@@ -28,7 +28,10 @@
  * Per-frame `isFlowMode` is inferred from the commanded goals over that
  * frame's samples: median `set_group_flow` > 0.2 with median
  * `set_group_pressure` < 0.2 reads as a flow-driven frame. `transitionReason`
- * is always `""` (unknown for reconstructed markers — spec-tolerated).
+ * is emitted as `""` — reconstructed markers can't know it — and the core
+ * infers it from `frameExits` (the recipe's per-step exit specs) so the
+ * confirmed-exit suppression in skip-first-frame detection works
+ * (Decenza #1421).
  */
 
 import type { PhaseMarker, Profile, SeriesPoint, ShotQualityInput } from '$lib/core';
@@ -227,6 +230,19 @@ export function qualityInputFromShot(shot: StoredShot): ShotQualityInput | null 
 		analysisFlags: [],
 		// A snapshotted recipe with steps is Crema's equivalent of a
 		// resolved profile shape — grind Arm 1 may trust the flow goal.
-		profileKbResolved: recipe !== null
+		profileKbResolved: recipe !== null,
+		// Per-frame exit specs so the core can infer the transitionReason
+		// these reconstructed markers can't carry — without them a fill
+		// frame exiting early on its pressure target reads as "First step
+		// skipped" every shot (Decenza #1421).
+		frameExits: recipe
+			? recipe.steps.map((step) => ({
+					metric: step.exit?.metric ?? '',
+					exitOver: step.exit?.compare === 'over',
+					threshold: step.exit?.threshold ?? 0,
+					maxDurationS:
+						typeof step.duration_seconds === 'number' ? step.duration_seconds : -1
+				}))
+			: []
 	};
 }

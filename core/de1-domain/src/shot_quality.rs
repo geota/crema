@@ -246,6 +246,32 @@ pub struct PhaseMarker {
     pub transition_reason: String,
 }
 
+/// One profile frame's configured exit, used to infer
+/// [`PhaseMarker::transition_reason`] for reconstructed markers (indexed by
+/// frame number in [`ShotQualityInput::frame_exits`]).
+///
+/// Crema never stored live transition reasons — shells rebuild phase markers
+/// from telemetry, so every reason arrived as `""` and the confirmed-exit
+/// suppression in skip-first-frame detection was dead code: a fill frame
+/// exiting early on its pressure target got a false "First step skipped"
+/// badge on every shot (the exact user-visible symptom Decenza fixed in
+/// PR #1421, `shotanalysis.cpp:677-699`). With the specs supplied, the
+/// analysis infers the reason from the recorded series at each boundary.
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameExitSpec {
+    /// "pressure" / "flow", or "" when the frame has no early exit.
+    pub metric: String,
+    /// True = the frame exits when the metric rises OVER the threshold;
+    /// false = when it falls under.
+    pub exit_over: bool,
+    /// Exit threshold (bar or mL/s, per `metric`).
+    pub threshold: f64,
+    /// Configured max frame duration, seconds; `<= 0` when unknown.
+    pub max_duration_s: f64,
+}
+
 /// Everything [`analyze_shot`] needs — the port of `ShotAnalysis::analyzeShot`'s
 /// parameter list (`shotanalysis.cpp:731-747`), minus the conductance
 /// derivative (computed internally from pressure + flow) and the expert band
@@ -290,6 +316,12 @@ pub struct ShotQualityInput {
     /// grind Arm 1 (flow-vs-goal averaging) is skipped entirely; Arm 2's
     /// physics-level arms still run (`shotanalysis.cpp:369-384`).
     pub profile_kb_resolved: bool,
+    /// Per-frame exit specs from the profile snapshot, indexed by frame
+    /// number; empty when no profile was stored. Lets the analysis infer
+    /// the `transition_reason` shells can't supply (see [`FrameExitSpec`]).
+    /// `serde(default)` — additive, absent on inputs built before it.
+    #[serde(default)]
+    pub frame_exits: Vec<FrameExitSpec>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1192,6 +1224,78 @@ fn push_line(lines: &mut Vec<QualityLine>, text: impl Into<String>, line_type: &
     });
 }
 
+/// A sensor exit counts as confirmed when the recorded boundary value is
+/// within this margin of the threshold (sampling at ~5 Hz means the exact
+/// crossing sample may sit just shy of it).
+const EXIT_CONFIRM_EPS: f64 = 0.1;
+/// A frame that ran to within this of its configured max exited on time.
+const TIME_EXIT_TOLERANCE_S: f64 = 0.25;
+
+/// The recorded value at the frame boundary: the last sample at or before
+/// `t` (the reading the firmware acted on).
+fn series_value_at(series: &[SeriesPoint], t: f64) -> Option<f64> {
+    let mut last = None;
+    for p in series {
+        if p.t <= t {
+            last = Some(p.v);
+        } else {
+            break;
+        }
+    }
+    last
+}
+
+/// Fill empty `transition_reason`s on reconstructed phase markers from the
+/// profile's per-frame exit specs + the recorded series (see
+/// [`FrameExitSpec`]). Only `""` reasons are touched — real recorded
+/// reasons, if a source ever supplies them, win. The final "End" marker is
+/// skipped: the shot's end is a stop (user / SAW / volume), not a frame
+/// exit, and inferring a sensor reason there would feed the grind
+/// limiter-tail trimming garbage. Unconfirmed exits follow Decenza
+/// `maincontroller.cpp:2700-2717`: record "time" when the frame ran its
+/// configured duration, never guess a sensor reason.
+fn infer_transition_reasons(input: &mut ShotQualityInput) {
+    if input.frame_exits.is_empty() {
+        return;
+    }
+    for i in 1..input.phases.len() {
+        if !input.phases[i].transition_reason.is_empty() || input.phases[i].label == "End" {
+            continue;
+        }
+        let prev_frame = input.phases[i - 1].frame_number;
+        let prev_time = input.phases[i - 1].time_s;
+        if prev_frame < 0 {
+            continue;
+        }
+        #[allow(clippy::cast_sign_loss)]
+        let Some(spec) = input.frame_exits.get(prev_frame as usize) else {
+            continue;
+        };
+        let t = input.phases[i].time_s;
+        let boundary = match spec.metric.as_str() {
+            "pressure" => series_value_at(&input.pressure, t),
+            "flow" => series_value_at(&input.flow, t),
+            _ => None,
+        };
+        let confirmed = boundary.is_some_and(|v| {
+            if spec.exit_over {
+                v >= spec.threshold - EXIT_CONFIRM_EPS
+            } else {
+                v <= spec.threshold + EXIT_CONFIRM_EPS
+            }
+        });
+        input.phases[i].transition_reason = if confirmed {
+            spec.metric.clone()
+        } else if spec.max_duration_s > 0.0
+            && t - prev_time >= spec.max_duration_s - TIME_EXIT_TOLERANCE_S
+        {
+            "time".to_string()
+        } else {
+            String::new()
+        };
+    }
+}
+
 /// Run the full shot-summary pipeline (`shotanalysis.cpp:731-1316`,
 /// `analyzeShot`): pour-window derivation, the pour-truncated dominator,
 /// channeling, flow trend, preinfusion drip, grind direction,
@@ -1204,6 +1308,9 @@ fn push_line(lines: &mut Vec<QualityLine>, text: impl Into<String>, line_type: &
 /// insufficient-data early return which emits a single observation line.
 #[must_use]
 pub fn analyze_shot(input: &ShotQualityInput) -> ShotQualityReport {
+    let mut owned = input.clone();
+    infer_transition_reasons(&mut owned);
+    let input = &owned;
     let mut lines: Vec<QualityLine> = Vec::new();
     let mut d = DetectorResults::default();
 
@@ -1681,6 +1788,7 @@ mod tests {
             expected_frame_count: -1,
             analysis_flags: Vec::new(),
             profile_kb_resolved: true,
+            frame_exits: Vec::new(),
         }
     }
 
@@ -1859,6 +1967,104 @@ mod tests {
         assert!(detect_skip_first_frame(&with_bogus, 3, -1.0));
         // Empty phases → false.
         assert!(!detect_skip_first_frame(&[], -1, -1.0));
+    }
+
+    // -----------------------------------------------------------------
+    // Transition-reason inference (Decenza #1421).
+    // -----------------------------------------------------------------
+
+    fn exit_spec(metric: &str, over: bool, threshold: f64, max_s: f64) -> FrameExitSpec {
+        FrameExitSpec {
+            metric: metric.to_string(),
+            exit_over: over,
+            threshold,
+            max_duration_s: max_s,
+        }
+    }
+
+    #[test]
+    fn infers_a_confirmed_sensor_exit_and_a_time_exit() {
+        // Frame 0: pressure-over-3.0 exit, satisfied at the 1.2 s boundary.
+        // Frame 1: flow-under exit NOT satisfied, but the frame ran its
+        // configured 10 s → "time" (never guess a sensor reason —
+        // Decenza maincontroller.cpp:2700-2717).
+        let mut input = base_input(30.0);
+        input.pressure = series(0.25, 120, |t| if t <= 1.2 { 3.1 } else { 8.0 });
+        input.flow = series(0.25, 120, |_| 2.0);
+        input.phases = vec![
+            marker(0.0, "Start", 0, false, ""),
+            marker(1.2, "Pour", 1, false, ""),
+            marker(11.2, "Frame 2", 2, false, ""),
+            marker(30.0, "End", 2, false, ""),
+        ];
+        input.frame_exits = vec![
+            exit_spec("pressure", true, 3.0, 8.0),
+            exit_spec("flow", false, 0.5, 10.0),
+            exit_spec("", false, 0.0, 20.0),
+        ];
+        infer_transition_reasons(&mut input);
+        assert_eq!(input.phases[1].transition_reason, "pressure");
+        assert_eq!(input.phases[2].transition_reason, "time");
+        // The End marker is a stop, not a frame exit — never inferred.
+        assert_eq!(input.phases[3].transition_reason, "");
+    }
+
+    #[test]
+    fn leaves_unconfirmed_short_exits_and_recorded_reasons_alone() {
+        let mut input = base_input(30.0);
+        // Pressure never reaches the 3.0 exit target.
+        input.pressure = series(0.25, 120, |_| 1.0);
+        input.phases = vec![
+            marker(0.0, "Start", 0, false, ""),
+            // A genuinely skipped first frame: 1.2 s of an 8 s fill with
+            // its exit unsatisfied — the reason stays "" and the
+            // skip-first-frame duration check keeps working.
+            marker(1.2, "Pour", 1, false, ""),
+            // A recorded reason is never overwritten.
+            marker(20.0, "Frame 2", 2, false, "weight"),
+        ];
+        input.frame_exits = vec![
+            exit_spec("pressure", true, 3.0, 8.0),
+            exit_spec("pressure", true, 9.0, 25.0),
+        ];
+        infer_transition_reasons(&mut input);
+        assert_eq!(input.phases[1].transition_reason, "");
+        assert_eq!(input.phases[2].transition_reason, "weight");
+    }
+
+    #[test]
+    fn confirmed_first_frame_exit_kills_the_false_skip_badge_end_to_end() {
+        // The Decenza #1421 symptom: an 8 s fill frame designed to exit on
+        // pressure-over-3.0 does so at 1.2 s. Without frame_exits the
+        // duration heuristic flags "First step skipped"; with them the
+        // inferred "pressure" reason suppresses it.
+        fn shot(with_specs: bool) -> ShotQualityReport {
+            let mut input = base_input(30.0);
+            input.pressure = series(0.25, 120, |t| if t <= 1.2 { 3.1 } else { 8.5 });
+            input.flow = series(0.25, 120, |_| 1.8);
+            input.expected_frame_count = 2;
+            input.first_frame_configured_s = 8.0;
+            input.phases = vec![
+                marker(0.0, "Start", 0, false, ""),
+                marker(1.2, "Pour", 1, false, ""),
+                marker(30.0, "End", 1, false, ""),
+            ];
+            if with_specs {
+                input.frame_exits = vec![
+                    exit_spec("pressure", true, 3.0, 8.0),
+                    exit_spec("", false, 0.0, 22.0),
+                ];
+            }
+            analyze_shot(&input)
+        }
+        assert!(
+            shot(false).badges.skip_first_frame,
+            "control: badge fires without specs"
+        );
+        assert!(
+            !shot(true).badges.skip_first_frame,
+            "specs must suppress the false badge"
+        );
     }
 
     // -----------------------------------------------------------------

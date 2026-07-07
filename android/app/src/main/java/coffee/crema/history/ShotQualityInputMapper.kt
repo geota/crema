@@ -1,10 +1,12 @@
 package coffee.crema.history
 
+import coffee.crema.core.FrameExitSpec
 import coffee.crema.core.PhaseMarker
 import coffee.crema.core.SeriesPoint
 import coffee.crema.core.ShotQualityInput
 import coffee.crema.ui.TelemetrySample
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -129,6 +131,7 @@ fun qualityInputFromShot(shot: StoredShot): ShotQualityInput? {
         beverageType = "espresso",
         durationS = durationS,
         firstFrameConfiguredS = hints.firstFrameConfiguredS,
+        frameExits = hints.frameExits,
         targetWeightG = hints.targetWeightG,
         finalWeightG = shot.yieldG?.toDouble() ?: 0.0,
         expectedFrameCount = hints.expectedFrameCount,
@@ -180,6 +183,8 @@ private data class ProfileHints(
     val expectedFrameCount: Int,
     val targetWeightG: Double,
     val resolved: Boolean,
+
+    val frameExits: List<FrameExitSpec> = emptyList(),
 )
 
 private val UNKNOWN_PROFILE = ProfileHints(
@@ -209,6 +214,18 @@ private fun profileHints(profile: JsonObject?): ProfileHints {
             // "KB resolved" (Decenza: the profile's shape is known well enough
             // to trust the flow goal): here, a real snapshot with actual steps.
             resolved = !steps.isNullOrEmpty(),
+            // Per-frame exit specs so the core can infer the transitionReason
+            // these reconstructed markers can't carry (Decenza #1421).
+            frameExits = steps?.map { el ->
+                val step = el.jsonObject
+                val exit = step["exit"]?.let { if (it is JsonObject) it else null }
+                FrameExitSpec(
+                    metric = exit?.get("metric")?.jsonPrimitive?.contentOrNull ?: "",
+                    exitOver = exit?.get("compare")?.jsonPrimitive?.contentOrNull == "over",
+                    threshold = exit?.get("threshold")?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                    maxDurationS = step["duration_seconds"]?.jsonPrimitive?.doubleOrNull ?: -1.0,
+                )
+            } ?: emptyList(),
         )
     }.getOrDefault(UNKNOWN_PROFILE)
 }

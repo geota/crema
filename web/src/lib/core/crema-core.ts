@@ -936,6 +936,33 @@ export interface DetectorResults {
 }
 
 /**
+ * One profile frame's configured exit, used to infer
+ * [`PhaseMarker::transition_reason`] for reconstructed markers (indexed by
+ * frame number in [`ShotQualityInput::frame_exits`]).
+ * 
+ * Crema never stored live transition reasons — shells rebuild phase markers
+ * from telemetry, so every reason arrived as `""` and the confirmed-exit
+ * suppression in skip-first-frame detection was dead code: a fill frame
+ * exiting early on its pressure target got a false "First step skipped"
+ * badge on every shot (the exact user-visible symptom Decenza fixed in
+ * PR #1421, `shotanalysis.cpp:677-699`). With the specs supplied, the
+ * analysis infers the reason from the recorded series at each boundary.
+ */
+export interface FrameExitSpec {
+	/** "pressure" / "flow", or "" when the frame has no early exit. */
+	metric: string;
+	/**
+	 * True = the frame exits when the metric rises OVER the threshold;
+	 * false = when it falls under.
+	 */
+	exitOver: boolean;
+	/** Exit threshold (bar or mL/s, per `metric`). */
+	threshold: number;
+	/** Configured max frame duration, seconds; `<= 0` when unknown. */
+	maxDurationS: number;
+}
+
+/**
  * A slim view onto the shell's `StoredShot`: only the fields the
  * reconcile planner reads. Lets the shell project its full record
  * (web `StoredShot` in `$lib/history/model.ts`, Android equivalent)
@@ -1514,6 +1541,13 @@ export interface ShotQualityInput {
 	 * physics-level arms still run (`shotanalysis.cpp:369-384`).
 	 */
 	profileKbResolved: boolean;
+	/**
+	 * Per-frame exit specs from the profile snapshot, indexed by frame
+	 * number; empty when no profile was stored. Lets the analysis infer
+	 * the `transition_reason` shells can't supply (see [`FrameExitSpec`]).
+	 * `serde(default)` — additive, absent on inputs built before it.
+	 */
+	frameExits?: FrameExitSpec[];
 }
 
 /**

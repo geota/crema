@@ -967,6 +967,30 @@ data class DetectorResults (
 	val skipFirstFrame: Boolean
 )
 
+/// One profile frame's configured exit, used to infer
+/// [`PhaseMarker::transition_reason`] for reconstructed markers (indexed by
+/// frame number in [`ShotQualityInput::frame_exits`]).
+/// 
+/// Crema never stored live transition reasons — shells rebuild phase markers
+/// from telemetry, so every reason arrived as `""` and the confirmed-exit
+/// suppression in skip-first-frame detection was dead code: a fill frame
+/// exiting early on its pressure target got a false "First step skipped"
+/// badge on every shot (the exact user-visible symptom Decenza fixed in
+/// PR #1421, `shotanalysis.cpp:677-699`). With the specs supplied, the
+/// analysis infers the reason from the recorded series at each boundary.
+@Serializable
+data class FrameExitSpec (
+	/// "pressure" / "flow", or "" when the frame has no early exit.
+	val metric: String,
+	/// True = the frame exits when the metric rises OVER the threshold;
+	/// false = when it falls under.
+	val exitOver: Boolean,
+	/// Exit threshold (bar or mL/s, per `metric`).
+	val threshold: Double,
+	/// Configured max frame duration, seconds; `<= 0` when unknown.
+	val maxDurationS: Double
+)
+
 /// A slim view onto the shell's `StoredShot`: only the fields the
 /// reconcile planner reads. Lets the shell project its full record
 /// (web `StoredShot` in `$lib/history/model.ts`, Android equivalent)
@@ -1454,7 +1478,12 @@ data class ShotQualityInput (
 	/// goal as a target (Decenza: KB resolution succeeded). When false,
 	/// grind Arm 1 (flow-vs-goal averaging) is skipped entirely; Arm 2's
 	/// physics-level arms still run (`shotanalysis.cpp:369-384`).
-	val profileKbResolved: Boolean
+	val profileKbResolved: Boolean,
+	/// Per-frame exit specs from the profile snapshot, indexed by frame
+	/// number; empty when no profile was stored. Lets the analysis infer
+	/// the `transition_reason` shells can't supply (see [`FrameExitSpec`]).
+	/// `serde(default)` — additive, absent on inputs built before it.
+	val frameExits: List<FrameExitSpec>? = null
 )
 
 /// Combined output of [`analyze_shot`]: the prose lines (ending in one
