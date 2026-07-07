@@ -825,10 +825,13 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			};
 		case 'StopTriggered':
 			// Attribution lives on the stop-conditions card (gold ring on the
-			// fired row), not a toast.
+			// fired row), not a toast. Espresso only: a hot-water weight stop
+			// must not ring the espresso stop cards.
 			return {
 				...snapshot,
-				lastStopReason: event.content.reason,
+				lastStopReason: snapshot.shotInProgress
+					? event.content.reason
+					: snapshot.lastStopReason,
 				eventLog: appendLog(snapshot.eventLog, `Auto-stop: ${event.content.reason}`)
 			};
 		case 'ShotCompleted': {

@@ -5353,8 +5353,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // Attribute the stop ON the stop-conditions UI (the fired
                 // row/card gets a gold highlight) instead of a toast — an
                 // unexplained early stop reads as a bug, but a snackbar over
-                // the fresh shot was clutter.
-                _ui.update { it.copy(lastStopReason = event.content.reason) }
+                // the fresh shot was clutter. Espresso only: a hot-water
+                // weight stop must not ring the espresso stop cards.
+                _ui.update {
+                    if (it.shotInProgress) it.copy(lastStopReason = event.content.reason) else it
+                }
             }
             is Event.ShotCompleted -> {
                 val c = event.content

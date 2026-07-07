@@ -351,6 +351,13 @@ pub struct CremaCore {
     /// shell, retained so eco-mode transitions can rewrite the steam target.
     /// `None` until [`set_steam_hotwater_settings`](Self::set_steam_hotwater_settings).
     steam_hotwater_settings: Option<ShotSettings>,
+    /// Hot-water-by-weight: armed (target grams) while a hot-water session
+    /// pours with a scale connected. The user's volume translates 1 ml ≈ 1 g
+    /// (water density); the wire packet asked the DE1 for far MORE water
+    /// ([`HOT_WATER_STOP_ON_SCALE_ML`]) precisely so this scale-side stop is
+    /// the one that cuts the pour — it was the missing half of that de1app
+    /// convention. Cleared when the session completes or the stop fires.
+    hot_water_stop_target_g: Option<f32>,
     /// The eco-mode steam target temperature, °C.
     steam_eco_temp: f32,
     last_state: Option<StateInfo>,
@@ -614,6 +621,7 @@ impl CremaCore {
             water: WaterMonitor::new(),
             steam: SteamMonitor::new(),
             steam_hotwater_settings: None,
+            hot_water_stop_target_g: None,
             steam_eco_temp: STEAM_ECO_TEMPERATURE_C,
             last_state: None,
             shot_started: None,
@@ -1780,7 +1788,7 @@ impl CremaCore {
         if eco {
             settings.steam_temp_c = self.steam_eco_temp;
         }
-        if self.scale.is_some() {
+        if self.scale.is_some() && settings.hot_water_volume_ml > 0.0 {
             settings.hot_water_volume_ml = HOT_WATER_STOP_ON_SCALE_ML;
         }
         settings
@@ -2437,7 +2445,7 @@ impl CremaCore {
             self.map_shot_event(event, now, out);
         }
         for event in self.water.on_state_info(info, now) {
-            Self::map_water_event(event, out);
+            self.map_water_event(event, now, out);
         }
         for event in self.steam.on_state_info(info, now) {
             self.map_steam_event(event, out);
@@ -2662,6 +2670,21 @@ impl CremaCore {
             .as_mut()
             .and_then(|stop| stop.on_weight(net_weight, now));
         Self::push_stop(reason, out);
+        // Hot-water-by-weight: stop the pour at the user's volume (1 ml ≈
+        // 1 g), projected one sensor-lag beat ahead so it lands ON target
+        // rather than past it (reaprime HotWaterSequencer's projection).
+        // Mutually exclusive with the espresso auto-stop above — the
+        // machine is in exactly one of those states.
+        if let Some(target) = self.hot_water_stop_target_g {
+            let lag_s = self
+                .scale
+                .as_ref()
+                .map_or(0.38, |s| s.sensor_lag().as_secs_f32());
+            if estimate.weight + estimate.flow.max(0.0) * lag_s >= target {
+                self.hot_water_stop_target_g = None;
+                Self::push_stop(Some(StopReason::Weight), out);
+            }
+        }
     }
 
     /// The untared-cup guard (Decenza `weightprocessor.cpp:242-253`, evolved
@@ -3262,13 +3285,33 @@ impl CremaCore {
         }
     }
 
-    /// Translate a domain [`WaterEvent`] into FFI [`Event`]s.
-    fn map_water_event(event: WaterEvent, out: &mut CoreOutput) {
+    /// Translate a domain [`WaterEvent`] into FFI [`Event`]s, and arm /
+    /// disarm the hot-water-by-weight stop around the session.
+    fn map_water_event(&mut self, event: WaterEvent, now: Duration, out: &mut CoreOutput) {
         match event {
             WaterEvent::Started(kind) => {
+                // Hot water with a scale: the user's volume IS the target,
+                // auto-translated to grams — no separate setting. Tare on
+                // entry (with the settle gate, same as an espresso start)
+                // so the vessel's weight never counts as water; the tare
+                // itself still respects the user's auto-tare preference.
+                if kind == de1_domain::WaterSessionKind::HotWater {
+                    let target_ml = self
+                        .steam_hotwater_settings
+                        .as_ref()
+                        .map_or(0.0, |s| s.hot_water_volume_ml);
+                    if self.scale.is_some() && target_ml > 0.0 {
+                        self.hot_water_stop_target_g = Some(target_ml);
+                        if self.auto_tare {
+                            self.push_tare_command(out);
+                            self.tare_gate = Some(now);
+                        }
+                    }
+                }
                 out.events.push(Event::WaterSessionStarted { kind });
             }
             WaterEvent::Completed(record) => {
+                self.hot_water_stop_target_g = None;
                 out.events.push(Event::WaterSessionCompleted {
                     kind: record.kind,
                     duration: duration_to_u32_ms(record.duration),
@@ -5435,6 +5478,107 @@ mod tests {
             kind: de1_domain::WaterSessionKind::Flush,
             duration: 4_000,
         }));
+    }
+
+    #[test]
+    fn hot_water_by_weight_stops_at_the_users_volume() {
+        // The user's volume dial IS the target — 150 ml auto-translates to
+        // 150 g on the scale. The wire packet asked the DE1 for 250 ml so
+        // THIS is the stop that cuts the pour.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_steam_hotwater_settings(hotwater_settings(150.0));
+        let out = core.on_notification(Source::De1State, &[6, 5], 0);
+        // Entering hot water tares the scale (settle-gated, like espresso).
+        assert!(
+            out.commands
+                .iter()
+                .any(|c| matches!(c, Command::WriteScale { .. })),
+            "hot-water entry must tare the scale"
+        );
+        // 100 g mid-pour (past the tare-settle gate): nowhere near target.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(10_000), 2_000);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::StopTriggered { .. }))
+        );
+        // 149 g at a brisk pour rate: the lag projection crosses 150 → stop.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(14_900), 4_000);
+        assert!(out.events.contains(&Event::StopTriggered {
+            reason: StopReason::Weight,
+        }));
+        assert!(out.commands.iter().any(|c| matches!(
+            c,
+            Command::WriteCharacteristic {
+                target: WriteTarget::De1RequestedState,
+                ..
+            }
+        )));
+        // Fired once — later readings must not re-stop.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(15_200), 4_500);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::StopTriggered { .. }))
+        );
+    }
+
+    #[test]
+    fn hot_water_by_weight_needs_a_volume_and_does_not_arm_on_a_flush() {
+        // Volume 0 (off) → never arms even with a scale.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_steam_hotwater_settings(hotwater_settings(0.0));
+        core.on_notification(Source::De1State, &[6, 5], 0);
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(30_000), 2_000);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::StopTriggered { .. }))
+        );
+
+        // A flush (HotWaterRinse) never arms regardless of the volume.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_steam_hotwater_settings(hotwater_settings(150.0));
+        core.on_notification(Source::De1State, &[15, 5], 0);
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(30_000), 2_000);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::StopTriggered { .. }))
+        );
+    }
+
+    #[test]
+    fn the_water_weight_stop_disarms_when_the_session_ends() {
+        // The user stops the pour by hand before the target: the session
+        // completes, and a later heavy reading must not fire a stale stop.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_steam_hotwater_settings(hotwater_settings(150.0));
+        core.on_notification(Source::De1State, &[6, 5], 0);
+        core.on_notification(Source::De1State, &[2, 0], 3_000);
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(30_000), 5_000);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::StopTriggered { .. }))
+        );
+    }
+
+    #[test]
+    fn the_scale_override_leaves_a_disabled_hot_water_volume_alone() {
+        // Volume 0 means "no volume stop" — bumping it to 250 ml with no
+        // weight watcher armed would pour a quarter litre unwatched.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let out = core.set_steam_hotwater_settings(hotwater_settings(0.0));
+        let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
+            panic!("expected a WriteCharacteristic command");
+        };
+        assert_eq!(data[4], 0, "0 (off) must not become the 250 ml override");
     }
 
     #[test]
