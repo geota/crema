@@ -3157,7 +3157,7 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
     "max_total_volume_ml": 0,
