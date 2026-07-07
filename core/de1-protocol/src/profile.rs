@@ -251,8 +251,16 @@ pub struct ShotTail {
 
 impl ShotTail {
     /// Encode to the 8-byte tail `FrameWrite` packet.
+    ///
+    /// The volume goes on the wire as the RAW 10-bit value with NO flag
+    /// bit — unlike the per-frame limit, which uses [`u10p0_encode`]'s
+    /// unconditional bit-10 (matching de1app's `convert_float_to_U10P0`).
+    /// All three reference apps hardcode the tail bytes to `0x0000`
+    /// (de1app `binary.tcl:1001` sets the raw field to 0 without the
+    /// converter; reaprime and Decenza likewise) — reusing the flagged
+    /// encoder here shipped `0x0400` on every upload (review #30).
     pub fn encode(&self) -> [u8; SHOT_FRAME_LEN] {
-        let max_vol = u10p0_encode(f32::from(self.max_total_volume_ml)).to_be_bytes();
+        let max_vol = (self.max_total_volume_ml & 0x03FF).to_be_bytes();
         [self.frame_count, max_vol[0], max_vol[1], 0, 0, 0, 0, 0]
     }
 
@@ -432,6 +440,24 @@ mod tests {
                 max_total_volume_ml: 200,
             };
             assert_eq!(ShotTail::decode(&tail.encode()), Ok(tail));
+        }
+
+        #[test]
+        fn tail_bytes_match_the_reference_apps_exactly() {
+            // Review #30: de1app hardcodes the tail volume bytes to raw 0
+            // (binary.tcl:1001) — never through the bit-10-setting
+            // converter. A zero limit must be 0x00 0x00 on the wire, not
+            // 0x04 0x00, and a real value must carry no flag bit.
+            let no_limit = ShotTail {
+                frame_count: 5,
+                max_total_volume_ml: 0,
+            };
+            assert_eq!(no_limit.encode(), [5, 0x00, 0x00, 0, 0, 0, 0, 0]);
+            let limited = ShotTail {
+                frame_count: 5,
+                max_total_volume_ml: 200,
+            };
+            assert_eq!(limited.encode(), [5, 0x00, 0xC8, 0, 0, 0, 0, 0]);
         }
 
         #[test]
