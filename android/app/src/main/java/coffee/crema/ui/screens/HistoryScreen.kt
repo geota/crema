@@ -91,6 +91,8 @@ import coffee.crema.ui.components.SplitMenuItem
 import coffee.crema.ui.components.CremaOverflowMenu
 import coffee.crema.ui.components.OverflowItem
 import coffee.crema.ui.components.CremaConfirmDialog
+import coffee.crema.ui.components.ShotQualityCard
+import coffee.crema.core.ShotQualityReport
 import coffee.crema.ui.theme.CremaTheme
 import androidx.core.net.toUri
 
@@ -345,8 +347,12 @@ fun HistoryScreen(
                     }
                     if (selected != null) {
                         val detailContext = androidx.compose.ui.platform.LocalContext.current
+                        // Core shot-quality analysis (Decenza port) — computed once
+                        // per selection; null (thin/malformed shot) renders nothing.
+                        val quality = remember(selected.id) { vm.analyzeShotQuality(selected) }
                         ShotDetail(
                             shot = selected,
+                            quality = quality,
                             // Fixed archival set (web detail chart): pressure + flow +
                             // coffee temp + weight — not the QC live-chart selection.
                             channels = setOf("pressure", "flow", "headTemp", "weight"),
@@ -549,6 +555,8 @@ private fun RowMetric(value: String, unit: String?, label: String) {
 @Composable
 private fun ShotDetail(
     shot: StoredShot,
+    /** The core's shot-quality report, or null when unanalyzable (no block). */
+    quality: ShotQualityReport?,
     channels: Set<String>,
     weightUnit: String,
     tempUnit: String,
@@ -665,6 +673,9 @@ private fun ShotDetail(
                 }
             }
         }
+        // Shot quality — the core's analysis over the stored telemetry, right
+        // below the chart it describes. Absent (null) for thin/legacy shots.
+        if (quality != null) ShotQualityCard(quality)
         var rating by remember(shot.id) { mutableStateOf(shot.rating ?: 0) }
         var notes by remember(shot.id) { mutableStateOf(shot.notes ?: "") }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

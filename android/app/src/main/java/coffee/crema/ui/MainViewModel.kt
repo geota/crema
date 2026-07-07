@@ -49,6 +49,7 @@ import coffee.crema.beans.newRoaster
 import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
 import coffee.crema.history.downsampleForStorage
+import coffee.crema.history.qualityInputFromShot
 import coffee.crema.maintenance.MaintenanceStore
 import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_DT_S
 import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_ML
@@ -90,6 +91,8 @@ import java.io.File
 import java.util.UUID
 import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.ShotBean
+import coffee.crema.core.ShotQualityInput
+import coffee.crema.core.ShotQualityReport
 import coffee.crema.core.SteamHotWaterSettings
 import coffee.crema.core.StopReason
 import coffee.crema.core.debitRemaining
@@ -1662,6 +1665,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val shots = if (ids == null) _ui.value.history else { val w = ids.toHashSet(); _ui.value.history.filter { it.id in w } }
         if (shots.isEmpty()) { notifyUser("Export — no shots"); return null }
         return runCatching { json.encodeToString(ListSerializer(StoredShot.serializer()), shots) }.getOrNull()
+    }
+
+    /**
+     * Run the core's shot-quality analysis (the Decenza `ShotAnalysis` port)
+     * over a stored shot. Null when the shot is too thin to analyze
+     * ([qualityInputFromShot] bails under 10 samples) or the bridge/decode
+     * rejects the input — the detail views render nothing in that case.
+     */
+    fun analyzeShotQuality(shot: StoredShot): ShotQualityReport? {
+        val input = qualityInputFromShot(shot) ?: return null
+        return runCatching {
+            json.decodeFromString(
+                ShotQualityReport.serializer(),
+                bridge.analyzeShotQuality(json.encodeToString(ShotQualityInput.serializer(), input)),
+            )
+        }.getOrNull()
     }
 
     /** All profiles (built-ins + customs) as a JSON array. */

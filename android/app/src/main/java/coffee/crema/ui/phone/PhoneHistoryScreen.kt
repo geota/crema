@@ -568,6 +568,12 @@ private fun PhoneShotDetail(
                 DetailMetric(shot.yieldG?.let { "${dYield.value}${dYield.unit}" } ?: "—", "Yield", tel.weight, Modifier.weight(1f))
             }
 
+            // Shot quality — the core's analysis (Decenza port) over the stored
+            // telemetry, below the chart + metrics it describes. Computed once per
+            // shot; null (thin/legacy shot) renders nothing.
+            val quality = remember(shot.id) { vm.analyzeShotQuality(shot) }
+            if (quality != null) ShotQualityCard(quality)
+
             // Rating + privacy + notes.
             Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
