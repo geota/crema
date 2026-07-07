@@ -23,6 +23,20 @@ export function readJson<T>(key: string, fallback: T): T {
 	}
 }
 
+/**
+ * Like {@link writeJson} but REPORTS failure — for callers that must react
+ * to a quota error (the history store evicts and warns; review #27).
+ */
+export function writeJsonChecked(key: string, value: unknown): boolean {
+	if (typeof localStorage === 'undefined') return true;
+	try {
+		localStorage.setItem(key, JSON.stringify(value));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /** Write a JSON value to localStorage, swallowing quota / availability errors. */
 export function writeJson(key: string, value: unknown): void {
 	if (typeof localStorage === 'undefined') return;

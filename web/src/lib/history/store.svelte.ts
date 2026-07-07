@@ -20,7 +20,15 @@
 import type { RustStoredShot, TimedSample } from '$lib/core';
 import type { TelemetrySample } from '$lib/state';
 import { toWire } from './telemetry-wire';
-import { readJson, writeJson } from '$lib/utils/storage';
+import { readJson, writeJsonChecked } from '$lib/utils/storage';
+import { toast } from '$lib/components/shared/toast.svelte';
+import {
+	clearAllSeries,
+	deleteSeries,
+	getAllSeries,
+	pruneSeriesTo,
+	putSeries
+} from './series-store';
 import {
 	shotId,
 	snapshotFromBean,
@@ -132,6 +140,36 @@ export class HistoryStore {
 	/** The recorded shots, newest first. Loaded from localStorage. */
 	private shots = $state.raw<StoredShot[]>(loadShots());
 
+	constructor() {
+		// Two-phase boot (review #27): summaries loaded synchronously above;
+		// each shot's telemetry series hydrates from IndexedDB in the
+		// background (reassigning `shots` keeps readers reactive). Also the
+		// one-time migration: rows persisted by the old all-in-localStorage
+		// format arrive WITH samples — move them to IndexedDB and re-persist
+		// stripped, freeing the quota that was silently killing saves.
+		if (typeof indexedDB !== 'undefined') void this.hydrateSeries();
+	}
+
+	private async hydrateSeries(): Promise<void> {
+		try {
+			const legacy = this.shots.filter((s) => s.record.samples.length > 0);
+			for (const shot of legacy) {
+				await putSeries(shot.id, shot.record.samples);
+			}
+			const series = await getAllSeries();
+			this.shots = this.shots.map((s) =>
+				s.record.samples.length === 0 && series.has(s.id)
+					? { ...s, record: { ...s.record, samples: series.get(s.id) ?? [] } }
+					: s
+			);
+			if (legacy.length > 0) this.persist();
+			await pruneSeriesTo(new Set(this.shots.map((s) => s.id)));
+		} catch {
+			// IndexedDB unavailable (private mode, etc.) — history still
+			// works this session from memory; only durability degrades.
+		}
+	}
+
 	/**
 	 * The user-visible history, newest first. Tombstones (`deletedAt`
 	 * set) are filtered out — they only exist for the sync layer to push
@@ -154,15 +192,40 @@ export class HistoryStore {
 		return this.shots.find((s) => s.id === id);
 	}
 
-	/** Persist the shot list to localStorage. */
+	/**
+	 * Persist the shot list to localStorage — WITHOUT the sample series
+	 * (those live in IndexedDB, review #27), so the blob stays a few KB per
+	 * shot and the 300-shot cap is actually reachable. A quota failure
+	 * evicts the oldest shots and retries once, and is never silent.
+	 */
 	private persist(): void {
-		writeJson(HISTORY_KEY, this.shots);
+		const stripped = this.shots.map((s) => ({
+			...s,
+			record: { ...s.record, samples: [] }
+		}));
+		if (writeJsonChecked(HISTORY_KEY, stripped)) return;
+		// Quota hit even without series — evict the oldest 10% and retry.
+		const keep = Math.max(1, Math.floor(this.shots.length * 0.9));
+		const dropped = this.shots.length - keep;
+		this.shots = this.shots.slice(0, keep);
+		const retry = this.shots.map((s) => ({
+			...s,
+			record: { ...s.record, samples: [] }
+		}));
+		if (writeJsonChecked(HISTORY_KEY, retry)) {
+			toast.error(
+				`Shot storage was full — dropped the ${dropped} oldest shot${dropped === 1 ? '' : 's'} to keep saving.`
+			);
+		} else {
+			toast.error('Shot history could not be saved — storage is full.');
+		}
 	}
 
 	/** Wipe all recorded shots — for a "replace from backup" restore. */
 	clearAllShots(): void {
 		this.shots = [];
 		this.persist();
+		void clearAllSeries().catch(() => {});
 	}
 
 	/**
@@ -208,6 +271,11 @@ export class HistoryStore {
 		};
 		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
 		this.persist();
+		// The series row rides IndexedDB (review #27) — fire-and-forget
+		// with a surface, like the capture store.
+		void putSeries(record.id, samples).catch(() => {
+			toast.error('Could not save this shot\u2019s telemetry — storage may be full.');
+		});
 		return record;
 	}
 
@@ -367,6 +435,7 @@ export class HistoryStore {
 	purgeTombstone(id: string): void {
 		this.shots = this.shots.filter((s) => s.id !== id);
 		this.persist();
+		void deleteSeries(id).catch(() => {});
 	}
 
 	/**
@@ -423,6 +492,7 @@ export class HistoryStore {
 			},
 			...this.shots.slice(idx + 1)
 		];
+		void putSeries(id, [...samples]).catch(() => {});
 		this.persist();
 	}
 
@@ -475,6 +545,7 @@ export class HistoryStore {
 		};
 		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
 		this.persist();
+		void putSeries(record.id, record.record.samples).catch(() => {});
 		return record;
 	}
 }
