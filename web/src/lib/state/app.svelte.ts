@@ -441,7 +441,15 @@ export class CremaApp {
 				// the wall-clock gap since the previous telemetry sample, the
 				// de1app's `volume += GroupFlow × Δt` approach.
 				const now = performance.now();
-				if (this.lastTelemetryAtMs !== null && this.countsTowardWater()) {
+				// Replayed telemetry must never advance the REAL water-filter /
+				// descale counters (review #35) — the machine-state gate passes
+				// during a replay because the replayed events drive the same
+				// snapshot.
+				if (
+					this.lastTelemetryAtMs !== null &&
+					this.countsTowardWater() &&
+					this.replayFiber === null
+				) {
 					const deltaS = Math.min(
 						MAX_TELEMETRY_GAP_S,
 						(now - this.lastTelemetryAtMs) / 1000
@@ -1806,6 +1814,22 @@ export class CremaApp {
 	 */
 	async replayCapture(file: File, opts: ReplayCaptureOptions = {}): Promise<void> {
 		if (this.replayFiber) return;
+		// A live DE1 keeps notifying while the replay's shadow core is
+		// installed — its packets would land in the shadow session and both
+		// streams would fight over the one display (review #35). Replay is
+		// strictly an offline diagnostic: require a disconnect first.
+		if (this.state.current.de1State === 'ready' || this.state.current.de1State === 'subscribing') {
+			this.state.patch({
+				replay: {
+					phase: 'error',
+					fileName: file.name,
+					done: 0,
+					total: 0,
+					message: 'Disconnect the DE1 before replaying — a live session would fight the replay for the display.'
+				}
+			});
+			return;
+		}
 
 		// Pre-flight (no shadow core touched yet, so a failure just paints
 		// `error` and returns): the file-size cap, the parse, and the empty check.
