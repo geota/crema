@@ -3183,11 +3183,13 @@ impl CremaCore {
                     // `tare_gate` and `handle_scale_weight`.
                     self.tare_gate = Some(now);
                 }
-                // Reset the scale's built-in timer first, then start it. The
-                // reset clears any residual from a prior shot; the start
-                // begins counting from zero.
+                // Reset the scale's built-in timer so any residual from a
+                // prior shot clears — but do NOT start it yet: the start
+                // waits for first flow below, so the on-scale timer matches
+                // the inbuilt shot clock instead of counting the pre-pour
+                // heating (user report: the Bookoo's timer ran from shot
+                // init and over-read every shot).
                 Self::push_timer_command(&self.scale, TimerCommand::Reset, out);
-                Self::push_timer_command(&self.scale, TimerCommand::Start, out);
                 out.events.push(Event::ShotStarted);
             }
             ShotEvent::PhaseChanged(phase) => {
@@ -3198,6 +3200,10 @@ impl CremaCore {
                     && matches!(phase, ShotPhase::Preinfusion | ShotPhase::Pouring)
                 {
                     self.flow_started = Some(now);
+                    // Pump on: start the scale's built-in timer from the same
+                    // anchor the inbuilt clock uses (fires once per shot —
+                    // `flow_started` latches).
+                    Self::push_timer_command(&self.scale, TimerCommand::Start, out);
                 }
                 self.arm_auto_stop_if_flowing(phase, now);
                 out.events.push(Event::ShotPhaseChanged { phase });
@@ -5620,6 +5626,36 @@ mod tests {
             .position(|w| *w == bookoo::TIMER_START.as_slice())
             .expect("a TIMER_START write");
         assert!(reset_pos < start_pos, "RESET must precede START");
+    }
+
+    #[test]
+    fn the_scale_timer_starts_at_first_flow_not_shot_init() {
+        // User report (Bookoo): the on-scale timer ran from shot init
+        // (heating) and over-read every shot vs the inbuilt clock, which
+        // anchors at first flow. Init → RESET only; START rides the first
+        // flow phase, once.
+        fn scale_writes(out: &CoreOutput) -> Vec<&[u8]> {
+            out.commands
+                .iter()
+                .filter_map(|c| match c {
+                    Command::WriteScale { data } => Some(data.as_slice()),
+                    Command::WriteCharacteristic { .. } => None,
+                })
+                .collect()
+        }
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        // Espresso enters in a heating substate — no flow yet.
+        let out = core.on_notification(Source::De1State, &[4, 2], 1_000);
+        let writes = scale_writes(&out);
+        assert!(writes.contains(&bookoo::TIMER_RESET.as_slice()));
+        assert!(!writes.contains(&bookoo::TIMER_START.as_slice()));
+        // Preinfusion begins — pump on: NOW the timer starts.
+        let out = core.on_notification(Source::De1State, &[4, 4], 4_000);
+        assert!(scale_writes(&out).contains(&bookoo::TIMER_START.as_slice()));
+        // It doesn't restart on the next flow phase (flow_started latched).
+        let out = core.on_notification(Source::De1State, &[4, 5], 8_000);
+        assert!(!scale_writes(&out).contains(&bookoo::TIMER_START.as_slice()));
     }
 
     #[test]
