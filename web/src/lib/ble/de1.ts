@@ -34,6 +34,9 @@ import { De1Uuids } from './de1-uuids';
 import { requestDevice, type ConnState } from './transport';
 import type { De1Transport } from './de1-transport';
 
+/** Diagnostics publish cadence — advisory counters don't need 25 Hz. */
+const DIAGNOSTICS_PUBLISH_INTERVAL_MS = 250;
+
 /** The `NotificationSource`s the DE1's characteristics route to. */
 type De1NotificationSource = Extract<
 	NotificationSource,
@@ -128,6 +131,12 @@ export class De1Manager {
 	 */
 	private notificationCounts: Record<De1NotificationSource, number> = freshCounts();
 
+	/** Last time the notification tallies were published (throttle anchor). */
+	private lastDiagnosticsPublishMs = 0;
+
+	/** The newest arrival stamp, carried into the next throttled publish. */
+	private pendingNotificationStamp = 0;
+
 	constructor(
 		private readonly core: CremaCore,
 		private readonly callbacks: De1ManagerCallbacks,
@@ -215,13 +224,24 @@ export class De1Manager {
 				return;
 			}
 			// Count the notification per source and stamp the arrival — live
-			// proof the device is streaming decodable DE1 data.
+			// proof the device is streaming decodable DE1 data. Published at
+			// most ~4 Hz (review #38): the un-throttled version reassigned
+			// the whole UiSnapshot per notification (~25-50 Hz during a
+			// shot) just for an advisory counter, doubling reactive churn.
 			this.notificationCounts[source] += 1;
-			const total = Object.values(this.notificationCounts).reduce((sum, n) => sum + n, 0);
-			this.patchDiagnostics({
-				notificationCount: total,
-				lastNotificationAtMs: notification.atMs
-			});
+			this.pendingNotificationStamp = notification.atMs;
+			const now = performance.now();
+			if (now - this.lastDiagnosticsPublishMs >= DIAGNOSTICS_PUBLISH_INTERVAL_MS) {
+				this.lastDiagnosticsPublishMs = now;
+				const total = Object.values(this.notificationCounts).reduce(
+					(sum, n) => sum + n,
+					0
+				);
+				this.patchDiagnostics({
+					notificationCount: total,
+					lastNotificationAtMs: this.pendingNotificationStamp
+				});
+			}
 			// The core's `onNotification` captures the raw bytes itself —
 			// see `core/de1-app/src/capture.rs`. No separate tee here.
 			void this.core

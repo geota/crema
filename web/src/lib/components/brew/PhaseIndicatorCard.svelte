@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import Icon from '$lib/icons/Icon.svelte';
 	/**
 	 * `PhaseIndicatorCard` — the left-column "where in the shot are we" card.
@@ -69,8 +70,11 @@
 	const EARLY_EXIT_EPS = 0.25;
 
 	$effect(() => {
-		const t = Math.max(0, seconds);
+		// Bail BEFORE reading `seconds` (review #38): reading it first
+		// subscribed this effect to the ~25 Hz telemetry signal only to
+		// return immediately on all but the rare frame-change ticks.
 		if (frame === prevFrame) return;
+		const t = Math.max(0, untrack(() => Math.max(0, seconds)));
 		// A rewind to an earlier frame means a fresh shot — clear the markers.
 		if (frame < prevFrame) earlyExited.clear();
 		// The frame we're leaving ended at `t`; if that's short of its set
@@ -187,8 +191,11 @@
 		void rows;
 		requestAnimationFrame(updateEdges);
 	});
-	// Keep the active row centred within the capped list.
+	// Keep the active row centred within the capped list. `void rows;`
+	// makes the frame progression a tracked dependency — without it the
+	// effect ran once at mount and the scroll-follow was dead (review #38).
 	$effect(() => {
+		void rows;
 		const c = listEl;
 		if (!c) return;
 		const el = c.querySelector('.crema-phase-row.is-active') as HTMLElement | null;

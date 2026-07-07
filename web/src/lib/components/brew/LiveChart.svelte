@@ -142,21 +142,27 @@
 		return sampleCurve(pressureSegments);
 	});
 
-	/** The goal pressure at elapsed time `t`, linearly interpolated. */
-	function goalAt(t: number): number | null {
+	/**
+	 * The goal pressure at elapsed time `t`, linearly interpolated.
+	 *
+	 * `cursor` is a monotonic walk position (review #38): `toData` calls
+	 * this with strictly ascending `t`, so instead of re-scanning the
+	 * whole curve per sample — O(samples × curve points) per redraw at
+	 * up to 25 Hz — the cursor resumes where the previous sample left
+	 * off, making the goal column O(samples + curve points).
+	 */
+	function goalAt(t: number, cursor: { i: number }): number | null {
 		const c = goalCurve;
 		if (!c || c.time.length === 0) return null;
 		if (t <= c.time[0]) return c.value[0];
 		const last = c.time.length - 1;
 		if (t >= c.time[last]) return c.value[last];
-		for (let i = 1; i <= last; i++) {
-			if (t <= c.time[i]) {
-				const span = c.time[i] - c.time[i - 1];
-				const u = span === 0 ? 0 : (t - c.time[i - 1]) / span;
-				return c.value[i - 1] + u * (c.value[i] - c.value[i - 1]);
-			}
-		}
-		return c.value[last];
+		let i = Math.max(1, cursor.i);
+		while (i <= last && c.time[i] < t) i++;
+		cursor.i = i;
+		const span = c.time[i] - c.time[i - 1];
+		const u = span === 0 ? 0 : (t - c.time[i - 1]) / span;
+		return c.value[i - 1] + u * (c.value[i] - c.value[i - 1]);
 	}
 
 	/**
@@ -206,6 +212,7 @@
 		const volume: (number | null)[] = [];
 		const mixTemp: (number | null)[] = [];
 		const weightFlow: (number | null)[] = [];
+		const goalCursor = { i: 1 };
 		for (let i = 0; i < samples.length; i++) {
 			const s = samples[i];
 			const t = s.elapsed / 1000;
@@ -214,7 +221,7 @@
 			flow.push(showFlow ? (s.flow ?? null) : null);
 			temp.push(showHeadTemp ? (s.temp == null ? null : s.temp / 10) : null);
 			weight.push(showWeight ? (s.weight == null ? null : s.weight / 10) : null);
-			goal.push(goalAt(t));
+			goal.push(goalAt(t, goalCursor));
 			// Live setpoint dashed overlay — what the firmware was aiming for
 			// at each AC half-cycle. Distinct from `goal` (profile-derived)
 			// because the DE1 interpolates / ramps / clamps internally per
