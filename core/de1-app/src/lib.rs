@@ -2991,18 +2991,16 @@ impl CremaCore {
                 // window than Decenza's 6-sample state machine, accepted as
                 // the v1 capture; the model's own validity gates (flow ≥ 0.5,
                 // dispersion, outlier-vs-expected) reject bad samples.
-                if let (Some((weight_at_stop, flow_at_stop, target)), Some(final_g)) =
-                    (stop_capture, final_weight)
-                {
+                if let (Some(capture), Some(final_g)) = (stop_capture, final_weight) {
                     let profile = self.last_active_profile_title.clone().unwrap_or_default();
                     let scale_label = self.scale.as_ref().map_or("", |s| s.label()).to_owned();
-                    let drip = f64::from((final_g - weight_at_stop).max(0.0));
-                    let overshoot = f64::from(final_g - target);
+                    let drip = f64::from((final_g - capture.weight_g).max(0.0));
+                    let overshoot = f64::from(final_g - capture.target_g);
                     self.saw_model.add_learning_point(
                         &profile,
                         &scale_label,
                         drip,
-                        f64::from(flow_at_stop),
+                        f64::from(capture.flow_g_per_s),
                         overshoot,
                         now.as_secs(),
                     );

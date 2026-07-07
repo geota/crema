@@ -140,9 +140,24 @@ pub struct AutoStop {
     /// The connected scale's sensor lag, seconds — the no-model default's
     /// `min(flow · (lag + 0.1), 8)` term.
     sensor_lag_s: f64,
-    /// Captured at the weight trigger, for post-shot drip learning:
-    /// `(robust weight, flow, target)` at the instant SAW fired.
-    stop_capture: Option<(f32, f32, f32)>,
+    /// Captured at the weight trigger, for post-shot drip learning — see
+    /// [`StopCapture`]. `None` until SAW fires.
+    stop_capture: Option<StopCapture>,
+}
+
+/// The instant the weight leg fired, captured for post-shot drip learning
+/// (the training sample's inputs — `drip = final − weight_g`,
+/// `overshoot = final − target_g`, kernel flow = `flow_g_per_s`). A named
+/// struct rather than a bare `(f32, f32, f32)`: three same-typed floats
+/// are one silent field-swap away from corrupting the learned model.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StopCapture {
+    /// The robust (estimator) weight when the stop fired, grams.
+    pub weight_g: f32,
+    /// The estimator mass-flow when the stop fired, g/s.
+    pub flow_g_per_s: f32,
+    /// The weight target in effect when the stop fired, grams.
+    pub target_g: f32,
 }
 
 impl AutoStop {
@@ -168,10 +183,10 @@ impl AutoStop {
         self.sensor_lag_s = sensor_lag_s;
     }
 
-    /// The `(weight, flow, target)` captured the instant the weight leg
-    /// fired — the post-shot drip-learning sample's inputs. `None` until
-    /// SAW triggers (volume / max-time stops capture nothing).
-    pub fn stop_capture(&self) -> Option<(f32, f32, f32)> {
+    /// The [`StopCapture`] recorded the instant the weight leg fired — the
+    /// post-shot drip-learning sample's inputs. `None` until SAW triggers
+    /// (volume / max-time stops capture nothing).
+    pub fn stop_capture(&self) -> Option<StopCapture> {
         self.stop_capture
     }
 
@@ -243,7 +258,11 @@ impl AutoStop {
         };
         if crossed {
             self.triggered = true;
-            self.stop_capture = Some((estimate.weight, estimate.flow, target));
+            self.stop_capture = Some(StopCapture {
+                weight_g: estimate.weight,
+                flow_g_per_s: estimate.flow,
+                target_g: target,
+            });
             return Some(StopReason::Weight);
         }
         None
