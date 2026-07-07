@@ -30,12 +30,22 @@ pub const NOTIFY_UUID: &str = "b905eaeb-6c7e-4f73-b43d-2cdfcab29570";
 /// above (`atomheart_scale.dart:23`): `b905eaec-6c7e-4f73-b43d-2cdfcab29570`.
 pub const COMMAND_UUID: &str = "b905eaec-6c7e-4f73-b43d-2cdfcab29570";
 
-/// Command: tare (also resets the timer).
+// Commands are an ASCII-mnemonic scheme, one letter + `01 01`: 'T'are,
+// 'S'tart, 'E'nd, 'R'eset — per Decenza `atomhearteclairscale.cpp:247-262`,
+// which cites de1app PR #349 (the Eclair gained a DEDICATED timer-reset
+// opcode, distinct from tare). The previous constants here followed
+// reaprime's `0x43`-multiplexed scheme (start `43 01 01`, stop `43 00 00`,
+// reset = tare), which disagrees on every byte except tare — aligned to
+// Decenza 2026-07-07 (see the local review notes); hardware-verify on a
+// real Eclair when one is on the bench.
+/// Command: tare — `'T' 01 01`.
 pub const TARE: [u8; 3] = [0x54, 0x01, 0x01];
-/// Command: start the timer.
-pub const TIMER_START: [u8; 3] = [0x43, 0x01, 0x01];
-/// Command: stop the timer.
-pub const TIMER_STOP: [u8; 3] = [0x43, 0x00, 0x00];
+/// Command: start the timer — `'S' 01 01`.
+pub const TIMER_START: [u8; 3] = [0x53, 0x01, 0x01];
+/// Command: stop the timer — `'E' 01 01`.
+pub const TIMER_STOP: [u8; 3] = [0x45, 0x01, 0x01];
+/// Command: reset the timer to zero — `'R' 01 01` (does NOT tare).
+pub const TIMER_RESET: [u8; 3] = [0x52, 0x01, 0x01];
 
 /// Decode a weight notification into grams.
 ///

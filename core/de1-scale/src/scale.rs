@@ -1405,7 +1405,7 @@ impl Scale {
     /// bytes the shell should write to [`ScaleUuids::command_write`].
     pub fn tare(&mut self) -> Option<Vec<u8>> {
         Some(match &mut self.inner {
-            Inner::Decent(state) => state.next_tare().to_vec(),
+            Inner::Decent(_) => decent_scale::TARE.to_vec(),
             Inner::Skale => vec![skale::CMD_TARE],
             Inner::Felicita => vec![felicita::TARE],
             Inner::Bookoo => bookoo::TARE.to_vec(),
@@ -1455,8 +1455,9 @@ impl Scale {
             Inner::AtomheartEclair => match command {
                 Start => atomheart_eclair::TIMER_START.to_vec(),
                 Stop => atomheart_eclair::TIMER_STOP.to_vec(),
-                // The Eclair has no separate reset — tare resets the timer.
-                Reset => atomheart_eclair::TARE.to_vec(),
+                // Dedicated reset opcode (de1app PR #349 via Decenza) — the
+                // old tare fallback zeroed the weight as a side effect.
+                Reset => atomheart_eclair::TIMER_RESET.to_vec(),
             },
             Inner::EurekaPrecisa | Inner::SoloBarista => match command {
                 Start => eureka_precisa::TIMER_START.to_vec(),
@@ -1800,12 +1801,14 @@ mod tests {
     }
 
     #[test]
-    fn decent_tare_counter_increments_each_call() {
+    fn decent_tare_is_the_constant_decenza_frame() {
+        // Aligned with Decenza (fixed counter 0x01, byte 5 = 0x00) — every
+        // tare sends the identical frame.
         let mut decent = Scale::from_label("Decent Scale").unwrap();
         let first = decent.tare().unwrap();
         let second = decent.tare().unwrap();
-        // Byte 2 of a Decent tare command is the rolling counter.
-        assert_eq!(second[2], first[2].wrapping_add(1));
+        assert_eq!(first, decent_scale::TARE.to_vec());
+        assert_eq!(second, first);
     }
 
     #[test]

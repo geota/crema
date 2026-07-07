@@ -39,11 +39,15 @@ fn command(cmd: u8, payload: [u8; 4]) -> [u8; 7] {
     packet
 }
 
-/// Command: tare the scale. `counter` should be incremented by the caller on
-/// each tare so the scale can tell repeated requests apart.
-pub fn tare(counter: u8) -> [u8; 7] {
-    command(0x0F, [counter, 0x00, 0x00, 0x01])
-}
+/// Command: tare the scale — the constant frame Decenza sends
+/// (`decentscale.cpp:372-374`): counter byte fixed at `0x01`, byte 5 `0x00`
+/// (byte 5 also matches the official HDS API doc's `030F000000000C`
+/// example). Replaced 2026-07-07 (see the local review notes): the previous
+/// de1app-derived variant rolled the counter from 253 AND set byte 5 to
+/// `0x01` — if bench testing ever shows the HDS deduping repeated tares on
+/// the fixed counter, resurrect the rolling counter from de1app
+/// `bluetooth.tcl:1230-1235`.
+pub const TARE: [u8; 7] = [0x03, 0x0F, 0x01, 0x00, 0x00, 0x00, 0x0D];
 
 /// Command: start the scale's timer.
 pub fn timer_start() -> [u8; 7] {
@@ -242,20 +246,12 @@ pub fn parse_command_response(data: &[u8]) -> Option<CommandResponse> {
 /// Decent-Scale-specific state the [`crate::Scale`] wrapper carries.
 ///
 /// Parallels the Bookoo's [`crate::ScaleCapabilities`]: a small struct that
-/// holds runtime fields ([`tare_counter`](Self::next_tare),
-/// [`firmware_version`](Self::record_firmware_version)) and exposes
-/// capability-check helpers so the [`crate::Scale`] wrapper stays plain
-/// dispatch.
-///
-/// The tare counter starts at `253` (matching legacy
-/// `de1plus/bluetooth.tcl:1230-1235`) and wraps `255` → `0` on each tare;
-/// the scale rejects a duplicate counter, so a stable rolling value is
-/// what makes the tare command deduplicate-resistant across BLE retries.
+/// holds runtime fields ([`firmware_version`](Self::record_firmware_version))
+/// and exposes capability-check helpers so the [`crate::Scale`] wrapper
+/// stays plain dispatch. (It also carried the legacy rolling tare counter
+/// until the [`TARE`] frame was aligned with Decenza's constant one.)
 #[derive(Debug, Clone)]
 pub struct DecentScale {
-    /// Tare counter — legacy starts at 253, increments per tare call,
-    /// wraps `255` → `0`. The scale rejects a duplicate counter.
-    tare_counter: u8,
     /// Firmware version, if known. Set by
     /// [`record_firmware_version`](Self::record_firmware_version) once the
     /// shell forwards the first `0x0A` reply; surfaced diagnostically only.
@@ -263,28 +259,12 @@ pub struct DecentScale {
 }
 
 impl DecentScale {
-    /// The legacy starting value of the tare counter
-    /// (`de1plus/bluetooth.tcl:1231`).
-    const TARE_COUNTER_INIT: u8 = 253;
-
     /// Construct fresh state for a newly-connected Decent Scale.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            tare_counter: Self::TARE_COUNTER_INIT,
             firmware_version: None,
         }
-    }
-
-    /// Build the next tare command bytes and advance the rolling counter.
-    ///
-    /// The counter wraps `255` → `0` (matching
-    /// `de1plus/bluetooth.tcl:1232-1234`) so it cycles indefinitely — a
-    /// duplicate-suppressing rolling identifier, not a sequence number.
-    pub fn next_tare(&mut self) -> [u8; 7] {
-        let bytes = tare(self.tare_counter);
-        self.tare_counter = self.tare_counter.wrapping_add(1);
-        bytes
     }
 
     /// Record the firmware version reported by a `0x0A` reply (see
@@ -337,8 +317,8 @@ mod tests {
     }
 
     #[test]
-    fn tare_command_carries_the_counter_and_checksum() {
-        assert_eq!(tare(5), [0x03, 0x0F, 0x05, 0x00, 0x00, 0x01, 0x08]);
+    fn tare_bytes_are_pinned() {
+        assert_eq!(TARE, [0x03, 0x0F, 0x01, 0x00, 0x00, 0x00, 0x0D]);
     }
 
     #[test]
@@ -415,24 +395,10 @@ mod tests {
     }
 
     #[test]
-    fn decent_scale_tare_counter_wraps_255_to_0() {
-        // The legacy app starts the counter at 253 and wraps 255 → 0
-        // (`de1plus/bluetooth.tcl:1230-1234`); the rolling identifier
-        // shouldn't ever stall at a fixed value, otherwise the scale
-        // would reject the duplicate counter.
-        let mut state = DecentScale::new();
-        // 253 -> 254 -> 255 -> 0 -> 1 -> 2 -> ... over six tares.
-        let counters: Vec<u8> = (0..6).map(|_| state.next_tare()[2]).collect();
-        assert_eq!(counters, [253, 254, 255, 0, 1, 2]);
-    }
-
-    #[test]
-    fn decent_scale_tare_command_matches_the_existing_builder() {
-        // The stateful `next_tare` wraps the same `tare()` builder; one
-        // call must produce the same bytes as a direct `tare(253)` (the
-        // initial counter value).
-        let mut state = DecentScale::new();
-        assert_eq!(state.next_tare(), tare(253));
+    fn tare_is_decenzas_constant_frame_with_a_valid_checksum() {
+        // Pinned to Decenza `decentscale.cpp:372-374` (`03 0F 01 00 00 00`
+        // + XOR): the constant must agree with the generic frame builder.
+        assert_eq!(TARE, command(0x0F, [0x01, 0x00, 0x00, 0x00]));
     }
 
     #[test]
