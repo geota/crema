@@ -4230,6 +4230,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             doseG = profile?.dose,
             // The QC grind dial actually used (issue 15) — null until the user sets one.
             grindSetting = s.qcGrind,
+            yieldTargetG = (s.brewParams?.yieldOut ?: profile?.yieldOut?.toDouble())?.toFloat(),
             peakPressure = peakPressure,
             peakTemp = peakTemp,
             profileName = profile?.name,

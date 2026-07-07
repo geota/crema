@@ -1,6 +1,7 @@
 package coffee.crema.ui
 
 import coffee.crema.core.MachineState
+import coffee.crema.core.MmrRegister
 import coffee.crema.core.celsiusToFahrenheit
 
 // Service-mode (steam / hot water / flush) display targets — the values the
@@ -30,13 +31,17 @@ data class ModeTargets(
 
 fun modeTargets(ui: MainUiState): ModeTargets {
     val ss = ui.de1ShotSettings
+    // The machine's stored flush setpoint (FlushTemp MMR, deci-°C) — read at
+    // connect but previously discarded, so Android showed the QC value where
+    // web showed the machine's (review #41 divergence).
+    val machineFlushC = ui.de1MachineInfo[MmrRegister.FlushTemp]?.toFloat()?.div(10f)
     return ModeTargets(
         steamTempC = posOr(ss?.steam_temp, posOr(ui.qcSteamTempC, 148f)),
         steamTimeoutS = posOr(ss?.steam_timeout, posOr(ui.qcSteamTimeS, 90f)),
         hotWaterTempC = posOr(ss?.hot_water_temp, posOr(ui.qcHotWaterTempC, 92f)),
         hotWaterVolumeMl = posOr(ss?.hot_water_volume, posOr(ui.qcHotWaterVolumeMl, 250f)),
         hotWaterTimeoutS = posOr(ss?.hot_water_timeout, 30f),
-        flushTempC = posOr(ui.qcFlushTempC, 95f),
+        flushTempC = posOr(machineFlushC, posOr(ui.qcFlushTempC, 95f)),
         flushTimeS = posOr(ui.qcFlushTimeS, 4f),
     )
 }

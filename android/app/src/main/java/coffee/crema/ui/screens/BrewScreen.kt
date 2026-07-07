@@ -1208,7 +1208,11 @@ private fun LimitsCard(active: CremaProfile?, ui: coffee.crema.ui.MainUiState) {
         // Volume is a stop condition only when it will actually fire: with a
         // scale connected it's a dormant fallback (SAW owns the stop) unless
         // the user opted into both caps — mirror the core's arming rule.
-        val volumeArms = ui.scaleState != ScaleBleManager.State.READY || ui.volumeStopWithScale
+        // SUBSCRIBING counts as connected (web parity, review #41): the scale
+        // will stream within a beat, so the card shouldn't flash on connect.
+        val scalePresent = ui.scaleState == ScaleBleManager.State.READY ||
+            ui.scaleState == ScaleBleManager.State.SUBSCRIBING
+        val volumeArms = !scalePresent || ui.volumeStopWithScale
         if (active != null && active.maxTotalVolumeMl > 0 && volumeArms) {
             val liveV = convertVolume(ui.dispensedVolume ?: 0f, ui.volumeUnit)
             val targetV = convertVolume(active.maxTotalVolumeMl.toFloat(), ui.volumeUnit)

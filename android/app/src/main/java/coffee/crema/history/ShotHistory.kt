@@ -39,6 +39,13 @@ data class StoredShot(
      * setting). Additive — older records deserialise cleanly.
      */
     val grindSetting: Float? = null,
+    /**
+     * The stop-at-weight target the user dialled for THIS shot, g, or null.
+     * The shot-quality yield arms key off it (falling back to the profile's
+     * target) — web has persisted it all along; the gap made Android's
+     * quality analysis use the wrong target (review #39). Additive.
+     */
+    val yieldTargetG: Float? = null,
     /** Peak group pressure across the shot, bar, or null. */
     val peakPressure: Float? = null,
     /** Peak group-head temperature across the shot, °C, or null. */

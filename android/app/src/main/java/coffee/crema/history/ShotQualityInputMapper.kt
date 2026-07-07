@@ -128,11 +128,16 @@ fun qualityInputFromShot(shot: StoredShot): ShotQualityInput? {
         pressureGoal = samples.map { SeriesPoint(t(it), it.setGroupPressure.toDouble()) },
         flowGoal = samples.map { SeriesPoint(t(it), it.setGroupFlow.toDouble()) },
         phases = markers,
-        beverageType = "espresso",
+        // From the profile snapshot (review #39): the espresso hardcode ran
+        // puck-integrity detectors on filter/pourover/cleaning shots and
+        // badged them falsely — the core skips those by type.
+        beverageType = hints.beverageType,
         durationS = durationS,
         firstFrameConfiguredS = hints.firstFrameConfiguredS,
         frameExits = hints.frameExits,
-        targetWeightG = hints.targetWeightG,
+        // The user's dialled stop target wins over the profile's (web
+        // parity — review #39).
+        targetWeightG = shot.yieldTargetG?.toDouble() ?: hints.targetWeightG,
         finalWeightG = shot.yieldG?.toDouble() ?: 0.0,
         expectedFrameCount = hints.expectedFrameCount,
         analysisFlags = emptyList(),
@@ -185,6 +190,8 @@ private data class ProfileHints(
     val resolved: Boolean,
 
     val frameExits: List<FrameExitSpec> = emptyList(),
+
+    val beverageType: String = "espresso",
 )
 
 private val UNKNOWN_PROFILE = ProfileHints(
@@ -211,6 +218,7 @@ private fun profileHints(profile: JsonObject?): ProfileHints {
                 ?.get("duration_seconds")?.jsonPrimitive?.doubleOrNull ?: -1.0,
             expectedFrameCount = steps?.size ?: -1,
             targetWeightG = profile["target_weight"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+            beverageType = profile["beverage_type"]?.jsonPrimitive?.contentOrNull ?: "espresso",
             // "KB resolved" (Decenza: the profile's shape is known well enough
             // to trust the flow goal): here, a real snapshot with actual steps.
             resolved = !steps.isNullOrEmpty(),
