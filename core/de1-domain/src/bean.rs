@@ -751,6 +751,13 @@ pub struct ShotBean {
     /// recommended dial recorded with the bag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grinder_setting: Option<String>,
+    /// The bean's grinder NAME at the time of the shot (e.g. "Niche
+    /// Zero") — so history can say which grinder pulled the shot even
+    /// after the bag's grinder is edited (issue #16; the snapshot used
+    /// to carry only the dial). Additive + optional, so pre-existing
+    /// stored shots decode unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grinder: Option<String>,
 }
 
 impl ShotBean {
@@ -769,6 +776,11 @@ impl ShotBean {
                 None
             } else {
                 Some(bean.grinder_setting.clone())
+            },
+            grinder: if bean.grinder.is_empty() {
+                None
+            } else {
+                Some(bean.grinder.clone())
             },
         }
     }
