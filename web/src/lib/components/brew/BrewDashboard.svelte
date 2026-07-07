@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ml_to_fl_oz as mlToFlOz } from '$lib/wasm/de1_wasm';
 	import { untrack } from 'svelte';
 	import Icon from '$lib/icons/Icon.svelte';
 	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
@@ -666,7 +667,8 @@
 	 */
 	function formatDispensedMl(ml: number | null | undefined, unit: 'ml' | 'floz'): string {
 		if (ml == null || !Number.isFinite(ml)) return '0.0';
-		return (unit === 'floz' ? ml / 29.5735 : ml).toFixed(1);
+		// Core conversion (review #42) — no hand-rolled constant.
+		return (unit === 'floz' ? mlToFlOz(ml) : ml).toFixed(1);
 	}
 
 	// Unit-aware channel measurements — all driven by the Settings unit prefs

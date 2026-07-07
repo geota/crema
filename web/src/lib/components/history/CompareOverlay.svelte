@@ -1,4 +1,10 @@
 <script lang="ts">
+	import {
+		bar_to_psi as barToPsi,
+		celsius_to_fahrenheit as celsiusToFahrenheit,
+		grams_to_oz as gramsToOz,
+		ml_to_fl_oz as mlToFlOz
+	} from '$lib/wasm/de1_wasm';
 	import Icon from '$lib/icons/Icon.svelte';
 	import StarRating from '$lib/components/common/StarRating.svelte';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
@@ -113,13 +119,14 @@
 	 */
 	function toDisplay(value: number | null, ch: Channel): number | null {
 		if (value == null || !Number.isFinite(value)) return null;
-		if (ch === 'pressure')
-			return prefs.pressureUnit === 'psi' ? value * 14.5038 : value;
+		// Conversions via the core fns (review #42) — the constants used to
+		// be hand-rolled here, duplicating de1-domain/units.rs and free to
+		// drift if a constant is ever corrected.
+		if (ch === 'pressure') return prefs.pressureUnit === 'psi' ? barToPsi(value) : value;
 		if (ch === 'temp' || ch === 'mixTemp')
-			return prefs.tempUnit === 'F' ? value * 1.8 + 32 : value;
-		if (ch === 'weight')
-			return prefs.weightUnit === 'oz' ? value / 28.3495 : value;
-		if (ch === 'water') return prefs.volumeUnit === 'floz' ? value / 29.5735 : value;
+			return prefs.tempUnit === 'F' ? celsiusToFahrenheit(value) : value;
+		if (ch === 'weight') return prefs.weightUnit === 'oz' ? gramsToOz(value) : value;
+		if (ch === 'water') return prefs.volumeUnit === 'floz' ? mlToFlOz(value) : value;
 		return value; // flow, resistance, weightFlow — unit-fixed
 	}
 
