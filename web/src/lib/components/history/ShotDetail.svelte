@@ -26,8 +26,10 @@
 		shotFilename,
 		exportStoredShotAsV2Json,
 		peaksOf,
-		flatSamplesOf
+		flatSamplesOf,
+		qualityInputFromShot
 	} from '$lib/history';
+	import { loadCore, type ShotQualityReport } from '$lib/core';
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
 	import { daysOffRoast, roastBand, type Bean, type Roaster } from '$lib/bean';
 	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
@@ -151,6 +153,67 @@
 	const flatSeries = $derived(flatSamplesOf(shot));
 	/** Final (or peak) yield, grams. */
 	const yieldOut = $derived(peaks.finalWeight ?? peaks.peakWeight);
+
+	// ── Shot quality ─────────────────────────────────────────────────────
+	/**
+	 * The core's shot-quality report — the Decenza-port analysis
+	 * (`analyzeShotQuality`) run over the stored curves. `null` while the
+	 * analysis is in flight, when the shot is too short to analyze
+	 * (`qualityInputFromShot` returns `null` under 10 samples), or when
+	 * the core rejects the input; the quality card simply doesn't render
+	 * in any of those cases. Recomputed on every shot view — nothing is
+	 * persisted. Same stale-resolve guard discipline as `hasCapture`.
+	 */
+	let quality = $state.raw<ShotQualityReport | null>(null);
+	$effect(() => {
+		const id = shot.id;
+		quality = null;
+		const input = qualityInputFromShot(shot);
+		if (!input) return;
+		void loadCore()
+			.then((core) => core.analyzeShotQuality(input))
+			.then((report) => {
+				// Guard against a stale resolve landing after the shot changed.
+				if (shot.id === id) quality = report;
+			})
+			.catch(() => {
+				if (shot.id === id) quality = null;
+			});
+	});
+	/**
+	 * Badge chips projected from the report's four booleans; when none
+	 * fire, one green all-clear chip stands in.
+	 */
+	const qualityChips = $derived.by(() => {
+		if (!quality) return [];
+		const chips: { label: string; tone: 'danger' | 'warning' | 'success' }[] = [];
+		if (quality.badges.channeling) chips.push({ label: 'Channeling', tone: 'danger' });
+		if (quality.badges.grindIssue) chips.push({ label: 'Grind issue', tone: 'warning' });
+		if (quality.badges.pourTruncated) chips.push({ label: 'Puck failed', tone: 'danger' });
+		if (quality.badges.skipFirstFrame)
+			chips.push({ label: 'First step skipped', tone: 'danger' });
+		if (chips.length === 0) chips.push({ label: 'Clean extraction', tone: 'success' });
+		return chips;
+	});
+	/** The emphasized verdict line — the report's last word on the shot. */
+	const qualityVerdict = $derived(
+		quality?.lines.find((l) => l.lineType === 'verdict') ?? null
+	);
+	/** Every non-verdict prose line, rendered with a severity dot. */
+	const qualityLines = $derived(quality?.lines.filter((l) => l.lineType !== 'verdict') ?? []);
+	/** Severity dot color per line type; `observation` stays neutral. */
+	function qualityDotColor(lineType: string): string {
+		switch (lineType) {
+			case 'good':
+				return 'var(--success)';
+			case 'caution':
+				return 'var(--warning)';
+			case 'warning':
+				return 'var(--danger)';
+			default:
+				return 'rgba(var(--tint-rgb), 0.35)';
+		}
+	}
 
 	// Unit-aware metric readouts — driven by the Settings unit prefs (D1).
 	const settings = getSettingsStore();
@@ -509,6 +572,40 @@
 		</ChartModal>
 	{/if}
 
+	<!-- Shot quality — the core's Decenza-port analysis of the stored
+	     curves: badge chips, the verdict line, then the prose
+	     observations with severity dots. Recomputed on view, never
+	     persisted; hidden while in flight, when the shot is too short
+	     to analyze, or when the analysis rejects. -->
+	{#if quality}
+		<div class="hi-quality">
+			<div class="hi-quality-head">
+				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Shot quality</span>
+				<div class="hi-quality-chips">
+					{#each qualityChips as chip (chip.label)}
+						<span class="hi-quality-chip is-{chip.tone}">{chip.label}</span>
+					{/each}
+				</div>
+			</div>
+			{#if qualityVerdict}
+				<div class="hi-quality-verdict">{qualityVerdict.text}</div>
+			{/if}
+			{#if qualityLines.length > 0}
+				<ul class="hi-quality-lines">
+					{#each qualityLines as line (line.kind + line.text)}
+						<li class="hi-quality-line">
+							<i
+								class="hi-quality-dot"
+								style="background:{qualityDotColor(line.lineType)}"
+							></i>
+							<span>{line.text}</span>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</div>
+	{/if}
+
 	<!-- Metric strip -->
 	<div class="hi-metrics">
 		<div class="hi-metric">
@@ -834,6 +931,83 @@
 		font-size: 10px;
 		color: rgba(var(--tint-rgb), 0.5);
 		margin-left: 2px;
+	}
+
+	/* Shot quality card — chips + verdict + dotted prose lines. Chips use
+	   the semantic wash pattern (solid var() color over its `-rgb` tint)
+	   the settings kit's danger buttons established. */
+	.hi-quality {
+		background: var(--bg-page);
+		border-radius: var(--radius-md);
+		padding: 12px 14px;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.hi-quality-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+	}
+	.hi-quality-chips {
+		display: flex;
+		gap: 6px;
+		flex-wrap: wrap;
+	}
+	.hi-quality-chip {
+		font-family: var(--font-sans);
+		font-size: 11px;
+		font-weight: 600;
+		border-radius: 999px;
+		padding: 3px 10px;
+		border: 1px solid transparent;
+	}
+	.hi-quality-chip.is-danger {
+		color: var(--danger);
+		border-color: rgba(var(--danger-rgb), 0.45);
+		background: rgba(var(--danger-rgb), 0.1);
+	}
+	.hi-quality-chip.is-warning {
+		color: var(--warning);
+		border-color: rgba(var(--warning-rgb), 0.45);
+		background: rgba(var(--warning-rgb), 0.1);
+	}
+	.hi-quality-chip.is-success {
+		color: var(--success);
+		border-color: rgba(var(--success-rgb), 0.45);
+		background: rgba(var(--success-rgb), 0.1);
+	}
+	.hi-quality-verdict {
+		font-family: var(--font-sans);
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--fg-1);
+	}
+	.hi-quality-lines {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.hi-quality-line {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+		font-family: var(--font-sans);
+		font-size: 12px;
+		line-height: 1.5;
+		color: rgba(var(--tint-rgb), 0.75);
+	}
+	.hi-quality-dot {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		flex-shrink: 0;
+		margin-top: 5px;
 	}
 
 	.hi-rating {

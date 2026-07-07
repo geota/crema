@@ -23,6 +23,7 @@
 
 import type { CoreOutput, ScaleCapabilities, ScaleUuids, TimedSample } from './crema-core';
 import type { CalTarget, MmrRegister, FirmwareUpdateStatus } from './crema-core';
+import type { ShotQualityInput, ShotQualityReport } from './crema-core';
 
 /**
  * The web shell stores the user's weight pref as `'g' | 'oz'` (legacy
@@ -521,6 +522,15 @@ export interface CremaCore {
 	/** Seed the learned SAW drip model from a persisted JSON blob. */
 	setSawModelJson(json: string): Promise<void>;
 	/**
+	 * Run the pure shot-quality analysis (the Decenza port —
+	 * `de1_domain::shot_quality::analyze_shot`) over a stored shot's
+	 * series. Stateless: a pure function of `input`, untouched by the
+	 * live session, so it is safe to call for any historical shot at
+	 * any time. Rejects with the core's message when the input fails
+	 * to (de)serialize — callers treat a rejection as "no report".
+	 */
+	analyzeShotQuality(input: ShotQualityInput): Promise<ShotQualityReport>;
+	/**
 	 * Clear the running scale-derived peaks (peak weight + final weight)
 	 * without disturbing pressure / temperature peaks. The Scale page's
 	 * "Reset peak" button.
@@ -982,6 +992,14 @@ async function createCore(): Promise<CremaCore> {
 		async setSawModelJson(json) {
 			bridge.set_saw_model_json(json);
 		},
+		async analyzeShotQuality(input) {
+			// The bridge returns `Result<String, String>`; wasm-bindgen
+			// surfaces the `Err` as a throw, which rejects this promise —
+			// callers treat a rejection as "no report".
+			return JSON.parse(
+				bridge.analyze_shot_quality(JSON.stringify(input))
+			) as ShotQualityReport;
+		},
 		async resetScalePeaks() {
 			bridge.reset_scale_peaks();
 		},
@@ -1175,3 +1193,13 @@ export type { TimedSample, ShotSample } from './crema-core';
 // produced by typeshare; values matter (consumers `===` them).
 export { MachineState, SubState, ShotPhase } from './crema-core';
 export { CalCommand, CalTarget, MmrRegister } from './crema-core';
+// Shot-quality analysis wire types — the argument / result shapes of the
+// facade's `analyzeShotQuality` (see `de1_domain::shot_quality`).
+export type {
+	ShotQualityInput,
+	ShotQualityReport,
+	QualityLine,
+	QualityBadges,
+	PhaseMarker,
+	SeriesPoint
+} from './crema-core';

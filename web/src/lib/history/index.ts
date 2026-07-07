@@ -29,3 +29,5 @@ export {
 } from './store.svelte';
 
 export { exportStoredShotAsV2Json, extractCremaExtras } from './v2-export';
+
+export { qualityInputFromShot } from './shot-quality-input';
