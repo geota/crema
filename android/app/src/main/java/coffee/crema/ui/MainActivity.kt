@@ -77,6 +77,7 @@ import coffee.crema.ui.phone.TabletDevicesSheet
 import coffee.crema.ui.screens.BeanEditScreen
 import coffee.crema.ui.screens.BeansScreen
 import coffee.crema.ui.screens.BrewScreen
+import coffee.crema.ui.components.SaverOverlay
 import coffee.crema.ui.screens.ChartExpandOverlay
 import coffee.crema.ui.screens.LocalChartExpander
 import coffee.crema.ui.screens.HistoryScreen
@@ -240,7 +241,9 @@ class MainActivity : ComponentActivity() {
                 // "Keep screen on" (Settings → Display): hold FLAG_KEEP_SCREEN_ON
                 // the whole time Crema is in the foreground so the display never
                 // dims mid-use (the flag only applies while this window is visible).
-                val keepOn = ui.keepScreenOnBrew
+                // Also held while the SAVER is up: the wall-tablet clock must stay
+                // visible instead of Android blanking the screen underneath it.
+                val keepOn = ui.keepScreenOnBrew || ui.saverVisible
                 LaunchedEffect(keepOn) {
                     if (keepOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -274,6 +277,18 @@ class MainActivity : ComponentActivity() {
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()
+                        // Screensaver idle tracking: observe EVERY touch on the
+                        // Initial pass (before children), never consuming — the
+                        // docs/41 C2 "bump on interaction" design. Cheap: one
+                        // volatile write per pointer event.
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                    viewModel.noteUserInteraction()
+                                }
+                            }
+                        }
                         .pointerInput(Unit) {
                             detectTapGestures(onTap = { focusManager.clearFocus() })
                         },
@@ -416,6 +431,14 @@ class MainActivity : ComponentActivity() {
                 // Fullscreen expanded chart — drawn last, over everything.
                 fullscreenChart?.let { fc ->
                     ChartExpandOverlay(chart = fc, onClose = { fullscreenChart = null })
+                }
+                // Screensaver — above even the chart overlay; tap wakes the
+                // screen AND the machine (SaverOverlay's doc has the design).
+                if (ui.saverVisible) {
+                    SaverOverlay(
+                        lastShotAtMs = ui.lastShot?.completedAtMs,
+                        onWake = viewModel::dismissSaver,
+                    )
                 }
                 }
                 }

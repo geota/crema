@@ -61,6 +61,12 @@ data class AppPrefs(
     val chartChannels: Set<String> = setOf("pressure", "flow", "weight"),
     /** Hold FLAG_KEEP_SCREEN_ON while a shot is pulling. */
     val keepScreenOnBrew: Boolean = false,
+    // ── Sleep & screensaver (platform extras — deliberately NOT in
+    // CommonSettings; the backup design keeps screensaver per-shell) ─────────
+    /** Idle minutes before the screensaver shows; 0 = never. */
+    val screensaverAfterMin: Int = 30,
+    /** Put the DE1 to sleep when the saver starts (tap wakes both). */
+    val sleepMachineWithSaver: Boolean = true,
     /** Show the inline debug / event-log panel in Settings → Advanced
      *  (web `showDebugPanel`). */
     val showDebugPanel: Boolean = false,
@@ -205,6 +211,8 @@ fun AppPrefs.withCommonSettings(c: CommonSettings): AppPrefs = copy(
 private data class PersistedPrefs(
     val common: CommonSettings,
     // ── Platform extras (per-device / Android-only; never cross-shell) ────────
+    val screensaverAfterMin: Int = 30,
+    val sleepMachineWithSaver: Boolean = true,
     val qcGrind: Float? = null,
     val activeProfileId: String? = null,
     val de1Address: String? = null,
@@ -218,6 +226,8 @@ private data class PersistedPrefs(
 
 private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     common = toCommonSettings(),
+    screensaverAfterMin = screensaverAfterMin,
+    sleepMachineWithSaver = sleepMachineWithSaver,
     qcGrind = qcGrind,
     activeProfileId = activeProfileId,
     de1Address = de1Address,
@@ -230,6 +240,8 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
 )
 
 private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSettings(common).copy(
+    screensaverAfterMin = screensaverAfterMin,
+    sleepMachineWithSaver = sleepMachineWithSaver,
     qcGrind = qcGrind,
     activeProfileId = activeProfileId,
     de1Address = de1Address,

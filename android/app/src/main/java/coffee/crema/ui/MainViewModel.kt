@@ -427,6 +427,15 @@ data class MainUiState(
     val steamPurge: Boolean = false,
     /** Hold the screen on while a shot is pulling (Settings → Display). */
     val keepScreenOnBrew: Boolean = false,
+    // ── Sleep & screensaver (Settings → Display; per-shell platform prefs) ──
+    /** Idle minutes before the screensaver shows; 0 = never. */
+    val screensaverAfterMin: Int = 30,
+    /** Also put the DE1 to sleep when the saver starts (de1app/Decenza
+     *  coupling; OFF = display-only dimming). */
+    val sleepMachineWithSaver: Boolean = true,
+    /** Whether the screensaver overlay is currently shown. Set by the idle
+     *  checker or a live machine-sleep transition; cleared by tap-to-wake. */
+    val saverVisible: Boolean = false,
     /** Brew defaults (Settings → Brew defaults) — seed new profiles + QC fallbacks.
      *  Seeded from the core's [BrewDefaults] so web + Android share one source. */
     val defaultDoseG: Float = BrewDefaults.INSTANCE.doseG,
@@ -1120,6 +1129,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             drive.load()
         }
         startDe1KeepAlive()
+        startScreensaverClock()
         // Mirror the Visualizer controller's state into the UI snapshot.
         viewModelScope.launch {
             visualizer.state.collect { vs ->
@@ -3310,6 +3320,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         steamPurge = _ui.value.steamPurge,
         chartChannels = _ui.value.chartChannels,
         keepScreenOnBrew = _ui.value.keepScreenOnBrew,
+        screensaverAfterMin = _ui.value.screensaverAfterMin,
+        sleepMachineWithSaver = _ui.value.sleepMachineWithSaver,
         grinderModel = _ui.value.grinderModel,
         suppressDe1Sleep = _ui.value.suppressDe1Sleep,
         showDebugPanel = _ui.value.showDebugPanel,
@@ -4331,6 +4343,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             steamPurge = p.steamPurge,
             chartChannels = p.chartChannels,
             keepScreenOnBrew = p.keepScreenOnBrew,
+            screensaverAfterMin = p.screensaverAfterMin,
+            sleepMachineWithSaver = p.sleepMachineWithSaver,
             grinderModel = p.grinderModel,
             suppressDe1Sleep = p.suppressDe1Sleep,
             showDebugPanel = p.showDebugPanel,
@@ -4442,9 +4456,91 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             while (true) {
                 delay(60_000)
-                if (_ui.value.suppressDe1Sleep) pokeUserPresent()
+                // The saver owns the sleep policy while shown: don't re-arm
+                // the DE1's presence timer against our own idle decision
+                // (reaprime's PresenceController model — the heartbeat keeps
+                // the machine awake only while the user is actually present).
+                if (_ui.value.suppressDe1Sleep && !_ui.value.saverVisible) pokeUserPresent()
             }
         }
+    }
+
+    // ── Sleep & screensaver ───────────────────────────────────────────────────
+
+    /** Monotonic ms of the last user interaction — bumped by the activity's
+     *  root touch interceptor and by machine transitions into active modes. */
+    @Volatile
+    private var lastInteractionAtMs: Long = SystemClock.elapsedRealtime()
+
+    /** Bump the idle clock. Called on every touch (MainActivity's root
+     *  interceptor, Initial pass, never consumes) — cheap and lock-free. */
+    fun noteUserInteraction() {
+        lastInteractionAtMs = SystemClock.elapsedRealtime()
+    }
+
+    /** The idle checker: every 30 s, show the saver once idle passes the
+     *  threshold — never during a shot / steam / cleaning / an upload
+     *  (de1app + Decenza's operation guards; a blocked trigger simply
+     *  re-arms). Coupled machine sleep only from Idle. */
+    private fun startScreensaverClock() {
+        viewModelScope.launch {
+            while (true) {
+                delay(30_000)
+                val s = _ui.value
+                val afterMin = s.screensaverAfterMin
+                if (afterMin <= 0 || s.saverVisible) continue
+                val idleMs = SystemClock.elapsedRealtime() - lastInteractionAtMs
+                if (idleMs < afterMin * 60_000L) continue
+                if (machineBusyForSaver(s)) continue
+                showSaver()
+            }
+        }
+    }
+
+    /** Machine states / app work that must never be interrupted by the saver. */
+    private fun machineBusyForSaver(s: MainUiState): Boolean =
+        s.shotInProgress || s.profileUploading ||
+            s.machineStateName in setOf(
+                MachineState.Espresso, MachineState.Steam, MachineState.HotWater,
+                MachineState.HotWaterRinse, MachineState.Descale, MachineState.Clean,
+            )
+
+    /** Show the saver; when coupled, also put the DE1 to sleep (only from a
+     *  known-Idle machine — de1app's start_sleep gate). */
+    private fun showSaver() {
+        _ui.update { it.copy(saverVisible = true) }
+        if (_ui.value.sleepMachineWithSaver &&
+            ble.state.value == De1BleManager.State.READY &&
+            _ui.value.machineStateName == MachineState.Idle
+        ) {
+            sleep()
+        }
+    }
+
+    /** Tap-to-wake: dismiss the saver, re-arm the idle clock, and wake the
+     *  DE1 if we (or the GHC) put it to sleep — one tap does both, like
+     *  de1app's saver button and Decenza's ScreensaverPage.wake(). */
+    fun dismissSaver() {
+        noteUserInteraction()
+        if (!_ui.value.saverVisible) return
+        _ui.update { it.copy(saverVisible = false) }
+        if (ble.state.value == De1BleManager.State.READY &&
+            _ui.value.machineStateName == MachineState.Sleep
+        ) {
+            wake()
+        }
+    }
+
+    /** Set the screensaver idle timeout, minutes (0 = never). Persisted. */
+    fun setScreensaverAfterMin(minutes: Int) {
+        _ui.update { it.copy(screensaverAfterMin = minutes.coerceIn(0, 120)) }
+        persistPrefs()
+    }
+
+    /** Toggle the coupled machine sleep. Persisted. */
+    fun setSleepMachineWithSaver(on: Boolean) {
+        _ui.update { it.copy(sleepMachineWithSaver = on) }
+        persistPrefs()
     }
 
     // ── Maintenance intervals (web WaterSection "Maintenance intervals") ─────
@@ -4919,6 +5015,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val mode = c.state == MachineState.Steam ||
                     c.state == MachineState.HotWater ||
                     c.state == MachineState.HotWaterRinse
+                // Screensaver ↔ machine-sleep coupling, both directions
+                // (de1app gui.tcl:60-64; Decenza main.qml:3019-3027):
+                //  • a LIVE transition into Sleep/GoingToSleep (GHC tap or the
+                //    machine's own timer) shows the saver — but not the first
+                //    state report after connect (Decenza's startup grace:
+                //    connecting to an already-asleep DE1 must not hijack the UI);
+                //  • the machine waking EXTERNALLY while the saver is up
+                //    dismisses it (no wake() needed — it's already awake);
+                //  • entering any active mode counts as user presence.
+                val prevState = _ui.value.machineStateName
+                val asleep = c.state == MachineState.Sleep || c.state == MachineState.GoingToSleep
+                val wasAsleep = prevState == MachineState.Sleep || prevState == MachineState.GoingToSleep
+                if (asleep && !wasAsleep && prevState != null) {
+                    _ui.update { it.copy(saverVisible = true) }
+                } else if (!asleep && wasAsleep && _ui.value.saverVisible) {
+                    _ui.update { it.copy(saverVisible = false) }
+                    noteUserInteraction()
+                }
+                if (mode || c.state == MachineState.Espresso) noteUserInteraction()
                 _ui.update { prev ->
                     val started = when {
                         !mode -> null
