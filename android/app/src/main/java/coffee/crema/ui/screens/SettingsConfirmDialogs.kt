@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.fmt
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -168,8 +169,8 @@ fun SettingsConfirmDialogs(state: SettingsConfirmState, vm: MainViewModel, ui: M
     state.pendingFlowMultiplier?.let { mult ->
         CremaConfirmDialog(
             title = "Apply flow calibration?",
-            body = "Every flow and volume estimate scales by this multiplier (×${String.format("%.2f", mult)}). Calibrate only against a known reference. Type flow to confirm.",
-            confirmLabel = "Apply ×${String.format("%.2f", mult)}",
+            body = "Every flow and volume estimate scales by this multiplier (×${fmt("%.2f",  mult)}). Calibrate only against a known reference. Type flow to confirm.",
+            confirmLabel = "Apply ×${fmt("%.2f",  mult)}",
             requireTyped = "flow",
             onConfirm = {
                 vm.setFlowMultiplier(mult)

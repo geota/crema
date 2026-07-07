@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.BorderStroke
@@ -197,7 +198,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     BE_TOC.forEachIndexed { i, label ->
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text(
-                                "%02d".format(i + 1),
+                                fmt("%02d", i + 1),
                                 style = MaterialTheme.typography.labelMedium.copy(fontFamily = JetBrainsMono),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -271,14 +272,14 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 BeBlock("04", "Bag & Grind", "Bag size auto-debits per shot. Grinder is bean-scoped.") {
                     BeRow("Bag size", stack = true) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            CremaStepper(value = bagSize, unit = "g", onChange = { bagSize = it }, step = 10.0, min = 0.0, max = 2000.0, fmt = { "%.0f".format(it) })
+                            CremaStepper(value = bagSize, unit = "g", onChange = { bagSize = it }, step = 10.0, min = 0.0, max = 2000.0, fmt = { fmt("%.0f", it) })
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 BAG_PRESETS.forEach { g -> PresetChip(g, bagSize.toInt() == g) { bagSize = g.toDouble() } }
                             }
                         }
                     }
                     BeRow("Remaining", stack = true) {
-                        CremaStepper(value = remaining, unit = "g", onChange = { remaining = it }, step = 5.0, min = 0.0, max = 2000.0, fmt = { "%.0f".format(it) })
+                        CremaStepper(value = remaining, unit = "g", onChange = { remaining = it }, step = 5.0, min = 0.0, max = 2000.0, fmt = { fmt("%.0f", it) })
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Box(Modifier.weight(1f)) { BeField("Grinder", grinder) { grinder = it } }

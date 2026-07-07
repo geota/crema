@@ -759,9 +759,9 @@ private fun ScaleSection(
             // The card is titled with the connected scale's advertised name
             // once known, falling back to a plain "Scale" before connect.
             Text(scaleName ?: "Scale", style = MaterialTheme.typography.titleMedium)
-            Field("Weight", scaleWeightG?.let { "%.1f g".format(it) } ?: "—")
-            Field("Flow", scaleFlowGPerS?.let { "%.1f g/s".format(it) } ?: "—")
-            Field("Timer", scaleTimerMs?.let { "%.1f s".format(it / 1000.0) } ?: "—")
+            Field("Weight", scaleWeightG?.let { fmt("%.1f g", it) } ?: "—")
+            Field("Flow", scaleFlowGPerS?.let { fmt("%.1f g/s", it) } ?: "—")
+            Field("Timer", scaleTimerMs?.let { fmt("%.1f s", it / 1000.0) } ?: "—")
             Field("Battery", scaleBatteryPercent?.let { "$it %" } ?: "—")
             // The scale's identity from its connect-time serial response.
             Field("Firmware", scaleFirmware ?: "—")

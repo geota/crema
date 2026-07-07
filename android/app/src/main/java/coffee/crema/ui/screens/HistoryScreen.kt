@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.fmt
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -431,9 +432,9 @@ private fun StatsStrip(history: List<StoredShot>, weightUnit: String) {
         StatTile("Shots", "${s.shots}", "shots", if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
         StatTile("Weight", totalWt.value, s.totalWeightG?.let { totalWt.unit }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
         StatTile("Avg weight", avgWt.value, s.avgWeightG?.let { avgWt.unit }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
-        StatTile("Avg ratio", s.avgRatio?.let { "1:%.1f".format(it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
-        StatTile("Avg time", s.avgTimeS?.let { "%.0f".format(it) } ?: "—", s.avgTimeS?.let { "s" }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
-        StatTile("Avg rating", s.avgRating?.let { "%.1f".format(it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Avg ratio", s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Avg time", s.avgTimeS?.let { fmt("%.0f", it) } ?: "—", s.avgTimeS?.let { "s" }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Avg rating", s.avgRating?.let { fmt("%.1f", it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
     }
 }
 
@@ -604,7 +605,7 @@ private fun ShotDetail(
                     // Grind used for THIS shot (issue #16): the QC dial recorded at
                     // capture, else the bean-snapshot reference setting.
                     (
-                        shot.grindSetting?.let { g -> "Grind " + (if (g % 1f == 0f) "%.0f".format(g) else "%.1f".format(g)) }
+                        shot.grindSetting?.let { g -> "Grind " + (if (g % 1f == 0f) fmt("%.0f", g) else fmt("%.1f", g)) }
                             ?: shot.bean?.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" }
                     )?.let { add(it) }
                 }.joinToString(" · ")
@@ -641,7 +642,7 @@ private fun ShotDetail(
             val mPeakT = convertTemp(shot.peakTemp, tempUnit)
             val mPeakWt = convertWeight(peakWt, weightUnit)
             val mYield = convertWeight(shot.yieldG, weightUnit)
-            MetricCard("Time", "%.0f".format(shot.durationMs / 1000.0), "s", Modifier.weight(1f))
+            MetricCard("Time", fmt("%.0f", shot.durationMs / 1000.0), "s", Modifier.weight(1f))
             MetricCard("Peak pressure", mPeakP.value, shot.peakPressure?.let { mPeakP.unit }, Modifier.weight(1f))
             MetricCard("Peak temp", mPeakT.value, shot.peakTemp?.let { mPeakT.unit }, Modifier.weight(1f))
             MetricCard("Peak wt", mPeakWt.value, peakWt?.let { mPeakWt.unit }, Modifier.weight(1f))

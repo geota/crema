@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.fmt
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -330,9 +331,9 @@ private fun PhoneStatsStrip(history: List<StoredShot>) {
         Modifier.fillMaxWidth().padding(horizontal = CremaEdge, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        PhoneStatTile("Avg ratio", s.avgRatio?.let { "1:%.1f".format(it) } ?: "—", Modifier.weight(1f))
-        PhoneStatTile("Avg time", s.avgTimeS?.let { "%.0fs".format(it) } ?: "—", Modifier.weight(1f))
-        PhoneStatTile("Avg rating", s.avgRating?.let { "%.1f★".format(it) } ?: "—", Modifier.weight(1f))
+        PhoneStatTile("Avg ratio", s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—", Modifier.weight(1f))
+        PhoneStatTile("Avg time", s.avgTimeS?.let { fmt("%.0fs", it) } ?: "—", Modifier.weight(1f))
+        PhoneStatTile("Avg rating", s.avgRating?.let { fmt("%.1f★", it) } ?: "—", Modifier.weight(1f))
     }
 }
 
@@ -426,7 +427,7 @@ private fun PhoneShotRow(
                 )
                 RowMono(shotRatioLabel(shot) ?: "—")
                 RowMono(shot.yieldG?.let { convertWeight(it, weightUnit).let { m -> "${m.value}${m.unit}" } } ?: "—")
-                RowMono("%.0fs".format(shot.durationMs / 1000.0))
+                RowMono(fmt("%.0fs", shot.durationMs / 1000.0))
             }
         }
         when {
@@ -478,7 +479,7 @@ private fun PhoneShotDetail(
                     shot.beanLabel?.let { add(it) }
                     // Grind used for THIS shot (issue #16).
                     (
-                        shot.grindSetting?.let { g -> "Grind " + (if (g % 1f == 0f) "%.0f".format(g) else "%.1f".format(g)) }
+                        shot.grindSetting?.let { g -> "Grind " + (if (g % 1f == 0f) fmt("%.0f", g) else fmt("%.1f", g)) }
                             ?: shot.bean?.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" }
                     )?.let { add(it) }
                     add(
@@ -562,7 +563,7 @@ private fun PhoneShotDetail(
                 val dPeakP = convertPressure(shot.peakPressure, pressureUnit)
                 val dPeakT = convertTemp(shot.peakTemp, tempUnit)
                 val dYield = convertWeight(shot.yieldG, weightUnit)
-                DetailMetric("%.0fs".format(shot.durationMs / 1000.0), "Time", null, Modifier.weight(1f))
+                DetailMetric(fmt("%.0fs", shot.durationMs / 1000.0), "Time", null, Modifier.weight(1f))
                 DetailMetric(shot.peakPressure?.let { dPeakP.value } ?: "—", "Peak ${dPeakP.unit}", tel.pressure, Modifier.weight(1f))
                 DetailMetric(shot.peakTemp?.let { "${dPeakT.value}${dPeakT.unit}" } ?: "—", "Peak temp", tel.temp, Modifier.weight(1f))
                 DetailMetric(shot.yieldG?.let { "${dYield.value}${dYield.unit}" } ?: "—", "Yield", tel.weight, Modifier.weight(1f))

@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.fmt
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -574,8 +575,13 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
                         Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(999.dp))
                             .background(MaterialTheme.colorScheme.surfaceContainerHighest),
                     ) {
+                        // Zero-guard (review #33): a zero-yield profile with no
+                        // scale reading yet gives 0/0 = NaN, and
+                        // fillMaxWidth(NaN) throws mid-shot. The tablet path
+                        // guards this; now the phone does too.
+                        val yieldFrac = if (target > 0f) (weight / target).coerceIn(0f, 1f) else 0f
                         Box(
-                            Modifier.fillMaxWidth((weight / target).coerceIn(0f, 1f)).fillMaxHeight()
+                            Modifier.fillMaxWidth(yieldFrac).fillMaxHeight()
                                 .clip(RoundedCornerShape(999.dp))
                                 .background(MaterialTheme.colorScheme.primary),
                         )
@@ -646,7 +652,7 @@ private fun phaseLabel(phase: String?): String = when (phase) {
 }
 
 private fun fmtF(v: Float?, digits: Int = 1): String =
-    if (v == null) "—" else "%.${digits}f".format(v)
+    if (v == null) "—" else fmt("%.${digits}f", v)
 
 // Dual-channel chip (proto .pf-dchip).
 @Composable
@@ -906,7 +912,7 @@ private fun RestingBody(
                             if (yy != null && d != null && d > 0f) formatRatio(d, yy) else "—"
                         }
                         val peak = convertPressure(last.peakPressure, ui.pressureUnit)
-                        ReadyParam("TIME", "%.1f".format(last.durationMs / 1000.0), "s", Modifier.weight(1f))
+                        ReadyParam("TIME", fmt("%.1f", last.durationMs / 1000.0), "s", Modifier.weight(1f))
                         ReadyParam("YIELD", if (last.yieldG != null) y.value else "—", if (last.yieldG != null) y.unit else "", Modifier.weight(1f))
                         ReadyParam("RATIO", ratio, "", Modifier.weight(1f))
                         ReadyParam("PEAK", if (last.peakPressure != null) peak.value else "—", if (last.peakPressure != null) peak.unit else "", Modifier.weight(1f))
@@ -946,7 +952,7 @@ private fun RestingBody(
             val scaleM = convertWeight(restScaleG, ui.weightUnit)
             MStat("Group", "thermometer", ui.headTemp?.let { "${groupM.value}${groupM.unit}" } ?: "—", groupOk, Modifier.weight(1f))
             MStat("Steam", "cloud", ui.steamTemp?.let { "${steamM.value}${steamM.unit}" } ?: "—", steamOk, Modifier.weight(1f))
-            MStat("Tank", "drop-half", ui.waterLevelMm?.let { "%.0fmm".format(it) } ?: "—", tankOk, Modifier.weight(1f))
+            MStat("Tank", "drop-half", ui.waterLevelMm?.let { fmt("%.0fmm", it) } ?: "—", tankOk, Modifier.weight(1f))
             MStat("Scale", "scales", if (scaleConnected) "${scaleM.value}${scaleM.unit}" else "—", scaleConnected, Modifier.weight(1f))
         }
     }
@@ -1042,7 +1048,7 @@ private fun ModeCluster(
     val steaming = ui.machineStateName == MachineState.Steam
     val dispensing = ui.machineStateName == MachineState.HotWater
     val flushing = ui.machineStateName == MachineState.HotWaterRinse
-    fun deg(c: Float) = "%.0f°".format(if (ui.tempUnit == "F") celsiusToFahrenheit(c) else c)
+    fun deg(c: Float) = fmt("%.0f°", if (ui.tempUnit == "F") celsiusToFahrenheit(c) else c)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ModePill(
             "Steam",
@@ -1087,7 +1093,7 @@ private fun ModeStatusBanner(
     onStop: () -> Unit,
 ) {
     val elapsedS = elapsedMs / 1000f
-    val meta = "%.1f / %.0f s".format(elapsedS, targetS) +
+    val meta = fmt("%.1f / %.0f s", elapsedS, targetS) +
         (tempLabel?.let { " · $it" } ?: "")
     Surface(
         shape = RoundedCornerShape(14.dp),

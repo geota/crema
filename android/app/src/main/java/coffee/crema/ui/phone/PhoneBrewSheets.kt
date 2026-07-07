@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -162,7 +163,7 @@ fun PhoneQuickSheet(
                                 min = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MIN_G else QcBounds.GRIND_MIN,
                                 max = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MAX_G else QcBounds.GRIND_MAX,
                                 presets = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 18.0, 19.0, 20.0) else listOf(3.5, 4.0, 4.5, 5.0),
-                                fmt = { "%.1f".format(it) },
+                                fmt = { fmt("%.1f", it) },
                                 onChange = { if (doseGrindMode == DoseGrindMode.Dose) vm.quickAdjustBrew(it, yieldOut, brewTemp) else vm.setQcGrind(it.toFloat()) },
                             )
                             // Yield | Ratio.
@@ -181,7 +182,7 @@ fun PhoneQuickSheet(
                                 min = if (yieldRatioMode == YieldRatioMode.Yield) QcBounds.YIELD_MIN_G else QcBounds.RATIO_MIN,
                                 max = if (yieldRatioMode == YieldRatioMode.Yield) QcBounds.YIELD_MAX_G else QcBounds.RATIO_MAX,
                                 presets = if (yieldRatioMode == YieldRatioMode.Yield) listOf(32.0, 36.0, 40.0, 45.0) else listOf(1.5, 2.0, 2.5, 3.0),
-                                fmt = { if (yieldRatioMode == YieldRatioMode.Yield) "%.1f".format(it) else "1:%.1f".format(it) },
+                                fmt = { if (yieldRatioMode == YieldRatioMode.Yield) fmt("%.1f", it) else fmt("1:%.1f", it) },
                                 onChange = {
                                     if (yieldRatioMode == YieldRatioMode.Yield) vm.quickAdjustBrew(dose, it, brewTemp)
                                     else vm.quickAdjustBrew(dose, dose * it, brewTemp)
@@ -194,7 +195,7 @@ fun PhoneQuickSheet(
                                 header = { Eyebrow("Brew temp") },
                                 value = brewTemp, unit = "°C", step = 0.5, min = QcBounds.BREW_TEMP_MIN_C, max = QcBounds.BREW_TEMP_MAX_C,
                                 presets = listOf(90.0, 93.0, 95.0, 97.0),
-                                fmt = { "%.1f".format(it) },
+                                fmt = { fmt("%.1f", it) },
                                 onChange = { vm.quickAdjustBrew(dose, yieldOut, it) },
                             )
                             // Pre-inf | Flush (local — drives the next shot's fixed params).
@@ -211,7 +212,7 @@ fun PhoneQuickSheet(
                                 unit = "s", step = 1.0,
                                 min = QcBounds.PREINF_MIN_S, max = if (piFlushMode == PiFlushMode.Preinf) QcBounds.PREINF_MAX_S else QcBounds.FLUSH_TIME_MAX_S,
                                 presets = if (piFlushMode == PiFlushMode.Preinf) listOf(0.0, 4.0, 8.0, 12.0) else listOf(2.0, 4.0, 6.0, 8.0),
-                                fmt = { "%.0f".format(it) },
+                                fmt = { fmt("%.0f", it) },
                                 onChange = { if (piFlushMode == PiFlushMode.Preinf) preinf = it else flushTime = it },
                             )
                         }
@@ -238,7 +239,7 @@ fun PhoneQuickSheet(
                             min = when (steamMode) { SteamMode.Flow -> QcSteam.MIN_FLOW_ML_S; SteamMode.Temp -> QcSteam.MIN_TEMP_C; SteamMode.Time -> QcSteam.MIN_TIME_S },
                             max = when (steamMode) { SteamMode.Flow -> QcSteam.MAX_FLOW_ML_S; SteamMode.Temp -> QcSteam.MAX_TEMP_C; SteamMode.Time -> QcSteam.MAX_TIME_S },
                             presets = when (steamMode) { SteamMode.Flow -> listOf(0.6, 0.9, 1.2, 1.6, 2.0); SteamMode.Temp -> listOf(140.0, 145.0, 148.0, 150.0, 155.0); SteamMode.Time -> listOf(5.0, 10.0, 15.0, 20.0, 30.0) },
-                            fmt = { if (it % 1.0 == 0.0) "%.0f".format(it) else "%.1f".format(it) },
+                            fmt = { if (it % 1.0 == 0.0) fmt("%.0f", it) else fmt("%.1f", it) },
                             enabled = !(steamMode == SteamMode.Temp && ui.qcSteamTempC <= 0f),
                             onChange = { when (steamMode) { SteamMode.Flow -> vm.setQcSteamFlow(it.toFloat()); SteamMode.Temp -> vm.setQcSteamTemp(it.toFloat()); SteamMode.Time -> vm.setQcSteamTime(it.toFloat()) } },
                         )
@@ -260,7 +261,7 @@ fun PhoneQuickSheet(
                             min = if (waterMode == WaterMode.Temp) QcBounds.WATER_TEMP_MIN_C else QcBounds.WATER_VOL_MIN_ML,
                             max = if (waterMode == WaterMode.Temp) QcBounds.WATER_TEMP_MAX_C else QcBounds.WATER_VOL_MAX_ML,
                             presets = if (waterMode == WaterMode.Temp) listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
-                            fmt = { "%.0f".format(it) },
+                            fmt = { fmt("%.0f", it) },
                             onChange = { if (waterMode == WaterMode.Temp) vm.setQcHotWaterTemp(it.toFloat()) else vm.setQcHotWaterVolume(it.toFloat()) },
                         )
                     }

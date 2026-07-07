@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.fmt
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -309,7 +310,7 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             NumberedSection(
                 "3", "Pressure profile",
                 // Web pe-chart sub: "N segments · Xs total · drag the dots or edit the rows below".
-                "${segs.size} segments · ${"%.0f".format(totalS)}s total · drag the dots or edit the segments below",
+                "${segs.size} segments · ${fmt("%.0f", totalS)}s total · drag the dots or edit the segments below",
                 trailing = {
                     CremaButton(
                         onClick = {
@@ -454,7 +455,7 @@ private fun SegmentRowFull(
             }
             SegCell(1f) {
                 CremaOptionalHeader("Volume", segVolOn, { onEdit(seg.copy(volume = if (segVolOn) null else 50f)) })
-                CremaStepper(value = (seg.volume ?: 0f).toDouble(), unit = "ml", step = 5.0, min = 0.0, max = 500.0, onChange = { onEdit(seg.copy(volume = it.toFloat().takeIf { v -> v > 0f })) }, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BoxedDense, enabled = segVolOn)
+                CremaStepper(value = (seg.volume ?: 0f).toDouble(), unit = "ml", step = 5.0, min = 0.0, max = 500.0, onChange = { onEdit(seg.copy(volume = it.toFloat().takeIf { v -> v > 0f })) }, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BoxedDense, enabled = segVolOn)
             }
             SegCell(1.5f) {
                 CremaSplitLabel(
@@ -572,7 +573,7 @@ private fun RowScope.GroupCard(label: String, weight: Float, content: @Composabl
 // ── Targets/Limits tiles — the eyebrow (or dot header) sits ABOVE a compact
 // stepper box. ────────────────────────────────────────────────────────────────
 @Composable
-private fun LabeledStepper(label: String, value: Double, unit: String?, modifier: Modifier, step: Double, min: Double, max: Double, onChange: (Double) -> Unit, fmt: (Double) -> String = { String.format("%.1f", it) }) {
+private fun LabeledStepper(label: String, value: Double, unit: String?, modifier: Modifier, step: Double, min: Double, max: Double, onChange: (Double) -> Unit, fmt: (Double) -> String = { fmt("%.1f",  it) }) {
     CremaStepper(label = label, value = value, unit = unit, onChange = onChange, step = step, min = min, max = max, fmt = fmt, modifier = modifier, style = CremaStepperStyle.Boxed)
 }
 
@@ -580,7 +581,7 @@ private fun LabeledStepper(label: String, value: Double, unit: String?, modifier
 private fun LimitTile(label: String, value: Double, unit: String?, modifier: Modifier, on: Boolean, onToggle: () -> Unit, step: Double, min: Double, max: Double, onChange: (Double) -> Unit) {
     CremaStepper(
         value = value, unit = unit, onChange = onChange, step = step, min = min, max = max,
-        fmt = { String.format("%.0f", it) }, modifier = modifier, style = CremaStepperStyle.Boxed,
+        fmt = { fmt("%.0f",  it) }, modifier = modifier, style = CremaStepperStyle.Boxed,
         enabled = on, header = { CremaOptionalHeader(label, on, onToggle) },
     )
 }

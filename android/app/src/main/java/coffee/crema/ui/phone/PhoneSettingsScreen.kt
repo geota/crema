@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.fmt
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -372,7 +373,7 @@ private fun MachineSection(
             ) {
                 CremaStepper(
                     value = plate.toDouble(), unit = "°C", step = 1.0, min = 0.0, max = 80.0,
-                    fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact,
+                    fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact,
                     onChange = { if (connected) vm.setCupWarmerTemp(it.toInt()) },
                 )
             }
@@ -424,16 +425,16 @@ private fun BrewDefaultsSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiSta
         val setDefs = { d: Float, r: Float, t: Float, p: Float -> vm.setBrewDefaults(d, r, t, p) }
         val dD = ui.defaultDoseG; val dR = ui.defaultRatio; val dT = ui.defaultBrewTempC; val dP = ui.defaultPreinfuseS
         CremaSettingsRow("Default dose", "Starting dose for a fresh shot.") {
-            CremaStepper(value = dD.toDouble(), unit = "g", step = 0.1, min = 5.0, max = 30.0, fmt = { "%.1f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { setDefs(it.toFloat(), dR, dT, dP) })
+            CremaStepper(value = dD.toDouble(), unit = "g", step = 0.1, min = 5.0, max = 30.0, fmt = { fmt("%.1f", it) }, style = CremaStepperStyle.BareCompact, onChange = { setDefs(it.toFloat(), dR, dT, dP) })
         }
         CremaSettingsRow("Default ratio", "Target brew ratio (yield ÷ dose).") {
-            CremaStepper(value = dR.toDouble(), unit = null, step = 0.1, min = 1.0, max = 5.0, fmt = { "1:%.1f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { setDefs(dD, it.toFloat(), dT, dP) })
+            CremaStepper(value = dR.toDouble(), unit = null, step = 0.1, min = 1.0, max = 5.0, fmt = { fmt("1:%.1f", it) }, style = CremaStepperStyle.BareCompact, onChange = { setDefs(dD, it.toFloat(), dT, dP) })
         }
         CremaSettingsRow("Default brew temp", "Starting group temperature.") {
-            CremaStepper(value = dT.toDouble(), unit = "°C", step = 0.5, min = 80.0, max = 100.0, fmt = { "%.1f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { setDefs(dD, dR, it.toFloat(), dP) })
+            CremaStepper(value = dT.toDouble(), unit = "°C", step = 0.5, min = 80.0, max = 100.0, fmt = { fmt("%.1f", it) }, style = CremaStepperStyle.BareCompact, onChange = { setDefs(dD, dR, it.toFloat(), dP) })
         }
         CremaSettingsRow("Default pre-infusion", "Low-pressure soak before the main shot.", last = true, dot = true, dotOn = dP > 0f, onDot = { setDefs(dD, dR, dT, if (dP > 0f) 0f else 8f) }) {
-            CremaStepper(value = dP.toDouble(), unit = "s", step = 1.0, min = 0.0, max = 60.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { setDefs(dD, dR, dT, it.toFloat()) })
+            CremaStepper(value = dP.toDouble(), unit = "s", step = 1.0, min = 0.0, max = 60.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = { setDefs(dD, dR, dT, it.toFloat()) })
         }
     }
     SettingsGroup("Shot behaviour") {
@@ -448,7 +449,7 @@ private fun BrewDefaultsSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiSta
             val maxDur = ui.maxShotDurationS.toInt()
             CremaStepper(
                 value = maxDur.toDouble(), unit = "s", step = 5.0, min = 0.0, max = 300.0,
-                fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact,
+                fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact,
                 onChange = { vm.setMaxShotDuration(it.toFloat()) },
             )
         }
@@ -532,13 +533,13 @@ private fun WaterSection(
     SettingsGroup("Maintenance intervals") {
         val m2 = ui.maintenance
         CremaSettingsRow("Filter capacity", "Litres before a filter change is due.") {
-            CremaStepper(value = m2.filterCapacityLitres, unit = "L", step = 5.0, min = 5.0, max = 500.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { vm.setFilterCapacity(it) })
+            CremaStepper(value = m2.filterCapacityLitres, unit = "L", step = 5.0, min = 5.0, max = 500.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = { vm.setFilterCapacity(it) })
         }
         CremaSettingsRow("Descale interval", "Litres of brew water between descales.") {
-            CremaStepper(value = m2.descaleIntervalLitres, unit = "L", step = 10.0, min = 10.0, max = 1000.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { vm.setDescaleInterval(it) })
+            CremaStepper(value = m2.descaleIntervalLitres, unit = "L", step = 10.0, min = 10.0, max = 1000.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = { vm.setDescaleInterval(it) })
         }
         CremaSettingsRow("Clean cycle interval", "Hours of machine-on time between cleans.", last = true) {
-            CremaStepper(value = m2.cleanIntervalHours, unit = "h", step = 1.0, min = 1.0, max = 500.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { vm.setCleanInterval(it) })
+            CremaStepper(value = m2.cleanIntervalHours, unit = "h", step = 1.0, min = 1.0, max = 500.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = { vm.setCleanInterval(it) })
         }
     }
     SettingsGroup("Water chemistry") {
@@ -551,10 +552,10 @@ private fun WaterSection(
             )
         }
         CremaSettingsRow("Hardness", "General hardness (GH).", notImplemented = true) {
-            CremaStepper(value = hardnessPpm.toDouble(), unit = "ppm", step = 1.0, min = 0.0, max = 500.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { onHardness(it.toInt()) })
+            CremaStepper(value = hardnessPpm.toDouble(), unit = "ppm", step = 1.0, min = 0.0, max = 500.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = { onHardness(it.toInt()) })
         }
         CremaSettingsRow("Total dissolved solids", "Measured TDS of your water.", last = true, notImplemented = true) {
-            CremaStepper(value = tdsPpm.toDouble(), unit = "ppm", step = 1.0, min = 0.0, max = 1000.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { onTds(it.toInt()) })
+            CremaStepper(value = tdsPpm.toDouble(), unit = "ppm", step = 1.0, min = 0.0, max = 1000.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = { onTds(it.toInt()) })
         }
     }
 }
@@ -590,7 +591,7 @@ private fun DisplaySection(
             )
         }
         CremaSettingsRow("Screensaver", "Show a dim clock after this long idle — tap to wake.", dot = true, dotOn = screensaverAfterMin > 0, onDot = { vm.setScreensaverAfterMin(if (screensaverAfterMin > 0) 0 else 30) }) {
-            CremaStepper(value = screensaverAfterMin.toDouble(), unit = "min", step = 5.0, min = 0.0, max = 120.0, fmt = { if (it <= 0.0) "Off" else "%.0f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { vm.setScreensaverAfterMin(it.toInt()) })
+            CremaStepper(value = screensaverAfterMin.toDouble(), unit = "min", step = 5.0, min = 0.0, max = 120.0, fmt = { if (it <= 0.0) "Off" else fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = { vm.setScreensaverAfterMin(it.toInt()) })
         }
         CremaSettingsRow("Sleep machine with screensaver", "Also put the DE1 to sleep when the saver starts — tapping wakes both.") { CremaSwitch(sleepMachineWithSaver, vm::setSleepMachineWithSaver) }
         CremaSettingsRow("Keep screen on", "Hold the display awake while Crema is open.", last = true) { CremaSwitch(keepScreenOnBrew, vm::setKeepScreenOnBrew) }
@@ -799,14 +800,14 @@ private fun CalibrationSection(
     if (secondary) MirrorControlledNote(ui.mirroringPrimaryName)
     SettingsGroup("Sensor calibration") {
         CremaSettingsRow("Temperature", "Shift every temperature reading.", notImplemented = true) {
-            CremaStepper(value = tempOffset, unit = "°C", step = 0.1, min = -5.0, max = 5.0, fmt = { "%+.1f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = onTempOffset)
+            CremaStepper(value = tempOffset, unit = "°C", step = 0.1, min = -5.0, max = 5.0, fmt = { fmt("%+.1f", it) }, style = CremaStepperStyle.BareCompact, onChange = onTempOffset)
         }
         CremaSettingsRow("Pressure", "Re-zero the pressure sensor at idle.", notImplemented = true) { CremaMonoReadout("0.0 bar", strong = true) }
         val mult = flowMultiplierValue(ui.de1MachineInfo) ?: 1.0
         var flowDraft by remember(mult) { mutableStateOf(mult) }
         val flowDirty = kotlin.math.abs(flowDraft - mult) > 0.0001
         CremaSettingsRow("Flow", "Scale the flow-meter reading. Apply commits after a typed confirm.", needsConnection = !connected) {
-            CremaStepper(value = flowDraft, unit = "×", step = 0.01, min = 0.13, max = 2.0, fmt = { "%.2f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { flowDraft = it })
+            CremaStepper(value = flowDraft, unit = "×", step = 0.01, min = 0.13, max = 2.0, fmt = { fmt("%.2f", it) }, style = CremaStepperStyle.BareCompact, onChange = { flowDraft = it })
         }
         CremaSettingsRow("", null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -815,7 +816,7 @@ private fun CalibrationSection(
             }
         }
         CremaSettingsRow("Last read", "Flow multiplier reported by the DE1.", last = true) {
-            CremaMonoReadout(flowMultiplierValue(ui.de1MachineInfo)?.let { String.format("×%.2f", it) } ?: "—", strong = true)
+            CremaMonoReadout(flowMultiplierValue(ui.de1MachineInfo)?.let { fmt("×%.2f",  it) } ?: "—", strong = true)
         }
     }
 }

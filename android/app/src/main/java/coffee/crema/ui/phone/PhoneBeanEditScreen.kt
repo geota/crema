@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.fmt
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -230,7 +231,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             NumberedGroup("04", "Bag & grind") {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     EdRow("Bag size") {
-                        CremaStepper(value = bagSize, unit = "g", step = 10.0, min = 0.0, max = 2000.0, fmt = { "%.0f".format(it) }, onChange = { bagSize = it }, style = CremaStepperStyle.BareCompact)
+                        CremaStepper(value = bagSize, unit = "g", step = 10.0, min = 0.0, max = 2000.0, fmt = { fmt("%.0f", it) }, onChange = { bagSize = it }, style = CremaStepperStyle.BareCompact)
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         BAG_PRESETS.forEach { g ->
@@ -257,7 +258,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     // Fixed cap, NOT bagSize: quick-added/imported bags have bagSize = 0,
                     // and the stepper clamps every edit through it — which froze Remaining
                     // at 0 (tablet + web use a fixed cap for the same reason, issue #14).
-                    CremaStepper(value = remaining, unit = "g", step = 5.0, min = 0.0, max = 2000.0, fmt = { "%.0f".format(it) }, onChange = { remaining = it }, style = CremaStepperStyle.BareCompact)
+                    CremaStepper(value = remaining, unit = "g", step = 5.0, min = 0.0, max = 2000.0, fmt = { fmt("%.0f", it) }, onChange = { remaining = it }, style = CremaStepperStyle.BareCompact)
                 }
                 CremaTextField(value = grinder, onValueChange = { grinder = it }, label = "Grinder", placeholder = "e.g. Niche Zero")
                 CremaTextField(value = grind, onValueChange = { grind = it }, label = "Grind setting", placeholder = "e.g. 4.2, 6 + a tooth")

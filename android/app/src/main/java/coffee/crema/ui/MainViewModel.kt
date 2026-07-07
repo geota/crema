@@ -2016,7 +2016,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun backupFileName(): String {
         val label = deviceLabel().replace(Regex("[^A-Za-z0-9._-]"), "_")
         val c = java.util.Calendar.getInstance()
-        val stamp = "%04d%02d%02d-%02d%02d".format(
+        val stamp = fmt("%04d%02d%02d-%02d%02d", 
             c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH) + 1, c.get(java.util.Calendar.DAY_OF_MONTH),
             c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE),
         )
@@ -4215,7 +4215,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // The Last-shot card would point at a shot history doesn't
                 // hold — clear it for an aborted pull.
                 lastShot = null,
-                discardToastMessage = "Aborted shot discarded (${"%.1f".format(durationMs / 1000f)} s)",
+                discardToastMessage = "Aborted shot discarded (${fmt("%.1f", durationMs / 1000f)} s)",
             ) }
             appendLog("Shot discarded as aborted (<10 s, <5 g)")
         } else {
@@ -4695,7 +4695,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun saveQuickGrindToBean(): Boolean {
         val dial = _ui.value.qcGrind ?: return false
         val bean = _ui.value.beans.firstOrNull { it.id == _ui.value.activeBeanId } ?: return false
-        val fmt = if (dial % 1f == 0f) "%.0f".format(dial) else "%.1f".format(dial)
+        val fmt = if (dial % 1f == 0f) fmt("%.0f", dial) else fmt("%.1f", dial)
         if (bean.grinderSetting == fmt) return false
         mutateBean(bean.id) { it.copy(grinderSetting = fmt) }
         notifyUser("Grind $fmt saved to ${bean.name}")
@@ -5247,7 +5247,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // SIDE EFFECT — stays OUTSIDE the update lambda so it accumulates
                 // exactly once per frame even if the CAS retries (issue 11).
                 accumulateMaintenance(t.group_flow, System.currentTimeMillis())
-                val line = "t=%dms  P=%.1fbar  flow=%.1fmL/s  head=%.1f°C".format(
+                val line = fmt("t=%dms  P=%.1fbar  flow=%.1fmL/s  head=%.1f°C", 
                     t.elapsed.toLong(), t.group_pressure, t.group_flow, t.head_temp,
                 )
                 // Atomic read-modify-write: build the chart buffer from the lambda's
@@ -5327,7 +5327,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     waterLevelMm = event.content.level,
                     waterRefillThresholdMm = event.content.refill_threshold,
                 ) }
-                appendLog("Water level: %.0fmm".format(event.content.level))
+                appendLog(fmt("Water level: %.0fmm", event.content.level))
             }
             is Event.ShotSettingsRead -> {
                 // Cache the machine's reported steam/hot-water settings so QC
@@ -5339,12 +5339,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(de1ShotSettings = event.content) }
             }
             is Event.SawAutoZeroed -> {
-                val w = "%.0f".format(event.content.offset_g)
+                val w = fmt("%.0f", event.content.offset_g)
                 appendLog("SAW re-zeroed on the fly ($w g cup)")
                 notifyUser("Scale re-zeroed on the fly — $w g was on it")
             }
             is Event.SawSuppressedUntaredCup -> {
-                val w = "%.0f".format(event.content.weight_g)
+                val w = fmt("%.0f", event.content.weight_g)
                 appendLog("SAW suppressed — untared cup ($w g)")
                 notifyUser("Stop-at-weight off for this shot — the scale wasn\u2019t tared ($w g on it)")
             }
@@ -5527,7 +5527,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun appendLog(line: String) {
-        val stamped = "%s  %s".format(
+        val stamped = fmt("%s  %s", 
             android.text.format.DateFormat.format("HH:mm:ss", System.currentTimeMillis()),
             line,
         )

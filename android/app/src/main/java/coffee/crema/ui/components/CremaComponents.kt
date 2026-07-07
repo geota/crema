@@ -1,5 +1,6 @@
 package coffee.crema.ui.components
 
+import coffee.crema.ui.fmt
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -996,7 +997,7 @@ fun TapToEditValue(
     var hadFocus by remember { mutableStateOf(false) }
     var text by remember {
         mutableStateOf(
-            if (value == kotlin.math.floor(value)) "%.0f".format(value)
+            if (value == kotlin.math.floor(value)) fmt("%.0f", value)
             else (kotlin.math.round(value * 100) / 100.0).toString(),
         )
     }
@@ -1562,7 +1563,7 @@ fun CremaStepper(
     step: Double = 0.1,
     min: Double = 0.0,
     max: Double = 100.0,
-    fmt: (Double) -> String = { String.format("%.1f", it) },
+    fmt: (Double) -> String = { fmt("%.1f",  it) },
     modifier: Modifier = Modifier,
     style: CremaStepperStyle = CremaStepperStyle.Telemetry,
     enabled: Boolean = true,

@@ -1,5 +1,7 @@
 package coffee.crema.ui
 
+import java.util.Locale
+
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import coffee.crema.beans.freshnessVerdict
@@ -9,6 +11,16 @@ import coffee.crema.core.brewRatio
 import coffee.crema.core.celsiusToFahrenheit
 import coffee.crema.core.gramsToOz
 import coffee.crema.core.mlToFlOz
+
+/**
+ * Locale-pinned `String.format` — ALL numeric display formatting must go
+ * through this (review #33). Kotlin's bare `fmt("…", x)` uses the device
+ * locale: on de/fr/es/tr devices `%.1f` renders a comma decimal ("36,0 g",
+ * "1:2,4") diverging from the web shell, and `%d` can emit non-Latin
+ * digits under some locales. `Locale.US` keeps every readout dot-decimal
+ * and ASCII, matching web + the wire formats.
+ */
+fun fmt(pattern: String, vararg args: Any?): String = String.format(Locale.US, pattern, *args)
 
 /**
  * Canonical brew-ratio label `1:N` with **one decimal** (e.g. `1:2.4`), or
@@ -23,7 +35,7 @@ import coffee.crema.core.mlToFlOz
 fun formatRatio(dose: Float?, yieldOut: Float?): String {
     if (dose == null || yieldOut == null) return "1:—"
     val r = brewRatio(dose, yieldOut) ?: return "1:—"
-    return "1:%.1f".format(r)
+    return fmt("1:%.1f", r)
 }
 
 /** [Double] overload for call sites holding `Double` dose/yield values. */
@@ -53,8 +65,8 @@ fun convertWeight(grams: Float?, unit: String): Measurement {
     val oz = unit == "oz"
     val label = if (oz) "oz" else "g"
     if (grams == null || !grams.isPresentReading()) return Measurement(DASH, label)
-    return if (oz) Measurement("%.2f".format(gramsToOz(grams)), "oz")
-    else Measurement("%.1f".format(grams), "g")
+    return if (oz) Measurement(fmt("%.2f", gramsToOz(grams)), "oz")
+    else Measurement(fmt("%.1f", grams), "g")
 }
 
 /** Convert a temperature (canonical °C) to the chosen unit (`"C"`/`"F"`). */
@@ -62,8 +74,8 @@ fun convertTemp(celsius: Float?, unit: String): Measurement {
     val f = unit == "F"
     val label = if (f) "°F" else "°C"
     if (celsius == null || !celsius.isPresentReading()) return Measurement(DASH, label)
-    return if (f) Measurement("%.1f".format(celsiusToFahrenheit(celsius)), "°F")
-    else Measurement("%.1f".format(celsius), "°C")
+    return if (f) Measurement(fmt("%.1f", celsiusToFahrenheit(celsius)), "°F")
+    else Measurement(fmt("%.1f", celsius), "°C")
 }
 
 /** Convert a pressure (canonical bar) to the chosen unit (`"bar"`/`"psi"`). */
@@ -71,8 +83,8 @@ fun convertPressure(bar: Float?, unit: String): Measurement {
     val psi = unit == "psi"
     val label = if (psi) "psi" else "bar"
     if (bar == null || !bar.isPresentReading()) return Measurement(DASH, label)
-    return if (psi) Measurement("%.0f".format(barToPsi(bar)), "psi")
-    else Measurement("%.1f".format(bar), "bar")
+    return if (psi) Measurement(fmt("%.0f", barToPsi(bar)), "psi")
+    else Measurement(fmt("%.1f", bar), "bar")
 }
 
 /** Convert a volume (canonical ml) to the chosen unit (`"ml"`/`"floz"`). */
@@ -80,8 +92,8 @@ fun convertVolume(ml: Float?, unit: String): Measurement {
     val floz = unit == "floz"
     val label = if (floz) "fl oz" else "ml"
     if (ml == null || !ml.isPresentReading()) return Measurement(DASH, label)
-    return if (floz) Measurement("%.1f".format(mlToFlOz(ml)), "fl oz")
-    else Measurement("%.0f".format(ml), "ml")
+    return if (floz) Measurement(fmt("%.1f", mlToFlOz(ml)), "fl oz")
+    else Measurement(fmt("%.0f", ml), "ml")
 }
 
 private fun Measurement.joined(): String = if (unit.isNotEmpty()) "$value $unit" else value

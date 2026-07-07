@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -108,7 +109,7 @@ fun PhoneScaleScreen(
                 else MaterialTheme.colorScheme.outline
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    String.format("%.1f", if (connected) weight else 0.0),
+                    fmt("%.1f",  if (connected) weight else 0.0),
                     style = CremaTheme.readout.readoutXl,
                     color = heroColor,
                 )
@@ -231,7 +232,7 @@ private fun ConnectedBody(
                     PhIcon("plus", sizeDp = 16); Spacer(Modifier.width(4.dp)); Text("Add 0.5 g")
                 }
                 Text(
-                    String.format("Target %.1f g", target),
+                    fmt("Target %.1f g",  target),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

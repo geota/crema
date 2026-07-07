@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -82,7 +83,7 @@ import coffee.crema.ui.components.SplitOption
  * grind / pre-infuse / steam / water / flush are local (Android has no per-mode
  * param store yet — the chips/steppers drive the next shot's fixed params).
  */
-private val niceFmt: (Double) -> String = { v -> if (v == kotlin.math.floor(v)) "%.0f".format(v) else "%.1f".format(v) }
+private val niceFmt: (Double) -> String = { v -> if (v == kotlin.math.floor(v)) fmt("%.0f", v) else fmt("%.1f", v) }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable

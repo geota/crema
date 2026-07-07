@@ -60,9 +60,9 @@ fun modeTargetSeconds(state: MachineState?, t: ModeTargets): Float? = when (stat
 
 /** Live `elapsed / total s` counter for an active mode's chip sub-label. */
 fun modeRunningSub(elapsedMs: Long, targetS: Float): String =
-    "%.1f / %.0f s".format(elapsedMs / 1000f, targetS)
+    fmt("%.1f / %.0f s", elapsedMs / 1000f, targetS)
 
 /** Compact whole-degree temperature for the dense mode chips, e.g. "148 °C". */
 fun formatTempCompact(celsius: Float, unit: String): String =
-    if (unit == "F") "%.0f °F".format(celsiusToFahrenheit(celsius))
-    else "%.0f °C".format(celsius)
+    if (unit == "F") fmt("%.0f °F", celsiusToFahrenheit(celsius))
+    else fmt("%.0f °C", celsius)

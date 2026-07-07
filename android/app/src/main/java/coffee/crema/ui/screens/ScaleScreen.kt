@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -372,7 +373,7 @@ fun ScaleCapabilityRows(
                 step = 1.0,
                 min = standby.min.toDouble(),
                 max = standby.max.toDouble(),
-                fmt = { String.format("%.0f", it) },
+                fmt = { fmt("%.0f",  it) },
             )
         }
     }

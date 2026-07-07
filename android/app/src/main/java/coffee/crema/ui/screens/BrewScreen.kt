@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.fmt
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -994,7 +995,7 @@ private fun TimerCard(running: Boolean, elapsedMs: Long, phase: String?, modeLab
             // the frac no longer sits low/misaligned against the main readout.
             Row {
                 Text(
-                    "%02d:%02d".format(mm, ss),
+                    fmt("%02d:%02d", mm, ss),
                     style = CremaTheme.readout.readoutMd.copy(fontSize = 44.sp, lineHeight = 48.sp),
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.alignByBaseline(),
@@ -1216,8 +1217,8 @@ private fun LimitsCard(active: CremaProfile?, ui: coffee.crema.ui.MainUiState) {
         // Time cap from the persisted setting (ui.maxShotDurationS); live = elapsed
         // shot seconds. Always shown — it's a global hard cap, not profile-scoped.
         if (ui.maxShotDurationS > 0f) {
-            val liveS = "%.0f".format(ui.shotElapsedMs / 1000f)
-            val targetS = "%.0f".format(ui.maxShotDurationS)
+            val liveS = fmt("%.0f", ui.shotElapsedMs / 1000f)
+            val targetS = fmt("%.0f", ui.maxShotDurationS)
             add(LimitRow("Time", "timer", timeColor, ui.shotElapsedMs / 1000f, ui.maxShotDurationS, liveS, targetS, "s", fired = ui.lastStopReason == StopReason.MaxTime))
         }
     }
@@ -1314,7 +1315,7 @@ private fun LastShotCard(
             // 5 stats in a 3-col grid (Time · Yield · Ratio / Peak · Peak temp), the
             // web .ls-grid order. Float? guarded before %f (never pass an Int).
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                LastShotStat("Time", "%.1f".format(last.durationMs / 1000.0), "s", Modifier.weight(1f))
+                LastShotStat("Time", fmt("%.1f", last.durationMs / 1000.0), "s", Modifier.weight(1f))
                 LastShotStat("Yield", yield_.value, yieldG?.let { yield_.unit }, Modifier.weight(1f))
                 LastShotStat("Ratio", ratio, null, Modifier.weight(1f))
             }
@@ -1481,7 +1482,7 @@ private fun BrewFoot(
                 FootDivider()
                 val steam = convertTemp(ui.steamTemp, ui.tempUnit)
                 FootMeta("Steam", steam.value, ui.steamTemp?.let { steam.unit })
-                FootMeta("Tank", ui.waterLevelMm?.let { "%.0f".format(it) } ?: "—", ui.waterLevelMm?.let { "mm" })
+                FootMeta("Tank", ui.waterLevelMm?.let { fmt("%.0f", it) } ?: "—", ui.waterLevelMm?.let { "mm" })
             }
             // Right actions. Chip sub-labels are live (were hardcoded): resting
             // shows the *target* the firmware will hold (machine ShotSettings →
@@ -1657,7 +1658,7 @@ private fun StatBar(fraction: Float, color: Color) {
 }
 
 private fun fmt(v: Float?, digits: Int = 1): String =
-    if (v == null) "—" else "%.${digits}f".format(v)
+    if (v == null) "—" else fmt("%.${digits}f", v)
 
 
 private fun phaseStepLabel(phase: String?): String = when (phase) {
@@ -1670,6 +1671,6 @@ private fun phaseStepLabel(phase: String?): String = when (phase) {
 
 private fun phaseTime(t: Float): String = when {
     t <= 0f -> "—"
-    t < 1f -> "%.1fs".format(t)
+    t < 1f -> fmt("%.1fs", t)
     else -> "${t.roundToInt()}s"
 }

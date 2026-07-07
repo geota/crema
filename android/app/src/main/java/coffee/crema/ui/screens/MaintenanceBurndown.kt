@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.fmt
 import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.MaintenanceState
 
@@ -31,7 +32,7 @@ data class MaintenanceRowReadout(
  */
 
 fun MaintenanceReadout.filterRow(m: MaintenanceState) = MaintenanceRowReadout(
-    note = "${String.format("%.1f", filterUsedLitres)} L of ${m.filterCapacityLitres.toInt()} L used",
+    note = "${fmt("%.1f",  filterUsedLitres)} L of ${m.filterCapacityLitres.toInt()} L used",
     value = "${filterPercent.toInt()}",
     unit = "%",
     pct = (filterPercent / 100.0).toFloat(),
@@ -39,8 +40,8 @@ fun MaintenanceReadout.filterRow(m: MaintenanceState) = MaintenanceRowReadout(
 )
 
 fun MaintenanceReadout.descaleRow(m: MaintenanceState) = MaintenanceRowReadout(
-    note = "${String.format("%.0f", descaleSinceLitres)} L since last descale · every ${m.descaleIntervalLitres.toInt()} L",
-    value = String.format("%.0f", descaleSinceLitres),
+    note = "${fmt("%.0f",  descaleSinceLitres)} L since last descale · every ${m.descaleIntervalLitres.toInt()} L",
+    value = fmt("%.0f",  descaleSinceLitres),
     unit = "L",
     pct = if (m.descaleIntervalLitres > 0.0) (descaleSinceLitres / m.descaleIntervalLitres).toFloat() else 0f,
     due = !descaleOk,
