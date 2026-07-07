@@ -1091,7 +1091,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // when an unrelated event happens to call observeBleState().
         viewModelScope.launch {
             var wasReady = false
+            // Guarded (review #36): a throw inside a StateFlow collector
+            // cancels it FOREVER — BLE-state→UI sync would silently stop.
             ble.state.collect { state ->
+                runCatching {
                 _ui.update { it.copy(bleState = state, de1BluetoothAddress = ble.connectedAddress) }
                 // A DE1 connect/disconnect changes the roster this primary
                 // advertises to its mirrors (issue 04) — re-push so a secondary
@@ -1122,10 +1125,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     lastUploadedFingerprint = null
                     refreshAdvertisement()
                 }
+                }.onFailure { appendLog("DE1 state handling failed: ${it.message}") }
             }
         }
         viewModelScope.launch {
             scale.state.collect { state ->
+                runCatching {
                 _ui.update { it.copy(scaleState = state) }
                 // Capability-driven keep-alive: some scales need a periodic
                 // heartbeat write — the Decent's LCD (2 s) and the Acaia,
@@ -1155,6 +1160,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // without needing to reconnect (the Welcome roster is attach-time
                 // only). This closes the gap the issue-04 demo surfaced.
                 relayHub?.pushRoster()
+                }.onFailure { appendLog("Scale state handling failed: ${it.message}") }
             }
         }
         loadBuiltinProfiles()
@@ -3346,7 +3352,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Read just the proxy role/host/port straight off `prefs.json`, synchronously,
      *  for [buildInitialDelegate] (which runs before the async [loadPrefs]). */
-    private fun readProxyConfigSync(): ProxyConfig = runCatching {
+    /** Construction-time proxy-config snapshot — read the file ONCE
+     *  (review #36: three blocking main-thread disk reads during VM
+     *  construction). The role/host/port are restart-to-apply anyway. */
+    private val proxyConfigCache: ProxyConfig by lazy { readProxyConfigUncached() }
+
+    private fun readProxyConfigSync(): ProxyConfig = proxyConfigCache
+
+    private fun readProxyConfigUncached(): ProxyConfig = runCatching {
         val f = File(getApplication<Application>().filesDir, "prefs.json")
         if (!f.exists()) return ProxyConfig("normal", "", 0)
         val p = json.decodeFromString(AppPrefs.serializer(), f.readText())
@@ -5287,7 +5300,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // sample (~25–40 Hz); flushed on shot / water-session completion.
                 // SIDE EFFECT — stays OUTSIDE the update lambda so it accumulates
                 // exactly once per frame even if the CAS retries (issue 11).
-                accumulateMaintenance(t.group_flow, System.currentTimeMillis())
+                // Monotonic clock (review #36): a wall-clock jump (NTP, DST)
+                // used to distort the water integral; elapsedRealtime can't.
+                accumulateMaintenance(t.group_flow, SystemClock.elapsedRealtime())
                 val line = fmt("t=%dms  P=%.1fbar  flow=%.1fmL/s  head=%.1f°C", 
                     t.elapsed.toLong(), t.group_pressure, t.group_flow, t.head_temp,
                 )

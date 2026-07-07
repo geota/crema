@@ -138,6 +138,9 @@ class ScaleBleManager(
      */
     private var recording = false
 
+    /** Guards the [recording] ref-count across the session/caller threads. */
+    private val recordingLock = Any()
+
     /** Parses the core's `scaleUuids()` JSON into [CoreScaleUuids]. */
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -270,7 +273,6 @@ class ScaleBleManager(
                 serviceUuid = null
                 weightNotifyUuid = null
                 commandUuid = null
-        buttonNotifyUuid = null
                 buttonNotifyUuid = null
                 bridge.disconnectScale()
                 _state.value = State.DISCONNECTED
@@ -294,9 +296,14 @@ class ScaleBleManager(
 
         // Join the shared session recording ONCE per session (not per reconnect),
         // so the recorder open/close ref-count stays balanced across drops.
-        if (!recording) {
-            recording = true
-            recorder.open()?.let { onStatus("Recording session to $it") }
+        // Synchronised (review #36): establish() runs on the manager scope
+        // while disconnect() runs on the caller — an interleaving used to
+        // leak the capture file handle or wedge `recording`.
+        synchronized(recordingLock) {
+            if (!recording) {
+                recording = true
+                recorder.open()?.let { onStatus("Recording session to $it") }
+            }
         }
 
         // Identify the scale with the core so it selects the right codec. An
@@ -368,10 +375,13 @@ class ScaleBleManager(
         sessionJob = null
         val d = device
         // Leave the shared recording; the capture file closes only once the
-        // last device (DE1 or scale) has disconnected.
-        if (recording) {
-            recording = false
-            recorder.close()
+        // last device (DE1 or scale) has disconnected. Synchronised with the
+        // session-side open (review #36).
+        synchronized(recordingLock) {
+            if (recording) {
+                recording = false
+                recorder.close()
+            }
         }
         observeJob?.cancel()
         observeJob = null

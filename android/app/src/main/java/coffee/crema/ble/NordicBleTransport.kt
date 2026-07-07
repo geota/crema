@@ -405,6 +405,12 @@ class NordicBleTransport(context: Context) : BleTransport {
         runCatching { environment.close() }
             .onFailure { Log.w(TAG, "environment.close() failed", it) }
         scope.cancel()
+        // Full teardown (review #36): the state-mirror jobs must cancel and
+        // EVERY per-device map must clear — serviceUuids and stateMirrorJobs
+        // used to leak here.
+        stateMirrorJobs.values.forEach { it.cancel() }
+        stateMirrorJobs.clear()
+        serviceUuids.clear()
         peripherals.clear()
         states.clear()
     }
