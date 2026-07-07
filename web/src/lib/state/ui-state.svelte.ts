@@ -25,6 +25,7 @@ import type {
 	CalTarget,
 	SubState
 } from '$lib/core';
+import type { StopReason } from '$lib/core/crema-core';
 import type { De1State, De1Diagnostics } from '$lib/ble/de1';
 import { EMPTY_DE1_DIAGNOSTICS } from '$lib/ble/de1';
 import type { ScaleState } from '$lib/ble/scale';
@@ -345,6 +346,11 @@ export interface UiSnapshot {
 	 * `app.svelte.ts`).
 	 */
 	readonly activeProfileFingerprint: string | null;
+	/** Which auto-stop condition ended the last shot (weight / volume /
+	 *  max-time), or null when the user stopped it (or no shot yet). Cleared
+	 *  on the next ShotStarted — the stop-conditions card highlights the
+	 *  fired row instead of toasting. */
+	readonly lastStopReason: StopReason | null;
 	/**
 	 * The DE1's currently-loaded profile shape (from a `HeaderWrite` read at
 	 * connect time, populated by `Event::ProfileHeaderRead`). `null` before
@@ -565,6 +571,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	de1Firmware: null,
 	activeProfileName: null,
 	activeProfileFingerprint: null,
+	lastStopReason: null,
 	loadedProfileShape: null,
 	profileUploadProgress: null,
 	de1MachineInfo: {},
@@ -720,6 +727,8 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				shotElapsed: 0,
 				dispensedVolume: 0,
 				shotFrame: 0,
+				// Fresh shot — the previous stop attribution no longer applies.
+				lastStopReason: null,
 				completedShot: null,
 				eventLog: appendLog(snapshot.eventLog, 'Shot started')
 			};
@@ -815,8 +824,11 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				)
 			};
 		case 'StopTriggered':
+			// Attribution lives on the stop-conditions card (gold ring on the
+			// fired row), not a toast.
 			return {
 				...snapshot,
+				lastStopReason: event.content.reason,
 				eventLog: appendLog(snapshot.eventLog, `Auto-stop: ${event.content.reason}`)
 			};
 		case 'ShotCompleted': {

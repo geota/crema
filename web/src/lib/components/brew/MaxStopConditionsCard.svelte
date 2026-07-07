@@ -31,6 +31,9 @@
 		pct: number;
 		/** Channel colour (CSS value) for the icon + bar fill. */
 		color: string;
+		/** True when THIS condition ended the last shot — the row gets a
+		 *  gold ring (the stop attribution lives here, not a toast). */
+		fired?: boolean;
 	};
 
 	let { rows }: { rows: StopConditionRow[] } = $props();
@@ -40,7 +43,7 @@
 	<div class="crema-target crema-stopcond">
 		<div class="crema-stopcond-head"><span class="t-eyebrow">Max · stop conditions</span></div>
 		{#each rows as row (row.key)}
-			<div class="crema-stopcond-row">
+			<div class="crema-stopcond-row" class:is-fired={row.fired}>
 				<div class="crema-stopcond-top">
 					<span class="crema-stopcond-label">
 						<Icon cls={'ph ph-' + row.icon} style="color:{row.color}" aria-hidden="true" />
@@ -58,3 +61,12 @@
 		{/each}
 	</div>
 {/if}
+
+<style>
+	.crema-stopcond-row.is-fired {
+		border: 1px solid var(--accent, #d9a05b);
+		border-radius: 8px;
+		padding: 6px 8px;
+		margin: 0 -8px;
+	}
+</style>

@@ -22,7 +22,7 @@ import {
 	type CremaCore,
 	type FirmwareUpdateStatus
 } from '$lib/core';
-import { MachineState, MmrRegister, StopReason } from '$lib/core/crema-core';
+import { MachineState, MmrRegister } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore, getBeanLibraryStore } from '$lib/bean';
 import { getHistoryStore, snapshotFromBean, extractCremaExtras } from '$lib/history';
@@ -463,18 +463,6 @@ export class CremaApp {
 				// tell the user WHY stop-at-weight went quiet this shot.
 				toast.info(
 					`Stop-at-weight off for this shot — the scale wasn't tared (${Math.round(event.content.weight_g)} g on it)`
-				);
-			}
-			if (event.type === 'StopTriggered') {
-				// Attribute the auto-stop so the user learns WHERE the control
-				// lives — an unexplained early stop reads as a bug ("water
-				// yield stopped my shot early and I couldn't see why").
-				toast.info(
-					event.content.reason === StopReason.Weight
-						? 'Stopped at target weight'
-						: event.content.reason === StopReason.Volume
-							? 'Stopped at the profile’s max volume'
-							: 'Stopped at the max shot duration'
 				);
 			}
 			if (event.type === 'ShotStarted') {

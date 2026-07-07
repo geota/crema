@@ -78,6 +78,7 @@ import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.Bean
 import coffee.crema.core.ExitMetric
 import coffee.crema.core.MachineState
+import coffee.crema.core.StopReason
 import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.Roaster
 import coffee.crema.profiles.CremaProfile
@@ -269,7 +270,6 @@ fun BrewScreen(
                 // Gated start: upload the active profile, await completion, guard,
                 // then Espresso (vm.startShot). Stop is a direct Idle request.
                 onCoffee = { if (espressoActive) vm.stopShot() else vm.startShot() },
-                onBumpTarget = vm::bumpShotTargetWeight,
             )
             if (quickOpen) {
                 QuickControlsSheet(
@@ -1202,7 +1202,7 @@ private fun LimitsCard(active: CremaProfile?, ui: coffee.crema.ui.MainUiState) {
             // the progress fraction stays canonical (ratio is unit-independent).
             val liveW = convertWeight(weightG, ui.weightUnit)
             val targetW = convertWeight(active.yieldOut, ui.weightUnit)
-            add(LimitRow("Yield", "scales", tel.weight, weightG, active.yieldOut, liveW.value, targetW.value, targetW.unit))
+            add(LimitRow("Yield", "scales", tel.weight, weightG, active.yieldOut, liveW.value, targetW.value, targetW.unit, fired = ui.lastStopReason == StopReason.Weight))
         }
         // Volume is a stop condition only when it will actually fire: with a
         // scale connected it's a dormant fallback (SAW owns the stop) unless
@@ -1211,14 +1211,14 @@ private fun LimitsCard(active: CremaProfile?, ui: coffee.crema.ui.MainUiState) {
         if (active != null && active.maxTotalVolumeMl > 0 && volumeArms) {
             val liveV = convertVolume(ui.dispensedVolume ?: 0f, ui.volumeUnit)
             val targetV = convertVolume(active.maxTotalVolumeMl.toFloat(), ui.volumeUnit)
-            add(LimitRow("Volume", "drop-half", tel.flow, ui.dispensedVolume ?: 0f, active.maxTotalVolumeMl.toFloat(), liveV.value, targetV.value, targetV.unit))
+            add(LimitRow("Volume", "drop-half", tel.flow, ui.dispensedVolume ?: 0f, active.maxTotalVolumeMl.toFloat(), liveV.value, targetV.value, targetV.unit, fired = ui.lastStopReason == StopReason.Volume))
         }
         // Time cap from the persisted setting (ui.maxShotDurationS); live = elapsed
         // shot seconds. Always shown — it's a global hard cap, not profile-scoped.
         if (ui.maxShotDurationS > 0f) {
             val liveS = "%.0f".format(ui.shotElapsedMs / 1000f)
             val targetS = "%.0f".format(ui.maxShotDurationS)
-            add(LimitRow("Time", "timer", timeColor, ui.shotElapsedMs / 1000f, ui.maxShotDurationS, liveS, targetS, "s"))
+            add(LimitRow("Time", "timer", timeColor, ui.shotElapsedMs / 1000f, ui.maxShotDurationS, liveS, targetS, "s", fired = ui.lastStopReason == StopReason.MaxTime))
         }
     }
     if (rows.isEmpty()) return
@@ -1245,16 +1245,28 @@ private data class LimitRow(
     val targetStr: String,
     /** The display unit label ("g"/"oz", "ml"/"fl oz", "s"). */
     val unit: String,
+    /** True when THIS condition ended the last shot (`lastStopReason`) —
+     *  the row gets the gold highlight instead of a stop toast. */
+    val fired: Boolean = false,
 )
 
 @Composable
 private fun LimitRowView(row: LimitRow) {
     val frac = if (row.target > 0f && row.live != null) (row.live / row.target).coerceIn(0f, 1f) else 0f
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.padding(vertical = 4.dp)) {
+    // The condition that ended the last shot gets a gold ring (cleared on
+    // the next ShotStarted) — the stop attribution lives HERE, not a toast.
+    val firedRing = if (row.fired) {
+        Modifier
+            .border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp)
+    } else {
+        Modifier
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.padding(vertical = 4.dp).then(firedRing)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 PhIcon(row.icon, sizeDp = 16, tint = row.color)
-                Text(row.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(row.label, style = MaterialTheme.typography.labelLarge, color = if (row.fired) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
             }
             // Web MaxStopConditionsCard: a null live (no scale weight yet) renders "—",
             // never a fake "0.0" — the value is unknown, not zero. Both parts are
@@ -1452,8 +1464,6 @@ private fun BrewFoot(
     onHotWater: () -> Unit,
     onFlush: () -> Unit,
     onCoffee: () -> Unit,
-    /** "+10 g" mid-shot yield bump — shown only while espresso pours. */
-    onBumpTarget: () -> Unit,
 ) {
     Column {
         Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
@@ -1494,12 +1504,6 @@ private fun BrewFoot(
                 ModeChip("Steam", steamSub, "cloud", CremaTheme.telemetry.modeSteam, active = steaming, enabled = connected, onTap = onSteam)
                 ModeChip("Hot water", waterSub, "drop", CremaTheme.telemetry.modeWater, active = dispensing, enabled = connected, onTap = onHotWater)
                 ModeChip("Flush", flushSub, "sparkle", CremaTheme.telemetry.modeFlush, active = flushing, enabled = connected, onTap = onFlush)
-                // Mid-shot salvage: raise the SAW target while the shot pours
-                // (Decenza EspressoPage.qml:989-1007) — the armed stop
-                // re-targets immediately.
-                if (espressoActive) {
-                    ModeChip("+10 g", "raise target", "plus", CremaTheme.telemetry.weight, active = false, enabled = true, onTap = onBumpTarget)
-                }
                 CoffeeButton(running = espressoActive, uploading = ui.profileUploading, enabled = connected, onClick = onCoffee)
             }
         }

@@ -28,7 +28,7 @@
 		ProfileSyncFailedError,
 		type UiSnapshot
 	} from '$lib/state';
-	import { ShotPhase, MachineState, MmrRegister } from '$lib/core/crema-core';
+	import { ShotPhase, MachineState, MmrRegister , StopReason } from '$lib/core/crema-core';
 	import ModeChip from './ModeChip.svelte';
 	import ModeHeadStatus from './ModeHeadStatus.svelte';
 	import MachineErrorBanner from './MachineErrorBanner.svelte';
@@ -911,7 +911,8 @@
 				live: shotWeightM.value,
 				target: yieldTarget.value,
 				unit: yieldTarget.unit,
-				pct: yieldPct
+				pct: yieldPct,
+				fired: ui.lastStopReason === StopReason.Weight
 			});
 		if (maxVolumeCardVisible)
 			out.push({
@@ -922,7 +923,8 @@
 				live: (ui.dispensedVolume ?? 0).toFixed(0),
 				target: String(activeProfile?.maxTotalVolumeMl ?? ''),
 				unit: 'ml',
-				pct: maxVolumePct
+				pct: maxVolumePct,
+				fired: ui.lastStopReason === StopReason.Volume
 			});
 		if (maxDurationCardVisible)
 			out.push({
@@ -933,7 +935,8 @@
 				live: elapsedSec.toFixed(0),
 				target: String(prefs.maxShotDurationS),
 				unit: 's',
-				pct: maxDurationPct
+				pct: maxDurationPct,
+				fired: ui.lastStopReason === StopReason.MaxTime
 			});
 		return out;
 	});
@@ -1511,18 +1514,6 @@
 					/>
 				</div>
 				<span class="mc-foot-rule" aria-hidden="true"></span>
-				{#if running}
-					<!-- Mid-shot salvage (Decenza EspressoPage.qml:989-1007):
-					     raise the SAW target while the shot pours — the yield
-					     push re-targets the armed auto-stop immediately. -->
-					<button
-						type="button"
-						class="crema-bump-btn"
-						onclick={() => params.set('yield', params.current.yield + 10)}
-					>
-						+10 g
-					</button>
-				{/if}
 				<button
 					class="crema-bigbtn"
 					class:running
@@ -1582,21 +1573,6 @@
 </div>
 
 <style>
-	.crema-bump-btn {
-		border: 1px solid rgba(var(--tint-rgb), 0.25);
-		background: transparent;
-		color: var(--fg-1);
-		font: inherit;
-		font-weight: 600;
-		font-size: 0.85rem;
-		padding: 8px 14px;
-		border-radius: 999px;
-		cursor: pointer;
-		white-space: nowrap;
-	}
-	.crema-bump-btn:hover {
-		background: rgba(var(--tint-rgb), 0.1);
-	}
 	/* The pinned moment renders as a vertical line on the chart itself
 	   (drawn by LiveChart's marker plugin); no chrome on the wrapper. */
 	.crema-chart {

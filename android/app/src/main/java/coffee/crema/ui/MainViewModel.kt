@@ -387,6 +387,11 @@ data class MainUiState(
     val lineFreqOverride: Float = 0f,
     /** Summary of the last completed shot (Last-shot card), or null. */
     val lastShot: LastShot? = null,
+    /** Which auto-stop condition ended the last shot (weight / volume /
+     *  max-time), or null when the user stopped it (or no shot yet).
+     *  Cleared on the next ShotStarted — the stop-conditions card
+     *  highlights the row that fired instead of toasting. */
+    val lastStopReason: StopReason? = null,
     /** Non-null while an aborted-shot discard can be undone — the message
      *  MainActivity shows in an action snackbar ("Undo"). */
     val discardToastMessage: String? = null,
@@ -1324,17 +1329,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Apply a Quick-Controls brew override (dose/yield/brew-temp). Transient —
      *  not saved to the profile; baked into the next shot's upload by [startShot]. */
-    /**
-     * "+10 g" mid-shot bump (Decenza `EspressoPage.qml:989-1007`): raise the
-     * shot's yield target while it pours. Routed through the QC override so
-     * the yield bar's target updates live AND the stop targets re-push — the
-     * armed AutoStop re-targets immediately (the mid-shot refresh from #15).
-     */
-    fun bumpShotTargetWeight(byG: Double = 10.0) {
-        val (dose, yieldOut, brewTemp) = _ui.value.effectiveBrew()
-        quickAdjustBrew(dose, yieldOut + byG, brewTemp, _ui.value.brewParams?.preinf)
-    }
-
     fun quickAdjustBrew(dose: Double, yieldOut: Double, brewTemp: Double, preinf: Double? = null) {
         val prev = _ui.value.brewParams
         _ui.update { it.copy(brewParams = BrewParams(dose, yieldOut, brewTemp, preinf)) }
@@ -5183,6 +5177,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     shotElapsedMs = 0,
                     dispensedVolume = 0f,
                     shotTelemetry = emptyList(),
+                    // Fresh shot — the previous stop attribution no longer applies.
+                    lastStopReason = null,
                 ) }
                 appendLog("Shot started")
             }
@@ -5301,16 +5297,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.StopTriggered -> {
                 appendLog("Auto-stop: ${event.content.reason.string}")
-                // Attribute the stop so the user learns WHERE the control
-                // lives — an unexplained early stop reads as a bug (issue:
-                // "water yield stopped my shot early and I couldn't see why").
-                notifyUser(
-                    when (event.content.reason) {
-                        StopReason.Weight -> "Stopped at target weight"
-                        StopReason.Volume -> "Stopped at the profile’s max volume"
-                        StopReason.MaxTime -> "Stopped at the max shot duration"
-                    },
-                )
+                // Attribute the stop ON the stop-conditions UI (the fired
+                // row/card gets a gold highlight) instead of a toast — an
+                // unexplained early stop reads as a bug, but a snackbar over
+                // the fresh shot was clutter.
+                _ui.update { it.copy(lastStopReason = event.content.reason) }
             }
             is Event.ShotCompleted -> {
                 val c = event.content

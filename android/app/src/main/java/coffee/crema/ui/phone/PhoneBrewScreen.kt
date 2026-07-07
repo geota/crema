@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -41,6 +42,7 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.MachineState
 import coffee.crema.core.Pump
+import coffee.crema.core.StopReason
 import coffee.crema.core.Transition
 import coffee.crema.core.celsiusToFahrenheit
 import coffee.crema.ui.modeLabel
@@ -162,7 +164,7 @@ fun PhoneBrewScreen(
             }
 
             if (running) {
-                RunningBody(ui = ui, active = active, onBumpTarget = vm::bumpShotTargetWeight, modifier = Modifier.weight(1f))
+                RunningBody(ui = ui, active = active, modifier = Modifier.weight(1f))
             } else {
                 RestingBody(
                     ui = ui,
@@ -498,7 +500,7 @@ private fun MiniProfileSpark(profile: CremaProfile, active: Boolean, modifier: M
 /* ────────────────────────── RUNNING (BrewRefinedA2) ─────────────────────── */
 
 @Composable
-private fun RunningBody(ui: MainUiState, active: CremaProfile?, onBumpTarget: () -> Unit, modifier: Modifier = Modifier) {
+private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifier = Modifier) {
     val tel = CremaTheme.telemetry
     Column(modifier, verticalArrangement = Arrangement.spacedBy(9.dp)) {
         // Compact timer + yield bar.
@@ -513,7 +515,15 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, onBumpTarget: ()
         // "in progress" until the DE1 idles) flips live weight crazy-negative —
         // keep it out of the yield readout + ratio (the bar already clamps at 525).
         val weight = (ui.scaleWeightG ?: 0f).coerceAtLeast(0f)
-        Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+        // The card whose condition ended the last shot gets a gold ring —
+        // stop attribution lives on the cards, not a toast (time → the
+        // timer hero; volume / weight → their chips below).
+        val timeFired = ui.lastStopReason == StopReason.MaxTime
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = if (timeFired) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+        ) {
             Column(
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -553,28 +563,12 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, onBumpTarget: ()
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Eyebrow("Yield · ${formatRatio(dose, weight)}")
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            val wNow = convertWeight(weight, ui.weightUnit)
-                            val wTarget = convertWeight(target, ui.weightUnit)
-                            Text(
-                                "${wNow.value} / ${wTarget.value} ${wNow.unit}",
-                                style = TextStyle(fontFamily = JetBrainsMono, fontSize = 14.sp, fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum"),
-                            )
-                            // Mid-shot salvage: raise the SAW target while it
-                            // pours (Decenza EspressoPage.qml:989-1007).
-                            Surface(
-                                onClick = onBumpTarget,
-                                shape = RoundedCornerShape(999.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            ) {
-                                Text(
-                                    "+10 g",
-                                    Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
-                            }
-                        }
+                        val wNow = convertWeight(weight, ui.weightUnit)
+                        val wTarget = convertWeight(target, ui.weightUnit)
+                        Text(
+                            "${wNow.value} / ${wTarget.value} ${wNow.unit}",
+                            style = TextStyle(fontFamily = JetBrainsMono, fontSize = 14.sp, fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum"),
+                        )
                     }
                     Box(
                         Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(999.dp))
@@ -609,6 +603,7 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, onBumpTarget: ()
                 Modifier.weight(1f),
                 "FLOW", fmtF(ui.flow), "ml/s", tel.flow,
                 "VOLUME", cVolume.value, cVolume.unit, tel.flow2,
+                highlight = ui.lastStopReason == StopReason.Volume,
             )
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -621,6 +616,7 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, onBumpTarget: ()
                 Modifier.weight(1f),
                 "WEIGHT", cWeight.value, cWeight.unit, tel.weight,
                 "FLOW", fmtF(ui.scaleFlowGPerS), "g/s", tel.weight2,
+                highlight = ui.lastStopReason == StopReason.Weight,
             )
         }
 
@@ -658,8 +654,15 @@ private fun DualChip(
     modifier: Modifier,
     label: String, value: String, unit: String, color: Color,
     sLabel: String, sValue: String, sUnit: String, sColor: Color,
+    /** Gold ring — this chip's condition ended the last shot. */
+    highlight: Boolean = false,
 ) {
-    Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        border = if (highlight) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+        modifier = modifier,
+    ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 Box(Modifier.size(6.dp).clip(CircleShape).background(color))
