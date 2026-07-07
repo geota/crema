@@ -66,6 +66,10 @@ const WATER_LEVEL_MM_CORRECTION: f32 = 5.0;
 /// stale — the legacy app warns after roughly one second of silence.
 const SCALE_STALE_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// Minimum spacing between unit-recovery nudge writes — one per
+/// notification (~10 Hz) hammered a stubborn scale for no benefit.
+const UNIT_RECOVERY_THROTTLE: Duration = Duration::from_millis(500);
+
 /// Untared-cup sanity guard (Decenza `weightprocessor.cpp:242-253`): a
 /// reading heavier than this inside [`UNTARED_CUP_WINDOW`] of first flow
 /// means the cup was placed after the tare (or never tared) — every later
@@ -464,6 +468,16 @@ pub struct CremaCore {
     /// whether it stabilises into a cup baseline (→ virtual zero) or keeps
     /// moving (→ suppress). `None` when not settling.
     untared_settle: Option<UntaredSettle>,
+    /// Set when a scale (re)connects while a shot is already running
+    /// (review #29): the guard's 3 s trip window has long closed, but the
+    /// reconnect did NOT re-tare, so the first reading may be the cup's
+    /// absolute weight sitting at/over the target — which would stop the
+    /// shot instantly. The first evaluated reading consumes this flag:
+    /// implausibly heavy → the settle machine decides (virtual-zero or
+    /// suppress); plausible → arm normally.
+    untared_window_reopened: bool,
+    /// Last unit-recovery nudge write, for [`UNIT_RECOVERY_THROTTLE`].
+    last_unit_recovery_write: Option<Duration>,
     /// Timestamp of the most recent scale-weight reading, for the lost-scale
     /// watchdog. `None` until the connected scale reports once.
     last_scale_weight: Option<Duration>,
@@ -654,6 +668,8 @@ impl CremaCore {
             untared_cup_tripped: false,
             saw_zero_offset_g: 0.0,
             untared_settle: None,
+            untared_window_reopened: false,
+            last_unit_recovery_write: None,
             last_scale_weight: None,
             last_scale_estimate: None,
             scale_stale_reported: false,
@@ -767,6 +783,12 @@ impl CremaCore {
         // A newly connected scale has not yet been asked for its serial /
         // settings; re-arm the one-shot connect-time queries.
         self.scale_config_queried = false;
+        // A scale arriving MID-SHOT was never tared for this shot — reopen
+        // the untared-cup window so its first reading is sanity-checked
+        // before the re-armed weight leg can fire (review #29).
+        if self.scale.is_some() && self.shot_started.is_some() {
+            self.untared_window_reopened = true;
+        }
         // A scale arriving mid-shot unlocks the SAW leg of an already-armed
         // AutoStop (issue #15 — the arm-once guard otherwise baked
         // `weight: None` in for the whole shot).
@@ -960,7 +982,11 @@ impl CremaCore {
         // `volume_stop_with_scale` opts back into both caps racing. A scale
         // lost mid-shot re-arms this leg via refresh_auto_stop_targets — the
         // same degrade-to-volume reaprime does.
-        let volume = if self.scale.is_some() && !self.volume_stop_with_scale {
+        // Demote ONLY when the weight leg actually resolved (review #29):
+        // a scale connected without a weight target must not silently drop
+        // the profile's volume limit — that left the shot with no stop at
+        // all (until max-time, if set).
+        let volume = if weight.is_some() && !self.volume_stop_with_scale {
             None
         } else {
             self.profile_volume_limit
@@ -2566,17 +2592,34 @@ impl CremaCore {
         // numeric weight is bogus (drop the frame) or only the display
         // unit is off (queue the nudge + keep parsing).
         if let Some(recovery) = scale.unit_recovery(data) {
+            // Even a dropped frame IS a frame (review #29): refresh the
+            // lost-scale watchdog so a scale stuck in a non-grams mode
+            // doesn't also false-report ScaleStale, run the one-shot
+            // connect queries, and throttle the nudge so a stubborn scale
+            // isn't hammered with one recovery write per notification.
+            self.last_scale_weight = Some(now);
+            self.scale_stale_reported = false;
+            let throttled = self
+                .last_unit_recovery_write
+                .is_some_and(|at| now.saturating_sub(at) < UNIT_RECOVERY_THROTTLE);
             match recovery {
                 de1_scale::UnitRecovery::Drop { bytes } => {
-                    out.commands.push(Command::WriteScale {
-                        data: bytes.to_vec(),
-                    });
+                    if !throttled {
+                        self.last_unit_recovery_write = Some(now);
+                        out.commands.push(Command::WriteScale {
+                            data: bytes.to_vec(),
+                        });
+                    }
+                    self.push_connect_queries_once(out);
                     return;
                 }
                 de1_scale::UnitRecovery::Continue { bytes } => {
-                    out.commands.push(Command::WriteScale {
-                        data: bytes.to_vec(),
-                    });
+                    if !throttled {
+                        self.last_unit_recovery_write = Some(now);
+                        out.commands.push(Command::WriteScale {
+                            data: bytes.to_vec(),
+                        });
+                    }
                 }
             }
         }
@@ -2777,14 +2820,27 @@ impl CremaCore {
             return None;
         }
         // Trip detection — once per shot, only while SAW is actually armed.
+        // The window is open for the first seconds of flow, OR one reading
+        // after a mid-shot scale connect (review #29). In the reopened case
+        // the threshold tightens to the weight target: a first reading
+        // already at/over the target cannot be trusted — a genuine pour
+        // crosses it gradually.
+        let weight_target = self.effective_stop_targets().and_then(|t| t.weight);
+        let in_flow_window = self
+            .flow_started
+            .is_some_and(|fs| now.saturating_sub(fs) < UNTARED_CUP_WINDOW);
+        let threshold = if in_flow_window {
+            UNTARED_CUP_THRESHOLD_G
+        } else {
+            weight_target.map_or(UNTARED_CUP_THRESHOLD_G, |t| t.min(UNTARED_CUP_THRESHOLD_G))
+        };
+        let window_open = in_flow_window || self.untared_window_reopened;
+        self.untared_window_reopened = false;
         if self.saw_zero_offset_g == 0.0
             && !self.untared_cup_tripped
-            && let Some(flow_started) = self.flow_started
-            && now.saturating_sub(flow_started) < UNTARED_CUP_WINDOW
-            && raw_g > UNTARED_CUP_THRESHOLD_G
-            && self
-                .effective_stop_targets()
-                .is_some_and(|t| t.weight.is_some())
+            && window_open
+            && raw_g > threshold
+            && weight_target.is_some()
         {
             self.untared_settle = Some(UntaredSettle {
                 started: now,
@@ -3223,6 +3279,7 @@ impl CremaCore {
                 self.untared_cup_tripped = false;
                 self.saw_zero_offset_g = 0.0;
                 self.untared_settle = None;
+                self.untared_window_reopened = false;
                 // Auto-tare the connected scale so the cup starts from zero,
                 // mirroring the legacy app's tare-at-shot-start behaviour —
                 // gated on the latched user preference (default true). The
@@ -5400,8 +5457,40 @@ mod tests {
         core.set_max_shot_duration(Some(45.0));
         core.on_notification(Source::De1State, &[4, 5], 0);
         core.connect_scale("BOOKOO_SC", &[]);
+        // The reconnect reopened the untared window (review #29): the first
+        // reading is the sanity check. A plausible 10 g consumes it and arms.
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(1_000), 5_500);
         // A 35 g reading past the arming delay must now trip SAW.
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
+        assert!(out.events.contains(&Event::StopTriggered {
+            reason: StopReason::Weight,
+        }));
+    }
+
+    #[test]
+    fn a_mid_shot_reconnect_with_the_cup_at_target_does_not_instant_stop() {
+        // Review #29: a scale reconnecting 10 s into the shot with the
+        // (untared) cup+coffee already reading over the target must not
+        // stop the shot on its first frame — the settle machine decides.
+        let mut core = CremaCore::new();
+        core.set_profile_target_weight(Some(30.0));
+        core.set_max_shot_duration(Some(45.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        core.connect_scale("BOOKOO_SC", &[]);
+        // First reading: 35 g absolute (cup + coffee), over the 30 g target.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 10_000);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::StopTriggered { .. })),
+            "first untrusted reading must not stop the shot"
+        );
+        // It holds still → the guard latches it as the software zero…
+        for (cg, at) in [(3_510, 10_300u64), (3_490, 10_700), (3_500, 11_400)] {
+            core.on_notification(Source::ScaleWeight, &bookoo_packet(cg), at);
+        }
+        // …and SAW works on the NET weight: +30 g of coffee later, stop.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(6_600), 14_000);
         assert!(out.events.contains(&Event::StopTriggered {
             reason: StopReason::Weight,
         }));
@@ -5453,8 +5542,15 @@ mod tests {
             core.effective_stop_targets().and_then(|t| t.volume),
             Some(36.0)
         );
-        // Scale registered: volume must not race the weight target.
+        // Scale registered but NO weight target: the volume limit must STAY
+        // — demoting it would leave the shot with no stop at all (review #29).
         core.connect_scale("BOOKOO_SC", &[]);
+        assert_eq!(
+            core.effective_stop_targets().and_then(|t| t.volume),
+            Some(36.0)
+        );
+        // With a weight target armed, volume steps aside so the caps don't race.
+        core.set_profile_target_weight(Some(30.0));
         assert_eq!(core.effective_stop_targets().and_then(|t| t.volume), None);
         // …unless the user opts into both caps.
         core.set_volume_stop_with_scale(true);
