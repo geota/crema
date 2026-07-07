@@ -89,6 +89,16 @@ interface BleTransport {
     fun scan(matches: (name: String) -> Boolean): Flow<ScanMatch>
 
     /**
+     * Resolve a device handle straight from a remembered Bluetooth address —
+     * NO scan. Android throttles unfiltered scans to zero results while the
+     * screen is off (reaprime #107), so background auto-reconnect paths (the
+     * Bluetooth-on receiver) must not depend on discovery; a direct GATT
+     * connect by address is never throttled. Returns `null` when the
+     * transport can't mint peripherals from addresses (the LAN proxy).
+     */
+    fun resolveByAddress(address: String, name: String?): DeviceHandle? = null
+
+    /**
      * Connect to [device] and discover its GATT services. Suspends until the
      * device is connected and services are resolved, or throws on failure /
      * timeout. After this returns, [observe] and [write] may be called for

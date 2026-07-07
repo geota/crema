@@ -365,6 +365,9 @@ data class MainUiState(
     val rememberedDe1Address: String? = null,
     /** The remembered scale address; non-null ⟺ the scale's Auto-connect is ON. */
     val rememberedScaleAddress: String? = null,
+    /** The remembered scale's advertised name — feeds the scan-free direct
+     *  reconnect (codec identify needs the name). */
+    val rememberedScaleName: String? = null,
     /**
      * Raw MMR register values the DE1 reported, keyed by [MmrRegister]. Folded
      * from each `Event.MmrValue`; values are the **raw** 32-bit words — the UI
@@ -1118,8 +1121,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (state == ScaleBleManager.State.READY) {
                     scale.connectedAddress?.let { addr ->
                         scale.autoReconnectEnabled = true
-                        if (_ui.value.rememberedScaleAddress != addr) {
-                            _ui.update { it.copy(rememberedScaleAddress = addr) }
+                        val name = scale.connectedName
+                        if (_ui.value.rememberedScaleAddress != addr ||
+                            _ui.value.rememberedScaleName != name
+                        ) {
+                            _ui.update { it.copy(
+                                rememberedScaleAddress = addr,
+                                rememberedScaleName = name,
+                            ) }
                             persistPrefs()
                         }
                     }
@@ -3384,6 +3393,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         activeProfileId = _ui.value.activeProfileId,
         de1Address = _ui.value.rememberedDe1Address,
         scaleAddress = _ui.value.rememberedScaleAddress,
+        scaleName = _ui.value.rememberedScaleName,
         proxyRole = _ui.value.proxyRole,
         proxyPrimaryHost = _ui.value.proxyPrimaryHost,
         proxyPrimaryPort = _ui.value.proxyPrimaryPort,
@@ -4443,6 +4453,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             activeProfileId = p.activeProfileId ?: it.activeProfileId,
             rememberedDe1Address = p.de1Address,
             rememberedScaleAddress = p.scaleAddress,
+                rememberedScaleName = p.scaleName,
             proxyRole = p.proxyRole,
             proxyPrimaryHost = p.proxyPrimaryHost,
             proxyPrimaryPort = p.proxyPrimaryPort,
@@ -4497,8 +4508,36 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         fun stale(s: ScaleBleManager.State) =
             s == ScaleBleManager.State.IDLE || s == ScaleBleManager.State.DISCONNECTED || s == ScaleBleManager.State.SCANNING
         runCatching {
-            if (_ui.value.rememberedDe1Address != null && stale(ble.state.value)) connect()
-            if (_ui.value.rememberedScaleAddress != null && stale(scale.state.value)) connectScale()
+            // Prefer a scan-free DIRECT connect by the remembered address:
+            // this receiver can fire with the app backgrounded and the
+            // screen off, where Android throttles our (deliberately)
+            // unfiltered scan to zero results — the reaprime #107 failure.
+            // A direct GATT connect is never throttled. Fall back to the
+            // name scan when the transport can't mint address handles
+            // (LAN-proxy mode) or the scale's name was never persisted.
+            val ui = _ui.value
+            if (ui.rememberedDe1Address != null && stale(ble.state.value)) {
+                val direct = bleTransport.resolveByAddress(ui.rememberedDe1Address, "DE1")
+                if (direct != null) {
+                    ble.markScanning()
+                    ble.connect(direct)
+                } else {
+                    connect()
+                }
+            }
+            if (ui.rememberedScaleAddress != null && stale(scale.state.value)) {
+                val name = ui.rememberedScaleName
+                val direct = if (name != null) {
+                    bleTransport.resolveByAddress(ui.rememberedScaleAddress, name)
+                } else {
+                    null
+                }
+                if (direct != null && name != null) {
+                    scale.connect(direct, name)
+                } else {
+                    connectScale()
+                }
+            }
         }
     }
 

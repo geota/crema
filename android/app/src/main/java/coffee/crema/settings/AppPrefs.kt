@@ -108,6 +108,11 @@ data class AppPrefs(
     val de1Address: String? = null,
     /** Remembered scale Bluetooth address (same per-device auto-connect rule). */
     val scaleAddress: String? = null,
+    /** The remembered scale's advertised name — lets a background reconnect
+     *  connect DIRECTLY by address (no scan; Android throttles unfiltered
+     *  scans to zero with the screen off, reaprime #107) while still telling
+     *  the core codec which scale it is. Additive → nullable. */
+    val scaleName: String? = null,
     // ── Multi-device LAN proxy (M1, debug/demo) ──────────────────────────────
     /** Proxy role — `"normal" | "primary" | "secondary"`. `normal` = today's
      *  single-device behaviour. A debug/demo setting: the transport is built at
@@ -217,6 +222,7 @@ private data class PersistedPrefs(
     val activeProfileId: String? = null,
     val de1Address: String? = null,
     val scaleAddress: String? = null,
+    val scaleName: String? = null,
     val proxyRole: String = "normal",
     val proxyPrimaryHost: String = "",
     val proxyPrimaryPort: Int = 0,
@@ -232,6 +238,7 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     activeProfileId = activeProfileId,
     de1Address = de1Address,
     scaleAddress = scaleAddress,
+    scaleName = scaleName,
     proxyRole = proxyRole,
     proxyPrimaryHost = proxyPrimaryHost,
     proxyPrimaryPort = proxyPrimaryPort,
@@ -246,6 +253,7 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     activeProfileId = activeProfileId,
     de1Address = de1Address,
     scaleAddress = scaleAddress,
+    scaleName = scaleName,
     proxyRole = proxyRole,
     proxyPrimaryHost = proxyPrimaryHost,
     proxyPrimaryPort = proxyPrimaryPort,

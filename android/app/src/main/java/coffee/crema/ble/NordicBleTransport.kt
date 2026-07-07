@@ -170,6 +170,23 @@ class NordicBleTransport(context: Context) : BleTransport {
                 BleTransport.ScanMatch(handle, name)
             }
 
+    override fun resolveByAddress(address: String, name: String?): BleTransport.DeviceHandle? =
+        runCatching {
+            // Mint the peripheral straight from the MAC — the OS resolves it
+            // without any advertisement, so this works where the unfiltered
+            // scan is throttled to silence (screen off, reaprime #107).
+            val peripheral = centralManager.getPeripheralById(address)
+                ?: return@runCatching null
+            val handle = NordicDeviceHandle(name ?: peripheral.name, address)
+            peripherals[handle] = peripheral
+            states.getOrPut(handle) {
+                MutableStateFlow(BleTransport.ConnState.DISCONNECTED)
+            }
+            handle
+        }.onFailure {
+            Log.w(TAG, "resolveByAddress($address) failed: ${it.message}")
+        }.getOrNull()
+
     // ---- Connect ----------------------------------------------------------
 
     override suspend fun connect(device: BleTransport.DeviceHandle) {
