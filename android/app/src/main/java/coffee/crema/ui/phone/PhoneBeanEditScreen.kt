@@ -254,7 +254,10 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     }
                 }
                 EdRow("Remaining") {
-                    CremaStepper(value = remaining, unit = "g", step = 5.0, min = 0.0, max = bagSize.coerceAtLeast(0.0), fmt = { "%.0f".format(it) }, onChange = { remaining = it }, style = CremaStepperStyle.BareCompact)
+                    // Fixed cap, NOT bagSize: quick-added/imported bags have bagSize = 0,
+                    // and the stepper clamps every edit through it — which froze Remaining
+                    // at 0 (tablet + web use a fixed cap for the same reason, issue #14).
+                    CremaStepper(value = remaining, unit = "g", step = 5.0, min = 0.0, max = 2000.0, fmt = { "%.0f".format(it) }, onChange = { remaining = it }, style = CremaStepperStyle.BareCompact)
                 }
                 CremaTextField(value = grinder, onValueChange = { grinder = it }, label = "Grinder", placeholder = "e.g. Niche Zero")
                 CremaTextField(value = grind, onValueChange = { grind = it }, label = "Grind setting", placeholder = "e.g. 4.2, 6 + a tooth")
