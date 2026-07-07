@@ -100,6 +100,9 @@ pub enum NotificationSource {
     /// The DE1 `FrameWrite` characteristic — per-frame ack echoes during a
     /// profile upload.
     De1FrameAck,
+    /// The scale's on-scale button characteristic (Skale II `EF82`) —
+    /// mirrors `de1_app::Source::ScaleButton`.
+    ScaleButton,
 }
 
 impl From<NotificationSource> for Source {
@@ -116,6 +119,7 @@ impl From<NotificationSource> for Source {
             NotificationSource::De1ShotSettings => Source::De1ShotSettings,
             NotificationSource::De1ProfileHeader => Source::De1ProfileHeader,
             NotificationSource::De1FrameAck => Source::De1FrameAck,
+            NotificationSource::ScaleButton => Source::ScaleButton,
         }
     }
 }
@@ -1532,6 +1536,7 @@ impl CremaBridge {
     pub fn query_scale_settings(&self) -> String {
         self.emit(self.core().query_scale_settings())
     }
+
 
     /// Write the DE1's steam / hot-water settings. Returns a JSON-encoded
     /// [`CoreOutput`] whose command applies them (with the legacy hot-water

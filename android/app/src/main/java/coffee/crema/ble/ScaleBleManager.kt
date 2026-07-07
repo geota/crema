@@ -176,6 +176,11 @@ class ScaleBleManager(
     private var weightNotifyUuid: UUID? = null
     private var commandUuid: UUID? = null
 
+    /** The scale's on-scale button characteristic (Skale II `EF82`), or null
+     *  for scales without one — subscribed when the core reports it and
+     *  forwarded as [NotificationSource.SCALE_BUTTON]. */
+    private var buttonNotifyUuid: UUID? = null
+
     /** The advertised name of the connected scale, kept so a reconnect can
      *  re-identify the codec via [CremaBridge.connectScale]. */
     private var advertisedName: String? = null
@@ -265,6 +270,8 @@ class ScaleBleManager(
                 serviceUuid = null
                 weightNotifyUuid = null
                 commandUuid = null
+        buttonNotifyUuid = null
+                buttonNotifyUuid = null
                 bridge.disconnectScale()
                 _state.value = State.DISCONNECTED
             },
@@ -335,13 +342,20 @@ class ScaleBleManager(
         // to commandUuid. The streams merge into one collected flow so per-device
         // notification ordering is preserved (see BleTransport.observe's contract).
         observeJob?.cancel() // a reconnect re-subscribes on the same handle
-        val notifications = if (coreUuids.command_notifies && command != weight) {
+        var notifications = if (coreUuids.command_notifies && command != weight) {
             merge(
                 transport.observe(device, service, weight),
                 transport.observe(device, service, command),
             )
         } else {
             transport.observe(device, service, weight)
+        }
+        // A third stream for scales with an on-scale button characteristic
+        // (Skale II EF82) — de1app subscribes to it too (bluetooth.tcl:221).
+        val button = coreUuids.button_notify?.let { UUID.fromString(it) }
+        buttonNotifyUuid = button
+        if (button != null) {
+            notifications = merge(notifications, transport.observe(device, service, button))
         }
         observeJob = notifications.onEach { handleNotification(it) }.launchIn(scope)
     }
@@ -432,11 +446,20 @@ class ScaleBleManager(
         when (notification.characteristic) {
             weightNotifyUuid -> handleWeightNotification(notification)
             commandUuid -> handleCommandNotification(notification)
+            buttonNotifyUuid -> handleButtonNotification(notification)
             else -> Log.w(
                 TAG,
                 "Notification from unmapped characteristic ${notification.characteristic}",
             )
         }
+    }
+
+    /** Button-characteristic path (Skale II `EF82`): record + drive the core,
+     *  which decodes the press into an `Event.ScaleButtonPressed`. */
+    private fun handleButtonNotification(notification: BleTransport.Notification) {
+        val tMs = notification.atMs
+        recorder.recordInbound(NotificationSource.SCALE_BUTTON, notification.data, tMs)
+        feedCore(NotificationSource.SCALE_BUTTON, notification.data, tMs, "Scale button")
     }
 
     /** Weight-notify (`ff11`) path: record as `SCALE_WEIGHT` and drive the core. */

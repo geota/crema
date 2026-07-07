@@ -41,6 +41,20 @@ pub struct ScaleUuids {
     /// fails at the GATT layer and crashes the connect, so the shell must skip
     /// it. Capability-driven — the core, which owns the protocol, decides.
     pub command_notifies: bool,
+    /// A third characteristic that notifies on-scale button presses — today
+    /// only the Skale II's `EF82` (de1app subscribes and logs it,
+    /// `bluetooth.tcl:221`; Decenza emits `buttonPressed`). `None` for every
+    /// other scale. The shell subscribes when present and forwards the bytes
+    /// as `Source::ScaleButton`.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub button_notify: Option<&'static str>,
+    /// Whether `command_write` must be written WITHOUT response. True only
+    /// for the gen-1/IPS Acaia — its command characteristic rejects
+    /// with-response writes (Decenza acaiascale.cpp:279-295 "IPS and Pyxis
+    /// require different write types"). Every other scale (incl. Pyxis)
+    /// accepts the shells' default with-response write.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub command_write_no_response: bool,
 }
 
 /// The **pre-connect** BLE scan filter set, shared across shells: the union of
@@ -81,7 +95,9 @@ struct ScaleScanEntry {
 /// [`Scale::from_label`] arm.
 const SCALE_SCAN: &[ScaleScanEntry] = &[
     ScaleScanEntry {
-        prefixes: &["Decent Scale", "ButtsHaus Scale"],
+        // "Decenza" = the Decenza app's self-rebranded Half Decent Scale
+        // (Decenza scalefactory.cpp:198-200) — covers users migrating over.
+        prefixes: &["Decent Scale", "ButtsHaus Scale", "Decenza"],
         label: "Decent Scale",
     },
     ScaleScanEntry {
@@ -89,11 +105,15 @@ const SCALE_SCAN: &[ScaleScanEntry] = &[
         label: "Skale II",
     },
     ScaleScanEntry {
-        prefixes: &["FELICITA"],
+        // "eCompass" = a Felicita rebrand (Decenza scalefactory.cpp:214-217).
+        prefixes: &["FELICITA", "eCompass"],
         label: "Felicita Arc",
     },
     ScaleScanEntry {
-        prefixes: &["BOOKOO_SC"],
+        // "BKScale" alias per Decenza scalefactory.cpp:228-235. Keep the
+        // prefixes narrow enough to exclude BOOKOO_EM (the Espresso Monitor
+        // pressure sensor, not a scale).
+        prefixes: &["BOOKOO_SC", "BKScale"],
         label: "Bookoo",
     },
     ScaleScanEntry {
@@ -109,11 +129,16 @@ const SCALE_SCAN: &[ScaleScanEntry] = &[
         label: "Atomheart Eclair",
     },
     ScaleScanEntry {
-        prefixes: &["CFS-9002"],
+        // Units advertise as "Eureka…"/"Precisa…" too (Decenza
+        // scalefactory.cpp:248-252) — the shared fff0 service can't rescue a
+        // name miss, so the prefixes must carry the whole load.
+        prefixes: &["CFS-9002", "Eureka", "Precisa"],
         label: "Eureka Precisa",
     },
     ScaleScanEntry {
-        prefixes: &["LSJ-001"],
+        // Some units advertise the product name, not the module id
+        // (Decenza scalefactory.cpp:254-257).
+        prefixes: &["LSJ-001", "Solo Barista"],
         label: "Solo Barista",
     },
     ScaleScanEntry {
@@ -129,7 +154,11 @@ const SCALE_SCAN: &[ScaleScanEntry] = &[
         label: "Hiroia Jimmy",
     },
     ScaleScanEntry {
-        prefixes: &["AKU MINI", "Varia AKU"],
+        // Broad prefixes: the family advertises "AKU MINI" / "AKU PRO" /
+        // "AKU PLUS" / "Varia AKU" / bare "Varia…" (Decenza
+        // scalefactory.cpp:264-267 matches contains("aku")|contains("varia");
+        // the old narrow prefixes missed everything but the Mini).
+        prefixes: &["AKU", "Varia"],
         label: "Varia Aku",
     },
 ];
@@ -646,11 +675,23 @@ impl Scale {
                 varia_aku::COMMAND_UUID,
             ),
         };
+        // Only the Skale II has an extra button characteristic (EF82) —
+        // de1app subscribes to it too (bluetooth.tcl:221).
+        let button_notify = match &self.inner {
+            Inner::Skale => Some(skale::BUTTON_NOTIFY_UUID),
+            _ => None,
+        };
+        // Gen-1/IPS Acaia commands must be written WITHOUT response
+        // (Decenza acaiascale.cpp:279-295); Pyxis + everything else take the
+        // default with-response write.
+        let command_write_no_response = matches!(&self.inner, Inner::AcaiaGen1(_));
         ScaleUuids {
             service,
             weight_notify,
             command_write,
             command_notifies,
+            button_notify,
+            command_write_no_response,
         }
     }
 
@@ -736,11 +777,15 @@ impl Scale {
         let can_beep = self.beep_command().is_some();
         let can_set_unit_grams = self.set_unit_grams_command().is_some();
         let can_toggle_unit = self.toggle_unit_command().is_some();
-        let heartbeat_interval_ms = if self.heartbeat_command().is_some() {
-            // u64 → u32 saturating; the constant is 2_000.
-            Some(u32::try_from(decent_scale::HEARTBEAT_INTERVAL_MS).unwrap_or(u32::MAX))
-        } else {
-            None
+        let heartbeat_interval_ms = match &self.inner {
+            // u64 → u32 saturating; the constants are 2_000 / 3_000.
+            Inner::Decent(_) => {
+                Some(u32::try_from(decent_scale::HEARTBEAT_INTERVAL_MS).unwrap_or(u32::MAX))
+            }
+            Inner::AcaiaGen1(_) | Inner::AcaiaPyxis(_) => {
+                Some(u32::try_from(acaia::HEARTBEAT_INTERVAL_MS).unwrap_or(u32::MAX))
+            }
+            _ => None,
         };
         match &self.inner {
             // The Bookoo carries native flow and a built-in timer in its
@@ -823,6 +868,19 @@ impl Scale {
                 &difluid::ENABLE_NOTIFICATIONS[..],
                 &difluid::SET_UNIT_GRAMS[..],
             ],
+            // The Acaia streams weight only after its ident + config
+            // handshake (both de1app and Decenza acaiascale.cpp:164-277 send
+            // them at connect; the constants existed here but were never
+            // wired — the scale would sit silent).
+            Inner::AcaiaGen1(_) | Inner::AcaiaPyxis(_) => {
+                vec![&acaia::IDENT[..], &acaia::CONFIG[..]]
+            }
+            // Force grams at connect (Decenza eurekaprecisascale.cpp:109-112)
+            // — a unit booted in oz otherwise streams oz-scaled weights, and
+            // these scales have no unit_recovery fallback.
+            Inner::EurekaPrecisa | Inner::SoloBarista => {
+                vec![&eureka_precisa::SET_UNIT_GRAMS[..]]
+            }
             _ => Vec::new(),
         }
     }
@@ -931,6 +989,22 @@ impl Scale {
     pub fn heartbeat_command(&self) -> Option<Vec<&'static [u8]>> {
         match &self.inner {
             Inner::Decent(_) => Some(vec![&decent_scale::HEARTBEAT]),
+            // The Acaia stops streaming without a periodic keep-alive
+            // (Decenza acaiascale.cpp:264-277 — 3 s cadence for the session).
+            Inner::AcaiaGen1(_) | Inner::AcaiaPyxis(_) => Some(vec![&acaia::HEARTBEAT]),
+            _ => None,
+        }
+    }
+
+    /// Decode an on-scale button press from the scale's button
+    /// characteristic ([`ScaleUuids::button_notify`]). Returns the button
+    /// byte, or `None` for scales without a button channel / empty frames.
+    /// Skale II: the first byte carries the button id (de1app
+    /// `bluetooth.tcl:2825-2828` scans and logs the same byte).
+    #[must_use]
+    pub fn parse_button(&self, data: &[u8]) -> Option<u8> {
+        match &self.inner {
+            Inner::Skale => data.first().copied(),
             _ => None,
         }
     }

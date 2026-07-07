@@ -2112,6 +2112,11 @@ impl CremaCore {
             Source::De1ShotSettings => self.handle_shot_settings_read(data, &mut out),
             Source::De1ProfileHeader => self.handle_profile_header_read(data, &mut out),
             Source::De1FrameAck => self.handle_profile_frame_ack(data, now, &mut out),
+            Source::ScaleButton => {
+                if let Some(button) = self.scale.as_ref().and_then(|s| s.parse_button(data)) {
+                    out.events.push(Event::ScaleButtonPressed { button });
+                }
+            }
         }
         self.gate_read_only(out)
     }

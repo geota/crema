@@ -248,7 +248,14 @@ export class ScaleManager {
 			return;
 		}
 		try {
-			await device.write(uuids.service, uuids.command_write, data);
+			// The gen-1/IPS Acaia's command characteristic rejects acknowledged
+			// writes (Decenza acaiascale.cpp:279-295) — the core flags it.
+			await device.write(
+				uuids.service,
+				uuids.command_write,
+				data,
+				!uuids.command_write_no_response
+			);
 		} catch (error) {
 			this.callbacks.onStatus(`Scale command write was rejected: ${describeError(error)}`);
 		}
@@ -269,6 +276,12 @@ export class ScaleManager {
 		}
 		if (characteristicUuid === uuids.command_write.toLowerCase()) {
 			return 'ScaleCommand';
+		}
+		if (
+			uuids.button_notify !== undefined &&
+			characteristicUuid === uuids.button_notify.toLowerCase()
+		) {
+			return 'ScaleButton';
 		}
 		return null;
 	}

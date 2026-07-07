@@ -296,6 +296,7 @@ fn source_name(source: Source) -> &'static str {
         Source::De1FrameAck => "DE1_FRAME_ACK",
         Source::ScaleWeight => "SCALE_WEIGHT",
         Source::ScaleCommand => "SCALE_FF12",
+        Source::ScaleButton => "SCALE_BUTTON",
     }
 }
 

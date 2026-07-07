@@ -800,6 +800,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Ticker driving [MainUiState.modeElapsedMs] while a service mode runs. */
     private var modeTickerJob: Job? = null
 
+    /** The scale keep-alive loop, running only while a scale is READY. */
+    private var scaleHeartbeatJob: Job? = null
+
+    /** Start/stop the capability-driven scale heartbeat. The cadence comes
+     *  from [ScaleCapabilities.heartbeat_interval_ms]; scales without one
+     *  idle the loop at a slow poll so a late-arriving capability read (it
+     *  lands just after READY) still picks the clock up. */
+    private fun updateScaleHeartbeat(ready: Boolean) {
+        if (!ready) {
+            scaleHeartbeatJob?.cancel()
+            scaleHeartbeatJob = null
+            return
+        }
+        if (scaleHeartbeatJob?.isActive == true) return
+        scaleHeartbeatJob = viewModelScope.launch {
+            while (true) {
+                val interval = _ui.value.scaleCapabilities?.heartbeat_interval_ms?.toLong()
+                if (interval != null) {
+                    runCatching { onCoreOutputJson(bridge.scaleHeartbeat()) }
+                        .onFailure { appendLog("Scale heartbeat failed: ${it.message}") }
+                    delay(interval)
+                } else {
+                    delay(1_000)
+                }
+            }
+        }
+    }
+
     /** Start the 4 Hz mode-clock ticker when a service mode is running, stop it
      *  when idle. Elapsed is recomputed from the monotonic anchor each tick, so
      *  tick jitter never accumulates into the readout. */
@@ -1053,6 +1081,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             scale.state.collect { state ->
                 _ui.update { it.copy(scaleState = state) }
+                // Capability-driven keep-alive: some scales need a periodic
+                // heartbeat write — the Decent's LCD (2 s) and the Acaia,
+                // which stops streaming weight entirely without one (3 s,
+                // Decenza acaiascale.cpp:264-277). The web shell has run this
+                // loop for a while; Android never did (the Acaia gap).
+                updateScaleHeartbeat(state == ScaleBleManager.State.READY)
                 // Connecting auto-remembers the scale → its Auto-connect turns ON.
                 if (state == ScaleBleManager.State.READY) {
                     scale.connectedAddress?.let { addr ->
@@ -4541,10 +4575,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // AND6: scan for EVERY supported scale's advertised-name prefix (the
         // core-owned registry), not a hardcoded Bookoo rule — the web shell does
         // the same. Resolved once per scan; the connected model's codec + UUIDs
-        // come from the core in ScaleBleManager.establish(). Case-sensitive to
-        // match the core's `Scale::identify` (so a scan match implies identify).
+        // come from the core in ScaleBleManager.establish(). Case-INSENSITIVE
+        // to match the core's `Scale::identify` (the scan used to be stricter
+        // than identify, so a mixed-case unit could pass identify but never
+        // scan-match — e.g. "eCompass" vs "ECOMPASS").
         val prefixes = scale.supportedScaleNamePrefixes()
-        bleScanner.scanFor(SCAN_LABEL_SCALE, { name -> prefixes.any { name.startsWith(it) } }) { device, name ->
+        bleScanner.scanFor(SCAN_LABEL_SCALE, { name -> prefixes.any { name.startsWith(it, ignoreCase = true) } }) { device, name ->
             scale.connect(device, name)
         }
     }
@@ -5098,6 +5134,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(scaleWeightG = null) }
                 appendLog("Scale stale")
             }
+            is Event.ScaleButtonPressed ->
+                // Logged like de1app (bluetooth.tcl:2825-2828) — no hard-wired
+                // action yet; the event is the hook for a future mapping.
+                appendLog("Scale button pressed: ${event.content.button}")
             is Event.ScaleConfig -> {
                 val c = event.content
                 // The Bookoo's `ff12` command channel reports its dynamic

@@ -63,6 +63,12 @@ pub enum Source {
     /// received. The orchestrator's ack matcher reads byte 0 (`FrameToWrite`)
     /// to confirm each frame applied.
     De1FrameAck,
+    /// The connected scale's on-scale button characteristic — today only the
+    /// Skale II's `EF82` (`ScaleUuids::button_notify`). The shell subscribes
+    /// when the core reports the characteristic and forwards presses here;
+    /// the core decodes them via `Scale::parse_button` into
+    /// [`Event::ScaleButtonPressed`].
+    ScaleButton,
 }
 
 /// Something the core observed that the UI may want to react to.
@@ -256,6 +262,14 @@ pub enum Event {
     /// for roughly a second. Emitted once per stale episode; a fresh reading
     /// re-arms it.
     ScaleStale,
+    /// The user pressed a button on the scale itself (today only the
+    /// Skale II's button characteristic). Surfaced for the shells to log or
+    /// map to an action; de1app likewise subscribes and logs the press
+    /// (`bluetooth.tcl:2825-2828`) without hard-wiring a behaviour.
+    ScaleButtonPressed {
+        /// The raw button byte the scale reported.
+        button: u8,
+    },
     /// The connected scale reported its dynamic configuration on its command
     /// characteristic (the Bookoo's `ff12` channel).
     ///

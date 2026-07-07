@@ -46,6 +46,10 @@ pub const CONFIG: [u8; 14] = [
 ];
 /// Handshake: keep-alive heartbeat.
 pub const HEARTBEAT: [u8; 7] = [0xEF, 0xDD, 0x00, 0x02, 0x00, 0x02, 0x00];
+/// How often the shell should send [`HEARTBEAT`] — the Acaia stops
+/// streaming without a periodic keep-alive (Decenza `acaiascale.cpp:264-277`
+/// runs the same 3 s cadence for the whole session).
+pub const HEARTBEAT_INTERVAL_MS: u64 = 3_000;
 
 /// Number of metadata bytes in a frame: `EF DD <type> <length> <event_type>`.
 const METADATA_LEN: usize = 5;
@@ -162,7 +166,13 @@ impl AcaiaDecoder {
                         // Not even the metadata is fully buffered — wait.
                         return None;
                     }
-                    self.battery_percent = Some(self.buffer[msg_start + 4]);
+                    // Mask the charging bit + clamp to a percentage (Decenza
+                    // acaiascale.cpp:352-357 does `& 0x7F` and range-checks).
+                    // NOTE the byte OFFSET is disputed: reaprime (followed
+                    // here) reads metadata byte [4]; Decenza reads payload
+                    // byte [5] and calls [4] "unknown" — hardware-verify, see
+                    // .scratch/decenza-review/HARDWARE-VERIFY-FIXES.md.
+                    self.battery_percent = Some((self.buffer[msg_start + 4] & 0x7F).min(100));
                     let claimed_end = msg_start + METADATA_LEN + length;
                     let consume_end = claimed_end.min(self.buffer.len());
                     self.buffer.drain(..consume_end);

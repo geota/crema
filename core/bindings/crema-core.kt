@@ -453,6 +453,13 @@ data class EventSteamEcoModeChangedInner (
 	val eco: Boolean
 )
 
+/// Generated type representing the anonymous struct variant `ScaleButtonPressed` of the `Event` Rust enum
+@Serializable
+data class EventScaleButtonPressedInner (
+	/// The raw button byte the scale reported.
+	val button: UByte
+)
+
 /// Generated type representing the anonymous struct variant `ScaleConfig` of the `Event` Rust enum
 @Serializable
 data class EventScaleConfigInner (
@@ -683,6 +690,13 @@ sealed class Event {
 	@Serializable
 	@SerialName("ScaleStale")
 	object ScaleStale: Event()
+	/// The user pressed a button on the scale itself (today only the
+	/// Skale II's button characteristic). Surfaced for the shells to log or
+	/// map to an action; de1app likewise subscribes and logs the press
+	/// (`bluetooth.tcl:2825-2828`) without hard-wiring a behaviour.
+	@Serializable
+	@SerialName("ScaleButtonPressed")
+	data class ScaleButtonPressed(val content: EventScaleButtonPressedInner): Event()
 	/// The connected scale reported its dynamic configuration on its command
 	/// characteristic (the Bookoo's `ff12` channel).
 	/// 
@@ -1151,7 +1165,19 @@ data class ScaleUuids (
 	/// characteristic: enabling notifications on one (e.g. the Decent's `36f5`)
 	/// fails at the GATT layer and crashes the connect, so the shell must skip
 	/// it. Capability-driven — the core, which owns the protocol, decides.
-	val command_notifies: Boolean
+	val command_notifies: Boolean,
+	/// A third characteristic that notifies on-scale button presses — today
+	/// only the Skale II's `EF82` (de1app subscribes and logs it,
+	/// `bluetooth.tcl:221`; Decenza emits `buttonPressed`). `None` for every
+	/// other scale. The shell subscribes when present and forwards the bytes
+	/// as `Source::ScaleButton`.
+	val button_notify: String? = null,
+	/// Whether `command_write` must be written WITHOUT response. True only
+	/// for the gen-1/IPS Acaia — its command characteristic rejects
+	/// with-response writes (Decenza acaiascale.cpp:279-295 "IPS and Pyxis
+	/// require different write types"). Every other scale (incl. Pyxis)
+	/// accepts the shells' default with-response write.
+	val command_write_no_response: Boolean
 )
 
 /// A snapshot of the active bean at the moment a shot was pulled.

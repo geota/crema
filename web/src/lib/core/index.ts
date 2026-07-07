@@ -235,7 +235,8 @@ export type NotificationSource =
 	| 'De1Calibration'
 	| 'De1ShotSettings'
 	| 'De1ProfileHeader'
-	| 'De1FrameAck';
+	| 'De1FrameAck'
+	| 'ScaleButton';
 
 /**
  * The eight fields of the DE1's steam / hot-water settings packet (cuuid_0B),

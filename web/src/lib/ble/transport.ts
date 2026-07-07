@@ -471,7 +471,12 @@ export class BleDevice implements De1Transport {
 	 * writes (the scale's three-command mode sequence) runs strictly serially
 	 * and cannot collide with a notification subscribe or a reconnect.
 	 */
-	write(serviceUuid: string, characteristicUuid: string, data: Uint8Array): Promise<void> {
+	write(
+		serviceUuid: string,
+		characteristicUuid: string,
+		data: Uint8Array,
+		withResponse = true
+	): Promise<void> {
 		return this.gattQueue.enqueue(async () => {
 			let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
 			if (characteristic === undefined) {
@@ -482,8 +487,14 @@ export class BleDevice implements De1Transport {
 			}
 			// `writeValueWithResponse` is the equivalent of the Android
 			// transport's acknowledged write; copy into a fresh buffer for a
-			// clean ArrayBuffer.
-			await characteristic.writeValueWithResponse(data.slice().buffer);
+			// clean ArrayBuffer. `withResponse = false` for characteristics
+			// that only accept unacknowledged writes (gen-1/IPS Acaia).
+			const buffer = data.slice().buffer;
+			if (withResponse) {
+				await characteristic.writeValueWithResponse(buffer);
+			} else {
+				await characteristic.writeValueWithoutResponse(buffer);
+			}
 		});
 	}
 

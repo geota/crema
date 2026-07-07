@@ -94,6 +94,13 @@ export const scaleConnectProgram = (d: ScaleConnectDeps): Effect.Effect<void, Sc
 				d.device.startNotifications(uuids.service, uuids.command_write)
 			);
 		}
+		// A third stream for scales with an on-scale button characteristic
+		// (Skale II EF82) — de1app subscribes to it too (bluetooth.tcl:221).
+		if (uuids.button_notify) {
+			yield* fatal('button subscription', () =>
+				d.device.startNotifications(uuids.service, uuids.button_notify!)
+			);
+		}
 
 		// Capability-gated config UI hangs off this.
 		d.onScaleIdentified(d.advertisedName);

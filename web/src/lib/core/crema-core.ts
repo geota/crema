@@ -531,6 +531,16 @@ export type Event =
 	 */
 	| { type: "ScaleStale", content?: undefined }
 	/**
+	 * The user pressed a button on the scale itself (today only the
+	 * Skale II's button characteristic). Surfaced for the shells to log or
+	 * map to an action; de1app likewise subscribes and logs the press
+	 * (`bluetooth.tcl:2825-2828`) without hard-wiring a behaviour.
+	 */
+	| { type: "ScaleButtonPressed", content: {
+	/** The raw button byte the scale reported. */
+	button: number;
+}}
+	/**
 	 * The connected scale reported its dynamic configuration on its command
 	 * characteristic (the Bookoo's `ff12` channel).
 	 * 
@@ -1167,6 +1177,22 @@ export interface ScaleUuids {
 	 * it. Capability-driven — the core, which owns the protocol, decides.
 	 */
 	command_notifies: boolean;
+	/**
+	 * A third characteristic that notifies on-scale button presses — today
+	 * only the Skale II's `EF82` (de1app subscribes and logs it,
+	 * `bluetooth.tcl:221`; Decenza emits `buttonPressed`). `None` for every
+	 * other scale. The shell subscribes when present and forwards the bytes
+	 * as `Source::ScaleButton`.
+	 */
+	button_notify?: string;
+	/**
+	 * Whether `command_write` must be written WITHOUT response. True only
+	 * for the gen-1/IPS Acaia — its command characteristic rejects
+	 * with-response writes (Decenza acaiascale.cpp:279-295 "IPS and Pyxis
+	 * require different write types"). Every other scale (incl. Pyxis)
+	 * accepts the shells' default with-response write.
+	 */
+	command_write_no_response: boolean;
 }
 
 /**

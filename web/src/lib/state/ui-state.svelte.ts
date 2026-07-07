@@ -898,6 +898,16 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				scaleWeight: null,
 				eventLog: appendLog(snapshot.eventLog, 'Scale stale')
 			};
+		case 'ScaleButtonPressed':
+			// Logged like de1app (bluetooth.tcl:2825-2828) — no hard-wired
+			// action yet; the event is the hook for a future mapping.
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Scale button pressed: ${event.content.button}`
+				)
+			};
 		case 'ScaleConfig': {
 			const c = event.content;
 			// The Bookoo's `ff12` channel reports its dynamic config: a `03 0c`
