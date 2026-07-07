@@ -706,22 +706,6 @@ impl Scale {
         true
     }
 
-    /// Whether this scale is a Decent Scale.
-    ///
-    /// The Decent Scale needs two pieces of behaviour none of the other
-    /// supported scales do — an explicit on-scale LCD enable/disable, and a
-    /// periodic [`decent_scale::HEARTBEAT`] to keep the display awake. The
-    /// core gates those reactive writes on this check; every other scale
-    /// returns `false` here and the writes are silently skipped.
-    ///
-    /// This is the single deliberate "device-driven" capability in the
-    /// otherwise capability-driven scale surface, because the writes are
-    /// Decent-specific and have no analogue on other scales — a generic
-    /// capability would have only one implementation.
-    pub fn is_decent_scale(&self) -> bool {
-        matches!(&self.inner, Inner::Decent(_))
-    }
-
     /// Record a Decent-Scale firmware-version observation (the byte
     /// extracted from a `0x0A` reply — see
     /// [`decent_scale::parse_command_response`]). No-op for every other
@@ -1477,37 +1461,6 @@ impl Scale {
         })
     }
 
-    /// Whether the connected scale is a Skale II (Atomax).
-    ///
-    /// The Skale needs an explicit LCD-enable / LCD-disable surface like the
-    /// Decent Scale — see [`is_decent_scale`](Self::is_decent_scale). The
-    /// shell uses this gate to fire `ED EC` (display-on + display-weight) on
-    /// machine Idle entry and `EE` (display-off) on Sleep entry. Every other
-    /// scale returns `false`.
-    pub fn is_skale(&self) -> bool {
-        matches!(&self.inner, Inner::Skale)
-    }
-
-    /// Whether the connected scale is a Eureka Precisa (CFS-9002) or its
-    /// codec-identical sibling, the Solo Barista (LSJ-001).
-    ///
-    /// Both scales accept the same 4-byte commands and only differ in the
-    /// advertised name. The shell uses this gate to fire the optional
-    /// turn-off / beep / set-unit-grams commands behind the user-controlled
-    /// "Eureka auto-off on sleep" toggle.
-    pub fn is_eureka_precisa(&self) -> bool {
-        matches!(&self.inner, Inner::EurekaPrecisa | Inner::SoloBarista)
-    }
-
-    /// Whether the connected scale is a Solo Barista (LSJ-001) specifically.
-    ///
-    /// Returns `false` for an Eureka Precisa even though both share the
-    /// codec — kept distinct so a Settings page can branch on the
-    /// user-visible scale identity if it ever needs to.
-    pub fn is_solo_barista(&self) -> bool {
-        matches!(&self.inner, Inner::SoloBarista)
-    }
-
     /// Whether the connected scale is a Hiroia Jimmy.
     ///
     /// The Hiroia accepts a "toggle display unit" command not present on any
@@ -1774,30 +1727,6 @@ mod tests {
         let frame = [0xEF, 0xDD, 12, 6, 5, 180, 0, 0, 0, 1, 0];
         assert_eq!(acaia.parse_weight(&frame[..4]), None);
         assert_eq!(acaia.parse_weight(&frame[4..]), Some(18.0));
-    }
-
-    #[test]
-    fn is_decent_scale_only_true_for_a_decent_scale() {
-        assert!(Scale::from_label("Decent Scale").unwrap().is_decent_scale());
-        for label in [
-            "Bookoo",
-            "Skale II",
-            "Felicita Arc",
-            "Acaia",
-            "Acaia Pyxis",
-            "Atomheart Eclair",
-            "Eureka Precisa",
-            "Solo Barista",
-            "Difluid Microbalance",
-            "Smartchef",
-            "Hiroia Jimmy",
-            "Varia Aku",
-        ] {
-            assert!(
-                !Scale::from_label(label).unwrap().is_decent_scale(),
-                "{label} should not report as a Decent Scale"
-            );
-        }
     }
 
     #[test]
