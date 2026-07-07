@@ -125,7 +125,11 @@ fun PhoneBrewScreen(
             Box {
                 ProfileStrip(
                     active = active,
-                    beanLine = beanLine(ui),
+                    // Remembered (review #37): beanLine does two list scans +
+                    // a join, and this strip recomposes at telemetry rate.
+                    beanLine = remember(
+                        ui.activeBeanId, ui.beans, ui.roasters, ui.grinderModel, ui.mirroredBeanSummary,
+                    ) { beanLine(ui) },
                     onClick = { swapOpen = true },
                 )
                 if (swapOpen) {

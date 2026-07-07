@@ -92,7 +92,9 @@ fun CanvasShotChart(
     val gridColor = MaterialTheme.colorScheme.outlineVariant
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val nowColor = MaterialTheme.colorScheme.primary
-    val textMeasurer = rememberTextMeasurer()
+    // ~12+ distinct labels are measured per draw; the default 8-entry LRU
+    // thrashed into a fresh text layout per gridline per frame (review #37).
+    val textMeasurer = rememberTextMeasurer(cacheSize = 64)
     val labelStyle = remember(labelColor) { TextStyle(color = labelColor, fontSize = 10.sp, fontFamily = JetBrainsMono) }
 
     // Fixed channel order + plot transforms (temp/weight/volume ride the ÷10 scale).
@@ -119,9 +121,14 @@ fun CanvasShotChart(
     val setpoint = remember(tel) {
         CanvasChannel("setPressure", tel.pressure, 1.2f, dashed = true, alpha = 0.6f) { it.setGroupPressure }
     }
-    val active = buildList {
-        addAll(channels.filter { it.key in enabledChannels && it.available(samples) })
-        if ("pressure" in enabledChannels) add(setpoint)
+    // Remembered (review #37): a history chart's samples are static, so
+    // this used to re-filter + O(n)-scan availability on every recomposition
+    // for nothing. Live charts key-change per tick, same cost as before.
+    val active = remember(samples, enabledChannels, setpoint) {
+        buildList {
+            addAll(channels.filter { it.key in enabledChannels && it.available(samples) })
+            if ("pressure" in enabledChannels) add(setpoint)
+        }
     }
 
     // X-window TARGET: auto-grows with the shot (de1app-style). LIVE snaps up in
@@ -130,14 +137,17 @@ fun CanvasShotChart(
     val targetXMax = if (live) max(10f, ceil(lastSec / 10f) * 10f) else max(10f, ceil(lastSec / 5f) * 5f)
     // Ease each live step over 300 ms (reaprime-style) so the window glides instead
     // of snapping; a finished shot is static, so it takes the target directly.
-    val animatedXMax by animateFloatAsState(
+    // Read INSIDE the Canvas draw lambda (review #37): reading the animated
+    // value at composition scope recomposed this whole composable on every
+    // frame of the 300 ms tween; a draw-phase read only redraws.
+    val animatedXMax = animateFloatAsState(
         targetValue = targetXMax,
         animationSpec = tween(durationMillis = 300),
         label = "shotChartXMax",
     )
-    val xMax = if (live) animatedXMax else targetXMax
 
     Canvas(modifier) {
+        val xMax = if (live) animatedXMax.value else targetXMax
         val padL = 30.dp.toPx()
         val padR = 34.dp.toPx()
         val padT = 8.dp.toPx()

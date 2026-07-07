@@ -1360,57 +1360,61 @@ private fun ChannelsRow(ui: coffee.crema.ui.MainUiState, active: CremaProfile?) 
     // The four telemetry cards as modifier-parameterised slots, so the same set
     // renders 4-across on a wide tablet (10") OR 2×2 on a narrow one (7"), where
     // four dual-value cards would starve each column and clip the labels/values.
-    val cards = listOf<@Composable (Modifier) -> Unit>(
-        { m ->
-            ChannelCard(
-                m, primLabel = "Pressure", primIcon = "gauge", primColor = tel.pressure,
-                primValue = pressure.value, primUnit = pressure.unit,
-                secLabel = "Resistance", secColor = tel.pressure2,
-                secValue = fmt(resist, 2), secUnit = resistUnit,
-            )
-        },
-        { m ->
-            ChannelCard(
-                m, primLabel = "Flow", primIcon = "drop", primColor = tel.flow,
-                primValue = fmt(ui.flow), primUnit = "ml/s",
-                secLabel = "Water", secColor = tel.flow2,
-                secValue = water.value, secUnit = water.unit,
-            )
-        },
-        { m ->
-            ChannelCard(
-                m, primLabel = "Coffee", primIcon = "thermometer", primColor = tel.temp,
-                primValue = coffeeTemp.value, primUnit = coffeeTemp.unit,
-                secLabel = "Water", secColor = tel.temp2,
-                secValue = mixTempM.value, secUnit = mixTempM.unit,
-                target = active?.let { "target ${formatTemp(it.brewTemp, ui.tempUnit)}" },
-            )
-        },
-        { m ->
-            ChannelCard(
-                m, primLabel = "Weight", primIcon = "scales", primColor = tel.weight,
-                primValue = weight.value, primUnit = weight.unit,
-                secLabel = "Flow", secColor = tel.weight2,
-                secValue = fmt(ui.scaleFlowGPerS), secUnit = "g/s",
-                target = active?.let { "target ${formatWeight(it.yieldOut, ui.weightUnit)}" },
-            )
-        },
-    )
+    // Named card slots instead of a per-frame List<@Composable> of capturing
+    // lambdas (review #37) — this row recomposes at telemetry rate, and the
+    // list + four closures were reallocated every frame.
+    val pressureCard: @Composable (Modifier) -> Unit = { m ->
+        ChannelCard(
+            m, primLabel = "Pressure", primIcon = "gauge", primColor = tel.pressure,
+            primValue = pressure.value, primUnit = pressure.unit,
+            secLabel = "Resistance", secColor = tel.pressure2,
+            secValue = fmt(resist, 2), secUnit = resistUnit,
+        )
+    }
+    val flowCard: @Composable (Modifier) -> Unit = { m ->
+        ChannelCard(
+            m, primLabel = "Flow", primIcon = "drop", primColor = tel.flow,
+            primValue = fmt(ui.flow), primUnit = "ml/s",
+            secLabel = "Water", secColor = tel.flow2,
+            secValue = water.value, secUnit = water.unit,
+        )
+    }
+    val tempCard: @Composable (Modifier) -> Unit = { m ->
+        ChannelCard(
+            m, primLabel = "Coffee", primIcon = "thermometer", primColor = tel.temp,
+            primValue = coffeeTemp.value, primUnit = coffeeTemp.unit,
+            secLabel = "Water", secColor = tel.temp2,
+            secValue = mixTempM.value, secUnit = mixTempM.unit,
+            target = active?.let { "target ${formatTemp(it.brewTemp, ui.tempUnit)}" },
+        )
+    }
+    val weightCard: @Composable (Modifier) -> Unit = { m ->
+        ChannelCard(
+            m, primLabel = "Weight", primIcon = "scales", primColor = tel.weight,
+            primValue = weight.value, primUnit = weight.unit,
+            secLabel = "Flow", secColor = tel.weight2,
+            secValue = fmt(ui.scaleFlowGPerS), secUnit = "g/s",
+            target = active?.let { "target ${formatWeight(it.yieldOut, ui.weightUnit)}" },
+        )
+    }
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         if (maxWidth < 760.dp) {
             // 2×2 grid — each card gets ~half the width, enough for dual values.
             Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 Row(Modifier.fillMaxWidth().height(86.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                    cards[0](Modifier.weight(1f).fillMaxHeight()); cards[1](Modifier.weight(1f).fillMaxHeight())
+                    pressureCard(Modifier.weight(1f).fillMaxHeight()); flowCard(Modifier.weight(1f).fillMaxHeight())
                 }
                 Row(Modifier.fillMaxWidth().height(86.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                    cards[2](Modifier.weight(1f).fillMaxHeight()); cards[3](Modifier.weight(1f).fillMaxHeight())
+                    tempCard(Modifier.weight(1f).fillMaxHeight()); weightCard(Modifier.weight(1f).fillMaxHeight())
                 }
             }
         } else {
             // Wide tablet: original slim 4-across band (86dp uniform height).
             Row(Modifier.fillMaxWidth().height(86.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                cards.forEach { it(Modifier.weight(1f).fillMaxHeight()) }
+                pressureCard(Modifier.weight(1f).fillMaxHeight())
+                flowCard(Modifier.weight(1f).fillMaxHeight())
+                tempCard(Modifier.weight(1f).fillMaxHeight())
+                weightCard(Modifier.weight(1f).fillMaxHeight())
             }
         }
     }
