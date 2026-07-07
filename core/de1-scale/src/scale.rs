@@ -9,7 +9,7 @@ use crate::decent_scale::DecentScale;
 use crate::smartchef::SmartchefScale;
 use crate::{
     atomheart_eclair, bookoo, decent_scale, difluid, eureka_precisa, felicita, hiroia_jimmy, skale,
-    smartchef, varia_aku,
+    smartchef, timemore, varia_aku,
 };
 
 pub use crate::decent_scale::DecentScaleFirmwareVersion;
@@ -144,6 +144,12 @@ const SCALE_SCAN: &[ScaleScanEntry] = &[
     ScaleScanEntry {
         prefixes: &["Microbalance"],
         label: "Difluid Microbalance",
+    },
+    ScaleScanEntry {
+        // Timemore Dot (de1app PR #345 scans "TIMEMORE"; Decenza
+        // scalefactory.cpp:269-271 matches case-insensitively).
+        prefixes: &["TIMEMORE", "Timemore"],
+        label: "Timemore Dot",
     },
     ScaleScanEntry {
         prefixes: &["smartchef"],
@@ -439,6 +445,7 @@ enum Inner {
     Smartchef(SmartchefScale),
     HiroiaJimmy,
     VariaAku,
+    Timemore,
 }
 
 impl Scale {
@@ -576,6 +583,7 @@ impl Scale {
             "Smartchef" => Inner::Smartchef(SmartchefScale::new()),
             "Hiroia Jimmy" => Inner::HiroiaJimmy,
             "Varia Aku" => Inner::VariaAku,
+            "Timemore Dot" => Inner::Timemore,
             _ => return None,
         };
         Some(Scale {
@@ -601,6 +609,7 @@ impl Scale {
             Inner::Smartchef(_) => "Smartchef",
             Inner::HiroiaJimmy => "Hiroia Jimmy",
             Inner::VariaAku => "Varia Aku",
+            Inner::Timemore => "Timemore Dot",
         }
     }
 
@@ -654,6 +663,11 @@ impl Scale {
                 eureka_precisa::STATUS_UUID,
                 eureka_precisa::COMMAND_UUID,
             ),
+            Inner::Timemore => (
+                timemore::SERVICE_UUID,
+                timemore::STATUS_UUID,
+                timemore::COMMAND_UUID,
+            ),
             Inner::Difluid => (
                 difluid::SERVICE_UUID,
                 difluid::NOTIFY_COMMAND_UUID,
@@ -684,7 +698,8 @@ impl Scale {
         // Gen-1/IPS Acaia commands must be written WITHOUT response
         // (Decenza acaiascale.cpp:279-295); Pyxis + everything else take the
         // default with-response write.
-        let command_write_no_response = matches!(&self.inner, Inner::AcaiaGen1(_));
+        let command_write_no_response =
+            matches!(&self.inner, Inner::AcaiaGen1(_) | Inner::Timemore);
         ScaleUuids {
             service,
             weight_notify,
@@ -746,6 +761,9 @@ impl Scale {
             Inner::AcaiaGen1(_) | Inner::AcaiaPyxis(_) => {
                 Some(u32::try_from(acaia::HEARTBEAT_INTERVAL_MS).unwrap_or(u32::MAX))
             }
+            Inner::Timemore => {
+                Some(u32::try_from(timemore::HEARTBEAT_INTERVAL_MS).unwrap_or(u32::MAX))
+            }
             _ => None,
         };
         match &self.inner {
@@ -802,7 +820,8 @@ impl Scale {
             | Inner::Difluid
             | Inner::Smartchef(_)
             | Inner::HiroiaJimmy
-            | Inner::VariaAku => ScaleCapabilities {
+            | Inner::VariaAku
+            | Inner::Timemore => ScaleCapabilities {
                 can_lcd,
                 can_power_off,
                 can_beep,
@@ -841,6 +860,20 @@ impl Scale {
             // these scales have no unit_recovery fallback.
             Inner::EurekaPrecisa | Inner::SoloBarista => {
                 vec![&eureka_precisa::SET_UNIT_GRAMS[..]]
+            }
+            // The Dot's hardware tare / timer stay locked until the init
+            // sequence lands; the official app (and Decenza
+            // timemorescale.cpp:170-186) sends all six commands TWICE.
+            // Decenza paces the writes ~150 ms apart via timers; here they
+            // ride the write queue back-to-back — bench-verify on hardware.
+            Inner::Timemore => {
+                let mut writes: Vec<&'static [u8]> = Vec::with_capacity(12);
+                for _round in 0..2 {
+                    for cmd in &timemore::INIT_SEQUENCE {
+                        writes.push(&cmd[..]);
+                    }
+                }
+                writes
             }
             _ => Vec::new(),
         }
@@ -953,6 +986,9 @@ impl Scale {
             // The Acaia stops streaming without a periodic keep-alive
             // (Decenza acaiascale.cpp:264-277 — 3 s cadence for the session).
             Inner::AcaiaGen1(_) | Inner::AcaiaPyxis(_) => Some(vec![&acaia::HEARTBEAT]),
+            // The Dot goes quiet without the ~10 s poll pair (Decenza
+            // timemorescale.cpp:193-199 sendKeepAlive) — two separate writes.
+            Inner::Timemore => Some(vec![&timemore::POLL_1, &timemore::POLL_2]),
             _ => None,
         }
     }
@@ -1033,7 +1069,8 @@ impl Scale {
             | Inner::SoloBarista
             | Inner::Difluid
             | Inner::Smartchef(_)
-            | Inner::VariaAku => 380,
+            | Inner::VariaAku
+            | Inner::Timemore => 380,
         };
         Duration::from_millis(ms)
     }
@@ -1063,6 +1100,7 @@ impl Scale {
             }
             Inner::HiroiaJimmy => hiroia_jimmy::parse_weight(data),
             Inner::VariaAku => varia_aku::parse_weight(data),
+            Inner::Timemore => timemore::parse_weight(data),
         }
     }
 
@@ -1164,7 +1202,8 @@ impl Scale {
             | Inner::Difluid
             | Inner::Smartchef(_)
             | Inner::HiroiaJimmy
-            | Inner::VariaAku => None,
+            | Inner::VariaAku
+            | Inner::Timemore => None,
         }
     }
 
@@ -1384,6 +1423,7 @@ impl Scale {
             }
             Inner::HiroiaJimmy => hiroia_jimmy::TARE.to_vec(),
             Inner::VariaAku => varia_aku::TARE.to_vec(),
+            Inner::Timemore => timemore::TARE.to_vec(),
         })
     }
 
@@ -1429,6 +1469,11 @@ impl Scale {
                 Start => difluid::TIMER_START.to_vec(),
                 Stop => difluid::TIMER_STOP.to_vec(),
                 Reset => difluid::TIMER_RESET.to_vec(),
+            },
+            Inner::Timemore => match command {
+                Start => timemore::TIMER_START.to_vec(),
+                Stop => timemore::TIMER_STOP.to_vec(),
+                Reset => timemore::TIMER_RESET.to_vec(),
             },
             Inner::AcaiaGen1(_)
             | Inner::AcaiaPyxis(_)
@@ -1934,6 +1979,34 @@ mod tests {
         assert!(!felicita.can_set_unit_grams);
         assert!(!felicita.can_toggle_unit);
         assert!(felicita.heartbeat_interval_ms.is_none());
+    }
+
+    #[test]
+    fn timemore_dot_wires_the_dot_protocol_end_to_end() {
+        let mut dot = Scale::from_label("Timemore Dot").unwrap();
+        // Name-only identification via the scan prefix (FFF0 is shared, so
+        // the name carries the whole load, like Eureka / Solo).
+        assert_eq!(
+            Scale::identify("TIMEMORE-A1B2", &[]).unwrap().label(),
+            "Timemore Dot"
+        );
+        // Capability surface: tare + timer commands, write-without-response,
+        // the ~10 s keep-alive PAIR (two separate writes per beat).
+        assert_eq!(dot.tare(), Some(timemore::TARE.to_vec()));
+        assert_eq!(
+            dot.timer(TimerCommand::Start),
+            Some(timemore::TIMER_START.to_vec())
+        );
+        assert!(dot.uuids().command_write_no_response);
+        assert_eq!(dot.capabilities().heartbeat_interval_ms, Some(10_000));
+        assert_eq!(dot.heartbeat_command().unwrap().len(), 2);
+        // The six-command init sequence rides connect_writes twice over.
+        assert_eq!(dot.connect_writes().len(), 12);
+        // No LCD / battery / flow surface.
+        assert!(!dot.capabilities().can_lcd);
+        // Weight decode end-to-end: 0x00B4 BE = 180 tenths = 18.0 g.
+        let packet = [0xA5, 0x5A, 0x01, 0, 0, 0, 0, 0, 0x00, 0xB4];
+        assert_eq!(dot.parse_weight(&packet), Some(18.0));
     }
 
     #[test]

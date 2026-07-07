@@ -31,6 +31,7 @@ pub mod scale;
 pub mod skale;
 pub mod smartchef;
 pub mod solo_barista;
+pub mod timemore;
 pub mod varia_aku;
 
 pub use scale::{
