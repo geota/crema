@@ -828,6 +828,89 @@ export interface De1Uuids {
 }
 
 /**
+ * Structured detector outputs — the typed values behind the prose lines,
+ * mirroring Decenza's `DetectorResults` (`shotanalysis.h:479-600`).
+ * `*_checked == false` means the detector was suppressed (pour-truncated
+ * cascade, beverage-type skip, profile flag, or insufficient input); the
+ * rest of that detector's fields stay at their defaults. Distinguishing
+ * "not checked" from "checked, no signal" matters — silence on a skipped
+ * detector is not the same as silence on a clean shot.
+ */
+export interface DetectorResults {
+	/** Pour never pressurized — runs first and dominates the cascade. */
+	pourTruncated: boolean;
+	/** Peak pour-window pressure; populated only when `pour_truncated` fired. */
+	peakPressureBar: number;
+	/**
+	 * Pour window start the cascade used (0 when no pour/preinfusion
+	 * markers were present).
+	 */
+	pourStartS: number;
+	/**
+	 * Pour window end (shot duration when no "End" marker; 0 only on the
+	 * insufficient-data early return).
+	 */
+	pourEndS: number;
+	/** Whether the channeling detector ran. */
+	channelingChecked: boolean;
+	/** "" if unchecked; else "none" / "transient" / "sustained". */
+	channelingSeverity: string;
+	/** Timestamp of the largest |dC/dt| spike inside the analysis windows. */
+	channelingSpikeTimeS: number;
+	/** Whether the flow-trend detector ran. */
+	flowTrendChecked: boolean;
+	/** "" if unchecked; else "stable" / "rising" / "falling". */
+	flowTrend: string;
+	/** (avg flow in last 30% of pour) − (avg in first 30%). */
+	flowTrendDeltaMlS: number;
+	/** Preinfusion drip observation fired (weight and duration thresholds). */
+	preinfusionObserved: boolean;
+	/** Cup weight at the end of preinfusion. */
+	preinfusionDripWeightG: number;
+	/** Preinfusion duration (first marker → preinfusion end). */
+	preinfusionDripDurationS: number;
+	/** Whether the grind detector ran (not suppressed by cascade or config). */
+	grindChecked: boolean;
+	/** At least one grind arm produced a result. */
+	grindHasData: boolean;
+	/**
+	 * The pressure-mode choke check fired (severe flow or moderate yield
+	 * arm).
+	 */
+	grindChokedPuck: boolean;
+	/** Yield ran past target by more than [`YIELD_OVERSHOOT_RATIO_MIN`]. */
+	grindYieldOvershoot: boolean;
+	/**
+	 * The puck behaved through a sustained pressurized pour — positive
+	 * verification, not just absence of signal.
+	 */
+	grindVerifiedClean: boolean;
+	/**
+	 * (avg actual flow) − (avg goal flow); positive = coarse. Meaningful
+	 * only when neither `grind_choked_puck` nor `grind_yield_overshoot`
+	 * fired.
+	 */
+	grindFlowDeltaMlS: number;
+	/**
+	 * Qualifying samples averaged (Arm 1) or pressurized samples observed
+	 * (choked path).
+	 */
+	grindSampleCount: number;
+	/**
+	 * "" if no data; else "yieldOvershoot" / "chokedPuck" / "tooFine" /
+	 * "tooCoarse" / "onTarget".
+	 */
+	grindDirection: string;
+	/**
+	 * "verified" / "notAnalyzable" / "skipped" / "" (pour-truncated cascade
+	 * or degenerate pour window) — see `shotanalysis.h:556-573`.
+	 */
+	grindCoverage: string;
+	/** Profile frame 0 appears to have been skipped. */
+	skipFirstFrame: boolean;
+}
+
+/**
  * A slim view onto the shell's `StoredShot`: only the fields the
  * reconcile planner reads. Lets the shell project its full record
  * (web `StoredShot` in `$lib/history/model.ts`, Android equivalent)
@@ -921,6 +1004,66 @@ export interface ModeInfo {
 	id: number;
 	/** A human-readable name for the mode, suitable for a button label. */
 	name: string;
+}
+
+/**
+ * A profile phase boundary observed during the shot — the port of Decenza's
+ * `HistoryPhaseMarker`. Decenza inserts a synthetic first marker with
+ * `label == "Start"` and `frame_number == 0` at extraction start
+ * (`shotanalysis.cpp:667-672`).
+ */
+export interface PhaseMarker {
+	/** Seconds from extraction start at which this phase began. */
+	timeS: number;
+	/** Phase label ("Start", "Preinfusion", "Pour", "End", …). */
+	label: string;
+	/** 0-based profile frame number; negative when unknown. */
+	frameNumber: number;
+	/**
+	 * Whether this frame is flow-controlled (pump=flow) rather than
+	 * pressure-controlled.
+	 */
+	isFlowMode: boolean;
+	/**
+	 * Why the *preceding* frame exited: "weight" / "pressure" / "flow"
+	 * (sensor-confirmed), "pressure_unconfirmed" / "flow_unconfirmed",
+	 * "time", or "" when unknown (old data).
+	 */
+	transitionReason: string;
+}
+
+/**
+ * The four badge booleans the shells surface as chips. Projection rules:
+ * `channeling` fires only on *sustained* severity (transients stay a prose
+ * caution); `grind_issue` mirrors `detectGrindIssue`
+ * (`shotanalysis.cpp:610-625`): not skipped, has data, and choked /
+ * overshoot / |delta| beyond [`FLOW_DEVIATION_THRESHOLD`];
+ * `pour_truncated` and `skip_first_frame` are 1:1 with their detectors.
+ */
+export interface QualityBadges {
+	/** Sustained channeling detected. */
+	channeling: boolean;
+	/** Grind flagged: choked, gusher, or |flow-vs-goal delta| > threshold. */
+	grindIssue: boolean;
+	/** The pour never pressurized (peak < [`PRESSURE_FLOOR_BAR`]). */
+	pourTruncated: boolean;
+	/** Profile frame 0 appears to have been skipped. */
+	skipFirstFrame: boolean;
+}
+
+/**
+ * One prose line of the shot summary. `line_type` is one of `good` /
+ * `caution` / `warning` / `observation` / `verdict`; `kind` is a stable
+ * machine-readable id (e.g. `channeling_sustained`). For the verdict line,
+ * `kind` carries the verdict category (Decenza's verdict map has no kind).
+ */
+export interface QualityLine {
+	/** User-facing English text (Decenza's exact wording). */
+	text: string;
+	/** Stable machine-readable line id. */
+	kind: string;
+	/** good / caution / warning / observation / verdict. */
+	lineType: string;
 }
 
 /**
@@ -1196,6 +1339,19 @@ export interface ScaleUuids {
 }
 
 /**
+ * One sample of a time series: `t` seconds from extraction start, `v` the
+ * value (bar, mL/s, g, or conductance depending on the series). Series are
+ * ordered ascending by `t`; there is no fixed sample rate — every window
+ * rule works off the actual timestamps.
+ */
+export interface SeriesPoint {
+	/** Seconds from extraction start. */
+	t: number;
+	/** Sample value. */
+	v: number;
+}
+
+/**
  * A snapshot of the active bean at the moment a shot was pulled.
  * Frozen onto each [`crate::history::StoredShot`] (in the shell's
  * extended record) so a later rename / archive / delete of the bag
@@ -1238,6 +1394,14 @@ export interface ShotBean {
 	 * recommended dial recorded with the bag.
 	 */
 	grinderSetting?: string;
+	/**
+	 * The bean's grinder NAME at the time of the shot (e.g. "Niche
+	 * Zero") — so history can say which grinder pulled the shot even
+	 * after the bag's grinder is edited (issue #16; the snapshot used
+	 * to carry only the dial). Additive + optional, so pre-existing
+	 * stored shots decode unchanged.
+	 */
+	grinder?: string;
 }
 
 /**
@@ -1268,6 +1432,86 @@ export interface ShotPeaks {
 	peakPressure: number;
 	/** Peak group-head temperature reached, °C. */
 	peakTemp: number;
+}
+
+/**
+ * Everything [`analyze_shot`] needs — the port of `ShotAnalysis::analyzeShot`'s
+ * parameter list (`shotanalysis.cpp:731-747`), minus the conductance
+ * derivative (computed internally from pressure + flow) and the expert band
+ * (omitted in this port).
+ */
+export interface ShotQualityInput {
+	/** Group pressure (bar) over the shot. */
+	pressure: SeriesPoint[];
+	/** Group flow (mL/s) over the shot. */
+	flow: SeriesPoint[];
+	/** Cup weight (g) over the shot; may be empty (no scale). */
+	weight: SeriesPoint[];
+	/** Commanded pressure goal (bar); may be empty. */
+	pressureGoal: SeriesPoint[];
+	/** Commanded flow goal (mL/s); may be empty. */
+	flowGoal: SeriesPoint[];
+	/** Phase boundary markers in time order. */
+	phases: PhaseMarker[];
+	/**
+	 * Beverage type; `filter` / `pourover` / `tea` / `steam` / `cleaning`
+	 * (case-insensitive) skip the puck-integrity detectors.
+	 */
+	beverageType: string;
+	/**
+	 * Total shot duration, seconds — the default pour end when no "End"
+	 * marker is present.
+	 */
+	durationS: number;
+	/**
+	 * Configured duration of profile frame 0, seconds; `-1` when unknown.
+	 * Drives the short-first-step cutoff in skip-first-frame detection.
+	 */
+	firstFrameConfiguredS: number;
+	/** Effective stop-at-weight target (g); `0` disables the yield arms. */
+	targetWeightG: number;
+	/** Final in-cup weight (g); `0` disables the yield arms. */
+	finalWeightG: number;
+	/**
+	 * Number of frames in the profile; `-1` when unknown. Values `< 2`
+	 * suppress skip-first-frame detection.
+	 */
+	expectedFrameCount: number;
+	/**
+	 * Per-profile analysis flags: `grind_check_skip`, `channeling_expected`,
+	 * `flow_trend_ok`.
+	 */
+	analysisFlags: string[];
+	/**
+	 * Whether the profile's shape is known well enough to trust the flow
+	 * goal as a target (Decenza: KB resolution succeeded). When false,
+	 * grind Arm 1 (flow-vs-goal averaging) is skipped entirely; Arm 2's
+	 * physics-level arms still run (`shotanalysis.cpp:369-384`).
+	 */
+	profileKbResolved: boolean;
+}
+
+/**
+ * Combined output of [`analyze_shot`]: the prose lines (ending in one
+ * verdict line, except on the insufficient-data early return), the badge
+ * projection, the stable verdict category, and the structured detector
+ * results the lines were formatted from.
+ */
+export interface ShotQualityReport {
+	/** Prose observation list, verdict last. */
+	lines: QualityLine[];
+	/** Badge projection for chips. */
+	badges: QualityBadges;
+	/**
+	 * Stable enum-like category (see `shotanalysis.h:578-599`):
+	 * `clean`, `cleanGrindNotAnalyzable`, `insufficientData`,
+	 * `puckTruncated`, `skipFirstFrame`, `yieldOvershoot`, `chokedPuck`,
+	 * `puckIntegrity[GrindFine|GrindCoarse]`,
+	 * `minorIssues[GrindFine|GrindCoarse]`.
+	 */
+	verdictCategory: string;
+	/** The typed detector values behind the lines. */
+	detectors: DetectorResults;
 }
 
 /**

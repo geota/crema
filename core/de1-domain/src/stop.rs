@@ -18,6 +18,7 @@ use de1_protocol::ShotSample;
 use typeshare::typeshare;
 
 use crate::flow::{FlowAlgorithm, FlowEstimator};
+use crate::saw_learning::{SawLearningModel, SawSnapshot};
 
 /// The targets that end a shot automatically. A `None` field disables that mode.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -131,6 +132,17 @@ pub struct AutoStop {
     started: Duration,
     flow: FlowEstimator,
     triggered: bool,
+    /// The learned-drip snapshot captured at arm time (Decenza's SAW
+    /// learning, `weightprocessor.cpp:587-615`). When present, the weight
+    /// leg stops at `target − expected_drip(flow)` instead of the fixed
+    /// four-term lead projection. `None` = legacy behaviour.
+    drip_snapshot: Option<SawSnapshot>,
+    /// The connected scale's sensor lag, seconds — the no-model default's
+    /// `min(flow · (lag + 0.1), 8)` term.
+    sensor_lag_s: f64,
+    /// Captured at the weight trigger, for post-shot drip learning:
+    /// `(robust weight, flow, target)` at the instant SAW fired.
+    stop_capture: Option<(f32, f32, f32)>,
 }
 
 impl AutoStop {
@@ -142,7 +154,25 @@ impl AutoStop {
             started,
             flow: FlowEstimator::new(config.flow_algorithm),
             triggered: false,
+            drip_snapshot: None,
+            sensor_lag_s: 0.38,
+            stop_capture: None,
         }
+    }
+
+    /// Attach a learned-drip snapshot (Decenza SAW learning) — the weight
+    /// leg then predicts post-stop drip from past shots instead of the
+    /// fixed lead. Also usable mid-shot (a scale registering after arming).
+    pub fn set_drip_model(&mut self, snapshot: SawSnapshot, sensor_lag_s: f64) {
+        self.drip_snapshot = Some(snapshot);
+        self.sensor_lag_s = sensor_lag_s;
+    }
+
+    /// The `(weight, flow, target)` captured the instant the weight leg
+    /// fired — the post-shot drip-learning sample's inputs. `None` until
+    /// SAW triggers (volume / max-time stops capture nothing).
+    pub fn stop_capture(&self) -> Option<(f32, f32, f32)> {
+        self.stop_capture
     }
 
     /// Whether a stop has already been decided.
@@ -196,11 +226,24 @@ impl AutoStop {
         if !self.is_armed(now) {
             return None;
         }
-        // Project the robust weight one look-ahead forward along the flow.
-        let projected =
-            estimate.weight + estimate.flow.max(0.0) * self.config.weight_lead.as_secs_f32();
-        if projected >= target - self.config.weight_offset {
+        let crossed = if let Some(snapshot) = &self.drip_snapshot {
+            // Learned-drip threshold (Decenza weightprocessor.cpp:283-308):
+            // stop when the robust weight reaches `target − expected_drip`,
+            // with the kernel's flow input capped at 12 ml/s (:293). The
+            // no-model default inside expected_drip reproduces the legacy
+            // lead's intent (`min(flow · (sensor_lag + 0.1), 8)`).
+            let flow = f64::from(estimate.flow.max(0.0)).min(12.0);
+            let expected = SawLearningModel::expected_drip(snapshot, flow, self.sensor_lag_s);
+            f64::from(estimate.weight) >= f64::from(target) - expected
+        } else {
+            // Legacy: project the robust weight one look-ahead along the flow.
+            let projected =
+                estimate.weight + estimate.flow.max(0.0) * self.config.weight_lead.as_secs_f32();
+            projected >= target - self.config.weight_offset
+        };
+        if crossed {
             self.triggered = true;
+            self.stop_capture = Some((estimate.weight, estimate.flow, target));
             return Some(StopReason::Weight);
         }
         None

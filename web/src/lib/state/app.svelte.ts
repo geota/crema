@@ -142,6 +142,13 @@ const MAX_TELEMETRY_GAP_S = 2;
 const LAST_FINGERPRINT_KEY = 'crema.profile-sync.lastFingerprint.v1';
 
 /**
+ * localStorage key for the core's learned SAW drip model — an opaque
+ * core-owned JSON blob (`de1_domain::saw_learning`), seeded at boot and
+ * saved after every completed shot.
+ */
+const SAW_MODEL_KEY = 'crema.saw-model.v1';
+
+/**
  * The DE1 top-level states whose group flow counts toward the water-filter /
  * descale counters: an espresso shot and the two hot-water modes (hot water +
  * its rinse). Steam draws no water through the group, and idle / sleep / cal
@@ -442,6 +449,14 @@ export class CremaApp {
 					getMaintenanceStore().accumulate(event.content.group_flow, deltaS);
 				}
 				this.lastTelemetryAtMs = now;
+			}
+			if (event.type === 'ShotCompleted') {
+				// Persist the learned SAW drip model — a weight-stopped shot
+				// just added a training sample in the core.
+				void this.core
+					.sawModelJson()
+					.then((blob) => writeJson(SAW_MODEL_KEY, blob))
+					.catch(() => undefined);
 			}
 			if (event.type === 'StopTriggered') {
 				// Attribute the auto-stop so the user learns WHERE the control
@@ -1895,6 +1910,12 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 		void core.setStopOnWeight(s.stopOnWeight);
 		void core.setVolumeStopWithScale(s.volumeStopWithScale);
 		void core.setMaxShotDuration(s.maxShotDurationS > 0 ? s.maxShotDurationS : undefined);
+	}
+	// Seed the learned SAW drip model (core-owned opaque blob) from its
+	// persisted store; saved back after every completed shot.
+	{
+		const blob = readJson<string | null>(SAW_MODEL_KEY, null);
+		if (blob) void core.setSawModelJson(blob);
 	}
 	// Install the user-presence heartbeat — every user touch / keystroke
 	// (debounced to once per minute) writes `UserPresent = 1` to the DE1,

@@ -868,6 +868,72 @@ data class De1Uuids (
 	val frameWrite: String
 )
 
+/// Structured detector outputs — the typed values behind the prose lines,
+/// mirroring Decenza's `DetectorResults` (`shotanalysis.h:479-600`).
+/// `*_checked == false` means the detector was suppressed (pour-truncated
+/// cascade, beverage-type skip, profile flag, or insufficient input); the
+/// rest of that detector's fields stay at their defaults. Distinguishing
+/// "not checked" from "checked, no signal" matters — silence on a skipped
+/// detector is not the same as silence on a clean shot.
+@Serializable
+data class DetectorResults (
+	/// Pour never pressurized — runs first and dominates the cascade.
+	val pourTruncated: Boolean,
+	/// Peak pour-window pressure; populated only when `pour_truncated` fired.
+	val peakPressureBar: Double,
+	/// Pour window start the cascade used (0 when no pour/preinfusion
+	/// markers were present).
+	val pourStartS: Double,
+	/// Pour window end (shot duration when no "End" marker; 0 only on the
+	/// insufficient-data early return).
+	val pourEndS: Double,
+	/// Whether the channeling detector ran.
+	val channelingChecked: Boolean,
+	/// "" if unchecked; else "none" / "transient" / "sustained".
+	val channelingSeverity: String,
+	/// Timestamp of the largest |dC/dt| spike inside the analysis windows.
+	val channelingSpikeTimeS: Double,
+	/// Whether the flow-trend detector ran.
+	val flowTrendChecked: Boolean,
+	/// "" if unchecked; else "stable" / "rising" / "falling".
+	val flowTrend: String,
+	/// (avg flow in last 30% of pour) − (avg in first 30%).
+	val flowTrendDeltaMlS: Double,
+	/// Preinfusion drip observation fired (weight and duration thresholds).
+	val preinfusionObserved: Boolean,
+	/// Cup weight at the end of preinfusion.
+	val preinfusionDripWeightG: Double,
+	/// Preinfusion duration (first marker → preinfusion end).
+	val preinfusionDripDurationS: Double,
+	/// Whether the grind detector ran (not suppressed by cascade or config).
+	val grindChecked: Boolean,
+	/// At least one grind arm produced a result.
+	val grindHasData: Boolean,
+	/// The pressure-mode choke check fired (severe flow or moderate yield
+	/// arm).
+	val grindChokedPuck: Boolean,
+	/// Yield ran past target by more than [`YIELD_OVERSHOOT_RATIO_MIN`].
+	val grindYieldOvershoot: Boolean,
+	/// The puck behaved through a sustained pressurized pour — positive
+	/// verification, not just absence of signal.
+	val grindVerifiedClean: Boolean,
+	/// (avg actual flow) − (avg goal flow); positive = coarse. Meaningful
+	/// only when neither `grind_choked_puck` nor `grind_yield_overshoot`
+	/// fired.
+	val grindFlowDeltaMlS: Double,
+	/// Qualifying samples averaged (Arm 1) or pressurized samples observed
+	/// (choked path).
+	val grindSampleCount: Int,
+	/// "" if no data; else "yieldOvershoot" / "chokedPuck" / "tooFine" /
+	/// "tooCoarse" / "onTarget".
+	val grindDirection: String,
+	/// "verified" / "notAnalyzable" / "skipped" / "" (pour-truncated cascade
+	/// or degenerate pour window) — see `shotanalysis.h:556-573`.
+	val grindCoverage: String,
+	/// Profile frame 0 appears to have been skipped.
+	val skipFirstFrame: Boolean
+)
+
 /// A slim view onto the shell's `StoredShot`: only the fields the
 /// reconcile planner reads. Lets the shell project its full record
 /// (web `StoredShot` in `$lib/history/model.ts`, Android equivalent)
@@ -954,6 +1020,59 @@ data class ModeInfo (
 	val id: UByte,
 	/// A human-readable name for the mode, suitable for a button label.
 	val name: String
+)
+
+/// A profile phase boundary observed during the shot — the port of Decenza's
+/// `HistoryPhaseMarker`. Decenza inserts a synthetic first marker with
+/// `label == "Start"` and `frame_number == 0` at extraction start
+/// (`shotanalysis.cpp:667-672`).
+@Serializable
+data class PhaseMarker (
+	/// Seconds from extraction start at which this phase began.
+	val timeS: Double,
+	/// Phase label ("Start", "Preinfusion", "Pour", "End", …).
+	val label: String,
+	/// 0-based profile frame number; negative when unknown.
+	val frameNumber: Int,
+	/// Whether this frame is flow-controlled (pump=flow) rather than
+	/// pressure-controlled.
+	val isFlowMode: Boolean,
+	/// Why the *preceding* frame exited: "weight" / "pressure" / "flow"
+	/// (sensor-confirmed), "pressure_unconfirmed" / "flow_unconfirmed",
+	/// "time", or "" when unknown (old data).
+	val transitionReason: String
+)
+
+/// The four badge booleans the shells surface as chips. Projection rules:
+/// `channeling` fires only on *sustained* severity (transients stay a prose
+/// caution); `grind_issue` mirrors `detectGrindIssue`
+/// (`shotanalysis.cpp:610-625`): not skipped, has data, and choked /
+/// overshoot / |delta| beyond [`FLOW_DEVIATION_THRESHOLD`];
+/// `pour_truncated` and `skip_first_frame` are 1:1 with their detectors.
+@Serializable
+data class QualityBadges (
+	/// Sustained channeling detected.
+	val channeling: Boolean,
+	/// Grind flagged: choked, gusher, or |flow-vs-goal delta| > threshold.
+	val grindIssue: Boolean,
+	/// The pour never pressurized (peak < [`PRESSURE_FLOOR_BAR`]).
+	val pourTruncated: Boolean,
+	/// Profile frame 0 appears to have been skipped.
+	val skipFirstFrame: Boolean
+)
+
+/// One prose line of the shot summary. `line_type` is one of `good` /
+/// `caution` / `warning` / `observation` / `verdict`; `kind` is a stable
+/// machine-readable id (e.g. `channeling_sustained`). For the verdict line,
+/// `kind` carries the verdict category (Decenza's verdict map has no kind).
+@Serializable
+data class QualityLine (
+	/// User-facing English text (Decenza's exact wording).
+	val text: String,
+	/// Stable machine-readable line id.
+	val kind: String,
+	/// good / caution / warning / observation / verdict.
+	val lineType: String
 )
 
 /// The inclusive `[min, max]` bounds of a ranged scale setting.
@@ -1180,6 +1299,18 @@ data class ScaleUuids (
 	val command_write_no_response: Boolean
 )
 
+/// One sample of a time series: `t` seconds from extraction start, `v` the
+/// value (bar, mL/s, g, or conductance depending on the series). Series are
+/// ordered ascending by `t`; there is no fixed sample rate — every window
+/// rule works off the actual timestamps.
+@Serializable
+data class SeriesPoint (
+	/// Seconds from extraction start.
+	val t: Double,
+	/// Sample value.
+	val v: Double
+)
+
 /// A snapshot of the active bean at the moment a shot was pulled.
 /// Frozen onto each [`crate::history::StoredShot`] (in the shell's
 /// extended record) so a later rename / archive / delete of the bag
@@ -1215,7 +1346,13 @@ data class ShotBean (
 	/// (the *machine* used) and `ShotMetadata::grinder_setting`
 	/// (the *dial used for this shot*). This is the bean's own
 	/// recommended dial recorded with the bag.
-	val grinderSetting: String? = null
+	val grinderSetting: String? = null,
+	/// The bean's grinder NAME at the time of the shot (e.g. "Niche
+	/// Zero") — so history can say which grinder pulled the shot even
+	/// after the bag's grinder is edited (issue #16; the snapshot used
+	/// to carry only the dial). Additive + optional, so pre-existing
+	/// stored shots decode unchanged.
+	val grinder: String? = null
 )
 
 /// Pre-computed summary peaks over a [`ShotRecord`]'s telemetry —
@@ -1241,6 +1378,70 @@ data class ShotPeaks (
 	val peakPressure: Float,
 	/// Peak group-head temperature reached, °C.
 	val peakTemp: Float
+)
+
+/// Everything [`analyze_shot`] needs — the port of `ShotAnalysis::analyzeShot`'s
+/// parameter list (`shotanalysis.cpp:731-747`), minus the conductance
+/// derivative (computed internally from pressure + flow) and the expert band
+/// (omitted in this port).
+@Serializable
+data class ShotQualityInput (
+	/// Group pressure (bar) over the shot.
+	val pressure: List<SeriesPoint>,
+	/// Group flow (mL/s) over the shot.
+	val flow: List<SeriesPoint>,
+	/// Cup weight (g) over the shot; may be empty (no scale).
+	val weight: List<SeriesPoint>,
+	/// Commanded pressure goal (bar); may be empty.
+	val pressureGoal: List<SeriesPoint>,
+	/// Commanded flow goal (mL/s); may be empty.
+	val flowGoal: List<SeriesPoint>,
+	/// Phase boundary markers in time order.
+	val phases: List<PhaseMarker>,
+	/// Beverage type; `filter` / `pourover` / `tea` / `steam` / `cleaning`
+	/// (case-insensitive) skip the puck-integrity detectors.
+	val beverageType: String,
+	/// Total shot duration, seconds — the default pour end when no "End"
+	/// marker is present.
+	val durationS: Double,
+	/// Configured duration of profile frame 0, seconds; `-1` when unknown.
+	/// Drives the short-first-step cutoff in skip-first-frame detection.
+	val firstFrameConfiguredS: Double,
+	/// Effective stop-at-weight target (g); `0` disables the yield arms.
+	val targetWeightG: Double,
+	/// Final in-cup weight (g); `0` disables the yield arms.
+	val finalWeightG: Double,
+	/// Number of frames in the profile; `-1` when unknown. Values `< 2`
+	/// suppress skip-first-frame detection.
+	val expectedFrameCount: Int,
+	/// Per-profile analysis flags: `grind_check_skip`, `channeling_expected`,
+	/// `flow_trend_ok`.
+	val analysisFlags: List<String>,
+	/// Whether the profile's shape is known well enough to trust the flow
+	/// goal as a target (Decenza: KB resolution succeeded). When false,
+	/// grind Arm 1 (flow-vs-goal averaging) is skipped entirely; Arm 2's
+	/// physics-level arms still run (`shotanalysis.cpp:369-384`).
+	val profileKbResolved: Boolean
+)
+
+/// Combined output of [`analyze_shot`]: the prose lines (ending in one
+/// verdict line, except on the insufficient-data early return), the badge
+/// projection, the stable verdict category, and the structured detector
+/// results the lines were formatted from.
+@Serializable
+data class ShotQualityReport (
+	/// Prose observation list, verdict last.
+	val lines: List<QualityLine>,
+	/// Badge projection for chips.
+	val badges: QualityBadges,
+	/// Stable enum-like category (see `shotanalysis.h:578-599`):
+	/// `clean`, `cleanGrindNotAnalyzable`, `insufficientData`,
+	/// `puckTruncated`, `skipFirstFrame`, `yieldOvershoot`, `chokedPuck`,
+	/// `puckIntegrity[GrindFine|GrindCoarse]`,
+	/// `minorIssues[GrindFine|GrindCoarse]`.
+	val verdictCategory: String,
+	/// The typed detector values behind the lines.
+	val detectors: DetectorResults
 )
 
 /// One decoded telemetry sample from the DE1, notified at ~4–10 Hz during a

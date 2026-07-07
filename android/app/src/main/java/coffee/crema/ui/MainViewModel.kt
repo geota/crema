@@ -65,6 +65,7 @@ import coffee.crema.visualizer.wireShotJson
 import coffee.crema.visualizer.storedShotFromBackupJson
 import coffee.crema.visualizer.VisualizerSync
 import coffee.crema.settings.SettingsStore
+import coffee.crema.settings.SawModelStore
 import coffee.crema.ble.BleScanner
 import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
@@ -866,6 +867,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** App-preferences persistence — a JSON file in filesDir. */
     private val settingsStore = SettingsStore(app, json)
 
+    /** Learned SAW drip-model persistence — an opaque core-owned JSON blob. */
+    private val sawModelStore = SawModelStore(app)
+
     /** Custom-profile persistence — a JSON file in filesDir. */
     private val customProfileStore = CustomProfileStore(app, json)
 
@@ -1121,6 +1125,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             loadLibrary()
             loadHistory()
             loadPrefs()
+            // Seed the learned SAW drip model into the core (it survives
+            // bridge.reset() in-core, so startup is the only seed point).
+            sawModelStore.load()?.let { blob ->
+                runCatching { bridge.setSawModelJson(blob) }
+                    .onFailure { appendLog("SAW model seed failed: ${it.message}") }
+            }
             pinnedIds = pinnedProfileStore.load()
             hiddenIds = hiddenProfileStore.load()
             loadCustomProfiles()
@@ -4145,6 +4155,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val next = (listOf(shot) + s.history).take(HistoryStore.MAX_SHOTS)
         _ui.update { it.copy(history = next) }
         viewModelScope.launch { historyStore.save(next) }
+        // Persist the learned SAW drip model — a weight-stopped shot just
+        // added a training sample in the core.
+        viewModelScope.launch {
+            runCatching { sawModelStore.save(bridge.sawModelJson()) }
+                .onFailure { appendLog("SAW model save failed: ${it.message}") }
+        }
         // Auto-sync: push the fresh shot to Visualizer when armed + signed in.
         visualizer.maybeAutoUpload(shot)
 

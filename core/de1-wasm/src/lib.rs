@@ -1158,6 +1158,29 @@ impl CremaBridge {
         self.core.set_volume_stop_with_scale(enabled);
     }
 
+    /// The learned SAW drip model as a JSON blob — the shell persists it
+    /// in localStorage and re-seeds it at startup via
+    /// [`set_saw_model_json`](Self::set_saw_model_json).
+    pub fn saw_model_json(&self) -> String {
+        self.core.saw_model_json()
+    }
+
+    /// Seed the learned SAW drip model from a persisted JSON blob.
+    /// A corrupt blob is ignored.
+    pub fn set_saw_model_json(&mut self, json: String) {
+        self.core.set_saw_model_json(&json);
+    }
+
+    /// Run the pure shot-quality analysis (Decenza port — see
+    /// `de1_domain::shot_quality`) over a stored shot's series. Takes a
+    /// JSON `ShotQualityInput`, returns a JSON `ShotQualityReport`.
+    pub fn analyze_shot_quality(&self, input_json: String) -> Result<String, String> {
+        let input: de1_domain::shot_quality::ShotQualityInput =
+            serde_json::from_str(&input_json).map_err(|e| e.to_string())?;
+        serde_json::to_string(&de1_domain::shot_quality::analyze_shot(&input))
+            .map_err(|e| e.to_string())
+    }
+
     /// Clear the running scale-derived peaks (peak weight + final
     /// weight). The Scale page's "Reset peak" button.
     pub fn reset_scale_peaks(&mut self) {

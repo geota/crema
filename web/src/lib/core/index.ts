@@ -514,6 +514,13 @@ export interface CremaCore {
 	 */
 	setVolumeStopWithScale(enabled: boolean): Promise<void>;
 	/**
+	 * The learned SAW drip model as a JSON blob — persisted by the shell
+	 * (localStorage) and re-seeded at startup via {@link setSawModelJson}.
+	 */
+	sawModelJson(): Promise<string>;
+	/** Seed the learned SAW drip model from a persisted JSON blob. */
+	setSawModelJson(json: string): Promise<void>;
+	/**
 	 * Clear the running scale-derived peaks (peak weight + final weight)
 	 * without disturbing pressure / temperature peaks. The Scale page's
 	 * "Reset peak" button.
@@ -796,6 +803,8 @@ async function createCore(): Promise<CremaCore> {
 				return wasm.NotificationSource.De1ProfileHeader;
 			case 'De1FrameAck':
 				return wasm.NotificationSource.De1FrameAck;
+			case 'ScaleButton':
+				return wasm.NotificationSource.ScaleButton;
 		}
 	};
 
@@ -966,6 +975,12 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setVolumeStopWithScale(enabled) {
 			bridge.set_volume_stop_with_scale(enabled);
+		},
+		async sawModelJson() {
+			return bridge.saw_model_json();
+		},
+		async setSawModelJson(json) {
+			bridge.set_saw_model_json(json);
 		},
 		async resetScalePeaks() {
 			bridge.reset_scale_peaks();

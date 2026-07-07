@@ -27,6 +27,7 @@ use capture::{CaptureRecorder, slice_to_jsonl};
 
 use std::time::Duration;
 
+use de1_domain::saw_learning::SawLearningModel;
 use de1_domain::{
     AutoStop, Estimate, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile,
     STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StopConfig,
@@ -323,6 +324,13 @@ pub struct CremaCore {
     max_shot_duration: Option<f32>,
     /// The live auto-stop controller, for the duration of one shot.
     auto_stop: Option<AutoStop>,
+    /// The learned SAW drip model (Decenza SAW learning): per-(profile,
+    /// scale) post-stop drip history that sharpens the weight-stop
+    /// threshold shot over shot. Persistent user data — the shell seeds it
+    /// at startup ([`set_saw_model_json`](Self::set_saw_model_json)) and
+    /// saves it after each shot; it survives [`reset`](Self::reset) like
+    /// the scale registration.
+    saw_model: SawLearningModel,
     /// Timestamp of the most recent scale-weight reading, for the lost-scale
     /// watchdog. `None` until the connected scale reports once.
     last_scale_weight: Option<Duration>,
@@ -491,6 +499,7 @@ impl CremaCore {
             profile_volume_limit: None,
             max_shot_duration: None,
             auto_stop: None,
+            saw_model: SawLearningModel::default(),
             last_scale_weight: None,
             last_scale_estimate: None,
             scale_stale_reported: false,
@@ -733,6 +742,22 @@ impl CremaCore {
     pub fn set_max_shot_duration(&mut self, seconds: Option<f32>) {
         self.max_shot_duration = seconds.filter(|s| s.is_finite() && *s > 0.0);
         self.refresh_auto_stop_targets();
+    }
+
+    /// The learned SAW drip model as a JSON blob — the shell persists it
+    /// beside its other stores and re-seeds it at startup via
+    /// [`set_saw_model_json`](Self::set_saw_model_json).
+    pub fn saw_model_json(&self) -> String {
+        serde_json::to_string(&self.saw_model).unwrap_or_else(|_| "{}".to_owned())
+    }
+
+    /// Seed the learned SAW drip model from a persisted JSON blob. A blob
+    /// that fails to parse is ignored (the model stays as-is) — a corrupt
+    /// store must never take the shot path down.
+    pub fn set_saw_model_json(&mut self, json: &str) {
+        if let Ok(model) = serde_json::from_str::<SawLearningModel>(json) {
+            self.saw_model = model;
+        }
     }
 
     /// The target weight currently in effect for SAW. Priority:
@@ -2197,10 +2222,15 @@ impl CremaCore {
         // path ([`disconnect_scale`](Self::disconnect_scale)) still clears it.
         let scale = self.scale.take();
         let scale_config_queried = self.scale_config_queried;
+        // The learned SAW drip model is persistent user data, not session
+        // state — losing it on every DE1 reconnect would silently restart
+        // the learning from scratch.
+        let saw_model = std::mem::take(&mut self.saw_model);
         *self = CremaCore::new();
         self.read_only = read_only;
         self.scale = scale;
         self.scale_config_queried = scale_config_queried;
+        self.saw_model = saw_model;
     }
 
     /// Decode and process a `StateInfo` notification.
@@ -2930,6 +2960,9 @@ impl CremaCore {
             ShotEvent::Completed(record) => {
                 self.shot_started = None;
                 self.flow_started = None;
+                // Harvest the weight-stop capture before dropping the
+                // controller — it feeds the drip-learning sample below.
+                let stop_capture = self.auto_stop.as_ref().and_then(AutoStop::stop_capture);
                 self.auto_stop = None;
                 // Close any tare gate that never saw its confirmation reading.
                 self.tare_gate = None;
@@ -2951,6 +2984,30 @@ impl CremaCore {
                     peak_weight,
                     final_weight,
                 });
+                // Drip learning (Decenza SAW learning): the measured sample is
+                // (final settled weight − weight at the stop trigger) at the
+                // trigger's flow. crema's `final_weight` is the metrics
+                // tracker's settled value at machine-idle — a coarser settle
+                // window than Decenza's 6-sample state machine, accepted as
+                // the v1 capture; the model's own validity gates (flow ≥ 0.5,
+                // dispersion, outlier-vs-expected) reject bad samples.
+                if let (Some((weight_at_stop, flow_at_stop, target)), Some(final_g)) =
+                    (stop_capture, final_weight)
+                {
+                    let profile = self.last_active_profile_title.clone().unwrap_or_default();
+                    let scale_label =
+                        self.scale.as_ref().map_or("", |s| s.label()).to_owned();
+                    let drip = f64::from((final_g - weight_at_stop).max(0.0));
+                    let overshoot = f64::from(final_g - target);
+                    self.saw_model.add_learning_point(
+                        &profile,
+                        &scale_label,
+                        drip,
+                        f64::from(flow_at_stop),
+                        overshoot,
+                        now.as_secs(),
+                    );
+                }
             }
         }
     }
@@ -3010,8 +3067,29 @@ impl CremaCore {
             return;
         }
         if let Some(targets) = self.effective_stop_targets() {
-            self.auto_stop = Some(AutoStop::new(targets, self.stop_config(), now));
+            let mut stop = AutoStop::new(targets, self.stop_config(), now);
+            self.attach_drip_model(&mut stop, targets.weight.is_some());
+            self.auto_stop = Some(stop);
         }
+    }
+
+    /// Attach the learned-drip snapshot to an [`AutoStop`] whose weight leg
+    /// is armed — the SAW-learning threshold (see `de1_domain::saw_learning`).
+    /// Keyed by (active profile title, scale label); a shot with no weight
+    /// target keeps the legacy config untouched.
+    fn attach_drip_model(&self, stop: &mut AutoStop, weight_armed: bool) {
+        if !weight_armed {
+            return;
+        }
+        let profile = self.last_active_profile_title.as_deref().unwrap_or("");
+        let scale_label = self.scale.as_ref().map_or("", |s| s.label());
+        let snapshot = self.saw_model.snapshot(profile, scale_label);
+        let lag = self
+            .scale
+            .as_ref()
+            .map_or(DEFAULT_SCALE_LAG, Scale::sensor_lag)
+            .as_secs_f64();
+        stop.set_drip_model(snapshot, lag);
     }
 
     /// Re-compose an armed [`AutoStop`]'s targets after a mid-shot change to
@@ -3030,8 +3108,13 @@ impl CremaCore {
             volume: None,
             max_time: None,
         });
-        if let Some(stop) = self.auto_stop.as_mut() {
+        let weight_armed = targets.weight.is_some();
+        if let Some(mut stop) = self.auto_stop.take() {
             stop.set_targets(targets);
+            // A weight leg arriving mid-shot (scale registered late) also
+            // needs the learned-drip snapshot it missed at arm time.
+            self.attach_drip_model(&mut stop, weight_armed);
+            self.auto_stop = Some(stop);
         }
     }
 
@@ -4753,7 +4836,10 @@ mod tests {
         assert_eq!(out.commands.len(), 3);
         assert!(matches!(
             &out.commands[0],
-            Command::WriteCharacteristic { target: WriteTarget::De1MmrWrite, .. }
+            Command::WriteCharacteristic {
+                target: WriteTarget::De1MmrWrite,
+                ..
+            }
         ));
         assert_eq!(
             out.commands[1],
@@ -4779,7 +4865,10 @@ mod tests {
         assert_eq!(out.commands.len(), 2);
         assert!(matches!(
             &out.commands[0],
-            Command::WriteCharacteristic { target: WriteTarget::De1MmrWrite, .. }
+            Command::WriteCharacteristic {
+                target: WriteTarget::De1MmrWrite,
+                ..
+            }
         ));
         assert_eq!(
             out.commands[1],
@@ -4793,8 +4882,18 @@ mod tests {
     #[test]
     fn idle_and_sleep_requests_stay_a_single_write() {
         let core = CremaCore::new();
-        assert_eq!(core.request_machine_state(MachineState::Idle).commands.len(), 1);
-        assert_eq!(core.request_machine_state(MachineState::Sleep).commands.len(), 1);
+        assert_eq!(
+            core.request_machine_state(MachineState::Idle)
+                .commands
+                .len(),
+            1
+        );
+        assert_eq!(
+            core.request_machine_state(MachineState::Sleep)
+                .commands
+                .len(),
+            1
+        );
     }
 
     #[test]
