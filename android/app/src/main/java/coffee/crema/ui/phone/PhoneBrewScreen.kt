@@ -42,6 +42,11 @@ import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.MachineState
 import coffee.crema.core.Pump
 import coffee.crema.core.Transition
+import coffee.crema.core.celsiusToFahrenheit
+import coffee.crema.ui.modeLabel
+import coffee.crema.ui.modeRunningSub
+import coffee.crema.ui.modeTargetSeconds
+import coffee.crema.ui.modeTargets
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.rankProfilesForPicker
 import coffee.crema.beans.rankBeansForPicker
@@ -130,6 +135,30 @@ fun PhoneBrewScreen(
                         onDismiss = { swapOpen = false },
                     )
                 }
+            }
+
+            // Service-mode status banner (steam / hot water / flush) — the
+            // steaming timer the web head pill shows: live elapsed vs the
+            // firmware timeout, measured temp, progress bar, and a Stop.
+            val mode = if (running) null else modeLabel(ui.machineStateName)
+            if (mode != null) {
+                ModeStatusBanner(
+                    label = mode,
+                    elapsedMs = ui.modeElapsedMs,
+                    targetS = modeTargetSeconds(ui.machineStateName, modeTargets(ui)) ?: 0f,
+                    // Steam shows the steam-heater temp; hot water / flush show
+                    // the group-head temp (web headStatusMeta parity).
+                    tempLabel = when (ui.machineStateName) {
+                        MachineState.Steam -> ui.steamTemp?.let { formatTemp(it, ui.tempUnit) }
+                        else -> ui.headTemp?.let { formatTemp(it, ui.tempUnit) }
+                    },
+                    color = when (ui.machineStateName) {
+                        MachineState.Steam -> CremaTheme.telemetry.modeSteam
+                        MachineState.HotWater -> CremaTheme.telemetry.modeWater
+                        else -> CremaTheme.telemetry.modeFlush
+                    },
+                    onStop = vm::stopShot,
+                )
             }
 
             if (running) {
@@ -980,23 +1009,110 @@ private fun ModeCluster(
     onFlush: () -> Unit,
 ) {
     val tel = CremaTheme.telemetry
+    // Live pill subs (were hardcoded): resting = the *target* the firmware
+    // will hold (machine ShotSettings → QC → legacy default), active = an
+    // `elapsed / total s` counter from the VM mode clock (web chip-sub parity).
+    val t = modeTargets(ui)
+    val steaming = ui.machineStateName == MachineState.Steam
+    val dispensing = ui.machineStateName == MachineState.HotWater
+    val flushing = ui.machineStateName == MachineState.HotWaterRinse
+    fun deg(c: Float) = "%.0f°".format(if (ui.tempUnit == "F") celsiusToFahrenheit(c) else c)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ModePill(
-            "Steam", ui.steamTemp?.let { "%.0f° · 90s".format(it) } ?: "148° · 90s",
+            "Steam",
+            if (steaming) modeRunningSub(ui.modeElapsedMs, t.steamTimeoutS)
+            else "${deg(t.steamTempC)} · ${t.steamTimeoutS.toInt()}s",
             "cloud", tel.modeSteam,
-            active = ui.machineStateName == MachineState.Steam,
+            active = steaming,
             enabled = connected, onTap = onSteam, modifier = Modifier.weight(1f),
         )
         ModePill(
-            "Water", "250ml · 90°", "drop", tel.modeWater,
-            active = ui.machineStateName == MachineState.HotWater,
+            "Water",
+            if (dispensing) modeRunningSub(ui.modeElapsedMs, t.hotWaterTimeoutS)
+            else "${t.hotWaterVolumeMl.toInt()}ml · ${deg(t.hotWaterTempC)}",
+            "drop", tel.modeWater,
+            active = dispensing,
             enabled = connected, onTap = onWater, modifier = Modifier.weight(1f),
         )
         ModePill(
-            "Flush", "4s purge", "sparkle", tel.modeFlush,
-            active = false,
+            "Flush",
+            if (flushing) modeRunningSub(ui.modeElapsedMs, t.flushTimeS)
+            else "${t.flushTimeS.toInt()}s purge",
+            "sparkle", tel.modeFlush,
+            active = flushing,
             enabled = connected, onTap = onFlush, modifier = Modifier.weight(1f),
         )
+    }
+}
+
+/**
+ * Active service-mode banner — the phone's steaming / hot-water / flushing
+ * feedback (web `ModeHeadStatus` parity): mode label, live `elapsed / total s`
+ * with the measured temperature, a progress bar against the firmware timeout,
+ * and a Stop that requests Idle (same as tapping the active pill).
+ */
+@Composable
+private fun ModeStatusBanner(
+    label: String,
+    elapsedMs: Long,
+    targetS: Float,
+    tempLabel: String?,
+    color: Color,
+    onStop: () -> Unit,
+) {
+    val elapsedS = elapsedMs / 1000f
+    val meta = "%.1f / %.0f s".format(elapsedS, targetS) +
+        (tempLabel?.let { " · $it" } ?: "")
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = color.copy(alpha = 0.16f).blendOverSurface(MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    meta,
+                    style = TextStyle(fontFamily = JetBrainsMono, fontSize = 13.sp, fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum"),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                )
+                Spacer(Modifier.width(10.dp))
+                Surface(
+                    onClick = onStop,
+                    shape = RoundedCornerShape(999.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                ) {
+                    Text(
+                        "Stop",
+                        Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+            Box(
+                Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(999.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(if (targetS > 0f) (elapsedS / targetS).coerceIn(0f, 1f) else 0f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(color),
+                )
+            }
+        }
     }
 }
 

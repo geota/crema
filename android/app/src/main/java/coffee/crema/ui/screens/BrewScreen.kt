@@ -65,8 +65,13 @@ import coffee.crema.ui.convertVolume
 import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.formatTemp
+import coffee.crema.ui.formatTempCompact
+import coffee.crema.ui.formatVolume
 import coffee.crema.ui.formatWeight
 import coffee.crema.ui.freshnessColor
+import coffee.crema.ui.modeLabel
+import coffee.crema.ui.modeRunningSub
+import coffee.crema.ui.modeTargets
 import coffee.crema.beans.roastBand
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
@@ -198,7 +203,16 @@ fun BrewScreen(
                         .fillMaxHeight(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    TimerCard(running = running, elapsedMs = ui.shotElapsedMs, phase = ui.shotPhase)
+                    // The timer also runs during a service mode (steam / hot
+                    // water / flush), fed by the VM's mode clock — the steaming
+                    // countdown the web head pill shows (issue: steam timer).
+                    val mode = modeLabel(ui.machineStateName)
+                    TimerCard(
+                        running = running || mode != null,
+                        elapsedMs = if (running) ui.shotElapsedMs else ui.modeElapsedMs,
+                        phase = ui.shotPhase,
+                        modeLabel = if (running) null else mode,
+                    )
                     RatioCard(active = active, weightG = ratioWeight(ui, running))
                     PhaseCard(
                         active = active,
@@ -945,12 +959,16 @@ private fun QuickControlsPill(onClick: () -> Unit) {
 // ── Left column cards ───────────────────────────────────────────────────────
 
 @Composable
-private fun TimerCard(running: Boolean, elapsedMs: Long, phase: String?) {
+private fun TimerCard(running: Boolean, elapsedMs: Long, phase: String?, modeLabel: String? = null) {
     val totalSec = elapsedMs / 1000.0
     val mm = (totalSec / 60).toInt()
     val ss = (totalSec % 60).toInt()
     val tenth = ((totalSec % 1) * 10).toInt()
-    val step = if (!running) "Ready" else phaseStepLabel(phase)
+    val step = when {
+        modeLabel != null -> modeLabel
+        !running -> "Ready"
+        else -> phaseStepLabel(phase)
+    }
     CremaCard(Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.fillMaxWidth().height(86.dp).padding(horizontal = 16.dp, vertical = 6.dp),
@@ -1437,11 +1455,27 @@ private fun BrewFoot(
                 FootMeta("Steam", steam.value, ui.steamTemp?.let { steam.unit })
                 FootMeta("Tank", ui.waterLevelMm?.let { "%.0f".format(it) } ?: "—", ui.waterLevelMm?.let { "mm" })
             }
-            // Right actions.
+            // Right actions. Chip sub-labels are live (were hardcoded): resting
+            // shows the *target* the firmware will hold (machine ShotSettings →
+            // QC → legacy default), active shows an `elapsed / total s` counter
+            // fed by the VM mode clock — web BrewDashboard chip-sub parity.
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ModeChip("Steam", "148 °C · 90 s", "cloud", CremaTheme.telemetry.modeSteam, active = ui.machineStateName == MachineState.Steam, enabled = connected, onTap = onSteam)
-                ModeChip("Hot water", "90 °C · 250 ml", "drop", CremaTheme.telemetry.modeWater, active = ui.machineStateName == MachineState.HotWater, enabled = connected, onTap = onHotWater)
-                ModeChip("Flush", "91 °C · 4 s", "sparkle", CremaTheme.telemetry.modeFlush, active = false, enabled = connected, onTap = onFlush)
+                val t = modeTargets(ui)
+                val steaming = ui.machineStateName == MachineState.Steam
+                val dispensing = ui.machineStateName == MachineState.HotWater
+                val flushing = ui.machineStateName == MachineState.HotWaterRinse
+                val steamSub =
+                    if (steaming) modeRunningSub(ui.modeElapsedMs, t.steamTimeoutS)
+                    else "${formatTempCompact(t.steamTempC, ui.tempUnit)} · ${t.steamTimeoutS.toInt()} s"
+                val waterSub =
+                    if (dispensing) modeRunningSub(ui.modeElapsedMs, t.hotWaterTimeoutS)
+                    else "${formatTempCompact(t.hotWaterTempC, ui.tempUnit)} · ${formatVolume(t.hotWaterVolumeMl, ui.volumeUnit)}"
+                val flushSub =
+                    if (flushing) modeRunningSub(ui.modeElapsedMs, t.flushTimeS)
+                    else "${formatTempCompact(t.flushTempC, ui.tempUnit)} · ${t.flushTimeS.toInt()} s"
+                ModeChip("Steam", steamSub, "cloud", CremaTheme.telemetry.modeSteam, active = steaming, enabled = connected, onTap = onSteam)
+                ModeChip("Hot water", waterSub, "drop", CremaTheme.telemetry.modeWater, active = dispensing, enabled = connected, onTap = onHotWater)
+                ModeChip("Flush", flushSub, "sparkle", CremaTheme.telemetry.modeFlush, active = flushing, enabled = connected, onTap = onFlush)
                 CoffeeButton(running = espressoActive, uploading = ui.profileUploading, enabled = connected, onClick = onCoffee)
             }
         }

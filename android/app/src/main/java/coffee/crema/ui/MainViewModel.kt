@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import coffee.crema.core.Command
@@ -331,6 +332,17 @@ data class MainUiState(
      *  "refill soon" cue rather than a hardcoded constant, matching the web
      *  shell's `waterRefillThreshold` (issue 29). */
     val waterRefillThresholdMm: Float? = null,
+    /** The DE1's own steam / hot-water settings (`Event.ShotSettingsRead`) —
+     *  the machine's live targets, read at connect and echoed on change. Null
+     *  until the first read. Drives the mode chips' target sub-labels and the
+     *  steam / hot-water timers (web `ui.de1ShotSettings` parity). */
+    val de1ShotSettings: EventShotSettingsReadInner? = null,
+    /** Monotonic ms when the DE1 entered the current service mode (Steam /
+     *  HotWater / HotWaterRinse), or null when no service mode is running. */
+    val modeStartedAtMs: Long? = null,
+    /** Milliseconds since the current service mode began — ticked at 4 Hz
+     *  while a mode runs (the steam / hot-water / flush timers); 0 when idle. */
+    val modeElapsedMs: Long = 0,
     /**
      * The DE1's pre-formatted firmware label (e.g. `"v1.0.142 (API 4)"`), or
      * null until the machine's `Version` characteristic reply arrives.
@@ -779,6 +791,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  changes so the unmodeled fields (timeouts, espresso volume, group temp)
      *  are preserved rather than reset (issue 14). Null until the DE1 reports. */
     private var machineShotSettings: EventShotSettingsReadInner? = null
+
+    /** Ticker driving [MainUiState.modeElapsedMs] while a service mode runs. */
+    private var modeTickerJob: Job? = null
+
+    /** Start the 4 Hz mode-clock ticker when a service mode is running, stop it
+     *  when idle. Elapsed is recomputed from the monotonic anchor each tick, so
+     *  tick jitter never accumulates into the readout. */
+    private fun updateModeTicker() {
+        val active = _ui.value.modeStartedAtMs != null
+        if (active) {
+            if (modeTickerJob?.isActive == true) return
+            modeTickerJob = viewModelScope.launch {
+                while (true) {
+                    val started = _ui.value.modeStartedAtMs ?: break
+                    _ui.update { it.copy(modeElapsedMs = SystemClock.elapsedRealtime() - started) }
+                    delay(250)
+                }
+            }
+        } else {
+            modeTickerJob?.cancel()
+            modeTickerJob = null
+        }
+    }
 
     /** Bean-library persistence — a JSON file in filesDir. */
     private val library = LibraryStore(app, json)
@@ -4813,14 +4848,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         when (event) {
             is Event.MachineStateChanged -> {
                 val c = event.content
-                _ui.update { it.copy(
-                    machineState = "${c.state.string} / ${c.substate.string}",
-                    machineStateName = c.state,
-                    machineSubstate = c.substate.string,
-                    // Readable error copy for an error substate (null otherwise),
-                    // from core so it matches web. Healthy substates clear it.
-                    machineError = subStateErrorMessage(c.substate.string),
-                ) }
+                // Service-mode clock (steam / hot water / flush): anchor a
+                // monotonic start on entry, re-anchor on a direct mode→mode
+                // swap, clear on exit. The 4 Hz ticker feeds the Brew timers
+                // while a mode runs — mirrors the web BrewDashboard's
+                // modeStartedAtMs / modeNowMs pair.
+                val mode = c.state == MachineState.Steam ||
+                    c.state == MachineState.HotWater ||
+                    c.state == MachineState.HotWaterRinse
+                _ui.update { prev ->
+                    val started = when {
+                        !mode -> null
+                        prev.machineStateName != c.state -> SystemClock.elapsedRealtime()
+                        else -> prev.modeStartedAtMs
+                    }
+                    prev.copy(
+                        machineState = "${c.state.string} / ${c.substate.string}",
+                        machineStateName = c.state,
+                        machineSubstate = c.substate.string,
+                        // Readable error copy for an error substate (null otherwise),
+                        // from core so it matches web. Healthy substates clear it.
+                        machineError = subStateErrorMessage(c.substate.string),
+                        modeStartedAtMs = started,
+                        modeElapsedMs = if (started == null) 0L else prev.modeElapsedMs,
+                    )
+                }
+                updateModeTicker()
                 appendLog("MachineState -> ${c.state.string} / ${c.substate.string}")
             }
             is Event.ShotStarted -> {
