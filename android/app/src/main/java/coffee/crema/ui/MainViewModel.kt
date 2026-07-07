@@ -4133,6 +4133,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 roastLevel = b.roastLevel,
                 tags = b.tags,
                 grinderSetting = b.grinderSetting?.takeIf { it.isNotBlank() },
+                grinder = b.grinder?.takeIf { it.isNotBlank() },
             )
         }
         val shot = StoredShot(
@@ -4557,6 +4558,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setSleepMachineWithSaver(on: Boolean) {
         _ui.update { it.copy(sleepMachineWithSaver = on) }
         persistPrefs()
+    }
+
+    /**
+     * The bean half of the quick sheets' scope-aware **Save** (issue #16):
+     * write the QC grind dial back to the active bean's reference setting
+     * when they differ. Returns true when a bean write happened — the sheet
+     * runs this alongside the existing profile-preset half, so one button
+     * saves each dirty part to its owner. Overwriting free-text like
+     * "6 + a tooth" with the dial number is deliberate: Save is an explicit
+     * action and the field keeps its reference-dial meaning.
+     */
+    fun saveQuickGrindToBean(): Boolean {
+        val dial = _ui.value.qcGrind ?: return false
+        val bean = _ui.value.beans.firstOrNull { it.id == _ui.value.activeBeanId } ?: return false
+        val fmt = if (dial % 1f == 0f) "%.0f".format(dial) else "%.1f".format(dial)
+        if (bean.grinderSetting == fmt) return false
+        mutateBean(bean.id) { it.copy(grinderSetting = fmt) }
+        notifyUser("Grind $fmt saved to ${bean.name}")
+        return true
     }
 
     // ── Maintenance intervals (web WaterSection "Maintenance intervals") ─────

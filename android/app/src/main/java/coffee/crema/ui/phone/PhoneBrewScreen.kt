@@ -253,6 +253,11 @@ private fun beanLine(ui: MainUiState): String {
         ?: return ui.mirroredBeanSummary ?: "No bean selected"
     val roaster = ui.roasters.firstOrNull { it.id == bean.roasterId }?.name
     val days = daysOffRoast(bean.roastedOn)
+    // Grind at a glance (issue #16): the dial + grinder name — the bean's own
+    // grinder, else the equipment default (web BeanContextCard precedence).
+    val grind = bean.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" }
+    val grinder = bean.grinder?.takeIf { it.isNotBlank() }
+        ?: ui.grinderModel.takeIf { it.isNotBlank() }
     return listOfNotNull(
         roaster,
         bean.name,
@@ -261,6 +266,8 @@ private fun beanLine(ui: MainUiState): String {
             days != null -> "${days}d off roast"
             else -> null
         },
+        grind,
+        grinder,
     ).joinToString(" · ")
 }
 

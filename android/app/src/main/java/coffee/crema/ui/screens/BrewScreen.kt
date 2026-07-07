@@ -153,6 +153,7 @@ fun BrewScreen(
                 activeBean = activeBean,
                 beans = ui.beans,
                 roasters = ui.roasters,
+                equipmentGrinder = ui.grinderModel,
                 onSelectBean = vm::setActiveBean,
                 onOpenQuick = { quickOpen = true },
                 // Footer/empty-state routes — mirror ProfilesScreen/BeansScreen wiring
@@ -309,6 +310,7 @@ fun BrewScreen(
                     onFlushTemp = { vm.setQcFlushTemp(it.toFloat()) },
                     qcGrind = ui.qcGrind?.toDouble(),
                     onGrind = { vm.setQcGrind(it.toFloat()) },
+                    onSaveGrindToBean = vm::saveQuickGrindToBean,
                     onToggleChannel = vm::toggleChartChannel,
                     onDismiss = { quickOpen = false },
                 )
@@ -337,6 +339,7 @@ private fun BrewHeader(
     activeBean: Bean?,
     beans: List<Bean>,
     roasters: List<Roaster>,
+    equipmentGrinder: String,
     onSelectBean: (String) -> Unit,
     onOpenQuick: () -> Unit,
     onOpenProfiles: () -> Unit,
@@ -371,6 +374,7 @@ private fun BrewHeader(
             activeBean = activeBean,
             beans = beans,
             roasters = roasters,
+            equipmentGrinder = equipmentGrinder,
             onSelect = onSelectBean,
             onOpenLibrary = onOpenBeans,
             onNew = onNewBean,
@@ -599,6 +603,9 @@ private fun BeanBlock(
     activeBean: Bean?,
     beans: List<Bean>,
     roasters: List<Roaster>,
+    /** Settings-level grinder model — the fallback when the bean has no
+     *  grinder of its own (web BeanContextCard precedence, issue #16). */
+    equipmentGrinder: String,
     onSelect: (String) -> Unit,
     onOpenLibrary: () -> Unit,
     onNew: () -> Unit,
@@ -678,6 +685,10 @@ private fun BeanBlock(
                     activeBean.roastType?.string?.replaceFirstChar { it.uppercase() },
                     activeBean.mix?.string?.replaceFirstChar { it.uppercase() },
                     activeBean.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" },
+                    // Grinder NAME at a glance (issue #16): the bean's own, else
+                    // the equipment default — web BeanContextCard precedence.
+                    activeBean.grinder?.takeIf { it.isNotBlank() }
+                        ?: equipmentGrinder.takeIf { it.isNotBlank() },
                 ).joinToString(" · ")
                 if (spec.isNotBlank()) {
                     Text(

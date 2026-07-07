@@ -168,7 +168,7 @@
 		<div class="qsheet-v2-actions">
 			{#if onSavePreset}
 				<button class="qsheet-cta" onclick={onSavePreset}>
-					<BookmarkSimpleIcon aria-hidden="true" /> Save profile
+					<BookmarkSimpleIcon aria-hidden="true" /> Save
 				</button>
 			{/if}
 			<button class="qsheet-cta" onclick={() => params.reset()}>

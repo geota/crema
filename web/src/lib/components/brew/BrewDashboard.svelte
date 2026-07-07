@@ -54,6 +54,7 @@
 		type Bean,
 		type Roaster, activateBean } from '$lib/bean';
 	import { getMaintenanceStore } from '$lib/maintenance';
+	import { toast } from '$lib/components/shared/toast.svelte';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getActiveShotStore, getBrewContext, getMachineReadout } from '$lib/state';
 	import { BrewParamState, type BrewParamSeed } from './brew-params.svelte';
@@ -386,6 +387,17 @@
 	 * the DE1 if connected.
 	 */
 	async function savePreset(): Promise<void> {
+		// Scope-aware Save (issue #16): the grind dial writes back to the
+		// active bean first — one button, each dirty part to its owner.
+		const bean = beanLibrary.activeBean;
+		const dial = params.current.grind;
+		if (bean && Number.isFinite(dial)) {
+			const fmt = Number.isInteger(dial) ? String(dial) : dial.toFixed(1);
+			if ((bean.grinderSetting ?? '') !== fmt) {
+				beanLibrary.updateBean(bean.id, { grinderSetting: fmt });
+				toast.info(`Grind ${fmt} saved to ${bean.name}`);
+			}
+		}
 		const base = activeProfile;
 		if (!base) return;
 		const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');

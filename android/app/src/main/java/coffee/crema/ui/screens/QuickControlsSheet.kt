@@ -129,6 +129,9 @@ fun QuickControlsSheet(
     // Persisted QC grind click + pre-infuse transient override (issue 15).
     qcGrind: Double?,
     onGrind: (Double) -> Unit,
+    /** The bean half of the scope-aware Save (issue #16): write the grind
+     *  dial back to the active bean; returns true when it wrote. */
+    onSaveGrindToBean: () -> Boolean = { false },
     onToggleChannel: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -184,12 +187,18 @@ fun QuickControlsSheet(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (active != null) {
-                        // Custom profile → update in place; read-only built-in → name + copy.
+                        // Scope-aware Save (issue #16): the grind dial writes
+                        // back to the active bean, then the brew params to
+                        // the profile — custom updates in place; read-only
+                        // built-in → name + copy.
                         CremaButton(
-                            onClick = { if (active.source == "custom") onSavePreset(active.name) else showSave = true },
+                            onClick = {
+                                onSaveGrindToBean()
+                                if (active.source == "custom") onSavePreset(active.name) else showSave = true
+                            },
                             variant = CremaButtonVariant.Text,
                             icon = "bookmark-simple",
-                            label = "Save profile",
+                            label = "Save",
                         )
                     }
                     // Always visible like the web QuickSheet; enabled only once a

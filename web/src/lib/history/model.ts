@@ -123,7 +123,8 @@ export function snapshotFromBean(
 		roastLevel: bean.roastLevel,
 		tags: [...bean.tags],
 		...(bean.notes ? { notes: bean.notes } : {}),
-		...(bean.grinderSetting ? { grinderSetting: bean.grinderSetting } : {})
+		...(bean.grinderSetting ? { grinderSetting: bean.grinderSetting } : {}),
+		...(bean.grinder ? { grinder: bean.grinder } : {})
 	};
 }
 

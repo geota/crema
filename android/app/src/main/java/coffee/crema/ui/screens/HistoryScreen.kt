@@ -593,6 +593,12 @@ private fun ShotDetail(
                     val d = shot.doseG; val y = shot.yieldG
                     if (d != null && y != null) add("${formatWeight(d, weightUnit)} → ${formatWeight(y, weightUnit)}")
                     shotRatio(shot)?.let { add(it) }
+                    // Grind used for THIS shot (issue #16): the QC dial recorded at
+                    // capture, else the bean-snapshot reference setting.
+                    (
+                        shot.grindSetting?.let { g -> "Grind " + (if (g % 1f == 0f) "%.0f".format(g) else "%.1f".format(g)) }
+                            ?: shot.bean?.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" }
+                    )?.let { add(it) }
                 }.joinToString(" · ")
                 if (meta.isNotBlank()) {
                     Text(meta, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

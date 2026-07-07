@@ -476,6 +476,11 @@ private fun PhoneShotDetail(
                 title = shot.profileName ?: "Shot",
                 subtitle = buildList {
                     shot.beanLabel?.let { add(it) }
+                    // Grind used for THIS shot (issue #16).
+                    (
+                        shot.grindSetting?.let { g -> "Grind " + (if (g % 1f == 0f) "%.0f".format(g) else "%.1f".format(g)) }
+                            ?: shot.bean?.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" }
+                    )?.let { add(it) }
                     add(
                         remember(shot.completedAtMs) {
                             java.text.SimpleDateFormat("MMM d · HH:mm", java.util.Locale.getDefault())

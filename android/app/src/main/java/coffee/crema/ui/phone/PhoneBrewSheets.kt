@@ -62,7 +62,10 @@ fun PhoneQuickSheet(
     var tab by remember { mutableStateOf("dial") }
     // Split-stepper modes + local (no-VM-seam) values — tablet QC parity.
     var doseGrindMode by remember { mutableStateOf(DoseGrindMode.Dose) }
-    var grind by remember { mutableStateOf(4.2) }
+    // Grind: the persisted QC dial (issue 15), shared with the tablet — the
+    // old local stub never reached the VM, so the dial reset every open and
+    // was never recorded onto shots.
+    val grind = (ui.qcGrind ?: 4.2f).toDouble()
     var yieldRatioMode by remember { mutableStateOf(YieldRatioMode.Yield) }
     var piFlushMode by remember { mutableStateOf(PiFlushMode.Preinf) }
     var preinf by remember { mutableStateOf(8.0) }
@@ -96,6 +99,18 @@ fun PhoneQuickSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                // Scope-aware Save (issue #16): the grind dial writes back to
+                // the active bean; brew params to a CUSTOM profile in place
+                // (the tablet's name-a-copy flow for built-ins stays tablet-only).
+                CremaButton(
+                    onClick = {
+                        vm.saveQuickGrindToBean()
+                        if (ui.brewParams != null && active?.source == "custom") vm.saveQuickPreset(active.name)
+                    },
+                    variant = CremaButtonVariant.Text,
+                    icon = "bookmark-simple",
+                    label = "Save",
+                )
             }
 
             // Tabs (proto .pf-qc-tabs).
@@ -148,7 +163,7 @@ fun PhoneQuickSheet(
                                 max = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MAX_G else QcBounds.GRIND_MAX,
                                 presets = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 18.0, 19.0, 20.0) else listOf(3.5, 4.0, 4.5, 5.0),
                                 fmt = { "%.1f".format(it) },
-                                onChange = { if (doseGrindMode == DoseGrindMode.Dose) vm.quickAdjustBrew(it, yieldOut, brewTemp) else grind = it },
+                                onChange = { if (doseGrindMode == DoseGrindMode.Dose) vm.quickAdjustBrew(it, yieldOut, brewTemp) else vm.setQcGrind(it.toFloat()) },
                             )
                             // Yield | Ratio.
                             QcCell(
