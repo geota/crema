@@ -737,6 +737,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The Rust core, behind the UniFFI bridge. */
     private val bridge: CremaBridge = CremaBridge()
 
+    /**
+     * Single-threaded home for core-event application and every HEAVY
+     * FFI interaction (review #28). The generated bridge is synchronous
+     * blocking JNA and `viewModelScope` runs on Main — so the profile
+     * upload chain janked the UI thread at the most latency-sensitive
+     * moment, and `applyEvent` ran concurrently from three threads (the
+     * two BLE manager scopes + Main), racing the ticker check-then-act
+     * guards. All `CoreOutput` now applies on this lane (FIFO per
+     * sender), and the heavy paths (startShot, the heartbeat clock)
+     * run their bridge calls here instead of Main.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val coreDispatcher = kotlinx.coroutines.Dispatchers.Default.limitedParallelism(1)
+
     private val _ui = MutableStateFlow(MainUiState())
     val ui: StateFlow<MainUiState> = _ui.asStateFlow()
 
@@ -838,7 +852,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         if (scaleHeartbeatJob?.isActive == true) return
-        scaleHeartbeatJob = viewModelScope.launch {
+        // The heartbeat's bridge call runs on the core lane, not Main
+        // (review #28).
+        scaleHeartbeatJob = viewModelScope.launch(coreDispatcher) {
             while (true) {
                 val interval = _ui.value.scaleCapabilities?.heartbeat_interval_ms?.toLong()
                 if (interval != null) {
@@ -2262,6 +2278,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             notifyUser("Can\u2019t start shot \u2014 no profile selected")
             return
         }
+        // The heavy chain below — several bridge calls including the full
+        // profile-frame build in Rust — runs on the core lane instead of
+        // the Main tap handler (review #28).
+        viewModelScope.launch(coreDispatcher) { startShotOnCoreLane(cremaJson) }
+    }
+
+    private fun startShotOnCoreLane(cremaJson: String) {
         // Make sure the core's stop-at-weight / volume targets are current before
         // the shot arms its AutoStop \u2014 covers a profile restored at startup that
         // never went through setActiveProfile (otherwise SAW silently never arms).
@@ -2326,8 +2349,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(profileUploading = true, profileUploadProgress = null) }
         onCoreOutputJson(raw)
         // Backstop: if no ProfileUploadCompleted arrives, clear the pending brew
-        // so the UI doesn't hang in "uploading" forever.
-        viewModelScope.launch {
+        // so the UI doesn't hang in "uploading" forever. On the core lane so
+        // pendingBrew stays single-threaded.
+        viewModelScope.launch(coreDispatcher) {
             delay(PROFILE_UPLOAD_TIMEOUT_MS)
             if (pendingBrew) {
                 pendingBrew = false
@@ -4883,7 +4907,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * shared command path so the scale's `03 0e` settings response lands in
      * the capture.
      */
-    private fun refreshScaleCapabilities(advertisedName: String) {
+    private fun refreshScaleCapabilities(advertisedName: String) =
+        // Bridge read + heartbeat-guard mutation → core lane (review #28).
+        viewModelScope.launch(coreDispatcher) { refreshScaleCapabilitiesOnCoreLane(advertisedName) }
+
+    private fun refreshScaleCapabilitiesOnCoreLane(advertisedName: String) {
         val capsJson = runCatching { bridge.scaleCapabilities() }.getOrNull()
         val caps = capsJson?.let {
             runCatching {
@@ -5098,6 +5126,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * and Compose collects it on the main thread.
      */
     private fun onCoreOutputJson(raw: String) {
+        // Confine ALL event/command application to the core lane
+        // (review #28): callers arrive from Main, the DE1 manager scope,
+        // and the scale manager scope — launches enqueue FIFO per sender
+        // onto the single thread, so applyEvent's check-then-act state
+        // (tickers, pending flags) is single-threaded by construction.
+        // The guard also keeps one bad payload from killing the lane.
+        viewModelScope.launch(coreDispatcher) {
+            runCatching { applyCoreOutputJson(raw) }
+                .onFailure { appendLog("Core output application failed: ${it.message}") }
+        }
+    }
+
+    private fun applyCoreOutputJson(raw: String) {
         val output: CoreOutput = runCatching {
             json.decodeFromString(CoreOutput.serializer(), raw)
         }.getOrElse {
