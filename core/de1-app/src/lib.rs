@@ -350,7 +350,18 @@ pub struct CremaCore {
     /// The most recent steam / hot-water [`ShotSettings`] supplied by the
     /// shell, retained so eco-mode transitions can rewrite the steam target.
     /// `None` until [`set_steam_hotwater_settings`](Self::set_steam_hotwater_settings).
+    /// NOTE: this snapshot tracks the MACHINE (connect-time reads and change
+    /// notifications overwrite it), so with a scale connected its hot-water
+    /// volume can be the 250 ml wire override echoed back — never read a
+    /// stop target from it (review #25; use `user_hot_water_volume_ml`).
     steam_hotwater_settings: Option<ShotSettings>,
+    /// The hot-water volume the USER configured, ml — the source of truth
+    /// for the hot-water-by-weight target and for every outgoing settings
+    /// write. Kept apart from `steam_hotwater_settings` because the machine
+    /// echoes back the scale-mode 250 ml override, which must never
+    /// redefine the user's dial (review #25: setting 150 ml then receiving
+    /// one echo made the next pour stop at 250 g).
+    user_hot_water_volume_ml: Option<f32>,
     /// Hot-water-by-weight: armed (target grams) while a hot-water session
     /// pours with a scale connected. The user's volume translates 1 ml ≈ 1 g
     /// (water density); the wire packet asked the DE1 for far MORE water
@@ -621,6 +632,7 @@ impl CremaCore {
             water: WaterMonitor::new(),
             steam: SteamMonitor::new(),
             steam_hotwater_settings: None,
+            user_hot_water_volume_ml: None,
             hot_water_stop_target_g: None,
             steam_eco_temp: STEAM_ECO_TEMPERATURE_C,
             last_state: None,
@@ -1160,7 +1172,11 @@ impl CremaCore {
         if let Some(out) = self.refuse_if_firmware_locked("set_steam_hotwater_settings") {
             return out;
         }
-        self.steam_hotwater_settings = Some(Self::clamp_shot_settings(settings));
+        let clamped = Self::clamp_shot_settings(settings);
+        // The user's dialled volume — the one value the machine echo must
+        // never overwrite (see `user_hot_water_volume_ml`).
+        self.user_hot_water_volume_ml = Some(clamped.hot_water_volume_ml);
+        self.steam_hotwater_settings = Some(clamped);
         let mut out = CoreOutput::default();
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1ShotSettings,
@@ -1787,6 +1803,13 @@ impl CremaCore {
         let mut settings = self.steam_hotwater_settings.clone().unwrap_or_default();
         if eco {
             settings.steam_temp_c = self.steam_eco_temp;
+        }
+        // Rebase the volume on the USER's dial before deciding the override:
+        // the stored snapshot may hold the machine-echoed 250 ml sentinel,
+        // and a scale-less rewrite from that would ask the DE1 for a quarter
+        // litre with nothing watching (review #25).
+        if let Some(user_ml) = self.user_hot_water_volume_ml {
+            settings.hot_water_volume_ml = user_ml;
         }
         if self.scale.is_some() && settings.hot_water_volume_ml > 0.0 {
             settings.hot_water_volume_ml = HOT_WATER_STOP_ON_SCALE_ML;
@@ -3296,10 +3319,9 @@ impl CremaCore {
                 // so the vessel's weight never counts as water; the tare
                 // itself still respects the user's auto-tare preference.
                 if kind == de1_domain::WaterSessionKind::HotWater {
-                    let target_ml = self
-                        .steam_hotwater_settings
-                        .as_ref()
-                        .map_or(0.0, |s| s.hot_water_volume_ml);
+                    // USER-configured volume only — the machine snapshot can
+                    // carry the echoed 250 ml override (review #25).
+                    let target_ml = self.user_hot_water_volume_ml.unwrap_or(0.0);
                     if self.scale.is_some() && target_ml > 0.0 {
                         self.hot_water_stop_target_g = Some(target_ml);
                         if self.auto_tare {
@@ -5522,6 +5544,59 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Event::StopTriggered { .. }))
         );
+    }
+
+    #[test]
+    fn the_machine_echo_never_redefines_the_hot_water_target() {
+        // Review #25: with a scale connected the wire write carries the
+        // 250 ml override; the DE1 echoes it back on the ShotSettings
+        // characteristic. That echo must not become the by-weight target.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_steam_hotwater_settings(hotwater_settings(150.0));
+        // The machine echoes the settings we actually wrote — 250 ml.
+        let echo = hotwater_settings(HOT_WATER_STOP_ON_SCALE_ML).encode();
+        core.on_notification(Source::De1ShotSettings, &echo, 500);
+        core.on_notification(Source::De1State, &[6, 5], 1_000);
+        // 155 g raw (≥ the user's 150 g target, far under 250): must stop.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(15_500), 3_000);
+        assert!(
+            out.events.contains(&Event::StopTriggered {
+                reason: StopReason::Weight,
+            }),
+            "the pour must stop at the USER's 150 g, not the echoed 250"
+        );
+    }
+
+    #[test]
+    fn a_scale_less_rewrite_restores_the_users_volume_not_the_override() {
+        // Review #25, second leg: after the 250 ml echo pollutes the
+        // machine snapshot, a settings rewrite with the scale gone must
+        // ask the DE1 for the USER's volume again — not a quarter litre
+        // with nothing watching.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_steam_hotwater_settings(hotwater_settings(150.0));
+        let echo = hotwater_settings(HOT_WATER_STOP_ON_SCALE_ML).encode();
+        core.on_notification(Source::De1ShotSettings, &echo, 500);
+        // The scale disconnects (unrecognised name clears `scale`).
+        assert_eq!(core.connect_scale("Some Random Device", &[]), None);
+        // The eco transition (armed, then fired by the idle tick) rewrites
+        // the settings on the wire.
+        core.enable_steam_eco_mode(true, 0);
+        let out = core.on_tick(600_000);
+        let volume_bytes: Vec<u8> = out
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1ShotSettings,
+                    data,
+                } => Some(data[4]),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(volume_bytes, vec![150], "wire volume must be the user's");
     }
 
     #[test]
