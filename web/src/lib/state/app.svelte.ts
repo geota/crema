@@ -339,6 +339,13 @@ export class CremaApp {
 			onState: (scaleState) => {
 				const wasReady = this.state.current.scaleState === 'ready';
 				this.state.patch({ scaleState });
+				// A terminal drop (auto-reconnect exhausted, or a failure)
+				// must stop the heartbeat clock — it otherwise kept writing
+				// to a dead device every ~2 s forever (review #34). The
+				// user-disconnect path already clears it in disconnectScale.
+				if (scaleState === 'disconnected' || scaleState === 'failed') {
+					this.clearScaleHeartbeat();
+				}
 				// Fire `scaleConnected` on the first transition into ready.
 				// The advertised name and capabilities arrive a beat later
 				// via `onScaleIdentified` / `refreshScaleCapabilities`, so
@@ -352,6 +359,14 @@ export class CremaApp {
 			},
 			onScaleIdentified: (advertisedName) => {
 				void this.refreshScaleCapabilities(advertisedName);
+			},
+			onWriteFailed: () => {
+				// Re-query the scale's settings so the response stream
+				// overwrites whatever a rejected write optimistically
+				// patched (review #34).
+				void this.core
+					.queryScaleSettings()
+					.then((out) => this.applyCoreOutput(out));
 			},
 			// After the auto-reconnect loop recovers the scale link, re-fire the
 			// settings query so the config read-back refreshes from the device.
@@ -549,14 +564,27 @@ export class CremaApp {
 				this.runtime?.runSync(ProfileSync.pipe(Effect.flatMap((ps) => ps.failed)));
 			}
 			if (
-				event.type === 'WaterSessionCompleted' &&
+				event.type === 'WaterSessionStarted' &&
 				event.content.kind === 'Flush' &&
 				this.pendingPreshotFlush !== null
+			) {
+				// OUR pre-shot flush began — only a completion of a flush
+				// that started after the waiter armed may release it.
+				this.preshotFlushStarted = true;
+			}
+			if (
+				event.type === 'WaterSessionCompleted' &&
+				event.content.kind === 'Flush' &&
+				this.pendingPreshotFlush !== null &&
+				this.preshotFlushStarted
 			) {
 				// The pre-shot flush we requested just finished — release
 				// the `startShot()` waiter so it can issue the Espresso
 				// state request. The 30 s timeout in `startShot` is the
-				// backstop if this notification is missed.
+				// backstop if this notification is missed. Correlated via
+				// `preshotFlushStarted` so a stray Flush completion (a
+				// manual flush already running, a just-finished auto-purge)
+				// can't release the waiter early (review #34).
 				this.pendingPreshotFlush();
 			}
 			if (event.type === 'SteamSessionCompleted') {
@@ -1732,8 +1760,11 @@ export class CremaApp {
 		// its completion (or the 30 s ceiling) before requesting Espresso.
 		this.rinsePending = true;
 		try {
-			await this.requestMachineState(MachineState.HotWaterRinse);
-			await new Promise<void>((resolve) => {
+			// Arm the waiter BEFORE the state request: the flush's Started
+			// notification could otherwise beat the installation and the
+			// correlation marker would be missed (review #34).
+			this.preshotFlushStarted = false;
+			const flushDone = new Promise<void>((resolve) => {
 				const timeout = window.setTimeout(() => {
 					this.pendingPreshotFlush = null;
 					resolve();
@@ -1744,8 +1775,11 @@ export class CremaApp {
 					resolve();
 				};
 			});
+			await this.requestMachineState(MachineState.HotWaterRinse);
+			await flushDone;
 		} finally {
 			this.rinsePending = false;
+			this.preshotFlushStarted = false;
 		}
 		await this.requestMachineState(MachineState.Espresso);
 	}
@@ -1762,6 +1796,13 @@ export class CremaApp {
 	 * issue the `Espresso` request.
 	 */
 	private pendingPreshotFlush: (() => void) | null = null;
+
+	/**
+	 * True once a Flush session STARTED while the pre-shot waiter was
+	 * armed — the correlation that keeps a stray flush completion from
+	 * releasing the waiter early (review #34).
+	 */
+	private preshotFlushStarted = false;
 
 	/**
 	 * Ask the DE1 to enter a machine state — most usefully Sleep or Idle.

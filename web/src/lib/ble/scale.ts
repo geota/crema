@@ -69,6 +69,12 @@ export interface ScaleManagerCallbacks {
 	/** The coarse connection state advanced. */
 	onState: (state: ScaleState) => void;
 	/**
+	 * A scale command write was rejected by GATT. Optional: the app layer
+	 * re-queries the scale's settings so the live stream corrects any
+	 * optimistically-patched control (review #34).
+	 */
+	onWriteFailed?: () => void;
+	/**
 	 * The core identified the connected scale. Carries the BLE advertised name
 	 * — the orchestrator surfaces it and reads `core.scaleCapabilities()`.
 	 */
@@ -99,10 +105,6 @@ export class ScaleManager {
 		private readonly runtime: AppRuntime | null = null
 	) {}
 
-	/** The current GATT link state, for the scale card. */
-	get connectionState(): ConnState {
-		return this.device?.connectionState ?? 'disconnected';
-	}
 
 	/**
 	 * Discover, select, and connect a supported scale.
@@ -258,6 +260,10 @@ export class ScaleManager {
 			);
 		} catch (error) {
 			this.callbacks.onStatus(`Scale command write was rejected: ${describeError(error)}`);
+			// Let the app layer re-sync optimistic UI state — a rejected
+			// config write otherwise leaves the control showing a value the
+			// scale doesn't hold (review #34).
+			this.callbacks.onWriteFailed?.();
 		}
 	}
 

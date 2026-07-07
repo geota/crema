@@ -215,7 +215,11 @@ export class BleDevice implements De1Transport {
 		const atMs = performance.now();
 		this.sink({
 			characteristic: target.uuid.toLowerCase(),
-			data: new Uint8Array(value.buffer.slice(0)),
+			// Respect the DataView's window (review #34): Web Bluetooth hands
+			// back zero-offset views today, but slicing the whole backing
+			// buffer decodes garbage the moment that assumption breaks. Same
+			// shape readCharacteristic uses.
+			data: new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice(),
 			atMs
 		});
 	};
@@ -571,6 +575,14 @@ export class BleDevice implements De1Transport {
 			this.notifyReconnectAttempt(attempt);
 			try {
 				await this.reconnectAndReplay();
+				// A user disconnect landed WHILE this attempt was in flight —
+				// it couldn't cancel the promise, so honour it now instead of
+				// resurrecting the link as a ghost session (review #34).
+				if (this.userDisconnected) {
+					this.reconnecting = false;
+					this.disconnect();
+					return;
+				}
 				// Recovered.
 				this.reconnecting = false;
 				this.connectionState = 'connected';

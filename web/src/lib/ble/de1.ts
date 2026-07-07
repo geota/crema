@@ -139,10 +139,6 @@ export class De1Manager {
 		private readonly runtime: AppRuntime | null = null
 	) {}
 
-	/** The current GATT link state, for the connection card. */
-	get connectionState(): ConnState {
-		return this.device?.connectionState ?? 'disconnected';
-	}
 
 	/** Patch the diagnostics snapshot and publish it to the orchestrator. */
 	private patchDiagnostics(partial: Partial<De1Diagnostics>): void {
