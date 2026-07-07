@@ -795,6 +795,12 @@ impl CremaCore {
         self.scale_stale_reported = false;
         self.scale_config_queried = false;
         self.shot_metrics.reset_scale();
+        // The untared-cup guard's latches describe THIS scale's readings —
+        // a different scale (or the same one re-taring on reconnect) must
+        // start clean (review #26).
+        self.untared_cup_tripped = false;
+        self.saw_zero_offset_g = 0.0;
+        self.untared_settle = None;
         // A scale vanishing mid-shot drops the SAW leg of an armed AutoStop
         // (its weight stream is gone; volume / max-time keep the shot bounded).
         self.refresh_auto_stop_targets();
@@ -3258,6 +3264,14 @@ impl CremaCore {
             ShotEvent::Completed(record) => {
                 self.shot_started = None;
                 self.flow_started = None;
+                // End-of-shot latch reset (review #26): the untared-cup
+                // guard's virtual zero is a PER-SHOT correction — left
+                // latched it kept netting every later reading (hot-water
+                // pours overpoured by the cup's weight; the scale page
+                // read negative until the next espresso).
+                self.untared_cup_tripped = false;
+                self.saw_zero_offset_g = 0.0;
+                self.untared_settle = None;
                 // Harvest the weight-stop capture before dropping the
                 // controller — it feeds the drip-learning sample below.
                 let stop_capture = self.auto_stop.as_ref().and_then(AutoStop::stop_capture);
@@ -5296,6 +5310,67 @@ mod tests {
         assert!(out.events.contains(&Event::StopTriggered {
             reason: StopReason::Weight,
         }));
+    }
+
+    #[test]
+    fn the_virtual_zero_dies_with_the_shot() {
+        // Review #26: a latched software zero is a per-shot correction.
+        // After the shot completes, raw readings must flow un-netted —
+        // a hot-water pour right after must not inherit the offset.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        // Settle a ~300 g cup → the guard latches the virtual zero.
+        for (cg, at) in [(30_000, 1_600u64), (30_030, 2_000), (29_990, 2_400)] {
+            core.on_notification(Source::ScaleWeight, &bookoo_packet(cg), at);
+        }
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(30_010), 2_700);
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::SawAutoZeroed { .. }))
+        );
+        // Shot ends.
+        core.on_notification(Source::De1State, &[2, 0], 8_000);
+        // A 100 g raw reading after the shot must report ~100 g, not
+        // 100 − 300 = −200 g.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(10_000), 9_000);
+        let weight = out
+            .events
+            .iter()
+            .find_map(|e| match e {
+                Event::ScaleReading { weight, .. } => Some(*weight),
+                _ => None,
+            })
+            .expect("a scale reading");
+        assert!(weight > 0.0, "offset must not survive the shot: {weight}");
+    }
+
+    #[test]
+    fn the_virtual_zero_dies_with_the_scale() {
+        // Review #26, second leg: disconnecting the scale clears the
+        // latches — a replacement scale starts clean.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        for (cg, at) in [(30_000, 1_600u64), (30_030, 2_000), (29_990, 2_400)] {
+            core.on_notification(Source::ScaleWeight, &bookoo_packet(cg), at);
+        }
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(30_010), 2_700);
+        core.disconnect_scale();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(10_000), 5_000);
+        let weight = out
+            .events
+            .iter()
+            .find_map(|e| match e {
+                Event::ScaleReading { weight, .. } => Some(*weight),
+                _ => None,
+            })
+            .expect("a scale reading");
+        assert!(weight > 0.0, "offset must not survive the scale: {weight}");
     }
 
     #[test]
