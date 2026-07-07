@@ -183,13 +183,43 @@ fn puck_resistance_weight(group_pressure_bar: f32, weight_flow_g_per_s: f32) -> 
 /// All four are `Option<f32>` because there's no sample to bound them:
 /// `peak_pressure` / `peak_temp` are `None` when no Telemetry arrived;
 /// `peak_weight` / `final_weight` are `None` when no scale was paired.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 struct ShotMetricsAccumulator {
     peak_pressure: Option<f32>,
     peak_temp: Option<f32>,
     peak_weight: Option<f32>,
     final_weight: Option<f32>,
+    /// Recent readings (time, grams) for the settle tracker — a port of
+    /// Decenza's cup-lift-proof final weight (PR #1282,
+    /// `shottimingcontroller.cpp:214-301`): grabbing the cup while the
+    /// machine is still finishing used to leave lift spikes / down-steps
+    /// as the shot's final weight, polluting the displayed yield AND the
+    /// SAW drip-learning sample.
+    settle: Vec<(Duration, f32)>,
+    /// The last average of a stable settle window ([`SETTLE_BAND_G`] span
+    /// held ≥ [`SETTLE_MIN_HOLD`]) — the trusted "cup at rest" weight.
+    clean_weight: Option<f32>,
+    /// Whether the most recent reading was a cup-lift artifact (a big
+    /// down-step below `clean_weight`). Cleared when readings recover, so
+    /// a lift-and-replace resumes tracking.
+    cup_lifted: bool,
 }
+
+/// Settle-window stability band: readings within this span read as a cup
+/// at rest (Decenza's rolling-average stability gate).
+const SETTLE_BAND_G: f32 = 0.3;
+/// How long the band must hold before the average is trusted.
+const SETTLE_MIN_HOLD: Duration = Duration::from_millis(250);
+/// How much history the settle window keeps.
+const SETTLE_WINDOW: Duration = Duration::from_millis(600);
+/// A reading this far below the clean settled weight is the cup leaving
+/// the scale, not coffee.
+const CUP_LIFT_DROP_G: f32 = 5.0;
+/// A restored final weight more than this above the stop-trigger weight is
+/// a scale fault (drip adds ~1–3 g), and below the trigger is impossible
+/// (weight only grows after the stop) — both snap to the trigger
+/// (Decenza's branch-2/3 fallbacks).
+const IMPLAUSIBLE_DRIP_G: f32 = 5.0;
 
 impl ShotMetricsAccumulator {
     /// Update the pressure / temperature peaks from a DE1 Telemetry sample.
@@ -209,9 +239,13 @@ impl ShotMetricsAccumulator {
     }
 
     /// Update the weight peak and the running final-weight from a scale
-    /// reading. `final_weight` is the last non-`None` weight observed, so
-    /// every reading updates it.
-    fn feed_weight(&mut self, weight: f32) {
+    /// reading. `final_weight` is the last non-`None` weight observed —
+    /// EXCEPT cup-lift artifacts: a reading far below the last stable
+    /// settled average is the cup leaving the scale, so it neither updates
+    /// the final weight nor the settle tracker (Decenza #1282). Readings
+    /// that recover (a lift-and-replace, or a mid-shot wobble) resume
+    /// normal tracking.
+    fn feed_weight(&mut self, weight: f32, now: Duration) {
         if !weight.is_finite() {
             return;
         }
@@ -219,17 +253,62 @@ impl ShotMetricsAccumulator {
             Some(w) => w.max(weight),
             None => weight,
         });
+        if let Some(clean) = self.clean_weight
+            && weight < clean - CUP_LIFT_DROP_G
+        {
+            self.cup_lifted = true;
+            return;
+        }
+        self.cup_lifted = false;
         self.final_weight = Some(weight);
+        // Roll the settle window forward and refresh the clean average
+        // whenever the recent readings hold still.
+        self.settle.push((now, weight));
+        let cutoff = now.saturating_sub(SETTLE_WINDOW);
+        self.settle.retain(|&(t, _)| t >= cutoff);
+        if self.settle.len() >= 3 && now.saturating_sub(self.settle[0].0) >= SETTLE_MIN_HOLD {
+            let (mut min, mut max, mut sum) = (f32::MAX, f32::MIN, 0.0f32);
+            for &(_, w) in &self.settle {
+                min = min.min(w);
+                max = max.max(w);
+                sum += w;
+            }
+            if max - min <= SETTLE_BAND_G {
+                #[allow(clippy::cast_precision_loss)]
+                let avg = sum / self.settle.len() as f32;
+                self.clean_weight = Some(avg);
+            }
+        }
     }
 
     /// Pop the four metrics for an [`Event::ShotCompleted`] payload, leaving
     /// the accumulator zeroed for the next shot.
-    fn drain(&mut self) -> (Option<f32>, Option<f32>, Option<f32>, Option<f32>) {
+    ///
+    /// `stop_trigger_g` is the weight at the auto-stop trigger (from the
+    /// [`StopCapture`]) when the shot was weight-stopped. When the last
+    /// reading was a cup lift, the final weight restores from the clean
+    /// settled average, clamped to plausibility against the trigger
+    /// (Decenza #1282's branch-2/3 fallbacks — see [`IMPLAUSIBLE_DRIP_G`]).
+    fn drain(
+        &mut self,
+        stop_trigger_g: Option<f32>,
+    ) -> (Option<f32>, Option<f32>, Option<f32>, Option<f32>) {
+        let final_weight = if self.cup_lifted {
+            let restored = self.clean_weight.or(self.final_weight);
+            match (restored, stop_trigger_g) {
+                (Some(f), Some(trigger)) if f > trigger + IMPLAUSIBLE_DRIP_G || f < trigger => {
+                    Some(trigger)
+                }
+                (f, _) => f,
+            }
+        } else {
+            self.final_weight
+        };
         let metrics = (
             self.peak_pressure,
             self.peak_temp,
             self.peak_weight,
-            self.final_weight,
+            final_weight,
         );
         *self = ShotMetricsAccumulator::default();
         metrics
@@ -250,6 +329,9 @@ impl ShotMetricsAccumulator {
     fn reset_scale(&mut self) {
         self.peak_weight = None;
         self.final_weight = None;
+        self.settle.clear();
+        self.clean_weight = None;
+        self.cup_lifted = false;
     }
 }
 
@@ -2562,7 +2644,7 @@ impl CremaCore {
         // value the shell sees on its TelemetrySample.weight channel, so
         // peak / final stay aligned with what the chart actually drew.
         if self.shot_started.is_some() {
-            self.shot_metrics.feed_weight(estimate.weight);
+            self.shot_metrics.feed_weight(estimate.weight, now);
         }
         out.events.push(Event::ScaleReading {
             weight: estimate.weight,
@@ -3138,8 +3220,9 @@ impl CremaCore {
                 // Drain the running peak / final-weight tracker into the
                 // event — one computation at the core boundary that every
                 // shell can consume directly.
-                let (peak_pressure, peak_temp, peak_weight, final_weight) =
-                    self.shot_metrics.drain();
+                let (peak_pressure, peak_temp, peak_weight, final_weight) = self
+                    .shot_metrics
+                    .drain(stop_capture.as_ref().map(|c| c.weight_g));
                 out.events.push(Event::ShotCompleted {
                     duration,
                     sample_count: u32::try_from(record.samples.len()).unwrap_or(u32::MAX),
@@ -5595,6 +5678,55 @@ mod tests {
             final_weight.is_none(),
             "no scale paired → final_weight stays None",
         );
+    }
+
+    #[test]
+    fn a_cup_lift_during_settling_restores_the_clean_weight() {
+        // Decenza #1282: settled at ~36 g, then lift spikes (44, 51) and
+        // the removal down-step (2 g). The final weight must be the clean
+        // settled average, not the artifacts.
+        let mut acc = ShotMetricsAccumulator::default();
+        let ms = Duration::from_millis;
+        for (t, w) in [(0u64, 36.0f32), (150, 36.1), (300, 36.0), (450, 36.1)] {
+            acc.feed_weight(w, ms(t));
+        }
+        acc.feed_weight(44.0, ms(600));
+        acc.feed_weight(51.0, ms(700));
+        acc.feed_weight(2.0, ms(800));
+        let (_, _, _, final_weight) = acc.drain(None);
+        let f = final_weight.expect("restored");
+        assert!((f - 36.05).abs() < 0.2, "restored {f}, wanted ~36");
+    }
+
+    #[test]
+    fn an_implausible_restored_weight_snaps_to_the_stop_trigger() {
+        // The clean average itself can be a scale fault: settled 7 g OVER
+        // the stop-trigger weight (drip adds ~1-3 g) → snap to the trigger
+        // (Decenza's branch-2 fallback). Below the trigger snaps too.
+        let mut acc = ShotMetricsAccumulator::default();
+        let ms = Duration::from_millis;
+        for (t, w) in [(0u64, 41.0f32), (150, 41.1), (300, 41.0), (450, 41.1)] {
+            acc.feed_weight(w, ms(t));
+        }
+        acc.feed_weight(2.0, ms(600));
+        let (_, _, _, final_weight) = acc.drain(Some(34.0));
+        assert_eq!(final_weight, Some(34.0));
+    }
+
+    #[test]
+    fn a_lift_and_replace_resumes_tracking() {
+        // A dip below the clean weight that RECOVERS (cup put back, or a
+        // mid-shot wobble) must not freeze the final weight.
+        let mut acc = ShotMetricsAccumulator::default();
+        let ms = Duration::from_millis;
+        for (t, w) in [(0u64, 30.0f32), (150, 30.1), (300, 30.0), (450, 30.0)] {
+            acc.feed_weight(w, ms(t));
+        }
+        acc.feed_weight(2.0, ms(600)); // lift artifact — skipped
+        acc.feed_weight(30.2, ms(750)); // cup back
+        acc.feed_weight(30.3, ms(900));
+        let (_, _, _, final_weight) = acc.drain(None);
+        assert_eq!(final_weight, Some(30.3));
     }
 
     #[test]
