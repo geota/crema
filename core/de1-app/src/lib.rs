@@ -808,6 +808,14 @@ impl CremaCore {
     /// [`MachineState::Espresso`] to start a shot, [`MachineState::Idle`] to
     /// stop one or wake from sleep.
     ///
+    /// Flow-mode starts (Espresso / Steam / HotWater / HotWaterRinse) get the
+    /// start-operation interlock the reference apps use (Decenza
+    /// `de1device.cpp:796-830`; de1app writes the same GHC mode before
+    /// starts): first `GhcMode = 1` so a GHC-equipped machine accepts
+    /// app-initiated starts, then an `Idle` bounce when the machine isn't
+    /// known to be Idle — the firmware accepts flow-state requests reliably
+    /// only from Idle. Plain Idle / Sleep requests stay a single write.
+    ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits one
     /// [`Event::FirmwareLockoutHit`] and no command.
@@ -816,6 +824,28 @@ impl CremaCore {
             return out;
         }
         let mut out = CoreOutput::default();
+        let starting_flow = matches!(
+            state,
+            MachineState::Espresso
+                | MachineState::Steam
+                | MachineState::HotWater
+                | MachineState::HotWaterRinse
+        );
+        if starting_flow {
+            // 4-byte write like every other MMR register (Decenza writes
+            // GHC_MODE as a full word too).
+            out.commands
+                .extend(mmr_write_command(MmrRegister::GhcMode, 1, 4).commands);
+            let known_idle = self
+                .last_state
+                .is_some_and(|info| info.state == MachineState::Idle);
+            if !known_idle {
+                out.commands.push(Command::WriteCharacteristic {
+                    target: WriteTarget::De1RequestedState,
+                    data: vec![requested_state(MachineState::Idle)],
+                });
+            }
+        }
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1RequestedState,
             data: vec![requested_state(state)],
@@ -1124,7 +1154,9 @@ impl CremaCore {
         if let Some(out) = self.refuse_if_firmware_locked("set_ghc_mode") {
             return out;
         }
-        mmr_write_command(MmrRegister::GhcMode, u32::from(mode), 1)
+        // 4-byte write like every other MMR register — the previous 1-byte
+        // write was the lone inconsistency (Decenza + de1app write a word).
+        mmr_write_command(MmrRegister::GhcMode, u32::from(mode), 4)
     }
 
     /// Set the hot-water flow rate. `ml_per_s` is scaled `int(10 × rate)`.
@@ -4705,6 +4737,59 @@ mod tests {
         assert!(out.events.contains(&Event::StopTriggered {
             reason: StopReason::MaxTime,
         }));
+    }
+
+    #[test]
+    fn a_flow_start_writes_ghc_mode_and_bounces_to_idle() {
+        let mut core = CremaCore::new();
+        // Machine known to be in Steam: GhcMode word + Idle bounce + target.
+        core.on_notification(Source::De1State, &[5, 7], 0);
+        let out = core.request_machine_state(MachineState::Espresso);
+        assert_eq!(out.commands.len(), 3);
+        assert!(matches!(
+            &out.commands[0],
+            Command::WriteCharacteristic { target: WriteTarget::De1MmrWrite, .. }
+        ));
+        assert_eq!(
+            out.commands[1],
+            Command::WriteCharacteristic {
+                target: WriteTarget::De1RequestedState,
+                data: vec![requested_state(MachineState::Idle)],
+            }
+        );
+        assert_eq!(
+            out.commands[2],
+            Command::WriteCharacteristic {
+                target: WriteTarget::De1RequestedState,
+                data: vec![requested_state(MachineState::Espresso)],
+            }
+        );
+    }
+
+    #[test]
+    fn a_flow_start_from_idle_skips_the_idle_bounce() {
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[2, 0], 0);
+        let out = core.request_machine_state(MachineState::Steam);
+        assert_eq!(out.commands.len(), 2);
+        assert!(matches!(
+            &out.commands[0],
+            Command::WriteCharacteristic { target: WriteTarget::De1MmrWrite, .. }
+        ));
+        assert_eq!(
+            out.commands[1],
+            Command::WriteCharacteristic {
+                target: WriteTarget::De1RequestedState,
+                data: vec![requested_state(MachineState::Steam)],
+            }
+        );
+    }
+
+    #[test]
+    fn idle_and_sleep_requests_stay_a_single_write() {
+        let core = CremaCore::new();
+        assert_eq!(core.request_machine_state(MachineState::Idle).commands.len(), 1);
+        assert_eq!(core.request_machine_state(MachineState::Sleep).commands.len(), 1);
     }
 
     #[test]
