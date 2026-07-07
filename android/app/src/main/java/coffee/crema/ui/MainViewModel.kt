@@ -4140,6 +4140,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ) {
         val s = _ui.value
         val profile = s.profiles.firstOrNull { it.id == s.activeProfileId }
+        // Machine maintenance runs in the DE1's Espresso state, so a
+        // cleaning/backflush profile would be recorded as a shot — skip the
+        // capture entirely (no history row, no Visualizer, no bean debit;
+        // nothing was ground). Decenza #1325 (maincontroller.cpp:1841-1853).
+        // Descale/calibrate run in their own machine states, never here.
+        if (profile?.beverageType == "cleaning") {
+            appendLog("Cleaning run finished — not recorded as a shot")
+            return
+        }
         // Snapshot the recipe (as-run) as the core wire Profile so the upload
         // embeds real steps (#12) — not just the name. You can't switch profiles
         // mid-pour, so the active profile is the one that ran.

@@ -102,6 +102,20 @@ export function commitShotCompletion(
 	ctx: ShotCompletionContext
 ): void {
 	const activeShot = getActiveShotStore().current;
+	// Machine maintenance runs in the DE1's Espresso state, so a
+	// cleaning/backflush profile would be recorded as a shot — skip the
+	// history row, Visualizer push, capture slice, AND the live side
+	// effects (nothing was ground; no bean debit, no webhook). Decenza
+	// #1325 (maincontroller.cpp:1841-1853). Descale/calibrate run in their
+	// own machine states and never reach this path.
+	{
+		const profiles = getProfileStore();
+		const active = profiles.activeId ? profiles.get(profiles.activeId) : undefined;
+		if (active?.beverageType === 'cleaning') {
+			getActiveShotStore().clear();
+			return;
+		}
+	}
 	// Aborted-shot auto-discard (Decenza abortedshotclassifier.h:19-25,
 	// validated over 882 shots): under 10 s of flow AND under 5 g in the cup
 	// is an aborted pull, not a shot — it would only pollute history and
