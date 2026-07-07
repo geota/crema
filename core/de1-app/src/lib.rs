@@ -5470,8 +5470,8 @@ mod tests {
     #[test]
     fn timer_methods_emit_nothing_for_a_timer_less_scale() {
         let mut core = CremaCore::new();
-        // The Acaia is in `Scale::supports_timer`'s exclusion list — no
-        // software timer commands; capability-gated to nothing.
+        // The Acaia has no software timer — `Scale::timer` returns `None`,
+        // so every timer method is capability-gated to nothing.
         core.connect_scale("ACAIA-X", &[]);
         assert!(core.start_timer().commands.is_empty());
         assert!(core.stop_timer().commands.is_empty());

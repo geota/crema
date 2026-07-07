@@ -695,17 +695,6 @@ impl Scale {
         }
     }
 
-    /// Whether this scale accepts a software tare command.
-    ///
-    /// Every supported scale reports `true` today — including the Smartchef,
-    /// which used to return `false` (no BLE tare command) but now exposes a
-    /// software-tare offset (see [`crate::smartchef::SmartchefScale`]).
-    pub fn supports_tare(&self) -> bool {
-        // No supported scale rejects tare today; kept as a method for the
-        // future where a new variant might (e.g. a totally read-only sensor).
-        true
-    }
-
     /// Record a Decent-Scale firmware-version observation (the byte
     /// extracted from a `0x0A` reply — see
     /// [`decent_scale::parse_command_response`]). No-op for every other
@@ -724,18 +713,6 @@ impl Scale {
             Inner::Decent(state) => state.firmware_version(),
             _ => None,
         }
-    }
-
-    /// Whether this scale accepts software timer commands.
-    pub fn supports_timer(&self) -> bool {
-        !matches!(
-            &self.inner,
-            Inner::AcaiaGen1(_)
-                | Inner::AcaiaPyxis(_)
-                | Inner::Smartchef(_)
-                | Inner::HiroiaJimmy
-                | Inner::VariaAku
-        )
     }
 
     /// What this scale can do beyond reporting a bare weight — see
@@ -1411,8 +1388,8 @@ impl Scale {
     }
 
     /// Build a timer command to write to the [command characteristic](ScaleUuids).
-    /// Returns `None` if the scale has no software timer (see
-    /// [`supports_timer`](Self::supports_timer)).
+    /// Returns `None` if the scale has no software timer — the `Option` IS
+    /// the capability, like every other `*_command` surface here.
     pub fn timer(&self, command: TimerCommand) -> Option<Vec<u8>> {
         use TimerCommand::{Reset, Start, Stop};
         Some(match &self.inner {
@@ -1744,11 +1721,9 @@ mod tests {
     fn smartchef_tare_is_software_only_and_returns_no_wire_bytes() {
         // The Smartchef has no BLE tare command; tare is software-side via
         // the offset on `SmartchefScale`. `Scale::tare()` returns `None` to
-        // signal "no wire write needed" but `supports_tare()` is still `true`
-        // — the user gets a tared reading on the next notification.
+        // signal "no wire write needed" — the user still gets a tared
+        // reading on the next notification. No timer either.
         let mut smartchef = Scale::from_label("Smartchef").unwrap();
-        assert!(smartchef.supports_tare());
-        assert!(!smartchef.supports_timer());
         assert_eq!(smartchef.tare(), None);
         assert_eq!(smartchef.timer(TimerCommand::Start), None);
     }
@@ -1962,10 +1937,8 @@ mod tests {
     }
 
     #[test]
-    fn acaia_supports_tare_but_not_a_timer() {
+    fn acaia_tares_but_has_no_timer() {
         let mut acaia = Scale::from_label("Acaia").unwrap();
-        assert!(acaia.supports_tare());
-        assert!(!acaia.supports_timer());
         assert!(acaia.tare().is_some());
         assert_eq!(acaia.timer(TimerCommand::Reset), None);
     }
