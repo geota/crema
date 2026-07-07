@@ -23,6 +23,9 @@
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
+use crate::history::StoredShot;
+use crate::profile::{BeverageType, Compare, ExitMetric};
+
 // ---------------------------------------------------------------------------
 // Thresholds (tune here, applies everywhere) — `shotanalysis.h:84-302`.
 // ---------------------------------------------------------------------------
@@ -1224,6 +1227,238 @@ fn push_line(lines: &mut Vec<QualityLine>, text: impl Into<String>, line_type: &
     });
 }
 
+/// Fewest stored samples worth analyzing — below this the report is the
+/// insufficient-data early return anyway, so callers can skip the bridge
+/// round-trip and hide the quality card (both shells used 10).
+const MIN_STORED_SAMPLES: usize = 10;
+/// Median commanded-goal thresholds for the per-frame flow-vs-pressure
+/// mode call: a frame is flow-driven when the machine commanded meaningful
+/// flow and essentially no pressure.
+const FLOW_MODE_FLOW_FLOOR: f64 = 0.2;
+const FLOW_MODE_PRESSURE_CEIL: f64 = 0.2;
+
+fn median(values: &mut [f64]) -> f64 {
+    values.sort_by(f64::total_cmp);
+    let mid = values.len() / 2;
+    if values.len() % 2 == 1 {
+        values[mid]
+    } else {
+        (values[mid - 1] + values[mid]) / 2.0
+    }
+}
+
+fn beverage_str(bt: BeverageType) -> &'static str {
+    match bt {
+        BeverageType::Espresso => "espresso",
+        BeverageType::Calibrate => "calibrate",
+        BeverageType::Cleaning => "cleaning",
+        BeverageType::Manual => "manual",
+        BeverageType::Pourover => "pourover",
+    }
+}
+
+/// Build the analysis input for a persisted [`StoredShot`] — the single
+/// core-owned replacement for the two shell mappers that used to
+/// re-implement this projection in TypeScript and Kotlin (and had already
+/// diverged; review #39). Phase markers come from the REAL per-sample
+/// `frame_number` (synthetic `Start` at t=0, one marker per transition, a
+/// closing `End`), per-frame flow-mode from the median commanded goals,
+/// labels from the recipe's preinfuse count (`Preinfusion` below it, the
+/// first frame at/past it `Pour`, later `Frame N`; without a recipe the
+/// first transition to a frame ≥ 1 anchors `Pour`).
+///
+/// Returns `None` when there is nothing worth analyzing
+/// ([`MIN_STORED_SAMPLES`]) — callers hide the quality card.
+#[must_use]
+pub fn input_from_stored_shot(shot: &StoredShot) -> Option<ShotQualityInput> {
+    let samples = &shot.record.samples;
+    if samples.len() < MIN_STORED_SAMPLES {
+        return None;
+    }
+    let recipe = shot.profile.as_ref().filter(|p| !p.steps.is_empty());
+    let preinfuse_count: Option<i32> = recipe.map(|p| i32::from(p.preinfuse_step_count));
+
+    let mut pressure = Vec::with_capacity(samples.len());
+    let mut flow = Vec::with_capacity(samples.len());
+    let mut weight = Vec::new();
+    let mut pressure_goal = Vec::with_capacity(samples.len());
+    let mut flow_goal = Vec::with_capacity(samples.len());
+    // Per-frame commanded-goal accumulators + the observed transitions.
+    let mut frame_flow_goals: std::collections::BTreeMap<u8, Vec<f64>> = Default::default();
+    let mut frame_pressure_goals: std::collections::BTreeMap<u8, Vec<f64>> = Default::default();
+    let mut transitions: Vec<(f64, u8)> = Vec::new();
+    let mut current_frame: Option<u8> = None;
+
+    for ts in samples {
+        let t = ts.elapsed.as_secs_f64();
+        pressure.push(SeriesPoint {
+            t,
+            v: f64::from(ts.sample.group_pressure),
+        });
+        flow.push(SeriesPoint {
+            t,
+            v: f64::from(ts.sample.group_flow),
+        });
+        if let Some(w) = ts.scale_weight {
+            weight.push(SeriesPoint { t, v: f64::from(w) });
+        }
+        pressure_goal.push(SeriesPoint {
+            t,
+            v: f64::from(ts.sample.set_group_pressure),
+        });
+        flow_goal.push(SeriesPoint {
+            t,
+            v: f64::from(ts.sample.set_group_flow),
+        });
+        let frame = ts.sample.frame_number;
+        frame_flow_goals
+            .entry(frame)
+            .or_default()
+            .push(f64::from(ts.sample.set_group_flow));
+        frame_pressure_goals
+            .entry(frame)
+            .or_default()
+            .push(f64::from(ts.sample.set_group_pressure));
+        match current_frame {
+            None => current_frame = Some(frame),
+            Some(f) if f != frame => {
+                transitions.push((t, frame));
+                current_frame = Some(frame);
+            }
+            _ => {}
+        }
+    }
+
+    let is_flow_mode = |frame: u8,
+                        flows: &std::collections::BTreeMap<u8, Vec<f64>>,
+                        pressures: &std::collections::BTreeMap<u8, Vec<f64>>|
+     -> bool {
+        let (Some(f), Some(p)) = (flows.get(&frame), pressures.get(&frame)) else {
+            return false;
+        };
+        if f.is_empty() || p.is_empty() {
+            return false;
+        }
+        median(&mut f.clone()) > FLOW_MODE_FLOW_FLOOR
+            && median(&mut p.clone()) < FLOW_MODE_PRESSURE_CEIL
+    };
+
+    // Labels: recipe-aware, with the no-recipe "first frame ≥ 1 is the
+    // pour" heuristic. A zero preinfuse count means the pour begins at
+    // extraction start — the Start marker anchors it, no Pour label.
+    let mut pour_seen = preinfuse_count.is_some_and(|c| c <= 0);
+    let mut label_for = |frame: u8| -> String {
+        if let Some(count) = preinfuse_count {
+            if i32::from(frame) < count {
+                return "Preinfusion".to_string();
+            }
+            if !pour_seen {
+                pour_seen = true;
+                return "Pour".to_string();
+            }
+            return format!("Frame {frame}");
+        }
+        if !pour_seen && frame >= 1 {
+            pour_seen = true;
+            return "Pour".to_string();
+        }
+        format!("Frame {frame}")
+    };
+
+    let duration_s = shot.record.duration.as_secs_f64();
+    let last_frame = samples.last().map_or(0, |ts| ts.sample.frame_number);
+    let first_frame = samples.first().map_or(0, |ts| ts.sample.frame_number);
+    let mut phases = Vec::with_capacity(transitions.len() + 2);
+    phases.push(PhaseMarker {
+        time_s: 0.0,
+        label: "Start".to_string(),
+        frame_number: 0,
+        is_flow_mode: is_flow_mode(
+            if frame_flow_goals.contains_key(&0) {
+                0
+            } else {
+                first_frame
+            },
+            &frame_flow_goals,
+            &frame_pressure_goals,
+        ),
+        transition_reason: String::new(),
+    });
+    for (t, frame) in &transitions {
+        phases.push(PhaseMarker {
+            time_s: *t,
+            label: label_for(*frame),
+            frame_number: i32::from(*frame),
+            is_flow_mode: is_flow_mode(*frame, &frame_flow_goals, &frame_pressure_goals),
+            transition_reason: String::new(),
+        });
+    }
+    phases.push(PhaseMarker {
+        time_s: duration_s,
+        label: "End".to_string(),
+        frame_number: i32::from(last_frame),
+        is_flow_mode: is_flow_mode(last_frame, &frame_flow_goals, &frame_pressure_goals),
+        transition_reason: String::new(),
+    });
+
+    let final_weight_g = weight
+        .last()
+        .map(|p| p.v)
+        .or_else(|| shot.metadata.yield_out.map(f64::from))
+        .unwrap_or(0.0);
+    let target_weight_g = shot
+        .yield_target
+        .map(f64::from)
+        .or_else(|| recipe.map(|p| f64::from(p.target_weight)))
+        .unwrap_or(0.0);
+
+    Some(ShotQualityInput {
+        pressure,
+        flow,
+        weight,
+        pressure_goal,
+        flow_goal,
+        phases,
+        beverage_type: recipe
+            .map_or("espresso", |p| beverage_str(p.beverage_type))
+            .to_string(),
+        duration_s,
+        first_frame_configured_s: recipe
+            .and_then(|p| p.steps.first())
+            .map_or(-1.0, |st| f64::from(st.duration_seconds)),
+        target_weight_g,
+        final_weight_g,
+        expected_frame_count: recipe
+            .map_or(-1, |p| i32::try_from(p.steps.len()).unwrap_or(i32::MAX)),
+        analysis_flags: Vec::new(),
+        profile_kb_resolved: recipe.is_some(),
+        frame_exits: recipe.map_or_else(Vec::new, |p| {
+            p.steps
+                .iter()
+                .map(|st| FrameExitSpec {
+                    metric: st.exit.map_or(String::new(), |e| {
+                        match e.metric {
+                            ExitMetric::Pressure => "pressure",
+                            ExitMetric::Flow => "flow",
+                        }
+                        .to_string()
+                    }),
+                    exit_over: st.exit.is_some_and(|e| e.compare == Compare::Over),
+                    threshold: st.exit.map_or(0.0, |e| f64::from(e.threshold)),
+                    max_duration_s: f64::from(st.duration_seconds),
+                })
+                .collect()
+        }),
+    })
+}
+
+/// [`input_from_stored_shot`] + [`analyze_shot`] in one call — the FFI/wasm
+/// surface both shells use for the History quality card.
+#[must_use]
+pub fn analyze_stored_shot(shot: &StoredShot) -> Option<ShotQualityReport> {
+    input_from_stored_shot(shot).map(|input| analyze_shot(&input))
+}
+
 /// A sensor exit counts as confirmed when the recorded boundary value is
 /// within this margin of the threshold (sampling at ~5 Hz means the exact
 /// crossing sample may sit just shy of it).
@@ -1732,6 +1967,7 @@ pub fn analyze_shot(input: &ShotQualityInput) -> ShotQualityReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     /// `count` samples starting at t=0 with exact `step` spacing (use
     /// power-of-two steps like 0.25 so accumulation stays exact).
@@ -1967,6 +2203,101 @@ mod tests {
         assert!(detect_skip_first_frame(&with_bogus, 3, -1.0));
         // Empty phases → false.
         assert!(!detect_skip_first_frame(&[], -1, -1.0));
+    }
+
+    // -----------------------------------------------------------------
+    // input_from_stored_shot (review #39 — ported from the web mapper's
+    // vitest cases before the shell mappers were deleted).
+    // -----------------------------------------------------------------
+
+    fn stored_sample(
+        elapsed_ms: u64,
+        frame: u8,
+        set_p: f32,
+        set_f: f32,
+        w: Option<f32>,
+    ) -> crate::TimedSample {
+        crate::TimedSample {
+            elapsed: Duration::from_millis(elapsed_ms),
+            sample: de1_protocol::ShotSample {
+                sample_time: 0,
+                group_pressure: 8.0,
+                group_flow: 2.0,
+                head_temp: 92.0,
+                mix_temp: 90.0,
+                set_mix_temp: 90.0,
+                set_head_temp: 92.0,
+                set_group_pressure: set_p,
+                set_group_flow: set_f,
+                frame_number: frame,
+                steam_temp: 150.0,
+            },
+            scale_weight: w,
+            scale_flow_weight: None,
+            dispensed_volume: None,
+            resistance: None,
+            resistance_weight: None,
+        }
+    }
+
+    fn stored_shot_with(samples: Vec<crate::TimedSample>) -> StoredShot {
+        let record = crate::ShotRecord {
+            duration: samples.last().map_or(Duration::ZERO, |s| s.elapsed),
+            samples,
+        };
+        StoredShot::new(0, record)
+    }
+
+    #[test]
+    fn stored_shot_input_needs_ten_samples() {
+        let samples: Vec<_> = (0..9)
+            .map(|i| stored_sample(i * 200, 0, 8.0, 0.0, None))
+            .collect();
+        assert!(input_from_stored_shot(&stored_shot_with(samples)).is_none());
+    }
+
+    #[test]
+    fn stored_shot_input_reconstructs_start_pour_end_markers() {
+        // Frames 0,0,0,1,1... → synthetic Start@0/frame0, one transition
+        // marker (Pour under the no-recipe heuristic), End@duration.
+        let mut samples = Vec::new();
+        for i in 0..6u64 {
+            #[allow(clippy::cast_precision_loss)]
+            samples.push(stored_sample(i * 200, 0, 8.0, 0.0, Some(i as f32)));
+        }
+        for i in 6..14u64 {
+            #[allow(clippy::cast_precision_loss)]
+            samples.push(stored_sample(i * 200, 1, 8.0, 0.0, Some(i as f32)));
+        }
+        let input = input_from_stored_shot(&stored_shot_with(samples)).expect("input");
+        assert_eq!(input.phases.len(), 3);
+        assert_eq!(input.phases[0].label, "Start");
+        assert_eq!(input.phases[0].frame_number, 0);
+        assert_eq!(input.phases[1].label, "Pour");
+        assert_eq!(input.phases[1].frame_number, 1);
+        assert!(approx(input.phases[1].time_s, 1.2, 1e-9));
+        assert_eq!(input.phases[2].label, "End");
+        assert_eq!(input.phases[2].frame_number, 1);
+        // Weight series carried through; final = last scale weight.
+        assert!(approx(input.final_weight_g, 13.0, 1e-6));
+        // Pressure-driven frames: no flow mode.
+        assert!(!input.phases[1].is_flow_mode);
+    }
+
+    #[test]
+    fn stored_shot_input_flow_mode_from_median_goals() {
+        // Frame 1 commands flow (2.5) with ~zero pressure → flow mode.
+        let mut samples = Vec::new();
+        for i in 0..6u64 {
+            samples.push(stored_sample(i * 200, 0, 8.0, 0.0, None));
+        }
+        for i in 6..14u64 {
+            samples.push(stored_sample(i * 200, 1, 0.0, 2.5, None));
+        }
+        let input = input_from_stored_shot(&stored_shot_with(samples)).expect("input");
+        assert!(input.phases[1].is_flow_mode);
+        // No scale + no metadata yield → 0 disables the yield arms.
+        assert!(approx(input.final_weight_g, 0.0, 1e-9));
     }
 
     // -----------------------------------------------------------------

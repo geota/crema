@@ -46,6 +46,13 @@ data class TelemetrySample(
     val setGroupPressure: Float,
     /** Target group flow for the active frame, ml/s — goal overlay (raw). */
     val setGroupFlow: Float,
+    /**
+     * Profile frame executing at this instant. Stamped from the shot's
+     * frame tracker at buffer time — persisted so the core's shot-quality
+     * analysis gets EXACT phase boundaries instead of a setpoint-step
+     * heuristic (review #39). Null on records from before this field.
+     */
+    val frameNumber: Int? = null,
 )
 
 /**

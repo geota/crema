@@ -130,9 +130,15 @@ pub struct StoredShot {
     /// paying the JSON cost of the full profile body.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_name: Option<String>,
-    /// The profile pulled, if known.
+    /// The profile pulled, if known. `serde(default)` — web-persisted
+    /// rows may omit optional fields entirely (review #39: the core now
+    /// parses shell-persisted rows for the quality analysis, so absence
+    /// tolerance is load-bearing, not just defensive).
+    #[serde(default)]
     pub profile: Option<Profile>,
     /// Why the shot stopped, if an [`AutoStop`](crate::AutoStop) drove it.
+    /// `serde(default)` — same tolerance rationale as `profile`.
+    #[serde(default)]
     pub stop_reason: Option<StopReason>,
     /// Barista journal metadata. `#[serde(default)]` so a legacy shot that
     /// predates this field (or a foreign import that omits it) still loads

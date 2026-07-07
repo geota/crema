@@ -5329,6 +5329,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             setHeadTemp = t.set_head_temp,
                             setGroupPressure = t.set_group_pressure,
                             setGroupFlow = t.set_group_flow,
+                            frameNumber = prev.shotFrame,
                         )
                         val appended = prev.shotTelemetry + sample
                         if (appended.size > SHOT_TELEMETRY_CAP) {

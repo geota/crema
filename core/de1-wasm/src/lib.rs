@@ -1181,6 +1181,20 @@ impl CremaBridge {
             .map_err(|e| e.to_string())
     }
 
+    /// Analyze a persisted shot end-to-end (review #39): parse the
+    /// core-shape `StoredShot` JSON, build the input (real per-sample
+    /// frame markers), run the detector cascade. `"null"` when the shot
+    /// has too few samples (the shell hides the quality card).
+    #[wasm_bindgen(js_name = analyzeStoredShotQuality)]
+    pub fn analyze_stored_shot_quality(&self, shot_json: String) -> Result<String, String> {
+        let shot: de1_domain::StoredShot =
+            serde_json::from_str(&shot_json).map_err(|e| e.to_string())?;
+        match de1_domain::shot_quality::analyze_stored_shot(&shot) {
+            Some(report) => serde_json::to_string(&report).map_err(|e| e.to_string()),
+            None => Ok("null".to_string()),
+        }
+    }
+
     /// Clear the running scale-derived peaks (peak weight + final
     /// weight). The Scale page's "Reset peak" button.
     pub fn reset_scale_peaks(&mut self) {

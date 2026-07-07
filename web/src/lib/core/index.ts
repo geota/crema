@@ -531,6 +531,14 @@ export interface CremaCore {
 	 */
 	analyzeShotQuality(input: ShotQualityInput): Promise<ShotQualityReport>;
 	/**
+	 * Analyze a persisted shot end-to-end: the core builds the analysis
+	 * input from the shot's own samples/profile (exact frame markers) and
+	 * runs the detector cascade. `null` = too few samples to analyze —
+	 * hide the quality card. Pass the store's `StoredShot` (it IS the
+	 * core wire shape).
+	 */
+	analyzeStoredShotQuality(shot: unknown): Promise<ShotQualityReport | null>;
+	/**
 	 * Clear the running scale-derived peaks (peak weight + final weight)
 	 * without disturbing pressure / temperature peaks. The Scale page's
 	 * "Reset peak" button.
@@ -999,6 +1007,14 @@ async function createCore(): Promise<CremaCore> {
 			return JSON.parse(
 				bridge.analyze_shot_quality(JSON.stringify(input))
 			) as ShotQualityReport;
+		},
+		async analyzeStoredShotQuality(shot) {
+			// End-to-end: the CORE builds the analysis input from the
+			// persisted shot (real per-sample frame markers) and runs the
+			// cascade — the shell-side mapper is gone (review #39). The
+			// bridge returns the string "null" for too-few-samples.
+			const raw = bridge.analyzeStoredShotQuality(JSON.stringify(shot));
+			return JSON.parse(raw) as ShotQualityReport | null;
 		},
 		async resetScalePeaks() {
 			bridge.reset_scale_peaks();

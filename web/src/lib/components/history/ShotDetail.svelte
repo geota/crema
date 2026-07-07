@@ -27,7 +27,6 @@
 		exportStoredShotAsV2Json,
 		peaksOf,
 		flatSamplesOf,
-		qualityInputFromShot
 	} from '$lib/history';
 	import { loadCore, type ShotQualityReport } from '$lib/core';
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
@@ -159,7 +158,7 @@
 	 * The core's shot-quality report — the Decenza-port analysis
 	 * (`analyzeShotQuality`) run over the stored curves. `null` while the
 	 * analysis is in flight, when the shot is too short to analyze
-	 * (`qualityInputFromShot` returns `null` under 10 samples), or when
+	 * (the core returns `null` under 10 samples), or when
 	 * the core rejects the input; the quality card simply doesn't render
 	 * in any of those cases. Recomputed on every shot view — nothing is
 	 * persisted. Same stale-resolve guard discipline as `hasCapture`.
@@ -168,10 +167,8 @@
 	$effect(() => {
 		const id = shot.id;
 		quality = null;
-		const input = qualityInputFromShot(shot);
-		if (!input) return;
 		void loadCore()
-			.then((core) => core.analyzeShotQuality(input))
+			.then((core) => core.analyzeStoredShotQuality(shot))
 			.then((report) => {
 				// Guard against a stale resolve landing after the shot changed.
 				if (shot.id === id) quality = report;
