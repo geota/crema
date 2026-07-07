@@ -257,29 +257,18 @@ fun EnlargeableChart(
     // No permanent expand chip and no plot inset: the chip cost the chart
     // 30 dp of height (and before that sat on the y-axis). The whole chart
     // is the tap target; discoverability is a one-shot fading hint that
-    // OVERLAYS the plot instead of resizing it — shown ONCE PER INSTALL
-    // (a marker file in filesDir; deliberately not an AppPrefs field, so
-    // pure onboarding chrome never rides a backup onto a new device).
-    val context = LocalContext.current
-    var showHint by remember { mutableStateOf(false) }
+    // OVERLAYS the plot (below the curves' usual path) instead of resizing
+    // it, shown once per app session then never again.
+    var showHint by remember { mutableStateOf(!chartExpandHintShown) }
     val hintAlpha by animateFloatAsState(
         targetValue = if (showHint) 1f else 0f,
         animationSpec = tween(durationMillis = 450),
         label = "chartHintAlpha",
     )
-    LaunchedEffect(Unit) {
-        val consumed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val marker = java.io.File(context.filesDir, CHART_HINT_MARKER)
-            if (marker.exists()) {
-                true
-            } else {
-                runCatching { marker.createNewFile() }
-                false
-            }
-        }
-        if (!consumed) {
-            showHint = true
-            kotlinx.coroutines.delay(3_500)
+    if (showHint) {
+        LaunchedEffect(Unit) {
+            chartExpandHintShown = true
+            kotlinx.coroutines.delay(2_800)
             showHint = false
         }
     }
@@ -311,8 +300,10 @@ fun EnlargeableChart(
     }
 }
 
-/** Marker-file name for the once-per-install tap-to-expand hint. */
-private const val CHART_HINT_MARKER = "chart_hint_shown"
+/** One-shot, session-scoped teaching flag for the chart's tap-to-expand —
+ *  deliberately NOT persisted: a brief reminder once per launch is cheap,
+ *  and it saves a prefs field for what is pure onboarding chrome. */
+private var chartExpandHintShown = false
 
 /** The fullscreen expanded chart, hosted by the activity root so it survives the
  *  phone's expand-to-landscape rotation (see [LocalChartExpander]). A phone rotates
