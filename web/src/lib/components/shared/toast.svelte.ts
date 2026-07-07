@@ -23,6 +23,8 @@ export interface Toast {
 	readonly kind: ToastKind;
 	/** The message body. */
 	readonly message: string;
+	/** Optional action button (e.g. "Undo") — runs, then dismisses. */
+	readonly action?: { readonly label: string; readonly run: () => void };
 }
 
 let nextId = 0;
@@ -38,9 +40,14 @@ export function dismissToast(id: number): void {
 	items = items.filter((t) => t.id !== id);
 }
 
-function show(message: string, kind: ToastKind, durationMs: number): void {
+function show(
+	message: string,
+	kind: ToastKind,
+	durationMs: number,
+	action?: Toast['action']
+): void {
 	const id = nextId++;
-	items = [...items, { id, kind, message }];
+	items = [...items, { id, kind, message, ...(action ? { action } : {}) }];
 	// `durationMs <= 0` pins the toast until dismissed manually.
 	if (durationMs > 0 && typeof setTimeout !== 'undefined') {
 		setTimeout(() => dismissToast(id), durationMs);
@@ -55,5 +62,9 @@ function show(message: string, kind: ToastKind, durationMs: number): void {
 export const toast = {
 	info: (message: string, durationMs = 4000): void => show(message, 'info', durationMs),
 	success: (message: string, durationMs = 4000): void => show(message, 'success', durationMs),
-	error: (message: string, durationMs = 7000): void => show(message, 'error', durationMs)
+	error: (message: string, durationMs = 7000): void => show(message, 'error', durationMs),
+	/** An info toast with one action button (e.g. "Undo") — lingers longer
+	 *  so the user has time to react; the action runs, then dismisses. */
+	action: (message: string, label: string, run: () => void, durationMs = 8000): void =>
+		show(message, 'info', durationMs, { label, run })
 };

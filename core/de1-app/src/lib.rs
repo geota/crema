@@ -65,6 +65,15 @@ const WATER_LEVEL_MM_CORRECTION: f32 = 5.0;
 /// How long the scale may go without reporting weight before it is considered
 /// stale — the legacy app warns after roughly one second of silence.
 const SCALE_STALE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Untared-cup sanity guard (Decenza `weightprocessor.cpp:242-253`): a
+/// reading heavier than this inside [`UNTARED_CUP_WINDOW`] of first flow
+/// means the cup was placed after the tare (or never tared) — every later
+/// reading carries the cup's mass and the weight stop would fire
+/// nonsensically, so SAW is suppressed for the rest of the shot.
+const UNTARED_CUP_THRESHOLD_G: f32 = 50.0;
+/// How long after first flow the untared-cup guard watches.
+const UNTARED_CUP_WINDOW: Duration = Duration::from_secs(3);
 /// Hot-water volume (ml) requested when a scale is connected: the legacy app
 /// asks for far more water than wanted so the scale's weight-based stop is what
 /// cuts off the pour (`binary.tcl` `return_de1_packed_steam_hotwater_settings`).
@@ -331,6 +340,10 @@ pub struct CremaCore {
     /// saves it after each shot; it survives [`reset`](Self::reset) like
     /// the scale registration.
     saw_model: SawLearningModel,
+    /// Latched when the untared-cup guard trips (see
+    /// [`UNTARED_CUP_THRESHOLD_G`]): SAW stays suppressed for the rest of
+    /// the shot. Cleared on the next `ShotEvent::Started`.
+    untared_cup_tripped: bool,
     /// Timestamp of the most recent scale-weight reading, for the lost-scale
     /// watchdog. `None` until the connected scale reports once.
     last_scale_weight: Option<Duration>,
@@ -500,6 +513,7 @@ impl CremaCore {
             max_shot_duration: None,
             auto_stop: None,
             saw_model: SawLearningModel::default(),
+            untared_cup_tripped: false,
             last_scale_weight: None,
             last_scale_estimate: None,
             scale_stale_reported: false,
@@ -781,7 +795,10 @@ impl CremaCore {
     /// SAW is additionally gated on `stop_on_weight && scale.is_some()`;
     /// SAV and max-time are independent of the scale.
     fn effective_stop_targets(&self) -> Option<StopTargets> {
-        let weight = if self.stop_on_weight && !self.weight_target_disabled && self.scale.is_some()
+        let weight = if self.stop_on_weight
+            && !self.weight_target_disabled
+            && !self.untared_cup_tripped
+            && self.scale.is_some()
         {
             self.effective_target_weight()
         } else {
@@ -2497,6 +2514,26 @@ impl CremaCore {
             device_flow_smoothing: reading.flow_smoothing,
             device_auto_stop: reading.auto_stop,
         });
+        // Untared-cup sanity guard (Decenza weightprocessor.cpp:242-253):
+        // an implausibly heavy reading right after first flow means the cup
+        // wasn't tared — suppress the weight stop for the rest of the shot
+        // and tell the shell so the user knows why SAW went quiet. The
+        // auto-tare settle gate runs earlier and forces readings to 0, so a
+        // successfully-tared cup can't trip this.
+        if !self.untared_cup_tripped
+            && let Some(flow_started) = self.flow_started
+            && now.saturating_sub(flow_started) < UNTARED_CUP_WINDOW
+            && reading.weight_g > UNTARED_CUP_THRESHOLD_G
+            && self
+                .effective_stop_targets()
+                .is_some_and(|t| t.weight.is_some())
+        {
+            self.untared_cup_tripped = true;
+            self.refresh_auto_stop_targets();
+            out.events.push(Event::SawSuppressedUntaredCup {
+                weight_g: reading.weight_g,
+            });
+        }
         let reason = self
             .auto_stop
             .as_mut()
@@ -2925,6 +2962,8 @@ impl CremaCore {
                 // explicit reset keeps the invariant independent of call
                 // order.)
                 self.shot_metrics.reset();
+                // Re-arm the untared-cup guard for the fresh shot.
+                self.untared_cup_tripped = false;
                 // Auto-tare the connected scale so the cup starts from zero,
                 // mirroring the legacy app's tare-at-shot-start behaviour —
                 // gated on the latched user preference (default true). The
@@ -4891,6 +4930,69 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn an_untared_cup_suppresses_saw_for_the_shot() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        // 60 g two seconds after first flow (past the tare-settle gate,
+        // inside the 3 s window) — the cup landed after the tare.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(6_000), 2_000);
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::SawSuppressedUntaredCup { .. }))
+        );
+        // A target-crossing reading past the arming delay must NOT stop the
+        // shot — the weight leg is suppressed until the next shot.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
+        assert!(!out.events.iter().any(|e| matches!(
+            e,
+            Event::StopTriggered {
+                reason: StopReason::Weight
+            }
+        )));
+    }
+
+    #[test]
+    fn a_heavy_reading_after_the_window_does_not_trip_the_guard() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        // 60 g at 4 s — outside the 3 s window: a legitimately heavy pour,
+        // not an untared cup.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(6_000), 4_000);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::SawSuppressedUntaredCup { .. }))
+        );
+        // SAW still works: past the arming delay the target crossing stops.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(6_000), 6_000);
+        assert!(out.events.contains(&Event::StopTriggered {
+            reason: StopReason::Weight,
+        }));
+    }
+
+    #[test]
+    fn the_untared_guard_rearms_on_the_next_shot() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(6_000), 2_000);
+        // Shot ends…
+        core.on_notification(Source::De1State, &[2, 0], 8_000);
+        // …and the next shot's SAW works again.
+        core.on_notification(Source::De1State, &[4, 5], 10_000);
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 16_000);
+        assert!(out.events.contains(&Event::StopTriggered {
+            reason: StopReason::Weight,
+        }));
     }
 
     #[test]

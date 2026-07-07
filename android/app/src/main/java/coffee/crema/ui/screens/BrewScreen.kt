@@ -269,6 +269,7 @@ fun BrewScreen(
                 // Gated start: upload the active profile, await completion, guard,
                 // then Espresso (vm.startShot). Stop is a direct Idle request.
                 onCoffee = { if (espressoActive) vm.stopShot() else vm.startShot() },
+                onBumpTarget = vm::bumpShotTargetWeight,
             )
             if (quickOpen) {
                 QuickControlsSheet(
@@ -1451,6 +1452,8 @@ private fun BrewFoot(
     onHotWater: () -> Unit,
     onFlush: () -> Unit,
     onCoffee: () -> Unit,
+    /** "+10 g" mid-shot yield bump — shown only while espresso pours. */
+    onBumpTarget: () -> Unit,
 ) {
     Column {
         Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
@@ -1491,6 +1494,12 @@ private fun BrewFoot(
                 ModeChip("Steam", steamSub, "cloud", CremaTheme.telemetry.modeSteam, active = steaming, enabled = connected, onTap = onSteam)
                 ModeChip("Hot water", waterSub, "drop", CremaTheme.telemetry.modeWater, active = dispensing, enabled = connected, onTap = onHotWater)
                 ModeChip("Flush", flushSub, "sparkle", CremaTheme.telemetry.modeFlush, active = flushing, enabled = connected, onTap = onFlush)
+                // Mid-shot salvage: raise the SAW target while the shot pours
+                // (Decenza EspressoPage.qml:989-1007) — the armed stop
+                // re-targets immediately.
+                if (espressoActive) {
+                    ModeChip("+10 g", "raise target", "plus", CremaTheme.telemetry.weight, active = false, enabled = true, onTap = onBumpTarget)
+                }
                 CoffeeButton(running = espressoActive, uploading = ui.profileUploading, enabled = connected, onClick = onCoffee)
             }
         }

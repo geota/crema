@@ -20,6 +20,7 @@ import { Effect } from 'effect';
 import type { CaptureEntry } from '$lib/capture';
 import { getCaptureStore } from '$lib/capture';
 import { getBeanStore } from '$lib/bean';
+import { toast } from '$lib/components/shared/toast.svelte';
 import { promptBagEmpty } from '$lib/bean/bag-empty-prompt';
 import { getProfileStore, toCoreProfile } from '$lib/profiles';
 import { getActiveShotStore, type ActiveShotData } from '$lib/state/active-shot.svelte';
@@ -101,6 +102,46 @@ export function commitShotCompletion(
 	ctx: ShotCompletionContext
 ): void {
 	const activeShot = getActiveShotStore().current;
+	// Aborted-shot auto-discard (Decenza abortedshotclassifier.h:19-25,
+	// validated over 882 shots): under 10 s of flow AND under 5 g in the cup
+	// is an aborted pull, not a shot — it would only pollute history and
+	// Visualizer. Held behind an undo toast instead of a modal. Live side
+	// effects still run (the dose was physically ground, so the bean debit
+	// belongs); only the history row + Visualizer push + capture slice wait
+	// on the undo.
+	const aborted =
+		event.content.duration < 10_000 && (event.content.final_weight ?? 0) < 5;
+	if (aborted) {
+		if (activeShot?.source !== 'replay') {
+			runLiveOnlySideEffects(event, activeShot, ctx.snapshot, ctx.fireWebhook);
+		}
+		// Freeze everything the undo needs — by the time the user taps it
+		// the active-shot store is cleared and a new shot may be underway.
+		const frozenShot = activeShot;
+		const frozenSnapshot = ctx.snapshot;
+		const frozenCtx = {
+			runtime: ctx.runtime,
+			shotStartedAtMs: ctx.shotStartedAtMs,
+			lastNotificationAtMs: ctx.lastNotificationAtMs,
+			sliceJsonl: ctx.sliceJsonl
+		};
+		toast.action(
+			`Aborted shot discarded (${(event.content.duration / 1000).toFixed(1)} s)`,
+			'Undo',
+			() => {
+				const record = recordShotHistory(event, frozenShot, frozenSnapshot);
+				if (!record) return;
+				if (frozenCtx.runtime) frozenCtx.runtime.runFork(pushShotToVisualizer(record.id));
+				if (frozenCtx.shotStartedAtMs !== null) {
+					const fromMs = frozenCtx.shotStartedAtMs - CAPTURE_LEAD_MS;
+					const toMs = frozenCtx.lastNotificationAtMs ?? performance.now();
+					void persistCaptureSlice(record.id, fromMs, toMs, frozenCtx.sliceJsonl);
+				}
+			}
+		);
+		getActiveShotStore().clear();
+		return;
+	}
 	const record = recordShotHistory(event, activeShot, ctx.snapshot);
 
 	if (record) {

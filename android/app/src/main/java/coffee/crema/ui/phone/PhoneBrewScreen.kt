@@ -162,7 +162,7 @@ fun PhoneBrewScreen(
             }
 
             if (running) {
-                RunningBody(ui = ui, active = active, modifier = Modifier.weight(1f))
+                RunningBody(ui = ui, active = active, onBumpTarget = vm::bumpShotTargetWeight, modifier = Modifier.weight(1f))
             } else {
                 RestingBody(
                     ui = ui,
@@ -498,7 +498,7 @@ private fun MiniProfileSpark(profile: CremaProfile, active: Boolean, modifier: M
 /* ────────────────────────── RUNNING (BrewRefinedA2) ─────────────────────── */
 
 @Composable
-private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifier = Modifier) {
+private fun RunningBody(ui: MainUiState, active: CremaProfile?, onBumpTarget: () -> Unit, modifier: Modifier = Modifier) {
     val tel = CremaTheme.telemetry
     Column(modifier, verticalArrangement = Arrangement.spacedBy(9.dp)) {
         // Compact timer + yield bar.
@@ -553,12 +553,28 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Eyebrow("Yield · ${formatRatio(dose, weight)}")
-                        val wNow = convertWeight(weight, ui.weightUnit)
-                        val wTarget = convertWeight(target, ui.weightUnit)
-                        Text(
-                            "${wNow.value} / ${wTarget.value} ${wNow.unit}",
-                            style = TextStyle(fontFamily = JetBrainsMono, fontSize = 14.sp, fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum"),
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            val wNow = convertWeight(weight, ui.weightUnit)
+                            val wTarget = convertWeight(target, ui.weightUnit)
+                            Text(
+                                "${wNow.value} / ${wTarget.value} ${wNow.unit}",
+                                style = TextStyle(fontFamily = JetBrainsMono, fontSize = 14.sp, fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum"),
+                            )
+                            // Mid-shot salvage: raise the SAW target while it
+                            // pours (Decenza EspressoPage.qml:989-1007).
+                            Surface(
+                                onClick = onBumpTarget,
+                                shape = RoundedCornerShape(999.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            ) {
+                                Text(
+                                    "+10 g",
+                                    Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
                     }
                     Box(
                         Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(999.dp))

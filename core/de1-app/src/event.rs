@@ -262,6 +262,16 @@ pub enum Event {
     /// for roughly a second. Emitted once per stale episode; a fresh reading
     /// re-arms it.
     ScaleStale,
+    /// Stop-at-weight was suppressed for the rest of this shot: within the
+    /// first seconds of flow the scale showed an implausibly heavy reading —
+    /// the cup was placed after the tare (or never tared), so every reading
+    /// carries the cup's mass and the weight stop would fire nonsensically
+    /// (Decenza `weightprocessor.cpp:242-253`). Volume / max-time stops
+    /// still bound the shot. The shell should surface this as a warning.
+    SawSuppressedUntaredCup {
+        /// The offending reading, grams.
+        weight_g: f32,
+    },
     /// The user pressed a button on the scale itself (today only the
     /// Skale II's button characteristic). Surfaced for the shells to log or
     /// map to an action; de1app likewise subscribes and logs the press

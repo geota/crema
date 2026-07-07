@@ -1511,6 +1511,18 @@
 					/>
 				</div>
 				<span class="mc-foot-rule" aria-hidden="true"></span>
+				{#if running}
+					<!-- Mid-shot salvage (Decenza EspressoPage.qml:989-1007):
+					     raise the SAW target while the shot pours — the yield
+					     push re-targets the armed auto-stop immediately. -->
+					<button
+						type="button"
+						class="crema-bump-btn"
+						onclick={() => params.set('yield', params.current.yield + 10)}
+					>
+						+10 g
+					</button>
+				{/if}
 				<button
 					class="crema-bigbtn"
 					class:running
@@ -1570,6 +1582,21 @@
 </div>
 
 <style>
+	.crema-bump-btn {
+		border: 1px solid rgba(var(--tint-rgb), 0.25);
+		background: transparent;
+		color: var(--fg-1);
+		font: inherit;
+		font-weight: 600;
+		font-size: 0.85rem;
+		padding: 8px 14px;
+		border-radius: 999px;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+	.crema-bump-btn:hover {
+		background: rgba(var(--tint-rgb), 0.1);
+	}
 	/* The pinned moment renders as a vertical line on the chart itself
 	   (drawn by LiveChart's marker plugin); no chrome on the wrapper. */
 	.crema-chart {

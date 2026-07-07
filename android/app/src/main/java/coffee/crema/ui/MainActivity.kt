@@ -33,8 +33,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -236,6 +238,20 @@ class MainActivity : ComponentActivity() {
                         // serialises concurrent shows internally.
                         viewModel.consumeUserMessage()
                         snackbarScope.launch { snackbarHostState.showSnackbar(msg) }
+                    }
+                }
+                // Aborted-shot discard: an ACTION snackbar (Undo) — separate
+                // from the plain userMessages queue, which has no action slot.
+                LaunchedEffect(ui.discardToastMessage) {
+                    val msg = ui.discardToastMessage ?: return@LaunchedEffect
+                    snackbarScope.launch {
+                        val result = snackbarHostState.showSnackbar(
+                            message = msg,
+                            actionLabel = "Undo",
+                            duration = SnackbarDuration.Long,
+                        )
+                        if (result == SnackbarResult.ActionPerformed) viewModel.undoDiscardShot()
+                        else viewModel.consumeDiscardToast()
                     }
                 }
                 // "Keep screen on" (Settings → Display): hold FLAG_KEEP_SCREEN_ON

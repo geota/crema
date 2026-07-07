@@ -458,6 +458,13 @@ export class CremaApp {
 					.then((blob) => writeJson(SAW_MODEL_KEY, blob))
 					.catch(() => undefined);
 			}
+			if (event.type === 'SawSuppressedUntaredCup') {
+				// Untared-cup guard (Decenza weightprocessor.cpp:242-253) —
+				// tell the user WHY stop-at-weight went quiet this shot.
+				toast.info(
+					`Stop-at-weight off for this shot — the scale wasn't tared (${Math.round(event.content.weight_g)} g on it)`
+				);
+			}
 			if (event.type === 'StopTriggered') {
 				// Attribute the auto-stop so the user learns WHERE the control
 				// lives — an unexplained early stop reads as a bug ("water

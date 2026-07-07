@@ -898,6 +898,14 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				scaleWeight: null,
 				eventLog: appendLog(snapshot.eventLog, 'Scale stale')
 			};
+		case 'SawSuppressedUntaredCup':
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`SAW suppressed — untared cup (${Math.round(event.content.weight_g)} g)`
+				)
+			};
 		case 'ScaleButtonPressed':
 			// Logged like de1app (bluetooth.tcl:2825-2828) — no hard-wired
 			// action yet; the event is the hook for a future mapping.

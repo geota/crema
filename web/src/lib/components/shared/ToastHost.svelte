@@ -21,6 +21,18 @@
 		<div class={['toast', `toast-${t.kind}`]} role={t.kind === 'error' ? 'alert' : 'status'}>
 			<Icon name={ICON[t.kind]} aria-hidden="true" />
 			<span class="toast-msg">{t.message}</span>
+			{#if t.action}
+				<button
+					type="button"
+					class="toast-action"
+					onclick={() => {
+						t.action?.run();
+						dismissToast(t.id);
+					}}
+				>
+					{t.action.label}
+				</button>
+			{/if}
 			<button
 				type="button"
 				class="toast-close"
@@ -86,6 +98,21 @@
 	}
 	.toast-info > :global(svg:first-child) {
 		color: var(--fg-accent);
+	}
+	.toast-action {
+		flex: none;
+		border: 1px solid rgba(var(--tint-rgb), 0.25);
+		background: transparent;
+		color: var(--fg-1);
+		font: inherit;
+		font-weight: 600;
+		font-size: 0.85em;
+		padding: 3px 10px;
+		border-radius: 999px;
+		cursor: pointer;
+	}
+	.toast-action:hover {
+		background: rgba(var(--tint-rgb), 0.1);
 	}
 	.toast-close {
 		flex-shrink: 0;

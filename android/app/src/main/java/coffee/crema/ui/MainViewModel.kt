@@ -387,6 +387,9 @@ data class MainUiState(
     val lineFreqOverride: Float = 0f,
     /** Summary of the last completed shot (Last-shot card), or null. */
     val lastShot: LastShot? = null,
+    /** Non-null while an aborted-shot discard can be undone — the message
+     *  MainActivity shows in an action snackbar ("Undo"). */
+    val discardToastMessage: String? = null,
     /**
      * Built-in profiles from the core (`builtinCremaProfiles()`), loaded once at
      * startup. The Brew header picker chooses from these until the profile
@@ -873,6 +876,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Learned SAW drip-model persistence — an opaque core-owned JSON blob. */
     private val sawModelStore = SawModelStore(app)
 
+    /** The aborted shot held for the undo window (not yet in history). */
+    private var discardedShot: StoredShot? = null
+
     /** Custom-profile persistence — a JSON file in filesDir. */
     private val customProfileStore = CustomProfileStore(app, json)
 
@@ -1318,6 +1324,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Apply a Quick-Controls brew override (dose/yield/brew-temp). Transient —
      *  not saved to the profile; baked into the next shot's upload by [startShot]. */
+    /**
+     * "+10 g" mid-shot bump (Decenza `EspressoPage.qml:989-1007`): raise the
+     * shot's yield target while it pours. Routed through the QC override so
+     * the yield bar's target updates live AND the stop targets re-push — the
+     * armed AutoStop re-targets immediately (the mid-shot refresh from #15).
+     */
+    fun bumpShotTargetWeight(byG: Double = 10.0) {
+        val (dose, yieldOut, brewTemp) = _ui.value.effectiveBrew()
+        quickAdjustBrew(dose, yieldOut + byG, brewTemp, _ui.value.brewParams?.preinf)
+    }
+
     fun quickAdjustBrew(dose: Double, yieldOut: Double, brewTemp: Double, preinf: Double? = null) {
         val prev = _ui.value.brewParams
         _ui.update { it.copy(brewParams = BrewParams(dose, yieldOut, brewTemp, preinf)) }
@@ -4172,17 +4189,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // ShotStarted); downsample it for the detail chart.
             samples = downsampleForStorage(s.shotTelemetry),
         )
-        val next = (listOf(shot) + s.history).take(HistoryStore.MAX_SHOTS)
-        _ui.update { it.copy(history = next) }
-        viewModelScope.launch { historyStore.save(next) }
+        // Aborted-shot auto-discard (Decenza abortedshotclassifier.h:19-25,
+        // validated over 882 shots): under 10 s of flow AND under 5 g in the
+        // cup is an aborted pull, not a shot — it would only pollute history
+        // and Visualizer. Held for an undo toast instead of a modal. The
+        // bean debit below still runs (the dose was physically ground) and
+        // the SAW model still saves (its own gates reject bad samples).
+        val aborted = durationMs < 10_000 && (yieldG ?: 0f) < 5f
+        if (aborted) {
+            discardedShot = shot
+            _ui.update { it.copy(
+                // The Last-shot card would point at a shot history doesn't
+                // hold — clear it for an aborted pull.
+                lastShot = null,
+                discardToastMessage = "Aborted shot discarded (${"%.1f".format(durationMs / 1000f)} s)",
+            ) }
+            appendLog("Shot discarded as aborted (<10 s, <5 g)")
+        } else {
+            val next = (listOf(shot) + s.history).take(HistoryStore.MAX_SHOTS)
+            _ui.update { it.copy(history = next) }
+            viewModelScope.launch { historyStore.save(next) }
+            // Auto-sync: push the fresh shot to Visualizer when armed + signed in.
+            visualizer.maybeAutoUpload(shot)
+        }
         // Persist the learned SAW drip model — a weight-stopped shot just
         // added a training sample in the core.
         viewModelScope.launch {
             runCatching { sawModelStore.save(bridge.sawModelJson()) }
                 .onFailure { appendLog("SAW model save failed: ${it.message}") }
         }
-        // Auto-sync: push the fresh shot to Visualizer when armed + signed in.
-        visualizer.maybeAutoUpload(shot)
 
         // Burn this shot's dose down from its bag's remaining weight — live
         // shots only (a replay-demo must never touch real inventory). The core
@@ -4588,6 +4623,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * "6 + a tooth" with the dial number is deliberate: Save is an explicit
      * action and the field keeps its reference-dial meaning.
      */
+    /** Undo an aborted-shot discard: persist the held shot after all. */
+    fun undoDiscardShot() {
+        val shot = discardedShot ?: return
+        discardedShot = null
+        val next = (listOf(shot) + _ui.value.history).take(HistoryStore.MAX_SHOTS)
+        _ui.update { it.copy(
+            history = next,
+            discardToastMessage = null,
+            lastShot = LastShot(
+                durationMs = shot.durationMs,
+                yieldG = shot.yieldG,
+                peakPressure = shot.peakPressure,
+                peakTemp = shot.peakTemp,
+                completedAtMs = shot.completedAtMs,
+                id = shot.id,
+            ),
+        ) }
+        viewModelScope.launch { historyStore.save(next) }
+        visualizer.maybeAutoUpload(shot)
+    }
+
+    /** The discard snackbar timed out / was dismissed — drop the held shot. */
+    fun consumeDiscardToast() {
+        discardedShot = null
+        _ui.update { it.copy(discardToastMessage = null) }
+    }
+
     fun saveQuickGrindToBean(): Boolean {
         val dial = _ui.value.qcGrind ?: return false
         val bean = _ui.value.beans.firstOrNull { it.id == _ui.value.activeBeanId } ?: return false
@@ -5231,6 +5293,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // Also project into UI state: the mode chips + steam / hot-water
                 // timers read the machine's own targets (web de1ShotSettings parity).
                 _ui.update { it.copy(de1ShotSettings = event.content) }
+            }
+            is Event.SawSuppressedUntaredCup -> {
+                val w = "%.0f".format(event.content.weight_g)
+                appendLog("SAW suppressed — untared cup ($w g)")
+                notifyUser("Stop-at-weight off for this shot — the scale wasn\u2019t tared ($w g on it)")
             }
             is Event.StopTriggered -> {
                 appendLog("Auto-stop: ${event.content.reason.string}")
