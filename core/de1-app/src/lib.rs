@@ -2995,8 +2995,7 @@ impl CremaCore {
                     (stop_capture, final_weight)
                 {
                     let profile = self.last_active_profile_title.clone().unwrap_or_default();
-                    let scale_label =
-                        self.scale.as_ref().map_or("", |s| s.label()).to_owned();
+                    let scale_label = self.scale.as_ref().map_or("", |s| s.label()).to_owned();
                     let drip = f64::from((final_g - weight_at_stop).max(0.0));
                     let overshoot = f64::from(final_g - target);
                     self.saw_model.add_learning_point(
