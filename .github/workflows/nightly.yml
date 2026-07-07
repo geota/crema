@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0 # full history + tags: the versionCode is derived from the last release
           fetch-tags: true
@@ -62,13 +62,13 @@ jobs:
           echo "Nightly $NAME (versionCode $CODE) — base $LAST + $C commit(s)"
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install NDK + compileSdk platform (pinned to build.gradle.kts)
         run: sdkmanager "ndk;30.0.14904198" "platforms;android-37.0"
@@ -85,7 +85,7 @@ jobs:
           shared-key: rust-android
 
       - name: Set up Gradle (with cache)
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Decode release keystore (if configured)
         env:
@@ -142,7 +142,7 @@ jobs:
         run: gh release delete nightly --yes --cleanup-tag || true
 
       - name: Publish rolling nightly prerelease
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: nightly
           target_commitish: ${{ github.sha }}
