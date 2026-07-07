@@ -3568,8 +3568,9 @@ mod tests {
     #[allow(clippy::cast_possible_truncation)]
     fn bookoo_packet(centigrams: u32) -> [u8; 10] {
         [
-            0,
-            0,
+            // 03 0b weight header — required since the review-#32 gate.
+            0x03,
+            0x0B,
             0,
             0,
             0,

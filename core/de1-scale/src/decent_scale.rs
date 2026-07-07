@@ -26,6 +26,14 @@ pub fn parse_weight(data: &[u8]) -> Option<f32> {
     if data[1] != 0xCE && data[1] != 0xCA {
         return None;
     }
+    // The packet carries a trailing XOR of the first six bytes — the same
+    // checksum the outgoing `command` builder produces. Verify it before
+    // trusting the value: a corrupted frame whose type byte still reads as
+    // weight must not inject a spurious spike into stop-at-weight
+    // (review #32).
+    if data.len() >= 7 && data[..6].iter().fold(0u8, |a, &b| a ^ b) != data[6] {
+        return None;
+    }
     // Weight is a big-endian signed 16-bit value in units of 0.1 g.
     let raw = i16::from_be_bytes([data[2], data[3]]);
     Some(f32::from(raw) / 10.0)
@@ -293,14 +301,20 @@ mod tests {
     #[test]
     fn decodes_a_weight_packet_to_grams() {
         // Type 0xCE, weight 0x00C8 = 200 -> 20.0 g.
-        assert_eq!(parse_weight(&[0x03, 0xCE, 0x00, 0xC8, 0, 0, 0]), Some(20.0));
+        // Trailing byte = XOR of the first six (review #32).
+        assert_eq!(
+            parse_weight(&[0x03, 0xCE, 0x00, 0xC8, 0, 0, 0x05]),
+            Some(20.0)
+        );
+        // A corrupted frame with a stale checksum is rejected, not decoded.
+        assert_eq!(parse_weight(&[0x03, 0xCE, 0x00, 0xC8, 0, 0, 0x00]), None);
     }
 
     #[test]
     fn decodes_a_negative_weight() {
         // 0xFF38 as a signed 16-bit value is -200 -> -20.0 g.
         assert_eq!(
-            parse_weight(&[0x03, 0xCA, 0xFF, 0x38, 0, 0, 0]),
+            parse_weight(&[0x03, 0xCA, 0xFF, 0x38, 0, 0, 0x0E]),
             Some(-20.0)
         );
     }

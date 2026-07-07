@@ -1633,7 +1633,8 @@ mod tests {
     #[test]
     fn parse_weight_dispatches_to_the_right_codec() {
         let mut bookoo = Scale::from_label("Bookoo").unwrap();
-        let packet = [0, 0, 0, 0, 0, 0, b'+', 0x00, 0x07, 0xD0];
+        // Header 03 0b required since the review-#32 header gate.
+        let packet = [0x03, 0x0B, 0, 0, 0, 0, b'+', 0x00, 0x07, 0xD0];
         assert_eq!(bookoo.parse_weight(&packet), Some(20.0));
     }
 
@@ -1698,7 +1699,7 @@ mod tests {
     fn parse_reading_leaves_flow_and_timer_none_for_a_weight_only_scale() {
         let mut decent = Scale::from_label("Decent Scale").unwrap();
         // Decent weight frame: type byte 0xCE, weight 0x07D0 = 2000 -> 200.0 g.
-        let frame = [0x03, 0xCE, 0x07, 0xD0, 0x00, 0x00, 0x00];
+        let frame = [0x03, 0xCE, 0x07, 0xD0, 0x00, 0x00, 0x1A];
         let reading = decent.parse_reading(&frame).expect("a weight packet");
         assert_eq!(reading.weight_g, 200.0);
         assert_eq!(reading.flow_g_per_s, None);

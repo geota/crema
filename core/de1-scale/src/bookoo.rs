@@ -392,6 +392,12 @@ pub struct BookooPacket {
 /// Kept for callers that only need the weight; [`parse_packet`] decodes the
 /// whole notification.
 pub fn parse_weight(data: &[u8]) -> Option<f32> {
+    // Self-protecting (review #32): the command channel's config replies
+    // are ALSO right-length with a valid XOR — only the 03 0b header makes
+    // a frame a weight frame; don't rely on the caller's source routing.
+    if !matches_weight_header(data) {
+        return None;
+    }
     if data.len() < WEIGHT_PACKET_LEN {
         return None;
     }
@@ -421,6 +427,10 @@ pub fn matches_weight_header(bytes: &[u8]) -> bool {
 /// [`BookooPacket::checksum_ok`] rather than rejecting the packet, so a caller
 /// can still surface the (possibly corrupt) reading and decide what to do.
 pub fn parse_packet(data: &[u8]) -> Option<BookooPacket> {
+    // Same header gate as parse_weight (review #32).
+    if !matches_weight_header(data) {
+        return None;
+    }
     if data.len() != FULL_PACKET_LEN {
         return None;
     }
@@ -609,14 +619,15 @@ mod tests {
 
     #[test]
     fn decodes_a_big_endian_24bit_weight_to_grams() {
-        // Bytes 7–9 = 0x0007D0 = 2000 -> 20.00 g; sign byte '+'.
-        let packet = [0, 0, 0, 0, 0, 0, b'+', 0x00, 0x07, 0xD0];
+        // Bytes 7–9 = 0x0007D0 = 2000 -> 20.00 g; sign byte '+'. Header
+        // 03 0b — the parser now rejects headerless frames (review #32).
+        let packet = [0x03, 0x0B, 0, 0, 0, 0, b'+', 0x00, 0x07, 0xD0];
         assert_eq!(parse_weight(&packet), Some(20.0));
     }
 
     #[test]
     fn decodes_a_negative_weight() {
-        let packet = [0, 0, 0, 0, 0, 0, b'-', 0x00, 0x07, 0xD0];
+        let packet = [0x03, 0x0B, 0, 0, 0, 0, b'-', 0x00, 0x07, 0xD0];
         assert_eq!(parse_weight(&packet), Some(-20.0));
     }
 

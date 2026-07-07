@@ -57,6 +57,11 @@ pub fn u8p4_decode(raw: u8) -> f32 {
 
 /// Encode `U8P4`. Input is clamped to `0.0..=`[`U8P4_MAX`].
 pub fn u8p4_encode(value: f32) -> u8 {
+    // NaN slips through clamp and saturates to 0 via `as` — make the zero
+    // fallback explicit rather than accidental (review #31).
+    if value.is_nan() {
+        return 0;
+    }
     (value.clamp(0.0, U8P4_MAX) * 16.0).round() as u8
 }
 
@@ -69,6 +74,9 @@ pub fn u8p1_decode(raw: u8) -> f32 {
 
 /// Encode `U8P1`. Input is clamped to `0.0..=`[`U8P1_MAX`].
 pub fn u8p1_encode(value: f32) -> u8 {
+    if value.is_nan() {
+        return 0;
+    }
     (value.clamp(0.0, U8P1_MAX) * 2.0).round() as u8
 }
 
@@ -81,6 +89,9 @@ pub fn u8p0_decode(raw: u8) -> f32 {
 
 /// Encode `U8P0`. Input is clamped to `0.0..=`[`U8P0_MAX`].
 pub fn u8p0_encode(value: f32) -> u8 {
+    if value.is_nan() {
+        return 0;
+    }
     value.clamp(0.0, U8P0_MAX).round() as u8
 }
 
@@ -93,6 +104,9 @@ pub fn u16p8_decode(raw: u16) -> f32 {
 
 /// Encode `U16P8`. Input is clamped to `0.0..=`[`U16P8_MAX`].
 pub fn u16p8_encode(value: f32) -> u16 {
+    if value.is_nan() {
+        return 0;
+    }
     (value.clamp(0.0, U16P8_MAX) * 256.0).round() as u16
 }
 
@@ -105,6 +119,9 @@ pub fn s32p16_decode(raw: i32) -> f32 {
 
 /// Encode `S32P16`. Input is clamped to [`S32P16_MIN`]`..=`[`S32P16_MAX`].
 pub fn s32p16_encode(value: f32) -> i32 {
+    if value.is_nan() {
+        return 0;
+    }
     (value.clamp(S32P16_MIN, S32P16_MAX) * 65536.0).round() as i32
 }
 
@@ -125,6 +142,9 @@ pub fn f8_1_7_decode(raw: u8) -> f32 {
 /// sub-second precision (the round-trip is intentionally lossy there). Input is
 /// clamped to `0.0..=127.0`.
 pub fn f8_1_7_encode(value: f32) -> u8 {
+    if value.is_nan() {
+        return 0;
+    }
     let v = value.clamp(0.0, 127.0);
     if v >= 12.75 {
         (v.round() as u8) | 0x80
@@ -148,6 +168,11 @@ pub fn u10p0_enabled(raw: u16) -> bool {
 
 /// Encode a `U10P0` value (0–1023) with the "enabled" flag set.
 pub fn u10p0_encode(value: f32) -> u16 {
+    // NaN → same wire bytes as 0.0 (flag set, value 0) — explicit, like
+    // the other encoders (review #31).
+    if value.is_nan() {
+        return 0x0400;
+    }
     (value.clamp(0.0, 1023.0).round() as u16 & 0x03FF) | 0x0400
 }
 
@@ -361,6 +386,7 @@ mod tests {
         assert_eq!(u8p4_encode(f32::NAN), 0);
         assert_eq!(u8p1_encode(f32::NAN), 0);
         assert_eq!(u8p0_encode(f32::NAN), 0);
-        assert_eq!(u10p0_encode(f32::NAN), 0);
+        // u10p0 always carries the enabled flag — NaN encodes like 0.0.
+        assert_eq!(u10p0_encode(f32::NAN), u10p0_encode(0.0));
     }
 }

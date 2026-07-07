@@ -138,7 +138,16 @@ impl AcaiaDecoder {
             match scan(&self.buffer) {
                 Scan::NeedMoreData => return None,
                 Scan::NoMessage => {
-                    self.buffer.clear();
+                    // A lone trailing 0xEF may be the first half of an
+                    // EF DD header split at the notification boundary —
+                    // keep it so the next weight frame isn't dropped
+                    // (review #32).
+                    if self.buffer.last() == Some(&0xEF) {
+                        let keep_from = self.buffer.len() - 1;
+                        self.buffer.drain(..keep_from);
+                    } else {
+                        self.buffer.clear();
+                    }
                     return None;
                 }
                 Scan::Weight {
@@ -265,6 +274,21 @@ mod tests {
         let mut d = AcaiaDecoder::new();
         assert_eq!(d.push(&frame[..4]), None); // partial — need more
         assert_eq!(d.push(&frame[4..]), Some(18.0)); // completed
+    }
+
+    #[test]
+    fn a_header_split_after_an_unknown_message_is_not_dropped() {
+        // Review #32: an unknown message followed by the next frame's
+        // header splitting exactly at the notification boundary (…EF | DD…)
+        // used to lose the trailing 0xEF — and with it the weight frame.
+        let mut d = AcaiaDecoder::new();
+        // A complete unknown-type message (msgType 5) then a lone 0xEF.
+        let mut first = vec![0xEF, 0xDD, 0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        first.push(0xEF);
+        assert_eq!(d.push(&first), None);
+        // The rest of a real weight frame follows in the next notification.
+        let frame = weight_frame(180, 0);
+        assert_eq!(d.push(&frame[1..]), Some(18.0));
     }
 
     #[test]
