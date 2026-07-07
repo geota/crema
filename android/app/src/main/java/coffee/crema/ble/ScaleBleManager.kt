@@ -210,7 +210,7 @@ class ScaleBleManager(
      */
     fun markScanning() {
         _state.value = State.SCANNING
-        onStatus("Scanning for a Bookoo scale…")
+        onStatus("Scanning for a scale…")
     }
 
     /**
