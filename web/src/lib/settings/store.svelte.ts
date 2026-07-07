@@ -118,6 +118,14 @@ export interface Settings {
 	 */
 	stopOnWeight: boolean;
 	/**
+	 * Opt-in: arm the profile's max-volume stop even while a scale is
+	 * connected. Default off — volume is a no-scale fallback, never a
+	 * competitor to stop-at-weight (reference-app consensus; the DE1's
+	 * own tail volume stop is never uploaded either way). Pushed to the
+	 * core via `setVolumeStopWithScale`.
+	 */
+	volumeStopWithScale: boolean;
+	/**
 	 * Global maximum shot duration, seconds — a safety guardrail when
 	 * neither SAW nor SAV is configured. `0` means "no max." Default
 	 * 60 s (legacy `espresso_max_time` default). Pushed to the core via
@@ -275,6 +283,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	steamEcoMode: false,
 	autoTareOnShotStart: true,
 	stopOnWeight: true,
+	volumeStopWithScale: false,
 	maxShotDurationS: 0,
 
 	telemetryRateHz: 50,
@@ -369,6 +378,7 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		maxShotDurationS: s.maxShotDurationS,
 		autoTare: s.autoTareOnShotStart,
 		stopOnWeight: s.stopOnWeight,
+		volumeStopWithScale: s.volumeStopWithScale,
 		steamEco: s.steamEcoMode,
 		preFlush: s.groupFlushBeforeShot,
 		steamPurge: s.autoPurgeAfterSteam,
@@ -409,6 +419,9 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		maxShotDurationS: c.maxShotDurationS,
 		autoTareOnShotStart: c.autoTare,
 		stopOnWeight: c.stopOnWeight,
+		// Optional in the shared shape (additive-field tolerance): an older
+		// backup / another shell omitting it reads as "off".
+		volumeStopWithScale: c.volumeStopWithScale ?? false,
 		steamEcoMode: c.steamEco,
 		groupFlushBeforeShot: c.preFlush,
 		autoPurgeAfterSteam: c.steamPurge,

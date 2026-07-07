@@ -1147,6 +1147,13 @@ impl CremaBridge {
         self.core.set_weight_target_disabled(disabled);
     }
 
+    /// Opt-in: arm the profile's volume limit (stop-at-volume) even while a
+    /// scale is registered. Default off — volume is a no-scale fallback,
+    /// never a competitor to stop-at-weight.
+    pub fn set_volume_stop_with_scale(&mut self, enabled: bool) {
+        self.core.set_volume_stop_with_scale(enabled);
+    }
+
     /// Clear the running scale-derived peaks (peak weight + final
     /// weight). The Scale page's "Reset peak" button.
     pub fn reset_scale_peaks(&mut self) {

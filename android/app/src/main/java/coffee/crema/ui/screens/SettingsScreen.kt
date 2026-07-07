@@ -262,6 +262,7 @@ fun SettingsScreen(
                         SetGroup("Shot behaviour") {
                             CremaSettingsRow("Auto-tare on shot start", "Zero the scale automatically when extraction begins.") { CremaSwitch(ui.autoTare, vm::setAutoTare) }
                             CremaSettingsRow("Stop on weight", "End the shot once the target yield is reached.") { CremaSwitch(ui.stopOnWeight, vm::setStopOnWeight) }
+                            CremaSettingsRow("Volume stop with scale", "Also stop at the profile's max volume while a scale is connected. Off = volume only applies without a scale.") { CremaSwitch(ui.volumeStopWithScale, vm::setVolumeStopWithScale) }
                             // Max shot duration — persisted in AppPrefs + read from
                             // ui.maxShotDurationS so it survives + shows on Brew's stop
                             // conditions. The stepper pushes each change through the VM.

@@ -90,6 +90,7 @@ import java.util.UUID
 import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.ShotBean
 import coffee.crema.core.SteamHotWaterSettings
+import coffee.crema.core.StopReason
 import coffee.crema.core.debitRemaining
 import coffee.crema.core.profileFingerprint
 import coffee.crema.core.subStateErrorMessage
@@ -415,6 +416,10 @@ data class MainUiState(
     // the persisted value at startup, but the pre-load default must not diverge.
     val autoTare: Boolean = true,
     val stopOnWeight: Boolean = true,
+    /** Opt-in: arm the profile's max-volume stop even while a scale is
+     *  connected (Settings → Shot behaviour). Default off — volume is a
+     *  no-scale fallback, never a competitor to stop-at-weight. */
+    val volumeStopWithScale: Boolean = false,
     val steamEco: Boolean = false,
     /** Persisted pre-shot flush / post-steam purge preferences (not yet consumed
      *  by the shot sequence — Settings rows carry the pill until then). */
@@ -2051,6 +2056,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             maxShotDurationS = p.maxShotDurationS,
             autoTare = p.autoTare,
             stopOnWeight = p.stopOnWeight,
+            volumeStopWithScale = p.volumeStopWithScale,
             steamEco = p.steamEco,
             preFlush = p.preFlush,
             steamPurge = p.steamPurge,
@@ -2079,6 +2085,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setMaxShotDuration(p.maxShotDurationS) }
         runCatching { bridge.setAutoTare(p.autoTare) }
         runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
+        runCatching { bridge.setVolumeStopWithScale(p.volumeStopWithScale) }
         // Push the restored Quick-Controls steam / hot-water / flush params to the
         // machine too, so a restore takes effect without waiting for the next QC
         // edit. Each routes through routeWrite → a no-op when disconnected or
@@ -2177,6 +2184,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .onFailure { appendLog("Re-assert auto-tare failed: ${it.message}") }
         runCatching { bridge.setStopOnWeight(_ui.value.stopOnWeight) }
             .onFailure { appendLog("Re-assert stop-on-weight failed: ${it.message}") }
+        runCatching { bridge.setVolumeStopWithScale(_ui.value.volumeStopWithScale) }
+            .onFailure { appendLog("Re-assert volume-stop-with-scale failed: ${it.message}") }
         // Quick-Controls override: bake the transient dose/yield/brew-temp into the
         // uploaded profile (the web shell's lazy re-upload-with-overrides). The
         // library profile is untouched; only this one upload carries the override.
@@ -3261,6 +3270,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         maxShotDurationS = _ui.value.maxShotDurationS,
         autoTare = _ui.value.autoTare,
         stopOnWeight = _ui.value.stopOnWeight,
+        volumeStopWithScale = _ui.value.volumeStopWithScale,
         steamEco = _ui.value.steamEco,
         preFlush = _ui.value.preFlush,
         steamPurge = _ui.value.steamPurge,
@@ -3366,6 +3376,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (relayConfigOptimistic("setStopOnWeight", enabled.toString()) { _ui.update { it.copy(stopOnWeight = prev) } }) return
         runCatching { bridge.setStopOnWeight(enabled) }.onFailure {
             appendLog("Set stop-on-weight failed: ${it.message}")
+        }
+        persistPrefs()
+    }
+
+    /**
+     * Opt into the profile's max-volume stop racing stop-at-weight while a
+     * scale is connected (Settings → Shot behaviour). Off (default) = volume
+     * only applies as the no-scale fallback. Purely core-side (SAV) — the
+     * firmware tail volume stop is never uploaded, so no re-upload needed;
+     * a mid-shot flip re-targets the armed AutoStop via the core's refresh.
+     */
+    fun setVolumeStopWithScale(on: Boolean) {
+        _ui.update { it.copy(volumeStopWithScale = on) }
+        runCatching { bridge.setVolumeStopWithScale(on) }.onFailure {
+            appendLog("Set volume-stop-with-scale failed: ${it.message}")
         }
         persistPrefs()
     }
@@ -4266,6 +4291,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             maxShotDurationS = p.maxShotDurationS,
             autoTare = p.autoTare,
             stopOnWeight = p.stopOnWeight,
+            volumeStopWithScale = p.volumeStopWithScale,
             steamEco = p.steamEco,
             preFlush = p.preFlush,
             steamPurge = p.steamPurge,
@@ -4306,6 +4332,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setMaxShotDuration(p.maxShotDurationS) }
         runCatching { bridge.setAutoTare(p.autoTare) }
         runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
+        runCatching { bridge.setVolumeStopWithScale(p.volumeStopWithScale) }
         // Per-device auto-connect = a remembered address: arm each manager's
         // link-drop loop only for a device whose Auto-connect is ON.
         ble.autoReconnectEnabled = p.de1Address != null
@@ -4995,9 +5022,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // changes can read-modify-write without clobbering the fields QC
                 // doesn't model (timeouts, espresso volume, group temp) — issue 14.
                 machineShotSettings = event.content
+                // Also project into UI state: the mode chips + steam / hot-water
+                // timers read the machine's own targets (web de1ShotSettings parity).
+                _ui.update { it.copy(de1ShotSettings = event.content) }
             }
-            is Event.StopTriggered ->
+            is Event.StopTriggered -> {
                 appendLog("Auto-stop: ${event.content.reason.string}")
+                // Attribute the stop so the user learns WHERE the control
+                // lives — an unexplained early stop reads as a bug (issue:
+                // "water yield stopped my shot early and I couldn't see why").
+                notifyUser(
+                    when (event.content.reason) {
+                        StopReason.Weight -> "Stopped at target weight"
+                        StopReason.Volume -> "Stopped at the profile’s max volume"
+                        StopReason.MaxTime -> "Stopped at the max shot duration"
+                    },
+                )
+            }
             is Event.ShotCompleted -> {
                 val c = event.content
                 val now = System.currentTimeMillis()

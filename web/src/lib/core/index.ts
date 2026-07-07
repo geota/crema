@@ -507,6 +507,12 @@ export interface CremaCore {
 	 */
 	setWeightTargetDisabled(disabled: boolean): Promise<void>;
 	/**
+	 * Opt-in: arm the profile's volume limit (stop-at-volume) even while a
+	 * scale is registered. Default off — volume is a no-scale fallback,
+	 * never a competitor to stop-at-weight.
+	 */
+	setVolumeStopWithScale(enabled: boolean): Promise<void>;
+	/**
 	 * Clear the running scale-derived peaks (peak weight + final weight)
 	 * without disturbing pressure / temperature peaks. The Scale page's
 	 * "Reset peak" button.
@@ -956,6 +962,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setWeightTargetDisabled(disabled) {
 			bridge.set_weight_target_disabled(disabled);
+		},
+		async setVolumeStopWithScale(enabled) {
+			bridge.set_volume_stop_with_scale(enabled);
 		},
 		async resetScalePeaks() {
 			bridge.reset_scale_peaks();

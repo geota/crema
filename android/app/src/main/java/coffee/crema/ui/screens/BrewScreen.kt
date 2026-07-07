@@ -1192,7 +1192,11 @@ private fun LimitsCard(active: CremaProfile?, ui: coffee.crema.ui.MainUiState) {
             val targetW = convertWeight(active.yieldOut, ui.weightUnit)
             add(LimitRow("Yield", "scales", tel.weight, weightG, active.yieldOut, liveW.value, targetW.value, targetW.unit))
         }
-        if (active != null && active.maxTotalVolumeMl > 0) {
+        // Volume is a stop condition only when it will actually fire: with a
+        // scale connected it's a dormant fallback (SAW owns the stop) unless
+        // the user opted into both caps — mirror the core's arming rule.
+        val volumeArms = ui.scaleState != ScaleBleManager.State.READY || ui.volumeStopWithScale
+        if (active != null && active.maxTotalVolumeMl > 0 && volumeArms) {
             val liveV = convertVolume(ui.dispensedVolume ?: 0f, ui.volumeUnit)
             val targetV = convertVolume(active.maxTotalVolumeMl.toFloat(), ui.volumeUnit)
             add(LimitRow("Volume", "drop-half", tel.flow, ui.dispensedVolume ?: 0f, active.maxTotalVolumeMl.toFloat(), liveV.value, targetV.value, targetV.unit))

@@ -22,7 +22,7 @@ import {
 	type CremaCore,
 	type FirmwareUpdateStatus
 } from '$lib/core';
-import { MachineState, MmrRegister } from '$lib/core/crema-core';
+import { MachineState, MmrRegister, StopReason } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore, getBeanLibraryStore } from '$lib/bean';
 import { getHistoryStore, snapshotFromBean, extractCremaExtras } from '$lib/history';
@@ -37,6 +37,7 @@ import {
 } from '$lib/profiles';
 import { readJson, writeJson } from '$lib/utils/storage';
 import { getSettingsStore } from '$lib/settings';
+import { toast } from '$lib/components/shared/toast.svelte';
 import { getMaintenanceStore } from '$lib/maintenance';
 import { parseCaptureFile } from '$lib/replay';
 import { describeError } from '$lib/utils/error';
@@ -441,6 +442,18 @@ export class CremaApp {
 					getMaintenanceStore().accumulate(event.content.group_flow, deltaS);
 				}
 				this.lastTelemetryAtMs = now;
+			}
+			if (event.type === 'StopTriggered') {
+				// Attribute the auto-stop so the user learns WHERE the control
+				// lives — an unexplained early stop reads as a bug ("water
+				// yield stopped my shot early and I couldn't see why").
+				toast.info(
+					event.content.reason === StopReason.Weight
+						? 'Stopped at target weight'
+						: event.content.reason === StopReason.Volume
+							? 'Stopped at the profile’s max volume'
+							: 'Stopped at the max shot duration'
+				);
 			}
 			if (event.type === 'ShotStarted') {
 				// Mark the shot's start so ShotCompleted can slice the raw BLE
@@ -924,6 +937,16 @@ export class CremaApp {
 	 */
 	async applyWeightTargetDisabled(disabled: boolean): Promise<void> {
 		await this.core.setWeightTargetDisabled(disabled);
+	}
+
+	/**
+	 * Opt into the profile's max-volume stop racing stop-at-weight while a
+	 * scale is connected. Off (default) = volume only arms as the no-scale
+	 * fallback. Purely core-side — the firmware tail volume stop is never
+	 * uploaded, so no profile re-upload is needed.
+	 */
+	async applyVolumeStopWithScale(enabled: boolean): Promise<void> {
+		await this.core.setVolumeStopWithScale(enabled);
 	}
 
 	/**
@@ -1870,6 +1893,7 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 		const s = getSettingsStore().current;
 		void core.setAutoTare(s.autoTareOnShotStart);
 		void core.setStopOnWeight(s.stopOnWeight);
+		void core.setVolumeStopWithScale(s.volumeStopWithScale);
 		void core.setMaxShotDuration(s.maxShotDurationS > 0 ? s.maxShotDurationS : undefined);
 	}
 	// Install the user-presence heartbeat — every user touch / keystroke

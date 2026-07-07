@@ -150,6 +150,15 @@ impl AutoStop {
         self.triggered
     }
 
+    /// Replace the stop targets mid-shot. The flow estimator and the arming
+    /// clock keep their state — only the thresholds move. Lets the
+    /// orchestrator pick up a target that resolved only after arming (e.g.
+    /// SAW when the scale registers a beat after first flow) instead of
+    /// keeping the arm-time snapshot for the whole shot.
+    pub fn set_targets(&mut self, targets: StopTargets) {
+        self.targets = targets;
+    }
+
     /// Whether enough time has passed since the start for auto-stop to act.
     fn is_armed(&self, now: Duration) -> bool {
         now.saturating_sub(self.started) >= self.config.arming_delay
@@ -381,6 +390,28 @@ mod tests {
         assert_eq!(stop.on_weight(40.0, ms(1000)), Some(StopReason::Weight));
         assert_eq!(stop.on_weight(50.0, ms(2000)), None);
         assert!(stop.has_triggered());
+    }
+
+    #[test]
+    fn set_targets_swaps_in_a_weight_target_mid_shot() {
+        // Armed with max-time only (the always-set leg) — the issue #15
+        // shape, where the scale registers after arming.
+        let mut stop = AutoStop::new(
+            StopTargets {
+                weight: None,
+                volume: None,
+                max_time: Some(45.0),
+            },
+            immediate_config(),
+            Duration::ZERO,
+        );
+        assert_eq!(stop.on_weight(40.0, ms(1_000)), None);
+        stop.set_targets(StopTargets {
+            weight: Some(36.0),
+            volume: None,
+            max_time: Some(45.0),
+        });
+        assert_eq!(stop.on_weight(40.0, ms(2_000)), Some(StopReason::Weight));
     }
 
     #[test]

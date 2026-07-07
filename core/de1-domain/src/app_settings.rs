@@ -40,6 +40,14 @@ pub struct CommonSettings {
     pub auto_tare: bool,
     /// Enable stop-at-weight. Web `stopOnWeight`.
     pub stop_on_weight: bool,
+    /// Opt-in: arm the profile's volume limit (stop-at-volume) even while a
+    /// scale is connected. Default off — volume is a no-scale fallback,
+    /// never a competitor to stop-at-weight (the reference-app consensus;
+    /// mirrors Decenza's `ignoreVolumeWithScale`, inverted sense).
+    /// `Option` (not a bare bool) so the generated Kotlin field defaults to
+    /// null and a pre-existing `prefs.json` / older backup still decodes —
+    /// `None` means "unset", which every consumer reads as `false`.
+    pub volume_stop_with_scale: Option<bool>,
     /// Steam eco mode. Web `steamEcoMode`.
     pub steam_eco: bool,
     /// Flush the group before each shot. Web `groupFlushBeforeShot`.
@@ -98,6 +106,7 @@ impl Default for CommonSettings {
             max_shot_duration_s: 45.0,
             auto_tare: true,
             stop_on_weight: true,
+            volume_stop_with_scale: None,
             steam_eco: false,
             pre_flush: false,
             steam_purge: false,

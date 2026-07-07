@@ -294,6 +294,14 @@ pub struct CremaCore {
     /// SAW arming. Reseeded to `false` on every active-profile change so
     /// each profile load starts with the user's last persistent intent.
     weight_target_disabled: bool,
+    /// Opt-in: arm the profile's volume limit (SAV) even while a scale is
+    /// registered. Default `false` — the reference-app consensus treats
+    /// volume as a NO-SCALE FALLBACK only (it would otherwise routinely
+    /// pre-empt the weight target, because the integrated-flow estimate
+    /// runs ahead of true yield). Mirrors Decenza's `ignoreVolumeWithScale`
+    /// (inverted sense). Set via
+    /// [`set_volume_stop_with_scale`](Self::set_volume_stop_with_scale).
+    volume_stop_with_scale: bool,
     /// The active profile's recipe target weight, grams. `None` = no
     /// recipe target. Set via
     /// [`set_profile_target_weight`](Self::set_profile_target_weight) when
@@ -477,6 +485,7 @@ impl CremaCore {
             tare_gate: None,
             stop_on_weight: true,
             weight_target_disabled: false,
+            volume_stop_with_scale: false,
             profile_target_weight: None,
             shot_target_weight: None,
             profile_volume_limit: None,
@@ -595,6 +604,10 @@ impl CremaCore {
         // A newly connected scale has not yet been asked for its serial /
         // settings; re-arm the one-shot connect-time queries.
         self.scale_config_queried = false;
+        // A scale arriving mid-shot unlocks the SAW leg of an already-armed
+        // AutoStop (issue #15 — the arm-once guard otherwise baked
+        // `weight: None` in for the whole shot).
+        self.refresh_auto_stop_targets();
         self.scale.as_ref().map(|scale| scale.label().to_owned())
     }
 
@@ -619,6 +632,9 @@ impl CremaCore {
         self.scale_stale_reported = false;
         self.scale_config_queried = false;
         self.shot_metrics.reset_scale();
+        // A scale vanishing mid-shot drops the SAW leg of an armed AutoStop
+        // (its weight stream is gone; volume / max-time keep the shot bounded).
+        self.refresh_auto_stop_targets();
     }
 
     /// What the connected scale can do beyond reporting a bare weight — see
@@ -653,6 +669,7 @@ impl CremaCore {
     /// max-time stops remain independent.
     pub fn set_stop_on_weight(&mut self, enabled: bool) {
         self.stop_on_weight = enabled;
+        self.refresh_auto_stop_targets();
     }
 
     /// Per-shot kill switch for the weight target — when `true`, the
@@ -664,6 +681,18 @@ impl CremaCore {
     /// `false` on every active-profile change.
     pub fn set_weight_target_disabled(&mut self, disabled: bool) {
         self.weight_target_disabled = disabled;
+        self.refresh_auto_stop_targets();
+    }
+
+    /// Opt-in: arm the profile's volume limit (SAV) even while a scale is
+    /// registered — for users who want BOTH caps racing. Default `false`:
+    /// volume is a no-scale fallback only (see
+    /// [`effective_stop_targets`](Self::effective_stop_targets)). The
+    /// firmware-side tail stop stays disarmed either way —
+    /// [`upload_profile`](Self::upload_profile) always writes 0.
+    pub fn set_volume_stop_with_scale(&mut self, enabled: bool) {
+        self.volume_stop_with_scale = enabled;
+        self.refresh_auto_stop_targets();
     }
 
     /// Clear the running scale-derived peaks (peak weight + final
@@ -680,6 +709,7 @@ impl CremaCore {
     /// "disabled."
     pub fn set_profile_target_weight(&mut self, grams: Option<f32>) {
         self.profile_target_weight = grams.filter(|g| g.is_finite() && *g > 0.0);
+        self.refresh_auto_stop_targets();
     }
 
     /// Set the per-shot dial override weight, in grams. `None` clears the
@@ -688,18 +718,21 @@ impl CremaCore {
     /// [`set_profile_target_weight`](Self::set_profile_target_weight).
     pub fn set_shot_target_weight(&mut self, grams: Option<f32>) {
         self.shot_target_weight = grams.filter(|g| g.is_finite() && *g > 0.0);
+        self.refresh_auto_stop_targets();
     }
 
     /// Set the active profile's volume limit (SAV), in millilitres.
     /// `None` = no limit. Defensive `<= 0 → None`.
     pub fn set_profile_volume_limit(&mut self, milliliters: Option<f32>) {
         self.profile_volume_limit = milliliters.filter(|v| v.is_finite() && *v > 0.0);
+        self.refresh_auto_stop_targets();
     }
 
     /// Set the global maximum shot duration, in seconds. `None` = no max.
     /// Defensive `<= 0 → None`. The legacy app default is 60 s.
     pub fn set_max_shot_duration(&mut self, seconds: Option<f32>) {
         self.max_shot_duration = seconds.filter(|s| s.is_finite() && *s > 0.0);
+        self.refresh_auto_stop_targets();
     }
 
     /// The target weight currently in effect for SAW. Priority:
@@ -729,7 +762,21 @@ impl CremaCore {
         } else {
             None
         };
-        let volume = self.profile_volume_limit;
+        // Volume (SAV) is a NO-SCALE FALLBACK by default, never a competitor
+        // to SAW — the reference-app consensus (reaprime arms volume only
+        // when the scale is absent/lost; de1app zeroes the volume target when
+        // weight stopping is in use, "since it's not as accurate"; Decenza's
+        // ignoreVolumeWithScale). With a scale registered, the profile's
+        // volume limit would routinely pre-empt the weight target because the
+        // integrated-flow estimate runs ahead of true yield.
+        // `volume_stop_with_scale` opts back into both caps racing. A scale
+        // lost mid-shot re-arms this leg via refresh_auto_stop_targets — the
+        // same degrade-to-volume reaprime does.
+        let volume = if self.scale.is_some() && !self.volume_stop_with_scale {
+            None
+        } else {
+            self.profile_volume_limit
+        };
         let max_time = self.max_shot_duration;
         if weight.is_none() && volume.is_none() && max_time.is_none() {
             None
@@ -2104,8 +2151,19 @@ impl CremaCore {
         // mirror back into an authoritative core mid-session and resume driving
         // hardware. Carry it across the rebuild.
         let read_only = self.read_only;
+        // The scale registration is a *device* link the shell owns, not DE1
+        // session state: the BLE managers reset the core on a DE1 drop while
+        // the scale link stays up, and nothing re-identifies the scale until
+        // its own reconnect — leaving weight decoding dead and SAW unable to
+        // arm on every shot after a DE1 reconnect (issue #15). Carry the codec
+        // (and its one-shot config-query latch) across; the scale's own drop
+        // path ([`disconnect_scale`](Self::disconnect_scale)) still clears it.
+        let scale = self.scale.take();
+        let scale_config_queried = self.scale_config_queried;
         *self = CremaCore::new();
         self.read_only = read_only;
+        self.scale = scale;
+        self.scale_config_queried = scale_config_queried;
     }
 
     /// Decode and process a `StateInfo` notification.
@@ -2505,7 +2563,17 @@ impl CremaCore {
         profile: &Profile,
         now: Duration,
     ) -> Result<CoreOutput, AppError> {
-        let assembled = profile.assemble()?;
+        let mut assembled = profile.assemble()?;
+        // NEVER arm the firmware-side dispensed-volume stop: the tail's
+        // max_total_volume_ml drives the DE1's own (flow-integrated) volume
+        // estimate, which mis-fires — reaprime: "not compatible with active
+        // scale and breaks with high PI flows". All three reference apps
+        // upload 0 = no limit (de1app binary.tcl:1001, reaprime
+        // unified_de1.profile.dart:90, Decenza profile.cpp:1189) and stop by
+        // volume app-side instead — our SAV, which is accurate, attributable
+        // (`Event::StopTriggered`), and interceptable. The profile keeps its
+        // authored value for SAV + export; only the wire tail is zeroed.
+        assembled.tail.max_total_volume_ml = 0;
         let mut out = CoreOutput::default();
 
         // Abort any prior upload before arming the new one.
@@ -2906,6 +2974,27 @@ impl CremaCore {
         }
         if let Some(targets) = self.effective_stop_targets() {
             self.auto_stop = Some(AutoStop::new(targets, self.stop_config(), now));
+        }
+    }
+
+    /// Re-compose an armed [`AutoStop`]'s targets after a mid-shot change to
+    /// stop-relevant state (scale connect / disconnect, the stop toggles, the
+    /// target setters). [`arm_auto_stop_if_flowing`](Self::arm_auto_stop_if_flowing)
+    /// arms exactly once per shot — and since max-shot-time is almost always
+    /// set, it arms even before the scale has registered, which used to bake
+    /// `weight: None` in for the whole shot (issue #15's intermittent SAW
+    /// failure). No-op between shots (no `AutoStop` armed).
+    fn refresh_auto_stop_targets(&mut self) {
+        if self.auto_stop.is_none() {
+            return;
+        }
+        let targets = self.effective_stop_targets().unwrap_or(StopTargets {
+            weight: None,
+            volume: None,
+            max_time: None,
+        });
+        if let Some(stop) = self.auto_stop.as_mut() {
+            stop.set_targets(targets);
         }
     }
 
@@ -4619,6 +4708,87 @@ mod tests {
     }
 
     #[test]
+    fn a_scale_connecting_mid_shot_arms_saw() {
+        let mut core = CremaCore::new();
+        // Target + max-time set, but NO scale yet: the AutoStop arms at first
+        // flow with `weight: None` (max-time keeps the targets Some) — the
+        // issue #15 shape, where the scale registers a beat after first flow.
+        core.set_profile_target_weight(Some(30.0));
+        core.set_max_shot_duration(Some(45.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        core.connect_scale("BOOKOO_SC", &[]);
+        // A 35 g reading past the arming delay must now trip SAW.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
+        assert!(out.events.contains(&Event::StopTriggered {
+            reason: StopReason::Weight,
+        }));
+    }
+
+    #[test]
+    fn a_de1_reset_keeps_the_scale_registration() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        // The BLE managers reset the whole core on a DE1 drop while the scale
+        // link stays up; the codec must survive so weight decoding + SAW work
+        // in the next session without a scale reconnect (issue #15).
+        core.reset();
+        assert!(core.scale_capabilities().is_some());
+        core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
+        assert!(out.events.contains(&Event::StopTriggered {
+            reason: StopReason::Weight,
+        }));
+    }
+
+    #[test]
+    fn a_scale_disconnect_mid_shot_drops_the_saw_leg() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_profile_target_weight(Some(30.0));
+        core.set_max_shot_duration(Some(45.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        core.disconnect_scale();
+        // The scale is gone; re-registering a different one mid-shot must not
+        // fire on the stale weight leg unless the reading really crosses.
+        core.connect_scale("BOOKOO_SC", &[]);
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(1_000), 6_000);
+        assert!(!out.events.iter().any(|e| matches!(
+            e,
+            Event::StopTriggered {
+                reason: StopReason::Weight
+            }
+        )));
+    }
+
+    #[test]
+    fn a_registered_scale_demotes_the_volume_leg_to_a_fallback() {
+        let mut core = CremaCore::new();
+        core.set_profile_volume_limit(Some(36.0));
+        // No scale: SAV is the fallback stop.
+        assert_eq!(
+            core.effective_stop_targets().and_then(|t| t.volume),
+            Some(36.0)
+        );
+        // Scale registered: volume must not race the weight target.
+        core.connect_scale("BOOKOO_SC", &[]);
+        assert_eq!(core.effective_stop_targets().and_then(|t| t.volume), None);
+        // …unless the user opts into both caps.
+        core.set_volume_stop_with_scale(true);
+        assert_eq!(
+            core.effective_stop_targets().and_then(|t| t.volume),
+            Some(36.0)
+        );
+        // Scale gone again: the fallback re-arms regardless of the opt-in.
+        core.set_volume_stop_with_scale(false);
+        core.disconnect_scale();
+        assert_eq!(
+            core.effective_stop_targets().and_then(|t| t.volume),
+            Some(36.0)
+        );
+    }
+
+    #[test]
     fn defensive_normalisation_treats_zero_and_negative_as_none() {
         let mut core = CremaCore::new();
         core.set_profile_target_weight(Some(0.0));
@@ -6098,6 +6268,27 @@ mod tests {
                 last_events = out.events;
             }
             last_events
+        }
+
+        /// Upload a one-step profile carrying `volume` and return the tail
+        /// write (the last FrameWrite command).
+        fn tail_write(core: &mut CremaCore, volume: u16) -> Vec<u8> {
+            let mut p = profile("Vol", vec![step("a", Pump::Pressure, None)]);
+            p.max_total_volume_ml = volume;
+            let out = core.upload_profile(&p, Duration::ZERO).unwrap();
+            match out.commands.last().expect("upload emits writes") {
+                Command::WriteCharacteristic { data, .. } => data.clone(),
+                other => panic!("tail must be a characteristic write, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn the_uploaded_tail_never_carries_a_volume_limit() {
+            // The firmware-side dispensed-volume stop stays disarmed no
+            // matter what the profile says (reference-app consensus): a
+            // 100 ml profile uploads the same 0 = "no limit" tail.
+            let zero_tail = tail_write(&mut CremaCore::new(), 0);
+            assert_eq!(tail_write(&mut CremaCore::new(), 100), zero_tail);
         }
 
         #[test]

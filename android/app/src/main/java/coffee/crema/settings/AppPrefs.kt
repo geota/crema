@@ -36,6 +36,11 @@ data class AppPrefs(
      *  same web/core parity reason as [autoTare] (web defaults `stopOnWeight`
      *  true); a no-op when no scale or yield target is present. */
     val stopOnWeight: Boolean = true,
+    /** Opt-in: arm the profile's max-volume stop even while a scale is
+     *  connected. Default off — volume is a no-scale fallback, never a
+     *  competitor to stop-at-weight (reference-app consensus; the firmware's
+     *  own tail volume stop is never uploaded either way). */
+    val volumeStopWithScale: Boolean = false,
     val steamEco: Boolean = false,
     /** Pre-shot group flush / post-steam purge requests. Persisted preference;
      *  the shot sequence does not consume them yet (Settings rows carry the
@@ -128,6 +133,7 @@ fun AppPrefs.toCommonSettings(): CommonSettings = CommonSettings(
     maxShotDurationS = maxShotDurationS,
     autoTare = autoTare,
     stopOnWeight = stopOnWeight,
+    volumeStopWithScale = volumeStopWithScale,
     steamEco = steamEco,
     preFlush = preFlush,
     steamPurge = steamPurge,
@@ -160,6 +166,9 @@ fun AppPrefs.withCommonSettings(c: CommonSettings): AppPrefs = copy(
     maxShotDurationS = c.maxShotDurationS,
     autoTare = c.autoTare,
     stopOnWeight = c.stopOnWeight,
+    // Nullable in the generated binding (additive-field tolerance): a
+    // pre-existing prefs.json / older backup simply reads as "off".
+    volumeStopWithScale = c.volumeStopWithScale ?: false,
     steamEco = c.steamEco,
     preFlush = c.preFlush,
     steamPurge = c.steamPurge,

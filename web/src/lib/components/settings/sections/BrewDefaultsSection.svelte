@@ -38,6 +38,10 @@
 		settings.set('stopOnWeight', on);
 		void app?.applyStopOnWeight(on);
 	}
+	function setVolumeStopWithScale(on: boolean): void {
+		settings.set('volumeStopWithScale', on);
+		void app?.applyVolumeStopWithScale(on);
+	}
 	function setMaxShotDuration(s: number): void {
 		settings.set('maxShotDurationS', s);
 		void app?.applyMaxShotDuration(s);
@@ -139,6 +143,18 @@
 				on={prefs.stopOnWeight}
 				onChange={setStopOnWeight}
 				label="Stop on weight"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Volume stop with scale"
+		sub="Also stop at the profile's max volume while a scale is connected. Off = the volume limit only applies without a scale, so it can't pre-empt stop on weight."
+	>
+		{#snippet control()}
+			<StToggle
+				on={prefs.volumeStopWithScale}
+				onChange={setVolumeStopWithScale}
+				label="Volume stop with scale"
 			/>
 		{/snippet}
 	</StRow>
