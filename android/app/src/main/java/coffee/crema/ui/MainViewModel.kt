@@ -5290,6 +5290,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // timers read the machine's own targets (web de1ShotSettings parity).
                 _ui.update { it.copy(de1ShotSettings = event.content) }
             }
+            is Event.SawAutoZeroed -> {
+                val w = "%.0f".format(event.content.offset_g)
+                appendLog("SAW re-zeroed on the fly ($w g cup)")
+                notifyUser("Scale re-zeroed on the fly — $w g was on it")
+            }
             is Event.SawSuppressedUntaredCup -> {
                 val w = "%.0f".format(event.content.weight_g)
                 appendLog("SAW suppressed — untared cup ($w g)")

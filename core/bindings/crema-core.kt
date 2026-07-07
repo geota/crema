@@ -453,6 +453,13 @@ data class EventSteamEcoModeChangedInner (
 	val eco: Boolean
 )
 
+/// Generated type representing the anonymous struct variant `SawAutoZeroed` of the `Event` Rust enum
+@Serializable
+data class EventSawAutoZeroedInner (
+	/// The latched cup baseline, grams.
+	val offset_g: Float
+)
+
 /// Generated type representing the anonymous struct variant `SawSuppressedUntaredCup` of the `Event` Rust enum
 @Serializable
 data class EventSawSuppressedUntaredCupInner (
@@ -697,12 +704,22 @@ sealed class Event {
 	@Serializable
 	@SerialName("ScaleStale")
 	object ScaleStale: Event()
+	/// The untared-cup guard latched a virtual zero: a heavy reading right
+	/// after first flow held still, so it was a cup landing after the tare —
+	/// every later reading this shot is netted against it and stop-at-weight
+	/// keeps working, exactly as if the tare had caught it. The shell should
+	/// surface an informational notice.
+	@Serializable
+	@SerialName("SawAutoZeroed")
+	data class SawAutoZeroed(val content: EventSawAutoZeroedInner): Event()
 	/// Stop-at-weight was suppressed for the rest of this shot: within the
 	/// first seconds of flow the scale showed an implausibly heavy reading —
 	/// the cup was placed after the tare (or never tared), so every reading
 	/// carries the cup's mass and the weight stop would fire nonsensically
-	/// (Decenza `weightprocessor.cpp:242-253`). Volume / max-time stops
-	/// still bound the shot. The shell should surface this as a warning.
+	/// (Decenza `weightprocessor.cpp:242-253`) — and the reading never held
+	/// still long enough to latch a virtual zero ([`Event::SawAutoZeroed`]).
+	/// Volume / max-time stops still bound the shot. The shell should
+	/// surface this as a warning.
 	@Serializable
 	@SerialName("SawSuppressedUntaredCup")
 	data class SawSuppressedUntaredCup(val content: EventSawSuppressedUntaredCupInner): Event()

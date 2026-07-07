@@ -531,12 +531,25 @@ export type Event =
 	 */
 	| { type: "ScaleStale", content?: undefined }
 	/**
+	 * The untared-cup guard latched a virtual zero: a heavy reading right
+	 * after first flow held still, so it was a cup landing after the tare —
+	 * every later reading this shot is netted against it and stop-at-weight
+	 * keeps working, exactly as if the tare had caught it. The shell should
+	 * surface an informational notice.
+	 */
+	| { type: "SawAutoZeroed", content: {
+	/** The latched cup baseline, grams. */
+	offset_g: number;
+}}
+	/**
 	 * Stop-at-weight was suppressed for the rest of this shot: within the
 	 * first seconds of flow the scale showed an implausibly heavy reading —
 	 * the cup was placed after the tare (or never tared), so every reading
 	 * carries the cup's mass and the weight stop would fire nonsensically
-	 * (Decenza `weightprocessor.cpp:242-253`). Volume / max-time stops
-	 * still bound the shot. The shell should surface this as a warning.
+	 * (Decenza `weightprocessor.cpp:242-253`) — and the reading never held
+	 * still long enough to latch a virtual zero ([`Event::SawAutoZeroed`]).
+	 * Volume / max-time stops still bound the shot. The shell should
+	 * surface this as a warning.
 	 */
 	| { type: "SawSuppressedUntaredCup", content: {
 	/** The offending reading, grams. */

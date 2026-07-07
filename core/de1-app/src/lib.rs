@@ -74,6 +74,17 @@ const SCALE_STALE_TIMEOUT: Duration = Duration::from_secs(1);
 const UNTARED_CUP_THRESHOLD_G: f32 = 50.0;
 /// How long after first flow the untared-cup guard watches.
 const UNTARED_CUP_WINDOW: Duration = Duration::from_secs(3);
+/// Stability band for the guard's virtual-zero settle: consecutive readings
+/// must stay within this span to count as "the cup is at rest".
+const UNTARED_STABLE_BAND_G: f32 = 1.0;
+/// Minimum readings AND minimum time the band must hold before the heavy
+/// reading is trusted as a cup baseline and latched as the software zero.
+const UNTARED_STABLE_MIN_READINGS: u32 = 3;
+const UNTARED_STABLE_MIN: Duration = Duration::from_secs(1);
+/// How long the settle may take before the guard gives up on a virtual zero
+/// and falls back to suppressing SAW (the reading never stopped moving — a
+/// hand, a bump, a cup still being lowered).
+const UNTARED_SETTLE_WINDOW: Duration = Duration::from_secs(2);
 /// Hot-water volume (ml) requested when a scale is connected: the legacy app
 /// asks for far more water than wanted so the scale's weight-based stop is what
 /// cuts off the pour (`binary.tcl` `return_de1_packed_steam_hotwater_settings`).
@@ -340,10 +351,19 @@ pub struct CremaCore {
     /// saves it after each shot; it survives [`reset`](Self::reset) like
     /// the scale registration.
     saw_model: SawLearningModel,
-    /// Latched when the untared-cup guard trips (see
+    /// Latched when the untared-cup guard gives up on a virtual zero (see
     /// [`UNTARED_CUP_THRESHOLD_G`]): SAW stays suppressed for the rest of
     /// the shot. Cleared on the next `ShotEvent::Started`.
     untared_cup_tripped: bool,
+    /// The software zero latched by the untared-cup guard, grams — every
+    /// later reading this shot is netted against it, exactly what the tare
+    /// would have done (the same concept as the Smartchef's software tare).
+    /// `0.0` = none. Cleared on the next `ShotEvent::Started`.
+    saw_zero_offset_g: f32,
+    /// In-flight settle window after a heavy early reading: waiting to see
+    /// whether it stabilises into a cup baseline (→ virtual zero) or keeps
+    /// moving (→ suppress). `None` when not settling.
+    untared_settle: Option<UntaredSettle>,
     /// Timestamp of the most recent scale-weight reading, for the lost-scale
     /// watchdog. `None` until the connected scale reports once.
     last_scale_weight: Option<Duration>,
@@ -461,6 +481,22 @@ pub struct CremaCore {
 /// shell submits them serially. The orchestrator only walks
 /// [`expected_acks`](Self::expected_acks) as `Source::De1FrameAck`
 /// notifications arrive.
+/// The untared-cup guard's settle window (virtual-zero with a stability
+/// gate, user-confirmed 2026-07-07): a heavy reading right after first flow
+/// is watched until it either holds still — a cup at rest, safe to latch as
+/// a software zero — or keeps moving, in which case SAW is suppressed for
+/// the shot (the original Decenza-conservative behaviour).
+#[derive(Debug, Clone, Copy)]
+struct UntaredSettle {
+    /// When the heavy reading first appeared — bounds the whole settle.
+    started: Duration,
+    /// When the CURRENT stability band began (restarts on a band break).
+    band_started: Duration,
+    band_min: f32,
+    band_max: f32,
+    band_count: u32,
+}
+
 #[derive(Debug)]
 struct ProfileUpload {
     /// Title of the profile being uploaded; propagated to the completion /
@@ -514,6 +550,8 @@ impl CremaCore {
             auto_stop: None,
             saw_model: SawLearningModel::default(),
             untared_cup_tripped: false,
+            saw_zero_offset_g: 0.0,
+            untared_settle: None,
             last_scale_weight: None,
             last_scale_estimate: None,
             scale_stale_reported: false,
@@ -2486,7 +2524,30 @@ impl CremaCore {
                 return;
             }
         }
-        let estimate = self.flow.update(reading.weight_g, now);
+        // Untared-cup guard: net the reading against the latched software
+        // zero (usually 0), or hold the pipeline while a heavy early reading
+        // settles — see [`untared_guard`](Self::untared_guard).
+        let Some(net_weight) = self.untared_guard(reading.weight_g, now, out) else {
+            // Mid-settle: show the raw reading (the user should see the cup
+            // land) but keep the estimator / metrics / auto-stop out of it.
+            self.last_scale_estimate = Some(Estimate {
+                weight: reading.weight_g,
+                flow: 0.0,
+            });
+            out.events.push(Event::ScaleReading {
+                weight: reading.weight_g,
+                flow: 0.0,
+                device_flow: reading.flow_g_per_s,
+                device_timer: reading.timer_ms,
+                device_volume: reading.volume,
+                device_standby: reading.standby_minutes,
+                device_battery: reading.battery_percent,
+                device_flow_smoothing: reading.flow_smoothing,
+                device_auto_stop: reading.auto_stop,
+            });
+            return;
+        };
+        let estimate = self.flow.update(net_weight, now);
         // Cache the latest smoothed weight + flow so the DE1 telemetry
         // handler can fold them onto the next `Event::Telemetry` —
         // powers the weight-based puck-resistance metric (see
@@ -2514,31 +2575,93 @@ impl CremaCore {
             device_flow_smoothing: reading.flow_smoothing,
             device_auto_stop: reading.auto_stop,
         });
-        // Untared-cup sanity guard (Decenza weightprocessor.cpp:242-253):
-        // an implausibly heavy reading right after first flow means the cup
-        // wasn't tared — suppress the weight stop for the rest of the shot
-        // and tell the shell so the user knows why SAW went quiet. The
-        // auto-tare settle gate runs earlier and forces readings to 0, so a
-        // successfully-tared cup can't trip this.
-        if !self.untared_cup_tripped
+        let reason = self
+            .auto_stop
+            .as_mut()
+            .and_then(|stop| stop.on_weight(net_weight, now));
+        Self::push_stop(reason, out);
+    }
+
+    /// The untared-cup guard (Decenza `weightprocessor.cpp:242-253`, evolved
+    /// into virtual-zero-with-a-stability-gate): an implausibly heavy reading
+    /// right after first flow means the cup was placed after the tare (or
+    /// never tared). Instead of writing the shot off, watch the reading —
+    ///
+    ///  - if it holds still ([`UNTARED_STABLE_BAND_G`] for
+    ///    [`UNTARED_STABLE_MIN`] / [`UNTARED_STABLE_MIN_READINGS`]), latch it
+    ///    as a software zero and keep stop-at-weight working on the net
+    ///    weight ([`Event::SawAutoZeroed`]) — what the tare would have done;
+    ///  - if it never settles inside [`UNTARED_SETTLE_WINDOW`] (a hand, a
+    ///    bump, a cup mid-lowering), fall back to suppressing SAW for the
+    ///    shot ([`Event::SawSuppressedUntaredCup`]).
+    ///
+    /// Returns `Some(net weight)` when the reading should flow onward, or
+    /// `None` while mid-settle (the caller reports the raw reading for
+    /// display and skips the estimator / metrics / auto-stop, like the tare
+    /// gate). The auto-tare settle gate runs earlier and forces readings to
+    /// 0, so a successfully-tared cup can't trip this.
+    fn untared_guard(&mut self, raw_g: f32, now: Duration, out: &mut CoreOutput) -> Option<f32> {
+        // Resolve an in-flight settle first.
+        if let Some(mut settle) = self.untared_settle {
+            let band_min = settle.band_min.min(raw_g);
+            let band_max = settle.band_max.max(raw_g);
+            if band_max - band_min <= UNTARED_STABLE_BAND_G {
+                settle.band_min = band_min;
+                settle.band_max = band_max;
+                settle.band_count += 1;
+            } else {
+                // The reading moved — restart the band from here.
+                settle.band_started = now;
+                settle.band_min = raw_g;
+                settle.band_max = raw_g;
+                settle.band_count = 1;
+            }
+            if settle.band_count >= UNTARED_STABLE_MIN_READINGS
+                && now.saturating_sub(settle.band_started) >= UNTARED_STABLE_MIN
+            {
+                // A cup at rest: latch the software zero and carry on.
+                let offset = (settle.band_min + settle.band_max) / 2.0;
+                self.saw_zero_offset_g = offset;
+                self.untared_settle = None;
+                // Fresh flow trend from net values — the -offset step would
+                // otherwise read as a huge negative flow.
+                self.flow.reset();
+                out.events.push(Event::SawAutoZeroed { offset_g: offset });
+                return Some(raw_g - offset);
+            }
+            if now.saturating_sub(settle.started) >= UNTARED_SETTLE_WINDOW {
+                // Never settled: the conservative fallback — SAW off for the
+                // shot, everything else (volume / max-time) still bounds it.
+                self.untared_settle = None;
+                self.untared_cup_tripped = true;
+                self.refresh_auto_stop_targets();
+                out.events
+                    .push(Event::SawSuppressedUntaredCup { weight_g: raw_g });
+                return Some(raw_g);
+            }
+            self.untared_settle = Some(settle);
+            return None;
+        }
+        // Trip detection — once per shot, only while SAW is actually armed.
+        if self.saw_zero_offset_g == 0.0
+            && !self.untared_cup_tripped
             && let Some(flow_started) = self.flow_started
             && now.saturating_sub(flow_started) < UNTARED_CUP_WINDOW
-            && reading.weight_g > UNTARED_CUP_THRESHOLD_G
+            && raw_g > UNTARED_CUP_THRESHOLD_G
             && self
                 .effective_stop_targets()
                 .is_some_and(|t| t.weight.is_some())
         {
-            self.untared_cup_tripped = true;
-            self.refresh_auto_stop_targets();
-            out.events.push(Event::SawSuppressedUntaredCup {
-                weight_g: reading.weight_g,
+            self.untared_settle = Some(UntaredSettle {
+                started: now,
+                band_started: now,
+                band_min: raw_g,
+                band_max: raw_g,
+                band_count: 1,
             });
+            return None;
         }
-        let reason = self
-            .auto_stop
-            .as_mut()
-            .and_then(|stop| stop.on_weight(reading.weight_g, now));
-        Self::push_stop(reason, out);
+        Some(raw_g - self.saw_zero_offset_g)
     }
 
     /// Decode and process a notification from the scale's *command*
@@ -2964,6 +3087,8 @@ impl CremaCore {
                 self.shot_metrics.reset();
                 // Re-arm the untared-cup guard for the fresh shot.
                 self.untared_cup_tripped = false;
+                self.saw_zero_offset_g = 0.0;
+                self.untared_settle = None;
                 // Auto-tare the connected scale so the cup starts from zero,
                 // mirroring the legacy app's tare-at-shot-start behaviour —
                 // gated on the latched user preference (default true). The
@@ -4933,14 +5058,55 @@ mod tests {
     }
 
     #[test]
-    fn an_untared_cup_suppresses_saw_for_the_shot() {
+    fn an_untared_cup_that_settles_latches_a_virtual_zero() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(30.0));
         core.on_notification(Source::De1State, &[4, 5], 0);
-        // 60 g two seconds after first flow (past the tare-settle gate,
-        // inside the 3 s window) — the cup landed after the tare.
-        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(6_000), 2_000);
+        // A ~300 g cup lands after the tare and HOLDS STILL: the guard
+        // watches it settle, then latches the software zero instead of
+        // writing SAW off (user-confirmed virtual-zero design).
+        for (cg, at) in [(30_000, 1_600u64), (30_030, 2_000), (29_990, 2_400)] {
+            let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(cg), at);
+            assert!(
+                !out.events
+                    .iter()
+                    .any(|e| matches!(e, Event::SawAutoZeroed { .. })),
+                "must not latch before the stability window at {at}ms"
+            );
+        }
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(30_010), 2_700);
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::SawAutoZeroed { .. }))
+        );
+        // 335.0 g raw = ~34.9 g NET — crosses the 30 g target past the
+        // arming delay: SAW still works on the netted weight.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(33_500), 6_000);
+        assert!(out.events.contains(&Event::StopTriggered {
+            reason: StopReason::Weight,
+        }));
+    }
+
+    #[test]
+    fn an_unsettled_heavy_reading_falls_back_to_suppression() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        // The heavy reading keeps moving (a hand, a bump, a cup still being
+        // lowered) — no stable band ever forms, so after the settle window
+        // the guard gives up and suppresses SAW for the shot.
+        for (cg, at) in [
+            (30_000, 1_600u64),
+            (32_000, 2_000),
+            (28_000, 2_500),
+            (31_000, 3_000),
+        ] {
+            core.on_notification(Source::ScaleWeight, &bookoo_packet(cg), at);
+        }
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(30_500), 3_700);
         assert!(
             out.events
                 .iter()
@@ -4948,7 +5114,7 @@ mod tests {
         );
         // A target-crossing reading past the arming delay must NOT stop the
         // shot — the weight leg is suppressed until the next shot.
-        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(33_500), 6_000);
         assert!(!out.events.iter().any(|e| matches!(
             e,
             Event::StopTriggered {

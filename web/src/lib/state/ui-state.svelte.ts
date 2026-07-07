@@ -910,6 +910,14 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				scaleWeight: null,
 				eventLog: appendLog(snapshot.eventLog, 'Scale stale')
 			};
+		case 'SawAutoZeroed':
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`SAW re-zeroed on the fly (${Math.round(event.content.offset_g)} g cup)`
+				)
+			};
 		case 'SawSuppressedUntaredCup':
 			return {
 				...snapshot,

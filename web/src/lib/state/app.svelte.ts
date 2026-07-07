@@ -458,6 +458,13 @@ export class CremaApp {
 					.then((blob) => writeJson(SAW_MODEL_KEY, blob))
 					.catch(() => undefined);
 			}
+			if (event.type === 'SawAutoZeroed') {
+				// The guard trusted the settled cup and re-tared in software —
+				// SAW keeps working on the net weight.
+				toast.info(
+					`Scale re-zeroed on the fly — ${Math.round(event.content.offset_g)} g was on it`
+				);
+			}
 			if (event.type === 'SawSuppressedUntaredCup') {
 				// Untared-cup guard (Decenza weightprocessor.cpp:242-253) —
 				// tell the user WHY stop-at-weight went quiet this shot.
