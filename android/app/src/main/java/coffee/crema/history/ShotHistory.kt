@@ -9,6 +9,11 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import java.io.File
 
 /*
@@ -107,6 +112,55 @@ val StoredShot.beanLabel: String?
             else -> null
         }
     }
+
+/**
+ * Project a [StoredShot] onto the core's `de1_domain::StoredShot` JSON shape
+ * (camelCase) — the input `analyzeStoredShotQuality` parses. Only what the
+ * quality analysis reads is carried: the profile snapshot, journal metadata,
+ * the dialled yield target, and the telemetry record. The core `ShotSample`
+ * fields are non-optional, so the channels Android never persisted
+ * (sampleTime / setMixTemp / steamTemp) are zeroed; `frameNumber` is zeroed on
+ * records from before the field existed, which the core builder degrades to a
+ * single-phase Start/End reconstruction. A null scale weight OMITS the key
+ * (the core side is absence-tolerant via `serde(default)`).
+ */
+fun StoredShot.coreShotJson(): JsonObject = buildJsonObject {
+    put("formatVersion", 3)
+    put("id", id)
+    put("completedAt", completedAtMs)
+    profile?.let { put("profile", it) }
+    putJsonObject("metadata") {
+        put("dose", doseG)
+        put("yieldOut", yieldG)
+        put("rating", rating)
+        put("notes", notes)
+    }
+    yieldTargetG?.let { put("yieldTarget", it) }
+    putJsonObject("record") {
+        put("duration", durationMs)
+        putJsonArray("samples") {
+            samples.forEach { s ->
+                addJsonObject {
+                    put("elapsed", s.elapsedMs)
+                    putJsonObject("sample") {
+                        put("sampleTime", 0)
+                        put("groupPressure", s.pressure)
+                        put("groupFlow", s.flow)
+                        put("headTemp", s.headTemp)
+                        put("mixTemp", s.mixTemp)
+                        put("setMixTemp", 0)
+                        put("setHeadTemp", s.setHeadTemp)
+                        put("setGroupPressure", s.setGroupPressure)
+                        put("setGroupFlow", s.setGroupFlow)
+                        put("frameNumber", s.frameNumber ?: 0)
+                        put("steamTemp", 0)
+                    }
+                    s.weight?.let { put("scaleWeight", it) }
+                }
+            }
+        }
+    }
+}
 
 /**
  * Summary metrics for a (filter/range-scoped) set of shots — issue 48. Computed

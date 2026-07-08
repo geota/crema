@@ -49,7 +49,7 @@ import coffee.crema.beans.newRoaster
 import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
 import coffee.crema.history.downsampleForStorage
-import coffee.crema.history.qualityInputFromShot
+import coffee.crema.history.coreShotJson
 import coffee.crema.maintenance.MaintenanceStore
 import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_DT_S
 import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_ML
@@ -91,7 +91,6 @@ import java.io.File
 import java.util.UUID
 import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.ShotBean
-import coffee.crema.core.ShotQualityInput
 import coffee.crema.core.ShotQualityReport
 import coffee.crema.core.SteamHotWaterSettings
 import coffee.crema.core.StopReason
@@ -1720,17 +1719,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Run the core's shot-quality analysis (the Decenza `ShotAnalysis` port)
-     * over a stored shot. Null when the shot is too thin to analyze
-     * ([qualityInputFromShot] bails under 10 samples) or the bridge/decode
-     * rejects the input — the detail views render nothing in that case.
+     * over a stored shot. The core builds its own analysis input from the
+     * stored record — real per-sample frame markers, the same path the web
+     * shell uses (review #39). Null when the shot is too thin to analyze
+     * (the core bails under 10 samples, returning the string `"null"`) or
+     * the bridge/decode rejects the input — the detail views render nothing
+     * in that case.
      */
     fun analyzeShotQuality(shot: StoredShot): ShotQualityReport? {
-        val input = qualityInputFromShot(shot) ?: return null
         return runCatching {
-            json.decodeFromString(
-                ShotQualityReport.serializer(),
-                bridge.analyzeShotQuality(json.encodeToString(ShotQualityInput.serializer(), input)),
-            )
+            when (val report = bridge.analyzeStoredShotQuality(shot.coreShotJson().toString())) {
+                "null" -> null
+                else -> json.decodeFromString(ShotQualityReport.serializer(), report)
+            }
         }.getOrNull()
     }
 
