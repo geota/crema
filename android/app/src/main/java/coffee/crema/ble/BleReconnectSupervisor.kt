@@ -50,6 +50,7 @@ internal suspend fun reconnectingSession(
 ) {
     var attempt = 0
     var everConnected = false
+    var lurking = false
     try {
         while (true) {
             val connected = try {
@@ -66,6 +67,7 @@ internal suspend fun reconnectingSession(
             if (connected) {
                 everConnected = true
                 attempt = 0
+                lurking = false
                 onConnected()
                 // Suspend until the link drops. The caller's StateFlow.first()
                 // checks the current value first, so a drop during the tiny
@@ -82,22 +84,43 @@ internal suspend fun reconnectingSession(
                 if (!isAutoReconnectEnabled()) break
             }
 
-            attempt++
+            // Clamped so days of slow retries can't overflow the counter
+            // (Decenza clamps its ladder counter the same way).
+            attempt = (attempt + 1).coerceAtMost(MAX_RECONNECT_ATTEMPTS + 1)
             if (attempt > MAX_RECONNECT_ATTEMPTS) {
-                status("$label reconnect gave up after $MAX_RECONNECT_ATTEMPTS attempts")
-                break
+                // The fast burst is exhausted — drop to a persistent slow tier
+                // instead of stranding an armed device (de1app retries forever;
+                // Decenza's ladders end in a 60 s / 5 min forever-tier). The
+                // device coming back in range / powering on reconnects without
+                // a user tap; a user disconnect or auto-reconnect OFF still
+                // exits above. Announced once — the quiet retries don't spam
+                // the status line every cycle.
+                if (!lurking) {
+                    lurking = true
+                    status("$label not found — retrying quietly in the background")
+                }
+                onConnecting()
+                delay(LURK_INTERVAL_MS)
+            } else {
+                onConnecting()
+                status("Reconnecting to $label (attempt $attempt of $MAX_RECONNECT_ATTEMPTS)…")
+                delay(backoffMs(attempt))
             }
-            onConnecting()
-            status("Reconnecting to $label (attempt $attempt of $MAX_RECONNECT_ATTEMPTS)…")
-            delay(backoffMs(attempt))
         }
     } finally {
         if (!isUserInitiated()) teardown()
     }
 }
 
-/** Reconnect attempts after an unexpected drop before giving up (~web's 8). */
+/** Fast-burst reconnect attempts after an unexpected drop (~web's 8), before
+ *  the persistent slow tier takes over. */
 private const val MAX_RECONNECT_ATTEMPTS = 8
+
+/** Cadence of the persistent slow tier — Decenza's scale ladder ends in the
+ *  same 60 s forever-tier (its DE1 uses 5 min; a single shared value keeps
+ *  this supervisor device-agnostic, and a pending direct connect between
+ *  tries is cheap — it's the same background-scan mechanism as autoConnect). */
+private const val LURK_INTERVAL_MS = 60_000L
 
 /**
  * Exponential backoff: 500 ms doubling, capped at 30 s (mirrors the web).

@@ -7,10 +7,13 @@ import coffee.crema.core.CremaBridge
 import coffee.crema.core.NotificationSource
 import coffee.crema.core.ScaleUuids as CoreScaleUuids
 import coffee.crema.core.scaleScanUuids
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -288,6 +291,7 @@ class ScaleBleManager(
         firstConnect: Boolean,
     ) {
         _state.value = State.CONNECTING
+        consecutiveWriteFailures = 0 // fresh link, fresh dead-link budget
         onStatus(if (firstConnect) "Connecting to scale…" else "Reconnecting to scale…")
         // BleTransport.connect suspends until connected AND services discovered.
         transport.connect(device)
@@ -426,18 +430,53 @@ class ScaleBleManager(
             onStatus("Cannot write scale command — scale not connected")
             return false
         }
-        return runCatching {
-            transport.write(d, service, command, data)
+        return try {
+            // A dead link doesn't always deliver a disconnect event — after a
+            // peer power loss the OS can leave writes hanging while the app
+            // still believes it is connected (reaprime observed exactly this).
+            // The timeout turns the hang into a countable failure.
+            withTimeout(WRITE_TIMEOUT_MS) { transport.write(d, service, command, data) }
             // Record the write as a dir:"out" SCALE_COMMAND line so tare/timer
             // writes appear in the interleaved capture. Stamp it with the same
             // elapsedRealtime() clock the recorder and inbound lines use.
             recorder.recordOutbound("SCALE_COMMAND", data, SystemClock.elapsedRealtime())
+            consecutiveWriteFailures = 0
             true
-        }.getOrElse {
-            Log.w(TAG, "Scale command write failed", it)
+        } catch (t: TimeoutCancellationException) {
+            Log.w(TAG, "Scale command write timed out", t)
+            onStatus("Scale command write timed out")
+            onWriteFailure(d)
+            false
+        } catch (c: CancellationException) {
+            throw c // the caller's scope is going away — never swallow
+        } catch (e: Exception) {
+            Log.w(TAG, "Scale command write failed", e)
             onStatus("Scale command write was rejected")
+            onWriteFailure(d)
             false
         }
+    }
+
+    /**
+     * Consecutive [writeCommand] failures — the scale keep-alives (Decent 2 s /
+     * Acaia 3 s / Timemore 10 s) write on a steady cadence, so a wedged link
+     * trips this within seconds. On [MAX_CONSECUTIVE_WRITE_FAILURES] the link
+     * is presumed dead and torn down at the TRANSPORT level (not [disconnect],
+     * which is the user path and would stop the session): the state flow drops,
+     * the reconnect supervisor sees a non-user drop, and its ladder takes over.
+     * The same detector reaprime runs on GATT op timeouts; Decenza's
+     * write-retry exhaustion feeds its `de1LinkFault` the same way.
+     */
+    private var consecutiveWriteFailures = 0
+
+    private suspend fun onWriteFailure(d: BleTransport.DeviceHandle) {
+        consecutiveWriteFailures++
+        if (consecutiveWriteFailures < MAX_CONSECUTIVE_WRITE_FAILURES) return
+        consecutiveWriteFailures = 0
+        Log.w(TAG, "Scale link unresponsive ($MAX_CONSECUTIVE_WRITE_FAILURES consecutive write failures) — forcing teardown")
+        onStatus("Scale link unresponsive — reconnecting…")
+        runCatching { transport.disconnect(d) }
+            .onFailure { Log.w(TAG, "Forced scale teardown failed", it) }
     }
 
     // ---- Core integration -------------------------------------------------
@@ -527,6 +566,14 @@ class ScaleBleManager(
 
     companion object {
         private const val TAG = "ScaleBleManager"
+
+        /** Ceiling on one GATT write before it counts as a dead-link signal —
+         *  Decenza uses the same 5 s write timeout. */
+        private const val WRITE_TIMEOUT_MS = 5_000L
+
+        /** Consecutive write failures before the link is presumed dead and
+         *  torn down for the reconnect supervisor (reaprime uses 3). */
+        private const val MAX_CONSECUTIVE_WRITE_FAILURES = 3
 
         /**
          * Capture `src` label for inbound notifications from the Bookoo command

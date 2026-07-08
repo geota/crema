@@ -9,10 +9,13 @@ import coffee.crema.core.WriteTarget
 import coffee.crema.core.de1Uuids
 import kotlinx.serialization.json.Json
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -205,6 +208,7 @@ class De1BleManager(
      */
     private suspend fun establish(device: BleTransport.DeviceHandle, firstConnect: Boolean) {
         _state.value = State.CONNECTING
+        consecutiveWriteFailures = 0 // fresh link, fresh dead-link budget
         onStatus(if (firstConnect) "Connecting…" else "Reconnecting…")
         // BleTransport.connect suspends until connected AND services discovered.
         transport.connect(device)
@@ -378,14 +382,61 @@ class De1BleManager(
             onStatus("Write ignored — DE1 not connected")
             return
         }
-        transport.write(d, De1Uuids.SERVICE, De1Uuids.forWriteTarget(target), bytes)
+        try {
+            // A dead link doesn't always deliver a disconnect event — after a
+            // machine power loss the OS can leave writes hanging while the app
+            // still believes it is connected (reaprime observed exactly this on
+            // a DE1 power outage). The timeout turns the hang into a failure
+            // the caller sees AND a countable dead-link signal.
+            withTimeout(WRITE_TIMEOUT_MS) {
+                transport.write(d, De1Uuids.SERVICE, De1Uuids.forWriteTarget(target), bytes)
+            }
+            consecutiveWriteFailures = 0
+        } catch (t: TimeoutCancellationException) {
+            onWriteFailure(d)
+            throw t // callers log per-write context (executeCommand's guard)
+        } catch (c: CancellationException) {
+            throw c // the caller's scope is going away — never swallow
+        } catch (e: Exception) {
+            onWriteFailure(d)
+            throw e
+        }
         if (target == WriteTarget.De1ProfileFrame) {
             feedCore(NotificationSource.DE1_FRAME_ACK, bytes, SystemClock.elapsedRealtime(), "DE1 frame-ACK")
         }
     }
 
+    /**
+     * Consecutive [writeCharacteristic] failures — the keep-awake poke (60 s)
+     * and any user-action write feed this; on [MAX_CONSECUTIVE_WRITE_FAILURES]
+     * the link is presumed dead and torn down at the TRANSPORT level (not
+     * [disconnect], the user path): the state flow drops, the reconnect
+     * supervisor sees a non-user drop, and its ladder takes over. Mirrors
+     * Decenza's write-retry-exhaustion → `de1LinkFault` and reaprime's
+     * consecutive-op-timeout teardown.
+     */
+    private var consecutiveWriteFailures = 0
+
+    private suspend fun onWriteFailure(d: BleTransport.DeviceHandle) {
+        consecutiveWriteFailures++
+        if (consecutiveWriteFailures < MAX_CONSECUTIVE_WRITE_FAILURES) return
+        consecutiveWriteFailures = 0
+        Log.w(TAG, "DE1 link unresponsive ($MAX_CONSECUTIVE_WRITE_FAILURES consecutive write failures) — forcing teardown")
+        onStatus("DE1 link unresponsive — reconnecting…")
+        runCatching { transport.disconnect(d) }
+            .onFailure { Log.w(TAG, "Forced DE1 teardown failed", it) }
+    }
+
     companion object {
         private const val TAG = "De1BleManager"
+
+        /** Ceiling on one GATT write before it counts as a dead-link signal —
+         *  Decenza uses the same 5 s write timeout. */
+        private const val WRITE_TIMEOUT_MS = 5_000L
+
+        /** Consecutive write failures before the link is presumed dead and
+         *  torn down for the reconnect supervisor (reaprime uses 3). */
+        private const val MAX_CONSECUTIVE_WRITE_FAILURES = 3
 
         /**
          * The DE1 `Version` (`A001`) and `Calibration` (`A012`) characteristic
