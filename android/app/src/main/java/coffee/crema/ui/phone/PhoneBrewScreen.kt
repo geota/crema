@@ -39,6 +39,7 @@ import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.formatTemp
 import coffee.crema.ui.formatWeight
+import coffee.crema.ui.freshnessColor
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.MachineState
@@ -124,6 +125,11 @@ fun PhoneBrewScreen(
         ) {
             // ── Tappable profile / bean strip + anchored swap dropdown ───────
             Box {
+                // Freshness rides the TOP row as the tablet/web pip + label
+                // ("● 20d off roast", coloured by freshness band), which frees
+                // the meta line below for grind-at-a-glance (issue #16).
+                val frozen = activeBean?.isFrozen == true
+                val daysOff = activeBean?.let { daysOffRoast(it.roastedOn) }
                 ProfileStrip(
                     active = active,
                     // Remembered (review #37): beanLine does two list scans +
@@ -131,6 +137,12 @@ fun PhoneBrewScreen(
                     beanLine = remember(
                         ui.activeBeanId, ui.beans, ui.roasters, ui.grinderModel, ui.mirroredBeanSummary,
                     ) { beanLine(ui) },
+                    freshLabel = when {
+                        activeBean == null -> null
+                        frozen -> "Frozen"
+                        else -> daysOff?.let { "${it}d off roast" }
+                    },
+                    freshColor = freshnessColor(frozen, activeBean?.roastLevel?.toInt(), daysOff),
                     onClick = { swapOpen = true },
                 )
                 if (swapOpen) {
@@ -256,14 +268,16 @@ fun PhoneBrewScreen(
     }
 }
 
-/** "Roaster · Bean · Nd off roast" strip meta, or a quiet fallback. */
+/** "Roaster · Bean · Grind N · Grinder" strip meta, or a quiet fallback.
+ *  Freshness ("Nd off roast" / "Frozen") is NOT part of this line — it rides
+ *  the strip's TOP row as the tablet/web colour pip, which keeps the grind
+ *  (issue #16) inside a single un-ellipsized line at phone width. */
 private fun beanLine(ui: MainUiState): String {
     // Mirroring a primary whose active bean isn't in our library (issue 05): show
     // the summary the primary sent so the chip isn't blank.
     val bean = ui.beans.firstOrNull { it.id == ui.activeBeanId }
         ?: return ui.mirroredBeanSummary ?: "No bean selected"
     val roaster = ui.roasters.firstOrNull { it.id == bean.roasterId }?.name
-    val days = daysOffRoast(bean.roastedOn)
     // Grind at a glance (issue #16): the dial + grinder name — the bean's own
     // grinder, else the equipment default (web BeanContextCard precedence).
     val grind = bean.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" }
@@ -272,11 +286,6 @@ private fun beanLine(ui: MainUiState): String {
     return listOfNotNull(
         roaster,
         bean.name,
-        when {
-            bean.isFrozen -> "Frozen"
-            days != null -> "${days}d off roast"
-            else -> null
-        },
         grind,
         grinder,
     ).joinToString(" · ")
@@ -284,7 +293,15 @@ private fun beanLine(ui: MainUiState): String {
 
 // ── Profile strip (proto .pf-profilestrip) ───────────────────────────────────
 @Composable
-private fun ProfileStrip(active: CremaProfile?, beanLine: String, onClick: () -> Unit) {
+private fun ProfileStrip(
+    active: CremaProfile?,
+    beanLine: String,
+    /** "Nd off roast" / "Frozen", or null when the roast date is unknown —
+     *  rendered as the tablet/web colour pip + label on the TOP row. */
+    freshLabel: String?,
+    freshColor: Color,
+    onClick: () -> Unit,
+) {
     Surface(
         onClick = onClick,
         shape = MaterialTheme.shapes.medium,
@@ -297,15 +314,26 @@ private fun ProfileStrip(active: CremaProfile?, beanLine: String, onClick: () ->
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Column(Modifier.weight(1f)) {
-                Text(
-                    active?.name ?: "No profile loaded",
-                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.Medium),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        active?.name ?: "No profile loaded",
+                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.Medium),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    // Freshness pip + label, right-aligned — the tablet header's
+                    // .bh-eyebrow-row chip (8 dp dot, freshness-band colour).
+                    if (freshLabel != null) {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(freshColor))
+                        Text(freshLabel, style = MaterialTheme.typography.labelSmall, color = freshColor, maxLines = 1)
+                    }
+                }
                 Text(
                     beanLine,
                     style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.5.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    // Freshness lives on the row above, so the grind + grinder
+                    // (issue #16 — at a glance) fit one line at phone width.
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
             }
