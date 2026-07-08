@@ -1,12 +1,7 @@
 package coffee.crema.ui
 
 import android.app.Application
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothManager
-import android.content.BroadcastReceiver
-import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -36,7 +31,6 @@ import coffee.crema.core.importBeanconquerorJson
 import coffee.crema.core.exportBackupJsonl
 import coffee.crema.core.exportBeanconquerorMainJson
 import coffee.crema.core.maintenanceReadout
-import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import coffee.crema.beans.BeanImageStore
 import coffee.crema.beans.BeanLibrary
@@ -812,36 +806,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Ticker driving [MainUiState.modeElapsedMs] while a service mode runs. */
     private var modeTickerJob: Job? = null
 
-    /** The scale keep-alive loop, running only while a scale is READY. */
-    private var scaleHeartbeatJob: Job? = null
-
-    /** Start/stop the capability-driven scale heartbeat. The cadence comes
-     *  from [ScaleCapabilities.heartbeat_interval_ms]; scales without one
-     *  idle the loop at a slow poll so a late-arriving capability read (it
-     *  lands just after READY) still picks the clock up. */
-    private fun updateScaleHeartbeat(ready: Boolean) {
-        if (!ready) {
-            scaleHeartbeatJob?.cancel()
-            scaleHeartbeatJob = null
-            return
-        }
-        if (scaleHeartbeatJob?.isActive == true) return
-        // The heartbeat's bridge call runs on the core lane, not Main
-        // (review #28).
-        scaleHeartbeatJob = viewModelScope.launch(coreDispatcher) {
-            while (true) {
-                val interval = _ui.value.scaleCapabilities?.heartbeat_interval_ms?.toLong()
-                if (interval != null) {
-                    runCatching { onCoreOutputJson(bridge.scaleHeartbeat()) }
-                        .onFailure { appendLog("Scale heartbeat failed: ${it.message}") }
-                    delay(interval)
-                } else {
-                    delay(1_000)
-                }
-            }
-        }
-    }
-
     /** Start the 4 Hz mode-clock ticker when a service mode is running, stop it
      *  when idle. Elapsed is recomputed from the monotonic anchor each tick, so
      *  tick jitter never accumulates into the readout. */
@@ -1071,19 +1035,44 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onScaleIdentified = ::refreshScaleCapabilities,
     )
 
-    /** Receiver for the system Bluetooth on/off broadcast — registered in [init],
-     *  unregistered in [onCleared]. Reflects adapter state into the UI and, on a
-     *  transition to ON, recovers any remembered device whose reconnect loop gave
-     *  up while the adapter was off. */
-    private val bluetoothReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
-            val on = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR) ==
-                BluetoothAdapter.STATE_ON
-            _ui.update { it.copy(bluetoothOn = on) }
-            if (on) onBluetoothEnabled()
-        }
-    }
+    /**
+     * The device-connection controller (review #43) — DE1/scale connect and
+     * disconnect verbs, the manager-state collectors, the Bluetooth-adapter
+     * watcher, per-device auto-connect, the scale heartbeat, and the DE1
+     * keep-awake tick. A self-contained sibling of [proxy] / [visualizer] /
+     * [drive]; its [ConnectionController.State] is mirrored into [MainUiState]
+     * in `init`. The managers themselves stay fields of this VM (their core
+     * output and command routing are VM concerns); the controller owns their
+     * connection lifecycle. Whole-app reactions stay here as callbacks.
+     */
+    private val connection: ConnectionController = ConnectionController(
+        app = app,
+        scope = viewModelScope,
+        coreDispatcher = coreDispatcher,
+        ble = ble,
+        scale = scale,
+        bleScanner = bleScanner,
+        transport = proxy.transport,
+        appendLog = { appendLog(it) },
+        persistPrefs = { persistPrefs() },
+        onConnectStarted = { _ui.update { it.copy(eventLog = emptyList()) } },
+        onDe1SessionClosed = { clearDe1SessionUi() },
+        onScaleSessionClosed = { clearScaleSessionUi() },
+        onDe1Ready = { readMachineInfo() },
+        // The DE1 no longer holds our profile — drop the upload-skip cache so
+        // the next shot re-uploads (issue 11). Without this, a skip after a
+        // reconnect would brew against a stale/absent profile.
+        onDe1Dropped = { lastUploadedFingerprint = null },
+        pushRoster = { proxy.pushRoster() },
+        refreshAdvertisement = { proxy.refreshAdvertisement() },
+        heartbeatIntervalMs = { _ui.value.scaleCapabilities?.heartbeat_interval_ms?.toLong() },
+        sendScaleHeartbeat = { onCoreOutputJson(bridge.scaleHeartbeat()) },
+        // The saver owns the sleep policy while shown: don't re-arm the DE1's
+        // presence timer against our own idle decision (reaprime's
+        // PresenceController model — the heartbeat keeps the machine awake
+        // only while the user is actually present).
+        keepAliveTick = { if (_ui.value.suppressDe1Sleep && !_ui.value.saverVisible) pokeUserPresent() },
+    )
 
     init {
         // Multi-device (M2): arm the recorder gate, start NSD peer discovery +
@@ -1107,85 +1096,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        // Track the Bluetooth adapter: drive the "Bluetooth is off" UI and, when it
-        // returns, re-trigger auto-connect — a BT-off drop otherwise exhausts the
-        // managers' reconnect budget and never retries once the adapter is back.
-        observeBluetoothAdapter()
-        // Collect the managers' coarse connection-state flows so the UI
-        // snapshot updates promptly when either advances — rather than only
-        // when an unrelated event happens to call observeBleState().
+        // Start the connection controller — the Bluetooth-adapter watcher, the
+        // manager-state collectors, and the DE1 keep-awake tick — and mirror
+        // its state slice into the UI snapshot.
+        connection.start()
         viewModelScope.launch {
-            var wasReady = false
-            // Guarded (review #36): a throw inside a StateFlow collector
-            // cancels it FOREVER — BLE-state→UI sync would silently stop.
-            ble.state.collect { state ->
-                runCatching {
-                _ui.update { it.copy(bleState = state, de1BluetoothAddress = ble.connectedAddress) }
-                // A DE1 connect/disconnect changes the roster this primary
-                // advertises to its mirrors (issue 04) — re-push so a secondary
-                // that attached earlier tracks the change without reconnecting.
-                proxy.pushRoster()
-                // Fire the machine read-sweep once per connection, on the first
-                // transition into READY (services discovered + subscribed). The
-                // reads emit read-request commands whose replies arrive later as
-                // Firmware / MmrValue events; the pure reads fold straight in.
-                if (state == De1BleManager.State.READY && !wasReady) {
-                    wasReady = true
-                    readMachineInfo()
-                    // Connecting auto-remembers the DE1 → its Auto-connect turns ON.
-                    ble.connectedAddress?.let { addr ->
-                        ble.autoReconnectEnabled = true
-                        if (_ui.value.rememberedDe1Address != addr) {
-                            _ui.update { it.copy(rememberedDe1Address = addr) }
-                            persistPrefs()
-                        }
-                    }
-                    // Hosting now holds the DE1 — refresh our NSD advertisement.
-                    proxy.refreshAdvertisement()
-                } else if (state != De1BleManager.State.READY) {
-                    wasReady = false
-                    // The DE1 no longer holds our profile — drop the upload-skip
-                    // cache so the next shot re-uploads (issue 11). Without this, a
-                    // skip after a reconnect would brew against a stale/absent profile.
-                    lastUploadedFingerprint = null
-                    proxy.refreshAdvertisement()
+            connection.state.collect { cs ->
+                _ui.update {
+                    it.copy(
+                        bleState = cs.de1,
+                        scaleState = cs.scale,
+                        de1BluetoothAddress = cs.de1Address,
+                        bluetoothOn = cs.bluetoothOn,
+                        rememberedDe1Address = cs.rememberedDe1Address,
+                        rememberedScaleAddress = cs.rememberedScaleAddress,
+                        rememberedScaleName = cs.rememberedScaleName,
+                    )
                 }
-                }.onFailure { appendLog("DE1 state handling failed: ${it.message}") }
-            }
-        }
-        viewModelScope.launch {
-            scale.state.collect { state ->
-                runCatching {
-                _ui.update { it.copy(scaleState = state) }
-                // Capability-driven keep-alive: some scales need a periodic
-                // heartbeat write — the Decent's LCD (2 s) and the Acaia,
-                // which stops streaming weight entirely without one (3 s,
-                // Decenza acaiascale.cpp:264-277). The web shell has run this
-                // loop for a while; Android never did (the Acaia gap).
-                updateScaleHeartbeat(state == ScaleBleManager.State.READY)
-                // Connecting auto-remembers the scale → its Auto-connect turns ON.
-                if (state == ScaleBleManager.State.READY) {
-                    scale.connectedAddress?.let { addr ->
-                        scale.autoReconnectEnabled = true
-                        val name = scale.connectedName
-                        if (_ui.value.rememberedScaleAddress != addr ||
-                            _ui.value.rememberedScaleName != name
-                        ) {
-                            _ui.update { it.copy(
-                                rememberedScaleAddress = addr,
-                                rememberedScaleName = name,
-                            ) }
-                            persistPrefs()
-                        }
-                    }
-                }
-                // A scale connect/disconnect changes the roster this primary
-                // advertises to its mirrors (issue 04) — re-push so a secondary
-                // that attached BEFORE the scale was connected attaches it now,
-                // without needing to reconnect (the Welcome roster is attach-time
-                // only). This closes the gap the issue-04 demo surfaced.
-                proxy.pushRoster()
-                }.onFailure { appendLog("Scale state handling failed: ${it.message}") }
             }
         }
         loadBuiltinProfiles()
@@ -1208,7 +1135,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             visualizer.load()
             drive.load()
         }
-        startDe1KeepAlive()
         startScreensaverClock()
         // Mirror the Visualizer controller's state into the UI snapshot.
         viewModelScope.launch {
@@ -2449,27 +2375,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Called from the UI once the BLE runtime permissions have been granted. */
-    fun connect() {
-        _ui.update { it.copy(eventLog = emptyList()) }
-        // Show "scanning" on the connection-status UI while the shared scanner
-        // hunts; the scanner's onFound hands the matched DE1 to ble.connect.
-        ble.markScanning()
-        bleScanner.scanFor(SCAN_LABEL_DE1, De1BleManager::isDe1Name) { device, _ ->
-            ble.connect(device)
-        }
-        // The manager's state flow is collected in `init`; markScanning() above
-        // already pushed the new state, so no manual reflection is needed here.
-    }
+    /** Scan for and connect to a DE1 — delegate of [ConnectionController.connect].
+     *  Called from the UI once the BLE runtime permissions have been granted. */
+    fun connect() = connection.connect()
 
-    fun disconnect() {
-        // Drop any outstanding scan want too — the user may disconnect mid-scan.
-        bleScanner.cancel(SCAN_LABEL_DE1)
-        ble.disconnect()
+    /** Disconnect the DE1 — delegate of [ConnectionController.disconnect]. */
+    fun disconnect() = connection.disconnect()
+
+    /** A DE1 disconnect closed the session: stop the in-flight connect-time
+     *  register sweep, drop the pending gated-start, and clear the live
+     *  telemetry + machine identity so the Brew/Settings surfaces show "—"
+     *  for the next connection rather than freezing on the last machine's
+     *  values. Wired as [ConnectionController]'s onDe1SessionClosed. */
+    private fun clearDe1SessionUi() {
         machineInfoJob?.cancel() // stop any in-flight connect-time register sweep
         pendingBrew = false
         _ui.update { it.copy(
-            bleState = De1BleManager.State.DISCONNECTED,
             machineState = null,
             machineStateName = null,
             machineSubstate = null,
@@ -2954,9 +2875,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         qcFlushTempC = _ui.value.qcFlushTempC,
         qcGrind = _ui.value.qcGrind,
         activeProfileId = _ui.value.activeProfileId,
-        de1Address = _ui.value.rememberedDe1Address,
-        scaleAddress = _ui.value.rememberedScaleAddress,
-        scaleName = _ui.value.rememberedScaleName,
+        // The remembered addresses live on the connection controller — its
+        // setters call persistPrefs AFTER their state update, so this read is
+        // always fresh (the MainUiState copies are display mirrors).
+        de1Address = connection.state.value.rememberedDe1Address,
+        scaleAddress = connection.state.value.rememberedScaleAddress,
+        scaleName = connection.state.value.rememberedScaleName,
         proxyRole = _ui.value.proxyRole,
         proxyPrimaryHost = _ui.value.proxyPrimaryHost,
         proxyPrimaryPort = _ui.value.proxyPrimaryPort,
@@ -3056,29 +2980,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Auto-connect (per device) ─────────────────────────────────────────────
 
-    /** Per-device "Auto-connect" toggle for the DE1. ON remembers the device (so
-     *  the app reconnects on an unexpected drop and connects on launch); OFF
-     *  forgets it — clears the saved address and disarms reconnect, WITHOUT
-     *  dropping the current session. Mirrored into the manager immediately. */
-    fun setDe1AutoConnect(on: Boolean) {
-        val addr = if (on) (_ui.value.de1BluetoothAddress ?: _ui.value.rememberedDe1Address) else null
-        _ui.update { it.copy(rememberedDe1Address = addr) }
-        ble.autoReconnectEnabled = addr != null
-        // Turning it off while a (cold-start) scan/connect is still in flight cancels
-        // it, so a pending auto-connect can't immediately re-remember the device. A
-        // live (READY) session is left connected — off just means "don't reconnect".
-        if (!on && ble.state.value != De1BleManager.State.READY) disconnect()
-        persistPrefs()
-    }
+    /** Per-device "Auto-connect" toggle for the DE1 — delegate of
+     *  [ConnectionController.setDe1AutoConnect]. */
+    fun setDe1AutoConnect(on: Boolean) = connection.setDe1AutoConnect(on)
 
     /** Per-device "Auto-connect" toggle for the scale (the scale-side twin). */
-    fun setScaleAutoConnect(on: Boolean) {
-        val addr = if (on) (scale.connectedAddress ?: _ui.value.rememberedScaleAddress) else null
-        _ui.update { it.copy(rememberedScaleAddress = addr) }
-        scale.autoReconnectEnabled = addr != null
-        if (!on && scale.state.value != ScaleBleManager.State.READY) disconnectScale()
-        persistPrefs()
-    }
+    fun setScaleAutoConnect(on: Boolean) = connection.setScaleAutoConnect(on)
 
     /**
      * Enable/disable steam eco mode (Quick Controls). Returns a `CoreOutput` (an
@@ -4022,9 +3929,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Restore the last session's profile selection; refreshProfiles
             // self-heals if the id no longer resolves (e.g. deleted custom).
             activeProfileId = p.activeProfileId ?: it.activeProfileId,
-            rememberedDe1Address = p.de1Address,
-            rememberedScaleAddress = p.scaleAddress,
-                rememberedScaleName = p.scaleName,
             proxyRole = p.proxyRole,
             proxyPrimaryHost = p.proxyPrimaryHost,
             proxyPrimaryPort = p.proxyPrimaryPort,
@@ -4037,79 +3941,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setAutoTare(p.autoTare) }
         runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
         runCatching { bridge.setVolumeStopWithScale(p.volumeStopWithScale) }
-        // Per-device auto-connect = a remembered address: arm each manager's
-        // link-drop loop only for a device whose Auto-connect is ON.
-        ble.autoReconnectEnabled = p.de1Address != null
-        scale.autoReconnectEnabled = p.scaleAddress != null
         prefsLoaded = true
-        // Cold-start: auto-connect to each remembered device. Connects to the
-        // first DE1/scale matched by name — in the common single-machine setup
-        // that is the remembered one. Best-effort: a missing BLE permission (or no
-        // device in range) just no-ops.
-        runCatching {
-            if (p.de1Address != null && ble.state.value == De1BleManager.State.IDLE) connect()
-            if (p.scaleAddress != null && scale.state.value == ScaleBleManager.State.IDLE) connectScale()
-        }
-    }
-
-    /** Seed [MainUiState.bluetoothOn] from the adapter and subscribe to its on/off
-     *  broadcast for the life of the VM. */
-    private fun observeBluetoothAdapter() {
-        val app = getApplication<Application>()
-        val adapter = (app.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-        _ui.update { it.copy(bluetoothOn = adapter?.isEnabled == true) }
-        ContextCompat.registerReceiver(
-            app, bluetoothReceiver,
-            IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
-            ContextCompat.RECEIVER_NOT_EXPORTED,
-        )
-    }
-
-    /** Bluetooth came back ON: kick a fresh connect for any remembered device that
-     *  isn't already connecting/connected. Its reconnect loop may have given up
-     *  (MAX_RECONNECT_ATTEMPTS) while the adapter was off, so nothing else retries. */
-    private fun onBluetoothEnabled() {
-        // Re-kick anything not already connected or mid-handshake. SCANNING is
-        // included on purpose: a scan in flight when the adapter went off is left
-        // suspended on the (now-silent) shared scan, so without a fresh connect it
-        // would sit on "Scanning…" forever once BT returns. connectScale/connect
-        // cancel+replace the stale want, so this is safe to call in that state.
-        fun stale(s: De1BleManager.State) =
-            s == De1BleManager.State.IDLE || s == De1BleManager.State.DISCONNECTED || s == De1BleManager.State.SCANNING
-        fun stale(s: ScaleBleManager.State) =
-            s == ScaleBleManager.State.IDLE || s == ScaleBleManager.State.DISCONNECTED || s == ScaleBleManager.State.SCANNING
-        runCatching {
-            // Prefer a scan-free DIRECT connect by the remembered address:
-            // this receiver can fire with the app backgrounded and the
-            // screen off, where Android throttles our (deliberately)
-            // unfiltered scan to zero results — the reaprime #107 failure.
-            // A direct GATT connect is never throttled. Fall back to the
-            // name scan when the transport can't mint address handles
-            // (LAN-proxy mode) or the scale's name was never persisted.
-            val ui = _ui.value
-            if (ui.rememberedDe1Address != null && stale(ble.state.value)) {
-                val direct = proxy.transport.resolveByAddress(ui.rememberedDe1Address, "DE1")
-                if (direct != null) {
-                    ble.markScanning()
-                    ble.connect(direct)
-                } else {
-                    connect()
-                }
-            }
-            if (ui.rememberedScaleAddress != null && stale(scale.state.value)) {
-                val name = ui.rememberedScaleName
-                val direct = if (name != null) {
-                    proxy.transport.resolveByAddress(ui.rememberedScaleAddress, name)
-                } else {
-                    null
-                }
-                if (direct != null && name != null) {
-                    scale.connect(direct, name)
-                } else {
-                    connectScale()
-                }
-            }
-        }
+        // Hydrate the remembered addresses, arm each manager's reconnect loop,
+        // and cold-start auto-connect to each remembered device.
+        connection.hydrateRemembered(p.de1Address, p.scaleAddress, p.scaleName)
     }
 
     /** Equipment-level grinder model (free text). Persisted; rides Visualizer
@@ -4131,22 +3966,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun pokeUserPresent() {
         if (_ui.value.bleState != De1BleManager.State.READY) return
         runCatching { bridge.setUserPresent(true) }.getOrNull()?.let(::onCoreOutputJson)
-    }
-
-    /** The keep-awake heartbeat: while connected with the pref on, rewrite
-     *  UserPresent every 60 s (the DE1's sleep timer is minutes-scale, so a
-     *  minute cadence keeps it pinned without chattering the bus). */
-    private fun startDe1KeepAlive() {
-        viewModelScope.launch {
-            while (true) {
-                delay(60_000)
-                // The saver owns the sleep policy while shown: don't re-arm
-                // the DE1's presence timer against our own idle decision
-                // (reaprime's PresenceController model — the heartbeat keeps
-                // the machine awake only while the user is actually present).
-                if (_ui.value.suppressDe1Sleep && !_ui.value.saverVisible) pokeUserPresent()
-            }
-        }
     }
 
     // ── Sleep & screensaver ───────────────────────────────────────────────────
@@ -4395,27 +4214,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         refreshProfiles()
     }
 
-    /** Scan for and connect to a Bookoo scale. Independent of the DE1. */
-    fun connectScale() {
-        scale.markScanning()
-        // AND6: scan for EVERY supported scale's advertised-name prefix (the
-        // core-owned registry), not a hardcoded Bookoo rule — the web shell does
-        // the same. Resolved once per scan; the connected model's codec + UUIDs
-        // come from the core in ScaleBleManager.establish(). Case-INSENSITIVE
-        // to match the core's `Scale::identify` (the scan used to be stricter
-        // than identify, so a mixed-case unit could pass identify but never
-        // scan-match — e.g. "eCompass" vs "ECOMPASS").
-        val prefixes = scale.supportedScaleNamePrefixes()
-        bleScanner.scanFor(SCAN_LABEL_SCALE, { name -> prefixes.any { name.startsWith(it, ignoreCase = true) } }) { device, name ->
-            scale.connect(device, name)
-        }
-    }
+    /** Scan for and connect to a scale — delegate of
+     *  [ConnectionController.connectScale]. Independent of the DE1. */
+    fun connectScale() = connection.connectScale()
 
-    fun disconnectScale() {
-        bleScanner.cancel(SCAN_LABEL_SCALE)
-        scale.disconnect()
+    /** Disconnect the scale — delegate of [ConnectionController.disconnectScale]. */
+    fun disconnectScale() = connection.disconnectScale()
+
+    /** A scale disconnect closed the session: clear the readings, capabilities,
+     *  and identity so the scale card/config UI hides until the next scale.
+     *  Wired as [ConnectionController]'s onScaleSessionClosed. */
+    private fun clearScaleSessionUi() {
         _ui.update { it.copy(
-            scaleState = ScaleBleManager.State.DISCONNECTED,
             scaleWeightG = null,
             scaleFlowGPerS = null,
             scaleTimerMs = null,
@@ -5137,11 +4947,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         super.onCleared()
-        runCatching { getApplication<Application>().unregisterReceiver(bluetoothReceiver) }
-        bleScanner.cancel(SCAN_LABEL_DE1)
-        bleScanner.cancel(SCAN_LABEL_SCALE)
-        ble.disconnect()
-        scale.disconnect()
+        // Adapter watcher off, scans cancelled, both device links down…
+        connection.close()
         // Close the transport last — it unregisters the Nordic environment's
         // Bluetooth receiver and tears down the central manager. The managers'
         // disconnect() calls above are fire-and-forget coroutines; closing the
@@ -5170,10 +4977,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         /** Defer before a post-steam auto-purge so an immediate shot wins the
          *  group (issue 15). */
         const val AUTO_PURGE_DELAY_MS = 1_500L
-
-        /** [BleScanner] want labels — one per device the app discovers. */
-        const val SCAN_LABEL_DE1 = "DE1"
-        const val SCAN_LABEL_SCALE = "Scale"
     }
 }
 
