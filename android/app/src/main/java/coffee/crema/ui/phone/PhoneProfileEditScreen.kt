@@ -46,6 +46,7 @@ import coffee.crema.ui.phone.components.CremaPhoneBackBar
 import coffee.crema.ui.screens.ProfileCurveChart
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.theme.JetBrainsMono
+import kotlin.math.roundToInt
 
 /*
  * PhoneProfileEditScreen — the pushed profile editor (DESIGN §3.7; port of
@@ -395,10 +396,10 @@ private fun PhaseRow(
                 label = "Volume limit",
                 sub = "Cap water dispensed this phase",
                 on = seg.volume != null,
-                onToggle = { onChange(seg.copy(volume = if (seg.volume == null) 50f else null)) },
+                onToggle = { onChange(seg.copy(volume = if (seg.volume == null) 50 else null)) },
             ) {
-                CremaStepper(value = (seg.volume ?: 50f).toDouble(), unit = "ml", step = 5.0, min = 0.0, max = 500.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = {
-                    onChange(seg.copy(volume = it.toFloat()))
+                CremaStepper(value = (seg.volume ?: 50).toDouble(), unit = "ml", step = 5.0, min = 0.0, max = 500.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = {
+                    onChange(seg.copy(volume = it.roundToInt()))
                 })
             }
             // Exit early (optional).

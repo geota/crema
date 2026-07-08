@@ -5,7 +5,30 @@ import coffee.crema.core.ExitMetric
 import coffee.crema.core.Pump
 import coffee.crema.core.Transition
 import coffee.crema.core.brewRatio
+import kotlin.math.roundToInt
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonTransformingSerializer
+import kotlinx.serialization.json.double
+import kotlinx.serialization.json.intOrNull
+
+/**
+ * An `Int` that also DECODES from a float. Pre-2026-07 saves carry
+ * `"volumeLimitMl": 100.0` (the field was modelled as a Float — issue #23),
+ * and kotlinx's strict Int decode would reject those files outright, so a
+ * float rounds to the nearest int on read. Encoding always writes a plain
+ * integer, so re-saved profiles come out clean. The core's serde side is
+ * float-tolerant the same way (`lenient_uint` in crema_profile.rs).
+ */
+object LenientIntSerializer : JsonTransformingSerializer<Int>(Int.serializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement {
+        val p = element as? JsonPrimitive ?: return element
+        p.intOrNull?.let { return element }
+        return JsonPrimitive(p.double.roundToInt())
+    }
+}
 
 /*
  * The shell-facing editable profile model — a thin Kotlin interface that mirrors
@@ -89,8 +112,10 @@ data class ProfileSegment(
     val temp: Float? = null,
     /** Which sensor the [temp] targets — `"coffee"` (group head) | `"water"` (mix). */
     val tempSensor: String? = null,
-    /** Per-segment dispensed-volume limit, ml, or null = no limit. */
-    val volumeLimitMl: Float? = null,
+    /** Per-segment dispensed-volume limit, ml, or null = no limit. An integer
+     *  (the wire carries whole ml, `u16` core-side); decodes leniently from the
+     *  floats older saves carry — see [LenientIntSerializer]. */
+    val volumeLimitMl: @Serializable(with = LenientIntSerializer::class) Int? = null,
     /** Structured early-exit condition `{metric, compare, threshold}`, or null. */
     val exit: SegmentExit? = null,
     /** Per-segment max limiter `{value, range}` on the non-priority quantity, or null. */

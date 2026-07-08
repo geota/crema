@@ -91,6 +91,7 @@ import coffee.crema.ui.theme.JetBrainsMono
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.SegOption
+import kotlin.math.roundToInt
 
 /*
  * Profile editor (the pushed `profile-edit` route) — M3, single full-width page.
@@ -399,7 +400,7 @@ private fun SegmentRowFull(
     val exView = seg.exit ?: SegmentExit(ExitMetric.Flow, Compare.Over, 4f)
     val limOn = seg.limiter != null
     val lmView = seg.limiter ?: SegmentLimiter(6f, 0.6f)
-    val segVolOn = (seg.volume ?: 0f) > 0f
+    val segVolOn = (seg.volume ?: 0) > 0
     val bounds = ProfileBounds.INSTANCE
     CremaCard(Modifier.fillMaxWidth(), container = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Row(
@@ -454,8 +455,8 @@ private fun SegmentRowFull(
                 CremaStepper(value = (seg.temp ?: 93f).toDouble(), unit = "°C", step = 0.5, min = 20.0, max = bounds.maxTemperatureC.toDouble(), onChange = { onEdit(seg.copy(temp = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
             }
             SegCell(1f) {
-                CremaOptionalHeader("Volume", segVolOn, { onEdit(seg.copy(volume = if (segVolOn) null else 50f)) })
-                CremaStepper(value = (seg.volume ?: 0f).toDouble(), unit = "ml", step = 5.0, min = 0.0, max = 500.0, onChange = { onEdit(seg.copy(volume = it.toFloat().takeIf { v -> v > 0f })) }, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BoxedDense, enabled = segVolOn)
+                CremaOptionalHeader("Volume", segVolOn, { onEdit(seg.copy(volume = if (segVolOn) null else 50)) })
+                CremaStepper(value = (seg.volume ?: 0).toDouble(), unit = "ml", step = 5.0, min = 0.0, max = 500.0, onChange = { onEdit(seg.copy(volume = it.roundToInt().takeIf { v -> v > 0 })) }, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BoxedDense, enabled = segVolOn)
             }
             SegCell(1.5f) {
                 CremaSplitLabel(

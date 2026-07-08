@@ -240,7 +240,8 @@ data class SegmentEdit(
     val temp: Float?,
     /** Which sensor [temp] targets — `"coffee"` | `"water"`. */
     val tempSensor: String? = null,
-    val volume: Float? = null,
+    /** Per-segment volume limit, whole ml (wire `volumeLimitMl`, a core u16). */
+    val volume: Int? = null,
     /** Early-exit condition, or null = disabled. */
     val exit: SegmentExit? = null,
     /** Max limiter, or null = disabled. */

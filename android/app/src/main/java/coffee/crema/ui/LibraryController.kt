@@ -1593,13 +1593,16 @@ class LibraryController(
         }
         // Snapshot the recipe (as-run) as the core wire Profile so the upload
         // embeds real steps (#12) — not just the name. You can't switch profiles
-        // mid-pour, so the active profile is the one that ran.
-        val profileWire: JsonObject? = profile?.let { p ->
+        // mid-pour, so the active profile is the one that ran. Convert from the
+        // FULL raw library JSON (the same source startShot uploads from) — NOT a
+        // re-encode of the thin display model: kotlinx omits fields sitting at
+        // their declared defaults (a segment target of 0, a dose of exactly
+        // 18 g…), the core requires them, and the failed conversion silently
+        // dropped the snapshot for any such profile.
+        val profileWire: JsonObject? = s.activeProfileId?.let { profileJson(it) }?.let { raw ->
             runCatching {
-                json.parseToJsonElement(
-                    cremaProfileToWire(json.encodeToString(CremaProfile.serializer(), p)),
-                ) as? JsonObject
-            }.getOrNull()
+                json.parseToJsonElement(cremaProfileToWire(raw)) as? JsonObject
+            }.onFailure { appendLog("Shot profile snapshot failed: ${it.message}") }.getOrNull()
         }
         val bean = s.beans.firstOrNull { it.id == s.activeBeanId }
         val roasterName = bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
