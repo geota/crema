@@ -126,8 +126,9 @@ pub use replay::{ReplayMeta, ReplayMetaBean, fold_meta_jsonl, fold_meta_jsonl_js
 pub use session::SessionTimer;
 pub use settings_import::{ImportedDe1AppSettings, import_settings_tdb};
 pub use shot::{
-    ABORTED_MAX_DURATION_MS, ABORTED_MAX_WEIGHT_G, MAX_SHOT_SAMPLES, ShotDisposition, ShotEvent,
-    ShotMetrics, ShotMonitor, ShotPeaks, ShotPhase, ShotRecord, TimedSample, shot_disposition,
+    ABORTED_MAX_DURATION_MS, ABORTED_MAX_WEIGHT_G, MAX_SHOT_SAMPLES, STORAGE_SAMPLE_CAP,
+    ShotDisposition, ShotEvent, ShotMetrics, ShotMonitor, ShotPeaks, ShotPhase, ShotRecord,
+    TimedSample, downsample_indices, shot_disposition,
 };
 pub use steam::{
     MAX_STEAM_SAMPLES, STEAM_ECO_DELAY, SteamClogReason, SteamEvent, SteamMonitor, SteamRecord,
@@ -150,10 +151,11 @@ pub use visualizer_sync::{
     signature_for_shot,
 };
 pub use visualizer_wire::{
-    BagWire, RoasterWire, bean_from_wire, bean_from_wire_json, bean_to_wire, bean_to_wire_json,
-    roast_level_from_wire, roast_level_to_wire, roaster_from_wire, roaster_from_wire_json,
-    roaster_to_wire, roaster_to_wire_json, samples_from_visualizer_detail,
-    samples_from_visualizer_detail_json, wire_shot_from_detail, wire_shot_from_detail_json,
+    BagWire, RoasterWire, ShotPatchInputs, bean_from_wire, bean_from_wire_json, bean_to_wire,
+    bean_to_wire_json, rating_to_flavor, roast_level_from_wire, roast_level_to_wire,
+    roaster_from_wire, roaster_from_wire_json, roaster_to_wire, roaster_to_wire_json,
+    samples_from_visualizer_detail, samples_from_visualizer_detail_json, visualizer_shot_patch,
+    visualizer_shot_patch_json, wire_shot_from_detail, wire_shot_from_detail_json,
 };
 pub use volume::{LineFreqDetector, VolumeIntegrator};
 pub use water::{WaterEvent, WaterMonitor, WaterRecord, WaterSessionKind};

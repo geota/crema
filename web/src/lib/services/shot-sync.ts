@@ -49,9 +49,8 @@ import {
 	decodeResponse
 } from '../effect/schema/visualizer.ts';
 import { getBeanStore } from '$lib/bean/store.svelte';
-import { roastLevelToWire } from '$lib/bean/visualizer-sync';
 import { exportStoredShotAsV2Json } from '$lib/history/v2-export';
-import type { TimedSample } from '$lib/core';
+import type { ShotPatchInputs, TimedSample } from '$lib/core';
 import type { ShotBean, StoredShot } from '$lib/history/model';
 import type { HistoryStore } from '$lib/history/store.svelte';
 import { getSettingsStore } from '$lib/settings';
@@ -66,7 +65,8 @@ import { appendSyncLog, readSyncConfig } from '$lib/visualizer/sync-config';
 import {
 	samplesFromVisualizerDetail as wasmSamplesFromVisualizerDetail,
 	wireShotFromDetail as wasmWireShotFromDetail,
-	parseV2Profile as wasmParseV2Profile
+	parseV2Profile as wasmParseV2Profile,
+	visualizerShotPatchJson as wasmVisualizerShotPatchJson
 } from '$lib/wasm/de1_wasm';
 import { enqueueEntry as enqueueSyncOp } from './queue-store.ts';
 
@@ -151,34 +151,15 @@ function samplesFromVisualizerDetail(detail: ShotDetail): TimedSample[] {
 	return JSON.parse(wasmSamplesFromVisualizerDetail(JSON.stringify(detail))) as TimedSample[];
 }
 
-// ── PATCH-body resolvers (copied verbatim from the old module) ────────────
-
-/**
- * Map a {@link ShotBean} snapshot onto the inline-bean PATCH fields Visualizer
- * accepts on `ShotUpdateRequest.shot`. **Snapshot-only**: every field is read
- * from the frozen-at-completion {@link ShotBean}, never from the live bean —
- * reading live-bean content would retroactively rewrite history. Empty
- * strings / `null` sources are skipped so an empty bean doesn't blow away
- * server-side values the user filled in via Visualizer's web UI.
- */
-export function inlineBeanPatch(bean: ShotBean | null | undefined): Record<string, unknown> {
-	const out: Record<string, unknown> = {};
-	if (!bean) return out;
-	const roaster = bean.roasterName?.trim();
-	if (roaster) out.bean_brand = roaster;
-	const type = bean.name?.trim();
-	if (type) out.bean_type = type;
-	if (bean.roastedOn) out.roast_date = bean.roastedOn;
-	const roastLevelStr = roastLevelToWire(bean.roastLevel ?? null);
-	if (roastLevelStr) out.roast_level = roastLevelStr;
-	const notes = bean.notes?.trim();
-	if (notes) out.bean_notes = notes;
-	const grinder = bean.grinderSetting?.trim();
-	if (grinder) out.grinder_setting = grinder;
-	// NOTE: `grinder_model` is equipment-level, not bean-level — resolved
-	// separately via {@link resolveGrinderModel}. Don't add a slot here.
-	return out;
-}
+// ── PATCH-body resolvers ──────────────────────────────────────────────────
+//
+// The body ASSEMBLY (inline-bean field mapping, rating→flavor, key naming,
+// blank-skipping) lives in the core — `de1_domain::visualizer_shot_patch`,
+// review #42: this module and Android's `VisualizerSync` had drifted (the
+// Kotlin builder sent only `bean_brand`/`bean_type`, and the shells
+// disagreed on what a cleared rating does to `flavor`). What remains here
+// are the SHELL-side resolvers: config lookups and the live-vs-snapshot
+// reading discipline the core can't know about.
 
 /**
  * Resolve the shot's equipment-level grinder model for the post-upload PATCH.
@@ -289,7 +270,16 @@ export interface ShotPatch {
 	notes?: string;
 	coffeeBagId?: string | null;
 	tagList?: string[];
-	inlineBean?: Record<string, unknown>;
+	/**
+	 * The frozen-at-completion bean snapshot for the inline-bean block.
+	 * **Snapshot-only** — never the live bean (reading live-bean content
+	 * would retroactively rewrite history). The core builder maps it onto
+	 * `bean_brand` / `bean_type` / `roast_date` / `roast_level` /
+	 * `bean_notes` / `grinder_setting`, skipping blanks so an empty bean
+	 * doesn't blow away server-side values the user filled in via
+	 * Visualizer's web UI.
+	 */
+	bean?: ShotBean | null;
 	grinderModel?: string;
 	/**
 	 * Per-shot visibility. Sent as the same `privacy` vocabulary the upload
@@ -425,22 +415,21 @@ export const ShotSyncLive = Layer.effect(
 			}
 
 			// Post-upload PATCH: build each block independently so empty sources
-			// skip cleanly (no risk of overwriting a Visualizer-side edit).
+			// skip cleanly (no risk of overwriting a Visualizer-side edit —
+			// the core builder additionally drops blank inline-bean fields).
 			const coffeeBagId = resolveCoffeeBagId(shot);
 			const tagList = resolveTagList(shot);
-			const inlineBean = inlineBeanPatch(shot.bean);
-			const hasInlineBean = Object.keys(inlineBean).length > 0;
 			const grinderModel = resolveGrinderModel(shot, getSettingsStore().current.grinderModel);
 			if (
 				coffeeBagId != null ||
 				(tagList != null && tagList.length > 0) ||
-				hasInlineBean ||
+				shot.bean != null ||
 				grinderModel != null
 			) {
 				yield* patchShot(result.id, {
 					...(coffeeBagId != null ? { coffeeBagId } : {}),
 					...(tagList != null && tagList.length > 0 ? { tagList } : {}),
-					...(hasInlineBean ? { inlineBean } : {}),
+					...(shot.bean != null ? { bean: shot.bean } : {}),
 					...(grinderModel != null ? { grinderModel } : {})
 				}).pipe(
 					Effect.catchAll((e) =>
@@ -481,21 +470,28 @@ export const ShotSyncLive = Layer.effect(
 			patch: ShotPatch
 		) {
 			yield* requireConnected;
-			// Start from the inline-bean block so the typed slots below take
-			// precedence on key collisions.
-			const shotBody: ShotUpdateRequest['shot'] = { ...(patch.inlineBean ?? {}) };
-			if (patch.notes !== undefined) shotBody.private_notes = patch.notes;
-			if (patch.rating !== undefined) {
-				// `null` rating means "unrated" — omit `flavor` rather than sending 0
-				// so we don't blow away an existing server-side cupping score.
-				if (patch.rating != null) {
-					shotBody.flavor = Math.max(0, Math.min(15, Math.round(patch.rating * 3)));
-				}
-			}
-			if (patch.coffeeBagId !== undefined) shotBody.coffee_bag_id = patch.coffeeBagId;
-			if (patch.tagList !== undefined) shotBody.tag_list = patch.tagList;
-			if (patch.grinderModel !== undefined) shotBody.grinder_model = patch.grinderModel;
-			if (patch.privacy !== undefined) shotBody.privacy = patch.privacy;
+			// The body assembly lives in the core (one builder for both
+			// shells — review #42): rating→flavor with unrated/cleared
+			// OMITTED (never clobber a server-side cupping score), the
+			// inline-bean block with blank-skipping and the lossy
+			// roast-level banding, and the wire key names.
+			const inputs: ShotPatchInputs = {
+				rating: patch.rating ?? undefined,
+				notes: patch.notes,
+				privacy: patch.privacy,
+				grinderModel: patch.grinderModel,
+				coffeeBagId: patch.coffeeBagId ?? undefined,
+				tagList: patch.tagList ?? [],
+				beanBrand: patch.bean?.roasterName ?? undefined,
+				beanType: patch.bean?.name,
+				roastDate: patch.bean?.roastedOn ?? undefined,
+				roastLevel: patch.bean?.roastLevel ?? undefined,
+				beanNotes: patch.bean?.notes,
+				grinderSetting: patch.bean?.grinderSetting ?? undefined
+			};
+			const shotBody = JSON.parse(
+				wasmVisualizerShotPatchJson(JSON.stringify(inputs))
+			) as ShotUpdateRequest['shot'];
 			const envelope: ShotUpdateRequest = { shot: shotBody };
 			yield* call(`/shots/${visualizerId}`, {
 				method: 'PATCH',
@@ -819,7 +815,6 @@ export const ShotSyncLive = Layer.effect(
 			const cfg = readSyncConfig();
 			const coffeeBagId = resolveCoffeeBagId(shot);
 			const tagList = resolveTagList(shot);
-			const inlineBean = inlineBeanPatch(shot.bean);
 			const grinderModel = resolveGrinderModel(shot, settings.grinderModel);
 			return {
 				rating: (shot.metadata.rating ?? 0) > 0 ? (shot.metadata.rating ?? null) : null,
@@ -827,7 +822,7 @@ export const ShotSyncLive = Layer.effect(
 				privacy: shot.privacy ?? cfg.privacy,
 				...(coffeeBagId != null ? { coffeeBagId } : {}),
 				...(tagList != null && tagList.length > 0 ? { tagList } : {}),
-				...(Object.keys(inlineBean).length > 0 ? { inlineBean } : {}),
+				...(shot.bean != null ? { bean: shot.bean } : {}),
 				...(grinderModel != null ? { grinderModel } : {})
 			};
 		};

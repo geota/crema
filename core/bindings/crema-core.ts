@@ -1549,6 +1549,54 @@ export interface ShotBean {
 }
 
 /**
+ * Everything a shot-annotation PATCH can carry, gathered by the shell
+ * (which owns the config lookups — include-notes opt-out, effective
+ * privacy, bag/tag resolution) and assembled here so both shells emit
+ * an identical wire body (review #42: the two builders had drifted —
+ * Android sent only `bean_brand`/`bean_type` of the inline-bean block,
+ * and the shells disagreed on what a cleared rating does to `flavor`).
+ * All fields optional: an absent field is omitted from the body, never
+ * sent as `null`.
+ */
+export interface ShotPatchInputs {
+	/**
+	 * Star rating 0..=5. `None` OR `0` = unrated → `flavor` is omitted,
+	 * never sent as 0 — a cleared local rating must not clobber a
+	 * cupping score the user set on visualizer.coffee directly.
+	 */
+	rating?: number;
+	/**
+	 * Tasting notes → `private_notes`. The shell gates this on its
+	 * include-notes pref (an opt-out must not leak via an edit); an
+	 * empty string is sent as-is (it clears the remote notes).
+	 */
+	notes?: string;
+	/** Effective per-shot visibility (`"public" | "unlisted" | "private"`). */
+	privacy?: string;
+	/** Equipment-level grinder model → `grinder_model`. */
+	grinderModel?: string;
+	/** Visualizer coffee-bag id to (re)link → `coffee_bag_id`. */
+	coffeeBagId?: string;
+	/** Tags → `tag_list`. Empty = omit. */
+	tagList: string[];
+	/** Inline bean: roaster display name → `bean_brand`. */
+	beanBrand?: string;
+	/** Inline bean: bean/bag name → `bean_type`. */
+	beanType?: string;
+	/** Inline bean: ISO `yyyy-mm-dd` roast date → `roast_date`. */
+	roastDate?: string;
+	/**
+	 * Inline bean: Crema roast level 1..=10, RAW — the lossy 5-band
+	 * mapping ([`roast_level_to_wire`]) lives here, not in the shell.
+	 */
+	roastLevel?: number;
+	/** Inline bean: the bean's free-form notes → `bean_notes`. */
+	beanNotes?: string;
+	/** Inline bean: the bean's recorded dial → `grinder_setting`. */
+	grinderSetting?: string;
+}
+
+/**
  * Pre-computed summary peaks over a [`ShotRecord`]'s telemetry —
  * what the History list and detail readouts surface above the chart.
  * Returned by [`ShotRecord::peaks`] so each shell consumes the

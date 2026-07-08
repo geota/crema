@@ -298,6 +298,24 @@ pub fn volume_stop_arms(
     de1_domain::volume_stop_arms(scale_connected, weight_target_set, volume_stop_with_scale)
 }
 
+/// Assemble the Visualizer `PATCH /shots/{id}` body from a
+/// `ShotPatchInputs` JSON (rating→flavor rule, inline-bean block,
+/// key naming — one builder for both shells; review #42). Returns the
+/// inner body JSON; the caller wraps it in the `{ "shot": … }` envelope.
+/// See `de1_domain::visualizer_shot_patch_json`.
+#[wasm_bindgen(js_name = visualizerShotPatchJson)]
+pub fn visualizer_shot_patch_json(inputs_json: &str) -> Result<String, String> {
+    de1_domain::visualizer_shot_patch_json(inputs_json)
+}
+
+/// The indices to KEEP when downsampling a shot's telemetry for storage
+/// (every-Nth plus always the last) — one policy for every shell. See
+/// `de1_domain::downsample_indices`.
+#[wasm_bindgen(js_name = downsampleIndices)]
+pub fn downsample_indices(len: u32, cap: u32) -> Vec<u32> {
+    de1_domain::downsample_indices(len, cap)
+}
+
 /// The bag's remaining grams after a pulled shot debits `dose_g`, floored at 0
 /// — shared `de1_domain::debit_remaining`. `undefined` means nothing to debit
 /// (already empty / bad dose): don't persist or touch `updatedAt`. The shell

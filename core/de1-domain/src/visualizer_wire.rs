@@ -38,6 +38,7 @@ use de1_protocol::ShotSample;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::time::Duration;
+use typeshare::typeshare;
 
 // ── Visualizer wire shapes ───────────────────────────────────────────────
 //
@@ -834,6 +835,123 @@ pub fn samples_from_visualizer_detail_json(detail_json: &str) -> Result<String, 
     serde_json::to_string(&samples).map_err(|e| e.to_string())
 }
 
+// ── Shot PATCH body ──────────────────────────────────────────────────────
+
+/// Crema star rating (0..=5) → Visualizer `flavor` (0..=15) — the exact
+/// inverse of the pull-side `rating = clamp(round(flavor / 3), 0, 5)` in
+/// [`wire_shot_from_detail`], kept adjacent so the pair can't drift.
+#[must_use]
+pub fn rating_to_flavor(rating: u8) -> u8 {
+    (rating.min(5)) * 3
+}
+
+/// Everything a shot-annotation PATCH can carry, gathered by the shell
+/// (which owns the config lookups — include-notes opt-out, effective
+/// privacy, bag/tag resolution) and assembled here so both shells emit
+/// an identical wire body (review #42: the two builders had drifted —
+/// Android sent only `bean_brand`/`bean_type` of the inline-bean block,
+/// and the shells disagreed on what a cleared rating does to `flavor`).
+/// All fields optional: an absent field is omitted from the body, never
+/// sent as `null`.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ShotPatchInputs {
+    /// Star rating 0..=5. `None` OR `0` = unrated → `flavor` is omitted,
+    /// never sent as 0 — a cleared local rating must not clobber a
+    /// cupping score the user set on visualizer.coffee directly.
+    pub rating: Option<u8>,
+    /// Tasting notes → `private_notes`. The shell gates this on its
+    /// include-notes pref (an opt-out must not leak via an edit); an
+    /// empty string is sent as-is (it clears the remote notes).
+    pub notes: Option<String>,
+    /// Effective per-shot visibility (`"public" | "unlisted" | "private"`).
+    pub privacy: Option<String>,
+    /// Equipment-level grinder model → `grinder_model`.
+    pub grinder_model: Option<String>,
+    /// Visualizer coffee-bag id to (re)link → `coffee_bag_id`.
+    pub coffee_bag_id: Option<String>,
+    /// Tags → `tag_list`. Empty = omit.
+    pub tag_list: Vec<String>,
+    /// Inline bean: roaster display name → `bean_brand`.
+    pub bean_brand: Option<String>,
+    /// Inline bean: bean/bag name → `bean_type`.
+    pub bean_type: Option<String>,
+    /// Inline bean: ISO `yyyy-mm-dd` roast date → `roast_date`.
+    pub roast_date: Option<String>,
+    /// Inline bean: Crema roast level 1..=10, RAW — the lossy 5-band
+    /// mapping ([`roast_level_to_wire`]) lives here, not in the shell.
+    pub roast_level: Option<f64>,
+    /// Inline bean: the bean's free-form notes → `bean_notes`.
+    pub bean_notes: Option<String>,
+    /// Inline bean: the bean's recorded dial → `grinder_setting`.
+    pub grinder_setting: Option<String>,
+}
+
+/// Assemble the `PATCH /shots/{id}` body (the inner object — the shell
+/// wraps it in the spec's `{ "shot": … }` envelope). Blank-after-trim
+/// strings are omitted like absent ones, except `notes` (see
+/// [`ShotPatchInputs::notes`]).
+#[must_use]
+pub fn visualizer_shot_patch(inputs: &ShotPatchInputs) -> Value {
+    let mut body = Map::new();
+    let mut put_trimmed = |key: &str, v: &Option<String>| {
+        if let Some(s) = v {
+            let t = s.trim();
+            if !t.is_empty() {
+                body.insert(key.to_owned(), Value::String(t.to_owned()));
+            }
+        }
+    };
+    put_trimmed("bean_brand", &inputs.bean_brand);
+    put_trimmed("bean_type", &inputs.bean_type);
+    put_trimmed("roast_date", &inputs.roast_date);
+    put_trimmed("bean_notes", &inputs.bean_notes);
+    put_trimmed("grinder_setting", &inputs.grinder_setting);
+    put_trimmed("grinder_model", &inputs.grinder_model);
+    if let Some(level) = roast_level_to_wire(inputs.roast_level) {
+        body.insert("roast_level".to_owned(), Value::String(level));
+    }
+    if let Some(rating) = inputs.rating.filter(|r| *r > 0) {
+        body.insert(
+            "flavor".to_owned(),
+            Value::Number(rating_to_flavor(rating).into()),
+        );
+    }
+    if let Some(notes) = &inputs.notes {
+        body.insert("private_notes".to_owned(), Value::String(notes.clone()));
+    }
+    if let Some(bag) = &inputs.coffee_bag_id {
+        body.insert("coffee_bag_id".to_owned(), Value::String(bag.clone()));
+    }
+    if !inputs.tag_list.is_empty() {
+        body.insert(
+            "tag_list".to_owned(),
+            Value::Array(
+                inputs
+                    .tag_list
+                    .iter()
+                    .map(|t| Value::String(t.clone()))
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(privacy) = &inputs.privacy {
+        body.insert("privacy".to_owned(), Value::String(privacy.clone()));
+    }
+    Value::Object(body)
+}
+
+/// JSON-bridged [`visualizer_shot_patch`]. Input: a [`ShotPatchInputs`]
+/// JSON. Output: the PATCH body JSON.
+///
+/// # Errors
+/// The JSON parse error string on a malformed `inputs_json`.
+pub fn visualizer_shot_patch_json(inputs_json: &str) -> Result<String, String> {
+    let inputs: ShotPatchInputs = serde_json::from_str(inputs_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&visualizer_shot_patch(&inputs)).map_err(|e| e.to_string())
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1183,5 +1301,76 @@ mod tests {
         assert_eq!(w.id, "r-1");
         assert_eq!(w.duration_ms, 25_000);
         assert_eq!(w.final_weight_g, Some(40.0));
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation)] // f64 0..=15 → i32, exact
+    fn rating_to_flavor_inverts_the_pull_mapping() {
+        // Forward × inverse round-trips every rating the UI can produce.
+        for rating in 0..=5u8 {
+            let flavor = f64::from(rating_to_flavor(rating));
+            let back = ((flavor / 3.0).round() as i32).clamp(0, 5);
+            assert_eq!(back, i32::from(rating));
+        }
+        // Saturation on garbage input.
+        assert_eq!(rating_to_flavor(200), 15);
+    }
+
+    #[test]
+    fn shot_patch_body_carries_the_typed_slots() {
+        let body = visualizer_shot_patch(&ShotPatchInputs {
+            rating: Some(4),
+            notes: Some("syrupy".to_owned()),
+            privacy: Some("unlisted".to_owned()),
+            grinder_model: Some("Niche Zero".to_owned()),
+            coffee_bag_id: Some("bag-1".to_owned()),
+            tag_list: vec!["crema".to_owned()],
+            bean_brand: Some("Sey".to_owned()),
+            bean_type: Some("Kenya AA".to_owned()),
+            roast_date: Some("2026-06-17".to_owned()),
+            roast_level: Some(3.0),
+            bean_notes: Some("washed".to_owned()),
+            grinder_setting: Some("14".to_owned()),
+        });
+        assert_eq!(body["flavor"], 12);
+        assert_eq!(body["private_notes"], "syrupy");
+        assert_eq!(body["privacy"], "unlisted");
+        assert_eq!(body["grinder_model"], "Niche Zero");
+        assert_eq!(body["coffee_bag_id"], "bag-1");
+        assert_eq!(body["tag_list"], serde_json::json!(["crema"]));
+        assert_eq!(body["bean_brand"], "Sey");
+        assert_eq!(body["bean_type"], "Kenya AA");
+        assert_eq!(body["roast_date"], "2026-06-17");
+        assert_eq!(body["roast_level"], "Medium-Light");
+        assert_eq!(body["bean_notes"], "washed");
+        assert_eq!(body["grinder_setting"], "14");
+    }
+
+    #[test]
+    fn cleared_rating_omits_flavor_and_empty_fields_are_absent() {
+        // Rating 0 (and None) must OMIT `flavor` — a cleared local rating
+        // must not clobber a server-side cupping score. Blank strings and
+        // an empty tag list vanish rather than riding as ""/[]/null.
+        let body = visualizer_shot_patch(&ShotPatchInputs {
+            rating: Some(0),
+            bean_brand: Some("  ".to_owned()),
+            ..ShotPatchInputs::default()
+        });
+        assert_eq!(body, serde_json::json!({}));
+        // Explicitly empty notes DO ride (they clear the remote notes).
+        let body = visualizer_shot_patch(&ShotPatchInputs {
+            notes: Some(String::new()),
+            ..ShotPatchInputs::default()
+        });
+        assert_eq!(body, serde_json::json!({ "private_notes": "" }));
+    }
+
+    #[test]
+    fn shot_patch_json_facade_round_trips() {
+        let out = visualizer_shot_patch_json(r#"{"rating":5,"privacy":"private"}"#).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["flavor"], 15);
+        assert_eq!(v["privacy"], "private");
+        assert!(visualizer_shot_patch_json("not json").is_err());
     }
 }

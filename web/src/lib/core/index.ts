@@ -1235,3 +1235,6 @@ export type {
 // argument / result shapes of the free wasm fns `historyStats` /
 // `resolveModeTargets`.
 export type { HistoryStats, ShotStatInput, ModeTargetInputs, ModeTargets } from './crema-core';
+// Visualizer shot-PATCH input shape (review #42) — the argument of the free
+// wasm fn `visualizerShotPatchJson`.
+export type { ShotPatchInputs } from './crema-core';

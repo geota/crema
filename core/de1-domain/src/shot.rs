@@ -420,6 +420,30 @@ impl ShotMonitor {
     }
 }
 
+/// Default cap for a persisted shot's telemetry slice — enough points
+/// for a faithful History detail chart while the stored row stays small.
+pub const STORAGE_SAMPLE_CAP: u32 = 200;
+
+/// Every-Nth downsample selection for persisting a shot's telemetry:
+/// the indices to KEEP from a series of `len` samples so at most ~`cap`
+/// survive, always including the last sample (the final reading anchors
+/// the chart's end). Returns indices rather than samples so each shell
+/// applies one identical policy to its own sample type (review #42 —
+/// ported from the Android `downsampleForStorage`). `len <= cap` (or a
+/// zero `cap`) keeps everything.
+#[must_use]
+pub fn downsample_indices(len: u32, cap: u32) -> Vec<u32> {
+    if cap == 0 || len <= cap {
+        return (0..len).collect();
+    }
+    let step = len / cap; // >= 1 since len > cap
+    let mut kept: Vec<u32> = (0..len).step_by(step as usize).collect();
+    if kept.last() != Some(&(len - 1)) {
+        kept.push(len - 1);
+    }
+    kept
+}
+
 /// A completed shot ran shorter than this AND landed less than
 /// [`ABORTED_MAX_WEIGHT_G`] in the cup ⇒ it was an aborted pull, not a
 /// shot. Decenza's `abortedshotclassifier.h:19-25` thresholds, validated
@@ -724,6 +748,22 @@ mod tests {
             shot_disposition(120_000, Some(200.0), BeverageType::Cleaning),
             ShotDisposition::SkipCleaning
         );
+    }
+
+    #[test]
+    fn downsample_keeps_everything_under_the_cap_and_always_the_last() {
+        // Under the cap: identity.
+        assert_eq!(downsample_indices(5, 200), vec![0, 1, 2, 3, 4]);
+        assert_eq!(downsample_indices(0, 200), Vec::<u32>::new());
+        // Over the cap: every-Nth plus the last index exactly once.
+        let kept = downsample_indices(1000, 200);
+        assert!(kept.len() <= 201, "kept {} of 1000", kept.len());
+        assert_eq!(kept.first(), Some(&0));
+        assert_eq!(kept.last(), Some(&999));
+        assert!(kept.windows(2).all(|w| w[0] < w[1]), "strictly increasing");
+        // Step lands exactly on the last index → no duplicate.
+        let kept = downsample_indices(400, 200);
+        assert_eq!(kept.iter().filter(|i| **i == 399).count(), 1);
     }
 
     #[test]

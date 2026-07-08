@@ -9,6 +9,7 @@
 	 * card is a frozen *result* — duration, yield, ratio and the shot's peaks.
 	 */
 	import { getSettingsStore, convertWeight, convertPressure, convertTemp } from '$lib/settings';
+	import { formatRatio } from '$lib/utils/ratio';
 	import type { CompletedShot } from '$lib/state';
 
 	let {
@@ -30,10 +31,9 @@
 	const time = $derived(`${Math.round(shot.duration / 1000)}`);
 	/** Final yield, in the chosen weight unit. */
 	const yieldM = $derived(convertWeight(shot.yieldOut, prefs.weightUnit));
-	/** Yield-to-dose ratio `1:x`, or `1:—` when there is no yield. */
-	const ratio = $derived(
-		shot.yieldOut != null && dose > 0 ? `1:${(shot.yieldOut / dose).toFixed(1)}` : '1:—'
-	);
+	/** Yield-to-dose ratio `1:x`, or `1:—` when there is no yield — the
+	 *  core-owned ratio math + label (review #42). */
+	const ratio = $derived(formatRatio(dose, shot.yieldOut));
 	/** Peak group pressure, in the chosen pressure unit. */
 	const peakBarM = $derived(convertPressure(shot.peakPressure, prefs.pressureUnit));
 	/** Peak group-head temperature, in the chosen temperature unit. */

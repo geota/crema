@@ -1499,6 +1499,47 @@ data class ShotBean (
 	val grinder: String? = null
 )
 
+/// Everything a shot-annotation PATCH can carry, gathered by the shell
+/// (which owns the config lookups — include-notes opt-out, effective
+/// privacy, bag/tag resolution) and assembled here so both shells emit
+/// an identical wire body (review #42: the two builders had drifted —
+/// Android sent only `bean_brand`/`bean_type` of the inline-bean block,
+/// and the shells disagreed on what a cleared rating does to `flavor`).
+/// All fields optional: an absent field is omitted from the body, never
+/// sent as `null`.
+@Serializable
+data class ShotPatchInputs (
+	/// Star rating 0..=5. `None` OR `0` = unrated → `flavor` is omitted,
+	/// never sent as 0 — a cleared local rating must not clobber a
+	/// cupping score the user set on visualizer.coffee directly.
+	val rating: UByte? = null,
+	/// Tasting notes → `private_notes`. The shell gates this on its
+	/// include-notes pref (an opt-out must not leak via an edit); an
+	/// empty string is sent as-is (it clears the remote notes).
+	val notes: String? = null,
+	/// Effective per-shot visibility (`"public" | "unlisted" | "private"`).
+	val privacy: String? = null,
+	/// Equipment-level grinder model → `grinder_model`.
+	val grinderModel: String? = null,
+	/// Visualizer coffee-bag id to (re)link → `coffee_bag_id`.
+	val coffeeBagId: String? = null,
+	/// Tags → `tag_list`. Empty = omit.
+	val tagList: List<String>,
+	/// Inline bean: roaster display name → `bean_brand`.
+	val beanBrand: String? = null,
+	/// Inline bean: bean/bag name → `bean_type`.
+	val beanType: String? = null,
+	/// Inline bean: ISO `yyyy-mm-dd` roast date → `roast_date`.
+	val roastDate: String? = null,
+	/// Inline bean: Crema roast level 1..=10, RAW — the lossy 5-band
+	/// mapping ([`roast_level_to_wire`]) lives here, not in the shell.
+	val roastLevel: Double? = null,
+	/// Inline bean: the bean's free-form notes → `bean_notes`.
+	val beanNotes: String? = null,
+	/// Inline bean: the bean's recorded dial → `grinder_setting`.
+	val grinderSetting: String? = null
+)
+
 /// Pre-computed summary peaks over a [`ShotRecord`]'s telemetry —
 /// what the History list and detail readouts surface above the chart.
 /// Returned by [`ShotRecord::peaks`] so each shell consumes the

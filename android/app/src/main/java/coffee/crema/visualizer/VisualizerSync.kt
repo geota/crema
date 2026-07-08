@@ -1,7 +1,9 @@
 package coffee.crema.visualizer
 
+import coffee.crema.core.ShotPatchInputs
 import coffee.crema.core.exportV2JsonShot
 import coffee.crema.core.signatureForShot
+import coffee.crema.core.visualizerShotPatchJson
 import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.history.StoredShot
 import kotlinx.coroutines.CoroutineScope
@@ -352,28 +354,38 @@ class VisualizerSync(
 
     /**
      * Mirror a History-panel edit onto the shot's already-uploaded Visualizer
-     * copy (web ShotSync.patchEditedShot): rating → `flavor` (0–15, ×3),
-     * notes → `private_notes` (gated on include-notes so an opt-out never
-     * leaks via an edit), effective privacy, and the inline bean fields the
-     * flat capture label carries. No-op for never-uploaded shots; soft —
-     * a failure notifies but never blocks the local edit.
+     * copy (web ShotSync.patchEditedShot). The body assembly — rating →
+     * `flavor` with a cleared rating OMITTED, the full inline-bean block
+     * (brand/type/roast date/roast level/grinder setting — this builder
+     * previously sent only brand+type), key names, blank-skipping — lives in
+     * the core (`de1_domain::visualizer_shot_patch`, review #42) so both
+     * shells emit an identical wire body. What stays here is the config:
+     * notes gated on include-notes (an opt-out never leaks via an edit) and
+     * the effective privacy. No-op for never-uploaded shots; soft — a
+     * failure notifies but never blocks the local edit.
      */
     fun patchEditedShot(shot: StoredShot) {
         val vid = shot.visualizerId ?: return
         if (persisted.tokens == null) return
         if (!directionPushes(persisted.prefs.shotsDirection)) return
-        val body = buildJsonObject {
-            val rating = shot.rating ?: 0
-            if (rating > 0) put("flavor", JsonPrimitive((rating * 3).coerceIn(0, 15)))
-            if (persisted.prefs.includeNotes) put("private_notes", JsonPrimitive(shot.notes ?: ""))
-            put("privacy", JsonPrimitive(shot.privacy ?: persisted.prefs.privacy))
-            grinderModel()?.let { put("grinder_model", JsonPrimitive(it)) }
+        val inputs = ShotPatchInputs(
+            rating = shot.rating?.toUByte(),
+            notes = if (persisted.prefs.includeNotes) (shot.notes ?: "") else null,
+            privacy = shot.privacy ?: persisted.prefs.privacy,
+            grinderModel = grinderModel(),
             // Inline bean from the structured snapshot frozen at shot time (issue 06).
-            shot.bean?.let { snap ->
-                snap.roasterName?.let { put("bean_brand", JsonPrimitive(it)) }
-                put("bean_type", JsonPrimitive(snap.name))
-            }
-        }
+            beanBrand = shot.bean?.roasterName,
+            beanType = shot.bean?.name,
+            roastDate = shot.bean?.roastedOn,
+            roastLevel = shot.bean?.roastLevel?.toDouble(),
+            grinderSetting = shot.bean?.grinderSetting,
+        )
+        val body = runCatching {
+            json.decodeFromString(
+                JsonObject.serializer(),
+                visualizerShotPatchJson(json.encodeToString(ShotPatchInputs.serializer(), inputs)),
+            )
+        }.getOrElse { notify("Visualizer update failed: ${it.message}"); return }
         scope.launch {
             runCatching { withFreshToken { client.patchShot(it, vid, body) } }
                 .onFailure { notify("Visualizer update failed: ${it.message}") }

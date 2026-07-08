@@ -17,6 +17,7 @@
  */
 
 import { Effect } from 'effect';
+import { brew_ratio } from '$lib/wasm/de1_wasm';
 import type { CaptureEntry } from '$lib/capture';
 import { getCaptureStore } from '$lib/capture';
 import { getBeanStore } from '$lib/bean';
@@ -235,8 +236,10 @@ function runLiveOnlySideEffects(
 	}
 	const finalWeight = event.content.final_weight ?? null;
 	const dose = activeShot?.dose ?? null;
+	// Core-owned ratio math (review #42) — same guard rule as the history
+	// stats (`de1_domain::brew_ratio`: positive dose, finite quotient).
 	const brewRatio =
-		finalWeight !== null && dose !== null && dose > 0 ? finalWeight / dose : null;
+		finalWeight !== null && dose !== null ? (brew_ratio(dose, finalWeight) ?? null) : null;
 	const profiles = getProfileStore();
 	const activeProfile = profiles.activeId ? profiles.get(profiles.activeId) : undefined;
 	fireWebhook('shotCompleted', {

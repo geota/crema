@@ -415,6 +415,24 @@ pub fn volume_stop_arms(
     de1_domain::volume_stop_arms(scale_connected, weight_target_set, volume_stop_with_scale)
 }
 
+/// Assemble the Visualizer `PATCH /shots/{id}` body from a
+/// `ShotPatchInputs` JSON (rating→flavor rule, inline-bean block,
+/// key naming — one builder for both shells; review #42). Returns the
+/// inner body JSON; the caller wraps it in the `{ "shot": … }` envelope.
+/// See [`de1_domain::visualizer_shot_patch_json`].
+#[uniffi::export]
+pub fn visualizer_shot_patch_json(inputs_json: String) -> Result<String, CremaError> {
+    de1_domain::visualizer_shot_patch_json(&inputs_json).map_err(CremaError::from)
+}
+
+/// The indices to KEEP when downsampling a shot's telemetry for storage
+/// (every-Nth plus always the last) — one policy for every shell. See
+/// [`de1_domain::downsample_indices`].
+#[uniffi::export]
+pub fn downsample_indices(len: u32, cap: u32) -> Vec<u32> {
+    de1_domain::downsample_indices(len, cap)
+}
+
 /// Install a process-wide Rust panic hook that appends each panic — message,
 /// `file:line:col`, thread, and a backtrace — to `log_path`.
 ///

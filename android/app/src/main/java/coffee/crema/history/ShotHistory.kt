@@ -4,6 +4,7 @@ import android.content.Context
 import coffee.crema.core.HistoryStats
 import coffee.crema.core.ShotBean
 import coffee.crema.core.ShotStatInput
+import coffee.crema.core.downsampleIndices
 import coffee.crema.core.historyStats as coreHistoryStats
 import coffee.crema.ui.TelemetrySample
 import kotlinx.coroutines.Dispatchers
@@ -204,19 +205,21 @@ fun historyStats(shots: List<StoredShot>): HistoryStats {
     }.getOrElse { HistoryStats(count = shots.size.toUInt()) }
 }
 
-/** Max telemetry points stored per shot — enough for a faithful detail chart. */
+/** Max telemetry points stored per shot — enough for a faithful detail
+ *  chart (mirrors the core's `STORAGE_SAMPLE_CAP`). */
 const val SHOT_SAMPLE_CAP: Int = 200
 
 /**
- * Downsample a shot's telemetry to ≤ [SHOT_SAMPLE_CAP] points (keep every Nth,
- * always including the last) so the persisted history stays small while the
- * detail chart still reads faithfully.
+ * Downsample a shot's telemetry to ≤ [SHOT_SAMPLE_CAP] points so the
+ * persisted history file stays small while the detail chart still reads
+ * faithfully. The selection policy (every Nth, always including the last)
+ * lives in the core (`de1_domain::downsample_indices`, review #42) — the
+ * indices come back and the shell applies them to its own sample type.
  */
 fun downsampleForStorage(samples: List<TelemetrySample>): List<TelemetrySample> {
     if (samples.size <= SHOT_SAMPLE_CAP) return samples
-    val step = samples.size / SHOT_SAMPLE_CAP
-    val kept = samples.filterIndexed { i, _ -> i % step == 0 }
-    return if (kept.last() === samples.last()) kept else kept + samples.last()
+    return downsampleIndices(samples.size.toUInt(), SHOT_SAMPLE_CAP.toUInt())
+        .map { samples[it.toInt()] }
 }
 
 /** File-backed JSON persistence for the shot log (`filesDir/shots.json`). */
