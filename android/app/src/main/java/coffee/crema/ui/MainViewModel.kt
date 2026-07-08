@@ -727,6 +727,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Ticker driving [MainUiState.modeElapsedMs] while a service mode runs. */
     private var modeTickerJob: Job? = null
 
+    /** Grace timer between the core's ScaleStale (1 s of silence) and the
+     *  presume-dead teardown — cancelled/replaced per stale episode. */
+    private var scaleStaleJob: Job? = null
+
     /** Start the 4 Hz mode-clock ticker when a service mode is running, stop it
      *  when idle. Elapsed is recomputed from the monotonic anchor each tick, so
      *  tick jitter never accumulates into the readout. */
@@ -3440,6 +3444,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.ScaleStale -> {
                 _ui.update { it.copy(scaleWeightG = null) }
                 appendLog("Scale stale")
+                // Escalation (Decenza treats an in-shot feed stall as a link
+                // fault; reaprime probes on silence): the core flags staleness
+                // after 1 s without a reading. Scales stream weight
+                // continuously by design, so give the stream a short grace to
+                // resume — a fresh reading repopulates scaleWeightG — and if
+                // it stays silent while the link still claims READY, presume
+                // the link dead and let the reconnect supervisor recover it.
+                // Covers scales with no keep-alive writes (Bookoo), where the
+                // consecutive-write-failure detector never gets a probe.
+                scaleStaleJob?.cancel()
+                scaleStaleJob = viewModelScope.launch {
+                    delay(SCALE_STALE_TEARDOWN_GRACE_MS)
+                    if (_ui.value.scaleState == ScaleBleManager.State.READY &&
+                        _ui.value.scaleWeightG == null
+                    ) {
+                        scale.presumeDead(
+                            "no readings for ${(1_000 + SCALE_STALE_TEARDOWN_GRACE_MS) / 1_000}s",
+                        )
+                    }
+                }
             }
             is Event.ScaleButtonPressed ->
                 // Logged like de1app (bluetooth.tcl:2825-2828) — no hard-wired
@@ -3593,6 +3617,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         /** Defer before a post-steam auto-purge so an immediate shot wins the
          *  group (issue 15). */
         const val AUTO_PURGE_DELAY_MS = 1_500L
+
+        /** Grace after the core's ScaleStale (itself 1 s of silence) before
+         *  the scale link is presumed dead and torn down for the reconnect
+         *  supervisor. Long enough that a radio hiccup resumes on its own,
+         *  short enough that a mid-shot stall recovers within the pour. */
+        const val SCALE_STALE_TEARDOWN_GRACE_MS = 5_000L
     }
 }
 

@@ -8,6 +8,7 @@ import coffee.crema.core.NotificationSource
 import coffee.crema.core.ScaleUuids as CoreScaleUuids
 import coffee.crema.core.scaleScanUuids
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -431,11 +432,7 @@ class ScaleBleManager(
             return false
         }
         return try {
-            // A dead link doesn't always deliver a disconnect event — after a
-            // peer power loss the OS can leave writes hanging while the app
-            // still believes it is connected (reaprime observed exactly this).
-            // The timeout turns the hang into a countable failure.
-            withTimeout(WRITE_TIMEOUT_MS) { transport.write(d, service, command, data) }
+            writeWithOneRetry(d, service, command, data)
             // Record the write as a dir:"out" SCALE_COMMAND line so tare/timer
             // writes appear in the interleaved capture. Stamp it with the same
             // elapsedRealtime() clock the recorder and inbound lines use.
@@ -475,6 +472,50 @@ class ScaleBleManager(
         consecutiveWriteFailures = 0
         Log.w(TAG, "Scale link unresponsive ($MAX_CONSECUTIVE_WRITE_FAILURES consecutive write failures) — forcing teardown")
         onStatus("Scale link unresponsive — reconnecting…")
+        runCatching { transport.disconnect(d) }
+            .onFailure { Log.w(TAG, "Forced scale teardown failed", it) }
+    }
+
+    /**
+     * One GATT write with a single spaced retry. de1app double-sends every
+     * scale command unconditionally because "sometimes the [scale's] command
+     * buffer has not finished the previous command and drops the next one"
+     * (bluetooth.tcl:25), and Decenza retries writes up to 10 × 500 ms; one
+     * retry covers that common transient without their full ladder — a second
+     * failure falls through to the dead-link counter. Each attempt is bounded
+     * (a hang counts as a failure — see [writeCommand]); retrying a scale
+     * command twice is safe, the whole surface is idempotent (tare of an
+     * already-zero pan, timer start when started, heartbeats…).
+     */
+    private suspend fun writeWithOneRetry(
+        d: BleTransport.DeviceHandle,
+        service: UUID,
+        characteristic: UUID,
+        data: ByteArray,
+    ) {
+        val first = try {
+            withTimeout(WRITE_TIMEOUT_MS) { transport.write(d, service, characteristic, data) }
+            return
+        } catch (t: TimeoutCancellationException) {
+            t
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Exception) {
+            e
+        }
+        Log.i(TAG, "Scale write failed (${first.message}) — one retry in ${WRITE_RETRY_DELAY_MS}ms")
+        delay(WRITE_RETRY_DELAY_MS)
+        withTimeout(WRITE_TIMEOUT_MS) { transport.write(d, service, characteristic, data) }
+    }
+
+    /** External dead-link verdict (the core's stale watchdog with no recovery
+     *  inside the grace window — see the VM's ScaleStale escalation): tear the
+     *  link down at the transport level so the reconnect supervisor takes
+     *  over. No-op when not connected. */
+    suspend fun presumeDead(reason: String) {
+        val d = device ?: return
+        Log.w(TAG, "Scale link presumed dead ($reason) — forcing teardown")
+        onStatus("Scale unresponsive — reconnecting…")
         runCatching { transport.disconnect(d) }
             .onFailure { Log.w(TAG, "Forced scale teardown failed", it) }
     }
@@ -574,6 +615,9 @@ class ScaleBleManager(
         /** Consecutive write failures before the link is presumed dead and
          *  torn down for the reconnect supervisor (reaprime uses 3). */
         private const val MAX_CONSECUTIVE_WRITE_FAILURES = 3
+
+        /** Spacing before the single write retry (Decenza's retry delay). */
+        private const val WRITE_RETRY_DELAY_MS = 500L
 
         /**
          * Capture `src` label for inbound notifications from the Bookoo command

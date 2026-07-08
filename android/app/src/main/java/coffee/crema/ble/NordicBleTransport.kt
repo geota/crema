@@ -6,6 +6,7 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -140,8 +141,49 @@ class NordicBleTransport(context: Context) : BleTransport {
      * filter never matches — the name is matched in Kotlin instead, the same
      * rule the legacy de1app uses.
      */
+    /** Last notification delivery per handle (`elapsedRealtime()`), seeded at
+     *  connect — the advert-while-connected probe's quiet-window input. */
+    private val lastNotifyAtMs = ConcurrentHashMap<NordicDeviceHandle, Long>()
+
+    /** Last advert-probe action per handle, for the reaprime-style throttle. */
+    private val lastAdvertProbeAtMs = ConcurrentHashMap<NordicDeviceHandle, Long>()
+
+    /**
+     * reaprime's advert-while-connected detector: a peripheral we believe is
+     * connected should not be advertising — its adverts showing up in the scan
+     * usually mean it rebooted or dropped under us WITHOUT the OS delivering a
+     * disconnect callback (reaprime observed exactly this after a peer power
+     * loss). Some peripherals do legitimately advertise while connected, so
+     * the advert alone is not enough: the link must ALSO have gone quiet
+     * ([ADVERT_QUIET_MS] with no notification). Probes are throttled per
+     * device ([ADVERT_PROBE_THROTTLE_MS], reaprime's spacing); the action is
+     * a transport-level teardown, which the managers' reconnect supervisors
+     * pick up as a normal drop.
+     */
+    private fun advertWhileConnectedProbe(address: String) {
+        val entry = states.entries.firstOrNull { it.key.address == address } ?: return
+        if (entry.value.value != BleTransport.ConnState.CONNECTED) return
+        val handle = entry.key
+        val now = SystemClock.elapsedRealtime()
+        if (now - (lastNotifyAtMs[handle] ?: 0L) < ADVERT_QUIET_MS) return
+        val lastProbe = lastAdvertProbeAtMs[handle] ?: 0L
+        if (now - lastProbe < ADVERT_PROBE_THROTTLE_MS) return
+        lastAdvertProbeAtMs[handle] = now
+        Log.w(
+            TAG,
+            "${handle.address} is advertising while believed connected and has been " +
+                "quiet ≥${ADVERT_QUIET_MS / 1000}s — presuming a dead link, forcing teardown",
+        )
+        scope.launch { runCatching { disconnect(handle) } }
+    }
+
     private val rawScan =
         centralManager.scan { /* no filter — see above */ }
+            // Every advertisement feeds the dead-link probe above, guarded so
+            // a probe failure can never kill the shared scan.
+            .onEach { result ->
+                runCatching { advertWhileConnectedProbe(result.peripheral.address) }
+            }
             // Nordic's scan throws (e.g. BluetoothUnavailableException when BT is
             // off) from INSIDE this shared upstream. Without a catch here the
             // failure kills the shareIn collector on `scope` — an uncaught
@@ -209,6 +251,10 @@ class NordicBleTransport(context: Context) : BleTransport {
             .launchIn(scope)
 
         stateFlow.value = BleTransport.ConnState.CONNECTING
+        // Seed the advert-probe's quiet-window clock: a link with no
+        // notifications yet measures its silence from the connect, not from
+        // epoch (which would make it instantly probe-eligible).
+        lastNotifyAtMs[handle] = SystemClock.elapsedRealtime()
         // Direct connection; Nordic applies its own connect timeout + retries,
         // closing the GATT client between attempts. Cheap/older BLE stacks (e.g. an
         // Allwinner combo chip on a budget tablet) routinely storm GATT_ERROR(133)
@@ -339,11 +385,14 @@ class NordicBleTransport(context: Context) : BleTransport {
             // clock CremaBridge.onNotification expects.
             val job = remote.subscribe()
                 .onEach { value ->
+                    val at = SystemClock.elapsedRealtime()
+                    // Liveness stamp for the advert-while-connected probe.
+                    lastNotifyAtMs[handle] = at
                     trySend(
                         BleTransport.Notification(
                             characteristic = characteristic,
                             data = value,
-                            atMs = SystemClock.elapsedRealtime(),
+                            atMs = at,
                         ),
                     )
                 }
@@ -435,6 +484,16 @@ class NordicBleTransport(context: Context) : BleTransport {
 
     private companion object {
         const val TAG = "NordicBleTransport"
+
+        /** Notification silence required before an advert from a "connected"
+         *  device is treated as a dead-link signal rather than a peripheral
+         *  that legitimately advertises while connected. */
+        const val ADVERT_QUIET_MS = 3_000L
+
+        /** Minimum spacing between advert-probe teardowns per device — a
+         *  disconnected peripheral advertises ~1/s during a scan; one action
+         *  per window is plenty (reaprime's throttle). */
+        const val ADVERT_PROBE_THROTTLE_MS = 5_000L
 
         /** Flatten Nordic's sealed [ConnectionState] into [BleTransport.ConnState]. */
         fun ConnectionState.toConnState(): BleTransport.ConnState = when (this) {

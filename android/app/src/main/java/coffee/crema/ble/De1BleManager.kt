@@ -10,6 +10,7 @@ import coffee.crema.core.de1Uuids
 import kotlinx.serialization.json.Json
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -383,14 +384,7 @@ class De1BleManager(
             return
         }
         try {
-            // A dead link doesn't always deliver a disconnect event — after a
-            // machine power loss the OS can leave writes hanging while the app
-            // still believes it is connected (reaprime observed exactly this on
-            // a DE1 power outage). The timeout turns the hang into a failure
-            // the caller sees AND a countable dead-link signal.
-            withTimeout(WRITE_TIMEOUT_MS) {
-                transport.write(d, De1Uuids.SERVICE, De1Uuids.forWriteTarget(target), bytes)
-            }
+            writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes)
             consecutiveWriteFailures = 0
         } catch (t: TimeoutCancellationException) {
             onWriteFailure(d)
@@ -441,6 +435,36 @@ class De1BleManager(
             .onFailure { Log.w(TAG, "Forced DE1 teardown failed", it) }
     }
 
+    /**
+     * One GATT write with a single spaced retry, each attempt bounded — a hang
+     * counts as a failure (a dead link doesn't always deliver a disconnect
+     * event; reaprime observed writes hanging forever after a DE1 power
+     * outage). de1app double-sends DE1 command writes and Decenza retries up
+     * to 10 × 500 ms; one retry covers the common transient without the full
+     * ladder — a second failure surfaces to the caller AND the dead-link
+     * counter. Safe to repeat: state requests, MMR writes, and profile-frame
+     * writes are all idempotent (same bytes to the same target).
+     */
+    private suspend fun writeWithOneRetry(
+        d: BleTransport.DeviceHandle,
+        characteristic: UUID,
+        bytes: ByteArray,
+    ) {
+        val first = try {
+            withTimeout(WRITE_TIMEOUT_MS) { transport.write(d, De1Uuids.SERVICE, characteristic, bytes) }
+            return
+        } catch (t: TimeoutCancellationException) {
+            t
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Exception) {
+            e
+        }
+        Log.i(TAG, "DE1 write failed (${first.message}) — one retry in ${WRITE_RETRY_DELAY_MS}ms")
+        delay(WRITE_RETRY_DELAY_MS)
+        withTimeout(WRITE_TIMEOUT_MS) { transport.write(d, De1Uuids.SERVICE, characteristic, bytes) }
+    }
+
     companion object {
         private const val TAG = "De1BleManager"
 
@@ -451,6 +475,9 @@ class De1BleManager(
         /** Consecutive write failures before the link is presumed dead and
          *  torn down for the reconnect supervisor (reaprime uses 3). */
         private const val MAX_CONSECUTIVE_WRITE_FAILURES = 3
+
+        /** Spacing before the single write retry (Decenza's retry delay). */
+        private const val WRITE_RETRY_DELAY_MS = 500L
 
         /**
          * The DE1 `Version` (`A001`) and `Calibration` (`A012`) characteristic

@@ -90,12 +90,20 @@ const RECONNECT_BASE_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 30_000;
 
 /**
- * How many reconnect attempts to make before giving up. With a base of 500 ms
- * doubling to a 30 s cap, eight attempts span roughly two minutes of retrying
- * — long enough to ride out a brief outage, short enough that a UI showing
- * "reconnecting" is not stuck forever.
+ * Fast-burst reconnect attempts before the persistent slow tier takes over.
+ * With a base of 500 ms doubling to a 30 s cap, eight attempts span roughly
+ * two minutes of eager retrying.
  */
 const RECONNECT_MAX_ATTEMPTS = 8;
+
+/**
+ * Cadence of the persistent slow tier after the burst — the loop keeps trying
+ * quietly forever (Decenza's scale ladder ends in the same 60 s forever-tier;
+ * de1app retries continuously), so a machine or scale that comes back in
+ * range / powers back on reconnects without a tap. Android's supervisor uses
+ * the same value.
+ */
+const RECONNECT_LURK_DELAY_MS = 60_000;
 
 /**
  * A strictly-serial async operation queue.
@@ -551,28 +559,36 @@ export class BleDevice implements De1Transport {
 	 * untouched — it is replayed implicitly because the re-attached listeners
 	 * dispatch to the same `sink` field.
 	 *
-	 * After {@link RECONNECT_MAX_ATTEMPTS} failed attempts it gives up to a
-	 * terminal `failed` state and fires the disconnect listeners, so the UI is
-	 * never stuck showing "reconnecting" forever.
+	 * After {@link RECONNECT_MAX_ATTEMPTS} failed fast attempts the loop drops
+	 * to a quiet persistent tier — one attempt every
+	 * {@link RECONNECT_LURK_DELAY_MS} for as long as the session lasts — rather
+	 * than stranding the device until a manual tap (Android's supervisor has
+	 * the same tier; Decenza's ladders end in a 60 s / 5 min forever-tier and
+	 * de1app retries continuously). Attempt notifications stop after the burst
+	 * so the status line isn't spammed every cycle; the `reconnecting` state
+	 * (and its pip) persists. Only a deliberate disconnect ends the loop.
 	 */
 	private async runReconnectLoop(): Promise<void> {
 		this.reconnecting = true;
-		for (let attempt = 1; attempt <= RECONNECT_MAX_ATTEMPTS; attempt++) {
+		// Clamped so days of slow retries can't grow the counter without bound.
+		let attempt = 0;
+		while (true) {
 			// A deliberate disconnect during the wait aborts the loop.
 			if (this.userDisconnected) {
 				this.reconnecting = false;
 				return;
 			}
-			const delay = Math.min(
-				RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1),
-				RECONNECT_MAX_DELAY_MS
-			);
+			attempt = Math.min(attempt + 1, RECONNECT_MAX_ATTEMPTS + 1);
+			const lurking = attempt > RECONNECT_MAX_ATTEMPTS;
+			const delay = lurking
+				? RECONNECT_LURK_DELAY_MS
+				: Math.min(RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1), RECONNECT_MAX_DELAY_MS);
 			await sleep(delay);
 			if (this.userDisconnected) {
 				this.reconnecting = false;
 				return;
 			}
-			this.notifyReconnectAttempt(attempt);
+			if (!lurking) this.notifyReconnectAttempt(attempt);
 			try {
 				await this.reconnectAndReplay();
 				// A user disconnect landed WHILE this attempt was in flight —
@@ -595,12 +611,6 @@ export class BleDevice implements De1Transport {
 				// top of the loop.
 			}
 		}
-		// Exhausted every attempt — give up to a terminal state so the UI is
-		// not stuck "reconnecting". Treated like a final disconnect.
-		this.reconnecting = false;
-		this.connectionState = 'failed';
-		this.notifyStateChanged();
-		this.notifyDisconnected();
 	}
 
 	/**
