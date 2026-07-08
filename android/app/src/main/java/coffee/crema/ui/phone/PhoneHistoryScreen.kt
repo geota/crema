@@ -599,12 +599,22 @@ private fun PhoneShotDetail(
                         minLines = 3,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // No override (privacy == null) highlights the chip matching
+                    // the Settings → Sharing default — no duplicated "Default · x"
+                    // chip. Tapping a chip pins this shot; tapping the pinned chip
+                    // reverts to following the default.
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Eyebrow("Privacy")
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            PrivacyPill("Default · $defaultPrivacy", shot.privacy == null) { vm.setShotPrivacy(shot.id, null) }
                             listOf("public" to "Public", "unlisted" to "Unlisted", "private" to "Private").forEach { (v, label) ->
-                                PrivacyPill(label, shot.privacy == v) { vm.setShotPrivacy(shot.id, v) }
+                                PrivacyPill(
+                                    label,
+                                    on = shot.privacy == v || (shot.privacy == null && defaultPrivacy == v),
+                                ) { vm.setShotPrivacy(shot.id, if (shot.privacy == v) null else v) }
                             }
                         }
                     }

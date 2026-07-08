@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -576,7 +577,13 @@ private fun ShotDetail(
     /** Per-shot privacy override edit; null reverts to the Sharing default. */
     onPrivacyChange: (String?) -> Unit = {},
 ) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    // The pane scrolls: the chart keeps its full (pre-quality-card) height and
+    // the quality card / rating / notes live below the fold instead of
+    // squeezing the chart (user feedback 2026-07-07).
+    Column(
+        modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         var confirmDelete by remember(shot.id) { mutableStateOf(false) }
         // Detail head — title block (left) + actions (right), bottom-aligned with a
         // hairline rule (PWA .hi-detail-head: space-between, align-items: flex-end).
@@ -651,7 +658,9 @@ private fun ShotDetail(
             MetricCard("Samples", "${shot.samples.size}", null, Modifier.weight(1f))
         }
         Surface(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+            // Fixed height inside the scrolling pane — the chart's dominant,
+            // pre-quality-card size (it was weight(1f) before the card ate it).
+            modifier = Modifier.height(360.dp).fillMaxWidth(),
             shape = MaterialTheme.shapes.medium,
             color = MaterialTheme.colorScheme.surfaceContainer,
         ) {
@@ -679,18 +688,22 @@ private fun ShotDetail(
         if (quality != null) ShotQualityCard(quality)
         var rating by remember(shot.id) { mutableStateOf(shot.rating ?: 0) }
         var notes by remember(shot.id) { mutableStateOf(shot.notes ?: "") }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        // Rating (left) and privacy (right) share one line. Privacy is the
+        // per-shot Visualizer visibility override (web .hi-privacy): with no
+        // override (privacy == null) the chip matching the Settings → Sharing
+        // default is highlighted — no duplicated "Default · x" chip. Tapping a
+        // chip pins this shot; tapping the pinned chip reverts to the default.
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Eyebrow("Rating")
             CremaStarRating(rating, onChange = { rating = it; onRate(it, notes) })
-        }
-        // Privacy — the per-shot Visualizer visibility override (web .hi-privacy):
-        // "Default" follows Settings → Sharing; a pinned chip overrides this shot.
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Spacer(Modifier.weight(1f))
             Eyebrow("Privacy")
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                PrivacyChip("Default · $defaultPrivacy", shot.privacy == null) { onPrivacyChange(null) }
                 listOf("public" to "Public", "unlisted" to "Unlisted", "private" to "Private").forEach { (v, label) ->
-                    PrivacyChip(label, shot.privacy == v) { onPrivacyChange(v) }
+                    PrivacyChip(
+                        label,
+                        on = shot.privacy == v || (shot.privacy == null && defaultPrivacy == v),
+                    ) { onPrivacyChange(if (shot.privacy == v) null else v) }
                 }
             }
         }
