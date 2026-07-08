@@ -1,49 +1,72 @@
 package coffee.crema.ui
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import coffee.crema.core.MachineState
 import coffee.crema.core.MmrRegister
+import coffee.crema.core.ModeTargetInputs
+import coffee.crema.core.ModeTargets
 import coffee.crema.core.celsiusToFahrenheit
+import coffee.crema.core.resolveModeTargets
+import kotlinx.serialization.json.Json
 
 // Service-mode (steam / hot water / flush) display targets — the values the
-// Brew mode chips and the mode timers show. One shared derivation for the
-// tablet BrewScreen and the phone PhoneBrewScreen, mirroring the web
-// BrewDashboard's MODE_TARGET_SEC / MODE_TARGET_LABEL.
+// Brew mode chips and the mode timers show. The resolution (machine
+// ShotSettings/MMR value → the user's Quick-Controls value → legacy de1app
+// default, with a partial payload's literal 0 treated as missing) lives in
+// the core — `de1_domain::resolve_mode_targets`, review #41: this file and
+// the web BrewDashboard's derivation had drifted. One shared call for the
+// tablet BrewScreen and the phone PhoneBrewScreen.
 
-/** First positive finite value, else the fallback. A partial / pre-handshake
- *  ShotSettings payload can carry literal zeros, which are meaningless as
- *  targets — treat them as missing (web BrewDashboard `posOr` parity). */
-fun posOr(v: Float?, fallback: Float): Float =
-    if (v != null && v.isFinite() && v > 0f) v else fallback
+/** Wire codec for the resolver FFI round-trip. */
+private val modeJson = Json { ignoreUnknownKeys = true }
 
-/** The service-mode targets. Precedence per field: live machine value (the
- *  connect-time `ShotSettingsRead`, echoed on change) → the user's persisted
- *  Quick-Controls value → legacy de1app default. The QC value is the user's
- *  intent; the machine value is what the firmware currently has loaded. */
-data class ModeTargets(
-    val steamTempC: Float,
-    val steamTimeoutS: Float,
-    val hotWaterTempC: Float,
-    val hotWaterVolumeMl: Float,
-    val hotWaterTimeoutS: Float,
-    val flushTempC: Float,
-    val flushTimeS: Float,
+/** The legacy de1app defaults, should the bridge ever reject (never in
+ *  practice) — matches the core's own fallback tier. */
+private val MODE_TARGET_FALLBACK = ModeTargets(
+    steamTempC = 148f, steamTimeoutS = 90f,
+    hotWaterTempC = 92f, hotWaterVolumeMl = 250f, hotWaterTimeoutS = 30f,
+    flushTempC = 95f, flushTimeS = 4f,
 )
 
+/** Resolve the service-mode targets from the UI snapshot via the core.
+ *  The FlushTemp MMR word crosses raw (deci-°C) — the ÷10 lives core-side. */
 fun modeTargets(ui: MainUiState): ModeTargets {
     val ss = ui.de1ShotSettings
-    // The machine's stored flush setpoint (FlushTemp MMR, deci-°C) — read at
-    // connect but previously discarded, so Android showed the QC value where
-    // web showed the machine's (review #41 divergence).
-    val machineFlushC = ui.de1MachineInfo[MmrRegister.FlushTemp]?.toFloat()?.div(10f)
-    return ModeTargets(
-        steamTempC = posOr(ss?.steam_temp, posOr(ui.qcSteamTempC, 148f)),
-        steamTimeoutS = posOr(ss?.steam_timeout, posOr(ui.qcSteamTimeS, 90f)),
-        hotWaterTempC = posOr(ss?.hot_water_temp, posOr(ui.qcHotWaterTempC, 92f)),
-        hotWaterVolumeMl = posOr(ss?.hot_water_volume, posOr(ui.qcHotWaterVolumeMl, 250f)),
-        hotWaterTimeoutS = posOr(ss?.hot_water_timeout, 30f),
-        flushTempC = posOr(machineFlushC, posOr(ui.qcFlushTempC, 95f)),
-        flushTimeS = posOr(ui.qcFlushTimeS, 4f),
+    val inputs = ModeTargetInputs(
+        machineSteamTempC = ss?.steam_temp,
+        machineSteamTimeoutS = ss?.steam_timeout,
+        machineHotWaterTempC = ss?.hot_water_temp,
+        machineHotWaterVolumeMl = ss?.hot_water_volume,
+        machineHotWaterTimeoutS = ss?.hot_water_timeout,
+        machineFlushTempDeciC = ui.de1MachineInfo[MmrRegister.FlushTemp]?.toFloat(),
+        qcSteamTempC = ui.qcSteamTempC,
+        qcSteamTimeS = ui.qcSteamTimeS,
+        qcHotWaterTempC = ui.qcHotWaterTempC,
+        qcHotWaterVolumeMl = ui.qcHotWaterVolumeMl,
+        qcFlushTempC = ui.qcFlushTempC,
+        qcFlushTimeS = ui.qcFlushTimeS,
     )
+    return runCatching {
+        modeJson.decodeFromString(
+            ModeTargets.serializer(),
+            resolveModeTargets(modeJson.encodeToString(ModeTargetInputs.serializer(), inputs)),
+        )
+    }.getOrDefault(MODE_TARGET_FALLBACK)
+}
+
+/**
+ * [modeTargets] memoized against its actual inputs, for composable call
+ * sites — the Brew screens recompose on every telemetry tick, and the
+ * resolver is an FFI + JSON round-trip that must not ride that hot path.
+ */
+@Composable
+fun rememberModeTargets(ui: MainUiState): ModeTargets {
+    val flushDeci = ui.de1MachineInfo[MmrRegister.FlushTemp]
+    return remember(
+        ui.de1ShotSettings, flushDeci, ui.qcSteamTempC, ui.qcSteamTimeS,
+        ui.qcHotWaterTempC, ui.qcHotWaterVolumeMl, ui.qcFlushTempC, ui.qcFlushTimeS,
+    ) { modeTargets(ui) }
 }
 
 /** The active service mode's display label, or null when no mode is running. */

@@ -28,7 +28,7 @@
 		getHistoryStore,
 		exportStoredShotAsV2Json,
 		shotFilename,
-		peaksOf
+		statsOf
 	} from '$lib/history';
 	import type { StoredShot } from '$lib/history';
 	import { ShotRow, ShotDetail, CompareOverlay } from '$lib/components/history';
@@ -543,63 +543,28 @@
 	// ── Stats (issue 48) ──────────────────────────────────────────────────
 	// Scoped to the FILTERED set (reflects the active filter/range, not all-time).
 	// Six tiles matching the Android tablet: Shots, total Weight, Avg weight, then
-	// the three averages (ratio / time / rating). Weights honour the unit pref.
-	/** Yields (g) of the filtered shots that recorded a weight. */
-	const statYields = $derived(
-		filtered
-			.map((s) => {
-				const p = peaksOf(s);
-				return p.finalWeight ?? p.peakWeight;
-			})
-			.filter((y): y is number => y != null && y > 0)
-	);
-	/** Total weight dispensed across the filtered shots. */
-	const totalWeight = $derived.by(() =>
-		statYields.length === 0
-			? null
-			: convertWeight(
-					statYields.reduce((a, y) => a + y, 0),
-					settings.current.weightUnit
-				)
+	// the three averages (ratio / time / rating). The aggregation rules live in
+	// the core (`de1_domain::history_stats`, review #41) so both shells produce
+	// identical numbers; only unit conversion + formatting stay here.
+	const stats = $derived(statsOf(filtered));
+	/** Total weight dispensed across the filtered shots, unit-converted. */
+	const totalWeight = $derived(
+		stats?.totalWeightG != null
+			? convertWeight(stats.totalWeightG, settings.current.weightUnit)
+			: null
 	);
 	/** Mean yield weight across the filtered shots ("Avg weight"). */
-	const avgYield = $derived.by(() =>
-		statYields.length === 0
-			? null
-			: convertWeight(
-					statYields.reduce((a, y) => a + y, 0) / statYields.length,
-					settings.current.weightUnit
-				)
+	const avgYield = $derived(
+		stats?.avgWeightG != null
+			? convertWeight(stats.avgWeightG, settings.current.weightUnit)
+			: null
 	);
 	/** Mean brew ratio (yield ÷ dose) over filtered shots that recorded both. */
-	const avgRatio = $derived.by(() => {
-		const ratios = filtered
-			.map((s) => {
-				const p = peaksOf(s);
-				const y = p.finalWeight ?? p.peakWeight;
-				const d = s.metadata.dose;
-				return y != null && y > 0 && d != null && d > 0 ? y / d : null;
-			})
-			.filter((r): r is number => r != null);
-		return ratios.length === 0
-			? null
-			: ratios.reduce((a, r) => a + r, 0) / ratios.length;
-	});
+	const avgRatio = $derived(stats?.avgRatio ?? null);
 	/** Mean shot duration, seconds. */
-	const avgTime = $derived.by(() => {
-		if (filtered.length === 0) return null;
-		const mean =
-			filtered.reduce((a, s) => a + s.record.duration, 0) / filtered.length / 1000;
-		return Math.round(mean);
-	});
+	const avgTime = $derived(stats?.avgTimeS != null ? Math.round(stats.avgTimeS) : null);
 	/** Mean star rating across rated filtered shots. */
-	const avgRating = $derived.by(() => {
-		const rated = filtered.filter((s) => (s.metadata.rating ?? 0) > 0);
-		if (rated.length === 0) return null;
-		return (
-			rated.reduce((a, s) => a + (s.metadata.rating ?? 0), 0) / rated.length
-		).toFixed(1);
-	});
+	const avgRating = $derived(stats?.avgRating != null ? stats.avgRating.toFixed(1) : null);
 
 	/** Select a shot. */
 	function select(id: string): void {

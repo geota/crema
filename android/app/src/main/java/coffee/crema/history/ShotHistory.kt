@@ -1,7 +1,10 @@
 package coffee.crema.history
 
 import android.content.Context
+import coffee.crema.core.HistoryStats
 import coffee.crema.core.ShotBean
+import coffee.crema.core.ShotStatInput
+import coffee.crema.core.historyStats as coreHistoryStats
 import coffee.crema.ui.TelemetrySample
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -55,6 +58,14 @@ data class StoredShot(
     val peakPressure: Float? = null,
     /** Peak group-head temperature across the shot, °C, or null. */
     val peakTemp: Float? = null,
+    /**
+     * Peak scale weight across the shot, g, or null when no scale was
+     * paired. The stats' yield fallback when [yieldG] (the settled final
+     * weight) is missing — a cup lifted before settle still counts
+     * (review #41; the web has always applied this fallback). Stamped
+     * from the ShotCompleted event's `peak_weight`; null on older rows.
+     */
+    val peakWeightG: Float? = null,
     /** Active profile name at capture, or null. */
     val profileName: String? = null,
     /**
@@ -162,38 +173,35 @@ fun StoredShot.coreShotJson(): JsonObject = buildJsonObject {
     }
 }
 
-/**
- * Summary metrics for a (filter/range-scoped) set of shots — issue 48. Computed
- * once here so the tablet's six-tile strip and the phone's three-average strip
- * stay consistent. `null` averages/weights mean "no data" (render as "—").
- */
-data class HistoryStats(
-    val shots: Int,
-    val totalWeightG: Double?,
-    val avgWeightG: Double?,
-    val avgRatio: Double?,
-    val avgTimeS: Double?,
-    val avgRating: Double?,
-)
+/** Wire codec for the stats FFI round-trip. */
+private val statsJson = Json { ignoreUnknownKeys = true }
 
-/** Derive [HistoryStats] over [shots]. Yields drive total/avg weight; ratio is the
- *  mean of per-shot yield÷dose (where both are present); rating averages 1..5. */
+/**
+ * Summary metrics for a (filter/range-scoped) set of shots — issue 48,
+ * shared by the tablet's six-tile strip and the phone's three-average
+ * strip. The aggregation rules live in the core
+ * (`de1_domain::history_stats`, review #41: this Kotlin port ignored the
+ * peak-weight yield fallback the web applied, so a lifted-cup shot
+ * dropped out of Android's averages) — a light 5-field projection per
+ * row crosses the FFI. On a bridge failure (never in practice) the strip
+ * degrades to count-only ("—" everywhere else).
+ */
 fun historyStats(shots: List<StoredShot>): HistoryStats {
-    val yields = shots.mapNotNull { it.yieldG }
-    val ratios = shots.mapNotNull { s ->
-        val y = s.yieldG
-        val d = s.doseG
-        if (y != null && d != null && d > 0f) y / d else null
+    val rows = shots.map {
+        ShotStatInput(
+            durationMs = it.durationMs,
+            finalWeightG = it.yieldG,
+            peakWeightG = it.peakWeightG,
+            doseG = it.doseG,
+            rating = it.rating?.toUByte(),
+        )
     }
-    val ratings = shots.mapNotNull { it.rating?.takeIf { r -> r > 0 } }
-    return HistoryStats(
-        shots = shots.size,
-        totalWeightG = if (yields.isNotEmpty()) yields.sum().toDouble() else null,
-        avgWeightG = if (yields.isNotEmpty()) yields.average() else null,
-        avgRatio = if (ratios.isNotEmpty()) ratios.average() else null,
-        avgTimeS = if (shots.isNotEmpty()) shots.map { it.durationMs / 1000.0 }.average() else null,
-        avgRating = if (ratings.isNotEmpty()) ratings.average() else null,
-    )
+    return runCatching {
+        statsJson.decodeFromString(
+            HistoryStats.serializer(),
+            coreHistoryStats(statsJson.encodeToString(ListSerializer(ShotStatInput.serializer()), rows)),
+        )
+    }.getOrElse { HistoryStats(count = shots.size.toUInt()) }
 }
 
 /** Max telemetry points stored per shot — enough for a faithful detail chart. */

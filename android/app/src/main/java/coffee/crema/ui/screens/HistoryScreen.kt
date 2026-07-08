@@ -429,7 +429,7 @@ private fun StatsStrip(history: List<StoredShot>, weightUnit: String) {
     ) {
         val totalWt = convertWeight(s.totalWeightG?.toFloat(), weightUnit)
         val avgWt = convertWeight(s.avgWeightG?.toFloat(), weightUnit)
-        StatTile("Shots", "${s.shots}", "shots", if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Shots", "${s.count}", "shots", if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
         StatTile("Weight", totalWt.value, s.totalWeightG?.let { totalWt.unit }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
         StatTile("Avg weight", avgWt.value, s.avgWeightG?.let { avgWt.unit }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
         StatTile("Avg ratio", s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))

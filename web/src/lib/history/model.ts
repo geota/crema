@@ -19,11 +19,16 @@
 
 import type { Bean, Roaster } from '$lib/bean';
 import type {
+	HistoryStats,
 	RustShotMetadata,
 	RustStoredShot,
+	ShotStatInput,
 	TimedSample
 } from '$lib/core';
-import { peaksForShot as wasmPeaksForShot } from '$lib/wasm/de1_wasm';
+import {
+	peaksForShot as wasmPeaksForShot,
+	historyStats as wasmHistoryStats
+} from '$lib/wasm/de1_wasm';
 import type { TelemetrySample } from '$lib/state';
 import { filenameStamp } from '$lib/utils/download';
 import { formatRatio } from '$lib/utils/ratio';
@@ -333,6 +338,32 @@ export function peaksOf(shot: StoredShot): ShotPeaks {
 			peakTemp: 0
 		};
 		return fallback;
+	}
+}
+
+/**
+ * The History page's stat strip over a (filter/range-scoped) set of
+ * shots — one core derivation shared with Android (review #41,
+ * `de1_domain::history_stats`). Ships a light 5-field projection per
+ * row over the wasm boundary, with the weights derived via the cached
+ * {@link peaksOf}. `null` when the wasm call rejects (never in
+ * practice — the projection is built typed).
+ */
+export function statsOf(shots: StoredShot[]): HistoryStats | null {
+	const rows: ShotStatInput[] = shots.map((s) => {
+		const p = peaksOf(s);
+		return {
+			durationMs: s.record.duration,
+			finalWeightG: p.finalWeight ?? undefined,
+			peakWeightG: p.peakWeight ?? undefined,
+			doseG: s.metadata.dose ?? undefined,
+			rating: s.metadata.rating ?? undefined
+		};
+	});
+	try {
+		return JSON.parse(wasmHistoryStats(JSON.stringify(rows))) as HistoryStats;
+	} catch {
+		return null;
 	}
 }
 

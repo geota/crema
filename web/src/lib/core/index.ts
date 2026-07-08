@@ -1231,3 +1231,7 @@ export type {
 	PhaseMarker,
 	SeriesPoint
 } from './crema-core';
+// History stat-strip + service-mode target wire types (review #41) — the
+// argument / result shapes of the free wasm fns `historyStats` /
+// `resolveModeTargets`.
+export type { HistoryStats, ShotStatInput, ModeTargetInputs, ModeTargets } from './crema-core';

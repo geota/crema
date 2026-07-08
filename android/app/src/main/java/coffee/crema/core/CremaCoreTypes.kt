@@ -1001,6 +1001,27 @@ data class FrameExitSpec (
 	val maxDurationS: Double
 )
 
+/// Summary metrics over a (filter/range-scoped) set of shots — the
+/// History page's stat strip. `None` means "no data" (render as "—").
+/// One derivation for every shell (review #41: Android ignored the
+/// peak-weight fallback, so a lifted-cup shot dropped out of its
+/// averages while the web counted it).
+@Serializable
+data class HistoryStats (
+	/// Number of shots in the set (all of them, not just weighed ones).
+	val count: UInt,
+	/// Total weight dispensed, grams, over shots with a usable yield.
+	val totalWeightG: Float? = null,
+	/// Mean yield weight, grams ("Avg weight").
+	val avgWeightG: Float? = null,
+	/// Mean brew ratio (yield ÷ dose) over shots that recorded both.
+	val avgRatio: Float? = null,
+	/// Mean shot duration, seconds (unrounded — the shell formats).
+	val avgTimeS: Float? = null,
+	/// Mean star rating over rated (1..=5) shots.
+	val avgRating: Float? = null
+)
+
 /// A slim view onto the shell's `StoredShot`: only the fields the
 /// reconcile planner reads. Lets the shell project its full record
 /// (web `StoredShot` in `$lib/history/model.ts`, Android equivalent)
@@ -1087,6 +1108,62 @@ data class ModeInfo (
 	val id: UByte,
 	/// A human-readable name for the mode, suitable for a button label.
 	val name: String
+)
+
+/// Everything the resolution consumes, all optional — a shell fills in
+/// what it has. `machine_*` fields come from the DE1 itself (`None`
+/// until the connect-time reads land); `qc_*` fields are the user's
+/// Quick-Controls dials (`None` when never set). A literal `0` in any
+/// field is treated as missing — a partial / pre-handshake
+/// `ShotSettings` payload can carry zeros, which are meaningless as
+/// targets.
+@Serializable
+data class ModeTargetInputs (
+	/// Machine steam target temperature, °C (`ShotSettingsRead.steam_temp`).
+	val machineSteamTempC: Float? = null,
+	/// Machine steam timeout, seconds (`ShotSettingsRead.steam_timeout`).
+	val machineSteamTimeoutS: Float? = null,
+	/// Machine hot-water target temperature, °C (`ShotSettingsRead.hot_water_temp`).
+	val machineHotWaterTempC: Float? = null,
+	/// Machine hot-water volume, ml (`ShotSettingsRead.hot_water_volume`).
+	val machineHotWaterVolumeMl: Float? = null,
+	/// Machine hot-water timeout, seconds (`ShotSettingsRead.hot_water_timeout`).
+	val machineHotWaterTimeoutS: Float? = null,
+	/// The machine's stored flush setpoint — the raw `FlushTemp` MMR word
+	/// (`0x00803844`), in **deci-°C** exactly as read off the wire; the
+	/// conversion lives here, not in the shells.
+	val machineFlushTempDeciC: Float? = null,
+	/// Quick-Controls steam temperature, °C.
+	val qcSteamTempC: Float? = null,
+	/// Quick-Controls steam duration, seconds.
+	val qcSteamTimeS: Float? = null,
+	/// Quick-Controls hot-water temperature, °C.
+	val qcHotWaterTempC: Float? = null,
+	/// Quick-Controls hot-water volume, ml.
+	val qcHotWaterVolumeMl: Float? = null,
+	/// Quick-Controls flush temperature, °C.
+	val qcFlushTempC: Float? = null,
+	/// Quick-Controls flush duration, seconds.
+	val qcFlushTimeS: Float? = null
+)
+
+/// The resolved service-mode targets the Brew mode chips / banners show.
+@Serializable
+data class ModeTargets (
+	/// Steam target temperature, °C.
+	val steamTempC: Float,
+	/// Steam timeout, seconds — the firmware-enforced ceiling.
+	val steamTimeoutS: Float,
+	/// Hot-water target temperature, °C.
+	val hotWaterTempC: Float,
+	/// Hot-water volume, ml.
+	val hotWaterVolumeMl: Float,
+	/// Hot-water timeout, seconds.
+	val hotWaterTimeoutS: Float,
+	/// Flush water temperature, °C.
+	val flushTempC: Float,
+	/// Flush duration, seconds. No machine-side value exists — QC → default.
+	val flushTimeS: Float
 )
 
 /// A profile phase boundary observed during the shot — the port of Decenza's
@@ -1546,6 +1623,26 @@ data class ShotSample (
 	val frameNumber: UByte,
 	/// Steam heater temperature, °C.
 	val steamTemp: Float
+)
+
+/// One shot's inputs to the History summary strip — a light projection
+/// so the FFI ships five numbers per row, not whole telemetry records.
+/// The shells build it from what they hold: web derives the weights via
+/// `ShotRecord::peaks`; Android reads its denormalized row fields.
+@Serializable
+data class ShotStatInput (
+	/// Total shot duration, milliseconds.
+	val durationMs: Long,
+	/// Final settled scale weight (the yield), grams, or `None` without
+	/// a scale.
+	val finalWeightG: Float? = null,
+	/// Peak scale weight, grams — the yield fallback when the final
+	/// weight is missing (a cup lifted before settle still counts).
+	val peakWeightG: Float? = null,
+	/// Dose, grams (from the profile at capture), or `None`.
+	val doseG: Float? = null,
+	/// Star rating 1..=5; `None` / 0 = unrated.
+	val rating: UByte? = null
 )
 
 /// A telemetry sample tagged with its time since the shot began.

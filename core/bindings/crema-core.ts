@@ -975,6 +975,28 @@ export interface FrameExitSpec {
 }
 
 /**
+ * Summary metrics over a (filter/range-scoped) set of shots — the
+ * History page's stat strip. `None` means "no data" (render as "—").
+ * One derivation for every shell (review #41: Android ignored the
+ * peak-weight fallback, so a lifted-cup shot dropped out of its
+ * averages while the web counted it).
+ */
+export interface HistoryStats {
+	/** Number of shots in the set (all of them, not just weighed ones). */
+	count: number;
+	/** Total weight dispensed, grams, over shots with a usable yield. */
+	totalWeightG?: number;
+	/** Mean yield weight, grams ("Avg weight"). */
+	avgWeightG?: number;
+	/** Mean brew ratio (yield ÷ dose) over shots that recorded both. */
+	avgRatio?: number;
+	/** Mean shot duration, seconds (unrounded — the shell formats). */
+	avgTimeS?: number;
+	/** Mean star rating over rated (1..=5) shots. */
+	avgRating?: number;
+}
+
+/**
  * A slim view onto the shell's `StoredShot`: only the fields the
  * reconcile planner reads. Lets the shell project its full record
  * (web `StoredShot` in `$lib/history/model.ts`, Android equivalent)
@@ -1068,6 +1090,64 @@ export interface ModeInfo {
 	id: number;
 	/** A human-readable name for the mode, suitable for a button label. */
 	name: string;
+}
+
+/**
+ * Everything the resolution consumes, all optional — a shell fills in
+ * what it has. `machine_*` fields come from the DE1 itself (`None`
+ * until the connect-time reads land); `qc_*` fields are the user's
+ * Quick-Controls dials (`None` when never set). A literal `0` in any
+ * field is treated as missing — a partial / pre-handshake
+ * `ShotSettings` payload can carry zeros, which are meaningless as
+ * targets.
+ */
+export interface ModeTargetInputs {
+	/** Machine steam target temperature, °C (`ShotSettingsRead.steam_temp`). */
+	machineSteamTempC?: number;
+	/** Machine steam timeout, seconds (`ShotSettingsRead.steam_timeout`). */
+	machineSteamTimeoutS?: number;
+	/** Machine hot-water target temperature, °C (`ShotSettingsRead.hot_water_temp`). */
+	machineHotWaterTempC?: number;
+	/** Machine hot-water volume, ml (`ShotSettingsRead.hot_water_volume`). */
+	machineHotWaterVolumeMl?: number;
+	/** Machine hot-water timeout, seconds (`ShotSettingsRead.hot_water_timeout`). */
+	machineHotWaterTimeoutS?: number;
+	/**
+	 * The machine's stored flush setpoint — the raw `FlushTemp` MMR word
+	 * (`0x00803844`), in **deci-°C** exactly as read off the wire; the
+	 * conversion lives here, not in the shells.
+	 */
+	machineFlushTempDeciC?: number;
+	/** Quick-Controls steam temperature, °C. */
+	qcSteamTempC?: number;
+	/** Quick-Controls steam duration, seconds. */
+	qcSteamTimeS?: number;
+	/** Quick-Controls hot-water temperature, °C. */
+	qcHotWaterTempC?: number;
+	/** Quick-Controls hot-water volume, ml. */
+	qcHotWaterVolumeMl?: number;
+	/** Quick-Controls flush temperature, °C. */
+	qcFlushTempC?: number;
+	/** Quick-Controls flush duration, seconds. */
+	qcFlushTimeS?: number;
+}
+
+/** The resolved service-mode targets the Brew mode chips / banners show. */
+export interface ModeTargets {
+	/** Steam target temperature, °C. */
+	steamTempC: number;
+	/** Steam timeout, seconds — the firmware-enforced ceiling. */
+	steamTimeoutS: number;
+	/** Hot-water target temperature, °C. */
+	hotWaterTempC: number;
+	/** Hot-water volume, ml. */
+	hotWaterVolumeMl: number;
+	/** Hot-water timeout, seconds. */
+	hotWaterTimeoutS: number;
+	/** Flush water temperature, °C. */
+	flushTempC: number;
+	/** Flush duration, seconds. No machine-side value exists — QC → default. */
+	flushTimeS: number;
 }
 
 /**
@@ -1616,6 +1696,31 @@ export interface ShotSample {
 	frameNumber: number;
 	/** Steam heater temperature, °C. */
 	steamTemp: number;
+}
+
+/**
+ * One shot's inputs to the History summary strip — a light projection
+ * so the FFI ships five numbers per row, not whole telemetry records.
+ * The shells build it from what they hold: web derives the weights via
+ * `ShotRecord::peaks`; Android reads its denormalized row fields.
+ */
+export interface ShotStatInput {
+	/** Total shot duration, milliseconds. */
+	durationMs: number;
+	/**
+	 * Final settled scale weight (the yield), grams, or `None` without
+	 * a scale.
+	 */
+	finalWeightG?: number;
+	/**
+	 * Peak scale weight, grams — the yield fallback when the final
+	 * weight is missing (a cup lifted before settle still counts).
+	 */
+	peakWeightG?: number;
+	/** Dose, grams (from the profile at capture), or `None`. */
+	doseG?: number;
+	/** Star rating 1..=5; `None` / 0 = unrated. */
+	rating?: number;
 }
 
 /**

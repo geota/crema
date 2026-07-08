@@ -72,7 +72,7 @@ import coffee.crema.ui.formatWeight
 import coffee.crema.ui.freshnessColor
 import coffee.crema.ui.modeLabel
 import coffee.crema.ui.modeRunningSub
-import coffee.crema.ui.modeTargets
+import coffee.crema.ui.rememberModeTargets
 import coffee.crema.beans.roastBand
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
@@ -80,6 +80,7 @@ import coffee.crema.core.Bean
 import coffee.crema.core.ExitMetric
 import coffee.crema.core.MachineState
 import coffee.crema.core.StopReason
+import coffee.crema.core.volumeStopArms
 import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.Roaster
 import coffee.crema.profiles.CremaProfile
@@ -1205,14 +1206,18 @@ private fun LimitsCard(active: CremaProfile?, ui: coffee.crema.ui.MainUiState) {
             val targetW = convertWeight(active.yieldOut, ui.weightUnit)
             add(LimitRow("Yield", "scales", tel.weight, weightG, active.yieldOut, liveW.value, targetW.value, targetW.unit, fired = ui.lastStopReason == StopReason.Weight))
         }
-        // Volume is a stop condition only when it will actually fire: with a
-        // scale connected it's a dormant fallback (SAW owns the stop) unless
-        // the user opted into both caps — mirror the core's arming rule.
+        // Volume is a stop condition only when it will actually fire. The rule
+        // is the core's own stop-target demotion (`de1_domain::volume_stop_arms`,
+        // review #41): a no-scale fallback, demoted only when the weight leg
+        // resolves (scale connected AND a weight target set) unless the user
+        // opted into both caps. A scale without a weight target keeps volume
+        // armed (review #29) — the old shell rule hid the row there while the
+        // core would still stop on it.
         // SUBSCRIBING counts as connected (web parity, review #41): the scale
         // will stream within a beat, so the card shouldn't flash on connect.
         val scalePresent = ui.scaleState == ScaleBleManager.State.READY ||
             ui.scaleState == ScaleBleManager.State.SUBSCRIBING
-        val volumeArms = !scalePresent || ui.volumeStopWithScale
+        val volumeArms = volumeStopArms(scalePresent, active != null && active.yieldOut > 0f, ui.volumeStopWithScale)
         if (active != null && active.maxTotalVolumeMl > 0 && volumeArms) {
             val liveV = convertVolume(ui.dispensedVolume ?: 0f, ui.volumeUnit)
             val targetV = convertVolume(active.maxTotalVolumeMl.toFloat(), ui.volumeUnit)
@@ -1497,7 +1502,7 @@ private fun BrewFoot(
             // QC → legacy default), active shows an `elapsed / total s` counter
             // fed by the VM mode clock — web BrewDashboard chip-sub parity.
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val t = modeTargets(ui)
+                val t = rememberModeTargets(ui)
                 val steaming = ui.machineStateName == MachineState.Steam
                 val dispensing = ui.machineStateName == MachineState.HotWater
                 val flushing = ui.machineStateName == MachineState.HotWaterRinse

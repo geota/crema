@@ -102,6 +102,24 @@ impl StopConfig {
     }
 }
 
+/// Whether the profile's volume limit (SAV) will actually arm for the
+/// next shot — the shells' Max-Volume card display gate. Mirrors the
+/// core orchestrator's `effective_stop_targets` demotion rule: volume is
+/// a NO-SCALE FALLBACK, never a competitor to stop-at-weight
+/// (reference-app consensus), so it is demoted only when the weight leg
+/// resolves — a scale connected AND a weight target set — unless the
+/// user opted into both caps racing (`volume_stop_with_scale`). A scale
+/// connected *without* a weight target keeps volume armed (review #29:
+/// dropping it would leave the shot with no stop at all).
+#[must_use]
+pub fn volume_stop_arms(
+    scale_connected: bool,
+    weight_target_set: bool,
+    volume_stop_with_scale: bool,
+) -> bool {
+    !(scale_connected && weight_target_set) || volume_stop_with_scale
+}
+
 /// Why [`AutoStop`] decided to end the shot.
 ///
 /// `#[non_exhaustive]` so further stop reasons (e.g. a future puck-collapse
@@ -575,5 +593,18 @@ mod tests {
             offset_median.weight_lead - theil_sen.weight_lead,
             OFFSET_MEDIAN_LAG,
         );
+    }
+
+    #[test]
+    fn volume_arms_unless_the_weight_leg_resolves_without_opt_in() {
+        // No scale → volume is the fallback stop.
+        assert!(volume_stop_arms(false, false, false));
+        assert!(volume_stop_arms(false, true, false));
+        // Scale + weight target → SAW owns the stop; volume demoted …
+        assert!(!volume_stop_arms(true, true, false));
+        // … unless the user opted into both caps racing.
+        assert!(volume_stop_arms(true, true, true));
+        // Scale WITHOUT a weight target keeps volume armed (review #29).
+        assert!(volume_stop_arms(true, false, false));
     }
 }

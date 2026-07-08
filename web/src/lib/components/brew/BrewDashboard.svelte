@@ -1,5 +1,10 @@
 <script lang="ts">
-	import { ml_to_fl_oz as mlToFlOz } from '$lib/wasm/de1_wasm';
+	import {
+		ml_to_fl_oz as mlToFlOz,
+		resolveModeTargets as wasmResolveModeTargets,
+		volumeStopArms as wasmVolumeStopArms
+	} from '$lib/wasm/de1_wasm';
+	import type { ModeTargetInputs, ModeTargets } from '$lib/core/crema-core';
 	import { untrack } from 'svelte';
 	import Icon from '$lib/icons/Icon.svelte';
 	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
@@ -148,81 +153,57 @@
 	const prefs = $derived(settings.current);
 
 	// ── Live mode telemetry — drives the head pill's progress bar
-	//
-	// Targets are hardcoded for now; they'll come from the per-mode
-	// Settings sections once they land. Steam target = 8 s,
-	// Flush target = 4 s. Hot water defaults to 30 s as a placeholder
-	// time-budget until we wire `dispensedVolume` against a
-	// settings-driven `hotWaterVolMl` target.
 	/**
-	 * Per-mode target ceilings: the steam / hot-water timeouts the DE1's
-	 * firmware enforces (the cap, not the typical session length), and the
-	 * legacy 4 s flush window. Steam + hot-water targets come from the
-	 * `ShotSettings` snapshot the connect-time Read populates; fallbacks
-	 * match the legacy de1app defaults so the chip has a sensible reading
-	 * before the read returns.
-	 *
-	 * Uses `posOr` rather than `??` because a partial / pre-handshake
-	 * `ShotSettings` payload can carry a literal `0` for these fields,
-	 * which `??` happily passes through. A zero timeout is meaningless
-	 * anyway — treat it as missing.
+	 * The resolved service-mode targets — steam / hot-water / flush temps,
+	 * volumes, and timeout ceilings. The precedence per field (live machine
+	 * value from the connect-time `ShotSettings` / `FlushTemp`-MMR reads →
+	 * the user's Quick Controls value → legacy de1app default, with a
+	 * partial payload's literal `0` treated as missing) lives in the core —
+	 * `de1_domain::resolve_mode_targets`, review #41: this derivation and
+	 * Android's `ModeTargets.kt` had drifted. The raw deci-°C FlushTemp MMR
+	 * word crosses as-is; the ÷10 lives core-side too.
 	 */
-	const posOr = (v: number | undefined, fallback: number): number =>
-		v != null && Number.isFinite(v) && v > 0 ? v : fallback;
 	// `$derived.by(fn)` rather than `$derived(value)` so the closure runs
 	// lazily — `params` is declared later in the file, and a non-lazy
 	// expression would hit the temporal-dead-zone error.
+	const modeTargets = $derived.by<ModeTargets>(() => {
+		const inputs: ModeTargetInputs = {
+			machineSteamTempC: ui.de1ShotSettings?.steamTemp,
+			machineSteamTimeoutS: ui.de1ShotSettings?.steamTimeout,
+			machineHotWaterTempC: ui.de1ShotSettings?.hotWaterTemp,
+			machineHotWaterVolumeMl: ui.de1ShotSettings?.hotWaterVolume,
+			machineHotWaterTimeoutS: ui.de1ShotSettings?.hotWaterTimeout,
+			machineFlushTempDeciC: machine.flushTempC ?? undefined,
+			qcSteamTempC: params.current.steamTemp,
+			qcSteamTimeS: params.current.steamTime,
+			qcHotWaterTempC: params.current.waterTemp,
+			qcHotWaterVolumeMl: params.current.waterVolume,
+			qcFlushTempC: params.current.flushTemp,
+			qcFlushTimeS: params.current.flushTime
+		};
+		return JSON.parse(wasmResolveModeTargets(JSON.stringify(inputs))) as ModeTargets;
+	});
+	/** Per-mode target ceilings — the timeouts the firmware enforces. */
 	const MODE_TARGET_SEC = $derived.by<
 		Record<'steaming' | 'dispensing' | 'flushing', number>
 	>(() => ({
-		// Precedence: live machine value (ShotSettings/MMR) > the user's
-		// Quick Controls value (the QuickSheet steppers persist these
-		// per-shot params via `params.current`) > hardcoded legacy default.
-		// The QC value is the user's intent; the machine value is what
-		// the firmware currently has loaded.
-		steaming: posOr(ui.de1ShotSettings?.steamTimeout, posOr(params.current.steamTime, 90)),
-		dispensing: posOr(ui.de1ShotSettings?.hotWaterTimeout, 30),
-		flushing: posOr(params.current.flushTime, 4)
+		steaming: modeTargets.steamTimeoutS,
+		dispensing: modeTargets.hotWaterTimeoutS,
+		flushing: modeTargets.flushTimeS
 	}));
 	/**
-	 * Flush water target temperature, °C.
-	 *
-	 * Precedence: machine MMR `FlushTemp` (`0x00803844`, wire value
-	 * `°C × 10`) > the user's Quick Controls value (`params.current
-	 * .flushTemp` — Flush bucket's Temp option) > legacy 95 °C default.
-	 * The MMR read happens at connect time; before it lands, QC is
-	 * what's shown on the chip + active banner. `posOr` so a partial
-	 * payload's 0 falls through.
-	 */
-	const flushTempC = $derived.by<number>(() => {
-		const raw = machine.flushTempC;
-		const fromMachine = raw != null && Number.isFinite(raw) ? raw / 10 : NaN;
-		return posOr(fromMachine, posOr(params.current.flushTemp, 95));
-	});
-
-	/**
 	 * The resting chip sub-labels — the *target* (set) values the firmware
-	 * will hold during the session. Steam + hot-water targets come from
-	 * `ShotSettings`; flush target temp comes from the FlushTemp MMR
-	 * register above. Fallbacks (148 °C steam target, 92 °C / 250 ml hot
-	 * water) match the legacy de1app defaults so the chips paint
-	 * sensibly before the connect-time reads return.
-	 *
+	 * will hold during the session, formatted from {@link modeTargets}.
 	 * The *active* banner (`headStatusMeta` below) uses the *measured*
 	 * live values instead — so the chip says "what will happen" and the
 	 * banner says "what's happening now."
 	 */
-	// Same lazy-closure pattern as MODE_TARGET_SEC above. Precedence on
-	// each field: machine read > Quick Controls value (where it exists)
-	// > hardcoded legacy default — including steam temp (the Steam card's
-	// Temp mode) and flush temp (the Flush bucket's Temp option), both of
-	// which now have QC analogues that write through to the DE1.
 	const MODE_TARGET_LABEL = $derived.by<
 		Record<'steaming' | 'dispensing' | 'flushing', string>
 	>(() => ({
-		steaming: `${formatTemp(posOr(ui.de1ShotSettings?.steamTemp, posOr(params.current.steamTemp, 148)), prefs.tempUnit)} · ${posOr(ui.de1ShotSettings?.steamTimeout, posOr(params.current.steamTime, 90))} s`,
-		dispensing: `${formatTemp(posOr(ui.de1ShotSettings?.hotWaterTemp, posOr(params.current.waterTemp, 92)), prefs.tempUnit)} · ${formatVolume(posOr(ui.de1ShotSettings?.hotWaterVolume, posOr(params.current.waterVolume, 250)), prefs.volumeUnit)}`,
-		flushing: `${formatTemp(flushTempC, prefs.tempUnit)} · ${posOr(params.current.flushTime, 4)} s`
+		steaming: `${formatTemp(modeTargets.steamTempC, prefs.tempUnit)} · ${modeTargets.steamTimeoutS} s`,
+		dispensing: `${formatTemp(modeTargets.hotWaterTempC, prefs.tempUnit)} · ${formatVolume(modeTargets.hotWaterVolumeMl, prefs.volumeUnit)}`,
+		flushing: `${formatTemp(modeTargets.flushTempC, prefs.tempUnit)} · ${modeTargets.flushTimeS} s`
 	}));
 	/**
 	 * `performance.now()` when the DE1 transitioned into the current
@@ -872,14 +853,17 @@
 	const yieldCardVisible = $derived((activeProfile?.yieldOut ?? 0) > 0 && p.yield > 0);
 	/**
 	 * Whether to render the Max Volume target card — only when the volume
-	 * stop will actually arm: with a scale connected it's a dormant no-scale
-	 * fallback (stop-on-weight owns the stop) unless the user opted into both
-	 * caps via Settings → "Volume stop with scale". Mirrors the core's arming
-	 * rule and the Android LimitsCard.
+	 * stop will actually arm. The rule is the core's own stop-target
+	 * demotion (`de1_domain::volume_stop_arms`, review #41): volume is a
+	 * no-scale fallback demoted only when the weight leg resolves (scale
+	 * connected AND a weight target set), unless the user opted into both
+	 * caps via Settings → "Volume stop with scale". A scale without a
+	 * weight target keeps volume armed (review #29) — the old shell rule
+	 * hid the card there while the core would still stop on it.
 	 */
 	const maxVolumeCardVisible = $derived(
 		(activeProfile?.maxTotalVolumeMl ?? 0) > 0 &&
-			(!scaleConnected || prefs.volumeStopWithScale)
+			wasmVolumeStopArms(scaleConnected, yieldCardVisible, prefs.volumeStopWithScale)
 	);
 	/** Volume progress as 0..100 % for the max-volume card's bar. */
 	const maxVolumePct = $derived.by(() => {

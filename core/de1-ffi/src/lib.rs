@@ -378,6 +378,43 @@ pub fn debit_remaining(remaining: f32, dose_g: f32) -> Option<f32> {
     de1_domain::debit_remaining(remaining, dose_g)
 }
 
+/// Derive the History stat strip over a JSON array of light per-shot
+/// tuples (`ShotStatInput`); returns `HistoryStats` JSON. One
+/// derivation for every shell (review #41: Android ignored the
+/// peak-weight yield fallback the web applied). See
+/// [`de1_domain::history_stats`].
+#[uniffi::export]
+pub fn history_stats(shots_json: String) -> Result<String, CremaError> {
+    let shots: Vec<de1_domain::ShotStatInput> =
+        serde_json::from_str(&shots_json).map_err(crema_err)?;
+    serde_json::to_string(&de1_domain::history_stats(&shots)).map_err(crema_err)
+}
+
+/// Resolve the Brew screen's service-mode display targets (steam /
+/// hot-water / flush) — machine value → Quick-Controls dial → legacy
+/// default, per field. Takes `ModeTargetInputs` JSON, returns
+/// `ModeTargets` JSON. See [`de1_domain::resolve_mode_targets`]
+/// (review #41 — the two shells' derivations had drifted).
+#[uniffi::export]
+pub fn resolve_mode_targets(inputs_json: String) -> Result<String, CremaError> {
+    let inputs: de1_domain::ModeTargetInputs =
+        serde_json::from_str(&inputs_json).map_err(crema_err)?;
+    serde_json::to_string(&de1_domain::resolve_mode_targets(&inputs)).map_err(crema_err)
+}
+
+/// Whether the profile's volume limit (SAV) will actually arm — the
+/// Max-Volume card's display gate, mirroring the core's stop-target
+/// demotion rule instead of each shell re-implementing it. See
+/// [`de1_domain::volume_stop_arms`].
+#[uniffi::export]
+pub fn volume_stop_arms(
+    scale_connected: bool,
+    weight_target_set: bool,
+    volume_stop_with_scale: bool,
+) -> bool {
+    de1_domain::volume_stop_arms(scale_connected, weight_target_set, volume_stop_with_scale)
+}
+
 /// Install a process-wide Rust panic hook that appends each panic — message,
 /// `file:line:col`, thread, and a backtrace — to `log_path`.
 ///

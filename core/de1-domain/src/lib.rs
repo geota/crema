@@ -59,6 +59,7 @@ pub mod history_export;
 pub mod history_import;
 pub mod ids;
 pub mod maintenance;
+pub mod mode_targets;
 pub mod profile;
 pub mod profile_bounds;
 pub mod profile_fingerprint;
@@ -103,13 +104,17 @@ pub use crema_profile::{
 };
 pub use error::{DomainError, ImportError};
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
-pub use history::{STORED_SHOT_FORMAT_VERSION, ShotMetadata, StoredShot, brew_ratio};
+pub use history::{
+    HistoryStats, STORED_SHOT_FORMAT_VERSION, ShotMetadata, ShotStatInput, StoredShot, brew_ratio,
+    history_stats,
+};
 pub use history_export::export_v2_json_shot;
 pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};
 pub use ids::{new_profile_id, new_shot_id};
 pub use maintenance::{
     MaintenanceReadout, MaintenanceState, maintenance_readout, maintenance_readout_json,
 };
+pub use mode_targets::{ModeTargetInputs, ModeTargets, resolve_mode_targets};
 pub use profile::{
     AssembledProfile, BeverageType, Compare, ExitCondition, ExitMetric, Limiter, Profile,
     ProfileStep, Pump, TempSensor, Transition,
@@ -128,7 +133,10 @@ pub use steam::{
     MAX_STEAM_SAMPLES, STEAM_ECO_DELAY, SteamClogReason, SteamEvent, SteamMonitor, SteamRecord,
     SteamSample,
 };
-pub use stop::{AutoStop, STOP_WEIGHT_BEFORE, StopCapture, StopConfig, StopReason, StopTargets};
+pub use stop::{
+    AutoStop, STOP_WEIGHT_BEFORE, StopCapture, StopConfig, StopReason, StopTargets,
+    volume_stop_arms,
+};
 pub use tank::{TANK_MM_TO_ML, water_tank_ml};
 pub use units::{
     WeightUnit, bar_to_psi, celsius_to_fahrenheit, fahrenheit_to_celsius, fl_oz_to_ml, grams_to_oz,

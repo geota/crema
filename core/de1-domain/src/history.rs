@@ -11,6 +11,7 @@
 //! file per shot, a database, an upload.
 
 use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
 use crate::bean::ShotBean;
 use crate::error::DomainError;
@@ -99,6 +100,184 @@ mod ratio_tests {
         assert_eq!(brew_ratio(-1.0, 36.0), None);
         assert_eq!(brew_ratio(18.0, f32::NAN), None);
         assert_eq!(brew_ratio(f32::INFINITY, 36.0), None);
+    }
+}
+
+/// One shot's inputs to the History summary strip — a light projection
+/// so the FFI ships five numbers per row, not whole telemetry records.
+/// The shells build it from what they hold: web derives the weights via
+/// `ShotRecord::peaks`; Android reads its denormalized row fields.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ShotStatInput {
+    /// Total shot duration, milliseconds.
+    #[typeshare(serialized_as = "I64")]
+    pub duration_ms: u64,
+    /// Final settled scale weight (the yield), grams, or `None` without
+    /// a scale.
+    pub final_weight_g: Option<f32>,
+    /// Peak scale weight, grams — the yield fallback when the final
+    /// weight is missing (a cup lifted before settle still counts).
+    pub peak_weight_g: Option<f32>,
+    /// Dose, grams (from the profile at capture), or `None`.
+    pub dose_g: Option<f32>,
+    /// Star rating 1..=5; `None` / 0 = unrated.
+    pub rating: Option<u8>,
+}
+
+/// Summary metrics over a (filter/range-scoped) set of shots — the
+/// History page's stat strip. `None` means "no data" (render as "—").
+/// One derivation for every shell (review #41: Android ignored the
+/// peak-weight fallback, so a lifted-cup shot dropped out of its
+/// averages while the web counted it).
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryStats {
+    /// Number of shots in the set (all of them, not just weighed ones).
+    pub count: u32,
+    /// Total weight dispensed, grams, over shots with a usable yield.
+    pub total_weight_g: Option<f32>,
+    /// Mean yield weight, grams ("Avg weight").
+    pub avg_weight_g: Option<f32>,
+    /// Mean brew ratio (yield ÷ dose) over shots that recorded both.
+    pub avg_ratio: Option<f32>,
+    /// Mean shot duration, seconds (unrounded — the shell formats).
+    pub avg_time_s: Option<f32>,
+    /// Mean star rating over rated (1..=5) shots.
+    pub avg_rating: Option<f32>,
+}
+
+/// Derive the History stat strip over `shots`.
+///
+/// Per-shot yield = `final_weight_g ?? peak_weight_g`, kept only when
+/// positive; the ratio additionally needs a positive dose; the rating
+/// average skips unrated (`None` / 0) rows; the time average runs over
+/// every shot. Mirrors the web history page's derivations, which were
+/// the verified reference.
+// The casts feed display averages: the history cap is 300 rows and a
+// real shot is minutes, both far inside f32's 23-bit mantissa.
+#[allow(clippy::cast_precision_loss)]
+#[must_use]
+pub fn history_stats(shots: &[ShotStatInput]) -> HistoryStats {
+    let yield_of = |s: &ShotStatInput| {
+        s.final_weight_g
+            .or(s.peak_weight_g)
+            .filter(|y| y.is_finite() && *y > 0.0)
+    };
+    let yields: Vec<f32> = shots.iter().filter_map(&yield_of).collect();
+    let ratios: Vec<f32> = shots
+        .iter()
+        .filter_map(|s| {
+            let y = yield_of(s)?;
+            let d = s.dose_g.filter(|d| d.is_finite() && *d > 0.0)?;
+            Some(y / d)
+        })
+        .collect();
+    let ratings: Vec<f32> = shots
+        .iter()
+        .filter_map(|s| s.rating.filter(|r| *r > 0).map(f32::from))
+        .collect();
+    let mean = |v: &[f32]| {
+        if v.is_empty() {
+            None
+        } else {
+            Some(v.iter().sum::<f32>() / v.len() as f32)
+        }
+    };
+    HistoryStats {
+        count: u32::try_from(shots.len()).unwrap_or(u32::MAX),
+        total_weight_g: if yields.is_empty() {
+            None
+        } else {
+            Some(yields.iter().sum())
+        },
+        avg_weight_g: mean(&yields),
+        avg_ratio: mean(&ratios),
+        avg_time_s: if shots.is_empty() {
+            None
+        } else {
+            Some(
+                shots.iter().map(|s| s.duration_ms as f32).sum::<f32>()
+                    / shots.len() as f32
+                    / 1000.0,
+            )
+        },
+        avg_rating: mean(&ratings),
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+
+    fn shot(
+        duration_ms: u64,
+        final_g: Option<f32>,
+        peak_g: Option<f32>,
+        dose_g: Option<f32>,
+        rating: Option<u8>,
+    ) -> ShotStatInput {
+        ShotStatInput {
+            duration_ms,
+            final_weight_g: final_g,
+            peak_weight_g: peak_g,
+            dose_g,
+            rating,
+        }
+    }
+
+    #[test]
+    fn empty_set_is_all_none() {
+        let s = history_stats(&[]);
+        assert_eq!(s.count, 0);
+        assert_eq!(s.total_weight_g, None);
+        assert_eq!(s.avg_weight_g, None);
+        assert_eq!(s.avg_ratio, None);
+        assert_eq!(s.avg_time_s, None);
+        assert_eq!(s.avg_rating, None);
+    }
+
+    #[test]
+    fn final_weight_wins_and_peak_backfills() {
+        let s = history_stats(&[
+            shot(30_000, Some(36.0), Some(38.0), Some(18.0), Some(4)),
+            // No settled final weight (cup lifted early) — the peak counts.
+            shot(20_000, None, Some(30.0), Some(15.0), None),
+        ]);
+        assert_eq!(s.count, 2);
+        assert_eq!(s.total_weight_g, Some(66.0));
+        assert_eq!(s.avg_weight_g, Some(33.0));
+        // Ratios: 36/18 = 2.0, 30/15 = 2.0.
+        assert_eq!(s.avg_ratio, Some(2.0));
+        assert_eq!(s.avg_time_s, Some(25.0));
+        // Only the rated shot counts.
+        assert_eq!(s.avg_rating, Some(4.0));
+    }
+
+    #[test]
+    fn scale_less_shots_still_count_and_still_time() {
+        // No weights at all: time averages over everything, the weight
+        // aggregates stay None rather than reading 0.
+        let s = history_stats(&[shot(30_000, None, None, Some(18.0), Some(0))]);
+        assert_eq!(s.count, 1);
+        assert_eq!(s.total_weight_g, None);
+        assert_eq!(s.avg_ratio, None);
+        assert_eq!(s.avg_time_s, Some(30.0));
+        // An explicit 0 rating is unrated.
+        assert_eq!(s.avg_rating, None);
+    }
+
+    #[test]
+    fn zero_or_negative_weights_and_doses_are_excluded() {
+        let s = history_stats(&[
+            shot(30_000, Some(0.0), Some(-2.0), Some(18.0), None),
+            shot(30_000, Some(40.0), None, Some(0.0), None),
+        ]);
+        // Only the 40 g shot has a usable yield; no shot has yield AND dose.
+        assert_eq!(s.total_weight_g, Some(40.0));
+        assert_eq!(s.avg_ratio, None);
     }
 }
 

@@ -4199,6 +4199,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         now: Long = System.currentTimeMillis(),
         shotId: String = newShotId(),
         disposition: ShotDisposition = ShotDisposition.Record,
+        peakWeightG: Float? = null,
     ) {
         val s = _ui.value
         val profile = s.profiles.firstOrNull { it.id == s.activeProfileId }
@@ -4250,6 +4251,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             yieldTargetG = (s.brewParams?.yieldOut ?: profile?.yieldOut?.toDouble())?.toFloat(),
             peakPressure = peakPressure,
             peakTemp = peakTemp,
+            // The stats' yield fallback when the settled final weight is
+            // missing (review #41) — the event has carried it all along.
+            peakWeightG = peakWeightG,
             profileName = profile?.name,
             profile = profileWire,
             bean = beanSnapshot,
@@ -5460,6 +5464,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // Core-classified (review #40); null only on a version-skewed
                     // event stream → record.
                     c.disposition ?: ShotDisposition.Record,
+                    peakWeightG = c.peak_weight,
                 )
                 // A pour just finished: flush the integrated water into the persisted
                 // maintenance state and recompute the filter / descale / clean readout.

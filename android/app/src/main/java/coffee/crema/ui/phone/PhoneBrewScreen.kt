@@ -49,7 +49,7 @@ import coffee.crema.core.celsiusToFahrenheit
 import coffee.crema.ui.modeLabel
 import coffee.crema.ui.modeRunningSub
 import coffee.crema.ui.modeTargetSeconds
-import coffee.crema.ui.modeTargets
+import coffee.crema.ui.rememberModeTargets
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.rankProfilesForPicker
 import coffee.crema.beans.rankBeansForPicker
@@ -152,7 +152,7 @@ fun PhoneBrewScreen(
                 ModeStatusBanner(
                     label = mode,
                     elapsedMs = ui.modeElapsedMs,
-                    targetS = modeTargetSeconds(ui.machineStateName, modeTargets(ui)) ?: 0f,
+                    targetS = modeTargetSeconds(ui.machineStateName, rememberModeTargets(ui)) ?: 0f,
                     // Steam shows the steam-heater temp; hot water / flush show
                     // the group-head temp (web headStatusMeta parity).
                     tempLabel = when (ui.machineStateName) {
@@ -1048,7 +1048,7 @@ private fun ModeCluster(
     // Live pill subs (were hardcoded): resting = the *target* the firmware
     // will hold (machine ShotSettings → QC → legacy default), active = an
     // `elapsed / total s` counter from the VM mode clock (web chip-sub parity).
-    val t = modeTargets(ui)
+    val t = rememberModeTargets(ui)
     val steaming = ui.machineStateName == MachineState.Steam
     val dispensing = ui.machineStateName == MachineState.HotWater
     val flushing = ui.machineStateName == MachineState.HotWaterRinse
