@@ -148,6 +148,16 @@ interface BleTransport {
     fun discoveredServices(device: DeviceHandle): List<String> = emptyList()
 
     /**
+     * Best-effort connection-parameter hint: ask the OS for a HIGH-priority
+     * (short-interval) link while [high], or back to BALANCED. Used to tighten
+     * the DE1's sample cadence + stop-write latency during a shot (Decenza
+     * boosts its links the same way). Never throws — a stack that refuses the
+     * request simply stays at its current parameters — and the default is a
+     * no-op for transports with no radio underneath (replay / LAN proxy).
+     */
+    suspend fun requestConnectionPriority(device: DeviceHandle, high: Boolean) {}
+
+    /**
      * Write [data] to the [characteristic] of [service] on [device]. Suspends
      * until the write completes; throws on failure. Used for scale tare /
      * timer commands.

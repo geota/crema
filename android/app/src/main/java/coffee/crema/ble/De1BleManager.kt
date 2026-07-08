@@ -407,6 +407,20 @@ class De1BleManager(
     }
 
     /**
+     * Best-effort connection-priority hint for the DE1 link — HIGH during a
+     * shot (tighter connection interval → steadier ShotSample cadence and a
+     * lower-latency stop-at-weight write), BALANCED otherwise. Decenza runs
+     * its DE1 link at HIGH for the same reason; the shot-window gating (and
+     * leaving the scale at BALANCED) avoids the dual-HIGH radio starvation it
+     * had to add a backoff latch for (#1093/#1176). No-op when disconnected;
+     * a refused request is logged by the transport and changes nothing.
+     */
+    suspend fun setConnectionPriority(high: Boolean) {
+        val d = device ?: return
+        transport.requestConnectionPriority(d, high)
+    }
+
+    /**
      * Consecutive [writeCharacteristic] failures — the keep-awake poke (60 s)
      * and any user-action write feed this; on [MAX_CONSECUTIVE_WRITE_FAILURES]
      * the link is presumed dead and torn down at the TRANSPORT level (not

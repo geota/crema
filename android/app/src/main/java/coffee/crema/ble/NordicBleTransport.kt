@@ -6,6 +6,7 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.shareIn
 import no.nordicsemi.kotlin.ble.client.RemoteCharacteristic
 import no.nordicsemi.kotlin.ble.client.RemoteServices
 import no.nordicsemi.kotlin.ble.client.android.CentralManager
+import no.nordicsemi.kotlin.ble.client.android.ConnectionPriority
 import no.nordicsemi.kotlin.ble.client.android.Peripheral
 import no.nordicsemi.kotlin.ble.client.android.native
 import no.nordicsemi.kotlin.ble.core.ConnectionState
@@ -270,6 +272,22 @@ class NordicBleTransport(context: Context) : BleTransport {
                     .ifEmpty { "(none)" }
                 Log.i(TAG, "    char ${characteristic.uuid}  [$props]")
             }
+        }
+    }
+
+    override suspend fun requestConnectionPriority(device: BleTransport.DeviceHandle, high: Boolean) {
+        val handle = device as NordicDeviceHandle
+        val peripheral = peripherals[handle] ?: return
+        val priority = if (high) ConnectionPriority.HIGH else ConnectionPriority.BALANCED
+        // Best-effort: the request can be refused (stack policy) or the
+        // parameter-change event can simply never arrive (many stacks don't
+        // report it) — neither should stall or fail the caller.
+        runCatching {
+            withTimeout(5_000) { peripheral.requestConnectionPriority(priority) }
+        }.onSuccess {
+            Log.i(TAG, "Connection priority $priority accepted for ${handle.address}: $it")
+        }.onFailure {
+            Log.i(TAG, "Connection priority $priority not applied for ${handle.address}: ${it.message}")
         }
     }
 

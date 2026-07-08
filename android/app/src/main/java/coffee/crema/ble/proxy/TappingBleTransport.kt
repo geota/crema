@@ -88,6 +88,9 @@ class TappingBleTransport(
     override fun discoveredServices(device: BleTransport.DeviceHandle): List<String> =
         delegate.discoveredServices(device)
 
+    override suspend fun requestConnectionPriority(device: BleTransport.DeviceHandle, high: Boolean) =
+        delegate.requestConnectionPriority(device, high)
+
     /** Serve a hub read by address: resolve the handle and read through the
      *  delegate. This backs [RelayHub]'s `readSource`. */
     suspend fun readByAddress(address: String, service: UUID, char: UUID): ByteArray {

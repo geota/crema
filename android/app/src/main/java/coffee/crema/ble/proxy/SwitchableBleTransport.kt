@@ -76,4 +76,7 @@ class SwitchableBleTransport(initial: BleTransport) : BleTransport {
 
     override fun discoveredServices(device: BleTransport.DeviceHandle): List<String> =
         current.discoveredServices(device)
+
+    override suspend fun requestConnectionPriority(device: BleTransport.DeviceHandle, high: Boolean) =
+        current.requestConnectionPriority(device, high)
 }

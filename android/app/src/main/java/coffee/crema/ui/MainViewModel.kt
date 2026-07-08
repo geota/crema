@@ -3230,6 +3230,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // Fresh shot — the previous stop attribution no longer applies.
                     lastStopReason = null,
                 ) }
+                // Tighten the DE1 link for the shot window (steadier ShotSample
+                // cadence + lower-latency SAW stop write); restored to BALANCED
+                // on ShotCompleted. Best-effort — see De1BleManager.
+                viewModelScope.launch { ble.setConnectionPriority(high = true) }
                 appendLog("Shot started")
             }
             is Event.ShotPhaseChanged -> {
@@ -3390,6 +3394,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ),
                 ) }
                 appendLog("Shot completed: ${c.duration}ms, ${c.sample_count} samples")
+                // Shot window over — release the HIGH-priority link hint
+                // requested on ShotStarted.
+                viewModelScope.launch { ble.setConnectionPriority(high = false) }
                 library.captureCompletedShot(
                     c.duration.toLong(), c.final_weight, c.peak_pressure, c.peak_temp, now, shotId,
                     // Core-classified (review #40); null only on a version-skewed
