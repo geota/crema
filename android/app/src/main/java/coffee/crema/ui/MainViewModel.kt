@@ -1001,6 +1001,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             ?: UUID.randomUUID().toString().also { runCatching { f.writeText(it) } }
     }
 
+    /** Construction-time proxy-config snapshot — read `prefs.json` ONCE
+     *  (review #36: three blocking main-thread disk reads during VM
+     *  construction; role/host/port are restart-to-apply anyway). Declared
+     *  BEFORE [switchable] for the same field-init-order reason as
+     *  [proxyDeviceId]: [buildInitialDelegate] dereferences this during that
+     *  field's initializer, and a later-declared lazy delegate is still null
+     *  there (launch crash). */
+    private val proxyConfigCache: ProxyConfig by lazy { readProxyConfigUncached() }
+
     // The managers + scanner sit on this facade so the transport can be swapped at
     // runtime — M2 mode switches (Mirror/Hand-off) with NO app restart. The startup
     // delegate is the persisted role (see [buildInitialDelegate]); [applyMode] swaps it.
@@ -3351,12 +3360,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private data class ProxyConfig(val role: String, val host: String, val port: Int, val replayPrimary: Boolean = false)
 
     /** Read just the proxy role/host/port straight off `prefs.json`, synchronously,
-     *  for [buildInitialDelegate] (which runs before the async [loadPrefs]). */
-    /** Construction-time proxy-config snapshot — read the file ONCE
-     *  (review #36: three blocking main-thread disk reads during VM
-     *  construction). The role/host/port are restart-to-apply anyway. */
-    private val proxyConfigCache: ProxyConfig by lazy { readProxyConfigUncached() }
-
+     *  for [buildInitialDelegate] (which runs before the async [loadPrefs]) —
+     *  served from the construction-time [proxyConfigCache]. */
     private fun readProxyConfigSync(): ProxyConfig = proxyConfigCache
 
     private fun readProxyConfigUncached(): ProxyConfig = runCatching {
