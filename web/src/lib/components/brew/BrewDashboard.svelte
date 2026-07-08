@@ -34,7 +34,7 @@
 		ProfileSyncFailedError,
 		type UiSnapshot
 	} from '$lib/state';
-	import { ShotPhase, MachineState, MmrRegister , StopReason } from '$lib/core/crema-core';
+	import { ShotPhase, MachineState, MmrRegister } from '$lib/core/crema-core';
 	import ModeChip from './ModeChip.svelte';
 	import ModeHeadStatus from './ModeHeadStatus.svelte';
 	import MachineErrorBanner from './MachineErrorBanner.svelte';
@@ -897,8 +897,7 @@
 				live: shotWeightM.value,
 				target: yieldTarget.value,
 				unit: yieldTarget.unit,
-				pct: yieldPct,
-				fired: ui.lastStopReason === StopReason.Weight
+				pct: yieldPct
 			});
 		if (maxVolumeCardVisible)
 			out.push({
@@ -909,8 +908,7 @@
 				live: (ui.dispensedVolume ?? 0).toFixed(0),
 				target: String(activeProfile?.maxTotalVolumeMl ?? ''),
 				unit: 'ml',
-				pct: maxVolumePct,
-				fired: ui.lastStopReason === StopReason.Volume
+				pct: maxVolumePct
 			});
 		if (maxDurationCardVisible)
 			out.push({
@@ -921,8 +919,7 @@
 				live: elapsedSec.toFixed(0),
 				target: String(prefs.maxShotDurationS),
 				unit: 's',
-				pct: maxDurationPct,
-				fired: ui.lastStopReason === StopReason.MaxTime
+				pct: maxDurationPct
 			});
 		return out;
 	});
@@ -1322,7 +1319,7 @@
 							segments={activeProfile?.segments}
 						/>
 						{#if showLastShot && lastShot}
-							<LastShotCard shot={lastShot} dose={p.dose} />
+							<LastShotCard shot={lastShot} dose={p.dose} stopReason={ui.lastStopReason} />
 						{/if}
 					{/if}
 				</div>

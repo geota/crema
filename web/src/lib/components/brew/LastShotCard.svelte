@@ -11,15 +11,22 @@
 	import { getSettingsStore, convertWeight, convertPressure, convertTemp } from '$lib/settings';
 	import { formatRatio } from '$lib/utils/ratio';
 	import type { CompletedShot } from '$lib/state';
+	import { StopReason } from '$lib/core/crema-core';
+	import Icon from '$lib/icons/Icon.svelte';
 
 	let {
 		shot,
-		dose
+		dose,
+		stopReason = null
 	}: {
 		/** The finished shot's summary. */
 		shot: CompletedShot;
 		/** The brew dose (g) used for the yield-to-dose ratio. */
 		dose: number;
+		/** What ended the shot — the attribution used to be a gold ring on the
+		 *  stop-conditions rows, but historical info belongs on the historical
+		 *  card (user direction, all shells). Null = manual / unclassified. */
+		stopReason?: StopReason | null;
 	} = $props();
 
 	/** The shared app-preferences store — drives every value's display unit. */
@@ -38,6 +45,27 @@
 	const peakBarM = $derived(convertPressure(shot.peakPressure, prefs.pressureUnit));
 	/** Peak group-head temperature, in the chosen temperature unit. */
 	const peakTempM = $derived(convertTemp(shot.peakTemp, prefs.tempUnit));
+	/** "Stopped" label — mirrors the Android `stopLabel` mapping. */
+	const stopped = $derived(
+		stopReason === StopReason.Weight
+			? 'Yield'
+			: stopReason === StopReason.Volume
+				? 'Volume'
+				: stopReason === StopReason.MaxTime
+					? 'Time'
+					: '\u2014'
+	);
+	/** Icon + word, the same pairing the stop-conditions rows use — the icon
+	 *  ties the attribution back to the row that fired (Android `stopIcon`). */
+	const stoppedIcon = $derived(
+		stopReason === StopReason.Weight
+			? 'scales'
+			: stopReason === StopReason.Volume
+				? 'drop-half'
+				: stopReason === StopReason.MaxTime
+					? 'timer'
+					: null
+	);
 </script>
 
 <div class="crema-target ls-card">
@@ -62,6 +90,12 @@
 		<div class="ls-stat">
 			<span class="ls-v">{peakTempM.value}<em>{peakTempM.unit}</em></span>
 			<span class="ls-l">Peak temp</span>
+		</div>
+		<div class="ls-stat">
+			<span class="ls-v ls-stop">
+				{#if stoppedIcon}<Icon cls={'ph ph-' + stoppedIcon} aria-hidden="true" />{/if}
+				{stopped}</span>
+			<span class="ls-l">Stopped</span>
 		</div>
 	</div>
 </div>
@@ -90,6 +124,15 @@
 		font-size: 15px;
 		line-height: 1.1;
 		color: var(--fg-1);
+	}
+	.ls-stop {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+	}
+	.ls-stop :global(.ph) {
+		font-size: 13px;
+		color: rgba(var(--tint-rgb), 0.6);
 	}
 	.ls-v em {
 		font-style: normal;

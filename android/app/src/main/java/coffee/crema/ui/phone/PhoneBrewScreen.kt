@@ -40,6 +40,8 @@ import coffee.crema.ui.formatRatio
 import coffee.crema.ui.formatTemp
 import coffee.crema.ui.formatWeight
 import coffee.crema.ui.freshnessColor
+import coffee.crema.ui.stopIcon
+import coffee.crema.ui.stopLabel
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.MachineState
@@ -552,14 +554,9 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
         // "in progress" until the DE1 idles) flips live weight crazy-negative —
         // keep it out of the yield readout + ratio (the bar already clamps at 525).
         val weight = (ui.scaleWeightG ?: 0f).coerceAtLeast(0f)
-        // The card whose condition ended the last shot gets a gold ring —
-        // stop attribution lives on the cards, not a toast (time → the
-        // timer hero; volume / weight → their chips below).
-        val timeFired = ui.lastStopReason == StopReason.MaxTime
         Surface(
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
-            border = if (timeFired) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
         ) {
             Column(
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 12.dp),
@@ -645,7 +642,6 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
                 Modifier.weight(1f),
                 "FLOW", fmtF(ui.flow), "ml/s", tel.flow,
                 "VOLUME", cVolume.value, cVolume.unit, tel.flow2,
-                highlight = ui.lastStopReason == StopReason.Volume,
             )
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -658,7 +654,6 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
                 Modifier.weight(1f),
                 "WEIGHT", cWeight.value, cWeight.unit, tel.weight,
                 "FLOW", fmtF(ui.scaleFlowGPerS), "g/s", tel.weight2,
-                highlight = ui.lastStopReason == StopReason.Weight,
             )
         }
 
@@ -696,13 +691,10 @@ private fun DualChip(
     modifier: Modifier,
     label: String, value: String, unit: String, color: Color,
     sLabel: String, sValue: String, sUnit: String, sColor: Color,
-    /** Gold ring — this chip's condition ended the last shot. */
-    highlight: Boolean = false,
 ) {
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
-        border = if (highlight) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
         modifier = modifier,
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -952,6 +944,11 @@ private fun RestingBody(
                         ReadyParam("YIELD", if (last.yieldG != null) y.value else "—", if (last.yieldG != null) y.unit else "", Modifier.weight(1f))
                         ReadyParam("RATIO", ratio, "", Modifier.weight(1f))
                         ReadyParam("PEAK", if (last.peakPressure != null) peak.value else "—", if (last.peakPressure != null) peak.unit else "", Modifier.weight(1f))
+                        // What ended the shot — moved here from the fired
+                        // highlights on the hero timer / dual chips (user
+                        // direction: historical info on the historical card).
+                        // Icon + word, the pairing the stop-condition surfaces use.
+                        ReadyParam("STOPPED", stopLabel(ui.lastStopReason), "", Modifier.weight(1f), icon = stopIcon(ui.lastStopReason))
                     }
                     // Tappable stars — inline quick-rate; persists to the stored shot. Its
                     // own clickable, so a star tap doesn't also open History.
@@ -1015,7 +1012,14 @@ private fun TargetNumber(value: Double, weightUnit: String) {
 }
 
 @Composable
-private fun ReadyParam(label: String, value: String, unit: String, modifier: Modifier = Modifier) {
+private fun ReadyParam(
+    label: String,
+    value: String,
+    unit: String,
+    modifier: Modifier = Modifier,
+    /** Optional leading icon before the value (the Stopped attribution). */
+    icon: String? = null,
+) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
             label,
@@ -1023,6 +1027,10 @@ private fun ReadyParam(label: String, value: String, unit: String, modifier: Mod
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(1.dp)) {
+            if (icon != null) {
+                PhIcon(icon, sizeDp = 13, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(3.dp))
+            }
             Text(
                 value,
                 style = TextStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium, fontSize = 15.sp, lineHeight = 16.sp, fontFeatureSettings = "tnum"),

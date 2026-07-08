@@ -65,6 +65,8 @@ import coffee.crema.ui.convertTemp
 import coffee.crema.ui.convertVolume
 import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
+import coffee.crema.ui.stopIcon
+import coffee.crema.ui.stopLabel
 import coffee.crema.ui.formatTemp
 import coffee.crema.ui.formatTempCompact
 import coffee.crema.ui.formatVolume
@@ -238,7 +240,6 @@ fun BrewScreen(
                         dispensedVolume = ui.dispensedVolume,
                         shotElapsedMs = ui.shotElapsedMs,
                         maxShotDurationS = ui.maxShotDurationS,
-                        lastStopReason = ui.lastStopReason,
                         weightUnit = ui.weightUnit,
                         volumeUnit = ui.volumeUnit,
                     )
@@ -249,6 +250,7 @@ fun BrewScreen(
                             weightUnit = ui.weightUnit,
                             tempUnit = ui.tempUnit,
                             pressureUnit = ui.pressureUnit,
+                            stopReason = ui.lastStopReason,
                             onClick = { vm.openShotInHistory(ui.lastShot!!.id); onNav("history") },
                         )
                     }
@@ -1230,7 +1232,6 @@ private fun LimitsCard(
     dispensedVolume: Float?,
     shotElapsedMs: Long,
     maxShotDurationS: Float,
-    lastStopReason: StopReason?,
     weightUnit: String,
     volumeUnit: String,
 ) {
@@ -1244,7 +1245,7 @@ private fun LimitsCard(
             // the progress fraction stays canonical (ratio is unit-independent).
             val liveW = convertWeight(weightG, weightUnit)
             val targetW = convertWeight(active.yieldOut, weightUnit)
-            add(LimitRow("Yield", "scales", tel.weight, weightG, active.yieldOut, liveW.value, targetW.value, targetW.unit, fired = lastStopReason == StopReason.Weight))
+            add(LimitRow("Yield", "scales", tel.weight, weightG, active.yieldOut, liveW.value, targetW.value, targetW.unit))
         }
         // Volume is a stop condition only when it will actually fire. The rule
         // is the core's own stop-target demotion (`de1_domain::volume_stop_arms`,
@@ -1257,14 +1258,14 @@ private fun LimitsCard(
         if (active != null && active.maxTotalVolumeMl > 0 && volumeArms) {
             val liveV = convertVolume(dispensedVolume ?: 0f, volumeUnit)
             val targetV = convertVolume(active.maxTotalVolumeMl.toFloat(), volumeUnit)
-            add(LimitRow("Volume", "drop-half", tel.flow, dispensedVolume ?: 0f, active.maxTotalVolumeMl.toFloat(), liveV.value, targetV.value, targetV.unit, fired = lastStopReason == StopReason.Volume))
+            add(LimitRow("Volume", "drop-half", tel.flow, dispensedVolume ?: 0f, active.maxTotalVolumeMl.toFloat(), liveV.value, targetV.value, targetV.unit))
         }
         // Time cap from the persisted setting (maxShotDurationS); live = elapsed
         // shot seconds. Always shown — it's a global hard cap, not profile-scoped.
         if (maxShotDurationS > 0f) {
             val liveS = fmt("%.0f", shotElapsedMs / 1000f)
             val targetS = fmt("%.0f", maxShotDurationS)
-            add(LimitRow("Time", "timer", timeColor, shotElapsedMs / 1000f, maxShotDurationS, liveS, targetS, "s", fired = lastStopReason == StopReason.MaxTime))
+            add(LimitRow("Time", "timer", timeColor, shotElapsedMs / 1000f, maxShotDurationS, liveS, targetS, "s"))
         }
     }
     if (rows.isEmpty()) return
@@ -1291,28 +1292,16 @@ private data class LimitRow(
     val targetStr: String,
     /** The display unit label ("g"/"oz", "ml"/"fl oz", "s"). */
     val unit: String,
-    /** True when THIS condition ended the last shot (`lastStopReason`) —
-     *  the row gets the gold highlight instead of a stop toast. */
-    val fired: Boolean = false,
 )
 
 @Composable
 private fun LimitRowView(row: LimitRow) {
     val frac = if (row.target > 0f && row.live != null) (row.live / row.target).coerceIn(0f, 1f) else 0f
-    // The condition that ended the last shot gets a gold ring (cleared on
-    // the next ShotStarted) — the stop attribution lives HERE, not a toast.
-    val firedRing = if (row.fired) {
-        Modifier
-            .border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp))
-            .padding(horizontal = 8.dp)
-    } else {
-        Modifier
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.padding(vertical = 4.dp).then(firedRing)) {
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.padding(vertical = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 PhIcon(row.icon, sizeDp = 16, tint = row.color)
-                Text(row.label, style = MaterialTheme.typography.labelLarge, color = if (row.fired) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(row.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             // Web MaxStopConditionsCard: a null live (no scale weight yet) renders "—",
             // never a fake "0.0" — the value is unknown, not zero. Both parts are
@@ -1337,6 +1326,10 @@ private fun LastShotCard(
     weightUnit: String,
     tempUnit: String,
     pressureUnit: String,
+    /** What ended the shot — the attribution used to be a gold ring on the
+     *  live stop-conditions card, but historical info belongs on the
+     *  historical card (user direction, all shells). */
+    stopReason: StopReason?,
     onClick: () -> Unit,
 ) {
     val yieldG = last.yieldG
@@ -1367,14 +1360,23 @@ private fun LastShotCard(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 LastShotStat("Peak", peakP.value, last.peakPressure?.let { peakP.unit }, Modifier.weight(1f))
                 LastShotStat("Peak temp", peakT.value, last.peakTemp?.let { peakT.unit }, Modifier.weight(1f))
-                Spacer(Modifier.weight(1f)) // hold the 3-col grid alignment
+                // Icon + word, the same pairing the stop-conditions rows use —
+                // the icon ties the attribution back to the row that fired.
+                LastShotStat("Stopped", stopLabel(stopReason), null, Modifier.weight(1f), icon = stopIcon(stopReason))
             }
         }
     }
 }
 
 @Composable
-private fun LastShotStat(label: String, value: String, unit: String?, modifier: Modifier = Modifier) {
+private fun LastShotStat(
+    label: String,
+    value: String,
+    unit: String?,
+    modifier: Modifier = Modifier,
+    /** Optional leading icon before the value (the Stopped attribution). */
+    icon: String? = null,
+) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
             label.uppercase(),
@@ -1382,7 +1384,10 @@ private fun LastShotStat(label: String, value: String, unit: String?, modifier: 
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
             maxLines = 1,
         )
-        CremaValueUnit(value, unit, valueSize = 15.sp, unitSize = 10.sp)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (icon != null) PhIcon(icon, sizeDp = 14, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            CremaValueUnit(value, unit, valueSize = 15.sp, unitSize = 10.sp)
+        }
     }
 }
 

@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import coffee.crema.beans.freshnessVerdict
 import coffee.crema.ui.theme.CremaTheme
+import coffee.crema.core.StopReason
 import coffee.crema.core.barToPsi
 import coffee.crema.core.brewRatio
 import coffee.crema.core.celsiusToFahrenheit
@@ -151,4 +152,26 @@ fun freshnessColor(frozen: Boolean, level: Int?, days: Int?): Color {
         "bad" -> c.bad
         else -> c.unknown
     }
+}
+
+/** Human label for what ended the last shot — the "Stopped" stat on the
+ *  Last-shot cards (all shells; the attribution used to be a gold ring on the
+ *  live stop-condition surfaces). Weight = the SAW yield target, Volume = the
+ *  SAV cap, MaxTime = the global time cap; null (manual stop / unclassified)
+ *  renders a quiet dash. */
+fun stopLabel(reason: StopReason?): String = when (reason) {
+    StopReason.Weight -> "Yield"
+    StopReason.Volume -> "Volume"
+    StopReason.MaxTime -> "Time"
+    null -> "\u2014"
+}
+
+/** Phosphor icon paired with [stopLabel] — the SAME icon each condition wears
+ *  on the stop-conditions rows, so the attribution reads as a visual
+ *  tie-back. Null when there is nothing to attribute. */
+fun stopIcon(reason: StopReason?): String? = when (reason) {
+    StopReason.Weight -> "scales"
+    StopReason.Volume -> "drop-half"
+    StopReason.MaxTime -> "timer"
+    null -> null
 }
