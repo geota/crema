@@ -7,7 +7,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -70,25 +69,13 @@ import coffee.crema.settings.SawModelStore
 import coffee.crema.ble.BleScanner
 import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
-import coffee.crema.ble.NordicBleTransport
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ble.BleTransport
 import coffee.crema.ble.De1Uuids
 import coffee.crema.ble.proxy.DeviceInfo
 import coffee.crema.ble.proxy.HandoffTarget
-import coffee.crema.ble.proxy.LanRelayServer
-import coffee.crema.ble.proxy.LinkState
-import coffee.crema.ble.proxy.PairingDecision
 import coffee.crema.ble.proxy.Peer
-import coffee.crema.ble.proxy.PeerDiscovery
-import coffee.crema.ble.proxy.ProxyTransport
-import coffee.crema.ble.proxy.ReconnectingClientLink
-import coffee.crema.ble.proxy.RelayHub
-import coffee.crema.ble.proxy.ReplayBleTransport
-import coffee.crema.ble.proxy.SwitchableBleTransport
-import coffee.crema.ble.proxy.TappingBleTransport
 import java.io.File
-import java.util.UUID
 import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.ShotBean
 import coffee.crema.core.ShotDisposition
@@ -113,8 +100,6 @@ import coffee.crema.profiles.quickPresetJson
 import coffee.crema.profiles.profileIdOf
 import coffee.crema.profiles.SegmentEdit
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.update
@@ -122,10 +107,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -205,14 +187,6 @@ data class BrewParams(
     val brewTemp: Double,
     val preinf: Double? = null,
 )
-
-/** A pending host-side "Allow this device?" pairing prompt (issue 02) — a secondary
- *  with an unknown [clientId] is connecting; the UI shows it and the user's choice
- *  resolves the held handshake. */
-data class PairingPrompt(val clientId: String, val clientName: String)
-
-/** The host's answer to a [PairingPrompt] (issue 02). */
-enum class PairingChoice { DENY, MIRROR_ONLY, ALLOW_CONTROL }
 
 /**
  * The brew parameters actually in effect: the live Quick-Controls override
@@ -973,48 +947,85 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var lastTelemetryMs: Long? = null
 
     /**
-     * The app-wide BLE transport — the one Nordic-backed [NordicBleTransport].
-     * Created once here and [NordicBleTransport.close]d from [onCleared]; it
-     * owns the Nordic `Environment` (a broadcast receiver that must be closed).
-     * The scanner and both managers sit on top of it.
+     * The multi-device proxy controller (review #43) — mode switching (normal /
+     * primary / secondary), the LAN relay + mirror-link lifecycle, NSD peer
+     * discovery, TOFU pairing, and handoff. A self-contained sibling of
+     * [visualizer] / [drive]; its [ProxyController.State] is mirrored into
+     * [MainUiState] in `init`.
+     *
+     * It OWNS the app-wide BLE transport — the one Nordic-backed transport in
+     * NORMAL mode, the relay tap or mirror link otherwise — behind a switchable
+     * facade, so it MUST be constructed before the scanner and both BLE
+     * managers below (they sit on [ProxyController.transport], and it closes
+     * the Nordic `Environment` in [ProxyController.close]).
+     *
+     * Whole-app concerns stay in this VM, reached through the callbacks:
+     * relayed-control dispatch, the session-config snapshot/apply, the
+     * TOFU paired-device list (persisted with the app prefs), and the
+     * mirrored-profile promotion on handoff. The lambdas referencing
+     * later-declared fields ([ble], [scale], [bleRecorder]) are only INVOKED
+     * post-construction — never during the controller's own field init
+     * (the field-init-order trap, review #36).
      */
-    // Multi-device proxy mode (M1/M2). In NORMAL, [nordicTransport] holds the real
-    // transport; [relayHub]/[relayServer] (PRIMARY) and [proxyLink] (SECONDARY) are
-    // the role-specific extras, torn down on a mode switch and in [onCleared].
-    private var nordicTransport: NordicBleTransport? = null
-    private var relayHub: RelayHub? = null
-    private var relayServer: LanRelayServer? = null
-    private var proxyLink: ReconnectingClientLink? = null
-    /** Child scope for the SECONDARY mode's collectors + its [ProxyTransport],
-     *  cancelled on every mode switch and in [onCleared] so they don't leak across
-     *  secondary→x→secondary cycles (issue 10). */
-    private var secondaryScope: CoroutineScope? = null
-
-    /** Stable per-install id (persisted in a tiny file — issue 14) used to advertise
-     *  + self-filter in NSD discovery AND as the secondary's `clientId` for the
-     *  host's TOFU pairing (issue 02). Declared BEFORE [switchable] because
-     *  [buildInitialDelegate] → [startSecondaryMode] reads it during that field's
-     *  init — a later declaration would be null there (the field-init-order trap). */
-    private val proxyDeviceId: String = run {
-        val f = File(app.filesDir, "deviceId")
-        runCatching { f.takeIf { it.exists() }?.readText()?.trim()?.ifBlank { null } }.getOrNull()
-            ?: UUID.randomUUID().toString().also { runCatching { f.writeText(it) } }
-    }
-
-    /** Construction-time proxy-config snapshot — read `prefs.json` ONCE
-     *  (review #36: three blocking main-thread disk reads during VM
-     *  construction; role/host/port are restart-to-apply anyway). Declared
-     *  BEFORE [switchable] for the same field-init-order reason as
-     *  [proxyDeviceId]: [buildInitialDelegate] dereferences this during that
-     *  field's initializer, and a later-declared lazy delegate is still null
-     *  there (launch crash). */
-    private val proxyConfigCache: ProxyConfig by lazy { readProxyConfigUncached() }
-
-    // The managers + scanner sit on this facade so the transport can be swapped at
-    // runtime — M2 mode switches (Mirror/Hand-off) with NO app restart. The startup
-    // delegate is the persisted role (see [buildInitialDelegate]); [applyMode] swaps it.
-    private val switchable = SwitchableBleTransport(buildInitialDelegate())
-    private val bleTransport: BleTransport = switchable
+    private val proxy: ProxyController = ProxyController(
+        app = app,
+        json = json,
+        scope = viewModelScope,
+        setCoreReadOnly = { bridge.setReadOnly(it) },
+        setRecorderEnabled = { bleRecorder.enabled = it },
+        notify = { notifyUser(it) },
+        appendLog = { appendLog(it) },
+        connect = { connect() },
+        disconnect = { disconnect() },
+        disconnectDevices = { ble.disconnect(); scale.disconnect() },
+        connectScale = { connectScale() },
+        scaleAttachWanted = {
+            scale.state.value.let { it != ScaleBleManager.State.READY && it != ScaleBleManager.State.SCANNING }
+        },
+        de1Connected = { ble.connectedAddress != null },
+        machineStateName = { _ui.value.machineStateName?.string },
+        dispatchControl = { method, args -> dispatchRelayedControl(method, args) },
+        snapshotConfig = { configSnapshotJson() },
+        applyConfig = { applyRemoteConfig(it) },
+        // The devices this primary holds: the DE1, plus the scale when one is
+        // connected (issue 04) — its advertised name lets a secondary's scale
+        // manager scan-match + re-derive the codec via connectScale.
+        roster = {
+            buildList {
+                ble.connectedAddress?.let { add(DeviceInfo(it, "DE1", "de1", "CONNECTED")) }
+                scale.connectedAddress?.let { addr ->
+                    add(DeviceInfo(addr, scale.connectedName ?: "Scale", "scale", "CONNECTED"))
+                }
+            }
+        },
+        // Latest-value state/identity chars snapshot on attach; the COUNTED
+        // streams — the DE1 ShotSample and the scale weight — stay live-only or
+        // the mirror's core double-counts (issue 04; M1-PROTOCOL §5).
+        isSnapshotChar = { _, char -> char != De1Uuids.SHOT_SAMPLE && char != scale.weightNotifyChar },
+        pairedDevices = { _ui.value.pairedDevices },
+        rememberPaired = { id, name, canControl -> rememberPaired(id, name, canControl) },
+        onHandoffGranted = { promoteMirroredProfile() },
+        onModeApplied = { role, host, port ->
+            _ui.update {
+                it.copy(
+                    proxyRole = role,
+                    // Keep the secondary target sticky across mode changes: only a
+                    // `secondary` switch updates host/port. Otherwise stopping a mirror
+                    // (→ normal) would wipe the debug/manual peer from the picker, so on
+                    // a network with no NSD you couldn't re-mirror without re-seeding it.
+                    proxyPrimaryHost = if (role == "secondary") host else it.proxyPrimaryHost,
+                    proxyPrimaryPort = if (role == "secondary") port else it.proxyPrimaryPort,
+                    // Drop any mirror overlay (issue 05) + authority cue (issue 10);
+                    // a fresh `secondary` attach repopulates them from the snapshot.
+                    mirroredProfile = null,
+                    mirroredProfileJson = null,
+                    mirroredBeanSummary = null,
+                    mirroringPrimaryName = if (role == "secondary") it.mirroringPrimaryName else "",
+                )
+            }
+            persistPrefs()
+        },
+    )
 
     /**
      * The one app-wide BLE scanner, shared by both managers. A single
@@ -1022,7 +1033,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * whichever device currently wants to connect — see [connect] / [connectScale].
      */
     private val bleScanner = BleScanner(
-        transport = bleTransport,
+        transport = proxy.transport,
         onStatus = { line -> _ui.update { it.copy(status = line) } },
     )
 
@@ -1036,8 +1047,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val bleRecorder = BleSessionRecorder(app)
 
-    private val ble = De1BleManager(
-        transport = bleTransport,
+    private val ble: De1BleManager = De1BleManager(
+        transport = proxy.transport,
         bridge = bridge,
         recorder = bleRecorder,
         onCoreOutput = ::onCoreOutputJson,
@@ -1051,22 +1062,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * It also shares the one [bleRecorder] so its weight notifications and
      * tare/timer writes land in the same interleaved capture file as the DE1's.
      */
-    private val scale = ScaleBleManager(
-        transport = bleTransport,
+    private val scale: ScaleBleManager = ScaleBleManager(
+        transport = proxy.transport,
         bridge = bridge,
         recorder = bleRecorder,
         onCoreOutput = ::onCoreOutputJson,
         onStatus = { line -> _ui.update { it.copy(status = line) } },
         onScaleIdentified = ::refreshScaleCapabilities,
     )
-
-    /** LAN peer discovery (NSD) for the multi-device picker (M2) — advertises this
-     *  instance and browses for peers, exposed as [MainUiState.peers]. */
-    private val peerDiscovery = PeerDiscovery(app, viewModelScope, proxyDeviceId)
-
-    /** The primary relay's bound port (0 when not hosting) — advertised so a
-     *  secondary can dial it. */
-    private var relayPort: Int = 0
 
     /** Receiver for the system Bluetooth on/off broadcast — registered in [init],
      *  unregistered in [onCleared]. Reflects adapter state into the UI and, on a
@@ -1083,14 +1086,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     init {
-        // A secondary (read-only mirror) doesn't record the primary's shot (issue
-        // 14). Set here, not in buildInitialDelegate — that runs during the
-        // `switchable` field init, before `bleRecorder` exists.
-        bleRecorder.enabled = readProxyConfigSync().role != "secondary"
-        // Multi-device (M2): browse for peers + advertise this instance on the LAN.
-        viewModelScope.launch { peerDiscovery.peers.collect { p -> _ui.update { it.copy(peers = p) } } }
-        peerDiscovery.startDiscovery()
-        refreshAdvertisement()
+        // Multi-device (M2): arm the recorder gate, start NSD peer discovery +
+        // advertise this instance on the LAN. Runs here, not at construction —
+        // it touches [bleRecorder]/[ble], which don't exist during the
+        // controller's own field init.
+        proxy.start()
+        // Mirror the proxy controller's state slice into the UI snapshot (the
+        // same pattern as [visualizer]/[drive] below).
+        viewModelScope.launch {
+            proxy.state.collect { ps ->
+                _ui.update {
+                    it.copy(
+                        peers = ps.peers,
+                        mirrorReconnecting = ps.mirrorReconnecting,
+                        mirrorViewOnly = ps.mirrorViewOnly,
+                        pendingPairing = ps.pendingPairing,
+                        mirrorClients = ps.mirrorClients,
+                        pendingHandoffOffer = ps.pendingHandoffOffer,
+                    )
+                }
+            }
+        }
         // Track the Bluetooth adapter: drive the "Bluetooth is off" UI and, when it
         // returns, re-trigger auto-connect — a BT-off drop otherwise exhausts the
         // managers' reconnect budget and never retries once the adapter is back.
@@ -1108,7 +1124,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // A DE1 connect/disconnect changes the roster this primary
                 // advertises to its mirrors (issue 04) — re-push so a secondary
                 // that attached earlier tracks the change without reconnecting.
-                relayHub?.pushRoster()
+                proxy.pushRoster()
                 // Fire the machine read-sweep once per connection, on the first
                 // transition into READY (services discovered + subscribed). The
                 // reads emit read-request commands whose replies arrive later as
@@ -1125,14 +1141,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
                     // Hosting now holds the DE1 — refresh our NSD advertisement.
-                    refreshAdvertisement()
+                    proxy.refreshAdvertisement()
                 } else if (state != De1BleManager.State.READY) {
                     wasReady = false
                     // The DE1 no longer holds our profile — drop the upload-skip
                     // cache so the next shot re-uploads (issue 11). Without this, a
                     // skip after a reconnect would brew against a stale/absent profile.
                     lastUploadedFingerprint = null
-                    refreshAdvertisement()
+                    proxy.refreshAdvertisement()
                 }
                 }.onFailure { appendLog("DE1 state handling failed: ${it.message}") }
             }
@@ -1168,7 +1184,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // that attached BEFORE the scale was connected attaches it now,
                 // without needing to reconnect (the Welcome roster is attach-time
                 // only). This closes the gap the issue-04 demo surfaced.
-                relayHub?.pushRoster()
+                proxy.pushRoster()
                 }.onFailure { appendLog("Scale state handling failed: ${it.message}") }
             }
         }
@@ -1377,7 +1393,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         ) return
         pushStopTargets() // the new yield override becomes the live stop-at-weight target
-        relayHub?.pushConfig() // mirrors track the primary's live override (issue 06)
+        proxy.pushConfig() // mirrors track the primary's live override (issue 06)
     }
 
     /** Reset the Quick-Controls override back to the active profile's recipe. */
@@ -1386,7 +1402,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(brewParams = null) }
         if (relayConfigOptimistic("resetBrew", "") { _ui.update { it.copy(brewParams = prev) } }) return
         pushStopTargets() // drop the per-shot override; the profile recipe target takes over
-        relayHub?.pushConfig() // mirrors drop their override too (issue 06)
+        proxy.pushConfig() // mirrors drop their override too (issue 06)
     }
 
     /**
@@ -2495,78 +2511,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * shared command path — the same path the scale writes use. The Brew screen
      * (M1/M2) builds its Coffee / Stop / mode controls on this.
      */
-    // ── Multi-device: relay a secondary's user intent to the primary ──────────
+    // ── Multi-device: relaying + relayed dispatch (see [ProxyController]) ─────
 
-    /**
-     * On a secondary (read-only mirror), relay user-intent control [method] to
-     * the primary instead of running it locally — the secondary's core can't
-     * drive the machine, so a tap on its Brew controls crosses the LAN to the
-     * primary's command router ([coffee.crema.ble.proxy.Frame.Control]). Returns
-     * `true` when relayed (the caller must `return`, skipping the local path);
-     * `false` on a normal/primary device, where the caller runs the action.
-     */
-    private fun relayIfSecondary(method: String, args: String = ""): Boolean {
-        if (_ui.value.proxyRole != "secondary") return false
-        val proxy = switchable.delegate as? ProxyTransport ?: return false
-        viewModelScope.launch {
-            proxy.control(method, args).onFailure {
-                appendLog("Relay $method failed: ${it.message}")
-                notifyUser(relayFailureMessage(it, applied = false))
-            }
-        }
-        return true
-    }
+    /** On a secondary, relay user-intent control [method] to the primary instead
+     *  of running it locally; `true` = relayed, the caller must `return`. A thin
+     *  delegate of [ProxyController.relayIfSecondary] so the control-path call
+     *  sites read unchanged. */
+    private fun relayIfSecondary(method: String, args: String = ""): Boolean =
+        proxy.relayIfSecondary(method, args)
 
-    /** User-facing copy for a failed relay: an authorization refusal (issue 02
-     *  view-only peer) reads differently from a dropped link. */
-    private fun relayFailureMessage(error: Throwable, applied: Boolean): String =
-        if (error.message?.contains("not authorized") == true) {
-            "View-only — the host hasn't allowed this device to control the machine"
-        } else if (applied) {
-            "Couldn't reach the machine — change reverted"
-        } else {
-            "Couldn't reach the machine — change not applied"
-        }
+    /** Relay a config verb from a secondary, optimistic-apply style (issue 06);
+     *  `true` = handled as a secondary, the caller must `return` (skipping its
+     *  persist + machine write). A thin delegate of
+     *  [ProxyController.relayConfigOptimistic]. */
+    private fun relayConfigOptimistic(method: String, args: String, revert: () -> Unit): Boolean =
+        proxy.relayConfigOptimistic(method, args, revert)
 
-    /**
-     * Relay a **config** verb from a secondary, optimistic-apply style (issue 06).
-     * The caller has already updated [_ui] locally (snappy — no round-trip lag);
-     * this relays and, on failure, runs [revert] + surfaces it, so a dropped link
-     * never silently eats the change. On success the primary's authoritative
-     * `Config` push reconciles (usually a no-op). Returns true when handled as a
-     * secondary (the caller must `return`, skipping its persist + machine write).
-     *
-     * Distinct from [relayIfSecondary], which stays authority-first (no local
-     * apply) for machine-control verbs (start/stop/tare) where optimism is unsafe.
-     */
-    private fun relayConfigOptimistic(method: String, args: String, revert: () -> Unit): Boolean {
-        if (_ui.value.proxyRole != "secondary") return false
-        val proxy = switchable.delegate as? ProxyTransport ?: return false
-        viewModelScope.launch {
-            proxy.control(method, args).onFailure {
-                appendLog("Relay $method failed: ${it.message}")
-                notifyUser(relayFailureMessage(it, applied = true))
-                revert()
-            }
-        }
-        return true
-    }
-
-    /** Run a secondary's relayed control intent on this (primary) device — the
-     *  same verbs the primary's own UI calls. On a primary [relayIfSecondary] is
-     *  false, so each executes locally against the real link. Wired into the
-     *  [RelayHub] by [startPrimaryMode]; `startShot` runs the primary's full shot
-     *  orchestration, so that complexity never crosses the wire. */
-    private fun handleRelayedControl(
-        method: String,
-        args: String,
-        originId: String? = null,
-        originName: String? = null,
-    ): Result<Unit> = runCatching {
-        // "Who's driving" notice (issue 11, loose model): compute BEFORE dispatch so
-        // an IDLE request reads as stop-vs-wake against the PRE-action machine state.
-        // Only a secondary-initiated control carries an originId.
-        val phrase = if (originId != null) controlPhrase(method, args) else null
+    /** Run a relayed control verb from a secondary on this (primary) device — the
+     *  same verbs the primary's own UI calls, so `startShot` runs the full local
+     *  shot orchestration and that complexity never crosses the wire. Wired in as
+     *  [ProxyController]'s dispatch router; a throw on an unknown method becomes
+     *  a `ControlErr` back to the peer. */
+    private fun dispatchRelayedControl(method: String, args: String) {
         when (method) {
             "machineState" -> requestMachineState(MachineRequest.valueOf(args))
             "startShot" -> startShot()
@@ -2595,116 +2561,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             "resetBrew" -> resetBrewParams()
             // M3 handoff: a secondary asks to take the DE1. Idle-only; on grant we
             // step down so the taker can acquire the radio.
-            "handoff" -> grantHandoff()
+            "handoff" -> proxy.grantHandoff()
             else -> error("unknown relayed control: $method")
         }
-        // Dispatch succeeded (a throw above is caught by runCatching, skipping this):
-        // fan the notice to the OTHER mirrors + surface it on this primary, so
-        // everyone but the originator learns who drove the machine (issue 11).
-        if (phrase != null) {
-            val text = "${originName ?: "A mirror"} $phrase"
-            relayHub?.broadcastEvent(text, exceptClientId = originId)
-            notifyUser(text)
-        }
     }
 
-    /** A short human phrase for a relayed machine-control verb (issue 11) — the
-     *  predicate of "<who> …". Returns null for verbs not worth announcing (config
-     *  edits, unknowns). IDLE is read against the current state: stop while running,
-     *  otherwise wake. */
-    private fun controlPhrase(method: String, args: String): String? = when (method) {
-        "startShot" -> "started a shot"
-        "tareScale" -> "tared the scale"
-        "machineState" -> when (args) {
-            MachineRequest.ESPRESSO.name -> "started a shot"
-            MachineRequest.STEAM.name, MachineRequest.STEAM_RINSE.name -> "started steam"
-            MachineRequest.HOT_WATER.name -> "started hot water"
-            MachineRequest.FLUSH.name -> "started a flush"
-            MachineRequest.SLEEP.name -> "put the machine to sleep"
-            MachineRequest.IDLE.name ->
-                if (_ui.value.machineStateName?.string in handoffIdleStates) "woke the machine"
-                else "stopped the machine"
-            else -> null
-        }
-        else -> null
-    }
-
-    /** Machine states during which a [requestHandoff] must be refused — moving the
-     *  radio mid-dispense would abort the shot. Everything else (idle/sleep/
-     *  heating) is fair game. */
-    /** Machine states it's safe to hand off the radio in. An **allowlist** (issue
-     *  09): everything else — dispensing, cleaning, calibrating, erroring, booting —
-     *  refuses, and so does an unknown/`null` state, so we never grant during a
-     *  moment we can't positively call idle. `Idle` covers warm-up/ready. */
-    private val handoffIdleStates = setOf("Sleep", "GoingToSleep", "Idle", "SchedIdle")
-
-    /** Primary side of an M3 handoff: a secondary asked for the DE1. Refuse unless
-     *  the machine is positively idle; otherwise grant by stepping down to NORMAL so
-     *  the taker can connect its own radio. The release is delayed a beat so this
-     *  grant (a `ControlOk`) flushes to the secondary before [applyMode] tears the
-     *  relay down. Throwing here becomes a `ControlErr` → the taker stays put. */
-    private fun grantHandoff() {
-        val state = _ui.value.machineStateName
-        require(state?.string in handoffIdleStates) { "machine not idle (${state?.string ?: "unknown"}) — handoff is idle-only" }
-        appendLog("Handoff granted — releasing the DE1")
-        viewModelScope.launch {
-            kotlinx.coroutines.delay(400) // let this grant (ControlOk) flush before the relay tears down
-            // RELEASE: step down to normal but do NOT reconnect — the taker must be
-            // able to acquire the now-free DE1 (issue 01). The old path reconnected,
-            // so the "released" holder immediately re-grabbed the radio and the
-            // take-over could never land on real hardware.
-            applyMode("normal", "", 0, reconnect = false)
-            armHandoffReclaim()
-        }
-    }
-
-    /** After granting a handoff we release the DE1 without reconnecting. If the
-     *  taker never actually acquires it (BT off, a crash, out of range) the machine
-     *  would be orphaned — so after a grace period, probe: if the DE1 came **free**
-     *  the take-over didn't stick, so reclaim it and resume hosting; if it's
-     *  **taken**, the handoff succeeded and we stay a plain normal device. The
-     *  free/busy test is the real BLE scan, so this recovery is hardware-exercised
-     *  (on a no-Bluetooth emulator the probe always finds nothing → stays normal).
-     *  (issue 01 — release + reclaim-on-timeout: a failed take-over never orphans.) */
-    private fun armHandoffReclaim() {
-        viewModelScope.launch {
-            kotlinx.coroutines.delay(8_000L) // grace for the taker to acquire the radio
-            if (_ui.value.proxyRole != "normal" || ble.connectedAddress != null) return@launch
-            appendLog("Handoff reclaim: probing whether the DE1 came free")
-            connect() // scans + binds the DE1 only if it is free
-            kotlinx.coroutines.delay(3_000L) // give the probe scan time to bind
-            if (ble.connectedAddress != null) {
-                appendLog("Handoff reclaim: DE1 was free — resuming as primary")
-                switchToPrimary()
-            } else {
-                appendLog("Handoff reclaim: DE1 is taken — re-mirroring the new host")
-                disconnect() // cancel the pending scan
-                autoMirrorDiscoveredPrimary() // don't go dark: become the taker's mirror (issue 07)
-            }
-        }
-    }
-
-    /** After stepping down from a handoff, don't sit blank (issue 07): if a primary
-     *  holding the DE1 has appeared on NSD, mirror it — a true role-swap, not
-     *  A→primary/B→dark. NSD doesn't cross the emulator NAT, so the cross-device
-     *  re-mirror is hardware-validated; on the emulator [peers] is empty → no-op
-     *  (the user can still re-mirror via the picker's manual peer). */
-    private fun autoMirrorDiscoveredPrimary() {
-        if (_ui.value.proxyRole != "normal") return
-        val host = _ui.value.peers.firstOrNull { it.isMirrorSource && it.id != proxyDeviceId } ?: run {
-            appendLog("Re-mirror: no DE1-holding primary discovered yet (NSD)")
-            return
-        }
-        appendLog("Re-mirror: auto-mirroring ${host.name} (${host.host}:${host.port})")
-        switchToSecondary(host.host, host.port)
-    }
-
-    /** Secondary side of an M3 handoff (the picker's "Take over"): ask the primary
-     *  to release the DE1, and on grant become the host ourselves. Idle-only — the
-     *  primary refuses mid-shot. NOTE: the old primary stepping back as *our*
-     *  mirror needs an endpoint exchange / NSD (it doesn't know our relay), and on
-     *  a no-Bluetooth emulator "becoming primary" falls to a replay; the real radio
-     *  move is hardware-gated. Both are documented follow-ups. */
     /** On a take-over (#01) the taker becomes the primary and must be able to
      *  actually drive shots with whatever profile it was mirroring — including a
      *  primary's custom profile it never had locally (issue 05). Promote the
@@ -2723,63 +2584,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(activeProfileId = id, brewParams = null) }
     }
 
-    fun requestHandoff() {
-        viewModelScope.launch {
-            val proxy = switchable.delegate as? ProxyTransport
-            if (proxy == null) {
-                appendLog("Handoff: not currently mirroring a primary")
-                return@launch
-            }
-            proxy.control("handoff")
-                .onSuccess {
-                    appendLog("Handoff granted — acquiring the DE1")
-                    notifyUser("Taking over the machine…")
-                    promoteMirroredProfile() // keep the mirrored custom profile (issue 05)
-                    kotlinx.coroutines.delay(600) // let the primary release first
-                    switchToPrimary()
-                }
-                .onFailure {
-                    appendLog("Handoff refused: ${it.message}")
-                    notifyUser("Can't take over — the machine is busy")
-                }
-        }
-    }
+    /** Secondary side of an M3 handoff (the picker's "Take over") — delegate of
+     *  [ProxyController.requestHandoff]. */
+    fun requestHandoff() = proxy.requestHandoff()
 
     // ── Push handoff ("hand off TO X" — issue 07) ─────────────────────────────
 
-    /** Refresh the list of secondaries mirroring this primary (the push targets),
-     *  wired to [RelayHub.onClientsChanged]. No-op off-primary. */
-    private fun refreshMirrorClients() {
-        val targets = relayHub?.handoffTargets() ?: emptyList()
-        _ui.update { it.copy(mirrorClients = targets) }
-    }
-
-    /** Primary side: offer the machine to a specific mirroring secondary. The peer
-     *  prompts and, on accept, runs its normal "Take over" back at us — so the
-     *  idle-gated release + reclaim (issue 01) handles the swap. */
-    fun offerHandoff(clientId: String) {
-        if (relayHub?.offerHandoff(clientId) == true) {
-            notifyUser("Offered the machine — waiting for the other device")
-        } else {
-            appendLog("Handoff offer failed: $clientId not connected")
-        }
-    }
-
-    /** Secondary side: the host pushed us an offer. Raise the accept prompt. */
-    private fun onHandoffOffered(fromName: String) {
-        _ui.update { it.copy(pendingHandoffOffer = fromName) }
-    }
+    /** Primary side: offer the machine to a specific mirroring secondary. */
+    fun offerHandoff(clientId: String) = proxy.offerHandoff(clientId)
 
     /** The user accepted a pushed offer → take the machine (the normal pull). */
-    fun acceptHandoffOffer() {
-        _ui.update { it.copy(pendingHandoffOffer = null) }
-        requestHandoff()
-    }
+    fun acceptHandoffOffer() = proxy.acceptHandoffOffer()
 
     /** The user declined a pushed offer — a local no-op (the host keeps the DE1). */
-    fun declineHandoffOffer() {
-        _ui.update { it.copy(pendingHandoffOffer = null) }
-    }
+    fun declineHandoffOffer() = proxy.declineHandoffOffer()
 
     /** A one-line roaster · name · freshness summary of the active bean for the
      *  config snapshot (issue 05) so a mirror can render the bean chip even when
@@ -2802,7 +2620,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Build the primary's session-config snapshot JSON for a mirror (see
      *  [ConfigSnapshot]) — sourced from the live [MainUiState] so it reflects any
-     *  unsaved in-session change. Fed to the [RelayHub] as its `configSource`. */
+     *  unsaved in-session change. Fed to the relay as its config source (see [ProxyController]). */
     private fun configSnapshotJson(): String = runCatching {
         val ui = _ui.value
         json.encodeToString(
@@ -2903,44 +2721,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ── Multi-device pairing (TOFU — issue 02) ────────────────────────────────
-    // The relay no longer auto-accepts: a connecting secondary is authorized here.
-    // One host-side prompt at a time; concurrent unknown peers queue on the mutex.
-    private val pairingMutex = Mutex()
-    private var pairingDeferred: CompletableDeferred<PairingChoice>? = null
-
-    /**
-     * Primary-side TOFU gate wired into [RelayHub]'s `authorize`. A remembered peer
-     * is admitted silently with its stored scope; an unknown one raises a host-side
-     * "Allow this device?" prompt ([MainUiState.pendingPairing]) and suspends until
-     * the user chooses. Accepting persists the peer so reconnects are silent. The
-     * mutex serializes prompts so two unknown peers don't fight over the dialog.
-     */
-    private suspend fun authorizePeer(clientId: String, clientName: String): PairingDecision {
-        _ui.value.pairedDevices.firstOrNull { it.id == clientId }?.let {
-            return PairingDecision.Allowed(it.canControl)
-        }
-        return pairingMutex.withLock {
-            // Re-check inside the lock: a peer approved while we queued is now known.
-            val known = _ui.value.pairedDevices.firstOrNull { it.id == clientId }
-            if (known != null) return@withLock PairingDecision.Allowed(known.canControl)
-            val deferred = CompletableDeferred<PairingChoice>()
-            pairingDeferred = deferred
-            _ui.update { it.copy(pendingPairing = PairingPrompt(clientId, clientName)) }
-            val choice = deferred.await()
-            pairingDeferred = null
-            _ui.update { it.copy(pendingPairing = null) }
-            when (choice) {
-                PairingChoice.DENY -> PairingDecision.Denied("not authorized")
-                PairingChoice.MIRROR_ONLY -> { rememberPaired(clientId, clientName, canControl = false); PairingDecision.Allowed(false) }
-                PairingChoice.ALLOW_CONTROL -> { rememberPaired(clientId, clientName, canControl = true); PairingDecision.Allowed(true) }
-            }
-        }
-    }
+    // The gate itself lives in [ProxyController.authorizePeer]; the remembered
+    // peers stay here (persisted with the app prefs, listed in Settings).
 
     /** The Activity resolves a pending [PairingPrompt] with the user's choice. */
-    fun resolvePairing(choice: PairingChoice) {
-        pairingDeferred?.complete(choice)
-    }
+    fun resolvePairing(choice: PairingChoice) = proxy.resolvePairing(choice)
 
     private fun rememberPaired(id: String, name: String, canControl: Boolean) {
         _ui.update {
@@ -2956,17 +2741,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun forgetPairedDevice(id: String) {
         _ui.update { it.copy(pairedDevices = it.pairedDevices.filterNot { d -> d.id == id }) }
         persistPrefs()
-    }
-
-    /** Secondary side: the host declined (or revoked) this device (issue 02). Stop
-     *  mirroring and tell the user, rather than silently retry-looping a denied link. */
-    private fun onProxyDenied(reason: String) {
-        if (_ui.value.proxyRole != "secondary") return
-        viewModelScope.launch {
-            appendLog("Mirror denied by host: $reason")
-            notifyUser("The host hasn't allowed this device")
-            switchToNormal()
-        }
     }
 
     private fun requestMachineState(state: MachineRequest) {
@@ -3134,281 +2908,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Build a full AppPrefs from the current UI state so each setter persists
-     *  without clobbering the other fields. */
-    // ──────────────────────────────────────────────────────────────────────
-    // Multi-device LAN proxy (M1/M2). The STARTUP role is read SYNCHRONOUSLY from
-    // prefs (the transport is an eager field, built before async loadPrefs()); a
-    // later change is applied LIVE via [applyMode] — no app restart (M2).
-    //
-    //  - NORMAL    : today's NordicBleTransport, unchanged.
-    //  - PRIMARY   : tap the real link (or a replayed capture, for an emulator
-    //                with no Bluetooth) into a RelayHub + LanRelayServer so
-    //                secondaries can mirror it. The managers + core are untouched.
-    //  - SECONDARY : a network ProxyTransport against a primary's relay; the
-    //                managers + core run as if they held the radio.
-    // ──────────────────────────────────────────────────────────────────────
-
-    /** The startup transport delegate, from the persisted role. */
-    private fun buildInitialDelegate(): BleTransport {
-        val cfg = readProxyConfigSync()
-        // A secondary's core mirrors the DE1 but must never drive it — make it a
-        // read-only observer from the start (preserved across session resets).
-        bridge.setReadOnly(cfg.role == "secondary")
-        return when (cfg.role) {
-            "secondary" -> startSecondaryMode(cfg.host, cfg.port)
-            "primary" -> startPrimaryMode()
-            else -> normalMode()
-        }
-    }
-
-    /** NORMAL: the one real Nordic transport (created lazily, reused across switches). */
-    private fun normalMode(): BleTransport =
-        nordicTransport ?: NordicBleTransport(getApplication()).also { nordicTransport = it }
-
-    /** PRIMARY: tap the real (or replayed) link into a relay + start the LAN server. */
-    private fun startPrimaryMode(): BleTransport {
-        // Replay a captured shot as a fake DE1 ONLY when explicitly opted in (an
-        // emulator with no Bluetooth). Otherwise live BT — without this gate a
-        // primary's own session recordings in `captures/` would be auto-replayed on
-        // the next launch, hijacking a real primary into a fake DE1 and starving the
-        // real DE1/scale scan (the transport would be the replay). Read from the
-        // prefs file so it's correct both at startup and on a live mode switch.
-        val capture = if (readProxyConfigSync().replayPrimary) newestCapture() else null
-        val real: BleTransport = if (capture != null) {
-            appendLog("Multi-device: PRIMARY (replay ${capture.name})")
-            ReplayBleTransport(
-                ReplayBleTransport.parse(capture.readText()),
-                viewModelScope, deviceName = "DE1", deviceAddress = "DE1:REPLAY", route = ::replayRoute,
-            )
-        } else {
-            appendLog("Multi-device: PRIMARY (live BLE)")
-            normalMode()
-        }
-        var tappingRef: TappingBleTransport? = null
-        val hub = RelayHub(
-            primaryId = deviceLabel(),
-            primaryName = deviceLabel(),
-            // The devices the primary holds: the DE1, plus the scale when one is
-            // connected (issue 04) — its advertised name lets a secondary's scale
-            // manager scan-match + re-derive the codec via connectScale.
-            roster = {
-                buildList {
-                    ble.connectedAddress?.let { add(DeviceInfo(it, "DE1", "de1", "CONNECTED")) }
-                    scale.connectedAddress?.let { addr ->
-                        add(DeviceInfo(addr, scale.connectedName ?: "Scale", "scale", "CONNECTED"))
-                    }
-                }
-            },
-            readSource = { a, s, c -> tappingRef!!.readByAddress(a, s, c) },
-            // Latest-value state/identity chars snapshot on attach; the COUNTED
-            // streams — the DE1 ShotSample and the scale weight — stay live-only or
-            // the mirror's core double-counts (issue 04; M1-PROTOCOL §5).
-            isSnapshotChar = { _, char -> char != De1Uuids.SHOT_SAMPLE && char != scale.weightNotifyChar },
-            // Relayed user intent from a secondary → this primary's command router.
-            controlHandler = { method, args, originId, originName ->
-                handleRelayedControl(method, args, originId, originName)
-            },
-            // The single-owner session config a mirror snaps to on attach (T2).
-            configSource = { configSnapshotJson() },
-            // TOFU gate (issue 02): prompt for an unknown peer, remember the choice.
-            authorize = { id, name -> authorizePeer(id, name) },
-            // Keep the "hand off to <device>" list live as mirrors come/go (issue 07).
-            onClientsChanged = { refreshMirrorClients() },
-        )
-        relayHub = hub
-        val tapping = TappingBleTransport(real, hub, viewModelScope)
-        tappingRef = tapping
-        val server = LanRelayServer(hub)
-        relayServer = server
-        viewModelScope.launch {
-            runCatching {
-                relayPort = server.start()
-                appendLog("LAN relay listening on :$relayPort")
-                refreshAdvertisement()
-            }.onFailure { appendLog("LAN relay failed to start: ${it.message}") }
-        }
-        return tapping
-    }
-
-    /** SECONDARY: a self-connecting ProxyTransport to a primary's relay. */
-    private fun startSecondaryMode(host: String, port: Int): BleTransport {
-        val url = "ws://$host:$port${LanRelayServer.PATH}"
-        appendLog("Multi-device: SECONDARY → $url")
-        // A child scope for everything this mode launches (the link-state + roster
-        // collectors AND the ProxyTransport's own init collectors), so applyMode can
-        // cancel them ALL on the next switch instead of leaking ~4 coroutines + a dead
-        // ProxyTransport/link per secondary→x→secondary cycle (issue 10).
-        val modeScope = CoroutineScope(viewModelScope.coroutineContext + SupervisorJob(viewModelScope.coroutineContext[Job]))
-        secondaryScope = modeScope
-        val link = ReconnectingClientLink(url, modeScope)
-        proxyLink = link
-        // Reflect the link's CONNECTING/CONNECTED into the UI so a dropped primary
-        // shows "Reconnecting…", not a frozen "Mirroring" (issue 03).
-        modeScope.launch {
-            link.state.collect { s -> _ui.update { it.copy(mirrorReconnecting = s == LinkState.CONNECTING) } }
-        }
-        val proxy = ProxyTransport(
-            // clientId = the STABLE per-install id (issue 14) so the host's TOFU
-            // pairing (issue 02) remembers THIS device, not every same-model phone;
-            // clientName = the human label shown in the host's prompt.
-            link, modeScope, clientId = proxyDeviceId, clientName = deviceLabel(),
-            // Snap this mirror's config to the primary's on every attach (T2).
-            onConfig = { applyRemoteConfig(it) },
-            // Reflect the granted scope (issue 02): view-only mirrors can't control.
-            onWelcome = { scope -> _ui.update { it.copy(mirrorViewOnly = scope == "mirror") } },
-            // Host declined/revoked us → stop mirroring with a message (issue 02).
-            onDenied = { reason -> onProxyDenied(reason) },
-            // The host is pushing us the machine (issue 07) → prompt to accept.
-            onHandoffOffer = { fromName -> onHandoffOffered(fromName) },
-            // "Who's driving" (issue 11): another mirror drove the machine → toast.
-            onEvent = { text -> notifyUser(text) },
-            // Re-run the attach handshake when the link redials (issue 03).
-            reconnects = link.reconnects,
-        )
-        // Mirror the primary's SCALE (issue 04), roster-driven: attach it only once
-        // the primary actually advertises one — no blind scan, so a scaleless primary
-        // leaves us on "Not paired" (not a stuck "Scanning…"). connectScale's scan is
-        // satisfied by the same roster, so this just times the trigger.
-        modeScope.launch {
-            proxy.deviceRoster.collect { devices ->
-                val hasScale = devices.any { it.kind == "scale" }
-                if (hasScale && scale.state.value.let { it != ScaleBleManager.State.READY && it != ScaleBleManager.State.SCANNING }) {
-                    appendLog("Mirror: primary has a scale — attaching")
-                    connectScale()
-                }
-            }
-        }
-        return proxy
-    }
-
-    // ── Live mode switches (M2 — no restart) ────────────────────────────────
+    // ── Live mode switches (M2 — no restart) — see [ProxyController] ────────
 
     /** Stop relaying/mirroring: become a standalone NORMAL device. */
-    fun switchToNormal() = applyMode("normal", "", 0)
+    fun switchToNormal() = proxy.switchToNormal()
 
     /** Hold the DE1 and relay it to others (becomes the primary). */
-    fun switchToPrimary() = applyMode("primary", "", 0)
+    fun switchToPrimary() = proxy.switchToPrimary()
 
     /** Mirror the DE1 from a primary at [host]:[port] — the picker's "Mirror from X". */
-    fun switchToSecondary(host: String, port: Int) = applyMode("secondary", host, port)
+    fun switchToSecondary(host: String, port: Int) = proxy.switchToSecondary(host, port)
 
-    /**
-     * Swap the transport at runtime: tear the managers' connections down, dispose
-     * the old mode's resources, install the new delegate, persist the role, and
-     * reconnect over it. The disconnect → [SwitchableBleTransport.setDelegate] →
-     * reconnect bracket keeps any notification flow from spanning the swap; the
-     * brief settle lets the managers' fire-and-forget transport release run
-     * against the OLD delegate before it is replaced.
-     */
-    private fun applyMode(role: String, host: String, port: Int, reconnect: Boolean = true) {
-        viewModelScope.launch {
-            ble.disconnect()
-            scale.disconnect()
-            kotlinx.coroutines.delay(150)
-            relayServer?.stop(); relayServer = null; relayHub = null
-            // Cancel the previous SECONDARY mode's collectors + ProxyTransport before
-            // releasing the link, so nothing leaks across the switch (issue 10).
-            secondaryScope?.cancel(); secondaryScope = null
-            proxyLink?.dispose(); proxyLink = null
-            switchable.setDelegate(
-                when (role) {
-                    "secondary" -> startSecondaryMode(host, port)
-                    "primary" -> startPrimaryMode()
-                    else -> normalMode()
-                },
-            )
-            // Keep the secondary target sticky across mode changes: only a
-            // `secondary` switch updates host/port. Otherwise stopping a mirror
-            // (→ normal) would wipe the debug/manual peer from the picker, so on
-            // a network with no NSD you couldn't re-mirror without re-seeding it.
-            _ui.update {
-                it.copy(
-                    proxyRole = role,
-                    proxyPrimaryHost = if (role == "secondary") host else it.proxyPrimaryHost,
-                    proxyPrimaryPort = if (role == "secondary") port else it.proxyPrimaryPort,
-                    // Drop any mirror overlay (issue 05) + authority cue (issue 10);
-                    // a fresh `secondary` attach repopulates them from the snapshot.
-                    mirroredProfile = null,
-                    mirroredProfileJson = null,
-                    mirroredBeanSummary = null,
-                    mirroringPrimaryName = if (role == "secondary") it.mirroringPrimaryName else "",
-                    mirrorViewOnly = if (role == "secondary") it.mirrorViewOnly else false,
-                    // Push-handoff state (issue 07): the client list only applies while
-                    // primary; a pending offer is dropped on any role change.
-                    mirrorClients = if (role == "primary") it.mirrorClients else emptyList(),
-                    pendingHandoffOffer = null,
-                )
-            }
-            persistPrefs()
-            // A secondary mirrors the machine but must never drive it: make its
-            // core a read-only observer so the autonomous writes it derives from
-            // the mirrored stream (SAW, frame-skip) are suppressed. normal/primary
-            // are authoritative. reset() preserves this across reconnects.
-            bridge.setReadOnly(role == "secondary")
-            bleRecorder.enabled = role != "secondary" // a mirror doesn't record (issue 14)
-            // Reconnect the DE1 over the new delegate (a secondary attaches to the
-            // primary's DE1; primary/normal scan the real or replayed radio). The
-            // scale, if any, is reconnected by the user — DE1-only mirror for now.
-            // A handoff release passes reconnect=false so the stepped-down holder
-            // does NOT re-grab the DE1 — the taker needs it free (issue 01).
-            if (reconnect) connect()
-            refreshAdvertisement()
-        }
-    }
-
-    /** (Re)advertise this device's current role / DE1-hold / relay-port over NSD, so
-     *  other devices' pickers see it (and can "Mirror from" it when it's hosting). */
-    private fun refreshAdvertisement() {
-        val role = _ui.value.proxyRole
-        val holdsDe1 = role != "secondary" && ble.connectedAddress != null
-        val port = if (role == "primary") relayPort else 0
-        peerDiscovery.advertise(deviceLabel(), role, holdsDe1, port)
-    }
-
-    private data class ProxyConfig(val role: String, val host: String, val port: Int, val replayPrimary: Boolean = false)
-
-    /** Read just the proxy role/host/port straight off `prefs.json`, synchronously,
-     *  for [buildInitialDelegate] (which runs before the async [loadPrefs]) —
-     *  served from the construction-time [proxyConfigCache]. */
-    private fun readProxyConfigSync(): ProxyConfig = proxyConfigCache
-
-    private fun readProxyConfigUncached(): ProxyConfig = runCatching {
-        val f = File(getApplication<Application>().filesDir, "prefs.json")
-        if (!f.exists()) return ProxyConfig("normal", "", 0)
-        val p = json.decodeFromString(AppPrefs.serializer(), f.readText())
-        ProxyConfig(p.proxyRole, p.proxyPrimaryHost, p.proxyPrimaryPort, p.replayPrimary)
-    }.getOrDefault(ProxyConfig("normal", "", 0))
-
-    /** Newest `session-*.jsonl` capture for the replay-backed PRIMARY demo. Checks the
-     *  app's INTERNAL `filesDir/captures` FIRST — a newer-Android emulator (scoped
-     *  storage) blocks the app from reading `adb push`ed files in its external dir, so
-     *  `run-as <pkg> cp` a capture into internal storage there — then falls back to the
-     *  EXTERNAL `getExternalFilesDir/captures`, where the app's own session recordings
-     *  land on a real device. Internal-first also means a hand-placed demo capture wins
-     *  over the replay's own auto-recordings (which write to external). */
-    private fun newestCapture(): File? = runCatching {
-        val app = getApplication<Application>()
-        listOfNotNull(
-            File(app.filesDir, "captures"),
-            app.getExternalFilesDir(null)?.let { File(it, "captures") },
-        ).firstNotNullOfOrNull { dir ->
-            dir.listFiles { f -> f.isFile && f.name.endsWith(".jsonl") }?.maxByOrNull { it.lastModified() }
-        }
-    }.getOrNull()
-
-    /** Map a capture `src` label to its DE1 `(service, characteristic)` for replay. */
-    private fun replayRoute(src: String): Pair<UUID, UUID>? = when (src) {
-        "DE1_STATE" -> De1Uuids.SERVICE to De1Uuids.STATE_INFO
-        "DE1_SHOT_SAMPLE" -> De1Uuids.SERVICE to De1Uuids.SHOT_SAMPLE
-        "DE1_WATER_LEVELS" -> De1Uuids.SERVICE to De1Uuids.WATER_LEVELS
-        "DE1_SHOT_SETTINGS" -> De1Uuids.SERVICE to De1Uuids.SHOT_SETTINGS
-        "DE1_MMR_READ" -> De1Uuids.SERVICE to De1Uuids.MMR_READ
-        else -> null
-    }
-
-    private fun deviceLabel(): String = Build.MODEL ?: "crema"
-
+    /** Build a full AppPrefs from the current UI state so each setter persists
+     *  without clobbering the other fields. */
     private fun currentPrefs() = AppPrefs(
         themeMode = _ui.value.themeMode,
         maxShotDurationS = _ui.value.maxShotDurationS,
@@ -3465,8 +2977,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { settingsStore.save(snapshot) }
         // Multi-device: if we're hosting, push the updated session config to every
         // mirror so a secondary tracks our config mid-session (the attach-time
-        // snapshot only covers a fresh join). No-op off-primary (relayHub null).
-        relayHub?.pushConfig()
+        // snapshot only covers a fresh join). No-op off-primary.
+        proxy.pushConfig()
     }
 
     /** Queue a user-facing message (snackbar) + keep it in the log. Public so the
@@ -4026,7 +3538,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(activeBeanId = id) }
         if (relayConfigOptimistic("setActiveBean", id ?: "") { _ui.update { it.copy(activeBeanId = prev) } }) return
         persistLibrary()
-        relayHub?.pushConfig() // bean activation persists via the library, not prefs
+        proxy.pushConfig() // bean activation persists via the library, not prefs
         // Linked-profile auto-load (web activateBean parity). Only user acts
         // reach this fun — boot/library restore writes activeBeanId directly —
         // so firing here matches the "explicit activation only" rule.
@@ -4576,7 +4088,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // (LAN-proxy mode) or the scale's name was never persisted.
             val ui = _ui.value
             if (ui.rememberedDe1Address != null && stale(ble.state.value)) {
-                val direct = bleTransport.resolveByAddress(ui.rememberedDe1Address, "DE1")
+                val direct = proxy.transport.resolveByAddress(ui.rememberedDe1Address, "DE1")
                 if (direct != null) {
                     ble.markScanning()
                     ble.connect(direct)
@@ -4587,7 +4099,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (ui.rememberedScaleAddress != null && stale(scale.state.value)) {
                 val name = ui.rememberedScaleName
                 val direct = if (name != null) {
-                    bleTransport.resolveByAddress(ui.rememberedScaleAddress, name)
+                    proxy.transport.resolveByAddress(ui.rememberedScaleAddress, name)
                 } else {
                     null
                 }
@@ -5630,16 +5142,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         bleScanner.cancel(SCAN_LABEL_SCALE)
         ble.disconnect()
         scale.disconnect()
-        // Close the Nordic environment last — it unregisters the Bluetooth
-        // broadcast receiver and tears down the central manager. The managers'
+        // Close the transport last — it unregisters the Nordic environment's
+        // Bluetooth receiver and tears down the central manager. The managers'
         // disconnect() calls above are fire-and-forget coroutines; closing the
         // transport also cancels its scope, so any in-flight disconnect ends.
-        // (Only one of these is non-null per proxy role; NORMAL has just the Nordic.)
-        nordicTransport?.close()
-        relayServer?.stop()
-        secondaryScope?.cancel()
-        proxyLink?.dispose()
-        peerDiscovery.close()
+        proxy.close()
     }
 
     private companion object {
