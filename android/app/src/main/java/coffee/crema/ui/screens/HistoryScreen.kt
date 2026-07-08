@@ -554,6 +554,7 @@ private fun RowMetric(value: String, unit: String?, label: String) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ShotDetail(
     shot: StoredShot,
@@ -688,22 +689,31 @@ private fun ShotDetail(
         if (quality != null) ShotQualityCard(quality)
         var rating by remember(shot.id) { mutableStateOf(shot.rating ?: 0) }
         var notes by remember(shot.id) { mutableStateOf(shot.notes ?: "") }
-        // Rating (left) and privacy (right) share one line. Privacy is the
-        // per-shot Visualizer visibility override (web .hi-privacy): with no
-        // override (privacy == null) the chip matching the Settings → Sharing
-        // default is highlighted — no duplicated "Default · x" chip. Tapping a
-        // chip pins this shot; tapping the pinned chip reverts to the default.
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Eyebrow("Rating")
-            CremaStarRating(rating, onChange = { rating = it; onRate(it, notes) })
-            Spacer(Modifier.weight(1f))
-            Eyebrow("Privacy")
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("public" to "Public", "unlisted" to "Unlisted", "private" to "Private").forEach { (v, label) ->
-                    PrivacyChip(
-                        label,
-                        on = shot.privacy == v || (shot.privacy == null && defaultPrivacy == v),
-                    ) { onPrivacyChange(if (shot.privacy == v) null else v) }
+        // Rating (left) and privacy (right) share one line — as a FlowRow so a
+        // narrow detail pane (7-8" tablets) wraps privacy onto its own line
+        // instead of crushing the chips. Privacy is the per-shot Visualizer
+        // visibility override (web .hi-privacy): with no override (privacy ==
+        // null) the chip matching the Settings → Sharing default is highlighted
+        // — no duplicated "Default · x" chip. Tapping a chip pins this shot;
+        // tapping the pinned chip reverts to the default.
+        FlowRow(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Eyebrow("Rating")
+                CremaStarRating(rating, onChange = { rating = it; onRate(it, notes) })
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Eyebrow("Privacy")
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("public" to "Public", "unlisted" to "Unlisted", "private" to "Private").forEach { (v, label) ->
+                        PrivacyChip(
+                            label,
+                            on = shot.privacy == v || (shot.privacy == null && defaultPrivacy == v),
+                        ) { onPrivacyChange(if (shot.privacy == v) null else v) }
+                    }
                 }
             }
         }
@@ -738,6 +748,10 @@ private fun PrivacyChip(label: String, on: Boolean, onClick: () -> Unit) {
             label,
             style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
             color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            // A pill never wraps ("Priv/ate" on a squeezed 7" pane) — it either
+            // fits or the FlowRow above moves the whole cluster down a line.
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }

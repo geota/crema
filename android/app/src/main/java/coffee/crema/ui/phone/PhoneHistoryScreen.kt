@@ -714,6 +714,10 @@ private fun PrivacyPill(label: String, on: Boolean, onClick: () -> Unit) {
             style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
             color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+            // A pill never wraps its label — narrow-width parity with the
+            // tablet PrivacyChip.
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }
