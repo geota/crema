@@ -3313,7 +3313,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // control keeps its last value.
                 _ui.update { it.copy(
                     scaleWeightG = r.weight,
-                    scaleFlowGPerS = r.device_flow,
+                    // Native per-packet flow when the scale reports one (Bookoo),
+                    // else the core's derived estimate (FlowEstimator) — web
+                    // parity (`device_flow ?? flow`). Binding only device_flow
+                    // left every non-Bookoo scale (Half Decent, Acaia, …)
+                    // showing "— g/s" forever (issue #24).
+                    scaleFlowGPerS = r.device_flow ?: r.flow,
                     scaleTimerMs = r.device_timer?.toLong(),
                     scaleVolume = r.device_volume?.toInt() ?: it.scaleVolume,
                     scaleStandbyMinutes = r.device_standby?.toInt()
