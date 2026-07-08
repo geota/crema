@@ -483,6 +483,18 @@ export type Event =
 	 * arrived).
 	 */
 	final_weight?: number;
+	/**
+	 * What the shell should do with this shot — record it, discard it
+	 * as an aborted pull (behind an undo), or skip it entirely as a
+	 * cleaning run. Classified at the core boundary
+	 * ([`de1_domain::shot_disposition`]) from the duration, the final
+	 * weight, and the active profile's beverage type (latched from
+	 * profile uploads / [`set_active_beverage_type`]
+	 * (crate::CremaCore::set_active_beverage_type)). `serde(default)`
+	 * (= `Record`) so a version-skewed consumer parsing an older
+	 * core's event stream still decodes.
+	 */
+	disposition?: ShotDisposition;
 }}
 	/**
 	 * A hot-water or flush session began (the DE1 entered the `HotWater` or
@@ -2069,6 +2081,27 @@ export enum Pump {
 	Pressure = "pressure",
 	/** Flow priority — the step targets a flow rate in ml/s. */
 	Flow = "flow",
+}
+
+/**
+ * What the shell should do with a just-completed shot — decided at the
+ * core boundary so both shells classify identically (previously each
+ * re-implemented the aborted rule and the cleaning-profile lookup).
+ * 
+ * The *mechanics* stay shell-side: `DiscardAborted` is held behind an
+ * undo toast (live side effects — bean debit, webhook — still run,
+ * because the dose was physically ground); `SkipCleaning` records
+ * nothing at all (nothing was ground — machine maintenance runs in the
+ * DE1's Espresso state, so a cleaning/backflush profile would otherwise
+ * be recorded as a shot; Decenza #1325, `maincontroller.cpp:1841-1853`).
+ */
+export enum ShotDisposition {
+	/** A real shot — persist the history row, sync, capture. */
+	Record = "Record",
+	/** An aborted pull (short AND light) — discard behind an undo. */
+	DiscardAborted = "DiscardAborted",
+	/** A cleaning/backflush run — record nothing. */
+	SkipCleaning = "SkipCleaning",
 }
 
 /**

@@ -58,6 +58,9 @@ export interface ShotCompletedEvent {
 		readonly peak_temp?: number | null;
 		readonly peak_weight?: number | null;
 		readonly final_weight?: number | null;
+		/** Core-classified disposition (review #40). Absent only on a
+		 *  version-skewed (stale-wasm) event stream → treat as `Record`. */
+		readonly disposition?: 'Record' | 'DiscardAborted' | 'SkipCleaning';
 	};
 }
 
@@ -102,30 +105,22 @@ export function commitShotCompletion(
 	ctx: ShotCompletionContext
 ): void {
 	const activeShot = getActiveShotStore().current;
-	// Machine maintenance runs in the DE1's Espresso state, so a
-	// cleaning/backflush profile would be recorded as a shot — skip the
-	// history row, Visualizer push, capture slice, AND the live side
-	// effects (nothing was ground; no bean debit, no webhook). Decenza
-	// #1325 (maincontroller.cpp:1841-1853). Descale/calibrate run in their
-	// own machine states and never reach this path.
-	{
-		const profiles = getProfileStore();
-		const active = profiles.activeId ? profiles.get(profiles.activeId) : undefined;
-		if (active?.beverageType === 'cleaning') {
-			getActiveShotStore().clear();
-			return;
-		}
+	// The core classifies every completion (review #40 —
+	// `de1_domain::shot_disposition`, same rule on Android): `SkipCleaning`
+	// when the active profile is a cleaning/backflush routine (machine
+	// maintenance runs in the DE1's Espresso state; recording it would
+	// pollute history — Decenza #1325), `DiscardAborted` for a short AND
+	// light pull (Decenza abortedshotclassifier.h:19-25, validated over
+	// 882 shots). The mechanics stay here: a skipped cleaning run has no
+	// side effects at all (nothing was ground); an aborted discard is held
+	// behind an undo toast, and its live side effects still run (the dose
+	// was physically ground, so the bean debit belongs).
+	const disposition = event.content.disposition ?? 'Record';
+	if (disposition === 'SkipCleaning') {
+		getActiveShotStore().clear();
+		return;
 	}
-	// Aborted-shot auto-discard (Decenza abortedshotclassifier.h:19-25,
-	// validated over 882 shots): under 10 s of flow AND under 5 g in the cup
-	// is an aborted pull, not a shot — it would only pollute history and
-	// Visualizer. Held behind an undo toast instead of a modal. Live side
-	// effects still run (the dose was physically ground, so the bean debit
-	// belongs); only the history row + Visualizer push + capture slice wait
-	// on the undo.
-	const aborted =
-		event.content.duration < 10_000 && (event.content.final_weight ?? 0) < 5;
-	if (aborted) {
+	if (disposition === 'DiscardAborted') {
 		if (activeShot?.source !== 'replay') {
 			runLiveOnlySideEffects(event, activeShot, ctx.snapshot, ctx.fireWebhook);
 		}

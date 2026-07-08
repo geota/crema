@@ -22,7 +22,7 @@ use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 
 use de1_app::{CremaCore, Event, Source};
-use de1_domain::ShotPhase;
+use de1_domain::{ShotDisposition, ShotPhase};
 use de1_protocol::{MachineState, SubState};
 
 /// One parsed capture line — mirrors the JSON Lines schema (see `replay.rs`).
@@ -133,6 +133,7 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
             Event::ShotCompleted {
                 duration,
                 sample_count,
+                disposition,
                 ..
             } => Event::ShotCompleted {
                 duration,
@@ -141,6 +142,9 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
                 peak_temp: None,
                 peak_weight: None,
                 final_weight: None,
+                // Passed through un-stripped: the expected vec pins the
+                // classification (a 71 s espresso pull → `Record`).
+                disposition,
             },
             other => other,
         })
@@ -207,6 +211,7 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
             peak_temp: None,
             peak_weight: None,
             final_weight: None,
+            disposition: ShotDisposition::Record,
         },
         Event::MachineStateChanged {
             state: MachineState::Sleep,

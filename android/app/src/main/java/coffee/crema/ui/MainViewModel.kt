@@ -91,6 +91,7 @@ import java.io.File
 import java.util.UUID
 import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.ShotBean
+import coffee.crema.core.ShotDisposition
 import coffee.crema.core.ShotQualityReport
 import coffee.crema.core.SteamHotWaterSettings
 import coffee.crema.core.StopReason
@@ -1409,6 +1410,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             bridge.setProfileTargetWeight(profileYield)
             bridge.setProfileVolumeLimit(volumeLimit)
             bridge.setShotTargetWeight(shotYield)
+            // The beverage type drives the core's ShotCompleted disposition
+            // (a cleaning run must never be recorded as a shot — review #40).
+            // Pushed alongside the stop targets — not only on profile upload —
+            // because activation can skip the upload (restore at startup, the
+            // shot-start refresh) and bridge.reset() on reconnect rebuilds the
+            // core.
+            bridge.setActiveBeverageType(active?.beverageType ?: "espresso")
         }.onFailure { appendLog("Push stop targets failed: ${it.message}") }
     }
 
@@ -4190,15 +4198,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         peakTemp: Float?,
         now: Long = System.currentTimeMillis(),
         shotId: String = newShotId(),
+        disposition: ShotDisposition = ShotDisposition.Record,
     ) {
         val s = _ui.value
         val profile = s.profiles.firstOrNull { it.id == s.activeProfileId }
-        // Machine maintenance runs in the DE1's Espresso state, so a
+        // The core classified this completion (review #40 —
+        // `de1_domain::shot_disposition`, same rule on web). SkipCleaning:
+        // machine maintenance runs in the DE1's Espresso state, so a
         // cleaning/backflush profile would be recorded as a shot — skip the
         // capture entirely (no history row, no Visualizer, no bean debit;
         // nothing was ground). Decenza #1325 (maincontroller.cpp:1841-1853).
         // Descale/calibrate run in their own machine states, never here.
-        if (profile?.beverageType == "cleaning") {
+        if (disposition == ShotDisposition.SkipCleaning) {
             appendLog("Cleaning run finished — not recorded as a shot")
             return
         }
@@ -4249,11 +4260,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Aborted-shot auto-discard (Decenza abortedshotclassifier.h:19-25,
         // validated over 882 shots): under 10 s of flow AND under 5 g in the
         // cup is an aborted pull, not a shot — it would only pollute history
-        // and Visualizer. Held for an undo toast instead of a modal. The
-        // bean debit below still runs (the dose was physically ground) and
-        // the SAW model still saves (its own gates reject bad samples).
-        val aborted = durationMs < 10_000 && (yieldG ?: 0f) < 5f
-        if (aborted) {
+        // and Visualizer. The rule lives in the core now; the mechanics stay
+        // here: held for an undo toast instead of a modal, and the bean debit
+        // below still runs (the dose was physically ground) as does the SAW
+        // model save (its own gates reject bad samples).
+        if (disposition == ShotDisposition.DiscardAborted) {
             discardedShot = shot
             _ui.update { it.copy(
                 // The Last-shot card would point at a shot history doesn't
@@ -5444,7 +5455,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ),
                 ) }
                 appendLog("Shot completed: ${c.duration}ms, ${c.sample_count} samples")
-                captureCompletedShot(c.duration.toLong(), c.final_weight, c.peak_pressure, c.peak_temp, now, shotId)
+                captureCompletedShot(
+                    c.duration.toLong(), c.final_weight, c.peak_pressure, c.peak_temp, now, shotId,
+                    // Core-classified (review #40); null only on a version-skewed
+                    // event stream → record.
+                    c.disposition ?: ShotDisposition.Record,
+                )
                 // A pour just finished: flush the integrated water into the persisted
                 // maintenance state and recompute the filter / descale / clean readout.
                 flushMaintenance()

@@ -29,9 +29,10 @@ use std::time::Duration;
 
 use de1_domain::saw_learning::SawLearningModel;
 use de1_domain::{
-    AutoStop, Estimate, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile,
+    AutoStop, BeverageType, Estimate, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile,
     STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StopConfig,
     StopReason, StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor, WeightUnit,
+    shot_disposition,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -512,6 +513,15 @@ pub struct CremaCore {
     /// "active profile on the DE1" identity the brew page surfaces. `None`
     /// at cold start; cleared by [`reset`](Self::reset) on disconnect.
     last_active_profile_title: Option<String>,
+    /// The active profile's beverage type — drives the `SkipCleaning`
+    /// disposition on [`Event::ShotCompleted`]. Latched from every
+    /// completed profile upload; the shell also pushes it explicitly via
+    /// [`set_active_beverage_type`](Self::set_active_beverage_type) for
+    /// the restore-without-reupload path (app restart with the profile
+    /// already on the DE1). Device-role-adjacent config: it survives
+    /// [`reset`](Self::reset) — a reconnect doesn't change what profile
+    /// the machine holds.
+    active_beverage_type: BeverageType,
     /// The most recently observed `ShotHeader` from the `HeaderWrite`
     /// characteristic — the shape of whatever profile the DE1 has loaded.
     /// Populated by [`handle_profile_header_read`](Self::handle_profile_header_read).
@@ -618,6 +628,10 @@ struct ProfileUpload {
     /// [`last_active_profile_title`](CremaCore::last_active_profile_title)
     /// on success.
     title: String,
+    /// The uploaded profile's beverage type; latched into
+    /// [`active_beverage_type`](CremaCore::active_beverage_type) on
+    /// success — it drives the `SkipCleaning` shot disposition.
+    beverage_type: BeverageType,
     /// The full sequence of `FrameToWrite` bytes the orchestrator expects,
     /// in upload order: `[0, 1, …, frame_count-1, 32+ext0, 32+ext1, …,
     /// frame_count]`. The header is not acked separately.
@@ -676,6 +690,7 @@ impl CremaCore {
             scale_config_queried: false,
             profile_upload: None,
             last_active_profile_title: None,
+            active_beverage_type: BeverageType::default(),
             last_profile_header: None,
             volume_integrator: VolumeIntegrator::new(),
             line_freq_detector: LineFreqDetector::new(),
@@ -2426,11 +2441,16 @@ impl CremaCore {
         // state — losing it on every DE1 reconnect would silently restart
         // the learning from scratch.
         let saw_model = std::mem::take(&mut self.saw_model);
+        // The active profile's beverage type describes what the DE1 still
+        // holds — a reconnect doesn't change the loaded profile, and losing
+        // it would mis-record the next cleaning run as a shot.
+        let active_beverage_type = self.active_beverage_type;
         *self = CremaCore::new();
         self.read_only = read_only;
         self.scale = scale;
         self.scale_config_queried = scale_config_queried;
         self.saw_model = saw_model;
+        self.active_beverage_type = active_beverage_type;
     }
 
     /// Decode and process a `StateInfo` notification.
@@ -3038,6 +3058,7 @@ impl CremaCore {
 
         self.profile_upload = Some(ProfileUpload {
             title: profile.title.clone(),
+            beverage_type: profile.beverage_type,
             expected_acks,
             next_idx: 0,
             last_progress: now,
@@ -3072,6 +3093,16 @@ impl CremaCore {
     /// [`reset`](Self::reset).
     pub fn active_profile_title(&self) -> Option<&str> {
         self.last_active_profile_title.as_deref()
+    }
+
+    /// Tell the core what kind of beverage the active profile produces —
+    /// it drives the `SkipCleaning` disposition on [`Event::ShotCompleted`].
+    /// Latched automatically from every completed [`upload_profile`]
+    /// (Self::upload_profile); the shell calls this for activations that
+    /// skip the upload (restart with the profile already on the DE1, a
+    /// fingerprint-cache hit).
+    pub fn set_active_beverage_type(&mut self, beverage_type: BeverageType) {
+        self.active_beverage_type = beverage_type;
     }
 
     /// Decode and process a `HeaderWrite` notification — the DE1's reply
@@ -3151,8 +3182,10 @@ impl CremaCore {
         if upload.next_idx == upload.expected_acks.len() {
             // Tail ack matched — the upload is complete.
             let title = std::mem::take(&mut upload.title);
+            let beverage_type = upload.beverage_type;
             self.profile_upload = None;
             self.last_active_profile_title = Some(title.clone());
+            self.active_beverage_type = beverage_type;
             out.events.push(Event::ProfileUploadCompleted { title });
         }
     }
@@ -3353,6 +3386,14 @@ impl CremaCore {
                     peak_temp,
                     peak_weight,
                     final_weight,
+                    // Classified here so both shells act on the same rule
+                    // (previously each re-implemented the aborted
+                    // thresholds and the cleaning-profile lookup).
+                    disposition: shot_disposition(
+                        duration,
+                        final_weight,
+                        self.active_beverage_type,
+                    ),
                 });
                 // Drip learning (Decenza SAW learning): the measured sample is
                 // (final settled weight − weight at the stop trigger) at the
@@ -7360,6 +7401,68 @@ mod tests {
             )));
             assert!(!core.profile_upload_in_progress());
             assert_eq!(core.active_profile_title(), Some("Triple"));
+        }
+
+        /// Pop the disposition off the `ShotCompleted` a short, dry,
+        /// scale-less shot produces (Espresso `[4, 5]` at `start_ms`,
+        /// Idle `[2, 0]` at `end_ms`).
+        fn run_shot_disposition(
+            core: &mut CremaCore,
+            start_ms: u64,
+            end_ms: u64,
+        ) -> de1_domain::ShotDisposition {
+            core.on_notification(Source::De1State, &[4, 5], start_ms);
+            let out = core.on_notification(Source::De1State, &[2, 0], end_ms);
+            out.events
+                .iter()
+                .find_map(|e| match e {
+                    Event::ShotCompleted { disposition, .. } => Some(*disposition),
+                    _ => None,
+                })
+                .expect("a ShotCompleted event")
+        }
+
+        #[test]
+        fn completing_an_uploaded_cleaning_profile_skips_the_shot() {
+            use de1_domain::ShotDisposition;
+            let mut core = CremaCore::new();
+            let mut p = profile("Backflush", vec![step("a", Pump::Pressure, None)]);
+            p.beverage_type = BeverageType::Cleaning;
+            let started = core.upload_profile(&p, Duration::ZERO).unwrap();
+            ack_every_frame(&mut core, &started.commands, 10);
+            // A 4 s dry run would read as an aborted pull — the latched
+            // cleaning type outranks the thresholds.
+            assert_eq!(
+                run_shot_disposition(&mut core, 1_000, 5_000),
+                ShotDisposition::SkipCleaning
+            );
+            // The latch survives the reconnect reset (the DE1 still holds
+            // the cleaning profile) …
+            core.reset();
+            assert_eq!(
+                run_shot_disposition(&mut core, 1_000, 5_000),
+                ShotDisposition::SkipCleaning
+            );
+            // … until the shell activates something else explicitly.
+            core.set_active_beverage_type(BeverageType::Espresso);
+            assert_eq!(
+                run_shot_disposition(&mut core, 1_000, 5_000),
+                ShotDisposition::DiscardAborted
+            );
+        }
+
+        #[test]
+        fn a_long_espresso_shot_records_and_a_short_dry_one_discards() {
+            use de1_domain::ShotDisposition;
+            let mut core = CremaCore::new();
+            assert_eq!(
+                run_shot_disposition(&mut core, 1_000, 12_000),
+                ShotDisposition::Record
+            );
+            assert_eq!(
+                run_shot_disposition(&mut core, 20_000, 24_000),
+                ShotDisposition::DiscardAborted
+            );
         }
 
         #[test]

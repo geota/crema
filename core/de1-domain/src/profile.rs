@@ -77,6 +77,25 @@ pub enum BeverageType {
     Pourover,
 }
 
+impl BeverageType {
+    /// Parse the lowercase wire spelling; unknown / foreign values fall
+    /// back to [`Espresso`](Self::Espresso) — this field is metadata, and
+    /// both reaprime and Crema stay lenient on it (matching the
+    /// `#[serde(default)]` posture on import). Bridge-friendly entry point
+    /// for the wasm / UniFFI shims, like [`WeightUnit::from_str_lower`]
+    /// (crate::WeightUnit::from_str_lower) but total.
+    #[must_use]
+    pub fn from_str_lenient(s: &str) -> Self {
+        match s {
+            "calibrate" => Self::Calibrate,
+            "cleaning" => Self::Cleaning,
+            "manual" => Self::Manual,
+            "pourover" => Self::Pourover,
+            _ => Self::Espresso,
+        }
+    }
+}
+
 /// The metric an exit condition watches. Lowercase wire spelling
 /// (`"pressure"` / `"flow"`) per the v2 contract.
 #[typeshare]

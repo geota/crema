@@ -121,8 +121,8 @@ pub use replay::{ReplayMeta, ReplayMetaBean, fold_meta_jsonl, fold_meta_jsonl_js
 pub use session::SessionTimer;
 pub use settings_import::{ImportedDe1AppSettings, import_settings_tdb};
 pub use shot::{
-    MAX_SHOT_SAMPLES, ShotEvent, ShotMetrics, ShotMonitor, ShotPeaks, ShotPhase, ShotRecord,
-    TimedSample,
+    ABORTED_MAX_DURATION_MS, ABORTED_MAX_WEIGHT_G, MAX_SHOT_SAMPLES, ShotDisposition, ShotEvent,
+    ShotMetrics, ShotMonitor, ShotPeaks, ShotPhase, ShotRecord, TimedSample, shot_disposition,
 };
 pub use steam::{
     MAX_STEAM_SAMPLES, STEAM_ECO_DELAY, SteamClogReason, SteamEvent, SteamMonitor, SteamRecord,

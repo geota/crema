@@ -420,6 +420,55 @@ impl ShotMonitor {
     }
 }
 
+/// A completed shot ran shorter than this AND landed less than
+/// [`ABORTED_MAX_WEIGHT_G`] in the cup ⇒ it was an aborted pull, not a
+/// shot. Decenza's `abortedshotclassifier.h:19-25` thresholds, validated
+/// there over 882 shots.
+pub const ABORTED_MAX_DURATION_MS: u32 = 10_000;
+/// See [`ABORTED_MAX_DURATION_MS`].
+pub const ABORTED_MAX_WEIGHT_G: f32 = 5.0;
+
+/// What the shell should do with a just-completed shot — decided at the
+/// core boundary so both shells classify identically (previously each
+/// re-implemented the aborted rule and the cleaning-profile lookup).
+///
+/// The *mechanics* stay shell-side: `DiscardAborted` is held behind an
+/// undo toast (live side effects — bean debit, webhook — still run,
+/// because the dose was physically ground); `SkipCleaning` records
+/// nothing at all (nothing was ground — machine maintenance runs in the
+/// DE1's Espresso state, so a cleaning/backflush profile would otherwise
+/// be recorded as a shot; Decenza #1325, `maincontroller.cpp:1841-1853`).
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum ShotDisposition {
+    /// A real shot — persist the history row, sync, capture.
+    #[default]
+    Record,
+    /// An aborted pull (short AND light) — discard behind an undo.
+    DiscardAborted,
+    /// A cleaning/backflush run — record nothing.
+    SkipCleaning,
+}
+
+/// Classify a completed shot. `beverage_type` is the *active profile's*
+/// type at completion time (you can't switch profiles mid-pour); the
+/// cleaning check outranks the aborted thresholds — a short, dry
+/// backflush is still a cleaning run, not an aborted espresso.
+pub fn shot_disposition(
+    duration_ms: u32,
+    final_weight_g: Option<f32>,
+    beverage_type: crate::profile::BeverageType,
+) -> ShotDisposition {
+    if beverage_type == crate::profile::BeverageType::Cleaning {
+        return ShotDisposition::SkipCleaning;
+    }
+    if duration_ms < ABORTED_MAX_DURATION_MS && final_weight_g.unwrap_or(0.0) < ABORTED_MAX_WEIGHT_G
+    {
+        return ShotDisposition::DiscardAborted;
+    }
+    ShotDisposition::Record
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -629,5 +678,64 @@ mod tests {
         assert_eq!(metrics.peak_flow, 0.0);
         assert_eq!(metrics.total_water, 0.0);
         assert_eq!(metrics.duration, ms(5_000));
+    }
+
+    #[test]
+    fn disposition_records_a_normal_shot() {
+        use crate::profile::BeverageType;
+        assert_eq!(
+            shot_disposition(27_000, Some(36.0), BeverageType::Espresso),
+            ShotDisposition::Record
+        );
+        // Long enough alone clears the aborted rule, even with no scale.
+        assert_eq!(
+            shot_disposition(10_000, None, BeverageType::Espresso),
+            ShotDisposition::Record
+        );
+        // Heavy enough alone clears it too, however short.
+        assert_eq!(
+            shot_disposition(3_000, Some(5.0), BeverageType::Espresso),
+            ShotDisposition::Record
+        );
+    }
+
+    #[test]
+    fn disposition_discards_a_short_light_pull() {
+        use crate::profile::BeverageType;
+        assert_eq!(
+            shot_disposition(9_999, Some(4.9), BeverageType::Espresso),
+            ShotDisposition::DiscardAborted
+        );
+        // No scale paired reads as 0 g in the cup (Decenza's rule).
+        assert_eq!(
+            shot_disposition(2_000, None, BeverageType::Manual),
+            ShotDisposition::DiscardAborted
+        );
+    }
+
+    #[test]
+    fn disposition_skips_a_cleaning_run_even_when_short_and_dry() {
+        use crate::profile::BeverageType;
+        assert_eq!(
+            shot_disposition(2_000, None, BeverageType::Cleaning),
+            ShotDisposition::SkipCleaning
+        );
+        assert_eq!(
+            shot_disposition(120_000, Some(200.0), BeverageType::Cleaning),
+            ShotDisposition::SkipCleaning
+        );
+    }
+
+    #[test]
+    fn disposition_wire_shape_is_the_bare_variant_name() {
+        // Both shells switch on the serialized string — pin it.
+        assert_eq!(
+            serde_json::to_string(&ShotDisposition::DiscardAborted).unwrap(),
+            "\"DiscardAborted\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ShotDisposition>("\"SkipCleaning\"").unwrap(),
+            ShotDisposition::SkipCleaning
+        );
     }
 }

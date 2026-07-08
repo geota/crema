@@ -242,10 +242,16 @@ export class ProfileStore {
 			await core.setWeightTargetDisabled(true);
 			await core.setProfileTargetWeight(undefined);
 			await core.setProfileVolumeLimit(undefined);
+			await core.setActiveBeverageType('espresso');
 			return;
 		}
 		const p = this.get(id);
 		if (!p) return;
+		// The beverage type drives the core's `ShotCompleted` disposition
+		// (a cleaning run must never be recorded as a shot). Pushed on every
+		// activation — not only on upload — because activation can skip the
+		// upload entirely (fingerprint-cache hit, restore at startup).
+		await core.setActiveBeverageType(p.beverageType);
 		// The per-shot weight-target dot follows the profile's intent on
 		// load: a profile with `yieldOut > 0` engages the target (dot ON,
 		// `disabled = false`); a profile with `yieldOut === 0` disables it

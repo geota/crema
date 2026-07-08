@@ -1,7 +1,7 @@
 //! FFI value types: the input discriminator [`Source`], the observed [`Event`]s
 //! and [`Command`]s the core emits, and the [`CoreOutput`] envelope.
 
-use de1_domain::{ShotPhase, SteamClogReason, StopReason, WaterSessionKind};
+use de1_domain::{ShotDisposition, ShotPhase, SteamClogReason, StopReason, WaterSessionKind};
 use de1_protocol::{CalCommand, CalTarget, MachineState, MmrRegister, SubState};
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
@@ -223,6 +223,17 @@ pub enum Event {
         /// the "shot yield". `None` when no scale was paired (no readings
         /// arrived).
         final_weight: Option<f32>,
+        /// What the shell should do with this shot — record it, discard it
+        /// as an aborted pull (behind an undo), or skip it entirely as a
+        /// cleaning run. Classified at the core boundary
+        /// ([`de1_domain::shot_disposition`]) from the duration, the final
+        /// weight, and the active profile's beverage type (latched from
+        /// profile uploads / [`set_active_beverage_type`]
+        /// (crate::CremaCore::set_active_beverage_type)). `serde(default)`
+        /// (= `Record`) so a version-skewed consumer parsing an older
+        /// core's event stream still decodes.
+        #[serde(default)]
+        disposition: ShotDisposition,
     },
     /// A hot-water or flush session began (the DE1 entered the `HotWater` or
     /// `HotWaterRinse` state).

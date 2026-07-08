@@ -1416,6 +1416,20 @@ impl CremaBridge {
         Ok(())
     }
 
+    /// Tell the core the active profile's beverage type (lowercase wire
+    /// spelling — `"espresso"`, `"cleaning"`, …) so `Event::ShotCompleted`
+    /// carries the right disposition (`SkipCleaning` for a cleaning run).
+    /// Lenient: unknown values read as espresso, matching the domain's
+    /// import posture for this metadata field. Also latched automatically
+    /// by every completed profile upload — call this on activations that
+    /// skip the upload (restore at startup, already-loaded cache hit).
+    pub fn set_active_beverage_type(&self, beverage_type: &str) {
+        self.core()
+            .set_active_beverage_type(de1_domain::BeverageType::from_str_lenient(
+                &beverage_type.to_lowercase(),
+            ));
+    }
+
     /// Build a [`CoreOutput`] (JSON) whose command fires a beep on the
     /// connected scale. Capability-driven — Eureka / Solo support it.
     pub fn scale_beep(&self) -> Result<String, CremaError> {

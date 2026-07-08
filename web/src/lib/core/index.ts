@@ -490,6 +490,15 @@ export interface CremaCore {
 	 */
 	setWeightUnitPref(unit: ShellWeightUnit): Promise<void>;
 	/**
+	 * Tell the core the active profile's beverage type (lowercase wire
+	 * spelling — `'espresso'`, `'cleaning'`, …) so `ShotCompleted` carries
+	 * the right disposition (`SkipCleaning` for a cleaning run). Lenient —
+	 * unknown values read as espresso. Also latched automatically by every
+	 * completed profile upload; the shell calls this for activations that
+	 * skip the upload (restore at startup, already-loaded cache hit).
+	 */
+	setActiveBeverageType(beverageType: string): Promise<void>;
+	/**
 	 * Enable or disable auto-tare on shot start. Latched in the core and
 	 * consulted on `ShotEvent::Started` regardless of who initiated the
 	 * shot (Crema-tap or DE1 group-head touch). Default `true` until set.
@@ -981,6 +990,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setWeightUnitPref(unit: ShellWeightUnit) {
 			bridge.set_weight_unit_pref(weightUnitToWire(unit));
+		},
+		async setActiveBeverageType(beverageType) {
+			bridge.setActiveBeverageType(beverageType);
 		},
 		async setAutoTare(enabled) {
 			bridge.set_auto_tare(enabled);
