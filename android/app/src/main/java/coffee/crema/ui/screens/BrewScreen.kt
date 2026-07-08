@@ -79,6 +79,7 @@ import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.Bean
 import coffee.crema.core.ExitMetric
 import coffee.crema.core.MachineState
+import coffee.crema.core.ModeTargets
 import coffee.crema.core.StopReason
 import coffee.crema.core.volumeStopArms
 import coffee.crema.core.MaintenanceReadout
@@ -225,7 +226,22 @@ fun BrewScreen(
                         phase = ui.shotPhase,
                         modifier = Modifier.weight(1f),
                     )
-                    LimitsCard(active = active, ui = ui)
+                    LimitsCard(
+                        active = active,
+                        scaleWeightG = ui.scaleWeightG,
+                        // SUBSCRIBING counts as connected (web parity, review
+                        // #41): the scale will stream within a beat, so the
+                        // card shouldn't flash on connect.
+                        scalePresent = ui.scaleState == ScaleBleManager.State.READY ||
+                            ui.scaleState == ScaleBleManager.State.SUBSCRIBING,
+                        volumeStopWithScale = ui.volumeStopWithScale,
+                        dispensedVolume = ui.dispensedVolume,
+                        shotElapsedMs = ui.shotElapsedMs,
+                        maxShotDurationS = ui.maxShotDurationS,
+                        lastStopReason = ui.lastStopReason,
+                        weightUnit = ui.weightUnit,
+                        volumeUnit = ui.volumeUnit,
+                    )
                     if (!running && ui.lastShot != null) {
                         LastShotCard(
                             last = ui.lastShot!!,
@@ -261,7 +277,16 @@ fun BrewScreen(
                 }
             }
             BrewFoot(
-                ui = ui,
+                machineState = ui.machineState,
+                machineStateName = ui.machineStateName,
+                scaleName = ui.scaleName,
+                steamTemp = ui.steamTemp,
+                waterLevelMm = ui.waterLevelMm,
+                modeElapsedMs = ui.modeElapsedMs,
+                profileUploading = ui.profileUploading,
+                targets = rememberModeTargets(ui),
+                tempUnit = ui.tempUnit,
+                volumeUnit = ui.volumeUnit,
                 connected = connected,
                 scaleConnected = scaleConnected,
                 espressoActive = espressoActive,
@@ -1193,18 +1218,33 @@ private fun PhaseRow(seg: coffee.crema.profiles.ProfileSegment, isActive: Boolea
 }
 
 @Composable
-private fun LimitsCard(active: CremaProfile?, ui: coffee.crema.ui.MainUiState) {
+private fun LimitsCard(
+    active: CremaProfile?,
+    // Narrow, stable params (review #43d / deferred #37) — taking the whole
+    // MainUiState made this card re-execute on every telemetry tick even
+    // while idle; with only the fields it renders, Compose skips it unless
+    // one of THESE changed.
+    scaleWeightG: Float?,
+    scalePresent: Boolean,
+    volumeStopWithScale: Boolean,
+    dispensedVolume: Float?,
+    shotElapsedMs: Long,
+    maxShotDurationS: Float,
+    lastStopReason: StopReason?,
+    weightUnit: String,
+    volumeUnit: String,
+) {
     val tel = CremaTheme.telemetry
     // Floor at 0: a post-stop cup-lift would otherwise read crazy-negative.
-    val weightG = ui.scaleWeightG?.coerceAtLeast(0f)
+    val weightG = scaleWeightG?.coerceAtLeast(0f)
     val timeColor = MaterialTheme.colorScheme.primary
     val rows = buildList {
         if (active != null && active.yieldOut > 0f) {
             // Unit-aware (issue 44): live + target convert to the chosen weight unit;
             // the progress fraction stays canonical (ratio is unit-independent).
-            val liveW = convertWeight(weightG, ui.weightUnit)
-            val targetW = convertWeight(active.yieldOut, ui.weightUnit)
-            add(LimitRow("Yield", "scales", tel.weight, weightG, active.yieldOut, liveW.value, targetW.value, targetW.unit, fired = ui.lastStopReason == StopReason.Weight))
+            val liveW = convertWeight(weightG, weightUnit)
+            val targetW = convertWeight(active.yieldOut, weightUnit)
+            add(LimitRow("Yield", "scales", tel.weight, weightG, active.yieldOut, liveW.value, targetW.value, targetW.unit, fired = lastStopReason == StopReason.Weight))
         }
         // Volume is a stop condition only when it will actually fire. The rule
         // is the core's own stop-target demotion (`de1_domain::volume_stop_arms`,
@@ -1213,22 +1253,18 @@ private fun LimitsCard(active: CremaProfile?, ui: coffee.crema.ui.MainUiState) {
         // opted into both caps. A scale without a weight target keeps volume
         // armed (review #29) — the old shell rule hid the row there while the
         // core would still stop on it.
-        // SUBSCRIBING counts as connected (web parity, review #41): the scale
-        // will stream within a beat, so the card shouldn't flash on connect.
-        val scalePresent = ui.scaleState == ScaleBleManager.State.READY ||
-            ui.scaleState == ScaleBleManager.State.SUBSCRIBING
-        val volumeArms = volumeStopArms(scalePresent, active != null && active.yieldOut > 0f, ui.volumeStopWithScale)
+        val volumeArms = volumeStopArms(scalePresent, active != null && active.yieldOut > 0f, volumeStopWithScale)
         if (active != null && active.maxTotalVolumeMl > 0 && volumeArms) {
-            val liveV = convertVolume(ui.dispensedVolume ?: 0f, ui.volumeUnit)
-            val targetV = convertVolume(active.maxTotalVolumeMl.toFloat(), ui.volumeUnit)
-            add(LimitRow("Volume", "drop-half", tel.flow, ui.dispensedVolume ?: 0f, active.maxTotalVolumeMl.toFloat(), liveV.value, targetV.value, targetV.unit, fired = ui.lastStopReason == StopReason.Volume))
+            val liveV = convertVolume(dispensedVolume ?: 0f, volumeUnit)
+            val targetV = convertVolume(active.maxTotalVolumeMl.toFloat(), volumeUnit)
+            add(LimitRow("Volume", "drop-half", tel.flow, dispensedVolume ?: 0f, active.maxTotalVolumeMl.toFloat(), liveV.value, targetV.value, targetV.unit, fired = lastStopReason == StopReason.Volume))
         }
-        // Time cap from the persisted setting (ui.maxShotDurationS); live = elapsed
+        // Time cap from the persisted setting (maxShotDurationS); live = elapsed
         // shot seconds. Always shown — it's a global hard cap, not profile-scoped.
-        if (ui.maxShotDurationS > 0f) {
-            val liveS = fmt("%.0f", ui.shotElapsedMs / 1000f)
-            val targetS = fmt("%.0f", ui.maxShotDurationS)
-            add(LimitRow("Time", "timer", timeColor, ui.shotElapsedMs / 1000f, ui.maxShotDurationS, liveS, targetS, "s", fired = ui.lastStopReason == StopReason.MaxTime))
+        if (maxShotDurationS > 0f) {
+            val liveS = fmt("%.0f", shotElapsedMs / 1000f)
+            val targetS = fmt("%.0f", maxShotDurationS)
+            add(LimitRow("Time", "timer", timeColor, shotElapsedMs / 1000f, maxShotDurationS, liveS, targetS, "s", fired = lastStopReason == StopReason.MaxTime))
         }
     }
     if (rows.isEmpty()) return
@@ -1469,7 +1505,21 @@ private fun ChannelCard(
 
 @Composable
 private fun BrewFoot(
-    ui: coffee.crema.ui.MainUiState,
+    // Narrow, stable params (review #43d / deferred #37): with the whole
+    // MainUiState this foot re-executed on every telemetry tick; now it only
+    // recomposes when a field it actually shows (machine state, steam temp,
+    // tank level, mode clock…) changes — and its chips/buttons take
+    // primitives, so they skip individually beneath it.
+    machineState: String?,
+    machineStateName: MachineState?,
+    scaleName: String?,
+    steamTemp: Float?,
+    waterLevelMm: Float?,
+    modeElapsedMs: Long,
+    profileUploading: Boolean,
+    targets: ModeTargets,
+    tempUnit: String,
+    volumeUnit: String,
     connected: Boolean,
     scaleConnected: Boolean,
     espressoActive: Boolean,
@@ -1488,37 +1538,36 @@ private fun BrewFoot(
         ) {
             // Left meta cluster.
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                PowerButton(connected = connected, asleep = ui.machineStateName == MachineState.Sleep, onClick = onPower)
-                FootMeta("Machine", ui.machineState ?: "—")
+                PowerButton(connected = connected, asleep = machineStateName == MachineState.Sleep, onClick = onPower)
+                FootMeta("Machine", machineState ?: "—")
                 FootDivider()
-                FootMeta("Scale", if (scaleConnected) (ui.scaleName ?: "Scale") else "—")
+                FootMeta("Scale", if (scaleConnected) (scaleName ?: "Scale") else "—")
                 FootDivider()
-                val steam = convertTemp(ui.steamTemp, ui.tempUnit)
-                FootMeta("Steam", steam.value, ui.steamTemp?.let { steam.unit })
-                FootMeta("Tank", ui.waterLevelMm?.let { fmt("%.0f", it) } ?: "—", ui.waterLevelMm?.let { "mm" })
+                val steam = convertTemp(steamTemp, tempUnit)
+                FootMeta("Steam", steam.value, steamTemp?.let { steam.unit })
+                FootMeta("Tank", waterLevelMm?.let { fmt("%.0f", it) } ?: "—", waterLevelMm?.let { "mm" })
             }
             // Right actions. Chip sub-labels are live (were hardcoded): resting
             // shows the *target* the firmware will hold (machine ShotSettings →
             // QC → legacy default), active shows an `elapsed / total s` counter
             // fed by the VM mode clock — web BrewDashboard chip-sub parity.
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val t = rememberModeTargets(ui)
-                val steaming = ui.machineStateName == MachineState.Steam
-                val dispensing = ui.machineStateName == MachineState.HotWater
-                val flushing = ui.machineStateName == MachineState.HotWaterRinse
+                val steaming = machineStateName == MachineState.Steam
+                val dispensing = machineStateName == MachineState.HotWater
+                val flushing = machineStateName == MachineState.HotWaterRinse
                 val steamSub =
-                    if (steaming) modeRunningSub(ui.modeElapsedMs, t.steamTimeoutS)
-                    else "${formatTempCompact(t.steamTempC, ui.tempUnit)} · ${t.steamTimeoutS.toInt()} s"
+                    if (steaming) modeRunningSub(modeElapsedMs, targets.steamTimeoutS)
+                    else "${formatTempCompact(targets.steamTempC, tempUnit)} · ${targets.steamTimeoutS.toInt()} s"
                 val waterSub =
-                    if (dispensing) modeRunningSub(ui.modeElapsedMs, t.hotWaterTimeoutS)
-                    else "${formatTempCompact(t.hotWaterTempC, ui.tempUnit)} · ${formatVolume(t.hotWaterVolumeMl, ui.volumeUnit)}"
+                    if (dispensing) modeRunningSub(modeElapsedMs, targets.hotWaterTimeoutS)
+                    else "${formatTempCompact(targets.hotWaterTempC, tempUnit)} · ${formatVolume(targets.hotWaterVolumeMl, volumeUnit)}"
                 val flushSub =
-                    if (flushing) modeRunningSub(ui.modeElapsedMs, t.flushTimeS)
-                    else "${formatTempCompact(t.flushTempC, ui.tempUnit)} · ${t.flushTimeS.toInt()} s"
+                    if (flushing) modeRunningSub(modeElapsedMs, targets.flushTimeS)
+                    else "${formatTempCompact(targets.flushTempC, tempUnit)} · ${targets.flushTimeS.toInt()} s"
                 ModeChip("Steam", steamSub, "cloud", CremaTheme.telemetry.modeSteam, active = steaming, enabled = connected, onTap = onSteam)
                 ModeChip("Hot water", waterSub, "drop", CremaTheme.telemetry.modeWater, active = dispensing, enabled = connected, onTap = onHotWater)
                 ModeChip("Flush", flushSub, "sparkle", CremaTheme.telemetry.modeFlush, active = flushing, enabled = connected, onTap = onFlush)
-                CoffeeButton(running = espressoActive, uploading = ui.profileUploading, enabled = connected, onClick = onCoffee)
+                CoffeeButton(running = espressoActive, uploading = profileUploading, enabled = connected, onClick = onCoffee)
             }
         }
     }

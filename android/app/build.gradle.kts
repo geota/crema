@@ -228,6 +228,13 @@ android {
     }
 }
 
+// Treat Kotlin collections as stable so list-taking composables (and
+// MainUiState itself) become skippable — see compose-stability.conf for the
+// full rationale (review #43d / deferred #37).
+composeCompiler {
+    stabilityConfigurationFiles.add(layout.projectDirectory.file("compose-stability.conf"))
+}
+
 // AGP 9 removed the `kotlinOptions {}` block from `android {}`. The Kotlin JVM
 // target now comes from the built-in Kotlin integration, which defaults
 // `kotlin.compilerOptions.jvmTarget` to `android.compileOptions.targetCompatibility`

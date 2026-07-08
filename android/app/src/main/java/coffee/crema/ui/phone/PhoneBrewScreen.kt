@@ -42,6 +42,7 @@ import coffee.crema.ui.formatWeight
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.MachineState
+import coffee.crema.core.ModeTargets
 import coffee.crema.core.Pump
 import coffee.crema.core.StopReason
 import coffee.crema.core.Transition
@@ -184,7 +185,10 @@ fun PhoneBrewScreen(
 
             // ── Foot: mode cluster + Coffee/Stop ─────────────────────────────
             ModeCluster(
-                ui = ui,
+                machineStateName = ui.machineStateName,
+                modeElapsedMs = ui.modeElapsedMs,
+                targets = rememberModeTargets(ui),
+                tempUnit = ui.tempUnit,
                 connected = connected,
                 onSteam = { if (ui.machineStateName == MachineState.Steam) vm.stopShot() else vm.steam() },
                 onWater = { if (ui.machineStateName == MachineState.HotWater) vm.stopShot() else vm.hotWater() },
@@ -1038,7 +1042,13 @@ private fun MStat(label: String, icon: String, value: String, ok: Boolean, modif
 
 @Composable
 private fun ModeCluster(
-    ui: MainUiState,
+    // Narrow, stable params (review #43d / deferred #37): the whole-MainUiState
+    // param made the pills re-execute on every telemetry tick; with only the
+    // mode fields, Compose skips the cluster unless one of these changed.
+    machineStateName: MachineState?,
+    modeElapsedMs: Long,
+    targets: ModeTargets,
+    tempUnit: String,
     connected: Boolean,
     onSteam: () -> Unit,
     onWater: () -> Unit,
@@ -1048,32 +1058,31 @@ private fun ModeCluster(
     // Live pill subs (were hardcoded): resting = the *target* the firmware
     // will hold (machine ShotSettings → QC → legacy default), active = an
     // `elapsed / total s` counter from the VM mode clock (web chip-sub parity).
-    val t = rememberModeTargets(ui)
-    val steaming = ui.machineStateName == MachineState.Steam
-    val dispensing = ui.machineStateName == MachineState.HotWater
-    val flushing = ui.machineStateName == MachineState.HotWaterRinse
-    fun deg(c: Float) = fmt("%.0f°", if (ui.tempUnit == "F") celsiusToFahrenheit(c) else c)
+    val steaming = machineStateName == MachineState.Steam
+    val dispensing = machineStateName == MachineState.HotWater
+    val flushing = machineStateName == MachineState.HotWaterRinse
+    fun deg(c: Float) = fmt("%.0f°", if (tempUnit == "F") celsiusToFahrenheit(c) else c)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ModePill(
             "Steam",
-            if (steaming) modeRunningSub(ui.modeElapsedMs, t.steamTimeoutS)
-            else "${deg(t.steamTempC)} · ${t.steamTimeoutS.toInt()}s",
+            if (steaming) modeRunningSub(modeElapsedMs, targets.steamTimeoutS)
+            else "${deg(targets.steamTempC)} · ${targets.steamTimeoutS.toInt()}s",
             "cloud", tel.modeSteam,
             active = steaming,
             enabled = connected, onTap = onSteam, modifier = Modifier.weight(1f),
         )
         ModePill(
             "Water",
-            if (dispensing) modeRunningSub(ui.modeElapsedMs, t.hotWaterTimeoutS)
-            else "${t.hotWaterVolumeMl.toInt()}ml · ${deg(t.hotWaterTempC)}",
+            if (dispensing) modeRunningSub(modeElapsedMs, targets.hotWaterTimeoutS)
+            else "${targets.hotWaterVolumeMl.toInt()}ml · ${deg(targets.hotWaterTempC)}",
             "drop", tel.modeWater,
             active = dispensing,
             enabled = connected, onTap = onWater, modifier = Modifier.weight(1f),
         )
         ModePill(
             "Flush",
-            if (flushing) modeRunningSub(ui.modeElapsedMs, t.flushTimeS)
-            else "${t.flushTimeS.toInt()}s purge",
+            if (flushing) modeRunningSub(modeElapsedMs, targets.flushTimeS)
+            else "${targets.flushTimeS.toInt()}s purge",
             "sparkle", tel.modeFlush,
             active = flushing,
             enabled = connected, onTap = onFlush, modifier = Modifier.weight(1f),
