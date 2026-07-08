@@ -373,6 +373,9 @@ class VisualizerSync(
             notes = if (persisted.prefs.includeNotes) (shot.notes ?: "") else null,
             privacy = shot.privacy ?: persisted.prefs.privacy,
             grinderModel = grinderModel(),
+            // Android has no shot tags; empty = the core omits `tag_list`
+            // (the web sends `patch.tagList ?? []` the same way).
+            tagList = emptyList(),
             // Inline bean from the structured snapshot frozen at shot time (issue 06).
             beanBrand = shot.bean?.roasterName,
             beanType = shot.bean?.name,
