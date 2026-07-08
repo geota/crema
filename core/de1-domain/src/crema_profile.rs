@@ -93,7 +93,9 @@ pub struct ProfileSegment {
     /// Which temperature sensor the segment regulates.
     pub temp_sensor: TempSensor,
     /// Per-segment dispensed-volume limit, ml, 0–1023 (0 = no limit).
-    #[serde(default)]
+    /// Lenient decode: the Android editor persists this as a nullable float
+    /// (`100.0`) — see [`lenient_uint`] (issue #23).
+    #[serde(default, deserialize_with = "lenient_u16")]
     pub volume_limit_ml: u16,
     /// Advanced max-flow-or-pressure limiter, or `None`.
     pub limiter: Option<Limiter>,
@@ -154,11 +156,12 @@ pub struct CremaProfile {
     #[serde(default = "default_true")]
     pub auto_tare: bool,
     /// How many leading segments count as preinfusion (wire
-    /// `preinfuse_step_count`).
-    #[serde(default)]
+    /// `preinfuse_step_count`). Lenient decode — see [`lenient_uint`].
+    #[serde(default, deserialize_with = "lenient_u8")]
     pub preinfuse_step_count: u8,
     /// Whole-shot dispensed-volume limit, ml, 0–1023 (0 = no limit).
-    #[serde(default)]
+    /// Lenient decode — see [`lenient_uint`] (issue #23).
+    #[serde(default, deserialize_with = "lenient_u16")]
     pub max_total_volume_ml: u16,
     /// The ordered pressure / flow segments.
     pub segments: Vec<ProfileSegment>,
@@ -195,6 +198,44 @@ where
 {
     use serde::Deserialize;
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// Deserialize a small wire integer leniently: accept `100`, `100.0`, `null`,
+/// or an absent key (pair with `#[serde(default)]`). The Android shell's
+/// editor models these fields as nullable floats, so a saved custom profile
+/// carries `"volumeLimitMl": 100.0` — a strict `u16` rejected the value and
+/// failed the whole shot start with "profile conversion failed" (issue #23).
+/// Rounds to nearest and clamps to the target range; `null`/`NaN` → 0.
+fn lenient_uint<'de, D, const MAX: u32>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let v = Option::<f64>::deserialize(deserializer)?.unwrap_or(0.0);
+    if v.is_nan() {
+        return Ok(0);
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Ok(v.round().clamp(0.0, f64::from(MAX)) as u32)
+}
+
+/// [`lenient_uint`] narrowed to `u16` (`volumeLimitMl` / `maxTotalVolumeMl`).
+/// The clamp above makes the narrowing infallible; `try_from` keeps that
+/// provable without a cast.
+fn lenient_u16<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    lenient_uint::<D, { u16::MAX as u32 }>(deserializer)
+        .map(|v| u16::try_from(v).unwrap_or(u16::MAX))
+}
+
+/// [`lenient_uint`] narrowed to `u8` (`preinfuseStepCount`).
+fn lenient_u8<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    lenient_uint::<D, { u8::MAX as u32 }>(deserializer).map(|v| u8::try_from(v).unwrap_or(u8::MAX))
 }
 
 /// The user's brew defaults, passed in from the shell's settings store so a
@@ -538,6 +579,36 @@ mod tests {
     /// exactly representable, so the epsilon is just hygiene.
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-6
+    }
+
+    /// Issue #23 regression: the Android editor persists `volumeLimitMl` as a
+    /// nullable float (`100.0`), and a strict `u16` failed the whole shot
+    /// start with "profile conversion failed". Float-typed small integers must
+    /// decode (rounded) wherever a shell round-trips a profile. The JSON below
+    /// is a trimmed copy of the exact bytes an Android device saved for an
+    /// edited "Damian's LRv2".
+    #[test]
+    fn float_typed_wire_integers_decode_leniently_issue_23() {
+        let android_saved = r#"{"id":"profile:f9749be4-27d0-400e-b169-f8bd13b2454c","source":"custom","name":"Damian's LRv2 (copy)","notes":"","roast":null,"tags":[],"pinned":false,"lastUsed":null,"dose":24.0,"yieldOut":72.0,"brewTemp":90.0,"stopOnWeight":true,"autoTare":true,"preinfuseStepCount":2,"maxTotalVolumeMl":0,"segments":[{"id":"s1","name":"Fill start","mode":"pressure","target":2.0,"ramp":"fast","time":2.0,"exit":null,"temp":89.0,"tempSensor":"coffee","volumeLimitMl":100.0,"limiter":null},{"id":"s2","name":"Fill","mode":"pressure","target":2.0,"ramp":"fast","time":25.0,"exit":{"metric":"pressure","compare":"over","threshold":1.5},"temp":89.0,"tempSensor":"coffee","volumeLimitMl":100.0,"limiter":null}],"author":"","beverageType":"espresso","tankTemperatureC":0.0}"#;
+        let p: CremaProfile = serde_json::from_str(android_saved).expect("float ints decode");
+        assert_eq!(p.segments[0].volume_limit_ml, 100);
+        assert_eq!(p.preinfuse_step_count, 2);
+        // The full shot-start path: conversion to the wire profile succeeds.
+        let wire = crema_profile_to_wire_json(android_saved).expect("wire conversion succeeds");
+        assert!(wire.contains("\"title\":\"Damian's LRv2 (copy)\""));
+        // Float variants of the other lenient fields (and a fractional value,
+        // which rounds) decode too; null falls back to 0.
+        let with_floats = android_saved
+            .replace("\"preinfuseStepCount\":2", "\"preinfuseStepCount\":2.0")
+            .replace("\"maxTotalVolumeMl\":0", "\"maxTotalVolumeMl\":511.6")
+            .replace(
+                "\"volumeLimitMl\":100.0,\"limiter\":null},{",
+                "\"volumeLimitMl\":null,\"limiter\":null},{",
+            );
+        let p: CremaProfile = serde_json::from_str(&with_floats).expect("variants decode");
+        assert_eq!(p.preinfuse_step_count, 2);
+        assert_eq!(p.max_total_volume_ml, 512);
+        assert_eq!(p.segments[0].volume_limit_ml, 0);
     }
 
     #[test]
