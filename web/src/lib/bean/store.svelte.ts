@@ -19,7 +19,7 @@
  */
 
 import { readJson, writeJson } from '$lib/utils/storage';
-import { debit_remaining } from '$lib/wasm/de1_wasm';
+import { credit_remaining, debit_remaining } from '$lib/wasm/de1_wasm';
 import {
 	type Bean,
 	type Roaster,
@@ -310,10 +310,13 @@ export class BeanLibraryStore {
 	 */
 	creditBean(beanId: string, doseG: number): void {
 		const bean = this.envelope.beans.find((b) => b.id === beanId);
-		if (!bean || bean.remaining == null || !Number.isFinite(doseG) || doseG <= 0) return;
-		const cap = bean.bagSize && bean.bagSize > 0 ? bean.bagSize : undefined;
-		const next = cap != null ? Math.min(bean.remaining + doseG, cap) : bean.remaining + doseG;
-		if (next !== bean.remaining) this.updateBean(bean.id, { remaining: next });
+		if (!bean || bean.remaining == null) return;
+		// The shared core rule (`de1_domain::credit_remaining`, the inverse of
+		// the debit): capped at bagSize, `undefined` when nothing changed —
+		// persist (and touch `updatedAt`) only on a real credit.
+		const next = credit_remaining(bean.remaining, doseG, bean.bagSize ?? 0);
+		if (next === undefined) return;
+		this.updateBean(bean.id, { remaining: next });
 	}
 
 	// ── Roaster CRUD ─────────────────────────────────────────────────

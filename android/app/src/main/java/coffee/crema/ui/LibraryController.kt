@@ -22,6 +22,7 @@ import coffee.crema.core.blankCremaProfile
 import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.core.cremaProfileFromWire
 import coffee.crema.core.cremaProfileToWire
+import coffee.crema.core.creditRemaining
 import coffee.crema.core.debitRemaining
 import coffee.crema.core.exportBackupJsonl
 import coffee.crema.core.exportBeanconquerorMainJson
@@ -1770,9 +1771,11 @@ class LibraryController(
         if (dose != null && dose > 0f) {
             s.beans.firstOrNull { it.id == oldBeanId }?.let { old ->
                 old.remaining?.let { rem ->
-                    val cap = old.bagSize?.takeIf { it > 0f }
-                    val credited = (rem + dose).let { if (cap != null) minOf(it, cap) else it }
-                    if (credited != rem) mutateBean(old.id) { it.copy(remaining = credited) }
+                    // Core rule (the inverse of debitRemaining): cap at
+                    // bagSize, null = nothing changed, don't persist.
+                    creditRemaining(rem, dose, old.bagSize ?: 0f)?.let { credited ->
+                        mutateBean(old.id) { it.copy(remaining = credited) }
+                    }
                 }
             }
             if (bean != null) {

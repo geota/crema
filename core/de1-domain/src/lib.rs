@@ -83,7 +83,7 @@ pub mod water;
 
 pub use bean::{
     Bean, BeanMix, BeanOrigin, BeanRoastType, RoastBand, RoastFreshness, Roaster, ShotBean,
-    days_off_roast, debit_remaining, roast_band, roast_band5, roast_freshness,
+    credit_remaining, days_off_roast, debit_remaining, roast_band, roast_band5, roast_freshness,
 };
 pub use bean_coerce::{coerce_bean, coerce_bean_json, coerce_roaster, coerce_roaster_json};
 pub use beanconqueror::{

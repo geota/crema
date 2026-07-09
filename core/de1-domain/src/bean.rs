@@ -537,6 +537,31 @@ pub fn debit_remaining(remaining: f32, dose_g: f32) -> Option<f32> {
     Some((remaining - dose_g).max(0.0))
 }
 
+/// The inverse of [`debit_remaining`], for moving a shot's bag debit when the
+/// shot is re-attributed to a different bean: the wrongly-billed bag gets the
+/// dose BACK. Capped at `bag_size` when the bag declares one (`> 0` — the bag
+/// may have been refilled or edited since the pull); a non-positive /
+/// non-finite `bag_size` means "untracked size", no cap. Returns `None` when
+/// there is nothing to credit — a bad dose, a non-finite `remaining`, or a
+/// credit that changes nothing (already at the cap) — so callers persist (and
+/// touch `updated_at`) ONLY on a real credit, mirroring the debit rule.
+/// `remaining` itself must be finite and non-negative: a shell passes the
+/// tracked bag's current value (untracked bags — `None` shell-side — are the
+/// caller's no-op, same as the debit path).
+#[must_use]
+pub fn credit_remaining(remaining: f32, dose_g: f32, bag_size: f32) -> Option<f32> {
+    if !remaining.is_finite() || remaining < 0.0 || !dose_g.is_finite() || dose_g <= 0.0 {
+        return None;
+    }
+    let uncapped = remaining + dose_g;
+    let next = if bag_size.is_finite() && bag_size > 0.0 {
+        uncapped.min(bag_size)
+    } else {
+        uncapped
+    };
+    if next == remaining { None } else { Some(next) }
+}
+
 impl Bean {
     /// Build a brand-new bag with a freshly minted id and `name`. Every
     /// other field starts at its default (empty / `None` / `false` / `0`).
@@ -1228,5 +1253,23 @@ mod tests {
         assert_eq!(debit_remaining(200.0, f32::NAN), None);
         // Non-finite remaining → None.
         assert_eq!(debit_remaining(f32::NAN, 18.0), None);
+    }
+
+    #[test]
+    fn credit_remaining_inverse_rules() {
+        // Plain credit.
+        assert_eq!(credit_remaining(182.0, 18.0, 250.0), Some(200.0));
+        // Capped at the bag size (refilled/edited since the pull).
+        assert_eq!(credit_remaining(245.0, 18.0, 250.0), Some(250.0));
+        // Already at the cap — nothing to persist.
+        assert_eq!(credit_remaining(250.0, 18.0, 250.0), None);
+        // No declared bag size → uncapped.
+        assert_eq!(credit_remaining(182.0, 18.0, 0.0), Some(200.0));
+        // Empty-but-tracked bag credits back up (the debit floored at 0).
+        assert_eq!(credit_remaining(0.0, 18.0, 250.0), Some(18.0));
+        // Bad dose → no-op.
+        assert_eq!(credit_remaining(182.0, 0.0, 250.0), None);
+        assert_eq!(credit_remaining(182.0, f32::NAN, 250.0), None);
+        assert_eq!(credit_remaining(f32::NAN, 18.0, 250.0), None);
     }
 }

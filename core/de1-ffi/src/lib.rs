@@ -378,6 +378,14 @@ pub fn debit_remaining(remaining: f32, dose_g: f32) -> Option<f32> {
     de1_domain::debit_remaining(remaining, dose_g)
 }
 
+/// The inverse credit for shot re-attribution — `de1_domain::credit_remaining`
+/// (dose back on the wrongly-billed bag, capped at `bag_size`; `None` = no
+/// change to persist), so web + Android share one rule.
+#[uniffi::export]
+pub fn credit_remaining(remaining: f32, dose_g: f32, bag_size: f32) -> Option<f32> {
+    de1_domain::credit_remaining(remaining, dose_g, bag_size)
+}
+
 /// Derive the History stat strip over a JSON array of light per-shot
 /// tuples (`ShotStatInput`); returns `HistoryStats` JSON. One
 /// derivation for every shell (review #41: Android ignored the
