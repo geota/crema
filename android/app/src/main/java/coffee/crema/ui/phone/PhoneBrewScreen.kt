@@ -445,7 +445,7 @@ private fun SwapDropdown(
 }
 
 @Composable
-private fun DdSectionHead(label: String, link: String, onLink: () -> Unit) {
+internal fun DdSectionHead(label: String, link: String, onLink: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 6.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -462,7 +462,7 @@ private fun DdSectionHead(label: String, link: String, onLink: () -> Unit) {
 }
 
 @Composable
-private fun DdRow(active: Boolean, onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
+internal fun DdRow(active: Boolean, onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
     val bg = if (active) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
     val fg = if (active) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
     CompositionLocalProvider(LocalContentColor provides fg) {

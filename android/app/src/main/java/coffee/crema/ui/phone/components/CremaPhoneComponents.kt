@@ -145,13 +145,25 @@ fun CremaPhoneBackBar(
     title: String,
     subtitle: String? = null,
     onBack: () -> Unit,
+    /** Makes the title block tappable (adds a caret) — the shot detail's
+     *  bean-swap dropdown anchors here, matching the Brew strip. */
+    onTitleTap: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     TopAppBar(
         navigationIcon = { IconButton(onClick = onBack) { PhIcon("arrow-left", sizeDp = 24) } },
         title = {
-            Column {
-                Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Column(
+                if (onTitleTap != null) {
+                    Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onTitleTap).padding(vertical = 2.dp)
+                } else {
+                    Modifier
+                },
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (onTitleTap != null) PhIcon("caret-down", sizeDp = 14, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 if (subtitle != null) Text(
                     subtitle,
                     style = MaterialTheme.typography.bodySmall,

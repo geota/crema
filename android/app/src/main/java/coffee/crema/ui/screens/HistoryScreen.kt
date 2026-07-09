@@ -62,13 +62,16 @@ import coffee.crema.ui.compare.RowCheck
 import coffee.crema.ui.compare.TabletCompareBar
 import coffee.crema.ui.compare.rememberCompareSelection
 import coffee.crema.history.filterAndSortShots
+import coffee.crema.beans.roastBand
 import coffee.crema.history.beanLabel
+import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.history.grindLabel
 import coffee.crema.history.historyStats
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaEmptyState
 import coffee.crema.ui.components.CremaStarRating
+import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.components.CremaSparkChart
 import coffee.crema.ui.components.CremaTextField
 import coffee.crema.ui.components.CremaValueUnit
@@ -606,7 +609,6 @@ private fun ShotDetail(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         var confirmDelete by remember(shot.id) { mutableStateOf(false) }
-        var editGrind by remember(shot.id) { mutableStateOf(false) }
         var changeBean by remember(shot.id) { mutableStateOf(false) }
         // Detail head — title block (left) + actions (right), bottom-aligned with a
         // hairline rule (PWA .hi-detail-head: space-between, align-items: flex-end).
@@ -628,7 +630,8 @@ private fun ShotDetail(
                     overflow = TextOverflow.Ellipsis,
                 )
                 val meta = buildList {
-                    shot.beanLabel?.let { add(it) }
+                    // Bean lives in its own header block on the right (issue
+                    // #16 round 3) — the meta keeps the numbers.
                     val d = shot.doseG; val y = shot.yieldG
                     if (d != null && y != null) add("${formatWeight(d, weightUnit)} → ${formatWeight(y, weightUnit)}")
                     shotRatio(shot)?.let { add(it) }
@@ -639,17 +642,45 @@ private fun ShotDetail(
                     Text(meta, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                CremaButton(onClick = onLoadOnBrew, variant = CremaButtonVariant.Outlined, icon = "coffee", label = "Load on Brew")
-                CremaButton(onClick = onExport, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
-                CremaOverflowMenu(items = buildList {
-                    onUploadVisualizer?.let { add(OverflowItem("cloud-arrow-up", "Upload to Visualizer", it)) }
-                    onViewVisualizer?.let { add(OverflowItem("cloud-check", "View on Visualizer", it)) }
-                    add(OverflowItem("pencil-simple", "Edit grind", { editGrind = true }))
-                    add(OverflowItem("coffee-bean", "Change bean", { changeBean = true }))
-                    add(OverflowItem("trash", "Delete shot", { confirmDelete = true }, danger = true))
-                })
+            // Bean block — the Brew header's bean section, verbatim style
+            // (eyebrow / name + caret / roast · grinder spec). Tapping it opens
+            // the re-attribution picker (issue #16 round 3: promoted from the
+            // overflow menu). Load on Brew / Export moved INTO the menu to make
+            // the room.
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { changeBean = true }
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            ) {
+                Eyebrow("Bean")
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        shot.beanLabel ?: "No bean",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Normal, fontSize = 20.sp, lineHeight = 24.sp),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    PhIcon("caret-down", sizeDp = 15, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                val spec = listOfNotNull(
+                    roastBand(shot.bean?.roastLevel?.toInt()),
+                    shot.bean?.grinder?.takeIf { it.isNotBlank() },
+                ).joinToString(" \u00b7 ")
+                if (spec.isNotBlank()) {
+                    Text(spec, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                }
             }
+            CremaOverflowMenu(items = buildList {
+                add(OverflowItem("coffee", "Load on Brew", onLoadOnBrew))
+                add(OverflowItem("download-simple", "Export", onExport))
+                onUploadVisualizer?.let { add(OverflowItem("cloud-arrow-up", "Upload to Visualizer", it)) }
+                onViewVisualizer?.let { add(OverflowItem("cloud-check", "View on Visualizer", it)) }
+                add(OverflowItem("trash", "Delete shot", { confirmDelete = true }, danger = true))
+            })
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         if (confirmDelete) {
@@ -661,14 +692,6 @@ private fun ShotDetail(
                 danger = true,
                 onConfirm = { onDelete(); confirmDelete = false },
                 onDismiss = { confirmDelete = false },
-            )
-        }
-        if (editGrind) {
-            ShotGrindDialog(
-                initial = shot.grindSetting?.let { g -> if (g % 1f == 0f) fmt("%.0f", g) else fmt("%.1f", g) }
-                    ?: shot.bean?.grinderSetting.orEmpty(),
-                onSave = { onGrindChange(it); editGrind = false },
-                onDismiss = { editGrind = false },
             )
         }
         if (changeBean) {
@@ -753,6 +776,20 @@ private fun ShotDetail(
                 }
             }
         }
+        // Grind stepper — the shot's recorded grind, editable in place (issue
+        // #16 round 3: promoted from an overflow dialog). Each click persists;
+        // the Visualizer PATCH debounces behind it.
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Eyebrow("Grind")
+            CremaStepper(
+                value = shot.effectiveGrindSetting?.toDoubleOrNull() ?: 0.0,
+                onChange = { onGrindChange(it.toFloat()) },
+                step = 0.1,
+                min = 0.0,
+                max = 200.0,
+                fmt = { v -> if (v % 1.0 == 0.0) fmt("%.0f", v) else fmt("%.1f", v) },
+            )
+        }
         CremaTextField(
             value = notes,
             onValueChange = { notes = it; onRate(rating, it) },
@@ -824,54 +861,6 @@ private fun shotRatio(shot: StoredShot): String? {
     return if (y != null && d != null && d > 0f) formatRatio(d, y) else null
 }
 
-
-/**
- * Edit the grind recorded on a stored shot (issue #16). Free numeric text —
- * grinders disagree about scales (Niche integers, DF64 decimals), so the field
- * accepts whatever parses as a number; blank clears back to the bean fallback.
- * Marked internal: the phone detail reuses it.
- */
-@Composable
-internal fun ShotGrindDialog(
-    initial: String,
-    onSave: (Float?) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var text by remember { mutableStateOf(initial) }
-    val parsed = text.trim().replace(',', '.').toFloatOrNull()
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Edit grind") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "The grind this shot was pulled at. Blank falls back to the bean\u2019s saved setting.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                androidx.compose.material3.OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    singleLine = true,
-                    label = { Text("Grind setting") },
-                    isError = text.isNotBlank() && parsed == null,
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal,
-                    ),
-                )
-            }
-        },
-        confirmButton = {
-            androidx.compose.material3.TextButton(
-                enabled = text.isBlank() || parsed != null,
-                onClick = { onSave(if (text.isBlank()) null else parsed) },
-            ) { Text("Save") }
-        },
-        dismissButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
-}
 
 /**
  * Re-attribute a stored shot to another library bean (issue #16) — a fresh

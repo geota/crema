@@ -18,6 +18,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -28,7 +29,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.history.StoredShot
+import coffee.crema.beans.rankBeansForPicker
+import coffee.crema.beans.daysOffRoast
 import coffee.crema.history.beanLabel
+import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.history.grindLabel
 import coffee.crema.history.filterAndSortShots
 import coffee.crema.history.historyStats
@@ -46,8 +50,6 @@ import coffee.crema.ui.compare.PhoneSelectHint
 import coffee.crema.ui.compare.RowCheck
 import coffee.crema.ui.compare.rememberCompareSelection
 import coffee.crema.ui.screens.CanvasShotChart
-import coffee.crema.ui.screens.ShotBeanDialog
-import coffee.crema.ui.screens.ShotGrindDialog
 import coffee.crema.ui.screens.EnlargeableChart
 import coffee.crema.ui.screens.historySortKeys
 import coffee.crema.ui.theme.CremaTheme
@@ -471,7 +473,6 @@ private fun PhoneShotDetail(
     val tel = CremaTheme.telemetry
     var menu by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
-    var editGrind by remember(shot.id) { mutableStateOf(false) }
     var changeBean by remember(shot.id) { mutableStateOf(false) }
     var rating by remember(shot.id) { mutableStateOf(shot.rating ?: 0) }
     var notes by remember(shot.id) { mutableStateOf(shot.notes ?: "") }
@@ -479,7 +480,11 @@ private fun PhoneShotDetail(
 
     Scaffold(
         topBar = {
-            CremaPhoneBackBar(
+            // The title block is the bean-swap anchor (issue #16 round 3):
+            // tap → the Brew strip's dropdown, beans only — a shot's profile
+            // is a historical fact, its bean attribution is editable.
+            Box {
+                CremaPhoneBackBar(
                 title = shot.profileName ?: "Shot",
                 subtitle = buildList {
                     shot.beanLabel?.let { add(it) }
@@ -493,10 +498,21 @@ private fun PhoneShotDetail(
                     )
                 }.joinToString(" · "),
                 onBack = onBack,
+                onTitleTap = { changeBean = true },
                 actions = {
                     IconButton(onClick = { menu = true }) { PhIcon("dots-three-vertical", sizeDp = 20) }
                 },
-            )
+                )
+                if (changeBean) {
+                    val ui by vm.ui.collectAsStateWithLifecycle()
+                    ShotBeanSwapDropdown(
+                        ui = ui,
+                        currentBeanId = shot.bean?.beanId,
+                        onSelect = { vm.setShotBean(shot.id, it); changeBean = false },
+                        onDismiss = { changeBean = false },
+                    )
+                }
+            }
         },
         bottomBar = {
             // Foot actions sit above the app bottom nav (proto .ph-dactions).
@@ -593,6 +609,24 @@ private fun PhoneShotDetail(
                             touchDp = 34,
                         )
                     }
+                    // Grind stepper — the shot's recorded grind, editable in
+                    // place (issue #16 round 3). Each click persists; the
+                    // Visualizer PATCH debounces behind it.
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Eyebrow("Grind")
+                        CremaStepper(
+                            value = shot.effectiveGrindSetting?.toDoubleOrNull() ?: 0.0,
+                            onChange = { vm.setShotGrind(shot.id, it.toFloat()) },
+                            step = 0.1,
+                            min = 0.0,
+                            max = 200.0,
+                            fmt = { v -> if (v % 1.0 == 0.0) fmt("%.0f", v) else fmt("%.1f", v) },
+                        )
+                    }
                     CremaTextField(
                         value = notes,
                         onValueChange = { notes = it; vm.updateShot(shot.id, rating, it) },
@@ -648,11 +682,6 @@ private fun PhoneShotDetail(
                     })
                 }
                 add(SheetItem(divider = true))
-                // Post-hoc log fix-ups (issue #16): dial-in spans shots, and
-                // the wrong bean is sometimes active at pull time.
-                add(SheetItem("pencil-simple", "Edit grind") { editGrind = true })
-                add(SheetItem("coffee-bean", "Change bean") { changeBean = true })
-                add(SheetItem(divider = true))
                 add(SheetItem("trash", "Delete shot", danger = true) { confirmDelete = true })
             },
             onDismiss = { menu = false },
@@ -671,28 +700,67 @@ private fun PhoneShotDetail(
         )
     }
 
-    // Shared with the tablet detail (screens.ShotGrindDialog / ShotBeanDialog).
-    if (editGrind) {
-        ShotGrindDialog(
-            initial = shot.grindSetting?.let { g -> if (g % 1f == 0f) fmt("%.0f", g) else fmt("%.1f", g) }
-                ?: shot.bean?.grinderSetting.orEmpty(),
-            onSave = { vm.setShotGrind(shot.id, it); editGrind = false },
-            onDismiss = { editGrind = false },
-        )
-    }
-    if (changeBean) {
-        val ui by vm.ui.collectAsStateWithLifecycle()
-        ShotBeanDialog(
-            choices = remember(ui.beans, ui.roasters) {
-                ui.beans.map { b ->
-                    val roaster = ui.roasters.firstOrNull { it.id == b.roasterId }?.name
-                    b.id to listOfNotNull(roaster, b.name).joinToString(" \u00b7 ")
+}
+
+/**
+ * The Brew strip's swap dropdown, beans only — anchored under the detail's
+ * title block for re-attributing a shot (issue #16 round 3). Same visual
+ * grammar as PhoneBrewScreen's SwapDropdown (DdRow, avatar, check-circle),
+ * plus a "No bean" row to clear the attribution.
+ */
+@Composable
+private fun ShotBeanSwapDropdown(
+    ui: coffee.crema.ui.MainUiState,
+    currentBeanId: String?,
+    onSelect: (String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val ddWidth = LocalConfiguration.current.screenWidthDp.dp - CremaEdge * 2
+    CremaAnchoredPopup(expanded = true, onDismiss = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(CremaCardSpec.phoneRadius),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shadowElevation = 18.dp,
+            modifier = Modifier.width(ddWidth).heightIn(max = 560.dp),
+        ) {
+            Column(Modifier.padding(8.dp).verticalScroll(rememberScrollState())) {
+                Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 6.dp)) {
+                    Eyebrow("Shot bean")
                 }
-            },
-            currentBeanId = shot.bean?.beanId,
-            onSelect = { vm.setShotBean(shot.id, it); changeBean = false },
-            onDismiss = { changeBean = false },
-        )
+                // Current bean leads, then favourites, then store order — the
+                // Brew picker's shared rank, unarchived only.
+                rankBeansForPicker(ui.beans.filter { it.archivedAt == null }, currentBeanId).forEach { b ->
+                    val activeRow = b.id == currentBeanId
+                    val roaster = ui.roasters.firstOrNull { it.id == b.roasterId }?.name
+                    DdRow(active = activeRow, onClick = { onSelect(b.id) }) {
+                        RoasterMarkAvatar(name = roaster ?: b.name, sizeDp = 30, cornerDp = 8, fontSize = 13.sp)
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                listOfNotNull(roaster, b.name).joinToString(" \u00b7 "),
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                            val days = daysOffRoast(b.roastedOn)
+                            Text(
+                                listOfNotNull(
+                                    days?.let { "${it}d off roast" },
+                                    b.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" },
+                                ).joinToString(" \u00b7 ").ifEmpty { "\u2014" },
+                                style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
+                                color = if (activeRow) LocalContentColor.current.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (activeRow) PhIcon("check-circle", sizeDp = 18, tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                HorizontalDivider(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                DdRow(active = currentBeanId == null, onClick = { onSelect(null) }) {
+                    PhIcon("prohibit", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("No bean", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    if (currentBeanId == null) PhIcon("check-circle", sizeDp = 18, tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+        }
     }
 }
 
