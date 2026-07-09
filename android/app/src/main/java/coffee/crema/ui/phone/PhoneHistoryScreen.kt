@@ -30,6 +30,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.history.StoredShot
 import coffee.crema.beans.rankBeansForPicker
+import coffee.crema.core.daysOffRoast as coreDaysOffRoast
+import coffee.crema.ui.freshnessColor
 import coffee.crema.beans.daysOffRoast
 import coffee.crema.history.beanLabel
 import coffee.crema.history.effectiveGrindSetting
@@ -480,39 +482,19 @@ private fun PhoneShotDetail(
 
     Scaffold(
         topBar = {
-            // The title block is the bean-swap anchor (issue #16 round 3):
-            // tap → the Brew strip's dropdown, beans only — a shot's profile
-            // is a historical fact, its bean attribution is editable.
-            Box {
-                CremaPhoneBackBar(
-                title = shot.profileName ?: "Shot",
-                subtitle = buildList {
-                    shot.beanLabel?.let { add(it) }
-                    // Grind used for THIS shot (issue #16) — shared derivation.
-                    shot.grindLabel?.let { add(it) }
-                    add(
-                        remember(shot.completedAtMs) {
-                            java.text.SimpleDateFormat("MMM d · HH:mm", java.util.Locale.getDefault())
-                                .format(java.util.Date(shot.completedAtMs))
-                        },
-                    )
-                }.joinToString(" · "),
+            // The bar carries only the pull timestamp (a shot is an archival
+            // record) — profile + bean live in the Brew strip card below,
+            // the SAME shared component (issue #16 round 4).
+            CremaPhoneBackBar(
+                title = remember(shot.completedAtMs) {
+                    java.text.SimpleDateFormat("MMM d · HH:mm", java.util.Locale.getDefault())
+                        .format(java.util.Date(shot.completedAtMs))
+                },
                 onBack = onBack,
-                onTitleTap = { changeBean = true },
                 actions = {
                     IconButton(onClick = { menu = true }) { PhIcon("dots-three-vertical", sizeDp = 20) }
                 },
-                )
-                if (changeBean) {
-                    val ui by vm.ui.collectAsStateWithLifecycle()
-                    ShotBeanSwapDropdown(
-                        ui = ui,
-                        currentBeanId = shot.bean?.beanId,
-                        onSelect = { vm.setShotBean(shot.id, it); changeBean = false },
-                        onDismiss = { changeBean = false },
-                    )
-                }
-            }
+            )
         },
         bottomBar = {
             // Foot actions sit above the app bottom nav (proto .ph-dactions).
@@ -544,6 +526,39 @@ private fun PhoneShotDetail(
                 .padding(horizontal = CremaEdge),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // ── Profile / bean strip — Brew's card, verbatim (issue #16
+            // round 4): title = the shot's profile (historical, not
+            // switchable), meta = bean + the grind it was pulled at, and a
+            // STATIC freshness pip (the bean's age at PULL time). Tapping
+            // opens the beans-only swap dropdown to re-attribute.
+            Box {
+                val daysAtPull = remember(shot.id) {
+                    coreDaysOffRoast(shot.bean?.roastedOn, shot.completedAtMs)?.toInt()
+                }
+                ProfileStrip(
+                    title = shot.profileName ?: "Shot",
+                    beanLine = remember(shot.id, shot.grindSetting, shot.bean) {
+                        listOfNotNull(
+                            shot.beanLabel,
+                            shot.grindLabel,
+                            shot.bean?.grinder?.takeIf { it.isNotBlank() },
+                        ).joinToString(" · ").ifBlank { "No bean" }
+                    },
+                    freshLabel = daysAtPull?.let { "${it}d off roast" },
+                    freshColor = freshnessColor(false, shot.bean?.roastLevel?.toInt(), daysAtPull),
+                    onClick = { changeBean = true },
+                )
+                if (changeBean) {
+                    val ui by vm.ui.collectAsStateWithLifecycle()
+                    ShotBeanSwapDropdown(
+                        ui = ui,
+                        currentBeanId = shot.bean?.beanId,
+                        onSelect = { vm.setShotBean(shot.id, it); changeBean = false },
+                        onDismiss = { changeBean = false },
+                    )
+                }
+            }
+
             // Chart card + legend.
             Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer) {
                 Column(Modifier.padding(start = 6.dp, end = 10.dp, top = 10.dp, bottom = 6.dp)) {

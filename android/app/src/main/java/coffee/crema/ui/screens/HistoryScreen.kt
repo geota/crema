@@ -63,6 +63,8 @@ import coffee.crema.ui.compare.TabletCompareBar
 import coffee.crema.ui.compare.rememberCompareSelection
 import coffee.crema.history.filterAndSortShots
 import coffee.crema.beans.roastBand
+import coffee.crema.core.daysOffRoast as coreDaysOffRoast
+import coffee.crema.ui.freshnessColor
 import coffee.crema.history.beanLabel
 import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.history.grindLabel
@@ -70,7 +72,11 @@ import coffee.crema.history.historyStats
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaEmptyState
+import coffee.crema.ui.components.CremaFreshnessChip
+import coffee.crema.ui.components.CremaHeaderBlock
 import coffee.crema.ui.components.CremaStarRating
+import coffee.crema.ui.components.HeaderBlockLine
+import coffee.crema.ui.components.HeaderLineStyle
 import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.components.CremaSparkChart
 import coffee.crema.ui.components.CremaTextField
@@ -610,69 +616,73 @@ private fun ShotDetail(
     ) {
         var confirmDelete by remember(shot.id) { mutableStateOf(false) }
         var changeBean by remember(shot.id) { mutableStateOf(false) }
-        // Detail head — title block (left) + actions (right), bottom-aligned with a
-        // hairline rule (PWA .hi-detail-head: space-between, align-items: flex-end).
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.Bottom) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                // Web detail eyebrow: absolute "JUN 9 · 20:01" (a shot is an archival
-                // record; relative time still rides on every list row).
-                Eyebrow(
-                    remember(shot.completedAtMs) {
-                        java.text.SimpleDateFormat("MMM d · HH:mm", java.util.Locale.getDefault())
-                            .format(java.util.Date(shot.completedAtMs))
+        // Detail head — the Brew header's PROFILE + BEAN blocks over the shot's
+        // frozen snapshot (issue #16 round 4: the SAME shared components, not a
+        // lookalike). The one deliberate difference from Brew: the pull
+        // timestamp rides the profile block's eyebrow row — a shot is an
+        // archival record.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.Top) {
+            CremaHeaderBlock(
+                eyebrow = "Profile",
+                eyebrowTrailing = {
+                    Text(
+                        remember(shot.completedAtMs) {
+                            java.text.SimpleDateFormat("MMM d · HH:mm", java.util.Locale.getDefault())
+                                .format(java.util.Date(shot.completedAtMs))
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                title = shot.profileName ?: "Shot",
+                // A shot's profile is a historical fact — no picker, no caret.
+                showCaret = false,
+                modifier = Modifier.weight(1f),
+                lines = buildList {
+                    val meta = buildList {
+                        val d = shot.doseG; val y = shot.yieldG
+                        if (d != null && y != null) add("${formatWeight(d, weightUnit)} → ${formatWeight(y, weightUnit)}")
+                        shotRatio(shot)?.let { add(it) }
+                    }.joinToString(" · ")
+                    if (meta.isNotBlank()) add(HeaderBlockLine(meta))
+                },
+            )
+            // Bean block — tap to re-attribute. The freshness chip is STATIC:
+            // the bean's age at PULL time ("7d off roast" forever if it was
+            // pulled at 7 days), not today's age. The grind moved here from the
+            // profile meta (user direction) — the shot's recorded grind, else
+            // the snapshot reference, exactly what History rows show.
+            run {
+                val daysAtPull = remember(shot.id) {
+                    coreDaysOffRoast(shot.bean?.roastedOn, shot.completedAtMs)?.toInt()
+                }
+                CremaHeaderBlock(
+                    eyebrow = "Bean",
+                    eyebrowTrailing = if (daysAtPull != null) {
+                        {
+                            CremaFreshnessChip(
+                                "${daysAtPull}d off roast",
+                                freshnessColor(false, shot.bean?.roastLevel?.toInt(), daysAtPull),
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    title = shot.beanLabel ?: "No bean",
+                    caretAtEnd = true,
+                    onClick = { changeBean = true },
+                    modifier = Modifier.width(264.dp),
+                    lines = buildList {
+                        val spec = listOfNotNull(
+                            roastBand(shot.bean?.roastLevel?.toInt()),
+                            shot.grindLabel,
+                            shot.bean?.grinder?.takeIf { it.isNotBlank() },
+                        ).joinToString(" · ")
+                        if (spec.isNotBlank()) add(HeaderBlockLine(spec, HeaderLineStyle.Spec))
+                        val tags = shot.bean?.tags?.filter { it.isNotBlank() }.orEmpty().joinToString(" · ")
+                        if (tags.isNotBlank()) add(HeaderBlockLine(tags, HeaderLineStyle.Tags))
                     },
                 )
-                Text(
-                    shot.profileName ?: "Shot",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                val meta = buildList {
-                    // Bean lives in its own header block on the right (issue
-                    // #16 round 3) — the meta keeps the numbers.
-                    val d = shot.doseG; val y = shot.yieldG
-                    if (d != null && y != null) add("${formatWeight(d, weightUnit)} → ${formatWeight(y, weightUnit)}")
-                    shotRatio(shot)?.let { add(it) }
-                    // Grind used for THIS shot (issue #16) — shared derivation.
-                    shot.grindLabel?.let { add(it) }
-                }.joinToString(" · ")
-                if (meta.isNotBlank()) {
-                    Text(meta, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            // Bean block — the Brew header's bean section, verbatim style
-            // (eyebrow / name + caret / roast · grinder spec). Tapping it opens
-            // the re-attribution picker (issue #16 round 3: promoted from the
-            // overflow menu). Load on Brew / Export moved INTO the menu to make
-            // the room.
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-                modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .clickable { changeBean = true }
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-            ) {
-                Eyebrow("Bean")
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        shot.beanLabel ?: "No bean",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Normal, fontSize = 20.sp, lineHeight = 24.sp),
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    PhIcon("caret-down", sizeDp = 15, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                val spec = listOfNotNull(
-                    roastBand(shot.bean?.roastLevel?.toInt()),
-                    shot.bean?.grinder?.takeIf { it.isNotBlank() },
-                ).joinToString(" \u00b7 ")
-                if (spec.isNotBlank()) {
-                    Text(spec, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                }
             }
             CremaOverflowMenu(items = buildList {
                 add(OverflowItem("coffee", "Load on Brew", onLoadOnBrew))
@@ -748,13 +758,11 @@ private fun ShotDetail(
         if (quality != null) ShotQualityCard(quality)
         var rating by remember(shot.id) { mutableStateOf(shot.rating ?: 0) }
         var notes by remember(shot.id) { mutableStateOf(shot.notes ?: "") }
-        // Rating (left) and privacy (right) share one line — as a FlowRow so a
-        // narrow detail pane (7-8" tablets) wraps privacy onto its own line
-        // instead of crushing the chips. Privacy is the per-shot Visualizer
-        // visibility override (web .hi-privacy): with no override (privacy ==
-        // null) the chip matching the Settings → Sharing default is highlighted
-        // — no duplicated "Default · x" chip. Tapping a chip pins this shot;
-        // tapping the pinned chip reverts to the default.
+        // Rating (left) + the grind stepper (right) share one line (user
+        // direction, issue #16 round 4) — a FlowRow so a narrow detail pane
+        // (7-8" tablets) wraps the stepper onto its own line instead of
+        // crushing it. Each stepper click persists; the Visualizer PATCH
+        // debounces behind it.
         FlowRow(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -765,30 +773,16 @@ private fun ShotDetail(
                 CremaStarRating(rating, onChange = { rating = it; onRate(it, notes) })
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Eyebrow("Privacy")
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("public" to "Public", "unlisted" to "Unlisted", "private" to "Private").forEach { (v, label) ->
-                        PrivacyChip(
-                            label,
-                            on = shot.privacy == v || (shot.privacy == null && defaultPrivacy == v),
-                        ) { onPrivacyChange(if (shot.privacy == v) null else v) }
-                    }
-                }
+                Eyebrow("Grind")
+                CremaStepper(
+                    value = shot.effectiveGrindSetting?.toDoubleOrNull() ?: 0.0,
+                    onChange = { onGrindChange(it.toFloat()) },
+                    step = 0.1,
+                    min = 0.0,
+                    max = 200.0,
+                    fmt = { v -> if (v % 1.0 == 0.0) fmt("%.0f", v) else fmt("%.1f", v) },
+                )
             }
-        }
-        // Grind stepper — the shot's recorded grind, editable in place (issue
-        // #16 round 3: promoted from an overflow dialog). Each click persists;
-        // the Visualizer PATCH debounces behind it.
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Eyebrow("Grind")
-            CremaStepper(
-                value = shot.effectiveGrindSetting?.toDoubleOrNull() ?: 0.0,
-                onChange = { onGrindChange(it.toFloat()) },
-                step = 0.1,
-                min = 0.0,
-                max = 200.0,
-                fmt = { v -> if (v % 1.0 == 0.0) fmt("%.0f", v) else fmt("%.1f", v) },
-            )
         }
         CremaTextField(
             value = notes,
@@ -799,6 +793,22 @@ private fun ShotDetail(
             minLines = 2,
             modifier = Modifier.fillMaxWidth(),
         )
+        // Privacy moves BELOW the notes with its label restored (user
+        // direction) — the per-shot Visualizer visibility override: with no
+        // override the chip matching the Settings → Sharing default is
+        // highlighted; tapping a chip pins this shot; tapping the pinned chip
+        // reverts to the default.
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Eyebrow("Privacy")
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("public" to "Public", "unlisted" to "Unlisted", "private" to "Private").forEach { (v, label) ->
+                    PrivacyChip(
+                        label,
+                        on = shot.privacy == v || (shot.privacy == null && defaultPrivacy == v),
+                    ) { onPrivacyChange(if (shot.privacy == v) null else v) }
+                }
+            }
+        }
     }
 }
 

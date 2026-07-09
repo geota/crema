@@ -91,6 +91,10 @@ import coffee.crema.beans.rankBeansForPicker
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaAnchoredPopup
 import coffee.crema.ui.components.CremaCard
+import coffee.crema.ui.components.CremaFreshnessChip
+import coffee.crema.ui.components.CremaHeaderBlock
+import coffee.crema.ui.components.HeaderBlockLine
+import coffee.crema.ui.components.HeaderLineStyle
 import coffee.crema.ui.components.CremaNavigationRail
 import coffee.crema.ui.components.CremaSearchPill
 import coffee.crema.ui.components.CremaValueUnit
@@ -495,77 +499,48 @@ private fun ProfileBlock(
     // Box wraps the anchor block + the popup so the Popup positions against the
     // block's bounds (proto: .bh-pop anchored to .bh-anchor at top:100%+8px).
     Box {
-        Column(
-            modifier = Modifier
-                .clip(RoundedCornerShape(12.dp))
-                // Open-state tint so the anchor reads as active while the menu is up
-                // (proto .bh-block.is-open = primary @13%).
-                .background(if (open) MaterialTheme.colorScheme.primary.copy(alpha = 0.13f) else Color.Transparent)
-                .clickable { open = !open }
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Eyebrow("Profile")
-                if (uploading) {
+        // The block anatomy is the shared CremaHeaderBlock (issue #16 round 4:
+        // the History detail renders the SAME component over a shot snapshot).
+        CremaHeaderBlock(
+            eyebrow = "Profile",
+            eyebrowTrailing = if (uploading) {
+                {
                     Text(
                         uploadProgress?.let { "Uploading… $it" } ?: "Uploading…",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    active?.name ?: "No profile selected",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Normal, fontSize = 20.sp, lineHeight = 24.sp),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                // Caret is always shown — the picker (or library route) is always reachable.
-                PhIcon("caret-down", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            if (active != null) {
-                Text(
-                    "Pre-inf ${active.preinfuseSeconds}s · ${formatRatio(active.dose, active.yieldOut)} · " +
-                        "${formatWeight(active.yieldOut, weightUnit)} · ${formatTemp(active.brewTemp, tempUnit)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                // .bh-spec — "{beverage} · {roast} · {author}".
-                val spec = listOfNotNull(
-                    active.beverageType?.replaceFirstChar { it.uppercase() },
-                    active.roast?.replaceFirstChar { it.uppercase() },
-                    active.author.takeIf { it.isNotBlank() },
-                ).joinToString(" · ")
-                if (spec.isNotBlank()) {
-                    Text(
-                        spec,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+            } else {
+                null
+            },
+            title = active?.name ?: "No profile selected",
+            openTint = open,
+            onClick = { open = !open },
+            lines = buildList {
+                if (active != null) {
+                    add(
+                        HeaderBlockLine(
+                            "Pre-inf ${active.preinfuseSeconds}s · ${formatRatio(active.dose, active.yieldOut)} · " +
+                                "${formatWeight(active.yieldOut, weightUnit)} · ${formatTemp(active.brewTemp, tempUnit)}",
+                        ),
                     )
+                    // .bh-spec — "{beverage} · {roast} · {author}".
+                    val spec = listOfNotNull(
+                        active.beverageType?.replaceFirstChar { it.uppercase() },
+                        active.roast?.replaceFirstChar { it.uppercase() },
+                        active.author.takeIf { it.isNotBlank() },
+                    ).joinToString(" · ")
+                    if (spec.isNotBlank()) add(HeaderBlockLine(spec, HeaderLineStyle.Spec))
+                    // .bh-tags — custom tags joined " · " (the synthesised "Built-in"
+                    // import tag is dropped; rendered only when something remains).
+                    val tags = active.tags
+                        .filter { it.isNotBlank() && it != "Built-in" }
+                        .joinToString(" · ")
+                    if (tags.isNotBlank()) add(HeaderBlockLine(tags, HeaderLineStyle.Tags))
                 }
-                // .bh-tags — custom tags joined " · " (the synthesised "Built-in"
-                // import tag is dropped; rendered only when something remains).
-                val tags = active.tags
-                    .filter { it.isNotBlank() && it != "Built-in" }
-                    .joinToString(" · ")
-                if (tags.isNotBlank()) {
-                    Text(
-                        tags,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        }
+            },
+        )
         CremaAnchoredPopup(expanded = open, onDismiss = { open = false }) {
             PopCard {
                 PickerLead("Switch profile · pinned")
@@ -652,103 +627,64 @@ private fun BeanBlock(
     // straight to Beans (proto/PWA never present a dead end).
     val hasBeans = beans.isNotEmpty()
     Box {
-        Column(
-            modifier = Modifier
-                .clip(RoundedCornerShape(12.dp))
-                .background(if (open && hasBeans) MaterialTheme.colorScheme.primary.copy(alpha = 0.13f) else Color.Transparent)
-                .clickable { if (hasBeans) open = !open else onOpenLibrary() }
-                // Bounded width so the freshness chip + caret right-justify WITHIN
-                // the block (not across the whole header — that ate the QC pill).
-                .width(264.dp)
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            // Bean info is LEFT-justified (like the profile block); only the
-            // green-dot freshness chip + the caret are pushed to the right edge.
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            // .bh-eyebrow-row — "Bean" + the freshness chip on the same row. The
-            // chip ("Nd off roast" / "Frozen") is coloured by freshness band and
-            // shown only when a roast date (or freeze) is known.
-            val frozen = activeBean?.isFrozen == true
-            val daysOff = activeBean?.let { daysOffRoast(it.roastedOn) }
-            val freshLabel = when {
-                activeBean == null -> null
-                frozen -> "Frozen"
-                else -> daysOff?.let { "${it}d off roast" }
-            }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                Eyebrow("Bean")
-                if (freshLabel != null) {
-                    val freshColor = freshnessColor(frozen, activeBean?.roastLevel?.toInt(), daysOff)
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(freshColor))
-                        Text(freshLabel, style = MaterialTheme.typography.labelSmall, color = freshColor)
-                    }
-                }
-            }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    activeBean?.let { listOfNotNull(roasterNameOf(it), it.name).joinToString(" · ") } ?: "No bean selected",
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Normal, fontSize = 20.sp, lineHeight = 24.sp),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                // Caret on the right — empty taps route to the Beans library.
-                PhIcon("caret-down", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            if (activeBean != null) {
-                // .bh-meta — "{country} · {variety} · {process}".
-                val meta = listOfNotNull(
-                    activeBean.origin?.country,
-                    activeBean.origin?.variety,
-                    activeBean.origin?.processing,
-                ).joinToString(" · ")
-                if (meta.isNotBlank()) {
-                    Text(
-                        meta,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                // .bh-spec — "{roastBand} · {roastType} · {mix} · Grind {grind}".
-                val spec = listOfNotNull(
-                    roastBand(activeBean.roastLevel?.toInt()),
-                    activeBean.roastType?.string?.replaceFirstChar { it.uppercase() },
-                    activeBean.mix?.string?.replaceFirstChar { it.uppercase() },
-                    activeBean.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" },
-                    // Grinder NAME at a glance (issue #16): the bean's own, else
-                    // the equipment default — web BeanContextCard precedence.
-                    activeBean.grinder?.takeIf { it.isNotBlank() }
-                        ?: equipmentGrinder.takeIf { it.isNotBlank() },
-                ).joinToString(" · ")
-                if (spec.isNotBlank()) {
-                    Text(
-                        spec,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                // .bh-tags — custom tags joined " · ".
-                val tags = activeBean.tags?.filter { it.isNotBlank() }.orEmpty().joinToString(" · ")
-                if (tags.isNotBlank()) {
-                    Text(
-                        tags,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            } else {
-                Text(
-                    if (hasBeans) "Tap to choose a bag" else "Tap to add your first bag",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                )
-            }
+        // .bh-eyebrow-row chip — "Nd off roast" / "Frozen", coloured by
+        // freshness band, shown only when a roast date (or freeze) is known.
+        val frozen = activeBean?.isFrozen == true
+        val daysOff = activeBean?.let { daysOffRoast(it.roastedOn) }
+        val freshLabel = when {
+            activeBean == null -> null
+            frozen -> "Frozen"
+            else -> daysOff?.let { "${it}d off roast" }
         }
+        // The block anatomy is the shared CremaHeaderBlock (issue #16 round 4).
+        // Bounded width so the freshness chip + caret right-justify WITHIN the
+        // block (not across the whole header — that ate the QC pill).
+        CremaHeaderBlock(
+            eyebrow = "Bean",
+            eyebrowTrailing = if (freshLabel != null) {
+                { CremaFreshnessChip(freshLabel, freshnessColor(frozen, activeBean?.roastLevel?.toInt(), daysOff)) }
+            } else {
+                null
+            },
+            title = activeBean?.let { listOfNotNull(roasterNameOf(it), it.name).joinToString(" · ") } ?: "No bean selected",
+            caretAtEnd = true,
+            openTint = open && hasBeans,
+            onClick = { if (hasBeans) open = !open else onOpenLibrary() },
+            modifier = Modifier.width(264.dp),
+            lines = buildList {
+                if (activeBean != null) {
+                    // .bh-meta — "{country} · {variety} · {process}".
+                    val meta = listOfNotNull(
+                        activeBean.origin?.country,
+                        activeBean.origin?.variety,
+                        activeBean.origin?.processing,
+                    ).joinToString(" · ")
+                    if (meta.isNotBlank()) add(HeaderBlockLine(meta))
+                    // .bh-spec — "{roastBand} · {roastType} · {mix} · Grind {grind}".
+                    val spec = listOfNotNull(
+                        roastBand(activeBean.roastLevel?.toInt()),
+                        activeBean.roastType?.string?.replaceFirstChar { it.uppercase() },
+                        activeBean.mix?.string?.replaceFirstChar { it.uppercase() },
+                        activeBean.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" },
+                        // Grinder NAME at a glance (issue #16): the bean's own, else
+                        // the equipment default — web BeanContextCard precedence.
+                        activeBean.grinder?.takeIf { it.isNotBlank() }
+                            ?: equipmentGrinder.takeIf { it.isNotBlank() },
+                    ).joinToString(" · ")
+                    if (spec.isNotBlank()) add(HeaderBlockLine(spec, HeaderLineStyle.Spec))
+                    // .bh-tags — custom tags joined " · ".
+                    val tags = activeBean.tags?.filter { it.isNotBlank() }.orEmpty().joinToString(" · ")
+                    if (tags.isNotBlank()) add(HeaderBlockLine(tags, HeaderLineStyle.Tags))
+                } else {
+                    add(
+                        HeaderBlockLine(
+                            if (hasBeans) "Tap to choose a bag" else "Tap to add your first bag",
+                            HeaderLineStyle.Spec,
+                        ),
+                    )
+                }
+            },
+        )
         CremaAnchoredPopup(expanded = open && hasBeans, onDismiss = { open = false }) {
             PopCard {
                 PickerLead("Switch bean · pinned")

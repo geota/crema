@@ -132,7 +132,7 @@ fun PhoneBrewScreen(
                 val frozen = activeBean?.isFrozen == true
                 val daysOff = activeBean?.let { daysOffRoast(it.roastedOn) }
                 ProfileStrip(
-                    active = active,
+                    title = active?.name ?: "No profile loaded",
                     // Remembered (review #37): beanLine does two list scans +
                     // a join, and this strip recomposes at telemetry rate.
                     beanLine = remember(
@@ -294,8 +294,10 @@ private fun beanLine(ui: MainUiState): String {
 
 // ── Profile strip (proto .pf-profilestrip) ───────────────────────────────────
 @Composable
-private fun ProfileStrip(
-    active: CremaProfile?,
+internal fun ProfileStrip(
+    /** The top-row title — Brew passes the loaded profile's name; the shot
+     *  detail passes the shot's recorded profile (issue #16 round 4). */
+    title: String,
     beanLine: String,
     /** "Nd off roast" / "Frozen", or null when the roast date is unknown —
      *  rendered as the tablet/web colour pip + label on the TOP row. */
@@ -317,7 +319,7 @@ private fun ProfileStrip(
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        active?.name ?: "No profile loaded",
+                        title,
                         style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.Medium),
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
