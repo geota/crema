@@ -14,6 +14,8 @@ export {
 	type ShotPeaks,
 	shotId,
 	ratioLabel,
+	effectiveGrindSetting,
+	grindLabel,
 	shotFilename,
 	snapshotFromBean,
 	peaksOf,

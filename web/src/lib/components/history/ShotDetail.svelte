@@ -1,14 +1,11 @@
 <script lang="ts">
 	import Icon from '$lib/icons/Icon.svelte';
 	import StarRating from '$lib/components/common/StarRating.svelte';
-	import BookmarkSimpleIcon from 'phosphor-svelte/lib/BookmarkSimpleIcon';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
-	import CoffeeIcon from 'phosphor-svelte/lib/CoffeeIcon';
 	import DropIcon from 'phosphor-svelte/lib/DropIcon';
 	import GaugeIcon from 'phosphor-svelte/lib/GaugeIcon';
 	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
 	import ScalesIcon from 'phosphor-svelte/lib/ScalesIcon';
-	import ShareIcon from 'phosphor-svelte/lib/ShareIcon';
 	import ThermometerIcon from 'phosphor-svelte/lib/ThermometerIcon';
 	/**
 	 * `ShotDetail` — the History page's right pane, ported from `ShotDetail` in
@@ -27,10 +24,11 @@
 		exportStoredShotAsV2Json,
 		peaksOf,
 		flatSamplesOf,
+		effectiveGrindSetting,
 	} from '$lib/history';
 	import { loadCore, type ShotQualityReport } from '$lib/core';
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
-	import { daysOffRoast, roastBand, type Bean, type Roaster } from '$lib/bean';
+	import { daysOffRoast, roastBand, roastFreshness, freshnessColor, type Bean, type Roaster } from '$lib/bean';
 	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
 	import { getProfileStore } from '$lib/profiles';
 	import { onSyncConfigChange, readSyncConfig } from '$lib/visualizer';
@@ -44,6 +42,8 @@
 	import StaticShotChart from './StaticShotChart.svelte';
 	import ChartModal from '$lib/components/shared/ChartModal.svelte';
 	import BeanPicker from './BeanPicker.svelte';
+	import HeaderBlock from '$lib/components/brew/HeaderBlock.svelte';
+	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
 
 	let {
 		shot,
@@ -52,6 +52,7 @@
 		onPrivacyChange,
 		onGrinderModelChange,
 		onTagsChange,
+		onGrindChange,
 		onBeanChange,
 		onDelete,
 		canDeleteRemote = false
@@ -75,6 +76,12 @@
 		onGrinderModelChange: (grinderModel: string | null) => void;
 		/** Persist edited shot-level tags. */
 		onTagsChange: (tags: string[]) => void;
+		/**
+		 * Persist the grind THIS shot was pulled at (issue #16) — the
+		 * detail's grind stepper. Writes the per-shot value; display and
+		 * the Visualizer wire fall back to the bean snapshot when unset.
+		 */
+		onGrindChange: (grinderSetting: string | null) => void;
 		/**
 		 * Retroactively (re)bind the shot to a live bean — caller wraps
 		 * `HistoryStore.setBeanFromLive` so the shared `snapshotFromBean`
@@ -244,31 +251,59 @@
 		onGrinderModelChange(next);
 	}
 
-	/**
-	 * The bean caption — the snapshotted bean type (with roaster and roast
-	 * band when known) plus its days-off-roast, derived from the shot's own
-	 * `completedAt` so it is stable. `null` for a shot recorded with no bean
-	 * (including pre-existing records). Tolerant of the pre-`roaster`/`type`
-	 * snapshot shape, where `roaster`/`type` may be absent.
-	 */
-	const beanLine = $derived.by(() => {
-		const bean = shot.bean;
-		if (!bean) return null;
-		const name = bean.name?.trim();
-		const roasterName = bean.roasterName?.trim();
-		const label = name || roasterName || 'Bean';
-		const parts: string[] = [];
-		if (roasterName && name) {
-			parts.push(`${roasterName} · ${name}`);
-		} else {
-			parts.push(label);
-		}
-		const band = roastBand(bean.roastLevel ?? null);
-		if (band) parts.push(band[0].toUpperCase() + band.slice(1));
-		const days = daysOffRoast(bean.roastedOn ?? null, shot.completedAt);
-		if (days != null) parts.push(`${days}d off roast`);
+	// ── Header blocks (issue #16 round 4) — the Brew page's profile/bean
+	// blocks over the shot's frozen snapshot, via the SAME shared
+	// HeaderBlock component. The pull timestamp rides the profile block's
+	// eyebrow row (the one deliberate difference from Brew), and the
+	// freshness chip is STATIC: the bean's age at PULL time, derived from
+	// the shot's own `completedAt` — a shot pulled at 7 days says 7d forever.
+	const profileMetaLine = $derived.by(() => {
+		const parts: string[] = [`${(shot.record.duration / 1000).toFixed(0)} s`];
+		if (yieldOut != null) parts.push(`${yieldM.value} ${yieldM.unit}`, ratioLabel(shot));
 		return parts.join(' · ');
 	});
+	const beanTitle = $derived.by(() => {
+		const bean = shot.bean;
+		if (!bean) return 'No bean';
+		const name = bean.name?.trim();
+		const roasterName = bean.roasterName?.trim() || boundRoasterName || '';
+		if (roasterName && name) return `${roasterName} · ${name}`;
+		return name || roasterName || 'Bean';
+	});
+	/** Bean age at pull time — static; `null` without a roast date. */
+	const daysAtPull = $derived(
+		shot.bean ? daysOffRoast(shot.bean.roastedOn ?? null, shot.completedAt) : null
+	);
+	const freshAtPullLabel = $derived(daysAtPull != null ? `${daysAtPull}d off roast` : null);
+	const freshAtPullColor = $derived.by(() => {
+		if (daysAtPull == null) return 'rgba(var(--tint-rgb), 0.4)';
+		return freshnessColor(
+			roastFreshness(roastBand(shot.bean?.roastLevel ?? null) ?? 'medium', daysAtPull)
+		);
+	});
+	/** Roast band · Grind N (the shot's) · grinder — the Brew prep line. */
+	const beanPrepLine = $derived.by(() => {
+		const parts: string[] = [];
+		const band = roastBand(shot.bean?.roastLevel ?? null);
+		if (band) parts.push(band[0].toUpperCase() + band.slice(1));
+		const setting = effectiveGrindSetting(shot);
+		if (setting) parts.push(`Grind ${setting}`);
+		const grinder = shot.bean?.grinder?.trim();
+		if (grinder) parts.push(grinder);
+		return parts.join(' · ');
+	});
+	const beanTagsLine = $derived((shot.bean?.tags ?? []).filter((x) => x.trim()).join(' · '));
+
+	// ── Grind stepper (issue #16) — edits the shot's own recorded grind.
+	const grindValue = $derived.by(() => {
+		const raw = effectiveGrindSetting(shot)?.replace(',', '.');
+		const parsed = raw ? Number.parseFloat(raw) : NaN;
+		return Number.isFinite(parsed) ? parsed : 0;
+	});
+	function commitGrind(v: number): void {
+		const fmt = Number.isInteger(v) ? String(v) : v.toFixed(1);
+		onGrindChange(fmt);
+	}
 
 	/** Open the notes editor, seeding the draft from the current notes. */
 	function startEdit(): void {
@@ -435,16 +470,33 @@
 
 <div class="hi-detail">
 	<div class="hi-detail-head">
-		<div>
-			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">{stamp}</div>
-			<div class="hi-detail-title">{shot.profileName ?? 'Untitled shot'}</div>
-			<div class="hi-detail-sub">
-				{(shot.record.duration / 1000).toFixed(0)} s
-				{#if yieldOut != null}· {yieldM.value} {yieldM.unit} · {ratioLabel(shot)}{/if}
-			</div>
-			{#if beanLine}
-				<div class="hi-detail-sub hi-detail-bean">{beanLine}</div>
-			{/if}
+		<div class="hi-head-blocks">
+			<!-- The Brew page's header blocks, shared for real (issue #16
+			     round 4). Profile: static (a shot's profile is history), the
+			     pull timestamp on the eyebrow row. Bean: tap to re-attribute
+			     (opens the BeanPicker), static at-pull freshness chip, and
+			     the grind this shot was pulled at on the prep line. -->
+			<HeaderBlock
+				variant="profile"
+				eyebrow="Profile"
+				{stamp}
+				title={shot.profileName ?? 'Untitled shot'}
+				meta={profileMetaLine}
+				interactive={false}
+			/>
+			<HeaderBlock
+				cls="bh-block-bean"
+				variant="bean"
+				eyebrow="Bean"
+				freshLabel={freshAtPullLabel}
+				freshColor={freshAtPullColor}
+				title={beanTitle}
+				spec={beanPrepLine}
+				tags={beanTagsLine}
+				open={pickerOpen}
+				tapLabel={shot.bean ? 'Change bean' : 'Assign bean'}
+				onTap={openPicker}
+			/>
 		</div>
 		<div class="hi-detail-actions">
 			<SplitButton
@@ -473,15 +525,30 @@
 					}
 				]}
 			/>
-			<button class="st-btn st-btn-secondary" onclick={loadOnBrew}>
-				<CoffeeIcon aria-hidden="true" /> Load on Brew
-			</button>
-			<button class="st-btn st-btn-secondary" onclick={saveAsProfile}>
-				<BookmarkSimpleIcon aria-hidden="true" /> Save as profile
-			</button>
-			<button class="st-btn st-btn-secondary" onclick={share}>
-				<ShareIcon aria-hidden="true" /> Share
-			</button>
+			<!-- Load on Brew leads; Save-as-profile / Share ride its menu —
+			     the header blocks need the room (issue #16 round 4). -->
+			<SplitButton
+				icon="ph ph-coffee"
+				label="Load on Brew"
+				title="Reload this shot's profile on the Brew page"
+				onPrimary={loadOnBrew}
+				caretAriaLabel="More shot actions"
+				menuHead="Shot actions"
+				items={[
+					{
+						icon: 'ph-duotone ph-bookmark-simple',
+						title: 'Save as profile',
+						sub: 'Derive a reusable profile from this shot.',
+						onclick: saveAsProfile
+					},
+					{
+						icon: 'ph-duotone ph-share',
+						title: 'Share',
+						sub: 'Upload via Settings → Sharing (Visualizer).',
+						onclick: share
+					}
+				]}
+			/>
 			{#if onDelete}
 				<SplitButton
 					variant="danger"
@@ -635,78 +702,28 @@
 		</div>
 	</div>
 
-	<!-- Rating -->
-	<div class="hi-rating">
-		<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Rating</span>
-		<div class="hi-stars">
+	<!-- Rating (left) + the grind stepper (right) share one line (issue
+	     #16 round 4, Android parity). The stepper edits the grind THIS
+	     shot was pulled at; each click persists and the Visualizer PATCH
+	     debounces behind it. -->
+	<div class="hi-rating-row">
+		<div class="hi-rating">
+			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Rating</span>
+			<div class="hi-stars">
 				<StarRating rating={rating} interactive onRate={setStar} size={18} emptyColor="rgba(var(--tint-rgb), 0.3)" />
-		</div>
-	</div>
-
-	<!-- Privacy — the per-shot Visualizer visibility override. "Default"
-	     inherits Settings → Sharing's upload privacy at upload/patch time;
-	     a chip pins this shot regardless of the default. -->
-	<div class="hi-privacy">
-		<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Privacy</span>
-		<div class="hi-privacy-chips">
-			<button
-				class="hi-privacy-chip"
-				class:is-on={shot.privacy == null}
-				onclick={() => onPrivacyChange(null)}
-				title="Follow the Settings → Sharing default"
-			>
-				Default · {defaultPrivacy}
-			</button>
-			{#each ['public', 'unlisted', 'private'] as const as p (p)}
-				<button
-					class="hi-privacy-chip"
-					class:is-on={shot.privacy === p}
-					onclick={() => onPrivacyChange(p)}
-				>
-					{p[0].toUpperCase() + p.slice(1)}
-				</button>
-			{/each}
-		</div>
-	</div>
-
-	<!-- Bean — the bound bag snapshot + roaster, with a button to rebind
-	     retroactively. Shows the snapshot (so a later rename of the live
-	     bag can't rewrite history). "Change bean" opens the BeanPicker;
-	     "Assign bean" appears when no bean is bound. -->
-	<div class="hi-bean">
-		<div class="hi-bean-head">
-			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Bean</span>
-			<button class="hi-bean-action" onclick={openPicker}>
-				<PencilSimpleIcon aria-hidden="true" />
-				{shot.bean ? 'Change bean' : 'Assign bean'}
-			</button>
-		</div>
-		{#if shot.bean}
-			<div class="hi-bean-body">
-				<div class="hi-bean-line">
-					{#if boundRoasterName}
-						<span class="hi-bean-roaster">{boundRoasterName}</span>
-						<span class="hi-bean-sep">·</span>
-					{/if}
-					<span class="hi-bean-name">{shot.bean.name || 'Untitled bean'}</span>
-				</div>
-				<div class="hi-bean-meta">
-					{#if shot.bean.roastedOn}
-						<span>Roasted {shot.bean.roastedOn}</span>
-					{/if}
-					{#if roastBand(shot.bean.roastLevel ?? null)}
-						{#if shot.bean.roastedOn}<span class="hi-bean-sep">·</span>{/if}
-						<span class="hi-bean-roast"
-							>{roastBand(shot.bean.roastLevel ?? null)?.[0].toUpperCase()}{roastBand(
-								shot.bean.roastLevel ?? null
-							)?.slice(1)} roast</span
-						>
-					{/if}
-				</div>
 			</div>
-		{:else}
-			<div class="hi-bean-empty">No bean assigned to this shot.</div>
-		{/if}
+		</div>
+		<div class="hi-grind">
+			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Grind</span>
+			<QuickStepper
+				value={grindValue}
+				min={0}
+				max={200}
+				step={0.1}
+				onChange={commitGrind}
+				fmt={(v) => (Number.isInteger(v) ? String(v) : v.toFixed(1))}
+			/>
+		</div>
 	</div>
 
 	<!-- Shot-level tags — free-form, edited via the canonical TagInput.
@@ -772,6 +789,29 @@
 			</div>
 		{/if}
 	</div>
+
+	<!-- Privacy — below the notes with its label (issue #16 round 4,
+	     Android parity). The per-shot Visualizer visibility override: with
+	     no override the chip matching the Settings → Sharing default is
+	     highlighted — no duplicated "Default · x" chip. Tapping a chip pins
+	     this shot; tapping the pinned chip reverts to the default. -->
+	<div class="hi-privacy">
+		<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Privacy</span>
+		<div class="hi-privacy-chips">
+			{#each ['public', 'unlisted', 'private'] as const as p (p)}
+				<button
+					class="hi-privacy-chip"
+					class:is-on={shot.privacy === p || (shot.privacy == null && defaultPrivacy === p)}
+					onclick={() => onPrivacyChange(shot.privacy === p ? null : p)}
+					title={shot.privacy == null && defaultPrivacy === p
+						? 'Following the Settings → Sharing default'
+						: undefined}
+				>
+					{p[0].toUpperCase() + p.slice(1)}
+				</button>
+			{/each}
+		</div>
+	</div>
 </div>
 
 {#if pickerOpen}
@@ -802,22 +842,14 @@
 		padding-bottom: 16px;
 		border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
 	}
-	.hi-detail-title {
-		font-family: var(--font-serif);
-		font-size: 24px;
-		letter-spacing: -0.01em;
-		color: var(--fg-1);
-		margin-top: 2px;
-	}
-	.hi-detail-sub {
-		font-family: var(--font-sans);
-		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
-		margin-top: 4px;
-	}
-	.hi-detail-bean {
-		margin-top: 2px;
-		color: var(--copper-300);
+	/* The Brew header blocks, side by side; the shared .bh-* CSS carries
+	   the anatomy (web-kit.css) — only the layout shell lives here. */
+	.hi-head-blocks {
+		display: flex;
+		align-items: flex-start;
+		gap: 28px;
+		min-width: 0;
+		flex: 1 1 auto;
 	}
 	.hi-detail-actions {
 		display: flex;
@@ -1007,10 +1039,27 @@
 		margin-top: 5px;
 	}
 
+	/* Rating (left) + grind stepper (right) on one line; wraps on narrow. */
+	.hi-rating-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+		flex-wrap: wrap;
+	}
 	.hi-rating {
 		display: flex;
 		align-items: center;
 		gap: 14px;
+	}
+	.hi-grind {
+		display: flex;
+		align-items: center;
+		gap: 14px;
+	}
+	/* QuickStepper sizes itself for the Quick sheet; give it a lane here. */
+	.hi-grind :global(.qcs) {
+		min-width: 180px;
 	}
 
 	/* Privacy block — eyebrow + chip row (same rhythm as .hi-rating). */
@@ -1039,72 +1088,6 @@
 		color: var(--copper-400);
 		border-color: rgba(193, 116, 75, 0.55);
 		background: rgba(193, 116, 75, 0.1);
-	}
-
-	/* Bean block — snapshot summary plus the Change/Assign button. */
-	.hi-bean {
-		background: var(--bg-page);
-		border-radius: var(--radius-md);
-		padding: 12px 14px;
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
-	.hi-bean-head {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-	}
-	.hi-bean-action {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		background: transparent;
-		border: 0;
-		color: var(--copper-400);
-		font-family: var(--font-sans);
-		font-size: 11px;
-		cursor: pointer;
-		padding: 2px 0;
-	}
-	.hi-bean-action:hover {
-		color: var(--copper-300);
-		text-decoration: underline;
-	}
-	.hi-bean-body {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-	.hi-bean-line {
-		font-family: var(--font-sans);
-		font-size: 13px;
-		color: var(--fg-1);
-	}
-	.hi-bean-roaster {
-		color: rgba(var(--tint-rgb), 0.7);
-	}
-	.hi-bean-name {
-		color: var(--fg-1);
-		font-weight: 500;
-	}
-	.hi-bean-sep {
-		color: rgba(var(--tint-rgb), 0.3);
-		margin: 0 4px;
-	}
-	.hi-bean-meta {
-		font-family: var(--font-sans);
-		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
-	}
-	.hi-bean-roast {
-		text-transform: capitalize;
-	}
-	.hi-bean-empty {
-		font-family: var(--font-sans);
-		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.45);
-		font-style: italic;
 	}
 
 	/* Shot-level tags block — wraps the canonical TagInput. */

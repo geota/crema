@@ -975,6 +975,10 @@
 							store.setTags(selected.id, tags);
 							syncEditToVisualizer(selected.id);
 						}}
+						onGrindChange={(grinderSetting) => {
+							store.setGrindSetting(selected.id, grinderSetting);
+							syncEditToVisualizer(selected.id);
+						}}
 						onBeanChange={(bean, roaster) => {
 							store.setBeanFromLive(selected.id, bean, roaster);
 							syncEditToVisualizer(selected.id);

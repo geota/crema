@@ -773,6 +773,11 @@ summary:focus-visible,
 .bh-bean-eyebrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .bh-fresh { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-sans); font-size: 11px; font-weight: 500; white-space: nowrap; }
 .bh-fresh-dot { width: 7px; height: 7px; border-radius: 999px; flex: 0 0 auto; }
+/* Eyebrow-row trailing timestamp (History detail's pull time). */
+.bh-stamp { font-family: var(--font-sans); font-size: 11px; color: rgba(var(--tint-rgb), 0.45); white-space: nowrap; }
+/* Non-interactive header block (History's profile block — a shot's profile is a fact). */
+.bh-block-tap.is-static { cursor: default; }
+.bh-block-tap.is-static:hover { background: transparent; }
 .bh-icon { width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 9px; cursor: pointer; background: rgba(var(--tint-rgb), 0.08); color: rgba(var(--tint-rgb), 0.7); transition: background 150ms var(--ease), color 150ms var(--ease); }
 .bh-icon:hover { background: rgba(var(--tint-rgb), 0.14); color: var(--fg-1); }
 .bh-icon:disabled { opacity: 0.4; cursor: default; }

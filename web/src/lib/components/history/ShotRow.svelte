@@ -5,7 +5,7 @@
 	 * profile name, the ratio + yield metrics and a star rating.
 	 */
 	import type { StoredShot } from '$lib/history';
-	import { ratioLabel, peaksOf, flatSamplesOf } from '$lib/history';
+	import { grindLabel, ratioLabel, peaksOf, flatSamplesOf } from '$lib/history';
 	import StarRating from '$lib/components/common/StarRating.svelte';
 	import { getSettingsStore, convertWeight } from '$lib/settings';
 	import MiniShotChart from './MiniShotChart.svelte';
@@ -59,6 +59,29 @@
 		})
 	);
 
+	/**
+	 * The row's second line — bean + the grind it was pulled at (issue #16:
+	 * "what did I grind last time" is scannable without opening the detail),
+	 * ending with the extraction time. Bean-less shots keep the original
+	 * "Ns extraction" line.
+	 */
+	const rowBeanLine = $derived.by(() => {
+		const parts: string[] = [];
+		const b = shot.bean;
+		if (b) {
+			const name = b.name?.trim();
+			const roaster = b.roasterName?.trim();
+			if (roaster && name) parts.push(`${roaster} · ${name}`);
+			else if (name || roaster) parts.push((name || roaster) as string);
+		}
+		const label = grindLabel(shot);
+		if (label) parts.push(label);
+		const secs = `${(shot.record.duration / 1000).toFixed(0)} s`;
+		if (parts.length === 0) return `${secs} extraction`;
+		parts.push(secs);
+		return parts.join(' · ');
+	});
+
 	/** A relative "ago" label for the shot — shared compact vocabulary (issue 43). */
 	const ago = $derived(relativeAgo(shot.completedAt));
 
@@ -99,7 +122,7 @@
 	</div>
 	<div class="hi-row-main">
 		<div class="hi-row-name">{shot.profileName ?? 'Untitled shot'}</div>
-		<div class="hi-row-bean">{(shot.record.duration / 1000).toFixed(0)} s extraction</div>
+		<div class="hi-row-bean">{rowBeanLine}</div>
 	</div>
 	<div class="hi-row-metric">
 		<div class="hi-row-metric-val">{ratioLabel(shot)}</div>

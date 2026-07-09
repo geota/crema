@@ -487,6 +487,20 @@
 	 * the primary view; the header's QuickPill opens the sheet, and its Close
 	 * button or a scrim tap dismisses it again.
 	 */
+	// Seed the QC grind dial from the active bean's saved setting (issue #16
+	// round 2, Android parity): "tweak slightly from last time" must START at
+	// last time. Switching bags re-seeds the dial to THAT bag's grind; the
+	// user's subsequent dial edits win until the next switch. `untrack`ed
+	// writes so the effect tracks only the active bean, not `params.current`.
+	$effect(() => {
+		const raw = beanLibrary.activeBean?.grinderSetting?.trim().replace(',', '.');
+		const parsed = raw ? Number.parseFloat(raw) : NaN;
+		const next = Number.isFinite(parsed) ? parsed : 4.2;
+		if (untrack(() => params.current.grind) !== next) {
+			untrack(() => params.set('grind', next));
+		}
+	});
+
 	let quickSheetOpen = $state(false);
 	/**
 	 * Whether a state-request transition we initiated is still in flight.

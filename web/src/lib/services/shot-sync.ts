@@ -49,6 +49,7 @@ import {
 	decodeResponse
 } from '../effect/schema/visualizer.ts';
 import { getBeanStore } from '$lib/bean/store.svelte';
+import { effectiveGrindSetting } from '$lib/history';
 import { exportStoredShotAsV2Json } from '$lib/history/v2-export';
 import type { ShotPatchInputs, TimedSample } from '$lib/core';
 import type { ShotBean, StoredShot } from '$lib/history/model';
@@ -90,7 +91,17 @@ export type { ShotSummary, ShotDetail, Paging };
  */
 function buildShotPayload(shot: StoredShot): Record<string, unknown> {
 	const cfg = readSyncConfig();
-	const json = JSON.parse(exportStoredShotAsV2Json(shot)) as Record<string, unknown>;
+	// The upload document carries the EFFECTIVE grind (issue #16) — the
+	// shot's recorded/edited value, else the bean snapshot's reference —
+	// exactly what History displays. The stored row keeps the RAW per-shot
+	// value only, so persistence/backups never materialise the fallback.
+	// Android's WireShot upload does the same.
+	const json = JSON.parse(
+		exportStoredShotAsV2Json({
+			...shot,
+			metadata: { ...(shot.metadata ?? {}), grinderSetting: effectiveGrindSetting(shot) }
+		})
+	) as Record<string, unknown>;
 
 	if (!cfg.includeProfile) {
 		delete json.profile;
@@ -281,6 +292,14 @@ export interface ShotPatch {
 	 */
 	bean?: ShotBean | null;
 	grinderModel?: string;
+	/**
+	 * The effective per-shot grind (issue #16): the shot's own recorded /
+	 * edited setting, else the bean snapshot's reference — the same
+	 * precedence History displays (`effectiveGrindSetting`). When set it
+	 * wins over `bean.grinderSetting` for the wire's `grinder_setting`;
+	 * absent, the snapshot value still rides (the post-upload PATCH path).
+	 */
+	grinderSetting?: string;
 	/**
 	 * Per-shot visibility. Sent as the same `privacy` vocabulary the upload
 	 * document uses; the PATCH schema's `shot` object is
@@ -487,7 +506,10 @@ export const ShotSyncLive = Layer.effect(
 				roastDate: patch.bean?.roastedOn ?? undefined,
 				roastLevel: patch.bean?.roastLevel ?? undefined,
 				beanNotes: patch.bean?.notes,
-				grinderSetting: patch.bean?.grinderSetting ?? undefined
+				// The shot's effective grind wins over the snapshot reference
+				// (issue #16: a grind edit must reach the uploaded copy) —
+				// Android's patchEditedShot sends the same precedence.
+				grinderSetting: patch.grinderSetting ?? patch.bean?.grinderSetting ?? undefined
 			};
 			const shotBody = JSON.parse(
 				wasmVisualizerShotPatchJson(JSON.stringify(inputs))
@@ -816,6 +838,7 @@ export const ShotSyncLive = Layer.effect(
 			const coffeeBagId = resolveCoffeeBagId(shot);
 			const tagList = resolveTagList(shot);
 			const grinderModel = resolveGrinderModel(shot, settings.grinderModel);
+			const grinderSetting = effectiveGrindSetting(shot);
 			return {
 				rating: (shot.metadata.rating ?? 0) > 0 ? (shot.metadata.rating ?? null) : null,
 				...(cfg.includeNotes ? { notes: shot.metadata.notes ?? '' } : {}),
@@ -823,7 +846,8 @@ export const ShotSyncLive = Layer.effect(
 				...(coffeeBagId != null ? { coffeeBagId } : {}),
 				...(tagList != null && tagList.length > 0 ? { tagList } : {}),
 				...(shot.bean != null ? { bean: shot.bean } : {}),
-				...(grinderModel != null ? { grinderModel } : {})
+				...(grinderModel != null ? { grinderModel } : {}),
+				...(grinderSetting != null ? { grinderSetting } : {})
 			};
 		};
 

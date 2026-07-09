@@ -99,6 +99,13 @@ export interface ShotBean {
 	 * on shot upload.
 	 */
 	readonly grinderSetting?: string;
+	/**
+	 * The bean's grinder NAME at shot-completion time (e.g. "Niche
+	 * Zero") — `snapshotFromBean` has always written it (untyped until
+	 * issue #16 round 4 surfaced it on the detail's bean block); absent
+	 * for older snapshots and beans without a grinder.
+	 */
+	readonly grinder?: string;
 }
 
 /**
@@ -419,6 +426,30 @@ export function flatSamplesOf(shot: StoredShot): TelemetrySample[] {
  * every shell produces the same number. This wrapper just resolves the
  * shot-level fields and the 18 g dose fallback.
  */
+/**
+ * The grind THIS shot was pulled at, as a raw setting string (issue #16):
+ * the shot's own `metadata.grinderSetting` (set by the History grind
+ * stepper, or carried by an import), else the frozen bean snapshot's
+ * reference setting; `null` when neither. ONE precedence shared by the
+ * history rows/detail ({@link grindLabel}) and the Visualizer wire
+ * (upload + PATCH) — what the app displays is exactly what syncs.
+ * Mirrors Android `StoredShot.effectiveGrindSetting`.
+ */
+export function effectiveGrindSetting(shot: StoredShot): string | null {
+	// Optional-chained: rows mid-import (and test fixtures) can lack the
+	// metadata object entirely before the loader upcast runs.
+	const own = shot.metadata?.grinderSetting?.trim();
+	if (own) return own;
+	const snap = shot.bean?.grinderSetting?.trim();
+	return snap || null;
+}
+
+/** "Grind N" display form of {@link effectiveGrindSetting}, or `null`. */
+export function grindLabel(shot: StoredShot): string | null {
+	const setting = effectiveGrindSetting(shot);
+	return setting ? `Grind ${setting}` : null;
+}
+
 export function ratioLabel(record: StoredShot): string {
 	const peaks = peaksOf(record);
 	const yieldOut = peaks.finalWeight ?? peaks.peakWeight;

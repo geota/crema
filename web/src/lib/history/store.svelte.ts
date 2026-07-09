@@ -293,6 +293,26 @@ export class HistoryStore {
 	}
 
 	/**
+	 * Set (or with `null`, clear) the grind recorded on a stored shot
+	 * (issue #16: dialing-in spans shots, so the log needs fixing up after
+	 * the fact — the History detail's grind stepper writes here). Clearing
+	 * falls back to the bean snapshot's reference setting for display and
+	 * wire purposes (see `effectiveGrindSetting`). Mirrors {@link setNotes}:
+	 * a thin replace-and-persist.
+	 */
+	setGrindSetting(id: string, grinderSetting: string | null): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		const target = this.shots[idx];
+		this.shots = [
+			...this.shots.slice(0, idx),
+			{ ...target, metadata: { ...target.metadata, grinderSetting } },
+			...this.shots.slice(idx + 1)
+		];
+		this.persist();
+	}
+
+	/**
 	 * Update a shot's equipment-level grinder-model override and persist.
 	 * Pass `null` (or call with an empty string after trimming) to clear
 	 * the override — the upload-time cascade then falls back to the

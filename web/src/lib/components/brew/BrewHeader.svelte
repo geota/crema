@@ -14,6 +14,7 @@
 	 * where the parent renders the mode pill / error / maintenance banner.
 	 */
 	import type { Snippet } from 'svelte';
+	import HeaderBlock from './HeaderBlock.svelte';
 	import HeaderPicker, { type PickerItem } from './HeaderPicker.svelte';
 
 	let {
@@ -97,12 +98,6 @@
 	function toggle(which: 'profile' | 'bean'): void {
 		openPicker = openPicker === which ? null : which;
 	}
-	function tapKey(e: KeyboardEvent, which: 'profile' | 'bean'): void {
-		if (e.key === 'Enter' || e.key === ' ') {
-			e.preventDefault();
-			toggle(which);
-		}
-	}
 	// Close the open picker on any click outside its block (the tap target + the
 	// panel both live inside the block, so opening / in-panel clicks don't self-close).
 	function onWindowClick(e: MouseEvent): void {
@@ -115,46 +110,47 @@
 <svelte:window onclick={onWindowClick} />
 
 <div class="crema-dash-head bh-header">
-	<!-- Profile block (left; margin-right:auto pushes the rest right). -->
-	<div class="bh-block bh-block-profile" bind:this={profileBlockEl}>
-		<div
-			class="bh-block-tap"
-			class:is-open={openPicker === 'profile'}
-			role="button"
-			tabindex="0"
-			aria-haspopup="dialog"
-			aria-expanded={openPicker === 'profile'}
-			onclick={() => toggle('profile')}
-			onkeydown={(e) => tapKey(e, 'profile')}
-		>
-			<span class="t-eyebrow">Profile</span>
-			<div class="bh-title-row">
-				<span class="bh-title">{profileName}</span>
-				{#if syncLabel}
-					<span class="bh-sync" title={syncTitle}>
-						<ArrowsClockwiseIcon aria-hidden="true" />{syncLabel}
-					</span>
-				{/if}
-			</div>
-			{#if profileMeta}<span class="bh-meta">{profileMeta}</span>{/if}
-			{#if profileSpec}<span class="bh-meta bh-spec">{profileSpec}</span>{/if}
-			{#if profileTags}<span class="bh-tags">{profileTags}</span>{/if}
+	<!-- Profile block (left; margin-right:auto pushes the rest right). The
+	     block anatomy is the shared HeaderBlock (issue #16 round 4: the
+	     History detail renders the SAME component over a shot snapshot). -->
+	<HeaderBlock
+		cls="bh-block-profile"
+		variant="profile"
+		eyebrow="Profile"
+		title={profileName}
+		meta={profileMeta}
+		spec={profileSpec}
+		tags={profileTags}
+		open={openPicker === 'profile'}
+		onTap={() => toggle('profile')}
+		bind:el={profileBlockEl}
+	>
+		{#snippet titleExtra()}
+			{#if syncLabel}
+				<span class="bh-sync" title={syncTitle}>
+					<ArrowsClockwiseIcon aria-hidden="true" />{syncLabel}
+				</span>
+			{/if}
+		{/snippet}
+		{#snippet footer()}
 			{#if loadedSubline}<span class="bh-loaded">{loadedSubline}</span>{/if}
-		</div>
-		<HeaderPicker
-			open={openPicker === 'profile'}
-			items={profileItems}
-			activeId={activeProfileId}
-			searchPlaceholder="Search profiles…"
-			addLabel="Add profile"
-			canEdit={canEditProfile}
-			onSelect={onSelectProfile}
-			onAdd={onAddProfile}
-			onEdit={onEditProfile}
-			onLibrary={onProfileLibrary}
-			onClose={() => (openPicker = null)}
-		/>
-	</div>
+		{/snippet}
+		{#snippet picker()}
+			<HeaderPicker
+				open={openPicker === 'profile'}
+				items={profileItems}
+				activeId={activeProfileId}
+				searchPlaceholder="Search profiles…"
+				addLabel="Add profile"
+				canEdit={canEditProfile}
+				onSelect={onSelectProfile}
+				onAdd={onAddProfile}
+				onEdit={onEditProfile}
+				onLibrary={onProfileLibrary}
+				onClose={() => (openPicker = null)}
+			/>
+		{/snippet}
+	</HeaderBlock>
 
 	<!-- Middle banner slot: mode pill / error / maintenance. -->
 	{#if status}
@@ -163,45 +159,35 @@
 
 	<!-- Bean block (right of the divider). -->
 	<span class="bh-divider" aria-hidden="true"></span>
-	<div class="bh-block bh-block-bean" bind:this={beanBlockEl}>
-		<div
-			class="bh-block-tap"
-			class:is-open={openPicker === 'bean'}
-			role="button"
-			tabindex="0"
-			aria-haspopup="dialog"
-			aria-expanded={openPicker === 'bean'}
-			onclick={() => toggle('bean')}
-			onkeydown={(e) => tapKey(e, 'bean')}
-		>
-			<div class="bh-bean-eyebrow">
-				<span class="t-eyebrow">Bean</span>
-				{#if freshLabel}
-					<span class="bh-fresh" style="color:{freshColor}">
-						<span class="bh-fresh-dot" style="background:{freshColor}"></span>{freshLabel}
-					</span>
-				{/if}
-			</div>
-			<div class="bh-title-row">
-				<span class="bh-title bh-bean-title">{beanName}</span>
-			</div>
-			{#if beanMeta}<span class="bh-meta bh-bean-meta">{beanMeta}</span>{/if}
-			{#if beanPrep}<span class="bh-meta bh-bean-prep">{beanPrep}</span>{/if}
-			{#if beanTags}<span class="bh-tags">{beanTags}</span>{/if}
-		</div>
-		<HeaderPicker
-			open={openPicker === 'bean'}
-			items={beanItems}
-			activeId={activeBeanId}
-			searchPlaceholder="Search beans…"
-			addLabel="Add bean"
-			onSelect={onSelectBean}
-			onAdd={onAddBean}
-			onEdit={onEditBean}
-			onLibrary={onBeanLibrary}
-			onClose={() => (openPicker = null)}
-		/>
-	</div>
+	<HeaderBlock
+		cls="bh-block-bean"
+		variant="bean"
+		eyebrow="Bean"
+		{freshLabel}
+		{freshColor}
+		title={beanName}
+		meta={beanMeta}
+		spec={beanPrep}
+		tags={beanTags}
+		open={openPicker === 'bean'}
+		onTap={() => toggle('bean')}
+		bind:el={beanBlockEl}
+	>
+		{#snippet picker()}
+			<HeaderPicker
+				open={openPicker === 'bean'}
+				items={beanItems}
+				activeId={activeBeanId}
+				searchPlaceholder="Search beans…"
+				addLabel="Add bean"
+				onSelect={onSelectBean}
+				onAdd={onAddBean}
+				onEdit={onEditBean}
+				onLibrary={onBeanLibrary}
+				onClose={() => (openPicker = null)}
+			/>
+		{/snippet}
+	</HeaderBlock>
 
 	<!-- Right cluster: Quick Controls pill (Add / Edit live in the pickers). -->
 	<div class="crema-dash-head-r bh-actions">
