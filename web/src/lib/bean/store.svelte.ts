@@ -300,6 +300,22 @@ export class BeanLibraryStore {
 		return next === 0;
 	}
 
+	/**
+	 * Put `doseG` BACK on a bag — the inverse of {@link debitBean}, for
+	 * re-attributing a logged shot to a different bean (the wrongly-billed
+	 * bag never physically lost the dose). Best-effort by design: capped at
+	 * `bagSize` (the bag may have been refilled since), untracked bags
+	 * (`remaining == null`) are left alone, and a capture-time debit that
+	 * clamped at 0 can't be reconstructed.
+	 */
+	creditBean(beanId: string, doseG: number): void {
+		const bean = this.envelope.beans.find((b) => b.id === beanId);
+		if (!bean || bean.remaining == null || !Number.isFinite(doseG) || doseG <= 0) return;
+		const cap = bean.bagSize && bean.bagSize > 0 ? bean.bagSize : undefined;
+		const next = cap != null ? Math.min(bean.remaining + doseG, cap) : bean.remaining + doseG;
+		if (next !== bean.remaining) this.updateBean(bean.id, { remaining: next });
+	}
+
 	// ── Roaster CRUD ─────────────────────────────────────────────────
 
 	upsertRoaster(roaster: Roaster): void {

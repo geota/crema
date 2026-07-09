@@ -1739,6 +1739,9 @@ class LibraryController(
      */
     fun setShotBean(id: String, beanId: String?) {
         val s = uiState()
+        val shot = s.history.firstOrNull { it.id == id } ?: return
+        val oldBeanId = shot.bean?.beanId
+        if (oldBeanId == beanId) return // same attribution — nothing to do
         val bean = beanId?.let { bid -> s.beans.firstOrNull { it.id == bid } }
         val roasterName = bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
         val beanSnapshot = bean?.let { b ->
@@ -1755,6 +1758,30 @@ class LibraryController(
         }
         updateUi { st ->
             st.copy(history = st.history.map { if (it.id == id) it.copy(bean = beanSnapshot) else it })
+        }
+        // Move the bag debit with the attribution: the grounds physically came
+        // from the bag the user now says they did, so the wrongly-debited old
+        // bag gets the dose BACK and the new bag loses it (capture's
+        // debitRemaining rule). Best-effort by design: the credit is capped at
+        // bagSize (the bag may have been refilled since), null-remaining bags
+        // are untracked and left alone, and a capture-time debit that clamped
+        // at 0 can't be reconstructed. Uses the dose the shot recorded.
+        val dose = shot.doseG
+        if (dose != null && dose > 0f) {
+            s.beans.firstOrNull { it.id == oldBeanId }?.let { old ->
+                old.remaining?.let { rem ->
+                    val cap = old.bagSize?.takeIf { it > 0f }
+                    val credited = (rem + dose).let { if (cap != null) minOf(it, cap) else it }
+                    if (credited != rem) mutateBean(old.id) { it.copy(remaining = credited) }
+                }
+            }
+            if (bean != null) {
+                val debited = debitRemaining(bean.remaining ?: 0f, dose)
+                if (debited != null) {
+                    mutateBean(bean.id) { it.copy(remaining = debited) }
+                    if (debited == 0f) notify("That was the last of ${bean.name}; bag empty")
+                }
+            }
         }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }

@@ -980,6 +980,17 @@
 							syncEditToVisualizer(selected.id);
 						}}
 						onBeanChange={(bean, roaster) => {
+							// Move the bag debit with the attribution (Android
+							// setShotBean parity): credit the wrongly-billed old
+							// bag, debit the new one, using the dose the shot
+							// recorded. Same-bean picks change nothing.
+							const oldBeanId = selected.bean?.beanId ?? null;
+							const newBeanId = bean?.id ?? null;
+							const dose = selected.metadata?.dose;
+							if (oldBeanId !== newBeanId && dose != null && dose > 0) {
+								if (oldBeanId) beanLibrary.creditBean(oldBeanId, dose);
+								if (newBeanId) beanLibrary.debitBean(newBeanId, dose);
+							}
 							store.setBeanFromLive(selected.id, bean, roaster);
 							syncEditToVisualizer(selected.id);
 						}}
