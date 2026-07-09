@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.horizontalScroll
@@ -62,6 +63,7 @@ import coffee.crema.ui.compare.TabletCompareBar
 import coffee.crema.ui.compare.rememberCompareSelection
 import coffee.crema.history.filterAndSortShots
 import coffee.crema.history.beanLabel
+import coffee.crema.history.grindLabel
 import coffee.crema.history.historyStats
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
@@ -372,6 +374,16 @@ fun HistoryScreen(
                             },
                             defaultPrivacy = ui.visualizer.privacy,
                             onPrivacyChange = { p -> vm.setShotPrivacy(selected.id, p) },
+                            // Post-hoc log fix-ups (issue #16): the dial-in loop spans
+                            // shots, and the wrong bean is sometimes active at pull time.
+                            beanChoices = remember(ui.beans, ui.roasters) {
+                                ui.beans.map { b ->
+                                    val roaster = ui.roasters.firstOrNull { it.id == b.roasterId }?.name
+                                    b.id to listOfNotNull(roaster, b.name).joinToString(" \u00b7 ")
+                                }
+                            },
+                            onGrindChange = { g -> vm.setShotGrind(selected.id, g) },
+                            onBeanChange = { bid -> vm.setShotBean(selected.id, bid) },
                             onViewVisualizer = selected.visualizerId?.let { vid ->
                                 {
                                     detailContext.startActivity(
@@ -509,7 +521,9 @@ private fun ShotRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                shot.beanLabel ?: "—",
+                // Bean + the grind it was pulled at (issue #16) — the reporter
+                // scans the list for "what did I grind last time".
+                listOfNotNull(shot.beanLabel, shot.grindLabel).joinToString(" \u00b7 ").ifBlank { "\u2014" },
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                 maxLines = 1,
@@ -577,6 +591,12 @@ private fun ShotDetail(
     defaultPrivacy: String = "unlisted",
     /** Per-shot privacy override edit; null reverts to the Sharing default. */
     onPrivacyChange: (String?) -> Unit = {},
+    /** Library beans as id → "Roaster · Name" labels, for Change bean. */
+    beanChoices: List<Pair<String, String>> = emptyList(),
+    /** Edit the grind recorded on this shot; null clears it (issue #16). */
+    onGrindChange: (Float?) -> Unit = {},
+    /** Re-attribute this shot to another bean; null = no bean (issue #16). */
+    onBeanChange: (String?) -> Unit = {},
 ) {
     // The pane scrolls: the chart keeps its full (pre-quality-card) height and
     // the quality card / rating / notes live below the fold instead of
@@ -586,6 +606,8 @@ private fun ShotDetail(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         var confirmDelete by remember(shot.id) { mutableStateOf(false) }
+        var editGrind by remember(shot.id) { mutableStateOf(false) }
+        var changeBean by remember(shot.id) { mutableStateOf(false) }
         // Detail head — title block (left) + actions (right), bottom-aligned with a
         // hairline rule (PWA .hi-detail-head: space-between, align-items: flex-end).
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.Bottom) {
@@ -610,12 +632,8 @@ private fun ShotDetail(
                     val d = shot.doseG; val y = shot.yieldG
                     if (d != null && y != null) add("${formatWeight(d, weightUnit)} → ${formatWeight(y, weightUnit)}")
                     shotRatio(shot)?.let { add(it) }
-                    // Grind used for THIS shot (issue #16): the QC dial recorded at
-                    // capture, else the bean-snapshot reference setting.
-                    (
-                        shot.grindSetting?.let { g -> "Grind " + (if (g % 1f == 0f) fmt("%.0f", g) else fmt("%.1f", g)) }
-                            ?: shot.bean?.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" }
-                    )?.let { add(it) }
+                    // Grind used for THIS shot (issue #16) — shared derivation.
+                    shot.grindLabel?.let { add(it) }
                 }.joinToString(" · ")
                 if (meta.isNotBlank()) {
                     Text(meta, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -627,6 +645,8 @@ private fun ShotDetail(
                 CremaOverflowMenu(items = buildList {
                     onUploadVisualizer?.let { add(OverflowItem("cloud-arrow-up", "Upload to Visualizer", it)) }
                     onViewVisualizer?.let { add(OverflowItem("cloud-check", "View on Visualizer", it)) }
+                    add(OverflowItem("pencil-simple", "Edit grind", { editGrind = true }))
+                    add(OverflowItem("coffee-bean", "Change bean", { changeBean = true }))
                     add(OverflowItem("trash", "Delete shot", { confirmDelete = true }, danger = true))
                 })
             }
@@ -641,6 +661,22 @@ private fun ShotDetail(
                 danger = true,
                 onConfirm = { onDelete(); confirmDelete = false },
                 onDismiss = { confirmDelete = false },
+            )
+        }
+        if (editGrind) {
+            ShotGrindDialog(
+                initial = shot.grindSetting?.let { g -> if (g % 1f == 0f) fmt("%.0f", g) else fmt("%.1f", g) }
+                    ?: shot.bean?.grinderSetting.orEmpty(),
+                onSave = { onGrindChange(it); editGrind = false },
+                onDismiss = { editGrind = false },
+            )
+        }
+        if (changeBean) {
+            ShotBeanDialog(
+                choices = beanChoices,
+                currentBeanId = shot.bean?.beanId,
+                onSelect = { onBeanChange(it); changeBean = false },
+                onDismiss = { changeBean = false },
             )
         }
         // Metric tiles — 7-up grid of recessed cards (PWA .hi-metrics / .hi-metric).
@@ -788,3 +824,105 @@ private fun shotRatio(shot: StoredShot): String? {
     return if (y != null && d != null && d > 0f) formatRatio(d, y) else null
 }
 
+
+/**
+ * Edit the grind recorded on a stored shot (issue #16). Free numeric text —
+ * grinders disagree about scales (Niche integers, DF64 decimals), so the field
+ * accepts whatever parses as a number; blank clears back to the bean fallback.
+ * Marked internal: the phone detail reuses it.
+ */
+@Composable
+internal fun ShotGrindDialog(
+    initial: String,
+    onSave: (Float?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by remember { mutableStateOf(initial) }
+    val parsed = text.trim().replace(',', '.').toFloatOrNull()
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit grind") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "The grind this shot was pulled at. Blank falls back to the bean\u2019s saved setting.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                androidx.compose.material3.OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true,
+                    label = { Text("Grind setting") },
+                    isError = text.isNotBlank() && parsed == null,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal,
+                    ),
+                )
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(
+                enabled = text.isBlank() || parsed != null,
+                onClick = { onSave(if (text.isBlank()) null else parsed) },
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+/**
+ * Re-attribute a stored shot to another library bean (issue #16) — a fresh
+ * snapshot is frozen from the chosen bean; "No bean" clears the attribution.
+ * Marked internal: the phone detail reuses it.
+ */
+@Composable
+internal fun ShotBeanDialog(
+    choices: List<Pair<String, String>>,
+    currentBeanId: String?,
+    onSelect: (String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Change bean") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()).heightIn(max = 400.dp),
+            ) {
+                (choices + (null to "No bean")).forEach { (id, label) ->
+                    val selected = id == currentBeanId
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(id) }
+                            .padding(vertical = 12.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        PhIcon(
+                            if (id == null) "prohibit" else "coffee-bean",
+                            sizeDp = 16,
+                            tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (selected) PhIcon("check", sizeDp = 15, tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}

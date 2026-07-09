@@ -129,6 +129,10 @@ fun QuickControlsSheet(
     onFlushTemp: (Double) -> Unit,
     // Persisted QC grind click + pre-infuse transient override (issue 15).
     qcGrind: Double?,
+    /** Dial seed when no QC value is set — the active bean's saved grind
+     *  (issue #16: "tweak slightly from last time" must START at last time),
+     *  else a generic mid-range default. */
+    qcGrindSeed: Double = 4.2,
     onGrind: (Double) -> Unit,
     /** The bean half of the scope-aware Save (issue #16): write the grind
      *  dial back to the active bean; returns true when it wrote. */
@@ -144,8 +148,9 @@ fun QuickControlsSheet(
     // The current pre-infuse override state (null = not overridden) — preserved
     // when other brew steppers fire so a dose tweak doesn't drop a preinf override.
     val preinfOverride = brewParams?.preinf
-    // Grind: persisted QC click (issue 15); show the saved value, else the seed.
-    val grind = qcGrind ?: 4.2
+    // Grind: persisted QC click (issue 15); show the saved value, else the
+    // active bean's own setting (issue #16), else the generic seed.
+    val grind = qcGrind ?: qcGrindSeed
 
     var showSave by remember { mutableStateOf(false) }
     var presetName by remember { mutableStateOf("") }

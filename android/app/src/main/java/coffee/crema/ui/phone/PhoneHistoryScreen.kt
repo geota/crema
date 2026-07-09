@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.history.StoredShot
 import coffee.crema.history.beanLabel
+import coffee.crema.history.grindLabel
 import coffee.crema.history.filterAndSortShots
 import coffee.crema.history.historyStats
 import coffee.crema.ui.MainViewModel
@@ -45,6 +46,8 @@ import coffee.crema.ui.compare.PhoneSelectHint
 import coffee.crema.ui.compare.RowCheck
 import coffee.crema.ui.compare.rememberCompareSelection
 import coffee.crema.ui.screens.CanvasShotChart
+import coffee.crema.ui.screens.ShotBeanDialog
+import coffee.crema.ui.screens.ShotGrindDialog
 import coffee.crema.ui.screens.EnlargeableChart
 import coffee.crema.ui.screens.historySortKeys
 import coffee.crema.ui.theme.CremaTheme
@@ -414,7 +417,8 @@ private fun PhoneShotRow(
                 )
             }
             Text(
-                shot.beanLabel ?: "—",
+                // Bean + the grind it was pulled at (issue #16).
+                listOfNotNull(shot.beanLabel, shot.grindLabel).joinToString(" \u00b7 ").ifBlank { "\u2014" },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -467,6 +471,8 @@ private fun PhoneShotDetail(
     val tel = CremaTheme.telemetry
     var menu by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var editGrind by remember(shot.id) { mutableStateOf(false) }
+    var changeBean by remember(shot.id) { mutableStateOf(false) }
     var rating by remember(shot.id) { mutableStateOf(shot.rating ?: 0) }
     var notes by remember(shot.id) { mutableStateOf(shot.notes ?: "") }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -477,11 +483,8 @@ private fun PhoneShotDetail(
                 title = shot.profileName ?: "Shot",
                 subtitle = buildList {
                     shot.beanLabel?.let { add(it) }
-                    // Grind used for THIS shot (issue #16).
-                    (
-                        shot.grindSetting?.let { g -> "Grind " + (if (g % 1f == 0f) fmt("%.0f", g) else fmt("%.1f", g)) }
-                            ?: shot.bean?.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" }
-                    )?.let { add(it) }
+                    // Grind used for THIS shot (issue #16) — shared derivation.
+                    shot.grindLabel?.let { add(it) }
                     add(
                         remember(shot.completedAtMs) {
                             java.text.SimpleDateFormat("MMM d · HH:mm", java.util.Locale.getDefault())
@@ -645,6 +648,11 @@ private fun PhoneShotDetail(
                     })
                 }
                 add(SheetItem(divider = true))
+                // Post-hoc log fix-ups (issue #16): dial-in spans shots, and
+                // the wrong bean is sometimes active at pull time.
+                add(SheetItem("pencil-simple", "Edit grind") { editGrind = true })
+                add(SheetItem("coffee-bean", "Change bean") { changeBean = true })
+                add(SheetItem(divider = true))
                 add(SheetItem("trash", "Delete shot", danger = true) { confirmDelete = true })
             },
             onDismiss = { menu = false },
@@ -660,6 +668,30 @@ private fun PhoneShotDetail(
             danger = true,
             onConfirm = { vm.deleteShot(shot.id); confirmDelete = false; onDeleted() },
             onDismiss = { confirmDelete = false },
+        )
+    }
+
+    // Shared with the tablet detail (screens.ShotGrindDialog / ShotBeanDialog).
+    if (editGrind) {
+        ShotGrindDialog(
+            initial = shot.grindSetting?.let { g -> if (g % 1f == 0f) fmt("%.0f", g) else fmt("%.1f", g) }
+                ?: shot.bean?.grinderSetting.orEmpty(),
+            onSave = { vm.setShotGrind(shot.id, it); editGrind = false },
+            onDismiss = { editGrind = false },
+        )
+    }
+    if (changeBean) {
+        val ui by vm.ui.collectAsStateWithLifecycle()
+        ShotBeanDialog(
+            choices = remember(ui.beans, ui.roasters) {
+                ui.beans.map { b ->
+                    val roaster = ui.roasters.firstOrNull { it.id == b.roasterId }?.name
+                    b.id to listOfNotNull(roaster, b.name).joinToString(" \u00b7 ")
+                }
+            },
+            currentBeanId = shot.bean?.beanId,
+            onSelect = { vm.setShotBean(shot.id, it); changeBean = false },
+            onDismiss = { changeBean = false },
         )
     }
 }

@@ -107,6 +107,23 @@ data class StoredShot(
 )
 
 /**
+ * The grind THIS shot was pulled at, as a raw setting string (issue #16): the
+ * recorded QC-dial value (trailing .0 trimmed), else the bean snapshot's
+ * reference setting; null when neither. ONE precedence shared by the history
+ * rows/detail ([grindLabel]) and the Visualizer wire (upload + PATCH) — what
+ * the app displays is exactly what syncs.
+ */
+val StoredShot.effectiveGrindSetting: String?
+    get() = grindSetting?.let { g ->
+        if (g % 1f == 0f) String.format(java.util.Locale.US, "%.0f", g)
+        else String.format(java.util.Locale.US, "%.1f", g)
+    } ?: bean?.grinderSetting?.takeIf { it.isNotBlank() }
+
+/** "Grind N" display form of [effectiveGrindSetting]. */
+val StoredShot.grindLabel: String?
+    get() = effectiveGrindSetting?.let { "Grind $it" }
+
+/**
  * The flat "Roaster · Name" label for a shot's bean, derived from the structured
  * [StoredShot.bean] snapshot (the canonical model) rather than a stored string —
  * the History UX line and the wire's `metadata.beans`. Mirrors the web

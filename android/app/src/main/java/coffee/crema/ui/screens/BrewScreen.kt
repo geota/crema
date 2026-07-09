@@ -338,6 +338,10 @@ fun BrewScreen(
                     onFlushTime = { vm.setQcFlushTime(it.toFloat()) },
                     onFlushTemp = { vm.setQcFlushTemp(it.toFloat()) },
                     qcGrind = ui.qcGrind?.toDouble(),
+                    qcGrindSeed = remember(ui.activeBeanId, ui.beans) {
+                        ui.beans.firstOrNull { it.id == ui.activeBeanId }
+                            ?.grinderSetting?.trim()?.replace(',', '.')?.toDoubleOrNull()
+                    } ?: 4.2,
                     onGrind = { vm.setQcGrind(it.toFloat()) },
                     onSaveGrindToBean = vm::saveQuickGrindToBean,
                     onToggleChannel = vm::toggleChartChannel,

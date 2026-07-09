@@ -6,6 +6,7 @@ import coffee.crema.core.signatureForShot
 import coffee.crema.core.visualizerShotPatchJson
 import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.history.StoredShot
+import coffee.crema.history.effectiveGrindSetting
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -381,7 +382,10 @@ class VisualizerSync(
             beanType = shot.bean?.name,
             roastDate = shot.bean?.roastedOn,
             roastLevel = shot.bean?.roastLevel?.toDouble(),
-            grinderSetting = shot.bean?.grinderSetting,
+            // The shot's own recorded/edited grind wins over the bean's
+            // reference setting — the same precedence History displays
+            // (issue #16: a grind edit must reach the uploaded copy).
+            grinderSetting = shot.effectiveGrindSetting,
         )
         val body = runCatching {
             json.decodeFromString(

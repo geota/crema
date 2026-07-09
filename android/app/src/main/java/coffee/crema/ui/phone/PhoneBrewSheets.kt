@@ -66,7 +66,13 @@ fun PhoneQuickSheet(
     // Grind: the persisted QC dial (issue 15), shared with the tablet — the
     // old local stub never reached the VM, so the dial reset every open and
     // was never recorded onto shots.
-    val grind = (ui.qcGrind ?: 4.2f).toDouble()
+    // Seed from the active bean's saved grind when the dial is untouched
+    // (issue #16) — matches the tablet sheet's qcGrindSeed.
+    val grindSeed = remember(ui.activeBeanId, ui.beans) {
+        ui.beans.firstOrNull { it.id == ui.activeBeanId }
+            ?.grinderSetting?.trim()?.replace(',', '.')?.toFloatOrNull()
+    } ?: 4.2f
+    val grind = (ui.qcGrind ?: grindSeed).toDouble()
     var yieldRatioMode by remember { mutableStateOf(YieldRatioMode.Yield) }
     var piFlushMode by remember { mutableStateOf(PiFlushMode.Preinf) }
     var preinf by remember { mutableStateOf(8.0) }

@@ -1,6 +1,7 @@
 package coffee.crema.visualizer
 
 import coffee.crema.history.StoredShot
+import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.history.beanLabel
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -55,10 +56,17 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
                 put("dose", shot.doseG)
                 put("yieldOut", shot.yieldG)
                 put("beans", shot.beanLabel)
-                // The dial used for this shot. Nulled on upload (Android doesn't push
-                // it); preserved for a backup so it round-trips (`put(k, String?)`
-                // emits JsonNull for null).
-                if (forBackup) put("grinderSetting", shot.grindSetting?.toString()) else put("grinderSetting", JsonNull)
+                // Backup keeps the RAW per-shot dial only (materialising the bean
+                // fallback would turn it into a per-shot value on restore); the
+                // upload sends the effective grind — recorded/edited value, else
+                // the bean's reference — the exact string History displays, so
+                // the v2 export emits the grinder block Visualizer shows
+                // (issue #16: grind edits must reach the uploaded copy).
+                if (forBackup) {
+                    put("grinderSetting", shot.grindSetting?.toString())
+                } else {
+                    put("grinderSetting", shot.effectiveGrindSetting)
+                }
                 put("notes", shot.notes)
                 put("rating", shot.rating ?: 0)
                 put("tds", JsonNull)

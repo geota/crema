@@ -1715,6 +1715,52 @@ class LibraryController(
         schedulePatchEdited(id)
     }
 
+    /**
+     * Set (or with null, clear) the grind recorded on a stored shot (issue
+     * #16 follow-up: dialing-in spans shots, so the log needs fixing up after
+     * the fact). Persisted; mirrors to the uploaded copy like [updateShot].
+     */
+    fun setShotGrind(id: String, grind: Float?) {
+        updateUi { st ->
+            st.copy(history = st.history.map { if (it.id == id) it.copy(grindSetting = grind) else it })
+        }
+        val snapshot = uiState().history
+        scope.launch { historyStore.save(snapshot) }
+        schedulePatchEdited(id)
+    }
+
+    /**
+     * Re-attribute a stored shot to another library bean — or with null, to no
+     * bean (issue #16 follow-up: the wrong bean was active when the shot was
+     * pulled). Freezes a fresh snapshot from the CURRENT library bean, the
+     * same shape capture builds, so the display label, Visualizer wire, and
+     * bean-search all follow. The recorded grind is untouched — it describes
+     * the physical pull, not the attribution.
+     */
+    fun setShotBean(id: String, beanId: String?) {
+        val s = uiState()
+        val bean = beanId?.let { bid -> s.beans.firstOrNull { it.id == bid } }
+        val roasterName = bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
+        val beanSnapshot = bean?.let { b ->
+            ShotBean(
+                beanId = b.id,
+                name = b.name,
+                roasterName = roasterName,
+                roastedOn = b.roastedOn,
+                roastLevel = b.roastLevel,
+                tags = b.tags,
+                grinderSetting = b.grinderSetting?.takeIf { it.isNotBlank() },
+                grinder = b.grinder?.takeIf { it.isNotBlank() },
+            )
+        }
+        updateUi { st ->
+            st.copy(history = st.history.map { if (it.id == id) it.copy(bean = beanSnapshot) else it })
+        }
+        val snapshot = uiState().history
+        scope.launch { historyStore.save(snapshot) }
+        schedulePatchEdited(id)
+    }
+
     /** Debounced edit→Visualizer mirror: the notes field fires per keystroke
      *  and star taps come in bursts — one PATCH goes out 1.5 s after the last
      *  edit, with the shot's then-current state. */

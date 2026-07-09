@@ -1290,6 +1290,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Set (or clear) a shot's per-upload Visualizer privacy override. */
     fun setShotPrivacy(id: String, privacy: String?) = library.setShotPrivacy(id, privacy)
 
+    /** Set (or clear) the grind recorded on a logged shot (issue #16). */
+    fun setShotGrind(id: String, grind: Float?) = library.setShotGrind(id, grind)
+
+    /** Re-attribute a logged shot to another bean, or none (issue #16). */
+    fun setShotBean(id: String, beanId: String?) = library.setShotBean(id, beanId)
+
     /** Apply a Quick-Controls brew override (dose/yield/brew-temp). Transient —
      *  not saved to the profile; baked into the next shot's upload by [startShot]. */
     fun quickAdjustBrew(dose: Double, yieldOut: Double, brewTemp: Double, preinf: Double? = null) {
