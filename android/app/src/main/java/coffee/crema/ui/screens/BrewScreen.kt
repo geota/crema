@@ -1304,11 +1304,13 @@ private fun LimitRowView(row: LimitRow) {
             }
             // Web MaxStopConditionsCard: a null live (no scale weight yet) renders "—",
             // never a fake "0.0" — the value is unknown, not zero. Both parts are
-            // pre-formatted in the user's unit (issue 44).
-            Text(
-                "${row.liveStr} / ${row.targetStr}${row.unit}",
-                style = CremaTheme.readout.readoutSm.copy(fontSize = 15.sp, lineHeight = 19.sp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // pre-formatted in the user's unit (issue 44). The unit gets the
+            // shared value+unit treatment (faint, smaller, baseline, spaced)
+            // instead of riding the target at full strength.
+            CremaValueUnit(
+                "${row.liveStr} / ${row.targetStr}", row.unit,
+                valueSize = 15.sp, unitSize = 10.sp,
+                valueColor = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         StatBar(fraction = frac, color = row.color)

@@ -271,7 +271,9 @@ summary:focus-visible,
 .crema-stopcond-label { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-sans); font-size: 12px; color: rgba(var(--tint-rgb), 0.7); }
 .crema-stopcond-label > :is(i, svg) { font-size: 14px; }
 .crema-stopcond-val { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 14px; color: rgba(var(--tint-rgb), 0.55); }
-.crema-stopcond-val em { font-style: normal; font-size: 10px; opacity: 0.7; margin-left: 1px; }
+/* The shared value+unit treatment (LastShotCard `.ls-v em`): faint, smaller,
+   baseline-aligned, with breathing room off the target value. */
+.crema-stopcond-val em { font-style: normal; font-size: 10px; color: rgba(var(--tint-rgb), 0.5); margin-left: 2px; }
 .crema-stopcond-live { color: var(--copper-400); }
 .crema-stopcond-bar { margin-top: 6px; height: 5px; border-radius: 999px; background: rgba(var(--tint-rgb), 0.08); overflow: hidden; }
 .crema-stopcond-bar > span { display: block; height: 100%; border-radius: 999px; transition: width 500ms var(--ease, cubic-bezier(.32,.72,0,1)); }
