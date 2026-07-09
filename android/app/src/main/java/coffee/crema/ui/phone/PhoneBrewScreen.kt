@@ -41,7 +41,6 @@ import coffee.crema.ui.formatTemp
 import coffee.crema.ui.formatWeight
 import coffee.crema.ui.freshnessColor
 import coffee.crema.ui.stopIcon
-import coffee.crema.ui.stopLabel
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.MachineState
@@ -946,9 +945,10 @@ private fun RestingBody(
                         ReadyParam("PEAK", if (last.peakPressure != null) peak.value else "—", if (last.peakPressure != null) peak.unit else "", Modifier.weight(1f))
                         // What ended the shot — moved here from the fired
                         // highlights on the hero timer / dual chips (user
-                        // direction: historical info on the historical card).
-                        // Icon + word, the pairing the stop-condition surfaces use.
-                        ReadyParam("STOPPED", stopLabel(ui.lastStopReason), "", Modifier.weight(1f), icon = stopIcon(ui.lastStopReason))
+                        // direction). Icon only — the SAME icon the condition
+                        // wears on the stop surfaces; a dash when unclassified.
+                        val si = stopIcon(ui.lastStopReason)
+                        ReadyParam("STOPPED", if (si == null) "\u2014" else "", "", Modifier.weight(1f), icon = si)
                     }
                     // Tappable stars — inline quick-rate; persists to the stored shot. Its
                     // own clickable, so a star tap doesn't also open History.
@@ -1028,7 +1028,8 @@ private fun ReadyParam(
         )
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(1.dp)) {
             if (icon != null) {
-                PhIcon(icon, sizeDp = 13, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Value-sized: icon-only stats read at the numeric weight.
+                PhIcon(icon, sizeDp = 15, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(3.dp))
             }
             Text(

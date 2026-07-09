@@ -55,8 +55,9 @@
 					? 'Time'
 					: '\u2014'
 	);
-	/** Icon + word, the same pairing the stop-conditions rows use — the icon
-	 *  ties the attribution back to the row that fired (Android `stopIcon`). */
+	/** Icon ONLY in the cell (user direction) — the same icon the condition
+	 *  wears on the stop-conditions rows (Android `stopIcon`); the word
+	 *  survives as the aria-label. */
 	const stoppedIcon = $derived(
 		stopReason === StopReason.Weight
 			? 'scales'
@@ -93,8 +94,7 @@
 		</div>
 		<div class="ls-stat">
 			<span class="ls-v ls-stop">
-				{#if stoppedIcon}<Icon cls={'ph ph-' + stoppedIcon} aria-hidden="true" />{/if}
-				{stopped}</span>
+				{#if stoppedIcon}<Icon cls={'ph ph-' + stoppedIcon} aria-label={stopped} />{:else}{stopped}{/if}</span>
 			<span class="ls-l">Stopped</span>
 		</div>
 	</div>
@@ -131,7 +131,8 @@
 		gap: 4px;
 	}
 	.ls-stop :global(.ph) {
-		font-size: 13px;
+		/* Value-sized: the icon stands alone in the cell. */
+		font-size: 15px;
 		color: rgba(var(--tint-rgb), 0.6);
 	}
 	.ls-v em {

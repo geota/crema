@@ -66,7 +66,6 @@ import coffee.crema.ui.convertVolume
 import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.stopIcon
-import coffee.crema.ui.stopLabel
 import coffee.crema.ui.formatTemp
 import coffee.crema.ui.formatTempCompact
 import coffee.crema.ui.formatVolume
@@ -1360,9 +1359,10 @@ private fun LastShotCard(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 LastShotStat("Peak", peakP.value, last.peakPressure?.let { peakP.unit }, Modifier.weight(1f))
                 LastShotStat("Peak temp", peakT.value, last.peakTemp?.let { peakT.unit }, Modifier.weight(1f))
-                // Icon + word, the same pairing the stop-conditions rows use —
-                // the icon ties the attribution back to the row that fired.
-                LastShotStat("Stopped", stopLabel(stopReason), null, Modifier.weight(1f), icon = stopIcon(stopReason))
+                // Icon only (user direction) — the SAME icon the condition
+                // wears on the stop-conditions rows; a dash when unclassified.
+                val si = stopIcon(stopReason)
+                LastShotStat("Stopped", if (si == null) "\u2014" else "", null, Modifier.weight(1f), icon = si)
             }
         }
     }
@@ -1385,8 +1385,10 @@ private fun LastShotStat(
             maxLines = 1,
         )
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (icon != null) PhIcon(icon, sizeDp = 14, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            CremaValueUnit(value, unit, valueSize = 15.sp, unitSize = 10.sp)
+            // Value-sized so an icon-only stat (Stopped) reads at the same
+            // weight as its numeric siblings.
+            if (icon != null) PhIcon(icon, sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (value.isNotEmpty()) CremaValueUnit(value, unit, valueSize = 15.sp, unitSize = 10.sp)
         }
     }
 }

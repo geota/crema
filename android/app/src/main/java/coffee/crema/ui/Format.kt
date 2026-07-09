@@ -154,21 +154,12 @@ fun freshnessColor(frozen: Boolean, level: Int?, days: Int?): Color {
     }
 }
 
-/** Human label for what ended the last shot — the "Stopped" stat on the
- *  Last-shot cards (all shells; the attribution used to be a gold ring on the
- *  live stop-condition surfaces). Weight = the SAW yield target, Volume = the
- *  SAV cap, MaxTime = the global time cap; null (manual stop / unclassified)
- *  renders a quiet dash. */
-fun stopLabel(reason: StopReason?): String = when (reason) {
-    StopReason.Weight -> "Yield"
-    StopReason.Volume -> "Volume"
-    StopReason.MaxTime -> "Time"
-    null -> "\u2014"
-}
-
-/** Phosphor icon paired with [stopLabel] — the SAME icon each condition wears
- *  on the stop-conditions rows, so the attribution reads as a visual
- *  tie-back. Null when there is nothing to attribute. */
+/** Phosphor icon for what ended the last shot — the "Stopped" stat on the
+ *  Last-shot cards renders it ALONE (user direction), so it must be the SAME
+ *  icon each condition wears on the stop-conditions rows for the tie-back to
+ *  read: scales = the SAW yield target, drop-half = the SAV cap, timer = the
+ *  global time cap. Null (manual stop / unclassified) → the card shows a
+ *  quiet dash instead. */
 fun stopIcon(reason: StopReason?): String? = when (reason) {
     StopReason.Weight -> "scales"
     StopReason.Volume -> "drop-half"
