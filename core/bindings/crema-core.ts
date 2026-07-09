@@ -454,6 +454,36 @@ export type Event =
 	/** Why the shot was stopped. */
 	reason: StopReason;
 }}
+	/**
+	 * The auto-stop watcher (re)composed its targets — what will end this
+	 * shot automatically. Emitted when arming and again whenever a mid-shot
+	 * refresh changes the picture (a scale registering late, a toggle), so
+	 * the shells' event logs show exactly what stop-at-weight is armed
+	 * with. Issue #15's failures were silent precisely because arming state
+	 * was invisible.
+	 */
+	| { type: "StopTargetsArmed", content: {
+	/** SAW target, grams; `None` = the weight leg is not armed. */
+	weight?: number;
+	/**
+	 * SAV target, ml; `None` = the volume leg is not armed
+	 * (demoted behind a scale, or unset).
+	 */
+	volume?: number;
+	/** Max shot time, seconds; `None` = no time cap. */
+	max_time?: number;
+}}
+	/**
+	 * A commanded stop has not been honoured — the machine is still in the
+	 * shot — so the stop write is being re-commanded (issue #15: one lost
+	 * or stalled BLE write must not let the shot pour past its target).
+	 */
+	| { type: "StopRetried", content: {
+	/** The stop reason being enforced. */
+	reason: StopReason;
+	/** 1-based retry attempt. */
+	attempt: number;
+}}
 	/** The espresso shot finished. */
 	| { type: "ShotCompleted", content: {
 	/** Total shot duration, milliseconds. */

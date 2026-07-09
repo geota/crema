@@ -222,6 +222,14 @@ impl AutoStop {
         self.targets = targets;
     }
 
+    /// The currently-armed targets — what will end the shot. Read by the
+    /// orchestrator's arming-visibility event (issue #15: silent arming
+    /// failures need to be loud in the shells' event logs).
+    #[must_use]
+    pub fn targets(&self) -> StopTargets {
+        self.targets
+    }
+
     /// Whether enough time has passed since the start for auto-stop to act.
     fn is_armed(&self, now: Duration) -> bool {
         now.saturating_sub(self.started) >= self.config.arming_delay

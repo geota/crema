@@ -413,6 +413,15 @@ pub struct CremaCore {
     /// SAW only fires if a scale is connected and an effective target
     /// weight resolves > 0 (see [`effective_target_weight`](Self::effective_target_weight)).
     stop_on_weight: bool,
+    /// A stop we commanded that the machine has not honoured yet — the
+    /// re-emit enforcer's state (issue #15: one lost or stalled BLE write
+    /// must not let the shot pour past its target; the stop is re-commanded
+    /// until the shot actually ends).
+    pending_stop: Option<PendingStop>,
+    /// The last [`Event::StopTargetsArmed`] payload pushed, so the reporter
+    /// only emits on change (arming, a late scale, a toggle) — compared on
+    /// every scale reading / telemetry sample, both cheap `Copy` structs.
+    reported_stop_targets: Option<StopTargets>,
     /// Per-shot SAW kill switch. Latched flag, default `false`; the shell
     /// pushes `true` when the user toggles the QC yield dot OFF, back to
     /// `false` when it turns ON. Independent of
@@ -671,6 +680,8 @@ impl CremaCore {
             auto_tare: true,
             tare_gate: None,
             stop_on_weight: true,
+            pending_stop: None,
+            reported_stop_targets: None,
             weight_target_disabled: false,
             volume_stop_with_scale: false,
             profile_target_weight: None,
@@ -2557,7 +2568,9 @@ impl CremaCore {
             .auto_stop
             .as_mut()
             .and_then(|stop| stop.on_sample(&sample, now, dispensed_ml));
-        Self::push_stop(reason, out);
+        self.push_stop(reason, now, out);
+        self.enforce_pending_stop(now, out);
+        self.report_stop_targets(out);
         // `Event::Telemetry.elapsed` is `u32` milliseconds — what the FFI
         // surface carries — so convert the `Duration` once at this boundary.
         // Elapsed runs from FLOW start (pump on), not shot start (which begins
@@ -2761,7 +2774,9 @@ impl CremaCore {
             .auto_stop
             .as_mut()
             .and_then(|stop| stop.on_weight(net_weight, now));
-        Self::push_stop(reason, out);
+        self.push_stop(reason, now, out);
+        self.enforce_pending_stop(now, out);
+        self.report_stop_targets(out);
         // Hot-water-by-weight: stop the pour at the user's volume (1 ml ≈
         // 1 g), projected one sensor-lag beat ahead so it lands ON target
         // rather than past it (reaprime HotWaterSequencer's projection).
@@ -2774,7 +2789,7 @@ impl CremaCore {
                 .map_or(0.38, |s| s.sensor_lag().as_secs_f32());
             if estimate.weight + estimate.flow.max(0.0) * lag_s >= target {
                 self.hot_water_stop_target_g = None;
-                Self::push_stop(Some(StopReason::Weight), out);
+                self.push_stop(Some(StopReason::Weight), now, out);
             }
         }
     }
@@ -3354,6 +3369,11 @@ impl CremaCore {
             ShotEvent::Completed(record) => {
                 self.shot_started = None;
                 self.flow_started = None;
+                // The stop was honoured (or the shot ended some other way) —
+                // stand the enforcer down and reset the arming reporter so
+                // the NEXT shot re-announces its targets.
+                self.pending_stop = None;
+                self.reported_stop_targets = None;
                 // End-of-shot latch reset (review #26): the untared-cup
                 // guard's virtual zero is a PER-SHOT correction — left
                 // latched it kept netting every later reading (hot-water
@@ -3556,17 +3576,105 @@ impl CremaCore {
     }
 
     /// Push a [`StopReason`], when one occurred, as a [`Event::StopTriggered`]
-    /// plus the [`Command`] that actually stops the machine.
-    fn push_stop(reason: Option<StopReason>, out: &mut CoreOutput) {
+    /// plus the [`Command`] that actually stops the machine — and arm the
+    /// re-emit enforcer: from here the stop is OWED, and
+    /// [`enforce_pending_stop`](Self::enforce_pending_stop) re-commands it
+    /// until the shot actually ends (issue #15).
+    fn push_stop(&mut self, reason: Option<StopReason>, now: Duration, out: &mut CoreOutput) {
         if let Some(reason) = reason {
             out.events.push(Event::StopTriggered { reason });
             out.commands.push(Command::WriteCharacteristic {
                 target: WriteTarget::De1RequestedState,
                 data: vec![requested_state(MachineState::Idle)],
             });
+            if self.pending_stop.is_none() {
+                self.pending_stop = Some(PendingStop {
+                    reason,
+                    last_push: now,
+                    attempts: 0,
+                });
+            }
+        }
+    }
+
+    /// The stop enforcer (issue #15): while a commanded stop is pending and
+    /// the shot is still running, re-push the Idle write every
+    /// [`STOP_REENFORCE_AFTER`] (up to [`STOP_REENFORCE_MAX`] times). Runs on
+    /// every scale reading and telemetry sample — the streams that are, by
+    /// definition, still flowing if the machine ignored us. A lost write, a
+    /// stalled GATT queue, or a mid-write drop all self-heal on the next
+    /// beat; the retries are visible as [`Event::StopRetried`] so a field
+    /// report shows exactly how hard the app fought.
+    fn enforce_pending_stop(&mut self, now: Duration, out: &mut CoreOutput) {
+        if self.pending_stop.is_none() {
+            return;
+        }
+        // The shot ended (state machine cleared it) — the stop was honoured.
+        if self.shot_started.is_none() {
+            self.pending_stop = None;
+            return;
+        }
+        let Some(pending) = self.pending_stop.as_mut() else {
+            return;
+        };
+        if now.saturating_sub(pending.last_push) < STOP_REENFORCE_AFTER {
+            return;
+        }
+        if pending.attempts >= STOP_REENFORCE_MAX {
+            return;
+        }
+        pending.attempts += 1;
+        pending.last_push = now;
+        let (reason, attempt) = (pending.reason, pending.attempts);
+        out.events.push(Event::StopRetried { reason, attempt });
+        out.commands.push(Command::WriteCharacteristic {
+            target: WriteTarget::De1RequestedState,
+            data: vec![requested_state(MachineState::Idle)],
+        });
+    }
+
+    /// Emit [`Event::StopTargetsArmed`] whenever the armed picture changed —
+    /// called from the scale-reading and telemetry paths (cheap `Copy`
+    /// compare), so arming, a late-registering scale, and every stop toggle
+    /// all surface in the shells' event logs within a beat (issue #15:
+    /// arming failures used to be silent).
+    fn report_stop_targets(&mut self, out: &mut CoreOutput) {
+        let current = self.auto_stop.as_ref().map(AutoStop::targets);
+        if current == self.reported_stop_targets {
+            return;
+        }
+        self.reported_stop_targets = current;
+        if let Some(t) = current {
+            out.events.push(Event::StopTargetsArmed {
+                weight: t.weight,
+                volume: t.volume,
+                max_time: t.max_time,
+            });
         }
     }
 }
+
+/// A commanded-but-unhonoured stop being enforced (issue #15).
+#[derive(Debug)]
+struct PendingStop {
+    /// The stop reason being enforced (re-logged on each retry).
+    reason: StopReason,
+    /// When the stop command was last pushed.
+    last_push: Duration,
+    /// Retries pushed so far (capped at [`STOP_REENFORCE_MAX`]).
+    attempts: u32,
+}
+
+/// Re-command an unhonoured stop after this long. One second is ~5 telemetry
+/// beats — late enough not to double-fire on a healthy link (the DE1 leaves
+/// the shot within a beat of the write), early enough that a single lost
+/// write costs ~2 g at typical flow.
+const STOP_REENFORCE_AFTER: Duration = Duration::from_secs(1);
+
+/// Give up re-commanding after this many retries (~30 s of enforcement —
+/// past that the pour has physically ended or the link is gone and the
+/// reconnect supervisor owns the problem).
+const STOP_REENFORCE_MAX: u32 = 30;
 
 /// Internal: build a `WriteToMMR` [`CoreOutput`] for one register.
 ///
@@ -5189,6 +5297,95 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn an_unhonoured_stop_is_recommanded_until_the_shot_ends() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        // Cross the target — the first stop command goes out and the
+        // enforcer arms.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
+        assert!(out.events.contains(&Event::StopTriggered {
+            reason: StopReason::Weight,
+        }));
+        // The machine "ignores" it (a lost BLE write): the shot keeps
+        // flowing. Inside the re-enforce window, no retry yet — a healthy
+        // link stops within a beat and must not be double-commanded.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_600), 6_500);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::StopRetried { .. }))
+        );
+        assert!(!out.commands.iter().any(|c| matches!(
+            c,
+            Command::WriteCharacteristic {
+                target: WriteTarget::De1RequestedState,
+                ..
+            }
+        )));
+        // Past the window the stop is re-commanded, with the retry visible.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_700), 7_100);
+        assert!(out.events.iter().any(|e| matches!(
+            e,
+            Event::StopRetried {
+                reason: StopReason::Weight,
+                attempt: 1
+            }
+        )));
+        assert!(out.commands.iter().any(|c| matches!(
+            c,
+            Command::WriteCharacteristic {
+                target: WriteTarget::De1RequestedState,
+                ..
+            }
+        )));
+        // The machine finally honours it (Idle → the shot completes) — the
+        // enforcer stands down; later readings re-command nothing.
+        core.on_notification(Source::De1State, &[2, 0], 8_000);
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_800), 9_500);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::StopRetried { .. }))
+        );
+        assert!(!out.commands.iter().any(|c| matches!(
+            c,
+            Command::WriteCharacteristic {
+                target: WriteTarget::De1RequestedState,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn arming_emits_the_stop_targets_event() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        // The first reading that clears the tare/settle gates reports what
+        // SAW is armed with — the visibility issue #15's silent failures
+        // lacked. (Earlier readings are consumed by the auto-tare gate and
+        // never reach the reporter.)
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 6_000);
+        assert!(out.events.iter().any(|e| matches!(
+            e,
+            Event::StopTargetsArmed {
+                weight: Some(w),
+                ..
+            } if (*w - 30.0).abs() < f32::EPSILON
+        )));
+        // Unchanged targets don't re-announce on the next beat.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(2_100), 6_200);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::StopTargetsArmed { .. }))
+        );
     }
 
     #[test]

@@ -17,6 +17,7 @@ import coffee.crema.core.ScaleCapabilities
 import coffee.crema.core.Bean
 import coffee.crema.core.Roaster
 import coffee.crema.core.MaintenanceState
+import coffee.crema.core.WriteTarget
 import coffee.crema.drive.DriveStore
 import coffee.crema.drive.DriveSync
 import coffee.crema.core.MaintenanceReadout
@@ -1019,7 +1020,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // presence timer against our own idle decision (reaprime's
         // PresenceController model — the heartbeat keeps the machine awake
         // only while the user is actually present).
-        keepAliveTick = { if (_ui.value.suppressDe1Sleep && !_ui.value.saverVisible) pokeUserPresent() },
+        // Suppressed mid-shot (issue #15): the machine can't sleep while it's
+        // pouring, and the poke's MMR write would contend with the SAW stop
+        // write on the serial GATT queue — the one write that must not wait.
+        keepAliveTick = {
+            if (_ui.value.suppressDe1Sleep && !_ui.value.saverVisible && !_ui.value.shotInProgress) pokeUserPresent()
+        },
     )
 
     init {
@@ -3171,15 +3177,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val bytes = command.content.data
                     .map { it.toByte() }
                     .toByteArray()
+                // A machine-state write during a shot IS the stop (issue #15) —
+                // time it, so a field log shows exactly how long the stop took
+                // to reach the machine (queue contention, retries, a wedged
+                // link all show up here as milliseconds).
+                val stopWrite = command.content.target == WriteTarget.De1RequestedState &&
+                    _ui.value.shotInProgress
+                val queuedAt = if (stopWrite) SystemClock.elapsedRealtime() else 0L
                 // Same guard: a failed machine write (e.g. the keep-alive poke as
                 // the DE1 drops) must not become an uncaught crash.
                 viewModelScope.launch {
                     try {
                         ble.writeCharacteristic(command.content.target, bytes)
+                        if (stopWrite) {
+                            appendLog("Stop write delivered in ${SystemClock.elapsedRealtime() - queuedAt} ms")
+                        }
                     } catch (ce: kotlinx.coroutines.CancellationException) {
                         throw ce
                     } catch (e: Exception) {
-                        appendLog("DE1 write failed (${command.content.target}): ${e.message}")
+                        appendLog(
+                            if (stopWrite) {
+                                "STOP WRITE FAILED after ${SystemClock.elapsedRealtime() - queuedAt} ms: ${e.message}"
+                            } else {
+                                "DE1 write failed (${command.content.target}): ${e.message}"
+                            },
+                        )
                     }
                 }
             }
@@ -3383,6 +3405,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val w = fmt("%.0f", event.content.weight_g)
                 appendLog("SAW suppressed — untared cup ($w g)")
                 notifyUser("Stop-at-weight off for this shot — the scale wasn\u2019t tared ($w g on it)")
+            }
+            is Event.StopTargetsArmed -> {
+                // The SAW-visibility line (issue #15): what will stop this
+                // shot, straight from the core's armed targets — a silent
+                // arming failure now reads as "weight —" in the log.
+                val c = event.content
+                appendLog(
+                    "Stop targets armed: weight " + (c.weight?.let { fmt("%.1f g", it) } ?: "\u2014") +
+                        " · volume " + (c.volume?.let { fmt("%.0f ml", it) } ?: "\u2014") +
+                        " · max " + (c.max_time?.let { fmt("%.0f s", it) } ?: "\u2014"),
+                )
+            }
+            is Event.StopRetried -> {
+                // The machine hasn't honoured a commanded stop — the core is
+                // re-commanding it (issue #15). Loud on purpose.
+                appendLog("Stop NOT honoured — re-commanding (attempt ${event.content.attempt}, ${event.content.reason.string})")
             }
             is Event.StopTriggered -> {
                 appendLog("Auto-stop: ${event.content.reason.string}")

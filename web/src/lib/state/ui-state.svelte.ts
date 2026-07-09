@@ -823,6 +823,31 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					`Water level: ${Math.round(event.content.level)}mm`
 				)
 			};
+		case 'StopTargetsArmed': {
+			// The SAW-visibility line (issue #15): what will stop this shot,
+			// straight from the core's armed targets — a silent arming
+			// failure now reads as "weight —" in the log.
+			const c = event.content;
+			const part = (v: number | null | undefined, unit: string) =>
+				v != null ? `${v.toFixed(unit === 'g' ? 1 : 0)} ${unit}` : '—';
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Stop targets armed: weight ${part(c.weight, 'g')} · volume ${part(c.volume, 'ml')} · max ${part(c.max_time, 's')}`
+				)
+			};
+		}
+		case 'StopRetried':
+			// The machine hasn't honoured a commanded stop — the core is
+			// re-commanding it (issue #15). Loud on purpose.
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Stop NOT honoured — re-commanding (attempt ${event.content.attempt}, ${event.content.reason})`
+				)
+			};
 		case 'StopTriggered':
 			// Attribution lives on the stop-conditions card (gold ring on the
 			// fired row), not a toast. Espresso only: a hot-water weight stop

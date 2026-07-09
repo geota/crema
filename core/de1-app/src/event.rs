@@ -202,6 +202,30 @@ pub enum Event {
         /// Why the shot was stopped.
         reason: StopReason,
     },
+    /// The auto-stop watcher (re)composed its targets — what will end this
+    /// shot automatically. Emitted when arming and again whenever a mid-shot
+    /// refresh changes the picture (a scale registering late, a toggle), so
+    /// the shells' event logs show exactly what stop-at-weight is armed
+    /// with. Issue #15's failures were silent precisely because arming state
+    /// was invisible.
+    StopTargetsArmed {
+        /// SAW target, grams; `None` = the weight leg is not armed.
+        weight: Option<f32>,
+        /// SAV target, ml; `None` = the volume leg is not armed
+        /// (demoted behind a scale, or unset).
+        volume: Option<f32>,
+        /// Max shot time, seconds; `None` = no time cap.
+        max_time: Option<f32>,
+    },
+    /// A commanded stop has not been honoured — the machine is still in the
+    /// shot — so the stop write is being re-commanded (issue #15: one lost
+    /// or stalled BLE write must not let the shot pour past its target).
+    StopRetried {
+        /// The stop reason being enforced.
+        reason: StopReason,
+        /// 1-based retry attempt.
+        attempt: u32,
+    },
     /// The espresso shot finished.
     ShotCompleted {
         /// Total shot duration, milliseconds.

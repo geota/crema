@@ -390,6 +390,27 @@ data class EventStopTriggeredInner (
 	val reason: StopReason
 )
 
+/// Generated type representing the anonymous struct variant `StopTargetsArmed` of the `Event` Rust enum
+@Serializable
+data class EventStopTargetsArmedInner (
+	/// SAW target, grams; `None` = the weight leg is not armed.
+	val weight: Float? = null,
+	/// SAV target, ml; `None` = the volume leg is not armed
+	/// (demoted behind a scale, or unset).
+	val volume: Float? = null,
+	/// Max shot time, seconds; `None` = no time cap.
+	val max_time: Float? = null
+)
+
+/// Generated type representing the anonymous struct variant `StopRetried` of the `Event` Rust enum
+@Serializable
+data class EventStopRetriedInner (
+	/// The stop reason being enforced.
+	val reason: StopReason,
+	/// 1-based retry attempt.
+	val attempt: UInt
+)
+
 /// Generated type representing the anonymous struct variant `ShotCompleted` of the `Event` Rust enum
 @Serializable
 data class EventShotCompletedInner (
@@ -677,6 +698,21 @@ sealed class Event {
 	@Serializable
 	@SerialName("StopTriggered")
 	data class StopTriggered(val content: EventStopTriggeredInner): Event()
+	/// The auto-stop watcher (re)composed its targets — what will end this
+	/// shot automatically. Emitted when arming and again whenever a mid-shot
+	/// refresh changes the picture (a scale registering late, a toggle), so
+	/// the shells' event logs show exactly what stop-at-weight is armed
+	/// with. Issue #15's failures were silent precisely because arming state
+	/// was invisible.
+	@Serializable
+	@SerialName("StopTargetsArmed")
+	data class StopTargetsArmed(val content: EventStopTargetsArmedInner): Event()
+	/// A commanded stop has not been honoured — the machine is still in the
+	/// shot — so the stop write is being re-commanded (issue #15: one lost
+	/// or stalled BLE write must not let the shot pour past its target).
+	@Serializable
+	@SerialName("StopRetried")
+	data class StopRetried(val content: EventStopRetriedInner): Event()
 	/// The espresso shot finished.
 	@Serializable
 	@SerialName("ShotCompleted")
