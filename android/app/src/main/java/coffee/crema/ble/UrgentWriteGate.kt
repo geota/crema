@@ -55,6 +55,11 @@ object UrgentWriteGate {
 
     private val inFlight = ConcurrentHashMap<Job, String>()
 
+    /** The cancellation an urgent write injects into a preempted one — typed,
+     *  so the dropped write's own catch can tell "preempted by a stop" apart
+     *  from ordinary scope teardown and log it to the app's event log. */
+    class WritePreempted(reason: String) : CancellationException("preempted by $reason")
+
     /** Register [job] (a non-critical write's coroutine) as preemptible while
      *  [block] runs. No-op registration when the context has no job. */
     suspend fun <T> preemptible(job: Job?, label: String, block: suspend () -> T): T {
@@ -67,14 +72,22 @@ object UrgentWriteGate {
         }
     }
 
-    /** Cancel every registered non-critical write so the global GATT mutex
-     *  frees for the caller's urgent write. */
-    fun preempt(reason: String) {
-        if (inFlight.isEmpty()) return
+    /**
+     * Cancel every registered non-critical write so the global GATT mutex
+     * frees for the caller's urgent write. Returns the labels of what was
+     * dropped — the urgent caller surfaces them in the app event log, so a
+     * field report shows exactly which writes were sacrificed (and each
+     * dropped write's own catch logs its side too).
+     */
+    fun preempt(reason: String): List<String> {
+        if (inFlight.isEmpty()) return emptyList()
+        val dropped = mutableListOf<String>()
         inFlight.forEach { (job, label) ->
             Log.i(TAG, "Preempting in-flight $label for $reason")
-            job.cancel(CancellationException("preempted by $reason"))
+            dropped += label
+            job.cancel(WritePreempted(reason))
         }
         inFlight.clear()
+        return dropped
     }
 }

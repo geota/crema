@@ -451,6 +451,11 @@ class ScaleBleManager(
             onWriteFailure(d)
             false
         } catch (c: CancellationException) {
+            if (c is UrgentWriteGate.WritePreempted) {
+                // Dropped for a stop write, deliberately not re-queued —
+                // heartbeats/tares self-heal on their own cadence.
+                onStatus("Scale command dropped — ${c.message}")
+            }
             throw c // the caller's scope is going away — never swallow
         } catch (e: Exception) {
             Log.w(TAG, "Scale command write failed", e)
@@ -505,6 +510,11 @@ class ScaleBleManager(
         } catch (t: TimeoutCancellationException) {
             t
         } catch (c: CancellationException) {
+            if (c is UrgentWriteGate.WritePreempted) {
+                // Dropped for a stop write, deliberately not re-queued —
+                // heartbeats/tares self-heal on their own cadence.
+                onStatus("Scale command dropped — ${c.message}")
+            }
             throw c
         } catch (e: Exception) {
             e

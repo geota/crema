@@ -395,7 +395,12 @@ class De1BleManager(
         }
         try {
             if (urgent) {
-                UrgentWriteGate.preempt("an urgent DE1 $target write")
+                val dropped = UrgentWriteGate.preempt("an urgent DE1 $target write")
+                if (dropped.isNotEmpty()) {
+                    // Field-log visibility: exactly which writes the stop
+                    // sacrificed (each dropped write logs its own side too).
+                    onStatus("Urgent $target write preempted: ${dropped.joinToString(", ")}")
+                }
                 writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes)
             } else {
                 UrgentWriteGate.preemptible(coroutineContext[Job], "DE1 $target write") {
@@ -407,6 +412,12 @@ class De1BleManager(
             onWriteFailure(d)
             throw t // callers log per-write context (executeCommand's guard)
         } catch (c: CancellationException) {
+            if (c is UrgentWriteGate.WritePreempted) {
+                // Dropped, not failed: deliberately NOT re-queued (see
+                // UrgentWriteGate's header) — say so where a field report
+                // can see it.
+                onStatus("DE1 $target write dropped — ${c.message}")
+            }
             throw c // the caller's scope is going away — never swallow
         } catch (e: Exception) {
             onWriteFailure(d)
