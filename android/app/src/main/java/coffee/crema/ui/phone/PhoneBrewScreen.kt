@@ -133,11 +133,14 @@ fun PhoneBrewScreen(
                 val daysOff = activeBean?.let { daysOffRoast(it.roastedOn) }
                 ProfileStrip(
                     title = active?.name ?: "No profile loaded",
-                    // Remembered (review #37): beanLine does two list scans +
-                    // a join, and this strip recomposes at telemetry rate.
+                    // Remembered (review #37): the lines do list scans + joins,
+                    // and this strip recomposes at telemetry rate.
                     beanLine = remember(
-                        ui.activeBeanId, ui.beans, ui.roasters, ui.grinderModel, ui.mirroredBeanSummary,
+                        ui.activeBeanId, ui.beans, ui.roasters, ui.mirroredBeanSummary,
                     ) { beanLine(ui) },
+                    specLine = remember(
+                        ui.activeBeanId, ui.beans, ui.grinderModel,
+                    ) { beanSpecLine(ui) },
                     freshLabel = when {
                         activeBean == null -> null
                         frozen -> "Frozen"
@@ -269,27 +272,26 @@ fun PhoneBrewScreen(
     }
 }
 
-/** "Roaster · Bean · Grind N · Grinder" strip meta, or a quiet fallback.
- *  Freshness ("Nd off roast" / "Frozen") is NOT part of this line — it rides
- *  the strip's TOP row as the tablet/web colour pip, which keeps the grind
- *  (issue #16) inside a single un-ellipsized line at phone width. */
-private fun beanLine(ui: MainUiState): String {
+/** "Roaster · Bean" strip middle row, or a quiet fallback. Freshness rides
+ *  the TOP row as the colour pip; grind + grinder ride [beanSpecLine]. */
+internal fun beanLine(ui: MainUiState): String {
     // Mirroring a primary whose active bean isn't in our library (issue 05): show
     // the summary the primary sent so the chip isn't blank.
     val bean = ui.beans.firstOrNull { it.id == ui.activeBeanId }
         ?: return ui.mirroredBeanSummary ?: "No bean selected"
     val roaster = ui.roasters.firstOrNull { it.id == bean.roasterId }?.name
-    // Grind at a glance (issue #16): the dial + grinder name — the bean's own
-    // grinder, else the equipment default (web BeanContextCard precedence).
+    return listOfNotNull(roaster, bean.name).joinToString(" · ")
+}
+
+/** "Grind N · Grinder" strip bottom row (issue #16 at-a-glance), fainter —
+ *  the bean's own grinder, else the equipment default (web BeanContextCard
+ *  precedence). Null when there is nothing to show. */
+internal fun beanSpecLine(ui: MainUiState): String? {
+    val bean = ui.beans.firstOrNull { it.id == ui.activeBeanId } ?: return null
     val grind = bean.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" }
     val grinder = bean.grinder?.takeIf { it.isNotBlank() }
         ?: ui.grinderModel.takeIf { it.isNotBlank() }
-    return listOfNotNull(
-        roaster,
-        bean.name,
-        grind,
-        grinder,
-    ).joinToString(" · ")
+    return listOfNotNull(grind, grinder).joinToString(" · ").ifBlank { null }
 }
 
 // ── Profile strip (proto .pf-profilestrip) ───────────────────────────────────
@@ -298,7 +300,12 @@ internal fun ProfileStrip(
     /** The top-row title — Brew passes the loaded profile's name; the shot
      *  detail passes the shot's recorded profile (issue #16 round 4). */
     title: String,
+    /** Middle row — the bean itself ("Roaster · Bean"). */
     beanLine: String,
+    /** Bottom row — grind + grinder, slightly fainter (the tablet/web
+     *  .bh-spec tier); its own row so neither line ellipsizes the other
+     *  (user direction: the single line cut off on phone widths). */
+    specLine: String? = null,
     /** "Nd off roast" / "Frozen", or null when the roast date is unknown —
      *  rendered as the tablet/web colour pip + label on the TOP row. */
     freshLabel: String?,
@@ -335,10 +342,16 @@ internal fun ProfileStrip(
                     beanLine,
                     style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.5.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    // Freshness lives on the row above, so the grind + grinder
-                    // (issue #16 — at a glance) fit one line at phone width.
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
+                if (specLine != null) {
+                    Text(
+                        specLine,
+                        style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.5.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             PhIcon("caret-down", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }

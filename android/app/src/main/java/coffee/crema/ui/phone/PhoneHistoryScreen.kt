@@ -537,12 +537,14 @@ private fun PhoneShotDetail(
                 }
                 ProfileStrip(
                     title = shot.profileName ?: "Shot",
-                    beanLine = remember(shot.id, shot.grindSetting, shot.bean) {
+                    beanLine = shot.beanLabel ?: "No bean",
+                    // Bottom row: the grind this shot was pulled at + the
+                    // grinder, fainter (tablet/web .bh-spec tier).
+                    specLine = remember(shot.id, shot.grindSetting, shot.bean) {
                         listOfNotNull(
-                            shot.beanLabel,
                             shot.grindLabel,
                             shot.bean?.grinder?.takeIf { it.isNotBlank() },
-                        ).joinToString(" · ").ifBlank { "No bean" }
+                        ).joinToString(" · ").ifBlank { null }
                     },
                     freshLabel = daysAtPull?.let { "${it}d off roast" },
                     freshColor = freshnessColor(false, shot.bean?.roastLevel?.toInt(), daysAtPull),

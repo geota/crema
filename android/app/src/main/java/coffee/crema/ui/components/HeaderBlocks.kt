@@ -5,7 +5,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -59,7 +61,13 @@ fun CremaHeaderBlock(
     onClick: (() -> Unit)? = null,
 ) {
     Column(
+        // IntrinsicSize.Max caps the fillMaxWidth rows below at the widest
+        // content line when the CALLER passes no width — without it, an
+        // unconstrained block (Brew's profile block) filled the whole header
+        // row and evicted the bean block + Quick Controls. An explicit width
+        // (bean's 264 dp) or weight from the caller still wins.
         modifier = modifier
+            .width(IntrinsicSize.Max)
             .clip(RoundedCornerShape(12.dp))
             .background(if (openTint) MaterialTheme.colorScheme.primary.copy(alpha = 0.13f) else Color.Transparent)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)

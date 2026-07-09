@@ -70,6 +70,11 @@ import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.history.grindLabel
 import coffee.crema.history.historyStats
 import coffee.crema.ui.MainViewModel
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import coffee.crema.ui.formatTemp
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaEmptyState
 import coffee.crema.ui.components.CremaFreshnessChip
@@ -639,12 +644,30 @@ private fun ShotDetail(
                 showCaret = false,
                 modifier = Modifier.weight(1f),
                 lines = buildList {
-                    val meta = buildList {
-                        val d = shot.doseG; val y = shot.yieldG
-                        if (d != null && y != null) add("${formatWeight(d, weightUnit)} → ${formatWeight(y, weightUnit)}")
-                        shotRatio(shot)?.let { add(it) }
-                    }.joinToString(" · ")
+                    // Brew's two profile lines, read from the shot's embedded
+                    // profile snapshot — the JSON-v2 shape capture freezes
+                    // (title/steps/target_weight, snake_case) — targets +
+                    // character; the shot's ACTUALS live in the tiles below.
+                    val wire = shot.profile
+                    fun field(key: String) = (wire?.get(key) as? JsonPrimitive)?.contentOrNull
+                    val dose = field("dose")?.toFloatOrNull() ?: shot.doseG
+                    val yieldOut = field("target_weight")?.toFloatOrNull() ?: shot.yieldTargetG
+                    // Brew temp = the first step's setpoint (v2 has no
+                    // top-level brew temp).
+                    val temp = ((wire?.get("steps") as? JsonArray)?.firstOrNull() as? JsonObject)
+                        ?.let { (it["temperature_c"] as? JsonPrimitive)?.contentOrNull?.toFloatOrNull() }
+                    val meta = listOfNotNull(
+                        if (dose != null && yieldOut != null) formatRatio(dose, yieldOut) else null,
+                        yieldOut?.let { formatWeight(it, weightUnit) },
+                        temp?.let { formatTemp(it, tempUnit) },
+                    ).joinToString(" · ")
                     if (meta.isNotBlank()) add(HeaderBlockLine(meta))
+                    // .bh-spec — "{beverage} · {author}" (v2 carries no roast).
+                    val spec = listOfNotNull(
+                        field("beverage_type")?.replaceFirstChar { it.uppercase() },
+                        field("author")?.takeIf { it.isNotBlank() },
+                    ).joinToString(" · ")
+                    if (spec.isNotBlank()) add(HeaderBlockLine(spec, HeaderLineStyle.Spec))
                 },
             )
             // Bean block — tap to re-attribute. The freshness chip is STATIC:
