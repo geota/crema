@@ -1069,7 +1069,15 @@ data class MaintenanceReadout (
 	/// Whole hours since the last clean cycle.
 	val cleanSinceHours: Long,
 	/// Whether the clean interval has not yet been exceeded.
-	val cleanOk: Boolean
+	val cleanOk: Boolean,
+	/// The resolved (defaulted) enable flags, so Settings can render the
+	/// toggles + grey the readouts without re-deriving the `None` = enabled
+	/// rule. A disabled reminder also forces its `*_ok` true — the due
+	/// banners key off `*_ok` on every shell, so disabling suppresses them
+	/// with no shell-side special-casing.
+	val filterEnabled: Boolean,
+	val descaleEnabled: Boolean,
+	val cleanEnabled: Boolean
 )
 
 /// The persisted maintenance state — counters, baselines, and
@@ -1093,7 +1101,15 @@ data class MaintenanceState (
 	/// Descale interval, litres.
 	val descaleIntervalLitres: Double,
 	/// Clean cycle interval, hours.
-	val cleanIntervalHours: Double
+	val cleanIntervalHours: Double,
+	/// Whether the filter reminder is armed. Additive field → optional (the
+	/// persisted-state Option rule: pre-existing saves lack the key); `None`
+	/// means enabled.
+	val filterEnabled: Boolean? = null,
+	/// Whether the descale reminder is armed. `None` means enabled.
+	val descaleEnabled: Boolean? = null,
+	/// Whether the clean-cycle reminder is armed. `None` means enabled.
+	val cleanEnabled: Boolean? = null
 )
 
 /// One selectable display/behaviour mode a scale exposes.

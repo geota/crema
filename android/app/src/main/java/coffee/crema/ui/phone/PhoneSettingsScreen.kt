@@ -532,14 +532,24 @@ private fun WaterSection(
     }
     SettingsGroup("Maintenance intervals") {
         val m2 = ui.maintenance
+        // Arming switch + interval per reminder — off = never due (core rule).
         CremaSettingsRow("Filter capacity", "Litres before a filter change is due.") {
-            CremaStepper(value = m2.filterCapacityLitres, unit = "L", step = 5.0, min = 5.0, max = 500.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = { vm.setFilterCapacity(it) })
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CremaSwitch(checked = m2.filterEnabled ?: true, onCheckedChange = { vm.setFilterReminderEnabled(it) })
+                CremaStepper(value = m2.filterCapacityLitres, unit = "L", step = 5.0, min = 5.0, max = 500.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, enabled = m2.filterEnabled ?: true, onChange = { vm.setFilterCapacity(it) })
+            }
         }
         CremaSettingsRow("Descale interval", "Litres of brew water between descales.") {
-            CremaStepper(value = m2.descaleIntervalLitres, unit = "L", step = 10.0, min = 10.0, max = 1000.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = { vm.setDescaleInterval(it) })
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CremaSwitch(checked = m2.descaleEnabled ?: true, onCheckedChange = { vm.setDescaleReminderEnabled(it) })
+                CremaStepper(value = m2.descaleIntervalLitres, unit = "L", step = 10.0, min = 10.0, max = 1000.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, enabled = m2.descaleEnabled ?: true, onChange = { vm.setDescaleInterval(it) })
+            }
         }
         CremaSettingsRow("Clean cycle interval", "Hours of machine-on time between cleans.", last = true) {
-            CremaStepper(value = m2.cleanIntervalHours, unit = "h", step = 1.0, min = 1.0, max = 500.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, onChange = { vm.setCleanInterval(it) })
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CremaSwitch(checked = m2.cleanEnabled ?: true, onCheckedChange = { vm.setCleanReminderEnabled(it) })
+                CremaStepper(value = m2.cleanIntervalHours, unit = "h", step = 1.0, min = 1.0, max = 500.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.BareCompact, enabled = m2.cleanEnabled ?: true, onChange = { vm.setCleanInterval(it) })
+            }
         }
     }
     SettingsGroup("Water chemistry") {

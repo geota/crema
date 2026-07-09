@@ -41,6 +41,17 @@ pub struct MaintenanceState {
     pub descale_interval_litres: f64,
     /// Clean cycle interval, hours.
     pub clean_interval_hours: f64,
+    /// Whether the filter reminder is armed. Additive field → optional (the
+    /// persisted-state Option rule: pre-existing saves lack the key); `None`
+    /// means enabled.
+    #[serde(default)]
+    pub filter_enabled: Option<bool>,
+    /// Whether the descale reminder is armed. `None` means enabled.
+    #[serde(default)]
+    pub descale_enabled: Option<bool>,
+    /// Whether the clean-cycle reminder is armed. `None` means enabled.
+    #[serde(default)]
+    pub clean_enabled: Option<bool>,
 }
 
 /// A derived maintenance readout — counters, percentages, and due/ok
@@ -64,6 +75,14 @@ pub struct MaintenanceReadout {
     pub clean_since_hours: i64,
     /// Whether the clean interval has not yet been exceeded.
     pub clean_ok: bool,
+    /// The resolved (defaulted) enable flags, so Settings can render the
+    /// toggles + grey the readouts without re-deriving the `None` = enabled
+    /// rule. A disabled reminder also forces its `*_ok` true — the due
+    /// banners key off `*_ok` on every shell, so disabling suppresses them
+    /// with no shell-side special-casing.
+    pub filter_enabled: bool,
+    pub descale_enabled: bool,
+    pub clean_enabled: bool,
 }
 
 /// Derive a [`MaintenanceReadout`] from the persisted state. `now_ms`
@@ -87,14 +106,20 @@ pub fn maintenance_readout(state: &MaintenanceState, now_ms: i64) -> Maintenance
     // `clean_ok` via NaN-poisoning the comparison.
     #[allow(clippy::cast_precision_loss)]
     let clean_since_hours_f = clean_since_hours as f64;
+    let filter_enabled = state.filter_enabled.unwrap_or(true);
+    let descale_enabled = state.descale_enabled.unwrap_or(true);
+    let clean_enabled = state.clean_enabled.unwrap_or(true);
     MaintenanceReadout {
         filter_used_litres,
         filter_percent,
-        filter_ok: filter_used_litres < state.filter_capacity_litres,
+        filter_ok: !filter_enabled || filter_used_litres < state.filter_capacity_litres,
         descale_since_litres,
-        descale_ok: descale_since_litres < state.descale_interval_litres,
+        descale_ok: !descale_enabled || descale_since_litres < state.descale_interval_litres,
         clean_since_hours,
-        clean_ok: clean_since_hours_f < state.clean_interval_hours,
+        clean_ok: !clean_enabled || clean_since_hours_f < state.clean_interval_hours,
+        filter_enabled,
+        descale_enabled,
+        clean_enabled,
     }
 }
 
@@ -125,6 +150,9 @@ mod tests {
             filter_capacity_litres: 50.0,
             descale_interval_litres: 120.0,
             clean_interval_hours: 48.0,
+            filter_enabled: None,
+            descale_enabled: None,
+            clean_enabled: None,
         }
     }
 
@@ -223,5 +251,35 @@ mod tests {
     #[test]
     fn json_adapter_rejects_malformed_input() {
         assert!(maintenance_readout_json("not json", 0).is_err());
+    }
+
+    #[test]
+    fn absent_enable_flags_mean_enabled() {
+        // Pre-existing persisted state has no enable keys — it must parse
+        // and behave exactly as before (the additive-Option rule).
+        let legacy = r#"{"totalLitres":75.0,"filterBaselineLitres":0.0,
+            "descaleBaselineLitres":0.0,"cleanAtMs":0,"filterAtMs":0,
+            "descaleAtMs":0,"filterCapacityLitres":50.0,
+            "descaleIntervalLitres":120.0,"cleanIntervalHours":48.0}"#;
+        let s: MaintenanceState = serde_json::from_str(legacy).unwrap();
+        let r = maintenance_readout(&s, 1_700_000_000_000);
+        assert!(r.filter_enabled && r.descale_enabled && r.clean_enabled);
+        assert!(!r.filter_ok); // 75 L over the 50 L capacity — still due
+    }
+
+    #[test]
+    fn disabled_reminder_is_never_due() {
+        let mut s = fresh_state();
+        s.total_litres = 500.0; // way past filter capacity AND descale interval
+        s.filter_enabled = Some(false);
+        s.descale_enabled = Some(false);
+        s.clean_enabled = Some(false);
+        let r = maintenance_readout(&s, 1_700_000_000_000 + 100 * 3_600_000);
+        // Counters still derive (the UI greys them, not hides the truth) …
+        assert_eq!(r.filter_used_litres, 500.0);
+        assert_eq!(r.filter_percent, 0.0);
+        // … but nothing is ever due, so the shells' banners stay silent.
+        assert!(r.filter_ok && r.descale_ok && r.clean_ok);
+        assert!(!r.filter_enabled && !r.descale_enabled && !r.clean_enabled);
     }
 }

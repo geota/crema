@@ -1050,6 +1050,16 @@ export interface MaintenanceReadout {
 	cleanSinceHours: number;
 	/** Whether the clean interval has not yet been exceeded. */
 	cleanOk: boolean;
+	/**
+	 * The resolved (defaulted) enable flags, so Settings can render the
+	 * toggles + grey the readouts without re-deriving the `None` = enabled
+	 * rule. A disabled reminder also forces its `*_ok` true — the due
+	 * banners key off `*_ok` on every shell, so disabling suppresses them
+	 * with no shell-side special-casing.
+	 */
+	filterEnabled: boolean;
+	descaleEnabled: boolean;
+	cleanEnabled: boolean;
 }
 
 /**
@@ -1075,6 +1085,16 @@ export interface MaintenanceState {
 	descaleIntervalLitres: number;
 	/** Clean cycle interval, hours. */
 	cleanIntervalHours: number;
+	/**
+	 * Whether the filter reminder is armed. Additive field → optional (the
+	 * persisted-state Option rule: pre-existing saves lack the key); `None`
+	 * means enabled.
+	 */
+	filterEnabled?: boolean;
+	/** Whether the descale reminder is armed. `None` means enabled. */
+	descaleEnabled?: boolean;
+	/** Whether the clean-cycle reminder is armed. `None` means enabled. */
+	cleanEnabled?: boolean;
 }
 
 /**

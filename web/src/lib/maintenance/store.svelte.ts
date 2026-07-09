@@ -243,6 +243,26 @@ export class MaintenanceStore {
 		this.state = { ...this.state, cleanIntervalHours: hours };
 		this.persist();
 	}
+
+	/**
+	 * Arm / disarm one reminder (additive optional field: absent = enabled).
+	 * A disabled reminder is never "due" — the core readout forces its `*_ok`
+	 * true, so the due banners stay silent with no shell special-casing.
+	 */
+	setFilterEnabled(on: boolean): void {
+		this.state = { ...this.state, filterEnabled: on };
+		this.persist();
+	}
+
+	setDescaleEnabled(on: boolean): void {
+		this.state = { ...this.state, descaleEnabled: on };
+		this.persist();
+	}
+
+	setCleanEnabled(on: boolean): void {
+		this.state = { ...this.state, cleanEnabled: on };
+		this.persist();
+	}
 }
 
 /** The process-wide singleton — one maintenance store shared by every route. */

@@ -2727,6 +2727,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setCleanInterval(hours: Double) =
         saveMaintenance(_ui.value.maintenance.copy(cleanIntervalHours = hours.coerceIn(1.0, 500.0)))
 
+    // Per-reminder arming (additive Option field: null = enabled). A disabled
+    // reminder is never "due" — the core readout forces its *_ok true, which
+    // silences the Brew banner on every shell with no special-casing.
+    fun setFilterReminderEnabled(on: Boolean) =
+        saveMaintenance(_ui.value.maintenance.copy(filterEnabled = on))
+
+    fun setDescaleReminderEnabled(on: Boolean) =
+        saveMaintenance(_ui.value.maintenance.copy(descaleEnabled = on))
+
+    fun setCleanReminderEnabled(on: Boolean) =
+        saveMaintenance(_ui.value.maintenance.copy(cleanEnabled = on))
+
     /** Start a steam-rinse cycle (Settings → Water → "Run now"). */
     fun startSteamRinse() = requestMachineState(MachineRequest.STEAM_RINSE)
 

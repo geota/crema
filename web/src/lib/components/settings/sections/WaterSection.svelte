@@ -38,6 +38,7 @@
 	import StRow from '../StRow.svelte';
 	import StSegment from '../StSegment.svelte';
 	import StStepper from '../StStepper.svelte';
+	import StToggle from '../StToggle.svelte';
 	import StMaintenanceCard from '../StMaintenanceCard.svelte';
 
 	let { app }: { app: CremaApp | null } = $props();
@@ -308,14 +309,21 @@
 		sub="Clean the inline filter after this many litres pass through it."
 	>
 		{#snippet control()}
-			<StStepper
-				value={m.filterCapacityLitres}
-				unit="L"
-				step={5}
-				min={5}
-				max={500}
-				onCommit={(v) => maintenance.setFilterCapacity(v)}
-			/>
+			<span class="ws-armed-row">
+				<StToggle
+					on={m.filterEnabled ?? true}
+					onChange={(v) => maintenance.setFilterEnabled(v)}
+					label="Filter reminder armed"
+				/>
+				<StStepper
+					value={m.filterCapacityLitres}
+					unit="L"
+					step={5}
+					min={5}
+					max={500}
+					onCommit={(v) => maintenance.setFilterCapacity(v)}
+				/>
+			</span>
 		{/snippet}
 	</StRow>
 	<StRow
@@ -323,14 +331,21 @@
 		sub="Run a descale after this many litres dispensed."
 	>
 		{#snippet control()}
-			<StStepper
-				value={m.descaleIntervalLitres}
-				unit="L"
-				step={10}
-				min={10}
-				max={1000}
-				onCommit={(v) => maintenance.setDescaleInterval(v)}
-			/>
+			<span class="ws-armed-row">
+				<StToggle
+					on={m.descaleEnabled ?? true}
+					onChange={(v) => maintenance.setDescaleEnabled(v)}
+					label="Descale reminder armed"
+				/>
+				<StStepper
+					value={m.descaleIntervalLitres}
+					unit="L"
+					step={10}
+					min={10}
+					max={1000}
+					onCommit={(v) => maintenance.setDescaleInterval(v)}
+				/>
+			</span>
 		{/snippet}
 	</StRow>
 	<StRow
@@ -338,14 +353,21 @@
 		sub="Run a clean cycle after this many hours of use."
 	>
 		{#snippet control()}
-			<StStepper
-				value={m.cleanIntervalHours}
-				unit="hr"
-				step={1}
-				min={1}
-				max={500}
-				onCommit={(v) => maintenance.setCleanInterval(v)}
-			/>
+			<span class="ws-armed-row">
+				<StToggle
+					on={m.cleanEnabled ?? true}
+					onChange={(v) => maintenance.setCleanEnabled(v)}
+					label="Clean reminder armed"
+				/>
+				<StStepper
+					value={m.cleanIntervalHours}
+					unit="hr"
+					step={1}
+					min={1}
+					max={500}
+					onCommit={(v) => maintenance.setCleanInterval(v)}
+				/>
+			</span>
 		{/snippet}
 	</StRow>
 </StGroup>
@@ -409,6 +431,13 @@
 {/if}
 
 <style>
+	/* Arming toggle + interval stepper share the row's control slot. */
+	.ws-armed-row {
+		display: inline-flex;
+		align-items: center;
+		gap: 12px;
+	}
+
 	.cyc-scrim {
 		position: fixed;
 		inset: 0;
