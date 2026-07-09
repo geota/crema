@@ -1378,17 +1378,26 @@ private fun LastShotStat(
     icon: String? = null,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            label.uppercase(),
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.3.sp),
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
-            maxLines = 1,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            // Value-sized so an icon-only stat (Stopped) reads at the same
-            // weight as its numeric siblings.
-            if (icon != null) PhIcon(icon, sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (value.isNotEmpty()) CremaValueUnit(value, unit, valueSize = 15.sp, unitSize = 10.sp)
+        val labelText: @Composable () -> Unit = {
+            Text(
+                label.uppercase(),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.3.sp),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                maxLines = 1,
+            )
+        }
+        if (icon != null) {
+            // Icon-only stat (Stopped): the lone glyph centres under its
+            // label — an inner wrap-content column so the label itself keeps
+            // the shared left edge with the neighbouring cells. Value-sized
+            // (16 dp ≈ the 15 sp numerals) so it reads at the same weight.
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                labelText()
+                PhIcon(icon, sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            labelText()
+            CremaValueUnit(value, unit, valueSize = 15.sp, unitSize = 10.sp)
         }
     }
 }

@@ -1021,27 +1021,29 @@ private fun ReadyParam(
     icon: String? = null,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp, letterSpacing = 0.6.sp, fontWeight = FontWeight.SemiBold),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-            if (icon != null) {
-                // Value-sized: icon-only stats read at the numeric weight.
-                PhIcon(icon, sizeDp = 15, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.width(3.dp))
-            }
+        val labelText: @Composable () -> Unit = {
             Text(
-                value,
-                style = TextStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium, fontSize = 15.sp, lineHeight = 16.sp, fontFeatureSettings = "tnum"),
-            )
-            if (unit.isNotEmpty()) Text(
-                unit,
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                label,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp, letterSpacing = 0.6.sp, fontWeight = FontWeight.SemiBold),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        if (icon != null) {
+            // Icon-only stat (STOPPED): centre the lone glyph under its
+            // label — wrap-content inner column, so the label keeps the
+            // shared left edge. Value-sized (15 dp ≈ the 15 sp numerals).
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                labelText()
+                PhIcon(icon, sizeDp = 15, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            return@Column
+        }
+        labelText()
+        // The shared value+unit treatment (tablet LastShotStat / web
+        // `.ls-v em`): baseline-aligned, faint, 3 dp gap — this row used to
+        // hand-roll it with a box-bottom align + 1 dp gap + full-strength
+        // unit colour, which read squished and heavy next to the other shells.
+        CremaValueUnit(value, unit.takeIf { it.isNotEmpty() }, valueSize = 15.sp, unitSize = 10.sp)
     }
 }
 

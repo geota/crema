@@ -92,7 +92,7 @@
 			<span class="ls-v">{peakTempM.value}<em>{peakTempM.unit}</em></span>
 			<span class="ls-l">Peak temp</span>
 		</div>
-		<div class="ls-stat">
+		<div class="ls-stat ls-stat-stop">
 			<span class="ls-v ls-stop">
 				{#if stoppedIcon}<Icon cls={'ph ph-' + stoppedIcon} aria-label={stopped} />{:else}{stopped}{/if}</span>
 			<span class="ls-l">Stopped</span>
@@ -129,6 +129,12 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
+	}
+	/* Icon-only cell: shrink to the label's width and centre the lone glyph
+	   on it — the label keeps the shared left edge with the other columns. */
+	.ls-stat-stop {
+		width: fit-content;
+		align-items: center;
 	}
 	.ls-stop :global(.ph) {
 		/* Value-sized: the icon stands alone in the cell. */
