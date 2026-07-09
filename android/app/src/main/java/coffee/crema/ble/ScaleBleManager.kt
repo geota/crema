@@ -7,6 +7,7 @@ import coffee.crema.core.CremaBridge
 import coffee.crema.core.NotificationSource
 import coffee.crema.core.ScaleUuids as CoreScaleUuids
 import coffee.crema.core.scaleScanUuids
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -432,7 +433,12 @@ class ScaleBleManager(
             return false
         }
         return try {
-            writeWithOneRetry(d, service, command, data)
+            // Registered as preemptible (issue #15): the Nordic GATT mutex is
+            // process-global, so a scale op in flight would make a DE1 shot
+            // stop wait behind it — an urgent stop cancels us instead.
+            UrgentWriteGate.preemptible(coroutineContext[Job], "scale command") {
+                writeWithOneRetry(d, service, command, data)
+            }
             // Record the write as a dir:"out" SCALE_COMMAND line so tare/timer
             // writes appear in the interleaved capture. Stamp it with the same
             // elapsedRealtime() clock the recorder and inbound lines use.

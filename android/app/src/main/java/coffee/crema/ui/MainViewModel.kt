@@ -3188,7 +3188,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // the DE1 drops) must not become an uncaught crash.
                 viewModelScope.launch {
                     try {
-                        ble.writeCharacteristic(command.content.target, bytes)
+                        // Stop writes ride the urgent lane (issue #15): they
+                        // preempt any in-flight non-critical GATT op instead
+                        // of queuing behind it on the global op mutex.
+                        ble.writeCharacteristic(command.content.target, bytes, urgent = stopWrite)
                         if (stopWrite) {
                             appendLog("Stop write delivered in ${SystemClock.elapsedRealtime() - queuedAt} ms")
                         }

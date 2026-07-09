@@ -9,6 +9,7 @@ import coffee.crema.core.WriteTarget
 import coffee.crema.core.de1Uuids
 import kotlinx.serialization.json.Json
 import java.util.UUID
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -378,13 +379,29 @@ class De1BleManager(
      * is what advances the core's profile-upload state machine. Mirrors the web
      * shell's `De1FrameAck` synthesis.
      */
-    suspend fun writeCharacteristic(target: WriteTarget, bytes: ByteArray) {
+    suspend fun writeCharacteristic(
+        target: WriteTarget,
+        bytes: ByteArray,
+        /** The stop-write preemption lane (issue #15): an urgent write first
+         *  cancels every registered non-critical in-flight write — Nordic's
+         *  GATT mutex is process-GLOBAL, so a wedged poke or a scale op
+         *  would otherwise make the shot-stop wait — and itself skips
+         *  registration so stops never preempt stops. */
+        urgent: Boolean = false,
+    ) {
         val d = device ?: run {
             onStatus("Write ignored — DE1 not connected")
             return
         }
         try {
-            writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes)
+            if (urgent) {
+                UrgentWriteGate.preempt("an urgent DE1 $target write")
+                writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes)
+            } else {
+                UrgentWriteGate.preemptible(coroutineContext[Job], "DE1 $target write") {
+                    writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes)
+                }
+            }
             consecutiveWriteFailures = 0
         } catch (t: TimeoutCancellationException) {
             onWriteFailure(d)
