@@ -732,6 +732,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  presume-dead teardown — cancelled/replaced per stale episode. */
     private var scaleStaleJob: Job? = null
 
+    /**
+     * The outstanding stop write, if any (issue #15 follow-up). Two rules:
+     * stop writes COALESCE (the enforcer re-commands every second, but
+     * stacking identical Idle bytes behind a wedged op adds nothing — at most
+     * one is ever queued/waiting), and the survivor is CANCELLED the moment
+     * the shot ends — a stale Idle delivered seconds late is not harmless: it
+     * wakes a sleeping machine and kills a steam/flush the user starts right
+     * after the shot.
+     */
+    private val pendingStopWrite = java.util.concurrent.atomic.AtomicReference<Job?>(null)
+
     /** Start the 4 Hz mode-clock ticker when a service mode is running, stop it
      *  when idle. Elapsed is recomputed from the monotonic anchor each tick, so
      *  tick jitter never accumulates into the readout. */
@@ -3183,10 +3194,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // link all show up here as milliseconds).
                 val stopWrite = command.content.target == WriteTarget.De1RequestedState &&
                     _ui.value.shotInProgress
+                // Coalesce stop writes: if one is already queued/waiting, a
+                // second copy of the same Idle byte buys nothing — and every
+                // extra copy is a stale-write risk after the machine stops.
+                if (stopWrite && pendingStopWrite.get()?.isActive == true) {
+                    appendLog("Stop write already in flight — not stacking another")
+                    return
+                }
                 val queuedAt = if (stopWrite) SystemClock.elapsedRealtime() else 0L
                 // Same guard: a failed machine write (e.g. the keep-alive poke as
                 // the DE1 drops) must not become an uncaught crash.
-                viewModelScope.launch {
+                val job = viewModelScope.launch {
                     try {
                         // Stop writes ride the urgent lane (issue #15): they
                         // preempt any in-flight non-critical GATT op instead
@@ -3206,6 +3224,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             },
                         )
                     }
+                }
+                if (stopWrite) {
+                    pendingStopWrite.set(job)
+                    job.invokeOnCompletion { pendingStopWrite.compareAndSet(job, null) }
                 }
             }
         }
@@ -3437,6 +3459,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             is Event.ShotCompleted -> {
+                // The machine stopped — cancel any stop write still queued or
+                // waiting on the GATT mutex. Delivered late, that same Idle
+                // byte would wake a sleeping machine or kill a steam/flush the
+                // user starts next (issue #15 follow-up).
+                pendingStopWrite.getAndSet(null)?.let { job ->
+                    if (job.isActive) {
+                        job.cancel(kotlinx.coroutines.CancellationException("machine already stopped"))
+                        appendLog("Stale stop write cancelled — machine already stopped")
+                    }
+                }
                 val c = event.content
                 val now = System.currentTimeMillis()
                 // One UUID-v7 shot id (core minter), shared by the "Last shot"

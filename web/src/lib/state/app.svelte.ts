@@ -182,6 +182,8 @@ export class CremaApp {
 	/** The reactive UI state — the screen renders `app.state.current`. */
 	readonly state = getCremaUiState();
 
+	/** One outstanding stop write at a time (issue #15 follow-up). */
+	#stopWriteInFlight = false;
 	private readonly de1: De1Manager;
 	private readonly scale: ScaleManager;
 
@@ -763,10 +765,31 @@ export class CremaApp {
 				break;
 			}
 			case 'WriteCharacteristic': {
-				const data = new Uint8Array(command.content.data);
-				const hex = [...data].map((b) => b.toString(16).padStart(2, '0')).join('');
-				this.state.log(`→ DE1 write ${command.content.target} ${hex}`);
-				await this.de1.writeCharacteristic(command.content.target, data);
+				// Stop-write hygiene (issue #15 follow-up, Android parity):
+				// while a shot runs, machine-state writes are the stop. They
+				// COALESCE — the core's enforcer re-commands every second, but
+				// stacking identical Idle bytes behind a stalled write adds
+				// nothing, and every extra copy is a stale-write risk once the
+				// machine stops (a late Idle kills a steam/flush started right
+				// after the shot). Web Bluetooth ops can't be cancelled
+				// mid-flight, so unlike Android the ONE outstanding write
+				// can't be revoked at ShotCompleted — bounding the exposure
+				// to a single write is the strongest guard available here.
+				const isStopWrite =
+					command.content.target === 'De1RequestedState' && this.state.current.shotInProgress;
+				if (isStopWrite && this.#stopWriteInFlight) {
+					this.state.log('Stop write already in flight — not stacking another');
+					break;
+				}
+				if (isStopWrite) this.#stopWriteInFlight = true;
+				try {
+					const data = new Uint8Array(command.content.data);
+					const hex = [...data].map((b) => b.toString(16).padStart(2, '0')).join('');
+					this.state.log(`→ DE1 write ${command.content.target} ${hex}`);
+					await this.de1.writeCharacteristic(command.content.target, data);
+				} finally {
+					if (isStopWrite) this.#stopWriteInFlight = false;
+				}
 				// The DE1 does *not* emit Handle Value Notifications on
 				// FrameWrite (cuuid_10) — confirmed by the 2026-05-21
 				// HCI snoop of a legacy-app session: every write gets only
@@ -783,7 +806,7 @@ export class CremaApp {
 				if (command.content.target === 'De1ProfileFrame') {
 					const ackOut = await this.core.onNotification(
 						'De1FrameAck',
-						data,
+						new Uint8Array(command.content.data),
 						performance.now()
 					);
 					this.applyCoreOutput(ackOut);
