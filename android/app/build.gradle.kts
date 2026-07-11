@@ -166,7 +166,29 @@ android {
                 }
         }
         release {
-            isMinifyEnabled = false
+            // R8 + resource shrinking: the release APK was ~57 MB (dex alone was
+            // ~52 MB) with this off — well past what a flat-APK repo (F-Droid,
+            // IzzyOnDroid) will accept. proguard-rules.pro carries the one
+            // dangerous keep set: the UniFFI-generated JNA bindings
+            // (coffee.crema.core) marshal native calls by matching field/method
+            // NAMES via reflection (Structure.FieldOrder, Native.register), so
+            // renaming or stripping them silently corrupts the FFI boundary
+            // instead of just crashing.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+            // arm64-v8a is the only ABI this app ships (see the `cargo { targets }`
+            // block below) — but JNA's aar bundles libjnidispatch.so for 6
+            // architectures. Scoped to release/nightly (the shipped, size-budgeted
+            // builds) rather than defaultConfig, so a debug build stays free to
+            // add "x86_64" to `cargo { targets }` for a fast emulator during local
+            // dev without this filter silently dropping it.
+            ndk {
+                abiFilters += "arm64-v8a"
+            }
             // Signed when a release keystore is configured; otherwise an unsigned
             // release APK is still produced (e.g. to sign locally).
             if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")

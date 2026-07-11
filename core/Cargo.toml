@@ -45,3 +45,9 @@ serde_json = "1"
 [profile.release]
 lto = true
 codegen-units = 1
+# NOTE: do NOT add `strip = true` here — uniffi-bindgen reads FFI metadata
+# back out of the compiled cdylib's symbol table to generate the Kotlin
+# bindings (see app/build.gradle.kts's generateUniffiBindings task), and a
+# Cargo-level strip removes that before bindgen ever runs ("No UniFFI
+# metadata found"). AGP already strips the packaged .so's debug symbols at
+# APK-build time (stripReleaseDebugSymbols) — that's the right layer for it.
