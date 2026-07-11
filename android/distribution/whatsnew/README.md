@@ -26,3 +26,8 @@ notes, which `release.yml` auto-generates from commits for developers /
 sideloaders.
 
 To add a language, drop in another `whatsnew-<locale>` file.
+
+**Also update `fastlane/README.md`'s sibling step** — F-Droid/IzzyOnDroid read
+a separate, permanent `fastlane/metadata/android/<locale>/changelogs/<versionCode>.txt`
+per release (not this mutable "current" file). Copy this text there too
+before tagging.
