@@ -379,6 +379,10 @@ data class MainUiState(
     /** Also put the DE1 to sleep when the saver starts (de1app/Decenza
      *  coupling; OFF = display-only dimming). */
     val sleepMachineWithSaver: Boolean = true,
+    /** Wake a sleeping DE1 when the saver is dismissed (de1app's saver-tap
+     *  behaviour). OFF = the tap only dismisses; the machine stays asleep
+     *  until the power button. */
+    val wakeMachineWithSaver: Boolean = true,
     /** Whether the screensaver overlay is currently shown. Set by the idle
      *  checker or a live machine-sleep transition; cleared by tap-to-wake. */
     val saverVisible: Boolean = false,
@@ -1031,11 +1035,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // presence timer against our own idle decision (reaprime's
         // PresenceController model — the heartbeat keeps the machine awake
         // only while the user is actually present).
+        // Also suppressed while the machine is asleep, saver or not: a manual
+        // sleep leaves the app awake on the Brew screen, and a presence poke
+        // there would argue with the sleep the user just asked for.
         // Suppressed mid-shot (issue #15): the machine can't sleep while it's
         // pouring, and the poke's MMR write would contend with the SAW stop
         // write on the serial GATT queue — the one write that must not wait.
         keepAliveTick = {
-            if (_ui.value.suppressDe1Sleep && !_ui.value.saverVisible && !_ui.value.shotInProgress) pokeUserPresent()
+            val s = _ui.value
+            val asleep = s.machineStateName == MachineState.Sleep ||
+                s.machineStateName == MachineState.GoingToSleep
+            if (s.suppressDe1Sleep && !s.saverVisible && !asleep && !s.shotInProgress) pokeUserPresent()
         },
     )
 
@@ -1900,6 +1910,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun requestMachineState(state: MachineRequest) {
+        // A sleep the app asked for is deliberate, not idle: mark it so the
+        // Sleep state report that follows doesn't raise the screensaver (see
+        // [appAskedForSleep]). Marked before the relay so both ends of a
+        // mirrored session (the secondary that tapped, the primary that
+        // writes) treat it the same.
+        if (state == MachineRequest.SLEEP) appSleepRequestedAtMs = SystemClock.elapsedRealtime()
         if (relayIfSecondary("machineState", state.name)) return
         val raw = runCatching { bridge.requestMachineState(state) }.getOrElse {
             appendLog("requestMachineState failed: ${it.message}")
@@ -2090,6 +2106,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         keepScreenOnBrew = _ui.value.keepScreenOnBrew,
         screensaverAfterMin = _ui.value.screensaverAfterMin,
         sleepMachineWithSaver = _ui.value.sleepMachineWithSaver,
+        wakeMachineWithSaver = _ui.value.wakeMachineWithSaver,
         grinderModel = _ui.value.grinderModel,
         suppressDe1Sleep = _ui.value.suppressDe1Sleep,
         showDebugPanel = _ui.value.showDebugPanel,
@@ -2566,6 +2583,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             keepScreenOnBrew = p.keepScreenOnBrew,
             screensaverAfterMin = p.screensaverAfterMin,
             sleepMachineWithSaver = p.sleepMachineWithSaver,
+            wakeMachineWithSaver = p.wakeMachineWithSaver,
             grinderModel = p.grinderModel,
             suppressDe1Sleep = p.suppressDe1Sleep,
             showDebugPanel = p.showDebugPanel,
@@ -2640,6 +2658,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         lastInteractionAtMs = SystemClock.elapsedRealtime()
     }
 
+    /** Monotonic ms of the last sleep the app itself asked for (the Brew power
+     *  button, the phone menu, a mirrored peer), or 0 once consumed. */
+    @Volatile
+    private var appSleepRequestedAtMs: Long = 0L
+
+    /** True while a Sleep state report can still be attributed to our own
+     *  request. Deliberately putting the machine to sleep from the app must
+     *  not raise the saver — only an *external* sleep (a GHC tap, the DE1's
+     *  own sleep timer) does. Time-boxed rather than a sticky flag so a write
+     *  that never lands can't swallow a later external sleep. Consuming it at
+     *  the transition keeps the coupled sleep in [showSaver] a no-op (the
+     *  saver is already up by then). */
+    private fun appAskedForSleep(): Boolean {
+        if (appSleepRequestedAtMs == 0L) return false
+        val fresh = SystemClock.elapsedRealtime() - appSleepRequestedAtMs < APP_SLEEP_WINDOW_MS
+        appSleepRequestedAtMs = 0L
+        return fresh
+    }
+
     /** The idle checker: every 30 s, show the saver once idle passes the
      *  threshold — never during a shot / steam / cleaning / an upload
      *  (de1app + Decenza's operation guards; a blocked trigger simply
@@ -2679,14 +2716,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Tap-to-wake: dismiss the saver, re-arm the idle clock, and wake the
-     *  DE1 if we (or the GHC) put it to sleep — one tap does both, like
-     *  de1app's saver button and Decenza's ScreensaverPage.wake(). */
+    /** Tap-to-wake: dismiss the saver, re-arm the idle clock, and — when
+     *  [MainUiState.wakeMachineWithSaver] is on — wake the DE1 if we (or the
+     *  GHC) put it to sleep, so one tap does both, like de1app's saver button
+     *  and Decenza's ScreensaverPage.wake(). With it off the tap only clears
+     *  the overlay: you can use the app (history, profiles) without heating
+     *  the machine, and the power button wakes it when you mean to. */
     fun dismissSaver() {
         noteUserInteraction()
         if (!_ui.value.saverVisible) return
         _ui.update { it.copy(saverVisible = false) }
-        if (ble.state.value == De1BleManager.State.READY &&
+        if (_ui.value.wakeMachineWithSaver &&
+            ble.state.value == De1BleManager.State.READY &&
             _ui.value.machineStateName == MachineState.Sleep
         ) {
             wake()
@@ -2702,6 +2743,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Toggle the coupled machine sleep. Persisted. */
     fun setSleepMachineWithSaver(on: Boolean) {
         _ui.update { it.copy(sleepMachineWithSaver = on) }
+        persistPrefs()
+    }
+
+    /** Toggle the coupled machine wake on saver dismiss. Persisted. */
+    fun setWakeMachineWithSaver(on: Boolean) {
+        _ui.update { it.copy(wakeMachineWithSaver = on) }
         persistPrefs()
     }
 
@@ -3247,17 +3294,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     c.state == MachineState.HotWaterRinse
                 // Screensaver ↔ machine-sleep coupling, both directions
                 // (de1app gui.tcl:60-64; Decenza main.qml:3019-3027):
-                //  • a LIVE transition into Sleep/GoingToSleep (GHC tap or the
-                //    machine's own timer) shows the saver — but not the first
-                //    state report after connect (Decenza's startup grace:
+                //  • a LIVE *external* transition into Sleep/GoingToSleep (GHC
+                //    tap or the machine's own timer) shows the saver — but not
+                //    a sleep the app asked for ([appAskedForSleep]: the power
+                //    button is a deliberate act, not an idle one, and raising
+                //    the saver over it made manual sleep near-unusable — the
+                //    next tap woke the machine straight back up), and not the
+                //    first state report after connect (Decenza's startup grace:
                 //    connecting to an already-asleep DE1 must not hijack the UI);
                 //  • the machine waking EXTERNALLY while the saver is up
                 //    dismisses it (no wake() needed — it's already awake);
                 //  • entering any active mode counts as user presence.
                 val prevState = _ui.value.machineStateName
-                val asleep = c.state == MachineState.Sleep || c.state == MachineState.GoingToSleep
-                val wasAsleep = prevState == MachineState.Sleep || prevState == MachineState.GoingToSleep
-                if (asleep && !wasAsleep && prevState != null) {
+                val asleep = c.state.isAsleep()
+                val wasAsleep = prevState.isAsleep()
+                if (shouldRaiseSaver(prevState, c.state, ::appAskedForSleep)) {
                     _ui.update { it.copy(saverVisible = true) }
                 } else if (!asleep && wasAsleep && _ui.value.saverVisible) {
                     _ui.update { it.copy(saverVisible = false) }
@@ -3690,6 +3741,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val MAX_LOG_LINES = 200
 
+        /** How long a Sleep state report is still attributable to our own
+         *  request (BLE write → firmware → notify, plus a GoingToSleep dwell). */
+        const val APP_SLEEP_WINDOW_MS = 15_000L
+
         /**
          * Wait after `ProfileUploadCompleted` before requesting Espresso — the
          * firmware's profile-download guard window. A state request inside it is
@@ -3739,6 +3794,38 @@ internal fun shouldSkipProfileUpload(
  * undocumented). Top-level + `internal` so it's pure and unit-testable without a
  * device (the actual BLE write isn't).
  */
+/** Sleep and its GoingToSleep run-up both count as "the machine is down". */
+internal fun MachineState?.isAsleep(): Boolean =
+    this == MachineState.Sleep || this == MachineState.GoingToSleep
+
+/**
+ * Does this machine-state report raise the screensaver?
+ *
+ * Only an *external* sleep does — a GHC tap, or the DE1's own sleep timer.
+ * Three things must not:
+ *  • a sleep the app itself asked for ([appAskedForSleep], the power button):
+ *    it's a deliberate act, not an idle one. Raising the saver over it made
+ *    manual sleep near-unusable — the next tap dismissed the saver and woke
+ *    the machine straight back up;
+ *  • the first report after connect ([prev] == null): connecting to an
+ *    already-asleep DE1 must not hijack the UI (Decenza's startup grace);
+ *  • a report that only re-states a sleep we're already in.
+ *
+ * [appAskedForSleep] is a lambda, and called last, because it *consumes* the
+ * marker: it may only be spent on a real awake→asleep transition, never on
+ * the unrelated state reports that can land between the write and the sleep.
+ * Top-level + `internal` so the decision is pure and unit-testable without a
+ * DE1 (the BLE round-trip that drives it isn't).
+ */
+internal fun shouldRaiseSaver(
+    prev: MachineState?,
+    next: MachineState,
+    appAskedForSleep: () -> Boolean,
+): Boolean {
+    if (prev == null || !next.isAsleep() || prev.isAsleep()) return false
+    return !appAskedForSleep()
+}
+
 internal fun buildSteamHotWaterSettings(
     steamTempC: Float,
     steamTimeoutS: Float,

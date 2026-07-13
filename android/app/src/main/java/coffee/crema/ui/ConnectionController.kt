@@ -81,7 +81,8 @@ class ConnectionController(
      *  Throws on failure (logged here). */
     private val sendScaleHeartbeat: () -> Unit,
     /** One DE1 keep-awake tick, every 60 s — the VM gates it on the
-     *  suppress-sleep pref and the screensaver and writes UserPresent. */
+     *  suppress-sleep pref, the screensaver and a sleeping machine, and
+     *  writes UserPresent. */
     private val keepAliveTick: () -> Unit,
 ) {
 

@@ -67,6 +67,9 @@ data class AppPrefs(
     val screensaverAfterMin: Int = 30,
     /** Put the DE1 to sleep when the saver starts (tap wakes both). */
     val sleepMachineWithSaver: Boolean = true,
+    /** Wake a sleeping DE1 when the saver is dismissed; OFF = the tap only
+     *  clears the overlay and the machine stays asleep. */
+    val wakeMachineWithSaver: Boolean = true,
     /** Show the inline debug / event-log panel in Settings → Advanced
      *  (web `showDebugPanel`). */
     val showDebugPanel: Boolean = false,
@@ -218,6 +221,7 @@ private data class PersistedPrefs(
     // ── Platform extras (per-device / Android-only; never cross-shell) ────────
     val screensaverAfterMin: Int = 30,
     val sleepMachineWithSaver: Boolean = true,
+    val wakeMachineWithSaver: Boolean = true,
     val qcGrind: Float? = null,
     val activeProfileId: String? = null,
     val de1Address: String? = null,
@@ -234,6 +238,7 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     common = toCommonSettings(),
     screensaverAfterMin = screensaverAfterMin,
     sleepMachineWithSaver = sleepMachineWithSaver,
+    wakeMachineWithSaver = wakeMachineWithSaver,
     qcGrind = qcGrind,
     activeProfileId = activeProfileId,
     de1Address = de1Address,
@@ -249,6 +254,7 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
 private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSettings(common).copy(
     screensaverAfterMin = screensaverAfterMin,
     sleepMachineWithSaver = sleepMachineWithSaver,
+    wakeMachineWithSaver = wakeMachineWithSaver,
     qcGrind = qcGrind,
     activeProfileId = activeProfileId,
     de1Address = de1Address,

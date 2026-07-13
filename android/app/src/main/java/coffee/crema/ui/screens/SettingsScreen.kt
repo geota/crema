@@ -455,7 +455,8 @@ fun SettingsScreen(
                             CremaSettingsRow("Screensaver", "Show a dim clock after this long idle — tap to wake.", dot = true, dotOn = ui.screensaverAfterMin > 0, onDot = { vm.setScreensaverAfterMin(if (ui.screensaverAfterMin > 0) 0 else 30) }) {
                                 CremaStepper(value = ui.screensaverAfterMin.toDouble(), unit = "min", step = 5.0, min = 0.0, max = 120.0, fmt = { if (it <= 0.0) "Off" else fmt("%.0f", it) }, style = CremaStepperStyle.Bare, onChange = { vm.setScreensaverAfterMin(it.toInt()) })
                             }
-                            CremaSettingsRow("Sleep machine with screensaver", "Also put the DE1 to sleep when the saver starts — tapping wakes both.") { CremaSwitch(ui.sleepMachineWithSaver, vm::setSleepMachineWithSaver) }
+                            CremaSettingsRow("Sleep machine with screensaver", "Also put the DE1 to sleep when the saver starts.") { CremaSwitch(ui.sleepMachineWithSaver, vm::setSleepMachineWithSaver) }
+                            CremaSettingsRow("Wake machine with screensaver", "Tapping the saver also wakes a sleeping DE1. Off: the tap only dismisses — wake with the power button.") { CremaSwitch(ui.wakeMachineWithSaver, vm::setWakeMachineWithSaver) }
                             CremaSettingsRow("Keep screen on", "Hold the display awake while Crema is open.", last = true) { CremaSwitch(ui.keepScreenOnBrew, vm::setKeepScreenOnBrew) }
                         }
                         SetGroup("Units") {
