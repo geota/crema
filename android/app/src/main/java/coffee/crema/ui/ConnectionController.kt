@@ -336,10 +336,15 @@ class ConnectionController(
      *  (MAX_RECONNECT_ATTEMPTS) while the adapter was off, so nothing else retries. */
     private fun onBluetoothEnabled() {
         // Re-kick anything not already connected or mid-handshake. SCANNING is
-        // included on purpose: a scan in flight when the adapter went off is left
-        // suspended on the (now-silent) shared scan, so without a fresh connect it
-        // would sit on "Scanning…" forever once BT returns. connectScale/connect
-        // cancel+replace the stale want, so this is safe to call in that state.
+        // included on purpose: a scan in flight when the adapter went off is
+        // parked on the shared scan. The transport self-heals that scan when the
+        // adapter powers on (NordicBleTransport.rawScan's retryWhen), so a
+        // first-time pairing recovers on its own — but for a REMEMBERED device we
+        // still prefer the scan-free DIRECT connect below, which also works when
+        // the (unfiltered) scan is throttled to silence with the screen off
+        // (reaprime #107). connectScale/connect cancel+replace the stale want; the
+        // direct branch cancels it explicitly (see below) so the self-healed scan
+        // can't fire a second, competing connect for the same device.
         fun stale(s: De1BleManager.State) =
             s == De1BleManager.State.IDLE || s == De1BleManager.State.DISCONNECTED || s == De1BleManager.State.SCANNING
         fun stale(s: ScaleBleManager.State) =
@@ -356,6 +361,10 @@ class ConnectionController(
             if (st.rememberedDe1Address != null && stale(ble.state.value)) {
                 val direct = transport.resolveByAddress(st.rememberedDe1Address, "DE1")
                 if (direct != null) {
+                    // Drop any parked cold-start scan want first: the now-healed
+                    // scan must not deliver a match that fires a second, competing
+                    // ble.connect() against this direct connect.
+                    bleScanner.cancel(SCAN_LABEL_DE1)
                     ble.markScanning()
                     ble.connect(direct)
                 } else {
@@ -370,6 +379,7 @@ class ConnectionController(
                     null
                 }
                 if (direct != null && name != null) {
+                    bleScanner.cancel(SCAN_LABEL_SCALE)
                     scale.connect(direct, name)
                 } else {
                     connectScale()

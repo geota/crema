@@ -6,6 +6,7 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.channels.BufferOverflow
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.shareIn
 import no.nordicsemi.kotlin.ble.client.RemoteCharacteristic
 import no.nordicsemi.kotlin.ble.client.RemoteServices
@@ -33,6 +35,8 @@ import no.nordicsemi.kotlin.ble.client.android.ConnectionPriority
 import no.nordicsemi.kotlin.ble.client.android.Peripheral
 import no.nordicsemi.kotlin.ble.client.android.native
 import no.nordicsemi.kotlin.ble.core.ConnectionState
+import no.nordicsemi.kotlin.ble.core.Manager
+import no.nordicsemi.kotlin.ble.core.exception.BluetoothUnavailableException
 import no.nordicsemi.kotlin.ble.environment.android.NativeAndroidEnvironment
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -184,14 +188,41 @@ class NordicBleTransport(context: Context) : BleTransport {
             .onEach { result ->
                 runCatching { advertWhileConnectedProbe(result.peripheral.address) }
             }
-            // Nordic's scan throws (e.g. BluetoothUnavailableException when BT is
-            // off) from INSIDE this shared upstream. Without a catch here the
-            // failure kills the shareIn collector on `scope` — an uncaught
-            // coroutine crash — and never reaches a per-want `.catch` downstream
-            // (shareIn isolates upstream errors from subscribers). Swallow + log
-            // so a BT-off tap on "Pair" degrades to "no scan", not an app crash;
-            // WhileSubscribed restarts the scan on the next subscribe once BT is on.
-            .catch { t -> Log.w(TAG, "BLE scan stopped (Bluetooth off/unavailable?): ${t.message}", t) }
+            // Nordic's scan throws (BluetoothUnavailableException) from INSIDE
+            // this shared upstream when Bluetooth is off. A plain `.catch` here
+            // is a TRAP: swallowing the error COMPLETES the shared upstream, and
+            // because `SharingStarted.WhileSubscribed` only (re)starts the scan on
+            // a 0→1 subscriber transition, a "want" that stayed subscribed the
+            // whole time (BleScanner never got a match — see BleScanner.scanFor)
+            // keeps the subscriber count at 1. So turning Bluetooth back ON never
+            // restarts the scan and the app wedges on "Scanning…" until it is
+            // killed (the reported BT-off→on bug). Instead, RETRY: on a
+            // Bluetooth-off failure, park (zero-CPU) until the adapter reports
+            // POWERED_ON again, settle briefly, then re-collect the cold scan —
+            // the still-subscribed want gets a live scan with no re-subscribe.
+            .retryWhen { cause, _ ->
+                if (cause is BluetoothUnavailableException) {
+                    Log.w(TAG, "BLE scan stopped (Bluetooth off) — waiting for the adapter to power on", cause)
+                    // Suspends here with no CPU cost until Nordic's adapter watcher
+                    // flips the manager state; resumes the instant Bluetooth is on.
+                    centralManager.state.first { it == Manager.State.POWERED_ON }
+                    // A short settle: right after POWERED_ON the stack can still
+                    // reject a scan for a beat — a tiny delay avoids a fast retry
+                    // loop across that window (and it's not a tight loop regardless).
+                    delay(SCAN_RESTART_SETTLE_MS)
+                    Log.i(TAG, "Bluetooth powered on — restarting BLE scan")
+                    true
+                } else {
+                    // A non-Bluetooth scan failure (permission, scan-start error):
+                    // don't retry — fall through to the terminal .catch below.
+                    false
+                }
+            }
+            // Terminal guard: a non-retried failure must not kill the shareIn
+            // collector on `scope` (an uncaught coroutine crash) — swallow + log so
+            // it degrades to "no scan", not an app crash. (shareIn isolates upstream
+            // errors from subscribers, so this never reaches a per-want .catch.)
+            .catch { t -> Log.w(TAG, "BLE scan stopped (unrecoverable): ${t.message}", t) }
             .shareIn(scope, SharingStarted.WhileSubscribed(), replay = 0)
 
     override fun scan(matches: (name: String) -> Boolean): Flow<BleTransport.ScanMatch> =
@@ -484,6 +515,11 @@ class NordicBleTransport(context: Context) : BleTransport {
 
     private companion object {
         const val TAG = "NordicBleTransport"
+
+        /** Settle window after the adapter reports POWERED_ON before re-collecting
+         *  the scan — the BLE stack can briefly still reject a scan right after
+         *  power-on, and this keeps the retry from looping tightly across it. */
+        const val SCAN_RESTART_SETTLE_MS = 500L
 
         /** Notification silence required before an advert from a "connected"
          *  device is treated as a dead-link signal rather than a peripheral
