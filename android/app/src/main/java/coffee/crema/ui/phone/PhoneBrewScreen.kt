@@ -261,8 +261,17 @@ fun PhoneBrewScreen(
                 add(SheetItem(divider = true))
                 add(
                     SheetItem(
-                        if (ui.machineStateName == MachineState.Sleep) "sun" else "moon",
-                        if (ui.machineStateName == MachineState.Sleep) "Wake machine" else "Sleep machine",
+                        // Match the web + tablet PowerButton: while the machine is
+                        // disconnected, show the "plugs" disconnect symbol, NOT the
+                        // sleep-machine moon (which read as "asleep" even with no
+                        // DE1). Only once connected does the icon reflect asleep
+                        // (sun → wake) vs awake (moon → sleep).
+                        icon = when {
+                            !connected -> "plugs"
+                            ui.machineStateName == MachineState.Sleep -> "sun"
+                            else -> "moon"
+                        },
+                        label = if (connected && ui.machineStateName == MachineState.Sleep) "Wake machine" else "Sleep machine",
                         sub = if (connected) null else "Connect the DE1 first",
                     ) { if (connected) { if (ui.machineStateName == MachineState.Sleep) vm.wake() else vm.sleep() } },
                 )
