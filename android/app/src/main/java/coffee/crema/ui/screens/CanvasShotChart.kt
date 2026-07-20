@@ -60,7 +60,8 @@ import kotlin.math.max
  * THE DESIGN (from uPlot): ONE shared y-scale. pressure(bar)/flow(ml·s) plot raw
  * (≈0–10); temp(°C)/weight(g)/volume(ml) plot ÷10 (93 °C→9.3, 36 g→3.6). The
  * LEFT axis labels the scale as-is (bar / ml·s); the RIGHT axis labels the same
- * ticks ×10 (°C / g). y grows from 10 (+0.3 headroom), x from 60 s. Solid
+ * ticks ×10 (°C / g). y grows from 10 (+0.3 headroom), capped by the per-channel
+ * [CHART_PLOT_MAX] clamp (issue #35), x from 60 s. Solid
  * horizontal grid (off the left axis) + dashed vertical grid; the dashed pressure
  * setpoint rides along when pressure is shown; a faded copper "now" line + a
  * per-channel end-dot when [live].
@@ -80,6 +81,19 @@ private class CanvasChannel(
     /** Applies the plot transform (raw, ÷10, clamp); null = no value at this sample. */
     val valueOf: (TelemetrySample) -> Float?,
 )
+
+/**
+ * Ceiling for every plotted value, shared with the web chart (issue #35). The
+ * DE1's own channels can't exceed it (pressure/flow decode from `u16/4096`,
+ * max ≈16; temps ÷10 sit ≤ ~10.3) — but the scale-fed channels (weight ÷10,
+ * weight-flow) are unbounded, so a single BLE spike (e.g. a 30 000 g misread)
+ * used to blow the shared y-axis for the whole shot. Clamping at the plot
+ * transform pegs an errant sample at the ceiling instead; sane data is
+ * untouched. Negative readings (cup lifted mid-shot) peg at the 0 floor.
+ */
+private const val CHART_PLOT_MAX = 16f
+
+private fun Float.plotClamped(): Float = coerceIn(0f, CHART_PLOT_MAX)
 
 @Composable
 fun CanvasShotChart(
@@ -102,13 +116,13 @@ fun CanvasShotChart(
     // reallocated on every telemetry frame (~25 Hz during a shot).
     val channels = remember(tel) {
         listOf(
-        CanvasChannel("pressure", tel.pressure, 2.6f) { it.pressure },
-        CanvasChannel("flow", tel.flow, 2.2f) { it.flow },
-        CanvasChannel("headTemp", tel.temp, 2.2f) { it.headTemp / 10f },
-        CanvasChannel("mixTemp", tel.temp2, 1.5f) { it.mixTemp / 10f },
-        CanvasChannel("weight", tel.weight, 2.2f, available = { s -> s.any { it.weight != null } }) { it.weight?.div(10f) },
-        CanvasChannel("weightFlow", tel.weight2, 1.5f, available = { s -> s.any { it.weightFlow != null } }) { it.weightFlow },
-        CanvasChannel("dispensedVolume", tel.flow2, 1.5f) { it.dispensedVolume / 10f },
+        CanvasChannel("pressure", tel.pressure, 2.6f) { it.pressure.plotClamped() },
+        CanvasChannel("flow", tel.flow, 2.2f) { it.flow.plotClamped() },
+        CanvasChannel("headTemp", tel.temp, 2.2f) { (it.headTemp / 10f).plotClamped() },
+        CanvasChannel("mixTemp", tel.temp2, 1.5f) { (it.mixTemp / 10f).plotClamped() },
+        CanvasChannel("weight", tel.weight, 2.2f, available = { s -> s.any { it.weight != null } }) { it.weight?.div(10f)?.plotClamped() },
+        CanvasChannel("weightFlow", tel.weight2, 1.5f, available = { s -> s.any { it.weightFlow != null } }) { it.weightFlow?.plotClamped() },
+        CanvasChannel("dispensedVolume", tel.flow2, 1.5f) { (it.dispensedVolume / 10f).plotClamped() },
         CanvasChannel(
             "resistance",
             tel.pressure2,
@@ -119,7 +133,7 @@ fun CanvasShotChart(
     }
     // The dashed pressure setpoint rides along whenever pressure is shown (web parity).
     val setpoint = remember(tel) {
-        CanvasChannel("setPressure", tel.pressure, 1.2f, dashed = true, alpha = 0.6f) { it.setGroupPressure }
+        CanvasChannel("setPressure", tel.pressure, 1.2f, dashed = true, alpha = 0.6f) { it.setGroupPressure.plotClamped() }
     }
     // Remembered (review #37): a history chart's samples are static, so
     // this used to re-filter + O(n)-scan availability on every recomposition

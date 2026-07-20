@@ -187,18 +187,24 @@ fun HistoryScreen(
             onConnect = onConnect,
         )
         Column(Modifier.weight(1f).fillMaxHeight()) {
+            // Short-window compaction (issue #35): on a landscape 8" tablet the
+            // full eyebrow + headlineLarge + subtitle header ate ~100dp of a
+            // ~700dp-tall window before the list. Below 800dp of height the
+            // title drops to one compact line (the shot count lives in the
+            // Shots stat tile anyway) and the stat tiles slim down.
+            val shortWindow = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 800
             Row(
-                Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 8.dp),
+                Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = if (shortWindow) 12.dp else 20.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Eyebrow("Library")
+                    if (!shortWindow) Eyebrow("Library")
                     Text(
                         "Shot history",
-                        style = MaterialTheme.typography.headlineLarge,
+                        style = if (shortWindow) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.headlineLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
-                    Text(
+                    if (!shortWindow) Text(
                         "${ui.history.size} shots on this device",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -277,7 +283,7 @@ fun HistoryScreen(
                     )
                 }
             } else {
-                StatsStrip(shots, ui.weightUnit)
+                StatsStrip(shots, ui.weightUnit, compact = shortWindow)
                 // Range filter chips (left) + sort split-button (right).
                 Row(
                     Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp),
@@ -438,7 +444,7 @@ fun HistoryScreen(
 // Doubles, so %f is safe. Day/week boundaries are simple millis math off
 // System.currentTimeMillis(); recomputed when `history` changes.
 @Composable
-private fun StatsStrip(history: List<StoredShot>, weightUnit: String) {
+private fun StatsStrip(history: List<StoredShot>, weightUnit: String, compact: Boolean = false) {
     // Stats over the passed (filter/range-scoped) list — issue 48. Six tiles,
     // matching the web (PWA): count, total + average weight, then the three
     // averages (ratio / time / rating). The phone shows just the three averages.
@@ -456,26 +462,27 @@ private fun StatsStrip(history: List<StoredShot>, weightUnit: String) {
     ) {
         val totalWt = convertWeight(s.totalWeightG?.toFloat(), weightUnit)
         val avgWt = convertWeight(s.avgWeightG?.toFloat(), weightUnit)
-        StatTile("Shots", "${s.count}", "shots", if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
-        StatTile("Weight", totalWt.value, s.totalWeightG?.let { totalWt.unit }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
-        StatTile("Avg weight", avgWt.value, s.avgWeightG?.let { avgWt.unit }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
-        StatTile("Avg ratio", s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
-        StatTile("Avg time", s.avgTimeS?.let { fmt("%.0f", it) } ?: "—", s.avgTimeS?.let { "s" }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
-        StatTile("Avg rating", s.avgRating?.let { fmt("%.1f", it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Shots", "${s.count}", "shots", if (narrow) Modifier.width(132.dp) else Modifier.weight(1f), compact)
+        StatTile("Weight", totalWt.value, s.totalWeightG?.let { totalWt.unit }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f), compact)
+        StatTile("Avg weight", avgWt.value, s.avgWeightG?.let { avgWt.unit }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f), compact)
+        StatTile("Avg ratio", s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f), compact)
+        StatTile("Avg time", s.avgTimeS?.let { fmt("%.0f", it) } ?: "—", s.avgTimeS?.let { "s" }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f), compact)
+        StatTile("Avg rating", s.avgRating?.let { fmt("%.1f", it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f), compact)
     }
 }
 
 @Composable
-private fun StatTile(label: String, value: String, unit: String?, modifier: Modifier = Modifier) {
+private fun StatTile(label: String, value: String, unit: String?, modifier: Modifier = Modifier, compact: Boolean = false) {
     CremaCard(modifier, shape = RoundedCornerShape(12.dp)) {
         Column(
-            Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            Modifier.padding(horizontal = 16.dp, vertical = if (compact) 8.dp else 14.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp),
         ) {
             Eyebrow(label)
             // PWA .hi-stat-val (22px mono) + em (11px SANS, half-size) — the unit must
             // be small + sans, not a 0.72x mono subscript (which read too big).
-            CremaValueUnit(value, unit, valueSize = 22.sp, unitSize = 11.sp, unitSans = true)
+            // Compact (short-window) drops the value a step to trim the strip.
+            CremaValueUnit(value, unit, valueSize = if (compact) 18.sp else 22.sp, unitSize = 11.sp, unitSans = true)
         }
     }
 }
