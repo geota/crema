@@ -67,6 +67,24 @@ private fun ageDays(publishedAt: String?): Long? = runCatching {
 }.getOrNull()
 
 /** One release check — two GETs, no auth, no caching. Call off the main thread. */
+/**
+ * Extract the nightly versionName from the release's asset names. The
+ * nightly release carries the APK **plus** its `.apk.idsig` and
+ * `.apk.sha256` siblings, and the GitHub API's asset order follows upload
+ * id — not contractual, and racy when the workflow uploads in parallel.
+ * Naively taking `assets[0]` occasionally parsed
+ * `0.0.4-nightly.25+g9eabfed.apk.idsig` as the "latest" version, which
+ * fails equality against the installed versionName and prompted users on
+ * the current nightly with an "update" to the very build they run. Pick
+ * the asset that IS the apk (exactly one `.apk`-suffixed asset exists),
+ * never positionally.
+ */
+internal fun nightlyVersionFromAssets(assetNames: List<String>): String? =
+    assetNames
+        .firstOrNull { it.startsWith("crema-nightly-") && it.endsWith(".apk") }
+        ?.removePrefix("crema-nightly-")
+        ?.removeSuffix(".apk")
+
 suspend fun checkForUpdates(json: Json): UpdateInfo = withContext(Dispatchers.IO) {
     runCatching {
         val stable = getJson("$REPO_API/releases/latest", json)
@@ -74,11 +92,10 @@ suspend fun checkForUpdates(json: Json): UpdateInfo = withContext(Dispatchers.IO
         val stableTag = stable?.get("tag_name")?.jsonPrimitive?.content
         // The nightly's versionName rides its APK asset name — the release
         // name/tag are both just "nightly".
-        val nightlyAsset = nightly?.get("assets")?.jsonArray?.firstOrNull()
-            ?.jsonObject?.get("name")?.jsonPrimitive?.content
-        val nightlyVersion = nightlyAsset
-            ?.removePrefix("crema-nightly-")
-            ?.removeSuffix(".apk")
+        val assetNames = nightly?.get("assets")?.jsonArray
+            ?.mapNotNull { it.jsonObject["name"]?.jsonPrimitive?.content }
+            .orEmpty()
+        val nightlyVersion = nightlyVersionFromAssets(assetNames)
         UpdateInfo(
             latestStable = stableTag?.removePrefix("v"),
             latestNightly = nightlyVersion,
