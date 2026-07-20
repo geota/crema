@@ -29,9 +29,11 @@
 	 */
 	import {
 		waterTankMl,
+		waterTankPercent,
 		waterRefillSoon,
 		NoActiveProfileError,
 		ProfileSyncFailedError,
+		ScaleRequiredError,
 		type UiSnapshot
 	} from '$lib/state';
 	import { ShotPhase, MachineState, MmrRegister } from '$lib/core/crema-core';
@@ -63,7 +65,7 @@
 	import { toast } from '$lib/components/shared/toast.svelte';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getActiveShotStore, getBrewContext, getMachineReadout } from '$lib/state';
-	import { BrewParamState, type BrewParamSeed } from './brew-params.svelte';
+	import { BrewParamState, DEFAULT_BREW_PARAMS, type BrewParamSeed } from './brew-params.svelte';
 	import ExtractionTimer from './ExtractionTimer.svelte';
 	import ChannelReadout from './ChannelReadout.svelte';
 	import PhaseIndicatorCard from './PhaseIndicatorCard.svelte';
@@ -1078,6 +1080,15 @@
 		const m = convertVolume(ml, prefs.volumeUnit);
 		return m.unit ? `${m.value} ${m.unit}` : m.value;
 	};
+	/** The Tank readout in the chosen style — volume, or percent of a
+	 *  typical full fill (Settings → Display → Water tank). */
+	const tankText = $derived.by(() => {
+		if (prefs.waterLevelUnit === 'percent') {
+			const pct = waterTankPercent(ui.waterLevel);
+			return pct == null ? '—' : `${pct}%`;
+		}
+		return convertVolumeText(waterMl);
+	});
 	/** Whether the tank is near the DE1's refill threshold — the E2 cue. */
 	const refillSoon = $derived(
 		waterRefillSoon(ui.waterLevel, ui.waterRefillThreshold)
@@ -1184,6 +1195,22 @@
 	 * (the lazy re-upload failed). Both clear themselves when the user
 	 * picks a profile / taps Coffee again.
 	 */
+	// ── Tap-to-tare (issue #37) ──────────────────────────────────────────
+	/** Copper pulse on the weight card after a tap-tare (scale-page parity). */
+	let tarePulse = $state(false);
+	let tarePulseTimer: ReturnType<typeof setTimeout> | undefined;
+	$effect(() => () => clearTimeout(tarePulseTimer));
+	/** Tapping the weight card tares — only while a scale is connected and
+	 *  no shot is pulling (a mid-shot tare would corrupt stop-at-weight). */
+	const tareOnTap = $derived(scaleConnected && !running);
+	function tapTare(): void {
+		if (!app || !tareOnTap) return;
+		void app.tareScale();
+		tarePulse = true;
+		clearTimeout(tarePulseTimer);
+		tarePulseTimer = setTimeout(() => (tarePulse = false), 600);
+	}
+
 	async function toggleRun(): Promise<void> {
 		if (!app || stateTransitionPending) return;
 		stateTransitionPending = true;
@@ -1200,12 +1227,22 @@
 			// snapshot pattern — capture-time-frozen, not live-read at
 			// export, so a later dial change cannot rewrite history.
 			const live = params.current;
+			// Per-shot grind snapshot (issue #30, Android `qcGrind` parity):
+			// capture the QC grind dial when it carries signal — the active
+			// bean seeded it, or the user dialed it. The bare placeholder
+			// (no bean grind, untouched dial) records nothing, so history
+			// falls back to the frozen bean snapshot as before.
+			const beanGrindRaw = beanLibrary.activeBean?.grinderSetting?.trim().replace(',', '.');
+			const beanHasGrind = beanGrindRaw
+				? Number.isFinite(Number.parseFloat(beanGrindRaw))
+				: false;
 			app.setBrewParamsSnapshot({
 				yieldTarget: live.yield,
 				brewTemp: live.brewTemp,
 				preinfuseTarget: live.preinf,
 				stopOnWeight: live.stopOnWeight,
-				autoTare: live.autoTare
+				autoTare: live.autoTare,
+				grind: beanHasGrind || live.grind !== DEFAULT_BREW_PARAMS.grind ? live.grind : null
 			});
 			// The fingerprint compare + lazy re-upload happens inside
 			// `startShot()`; when no upload is needed the call returns
@@ -1213,7 +1250,11 @@
 			// indicator during a genuine upload window.
 			await app.startShot(params.qcOverrides());
 		} catch (e) {
-			if (e instanceof NoActiveProfileError || e instanceof ProfileSyncFailedError) {
+			if (
+				e instanceof NoActiveProfileError ||
+				e instanceof ProfileSyncFailedError ||
+				e instanceof ScaleRequiredError
+			) {
 				shotStartError = e.message;
 			} else {
 				throw e;
@@ -1385,6 +1426,8 @@
 						secondaryValue={weightFlowVal}
 						secondaryUnit="g/s"
 						secondaryColor="var(--tel-weight-2)"
+						onclick={tareOnTap ? tapTare : undefined}
+						flash={tarePulse}
 					/>
 				</div>
 				{#snippet liveChart()}
@@ -1470,7 +1513,7 @@
 				     shows when the level nears the DE1's refill threshold. -->
 				<span class="t-eyebrow">Tank</span>
 				<span style:color={refillSoon ? 'var(--warning)' : undefined}>
-					{convertVolumeText(waterMl)}{#if refillSoon}
+					{tankText}{#if refillSoon}
 						· refill soon{/if}
 				</span>
 			</div>

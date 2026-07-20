@@ -9,6 +9,7 @@ export {
 	getCremaUiState,
 	applyEvent,
 	waterTankMl,
+	waterTankPercent,
 	waterRefillSoon,
 	machineErrorText,
 	EMPTY_DE1_CALIBRATION,
@@ -32,6 +33,7 @@ export {
 	createCremaApp,
 	NoActiveProfileError,
 	ProfileSyncFailedError,
+	ScaleRequiredError,
 	type ReplayCaptureOptions
 } from './app.svelte';
 export {

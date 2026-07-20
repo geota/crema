@@ -133,6 +133,13 @@ export interface ShotCompletion {
 	preinfuseTarget?: number | null;
 	stopOnWeight?: boolean;
 	autoTare?: boolean;
+	/**
+	 * The QC grind dial at shot start, or `null`/absent when it carried no
+	 * signal. Written to `metadata.grinderSetting` at capture so the shot
+	 * records the grind actually used (issue #30 — Android stores its
+	 * `qcGrind` the same way; web used to leave this for a post-hoc edit).
+	 */
+	grindSetting?: number | null;
 }
 
 /** The reactive shot-history library. One instance per app — {@link getHistoryStore}. */
@@ -247,7 +254,15 @@ export class HistoryStore {
 		const metadata: ShotMetadata = {
 			dose: completion.dose ?? null,
 			rating: null,
-			notes: null
+			notes: null,
+			// Same number formatting as the history grind stepper's commit.
+			...(completion.grindSetting != null
+				? {
+						grinderSetting: Number.isInteger(completion.grindSetting)
+							? String(completion.grindSetting)
+							: completion.grindSetting.toFixed(1)
+					}
+				: {})
 		};
 		const record: StoredShot = {
 			formatVersion: STORED_SHOT_FORMAT_VERSION,

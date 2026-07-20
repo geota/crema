@@ -24,7 +24,9 @@
 		secondaryLabel,
 		secondaryValue,
 		secondaryUnit,
-		secondaryColor
+		secondaryColor,
+		onclick,
+		flash = false
 	}: {
 		/** Phosphor icon name (e.g. 'gauge', 'drop', 'thermometer', 'scales'). */
 		icon: string;
@@ -46,12 +48,35 @@
 		secondaryUnit?: string;
 		/** Secondary hue — a `--tel-*-2` token. */
 		secondaryColor?: string;
+		/** Optional tap action — makes the whole tile a button (the weight
+		 *  card taps to tare, issue #37). */
+		onclick?: () => void;
+		/** Brief copper pulse after the tap action fired (the tare flash). */
+		flash?: boolean;
 	} = $props();
 
 	const hasSecondary = $derived(secondaryLabel != null && secondaryValue != null);
+	const tappable = $derived(onclick != null);
 </script>
 
-<div class="crema-readout" class:has-secondary={hasSecondary}>
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<!-- role="button" + tabindex are set together, only when tappable — the
+     static analyser can't see the conditional pairing. -->
+<div
+	class="crema-readout"
+	class:has-secondary={hasSecondary}
+	class:is-tappable={tappable}
+	class:is-flash={flash}
+	role={tappable ? 'button' : undefined}
+	tabindex={tappable ? 0 : undefined}
+	{onclick}
+	onkeydown={(e) => {
+		if (tappable && (e.key === 'Enter' || e.key === ' ')) {
+			e.preventDefault();
+			onclick?.();
+		}
+	}}
+>
 	<div class="crema-readout-side crema-readout-primary">
 		<div class="crema-readout-head">
 			<Icon
@@ -92,6 +117,18 @@
 		grid-template-columns: 1fr 1fr;
 		column-gap: 12px;
 		align-items: start;
+	}
+	.crema-readout.is-tappable {
+		cursor: pointer;
+		transition: box-shadow 120ms ease;
+	}
+	.crema-readout.is-tappable:focus-visible {
+		outline: 2px solid var(--copper, #b87333);
+		outline-offset: 2px;
+	}
+	/* The tare pulse — a brief copper ring, the scale page's tare-flash. */
+	.crema-readout.is-flash {
+		box-shadow: 0 0 0 2px var(--copper, #b87333) inset;
 	}
 	.crema-readout-val-right {
 		justify-content: flex-end;

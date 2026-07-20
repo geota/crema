@@ -212,6 +212,7 @@ function recordShotHistory(
 		preinfuseTarget: brewParams?.preinfuseTarget ?? null,
 		stopOnWeight: brewParams?.stopOnWeight,
 		autoTare: brewParams?.autoTare,
+		grindSetting: brewParams?.grind ?? null,
 		tags:
 			liveBeanForTags?.tags && liveBeanForTags.tags.length > 0
 				? [...liveBeanForTags.tags]

@@ -54,6 +54,7 @@ export type WeightUnit = 'g' | 'oz';
 export type TempUnit = 'C' | 'F';
 export type VolumeUnit = 'ml' | 'floz';
 export type PressureUnit = 'bar' | 'psi';
+export type WaterLevelUnit = 'ml' | 'percent';
 
 /** Display density — card padding / control sizing. */
 export type Density = 'compact' | 'comfortable' | 'spacious';
@@ -82,6 +83,8 @@ export interface Settings {
 	volumeUnit: VolumeUnit;
 	/** Pressure display unit. */
 	pressureUnit: PressureUnit;
+	/** Water-tank readout style — ml or percent of a typical full fill. */
+	waterLevelUnit: WaterLevelUnit;
 
 	// ── Brew defaults ────────────────────────────────────────────────────
 	/** Default dose for new profiles, grams. */
@@ -92,7 +95,11 @@ export interface Settings {
 	defaultBrewTempC: number;
 	/** Default pre-infusion time, seconds. */
 	defaultPreinfusionS: number;
-	/** Run a short flush after steaming. */
+	/**
+	 * Run a short group flush after steaming (app-level; distinct from
+	 * the DE1 firmware's own steam-wand purge — see `steamTwoTapStop`).
+	 * Default off, matching core and Android.
+	 */
 	autoPurgeAfterSteam: boolean;
 	/** Flush the group before each shot. */
 	groupFlushBeforeShot: boolean;
@@ -126,11 +133,18 @@ export interface Settings {
 	 */
 	volumeStopWithScale: boolean;
 	/**
+	 * Opt-in: refuse to start a shot when stop-at-weight would arm (a
+	 * weight target resolves) but no scale is connected — the de1app
+	 * `start_espresso_only_if_scale_connected` / reaprime `blockOnNoScale`
+	 * pattern, both also default-off. Off = warn non-blockingly instead.
+	 */
+	requireScale: boolean;
+	/**
 	 * Global maximum shot duration, seconds — a safety guardrail when
-	 * neither SAW nor SAV is configured. `0` means "no max." Default
-	 * 60 s (legacy `espresso_max_time` default). Pushed to the core via
-	 * `setMaxShotDuration`. Settings-only because neither de1app nor
-	 * reaprime carry this per-profile.
+	 * neither SAW nor SAV is configured. `0` means "no max", the default —
+	 * the profile dictates shot length (geota/crema#32). Pushed to the
+	 * core via `setMaxShotDuration`. Settings-only because neither de1app
+	 * nor reaprime carry this per-profile.
 	 */
 	maxShotDurationS: number;
 
@@ -155,6 +169,21 @@ export interface Settings {
 	 * of tablet activity. Useful for shared / café machines.
 	 */
 	suppressDe1Sleep: boolean;
+	/**
+	 * DE1 firmware two-tap steam stop (MMR `SteamTwoTapStop`): first stop
+	 * tap ends steam without the wand auto-purge; a second tap purges.
+	 * Written to the machine on change + re-seeded on connect
+	 * (geota/crema#34).
+	 */
+	steamTwoTapStop: boolean;
+	/**
+	 * Fan-on temperature threshold, °C (MMR `FanThreshold`, 0..=60 —
+	 * de1app/Decenza's range; default 55 splits their 60 and reaprime's
+	 * 50). Re-seeded on every connect — the DE1 boots with a low firmware
+	 * default and de1app rewrote it each connect, so without this the fan
+	 * runs near-constantly under Crema (geota/crema#31).
+	 */
+	fanThresholdC: number;
 
 	// ── Equipment ────────────────────────────────────────────────────────
 	/**
@@ -265,6 +294,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	tempUnit: 'C',
 	volumeUnit: 'ml',
 	pressureUnit: 'bar',
+	waterLevelUnit: 'ml',
 
 	get defaultDoseG() {
 		return brewDefaults().doseG;
@@ -278,17 +308,20 @@ export const DEFAULT_SETTINGS: Settings = {
 	get defaultPreinfusionS() {
 		return brewDefaults().preinfusionS;
 	},
-	autoPurgeAfterSteam: true,
+	autoPurgeAfterSteam: false,
 	groupFlushBeforeShot: false,
 	steamEcoMode: false,
 	autoTareOnShotStart: true,
 	stopOnWeight: true,
 	volumeStopWithScale: false,
+	requireScale: false,
 	maxShotDurationS: 0,
 
 	telemetryRateHz: 50,
 	lineFrequencyHz: 0,
 	suppressDe1Sleep: true,
+	steamTwoTapStop: false,
+	fanThresholdC: 55,
 
 	grinderModel: '',
 
@@ -379,13 +412,17 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		autoTare: s.autoTareOnShotStart,
 		stopOnWeight: s.stopOnWeight,
 		volumeStopWithScale: s.volumeStopWithScale,
+		requireScale: s.requireScale,
 		steamEco: s.steamEcoMode,
+		steamTwoTap: s.steamTwoTapStop,
+		fanThresholdC: s.fanThresholdC,
 		preFlush: s.groupFlushBeforeShot,
 		steamPurge: s.autoPurgeAfterSteam,
 		weightUnit: s.weightUnit,
 		tempUnit: s.tempUnit,
 		pressureUnit: s.pressureUnit,
 		volumeUnit: s.volumeUnit,
+		waterLevelUnit: s.waterLevelUnit,
 		chartChannels: CHART_FLAG_TO_KEY.filter(([flag]) => s[flag]).map(([, key]) => key),
 		keepScreenOnBrew: s.keepScreenOnBrew,
 		showDebugPanel: s.showDebugPanel,
@@ -423,12 +460,17 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		// backup / another shell omitting it reads as "off".
 		volumeStopWithScale: c.volumeStopWithScale ?? false,
 		steamEcoMode: c.steamEco,
+		// Nullable additive fields: older blobs read as the canonical defaults.
+		requireScale: c.requireScale ?? false,
+		steamTwoTapStop: c.steamTwoTap ?? false,
+		fanThresholdC: c.fanThresholdC ?? 55,
 		groupFlushBeforeShot: c.preFlush,
 		autoPurgeAfterSteam: c.steamPurge,
 		weightUnit: c.weightUnit as WeightUnit,
 		tempUnit: c.tempUnit as TempUnit,
 		pressureUnit: c.pressureUnit as PressureUnit,
 		volumeUnit: c.volumeUnit as VolumeUnit,
+		waterLevelUnit: (c.waterLevelUnit ?? 'ml') as WaterLevelUnit,
 		showPressure: on.has('pressure'),
 		showResistance: on.has('resistance'),
 		showFlow: on.has('flow'),

@@ -54,6 +54,12 @@
 		// pragmatic for a setting users rarely change mid-session.)
 		void app?.applySteamEcoMode(on);
 	}
+	function setSteamTwoTapStop(on: boolean): void {
+		settings.set('steamTwoTapStop', on);
+		// Written now while connected; the connect path re-seeds it, so an
+		// offline toggle still lands on the next connect.
+		void app?.applySteamTwoTapStop(on);
+	}
 </script>
 
 <StSectionHead
@@ -159,6 +165,18 @@
 		{/snippet}
 	</StRow>
 	<StRow
+		title="Require scale to start"
+		sub="Refuse to start a shot that has a weight target while no scale is connected — instead of the default warn-and-continue. For anyone on autopilot who'd rather be stopped than surprised."
+	>
+		{#snippet control()}
+			<StToggle
+				on={prefs.requireScale}
+				onChange={(v) => settings.set('requireScale', v)}
+				label="Require scale to start"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow
 		title="Max shot duration"
 		sub="Safety guardrail — abort the shot if it runs longer than this. Click the dot to disable."
 	>
@@ -177,14 +195,14 @@
 		{/snippet}
 	</StRow>
 	<StRow
-		title="Auto-purge after steam"
-		sub="Run a 3s flush after steaming to clear the boiler."
+		title="Group flush after steam"
+		sub="Rinse the group head with a short flush after steaming — keeps the brew path fresh if you steam before pulling the shot. The steam wand's own quick purge is the machine's — see two-tap steam stop below."
 	>
 		{#snippet control()}
 			<StToggle
 				on={prefs.autoPurgeAfterSteam}
 				onChange={(v) => settings.set('autoPurgeAfterSteam', v)}
-				label="Auto-purge after steam"
+				label="Group flush after steam"
 			/>
 		{/snippet}
 	</StRow>
@@ -209,6 +227,18 @@
 				on={prefs.steamEcoMode}
 				onChange={setSteamEcoMode}
 				label="Steam eco mode"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Two-tap steam stop"
+		sub="First stop tap ends steaming without the wand's auto-purge; tap again to purge once the pitcher is out of the way. Written to the machine."
+	>
+		{#snippet control()}
+			<StToggle
+				on={prefs.steamTwoTapStop}
+				onChange={setSteamTwoTapStop}
+				label="Two-tap steam stop"
 			/>
 		{/snippet}
 	</StRow>

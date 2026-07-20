@@ -31,6 +31,7 @@ import { EMPTY_DE1_DIAGNOSTICS } from '$lib/ble/de1';
 import type { ScaleState } from '$lib/ble/scale';
 import {
 	water_tank_ml as wasmWaterTankMl,
+	water_tank_percent as wasmWaterTankPercent,
 	subStateErrorMessage
 } from '$lib/wasm/de1_wasm';
 
@@ -601,6 +602,16 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 export function waterTankMl(mm: number | null | undefined): number | null {
 	if (mm == null || !Number.isFinite(mm)) return null;
 	return wasmWaterTankMl(mm);
+}
+
+/**
+ * Convert a DE1 water-level reading (sensor depth, mm) to a whole
+ * percentage of a typical full fill (the core's `water_tank_percent`,
+ * clamped 0..=100). Returns `null` for a missing reading.
+ */
+export function waterTankPercent(mm: number | null | undefined): number | null {
+	if (mm == null || !Number.isFinite(mm)) return null;
+	return wasmWaterTankPercent(mm);
 }
 
 /**

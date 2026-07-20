@@ -88,6 +88,23 @@ export class ProfileSyncFailedError extends Error {
 }
 
 /**
+ * Thrown by {@link CremaApp.startShot} when the "Require scale to start"
+ * setting is on, this shot resolves a weight target, and no scale is
+ * connected (issue #29 — the de1app
+ * `start_espresso_only_if_scale_connected` / reaprime `blockOnNoScale`
+ * pattern). The DE1 is left untouched; the dashboard surfaces the message
+ * as a banner and the accompanying toast offers a one-tap Connect.
+ */
+export class ScaleRequiredError extends Error {
+	constructor(
+		message: string = 'Shot not started — no scale connected, and "Require scale to start" is on.'
+	) {
+		super(message);
+		this.name = 'ScaleRequiredError';
+	}
+}
+
+/**
  * The "cleared DE1 readout" snapshot patch — every DE1-derived field returned
  * to its pre-connect blank. Applied on connect, on disconnect and at the start
  * of a capture replay, so a stale machine readout never bleeds across a
@@ -131,6 +148,13 @@ const CLEARED_DE1_READOUT = {
  * enough to ride out a transient hiccup, tight enough to reject a real stall.
  */
 const MAX_TELEMETRY_GAP_S = 2;
+
+/**
+ * Battery percentage at or below which the one-per-connection "charge your
+ * scale" warning fires (issue #29) — early enough to charge before a session,
+ * late enough not to nag.
+ */
+const SCALE_LOW_BATTERY_PCT = 25;
 
 /**
  * localStorage key for the most recent profile-upload fingerprint —
@@ -200,6 +224,13 @@ export class CremaApp {
 	 * uses for its Δt. Reset on disconnect so a stale gap is never integrated.
 	 */
 	private lastTelemetryAtMs: number | null = null;
+
+	/**
+	 * Whether the low-battery toast has fired for the current scale
+	 * connection (issue #29) — reset on disconnect so the next session
+	 * warns again, but a single connection never nags twice.
+	 */
+	private scaleLowBatteryWarned = false;
 
 	/**
 	 * `performance.now()` of the most recent `ShotStarted` event, or `null`
@@ -322,6 +353,35 @@ export class CremaApp {
 					// prior session.
 					if (getSettingsStore().current.suppressDe1Sleep) {
 						void this.markUserPresent();
+					}
+					// Re-seed the machine settings Crema owns a preference
+					// for — the DE1 boots with firmware defaults and forgets
+					// these across power cycles; de1app and Decenza both
+					// re-send them on every connect (geota/crema#31, #34).
+					{
+						const s = getSettingsStore().current;
+						void this.applyFanThreshold(s.fanThresholdC).catch(() => {});
+						void this.applySteamTwoTapStop(s.steamTwoTapStop).catch(() => {});
+						// The persisted Quick-Controls machine params: steam
+						// temp/time + hot water (one cuuid_0B packet), steam
+						// flow, flush time/temp. Without this a power-cycled
+						// machine ran firmware defaults until the user next
+						// touched a QC dial.
+						void this.setSteamHotwater({
+							steamTempC: s.qcSteamTempC,
+							steamTimeoutS: s.qcSteamTimeS,
+							hotWaterTempC: s.qcHotWaterTempC,
+							hotWaterVolumeMl: s.qcHotWaterVolumeMl
+						}).catch(() => {});
+						void this.setSteamFlow(s.qcSteamFlowMlS).catch(() => {});
+						void this.setFlushTimeoutS(s.qcFlushTimeS).catch(() => {});
+						void this.setFlushTemp(s.qcFlushTempC).catch(() => {});
+						// Eco last: it read-modify-writes the steam packet on
+						// top of the plain seed. Only pushed when ON — eco-off
+						// IS the plain seed above.
+						if (s.steamEcoMode) {
+							void this.applySteamEcoMode(true).catch(() => {});
+						}
 					}
 				}
 			},
@@ -482,6 +542,16 @@ export class CremaApp {
 					.sawModelJson()
 					.then((blob) => writeJson(SAW_MODEL_KEY, blob))
 					.catch(() => undefined);
+			}
+			if (event.type === 'ScaleReading') {
+				// Low-battery warning (issue #29): one toast per connection
+				// the first time the scale's battery reads at or below the
+				// threshold, so it can be charged before it dies mid-shot.
+				const batt = this.state.current.scaleBattery;
+				if (batt !== null && batt <= SCALE_LOW_BATTERY_PCT && !this.scaleLowBatteryWarned) {
+					this.scaleLowBatteryWarned = true;
+					toast.info(`Scale battery low (${batt}%) — charge it soon`);
+				}
 			}
 			if (event.type === 'SawAutoZeroed') {
 				// The guard trusted the settled cup and re-tared in software —
@@ -865,6 +935,7 @@ export class CremaApp {
 		// disconnect.
 		this.clearScaleHeartbeat();
 		await this.scale.disconnect();
+		this.scaleLowBatteryWarned = false;
 		this.state.patch({
 			scaleWeight: null,
 			scaleFlow: null,
@@ -1042,6 +1113,25 @@ export class CremaApp {
 	 */
 	async applySteamEcoMode(enabled: boolean): Promise<void> {
 		this.applyCoreOutput(await this.core.enableSteamEcoMode(enabled));
+	}
+
+	/**
+	 * Write the fan-on temperature threshold (°C, clamped 0..=50 by the
+	 * core) to the DE1. Re-seeded on every connect — the machine boots
+	 * with a low firmware default, so without the seed the fan runs
+	 * near-constantly (geota/crema#31).
+	 */
+	async applyFanThreshold(celsius: number): Promise<void> {
+		this.applyCoreOutput(await this.core.setFanThreshold(Math.round(celsius)));
+	}
+
+	/**
+	 * Toggle the DE1 firmware's two-tap steam stop: first stop tap ends
+	 * steam without the wand auto-purge; a second tap purges
+	 * (geota/crema#34).
+	 */
+	async applySteamTwoTapStop(enabled: boolean): Promise<void> {
+		this.applyCoreOutput(await this.core.setSteamTwoTapStop(enabled ? 1 : 0));
 	}
 
 	/**
@@ -1720,6 +1810,7 @@ export class CremaApp {
 		preinfuseTarget: number;
 		stopOnWeight: boolean;
 		autoTare: boolean;
+		grind?: number | null;
 	}): void {
 		this.brewParamsAtShotStart = { ...snapshot };
 	}
@@ -1760,6 +1851,37 @@ export class CremaApp {
 		const profile = profiles.get(id);
 		if (!profile) {
 			throw new NoActiveProfileError();
+		}
+		// Pre-shot scale gate (issue #29). Only when this shot actually
+		// resolves a weight target (QC dial override, else the profile's own
+		// yield — the same precedence SAW uses): a profile with no target
+		// never needed a scale, so it gets no noise (the Decenza/reaprime
+		// "profile uses weight" gate).
+		const weightTarget = qc.yield ?? profile.yieldOut;
+		if (
+			getSettingsStore().current.stopOnWeight &&
+			weightTarget > 0 &&
+			this.state.current.scaleState !== 'ready'
+		) {
+			// The toast's action button is a user gesture, so Web Bluetooth
+			// allows the chooser straight from it; the #15 fix arms SAW
+			// mid-shot, so a quick connect can still save this very shot.
+			if (getSettingsStore().current.requireScale) {
+				// Opt-in hard block (de1app `start_espresso_only_if_scale_connected`
+				// / reaprime `blockOnNoScale` — both also default off). The DE1
+				// is left untouched.
+				toast.action('Connect the scale to start the shot', 'Connect', () =>
+					void this.connectScale()
+				);
+				throw new ScaleRequiredError();
+			}
+			// Default: NON-blocking cue — a modal between the user and a
+			// tamped puck is workflow poison.
+			toast.action(
+				'No scale connected — stop-at-weight is off for this shot',
+				'Connect',
+				() => void this.connectScale()
+			);
 		}
 		// Lazy profile sync — compare the desired fingerprint against the
 		// cached "what's on the DE1" fingerprint. `syncActiveProfile` is

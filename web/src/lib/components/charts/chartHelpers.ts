@@ -46,14 +46,29 @@ export function xRangeStep(stepSec: number): uPlot.Scale.Range {
 }
 
 /**
+ * Ceiling for the shared y-scale, matching Android's `CHART_PLOT_MAX` clamp
+ * (issue #35). The DE1's own channels can't exceed 16 (pressure/flow decode
+ * from `u16/4096`; temps plot ÷10 and sit ≤ ~10.3) — but the scale-fed
+ * channels (weight ÷10, weight-flow) are unbounded, so a single BLE spike
+ * (e.g. a 30 000 g misread) used to blow the y-axis for the whole shot.
+ * Capping the axis pegs an errant series at the top edge (uPlot clips to the
+ * plot area) while sane data is untouched.
+ */
+export const CHART_PLOT_MAX = 16;
+
+/**
  * The shared y-scale `range` callback — one scale for all four channels. The
  * top floats from 10 upward so a mid-shot flow / pressure spike grows both
- * axes together. A hair of headroom (+0.3) keeps a peak landing on a round
- * number off the very top edge, so its end-dot never half-clips.
+ * axes together, capped at {@link CHART_PLOT_MAX} (+ headroom) so one errant
+ * sample can't flatten the whole chart. A hair of headroom (+0.3) keeps a
+ * peak landing on a round number off the very top edge, so its end-dot never
+ * half-clips.
  */
 export const yRange: uPlot.Scale.Range = (_u, _min, dataMax) => [
 	0,
-	Number.isFinite(dataMax) ? Math.max(10, Math.ceil(dataMax + 0.3)) : 10
+	Number.isFinite(dataMax)
+		? Math.max(10, Math.ceil(Math.min(dataMax, CHART_PLOT_MAX) + 0.3))
+		: 10
 ];
 
 /**

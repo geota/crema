@@ -42,6 +42,10 @@ export interface ActiveShotBrewParams {
 	readonly preinfuseTarget: number;
 	readonly stopOnWeight: boolean;
 	readonly autoTare: boolean;
+	/** The QC grind dial at shot start, or `null` when the dial carried no
+	 *  signal (no bean grind + untouched). Captured per-shot so the record
+	 *  holds the grind actually used — Android `qcGrind` parity (#30). */
+	readonly grind?: number | null;
 }
 
 /**

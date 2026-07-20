@@ -45,9 +45,11 @@
 	import StToggle from '../StToggle.svelte';
 	import StSelect from '../StSelect.svelte';
 	import StStepper from '../StStepper.svelte';
+	import StSlider from '../StSlider.svelte';
 	import StButton from '../StButton.svelte';
 	import StStatusDot from '../StStatusDot.svelte';
 	import FirmwareUpdateModal from '../FirmwareUpdateModal.svelte';
+	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	let {
 		app,
@@ -58,6 +60,28 @@
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
 	const machine = getMachineReadout();
+
+	/**
+	 * Fan-threshold commit with a confirm gate (Decenza treats this as an
+	 * expert calibration setting behind a warning; the dialog is our
+	 * equivalent). Cancel leaves the setting untouched — the slider snaps
+	 * back to the committed pref on re-render.
+	 */
+	async function commitFanThreshold(v: number): Promise<void> {
+		const ok = await confirmDialog({
+			title: 'Change fan threshold?',
+			message:
+				`The case fan cools the DE1's electronics. ` +
+				(v === 0
+					? 'Setting 0 keeps the fan running whenever the machine is on.'
+					: `Above ${v} °C the fan turns on; a higher threshold runs it less (quieter) but the electronics run warmer.`) +
+				' The value is written to the machine now and re-applied on every connect.',
+			confirmLabel: v === 0 ? 'Set to always on' : `Set to ${v} °C`
+		});
+		if (!ok) return;
+		settings.set('fanThresholdC', v);
+		void app?.applyFanThreshold(v);
+	}
 
 	/** The DE1 connection-diagnostics snapshot — proof the device is a DE1. */
 	const diag = $derived(snapshot.de1Diagnostics);
@@ -431,6 +455,25 @@
 					if (v) void app?.markUserPresent();
 				}}
 				label="Keep DE1 awake"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Fan on above"
+		sub="The internal temperature that turns the case fan on. Higher =
+		quieter idle. Written to the machine now and re-applied on every
+		connect (the DE1 forgets it across power cycles)."
+	>
+		{#snippet control()}
+			<StSlider
+				value={prefs.fanThresholdC}
+				min={0}
+				max={60}
+				step={1}
+				unit=" °C"
+				format={(v) => (v === 0 ? 'Always on' : `${v} °C`)}
+				label="Fan on above"
+				onCommit={commitFanThreshold}
 			/>
 		{/snippet}
 	</StRow>

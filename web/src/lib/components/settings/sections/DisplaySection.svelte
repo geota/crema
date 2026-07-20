@@ -155,6 +155,19 @@
 			/>
 		{/snippet}
 	</StRow>
+	<StRow title="Water tank" sub="How the Brew screen's tank readout reads.">
+		{#snippet control()}
+			<StSegment
+				equalWidth
+				value={prefs.waterLevelUnit}
+				options={[
+					{ value: 'ml', label: 'ml' },
+					{ value: 'percent', label: '%' }
+				]}
+				onChange={(v) => settings.set('waterLevelUnit', v as 'ml' | 'percent')}
+			/>
+		{/snippet}
+	</StRow>
 	<StRow title="Pressure">
 		{#snippet control()}
 			<StSegment
