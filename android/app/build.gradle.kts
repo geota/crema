@@ -347,7 +347,7 @@ dependencies {
 
     // JVM unit tests for pure shell logic (no device / FFI). kotlin-test mapped
     // onto the JUnit 4 runner AGP's unit-test task uses.
-    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.4.0")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.4.10")
     testImplementation("junit:junit:4.13.2")
 }
 
