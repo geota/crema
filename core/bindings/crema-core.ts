@@ -226,7 +226,11 @@ export interface Bean {
 export interface CommonSettings {
 	/** `"system" | "light" | "dark"`. Web `theme`. */
 	themeMode: string;
-	/** Global max shot duration, seconds (`0` = none). */
+	/**
+	 * Global max shot duration, seconds (`0` = none). Default off — the
+	 * profile dictates shot length; a silent global cap truncated long
+	 * profiles with no cue (geota/crema#32).
+	 */
 	maxShotDurationS: number;
 	/** Auto-tare the scale on shot start. Web `autoTareOnShotStart`. */
 	autoTare: boolean;
@@ -242,8 +246,33 @@ export interface CommonSettings {
 	 * `None` means "unset", which every consumer reads as `false`.
 	 */
 	volumeStopWithScale?: boolean;
+	/**
+	 * Opt-in: refuse to start an espresso shot when stop-at-weight would
+	 * arm (a weight target resolves) but no scale is connected — the
+	 * de1app `start_espresso_only_if_scale_connected` / reaprime
+	 * `blockOnNoScale` pattern, both also default-off (geota/crema#29).
+	 * Off = warn non-blockingly instead. `None` means "unset", read as
+	 * `false`.
+	 */
+	requireScale?: boolean;
 	/** Steam eco mode. Web `steamEcoMode`. */
 	steamEco: boolean;
+	/**
+	 * DE1 firmware two-tap steam stop (MMR `SteamTwoTapStop`): first stop
+	 * tap ends steam without the wand auto-purge; a second tap purges.
+	 * Written to the machine on change and re-seeded on connect. `None`
+	 * means "unset", read as `false` (firmware purges immediately on stop).
+	 */
+	steamTwoTap?: boolean;
+	/**
+	 * Fan-on temperature threshold, °C (MMR `FanThreshold`, clamped 0..=60
+	 * — de1app/Decenza's range). Re-seeded on every connect — the DE1
+	 * boots with a low firmware default and de1app rewrote it each
+	 * connect, so without this the fan runs near-constantly under Crema
+	 * (geota/crema#31). `None` means "unset", read as the 55 °C default
+	 * (splitting de1app/Decenza's 60 and reaprime's 50).
+	 */
+	fanThresholdC?: number;
 	/** Flush the group before each shot. Web `groupFlushBeforeShot`. */
 	preFlush: boolean;
 	/** Run a short purge after steaming. Web `autoPurgeAfterSteam`. */
@@ -256,6 +285,11 @@ export interface CommonSettings {
 	pressureUnit: string;
 	/** Volume unit `"ml" | "floz"`. */
 	volumeUnit: string;
+	/**
+	 * Water-tank readout style `"ml" | "percent"`. `None` means "unset",
+	 * read as `"ml"`.
+	 */
+	waterLevelUnit?: string;
 	/**
 	 * Enabled live-chart channel keys (Android's vocabulary:
 	 * `pressure`/`flow`/`weight`/`headTemp`/`mixTemp`/`weightFlow`/`resistance`/

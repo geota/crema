@@ -197,7 +197,9 @@ data class Bean (
 data class CommonSettings (
 	/// `"system" | "light" | "dark"`. Web `theme`.
 	val themeMode: String,
-	/// Global max shot duration, seconds (`0` = none).
+	/// Global max shot duration, seconds (`0` = none). Default off — the
+	/// profile dictates shot length; a silent global cap truncated long
+	/// profiles with no cue (geota/crema#32).
 	val maxShotDurationS: Float,
 	/// Auto-tare the scale on shot start. Web `autoTareOnShotStart`.
 	val autoTare: Boolean,
@@ -211,8 +213,27 @@ data class CommonSettings (
 	/// null and a pre-existing `prefs.json` / older backup still decodes —
 	/// `None` means "unset", which every consumer reads as `false`.
 	val volumeStopWithScale: Boolean? = null,
+	/// Opt-in: refuse to start an espresso shot when stop-at-weight would
+	/// arm (a weight target resolves) but no scale is connected — the
+	/// de1app `start_espresso_only_if_scale_connected` / reaprime
+	/// `blockOnNoScale` pattern, both also default-off (geota/crema#29).
+	/// Off = warn non-blockingly instead. `None` means "unset", read as
+	/// `false`.
+	val requireScale: Boolean? = null,
 	/// Steam eco mode. Web `steamEcoMode`.
 	val steamEco: Boolean,
+	/// DE1 firmware two-tap steam stop (MMR `SteamTwoTapStop`): first stop
+	/// tap ends steam without the wand auto-purge; a second tap purges.
+	/// Written to the machine on change and re-seeded on connect. `None`
+	/// means "unset", read as `false` (firmware purges immediately on stop).
+	val steamTwoTap: Boolean? = null,
+	/// Fan-on temperature threshold, °C (MMR `FanThreshold`, clamped 0..=60
+	/// — de1app/Decenza's range). Re-seeded on every connect — the DE1
+	/// boots with a low firmware default and de1app rewrote it each
+	/// connect, so without this the fan runs near-constantly under Crema
+	/// (geota/crema#31). `None` means "unset", read as the 55 °C default
+	/// (splitting de1app/Decenza's 60 and reaprime's 50).
+	val fanThresholdC: Float? = null,
 	/// Flush the group before each shot. Web `groupFlushBeforeShot`.
 	val preFlush: Boolean,
 	/// Run a short purge after steaming. Web `autoPurgeAfterSteam`.
@@ -225,6 +246,9 @@ data class CommonSettings (
 	val pressureUnit: String,
 	/// Volume unit `"ml" | "floz"`.
 	val volumeUnit: String,
+	/// Water-tank readout style `"ml" | "percent"`. `None` means "unset",
+	/// read as `"ml"`.
+	val waterLevelUnit: String? = null,
 	/// Enabled live-chart channel keys (Android's vocabulary:
 	/// `pressure`/`flow`/`weight`/`headTemp`/`mixTemp`/`weightFlow`/`resistance`/
 	/// `dispensedVolume`). Web maps its eight `show*` booleans to/from this list

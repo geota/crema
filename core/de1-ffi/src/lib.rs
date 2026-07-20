@@ -968,6 +968,25 @@ pub fn core_version() -> String {
     CORE_VERSION.to_owned()
 }
 
+/// Convert a DE1 water-tank depth (mm of sensor reading) to the tank's
+/// water volume in ml. Pure helper — does no machine I/O. Mirrors the wasm
+/// `water_tank_ml` so every shell consumes the same tank-geometry
+/// calibration (see [`de1_domain::water_tank_ml`]).
+#[uniffi::export]
+#[must_use]
+pub fn water_tank_ml(mm: f32) -> u16 {
+    de1_domain::water_tank_ml(mm)
+}
+
+/// Convert a DE1 water-tank depth (mm) to a whole percentage of a typical
+/// full fill, clamped `0..=100`. Pure helper — see
+/// [`de1_domain::water_tank_percent`].
+#[uniffi::export]
+#[must_use]
+pub fn water_tank_percent(mm: f32) -> u8 {
+    de1_domain::water_tank_percent(mm)
+}
+
 /// Reconcile a remote Visualizer pull against the local shot refs. Payload
 /// `{"local": LocalShotRef[], "remote": WireShot[]}` → `ReconcileAction[]`
 /// JSON (`kind: add | update | bind`). Mirrors the wasm `reconcileShots`

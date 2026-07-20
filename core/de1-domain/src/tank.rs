@@ -56,6 +56,27 @@ pub fn water_tank_ml(mm: f32) -> u16 {
     TANK_MM_TO_ML[idx]
 }
 
+/// The "full" fill of the DE1 tank, ml — the denominator for the percent
+/// readout. 1104 ml = the geometry table at 40 mm, de1app's documented
+/// `water_level_full_point` (`machine.tcl`), and the same denominator
+/// Decenza's percent readout uses — so all the ecosystem's percent
+/// readouts agree. The table extends past it (2058 ml at the sensor
+/// ceiling) because the tank can be overfilled; anything at or above the
+/// full point clamps to 100.
+pub const TANK_FULL_ML: u16 = 1104;
+
+/// Convert a DE1 tank-level reading (mm of sensor depth) to a whole
+/// percentage of a typical full fill ([`TANK_FULL_ML`]), clamped to
+/// `0..=100`.
+pub fn water_tank_percent(mm: f32) -> u8 {
+    let ml = f32::from(water_tank_ml(mm));
+    let pct = (ml / f32::from(TANK_FULL_ML) * 100.0).round();
+    // `water_tank_ml` is finite and >= 0, so only the top needs clamping.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let pct = pct.min(100.0) as u8;
+    pct
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +105,18 @@ mod tests {
     fn nan_yields_empty() {
         assert_eq!(water_tank_ml(f32::NAN), 0);
         assert_eq!(water_tank_ml(f32::INFINITY), 0);
+    }
+
+    #[test]
+    fn percent_of_full_point() {
+        assert_eq!(water_tank_percent(0.0), 0);
+        // 36 mm → 985 ml → 89 % of the 1104 ml full point.
+        assert_eq!(water_tank_percent(36.0), 89);
+        // The de1app full point itself: 40 mm → 1104 ml → exactly 100 %.
+        assert_eq!(water_tank_percent(40.0), 100);
+        // Overfilled past the full point (table ceiling 2058 ml) — clamped.
+        assert_eq!(water_tank_percent(67.0), 100);
+        assert_eq!(water_tank_percent(1000.0), 100);
+        assert_eq!(water_tank_percent(f32::NAN), 0);
     }
 }

@@ -253,6 +253,14 @@ pub fn water_tank_ml(mm: f32) -> u16 {
     de1_domain::water_tank_ml(mm)
 }
 
+/// Convert a DE1 water-tank depth (mm) to a whole percentage of a typical
+/// full fill, clamped `0..=100`. Pure helper — see
+/// `de1_domain::water_tank_percent`.
+#[wasm_bindgen]
+pub fn water_tank_percent(mm: f32) -> u8 {
+    de1_domain::water_tank_percent(mm)
+}
+
 /// Compute the brew ratio (yield ÷ dose) for a pair of weights in grams.
 /// Returns `undefined` (JS `null`/`undefined`) when the ratio is undefined
 /// — non-positive dose, non-finite operand, or non-finite quotient.

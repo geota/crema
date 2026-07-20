@@ -1326,9 +1326,10 @@ impl CremaCore {
         if let Some(out) = self.refuse_if_firmware_locked("set_fan_threshold") {
             return out;
         }
-        // Range 0..=50 °C — matches reaprime `fanThreshold` min/max;
-        // legacy TCL is unbounded.
-        let clamped = temp_c.min(50);
+        // Range 0..=60 °C — de1app + Decenza both allow (and default to) 60,
+        // so the firmware accepts it; reaprime clamps at 50. Crema's own
+        // default is 55, splitting the ecosystem's 50/60 difference.
+        let clamped = temp_c.min(60);
         mmr_write_command(MmrRegister::FanThreshold, u32::from(clamped), 4)
     }
 
@@ -6702,8 +6703,10 @@ mod tests {
     }
 
     #[test]
-    fn set_fan_threshold_clamps_above_50c() {
-        // reaprime MMRItem.fanThreshold min=0, max=50.
+    fn set_fan_threshold_clamps_above_60c() {
+        // de1app + Decenza both range the fan threshold 0..=60 (and default
+        // to 60), so 60 is the firmware-sanctioned cap; reaprime's tighter
+        // MMR max of 50 is the ecosystem outlier.
         let core = CremaCore::new();
         let in_range = core.set_fan_threshold(45);
         assert_eq!(mmr_write_payload(&in_range)[0], 45);
@@ -6711,13 +6714,13 @@ mod tests {
         let over = core.set_fan_threshold(200);
         assert_eq!(
             mmr_write_payload(&over)[0],
-            50,
-            "200 °C must clamp to the 50 °C reaprime cap"
+            60,
+            "200 °C must clamp to the 60 °C de1app/Decenza cap"
         );
 
         // The boundary stays untouched.
-        let boundary = core.set_fan_threshold(50);
-        assert_eq!(mmr_write_payload(&boundary)[0], 50);
+        let boundary = core.set_fan_threshold(60);
+        assert_eq!(mmr_write_payload(&boundary)[0], 60);
     }
 
     #[test]

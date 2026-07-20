@@ -34,7 +34,9 @@ use typeshare::typeshare;
 pub struct CommonSettings {
     /// `"system" | "light" | "dark"`. Web `theme`.
     pub theme_mode: String,
-    /// Global max shot duration, seconds (`0` = none).
+    /// Global max shot duration, seconds (`0` = none). Default off — the
+    /// profile dictates shot length; a silent global cap truncated long
+    /// profiles with no cue (geota/crema#32).
     pub max_shot_duration_s: f32,
     /// Auto-tare the scale on shot start. Web `autoTareOnShotStart`.
     pub auto_tare: bool,
@@ -48,8 +50,27 @@ pub struct CommonSettings {
     /// null and a pre-existing `prefs.json` / older backup still decodes —
     /// `None` means "unset", which every consumer reads as `false`.
     pub volume_stop_with_scale: Option<bool>,
+    /// Opt-in: refuse to start an espresso shot when stop-at-weight would
+    /// arm (a weight target resolves) but no scale is connected — the
+    /// de1app `start_espresso_only_if_scale_connected` / reaprime
+    /// `blockOnNoScale` pattern, both also default-off (geota/crema#29).
+    /// Off = warn non-blockingly instead. `None` means "unset", read as
+    /// `false`.
+    pub require_scale: Option<bool>,
     /// Steam eco mode. Web `steamEcoMode`.
     pub steam_eco: bool,
+    /// DE1 firmware two-tap steam stop (MMR `SteamTwoTapStop`): first stop
+    /// tap ends steam without the wand auto-purge; a second tap purges.
+    /// Written to the machine on change and re-seeded on connect. `None`
+    /// means "unset", read as `false` (firmware purges immediately on stop).
+    pub steam_two_tap: Option<bool>,
+    /// Fan-on temperature threshold, °C (MMR `FanThreshold`, clamped 0..=60
+    /// — de1app/Decenza's range). Re-seeded on every connect — the DE1
+    /// boots with a low firmware default and de1app rewrote it each
+    /// connect, so without this the fan runs near-constantly under Crema
+    /// (geota/crema#31). `None` means "unset", read as the 55 °C default
+    /// (splitting de1app/Decenza's 60 and reaprime's 50).
+    pub fan_threshold_c: Option<f32>,
     /// Flush the group before each shot. Web `groupFlushBeforeShot`.
     pub pre_flush: bool,
     /// Run a short purge after steaming. Web `autoPurgeAfterSteam`.
@@ -62,6 +83,9 @@ pub struct CommonSettings {
     pub pressure_unit: String,
     /// Volume unit `"ml" | "floz"`.
     pub volume_unit: String,
+    /// Water-tank readout style `"ml" | "percent"`. `None` means "unset",
+    /// read as `"ml"`.
+    pub water_level_unit: Option<String>,
     /// Enabled live-chart channel keys (Android's vocabulary:
     /// `pressure`/`flow`/`weight`/`headTemp`/`mixTemp`/`weightFlow`/`resistance`/
     /// `dispensedVolume`). Web maps its eight `show*` booleans to/from this list
@@ -103,17 +127,21 @@ impl Default for CommonSettings {
     fn default() -> Self {
         Self {
             theme_mode: "dark".to_owned(),
-            max_shot_duration_s: 45.0,
+            max_shot_duration_s: 0.0,
             auto_tare: true,
             stop_on_weight: true,
             volume_stop_with_scale: None,
+            require_scale: None,
             steam_eco: false,
+            steam_two_tap: None,
+            fan_threshold_c: None,
             pre_flush: false,
             steam_purge: false,
             weight_unit: "g".to_owned(),
             temp_unit: "C".to_owned(),
             pressure_unit: "bar".to_owned(),
             volume_unit: "ml".to_owned(),
+            water_level_unit: None,
             chart_channels: vec![
                 "pressure".to_owned(),
                 "flow".to_owned(),
