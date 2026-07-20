@@ -40,6 +40,15 @@ updates:
       npm-minor-patch:
         patterns: ["*"]
         update-types: [minor, patch]
+    ignore:
+      # TypeScript 7 is the native (tsgo) compiler line — svelte-check /
+      # svelte2tsx can't drive it yet (language-tools #2733; `svelte-check`
+      # dies with `useCaseSensitiveFileNames` undefined, PR #28), and tsgo
+      # lacks `rootDirs`, which SvelteKit's generated types require
+      # (sveltejs/kit #13970). Un-ignore once language-tools ships TS-Go
+      # support and the 6→7 migration is done deliberately.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
 
   # ── Android (Gradle at /android — build.gradle.kts + version catalog) ─
   - package-ecosystem: gradle
