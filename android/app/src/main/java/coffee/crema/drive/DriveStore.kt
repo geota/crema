@@ -25,6 +25,13 @@ data class DriveState(
     val pendingVerifier: String? = null,
     /** CSRF state for the in-flight handshake (single-use). */
     val pendingState: String? = null,
+    /** Epoch ms of the last daily auto-backup ATTEMPT (issue #36) — stamped
+     *  before the upload so a failing backup retries next day, not on every
+     *  launch. Null = never attempted. Additive → nullable default. */
+    val lastAutoBackupAtMs: Long? = null,
+    /** Epoch ms of the last SUCCESSFUL backup upload, manual or automatic —
+     *  drives the "Last backed up X ago" readout. Additive → nullable. */
+    val lastBackupSuccessAtMs: Long? = null,
 )
 
 /** File-backed JSON persistence for [DriveState] (`filesDir/drive.json`). */

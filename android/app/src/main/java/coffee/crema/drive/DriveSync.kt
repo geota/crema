@@ -27,6 +27,18 @@ import java.io.IOException
  * same `.crema.zip` (backup.jsonl + bean photos) the local SAF backup writes, so a
  * Drive backup is interchangeable with a file one.
  */
+/** Minimum gap between two daily auto-backup attempts (issue #36). */
+private const val AUTO_BACKUP_INTERVAL_MS = 24L * 60 * 60 * 1000
+
+/** Filename prefix distinguishing automatic uploads from manual ones —
+ *  must keep containing "crema-backup" (the Drive list query matches on
+ *  that substring, and restore-latest must see auto files too). */
+private const val AUTO_BACKUP_PREFIX = "crema-backup-auto-"
+
+/** How many auto-backups retention pruning keeps (≈ a week and a half of
+ *  daily coverage; Decenza's local equivalent keeps 5 days). */
+private const val AUTO_BACKUP_KEEP = 10
+
 class DriveSync(
     private val store: DriveStore,
     private val json: Json,
@@ -45,6 +57,9 @@ class DriveSync(
 ) {
     /** What the Settings UI binds to (mirrored into MainUiState). */
     data class UiState(
+        /** Epoch ms of the last successful backup upload (manual or auto),
+         *  or null — the settings "Last backed up X ago" readout. */
+        val lastBackupAtMs: Long? = null,
         /** False until a Drive client_id is baked into the build. */
         val configured: Boolean = false,
         val connected: Boolean = false,
@@ -65,7 +80,11 @@ class DriveSync(
     }
 
     private fun fold() {
-        _state.update { it.copy(configured = clientId.isNotBlank(), connected = persisted.tokens != null) }
+        _state.update { it.copy(
+            configured = clientId.isNotBlank(),
+            connected = persisted.tokens != null,
+            lastBackupAtMs = persisted.lastBackupSuccessAtMs,
+        ) }
     }
 
     private suspend fun persist(mutate: (DriveState) -> DriveState) {
@@ -155,9 +174,58 @@ class DriveSync(
             val zip = backupZip() ?: return@launch // backupZip already notified "nothing to back up"
             _state.update { it.copy(busy = true) }
             runCatching { driveUploadBackup(token, backupFileName(), zip, json) }
-                .onSuccess { notify("Backed up to Google Drive") }
+                .onSuccess {
+                    persist { it.copy(lastBackupSuccessAtMs = System.currentTimeMillis()) }
+                    notify("Backed up to Google Drive")
+                }
                 .onFailure { notify("Google Drive backup failed: ${it.message}") }
             _state.update { it.copy(busy = false) }
+        }
+    }
+
+    /**
+     * Daily automatic backup (issue #36): when Drive is linked and the last
+     * attempt is over 24 h old, run one quiet backup. Called on app start —
+     * no scheduler; a machine tablet gets opened most days, and the refresh
+     * token makes the upload unattended. Stamps the ATTEMPT time up front so
+     * a failing upload retries tomorrow instead of nagging every launch.
+     */
+    fun autoBackupIfDue(enabled: Boolean) {
+        if (!enabled) return
+        scope.launch {
+            if (persisted.tokens == null) return@launch
+            val last = persisted.lastAutoBackupAtMs
+            val now = System.currentTimeMillis()
+            if (last != null && now - last < AUTO_BACKUP_INTERVAL_MS) return@launch
+            persist { it.copy(lastAutoBackupAtMs = now) }
+            val token = freshToken() ?: return@launch
+            val zip = backupZip() ?: return@launch
+            // Auto uploads carry a distinct prefix (still containing
+            // "crema-backup" so the restore-latest list query sees them) —
+            // retention pruning below only ever touches this prefix, so
+            // manual backups are never deleted.
+            val name = backupFileName().replaceFirst("crema-backup-", AUTO_BACKUP_PREFIX)
+            runCatching { driveUploadBackup(token, name, zip, json) }
+                .onSuccess {
+                    persist { it.copy(lastBackupSuccessAtMs = System.currentTimeMillis()) }
+                    notify("Daily backup saved to Google Drive")
+                    pruneAutoBackups(token)
+                }
+                .onFailure { notify("Daily Google Drive backup failed: ${it.message}") }
+        }
+    }
+
+    /** Retention pruning: keep the newest [AUTO_BACKUP_KEEP] auto-backups
+     *  (daily uploads otherwise accumulate ~365 files/year in the user's
+     *  Drive), never touching manual backups. Best-effort — a failed prune
+     *  just retries after tomorrow's upload. */
+    private suspend fun pruneAutoBackups(token: String) {
+        runCatching {
+            val stale = driveListBackups(token, json)
+                .filter { it.name.startsWith(AUTO_BACKUP_PREFIX) }
+                .sortedByDescending { it.modifiedTime }
+                .drop(AUTO_BACKUP_KEEP)
+            for (file in stale) driveDeleteFile(token, file.id, json)
         }
     }
 

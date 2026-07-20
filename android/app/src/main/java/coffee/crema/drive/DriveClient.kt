@@ -122,6 +122,29 @@ suspend fun driveListBackups(accessToken: String, json: Json): List<DriveFile> =
 
 /** Download a backup file's raw bytes by id (a `.crema.zip`, or legacy text — the
  *  caller sniffs the zip magic vs decoding it as text). */
+/** Permanently delete one Drive file (retention pruning of old auto-backups).
+ *  Only ever pointed at files Crema itself created under `drive.file` scope. */
+suspend fun driveDeleteFile(accessToken: String, fileId: String, json: Json): Unit =
+    withContext(Dispatchers.IO) {
+        val url = "$FILES_URL/${URLEncoder.encode(fileId, "UTF-8")}"
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "DELETE"
+            connectTimeout = 15_000
+            readTimeout = 20_000
+            setRequestProperty("Authorization", "Bearer $accessToken")
+        }
+        try {
+            val status = conn.responseCode
+            // 204 on success; 404 counts as done (already gone).
+            if (status !in 200..299 && status != 404) {
+                val err = conn.errorStream?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
+                throw IOException(errorMessage(json, err, status, "delete"))
+            }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
 suspend fun driveDownloadBackup(accessToken: String, fileId: String, json: Json): ByteArray =
     withContext(Dispatchers.IO) {
         val url = "$FILES_URL/${URLEncoder.encode(fileId, "UTF-8")}?alt=media"
