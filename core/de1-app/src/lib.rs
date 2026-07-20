@@ -31,8 +31,8 @@ use de1_domain::saw_learning::SawLearningModel;
 use de1_domain::{
     AutoStop, BeverageType, Estimate, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile,
     STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StopConfig,
-    StopReason, StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor, WeightUnit,
-    shot_disposition,
+    StopReason, StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor, WeightSpikeGate,
+    WeightUnit, shot_disposition,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -391,6 +391,13 @@ pub struct CremaCore {
     scale: Option<Scale>,
     /// Smooths the scale stream into weight + flow for display.
     flow: FlowEstimator,
+    /// Rejects physically impossible single-sample weight jumps during a
+    /// shot before they reach the estimator, the chart, or — critically —
+    /// stop-at-weight (one corrupt BLE frame used to end the shot
+    /// instantly). Reset wherever the baseline legitimately steps: shot
+    /// start, tare landing, software re-zero. See
+    /// [`de1_domain::weight_gate`].
+    weight_gate: WeightSpikeGate,
     /// Whether to tare the connected scale automatically on shot start.
     /// Latched flag, default `true`; the shell pushes the user pref via
     /// [`set_auto_tare`](Self::set_auto_tare). Consulted on
@@ -677,6 +684,7 @@ impl CremaCore {
             flow_started: None,
             scale: None,
             flow: FlowEstimator::new(FlowAlgorithm::default()),
+            weight_gate: WeightSpikeGate::new(),
             auto_tare: true,
             tare_gate: None,
             stop_on_weight: true,
@@ -2697,6 +2705,9 @@ impl CremaCore {
                 // and let this (~zero) reading flow through normally below.
                 self.tare_gate = None;
                 self.flow.reset();
+                // The baseline legitimately stepped to ~0 — don't let the
+                // spike gate read the drop as a corrupt jump.
+                self.weight_gate.reset();
             } else {
                 // Still pre-tare — report zero so neither the live chart nor the
                 // recorded shot shows the pan/cup weight. The device's own
@@ -2743,6 +2754,18 @@ impl CremaCore {
             });
             return;
         };
+        // Spike gate (Decenza weightprocessor parity, their issue #610): a
+        // physically impossible single-sample jump during a shot is a
+        // corrupt BLE frame — drop the whole reading so it reaches neither
+        // the estimator, the chart, nor stop-at-weight. A genuine step
+        // change (cup swapped mid-shot) recovers after three agreeing
+        // samples; at rest the gate only tracks the baseline.
+        if self
+            .weight_gate
+            .rejects(net_weight, self.shot_started.is_some())
+        {
+            return;
+        }
         let estimate = self.flow.update(net_weight, now);
         // Cache the latest smoothed weight + flow so the DE1 telemetry
         // handler can fold them onto the next `Event::Telemetry` —
@@ -2837,8 +2860,10 @@ impl CremaCore {
                 self.saw_zero_offset_g = offset;
                 self.untared_settle = None;
                 // Fresh flow trend from net values — the -offset step would
-                // otherwise read as a huge negative flow.
+                // otherwise read as a huge negative flow. Same for the
+                // spike gate: the net baseline just stepped by -offset.
                 self.flow.reset();
+                self.weight_gate.reset();
                 out.events.push(Event::SawAutoZeroed { offset_g: offset });
                 return Some(raw_g - offset);
             }
@@ -3315,6 +3340,9 @@ impl CremaCore {
                 // phase below, so the preheat isn't counted. See `flow_started`.
                 self.flow_started = None;
                 self.flow.reset();
+                // Fresh shot → fresh spike-gate baseline (the gate only
+                // rejects while a shot is in progress).
+                self.weight_gate.reset();
                 // Fresh shot → fresh running volume. The integrator keeps
                 // its `last_sample_time` / `last_host_time` so the first
                 // sample of the new shot still has a valid `dt` reference.
@@ -5685,6 +5713,59 @@ mod tests {
         assert!(out.events.contains(&Event::StopTriggered {
             reason: StopReason::Weight,
         }));
+    }
+
+    #[test]
+    fn a_weight_spike_never_fires_stop_at_weight() {
+        // Decenza issue #610: one corrupt BLE frame (a real Felicita read
+        // 1649 g mid-shot) reaching the stop logic ends the shot instantly.
+        // The spike gate must swallow the frame entirely — no stop, no
+        // ScaleReading — while the very next sane samples flow through and
+        // SAW still fires at the real target.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_profile_target_weight(Some(36.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        // A sane pour ramp, past the untared-cup window, under target.
+        for (cg, at) in [(200u32, 1_000u64), (600, 2_000), (1_100, 3_200)] {
+            core.on_notification(Source::ScaleWeight, &bookoo_packet(cg), at);
+        }
+        // One corrupt frame far past the 36 g target.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(164_900), 4_500);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::StopTriggered { .. })),
+            "a lone spike must not stop the shot"
+        );
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::ScaleReading { .. })),
+            "the corrupt frame must never reach the shells"
+        );
+        // …while the following sane ramp passes the gate and SAW (which
+        // crosses on its ROBUST smoothed weight, so it needs the ramp, not
+        // one sample) still stops at the genuine target.
+        let mut stopped = false;
+        for (cg, at) in [
+            (1_500u32, 4_700u64),
+            (2_200, 5_000),
+            (2_900, 5_300),
+            (3_500, 5_600),
+            (3_800, 5_900),
+            (4_000, 6_200),
+            (4_100, 6_500),
+        ] {
+            let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(cg), at);
+            stopped |= out.events.contains(&Event::StopTriggered {
+                reason: StopReason::Weight,
+            });
+        }
+        assert!(
+            stopped,
+            "SAW must still fire on the genuine target crossing"
+        );
     }
 
     #[test]

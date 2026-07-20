@@ -80,6 +80,7 @@ pub mod visualizer_sync;
 pub mod visualizer_wire;
 pub mod volume;
 pub mod water;
+pub mod weight_gate;
 
 pub use bean::{
     Bean, BeanMix, BeanOrigin, BeanRoastType, RoastBand, RoastFreshness, Roaster, ShotBean,
@@ -159,3 +160,4 @@ pub use visualizer_wire::{
 };
 pub use volume::{LineFreqDetector, VolumeIntegrator};
 pub use water::{WaterEvent, WaterMonitor, WaterRecord, WaterSessionKind};
+pub use weight_gate::WeightSpikeGate;
