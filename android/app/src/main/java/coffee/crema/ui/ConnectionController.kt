@@ -372,18 +372,35 @@ class ConnectionController(
                 }
             }
             if (st.rememberedScaleAddress != null && stale(scale.state.value)) {
-                val name = st.rememberedScaleName
-                val direct = if (name != null) {
-                    transport.resolveByAddress(st.rememberedScaleAddress, name)
-                } else {
-                    null
-                }
-                if (direct != null && name != null) {
-                    bleScanner.cancel(SCAN_LABEL_SCALE)
-                    scale.connect(direct, name)
-                } else {
-                    connectScale()
-                }
+                kickScaleReconnect()
+            }
+        }
+    }
+
+    /**
+     * One best-effort scale (re)connect kick — direct by the remembered
+     * address when possible (scan-free, throttle-proof), else the name scan.
+     * A no-op while the scale is already connected or mid-handshake. Used by
+     * the BT-recovery path above and by shot start (issue #29): a forgotten
+     * scale can still arrive mid-shot, where the #15 fix arms SAW late.
+     */
+    fun kickScaleReconnect() {
+        val st = _state.value
+        val s = scale.state.value
+        val stale = s == ScaleBleManager.State.IDLE || s == ScaleBleManager.State.DISCONNECTED || s == ScaleBleManager.State.SCANNING
+        if (!stale) return
+        runCatching {
+            val name = st.rememberedScaleName
+            val direct = if (st.rememberedScaleAddress != null && name != null) {
+                transport.resolveByAddress(st.rememberedScaleAddress, name)
+            } else {
+                null
+            }
+            if (direct != null && name != null) {
+                bleScanner.cancel(SCAN_LABEL_SCALE)
+                scale.connect(direct, name)
+            } else {
+                connectScale()
             }
         }
     }

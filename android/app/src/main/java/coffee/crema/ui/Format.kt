@@ -12,6 +12,8 @@ import coffee.crema.core.brewRatio
 import coffee.crema.core.celsiusToFahrenheit
 import coffee.crema.core.gramsToOz
 import coffee.crema.core.mlToFlOz
+import coffee.crema.core.waterTankMl
+import coffee.crema.core.waterTankPercent
 
 /**
  * Locale-pinned `String.format` — ALL numeric display formatting must go
@@ -96,6 +98,25 @@ fun convertVolume(ml: Float?, unit: String): Measurement {
     return if (floz) Measurement(fmt("%.1f", mlToFlOz(ml)), "fl oz")
     else Measurement(fmt("%.0f", ml), "ml")
 }
+
+/** Water-tank readout — the DE1's sensor depth (mm) rendered per the
+ *  Settings → Display "Water tank" style: the tank volume in the chosen
+ *  volume unit, or a percent of a typical full fill. Conversion happens in
+ *  core (`water_tank_ml` / `water_tank_percent`) so every shell shares the
+ *  de1app tank-geometry calibration (geota/crema#33 — this readout used to
+ *  show the raw sensor mm, unlike web's ml). */
+fun formatTankLevel(mm: Float?, waterLevelUnit: String, volumeUnit: String): Measurement {
+    if (mm == null || !mm.isPresentReading()) {
+        return Measurement(DASH, if (waterLevelUnit == "percent") "%" else volumeLabel(volumeUnit))
+    }
+    return if (waterLevelUnit == "percent") {
+        Measurement(waterTankPercent(mm).toString(), "%")
+    } else {
+        convertVolume(waterTankMl(mm).toFloat(), volumeUnit)
+    }
+}
+
+private fun volumeLabel(unit: String): String = if (unit == "floz") "fl oz" else "ml"
 
 private fun Measurement.joined(): String = if (unit.isNotEmpty()) "$value $unit" else value
 

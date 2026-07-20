@@ -610,6 +610,58 @@ fun CremaCard(
     )
 }
 
+/**
+ * A settings-row range slider with a mono value readout — the sibling of
+ * [CremaStepper] for values where sweeping a range beats nudging (the fan
+ * threshold's 0–60 °C). Drags snap to [step]; [onCommit] fires ONCE on
+ * release with the final value — not per drag tick — so a caller can hang a
+ * confirm dialog off it. The readout tracks the drag live; a cancelled
+ * commit re-renders from the unchanged [value].
+ */
+@Composable
+fun CremaSlider(
+    value: Float,
+    onCommit: (Float) -> Unit,
+    min: Float,
+    max: Float,
+    step: Float = 1f,
+    fmt: (Float) -> String = { fmt("%.0f", it) },
+    modifier: Modifier = Modifier,
+) {
+    // Keyed on value so an external change (restore, another device) resets
+    // any stale drag state.
+    var drag by remember(value) { mutableStateOf<Float?>(null) }
+    val shown = drag ?: value
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = modifier,
+    ) {
+        Slider(
+            value = shown,
+            onValueChange = { raw ->
+                // Continuous track, values snapped to the step — avoids the 60
+                // tick dots M3 draws for discrete `steps`.
+                drag = (kotlin.math.round((raw - min) / step) * step + min).coerceIn(min, max)
+            },
+            onValueChangeFinished = {
+                val v = drag
+                drag = null
+                if (v != null && v != value) onCommit(v)
+            },
+            valueRange = min..max,
+            modifier = Modifier.width(180.dp),
+        )
+        Text(
+            fmt(shown),
+            style = TextStyle(fontFamily = JetBrainsMono, fontSize = 13.sp, fontFeatureSettings = "tnum"),
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.widthIn(min = 64.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+        )
+    }
+}
+
 // ── Confirm dialog — the single espresso-themed destructive-action confirm ──
 // A 1:1 port of the PWA `confirmDialog({ title, message, confirmLabel, danger })`
 // contract onto an M3 AlertDialog (M3 gives scrim/elevation/back-dismiss/a11y

@@ -36,6 +36,7 @@ import coffee.crema.ui.convertPressure
 import coffee.crema.ui.convertTemp
 import coffee.crema.ui.convertVolume
 import coffee.crema.ui.convertWeight
+import coffee.crema.ui.formatTankLevel
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.formatTemp
 import coffee.crema.ui.formatWeight
@@ -195,6 +196,7 @@ fun PhoneBrewScreen(
                     scaleConnected = scaleConnected,
                     onOpenLastShot = { id -> vm.openShotInHistory(id); onNav("history") },
                     onRate = { id, r -> vm.updateShot(id, r, ui.history.firstOrNull { it.id == id }?.notes ?: "") },
+                    onTareScale = vm::tareScale,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -783,6 +785,8 @@ private fun RestingBody(
     scaleConnected: Boolean,
     onOpenLastShot: (String?) -> Unit,
     onRate: (String, Int) -> Unit,
+    /** Tap-to-tare for the Scale stat tile (issue #37). */
+    onTareScale: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val tel = CremaTheme.telemetry
@@ -1009,8 +1013,15 @@ private fun RestingBody(
             val scaleM = convertWeight(restScaleG, ui.weightUnit)
             MStat("Group", "thermometer", ui.headTemp?.let { "${groupM.value}${groupM.unit}" } ?: "—", groupOk, Modifier.weight(1f))
             MStat("Steam", "cloud", ui.steamTemp?.let { "${steamM.value}${steamM.unit}" } ?: "—", steamOk, Modifier.weight(1f))
-            MStat("Tank", "drop-half", ui.waterLevelMm?.let { fmt("%.0fmm", it) } ?: "—", tankOk, Modifier.weight(1f))
-            MStat("Scale", "scales", if (scaleConnected) "${scaleM.value}${scaleM.unit}" else "—", scaleConnected, Modifier.weight(1f))
+            val tankM = formatTankLevel(ui.waterLevelMm, ui.waterLevelUnit, ui.volumeUnit)
+            MStat("Tank", "drop-half", if (ui.waterLevelMm != null) "${tankM.value}${tankM.unit}" else "—", tankOk, Modifier.weight(1f))
+            // Tap-to-tare (issue #37): while connected and idle, tapping the
+            // Scale tile tares (a mid-shot tare would corrupt stop-at-weight).
+            MStat(
+                "Scale", "scales", if (scaleConnected) "${scaleM.value}${scaleM.unit}" else "—", scaleConnected,
+                Modifier.weight(1f),
+                onTap = if (scaleConnected && ui.machineStateName != MachineState.Espresso) onTareScale else null,
+            )
         }
     }
 }
@@ -1074,9 +1085,18 @@ private fun ReadyParam(
 // Machine-readiness tile (proto .pf-mstat-i) — a labelled live machine stat
 // (NOT a chart channel): group temp / steam temp / tank level / scale weight.
 @Composable
-private fun MStat(label: String, icon: String, value: String, ok: Boolean, modifier: Modifier = Modifier) {
+private fun MStat(
+    label: String,
+    icon: String,
+    value: String,
+    ok: Boolean,
+    modifier: Modifier = Modifier,
+    /** Non-null = the tile is tappable (Scale tile → tare, issue #37). */
+    onTap: (() -> Unit)? = null,
+) {
     val tel = CremaTheme.telemetry
-    Surface(shape = RoundedCornerShape(11.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier) {
+    val m = if (onTap != null) modifier.clip(RoundedCornerShape(11.dp)).clickable(onClick = onTap) else modifier
+    Surface(shape = RoundedCornerShape(11.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = m) {
         Column(
             Modifier.padding(vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,

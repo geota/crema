@@ -78,6 +78,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.coroutines.Dispatchers
 import android.net.Uri
 import kotlinx.serialization.json.put
+import kotlin.math.roundToInt
 
 /**
  * Default scale beeper-volume step shown before the first live reading.
@@ -188,6 +189,17 @@ fun MainUiState.effectiveBrew(): EffectiveBrew =
  * (`web/src/lib/state/ui-state.svelte.ts`) so every shell warns at the same level.
  */
 const val REFILL_SOON_MARGIN_MM = 5f
+
+/**
+ * Battery percentage at or below which the one-per-connection "charge your
+ * scale" warning fires (issue #29) — early enough to charge before a session,
+ * late enough not to nag. Web parity: `SCALE_LOW_BATTERY_PCT` in
+ * `app.svelte.ts`.
+ */
+const val SCALE_LOW_BATTERY_PCT = 25
+
+/** Minimum gap between two automatic release-check attempts (issue #36). */
+const val AUTO_UPDATE_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
 
 /**
  * Whether the tank is low enough to warrant a "refill soon" cue: the live level
@@ -366,7 +378,17 @@ data class MainUiState(
      *  connected (Settings → Shot behaviour). Default off — volume is a
      *  no-scale fallback, never a competitor to stop-at-weight. */
     val volumeStopWithScale: Boolean = false,
+    /** Opt-in: refuse to start a shot with a weight target while no scale is
+     *  connected (geota/crema#29 — de1app/reaprime's block pattern). */
+    val requireScale: Boolean = false,
     val steamEco: Boolean = false,
+    /** DE1 firmware two-tap steam stop (MMR `SteamTwoTapStop`): first stop tap
+     *  ends steam without the wand auto-purge; a second tap purges. Written on
+     *  change + re-seeded on connect (geota/crema#34). */
+    val steamTwoTap: Boolean = false,
+    /** Fan-on temperature threshold, °C (MMR `FanThreshold`, 0..=60). Re-seeded
+     *  on every connect (geota/crema#31). */
+    val fanThresholdC: Float = 55f,
     /** Persisted pre-shot flush / post-steam purge preferences (not yet consumed
      *  by the shot sequence — Settings rows carry the pill until then). */
     val preFlush: Boolean = false,
@@ -383,6 +405,15 @@ data class MainUiState(
      *  behaviour). OFF = the tap only dismisses; the machine stays asleep
      *  until the power button. */
     val wakeMachineWithSaver: Boolean = true,
+    /** Daily automatic Google Drive backup while Drive is linked (issue #36). */
+    val autoDriveBackup: Boolean = true,
+    /** Daily automatic release check against GitHub — default OFF (opt-in
+     *  phone-home; the manual About → Check button always works). */
+    val autoUpdateCheck: Boolean = false,
+    /** Epoch ms of the last automatic release-check attempt (24 h throttle). */
+    val lastUpdateCheckAtMs: Long? = null,
+    /** The newest version already notified about — notify once per build. */
+    val lastSeenLatestVersion: String? = null,
     /** Whether the screensaver overlay is currently shown. Set by the idle
      *  checker or a live machine-sleep transition; cleared by tap-to-wake. */
     val saverVisible: Boolean = false,
@@ -410,9 +441,15 @@ data class MainUiState(
      * A queue, not a single field, so two rapid notifications both surface.
      */
     val userMessages: List<String> = emptyList(),
-    /** Max shot duration cap, seconds (persisted in AppPrefs). Shown as a Time
+    /** Result of the last on-demand release check (Settings → About,
+     *  issue #36) — null until the user taps Check. */
+    val updateInfo: coffee.crema.update.UpdateInfo? = null,
+    /** True while a release check is in flight. */
+    val updateCheckBusy: Boolean = false,
+    /** Max shot duration cap, seconds (persisted in AppPrefs; `0` = none —
+     *  the default, the profile dictates shot length). Shown as a Time
      *  stop-condition on Brew + edited in Settings → Brew defaults. */
-    val maxShotDurationS: Float = 45f,
+    val maxShotDurationS: Float = 0f,
     /**
      * Which telemetry channels the live chart draws — keys: `pressure`, `flow`,
      * `headTemp`, `mixTemp`, `weight`, `weightFlow`, `dispensedVolume`,
@@ -432,6 +469,8 @@ data class MainUiState(
     val pressureUnit: String = "bar",
     /** Volume unit for water/dispensed readouts — `"ml" | "floz"`. */
     val volumeUnit: String = "ml",
+    /** Water-tank readout style — `"ml" | "percent"` (geota/crema#33). */
+    val waterLevelUnit: String = "ml",
     /** The bean library — user bean bags, persisted via [LibraryStore]. */
     val beans: List<Bean> = emptyList(),
     /** The roaster directory (FK target for [beans]). */
@@ -713,6 +752,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * ⇒ never skip ⇒ the previous always-upload behaviour).
      */
     private var lastUploadedFingerprint: String? = null
+
+    /** Whether the low-battery snackbar fired for the current scale
+     *  connection (issue #29) — reset in [clearScaleSessionUi] so the next
+     *  session warns again, but one connection never nags twice. */
+    private var scaleLowBatteryWarned = false
     private var pendingUploadFingerprint: String? = null
 
     /** Resolved by `Event.WaterSessionCompleted(Flush)` to release the pre-shot
@@ -1022,7 +1066,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onConnectStarted = { _ui.update { it.copy(eventLog = emptyList()) } },
         onDe1SessionClosed = { clearDe1SessionUi() },
         onScaleSessionClosed = { clearScaleSessionUi() },
-        onDe1Ready = { readMachineInfo() },
+        onDe1Ready = {
+            readMachineInfo()
+            seedMachineSettings()
+        },
         // The DE1 no longer holds our profile — drop the upload-skip cache so
         // the next shot re-uploads (issue 11). Without this, a skip after a
         // reconnect would brew against a stale/absent profile.
@@ -1108,6 +1155,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             loadMaintenance()
             visualizer.load()
             drive.load()
+            // Daily automatic Drive backup (issue #36) — after both the prefs
+            // (the toggle) and the Drive tokens have hydrated.
+            drive.autoBackupIfDue(_ui.value.autoDriveBackup)
+            // Daily automatic release check (opt-in, default off).
+            maybeAutoUpdateCheck()
         }
         startScreensaverClock()
         // Mirror the Visualizer controller's state into the UI snapshot.
@@ -1398,7 +1450,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             autoTare = p.autoTare,
             stopOnWeight = p.stopOnWeight,
             volumeStopWithScale = p.volumeStopWithScale,
+            requireScale = p.requireScale,
             steamEco = p.steamEco,
+            steamTwoTap = p.steamTwoTap,
+            fanThresholdC = p.fanThresholdC,
             preFlush = p.preFlush,
             steamPurge = p.steamPurge,
             chartChannels = p.chartChannels,
@@ -1414,6 +1469,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             tempUnit = p.tempUnit,
             pressureUnit = p.pressureUnit,
             volumeUnit = p.volumeUnit,
+            waterLevelUnit = p.waterLevelUnit,
             qcSteamTimeS = p.qcSteamTimeS,
             qcSteamFlowMlS = p.qcSteamFlowMlS,
             qcSteamTempC = p.qcSteamTempC,
@@ -1427,6 +1483,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setAutoTare(p.autoTare) }
         runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
         runCatching { bridge.setVolumeStopWithScale(p.volumeStopWithScale) }
+        // Re-seed the restored machine-register prefs (no-ops when disconnected;
+        // the next connect's seedMachineSettings covers that case).
+        seedMachineSettings()
         // Push the restored Quick-Controls steam / hot-water / flush params to the
         // machine too, so a restore takes effect without waiting for the next QC
         // edit. Each routes through routeWrite → a no-op when disconnected or
@@ -1490,6 +1549,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (cremaJson == null) {
             notifyUser("Can\u2019t start shot \u2014 no profile selected")
             return
+        }
+        // Pre-shot scale gate (issue #29). Only when this shot actually
+        // resolves a weight target (QC dial override, else the active
+        // profile's own yield \u2014 the same precedence pushStopTargets uses): a
+        // profile with no target never needed a scale, so it gets no noise
+        // (the Decenza/reaprime "profile uses weight" gate).
+        val s = _ui.value
+        val activeProfile = s.profiles.firstOrNull { it.id == s.activeProfileId }
+        val weightTarget = s.brewParams?.yieldOut?.toFloat()?.takeIf { it.isFinite() && it > 0f }
+            ?: activeProfile?.yieldOut?.takeIf { it.isFinite() && it > 0f }
+        if (s.stopOnWeight && weightTarget != null && s.scaleState != ScaleBleManager.State.READY) {
+            val remembered = connection.state.value.rememberedScaleAddress != null
+            if (remembered) connection.kickScaleReconnect()
+            if (s.requireScale) {
+                // Opt-in hard block (de1app `start_espresso_only_if_scale_connected`
+                // / reaprime `blockOnNoScale` \u2014 both also default off). The DE1
+                // is left untouched; the reconnect kick above may make the next
+                // attempt succeed.
+                notifyUser(
+                    if (remembered) "Shot not started \u2014 reconnecting the scale\u2026 try again in a moment"
+                    else "Shot not started \u2014 no scale connected, and \u201cRequire scale to start\u201d is on"
+                )
+                return
+            }
+            // Default: NON-blocking cue \u2014 a modal between the user and a
+            // tamped puck is workflow poison. The #15 fix arms SAW mid-shot,
+            // so a quick reconnect can still save this very shot.
+            notifyUser(
+                if (remembered) "Scale not connected \u2014 reconnecting\u2026 stop-at-weight is off until it lands"
+                else "No scale connected \u2014 stop-at-weight is off for this shot"
+            )
         }
         // The heavy chain below — several bridge calls including the full
         // profile-frame build in Rust — runs on the core lane instead of
@@ -1961,6 +2051,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * call while disconnected: with no BLE link the read requests write nothing
      * and the pure reads still return; the UI just shows "—" until replies land.
      */
+    /** Re-seed the machine registers Crema owns a preference for. The DE1 boots
+     *  with its own firmware values and de1app rewrote these each connect, so
+     *  without this the machine silently runs the firmware defaults (the
+     *  constant-fan report, geota/crema#31). Safe to call any time — the writes
+     *  route through [routeWrite], a no-op when disconnected. */
+    private fun seedMachineSettings() {
+        val ui = _ui.value
+        val fan = ui.fanThresholdC.roundToInt().coerceIn(0, 60).toUByte()
+        routeWrite("Seed fan threshold") { bridge.setFanThreshold(fan) }
+        routeWrite("Seed steam two-tap stop") {
+            bridge.setSteamTwoTapStop(if (ui.steamTwoTap) 1u else 0u)
+        }
+        // Re-push the persisted Quick-Controls machine params too — steam
+        // temp/time + hot water (one cuuid_0B packet), steam flow, flush
+        // time/temp. The DE1 forgets these across power cycles just like the
+        // registers above; de1app and Decenza both re-send them at connect,
+        // and without this a power-cycled machine ran firmware defaults until
+        // the user next touched a QC dial.
+        applySteamHotWater()
+        routeWrite("Seed steam flow") { bridge.setSteamFlow(ui.qcSteamFlowMlS) }
+        routeWrite("Seed flush time") { bridge.setFlushTimeout((ui.qcFlushTimeS * 1000f).toUInt()) }
+        routeWrite("Seed flush temp") { bridge.setFlushTemp(ui.qcFlushTempC) }
+        // Eco last: it read-modify-writes the steam packet on top of the
+        // plain seed above. Only pushed when ON — eco-off IS the plain seed.
+        if (ui.steamEco) {
+            routeWrite("Seed steam eco") {
+                bridge.enableSteamEcoMode(true, System.currentTimeMillis().toULong())
+            }
+        }
+    }
+
     private fun readMachineInfo() {
         // Identity (firmware / board / model / serial), GHC presence, heater
         // voltage, flush temp, flow-calibration, refill-kit. Match the generated
@@ -2059,6 +2180,52 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(lineFreqHz = resolved, lineFreqOverride = hz) }
     }
 
+    /** On-demand GitHub release check (Settings → About, issue #36). */
+    fun checkForUpdates() {
+        if (_ui.value.updateCheckBusy) return
+        _ui.update { it.copy(updateCheckBusy = true) }
+        viewModelScope.launch {
+            val info = coffee.crema.update.checkForUpdates(json)
+            _ui.update { it.copy(updateInfo = info, updateCheckBusy = false) }
+        }
+    }
+
+    /** Daily automatic release check toggle. Turning it on runs a check right
+     *  away if one is due. */
+    fun setAutoUpdateCheck(on: Boolean) {
+        _ui.update { it.copy(autoUpdateCheck = on) }
+        persistPrefs()
+        if (on) maybeAutoUpdateCheck()
+    }
+
+    /** One opt-in daily release check (issue #36 follow-up): at most one
+     *  attempt per 24 h, stamped up front so a failed check retries tomorrow
+     *  rather than on every launch; notifies (snackbar) exactly once per new
+     *  version. Never runs unless [MainUiState.autoUpdateCheck] is on. */
+    private fun maybeAutoUpdateCheck() {
+        val s = _ui.value
+        if (!s.autoUpdateCheck) return
+        val now = System.currentTimeMillis()
+        val last = s.lastUpdateCheckAtMs
+        if (last != null && now - last < AUTO_UPDATE_CHECK_INTERVAL_MS) return
+        _ui.update { it.copy(lastUpdateCheckAtMs = now) }
+        persistPrefs()
+        viewModelScope.launch {
+            val info = coffee.crema.update.checkForUpdates(json)
+            if (info.error != null) return@launch // quiet — retries tomorrow
+            _ui.update { it.copy(updateInfo = info) }
+            // Notify about the channel this build rides: nightlies track the
+            // rolling nightly tag, everything else tracks stable.
+            val current = coffee.crema.BuildConfig.VERSION_NAME
+            val candidate = if (current.contains("nightly")) info.latestNightly else info.latestStable
+            if (candidate != null && candidate != current && candidate != _ui.value.lastSeenLatestVersion) {
+                notifyUser("Update available — Crema $candidate (you’re on $current)")
+                _ui.update { it.copy(lastSeenLatestVersion = candidate) }
+                persistPrefs()
+            }
+        }
+    }
+
     /** Re-read the auto-detector's current resolved line frequency so the AC-
      *  frequency hint can show "Currently locked at X Hz" live while on Auto. */
     fun refreshLineFrequency() {
@@ -2099,7 +2266,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         autoTare = _ui.value.autoTare,
         stopOnWeight = _ui.value.stopOnWeight,
         volumeStopWithScale = _ui.value.volumeStopWithScale,
+        requireScale = _ui.value.requireScale,
         steamEco = _ui.value.steamEco,
+        steamTwoTap = _ui.value.steamTwoTap,
+        fanThresholdC = _ui.value.fanThresholdC,
         preFlush = _ui.value.preFlush,
         steamPurge = _ui.value.steamPurge,
         chartChannels = _ui.value.chartChannels,
@@ -2107,6 +2277,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         screensaverAfterMin = _ui.value.screensaverAfterMin,
         sleepMachineWithSaver = _ui.value.sleepMachineWithSaver,
         wakeMachineWithSaver = _ui.value.wakeMachineWithSaver,
+        autoDriveBackup = _ui.value.autoDriveBackup,
+        autoUpdateCheck = _ui.value.autoUpdateCheck,
+        lastUpdateCheckAtMs = _ui.value.lastUpdateCheckAtMs,
+        lastSeenLatestVersion = _ui.value.lastSeenLatestVersion,
         grinderModel = _ui.value.grinderModel,
         suppressDe1Sleep = _ui.value.suppressDe1Sleep,
         showDebugPanel = _ui.value.showDebugPanel,
@@ -2118,6 +2292,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         tempUnit = _ui.value.tempUnit,
         pressureUnit = _ui.value.pressureUnit,
         volumeUnit = _ui.value.volumeUnit,
+        waterLevelUnit = _ui.value.waterLevelUnit,
         qcSteamTimeS = _ui.value.qcSteamTimeS,
         qcSteamFlowMlS = _ui.value.qcSteamFlowMlS,
         qcSteamTempC = _ui.value.qcSteamTempC,
@@ -2400,6 +2575,46 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistPrefs()
     }
 
+    /** Water-tank readout style (`"ml" | "percent"`). Persisted display pref. */
+    fun setWaterLevelUnit(unit: String) {
+        _ui.update { it.copy(waterLevelUnit = unit) }
+        persistPrefs()
+    }
+
+    /** Daily automatic Google Drive backup toggle (issue #36). Turning it on
+     *  runs a backup right away if one is due. */
+    fun setAutoDriveBackup(on: Boolean) {
+        _ui.update { it.copy(autoDriveBackup = on) }
+        persistPrefs()
+        if (on) drive.autoBackupIfDue(true)
+    }
+
+    /** Fan-on temperature threshold, °C (0..=60). Persisted + written to the
+     *  machine immediately; re-seeded on every connect. */
+    fun setFanThreshold(tempC: Float) {
+        _ui.update { it.copy(fanThresholdC = tempC) }
+        persistPrefs()
+        routeWrite("Set fan threshold") {
+            bridge.setFanThreshold(tempC.roundToInt().coerceIn(0, 60).toUByte())
+        }
+    }
+
+    /** Opt-in "require scale to start" block (geota/crema#29). Persisted. */
+    fun setRequireScale(on: Boolean) {
+        _ui.update { it.copy(requireScale = on) }
+        persistPrefs()
+    }
+
+    /** DE1 firmware two-tap steam stop. Persisted + written to the machine
+     *  immediately; re-seeded on every connect. */
+    fun setSteamTwoTap(enabled: Boolean) {
+        _ui.update { it.copy(steamTwoTap = enabled) }
+        persistPrefs()
+        routeWrite("Set steam two-tap stop") {
+            bridge.setSteamTwoTapStop(if (enabled) 1u else 0u)
+        }
+    }
+
     /** Persist the pre-shot flush preference (consumed by a later shot-sequence pass). */
     fun setPreFlush(enabled: Boolean) {
         _ui.update { it.copy(preFlush = enabled) }
@@ -2576,7 +2791,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             autoTare = p.autoTare,
             stopOnWeight = p.stopOnWeight,
             volumeStopWithScale = p.volumeStopWithScale,
+            requireScale = p.requireScale,
             steamEco = p.steamEco,
+            steamTwoTap = p.steamTwoTap,
+            fanThresholdC = p.fanThresholdC,
             preFlush = p.preFlush,
             steamPurge = p.steamPurge,
             chartChannels = p.chartChannels,
@@ -2584,6 +2802,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             screensaverAfterMin = p.screensaverAfterMin,
             sleepMachineWithSaver = p.sleepMachineWithSaver,
             wakeMachineWithSaver = p.wakeMachineWithSaver,
+            autoDriveBackup = p.autoDriveBackup,
+            autoUpdateCheck = p.autoUpdateCheck,
+            lastUpdateCheckAtMs = p.lastUpdateCheckAtMs,
+            lastSeenLatestVersion = p.lastSeenLatestVersion,
             grinderModel = p.grinderModel,
             suppressDe1Sleep = p.suppressDe1Sleep,
             showDebugPanel = p.showDebugPanel,
@@ -2595,6 +2817,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             tempUnit = p.tempUnit,
             pressureUnit = p.pressureUnit,
             volumeUnit = p.volumeUnit,
+            waterLevelUnit = p.waterLevelUnit,
             qcSteamTimeS = p.qcSteamTimeS,
             qcSteamFlowMlS = p.qcSteamFlowMlS,
             qcSteamTempC = p.qcSteamTempC,
@@ -2915,6 +3138,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  and identity so the scale card/config UI hides until the next scale.
      *  Wired as [ConnectionController]'s onScaleSessionClosed. */
     private fun clearScaleSessionUi() {
+        // Re-arm the once-per-connection low-battery warning (issue #29).
+        scaleLowBatteryWarned = false
         _ui.update { it.copy(
             scaleWeightG = null,
             scaleFlowGPerS = null,
@@ -3455,6 +3680,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         ?: it.scaleAutoStop,
                 ) }
                 // Weight is high-rate; do not flood the log with every reading.
+                // Low-battery warning (issue #29): one snackbar per connection
+                // the first time the battery reads at or below the threshold,
+                // so it can be charged before it dies mid-shot.
+                val batt = _ui.value.scaleBatteryPercent
+                if (batt != null && batt <= SCALE_LOW_BATTERY_PCT && !scaleLowBatteryWarned) {
+                    scaleLowBatteryWarned = true
+                    notifyUser("Scale battery low ($batt%) — charge it soon")
+                }
             }
             is Event.WaterLevel -> {
                 _ui.update { it.copy(

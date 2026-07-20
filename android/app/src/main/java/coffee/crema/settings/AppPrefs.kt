@@ -21,9 +21,11 @@ data class AppPrefs(
     /** `"system" | "light" | "dark"` — drives CremaTheme. Defaults to dark
      *  (the machine app is dark-skinned). */
     val themeMode: String = "dark",
-    /** Max shot duration cap, seconds. Pushed to the core on load + shown as a
-     *  Time stop-condition on Brew. */
-    val maxShotDurationS: Float = 45f,
+    /** Max shot duration cap, seconds (`0` = none). Pushed to the core on load
+     *  + shown as a Time stop-condition on Brew. Defaults OFF — the profile
+     *  dictates shot length; a silent 45 s cap truncated long profiles with no
+     *  cue (geota/crema#32). Existing users keep their saved value. */
+    val maxShotDurationS: Float = 0f,
     // ── Shot behaviour (re-applied to the core on launch) ────────────────────
     /** Auto-tare the scale on shot start. Defaults ON to match the core's own
      *  default ([CremaCore] `auto_tare = true`) and the web shell (which
@@ -41,11 +43,27 @@ data class AppPrefs(
      *  competitor to stop-at-weight (reference-app consensus; the firmware's
      *  own tail volume stop is never uploaded either way). */
     val volumeStopWithScale: Boolean = false,
+    /** Opt-in: refuse to start a shot when stop-at-weight would arm (a weight
+     *  target resolves) but no scale is connected — the de1app
+     *  `start_espresso_only_if_scale_connected` / reaprime `blockOnNoScale`
+     *  pattern, both also default-off (geota/crema#29). Off = warn
+     *  non-blockingly instead. */
+    val requireScale: Boolean = false,
     val steamEco: Boolean = false,
-    /** Pre-shot group flush / post-steam purge requests. Persisted preference;
-     *  the shot sequence does not consume them yet (Settings rows carry the
-     *  "not implemented" pill until it does). */
+    /** DE1 firmware two-tap steam stop (MMR `SteamTwoTapStop`): first stop tap
+     *  ends steam without the wand auto-purge; a second tap purges. Written on
+     *  change + re-seeded on connect (geota/crema#34). */
+    val steamTwoTap: Boolean = false,
+    /** Fan-on temperature threshold, °C (MMR `FanThreshold`, 0..=60 —
+     *  de1app/Decenza's range; 55 splits their 60 and reaprime's 50).
+     *  Re-seeded on every connect — the DE1 boots with a low firmware
+     *  default, so without this the fan runs near-constantly
+     *  (geota/crema#31). */
+    val fanThresholdC: Float = 55f,
+    /** Flush the group before each shot. */
     val preFlush: Boolean = false,
+    /** Run a short group flush after steaming (app-level; distinct from the
+     *  firmware's own wand purge — see [steamTwoTap]). */
     val steamPurge: Boolean = false,
     // ── Units (issue 44) ──────────────────────────────────────────────────────
     /** Weight unit for dose/yield/scale readouts — `"g" | "oz"`. */
@@ -56,6 +74,8 @@ data class AppPrefs(
     val pressureUnit: String = "bar",
     /** Volume unit for water/dispensed readouts — `"ml" | "floz"`. */
     val volumeUnit: String = "ml",
+    /** Water-tank readout style — `"ml" | "percent"` (geota/crema#33). */
+    val waterLevelUnit: String = "ml",
     // ── Display ──────────────────────────────────────────────────────────────
     /** Live-chart channel keys (Quick Controls chart strip). */
     val chartChannels: Set<String> = setOf("pressure", "flow", "weight"),
@@ -73,6 +93,22 @@ data class AppPrefs(
     /** Show the inline debug / event-log panel in Settings → Advanced
      *  (web `showDebugPanel`). */
     val showDebugPanel: Boolean = false,
+    /** Daily automatic Google Drive backup while Drive is linked (issue #36).
+     *  Platform extra — per-device like the screensaver, not in
+     *  CommonSettings. Default ON: linking Drive expresses backup intent,
+     *  and the toggle is a no-op until it's linked. */
+    val autoDriveBackup: Boolean = true,
+    /** Daily automatic release check against GitHub (issue #36 follow-up).
+     *  Default OFF — Crema never phones home unless the user opts in; the
+     *  manual About → Check button always works. Platform extra (update
+     *  checking is Android-only; web auto-deploys). */
+    val autoUpdateCheck: Boolean = false,
+    /** Epoch ms of the last automatic release-check ATTEMPT — stamped up
+     *  front so a failing check retries tomorrow, not on every launch. */
+    val lastUpdateCheckAtMs: Long? = null,
+    /** The newest version the user was already notified about, so a new
+     *  build notifies exactly once. */
+    val lastSeenLatestVersion: String? = null,
     // ── Brew defaults (seed new profiles + the Quick-Controls fallbacks) ─────
     val defaultDoseG: Float = 18f,
     val defaultRatio: Float = 2f,
@@ -148,13 +184,17 @@ fun AppPrefs.toCommonSettings(): CommonSettings = CommonSettings(
     autoTare = autoTare,
     stopOnWeight = stopOnWeight,
     volumeStopWithScale = volumeStopWithScale,
+    requireScale = requireScale,
     steamEco = steamEco,
+    steamTwoTap = steamTwoTap,
+    fanThresholdC = fanThresholdC,
     preFlush = preFlush,
     steamPurge = steamPurge,
     weightUnit = weightUnit,
     tempUnit = tempUnit,
     pressureUnit = pressureUnit,
     volumeUnit = volumeUnit,
+    waterLevelUnit = waterLevelUnit,
     chartChannels = chartChannels.toList(),
     keepScreenOnBrew = keepScreenOnBrew,
     showDebugPanel = showDebugPanel,
@@ -183,13 +223,18 @@ fun AppPrefs.withCommonSettings(c: CommonSettings): AppPrefs = copy(
     // Nullable in the generated binding (additive-field tolerance): a
     // pre-existing prefs.json / older backup simply reads as "off".
     volumeStopWithScale = c.volumeStopWithScale ?: false,
+    // Nullable additive fields: older blobs read as the canonical defaults.
+    requireScale = c.requireScale ?: false,
     steamEco = c.steamEco,
+    steamTwoTap = c.steamTwoTap ?: false,
+    fanThresholdC = c.fanThresholdC ?: 55f,
     preFlush = c.preFlush,
     steamPurge = c.steamPurge,
     weightUnit = c.weightUnit,
     tempUnit = c.tempUnit,
     pressureUnit = c.pressureUnit,
     volumeUnit = c.volumeUnit,
+    waterLevelUnit = c.waterLevelUnit ?: "ml",
     chartChannels = c.chartChannels.toSet(),
     keepScreenOnBrew = c.keepScreenOnBrew,
     showDebugPanel = c.showDebugPanel,
@@ -222,6 +267,10 @@ private data class PersistedPrefs(
     val screensaverAfterMin: Int = 30,
     val sleepMachineWithSaver: Boolean = true,
     val wakeMachineWithSaver: Boolean = true,
+    val autoDriveBackup: Boolean = true,
+    val autoUpdateCheck: Boolean = false,
+    val lastUpdateCheckAtMs: Long? = null,
+    val lastSeenLatestVersion: String? = null,
     val qcGrind: Float? = null,
     val activeProfileId: String? = null,
     val de1Address: String? = null,
@@ -239,6 +288,10 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     screensaverAfterMin = screensaverAfterMin,
     sleepMachineWithSaver = sleepMachineWithSaver,
     wakeMachineWithSaver = wakeMachineWithSaver,
+    autoDriveBackup = autoDriveBackup,
+    autoUpdateCheck = autoUpdateCheck,
+    lastUpdateCheckAtMs = lastUpdateCheckAtMs,
+    lastSeenLatestVersion = lastSeenLatestVersion,
     qcGrind = qcGrind,
     activeProfileId = activeProfileId,
     de1Address = de1Address,
@@ -255,6 +308,10 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     screensaverAfterMin = screensaverAfterMin,
     sleepMachineWithSaver = sleepMachineWithSaver,
     wakeMachineWithSaver = wakeMachineWithSaver,
+    autoDriveBackup = autoDriveBackup,
+    autoUpdateCheck = autoUpdateCheck,
+    lastUpdateCheckAtMs = lastUpdateCheckAtMs,
+    lastSeenLatestVersion = lastSeenLatestVersion,
     qcGrind = qcGrind,
     activeProfileId = activeProfileId,
     de1Address = de1Address,

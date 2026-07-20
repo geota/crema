@@ -1,6 +1,7 @@
 package coffee.crema.ui.screens
 
 import coffee.crema.ui.fmt
+import coffee.crema.ui.relativeAgo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -53,6 +55,7 @@ import coffee.crema.ui.components.CopyDiagnosticsRow
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaCard
+import coffee.crema.ui.components.CremaSlider
 import coffee.crema.ui.components.CremaStatusDot
 import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.components.CremaStepperStyle
@@ -173,6 +176,32 @@ fun SettingsScreen(
                             CremaSettingsRow("Keep DE1 awake while Crema is open", "Re-arms the DE1's sleep timer every minute so the machine stays ready.") {
                                 CremaSwitch(ui.suppressDe1Sleep, vm::setSuppressDe1Sleep)
                             }
+                            // Fan threshold is REAL: written now + re-seeded on every
+                            // connect (the DE1 forgets it across power cycles, #31).
+                            // Commit goes through a confirm dialog — Decenza treats
+                            // this as an expert calibration setting behind a warning.
+                            CremaSettingsRow("Fan on above", "Internal temperature that turns the case fan on. Higher = quieter idle; 0 = always on.") {
+                                var pendingFan by remember { mutableStateOf<Float?>(null) }
+                                CremaSlider(
+                                    value = ui.fanThresholdC,
+                                    min = 0f, max = 60f, step = 1f,
+                                    fmt = { if (it <= 0f) "Always on" else fmt("%.0f °C", it) },
+                                    onCommit = { pendingFan = it },
+                                )
+                                pendingFan?.let { v ->
+                                    CremaConfirmDialog(
+                                        title = "Change fan threshold?",
+                                        body = if (v <= 0f) {
+                                            "The case fan cools the DE1’s electronics. Setting 0 keeps it running whenever the machine is on. The value is written to the machine now and re-applied on every connect."
+                                        } else {
+                                            "The case fan cools the DE1’s electronics. Above ${fmt("%.0f", v)} °C the fan turns on — a higher threshold runs it less (quieter) but the electronics run warmer. Written to the machine now and re-applied on every connect."
+                                        },
+                                        confirmLabel = if (v <= 0f) "Set to always on" else "Set to ${fmt("%.0f", v)} °C",
+                                        onConfirm = { vm.setFanThreshold(v); pendingFan = null },
+                                        onDismiss = { pendingFan = null },
+                                    )
+                                }
+                            }
                             CremaSettingsRow("Auto-connect", "Reconnect to this DE1 automatically after a dropout, and on launch. Turning it off forgets the device.") {
                                 CremaSwitch(ui.rememberedDe1Address != null, vm::setDe1AutoConnect, enabled = connected || ui.rememberedDe1Address != null)
                             }
@@ -263,6 +292,7 @@ fun SettingsScreen(
                             CremaSettingsRow("Auto-tare on shot start", "Zero the scale automatically when extraction begins.") { CremaSwitch(ui.autoTare, vm::setAutoTare) }
                             CremaSettingsRow("Stop on weight", "End the shot once the target yield is reached.") { CremaSwitch(ui.stopOnWeight, vm::setStopOnWeight) }
                             CremaSettingsRow("Volume stop with scale", "Also stop at the profile's max volume while a scale is connected. Off = volume only applies without a scale.") { CremaSwitch(ui.volumeStopWithScale, vm::setVolumeStopWithScale) }
+                            CremaSettingsRow("Require scale to start", "Refuse to start a shot that has a weight target while no scale is connected — instead of the default warn-and-continue.") { CremaSwitch(ui.requireScale, vm::setRequireScale) }
                             // Max shot duration — persisted in AppPrefs + read from
                             // ui.maxShotDurationS so it survives + shows on Brew's stop
                             // conditions. The stepper pushes each change through the VM.
@@ -279,7 +309,8 @@ fun SettingsScreen(
                                 )
                             }
                             CremaSettingsRow("Group flush before each shot", "Stabilise the group temperature with a short flush.") { CremaSwitch(ui.preFlush, vm::setPreFlush) }
-                            CremaSettingsRow("Auto-purge after steam", "Clear the steam wand automatically after steaming.") { CremaSwitch(ui.steamPurge, vm::setSteamPurge) }
+                            CremaSettingsRow("Group flush after steam", "Rinse the group head after steaming — keeps the brew path fresh if you steam before the shot. The wand's own quick purge is the machine's — see two-tap steam stop.") { CremaSwitch(ui.steamPurge, vm::setSteamPurge) }
+                            CremaSettingsRow("Two-tap steam stop", "First stop tap ends steaming without the wand's auto-purge; tap again to purge. Written to the machine.") { CremaSwitch(ui.steamTwoTap, vm::setSteamTwoTap) }
                             CremaSettingsRow("Steam eco", "Idle the steam boiler cooler between sessions to save power.", last = true) { CremaSwitch(ui.steamEco, vm::setSteamEco) }
                         }
                     }
@@ -484,11 +515,19 @@ fun SettingsScreen(
                                     groupWidth = 172.dp,
                                 )
                             }
-                            CremaSettingsRow("Volume", "Units for water and yield volume.", last = true) {
+                            CremaSettingsRow("Volume", "Units for water and yield volume.") {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("ml", "ml"), SegOption("floz", "fl oz")),
                                     value = ui.volumeUnit,
                                     onChange = vm::setVolumeUnit,
+                                    groupWidth = 172.dp,
+                                )
+                            }
+                            CremaSettingsRow("Water tank", "How the Brew screen's tank readout reads.", last = true) {
+                                CremaSegmentedButton(
+                                    options = listOf(SegOption("ml", "ml"), SegOption("percent", "%")),
+                                    value = ui.waterLevelUnit,
+                                    onChange = vm::setWaterLevelUnit,
                                     groupWidth = 172.dp,
                                 )
                             }
@@ -620,11 +659,17 @@ fun SettingsScreen(
                                     CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Connect")
                                 }
                             } else {
-                                CremaSettingsRow("Back up to Drive", "Upload a fresh backup file to your Google Drive.") {
+                                val lastBackupSub = ds.lastBackupAtMs
+                                    ?.let { "Upload a fresh backup file to your Google Drive. Last backed up ${relativeAgo(it)}." }
+                                    ?: "Upload a fresh backup file to your Google Drive."
+                                CremaSettingsRow("Back up to Drive", lastBackupSub) {
                                     CremaButton(onClick = { vm.drive.backupNow() }, variant = CremaButtonVariant.Filled, icon = "cloud-arrow-up", enabled = !ds.busy, label = "Back up")
                                 }
                                 CremaSettingsRow("Restore latest", "Merge the newest Drive backup into your current data.") {
                                     CremaButton(onClick = { vm.drive.restoreLatest(false) }, variant = CremaButtonVariant.Outlined, icon = "cloud-arrow-down", enabled = !ds.busy, label = "Restore")
+                                }
+                                CremaSettingsRow("Automatic daily backup", "Upload a fresh backup once a day when the app opens — so an uninstall can't take your data with it.") {
+                                    CremaSwitch(ui.autoDriveBackup, vm::setAutoDriveBackup)
                                 }
                                 CremaSettingsRow("Disconnect", "Forget the Google Drive connection on this device.", last = true) {
                                     CremaButton(onClick = { vm.drive.disconnect() }, variant = CremaButtonVariant.Outlined, icon = "sign-out", enabled = !ds.busy, label = "Disconnect")
@@ -900,7 +945,38 @@ fun SettingsScreen(
                             CremaSettingsRow("App") { CremaMonoReadout(appVersion, color = MaterialTheme.colorScheme.onSurface) }
                             val coreVer = remember { runCatching { coffee.crema.core.coreVersion() }.getOrNull() ?: "—" }
                             CremaSettingsRow("Core") { CremaMonoReadout("de1-core v$coreVer · UniFFI", color = MaterialTheme.colorScheme.onSurface) }
-                            CremaSettingsRow("Machine", last = true) { CremaMonoReadout("Decent DE1", color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("Machine") { CremaMonoReadout("Decent DE1", color = MaterialTheme.colorScheme.onSurface) }
+                            // On-demand release check (issue #36) — one tap, two
+                            // GitHub API GETs; never automatic.
+                            val upd = ui.updateInfo
+                            CremaSettingsRow(
+                                "Latest release",
+                                when {
+                                    upd == null -> "Compare this build against the newest stable and nightly on GitHub."
+                                    upd.error != null -> "Check failed: ${upd.error}"
+                                    appVersion == upd.latestNightly || appVersion == upd.latestStable ->
+                                        "Up to date — this build is the newest available."
+                                    else -> buildString {
+                                        append("Stable ${upd.latestStable ?: "—"}")
+                                        upd.stableAgeDays?.let { append(" · ${it}d ago") }
+                                        append("  ·  Nightly ${upd.latestNightly ?: "—"}")
+                                        upd.nightlyAgeDays?.let { append(" · ${it}d ago") }
+                                    }
+                                },
+                            ) {
+                                CremaButton(
+                                    onClick = vm::checkForUpdates,
+                                    variant = CremaButtonVariant.Outlined,
+                                    icon = "arrow-circle-up",
+                                    label = if (ui.updateCheckBusy) "Checking…" else "Check",
+                                    enabled = !ui.updateCheckBusy,
+                                )
+                            }
+                            CremaSettingsRow(
+                                "Check automatically",
+                                "Once a day, when the app opens. Shows a notification when a new build is available. Off = Crema never phones home.",
+                                last = true,
+                            ) { CremaSwitch(ui.autoUpdateCheck, vm::setAutoUpdateCheck) }
                         }
                         val aboutContext = androidx.compose.ui.platform.LocalContext.current
                         val openLink: (String) -> Unit = { url ->
@@ -1018,7 +1094,12 @@ private fun MachineHeroCard(
 ) {
     CremaCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
         Row(
-            Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(horizontal = 22.dp, vertical = 20.dp),
+            // heightIn BEFORE the intrinsic height: IntrinsicSize.Min with a
+            // weight(1f) child measures that child near zero width, so its
+            // wrapped text can report a huge min height and stretch all three
+            // panels (the "very tall boxes" of issue #35). The cap bounds the
+            // stretch; normal content sits well under it.
+            Modifier.fillMaxWidth().heightIn(max = 240.dp).height(IntrinsicSize.Min).padding(horizontal = 22.dp, vertical = 20.dp),
             horizontalArrangement = Arrangement.spacedBy(24.dp),
         ) {
             // Artwork well — page-dark fill, the stylised DE1 drawing centred.

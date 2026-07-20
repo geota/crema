@@ -64,6 +64,7 @@ import coffee.crema.ui.convertPressure
 import coffee.crema.ui.convertTemp
 import coffee.crema.ui.convertVolume
 import coffee.crema.ui.convertWeight
+import coffee.crema.ui.formatTankLevel
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.stopIcon
 import coffee.crema.ui.formatTemp
@@ -263,7 +264,14 @@ fun BrewScreen(
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    ChannelsRow(ui = ui, active = active)
+                    // Tap-to-tare (issue #37): the weight card doubles as a tare
+                    // button while a scale is connected and no shot is pulling
+                    // (a mid-shot tare would corrupt stop-at-weight).
+                    ChannelsRow(
+                        ui = ui,
+                        active = active,
+                        onTareScale = if (scaleConnected && !espressoActive) vm::tareScale else null,
+                    )
                     // The live chart fills the remainder. Hosted in a Surface
                     // (not CremaCard) so the Canvas chart can fillMaxSize.
                     Surface(
@@ -292,6 +300,7 @@ fun BrewScreen(
                 targets = rememberModeTargets(ui),
                 tempUnit = ui.tempUnit,
                 volumeUnit = ui.volumeUnit,
+                waterLevelUnit = ui.waterLevelUnit,
                 connected = connected,
                 scaleConnected = scaleConnected,
                 espressoActive = espressoActive,
@@ -1347,7 +1356,12 @@ private fun LastShotStat(
 // ── Right column ────────────────────────────────────────────────────────────
 
 @Composable
-private fun ChannelsRow(ui: coffee.crema.ui.MainUiState, active: CremaProfile?) {
+private fun ChannelsRow(
+    ui: coffee.crema.ui.MainUiState,
+    active: CremaProfile?,
+    /** Non-null makes the weight card tappable — tap = tare (issue #37). */
+    onTareScale: (() -> Unit)? = null,
+) {
     val tel = CremaTheme.telemetry
     val resist = ui.resistanceWeight ?: ui.resistance
     val resistUnit = if (ui.resistanceWeight != null) "bar·s²/g²" else "bar·s²/ml²"
@@ -1398,6 +1412,7 @@ private fun ChannelsRow(ui: coffee.crema.ui.MainUiState, active: CremaProfile?) 
             secLabel = "Flow", secColor = tel.weight2,
             secValue = fmt(ui.scaleFlowGPerS), secUnit = "g/s",
             target = active?.let { "target ${formatWeight(it.yieldOut, ui.weightUnit)}" },
+            onTap = onTareScale,
         )
     }
     BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1429,8 +1444,11 @@ private fun ChannelCard(
     primLabel: String, primIcon: String, primColor: Color, primValue: String, primUnit: String,
     secLabel: String, secColor: Color, secValue: String, secUnit: String,
     target: String? = null,
+    /** Non-null = the whole card is tappable (weight card → tare, issue #37). */
+    onTap: (() -> Unit)? = null,
 ) {
-    CremaCard(modifier) {
+    // Clip before clickable so the tap ripple honours the card's rounded shape.
+    CremaCard(if (onTap != null) modifier.clip(MaterialTheme.shapes.medium).clickable(onClick = onTap) else modifier) {
         // proto v2 .brew-channel padding: 9px vertical / 13px horizontal (compact).
         Row(Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 9.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             // Primary (left).
@@ -1478,6 +1496,7 @@ private fun BrewFoot(
     targets: ModeTargets,
     tempUnit: String,
     volumeUnit: String,
+    waterLevelUnit: String,
     connected: Boolean,
     scaleConnected: Boolean,
     espressoActive: Boolean,
@@ -1503,7 +1522,8 @@ private fun BrewFoot(
                 FootDivider()
                 val steam = convertTemp(steamTemp, tempUnit)
                 FootMeta("Steam", steam.value, steamTemp?.let { steam.unit })
-                FootMeta("Tank", waterLevelMm?.let { fmt("%.0f", it) } ?: "—", waterLevelMm?.let { "mm" })
+                val tank = formatTankLevel(waterLevelMm, waterLevelUnit, volumeUnit)
+                FootMeta("Tank", tank.value, waterLevelMm?.let { tank.unit })
             }
             // Right actions. Chip sub-labels are live (were hardcoded): resting
             // shows the *target* the firmware will hold (machine ShotSettings →
