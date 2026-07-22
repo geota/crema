@@ -1520,23 +1520,30 @@ private fun BrewFoot(
             // 1340×800 ≈ 1000 dp wide) the full Machine · Scale · Steam · Tank
             // run overflowed under the right-side chips once everything
             // connected, clipping the Tank readout. Below 1100 dp the cluster
-            // keeps only what ISN'T shown elsewhere — Power + Tank. Machine
-            // state lives in the timer/phase cards and the rail's DE1 dot,
-            // the scale in the rail dot + Weight card, and the steam temp in
-            // the Steam chip's own sub-label.
+            // drops the two TEXT metas that are duplicated elsewhere —
+            // machine state (timer/phase cards + the rail's DE1 dot) and the
+            // scale (rail dot + Weight card) — and keeps the telemetry:
+            // Power, the LIVE steam boiler temp (the Steam chip's sub-label
+            // is the configured target, not a reading — this is its only
+            // Brew-screen surface), and Tank.
             val compactFoot = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1100
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 PowerButton(connected = connected, asleep = machineStateName == MachineState.Sleep, onClick = onPower)
-                if (!compactFoot) {
+                val steam = convertTemp(steamTemp, tempUnit)
+                val tank = formatTankLevel(waterLevelMm, waterLevelUnit, volumeUnit)
+                if (compactFoot) {
+                    // Icons in place of the STEAM/TANK eyebrows — the phone
+                    // stat tiles' vocabulary, ~half the width per meta.
+                    FootMetaIcon("cloud", steam.value, steamTemp?.let { steam.unit })
+                    FootMetaIcon("drop-half", tank.value, waterLevelMm?.let { tank.unit })
+                } else {
                     FootMeta("Machine", machineState ?: "—")
                     FootDivider()
                     FootMeta("Scale", if (scaleConnected) (scaleName ?: "Scale") else "—")
                     FootDivider()
-                    val steam = convertTemp(steamTemp, tempUnit)
                     FootMeta("Steam", steam.value, steamTemp?.let { steam.unit })
+                    FootMeta("Tank", tank.value, waterLevelMm?.let { tank.unit })
                 }
-                val tank = formatTankLevel(waterLevelMm, waterLevelUnit, volumeUnit)
-                FootMeta("Tank", tank.value, waterLevelMm?.let { tank.unit })
             }
             // Right actions. Chip sub-labels are live (were hardcoded): resting
             // shows the *target* the firmware will hold (machine ShotSettings →
@@ -1572,6 +1579,31 @@ private fun RowScope.FootMeta(label: String, value: String, unit: String? = null
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Eyebrow(label)
+        if (unit != null) {
+            CremaValueUnit(value, unit, valueSize = 13.sp)
+        } else {
+            Text(
+                value,
+                style = CremaTheme.readout.readoutSm.copy(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Normal),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** Compact-foot meta: a Phosphor icon in place of the text eyebrow (the
+ *  phone stat tiles' vocabulary — "cloud" = steam, "drop-half" = tank), so
+ *  the ~8" foot carries the live telemetry at roughly half the width. */
+@Composable
+private fun RowScope.FootMetaIcon(icon: String, value: String, unit: String? = null) {
+    Row(
+        Modifier.padding(end = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        PhIcon(icon, sizeDp = 14, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         if (unit != null) {
             CremaValueUnit(value, unit, valueSize = 13.sp)
         } else {
