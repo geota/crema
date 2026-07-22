@@ -1092,28 +1092,12 @@ private fun MachineHeroCard(
     /** Null = firmware updating isn't implemented yet — the tile drops the button. */
     onUpdateFirmware: (() -> Unit)?,
 ) {
-    CremaCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-        Row(
-            // heightIn BEFORE the intrinsic height: IntrinsicSize.Min with a
-            // weight(1f) child measures that child near zero width, so its
-            // wrapped text can report a huge min height and stretch all three
-            // panels (the "very tall boxes" of issue #35). The cap bounds the
-            // stretch; normal content sits well under it.
-            Modifier.fillMaxWidth().heightIn(max = 240.dp).height(IntrinsicSize.Min).padding(horizontal = 22.dp, vertical = 20.dp),
-            horizontalArrangement = Arrangement.spacedBy(24.dp),
-        ) {
-            // Artwork well — page-dark fill, the stylised DE1 drawing centred.
-            Box(
-                Modifier.width(120.dp).fillMaxHeight()
-                    .clip(MaterialTheme.shapes.medium)
-                    .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-                    .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f), MaterialTheme.shapes.medium),
-                contentAlignment = Alignment.Center,
-            ) { De1Artwork(Modifier.size(width = 88.dp, height = 104.dp)) }
-
-            // Machine info inner card — the neutral twin of the firmware card.
-            Column(
-                Modifier.weight(1f).fillMaxHeight()
+    // Machine info inner card — the neutral twin of the firmware card. The
+    // outer sizing comes from the caller: weight(1f)+fillMaxHeight in the
+    // wide row, fillMaxWidth in the compact stack.
+    val infoPanel: @Composable (Modifier) -> Unit = { m ->
+        Column(
+            m
                     .clip(MaterialTheme.shapes.medium)
                     .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f))
                     .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), MaterialTheme.shapes.medium)
@@ -1142,10 +1126,11 @@ private fun MachineHeroCard(
                     label = if (connected) "Disconnect" else "Connect",
                 )
             }
-
-            // Firmware inner card — copper-tinted variant of the same shape.
-            Column(
-                Modifier.width(280.dp).fillMaxHeight()
+    }
+    // Firmware inner card — copper-tinted variant of the same shape.
+    val firmwarePanel: @Composable (Modifier) -> Unit = { m ->
+        Column(
+                m
                     .clip(MaterialTheme.shapes.medium)
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.06f))
                     .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f), MaterialTheme.shapes.medium)
@@ -1169,6 +1154,43 @@ private fun MachineHeroCard(
                 } else {
                     Text("Update checks aren\u2019t implemented yet.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+            }
+    }
+    CremaCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        // Below ~1100 dp the three-panel row starved the weighted info column
+        // (the 120 dp artwork + fixed 280 dp firmware card left it ~90 dp \u2014
+        // "CONNECTED \u00b7 ES\u2026" truncated and the BLE address rendered one
+        // character per line, issue #35's 8" reports). Compact stacks the two
+        // panels full-width and drops the artwork well.
+        val compactHero = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1100
+        if (compactHero) {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                infoPanel(Modifier.fillMaxWidth())
+                firmwarePanel(Modifier.fillMaxWidth())
+            }
+        } else {
+            Row(
+                // heightIn BEFORE the intrinsic height: IntrinsicSize.Min with a
+                // weight(1f) child measures that child near zero width, so its
+                // wrapped text can report a huge min height and stretch all three
+                // panels (the "very tall boxes" of issue #35). The cap bounds the
+                // stretch; normal content sits well under it.
+                Modifier.fillMaxWidth().heightIn(max = 240.dp).height(IntrinsicSize.Min).padding(horizontal = 22.dp, vertical = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(24.dp),
+            ) {
+                // Artwork well \u2014 page-dark fill, the stylised DE1 drawing centred.
+                Box(
+                    Modifier.width(120.dp).fillMaxHeight()
+                        .clip(MaterialTheme.shapes.medium)
+                        .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                        .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f), MaterialTheme.shapes.medium),
+                    contentAlignment = Alignment.Center,
+                ) { De1Artwork(Modifier.size(width = 88.dp, height = 104.dp)) }
+                infoPanel(Modifier.weight(1f).fillMaxHeight())
+                firmwarePanel(Modifier.width(280.dp).fillMaxHeight())
             }
         }
     }
