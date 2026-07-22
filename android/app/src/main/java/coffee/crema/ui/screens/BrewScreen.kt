@@ -1418,11 +1418,14 @@ private fun ChannelsRow(
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         if (maxWidth < 760.dp) {
             // 2×2 grid — each card gets ~half the width, enough for dual values.
+            // 94dp (not the wide band's 86): the temp/weight cards carry a
+            // third "target …" line that clipped at 86 on ~8" tablets
+            // (issue #35, the 1340×800 report).
             Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                Row(Modifier.fillMaxWidth().height(86.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                Row(Modifier.fillMaxWidth().height(94.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                     pressureCard(Modifier.weight(1f).fillMaxHeight()); flowCard(Modifier.weight(1f).fillMaxHeight())
                 }
-                Row(Modifier.fillMaxWidth().height(86.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                Row(Modifier.fillMaxWidth().height(94.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                     tempCard(Modifier.weight(1f).fillMaxHeight()); weightCard(Modifier.weight(1f).fillMaxHeight())
                 }
             }
@@ -1513,15 +1516,25 @@ private fun BrewFoot(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            // Left meta cluster.
+            // Left meta cluster. On ~8" tablets (issue #35, second report:
+            // 1340×800 ≈ 1000 dp wide) the full Machine · Scale · Steam · Tank
+            // run overflowed under the right-side chips once everything
+            // connected, clipping the Tank readout. Below 1100 dp the cluster
+            // keeps only what ISN'T shown elsewhere — Power + Tank. Machine
+            // state lives in the timer/phase cards and the rail's DE1 dot,
+            // the scale in the rail dot + Weight card, and the steam temp in
+            // the Steam chip's own sub-label.
+            val compactFoot = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1100
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 PowerButton(connected = connected, asleep = machineStateName == MachineState.Sleep, onClick = onPower)
-                FootMeta("Machine", machineState ?: "—")
-                FootDivider()
-                FootMeta("Scale", if (scaleConnected) (scaleName ?: "Scale") else "—")
-                FootDivider()
-                val steam = convertTemp(steamTemp, tempUnit)
-                FootMeta("Steam", steam.value, steamTemp?.let { steam.unit })
+                if (!compactFoot) {
+                    FootMeta("Machine", machineState ?: "—")
+                    FootDivider()
+                    FootMeta("Scale", if (scaleConnected) (scaleName ?: "Scale") else "—")
+                    FootDivider()
+                    val steam = convertTemp(steamTemp, tempUnit)
+                    FootMeta("Steam", steam.value, steamTemp?.let { steam.unit })
+                }
                 val tank = formatTankLevel(waterLevelMm, waterLevelUnit, volumeUnit)
                 FootMeta("Tank", tank.value, waterLevelMm?.let { tank.unit })
             }
