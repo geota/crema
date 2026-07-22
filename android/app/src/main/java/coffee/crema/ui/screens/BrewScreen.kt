@@ -223,6 +223,7 @@ fun BrewScreen(
                         elapsedMs = if (running) ui.shotElapsedMs else ui.modeElapsedMs,
                         phase = ui.shotPhase,
                         modeLabel = if (running) null else mode,
+                        substate = ui.machineSubstate,
                     )
                     RatioCard(active = active, weightG = ratioWeight(ui, running))
                     PhaseCard(
@@ -948,14 +949,29 @@ private fun QuickControlsPill(onClick: () -> Unit) {
 // ── Left column cards ───────────────────────────────────────────────────────
 
 @Composable
-private fun TimerCard(running: Boolean, elapsedMs: Long, phase: String?, modeLabel: String? = null) {
+private fun TimerCard(
+    running: Boolean,
+    elapsedMs: Long,
+    phase: String?,
+    modeLabel: String? = null,
+    /** Machine substate ("Heating", "Refill", …) — appended to the idle
+     *  eyebrow when informative. The compact foot dropped the "Idle /
+     *  Heating" text (issue #35), so this is the substate's surface:
+     *  "READY · HEATING" says the machine is still warming on every size. */
+    substate: String? = null,
+) {
     val totalSec = elapsedMs / 1000.0
     val mm = (totalSec / 60).toInt()
     val ss = (totalSec % 60).toInt()
     val tenth = ((totalSec % 1) * 10).toInt()
+    // "Ready"/"NoState"/"Idle" add nothing over the READY eyebrow itself;
+    // anything else (Heating, Stabilising, Refill…) is worth surfacing.
+    val informativeSub = substate?.takeIf {
+        it.isNotBlank() && it != "Ready" && it != "NoState" && it != "Idle"
+    }
     val step = when {
         modeLabel != null -> modeLabel
-        !running -> "Ready"
+        !running -> if (informativeSub != null) "Ready · $informativeSub" else "Ready"
         else -> phaseStepLabel(phase)
     }
     CremaCard(Modifier.fillMaxWidth()) {
