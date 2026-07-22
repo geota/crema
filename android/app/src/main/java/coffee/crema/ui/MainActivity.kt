@@ -102,6 +102,20 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
 
+    // Presence follows visibility (issue: backgrounding the phone app kept
+    // the DE1 awake forever — the keep-awake heartbeat had no idea the app
+    // left the screen). onStop → the heartbeat pauses and the DE1's own
+    // sleep timer takes over; onStart → presence re-arms immediately.
+    override fun onStart() {
+        super.onStart()
+        viewModel.setAppForeground(true)
+    }
+
+    override fun onStop() {
+        viewModel.setAppForeground(false)
+        super.onStop()
+    }
+
     /** Android-12 BLE runtime permissions. */
     private val blePermissions = arrayOf(
         Manifest.permission.BLUETOOTH_SCAN,

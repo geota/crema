@@ -1092,7 +1092,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val s = _ui.value
             val asleep = s.machineStateName == MachineState.Sleep ||
                 s.machineStateName == MachineState.GoingToSleep
-            if (s.suppressDe1Sleep && !s.saverVisible && !asleep && !s.shotInProgress) pokeUserPresent()
+            // Foreground-gated (the reaprime PresenceController model): a
+            // backgrounded app is not a present user, so it must stop
+            // re-arming the DE1's sleep timer — otherwise pocketing the
+            // phone with Crema open held the machine awake indefinitely.
+            // The moment the pokes stop, the DE1's own ~30 min timer takes
+            // over and sleeps the machine with no phone in range; the
+            // screensaver clock (which keeps running in the background)
+            // still issues the explicit earlier sleep when still connected.
+            if (s.suppressDe1Sleep && appInForeground && !s.saverVisible && !asleep && !s.shotInProgress) {
+                pokeUserPresent()
+            }
         },
     )
 
@@ -2879,6 +2889,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  interceptor, Initial pass, never consumes) — cheap and lock-free. */
     fun noteUserInteraction() {
         lastInteractionAtMs = SystemClock.elapsedRealtime()
+    }
+
+    /** Whether the activity is started (visible). Presence follows this: the
+     *  keep-awake heartbeat only runs foregrounded — see [keepAliveTick]. */
+    @Volatile
+    private var appInForeground = true
+
+    /** Foreground/background transitions from [MainActivity]'s
+     *  onStart/onStop. Returning counts as user presence: the idle clock is
+     *  bumped (so the saver doesn't fire seconds after a long absence) and,
+     *  when keep-awake is on, one immediate poke re-arms the DE1 — it may be
+     *  minutes from its own sleep deadline after a background stretch. */
+    fun setAppForeground(foreground: Boolean) {
+        appInForeground = foreground
+        if (foreground) {
+            noteUserInteraction()
+            if (_ui.value.suppressDe1Sleep) pokeUserPresent()
+        }
     }
 
     /** Monotonic ms of the last sleep the app itself asked for (the Brew power

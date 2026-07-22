@@ -332,7 +332,7 @@ private fun MachineSection(
     }
     SettingsGroup("Connection") {
         CremaSettingsRow("Telemetry rate", "How often the chart samples live data.", notImplemented = true) { CremaSettingsSelect("50 Hz") }
-        CremaSettingsRow("Keep DE1 awake while Crema is open", "Re-arms the DE1's sleep timer every minute so the machine stays ready.") {
+        CremaSettingsRow("Keep DE1 awake while Crema is open", "Re-arms the DE1's sleep timer every minute while Crema is on screen. In the background the pokes stop, so the machine falls back to its own ~30 min sleep timer.") {
             CremaSwitch(ui.suppressDe1Sleep, vm::setSuppressDe1Sleep)
         }
         // Fan threshold is REAL: written now + re-seeded on every connect (the
