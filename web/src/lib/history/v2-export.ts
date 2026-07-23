@@ -133,7 +133,15 @@ function toRustStoredShot(shot: StoredShot): RustStoredShot {
 				...s,
 				elapsed: Math.max(0, Math.round(s.elapsed))
 			}))
-		}
+		},
+		// The structured snapshot + equipment grinder feed the exporter's
+		// `meta.bean` and `app.data.settings.*` journal fields (issue #44 —
+		// the upload document itself now carries the bean info Visualizer
+		// captures at parse time; the flat label above stays for legacy v2
+		// consumers). `tags: null` normalises to absent — the Rust `Vec`
+		// field defaults on a missing key but rejects an explicit null.
+		bean: shot.bean ? { ...shot.bean, tags: shot.bean.tags ?? undefined } : null,
+		grinderModel: shot.grinderModel ?? null
 	};
 }
 

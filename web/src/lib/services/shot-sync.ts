@@ -111,6 +111,23 @@ function buildShotPayload(shot: StoredShot): Record<string, unknown> {
 		if (metadata && 'notes' in metadata) {
 			metadata.notes = null;
 		}
+		// The v2 document carries the notes text in two more slots —
+		// `meta.shot.notes` (rides the raw file Visualizer keeps
+		// downloadable) and the journal block its parser captures
+		// (`app.data.settings.espresso_notes`). An opt-out must strip both.
+		const metaShot = ((json.meta as Record<string, unknown> | undefined)?.shot ?? null) as Record<
+			string,
+			unknown
+		> | null;
+		if (metaShot && 'notes' in metaShot) {
+			metaShot.notes = '';
+		}
+		const settings = (((json.app as Record<string, unknown> | undefined)?.data as
+			| Record<string, unknown>
+			| undefined)?.settings ?? null) as Record<string, unknown> | null;
+		if (settings) {
+			delete settings.espresso_notes;
+		}
 	}
 
 	// Per-shot override wins; absent/null inherits the sync-config default.

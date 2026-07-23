@@ -218,6 +218,25 @@ export interface RustStoredShot {
 		duration: RustDuration;
 		samples: TimedSample[];
 	};
+	/** Frozen-at-completion bean snapshot (Rust `ShotBean`, camelCase) —
+	 *  feeds the exporter's `meta.bean` + `app.data.settings.bean_*`
+	 *  journal fields (issue #44). Optional: absent for bean-less shots.
+	 *  Structurally typed (not the generated `ShotBean`) so the web
+	 *  history model's null-bearing optionals assign directly — serde
+	 *  reads JSON `null` as `None` for every `Option` field. */
+	bean?: {
+		beanId?: string | null;
+		name: string;
+		roasterName?: string | null;
+		roastedOn?: string | null;
+		roastLevel?: number | null;
+		tags?: readonly string[];
+		grinderSetting?: string | null;
+		grinder?: string | null;
+	} | null;
+	/** Equipment-level grinder model at completion time — feeds the
+	 *  exporter's `app.data.settings.grinder_model`. */
+	grinderModel?: string | null;
 }
 
 /**
@@ -1215,7 +1234,7 @@ export type { CoreOutput, ScaleCapabilities, ScaleUuids, FirmwareUpdateStatus } 
 export type { Event, Command, ModeInfo, RangeCapability } from './crema-core';
 // Telemetry wire types — now typeshare-generated (review #01 F24); replaced the
 // hand-written `RustShotSample` / `RustTimedSample`.
-export type { TimedSample, ShotSample } from './crema-core';
+export type { TimedSample, ShotSample, WireShotBean } from './crema-core';
 // Re-export the wire enums so consumers comparing snapshot fields don't have
 // to deep-import from `./crema-core`. These are the discriminant strings
 // produced by typeshare; values matter (consumers `===` them).

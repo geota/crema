@@ -28,8 +28,8 @@ import {
 	signatureForRoaster as wasmSignatureForRoaster,
 	reconcileShots as wasmReconcileShots
 } from '$lib/wasm/de1_wasm';
-import type { TimedSample } from '$lib/core';
-import { peaksOf, type StoredShot } from '$lib/history/model';
+import type { TimedSample, WireShotBean } from '$lib/core';
+import { peaksOf, type ShotBean, type StoredShot } from '$lib/history/model';
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -75,6 +75,13 @@ export interface WireShot {
 	 * in `shot-sync.ts` reads `detail.tags ?? []` into this slot.
 	 */
 	tag_list: string[];
+	/**
+	 * The remote's bean / grinder journal fields, or absent when the
+	 * detail carried none. Mutable metadata like `tag_list` — NOT part
+	 * of `signatureForShot` (issue #44: these used to be dropped on
+	 * pull, so a synced shot lost its bean info).
+	 */
+	bean?: WireShotBean | null;
 }
 
 /**
@@ -216,6 +223,28 @@ export function storedShotFromWire(
 	samples?: readonly TimedSample[]
 ): StoredShot {
 	const id = `shot:remote:${remote.id}`;
+	// The remote's bean / grinder journal fields → an unlinked ShotBean
+	// snapshot (no beanId — the pull doesn't re-link the local library).
+	// Issue #44: these used to be dropped, so a synced shot lost its bean.
+	const wb = remote.bean ?? null;
+	const beanName = wb?.bean_type ?? null;
+	const beanRoaster = wb?.bean_brand ?? null;
+	const roastLevel = wb?.roast_level == null ? null : Number.parseInt(wb.roast_level, 10);
+	const bean: ShotBean | null =
+		beanName != null || beanRoaster != null
+			? {
+					beanId: null,
+					// A brand-only remote still renders: it becomes the name and
+					// the roaster slot stays empty (avoids a "Sey · Sey" label).
+					name: beanName ?? beanRoaster ?? '',
+					roasterName: beanName != null ? beanRoaster : null,
+					roastedOn: wb?.roast_date ?? null,
+					roastLevel: roastLevel != null && Number.isFinite(roastLevel) ? roastLevel : null,
+					notes: wb?.bean_notes,
+					grinderSetting: wb?.grinder_setting,
+					grinder: wb?.grinder_model
+				}
+			: null;
 	return {
 		formatVersion: 3,
 		id,
@@ -228,12 +257,11 @@ export function storedShotFromWire(
 			notes: remote.notes ?? null
 		},
 		record: { duration: remote.duration_ms, samples: samples ? [...samples] : [] },
-		bean: null,
-		// `WireShot` doesn't carry the remote shot's `grinder_model`
-		// today — pulled rows leave the snapshot empty, and the
-		// upload-time cascade in `shot-sync.ts` re-applies the user's
+		bean,
+		// Equipment-level grinder model from the remote journal, when set;
+		// the upload-time cascade in `shot-sync.ts` re-applies the user's
 		// current settings default if they push the row back.
-		grinderModel: null,
+		grinderModel: wb?.grinder_model ?? null,
 		// Defensive `?? []` even though the type says `string[]` — the
 		// boundary in `shot-sync.ts` is the single producer of `tag_list`
 		// and it already supplies `[]` on missing, but a fresh contract

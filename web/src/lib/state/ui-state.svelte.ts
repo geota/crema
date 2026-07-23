@@ -785,11 +785,18 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				setGroupPressure: t.set_group_pressure,
 				setGroupFlow: t.set_group_flow
 			};
-			// Append to the series; only buffer while a shot is in progress so
-			// idle-state telemetry never grows the chart. Cap the length.
-			const series = snapshot.shotInProgress
-				? [...snapshot.shotTelemetry, sample].slice(-MAX_TELEMETRY_SAMPLES)
-				: snapshot.shotTelemetry;
+			// Append to the series only during the FLOW window (preinfusion /
+			// pouring), like the core's own ShotRecord: idle-state telemetry
+			// never grows the chart, the pre-pour heating phase piles
+			// zero-elapsed points, and the Espresso/Ending tail (pump
+			// wind-down after the stop) used to keep the curve growing past
+			// the stop point — issue #44's "truncate at the stop" report.
+			const flowing =
+				snapshot.machineSubstate === 'Preinfusion' || snapshot.machineSubstate === 'Pouring';
+			const series =
+				snapshot.shotInProgress && flowing
+					? [...snapshot.shotTelemetry, sample].slice(-MAX_TELEMETRY_SAMPLES)
+					: snapshot.shotTelemetry;
 			return {
 				...snapshot,
 				telemetry: line,
