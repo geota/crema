@@ -2268,8 +2268,11 @@ mod tests {
 
     #[test]
     fn query_scale_settings_produces_no_command_for_a_weight_only_scale() {
+        // Felicita: nothing to init, no LCD, no settings query. (A Decent
+        // Scale is no longer silent here — the connect hook lights its
+        // LCD; see the de1-app scale_connect_* tests.)
         let bridge = CremaBridge::new();
-        bridge.connect_scale("Decent Scale ABC".to_owned(), vec![]);
+        bridge.connect_scale("FELICITA".to_owned(), vec![]);
         let json = bridge.query_scale_settings();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(parsed["commands"].as_array().unwrap().is_empty());

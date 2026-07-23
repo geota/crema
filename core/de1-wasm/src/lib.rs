@@ -2359,8 +2359,11 @@ mod tests {
 
     #[test]
     fn scale_config_methods_produce_no_command_for_a_weight_only_scale() {
+        // Felicita: no config surface at all. (A Decent Scale is no longer
+        // silent on query_scale_settings — the connect hook lights its LCD;
+        // see the de1-app scale_connect_* tests.)
         let mut bridge = CremaBridge::new();
-        bridge.connect_scale("Decent Scale ABC".to_owned(), vec![]);
+        bridge.connect_scale("FELICITA".to_owned(), vec![]);
         for json in [
             bridge.set_scale_volume(3),
             bridge.set_scale_standby(15),

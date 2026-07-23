@@ -2234,6 +2234,27 @@ impl CremaCore {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale {
             Self::push_scale_writes(&mut out, scale.connect_writes());
+            // Wake the scale's display at (re)connect. The LCD-enable
+            // sequence otherwise rides only a DE1 *Idle transition*
+            // (`handle_state`), so a scale that connected while the DE1
+            // was already sitting in Idle — or with no DE1 at all — never
+            // got its display turned on: a Skale II that dropped and
+            // auto-reconnected stayed black until the next sleep/wake
+            // cycle (issue #29). Skipped while the DE1 is asleep so the
+            // display keeps following the machine's sleep state.
+            let machine_asleep = matches!(
+                self.last_state.map(|s| s.state),
+                Some(MachineState::Sleep | MachineState::GoingToSleep)
+            );
+            if !machine_asleep {
+                let grams = matches!(self.weight_unit_pref, WeightUnit::Grams);
+                if let Some(writes) = scale.lcd_enable_command(grams) {
+                    Self::push_scale_writes(&mut out, writes);
+                }
+                if grams && let Some(writes) = scale.set_unit_grams_command() {
+                    Self::push_scale_writes(&mut out, writes);
+                }
+            }
             if let Some(bytes) = scale.query_settings_command() {
                 Self::push_scale_write(&mut out, bytes);
             }
@@ -4458,6 +4479,65 @@ mod tests {
     }
 
     #[test]
+    fn scale_connect_lights_the_lcd_when_the_de1_is_not_asleep() {
+        // Issue #29: the LCD-enable sequence used to ride only a DE1 Idle
+        // *transition*, so a Skale II that dropped and auto-reconnected while
+        // the DE1 sat in Idle stayed black until the next sleep/wake cycle.
+        // The post-connect hook must light it.
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 1_000);
+        core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 2_000);
+        core.connect_scale("Skale2", &[]);
+        let out = core.query_scale_settings();
+        let writes: Vec<&[u8]> = out
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteScale { data } => Some(data.as_slice()),
+                Command::WriteCharacteristic { .. } => None,
+            })
+            .collect();
+        for expected in [
+            [skale::CMD_SCREEN_ON],
+            [skale::CMD_DISPLAY_WEIGHT],
+            [skale::CMD_ENABLE_GRAMS],
+        ] {
+            assert!(
+                writes.contains(&expected.as_slice()),
+                "expected {expected:02X?} in the connect writes, got {writes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scale_connect_lights_the_lcd_with_no_de1_connected() {
+        // Scale-only usage: with no DE1 there is never an Idle transition,
+        // so the connect hook is the only chance to turn the display on.
+        let mut core = CremaCore::new();
+        core.connect_scale("Skale2", &[]);
+        let out = core.query_scale_settings();
+        let lit = out.commands.iter().any(|c| {
+            matches!(c, Command::WriteScale { data } if data.as_slice() == [skale::CMD_SCREEN_ON])
+        });
+        assert!(lit, "expected SCREEN_ON with no DE1 state known");
+    }
+
+    #[test]
+    fn scale_connect_leaves_the_lcd_dark_while_the_de1_sleeps() {
+        // The display follows the machine's sleep state — a scale that
+        // reconnects next to a sleeping DE1 must stay dark.
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
+        core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 2_000);
+        core.connect_scale("Skale2", &[]);
+        let out = core.query_scale_settings();
+        let lit = out.commands.iter().any(|c| {
+            matches!(c, Command::WriteScale { data } if data.as_slice() == [skale::CMD_SCREEN_ON])
+        });
+        assert!(!lit, "expected no SCREEN_ON while the DE1 sleeps");
+    }
+
+    #[test]
     fn the_decent_scale_lcd_auto_policy_is_silent_for_a_non_decent_scale() {
         // The auto-policy is Decent-Scale-only; a Bookoo (or no scale)
         // sees no LCD writes on the same state transitions.
@@ -5315,8 +5395,12 @@ mod tests {
 
     #[test]
     fn query_scale_settings_emits_nothing_for_a_weight_only_scale() {
+        // Felicita: no connect-init writes, no settable LCD, no settings
+        // query. (A Decent Scale / Skale is no longer silent here — the
+        // connect hook lights their LCD — and a Bookoo answers a settings
+        // query; see the scale_connect_* tests.)
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC", &[]);
+        core.connect_scale("FELICITA", &[]);
         assert!(core.query_scale_settings().commands.is_empty());
     }
 
