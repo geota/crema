@@ -140,6 +140,43 @@ pub struct WireShot {
     /// field still deserialise cleanly to an empty Vec.
     #[serde(default)]
     pub tag_list: Vec<String>,
+    /// The bean / grinder journal fields the remote carries, or `None`
+    /// when the detail had none of them. Mutable metadata like `tag_list`
+    /// — NOT part of the de-dup signature. `#[serde(default)]` so older
+    /// shells / cached payloads without the field still deserialise
+    /// (issue #44: these used to be dropped on pull, so a shot synced
+    /// down from Visualizer lost its bean info).
+    #[serde(default)]
+    pub bean: Option<WireShotBean>,
+}
+
+/// The bean / grinder journal fields Visualizer's native detail flattens
+/// onto the shot row (`bean_brand`, `bean_type`, …). All optional — the
+/// pull materialises a local bean snapshot only from what's present.
+#[typeshare]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WireShotBean {
+    /// Roaster / brand (`bean_brand`).
+    #[serde(default)]
+    pub bean_brand: Option<String>,
+    /// Bean name (`bean_type`).
+    #[serde(default)]
+    pub bean_type: Option<String>,
+    /// Roast date as the remote's display string (`roast_date`).
+    #[serde(default)]
+    pub roast_date: Option<String>,
+    /// Roast level (`roast_level`).
+    #[serde(default)]
+    pub roast_level: Option<String>,
+    /// Bean notes (`bean_notes`).
+    #[serde(default)]
+    pub bean_notes: Option<String>,
+    /// Grinder model (`grinder_model`).
+    #[serde(default)]
+    pub grinder_model: Option<String>,
+    /// Grinder dial (`grinder_setting`).
+    #[serde(default)]
+    pub grinder_setting: Option<String>,
 }
 
 /// A slim view onto the shell's `StoredShot`: only the fields the
@@ -890,6 +927,7 @@ mod tests {
             rating: None,
             updated_at_ms: None,
             tag_list: Vec::new(),
+            bean: None,
         }
     }
 
@@ -976,6 +1014,7 @@ mod tests {
                 rating: None,
                 updated_at_ms: None,
                 tag_list: Vec::new(),
+                bean: None,
             },
             WireShot {
                 id: "r-bind".to_owned(),
@@ -987,6 +1026,7 @@ mod tests {
                 rating: None,
                 updated_at_ms: None,
                 tag_list: Vec::new(),
+                bean: None,
             },
         ];
         let actions = reconcile_shots(&[bound, unbound], &remotes);

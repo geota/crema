@@ -33,7 +33,7 @@
 
 use crate::bean::{Bean, BeanMix, BeanOrigin, Roaster};
 use crate::shot::TimedSample;
-use crate::visualizer_sync::WireShot;
+use crate::visualizer_sync::{WireShot, WireShotBean};
 use de1_protocol::ShotSample;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -483,6 +483,33 @@ pub fn wire_shot_from_detail(
         _ => Vec::new(),
     };
 
+    // Bean / grinder journal fields — Visualizer's native serializer
+    // flattens them onto the detail row. Blank strings collapse to `None`
+    // (the remote emits "" for unset fields); a numeric `roast_level`
+    // stringifies. Issue #44: these were dropped on pull, so a shot
+    // synced down from Visualizer lost its bean info.
+    let bean_field = |key: &str| -> Option<String> {
+        let v = detail.get(key).or_else(|| bc_get(key))?;
+        match v {
+            Value::String(s) => {
+                let t = s.trim();
+                (!t.is_empty()).then(|| t.to_owned())
+            }
+            Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        }
+    };
+    let bean = WireShotBean {
+        bean_brand: bean_field("bean_brand"),
+        bean_type: bean_field("bean_type"),
+        roast_date: bean_field("roast_date"),
+        roast_level: bean_field("roast_level"),
+        bean_notes: bean_field("bean_notes"),
+        grinder_model: bean_field("grinder_model"),
+        grinder_setting: bean_field("grinder_setting"),
+    };
+    let bean = (bean != WireShotBean::default()).then_some(bean);
+
     WireShot {
         id: summary_id.to_owned(),
         clock: summary_clock_sec * 1000,
@@ -493,6 +520,7 @@ pub fn wire_shot_from_detail(
         rating,
         updated_at_ms: Some(summary_updated_at_sec * 1000),
         tag_list,
+        bean,
     }
 }
 
@@ -1193,6 +1221,42 @@ mod tests {
         assert_eq!(w.duration_ms, 0);
         assert_eq!(w.profile_title, None);
         assert_eq!(w.rating, None);
+        assert_eq!(w.bean, None);
+    }
+
+    #[test]
+    fn wire_shot_reads_the_bean_journal_fields() {
+        // Issue #44: the pull used to drop these entirely.
+        let detail = serde_json::json!({
+            "duration": 30.0,
+            "bean_brand": "Sey",
+            "bean_type": "Gesha Village",
+            "roast_date": "2026-07-01",
+            "roast_level": 3,               // numeric → stringified
+            "bean_notes": "floral",
+            "grinder_model": "Niche Zero",
+            "grinder_setting": "2.4"
+        });
+        let w = wire_shot_from_detail("r-1", 1_700_000_000, 1_700_000_000, &detail);
+        let bean = w.bean.expect("bean fields present");
+        assert_eq!(bean.bean_brand.as_deref(), Some("Sey"));
+        assert_eq!(bean.bean_type.as_deref(), Some("Gesha Village"));
+        assert_eq!(bean.roast_date.as_deref(), Some("2026-07-01"));
+        assert_eq!(bean.roast_level.as_deref(), Some("3"));
+        assert_eq!(bean.bean_notes.as_deref(), Some("floral"));
+        assert_eq!(bean.grinder_model.as_deref(), Some("Niche Zero"));
+        assert_eq!(bean.grinder_setting.as_deref(), Some("2.4"));
+    }
+
+    #[test]
+    fn wire_shot_with_blank_bean_fields_has_no_bean() {
+        let detail = serde_json::json!({
+            "duration": 30.0,
+            "bean_brand": "",
+            "bean_type": "   "
+        });
+        let w = wire_shot_from_detail("r-1", 0, 0, &detail);
+        assert_eq!(w.bean, None);
     }
 
     // ── samplesFromVisualizerDetail ────────────────────────────────────

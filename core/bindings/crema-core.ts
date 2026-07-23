@@ -1973,6 +1973,28 @@ export interface VisualizerSyncPrefs {
 }
 
 /**
+ * The bean / grinder journal fields Visualizer's native detail flattens
+ * onto the shot row (`bean_brand`, `bean_type`, …). All optional — the
+ * pull materialises a local bean snapshot only from what's present.
+ */
+export interface WireShotBean {
+	/** Roaster / brand (`bean_brand`). */
+	bean_brand?: string;
+	/** Bean name (`bean_type`). */
+	bean_type?: string;
+	/** Roast date as the remote's display string (`roast_date`). */
+	roast_date?: string;
+	/** Roast level (`roast_level`). */
+	roast_level?: string;
+	/** Bean notes (`bean_notes`). */
+	bean_notes?: string;
+	/** Grinder model (`grinder_model`). */
+	grinder_model?: string;
+	/** Grinder dial (`grinder_setting`). */
+	grinder_setting?: string;
+}
+
+/**
  * The fields the planner reads from a remote shot row. Visualizer's
  * API returns a superset; we only care about identity + the de-dup
  * hash inputs + editable annotations. Mirrors the TS `WireShot` in
@@ -2013,6 +2035,15 @@ export interface WireShot {
 	 * field still deserialise cleanly to an empty Vec.
 	 */
 	tag_list?: string[];
+	/**
+	 * The bean / grinder journal fields the remote carries, or `None`
+	 * when the detail had none of them. Mutable metadata like `tag_list`
+	 * — NOT part of the de-dup signature. `#[serde(default)]` so older
+	 * shells / cached payloads without the field still deserialise
+	 * (issue #44: these used to be dropped on pull, so a shot synced
+	 * down from Visualizer lost its bean info).
+	 */
+	bean?: WireShotBean;
 }
 
 /**

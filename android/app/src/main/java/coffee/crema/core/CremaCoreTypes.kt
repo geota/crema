@@ -1861,6 +1861,27 @@ data class VisualizerSyncPrefs (
 	val roastersDirection: String
 )
 
+/// The bean / grinder journal fields Visualizer's native detail flattens
+/// onto the shot row (`bean_brand`, `bean_type`, …). All optional — the
+/// pull materialises a local bean snapshot only from what's present.
+@Serializable
+data class WireShotBean (
+	/// Roaster / brand (`bean_brand`).
+	val bean_brand: String? = null,
+	/// Bean name (`bean_type`).
+	val bean_type: String? = null,
+	/// Roast date as the remote's display string (`roast_date`).
+	val roast_date: String? = null,
+	/// Roast level (`roast_level`).
+	val roast_level: String? = null,
+	/// Bean notes (`bean_notes`).
+	val bean_notes: String? = null,
+	/// Grinder model (`grinder_model`).
+	val grinder_model: String? = null,
+	/// Grinder dial (`grinder_setting`).
+	val grinder_setting: String? = null
+)
+
 /// The fields the planner reads from a remote shot row. Visualizer's
 /// API returns a superset; we only care about identity + the de-dup
 /// hash inputs + editable annotations. Mirrors the TS `WireShot` in
@@ -1896,7 +1917,14 @@ data class WireShot (
 	/// 
 	/// `#[serde(default)]` so older shells / responses without the
 	/// field still deserialise cleanly to an empty Vec.
-	val tag_list: List<String>? = null
+	val tag_list: List<String>? = null,
+	/// The bean / grinder journal fields the remote carries, or `None`
+	/// when the detail had none of them. Mutable metadata like `tag_list`
+	/// — NOT part of the de-dup signature. `#[serde(default)]` so older
+	/// shells / cached payloads without the field still deserialise
+	/// (issue #44: these used to be dropped on pull, so a shot synced
+	/// down from Visualizer lost its bean info).
+	val bean: WireShotBean? = null
 )
 
 /// What kind of beverage a profile produces. Mirrors reaprime's

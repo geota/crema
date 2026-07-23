@@ -18,10 +18,13 @@
 //! and the inverse [`crate::import_v2_json_shot`] — the round-trip
 //! test in this module is the canonical contract.
 
+use std::time::Duration;
+
 use serde::Serialize;
 
 use crate::history::StoredShot;
 use crate::profile::{BeverageType, Profile};
+use crate::shot::TimedSample;
 
 /// Export a [`StoredShot`] as a pretty-printed community-v2
 /// `.shot.json` string.
@@ -49,12 +52,42 @@ pub fn export_v2_json_shot(shot: &StoredShot) -> Result<String, serde_json::Erro
 // Document assembly
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 fn build_v2_document(shot: &StoredShot) -> V2DocumentOut {
-    let samples = &shot.record.samples;
+    // `clock` is the SHOT START in Unix seconds — the TCL-lineage meaning
+    // (Visualizer's `ShotSummary.clock` is "shot start timestamp"). Crema
+    // stores `completed_at` (end-of-shot, Unix ms), so walk back by the
+    // recorded flow duration. Issue #44: this used to emit `completed_at`
+    // raw, which Visualizer read as a start time.
+    let duration_ms = shot.record.duration.as_millis() as u64;
+    let clock = shot.completed_at.saturating_sub(duration_ms) / 1000;
 
-    // `clock` is Unix seconds in v2; Crema stores `recorded_at` as Unix ms.
-    let clock = shot.completed_at / 1000;
+    // Truncate the exported series at the recorded flow window: the shells
+    // historically buffered telemetry through the DE1's `Espresso/Ending`
+    // tail (pump wind-down after the stop), so older stored shots carry
+    // samples past `record.duration`. Visualizer renders every sample it is
+    // given — cutting here keeps the uploaded curve ending at the stop
+    // (issue #44 follow-up). Quarter-second slack keeps the boundary sample.
+    let cutoff = shot.record.duration + Duration::from_millis(250);
+    let samples: Vec<&TimedSample> = if shot.record.duration.is_zero() {
+        shot.record.samples.iter().collect()
+    } else {
+        shot.record
+            .samples
+            .iter()
+            .filter(|t| t.elapsed <= cutoff)
+            .collect()
+    };
+
+    // The settled drink weight: the last positive scale reading across the
+    // FULL recording (before the flow-window cut — the post-stop tail is
+    // exactly where the drips land in the cup).
+    let drink_weight = shot
+        .record
+        .samples
+        .iter()
+        .rev()
+        .find_map(|t| t.scale_weight.filter(|w| *w > 0.0));
 
     let mut elapsed = Vec::with_capacity(samples.len());
     let mut pressure = Vec::with_capacity(samples.len());
@@ -106,12 +139,33 @@ fn build_v2_document(shot: &StoredShot) -> V2DocumentOut {
 
     let enjoyment = shot.metadata.rating.and_then(rating_to_enjoyment);
 
-    // Bean: Crema collapses Visualizer's `brand` + `type` into a flat
-    // label on import (`combine_bean_label`). On export we split the
-    // label back so a v2 consumer gets the two-field shape. roast_level
-    // / roast_date are not in StoredShot — emit empty strings, matching
-    // the legacy shell exporter's behaviour for unknown roast info.
-    let bean = bean_out(shot.metadata.beans.as_deref());
+    // Bean: prefer the frozen `ShotBean` snapshot (full roaster / name /
+    // roast info); fall back to splitting the flat `"brand · type"`
+    // `metadata.beans` label for legacy rows that predate the snapshot.
+    let bean = shot
+        .bean
+        .as_ref()
+        .map(|b| V2BeanOut {
+            brand: b.roaster_name.clone().unwrap_or_default(),
+            kind: b.name.clone(),
+            notes: String::new(),
+            roast_level: b.roast_level.map(|l| l.to_string()).unwrap_or_default(),
+            roast_date: b.roasted_on.clone().unwrap_or_default(),
+        })
+        .or_else(|| bean_out(shot.metadata.beans.as_deref()));
+
+    // Grinder: the equipment-level model, falling back to the bean
+    // snapshot's grinder; the per-shot dial, falling back to the bean's
+    // recorded dial.
+    let grinder_model = shot
+        .grinder_model
+        .clone()
+        .or_else(|| shot.bean.as_ref().and_then(|b| b.grinder.clone()));
+    let grinder_setting = shot
+        .metadata
+        .grinder_setting
+        .clone()
+        .or_else(|| shot.bean.as_ref().and_then(|b| b.grinder_setting.clone()));
 
     let profile = profile_out(
         shot.profile.as_ref(),
@@ -127,23 +181,63 @@ fn build_v2_document(shot: &StoredShot) -> V2DocumentOut {
             tds: shot.metadata.tds,
             ey: shot.metadata.extraction_yield,
         },
-        // Per-shot grinder model isn't stored; setting may be. Emit
-        // the grinder block when a setting is present, null otherwise.
-        grinder: shot
-            .metadata
-            .grinder_setting
-            .as_ref()
-            .map(|setting| V2GrinderOut {
-                model: String::new(),
-                setting: setting.clone(),
-            }),
+        // Emit the grinder block when either half is known, null otherwise.
+        grinder: if grinder_model.is_some() || grinder_setting.is_some() {
+            Some(V2GrinderOut {
+                model: grinder_model.clone().unwrap_or_default(),
+                setting: grinder_setting.clone().unwrap_or_default(),
+            })
+        } else {
+            None
+        },
         dose_in: shot.metadata.dose,
         out: shot.metadata.yield_out,
         time: shot.record.duration.as_secs_f32(),
     };
 
+    // Visualizer's Decent-JSON parser takes the shot start from
+    // `json["timestamp"]` (unix seconds) and reads the journal fields —
+    // bean brand/type, roast info, grinder, notes, TDS/EY, enjoyment,
+    // weights — from `app.data.settings.*` (the de1app settings-dict
+    // shape). Emitting both here means the initial POST already carries
+    // the full metadata instead of relying on a follow-up PATCH
+    // (issue #44: shots landed dated 1970 with no bean info).
+    let app_settings = V2AppSettingsOut {
+        bean_brand: meta
+            .bean
+            .as_ref()
+            .map(|b| b.brand.clone())
+            .filter(|s| !s.is_empty()),
+        bean_type: meta
+            .bean
+            .as_ref()
+            .map(|b| b.kind.clone())
+            .filter(|s| !s.is_empty()),
+        roast_date: meta
+            .bean
+            .as_ref()
+            .map(|b| b.roast_date.clone())
+            .filter(|s| !s.is_empty()),
+        roast_level: meta
+            .bean
+            .as_ref()
+            .map(|b| b.roast_level.clone())
+            .filter(|s| !s.is_empty()),
+        grinder_model,
+        grinder_setting,
+        espresso_notes: shot.metadata.notes.clone().filter(|s| !s.trim().is_empty()),
+        drink_tds: shot.metadata.tds,
+        drink_ey: shot.metadata.extraction_yield,
+        espresso_enjoyment: enjoyment,
+        bean_weight: shot.metadata.dose,
+        drink_weight,
+    };
+
     V2DocumentOut {
         version: 2,
+        // The same start instant under the key each reader family uses:
+        // `clock` (TCL lineage) and `timestamp` (Visualizer Decent-JSON).
+        timestamp: clock,
         clock,
         // `date` is human-readable in v2; the importer doesn't parse
         // it, so we emit an ISO-like string the shell can recreate
@@ -178,6 +272,9 @@ fn build_v2_document(shot: &StoredShot) -> V2DocumentOut {
         app: V2AppOut {
             app_name: "crema",
             app_version: env!("CARGO_PKG_VERSION"),
+            data: V2AppDataOut {
+                settings: app_settings,
+            },
         },
     }
 }
@@ -317,7 +414,10 @@ fn civil_from_days(days: u64) -> (u32, u32, u32) {
 #[derive(Serialize)]
 struct V2DocumentOut {
     version: u32,
-    /// Unix seconds.
+    /// Shot start, Unix seconds — the key Visualizer's Decent-JSON
+    /// parser reads (`Time.at(json["timestamp"])`).
+    timestamp: u64,
+    /// Shot start, Unix seconds — the TCL-lineage key.
     clock: u64,
     date: String,
     elapsed: Vec<f32>,
@@ -411,6 +511,44 @@ struct V2GrinderOut {
 struct V2AppOut {
     app_name: &'static str,
     app_version: &'static str,
+    data: V2AppDataOut,
+}
+
+#[derive(Serialize)]
+struct V2AppDataOut {
+    settings: V2AppSettingsOut,
+}
+
+/// The de1app settings-dict keys Visualizer's parsers capture
+/// (`Parsers::Base::EXTRA_DATA_CAPTURE`) — the journal metadata rides
+/// the upload document itself under `app.data.settings`, so the shot
+/// arrives complete without a follow-up PATCH.
+#[derive(Serialize)]
+struct V2AppSettingsOut {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bean_brand: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bean_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    roast_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    roast_level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grinder_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grinder_setting: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    espresso_notes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    drink_tds: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    drink_ey: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    espresso_enjoyment: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bean_weight: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    drink_weight: Option<f32>,
 }
 
 #[cfg(test)]
@@ -499,6 +637,7 @@ mod tests {
         // Top-level keys the v2 schema names.
         for key in [
             "version",
+            "timestamp",
             "clock",
             "date",
             "elapsed",
@@ -514,8 +653,10 @@ mod tests {
             assert!(v.get(key).is_some(), "missing top-level key `{key}`");
         }
         assert_eq!(v["version"], 2);
-        // Clock is Unix seconds (ms ÷ 1000).
-        assert_eq!(v["clock"], 1_710_510_622_u64);
+        // Clock / timestamp are the shot START in Unix seconds:
+        // completed_at (ms) minus the 27 s flow duration, ÷ 1000.
+        assert_eq!(v["clock"], 1_710_510_595_u64);
+        assert_eq!(v["timestamp"], 1_710_510_595_u64);
         // Sample-aligned series are all same length.
         let n = v["elapsed"].as_array().unwrap().len();
         assert_eq!(n, 2);
@@ -544,6 +685,62 @@ mod tests {
         assert_eq!(v["meta"]["out"], 36.0);
         // App stamp.
         assert_eq!(v["app"]["app_name"], "crema");
+        // The journal fields Visualizer's parser captures from
+        // `app.data.settings` (issue #44 — the initial POST must carry
+        // the bean / grinder / notes metadata itself).
+        let settings = &v["app"]["data"]["settings"];
+        assert_eq!(settings["bean_brand"], "Banibeans");
+        assert_eq!(settings["bean_type"], "Ethiopia Yirgacheffe");
+        assert_eq!(settings["grinder_setting"], "15");
+        assert_eq!(settings["espresso_notes"], "Good body");
+        assert_eq!(settings["drink_tds"], 8.5);
+        assert_eq!(settings["drink_ey"], 20.5);
+        assert_eq!(settings["espresso_enjoyment"], 75.0);
+        assert_eq!(settings["bean_weight"], 18.0);
+        // The settled drink weight = last positive scale reading (8.5 g
+        // at the 1 s sample in the fixture).
+        assert_eq!(settings["drink_weight"], 8.5);
+    }
+
+    #[test]
+    fn export_prefers_the_bean_snapshot_and_truncates_the_post_flow_tail() {
+        let mut shot = fixture();
+        // A frozen ShotBean snapshot outranks the flat metadata label.
+        shot.bean = Some(crate::bean::ShotBean {
+            bean_id: Some("bean:1".into()),
+            name: "Gesha Village".into(),
+            roaster_name: Some("Sey".into()),
+            roasted_on: Some("2026-07-01".into()),
+            roast_level: Some(3),
+            tags: Vec::new(),
+            grinder_setting: Some("2.4".into()),
+            grinder: Some("Niche Zero".into()),
+        });
+        // A trailing sample past the 27 s flow window — the machine's
+        // Espresso/Ending tail — must not be exported.
+        let mut tail = shot.record.samples[1].clone();
+        tail.elapsed = Duration::from_secs(31);
+        tail.scale_weight = Some(36.2);
+        shot.record.samples.push(tail);
+
+        let json = export_v2_json_shot(&shot).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+
+        assert_eq!(v["meta"]["bean"]["brand"], "Sey");
+        assert_eq!(v["meta"]["bean"]["type"], "Gesha Village");
+        assert_eq!(v["meta"]["bean"]["roast_date"], "2026-07-01");
+        assert_eq!(v["meta"]["bean"]["roast_level"], "3");
+        let settings = &v["app"]["data"]["settings"];
+        assert_eq!(settings["bean_brand"], "Sey");
+        assert_eq!(settings["bean_type"], "Gesha Village");
+        assert_eq!(settings["roast_date"], "2026-07-01");
+        assert_eq!(settings["grinder_model"], "Niche Zero");
+        // metadata.grinder_setting ("15") outranks the bean's dial.
+        assert_eq!(settings["grinder_setting"], "15");
+        // The tail sample is cut from the series…
+        assert_eq!(v["elapsed"].as_array().unwrap().len(), 2);
+        // …but still supplies the settled drink weight.
+        assert_eq!(settings["drink_weight"], 36.2);
     }
 
     #[test]

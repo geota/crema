@@ -118,7 +118,11 @@ pub fn import_legacy_tcl_shot(content: &str) -> Result<StoredShot, ImportError> 
     let metadata = tcl_metadata(&settings);
     let profile = tcl_profile(&settings, &metadata);
 
-    let mut stored = StoredShot::new(recorded_at, ShotRecord { duration, samples });
+    // `clock` is the shot START; `completed_at` is the end — walk forward
+    // by the recorded duration (the inverse of the exporter's walk back).
+    let completed_at =
+        recorded_at.saturating_add(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
+    let mut stored = StoredShot::new(completed_at, ShotRecord { duration, samples });
     stored.metadata = metadata;
     if let Some(profile) = profile {
         stored = stored.with_profile(profile);
@@ -172,12 +176,24 @@ pub fn import_v2_json_shot(content: &str) -> Result<StoredShot, ImportError> {
         &raw.flow.by_weight,
         &raw.totals.water_dispensed,
     );
-    let duration = samples.last().map_or(Duration::ZERO, |t| t.elapsed);
+    // Prefer the explicit `meta.time` flow-window duration (what the
+    // exporter writes); fall back to the last sample's elapsed for
+    // documents that omit it.
+    let duration = raw
+        .meta
+        .time
+        .filter(|t| *t > 0.0)
+        .map(duration_from_seconds)
+        .unwrap_or_else(|| samples.last().map_or(Duration::ZERO, |t| t.elapsed));
 
     let metadata = v2_metadata(&raw);
     let profile = v2_profile(&raw);
 
-    let mut stored = StoredShot::new(recorded_at, ShotRecord { duration, samples });
+    // `clock` is the shot START; `completed_at` is the end — walk forward
+    // by the recorded duration (the inverse of the exporter's walk back).
+    let completed_at =
+        recorded_at.saturating_add(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
+    let mut stored = StoredShot::new(completed_at, ShotRecord { duration, samples });
     stored.metadata = metadata;
     if let Some(profile) = profile {
         stored = stored.with_profile(profile);
@@ -492,6 +508,12 @@ struct V2Meta {
     dose_in: Option<f32>,
     #[serde(default, deserialize_with = "de_opt_f32")]
     out: Option<f32>,
+    /// The recorded flow-window duration, seconds. Preferred over the
+    /// last sample's elapsed when present — a recording that carries
+    /// post-flow samples (or none) would otherwise skew the duration
+    /// and therefore the `clock`→`completed_at` walk-forward.
+    #[serde(default, deserialize_with = "de_opt_f32")]
+    time: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -605,8 +627,9 @@ settings {
     #[test]
     fn legacy_tcl_shot_imports_metadata() {
         let shot = import_legacy_tcl_shot(LEGACY_FIXTURE).expect("imports cleanly");
-        // Clock is Unix seconds; recorded_at is Unix ms.
-        assert_eq!(shot.completed_at, 1_699_432_544 * 1000);
+        // Clock is the shot START in Unix seconds; completed_at walks
+        // forward by the recorded duration (1 s of elapsed samples).
+        assert_eq!(shot.completed_at, 1_699_432_544 * 1000 + 1000);
         assert_eq!(shot.format_version, STORED_SHOT_FORMAT_VERSION);
         // Bean label combines brand + type.
         assert_eq!(
@@ -699,7 +722,8 @@ settings {
     #[test]
     fn v2_json_shot_imports_metadata_and_profile() {
         let shot = import_v2_json_shot(V2_JSON_FIXTURE).expect("imports cleanly");
-        assert_eq!(shot.completed_at, 1_710_510_622 * 1000);
+        // clock (start) + the 1 s sample window = completed_at.
+        assert_eq!(shot.completed_at, 1_710_510_622 * 1000 + 1000);
         assert_eq!(shot.metadata.dose, Some(18.0));
         assert_eq!(shot.metadata.yield_out, Some(36.0));
         assert_eq!(shot.metadata.tds, Some(8.5));
@@ -747,8 +771,9 @@ settings {
             "meta": {"shot": {"tds": "8.5", "ey": "20.5", "enjoyment": "75", "notes": "Good body"}, "grinder": {"setting": "15"}, "in": "18.0", "out": "36.0", "bean": {"brand": "Banibeans", "type": "Ethiopia Yirgacheffe"}}
         }"#;
         let shot = import_v2_json_shot(json).expect("a fully-stringified de1app v2 shot imports");
-        // clock "0" → epoch (the 1969 filename). No more "expected u64" abort.
-        assert_eq!(shot.completed_at, 0);
+        // clock "0" → epoch start (the 1969 filename), plus the 2 s
+        // sample window. No more "expected u64" abort.
+        assert_eq!(shot.completed_at, 2000);
         // Telemetry arrays coerced from their string elements.
         assert_eq!(shot.record.samples.len(), 3);
         let s = &shot.record.samples[2];
