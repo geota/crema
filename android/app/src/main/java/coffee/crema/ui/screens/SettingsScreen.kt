@@ -50,6 +50,7 @@ import coffee.crema.core.MmrRegister
 import coffee.crema.core.hasCupWarmer
 import coffee.crema.core.machineModelName
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.QcSteam
 import coffee.crema.ui.refillSoon
 import coffee.crema.ui.components.CopyDiagnosticsRow
 import coffee.crema.ui.components.CremaButton
@@ -308,7 +309,43 @@ fun SettingsScreen(
                                     onChange = { vm.setMaxShotDuration(it.toFloat()) },
                                 )
                             }
-                            CremaSettingsRow("Group flush before each shot", "Stabilise the group temperature with a short flush.") { CremaSwitch(ui.preFlush, vm::setPreFlush) }
+                            CremaSettingsRow("Group flush before each shot", "Stabilise the group temperature with a short flush.", last = true) { CremaSwitch(ui.preFlush, vm::setPreFlush) }
+                        }
+                        // Steam dials + behaviour in one place (issue 43: the QC
+                        // sheet was the only surface for temp / time / flow). The
+                        // dials are the SAME persisted QC overrides — editing here
+                        // or in Quick Controls stays in sync, writes to the DE1
+                        // immediately, and re-seeds on every connect.
+                        SetGroup("Steam") {
+                            val steamOn = ui.qcSteamTempC > 0f
+                            CremaSettingsRow(
+                                "Steam temperature", "Steam boiler target. Off disables the steam heater entirely.",
+                                dot = true, dotOn = steamOn,
+                                onDot = { vm.setQcSteamTemp(if (steamOn) 0f else QcSteam.DEFAULT_TEMP_C.toFloat()) },
+                            ) {
+                                CremaStepper(
+                                    value = (if (steamOn) ui.qcSteamTempC.toDouble() else QcSteam.DEFAULT_TEMP_C),
+                                    unit = "°C", step = 1.0, min = QcSteam.MIN_TEMP_C, max = QcSteam.MAX_TEMP_C,
+                                    fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.Bare,
+                                    onChange = { vm.setQcSteamTemp(it.toFloat()) },
+                                )
+                            }
+                            CremaSettingsRow("Steam time", "How long the wand runs before stopping on its own.") {
+                                CremaStepper(
+                                    value = ui.qcSteamTimeS.toDouble(), unit = "s", step = 1.0,
+                                    min = QcSteam.MIN_TIME_S, max = QcSteam.MAX_TIME_S,
+                                    fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.Bare,
+                                    onChange = { vm.setQcSteamTime(it.toFloat()) },
+                                )
+                            }
+                            CremaSettingsRow("Steam flow", "Wand flow rate — lower for slower, gentler texturing.") {
+                                CremaStepper(
+                                    value = ui.qcSteamFlowMlS.toDouble(), unit = "ml/s", step = 0.1,
+                                    min = QcSteam.MIN_FLOW_ML_S, max = QcSteam.MAX_FLOW_ML_S,
+                                    fmt = { fmt("%.1f", it) }, style = CremaStepperStyle.Bare,
+                                    onChange = { vm.setQcSteamFlow(it.toFloat()) },
+                                )
+                            }
                             CremaSettingsRow("Group flush after steam", "Rinse the group head after steaming — keeps the brew path fresh if you steam before the shot. The wand's own quick purge is the machine's — see two-tap steam stop.") { CremaSwitch(ui.steamPurge, vm::setSteamPurge) }
                             CremaSettingsRow("Two-tap steam stop", "First stop tap ends steaming without the wand's auto-purge; tap again to purge. Written to the machine.") { CremaSwitch(ui.steamTwoTap, vm::setSteamTwoTap) }
                             CremaSettingsRow("Steam eco", "Idle the steam boiler cooler between sessions to save power.", last = true) { CremaSwitch(ui.steamEco, vm::setSteamEco) }
