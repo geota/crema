@@ -1251,6 +1251,26 @@ impl CremaCore {
                 .encode()
                 .to_vec(),
         });
+        // The DE1 only notifies cuuid_0B for machine-initiated changes, never
+        // as an echo of a host write — so project the retained settings back
+        // as a ShotSettingsRead here, or the shells' machine snapshot (which
+        // outranks the QC dial in `resolve_mode_targets`) stays frozen at the
+        // connect-time seed read and the Brew mode chips keep showing it
+        // (issue 43). The user target is projected, not the eco/scale wire
+        // overrides: those are transient wire-only rewrites on this baseline.
+        let retained = self
+            .steam_hotwater_settings
+            .as_ref()
+            .expect("just set above");
+        out.events.push(Event::ShotSettingsRead {
+            steam_temp: retained.steam_temp_c,
+            steam_timeout: retained.steam_timeout_s,
+            hot_water_temp: retained.hot_water_temp_c,
+            hot_water_volume: retained.hot_water_volume_ml,
+            hot_water_timeout: retained.hot_water_timeout_s,
+            espresso_volume: retained.espresso_volume_ml,
+            group_temp: retained.group_temp_c,
+        });
         out
     }
 
@@ -6158,6 +6178,59 @@ mod tests {
         assert_eq!(*target, WriteTarget::De1ShotSettings);
         // Byte 4 is the hot-water volume (u8p0): the user's 50 ml is unchanged.
         assert_eq!(data[4], 50);
+    }
+
+    #[test]
+    fn set_steam_hotwater_settings_projects_a_shot_settings_read() {
+        // Issue #43: the DE1 never echoes a host cuuid_0B write, so the write
+        // path itself must project the retained settings as a
+        // ShotSettingsRead — otherwise the shells' machine snapshot (which
+        // outranks the QC dial in `resolve_mode_targets`) stays frozen at
+        // the connect-time seed and the Brew steam chip never updates.
+        let mut core = CremaCore::new();
+        let mut settings = hotwater_settings(50.0);
+        settings.steam_temp_c = 180.0; // out of range — projection must be clamped
+        let out = core.set_steam_hotwater_settings(settings);
+        let Some(Event::ShotSettingsRead {
+            steam_temp,
+            steam_timeout,
+            hot_water_temp,
+            hot_water_volume,
+            ..
+        }) = out
+            .events
+            .iter()
+            .find(|e| matches!(e, Event::ShotSettingsRead { .. }))
+        else {
+            panic!(
+                "expected a ShotSettingsRead projection, got {:?}",
+                out.events
+            );
+        };
+        assert_eq!(*steam_temp, 170.0, "projection carries the CLAMPED value");
+        assert_eq!(*steam_timeout, 120.0);
+        assert_eq!(*hot_water_temp, 85.0);
+        assert_eq!(*hot_water_volume, 50.0);
+    }
+
+    #[test]
+    fn steam_projection_keeps_the_user_volume_under_the_scale_override() {
+        // With a scale connected the WIRE packet asks for 250 ml (the weight
+        // stop ends the pour), but the projection must reflect the user's
+        // dial — the override is transient and lifts on scale disconnect.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let out = core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        let Some(Event::ShotSettingsRead {
+            hot_water_volume, ..
+        }) = out
+            .events
+            .iter()
+            .find(|e| matches!(e, Event::ShotSettingsRead { .. }))
+        else {
+            panic!("expected a ShotSettingsRead projection");
+        };
+        assert_eq!(*hot_water_volume, 50.0);
     }
 
     #[test]
