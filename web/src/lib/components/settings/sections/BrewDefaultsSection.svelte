@@ -7,7 +7,8 @@
 	 *
 	 * **Real persistence** — every value here is an app preference persisted in
 	 * `lib/settings`. They are app-side defaults the Brew screen can read later;
-	 * persisting them now is the whole job. None of them is written to the DE1.
+	 * persisting them now is the whole job. The Steam group additionally pushes
+	 * to the DE1 while connected (the connect path re-seeds it otherwise).
 	 */
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getSettingsStore } from '$lib/settings';
@@ -59,6 +60,36 @@
 		// Written now while connected; the connect path re-seeds it, so an
 		// offline toggle still lands on the next connect.
 		void app?.applySteamTwoTapStop(on);
+	}
+	/**
+	 * Steam temp/time — the same persisted Quick-Controls overrides the Brew
+	 * Quick Sheet edits, so both surfaces stay in sync. Written now while
+	 * connected; the connect path re-seeds them, so offline edits land on the
+	 * next connect. The two share the one cuuid_0B packet with hot-water
+	 * temp/volume — persist first, then read-modify-write all four from the
+	 * freshly-updated settings.
+	 */
+	function pushSteamHotwater(): void {
+		const c = settings.current;
+		void app?.setSteamHotwater({
+			steamTempC: c.qcSteamTempC,
+			steamTimeoutS: c.qcSteamTimeS,
+			hotWaterTempC: c.qcHotWaterTempC,
+			hotWaterVolumeMl: c.qcHotWaterVolumeMl
+		});
+	}
+	function setSteamTemp(v: number): void {
+		settings.set('qcSteamTempC', v);
+		pushSteamHotwater();
+	}
+	function setSteamTime(v: number): void {
+		settings.set('qcSteamTimeS', v);
+		pushSteamHotwater();
+	}
+	// Steam flow is a standalone MMR write (same re-seed-on-connect semantics).
+	function setSteamFlow(v: number): void {
+		settings.set('qcSteamFlowMlS', v);
+		void app?.setSteamFlow(v);
 	}
 </script>
 
@@ -215,6 +246,49 @@
 				on={prefs.groupFlushBeforeShot}
 				onChange={(v) => settings.set('groupFlushBeforeShot', v)}
 				label="Group flush before each shot"
+			/>
+		{/snippet}
+	</StRow>
+</StGroup>
+
+<StGroup title="Steam">
+	<StRow
+		title="Steam temperature"
+		sub="Steam boiler target. Off disables the steam heater entirely."
+	>
+		{#snippet control()}
+			<StStepper
+				value={prefs.qcSteamTempC}
+				dimension="temp"
+				step={1}
+				min={135}
+				max={170}
+				onCommit={setSteamTemp}
+			/>
+		{/snippet}
+	</StRow>
+	<StRow title="Steam time" sub="How long the wand runs before stopping on its own.">
+		{#snippet control()}
+			<StStepper
+				value={prefs.qcSteamTimeS}
+				unit="s"
+				step={1}
+				min={1}
+				max={60}
+				onCommit={setSteamTime}
+			/>
+		{/snippet}
+	</StRow>
+	<StRow title="Steam flow" sub="Wand flow rate — lower for slower, gentler texturing.">
+		{#snippet control()}
+			<StStepper
+				value={prefs.qcSteamFlowMlS}
+				unit="ml/s"
+				decimals={1}
+				step={0.1}
+				min={0.2}
+				max={3.0}
+				onCommit={setSteamFlow}
 			/>
 		{/snippet}
 	</StRow>
