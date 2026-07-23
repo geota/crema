@@ -156,6 +156,28 @@ fun storedShotFromWire(wire: JsonObject, samplesJson: String?, json: kotlinx.ser
     fun num(k: String) = str(k)?.toDoubleOrNull()
     val vid = str("id") ?: return null
     val samples = samplesJson?.let { parseTimedSamples(it, json) } ?: emptyList()
+    // The remote's bean / grinder journal fields → an unlinked ShotBean
+    // snapshot (no beanId — the pull doesn't re-link the local library).
+    // Issue #44: these used to be dropped, so a synced shot lost its bean.
+    val wb = wire["bean"] as? JsonObject
+    fun beanStr(k: String) = (wb?.get(k) as? JsonPrimitive)?.contentOrNull
+    val beanName = beanStr("bean_type")
+    val beanRoaster = beanStr("bean_brand")
+    val bean = if (beanName != null || beanRoaster != null) {
+        coffee.crema.core.ShotBean(
+            beanId = null,
+            // A brand-only remote still renders: it becomes the name and the
+            // roaster slot stays empty (avoids a "Sey · Sey" label).
+            name = beanName ?: beanRoaster.orEmpty(),
+            roasterName = if (beanName != null) beanRoaster else null,
+            roastedOn = beanStr("roast_date"),
+            roastLevel = beanStr("roast_level")?.toIntOrNull()?.takeIf { it in 0..255 }?.toUByte(),
+            grinderSetting = beanStr("grinder_setting"),
+            grinder = beanStr("grinder_model"),
+        )
+    } else {
+        null
+    }
     return StoredShot(
         id = "shot:remote:$vid",
         completedAtMs = num("clock")?.toLong() ?: 0L,
@@ -165,6 +187,7 @@ fun storedShotFromWire(wire: JsonObject, samplesJson: String?, json: kotlinx.ser
         peakPressure = samples.maxOfOrNull { it.pressure },
         peakTemp = samples.maxOfOrNull { it.headTemp },
         profileName = str("profile_title"),
+        bean = bean,
         rating = num("rating")?.toInt()?.takeIf { it > 0 },
         notes = str("notes"),
         samples = coffee.crema.history.downsampleForStorage(samples),

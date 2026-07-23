@@ -302,8 +302,27 @@ class VisualizerSync(
         val doc = json.parseToJsonElement(v2).jsonObject.toMutableMap()
         if (!persisted.prefs.includeProfile) doc.remove("profile")
         val metadata = (doc["metadata"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
-        if (!persisted.prefs.includeNotes && metadata.containsKey("notes")) {
-            metadata["notes"] = JsonNull
+        if (!persisted.prefs.includeNotes) {
+            if (metadata.containsKey("notes")) metadata["notes"] = JsonNull
+            // The v2 document carries the notes text in two more slots —
+            // `meta.shot.notes` (rides the raw file Visualizer keeps
+            // downloadable) and the journal block its parser captures
+            // (`app.data.settings.espresso_notes`). An opt-out must strip both.
+            (doc["meta"] as? JsonObject)?.let { meta ->
+                (meta["shot"] as? JsonObject)?.let { s ->
+                    val shotMap = s.toMutableMap().apply { put("notes", JsonPrimitive("")) }
+                    doc["meta"] = JsonObject(meta.toMutableMap().apply { put("shot", JsonObject(shotMap)) })
+                }
+            }
+            (doc["app"] as? JsonObject)?.let { app ->
+                (app["data"] as? JsonObject)?.let { data ->
+                    (data["settings"] as? JsonObject)?.let { st ->
+                        val stripped = st.toMutableMap().apply { remove("espresso_notes") }
+                        val newData = data.toMutableMap().apply { put("settings", JsonObject(stripped)) }
+                        doc["app"] = JsonObject(app.toMutableMap().apply { put("data", JsonObject(newData)) })
+                    }
+                }
+            }
         }
         // Per-shot override wins; null inherits the Sharing default (web parity).
         doc["privacy"] = JsonPrimitive(shot.privacy ?: persisted.prefs.privacy)

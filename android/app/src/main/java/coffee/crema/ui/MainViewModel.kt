@@ -3635,10 +3635,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // `prev` (the live state), so a concurrent Event.ScaleReading update{}
                 // landing mid-frame isn't clobbered (issue 11).
                 _ui.update { prev ->
-                    // Append a chart sample while a shot is running (the buffer fills
-                    // only during extraction, like the web). Fold in the latest scale
-                    // weight/flow so the WEIGHT curves track the cup. FIFO-capped.
-                    val nextBuffer = if (prev.shotInProgress) {
+                    // Append a chart sample only during the FLOW window
+                    // (preinfusion / pouring), like the core's own ShotRecord:
+                    // the pre-pour heating phase piles zero-elapsed points and
+                    // the Espresso/Ending tail (pump wind-down after the stop)
+                    // used to keep the curve growing past the stop point —
+                    // issue #44's "truncate at the stop" report. Fold in the
+                    // latest scale weight/flow so the WEIGHT curves track the
+                    // cup. FIFO-capped.
+                    val flowing = prev.machineSubstate == "Preinfusion" ||
+                        prev.machineSubstate == "Pouring"
+                    val nextBuffer = if (prev.shotInProgress && flowing) {
                         val sample = TelemetrySample(
                             elapsedMs = t.elapsed.toLong(),
                             pressure = t.group_pressure,
