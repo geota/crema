@@ -1446,8 +1446,11 @@ private fun ChannelsRow(
                 }
             }
         } else {
-            // Wide tablet: original slim 4-across band (86dp uniform height).
-            Row(Modifier.fillMaxWidth().height(86.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            // Wide tablet: slim 4-across band. Same 94dp as the 2×2 grid — the
+            // temp/weight cards carry the third "target …" line either way, and
+            // at 86dp it survived only at 320dpi rounding (clipped at a standard
+            // 10" tablet's 240dpi — issue #35 follow-up).
+            Row(Modifier.fillMaxWidth().height(94.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 pressureCard(Modifier.weight(1f).fillMaxHeight())
                 flowCard(Modifier.weight(1f).fillMaxHeight())
                 tempCard(Modifier.weight(1f).fillMaxHeight())
