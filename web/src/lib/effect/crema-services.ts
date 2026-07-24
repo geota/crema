@@ -38,6 +38,7 @@ import { UploadQueue, type DrainResult, type EnqueueInput } from '../services/up
 import type { TokenSet } from '$lib/visualizer/oauth';
 import type { SyncResult } from '$lib/bean/visualizer-sync';
 import type { HistoryStore } from '$lib/history/store.svelte';
+import { pushShotToVisualizer } from '$lib/history/shot-persistence.ts';
 import type { BeanLibraryStore } from '$lib/bean/store.svelte';
 
 /**
@@ -86,6 +87,14 @@ export interface CremaServices {
 		): Promise<{ pulled: number; truncated: boolean }>;
 		/** Upload every local shot lacking a `visualizerId`. */
 		uploadUnsynced(history: HistoryStore): Promise<void>;
+		/**
+		 * Upload (or RE-upload) one shot by id — the History detail's manual
+		 * action. Skips the auto-upload gates, binds the returned id, logs,
+		 * and toasts success / failure itself. A bound shot's re-POST updates
+		 * the same Visualizer row (telemetry-SHA de-dupe), fixing an old
+		 * wrongly-dated / bean-less remote copy — issue #44 follow-up.
+		 */
+		uploadOne(shotId: string): Promise<void>;
 		/** PATCH an already-uploaded shot (rating / notes / privacy / …). */
 		patch(visualizerId: string, patch: ShotPatch): Promise<void>;
 		/** Push a local shot's edited fields to its uploaded copy (no-op when unsynced). */
@@ -141,6 +150,7 @@ export function createCremaServices(runtime: AppRuntime): CremaServices {
 			pullAndReconcile: (history, sinceMs, opts) =>
 				run(Effect.flatMap(ShotSync, (s) => s.pullAndReconcileShots(history, sinceMs, opts))),
 			uploadUnsynced: (history) => run(Effect.flatMap(ShotSync, (s) => s.uploadUnsyncedShots(history))),
+			uploadOne: (shotId) => run(pushShotToVisualizer(shotId, { manual: true })),
 			patch: (visualizerId, patch) =>
 				run(Effect.flatMap(ShotSync, (s) => s.patchShot(visualizerId, patch))),
 			patchEdited: (history, id) =>

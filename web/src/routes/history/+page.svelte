@@ -299,6 +299,15 @@
 				})
 			);
 	}
+	/**
+	 * Manual per-shot upload / re-upload — the detail pane's "Upload to
+	 * Visualizer" action (issue #44 follow-up). The facade uploads, binds
+	 * the returned id, writes the sync log and toasts success / failure
+	 * itself; nothing to do here but fire it.
+	 */
+	function uploadShotToVisualizer(id: string): void {
+		void appCtx().services?.shots.uploadOne(id);
+	}
 	/** Shots that need an upload — no `visualizerId` and not soft-deleted. */
 	const unsyncedShots = $derived(shots.filter((s) => !s.visualizerId));
 
@@ -996,6 +1005,7 @@
 						}}
 						onDelete={(opts) => handleDelete(selected, opts)}
 						canDeleteRemote={canPushShots && !!selected.visualizerId}
+						onUploadVisualizer={canPushShots ? () => uploadShotToVisualizer(selected.id) : null}
 					/>
 				{/key}
 			{:else}

@@ -97,10 +97,17 @@ function buildShotPayload(shot: StoredShot): Record<string, unknown> {
 	// value only, so persistence/backups never materialise the fallback.
 	// Android's WireShot upload does the same.
 	const json = JSON.parse(
-		exportStoredShotAsV2Json({
-			...shot,
-			metadata: { ...(shot.metadata ?? {}), grinderSetting: effectiveGrindSetting(shot) }
-		})
+		exportStoredShotAsV2Json(
+			{
+				...shot,
+				metadata: { ...(shot.metadata ?? {}), grinderSetting: effectiveGrindSetting(shot) }
+			},
+			// A RE-upload (already bound) keeps the post-flow tail: Visualizer
+			// de-dupes by a SHA over the telemetry columns, so reproducing the
+			// original series updates the SAME remote row in place (fixing the
+			// date + journal fields) instead of minting a duplicate.
+			{ fullSeries: shot.visualizerId != null }
+		)
 	) as Record<string, unknown>;
 
 	if (!cfg.includeProfile) {

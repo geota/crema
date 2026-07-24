@@ -22,7 +22,7 @@
  * downloaded archive and the upload path.
  */
 
-import { export_v2_json_shot } from '$lib/wasm/de1_wasm';
+import { export_v2_json_shot, export_v2_json_shot_full } from '$lib/wasm/de1_wasm';
 import type { Profile, RustStoredShot } from '$lib/core';
 import { peaksOf, type StoredShot } from './model';
 
@@ -37,9 +37,18 @@ import { peaksOf, type StoredShot } from './model';
  * Crema → Crema round-trip preserves everything the shell modeled.
  * `grinderSetting` rides the existing `metadata.grinder.setting` v2
  * slot — same wire field Visualizer's `grinder_setting` reads.
+ *
+ * `fullSeries` keeps the post-flow tail (the RE-upload variant):
+ * Visualizer de-dupes by a SHA over the telemetry columns, so a bound
+ * shot's re-upload must reproduce its original (untruncated) series to
+ * update the same remote row instead of minting a duplicate.
  */
-export function exportStoredShotAsV2Json(shot: StoredShot): string {
-	const baseJson = export_v2_json_shot(JSON.stringify(toRustStoredShot(shot)));
+export function exportStoredShotAsV2Json(
+	shot: StoredShot,
+	opts?: { fullSeries?: boolean }
+): string {
+	const rust = JSON.stringify(toRustStoredShot(shot));
+	const baseJson = opts?.fullSeries ? export_v2_json_shot_full(rust) : export_v2_json_shot(rust);
 	const crema = cremaExtras(shot);
 	if (crema === null) return baseJson;
 	// The wasm exporter produces a top-level JSON object; parse + augment

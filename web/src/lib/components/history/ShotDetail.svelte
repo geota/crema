@@ -14,8 +14,8 @@
 	 *
 	 * The curve chart is the **real** stored telemetry, redrawn by
 	 * {@link StaticShotChart}. Tasting notes and the star rating are editable
-	 * and persisted to the `lib/history` store. Load-on-Brew / Save-as-profile /
-	 * Share are stubs (`// TODO`).
+	 * and persisted to the `lib/history` store. Save-as-profile is a stub
+	 * (`// TODO`).
 	 */
 	import type { StoredShot } from '$lib/history';
 	import {
@@ -55,7 +55,8 @@
 		onGrindChange,
 		onBeanChange,
 		onDelete,
-		canDeleteRemote = false
+		canDeleteRemote = false,
+		onUploadVisualizer = null
 	}: {
 		/** The selected stored shot. */
 		shot: StoredShot;
@@ -101,6 +102,15 @@
 		 * Gates the menu item; the local delete is always available.
 		 */
 		canDeleteRemote?: boolean;
+		/**
+		 * Push this shot to Visualizer — the manual per-shot upload (issue
+		 * #44 follow-up). `null` when not connected or shot push is off,
+		 * which dims the menu item. For an already-bound shot this is a
+		 * RE-upload: Visualizer de-dupes by telemetry SHA, so the re-POST
+		 * updates the same remote row — fixes old wrongly-dated / bean-less
+		 * copies.
+		 */
+		onUploadVisualizer?: (() => void) | null;
 	} = $props();
 
 	/** Whether the notes block is in edit mode. */
@@ -444,11 +454,9 @@
 	function saveAsProfile(): void {
 		toast.info('Save-as-profile is coming in a later step.');
 	}
-	// Visualizer sharing is wired via Settings → Sharing — shots upload
-	// automatically when sync is on, and a manual "Sync now" force-pushes
-	// the queue. This button just nudges the user there.
-	function share(): void {
-		toast.info('Open Settings → Sharing to sign in to Visualizer and sync shots. Synced shots are visible at visualizer.coffee/shots.');
+	/** Open this shot's uploaded copy on visualizer.coffee in a new tab. */
+	function viewOnVisualizer(): void {
+		window.open(`https://visualizer.coffee/shots/${shot.visualizerId}`, '_blank', 'noopener');
 	}
 
 	// ── Bean rebind (retroactive) ────────────────────────────────────────
@@ -525,8 +533,9 @@
 					}
 				]}
 			/>
-			<!-- Load on Brew leads; Save-as-profile / Share ride its menu —
-			     the header blocks need the room (issue #16 round 4). -->
+			<!-- Load on Brew leads; Save-as-profile / the Visualizer actions
+			     ride its menu — the header blocks need the room (issue #16
+			     round 4). -->
 			<SplitButton
 				icon="ph ph-coffee"
 				label="Load on Brew"
@@ -542,11 +551,26 @@
 						onclick: saveAsProfile
 					},
 					{
-						icon: 'ph-duotone ph-share',
-						title: 'Share',
-						sub: 'Upload via Settings → Sharing (Visualizer).',
-						onclick: share
-					}
+						icon: 'ph-duotone ph-cloud-arrow-up',
+						title: shot.visualizerId ? 'Re-upload to Visualizer' : 'Upload to Visualizer',
+						sub: onUploadVisualizer
+							? shot.visualizerId
+								? 'Refreshes the copy on visualizer.coffee.'
+								: 'Push this shot to visualizer.coffee.'
+							: 'Connect Visualizer in Settings → Sharing.',
+						disabled: !onUploadVisualizer,
+						onclick: () => onUploadVisualizer?.()
+					},
+					...(shot.visualizerId
+						? [
+								{
+									icon: 'ph-duotone ph-arrow-square-out',
+									title: 'View on Visualizer',
+									sub: 'Open the uploaded copy in a new tab.',
+									onclick: viewOnVisualizer
+								}
+							]
+						: [])
 				]}
 			/>
 			{#if onDelete}

@@ -399,12 +399,18 @@ function describePushError(e: ShotPushError): string {
  * logged), so the orchestrator's `runFork` stays a clean detached fire.
  */
 export function pushShotToVisualizer(
-	shotId: string
+	shotId: string,
+	opts?: { manual?: boolean }
 ): Effect.Effect<void, never, ShotSync | UploadQueue> {
 	return Effect.gen(function* () {
-		const config = readSyncConfig();
-		if (!directionPushes(config.direction.shots)) return;
-		if (!config.autoUpload) return;
+		// A MANUAL push (the History detail's Upload / Re-upload action) skips
+		// the auto-upload gates: the caller already gated on connected + push
+		// direction, and the auto-upload pref must not veto an explicit tap.
+		if (!opts?.manual) {
+			const config = readSyncConfig();
+			if (!directionPushes(config.direction.shots)) return;
+			if (!config.autoUpload) return;
+		}
 		const shot = getHistoryStore().get(shotId);
 		if (!shot) return;
 
@@ -417,11 +423,16 @@ export function pushShotToVisualizer(
 				Effect.sync(() => {
 					getHistoryStore().bindVisualizerId(shotId, visualizerId);
 					appendSyncLog({ direction: 'push', entity: 'shot', id: shotId, name, at: Date.now() });
+					// Confirm the push (issue #44 follow-up): auto-uploads used
+					// to succeed invisibly, leaving users unsure the shot made
+					// it to Visualizer.
+					toast.success('Shot uploaded to Visualizer');
 				})
 			),
 			Effect.catchAll((e) =>
 				Effect.gen(function* () {
-					if (isRecoverable(e)) {
+					const queued = isRecoverable(e);
+					if (queued) {
 						yield* queue.enqueue({
 							entity: 'shot',
 							id: shotId,
@@ -437,6 +448,13 @@ export function pushShotToVisualizer(
 						at: Date.now(),
 						error: describePushError(e)
 					});
+					// A silent miss reads as "synced" — surface it. Recoverable
+					// failures are queued, so name the retry.
+					toast.error(
+						queued
+							? 'Visualizer upload failed — queued to retry'
+							: `Visualizer upload failed: ${describePushError(e)}`
+					);
 				})
 			)
 		);
