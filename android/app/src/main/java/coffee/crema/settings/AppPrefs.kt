@@ -76,6 +76,10 @@ data class AppPrefs(
     val volumeUnit: String = "ml",
     /** Water-tank readout style — `"ml" | "percent"` (geota/crema#33). */
     val waterLevelUnit: String = "ml",
+    /** Low-water warning threshold, canonical ml (geota/crema#33 follow-up).
+     *  Null = unset → the 110 ml (~10%) default; 0 disables. The Settings
+     *  row dials it in [waterLevelUnit]. */
+    val waterWarnMl: Float? = null,
     // ── Display ──────────────────────────────────────────────────────────────
     /** Live-chart channel keys (Quick Controls chart strip). */
     val chartChannels: Set<String> = setOf("pressure", "flow", "weight"),
@@ -200,6 +204,7 @@ fun AppPrefs.toCommonSettings(): CommonSettings = CommonSettings(
     pressureUnit = pressureUnit,
     volumeUnit = volumeUnit,
     waterLevelUnit = waterLevelUnit,
+    waterWarnMl = waterWarnMl,
     chartChannels = chartChannels.toList(),
     keepScreenOnBrew = keepScreenOnBrew,
     showDebugPanel = showDebugPanel,
@@ -240,6 +245,7 @@ fun AppPrefs.withCommonSettings(c: CommonSettings): AppPrefs = copy(
     pressureUnit = c.pressureUnit,
     volumeUnit = c.volumeUnit,
     waterLevelUnit = c.waterLevelUnit ?: "ml",
+    waterWarnMl = c.waterWarnMl,
     chartChannels = c.chartChannels.toSet(),
     keepScreenOnBrew = c.keepScreenOnBrew,
     showDebugPanel = c.showDebugPanel,

@@ -51,7 +51,10 @@ import coffee.crema.core.hasCupWarmer
 import coffee.crema.core.machineModelName
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.QcSteam
+import coffee.crema.ui.TANK_FULL_ML_UI
+import coffee.crema.ui.WATER_WARN_DEFAULT_ML
 import coffee.crema.ui.refillSoon
+import coffee.crema.ui.waterWarnThresholdMl
 import coffee.crema.ui.components.CopyDiagnosticsRow
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
@@ -374,12 +377,38 @@ fun SettingsScreen(
                                     low -> "Low — refill soon."
                                     else -> "Tank level looks good."
                                 },
-                                last = true,
                             ) {
                                 CremaMonoReadout(
                                     if (mm != null) "${mm.toInt()} mm" else "—",
                                     color = if (low) Color(0xFFDBA764) else MaterialTheme.colorScheme.onSurface,
                                 )
+                            }
+                            // Low-water warning (#33 follow-up): once-per-dip
+                            // snackbar below this level. Dialled in the user's
+                            // tank unit (percent or ml); stored canonical ml.
+                            val warnMl = ui.waterWarnThresholdMl()
+                            val warnOn = warnMl > 0f
+                            val warnDial = if (warnOn) warnMl else WATER_WARN_DEFAULT_ML
+                            CremaSettingsRow(
+                                "Low-water warning", "Warns once when the tank drops below this level.",
+                                last = true, dot = true, dotOn = warnOn,
+                                onDot = { vm.setWaterWarnMl(if (warnOn) 0f else WATER_WARN_DEFAULT_ML) },
+                            ) {
+                                if (ui.waterLevelUnit == "percent") {
+                                    CremaStepper(
+                                        value = (warnDial / TANK_FULL_ML_UI * 100).toDouble(), unit = "%",
+                                        step = 1.0, min = 1.0, max = 50.0,
+                                        fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.Bare,
+                                        onChange = { vm.setWaterWarnMl((it / 100.0 * TANK_FULL_ML_UI).toFloat()) },
+                                    )
+                                } else {
+                                    CremaStepper(
+                                        value = warnDial.toDouble(), unit = "ml",
+                                        step = 25.0, min = 25.0, max = 550.0,
+                                        fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.Bare,
+                                        onChange = { vm.setWaterWarnMl(it.toFloat()) },
+                                    )
+                                }
                             }
                         }
                         SetGroup("Cycles") {

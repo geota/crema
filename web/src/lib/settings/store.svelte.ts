@@ -85,6 +85,12 @@ export interface Settings {
 	pressureUnit: PressureUnit;
 	/** Water-tank readout style — ml or percent of a typical full fill. */
 	waterLevelUnit: WaterLevelUnit;
+	/**
+	 * Low-water warning threshold, canonical ml (geota/crema#33 follow-up).
+	 * `null` = unset → the 110 ml (~10%) default; `0` disables. The
+	 * Settings row dials it in {@link waterLevelUnit}.
+	 */
+	waterWarnMl: number | null;
 
 	// ── Brew defaults ────────────────────────────────────────────────────
 	/** Default dose for new profiles, grams. */
@@ -295,6 +301,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	volumeUnit: 'ml',
 	pressureUnit: 'bar',
 	waterLevelUnit: 'ml',
+	waterWarnMl: null,
 
 	get defaultDoseG() {
 		return brewDefaults().doseG;
@@ -423,6 +430,7 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		pressureUnit: s.pressureUnit,
 		volumeUnit: s.volumeUnit,
 		waterLevelUnit: s.waterLevelUnit,
+		waterWarnMl: s.waterWarnMl ?? undefined,
 		chartChannels: CHART_FLAG_TO_KEY.filter(([flag]) => s[flag]).map(([, key]) => key),
 		keepScreenOnBrew: s.keepScreenOnBrew,
 		showDebugPanel: s.showDebugPanel,
@@ -471,6 +479,7 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		pressureUnit: c.pressureUnit as PressureUnit,
 		volumeUnit: c.volumeUnit as VolumeUnit,
 		waterLevelUnit: (c.waterLevelUnit ?? 'ml') as WaterLevelUnit,
+		waterWarnMl: c.waterWarnMl ?? null,
 		showPressure: on.has('pressure'),
 		showResistance: on.has('resistance'),
 		showFlow: on.has('flow'),

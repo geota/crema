@@ -86,6 +86,13 @@ pub struct CommonSettings {
     /// Water-tank readout style `"ml" | "percent"`. `None` means "unset",
     /// read as `"ml"`.
     pub water_level_unit: Option<String>,
+    /// Low-water warning threshold, ml of remaining tank water — the shells
+    /// notify once per dip when the level crosses below it (issue #33
+    /// follow-up). Canonical ml regardless of `water_level_unit`; the
+    /// settings UI dials it in the user's chosen unit. `None` means
+    /// "unset", read as the 110 ml default (~10% of a typical full fill);
+    /// `0` disables the warning.
+    pub water_warn_ml: Option<f32>,
     /// Enabled live-chart channel keys (Android's vocabulary:
     /// `pressure`/`flow`/`weight`/`headTemp`/`mixTemp`/`weightFlow`/`resistance`/
     /// `dispensedVolume`). Web maps its eight `show*` booleans to/from this list
@@ -142,6 +149,7 @@ impl Default for CommonSettings {
             pressure_unit: "bar".to_owned(),
             volume_unit: "ml".to_owned(),
             water_level_unit: None,
+            water_warn_ml: None,
             chart_channels: vec![
                 "pressure".to_owned(),
                 "flow".to_owned(),

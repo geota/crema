@@ -54,6 +54,8 @@ import {
 	DEFAULT_SCALE_VOLUME,
 	EMPTY_DE1_CALIBRATION,
 	getCremaUiState,
+	waterTankMl,
+	waterTankPercent,
 	type UiSnapshot
 } from './ui-state.svelte';
 import { getActiveShotStore, type ActiveShotData } from './active-shot.svelte';
@@ -157,6 +159,19 @@ const MAX_TELEMETRY_GAP_S = 2;
 const SCALE_LOW_BATTERY_PCT = 25;
 
 /**
+ * Default low-water warning threshold, ml — ~10% of a typical 1104 ml full
+ * fill (#33 follow-up). Applied when `settings.waterWarnMl` is unset;
+ * an explicit `0` disables the warning.
+ */
+const WATER_WARN_DEFAULT_ML = 110;
+
+/**
+ * Hysteresis above the warning threshold before the once-per-dip warning
+ * re-arms — ~2 mm of tank, so pump-driven level bounce can't re-fire it.
+ */
+const WATER_WARN_REARM_ML = 55;
+
+/**
  * localStorage key for the most recent profile-upload fingerprint —
  * persisted on every `ProfileUploadCompleted` and hydrated into the
  * snapshot on app construction. Lets a page reload that keeps the DE1
@@ -231,6 +246,14 @@ export class CremaApp {
 	 * warns again, but a single connection never nags twice.
 	 */
 	private scaleLowBatteryWarned = false;
+
+	/**
+	 * Whether the low-water toast fired for the current tank dip (#33
+	 * follow-up) — re-armed once the level rises `WATER_WARN_REARM_ML`
+	 * above the threshold (a refill) or on disconnect. One dip never
+	 * nags twice.
+	 */
+	private waterLowWarned = false;
 
 	/**
 	 * `performance.now()` of the most recent `ShotStarted` event, or `null`
@@ -551,6 +574,27 @@ export class CremaApp {
 				if (batt !== null && batt <= SCALE_LOW_BATTERY_PCT && !this.scaleLowBatteryWarned) {
 					this.scaleLowBatteryWarned = true;
 					toast.info(`Scale battery low (${batt}%) — charge it soon`);
+				}
+			}
+			if (event.type === 'WaterLevel') {
+				// Configurable low-water warning (#33 follow-up): one toast per
+				// dip below the user's threshold, in the user's tank unit.
+				// Hysteresis re-arms it only after a real refill, so the mm
+				// bounce a running pump causes can't re-fire it.
+				const s = getSettingsStore().current;
+				const warnMl = s.waterWarnMl ?? WATER_WARN_DEFAULT_ML;
+				const ml = waterTankMl(event.content.level);
+				if (warnMl > 0 && ml !== null) {
+					if (!this.waterLowWarned && ml <= warnMl) {
+						this.waterLowWarned = true;
+						const left =
+							s.waterLevelUnit === 'percent'
+								? `${waterTankPercent(event.content.level)}%`
+								: `${Math.round(ml)} ml`;
+						toast.info(`Water low — ${left} left, refill soon`);
+					} else if (this.waterLowWarned && ml > warnMl + WATER_WARN_REARM_ML) {
+						this.waterLowWarned = false;
+					}
 				}
 			}
 			if (event.type === 'SawAutoZeroed') {
@@ -908,6 +952,8 @@ export class CremaApp {
 		// Drop the telemetry wall-clock anchor — the next connect must not
 		// integrate the (arbitrarily long) gap across the disconnect.
 		this.lastTelemetryAtMs = null;
+		// Next connection's first low-water report warns afresh (#33).
+		this.waterLowWarned = false;
 		// The fingerprint cache (snapshot + localStorage) is wiped on
 		// an explicit disconnect: the DE1 may be powered off or the
 		// user may be moving to a different machine, so the cached

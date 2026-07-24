@@ -15,6 +15,8 @@
 	 * "Run now" button that fires the matching `requestMachineState` after a
 	 * confirm dialog — the firmware drives the cycle to completion, then the
 	 * user manually taps "Mark complete" once the puck-side hardware is reset.
+	 * The Tank group's low-water threshold is a `$lib/settings` pref — this
+	 * row is only the input; the once-per-dip toast lives in `app.svelte.ts`.
 	 *
 	 * **UI-only** — the water-chemistry inputs are faithful UI; they are not
 	 * app preferences the rest of the app reads, so they are kept as local
@@ -30,6 +32,7 @@
 	 * same; the wire is the same.
 	 */
 	import { getMaintenanceStore } from '$lib/maintenance';
+	import { getSettingsStore } from '$lib/settings';
 	import { MachineState } from '$lib/core/crema-core';
 	import type { CremaApp } from '$lib/state';
 	import { INITIAL_SNAPSHOT } from '$lib/state';
@@ -67,6 +70,30 @@
 	function shortDate(ms: number): string {
 		return new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 	}
+
+	// ── Low-water warning (#33 follow-up) ───────────────────────────────
+	//
+	// This row is only the input — the once-per-dip toast itself lives in
+	// app.svelte.ts (WaterLevel handler, with refill hysteresis). Canonical
+	// unit is ml: `null` = unset (the app falls back to the 110 ml default),
+	// an explicit `0` = disabled. The dial converts to percent when the
+	// user's tank unit pref (Display section) says so.
+
+	const settings = getSettingsStore();
+	const prefs = $derived(settings.current);
+
+	/** A typical full tank fill, ml — mirrors the core's TANK_FULL_ML. */
+	const TANK_FULL_ML = 1104;
+	/** Default warning threshold when unset — ~10% of a full fill. */
+	const WATER_WARN_DEFAULT_ML = 110;
+
+	/** Whether the warning is armed — unset (default on) or an explicit positive ml. */
+	const warnOn = $derived((prefs.waterWarnMl ?? WATER_WARN_DEFAULT_ML) > 0);
+	/** The ml the dial shows — falls back to the default while unset or off. */
+	const warnEffectiveMl = $derived.by(() => {
+		const ml = prefs.waterWarnMl ?? WATER_WARN_DEFAULT_ML;
+		return ml > 0 ? ml : WATER_WARN_DEFAULT_ML;
+	});
 
 	// TODO: water chemistry is not yet wired into a store the app reads; local
 	// state only, so the segment / chips feel real while previewing the IA.
@@ -177,6 +204,50 @@
 	title="Water & maintenance"
 	sub="Track filter life, descaling, and water chemistry. Crema reminds you before things start affecting taste."
 />
+
+<!--
+	Tank — the low-water warning threshold, dialled in the user's tank unit
+	(Display section). This row is the input for the app-level once-per-dip
+	toast; the behaviour itself lives in app.svelte.ts.
+-->
+<StGroup title="Tank">
+	<StRow
+		title="Low-water warning"
+		sub="Warns once when the tank drops below this level."
+	>
+		{#snippet control()}
+			<span class="ws-armed-row">
+				<StToggle
+					on={warnOn}
+					onChange={(v) =>
+						settings.set('waterWarnMl', v ? WATER_WARN_DEFAULT_ML : 0)}
+					label="Low-water warning armed"
+				/>
+				{#if warnOn}
+					{#if prefs.waterLevelUnit === 'percent'}
+						<StStepper
+							value={Math.round((warnEffectiveMl / TANK_FULL_ML) * 100)}
+							unit="%"
+							step={1}
+							min={1}
+							max={50}
+							onCommit={(v) => settings.set('waterWarnMl', (v / 100) * TANK_FULL_ML)}
+						/>
+					{:else}
+						<StStepper
+							value={warnEffectiveMl}
+							unit="ml"
+							step={25}
+							min={25}
+							max={550}
+							onCommit={(v) => settings.set('waterWarnMl', v)}
+						/>
+					{/if}
+				{/if}
+			</span>
+		{/snippet}
+	</StRow>
+</StGroup>
 
 <div class="st-maint-grid">
 	<!-- 3-cycle row across the top; the Water filter card spans the full

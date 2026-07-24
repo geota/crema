@@ -191,6 +191,22 @@ fun MainUiState.effectiveBrew(): EffectiveBrew =
  */
 const val REFILL_SOON_MARGIN_MM = 5f
 
+/** Typical full tank, ml — mirrors core `TANK_FULL_ML` (de1app's 40 mm
+ *  `water_level_full_point`). Converts the warn dial's % ↔ canonical ml. */
+const val TANK_FULL_ML_UI = 1104f
+
+/** Default low-water warning threshold, ml — ~10% of a typical 1104 ml full
+ *  fill (#33 follow-up). Applied when [MainUiState.waterWarnMl] is unset. */
+const val WATER_WARN_DEFAULT_ML = 110f
+
+/** Hysteresis above the warning threshold before the once-per-dip warning
+ *  re-arms — ~2 mm of tank so pump-driven level bounce can't re-fire it. */
+const val WATER_WARN_REARM_ML = 55f
+
+/** The effective low-water warning threshold, ml — the user's dialled value,
+ *  the default when unset, and `<= 0` = disabled. */
+fun MainUiState.waterWarnThresholdMl(): Float = waterWarnMl ?: WATER_WARN_DEFAULT_ML
+
 /**
  * Battery percentage at or below which the one-per-connection "charge your
  * scale" warning fires (issue #29) — early enough to charge before a session,
@@ -475,6 +491,9 @@ data class MainUiState(
     val volumeUnit: String = "ml",
     /** Water-tank readout style — `"ml" | "percent"` (geota/crema#33). */
     val waterLevelUnit: String = "ml",
+    /** Low-water warning threshold, canonical ml (#33 follow-up). Null =
+     *  unset → [WATER_WARN_DEFAULT_ML]; 0 disables. See [waterWarnThresholdMl]. */
+    val waterWarnMl: Float? = null,
     /** The bean library — user bean bags, persisted via [LibraryStore]. */
     val beans: List<Bean> = emptyList(),
     /** The roaster directory (FK target for [beans]). */
@@ -761,6 +780,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  connection (issue #29) — reset in [clearScaleSessionUi] so the next
      *  session warns again, but one connection never nags twice. */
     private var scaleLowBatteryWarned = false
+
+    /** Whether the low-water snackbar fired for the current tank dip (#33
+     *  follow-up) — re-armed once the level rises [WATER_WARN_REARM_ML]
+     *  above the threshold (a refill), on threshold edits, and on
+     *  disconnect. One dip never nags twice. */
+    private var waterLowWarned = false
     private var pendingUploadFingerprint: String? = null
 
     /** Resolved by `Event.WaterSessionCompleted(Flush)` to release the pre-shot
@@ -1505,6 +1530,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             pressureUnit = p.pressureUnit,
             volumeUnit = p.volumeUnit,
             waterLevelUnit = p.waterLevelUnit,
+            waterWarnMl = p.waterWarnMl,
             qcSteamTimeS = p.qcSteamTimeS,
             qcSteamFlowMlS = p.qcSteamFlowMlS,
             qcSteamTempC = p.qcSteamTempC,
@@ -1762,6 +1788,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun clearDe1SessionUi() {
         machineInfoJob?.cancel() // stop any in-flight connect-time register sweep
         pendingBrew = false
+        // Next connection's first low-water report warns afresh (#33).
+        waterLowWarned = false
         _ui.update { it.copy(
             machineState = null,
             machineStateName = null,
@@ -2329,6 +2357,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pressureUnit = _ui.value.pressureUnit,
         volumeUnit = _ui.value.volumeUnit,
         waterLevelUnit = _ui.value.waterLevelUnit,
+        waterWarnMl = _ui.value.waterWarnMl,
         qcSteamTimeS = _ui.value.qcSteamTimeS,
         qcSteamFlowMlS = _ui.value.qcSteamFlowMlS,
         qcSteamTempC = _ui.value.qcSteamTempC,
@@ -2617,6 +2646,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistPrefs()
     }
 
+    /** Low-water warning threshold, canonical ml (0 = off) — #33 follow-up.
+     *  Persisted; re-arms the once-per-dip warning so a raised threshold can
+     *  fire on the very next level report. */
+    fun setWaterWarnMl(ml: Float) {
+        _ui.update { it.copy(waterWarnMl = ml) }
+        persistPrefs()
+        waterLowWarned = false
+    }
+
     /** Daily automatic Google Drive backup toggle (issue #36). Turning it on
      *  runs a backup right away if one is due. */
     fun setAutoDriveBackup(on: Boolean) {
@@ -2855,6 +2893,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             pressureUnit = p.pressureUnit,
             volumeUnit = p.volumeUnit,
             waterLevelUnit = p.waterLevelUnit,
+            waterWarnMl = p.waterWarnMl,
             qcSteamTimeS = p.qcSteamTimeS,
             qcSteamFlowMlS = p.qcSteamFlowMlS,
             qcSteamTempC = p.qcSteamTempC,
@@ -3764,6 +3803,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     waterRefillThresholdMm = event.content.refill_threshold,
                 ) }
                 appendLog(fmt("Water level: %.0fmm", event.content.level))
+                // Configurable low-water warning (#33 follow-up): one snackbar
+                // per dip below the user's threshold, in the user's tank unit.
+                // Hysteresis re-arms it only after a real refill, so the mm
+                // bounce a running pump causes can't re-fire it.
+                val s = _ui.value
+                val warnMl = s.waterWarnThresholdMl()
+                if (warnMl > 0f) {
+                    val ml = coffee.crema.core.waterTankMl(event.content.level).toFloat()
+                    if (!waterLowWarned && ml <= warnMl) {
+                        waterLowWarned = true
+                        val left = formatTankLevel(event.content.level, s.waterLevelUnit, s.volumeUnit)
+                        notifyUser("Water low — ${left.value} ${left.unit} left, refill soon")
+                    } else if (waterLowWarned && ml > warnMl + WATER_WARN_REARM_ML) {
+                        waterLowWarned = false
+                    }
+                }
             }
             is Event.ShotSettingsRead -> {
                 // Cache the machine's reported steam/hot-water settings so QC
