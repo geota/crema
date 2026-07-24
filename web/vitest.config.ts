@@ -29,7 +29,14 @@ export default defineConfig({
 	define: { __APP_VERSION__: JSON.stringify(pkgVersion) },
 	plugins: [svelte({ compilerOptions: { hmr: false } })],
 	resolve: {
-		alias: { $lib: path.resolve('./src/lib') },
+		alias: {
+			$lib: path.resolve('./src/lib'),
+			// SvelteKit's `$app/*` virtual modules exist only inside the Kit
+			// runtime — stand-ins keep store-coupled imports that reach them
+			// (e.g. `$lib/bean/bag-empty-prompt`) collectable under vitest.
+			'$app/navigation': path.resolve('./vitest.mocks/app-navigation.ts'),
+			'$app/paths': path.resolve('./vitest.mocks/app-paths.ts')
+		},
 		// Resolve the browser entry points of `.svelte.ts` rune modules.
 		conditions: ['browser']
 	},
