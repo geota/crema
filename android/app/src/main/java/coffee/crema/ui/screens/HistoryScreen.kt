@@ -722,9 +722,16 @@ private fun ShotDetail(
             CremaOverflowMenu(items = buildList {
                 add(OverflowItem("coffee", "Load on Brew", onLoadOnBrew))
                 add(OverflowItem("download-simple", "Export", onExport))
-                onUploadVisualizer?.let {
+                // Signed out (null handler) the item stays VISIBLE but
+                // disabled — a hidden action is undiscoverable (user feedback).
+                run {
                     val label = if (shot.visualizerId != null) "Re-upload to Visualizer" else "Upload to Visualizer"
-                    add(OverflowItem("cloud-arrow-up", label, it))
+                    val handler = onUploadVisualizer
+                    if (handler != null) {
+                        add(OverflowItem("cloud-arrow-up", label, handler))
+                    } else {
+                        add(OverflowItem("cloud-arrow-up", label, {}, enabled = false))
+                    }
                 }
                 onViewVisualizer?.let { add(OverflowItem("cloud-check", "View on Visualizer", it)) }
                 add(OverflowItem("trash", "Delete shot", { confirmDelete = true }, danger = true))

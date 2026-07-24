@@ -688,9 +688,15 @@ private fun PhoneShotDetail(
                 // A bound shot re-uploads: Visualizer de-dupes by telemetry
                 // SHA, so the re-POST updates the same remote row (fixing an
                 // old wrongly-dated / bean-less copy) — issue #44 follow-up.
-                if (signedIn && !syncing) {
+                // Signed out, the row stays VISIBLE but disabled with the way
+                // in — a hidden action is undiscoverable (user feedback).
+                if (!syncing) {
                     val label = if (shot.visualizerId != null) "Re-upload to Visualizer" else "Upload to Visualizer"
-                    add(SheetItem("cloud-arrow-up", label) { vm.visualizer.uploadShot(shot) })
+                    if (signedIn) {
+                        add(SheetItem("cloud-arrow-up", label) { vm.visualizer.uploadShot(shot) })
+                    } else {
+                        add(SheetItem("cloud-arrow-up", label, sub = "Sign in via Settings → Sharing first", disabled = true))
+                    }
                 }
                 if (shot.visualizerId != null) {
                     add(SheetItem("arrow-square-out", "View on Visualizer") {

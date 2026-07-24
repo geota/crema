@@ -318,6 +318,9 @@ data class SheetItem(
     val sub: String? = null,
     val danger: Boolean = false,
     val divider: Boolean = false,
+    /** Visible but inert — for an action that exists but isn't available
+     *  right now, with [sub] saying why (a hidden item is undiscoverable). */
+    val disabled: Boolean = false,
     val onClick: () -> Unit = {},
 )
 
@@ -347,19 +350,30 @@ fun CremaOverflowSheet(
                         color = MaterialTheme.colorScheme.outlineVariant,
                     )
                 } else {
-                    val tint = if (it.danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                    val tint = when {
+                        it.disabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        it.danger -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurface
+                    }
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
-                            .clickable { it.onClick(); onDismiss() }
+                            .then(
+                                if (it.disabled) Modifier
+                                else Modifier.clickable { it.onClick(); onDismiss() },
+                            )
                             .padding(horizontal = 14.dp, vertical = 13.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(15.dp),
                     ) {
                         PhIcon(
                             it.icon, sizeDp = 21,
-                            tint = if (it.danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = when {
+                                it.disabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                it.danger -> MaterialTheme.colorScheme.error
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            },
                         )
                         Column(Modifier.weight(1f)) {
                             Text(it.label, style = MaterialTheme.typography.bodyLarge, color = tint)
