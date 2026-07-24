@@ -44,7 +44,28 @@ use crate::shot::TimedSample;
 /// but RS5: surfaced as an error rather than silently yielding an empty string
 /// (a `unwrap_or_default()` would have written an empty export file on failure).
 pub fn export_v2_json_shot(shot: &StoredShot) -> Result<String, serde_json::Error> {
-    let doc = build_v2_document(shot);
+    let doc = build_v2_document(shot, true);
+    serde_json::to_string_pretty(&doc)
+}
+
+/// Like [`export_v2_json_shot`] but with the post-flow tail KEPT
+/// (`truncate_at_flow_end = false`).
+///
+/// Used by RE-uploads of shots already bound to a Visualizer row:
+/// Visualizer de-dupes uploads by a SHA over the telemetry columns
+/// (`Parsers::Base#sha` — `SHA256(data.sort.to_json)`), so a series
+/// byte-identical to the original upload UPDATES the same shot row in
+/// place — re-extracting the start time and journal fields — instead of
+/// minting a duplicate. Rows first uploaded before the flow-window cut
+/// carried the full series, so a re-upload must too. (A recording made
+/// after the shell-side buffer gate has no tail, so both variants emit
+/// the same bytes and the choice is moot.)
+///
+/// # Errors
+///
+/// [`serde_json::Error`] as [`export_v2_json_shot`].
+pub fn export_v2_json_shot_full(shot: &StoredShot) -> Result<String, serde_json::Error> {
+    let doc = build_v2_document(shot, false);
     serde_json::to_string_pretty(&doc)
 }
 
@@ -53,7 +74,7 @@ pub fn export_v2_json_shot(shot: &StoredShot) -> Result<String, serde_json::Erro
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-fn build_v2_document(shot: &StoredShot) -> V2DocumentOut {
+fn build_v2_document(shot: &StoredShot, truncate_at_flow_end: bool) -> V2DocumentOut {
     // `clock` is the SHOT START in Unix seconds — the TCL-lineage meaning
     // (Visualizer's `ShotSummary.clock` is "shot start timestamp"). Crema
     // stores `completed_at` (end-of-shot, Unix ms), so walk back by the
@@ -69,7 +90,7 @@ fn build_v2_document(shot: &StoredShot) -> V2DocumentOut {
     // given — cutting here keeps the uploaded curve ending at the stop
     // (issue #44 follow-up). Quarter-second slack keeps the boundary sample.
     let cutoff = shot.record.duration + Duration::from_millis(250);
-    let samples: Vec<&TimedSample> = if shot.record.duration.is_zero() {
+    let samples: Vec<&TimedSample> = if !truncate_at_flow_end || shot.record.duration.is_zero() {
         shot.record.samples.iter().collect()
     } else {
         shot.record
@@ -741,6 +762,23 @@ mod tests {
         assert_eq!(v["elapsed"].as_array().unwrap().len(), 2);
         // …but still supplies the settled drink weight.
         assert_eq!(settings["drink_weight"], 36.2);
+    }
+
+    #[test]
+    fn the_full_export_variant_keeps_the_post_flow_tail() {
+        // The re-upload path: Visualizer de-dupes by a SHA over the
+        // telemetry columns, so a bound shot's re-upload reproduces the
+        // original (untruncated) series to update the same remote row.
+        let mut shot = fixture();
+        let mut tail = shot.record.samples[1].clone();
+        tail.elapsed = Duration::from_secs(31);
+        shot.record.samples.push(tail);
+
+        let json = export_v2_json_shot_full(&shot).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(v["elapsed"].as_array().unwrap().len(), 3);
+        // Same-length columns still hold with the tail kept.
+        assert_eq!(v["pressure"]["pressure"].as_array().unwrap().len(), 3);
     }
 
     #[test]

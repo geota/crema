@@ -956,6 +956,21 @@ pub fn export_v2_json_shot(shot_json: String) -> Result<String, CremaError> {
     de1_domain::export_v2_json_shot(&shot).map_err(crema_err)
 }
 
+/// [`export_v2_json_shot`] with the post-flow tail kept — the RE-upload
+/// variant. Visualizer de-dupes by a SHA over the telemetry columns, so a
+/// bound shot's re-upload must reproduce its original (untruncated) series
+/// to update the same remote row instead of minting a duplicate.
+///
+/// # Errors
+///
+/// Returns the JSON parse error when `shot_json` is not a valid
+/// `de1_domain::StoredShot`.
+#[uniffi::export]
+pub fn export_v2_json_shot_full(shot_json: String) -> Result<String, CremaError> {
+    let shot: de1_domain::StoredShot = serde_json::from_str(&shot_json).map_err(crema_err)?;
+    de1_domain::export_v2_json_shot_full(&shot).map_err(crema_err)
+}
+
 /// The core crate version as a borrowed static; [`core_version`] owns a copy
 /// only at the binding boundary (uniffi can't return a borrowed `&str`).
 const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");

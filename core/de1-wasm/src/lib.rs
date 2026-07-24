@@ -1023,6 +1023,22 @@ pub fn export_v2_json_shot(shot_json: &str) -> Result<String, String> {
     de1_domain::export_v2_json_shot(&shot).map_err(|e| e.to_string())
 }
 
+/// [`export_v2_json_shot`] with the post-flow tail kept — the RE-upload
+/// variant. Visualizer de-dupes by a SHA over the telemetry columns, so a
+/// bound shot's re-upload must reproduce its original (untruncated) series
+/// to update the same remote row instead of minting a duplicate.
+///
+/// # Errors
+///
+/// Returns the JSON parse error when `shot_json` is not a valid
+/// `de1_domain::StoredShot`.
+#[wasm_bindgen]
+pub fn export_v2_json_shot_full(shot_json: &str) -> Result<String, String> {
+    let shot: de1_domain::StoredShot =
+        serde_json::from_str(shot_json).map_err(|e| e.to_string())?;
+    de1_domain::export_v2_json_shot_full(&shot).map_err(|e| e.to_string())
+}
+
 /// Mint a fresh profile ID — a standard UUID v7 (RFC 9562, 2024) in
 /// the 36-character dashed form, e.g. `01910f80-7a3b-7c54-b2d1-23a4f8e9cd00`.
 /// The 48-bit timestamp prefix makes IDs lexicographically sortable by
