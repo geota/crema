@@ -181,8 +181,11 @@ private fun ScaleHeroRow(
     // so below ~620dp they stack, giving the readout the full width.
     BoxWithConstraints {
         if (maxWidth < 620.dp) {
+            // Compact heights in the stacked layout (~8" tablets): the
+            // full-size readout + tare block pushed the dose helper clean
+            // off a ~600dp-tall window — issue #35, third report.
             Column(verticalArrangement = Arrangement.spacedBy(sp.s4)) {
-                ScaleReadoutCard(connected, weight, weightUnit, Modifier.fillMaxWidth().height(176.dp))
+                ScaleReadoutCard(connected, weight, weightUnit, Modifier.fillMaxWidth().height(132.dp), compact = true)
                 ScaleActionColumn(connected, weightUnit, onTare, onConnect, onResetPeak, onStartTimer, stacked = true, modifier = Modifier.fillMaxWidth())
             }
         } else {
@@ -195,17 +198,25 @@ private fun ScaleHeroRow(
 }
 
 @Composable
-private fun ScaleReadoutCard(connected: Boolean, weight: Double, weightUnit: String, modifier: Modifier) {
+private fun ScaleReadoutCard(
+    connected: Boolean,
+    weight: Double,
+    weightUnit: String,
+    modifier: Modifier,
+    /** Stacked (~8" tablet) sizing: the phone's 96sp hero instead of the
+     *  132sp tablet one, so the digits fit the shorter card (issue #35). */
+    compact: Boolean = false,
+) {
     val sp = CremaTheme.spacing
     CremaCard(modifier) {
-        Box(Modifier.fillMaxWidth().padding(sp.s5), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().padding(if (compact) sp.s4 else sp.s5), contentAlignment = Alignment.Center) {
             // Number + unit are inline baseline siblings (never absolute) so the
             // unit can't collide with a wide value — the bug the PWA avoids too.
             Row(verticalAlignment = Alignment.Bottom) {
                 val hero = convertWeight((if (connected) weight else 0.0).toFloat(), weightUnit)
                 Text(
                     hero.value,
-                    style = CremaTheme.readout.readoutHero,
+                    style = if (compact) CremaTheme.readout.readoutXl else CremaTheme.readout.readoutHero,
                     color = if (connected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
                     maxLines = 1,
                 )
@@ -215,7 +226,7 @@ private fun ScaleReadoutCard(connected: Boolean, weight: Double, weightUnit: Str
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     softWrap = false,
-                    modifier = Modifier.padding(start = 8.dp, bottom = 24.dp),
+                    modifier = Modifier.padding(start = 8.dp, bottom = if (compact) 14.dp else 24.dp),
                 )
             }
         }
@@ -240,14 +251,22 @@ private fun ScaleActionColumn(
                 onClick = onTare,
                 shape = MaterialTheme.shapes.large,
                 color = MaterialTheme.colorScheme.primary,
-                // Fills the row height when beside the readout; a fixed block when stacked.
-                modifier = (if (stacked) Modifier.height(132.dp) else Modifier.weight(1f)).fillMaxWidth(),
+                // Fills the row height when beside the readout; a fixed —
+                // compact — block when stacked (~8" tablets, issue #35).
+                modifier = (if (stacked) Modifier.height(88.dp) else Modifier.weight(1f)).fillMaxWidth(),
             ) {
-                Column(Modifier.padding(horizontal = sp.s5, vertical = 22.dp), verticalArrangement = Arrangement.Center) {
+                Column(
+                    Modifier.padding(horizontal = sp.s5, vertical = if (stacked) 12.dp else 22.dp),
+                    verticalArrangement = Arrangement.Center,
+                ) {
                     Eyebrow("Tare", color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f))
                     Row(verticalAlignment = Alignment.Bottom) {
                         val tareZero = convertWeight(0f, weightUnit)
-                        Text(tareZero.value, style = CremaTheme.readout.readoutLg, color = MaterialTheme.colorScheme.onPrimary)
+                        Text(
+                            tareZero.value,
+                            style = if (stacked) CremaTheme.readout.readoutMd else CremaTheme.readout.readoutLg,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
                         Text(
                             " ${tareZero.unit}",
                             style = MaterialTheme.typography.bodyLarge.copy(fontSize = 20.sp),
@@ -257,8 +276,16 @@ private fun ScaleActionColumn(
                     }
                 }
             }
-            ScalePillButton(icon = "arrow-counter-clockwise", label = "Reset peak", onClick = onResetPeak)
-            ScalePillButton(icon = "timer", label = "Start timer", onClick = onStartTimer)
+            if (stacked) {
+                // Side-by-side halves the vertical the two pills used to take.
+                Row(horizontalArrangement = Arrangement.spacedBy(sp.s3)) {
+                    ScalePillButton(icon = "arrow-counter-clockwise", label = "Reset peak", onClick = onResetPeak, modifier = Modifier.weight(1f))
+                    ScalePillButton(icon = "timer", label = "Start timer", onClick = onStartTimer, modifier = Modifier.weight(1f))
+                }
+            } else {
+                ScalePillButton(icon = "arrow-counter-clockwise", label = "Reset peak", onClick = onResetPeak)
+                ScalePillButton(icon = "timer", label = "Start timer", onClick = onStartTimer)
+            }
         } else {
             // FIXED spacers — a weighted Spacer makes this Column expand to the
             // incoming max height, which inflates the whole hero Row and shoves
