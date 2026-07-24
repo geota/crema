@@ -90,6 +90,11 @@ data class AppPrefs(
     /** Wake a sleeping DE1 when the saver is dismissed; OFF = the tap only
      *  clears the overlay and the machine stays asleep. */
     val wakeMachineWithSaver: Boolean = true,
+    /** Put the DE1 to sleep when Crema is QUIT (task swiped from recents) —
+     *  never on mere backgrounding. Best-effort (see `QuitSleep`); only
+     *  fires while the machine is idle and this device is the primary.
+     *  Platform extra — the swipe-away signal is Android-only. */
+    val sleepOnQuit: Boolean = true,
     /** Show the inline debug / event-log panel in Settings → Advanced
      *  (web `showDebugPanel`). */
     val showDebugPanel: Boolean = false,
@@ -267,6 +272,7 @@ private data class PersistedPrefs(
     val screensaverAfterMin: Int = 30,
     val sleepMachineWithSaver: Boolean = true,
     val wakeMachineWithSaver: Boolean = true,
+    val sleepOnQuit: Boolean = true,
     val autoDriveBackup: Boolean = true,
     val autoUpdateCheck: Boolean = false,
     val lastUpdateCheckAtMs: Long? = null,
@@ -288,6 +294,7 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     screensaverAfterMin = screensaverAfterMin,
     sleepMachineWithSaver = sleepMachineWithSaver,
     wakeMachineWithSaver = wakeMachineWithSaver,
+    sleepOnQuit = sleepOnQuit,
     autoDriveBackup = autoDriveBackup,
     autoUpdateCheck = autoUpdateCheck,
     lastUpdateCheckAtMs = lastUpdateCheckAtMs,
@@ -308,6 +315,7 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     screensaverAfterMin = screensaverAfterMin,
     sleepMachineWithSaver = sleepMachineWithSaver,
     wakeMachineWithSaver = wakeMachineWithSaver,
+    sleepOnQuit = sleepOnQuit,
     autoDriveBackup = autoDriveBackup,
     autoUpdateCheck = autoUpdateCheck,
     lastUpdateCheckAtMs = lastUpdateCheckAtMs,

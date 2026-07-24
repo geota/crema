@@ -64,6 +64,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Sleep-on-quit: a do-nothing started service whose sole job is
+             receiving onTaskRemoved when the user swipes Crema out of recents
+             — the only signal the platform offers for "quit" (backgrounding
+             delivers onStop; a swipe delivers nothing to activities). The
+             handler puts an idle DE1 to sleep before the process goes. -->
+        <service
+            android:name=".ui.QuitSleepService"
+            android:exported="false" />
+
         <!-- FileProvider — hands the camera app (TakePicture) a writable content
              Uri for the bean-photo capture temp file. Authority tracks the build's
              applicationId so it matches BuildConfig.APPLICATION_ID + ".fileprovider"

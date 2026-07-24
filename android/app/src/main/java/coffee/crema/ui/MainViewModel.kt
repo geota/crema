@@ -2,6 +2,7 @@ package coffee.crema.ui
 
 import android.app.Application
 import android.os.SystemClock
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import coffee.crema.core.Command
@@ -405,6 +406,9 @@ data class MainUiState(
      *  behaviour). OFF = the tap only dismisses; the machine stays asleep
      *  until the power button. */
     val wakeMachineWithSaver: Boolean = true,
+    /** Put the DE1 to sleep when Crema is QUIT (task swiped from recents) —
+     *  never on mere backgrounding. Best-effort; idle + primary only. */
+    val sleepOnQuit: Boolean = true,
     /** Daily automatic Google Drive backup while Drive is linked (issue #36). */
     val autoDriveBackup: Boolean = true,
     /** Daily automatic release check against GitHub — default OFF (opt-in
@@ -1107,6 +1111,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     init {
+        // Sleep-on-quit (see [QuitSleep]): swiping the task from recents is
+        // the one "I'm done" signal mere backgrounding never sends. Fired
+        // from [QuitSleepService.onTaskRemoved]; every gate re-checks at
+        // fire time — never mid-shot (idle only), and never from a
+        // secondary (its sleep() would relay to the machine the primary is
+        // still using).
+        QuitSleep.install {
+            val s = _ui.value
+            val idle = s.machineStateName == MachineState.Idle
+            val primary = s.proxyRole != "secondary"
+            // Logcat, not appendLog: the in-app event log dies with the task.
+            if (s.sleepOnQuit && idle && primary) {
+                Log.i("QuitSleep", "quit while idle — putting the DE1 to sleep")
+                sleep()
+            } else {
+                Log.i(
+                    "QuitSleep",
+                    "quit — sleep skipped (on=${s.sleepOnQuit} state=${s.machineStateName} role=${s.proxyRole})",
+                )
+            }
+        }
         // Multi-device (M2): arm the recorder gate, start NSD peer discovery +
         // advertise this instance on the LAN. Runs here, not at construction —
         // it touches [bleRecorder]/[ble], which don't exist during the
@@ -2287,6 +2312,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         screensaverAfterMin = _ui.value.screensaverAfterMin,
         sleepMachineWithSaver = _ui.value.sleepMachineWithSaver,
         wakeMachineWithSaver = _ui.value.wakeMachineWithSaver,
+        sleepOnQuit = _ui.value.sleepOnQuit,
         autoDriveBackup = _ui.value.autoDriveBackup,
         autoUpdateCheck = _ui.value.autoUpdateCheck,
         lastUpdateCheckAtMs = _ui.value.lastUpdateCheckAtMs,
@@ -2812,6 +2838,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             screensaverAfterMin = p.screensaverAfterMin,
             sleepMachineWithSaver = p.sleepMachineWithSaver,
             wakeMachineWithSaver = p.wakeMachineWithSaver,
+            sleepOnQuit = p.sleepOnQuit,
             autoDriveBackup = p.autoDriveBackup,
             autoUpdateCheck = p.autoUpdateCheck,
             lastUpdateCheckAtMs = p.lastUpdateCheckAtMs,
@@ -2870,6 +2897,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(suppressDe1Sleep = on) }
         persistPrefs()
         if (on) pokeUserPresent()
+    }
+
+    /** Sleep the machine when Crema is quit (swiped from recents) — the
+     *  [QuitSleep] handler consumes this at fire time. */
+    fun setSleepOnQuit(on: Boolean) {
+        _ui.update { it.copy(sleepOnQuit = on) }
+        persistPrefs()
     }
 
     /** One UserPresent write (MMR 0x803858) — resets the DE1's sleep timer. */
@@ -3996,6 +4030,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        // Quit path (sleep-on-quit): a swipe-away destroys the activity —
+        // and clears this VM — ~400 ms before the OS kills the process, so
+        // this is the reliable place to fire. It MUST run before
+        // `super.onCleared()`: the handler's sleep() write launches on
+        // viewModelScope, whose Main.immediate dispatch runs it to the first
+        // suspension synchronously — the GATT op reaches the system BT stack
+        // (which outlives us) before the scope cancellation lands.
+        QuitSleep.fire()
+        QuitSleep.clear()
         super.onCleared()
         // Adapter watcher off, scans cancelled, both device links down…
         connection.close()

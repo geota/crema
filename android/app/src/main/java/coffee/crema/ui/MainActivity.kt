@@ -109,6 +109,11 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         viewModel.setAppForeground(true)
+        // Revive the quit watcher on every foreground entry: only a RUNNING
+        // service receives onTaskRemoved (the swipe-away signal sleep-on-quit
+        // rides), and the system stops idle background services — so each
+        // return to the foreground re-arms it. Cheap no-op when it's alive.
+        runCatching { startService(android.content.Intent(this, QuitSleepService::class.java)) }
     }
 
     override fun onStop() {

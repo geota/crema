@@ -177,6 +177,12 @@ fun SettingsScreen(
                             CremaSettingsRow("Keep DE1 awake while Crema is open", "Re-arms the DE1's sleep timer every minute while Crema is on screen. In the background the pokes stop, so the machine falls back to its own ~30 min sleep timer.") {
                                 CremaSwitch(ui.suppressDe1Sleep, vm::setSuppressDe1Sleep)
                             }
+                            // Quit ≠ background: the swipe-away signal rides a tiny
+                            // service's onTaskRemoved (see QuitSleep) — best-effort,
+                            // idle-only, primary-only.
+                            CremaSettingsRow("Sleep the DE1 when you quit Crema", "Swiping Crema out of recents puts an idle machine to sleep first (best effort). Just switching apps never sleeps it.") {
+                                CremaSwitch(ui.sleepOnQuit, vm::setSleepOnQuit)
+                            }
                             // Fan threshold is REAL: written now + re-seeded on every
                             // connect (the DE1 forgets it across power cycles, #31).
                             // Commit goes through a confirm dialog — Decenza treats
