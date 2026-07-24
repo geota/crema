@@ -387,7 +387,11 @@ fun HistoryScreen(
                             onLoadOnBrew = { vm.loadProfileOnBrew(selected.profileName) },
                             onExport = { vm.exportShot(selected.id) },
                             onDelete = { vm.deleteShot(selected.id); selectedId = null },
-                            onUploadVisualizer = if (ui.visualizer.signedIn && selected.visualizerId == null) {
+                            // Also offered for an already-bound shot as "Re-upload":
+                            // Visualizer de-dupes by telemetry SHA, so the re-POST
+                            // updates the same remote row (fixing an old wrongly-dated
+                            // / bean-less copy) — issue #44 follow-up.
+                            onUploadVisualizer = if (ui.visualizer.signedIn) {
                                 { vm.visualizer.uploadShot(selected) }
                             } else {
                                 null
@@ -604,7 +608,8 @@ private fun ShotDetail(
     onLoadOnBrew: () -> Unit,
     onExport: () -> Unit,
     onDelete: () -> Unit,
-    /** Push this shot to Visualizer; null when signed out or already synced. */
+    /** Push this shot to Visualizer; null when signed out. For an
+     *  already-bound shot this is a RE-upload (the menu relabels). */
     onUploadVisualizer: (() -> Unit)? = null,
     /** Open the shot on visualizer.coffee; null until it has been uploaded. */
     onViewVisualizer: (() -> Unit)? = null,
@@ -717,7 +722,10 @@ private fun ShotDetail(
             CremaOverflowMenu(items = buildList {
                 add(OverflowItem("coffee", "Load on Brew", onLoadOnBrew))
                 add(OverflowItem("download-simple", "Export", onExport))
-                onUploadVisualizer?.let { add(OverflowItem("cloud-arrow-up", "Upload to Visualizer", it)) }
+                onUploadVisualizer?.let {
+                    val label = if (shot.visualizerId != null) "Re-upload to Visualizer" else "Upload to Visualizer"
+                    add(OverflowItem("cloud-arrow-up", label, it))
+                }
                 onViewVisualizer?.let { add(OverflowItem("cloud-check", "View on Visualizer", it)) }
                 add(OverflowItem("trash", "Delete shot", { confirmDelete = true }, danger = true))
             })

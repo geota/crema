@@ -2,6 +2,7 @@ package coffee.crema.visualizer
 
 import coffee.crema.core.ShotPatchInputs
 import coffee.crema.core.exportV2JsonShot
+import coffee.crema.core.exportV2JsonShotFull
 import coffee.crema.core.signatureForShot
 import coffee.crema.core.visualizerShotPatchJson
 import coffee.crema.core.VisualizerSyncPrefs
@@ -298,7 +299,12 @@ class VisualizerSync(
      */
     internal fun buildShotPayload(shot: StoredShot): JsonObject {
         val wire = wireShotJson(shot, grinderModel())
-        val v2 = exportV2JsonShot(json.encodeToString(JsonObject.serializer(), wire))
+        // A RE-upload (already bound) keeps the post-flow tail: Visualizer
+        // de-dupes by a SHA over the telemetry columns, so reproducing the
+        // original series updates the SAME remote row in place (fixing the
+        // date + journal fields) instead of minting a duplicate.
+        val wireJson = json.encodeToString(JsonObject.serializer(), wire)
+        val v2 = if (shot.visualizerId != null) exportV2JsonShotFull(wireJson) else exportV2JsonShot(wireJson)
         val doc = json.parseToJsonElement(v2).jsonObject.toMutableMap()
         if (!persisted.prefs.includeProfile) doc.remove("profile")
         val metadata = (doc["metadata"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
@@ -419,10 +425,12 @@ class VisualizerSync(
     }
 
     /** Called on `ShotCompleted` — uploads when auto-sync is armed, signed in,
-     *  and the shots direction pushes. */
+     *  and the shots direction pushes. Verbose: the upload snackbar confirms
+     *  the push (and surfaces a failure — a silent miss left users believing
+     *  the shot was synced), per the issue #44 follow-up ask. */
     fun maybeAutoUpload(shot: StoredShot) {
         if (persisted.prefs.autoUpload && persisted.tokens != null && directionPushes(persisted.prefs.shotsDirection)) {
-            uploadShot(shot, silent = true)
+            uploadShot(shot)
         }
     }
 

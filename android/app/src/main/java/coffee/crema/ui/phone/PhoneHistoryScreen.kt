@@ -685,8 +685,12 @@ private fun PhoneShotDetail(
             },
             items = buildList {
                 add(SheetItem("download-simple", "Download shot", sub = "Crema JSON") { onExport() })
-                if (signedIn && shot.visualizerId == null && !syncing) {
-                    add(SheetItem("cloud-arrow-up", "Upload to Visualizer") { vm.visualizer.uploadShot(shot) })
+                // A bound shot re-uploads: Visualizer de-dupes by telemetry
+                // SHA, so the re-POST updates the same remote row (fixing an
+                // old wrongly-dated / bean-less copy) — issue #44 follow-up.
+                if (signedIn && !syncing) {
+                    val label = if (shot.visualizerId != null) "Re-upload to Visualizer" else "Upload to Visualizer"
+                    add(SheetItem("cloud-arrow-up", label) { vm.visualizer.uploadShot(shot) })
                 }
                 if (shot.visualizerId != null) {
                     add(SheetItem("arrow-square-out", "View on Visualizer") {
