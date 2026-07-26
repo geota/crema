@@ -139,7 +139,10 @@ pub use stop::{
     AutoStop, STOP_WEIGHT_BEFORE, StopCapture, StopConfig, StopReason, StopTargets,
     volume_stop_arms,
 };
-pub use tank::{TANK_FULL_ML, TANK_MM_TO_ML, water_tank_ml, water_tank_percent};
+pub use tank::{
+    DEFAULT_REFILL_POINT_MM, SENSOR_OFFSET_MM, TANK_FULL_ML, TANK_MM_TO_ML, water_tank_depth_mm,
+    water_tank_ml, water_tank_percent,
+};
 pub use units::{
     WeightUnit, bar_to_psi, celsius_to_fahrenheit, fahrenheit_to_celsius, fl_oz_to_ml, grams_to_oz,
     ml_to_fl_oz, oz_to_grams, psi_to_bar,

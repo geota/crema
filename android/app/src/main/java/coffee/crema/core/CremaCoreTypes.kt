@@ -256,6 +256,15 @@ data class CommonSettings (
 	/// "unset", read as the 110 ml default (~10% of a typical full fill);
 	/// `0` disables the warning.
 	val waterWarnMl: Float? = null,
+	/// The machine's own refill threshold, RAW sensor mm — written to the
+	/// DE1's `WaterLevels` `StartFillLevel` at connect. This is the level at
+	/// which the machine itself blinks for water and refuses to pour, so a
+	/// stale high value left in the firmware makes the DE1 demand a refill
+	/// with a half-full tank (geota/crema#47). de1app
+	/// (`settings(water_refill_point)`) and Decenza (`water/refillPoint`)
+	/// both push it at connect and default to 5 mm; `None` means "unset",
+	/// read as `tank::DEFAULT_REFILL_POINT_MM`.
+	val waterRefillPointMm: Float? = null,
 	/// Enabled live-chart channel keys (Android's vocabulary:
 	/// `pressure`/`flow`/`weight`/`headTemp`/`mixTemp`/`weightFlow`/`resistance`/
 	/// `dispensedVolume`). Web maps its eight `show*` booleans to/from this list

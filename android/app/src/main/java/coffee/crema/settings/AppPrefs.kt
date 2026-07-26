@@ -80,6 +80,10 @@ data class AppPrefs(
      *  Null = unset → the 110 ml (~10%) default; 0 disables. The Settings
      *  row dials it in [waterLevelUnit]. */
     val waterWarnMl: Float? = null,
+    /** The DE1's own refill threshold, RAW sensor mm — pushed to the machine at
+     *  connect (geota/crema#47). Null = unset → core's 5 mm default, matching
+     *  de1app and Decenza. */
+    val waterRefillPointMm: Float? = null,
     // ── Display ──────────────────────────────────────────────────────────────
     /** Live-chart channel keys (Quick Controls chart strip). */
     val chartChannels: Set<String> = setOf("pressure", "flow", "weight"),
@@ -205,6 +209,7 @@ fun AppPrefs.toCommonSettings(): CommonSettings = CommonSettings(
     volumeUnit = volumeUnit,
     waterLevelUnit = waterLevelUnit,
     waterWarnMl = waterWarnMl,
+    waterRefillPointMm = waterRefillPointMm,
     chartChannels = chartChannels.toList(),
     keepScreenOnBrew = keepScreenOnBrew,
     showDebugPanel = showDebugPanel,
@@ -246,6 +251,7 @@ fun AppPrefs.withCommonSettings(c: CommonSettings): AppPrefs = copy(
     volumeUnit = c.volumeUnit,
     waterLevelUnit = c.waterLevelUnit ?: "ml",
     waterWarnMl = c.waterWarnMl,
+    waterRefillPointMm = c.waterRefillPointMm,
     chartChannels = c.chartChannels.toSet(),
     keepScreenOnBrew = c.keepScreenOnBrew,
     showDebugPanel = c.showDebugPanel,

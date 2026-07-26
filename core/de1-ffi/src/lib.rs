@@ -983,7 +983,7 @@ pub fn core_version() -> String {
     CORE_VERSION.to_owned()
 }
 
-/// Convert a DE1 water-tank depth (mm of sensor reading) to the tank's
+/// Convert a raw DE1 water-tank reading (mm of sensor depth) to the tank's
 /// water volume in ml. Pure helper — does no machine I/O. Mirrors the wasm
 /// `water_tank_ml` so every shell consumes the same tank-geometry
 /// calibration (see [`de1_domain::water_tank_ml`]).
@@ -993,13 +993,30 @@ pub fn water_tank_ml(mm: f32) -> u16 {
     de1_domain::water_tank_ml(mm)
 }
 
-/// Convert a DE1 water-tank depth (mm) to a whole percentage of a typical
-/// full fill, clamped `0..=100`. Pure helper — see
+/// Convert a raw DE1 water-tank reading (mm) to a whole percentage of a
+/// typical full fill, clamped `0..=100`. Pure helper — see
 /// [`de1_domain::water_tank_percent`].
 #[uniffi::export]
 #[must_use]
 pub fn water_tank_percent(mm: f32) -> u8 {
     de1_domain::water_tank_percent(mm)
+}
+
+/// The true water depth (mm) for a raw DE1 sensor reading — the reading plus
+/// the 5 mm sensor offset every app in the ecosystem applies. Pure helper —
+/// see [`de1_domain::water_tank_depth_mm`].
+#[uniffi::export]
+#[must_use]
+pub fn water_tank_depth_mm(sensor_mm: f32) -> f32 {
+    de1_domain::water_tank_depth_mm(sensor_mm)
+}
+
+/// The refill threshold (raw sensor mm) to write to the machine when the
+/// user hasn't dialled one — see [`de1_domain::DEFAULT_REFILL_POINT_MM`].
+#[uniffi::export]
+#[must_use]
+pub fn default_refill_point_mm() -> f32 {
+    de1_domain::DEFAULT_REFILL_POINT_MM
 }
 
 /// Reconcile a remote Visualizer pull against the local shot refs. Payload

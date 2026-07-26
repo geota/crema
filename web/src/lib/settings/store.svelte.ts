@@ -91,6 +91,15 @@ export interface Settings {
 	 * Settings row dials it in {@link waterLevelUnit}.
 	 */
 	waterWarnMl: number | null;
+	/**
+	 * The machine's own refill threshold, RAW sensor mm — written to the DE1's
+	 * `WaterLevels` `StartFillLevel` at connect (geota/crema#47). Below it the
+	 * DE1 itself blinks for water and refuses to pour, whatever the app shows,
+	 * so a stale high value left in the firmware makes the machine demand a
+	 * refill on a half-full tank. `null` = unset → core's 5 mm default, which
+	 * is de1app's and Decenza's default too.
+	 */
+	waterRefillPointMm: number | null;
 
 	// ── Brew defaults ────────────────────────────────────────────────────
 	/** Default dose for new profiles, grams. */
@@ -302,6 +311,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	pressureUnit: 'bar',
 	waterLevelUnit: 'ml',
 	waterWarnMl: null,
+	waterRefillPointMm: null,
 
 	get defaultDoseG() {
 		return brewDefaults().doseG;
@@ -431,6 +441,7 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		volumeUnit: s.volumeUnit,
 		waterLevelUnit: s.waterLevelUnit,
 		waterWarnMl: s.waterWarnMl ?? undefined,
+		waterRefillPointMm: s.waterRefillPointMm ?? undefined,
 		chartChannels: CHART_FLAG_TO_KEY.filter(([flag]) => s[flag]).map(([, key]) => key),
 		keepScreenOnBrew: s.keepScreenOnBrew,
 		showDebugPanel: s.showDebugPanel,
@@ -480,6 +491,7 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		volumeUnit: c.volumeUnit as VolumeUnit,
 		waterLevelUnit: (c.waterLevelUnit ?? 'ml') as WaterLevelUnit,
 		waterWarnMl: c.waterWarnMl ?? null,
+		waterRefillPointMm: c.waterRefillPointMm ?? null,
 		showPressure: on.has('pressure'),
 		showResistance: on.has('resistance'),
 		showFlow: on.has('flow'),

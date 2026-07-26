@@ -10,6 +10,8 @@ export {
 	applyEvent,
 	waterTankMl,
 	waterTankPercent,
+	waterTankDepthMm,
+	defaultRefillPointMm,
 	waterRefillSoon,
 	machineErrorText,
 	EMPTY_DE1_CALIBRATION,

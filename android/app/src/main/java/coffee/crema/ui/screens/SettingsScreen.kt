@@ -54,6 +54,11 @@ import coffee.crema.ui.QcSteam
 import coffee.crema.ui.TANK_FULL_ML_UI
 import coffee.crema.ui.WATER_WARN_DEFAULT_ML
 import coffee.crema.ui.refillSoon
+import coffee.crema.ui.REFILL_POINT_MAX_MM
+import coffee.crema.ui.REFILL_POINT_MIN_MM
+import coffee.crema.ui.formatTankLevel
+import coffee.crema.ui.refillPointMm
+import coffee.crema.ui.tankDepthMm
 import coffee.crema.ui.waterWarnThresholdMl
 import coffee.crema.ui.components.CopyDiagnosticsRow
 import coffee.crema.ui.components.CremaButton
@@ -370,17 +375,45 @@ fun SettingsScreen(
                         SetGroup("Tank") {
                             val mm = ui.waterLevelMm
                             val low = ui.refillSoon()
+                            // Rendered through formatTankLevel like every other
+                            // tank readout, so this row honours Display & units →
+                            // "Water tank". It used to hardcode raw sensor mm,
+                            // which is why Settings showed "17 mm" while the Brew
+                            // footer showed "49 %" for the same tank
+                            // (geota/crema#47). The depth (raw + core's 5 mm
+                            // sensor offset) rides the detail line: it's the
+                            // number de1app and Decenza show, and the unit the
+                            // refill point below is dialled in.
+                            val tank = formatTankLevel(mm, ui.waterLevelUnit, ui.volumeUnit)
+                            val depth = ui.tankDepthMm()
                             CremaSettingsRow(
                                 "Water tank",
                                 when {
                                     mm == null -> "Connect the DE1 to read the tank level."
-                                    low -> "Low — refill soon."
-                                    else -> "Tank level looks good."
+                                    low -> "Low — refill soon. ${depth?.toInt()} mm deep, machine refills at ${ui.refillPointMm().toInt()} mm."
+                                    else -> "Tank level looks good — ${depth?.toInt()} mm deep."
                                 },
                             ) {
                                 CremaMonoReadout(
-                                    if (mm != null) "${mm.toInt()} mm" else "—",
+                                    if (mm != null) "${tank.value} ${tank.unit}" else "—",
                                     color = if (low) Color(0xFFDBA764) else MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                            // The machine's OWN threshold, written to the DE1 —
+                            // not an app-side warning. Below it the DE1 blinks
+                            // for water and refuses to pour, so a stale high
+                            // value is what makes the machine demand a refill
+                            // on a half-full tank. Raw sensor mm (de1app's
+                            // "Refill at:" slider units), pushed on change.
+                            CremaSettingsRow(
+                                "Refill at",
+                                "The level where the DE1 itself asks for water. Written to the machine; 5 mm matches de1app and Decenza.",
+                            ) {
+                                CremaStepper(
+                                    value = ui.refillPointMm().toDouble(), unit = "mm", step = 1.0,
+                                    min = REFILL_POINT_MIN_MM.toDouble(), max = REFILL_POINT_MAX_MM.toDouble(),
+                                    fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.Bare,
+                                    onChange = { vm.setWaterRefillPointMm(it.toFloat()) },
                                 )
                             }
                             // Low-water warning (#33 follow-up): once-per-dip

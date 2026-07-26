@@ -203,9 +203,30 @@ const val WATER_WARN_DEFAULT_ML = 110f
  *  re-arms — ~2 mm of tank so pump-driven level bounce can't re-fire it. */
 const val WATER_WARN_REARM_ML = 55f
 
+/** Refill-point dial bounds, raw sensor mm — de1app's own slider range
+ *  (`de1_skin_settings.tcl`, `-from 3 -to 70`), which is the range the
+ *  firmware accepts. */
+const val REFILL_POINT_MIN_MM = 3f
+const val REFILL_POINT_MAX_MM = 70f
+
 /** The effective low-water warning threshold, ml — the user's dialled value,
  *  the default when unset, and `<= 0` = disabled. */
 fun MainUiState.waterWarnThresholdMl(): Float = waterWarnMl ?: WATER_WARN_DEFAULT_ML
+
+/**
+ * The refill point (raw sensor mm) to push to the machine — the user's dialled
+ * value, or core's 5 mm default when unset. This is the DE1's OWN threshold
+ * (the `WaterLevels` `StartFillLevel`): below it the machine blinks for water
+ * and refuses to pour, whatever the app shows. de1app and Decenza both write
+ * it at connect; Crema didn't, so a stale value left in the firmware made the
+ * DE1 demand a refill with a half-full tank (geota/crema#47).
+ */
+fun MainUiState.refillPointMm(): Float = waterRefillPointMm ?: coffee.crema.core.defaultRefillPointMm()
+
+/** The tank's true water depth (mm) — the raw sensor reading plus core's 5 mm
+ *  sensor offset, the number de1app and Decenza both display. Null until the
+ *  first report. */
+fun MainUiState.tankDepthMm(): Float? = waterLevelMm?.let { coffee.crema.core.waterTankDepthMm(it) }
 
 /**
  * Battery percentage at or below which the one-per-connection "charge your
@@ -491,6 +512,9 @@ data class MainUiState(
     val volumeUnit: String = "ml",
     /** Water-tank readout style — `"ml" | "percent"` (geota/crema#33). */
     val waterLevelUnit: String = "ml",
+    /** The DE1's own refill threshold, raw sensor mm — pushed to the machine at
+     *  connect. Null = unset → core's 5 mm default. See [refillPointMm]. */
+    val waterRefillPointMm: Float? = null,
     /** Low-water warning threshold, canonical ml (#33 follow-up). Null =
      *  unset → [WATER_WARN_DEFAULT_ML]; 0 disables. See [waterWarnThresholdMl]. */
     val waterWarnMl: Float? = null,
@@ -1531,6 +1555,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             volumeUnit = p.volumeUnit,
             waterLevelUnit = p.waterLevelUnit,
             waterWarnMl = p.waterWarnMl,
+            waterRefillPointMm = p.waterRefillPointMm,
             qcSteamTimeS = p.qcSteamTimeS,
             qcSteamFlowMlS = p.qcSteamFlowMlS,
             qcSteamTempC = p.qcSteamTempC,
@@ -2126,6 +2151,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         routeWrite("Seed steam two-tap stop") {
             bridge.setSteamTwoTapStop(if (ui.steamTwoTap) 1u else 0u)
         }
+        // The machine's OWN refill threshold (WaterLevels StartFillLevel).
+        // de1app and Decenza both write theirs at connect; Crema never did, so
+        // whatever value was last left in the firmware persisted — and a high
+        // one makes the DE1 blink for water and refuse to pour with a
+        // half-full tank while the app cheerfully reports ~50%
+        // (geota/crema#47). Raw sensor mm, no offset: the threshold shares the
+        // packet's units with the level it's compared against.
+        routeWrite("Seed refill point") { bridge.setRefillThreshold(ui.refillPointMm()) }
         // Re-push the persisted Quick-Controls machine params too — steam
         // temp/time + hot water (one cuuid_0B packet), steam flow, flush
         // time/temp. The DE1 forgets these across power cycles just like the
@@ -2358,6 +2391,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         volumeUnit = _ui.value.volumeUnit,
         waterLevelUnit = _ui.value.waterLevelUnit,
         waterWarnMl = _ui.value.waterWarnMl,
+        waterRefillPointMm = _ui.value.waterRefillPointMm,
         qcSteamTimeS = _ui.value.qcSteamTimeS,
         qcSteamFlowMlS = _ui.value.qcSteamFlowMlS,
         qcSteamTempC = _ui.value.qcSteamTempC,
@@ -2655,6 +2689,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         waterLowWarned = false
     }
 
+    /** The machine's own refill threshold, raw sensor mm (geota/crema#47).
+     *  Persisted AND pushed straight through, so the DE1 stops (or starts)
+     *  demanding water at the new level without waiting for a reconnect. */
+    fun setWaterRefillPointMm(mm: Float) {
+        val clamped = mm.coerceIn(REFILL_POINT_MIN_MM, REFILL_POINT_MAX_MM)
+        _ui.update { it.copy(waterRefillPointMm = clamped) }
+        persistPrefs()
+        routeWrite("Set refill point") { bridge.setRefillThreshold(clamped) }
+    }
+
     /** Daily automatic Google Drive backup toggle (issue #36). Turning it on
      *  runs a backup right away if one is due. */
     fun setAutoDriveBackup(on: Boolean) {
@@ -2894,6 +2938,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             volumeUnit = p.volumeUnit,
             waterLevelUnit = p.waterLevelUnit,
             waterWarnMl = p.waterWarnMl,
+            waterRefillPointMm = p.waterRefillPointMm,
             qcSteamTimeS = p.qcSteamTimeS,
             qcSteamFlowMlS = p.qcSteamFlowMlS,
             qcSteamTempC = p.qcSteamTempC,

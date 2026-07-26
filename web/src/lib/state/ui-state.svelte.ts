@@ -32,6 +32,8 @@ import type { ScaleState } from '$lib/ble/scale';
 import {
 	water_tank_ml as wasmWaterTankMl,
 	water_tank_percent as wasmWaterTankPercent,
+	water_tank_depth_mm as wasmWaterTankDepthMm,
+	default_refill_point_mm as wasmDefaultRefillPointMm,
 	subStateErrorMessage
 } from '$lib/wasm/de1_wasm';
 
@@ -612,6 +614,28 @@ export function waterTankMl(mm: number | null | undefined): number | null {
 export function waterTankPercent(mm: number | null | undefined): number | null {
 	if (mm == null || !Number.isFinite(mm)) return null;
 	return wasmWaterTankPercent(mm);
+}
+
+/**
+ * The tank's true water DEPTH (mm) for a raw sensor reading — the reading
+ * plus the core's 5 mm sensor offset. The DE1's level sensor sits above the
+ * water uptake point, so the raw value understates the depth; de1app
+ * (`water_level_mm_correction`) and Decenza (`SENSOR_OFFSET`) both correct
+ * for it, and this is the mm figure they display. Returns `null` for a
+ * missing reading.
+ */
+export function waterTankDepthMm(mm: number | null | undefined): number | null {
+	if (mm == null || !Number.isFinite(mm)) return null;
+	return wasmWaterTankDepthMm(mm);
+}
+
+/**
+ * The refill threshold (raw sensor mm) to write to the machine when the user
+ * hasn't dialled one — core's `DEFAULT_REFILL_POINT_MM`, which is de1app's
+ * and Decenza's 5 mm default too.
+ */
+export function defaultRefillPointMm(): number {
+	return wasmDefaultRefillPointMm();
 }
 
 /**

@@ -35,7 +35,7 @@
 	import { getSettingsStore } from '$lib/settings';
 	import { MachineState } from '$lib/core/crema-core';
 	import type { CremaApp } from '$lib/state';
-	import { INITIAL_SNAPSHOT } from '$lib/state';
+	import { INITIAL_SNAPSHOT, defaultRefillPointMm } from '$lib/state';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -94,6 +94,16 @@
 		const ml = prefs.waterWarnMl ?? WATER_WARN_DEFAULT_ML;
 		return ml > 0 ? ml : WATER_WARN_DEFAULT_ML;
 	});
+
+	/**
+	 * The machine's own refill point (raw sensor mm) — the DE1's
+	 * `StartFillLevel`. Falls back to core's 5 mm default while unset.
+	 */
+	const refillPointMm = $derived(prefs.waterRefillPointMm ?? defaultRefillPointMm());
+	
+	/** de1app's own refill-point slider range (`-from 3 -to 70`). */
+	const REFILL_POINT_MIN_MM = 3;
+	const REFILL_POINT_MAX_MM = 70;
 
 	// TODO: water chemistry is not yet wired into a store the app reads; local
 	// state only, so the segment / chips feel real while previewing the IA.
@@ -245,6 +255,24 @@
 					{/if}
 				{/if}
 			</span>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Refill at"
+		sub="The level where the DE1 itself asks for water — below it the machine blinks and will not pour. Written to the machine; 5 mm matches de1app and Decenza."
+	>
+		{#snippet control()}
+			<StStepper
+				value={refillPointMm}
+				unit="mm"
+				step={1}
+				min={REFILL_POINT_MIN_MM}
+				max={REFILL_POINT_MAX_MM}
+				onCommit={(v) => {
+					settings.set('waterRefillPointMm', v);
+					void app?.applyRefillPoint(v);
+				}}
+			/>
 		{/snippet}
 	</StRow>
 </StGroup>

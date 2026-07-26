@@ -54,6 +54,7 @@ import {
 	DEFAULT_SCALE_VOLUME,
 	EMPTY_DE1_CALIBRATION,
 	getCremaUiState,
+	defaultRefillPointMm,
 	waterTankMl,
 	waterTankPercent,
 	type UiSnapshot
@@ -385,6 +386,18 @@ export class CremaApp {
 						const s = getSettingsStore().current;
 						void this.applyFanThreshold(s.fanThresholdC).catch(() => {});
 						void this.applySteamTwoTapStop(s.steamTwoTapStop).catch(() => {});
+						// The machine's OWN refill threshold (the `WaterLevels`
+						// `StartFillLevel`): below it the DE1 blinks for water and
+						// refuses to pour, whatever the app shows. Nobody wrote it,
+						// so a stale value left in the firmware made the machine
+						// demand a refill on a half-full tank (geota/crema#47).
+						// de1app sends its `water_refill_point` from
+						// `later_new_de1_connection_setup` (bluetooth.tcl:2344);
+						// Decenza pushes `water/refillPoint`. Raw sensor mm — the
+						// threshold shares the packet's units with the level.
+						void this.applyRefillPoint(
+							s.waterRefillPointMm ?? defaultRefillPointMm()
+						).catch(() => {});
 						// The persisted Quick-Controls machine params: steam
 						// temp/time + hot water (one cuuid_0B packet), steam
 						// flow, flush time/temp. Without this a power-cycled
@@ -1178,6 +1191,18 @@ export class CremaApp {
 	 */
 	async applySteamTwoTapStop(enabled: boolean): Promise<void> {
 		this.applyCoreOutput(await this.core.setSteamTwoTapStop(enabled ? 1 : 0));
+	}
+
+	/**
+	 * Write the machine's OWN refill threshold (raw sensor mm) — the
+	 * `WaterLevels` `StartFillLevel`. Below it the DE1 blinks for water and
+	 * refuses to pour regardless of what the app shows, so this is the
+	 * setting that decides when the machine itself asks for a refill
+	 * (geota/crema#47). Re-seeded on every connect, like de1app's
+	 * `de1_send_waterlevel_settings` and Decenza's `water/refillPoint`.
+	 */
+	async applyRefillPoint(mm: number): Promise<void> {
+		this.applyCoreOutput(await this.core.setRefillThreshold(mm));
 	}
 
 	/**
