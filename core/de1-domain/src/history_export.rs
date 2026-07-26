@@ -129,6 +129,7 @@ fn build_v2_document(shot: &StoredShot, truncate_at_flow_end: bool) -> V2Documen
     let mut weight_series = Vec::with_capacity(samples.len());
     let mut flow_by_weight = Vec::with_capacity(samples.len());
     let mut water_dispensed = Vec::with_capacity(samples.len());
+    let mut state_change = Vec::with_capacity(samples.len());
 
     for t in samples {
         elapsed.push(t.elapsed.as_secs_f32());
@@ -149,6 +150,9 @@ fn build_v2_document(shot: &StoredShot, truncate_at_flow_end: bool) -> V2Documen
         water_dispensed.push(crate::shot::water_dispensed_to_wire(
             t.dispensed_volume.unwrap_or(0.0),
         ));
+        // The profile frame this sample was taken in — what Visualizer
+        // draws its step bars from (geota/crema#49).
+        state_change.push(u32::from(t.sample.frame_number));
     }
 
     // `by_weight_raw` is the unsmoothed sibling of `by_weight`. Crema
@@ -288,10 +292,22 @@ fn build_v2_document(shot: &StoredShot, truncate_at_flow_end: bool) -> V2Documen
             weight: weight_series,
             water_dispensed,
         },
-        // Per-sample phase boundaries aren't stored on TimedSample;
-        // the legacy log records them as a sparse array, empty is the
-        // safe default a v2 reader tolerates.
-        state_change: Vec::new(),
+        // The per-sample profile frame index. Visualizer's step bars are
+        // driven by this channel, and Crema used to emit an empty array —
+        // so a Crema shot rendered with no step bars at all. The comment
+        // that used to sit here claimed the data wasn't on TimedSample; it
+        // is, and always was: `sample.frame_number`, decoded live from byte
+        // 17 of every DE1 ShotSample (geota/crema#49).
+        //
+        // Frame index rather than de1app's marker: de1app emits a +/-1e7
+        // square wave that flips sign at each state change (gui.tcl:3542),
+        // which makes transitions visible but says nothing about WHICH
+        // frame. reaprime moved from machine substate to the frame index in
+        // `0daab77f` after finding the bars depend on it, and the index is
+        // strictly more informative. Both are sample-aligned, so either
+        // renders; this one also survives a reader that treats the series
+        // as data rather than as a marker.
+        state_change,
         profile,
         meta,
         app: V2AppOut {
@@ -696,8 +712,15 @@ mod tests {
         assert_eq!(v["temperature"]["goal"].as_array().unwrap().len(), n);
         assert_eq!(v["totals"]["weight"].as_array().unwrap().len(), n);
         assert_eq!(v["totals"]["water_dispensed"].as_array().unwrap().len(), n);
-        // state_change: empty (Crema doesn't capture sample-level phase boundaries).
-        assert_eq!(v["state_change"].as_array().unwrap().len(), 0);
+        // state_change carries the per-sample profile frame index, aligned
+        // with every other series, so Visualizer can draw step bars (#49).
+        assert_eq!(v["state_change"].as_array().unwrap().len(), n);
+        // …and it carries the fixture's real frame indices (0 then 2), not a
+        // constant. A present-but-unchanging series is the failure reaprime
+        // hit exporting machine substates: the column was there, the step
+        // transitions were invisible.
+        assert_eq!(v["state_change"][0], 0);
+        assert_eq!(v["state_change"][1], 2);
         // Meta basics survive verbatim.
         assert_eq!(v["meta"]["bean"]["brand"], "Banibeans");
         assert_eq!(v["meta"]["bean"]["type"], "Ethiopia Yirgacheffe");
