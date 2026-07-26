@@ -25,6 +25,30 @@ import java.net.URLEncoder
  * builder + token endpoint. `access_type=offline` + `prompt=consent` guarantee
  * a refresh token (Google omits it on silent re-auth, which would strand us
  * once the first one is gone).
+ *
+ * ── Console requirement (geota/crema#45) ───────────────────────────────────
+ * Every Android OAuth client this app ships with MUST have **Advanced
+ * Settings → "Enable Custom URI scheme"** ticked in the Google Cloud console
+ * (APIs & Services → Credentials). It is OFF by default and Google has been
+ * turning it off on existing clients; without it the authorize request is
+ * refused before the user sees anything:
+ *
+ *     Error 400: invalid_request
+ *     "Custom URI scheme is not enabled for your Android client."
+ *
+ * There is no code-side workaround — the Android client type accepts nothing
+ * else. Verified against the live client: a loopback (`http://127.0.0.1:…`)
+ * or `urn:ietf:wg:oauth:2.0:oob` redirect is refused by Google's OAuth 2.0
+ * policy, and an `https` redirect is a `redirect_uri_mismatch` because
+ * Android clients carry no redirect list at all (they are keyed on
+ * package name + signing SHA-1).
+ *
+ * That keying also means ONE client per signing key: the debug key, the
+ * nightly/release keystore, and Play App Signing each need their own Android
+ * client in the project — each with the same checkbox ticked.
+ *
+ * To reproduce a rejection without a device, request the authorize URL and
+ * base64-decode the `authError` query param off the `Location` header.
  */
 
 const val GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"

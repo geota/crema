@@ -25,6 +25,10 @@ data class DriveState(
     val pendingVerifier: String? = null,
     /** CSRF state for the in-flight handshake (single-use). */
     val pendingState: String? = null,
+    /** Epoch ms the in-flight handshake began — lets a return to the app with
+     *  the handshake still pending be recognised as "Google never came back"
+     *  (geota/crema#45). Additive → nullable. */
+    val pendingStartedAtMs: Long? = null,
     /** Epoch ms of the last daily auto-backup ATTEMPT (issue #36) — stamped
      *  before the upload so a failing backup retries next day, not on every
      *  launch. Null = never attempted. Additive → nullable default. */

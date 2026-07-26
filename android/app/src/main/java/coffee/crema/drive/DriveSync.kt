@@ -4,6 +4,7 @@ import coffee.crema.visualizer.codeChallengeFromVerifier
 import coffee.crema.visualizer.generateCodeVerifier
 import coffee.crema.visualizer.randomState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -107,8 +108,39 @@ class DriveSync(
         val verifier = generateCodeVerifier()
         val csrf = randomState()
         scope.launch {
-            persist { it.copy(pendingVerifier = verifier, pendingState = csrf) }
+            persist {
+                it.copy(
+                    pendingVerifier = verifier,
+                    pendingState = csrf,
+                    pendingStartedAtMs = System.currentTimeMillis(),
+                )
+            }
             openUrl(buildGoogleAuthorizeUrl(clientId, csrf, codeChallengeFromVerifier(verifier)))
+        }
+    }
+
+    /**
+     * Called when the app comes back to the foreground: if the handshake is
+     * STILL pending a moment later, Google never redirected us — it rendered an
+     * error page in the browser and the app would otherwise sit silent forever
+     * with a stale verifier (geota/crema#45, where Google answered
+     * `invalid_request: Custom URI scheme is not enabled for your Android
+     * client` and the user only saw a browser error).
+     *
+     * The delay lets a real redirect win: it arrives via `onNewIntent` →
+     * [handleCallback], whose clear is a coroutine, so checking synchronously
+     * on resume would race it. [GRACE_MS] also keeps a fast tab-open →
+     * tab-close round trip from tripping this.
+     */
+    fun notePossibleAbandon() {
+        scope.launch {
+            if (persisted.pendingVerifier == null) return@launch
+            delay(GRACE_MS)
+            val started = persisted.pendingStartedAtMs ?: 0L
+            if (persisted.pendingVerifier == null) return@launch
+            if (System.currentTimeMillis() - started < GRACE_MS) return@launch
+            persist { it.copy(pendingVerifier = null, pendingState = null, pendingStartedAtMs = null) }
+            notify("Google Drive sign-in didn’t complete — Google never returned to Crema. If the browser showed an error, the Drive OAuth client needs “Custom URI scheme” enabled.")
         }
     }
 
@@ -118,9 +150,13 @@ class DriveSync(
         scope.launch {
             val verifier = persisted.pendingVerifier
             val expected = persisted.pendingState
-            persist { it.copy(pendingVerifier = null, pendingState = null) }
+            persist { it.copy(pendingVerifier = null, pendingState = null, pendingStartedAtMs = null) }
             when {
-                error != null -> notify("Google Drive sign-in was cancelled")
+                // `access_denied` IS the user declining; anything else is
+                // Google refusing the request, and saying "cancelled" for that
+                // hides a real configuration fault (geota/crema#45).
+                error == "access_denied" -> notify("Google Drive sign-in was cancelled")
+                error != null -> notify("Google Drive sign-in failed: $error")
                 code == null -> notify("Google Drive sign-in failed — no code returned")
                 verifier == null -> notify("Google Drive sign-in expired — try again")
                 expected == null || expected != returnedState ->
@@ -243,5 +279,13 @@ class DriveSync(
                 .onFailure { notify("Google Drive restore failed: ${it.message}") }
             _state.update { it.copy(busy = false) }
         }
+    }
+
+    private companion object {
+        /** How long to let a real redirect land before calling the handshake
+         *  abandoned. Long enough for `onNewIntent` → [handleCallback]'s
+         *  coroutine to clear the pending state, short enough that the user
+         *  still connects the message to the tap. */
+        const val GRACE_MS = 1_500L
     }
 }

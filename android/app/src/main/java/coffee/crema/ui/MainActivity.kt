@@ -114,6 +114,11 @@ class MainActivity : ComponentActivity() {
         // rides), and the system stops idle background services — so each
         // return to the foreground re-arms it. Cheap no-op when it's alive.
         runCatching { startService(android.content.Intent(this, QuitSleepService::class.java)) }
+        // Returning from the Drive consent Custom Tab with the handshake still
+        // pending means Google never redirected back — it showed an error page
+        // in the browser instead. Say so, rather than leaving the tap silent
+        // (geota/crema#45). Self-gating: a no-op when no handshake is in flight.
+        viewModel.drive.notePossibleAbandon()
     }
 
     override fun onStop() {
