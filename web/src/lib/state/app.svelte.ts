@@ -624,6 +624,14 @@ export class CremaApp {
 					`Stop-at-weight off for this shot — the scale wasn't tared (${Math.round(event.content.weight_g)} g on it)`
 				);
 			}
+			if (event.type === 'TareRefusedMidShot') {
+				// The core dropped a tare that landed mid-pour rather than
+				// obeying it (geota/crema#50) — otherwise the Tare control just
+				// looks broken.
+				toast.info(
+					"Tare ignored — a shot is running. Taring now would break stop-at-weight."
+				);
+			}
 			if (event.type === 'ShotStarted') {
 				// Mark the shot's start so ShotCompleted can slice the raw BLE
 				// capture (with a lead-in) for the IndexedDB capture store.

@@ -318,6 +318,16 @@ pub enum Event {
         /// The offending reading, grams.
         weight_g: f32,
     },
+    /// A manual tare arrived while a shot was pouring and was refused.
+    ///
+    /// Zeroing the scale mid-extraction destroys the weight curve and, far
+    /// worse, leaves stop-at-weight chasing a target it can no longer reach —
+    /// the shot runs away. The request is dropped rather than obeyed, and this
+    /// event tells the user why their tap did nothing (geota/crema#50).
+    ///
+    /// Only the MANUAL entry point is guarded. The automatic tare at shot
+    /// start goes through the shared command helper and is unaffected.
+    TareRefusedMidShot,
     /// The user pressed a button on the scale itself (today only the
     /// Skale II's button characteristic). Surfaced for the shells to log or
     /// map to an action; de1app likewise subscribes and logs the press

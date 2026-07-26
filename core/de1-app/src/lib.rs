@@ -1906,8 +1906,24 @@ impl CremaCore {
 
     /// Build a [`Command`] that tares the connected scale. Empty if no scale is
     /// connected or the scale does not support tare.
+    ///
+    /// **Refused while a shot is pouring** ([`Event::TareRefusedMidShot`]).
+    /// Zeroing the scale mid-extraction destroys the weight curve and leaves
+    /// stop-at-weight chasing a target it can no longer reach — the shot runs
+    /// away rather than stopping. reaprime issue #499 is a user losing a brew
+    /// to exactly this, from a tare nobody at the machine had asked for; Crema
+    /// has one extra path to the same accident, since the LAN-proxy mirror
+    /// relays tare from a secondary device (geota/crema#50).
+    ///
+    /// The guard sits here, on the manual/relayed entry point, and NOT in
+    /// [`push_tare_command`](Self::push_tare_command) — the automatic tare at
+    /// shot start shares that helper and must keep working.
     pub fn tare_scale(&mut self) -> CoreOutput {
         let mut out = CoreOutput::default();
+        if self.shot_started.is_some() {
+            out.events.push(Event::TareRefusedMidShot);
+            return out;
+        }
         self.push_tare_command(&mut out);
         out
     }
@@ -5058,6 +5074,50 @@ mod tests {
             out.commands.first(),
             Some(Command::WriteScale { .. })
         ));
+    }
+
+    /// A manual tare mid-pour is refused, not obeyed: zeroing the scale during
+    /// extraction wrecks the weight curve and strands stop-at-weight
+    /// (geota/crema#50).
+    #[test]
+    fn tare_scale_is_refused_while_a_shot_is_pouring() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        // Espresso / Pouring — the shot is live.
+        core.on_notification(Source::De1State, &[4, 5], 1_000);
+
+        let out = core.tare_scale();
+        assert!(
+            out.commands.is_empty(),
+            "a mid-shot tare must not reach the scale"
+        );
+        assert!(out.events.contains(&Event::TareRefusedMidShot));
+
+        // Back to Idle — the tare works again.
+        core.on_notification(Source::De1State, &[2, 0], 2_000);
+        let out = core.tare_scale();
+        assert!(matches!(
+            out.commands.first(),
+            Some(Command::WriteScale { .. })
+        ));
+        assert!(!out.events.contains(&Event::TareRefusedMidShot));
+    }
+
+    /// The guard must not touch the automatic tare at shot start — that path
+    /// shares `push_tare_command` and fires precisely when a shot begins.
+    #[test]
+    fn the_mid_shot_guard_leaves_the_auto_tare_at_shot_start_alone() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_auto_tare(true);
+        let out = core.on_notification(Source::De1State, &[4, 5], 1_000);
+        assert!(out.events.contains(&Event::ShotStarted));
+        assert!(
+            out.commands
+                .iter()
+                .any(|c| matches!(c, Command::WriteScale { .. })),
+            "the shot-start auto-tare must still reach the scale"
+        );
     }
 
     #[test]

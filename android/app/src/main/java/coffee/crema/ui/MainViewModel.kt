@@ -3923,6 +3923,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("SAW suppressed — untared cup ($w g)")
                 notifyUser("Stop-at-weight off for this shot — the scale wasn\u2019t tared ($w g on it)")
             }
+            // A tare that arrived mid-pour was dropped by the core rather
+            // than obeyed (geota/crema#50). Say so — otherwise the Tare
+            // button just looks broken.
+            is Event.TareRefusedMidShot -> {
+                appendLog("Tare refused — a shot is pouring")
+                notifyUser("Tare ignored — a shot is running. Taring now would break stop-at-weight.")
+            }
             is Event.StopTargetsArmed -> {
                 // The SAW-visibility line (issue #15): what will stop this
                 // shot, straight from the core's armed targets — a silent

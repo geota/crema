@@ -809,6 +809,18 @@ sealed class Event {
 	@Serializable
 	@SerialName("SawSuppressedUntaredCup")
 	data class SawSuppressedUntaredCup(val content: EventSawSuppressedUntaredCupInner): Event()
+	/// A manual tare arrived while a shot was pouring and was refused.
+	/// 
+	/// Zeroing the scale mid-extraction destroys the weight curve and, far
+	/// worse, leaves stop-at-weight chasing a target it can no longer reach —
+	/// the shot runs away. The request is dropped rather than obeyed, and this
+	/// event tells the user why their tap did nothing (geota/crema#50).
+	/// 
+	/// Only the MANUAL entry point is guarded. The automatic tare at shot
+	/// start goes through the shared command helper and is unaffected.
+	@Serializable
+	@SerialName("TareRefusedMidShot")
+	object TareRefusedMidShot: Event()
 	/// The user pressed a button on the scale itself (today only the
 	/// Skale II's button characteristic). Surfaced for the shells to log or
 	/// map to an action; de1app likewise subscribes and logs the press
@@ -1817,7 +1829,10 @@ data class TimedSample (
 	/// Running pump-side dispensed volume at this instant, millilitres.
 	/// `None` for legacy imports that didn't record it; live captures
 	/// always populate it from the DE1's integrator. Maps to
-	/// `espresso_water_dispensed` + Visualizer `totals.water_dispensed`.
+	/// `espresso_water_dispensed` + Visualizer `totals.water_dispensed`
+	/// — **through [`water_dispensed_to_wire`] / [`water_dispensed_from_wire`],
+	/// never raw**: that channel is not stored in millilitres anywhere in
+	/// the DE1 ecosystem (geota/crema#48).
 	val dispensedVolume: Float? = null,
 	/// DE1-flow-derived puck resistance, `bar / (ml/s)²`. `None` near
 	/// zero flow (the `puck_resistance` floor). NOT uploaded to

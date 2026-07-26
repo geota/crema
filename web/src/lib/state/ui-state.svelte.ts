@@ -996,6 +996,14 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					`SAW suppressed — untared cup (${Math.round(event.content.weight_g)} g)`
 				)
 			};
+		case 'TareRefusedMidShot':
+			// The core dropped a tare that arrived mid-pour (geota/crema#50).
+			// The user-facing toast lives in app.svelte.ts; log it here so the
+			// event trail shows why the scale never zeroed.
+			return {
+				...snapshot,
+				eventLog: appendLog(snapshot.eventLog, 'Tare refused — a shot is pouring')
+			};
 		case 'ScaleButtonPressed':
 			// Logged like de1app (bluetooth.tcl:2825-2828) — no hard-wired
 			// action yet; the event is the hook for a future mapping.
