@@ -1173,8 +1173,9 @@ private fun AboutSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiState) {
             when {
                 upd == null -> "Compare this build against the newest stable and nightly on GitHub."
                 upd.error != null -> "Check failed: ${upd.error}"
-                appVersion == upd.latestNightly || appVersion == upd.latestStable ->
-                    "Up to date — this build is the newest available."
+                coffee.crema.update.isSameBuild(appVersion, upd.latestNightly) ||
+                    coffee.crema.update.isSameBuild(appVersion, upd.latestStable) ->
+                    "You’re on the latest — this build is the newest available."
                 else -> buildString {
                     append("Stable ${upd.latestStable ?: "—"}")
                     upd.stableAgeDays?.let { append(" · ${it}d ago") }

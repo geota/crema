@@ -223,7 +223,18 @@ android {
         // auto-apply — that direction needs a manual reinstall.
         create("nightly") {
             initWith(getByName("release"))
-            versionNameSuffix = "-nightly"
+            // Mark the build as a nightly ONLY when the supplied versionName does
+            // not already say so. CI passes the full nightly name
+            // (`0.0.5-nightly.42+gabc1234`), and appending the suffix on top of
+            // that produced `…+gabc1234-nightly` — a versionName that never
+            // equalled the `crema-nightly-<name>.apk` asset it was built from, so
+            // the release check flagged an "update" to the very build the user was
+            // already running, forever, and never said "up to date". The suffix
+            // still marks a local `assembleNightly` (versionName defaults to
+            // "0.1") as off-train.
+            if (!((project.findProperty("versionName") as String?) ?: "").contains("nightly")) {
+                versionNameSuffix = "-nightly"
+            }
             // Release-signed in CI (KEYSTORE_BASE64) so it shares a signature with
             // the tagged release; debug-signed locally so a dev build still installs.
             signingConfig =

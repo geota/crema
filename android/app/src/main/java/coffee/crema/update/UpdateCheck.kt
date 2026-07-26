@@ -85,6 +85,93 @@ internal fun nightlyVersionFromAssets(assetNames: List<String>): String? =
         ?.removePrefix("crema-nightly-")
         ?.removeSuffix(".apk")
 
+/*
+ * Version comparison — deliberately semantic, not `!=`.
+ *
+ * The installed versionName and the published one must be compared by what
+ * they MEAN, for two reasons learnt the hard way:
+ *
+ *  - A build-type marker can differ without the build differing. The nightly
+ *    buildType used to append `-nightly` on top of CI's already-nightly
+ *    versionName, so the installed `0.0.5-nightly.42+gabc1234-nightly` never
+ *    equalled the `0.0.5-nightly.42+gabc1234` it was built from — a permanent
+ *    "update available" pointing at the running build. [canonicalVersion]
+ *    strips that marker so builds already in the field stop nagging too.
+ *  - "Different" is not "newer". A local build ahead of the published nightly,
+ *    or a rollback of the rolling `nightly` release, would otherwise prompt a
+ *    downgrade. Only a strictly greater version counts.
+ */
+
+/** A nightly versionName: `<major>.<minor>.<patch>-nightly.<commits>+g<sha>`. */
+private val NIGHTLY_RE =
+    Regex("""^(\d+)\.(\d+)\.(\d+)-nightly\.(\d+)(?:\+g([0-9a-f]+))?$""")
+
+/** A stable versionName: `<major>.<minor>.<patch>`, any trailing metadata. */
+private val STABLE_RE = Regex("""^(\d+)\.(\d+)\.(\d+)""")
+
+/**
+ * Strip the redundant `-nightly` buildType marker a nightly versionName may
+ * carry twice, and surrounding whitespace. Idempotent: a name that says
+ * `-nightly` exactly once (as the `nightly.<commits>` train marker, or as the
+ * off-train marker on a local `assembleNightly`) is returned unchanged.
+ */
+internal fun canonicalVersion(v: String): String {
+    val t = v.trim()
+    val stripped = t.removeSuffix("-nightly")
+    return if (stripped != t && stripped.contains("-nightly")) stripped else t
+}
+
+/** Ordering key for a nightly: base semver first, then the commit count. */
+private fun nightlyKey(v: String): List<Int>? =
+    NIGHTLY_RE.matchEntire(canonicalVersion(v))?.let { m ->
+        (1..4).map { m.groupValues[it].toInt() }
+    }
+
+/** Ordering key for a stable release: the semver triple. */
+private fun stableKey(v: String): List<Int>? =
+    STABLE_RE.find(canonicalVersion(v))?.let { m ->
+        (1..3).map { m.groupValues[it].toInt() }
+    }
+
+private fun greater(a: List<Int>, b: List<Int>): Boolean {
+    for (i in a.indices) {
+        if (a[i] != b[i]) return a[i] > b[i]
+    }
+    return false
+}
+
+/**
+ * Whether [installed] and [published] are the same build — the "you're on the
+ * latest" test. Compares canonical names, so the doubled `-nightly` marker
+ * doesn't make a build look different from itself.
+ */
+fun isSameBuild(installed: String, published: String?): Boolean =
+    published != null && canonicalVersion(installed) == canonicalVersion(published)
+
+/**
+ * Whether [published] is a strictly NEWER build than [installed] on the same
+ * channel — the only condition that should ever raise an update notice.
+ *
+ * Nightlies compare by base semver then commit count; stables by semver
+ * triple. Cross-channel or unparseable names fall back to "different, and not
+ * a nightly we're ahead of", which is the most useful answer available.
+ */
+fun isNewerBuild(installed: String, published: String?): Boolean {
+    val remote = published?.let(::canonicalVersion) ?: return false
+    val local = canonicalVersion(installed)
+    if (remote == local) return false
+    nightlyKey(local)?.let { l ->
+        nightlyKey(remote)?.let { r -> return greater(r, l) }
+    }
+    val ls = stableKey(local)
+    val rs = stableKey(remote)
+    if (ls != null && rs != null && ls != rs) return greater(rs, ls)
+    // One side is a nightly and the other isn't (or neither parses): a version
+    // string we can't order. Treat any difference as an update rather than
+    // silently withholding a real one.
+    return true
+}
+
 suspend fun checkForUpdates(json: Json): UpdateInfo = withContext(Dispatchers.IO) {
     runCatching {
         val stable = getJson("$REPO_API/releases/latest", json)

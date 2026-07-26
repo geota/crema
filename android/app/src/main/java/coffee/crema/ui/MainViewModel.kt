@@ -2314,7 +2314,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // rolling nightly tag, everything else tracks stable.
             val current = coffee.crema.BuildConfig.VERSION_NAME
             val candidate = if (current.contains("nightly")) info.latestNightly else info.latestStable
-            if (candidate != null && candidate != current && candidate != _ui.value.lastSeenLatestVersion) {
+            // Strictly newer, never merely different: being ON the newest build
+            // (or ahead of it with a local build) must stay quiet. `!=` here
+            // notified users on the latest nightly about the very build they
+            // were running, on every check.
+            if (coffee.crema.update.isNewerBuild(current, candidate) &&
+                candidate != _ui.value.lastSeenLatestVersion
+            ) {
                 notifyUser("Update available — Crema $candidate (you’re on $current)")
                 _ui.update { it.copy(lastSeenLatestVersion = candidate) }
                 persistPrefs()
