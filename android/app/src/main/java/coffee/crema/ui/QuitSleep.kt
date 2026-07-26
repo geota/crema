@@ -10,7 +10,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Sleep-on-quit: put the DE1 to sleep when the user QUITS Crema (swipes the
  * task out of recents) — and only then. Backgrounding must never sleep the
  * machine: the presence model already handles that case (the keep-awake
- * pokes pause and the DE1's own ~30 min timer takes over).
+ * pokes pause and the DE1's own timer takes over — armed by the
+ * user-presence feature flag `MainViewModel.seedMachineSettings` writes at
+ * connect, without which neither path did anything).
  *
  * Two quit signals feed one latched handler, because neither alone is
  * reliable (verified on an API-36 emulator):
@@ -30,7 +32,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Best-effort by design: a force-stop or OOM kill delivers nothing
  * anywhere, and a swipe long after backgrounding may miss both signals —
  * the DE1's own sleep timer (counting since the pokes stopped) still puts
- * the machine down in every fallback case.
+ * the machine down in every fallback case. That fallback is what makes
+ * "best-effort" acceptable, so it must stay genuinely armed; see the
+ * feature-flag seed above.
  */
 object QuitSleep {
     @Volatile

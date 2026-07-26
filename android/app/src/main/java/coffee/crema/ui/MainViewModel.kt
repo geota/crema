@@ -1149,10 +1149,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // backgrounded app is not a present user, so it must stop
             // re-arming the DE1's sleep timer — otherwise pocketing the
             // phone with Crema open held the machine awake indefinitely.
-            // The moment the pokes stop, the DE1's own ~30 min timer takes
-            // over and sleeps the machine with no phone in range; the
-            // screensaver clock (which keeps running in the background)
-            // still issues the explicit earlier sleep when still connected.
+            // The moment the pokes stop, the DE1's own timer takes over and
+            // sleeps the machine with no phone in range.
+            //
+            // That hand-off only works because [seedMachineSettings] enables
+            // the firmware's user-presence feature flag at connect. Until it
+            // did, this gate was the bug rather than the fix: the pokes were
+            // no-ops, the firmware timer was never armed, and a backgrounded
+            // or walked-away-from app left the machine hot indefinitely
+            // (geota/crema, "doesn't go to sleep ever"). Deliberately the
+            // ONLY background sleep path — no foreground service, so it also
+            // holds when Android kills the process outright.
             if (s.suppressDe1Sleep && appInForeground && !s.saverVisible && !asleep && !s.shotInProgress) {
                 pokeUserPresent()
             }
@@ -1168,10 +1175,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // still using).
         QuitSleep.install {
             val s = _ui.value
-            val idle = s.machineStateName == MachineState.Idle
+            // "Not busy", not "exactly Idle": a machine that is heating,
+            // running a calibration or simply hasn't reported a state yet is
+            // still safe to sleep, and requiring MachineState.Idle silently
+            // skipped those quits. The exclusions are the ones that must never
+            // be cut off mid-way — the same set the screensaver refuses to
+            // interrupt — plus an already-asleep machine (nothing to do).
+            val sleepable = !machineBusyForSaver(s) &&
+                s.machineStateName != MachineState.Sleep &&
+                s.machineStateName != MachineState.GoingToSleep
             val primary = s.proxyRole != "secondary"
             // Logcat, not appendLog: the in-app event log dies with the task.
-            if (s.sleepOnQuit && idle && primary) {
+            if (s.sleepOnQuit && sleepable && primary) {
                 Log.i("QuitSleep", "quit while idle — putting the DE1 to sleep")
                 sleep()
             } else {
@@ -2151,6 +2166,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         routeWrite("Seed steam two-tap stop") {
             bridge.setSteamTwoTapStop(if (ui.steamTwoTap) 1u else 0u)
         }
+        // Enable the firmware's user-presence feature (FeatureFlags 0x803858
+        // bit 1) on every connect — the register that makes the DE1 act on the
+        // `UserPresent` pokes and sleep itself once they stop.
+        //
+        // Without it the DE1 never runs its own inactivity sleep, so nothing
+        // put the machine down when Crema was backgrounded or the user walked
+        // away: [keepAliveTick] correctly STOPS poking off-foreground and hands
+        // over to "the DE1's own timer" — a timer that was never armed. The
+        // heartbeats were a silent no-op too. The web shell has sent this since
+        // `6c8be97` (app.svelte.ts, de1State === 'ready'), which is why the
+        // symptom was Android-only; reaprime sends it from `onConnect`
+        // (`enableUserPresenceFeature()`, unified_de1.dart:526). de1app
+        // deliberately leaves it off (`#set_feature_flags 1`,
+        // bluetooth.tcl:2351) because it didn't want to own the poking — Crema
+        // does, gated on [MainUiState.suppressDe1Sleep].
+        routeWrite("Seed user-presence feature") { bridge.setFeatureFlags(1u) }
         // The machine's OWN refill threshold (WaterLevels StartFillLevel).
         // de1app and Decenza both write theirs at connect; Crema never did, so
         // whatever value was last left in the firmware persisted — and a high
@@ -2996,7 +3027,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistPrefs()
     }
 
-    /** One UserPresent write (MMR 0x803858) — resets the DE1's sleep timer. */
+    /** One UserPresent write (MMR **0x803860** — 0x803858 is the separate
+     *  FeatureFlags register seeded at connect) — resets the DE1's sleep
+     *  timer. Only acted on once that feature flag is set. */
     private fun pokeUserPresent() {
         if (_ui.value.bleState != De1BleManager.State.READY) return
         runCatching { bridge.setUserPresent(true) }.getOrNull()?.let(::onCoreOutputJson)
