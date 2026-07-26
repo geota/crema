@@ -144,7 +144,11 @@ fn build_v2_document(shot: &StoredShot, truncate_at_flow_end: bool) -> V2Documen
         temp_goal.push(t.sample.set_head_temp);
         weight_series.push(t.scale_weight.unwrap_or(0.0));
         flow_by_weight.push(t.scale_flow_weight.unwrap_or(0.0));
-        water_dispensed.push(t.dispensed_volume.unwrap_or(0.0));
+        // NOT raw ml — the wire channel is 0.1x. See
+        // `WATER_DISPENSED_WIRE_SCALE` (geota/crema#48).
+        water_dispensed.push(crate::shot::water_dispensed_to_wire(
+            t.dispensed_volume.unwrap_or(0.0),
+        ));
     }
 
     // `by_weight_raw` is the unsmoothed sibling of `by_weight`. Crema

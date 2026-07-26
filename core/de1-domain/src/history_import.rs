@@ -256,7 +256,15 @@ fn build_samples(
         // imports with `None` rather than a misleading `Some(0.0)`.
         let scale_weight_i = scale_weight.get(i).copied();
         let scale_flow_weight_i = scale_flow_weight.get(i).copied();
-        let dispensed_i = dispensed.get(i).copied();
+        // The one conversion point for BOTH import paths (legacy de1app
+        // `.shot` Tcl and v2 JSON both funnel their series through here):
+        // the wire channel is 0.1x real ml, so a de1app shot read raw
+        // would land at a tenth of its true volume. See
+        // `WATER_DISPENSED_WIRE_SCALE` (geota/crema#48).
+        let dispensed_i = dispensed
+            .get(i)
+            .copied()
+            .map(crate::shot::water_dispensed_from_wire);
         // Re-derive the resistance signals at import time so the chart
         // can render legacy shots through the same auto-switch path
         // live captures use. Same `P / F²` shape + sub-floor guard the
@@ -479,7 +487,8 @@ struct V2Totals {
     /// Cumulative scale weight, grams.
     #[serde(default, deserialize_with = "de_vec_f32")]
     weight: Vec<f32>,
-    /// Cumulative pump-dispensed water, millilitres.
+    /// Cumulative pump-dispensed water, at the ecosystem's 0.1x wire
+    /// scale — NOT millilitres. See `WATER_DISPENSED_WIRE_SCALE`.
     #[serde(default, deserialize_with = "de_vec_f32")]
     water_dispensed: Vec<f32>,
 }

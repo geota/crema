@@ -590,7 +590,9 @@ pub fn samples_from_visualizer_detail(detail: &Value) -> Vec<TimedSample> {
             },
             scale_weight: opt(weight, i),
             scale_flow_weight: opt(flow_weight, i),
-            dispensed_volume: opt(water, i),
+            // 0.1x on the wire — a de1app shot pulled raw would read at a
+            // tenth of its real volume (geota/crema#48).
+            dispensed_volume: opt(water, i).map(crate::shot::water_dispensed_from_wire),
             resistance: None,
             resistance_weight: None,
         });
@@ -1300,7 +1302,10 @@ mod tests {
         // opt(): a positive reading is Some; the zeroth row's zeros are None.
         assert_eq!(s.scale_weight, Some(5.0));
         assert_eq!(s.scale_flow_weight, Some(1.2));
-        assert_eq!(s.dispensed_volume, Some(6.0));
+        // Dispensed water is the one channel that is NOT 1:1 — the wire
+        // carries a tenth of the real volume, so 6.0 on the wire is 60 ml
+        // (geota/crema#48).
+        assert_eq!(s.dispensed_volume, Some(60.0));
         assert_eq!(samples[0].scale_weight, None);
         assert_eq!(samples[0].dispensed_volume, None);
     }

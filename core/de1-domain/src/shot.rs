@@ -131,7 +131,10 @@ pub struct TimedSample {
     /// Running pump-side dispensed volume at this instant, millilitres.
     /// `None` for legacy imports that didn't record it; live captures
     /// always populate it from the DE1's integrator. Maps to
-    /// `espresso_water_dispensed` + Visualizer `totals.water_dispensed`.
+    /// `espresso_water_dispensed` + Visualizer `totals.water_dispensed`
+    /// — **through [`water_dispensed_to_wire`] / [`water_dispensed_from_wire`],
+    /// never raw**: that channel is not stored in millilitres anywhere in
+    /// the DE1 ecosystem (geota/crema#48).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispensed_volume: Option<f32>,
     /// DE1-flow-derived puck resistance, `bar / (ml/s)²`. `None` near
@@ -148,6 +151,57 @@ pub struct TimedSample {
     /// non-upload story as `resistance`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resistance_weight: Option<f32>,
+}
+
+/// The factor between Crema's canonical millilitres and the dispensed-water
+/// value every DE1 app writes to a shot file or to visualizer.coffee.
+///
+/// **The `espresso_water_dispensed` / `totals.water_dispensed` channel is not
+/// in millilitres.** It is stored at one tenth of the real volume — a ~40 ml
+/// espresso is written as `~4.0`. This looks like a bug and is not; it is the
+/// de facto wire contract, and Crema was the only app not honouring it
+/// (geota/crema#48).
+///
+/// Where it comes from: de1app charts dispensed volume on the same axis as
+/// pressure (0–12) and flow (0–4), so it scales ml by `0.1` before appending
+/// to the chart vector (`gui.tcl:3571`) — and that same vector is what its
+/// shot file and Visualizer payload are built from. The scaling leaked out of
+/// the chart and became the format. de1app's own simulator multiplies by
+/// `10.0` reading the file back (`gui.tcl:1349`), confirming the intent.
+///
+/// All three reference apps agree, in both directions:
+///
+/// | app | writes | reads |
+/// |---|---|---|
+/// | de1app | `0.1 *` (`gui.tcl:3571`) | `10.0 *` (`gui.tcl:1349`) |
+/// | Decenza | `* 0.1` (`visualizeruploader.cpp:843`) | `*= 10.0` (`shotfileparser.cpp:315`) |
+/// | reaprime | `/ 10` (commit `d2e459f4`) | — |
+///
+/// Decenza spells out the magnitude: *"de1app stores espresso_water_dispensed
+/// at 0.1× scale (tenths of ml), so Visualizer expects values ~4.0 for a 40ml
+/// shot, not 40.0."*
+///
+/// Verified against 28 real de1app shots pulled from the public
+/// `visualizer.coffee/api/shots` feed: their water series peaks at 6.4–12.2
+/// for 28–48 g beverages. Read as millilitres that is impossible — you cannot
+/// pull a 34.6 g espresso from 8.68 ml of water — and at ×10 (87 ml) every
+/// shot is textbook.
+pub const WATER_DISPENSED_WIRE_SCALE: f32 = 0.1;
+
+/// Convert a canonical millilitre volume to the dispensed-water wire value.
+/// Every write of `espresso_water_dispensed` / `totals.water_dispensed` goes
+/// through here — see [`WATER_DISPENSED_WIRE_SCALE`] for why it is not 1:1.
+#[must_use]
+pub fn water_dispensed_to_wire(ml: f32) -> f32 {
+    ml * WATER_DISPENSED_WIRE_SCALE
+}
+
+/// Convert a dispensed-water wire value back to canonical millilitres. Every
+/// read of `espresso_water_dispensed` / `totals.water_dispensed` — Visualizer
+/// pull, v2 JSON import, legacy de1app `.shot` import — goes through here.
+#[must_use]
+pub fn water_dispensed_from_wire(wire: f32) -> f32 {
+    wire / WATER_DISPENSED_WIRE_SCALE
 }
 
 /// A completed espresso shot — its duration and telemetry series.
@@ -777,5 +831,49 @@ mod tests {
             serde_json::from_str::<ShotDisposition>("\"SkipCleaning\"").unwrap(),
             ShotDisposition::SkipCleaning
         );
+    }
+}
+
+#[cfg(test)]
+mod water_dispensed_wire_tests {
+    use super::*;
+
+    /// The dispensed-water channel is stored at a tenth of the real volume by
+    /// every DE1 app. Pinned against Decenza's own worked example: *"Visualizer
+    /// expects values ~4.0 for a 40ml shot, not 40.0"* (geota/crema#48).
+    #[test]
+    fn a_40_ml_shot_goes_on_the_wire_as_4() {
+        assert!((water_dispensed_to_wire(40.0) - 4.0).abs() < 1e-4);
+        assert!((water_dispensed_from_wire(4.0) - 40.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_conversion_round_trips() {
+        for ml in [0.0_f32, 0.5, 8.68, 40.0, 86.8, 287.5, 1000.0] {
+            let back = water_dispensed_from_wire(water_dispensed_to_wire(ml));
+            assert!((back - ml).abs() < 1e-3, "{ml} ml drifted to {back}");
+        }
+    }
+
+    /// Real de1app shots pulled from the public visualizer.coffee feed: their
+    /// water series peaks at 6.4–12.2 for 28–48 g espressos. Read as raw ml
+    /// that is impossible (you cannot pull 34.6 g of espresso from 8.68 ml);
+    /// through the conversion each lands in the physically sane 60–130 ml band.
+    #[test]
+    fn real_de1app_shots_decode_to_plausible_volumes() {
+        // (wire peak, cup weight g) — sampled 2026-07-26.
+        for (wire, cup) in [
+            (8.68_f32, 34.6_f32),
+            (6.48, 31.7),
+            (12.18, 47.4),
+            (9.20, 39.0),
+        ] {
+            let ml = water_dispensed_from_wire(wire);
+            assert!(ml > cup, "{ml} ml of water cannot yield a {cup} g beverage");
+            assert!(
+                (60.0..=140.0).contains(&ml),
+                "{wire} on the wire decoded to an implausible {ml} ml"
+            );
+        }
     }
 }
