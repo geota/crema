@@ -893,16 +893,6 @@
 		if (cap <= 0) return 0;
 		return Math.min(100, (elapsedSec / cap) * 100);
 	});
-	/**
-	 * Nothing will stop the shot — a real state, and the most important thing
-	 * this card can say. Rendering nothing here is what made #56 invisible.
-	 */
-	const noStopCondition = $derived(
-		stopTargets != null &&
-			stopTargets.weightG == null &&
-			stopTargets.volumeMl == null &&
-			stopTargets.maxTimeS == null
-	);
 
 	/**
 	 * Stop-condition rows for `MaxStopConditionsCard`, built from the SAME
@@ -963,6 +953,19 @@
 			});
 		return out;
 	});
+
+	/**
+	 * Nothing will stop the shot — a real state, and the most important thing
+	 * this card can say. Rendering nothing here is what made #56 invisible.
+	 *
+	 * Derived from the ROWS, not from the legs directly: a configured-but-
+	 * blocked weight target produces a row while every armed leg is still
+	 * null, and checking the legs alone made the eyebrow announce "NONE" over
+	 * a visible Yield row. Android reads `rows.isEmpty()` for the same reason.
+	 * Still gated on a non-null projection, so "the core hasn't reported yet"
+	 * stays distinct from "nothing is armed".
+	 */
+	const noStopCondition = $derived(stopTargets != null && stopConditionRows.length === 0);
 
 	// ── BrewHeader wiring (presentational; reuses the profile + bean stores) ──
 	/** Profile rows for the header's ▾ picker — all profiles, pinned first. */

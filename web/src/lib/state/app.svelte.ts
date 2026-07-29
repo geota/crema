@@ -15,6 +15,7 @@
  * the screen.
  */
 
+import { refreshStopTargetsProjection } from './ui-state.svelte';
 import {
 	loadCore,
 	type Command,
@@ -1239,21 +1240,7 @@ export class CremaApp {
 	 * is the one moment it knows the picture moved (geota/crema#56).
 	 */
 	async refreshStopTargets(): Promise<void> {
-		try {
-			const p = await this.core.stopTargetsProjection();
-			this.state.patch({
-				stopTargets: {
-					weightG: p.weight ?? null,
-					volumeMl: p.volume ?? null,
-					maxTimeS: p.maxTime ?? null,
-					armed: p.armed,
-					weightConfiguredG: p.weightConfigured ?? null,
-					weightBlocked: p.weightBlocked ?? null
-				}
-			});
-		} catch {
-			// Best-effort: the event path still covers the connected case.
-		}
+		await refreshStopTargetsProjection(this.core);
 	}
 
 	async applyProfileTargetWeight(grams: number): Promise<void> {

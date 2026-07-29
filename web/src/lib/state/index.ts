@@ -11,6 +11,7 @@ export {
 	waterTankMl,
 	waterTankPercent,
 	waterTankDepthMm,
+	refreshStopTargetsProjection,
 	defaultRefillPointMm,
 	waterRefillSoon,
 	machineErrorText,

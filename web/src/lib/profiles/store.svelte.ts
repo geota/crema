@@ -26,6 +26,7 @@
 import { SvelteSet } from 'svelte/reactivity';
 
 import { loadCore } from '$lib/core';
+import { refreshStopTargetsProjection } from '$lib/state/ui-state.svelte';
 import { readJson, writeJson } from '$lib/utils/storage';
 import {
 	builtinCremaProfiles,
@@ -243,6 +244,7 @@ export class ProfileStore {
 			await core.setProfileTargetWeight(undefined);
 			await core.setProfileVolumeLimit(undefined);
 			await core.setActiveBeverageType('espresso');
+			await refreshStopTargetsProjection(core);
 			return;
 		}
 		const p = this.get(id);
@@ -260,6 +262,10 @@ export class ProfileStore {
 		await core.setWeightTargetDisabled(p.yieldOut <= 0);
 		await core.setProfileTargetWeight(p.yieldOut > 0 ? p.yieldOut : undefined);
 		await core.setProfileVolumeLimit(p.maxTotalVolumeMl > 0 ? p.maxTotalVolumeMl : undefined);
+		// Mirror the new picture into the snapshot: this path bypasses
+		// `CremaApp`'s setters, so without it the stop-condition UI has no
+		// projection to render at startup.
+		await refreshStopTargetsProjection(core);
 	}
 
 	/** Persist the custom-profile list to localStorage. */

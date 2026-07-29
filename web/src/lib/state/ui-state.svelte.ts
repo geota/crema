@@ -1314,6 +1314,47 @@ let cremaUiState: CremaUiState | undefined;
  * lazily without a separate bind step, matching the pattern every
  * other store in `$lib` follows.
  */
+/**
+ * Re-read the core's stop-target projection into the UI snapshot.
+ *
+ * The core pushes `StopTargetsArmed` on every change, but only from the
+ * scale-reading and telemetry paths — with nothing connected there is no beat
+ * to ride, so `stopTargets` would stay `null` and every stop-condition surface
+ * would render nothing at all. (That is exactly what shipped in 8a71b01d: the
+ * Brew card vanished on a freshly loaded page because the only refresh hooks
+ * were on `CremaApp`'s setters, and the profile store pushes targets to the
+ * core directly, bypassing them.)
+ *
+ * Lives here, not on `CremaApp`, so BOTH callers share one implementation —
+ * the app's setting setters and the profile store's activation path.
+ */
+export async function refreshStopTargetsProjection(core: {
+	stopTargetsProjection(): Promise<{
+		armed: boolean;
+		weight: number | null;
+		volume: number | null;
+		maxTime: number | null;
+		weightConfigured: number | null;
+		weightBlocked: string | null;
+	}>;
+}): Promise<void> {
+	try {
+		const p = await core.stopTargetsProjection();
+		getCremaUiState().patch({
+			stopTargets: {
+				weightG: p.weight ?? null,
+				volumeMl: p.volume ?? null,
+				maxTimeS: p.maxTime ?? null,
+				armed: p.armed,
+				weightConfiguredG: p.weightConfigured ?? null,
+				weightBlocked: p.weightBlocked ?? null
+			}
+		});
+	} catch {
+		// Best-effort: the event path still covers the connected case.
+	}
+}
+
 export function getCremaUiState(): CremaUiState {
 	if (!cremaUiState) cremaUiState = new CremaUiState();
 	return cremaUiState;
