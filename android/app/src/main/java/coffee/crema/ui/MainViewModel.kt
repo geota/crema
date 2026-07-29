@@ -1702,6 +1702,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun startShotOnCoreLane(cremaJson: String) {
+        // Records whether this shot came from Crema or from the machine's
+        // GHC — the distinction that hid geota/crema#56.
+        shotStartedByApp = true
         // Make sure the core's stop-at-weight / volume targets are current before
         // the shot arms its AutoStop \u2014 covers a profile restored at startup that
         // never went through setActiveProfile (otherwise SAW silently never arms).
@@ -3054,6 +3057,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  unchanged reading doesn't flood the diagnostics buffer (#56). */
     private var lastLoggedWaterMm: Int? = null
 
+    /** The core's last-armed stop targets, kept for the shot record's verdict
+     *  line. Sourced from `Event.StopTargetsArmed`, i.e. what the core ACTUALLY
+     *  armed — not what the Brew card computed from the UI profile. When these
+     *  disagree, that discrepancy IS the bug (geota/crema#56). */
+    private var lastArmedTargets: String? = null
+
+    /**
+     * The one-line verdict at the top of a shot record: what was armed, what
+     * actually stopped the shot, and what it yielded. Deliberately answers
+     * "why didn't it stop" without anyone reading down the log — an unarmed
+     * weight leg shows as `armed=weight — · …` next to `stopped=none`.
+     */
+    private fun shotDiagSummary(c: coffee.crema.core.EventShotCompletedInner): String {
+        val s = _ui.value
+        val yieldG = c.final_weight?.let { fmt("%.1f g", it) } ?: "—"
+        val peakG = c.peak_weight?.let { fmt("%.1f g", it) } ?: "—"
+        return buildString {
+            append("profile=").append(s.profiles.firstOrNull { it.id == s.activeProfileId }?.name ?: "—")
+            append(" · armed=").append(lastArmedTargets ?: "NEVER ARMED")
+            append(" · stopped=").append(s.lastStopReason?.string ?: "none")
+            append(" · yield=").append(yieldG).append(" (peak ").append(peakG).append(")")
+            append(" · ").append(c.duration).append("ms")
+            append(" · scale=").append(s.scaleName ?: "none")
+            append(" · start=").append(if (shotStartedByApp) "app" else "GHC/machine")
+        }
+    }
+
+    /** Whether the CURRENT shot was started from Crema rather than at the
+     *  machine. A GHC start runs none of the shell's shot-start path, which is
+     *  how geota/crema#56 hid — worth recording per shot. */
+    @Volatile
+    private var shotStartedByApp: Boolean = false
+
     /** Monotonic ms of the last user interaction — bumped by the activity's
      *  root touch interceptor and by machine transitions into active modes. */
     @Volatile
@@ -3777,6 +3813,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // Fresh shot — the previous stop attribution no longer applies.
                     lastStopReason = null,
                 ) }
+                // Fresh shot — clear the previous shot's record markers so a
+                // stale "armed" line can never be attributed to this one (#56).
+                lastArmedTargets = null
                 // Tighten the DE1 link for the shot window (steadier ShotSample
                 // cadence + lower-latency SAW stop write); restored to BALANCED
                 // on ShotCompleted. Best-effort — see De1BleManager.
@@ -3964,11 +4003,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // shot, straight from the core's armed targets — a silent
                 // arming failure now reads as "weight —" in the log.
                 val c = event.content
-                appendLog(
-                    "Stop targets armed: weight " + (c.weight?.let { fmt("%.1f g", it) } ?: "\u2014") +
-                        " · volume " + (c.volume?.let { fmt("%.0f ml", it) } ?: "\u2014") +
-                        " · max " + (c.max_time?.let { fmt("%.0f s", it) } ?: "\u2014"),
-                )
+                val armed = "weight " + (c.weight?.let { fmt("%.1f g", it) } ?: "\u2014") +
+                    " · volume " + (c.volume?.let { fmt("%.0f ml", it) } ?: "\u2014") +
+                    " · max " + (c.max_time?.let { fmt("%.0f s", it) } ?: "\u2014")
+                // Kept for the frozen shot record's verdict line (#56).
+                lastArmedTargets = armed
+                appendLog("Stop targets armed: $armed")
             }
             is Event.StopRetried -> {
                 // The machine hasn't honoured a commanded stop — the core is
@@ -4030,6 +4070,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // A pour just finished: flush the integrated water into the persisted
                 // maintenance state and recompute the filter / descale / clean readout.
                 flushMaintenance()
+                // Freeze this shot's event trail to disk while it is still in
+                // the rolling buffer. A "stop at weight didn't work" report
+                // reaches us long after the shot, by which time the buffer has
+                // scrolled — see [ShotDiag] (geota/crema#56).
+                coffee.crema.diag.ShotDiag.finish(getApplication(), shotDiagSummary(c))
+                // Consumed — the next shot is a machine start until the app
+                // says otherwise.
+                shotStartedByApp = false
             }
             is Event.WaterSessionStarted -> {
                 // A hot-water pour also moves water through the group — reset the

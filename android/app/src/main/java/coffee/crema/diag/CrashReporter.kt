@@ -79,6 +79,10 @@ object CrashReporter {
             ?.let { runCatching { it.readText() }.getOrNull() }
             ?.takeIf { it.isNotBlank() }
         val recent = DiagLog.snapshot()
+        // The last completed shot's frozen event trail. Survives the process,
+        // so it is still here when a user reports a shot problem hours later
+        // and after an app restart (geota/crema#56).
+        val lastShot = ShotDiag.snapshot(ctx)
         return buildString {
             appendLine("=== Crema $title ===")
             appendLine("app:     ${BuildConfig.VERSION_NAME} (sha ${BuildConfig.GIT_SHA}, ${BuildConfig.BUILD_TYPE})")
@@ -99,6 +103,13 @@ object CrashReporter {
                 appendLine()
                 appendLine("-- rust panic --")
                 appendLine(rust.trim())
+            }
+            // BEFORE the rolling log: for a shot-behaviour report this is the
+            // section that answers the question, and it is the one part that
+            // hasn't scrolled away by the time the user presses Copy.
+            if (lastShot != null) {
+                appendLine()
+                appendLine(lastShot.trim())
             }
             appendLine()
             appendLine("-- recent log (last ${recent.size} lines) --")
