@@ -3050,6 +3050,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Sleep & screensaver ───────────────────────────────────────────────────
 
+    /** Last whole-millimetre tank level written to the event log, so an
+     *  unchanged reading doesn't flood the diagnostics buffer (#56). */
+    private var lastLoggedWaterMm: Int? = null
+
     /** Monotonic ms of the last user interaction — bumped by the activity's
      *  root touch interceptor and by machine transitions into active modes. */
     @Volatile
@@ -3899,7 +3903,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     waterLevelMm = event.content.level,
                     waterRefillThresholdMm = event.content.refill_threshold,
                 ) }
-                appendLog(fmt("Water level: %.0fmm", event.content.level))
+                // Log only when the whole millimetre actually changes. The DE1
+                // reports the tank level continuously (~2.4/s), and logging
+                // every report drowned the diagnostics buffer: a real report on
+                // geota/crema#56 arrived as 299 identical "Water level: 35mm"
+                // lines out of 300, covering 124 seconds — the shot being
+                // investigated had been evicted hours earlier. Decenza throttles
+                // the same channel for the same reason (de1device.cpp: emit only
+                // when the level changes).
+                val mm = event.content.level.roundToInt()
+                if (mm != lastLoggedWaterMm) {
+                    lastLoggedWaterMm = mm
+                    appendLog("Water level: ${mm}mm")
+                }
                 // Configurable low-water warning (#33 follow-up): one snackbar
                 // per dip below the user's threshold, in the user's tank unit.
                 // Hysteresis re-arms it only after a real refill, so the mm

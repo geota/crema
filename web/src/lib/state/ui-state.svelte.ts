@@ -855,16 +855,23 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				scaleAutoStop: r.device_auto_stop ?? snapshot.scaleAutoStop
 			};
 		}
-		case 'WaterLevel':
+		case 'WaterLevel': {
+			// Log only when the whole millimetre changes. The DE1 reports the
+			// tank level continuously, and logging every report drowned the
+			// event log — a real diagnostics dump on geota/crema#56 was 299
+			// identical water-level lines out of 300, covering two minutes.
+			// Decenza throttles the same channel for the same reason.
+			const mm = Math.round(event.content.level);
+			const changed = Math.round(snapshot.waterLevel ?? Number.NaN) !== mm;
 			return {
 				...snapshot,
 				waterLevel: event.content.level,
 				waterRefillThreshold: event.content.refill_threshold,
-				eventLog: appendLog(
-					snapshot.eventLog,
-					`Water level: ${Math.round(event.content.level)}mm`
-				)
+				eventLog: changed
+					? appendLog(snapshot.eventLog, `Water level: ${mm}mm`)
+					: snapshot.eventLog
 			};
+		}
 		case 'StopTargetsArmed': {
 			// The SAW-visibility line (issue #15): what will stop this shot,
 			// straight from the core's armed targets — a silent arming
