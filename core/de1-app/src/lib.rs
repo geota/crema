@@ -2522,12 +2522,49 @@ impl CremaCore {
         // holds — a reconnect doesn't change the loaded profile, and losing
         // it would mis-record the next cleaning run as a shot.
         let active_beverage_type = self.active_beverage_type;
+        // The stop targets and their switches are USER INTENT — the active
+        // recipe's yield, the Quick-Controls override, the volume cap, the
+        // max-time guard, and the three behaviour toggles. A DE1 dropping and
+        // reconnecting changes none of them, and the shells hold the same
+        // values in their own state the whole time.
+        //
+        // Losing them here is issue #15's remaining half (geota/crema#56).
+        // `CremaCore::new()` defaults every target to `None`, so after a
+        // reconnect `effective_stop_targets` returned `None` outright and
+        // `arm_auto_stop_if_flowing` never built an `AutoStop` at all — the
+        // shot ran with NO stop of any kind, not even the user's max-time,
+        // and the recorded stop reason was empty. `auto_tare` and
+        // `stop_on_weight` happen to default to `true`, so the auto-tare kept
+        // firing and the scale looked healthy, which is what made this so hard
+        // to see from the outside.
+        //
+        // Only the app's own shot-start path re-pushed them
+        // (`startShotOnCoreLane`), so a shot started at the machine's GHC —
+        // how many DE1 owners start every shot — never recovered until the app
+        // was restarted. The scale codec above was carried across for exactly
+        // this bug's other half; this is the rest of it.
+        let stop_on_weight = self.stop_on_weight;
+        let auto_tare = self.auto_tare;
+        let volume_stop_with_scale = self.volume_stop_with_scale;
+        let weight_target_disabled = self.weight_target_disabled;
+        let profile_target_weight = self.profile_target_weight;
+        let shot_target_weight = self.shot_target_weight;
+        let profile_volume_limit = self.profile_volume_limit;
+        let max_shot_duration = self.max_shot_duration;
         *self = CremaCore::new();
         self.read_only = read_only;
         self.scale = scale;
         self.scale_config_queried = scale_config_queried;
         self.saw_model = saw_model;
         self.active_beverage_type = active_beverage_type;
+        self.stop_on_weight = stop_on_weight;
+        self.auto_tare = auto_tare;
+        self.volume_stop_with_scale = volume_stop_with_scale;
+        self.weight_target_disabled = weight_target_disabled;
+        self.profile_target_weight = profile_target_weight;
+        self.shot_target_weight = shot_target_weight;
+        self.profile_volume_limit = profile_volume_limit;
+        self.max_shot_duration = max_shot_duration;
     }
 
     /// Decode and process a `StateInfo` notification.
@@ -4286,6 +4323,57 @@ mod tests {
             mirror_out.events, normal_out.events,
             "read-only suppresses commands only — events are unaffected",
         );
+    }
+
+    /// geota/crema#56: a DE1 reconnect wiped the stop targets, so the next
+    /// shot armed nothing at all. Reproduces the reporter's exact setup —
+    /// a 36 g recipe target, an 80 s cap, and a shot started at the GHC (a
+    /// bare DE1 state notification, with no app shot-start push to rescue it).
+    #[test]
+    fn stop_targets_survive_a_reset_so_a_ghc_shot_still_arms() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Skale", &[]);
+        core.set_profile_target_weight(Some(36.0));
+        core.set_max_shot_duration(Some(80.0));
+        core.set_profile_volume_limit(Some(36.0));
+
+        // The DE1 drops and reconnects — the BLE manager resets the core.
+        core.reset();
+
+        assert_eq!(core.profile_target_weight, Some(36.0));
+        assert_eq!(core.max_shot_duration, Some(80.0));
+        assert_eq!(core.profile_volume_limit, Some(36.0));
+        assert!(core.stop_on_weight);
+        assert!(core.auto_tare);
+
+        // A GHC start: nothing but the machine's own state notification.
+        core.on_notification(Source::De1State, &[4, 5], 1_000);
+        let armed = core
+            .auto_stop
+            .as_ref()
+            .expect("a GHC shot after a reconnect must still arm an auto-stop");
+        assert_eq!(
+            armed.targets().weight,
+            Some(36.0),
+            "the recipe's weight target must survive the reconnect"
+        );
+        assert_eq!(armed.targets().max_time, Some(80.0));
+    }
+
+    /// The behaviour toggles are user settings, not session state — a
+    /// reconnect must not silently re-enable a stop the user turned off.
+    #[test]
+    fn stop_toggles_survive_a_reset() {
+        let mut core = CremaCore::new();
+        core.set_stop_on_weight(false);
+        core.set_auto_tare(false);
+        core.set_volume_stop_with_scale(true);
+        core.set_weight_target_disabled(true);
+        core.reset();
+        assert!(!core.stop_on_weight);
+        assert!(!core.auto_tare);
+        assert!(core.volume_stop_with_scale);
+        assert!(core.weight_target_disabled);
     }
 
     #[test]

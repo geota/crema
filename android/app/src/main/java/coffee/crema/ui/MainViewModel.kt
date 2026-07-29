@@ -1122,6 +1122,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onDe1Ready = {
             readMachineInfo()
             seedMachineSettings()
+            // Re-assert the stop targets on every (re)connect. The core now
+            // carries them across `reset()` itself, so this is belt-and-braces
+            // — but it is the only thing standing between a GHC-started shot
+            // and an unarmed auto-stop if the core is ever rebuilt some other
+            // way (geota/crema#56). Pure core state, no BLE.
+            pushStopTargets()
         },
         // The DE1 no longer holds our profile — drop the upload-skip cache so
         // the next shot re-uploads (issue 11). Without this, a skip after a
@@ -1251,6 +1257,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             library.loadProfileMeta()
             library.loadCustomProfiles()
+            // Seed the core's stop targets from the profile just restored.
+            // Startup restore doesn't go through setActiveProfile, so without
+            // this the core holds no weight/volume/max-time target until the
+            // first app-started shot — and a shot started at the machine's GHC
+            // never triggers that push, so it would arm nothing at all
+            // (geota/crema#56). Pure core state; safe while disconnected.
+            pushStopTargets()
             loadMaintenance()
             visualizer.load()
             drive.load()
