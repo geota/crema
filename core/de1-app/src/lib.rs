@@ -428,7 +428,7 @@ pub struct CremaCore {
     /// The last [`Event::StopTargetsArmed`] payload pushed, so the reporter
     /// only emits on change (arming, a late scale, a toggle) — compared on
     /// every scale reading / telemetry sample, both cheap `Copy` structs.
-    reported_stop_targets: Option<StopTargets>,
+    reported_stop_targets: Option<(bool, StopTargets, Option<f32>, Option<&'static str>)>,
     /// Per-shot SAW kill switch. Latched flag, default `false`; the shell
     /// pushes `true` when the user toggles the QC yield dot OFF, back to
     /// `false` when it turns ON. Independent of
@@ -3762,18 +3762,97 @@ impl CremaCore {
     /// all surface in the shells' event logs within a beat (issue #15:
     /// arming failures used to be silent).
     fn report_stop_targets(&mut self, out: &mut CoreOutput) {
-        let current = self.auto_stop.as_ref().map(AutoStop::targets);
-        if current == self.reported_stop_targets {
+        let (armed, t) = self.stop_targets_projection();
+        // The blocked REASON is part of the reported picture: a scale dropping
+        // mid-shot changes only that, and the shell needs to hear about it.
+        let current = (
+            armed,
+            t,
+            self.effective_target_weight(),
+            self.weight_stop_blocked_by(),
+        );
+        if Some(current) == self.reported_stop_targets {
             return;
         }
-        self.reported_stop_targets = current;
-        if let Some(t) = current {
-            out.events.push(Event::StopTargetsArmed {
-                weight: t.weight,
-                volume: t.volume,
-                max_time: t.max_time,
-            });
+        self.reported_stop_targets = Some(current);
+        // Emitted even when every leg is `None` — "nothing will stop this
+        // shot" is the single most important thing this event can say, and
+        // suppressing it is what let geota/crema#56 run silently.
+        out.events.push(Event::StopTargetsArmed {
+            weight: t.weight,
+            volume: t.volume,
+            max_time: t.max_time,
+            armed,
+            weight_configured: self.effective_target_weight(),
+            weight_blocked: self.weight_stop_blocked_by().map(str::to_owned),
+        });
+    }
+
+    /// What will end the shot: the live armed targets while a shot is running,
+    /// otherwise what *would* arm if one started now. The `bool` is `true` in
+    /// the former case.
+    ///
+    /// The single source of truth for every "what will stop this shot" surface.
+    /// Pure — safe to call at any time, connected or not.
+    #[must_use]
+    pub fn stop_targets_projection(&self) -> (bool, StopTargets) {
+        match self.auto_stop.as_ref() {
+            Some(stop) => (true, stop.targets()),
+            None => (
+                false,
+                self.effective_stop_targets().unwrap_or(StopTargets {
+                    weight: None,
+                    volume: None,
+                    max_time: None,
+                }),
+            ),
         }
+    }
+
+    /// Why the weight leg is not armed even though a target IS configured, or
+    /// `None` when it is armed or genuinely unset.
+    ///
+    /// The distinction matters to the UI: "no yield target" and "a 36 g target
+    /// that cannot fire because the scale dropped" look identical in
+    /// [`stop_targets_projection`](Self::stop_targets_projection)'s `weight`
+    /// (both `None`) but mean opposite things to the person holding the cup.
+    /// Deliberately silent when the user turned the stop OFF — that is a
+    /// choice, not an impediment.
+    #[must_use]
+    pub fn weight_stop_blocked_by(&self) -> Option<&'static str> {
+        // Nothing configured is not "blocked".
+        self.effective_target_weight()?;
+        if !self.stop_on_weight || self.weight_target_disabled {
+            return None; // deliberately off
+        }
+        if self.scale.is_none() {
+            return Some("no-scale");
+        }
+        if self.untared_cup_tripped {
+            return Some("untared-cup");
+        }
+        None
+    }
+
+    /// [`stop_targets_projection`](Self::stop_targets_projection) as JSON, for
+    /// the FFI/wasm boundary.
+    ///
+    /// `weightConfigured` is the target that WOULD apply, and `weightBlocked`
+    /// says what is stopping it — so a shell can keep showing the row the user
+    /// set up, greyed with a reason, instead of silently dropping it when a
+    /// scale disconnects mid-session.
+    #[must_use]
+    pub fn stop_targets_projection_json(&self) -> String {
+        let (armed, t) = self.stop_targets_projection();
+        serde_json::json!({
+            "armed": armed,
+            "weight": t.weight,
+            "volume": t.volume,
+            "maxTime": t.max_time,
+            "weightConfigured": self.effective_target_weight(),
+            "weightBlocked": self.weight_stop_blocked_by(),
+        })
+        .to_string()
     }
 }
 
@@ -4323,6 +4402,90 @@ mod tests {
             mirror_out.events, normal_out.events,
             "read-only suppresses commands only — events are unaffected",
         );
+    }
+
+    /// The projection is what every "what will stop this shot" surface must
+    /// render. Between shots it reports the PROSPECTIVE picture, so a shell no
+    /// longer has to re-derive it from its own copy of the inputs — the
+    /// divergence that let the Brew card show a confident 36 g target while
+    /// the core had armed nothing (geota/crema#56).
+    #[test]
+    fn projection_reports_prospective_targets_between_shots() {
+        let mut core = CremaCore::new();
+        // Nothing configured: the projection says so out loud.
+        assert_eq!(
+            core.stop_targets_projection(),
+            (
+                false,
+                StopTargets {
+                    weight: None,
+                    volume: None,
+                    max_time: None
+                }
+            )
+        );
+
+        core.connect_scale("Skale", &[]);
+        core.set_profile_target_weight(Some(36.0));
+        core.set_max_shot_duration(Some(80.0));
+        core.set_profile_volume_limit(Some(36.0));
+
+        // Still idle — but the shell can now show exactly what would fire,
+        // including the volume leg's demotion behind the resolved weight leg.
+        let (armed, t) = core.stop_targets_projection();
+        assert!(!armed, "no shot is running yet");
+        assert_eq!(t.weight, Some(36.0));
+        assert_eq!(t.max_time, Some(80.0));
+        assert_eq!(t.volume, None, "volume stands down behind a weight target");
+
+        // Once the shot runs, the same call reports the live armed picture.
+        core.on_notification(Source::De1State, &[4, 5], 1_000);
+        let (armed, t) = core.stop_targets_projection();
+        assert!(armed, "the shot is running");
+        assert_eq!(t.weight, Some(36.0));
+    }
+
+    /// A scale dropping mid-shot must not make the user's yield target simply
+    /// vanish: the projection keeps reporting what they configured, plus why it
+    /// can no longer fire, so the row stays on screen with a reason attached.
+    #[test]
+    fn a_scale_drop_mid_shot_reports_the_target_and_the_reason() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Skale", &[]);
+        core.set_profile_target_weight(Some(36.0));
+        core.on_notification(Source::De1State, &[4, 5], 1_000);
+        assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
+        assert_eq!(core.weight_stop_blocked_by(), None);
+
+        core.disconnect_scale();
+
+        // The armed leg is gone — that part is honest, SAW genuinely cannot fire.
+        assert_eq!(core.stop_targets_projection().1.weight, None);
+        // …but the target the user set, and the reason, are still reportable.
+        assert_eq!(core.effective_target_weight(), Some(36.0));
+        assert_eq!(core.weight_stop_blocked_by(), Some("no-scale"));
+    }
+
+    /// Turning the stop OFF is a choice, not an impediment — no warning.
+    #[test]
+    fn a_deliberately_disabled_weight_stop_is_not_reported_as_blocked() {
+        let mut core = CremaCore::new();
+        core.set_profile_target_weight(Some(36.0));
+        core.set_stop_on_weight(false);
+        assert_eq!(core.weight_stop_blocked_by(), None);
+    }
+
+    /// A target that cannot arm must read as absent BEFORE the shot, not after
+    /// it has already over-poured.
+    #[test]
+    fn projection_shows_an_unarmable_weight_leg_while_idle() {
+        let mut core = CremaCore::new();
+        core.set_profile_target_weight(Some(36.0));
+        // No scale: SAW cannot arm, so the projection must not promise it.
+        let (_, t) = core.stop_targets_projection();
+        assert_eq!(t.weight, None, "no scale, so no weight stop");
+        core.connect_scale("Skale", &[]);
+        assert_eq!(core.stop_targets_projection().1.weight, Some(36.0));
     }
 
     /// geota/crema#56: a DE1 reconnect wiped the stop targets, so the next

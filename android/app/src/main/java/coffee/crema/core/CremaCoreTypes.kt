@@ -439,7 +439,19 @@ data class EventStopTargetsArmedInner (
 	/// (demoted behind a scale, or unset).
 	val volume: Float? = null,
 	/// Max shot time, seconds; `None` = no time cap.
-	val max_time: Float? = null
+	val max_time: Float? = null,
+	/// `true` once an `AutoStop` actually holds these targets (the shot is
+	/// running); `false` while this is the between-shots projection.
+	val armed: Boolean,
+	/// The weight target that WOULD apply, regardless of whether it can
+	/// fire. Lets a shell keep showing the row the user configured, greyed
+	/// with a reason, rather than silently dropping it.
+	val weight_configured: Float? = null,
+	/// Why [`weight`] is not armed despite [`weight_configured`] being set
+	/// — `"no-scale"` or `"untared-cup"`. `None` when the leg is armed,
+	/// nothing is configured, or the user turned the stop off (a choice,
+	/// not an impediment).
+	val weight_blocked: String? = null
 )
 
 /// Generated type representing the anonymous struct variant `StopRetried` of the `Event` Rust enum
@@ -744,6 +756,26 @@ sealed class Event {
 	/// the shells' event logs show exactly what stop-at-weight is armed
 	/// with. Issue #15's failures were silent precisely because arming state
 	/// was invisible.
+	/// What will end the next (or current) shot — the core's own projection,
+	/// emitted whenever it changes.
+	/// 
+	/// Between shots this is the *prospective* picture: what would arm if a
+	/// shot started right now. From flow start it is the live armed picture.
+	/// [`armed`](Self::StopTargetsArmed::armed) says which.
+	/// 
+	/// Shells must render THIS rather than re-deriving the answer from their
+	/// own copy of the inputs. The demotion rule is shared
+	/// ([`de1_domain::volume_stop_arms`]), but the inputs were not: a shell
+	/// evaluating it over its own active-profile yield can disagree with the
+	/// core evaluating it over `profile_target_weight`, and did — the Brew
+	/// card showed a confident 36 g target while the core had armed nothing
+	/// at all (geota/crema#56).
+	/// 
+	/// All three fields `None` is a meaningful, deliberately-emitted state:
+	/// *nothing* will stop this shot.
+	/// 
+	/// The variant keeps its historical name for wire compatibility with
+	/// mirrored peers; it reports projections as well as armings.
 	@Serializable
 	@SerialName("StopTargetsArmed")
 	data class StopTargetsArmed(val content: EventStopTargetsArmedInner): Event()

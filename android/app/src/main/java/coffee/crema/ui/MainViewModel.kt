@@ -79,6 +79,11 @@ import kotlinx.serialization.json.Json
 import kotlinx.coroutines.Dispatchers
 import android.net.Uri
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.floatOrNull
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlin.math.roundToInt
 
 /**
@@ -140,6 +145,39 @@ data class LastShot(
  * stepper — pre-infusion isn't a separate machine setting, so an override just
  * caps the leading pre-infuse segment's time (issue 15).
  */
+/**
+ * The core's stop-target projection, mirrored into the UI snapshot.
+ *
+ * [armed] distinguishes "a shot is running and these ARE the armed targets"
+ * from "this is what would arm if you pulled now". Every field null with
+ * [armed] false means nothing whatsoever will stop the next shot — the state
+ * that used to be invisible.
+ */
+data class StopTargetsView(
+    val weightG: Float? = null,
+    val volumeMl: Float? = null,
+    val maxTimeS: Float? = null,
+    val armed: Boolean = false,
+    /** The weight target that WOULD apply, armed or not — so a row the user
+     *  configured stays on screen when a scale drops instead of vanishing. */
+    val weightConfiguredG: Float? = null,
+    /** Why [weightG] is null despite [weightConfiguredG] being set —
+     *  `"no-scale"` or `"untared-cup"`; null when armed, unset, or the user
+     *  turned the stop off. */
+    val weightBlocked: String? = null,
+) {
+    /** Human reason for a configured-but-unarmable weight stop. */
+    val weightBlockedLabel: String? get() = when (weightBlocked) {
+        "no-scale" -> "no scale"
+        "untared-cup" -> "cup not tared"
+        else -> null
+    }
+
+    /** True when no leg will fire — the shot would run until the machine's own
+     *  profile limits end it. */
+    val none: Boolean get() = weightG == null && volumeMl == null && maxTimeS == null
+}
+
 data class BrewParams(
     val dose: Double,
     val yieldOut: Double,
@@ -376,6 +414,12 @@ data class MainUiState(
      *  Cleared on the next ShotStarted — the stop-conditions card
      *  highlights the row that fired instead of toasting. */
     val lastStopReason: StopReason? = null,
+    /** What will actually end the shot, straight from the core — live armed
+     *  targets during a shot, the prospective picture between them. The ONLY
+     *  source for stop-condition UI: re-deriving it from the active profile is
+     *  what let the Brew card promise a target the core had never armed
+     *  (geota/crema#56). Null before the core has reported once. */
+    val stopTargets: StopTargetsView? = null,
     /** Non-null while an aborted-shot discard can be undone — the message
      *  MainActivity shows in an action snackbar ("Undo"). */
     val discardToastMessage: String? = null,
@@ -1538,6 +1582,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // core.
             bridge.setActiveBeverageType(active?.beverageType ?: "espresso")
         }.onFailure { appendLog("Push stop targets failed: ${it.message}") }
+        refreshStopTargetProjection()
+    }
+
+    /**
+     * Re-read the core's stop-target projection into the snapshot.
+     *
+     * The core pushes `StopTargetsArmed` on every change, but only from the
+     * scale-reading and telemetry paths — so with nothing connected there is no
+     * beat to ride. This covers that: called wherever the shell itself changes
+     * an input, which is the one moment it knows the picture moved.
+     */
+    private fun refreshStopTargetProjection() {
+        val json = runCatching { bridge.stopTargetsProjection() }.getOrNull() ?: return
+        runCatching {
+            val o = this.json.parseToJsonElement(json).jsonObject
+            fun f(k: String) = o[k]?.jsonPrimitive?.floatOrNull
+            _ui.update { it.copy(stopTargets = StopTargetsView(
+                weightG = f("weight"),
+                volumeMl = f("volume"),
+                maxTimeS = f("maxTime"),
+                armed = o["armed"]?.jsonPrimitive?.booleanOrNull ?: false,
+                weightConfiguredG = f("weightConfigured"),
+                weightBlocked = o["weightBlocked"]?.jsonPrimitive?.contentOrNull,
+            )) }
+        }.onFailure { appendLog("Stop-target projection parse failed: ${it.message}") }
     }
 
     // ── Full-app backup & restore (crema-backup/v1) ──────────────────────────
@@ -2394,6 +2463,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _ui.update { it.copy(maxShotDurationS = seconds) }
             viewModelScope.launch { settingsStore.save(currentPrefs()) }
         }
+        refreshStopTargetProjection()
     }
 
     // ── Live mode switches (M2 — no restart) — see [ProxyController] ────────
@@ -3376,8 +3446,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  and identity so the scale card/config UI hides until the next scale.
      *  Wired as [ConnectionController]'s onScaleSessionClosed. */
     private fun clearScaleSessionUi() {
+        // Losing the scale mid-shot silently kills stop-at-weight — the exact
+        // complaint in issue #29 ("shots which did not stop on weight due to
+        // the scale being disconnected"). The Brew card keeps the yield row
+        // with a "no scale" note, but a card the user isn't looking at is not
+        // enough for something that will overrun the cup in their hand.
+        if (_ui.value.shotInProgress && _ui.value.stopTargets?.weightConfiguredG != null) {
+            notifyUser("Scale disconnected — stop-at-weight is off for this shot")
+        }
         // Re-arm the once-per-connection low-battery warning (issue #29).
         scaleLowBatteryWarned = false
+        refreshStopTargetProjection()
         _ui.update { it.copy(
             scaleWeightG = null,
             scaleFlowGPerS = null,
@@ -4008,7 +4087,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     " · max " + (c.max_time?.let { fmt("%.0f s", it) } ?: "\u2014")
                 // Kept for the frozen shot record's verdict line (#56).
                 lastArmedTargets = armed
-                appendLog("Stop targets armed: $armed")
+                // Mirror into the snapshot so every stop-condition surface
+                // renders the core's answer instead of its own (#56).
+                _ui.update { it.copy(stopTargets = StopTargetsView(
+                    c.weight, c.volume, c.max_time, c.armed,
+                    c.weight_configured, c.weight_blocked,
+                )) }
+                appendLog((if (c.armed) "Stop targets armed: " else "Stop targets (next shot): ") + armed)
             }
             is Event.StopRetried -> {
                 // The machine hasn't honoured a commanded stop — the core is

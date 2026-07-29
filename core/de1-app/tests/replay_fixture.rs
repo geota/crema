@@ -110,7 +110,11 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
     }
 
     assert_eq!(decode_errors, 0, "the recorded session must decode cleanly");
-    assert_eq!(events.len(), 1170, "total decoded event count");
+    // 1172 since the stop-target projection is emitted between shots too,
+    // not only at arming: this capture gains a "nothing will stop this
+    // shot" report before the shot and the disarm report after it
+    // (geota/crema#56 follow-up).
+    assert_eq!(events.len(), 1172, "total decoded event count");
 
     // The per-sample telemetry events are pinned only by count; the
     // non-telemetry events are pinned exactly, in order.
@@ -151,6 +155,17 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
         .collect();
 
     let expected: Vec<Event> = vec![
+        // The core's stop-target projection: this capture has no scale and
+        // no configured targets, so it correctly reports "nothing will stop
+        // this shot" - once before the shot, once on disarm after it.
+        Event::StopTargetsArmed {
+            weight: None,
+            volume: None,
+            max_time: None,
+            armed: false,
+            weight_configured: None,
+            weight_blocked: None,
+        },
         Event::MachineStateChanged {
             state: MachineState::Idle,
             substate: SubState::Heating,
@@ -212,6 +227,17 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
             peak_weight: None,
             final_weight: None,
             disposition: ShotDisposition::Record,
+        },
+        // The core's stop-target projection: this capture has no scale and
+        // no configured targets, so it correctly reports "nothing will stop
+        // this shot" - once before the shot, once on disarm after it.
+        Event::StopTargetsArmed {
+            weight: None,
+            volume: None,
+            max_time: None,
+            armed: false,
+            weight_configured: None,
+            weight_blocked: None,
         },
         Event::MachineStateChanged {
             state: MachineState::Sleep,

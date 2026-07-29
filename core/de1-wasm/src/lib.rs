@@ -1248,6 +1248,15 @@ impl CremaBridge {
 
     /// Per-shot kill switch for the weight target. Independent of
     /// `set_stop_on_weight`; either flag suppresses arming.
+    /// What will end the shot — the live armed targets while one is running,
+    /// otherwise what WOULD arm if a shot started now. JSON:
+    /// `{"armed":bool,"weight":g,"volume":ml,"maxTime":s}`. See
+    /// `CremaCore::stop_targets_projection` (geota/crema#56).
+    #[wasm_bindgen]
+    pub fn stop_targets_projection(&self) -> String {
+        self.core.stop_targets_projection_json()
+    }
+
     pub fn set_weight_target_disabled(&mut self, disabled: bool) {
         self.core.set_weight_target_disabled(disabled);
     }

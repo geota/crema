@@ -83,13 +83,20 @@ import coffee.crema.core.ExitMetric
 import coffee.crema.core.MachineState
 import coffee.crema.core.ModeTargets
 import coffee.crema.core.StopReason
-import coffee.crema.core.volumeStopArms
 import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.Roaster
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.rankProfilesForPicker
 import coffee.crema.beans.rankBeansForPicker
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.StopTargetsView
 import coffee.crema.ui.components.CremaAnchoredPopup
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaFreshnessChip
@@ -234,17 +241,13 @@ fun BrewScreen(
                         modifier = Modifier.weight(1f),
                     )
                     LimitsCard(
-                        active = active,
+                        // The core's projection is the ONLY stop-condition
+                        // source now — no scalePresent / volumeStopWithScale /
+                        // active-yield re-derivation (geota/crema#56).
+                        stopTargets = ui.stopTargets,
                         scaleWeightG = ui.scaleWeightG,
-                        // SUBSCRIBING counts as connected (web parity, review
-                        // #41): the scale will stream within a beat, so the
-                        // card shouldn't flash on connect.
-                        scalePresent = ui.scaleState == ScaleBleManager.State.READY ||
-                            ui.scaleState == ScaleBleManager.State.SUBSCRIBING,
-                        volumeStopWithScale = ui.volumeStopWithScale,
                         dispensedVolume = ui.dispensedVolume,
                         shotElapsedMs = ui.shotElapsedMs,
-                        maxShotDurationS = ui.maxShotDurationS,
                         weightUnit = ui.weightUnit,
                         volumeUnit = ui.volumeUnit,
                     )
@@ -1185,17 +1188,17 @@ private fun PhaseRow(seg: coffee.crema.profiles.ProfileSegment, isActive: Boolea
 
 @Composable
 private fun LimitsCard(
-    active: CremaProfile?,
+    /** The core's answer to "what will stop this shot" — armed targets during
+     *  a shot, the prospective picture between them. Null until the core has
+     *  reported once. */
+    stopTargets: StopTargetsView?,
     // Narrow, stable params (review #43d / deferred #37) — taking the whole
     // MainUiState made this card re-execute on every telemetry tick even
     // while idle; with only the fields it renders, Compose skips it unless
     // one of THESE changed.
     scaleWeightG: Float?,
-    scalePresent: Boolean,
-    volumeStopWithScale: Boolean,
     dispensedVolume: Float?,
     shotElapsedMs: Long,
-    maxShotDurationS: Float,
     weightUnit: String,
     volumeUnit: String,
 ) {
@@ -1203,42 +1206,89 @@ private fun LimitsCard(
     // Floor at 0: a post-stop cup-lift would otherwise read crazy-negative.
     val weightG = scaleWeightG?.coerceAtLeast(0f)
     val timeColor = MaterialTheme.colorScheme.primary
+    // Every row comes from the core's projection. The card used to compose
+    // these from the ACTIVE PROFILE and re-run the demotion rule over its own
+    // inputs — same rule as the core, different inputs — so it could promise a
+    // yield target the core had never armed. That is exactly what it did in
+    // geota/crema#56: a confident "Yield 0.0 / 36.0 g" while the core's weight
+    // leg was None and nothing stopped the shot at all.
     val rows = buildList {
-        if (active != null && active.yieldOut > 0f) {
+        stopTargets?.weightG?.let { target ->
             // Unit-aware (issue 44): live + target convert to the chosen weight unit;
             // the progress fraction stays canonical (ratio is unit-independent).
             val liveW = convertWeight(weightG, weightUnit)
-            val targetW = convertWeight(active.yieldOut, weightUnit)
-            add(LimitRow("Yield", "scales", tel.weight, weightG, active.yieldOut, liveW.value, targetW.value, targetW.unit))
+            val targetW = convertWeight(target, weightUnit)
+            add(LimitRow("Yield", "scales", tel.weight, weightG, target, liveW.value, targetW.value, targetW.unit))
         }
-        // Volume is a stop condition only when it will actually fire. The rule
-        // is the core's own stop-target demotion (`de1_domain::volume_stop_arms`,
-        // review #41): a no-scale fallback, demoted only when the weight leg
-        // resolves (scale connected AND a weight target set) unless the user
-        // opted into both caps. A scale without a weight target keeps volume
-        // armed (review #29) — the old shell rule hid the row there while the
-        // core would still stop on it.
-        val volumeArms = volumeStopArms(scalePresent, active != null && active.yieldOut > 0f, volumeStopWithScale)
-        if (active != null && active.maxTotalVolumeMl > 0 && volumeArms) {
+        // A target the user configured that CANNOT fire — the scale dropped, or
+        // the cup was never tared. Keep the row rather than letting it vanish:
+        // a row disappearing mid-session reads as a glitch, and silently losing
+        // stop-at-weight when a scale drops is issue #29's original complaint.
+        // Greyed, with the reason, and no progress bar — it is not tracking
+        // anything.
+        if (stopTargets?.weightG == null && stopTargets?.weightConfiguredG != null) {
+            val targetW = convertWeight(stopTargets.weightConfiguredG, weightUnit)
+            add(
+                LimitRow(
+                    "Yield", "scales", MaterialTheme.colorScheme.onSurfaceVariant,
+                    null, stopTargets.weightConfiguredG,
+                    "\u2014", targetW.value, targetW.unit,
+                    stopTargets.weightBlockedLabel,
+                ),
+            )
+        }
+        stopTargets?.volumeMl?.let { target ->
             val liveV = convertVolume(dispensedVolume ?: 0f, volumeUnit)
-            val targetV = convertVolume(active.maxTotalVolumeMl.toFloat(), volumeUnit)
-            add(LimitRow("Volume", "drop-half", tel.flow, dispensedVolume ?: 0f, active.maxTotalVolumeMl.toFloat(), liveV.value, targetV.value, targetV.unit))
+            val targetV = convertVolume(target, volumeUnit)
+            add(LimitRow("Volume", "drop-half", tel.flow, dispensedVolume ?: 0f, target, liveV.value, targetV.value, targetV.unit))
         }
-        // Time cap from the persisted setting (maxShotDurationS); live = elapsed
-        // shot seconds. Always shown — it's a global hard cap, not profile-scoped.
-        if (maxShotDurationS > 0f) {
+        stopTargets?.maxTimeS?.let { target ->
             val liveS = fmt("%.0f", shotElapsedMs / 1000f)
-            val targetS = fmt("%.0f", maxShotDurationS)
-            add(LimitRow("Time", "timer", timeColor, shotElapsedMs / 1000f, maxShotDurationS, liveS, targetS, "s"))
+            val targetS = fmt("%.0f", target)
+            add(LimitRow("Time", "timer", timeColor, shotElapsedMs / 1000f, target, liveS, targetS, "s"))
         }
     }
-    if (rows.isEmpty()) return
+    // Nothing armed is a REAL state and the most important thing this card can
+    // say — a shot that will run until the machine's own profile limits end it.
+    // Silently rendering nothing (the old behaviour when no rows resolved) is
+    // what made #56 invisible from the Brew screen.
+    if (rows.isEmpty()) {
+        if (stopTargets?.none != true) return
+        // Nothing armed is a REAL state: the shot will run until the machine's
+        // own profile limits end it. Say so in the eyebrow itself rather than
+        // as a row — this sits on the idle screen indefinitely, and anything
+        // wordier gets tuned out within a week, which would make it useless
+        // exactly when it matters. Hiding the card instead was the pre-fix
+        // behaviour, and an absent card reads as "fine": that is how
+        // geota/crema#56 stayed invisible from the Brew screen for three days.
+        CremaCard(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                // The label is the weighted child, so on a starved 7" column
+                // Eyebrow's clip eats the LABEL's tail — never the warning.
+                Eyebrow("Stop conditions", Modifier.weight(1f, fill = false))
+                // Neutral separator, matching the card title's own "·" idiom —
+                // the amber begins at the glyph, so the warning reads as one
+                // unit rather than colouring the whole line.
+                Eyebrow("\u00b7")
+                val warn = Color(0xFFDBA764)
+                // Sized to the 10.5sp eyebrow rather than the 16dp row icons —
+                // it should read as part of the label, not as a row of its own.
+                PhIcon("warning", sizeDp = 13, tint = warn)
+                Eyebrow("None", color = warn)
+            }
+        }
+        return
+    }
     CremaCard(Modifier.fillMaxWidth()) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            Eyebrow("Max · stop conditions")
+            Eyebrow("Stop conditions")
             rows.forEach { LimitRowView(it) }
         }
     }
@@ -1256,8 +1306,12 @@ private data class LimitRow(
     val targetStr: String,
     /** The display unit label ("g"/"oz", "ml"/"fl oz", "s"). */
     val unit: String,
+    /** Reason this guard cannot fire (e.g. "no scale"); null when it can. A
+     *  noted row renders greyed with no progress bar — it tracks nothing. */
+    val note: String? = null,
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LimitRowView(row: LimitRow) {
     val frac = if (row.target > 0f && row.live != null) (row.live / row.target).coerceIn(0f, 1f) else 0f
@@ -1266,6 +1320,28 @@ private fun LimitRowView(row: LimitRow) {
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 PhIcon(row.icon, sizeDp = 16, tint = row.color)
                 Text(row.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // A guard that cannot fire is flagged inline rather than
+                // explained underneath — the reason ("no scale") is a detail,
+                // the fact that this target will NOT stop the shot is not.
+                // Carried as the icon's content description so the reason
+                // survives for a screen reader.
+                row.note?.let { why ->
+                    // Long-press (or hover, with a mouse) reveals the reason.
+                    // The glyph carries the urgent half — "this will not stop
+                    // your shot" — and the tooltip carries the diagnostic half
+                    // without spending a line on it. Also the content
+                    // description, so a screen reader gets the reason too.
+                    TooltipBox(
+                        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                        tooltip = { PlainTooltip { Text(why) } },
+                        state = rememberTooltipState(),
+                    ) {
+                        PhIcon(
+                            "warning", sizeDp = 14, tint = Color(0xFFDBA764),
+                            modifier = Modifier.semantics { contentDescription = why },
+                        )
+                    }
+                }
             }
             // Web MaxStopConditionsCard: a null live (no scale weight yet) renders "—",
             // never a fake "0.0" — the value is unknown, not zero. Both parts are
@@ -1278,6 +1354,10 @@ private fun LimitRowView(row: LimitRow) {
                 valueColor = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // The bar still renders for a blocked guard, empty and in the row's own
+        // muted colour: it keeps the stack's vertical rhythm when a blocked row
+        // sits beside live ones, and the inline warning already says this one
+        // is not tracking anything.
         StatBar(fraction = frac, color = row.color)
     }
 }

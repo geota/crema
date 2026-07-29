@@ -537,6 +537,19 @@ export interface CremaCore {
 	 */
 	setWeightTargetDisabled(disabled: boolean): Promise<void>;
 	/**
+	 * What will end the shot — live armed targets while one runs, otherwise
+	 * what WOULD arm if a shot started now. The one source of truth for
+	 * stop-condition UI; never re-derive it shell-side (geota/crema#56).
+	 */
+	stopTargetsProjection(): Promise<{
+		armed: boolean;
+		weight: number | null;
+		volume: number | null;
+		maxTime: number | null;
+		weightConfigured: number | null;
+		weightBlocked: string | null;
+	}>;
+	/**
 	 * Opt-in: arm the profile's volume limit (stop-at-volume) even while a
 	 * scale is registered. Default off — volume is a no-scale fallback,
 	 * never a competitor to stop-at-weight.
@@ -1021,6 +1034,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setWeightTargetDisabled(disabled) {
 			bridge.set_weight_target_disabled(disabled);
+		},
+		async stopTargetsProjection() {
+			return JSON.parse(bridge.stop_targets_projection());
 		},
 		async setVolumeStopWithScale(enabled) {
 			bridge.set_volume_stop_with_scale(enabled);

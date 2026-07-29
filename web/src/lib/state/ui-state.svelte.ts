@@ -168,6 +168,25 @@ export interface CompletedShot {
  * A plain, immutable snapshot of every UI field — the shape `applyEvent`
  * folds over. `CremaUiState` holds one of these in a `$state` rune.
  */
+/**
+ * The core's stop-target projection. `armed` distinguishes "a shot is running
+ * and these ARE the armed targets" from "this is what would arm if you pulled
+ * now"; every field null means nothing whatsoever will stop the next shot.
+ */
+export interface StopTargetsView {
+	readonly weightG: number | null;
+	readonly volumeMl: number | null;
+	readonly maxTimeS: number | null;
+	readonly armed: boolean;
+	/** The weight target that WOULD apply, armed or not — so a row the user
+	 *  configured stays on screen when a scale drops instead of vanishing. */
+	readonly weightConfiguredG: number | null;
+	/** Why `weightG` is null despite `weightConfiguredG` being set —
+	 *  `'no-scale'` or `'untared-cup'`; null when armed, unset, or the user
+	 *  turned the stop off (a choice, not an impediment). */
+	readonly weightBlocked: string | null;
+}
+
 export interface UiSnapshot {
 	/** Coarse state of the DE1 connection. */
 	readonly de1State: De1State;
@@ -244,6 +263,14 @@ export interface UiSnapshot {
 	 * "refill soon" cue (E2).
 	 */
 	readonly waterRefillThreshold: number | null;
+	/**
+	 * What will actually end the shot, from the core's own projection —
+	 * armed targets during a shot, the prospective picture between them.
+	 * The ONLY source for stop-condition UI: re-deriving it from the active
+	 * profile let the Brew card promise a target the core never armed
+	 * (geota/crema#56). `null` until the core has reported once.
+	 */
+	readonly stopTargets: StopTargetsView | null;
 
 	// ---- Structured telemetry (Task 3 — the brew dashboard) --------------
 	//
@@ -563,6 +590,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	eventLog: [],
 	waterLevel: null,
 	waterRefillThreshold: null,
+	stopTargets: null,
 	latestTelemetry: null,
 	shotTelemetry: [],
 	shotInProgress: false,
@@ -881,9 +909,17 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				v != null ? `${v.toFixed(unit === 'g' ? 1 : 0)} ${unit}` : '—';
 			return {
 				...snapshot,
+				stopTargets: {
+					weightG: c.weight ?? null,
+					volumeMl: c.volume ?? null,
+					maxTimeS: c.max_time ?? null,
+					armed: c.armed,
+					weightConfiguredG: c.weight_configured ?? null,
+					weightBlocked: c.weight_blocked ?? null
+				},
 				eventLog: appendLog(
 					snapshot.eventLog,
-					`Stop targets armed: weight ${part(c.weight, 'g')} · volume ${part(c.volume, 'ml')} · max ${part(c.max_time, 's')}`
+					`${c.armed ? 'Stop targets armed' : 'Stop targets (next shot)'}: weight ${part(c.weight, 'g')} · volume ${part(c.volume, 'ml')} · max ${part(c.max_time, 's')}`
 				)
 			};
 		}

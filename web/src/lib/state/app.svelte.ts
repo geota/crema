@@ -1141,6 +1141,7 @@ export class CremaApp {
 	 */
 	async applyStopOnWeight(enabled: boolean): Promise<void> {
 		await this.core.setStopOnWeight(enabled);
+		await this.refreshStopTargets();
 	}
 
 	/**
@@ -1161,6 +1162,7 @@ export class CremaApp {
 	 */
 	async applyVolumeStopWithScale(enabled: boolean): Promise<void> {
 		await this.core.setVolumeStopWithScale(enabled);
+		await this.refreshStopTargets();
 	}
 
 	/**
@@ -1219,6 +1221,7 @@ export class CremaApp {
 	 */
 	async applyMaxShotDuration(seconds: number): Promise<void> {
 		await this.core.setMaxShotDuration(seconds > 0 ? seconds : undefined);
+		await this.refreshStopTargets();
 	}
 
 	/**
@@ -1227,8 +1230,35 @@ export class CremaApp {
 	 * value is edited. `0` clears the target (SAW becomes a no-op for the
 	 * profile recipe — the per-shot dial may still override).
 	 */
+	/**
+	 * Re-read the core's stop-target projection into the snapshot.
+	 *
+	 * The core pushes `StopTargetsArmed` on every change, but only from the
+	 * scale-reading and telemetry paths — with nothing connected there is no
+	 * beat to ride. Called wherever the shell itself changes an input, which
+	 * is the one moment it knows the picture moved (geota/crema#56).
+	 */
+	async refreshStopTargets(): Promise<void> {
+		try {
+			const p = await this.core.stopTargetsProjection();
+			this.state.patch({
+				stopTargets: {
+					weightG: p.weight ?? null,
+					volumeMl: p.volume ?? null,
+					maxTimeS: p.maxTime ?? null,
+					armed: p.armed,
+					weightConfiguredG: p.weightConfigured ?? null,
+					weightBlocked: p.weightBlocked ?? null
+				}
+			});
+		} catch {
+			// Best-effort: the event path still covers the connected case.
+		}
+	}
+
 	async applyProfileTargetWeight(grams: number): Promise<void> {
 		await this.core.setProfileTargetWeight(grams > 0 ? grams : undefined);
+		await this.refreshStopTargets();
 	}
 
 	/**
@@ -1238,6 +1268,7 @@ export class CremaApp {
 	 */
 	async applyProfileVolumeLimit(milliliters: number): Promise<void> {
 		await this.core.setProfileVolumeLimit(milliliters > 0 ? milliliters : undefined);
+		await this.refreshStopTargets();
 	}
 
 	/**
@@ -1247,6 +1278,7 @@ export class CremaApp {
 	 */
 	async applyShotTargetWeight(grams: number): Promise<void> {
 		await this.core.setShotTargetWeight(grams > 0 ? grams : undefined);
+		await this.refreshStopTargets();
 	}
 
 	/**

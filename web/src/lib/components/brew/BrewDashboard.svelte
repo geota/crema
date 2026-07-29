@@ -2,7 +2,6 @@
 	import {
 		ml_to_fl_oz as mlToFlOz,
 		resolveModeTargets as wasmResolveModeTargets,
-		volumeStopArms as wasmVolumeStopArms
 	} from '$lib/wasm/de1_wasm';
 	import type { ModeTargetInputs, ModeTargets } from '$lib/core/crema-core';
 	import { untrack } from 'svelte';
@@ -866,35 +865,44 @@
 	 * the per-shot dot, so the row reflects the profile's configured stop even
 	 * when the dot is toggled off for the current shot.
 	 */
-	const yieldCardVisible = $derived((activeProfile?.yieldOut ?? 0) > 0 && p.yield > 0);
-	/**
-	 * Whether to render the Max Volume target card — only when the volume
-	 * stop will actually arm. The rule is the core's own stop-target
-	 * demotion (`de1_domain::volume_stop_arms`, review #41): volume is a
-	 * no-scale fallback demoted only when the weight leg resolves (scale
-	 * connected AND a weight target set), unless the user opted into both
-	 * caps via Settings → "Volume stop with scale". A scale without a
-	 * weight target keeps volume armed (review #29) — the old shell rule
-	 * hid the card there while the core would still stop on it.
-	 */
-	const maxVolumeCardVisible = $derived(
-		(activeProfile?.maxTotalVolumeMl ?? 0) > 0 &&
-			wasmVolumeStopArms(scaleConnected, yieldCardVisible, prefs.volumeStopWithScale)
+	// Stop conditions come from the CORE's projection, never from the active
+	// profile. The card used to compose them from `activeProfile` and re-run
+	// the demotion rule over its own inputs — same rule as the core, different
+	// inputs — so it could promise a yield target the core had never armed.
+	// That is exactly what happened in geota/crema#56.
+	const stopTargets = $derived(ui.stopTargets);
+	const yieldCardVisible = $derived(stopTargets?.weightG != null);
+	/** The configured-but-unarmable weight target, in display units. Sourced
+	 *  from the CORE's projection, not the shell's brew params — a blocked row
+	 *  must show what the core actually holds. */
+	const blockedYieldTarget = $derived(
+		convertWeight(stopTargets?.weightConfiguredG ?? 0, prefs.weightUnit)
 	);
+	const maxVolumeCardVisible = $derived(stopTargets?.volumeMl != null);
 	/** Volume progress as 0..100 % for the max-volume card's bar. */
 	const maxVolumePct = $derived.by(() => {
-		const cap = activeProfile?.maxTotalVolumeMl ?? 0;
+		const cap = stopTargets?.volumeMl ?? 0;
 		if (cap <= 0) return 0;
 		return Math.min(100, ((ui.dispensedVolume ?? 0) / cap) * 100);
 	});
 	/** Whether to render the Max Duration target card. */
-	const maxDurationCardVisible = $derived(prefs.maxShotDurationS > 0);
+	const maxDurationCardVisible = $derived(stopTargets?.maxTimeS != null);
 	/** Elapsed-time progress as 0..100 % for the max-duration card's bar. */
 	const maxDurationPct = $derived.by(() => {
-		const cap = prefs.maxShotDurationS;
+		const cap = stopTargets?.maxTimeS ?? 0;
 		if (cap <= 0) return 0;
 		return Math.min(100, (elapsedSec / cap) * 100);
 	});
+	/**
+	 * Nothing will stop the shot — a real state, and the most important thing
+	 * this card can say. Rendering nothing here is what made #56 invisible.
+	 */
+	const noStopCondition = $derived(
+		stopTargets != null &&
+			stopTargets.weightG == null &&
+			stopTargets.volumeMl == null &&
+			stopTargets.maxTimeS == null
+	);
 
 	/**
 	 * Stop-condition rows for `MaxStopConditionsCard`, built from the SAME
@@ -915,6 +923,22 @@
 				unit: yieldTarget.unit,
 				pct: yieldPct
 			});
+		// A target the user configured that CANNOT fire — the scale dropped, or
+		// the cup was never tared. Keep the row rather than letting it vanish: a
+		// row disappearing mid-session reads as a glitch, and silently losing
+		// stop-at-weight to a dropped scale is issue #29's original complaint.
+		if (!yieldCardVisible && stopTargets?.weightConfiguredG != null)
+			out.push({
+				key: 'yield',
+				label: 'Yield',
+				icon: 'scales',
+				color: 'var(--text-muted)',
+				live: '\u2014',
+				target: yieldTarget.value,
+				unit: yieldTarget.unit,
+				pct: 0,
+				note: stopTargets.weightBlocked === 'untared-cup' ? 'cup not tared' : 'no scale'
+			});
 		if (maxVolumeCardVisible)
 			out.push({
 				key: 'volume',
@@ -922,7 +946,7 @@
 				icon: 'drop-half',
 				color: 'var(--tel-flow)',
 				live: (ui.dispensedVolume ?? 0).toFixed(0),
-				target: String(activeProfile?.maxTotalVolumeMl ?? ''),
+				target: String(stopTargets?.volumeMl ?? ''),
 				unit: 'ml',
 				pct: maxVolumePct
 			});
@@ -1355,7 +1379,7 @@
 				<ExtractionTimer seconds={elapsedSec} step={phaseLabel} />
 				<div class="crema-dash-targets">
 					<!-- Stop-conditions (Yield / Volume / Time) — renders nothing when none apply. -->
-					<MaxStopConditionsCard rows={stopConditionRows} />
+					<MaxStopConditionsCard rows={stopConditionRows} none={noStopCondition} />
 					<!-- Brew ratio — live during a shot, then the last shot's, vs target. -->
 					<div class="crema-target">
 						<div class="t-eyebrow">Ratio</div>

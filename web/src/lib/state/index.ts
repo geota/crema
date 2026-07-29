@@ -21,6 +21,7 @@ export {
 	MAX_LOG_LINES,
 	MAX_TELEMETRY_SAMPLES,
 	type UiSnapshot,
+	type StopTargetsView,
 	type LogLine,
 	type TelemetrySample,
 	type CompletedShot,
