@@ -246,7 +246,7 @@
 			return {
 				icon: 'thermometer', label: 'STEAM', color: 'var(--tel-temp)',
 				value: steamTempM.value, unit: steamTempM.unit,
-				target: formatTemp(modeTargets.steamTempC, prefs.tempUnit),
+				target: convertTemp(modeTargets.steamTempC, prefs.tempUnit).value,
 				secondaryLabel: 'COFFEE', secondaryValue: tempM.value, secondaryUnit: tempM.unit
 			};
 		// Hot water shows the MIX reading — the blended water the DE1 actually
@@ -256,7 +256,7 @@
 			return {
 				icon: 'thermometer', label: 'WATER', color: 'var(--tel-temp)',
 				value: mixTempM.value, unit: mixTempM.unit,
-				target: formatTemp(modeTargets.hotWaterTempC, prefs.tempUnit),
+				target: convertTemp(modeTargets.hotWaterTempC, prefs.tempUnit).value,
 				secondaryLabel: 'COFFEE', secondaryValue: tempM.value, secondaryUnit: tempM.unit
 			};
 		return {
