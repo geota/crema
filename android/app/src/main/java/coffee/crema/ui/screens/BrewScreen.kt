@@ -95,6 +95,10 @@ import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
+import coffee.crema.core.steamAtTemperature
+import coffee.crema.core.groupAtTemperature
+import coffee.crema.ui.components.ModeStatusBanner
+import coffee.crema.ui.modeTargetSeconds
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.StopTargetsView
 import coffee.crema.ui.components.CremaAnchoredPopup
@@ -205,6 +209,30 @@ fun BrewScreen(
                 onDismiss = { cat -> maintDismissed = maintDismissed + cat },
                 onOpenWater = { onNav("settings") },
             )
+            // Active service-mode banner — the same component the phone uses and
+            // the web's `ModeHeadStatus` equivalent, in the same header-status
+            // slot. The tablet had no banner, so the measured temperature during
+            // a mode lived only in the foot as a 13sp meta (geota/crema#57).
+            // Steam shows the steam-heater reading; hot water and flush are
+            // group-path, so they show the head temp — the phone's mapping.
+            val activeMode = modeLabel(ui.machineStateName)
+            if (activeMode != null) {
+                ModeStatusBanner(
+                    label = activeMode,
+                    elapsedMs = ui.modeElapsedMs,
+                    targetS = modeTargetSeconds(ui.machineStateName, rememberModeTargets(ui)) ?: 0f,
+                    tempLabel = when (ui.machineStateName) {
+                        MachineState.Steam -> ui.steamTemp?.let { formatTemp(it, ui.tempUnit) }
+                        else -> ui.headTemp?.let { formatTemp(it, ui.tempUnit) }
+                    },
+                    color = when (ui.machineStateName) {
+                        MachineState.Steam -> CremaTheme.telemetry.modeSteam
+                        MachineState.HotWater -> CremaTheme.telemetry.modeWater
+                        else -> CremaTheme.telemetry.modeFlush
+                    },
+                    onStop = vm::stopShot,
+                )
+            }
             Row(
                 modifier = Modifier
                     .weight(1f)
@@ -221,13 +249,15 @@ fun BrewScreen(
                         .fillMaxHeight(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    // The timer also runs during a service mode (steam / hot
-                    // water / flush), fed by the VM's mode clock — the steaming
-                    // countdown the web head pill shows (issue: steam timer).
+                    // Shot-only, matching web: the mode's own elapsed/total now
+                    // lives in the header banner above, so showing it here too
+                    // would print the same seconds twice on one screen. This
+                    // card doubled as the mode timer only because the tablet
+                    // had no banner to put it in.
                     val mode = modeLabel(ui.machineStateName)
                     TimerCard(
-                        running = running || mode != null,
-                        elapsedMs = if (running) ui.shotElapsedMs else ui.modeElapsedMs,
+                        running = running,
+                        elapsedMs = ui.shotElapsedMs,
                         phase = ui.shotPhase,
                         modeLabel = if (running) null else mode,
                         substate = ui.machineSubstate,
@@ -296,6 +326,7 @@ fun BrewScreen(
             BrewFoot(
                 machineState = ui.machineState,
                 machineStateName = ui.machineStateName,
+                machineSubstate = ui.machineSubstate,
                 scaleName = ui.scaleName,
                 steamTemp = ui.steamTemp,
                 waterLevelMm = ui.waterLevelMm,
@@ -1492,14 +1523,46 @@ private fun ChannelsRow(
             secValue = water.value, secUnit = water.unit,
         )
     }
+    // The temperature card follows the running mode (geota/crema#57). During a
+    // steam or hot-water session the group temperature is not what the user is
+    // watching, and it was occupying the card while the number that mattered
+    // sat in the foot as a 13sp meta. The displaced channel is DEMOTED to the
+    // secondary rather than dropped — the group temp still tells you whether
+    // the machine is ready for the next shot. Only the LABEL moves: the
+    // thermometer and the temperature colour identify the channel, and this is
+    // the temperature card in every mode, so swapping the glyph or the tint
+    // made it read as a different card appearing rather than the same one
+    // retargeting. The word alone is what stops "Coffee 150°".
+    val steamTempM = convertTemp(ui.steamTemp, ui.tempUnit)
+    val modeTargets = rememberModeTargets(ui)
     val tempCard: @Composable (Modifier) -> Unit = { m ->
-        ChannelCard(
-            m, primLabel = "Coffee", primIcon = "thermometer", primColor = tel.temp,
-            primValue = coffeeTemp.value, primUnit = coffeeTemp.unit,
-            secLabel = "Water", secColor = tel.temp2,
-            secValue = mixTempM.value, secUnit = mixTempM.unit,
-            target = active?.let { "target ${formatTemp(it.brewTemp, ui.tempUnit)}" },
-        )
+        when (ui.machineStateName) {
+            MachineState.Steam -> ChannelCard(
+                m, primLabel = "Steam", primIcon = "thermometer", primColor = tel.temp,
+                primValue = steamTempM.value, primUnit = steamTempM.unit,
+                secLabel = "Coffee", secColor = tel.temp2,
+                secValue = coffeeTemp.value, secUnit = coffeeTemp.unit,
+                target = "target ${formatTemp(modeTargets.steamTempC, ui.tempUnit)}",
+            )
+            // Hot water shows the MIX reading — the blended water the DE1
+            // actually delivers — promoted from its usual secondary slot. No
+            // new channel, so no claim about which heater feeds the tap.
+            MachineState.HotWater -> ChannelCard(
+                m, primLabel = "Water", primIcon = "thermometer", primColor = tel.temp,
+                primValue = mixTempM.value, primUnit = mixTempM.unit,
+                secLabel = "Coffee", secColor = tel.temp2,
+                secValue = coffeeTemp.value, secUnit = coffeeTemp.unit,
+                target = "target ${formatTemp(modeTargets.hotWaterTempC, ui.tempUnit)}",
+            )
+            // Espresso and Flush are both group-path: Coffee stays primary.
+            else -> ChannelCard(
+                m, primLabel = "Coffee", primIcon = "thermometer", primColor = tel.temp,
+                primValue = coffeeTemp.value, primUnit = coffeeTemp.unit,
+                secLabel = "Water", secColor = tel.temp2,
+                secValue = mixTempM.value, secUnit = mixTempM.unit,
+                target = active?.let { "target ${formatTemp(it.brewTemp, ui.tempUnit)}" },
+            )
+        }
     }
     val weightCard: @Composable (Modifier) -> Unit = { m ->
         ChannelCard(
@@ -1590,6 +1653,8 @@ private fun BrewFoot(
     // primitives, so they skip individually beneath it.
     machineState: String?,
     machineStateName: MachineState?,
+    /** Wire substate name — drives the group-heater chip glyphs. */
+    machineSubstate: String?,
     scaleName: String?,
     steamTemp: Float?,
     waterLevelMm: Float?,
@@ -1661,9 +1726,14 @@ private fun BrewFoot(
                 val flushSub =
                     if (flushing) modeRunningSub(modeElapsedMs, targets.flushTimeS)
                     else "${formatTempCompact(targets.flushTempC, tempUnit)} · ${targets.flushTimeS.toInt()} s"
-                ModeChip("Steam", steamSub, "cloud", CremaTheme.telemetry.modeSteam, active = steaming, enabled = connected, onTap = onSteam)
-                ModeChip("Hot water", waterSub, "drop", CremaTheme.telemetry.modeWater, active = dispensing, enabled = connected, onTap = onHotWater)
-                ModeChip("Flush", flushSub, "sparkle", CremaTheme.telemetry.modeFlush, active = flushing, enabled = connected, onTap = onFlush)
+                // Glyph lit once the heater each mode draws on is up to
+                // temperature. Steam has its own boiler; Coffee, Hot water and
+                // Flush all come off the group, so they share one signal.
+                val steamHot = steamAtTemperature(steamTemp, targets.steamTempC)
+                val groupHot = groupAtTemperature(machineSubstate)
+                ModeChip("Steam", steamSub, "cloud", CremaTheme.telemetry.modeSteam, active = steaming, enabled = connected, atTemperature = steamHot, onTap = onSteam)
+                ModeChip("Hot water", waterSub, "drop", CremaTheme.telemetry.modeWater, active = dispensing, enabled = connected, atTemperature = groupHot, onTap = onHotWater)
+                ModeChip("Flush", flushSub, "sparkle", CremaTheme.telemetry.modeFlush, active = flushing, enabled = connected, atTemperature = groupHot, onTap = onFlush)
                 CoffeeButton(running = espressoActive, uploading = profileUploading, enabled = connected, onClick = onCoffee)
             }
         }
@@ -1763,6 +1833,12 @@ private fun ModeChip(
     modeColor: Color,
     active: Boolean,
     enabled: Boolean,
+    /** Whether the heater this mode draws on is up to temperature. Dims the
+     *  GLYPH ONLY — deliberately not the whole chip, because `enabled` already
+     *  greys the chip to mean "you cannot press this". A cold heater is
+     *  pressable: the DE1 queues the request and heats. Two greys with
+     *  opposite meanings would be worse than none. */
+    atTemperature: Boolean,
     onTap: () -> Unit,
 ) {
     val border = if (active) modeColor else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
@@ -1778,7 +1854,7 @@ private fun ModeChip(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        PhIcon(icon, sizeDp = 19, tint = modeColor)
+        PhIcon(icon, sizeDp = 19, tint = if (atTemperature) modeColor else MaterialTheme.colorScheme.onSurfaceVariant)
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
             Text(sub, style = CremaTheme.readout.readoutSm.copy(fontSize = 10.5f.sp, lineHeight = 12.sp), color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -1011,6 +1011,23 @@ pub fn water_tank_depth_mm(sensor_mm: f32) -> f32 {
     de1_domain::water_tank_depth_mm(sensor_mm)
 }
 
+/// Whether the steam boiler is at its target (within 5 °C) — the Brew Steam
+/// chip's lit/dimmed state. See [`de1_domain::steam_at_temperature`].
+#[uniffi::export]
+#[must_use]
+pub fn steam_at_temperature(steam_temp_c: Option<f32>, target_c: f32) -> bool {
+    de1_domain::steam_at_temperature(steam_temp_c, target_c)
+}
+
+/// Whether the GROUP is up to temperature, from the reported substate name —
+/// the Coffee / Hot water / Flush chips' lit/dimmed state. See
+/// [`de1_domain::group_at_temperature`].
+#[uniffi::export]
+#[must_use]
+pub fn group_at_temperature(substate: Option<String>) -> bool {
+    de1_domain::group_at_temperature(substate.as_deref())
+}
+
 /// The refill threshold (raw sensor mm) to write to the machine when the
 /// user hasn't dialled one — see [`de1_domain::DEFAULT_REFILL_POINT_MM`].
 #[uniffi::export]

@@ -2,6 +2,8 @@
 	import {
 		ml_to_fl_oz as mlToFlOz,
 		resolveModeTargets as wasmResolveModeTargets,
+		steam_at_temperature as wasmSteamAtTemperature,
+		group_at_temperature as wasmGroupAtTemperature,
 	} from '$lib/wasm/de1_wasm';
 	import type { ModeTargetInputs, ModeTargets } from '$lib/core/crema-core';
 	import { untrack } from 'svelte';
@@ -219,6 +221,51 @@
 	const modeStartedAtMs = $derived<number | null>(
 		modeState === 'idle' ? null : performance.now()
 	);
+
+	// Heater readiness, distinct from `modeReady` (which is BLE reachability).
+	// Steam has its own boiler; Coffee, Hot water and Flush all draw on the
+	// group, so they share one signal. Both rules live in core so the three
+	// shells cannot drift (the Android phone had its own hardcoded 130 °C).
+	const steamHot = $derived(
+		wasmSteamAtTemperature(ui.latestTelemetry?.steamTemp ?? undefined, modeTargets.steamTempC)
+	);
+	const groupHot = $derived(wasmGroupAtTemperature(ui.machineSubstate ?? undefined));
+
+	/**
+	 * The temperature channel follows the running mode (geota/crema#57).
+	 * During steam or hot water the group temperature is not what the user is
+	 * watching; the displaced channel is DEMOTED to the secondary rather than
+	 * dropped, and label/icon/colour move together so the tile can never read
+	 * as a mislabelled "COFFEE 150°". Only the LABEL moves — the thermometer
+	 * and the temperature colour identify the channel, and this is the
+	 * temperature card in every mode. Espresso and Flush are both group-path,
+	 * so Coffee stays primary for them.
+	 */
+	const tempChannel = $derived.by(() => {
+		if (modeState === 'steaming')
+			return {
+				icon: 'thermometer', label: 'STEAM', color: 'var(--tel-temp)',
+				value: steamTempM.value, unit: steamTempM.unit,
+				target: formatTemp(modeTargets.steamTempC, prefs.tempUnit),
+				secondaryLabel: 'COFFEE', secondaryValue: tempM.value, secondaryUnit: tempM.unit
+			};
+		// Hot water shows the MIX reading — the blended water the DE1 actually
+		// delivers — promoted from its usual secondary slot. No new channel, so
+		// no claim about which heater feeds the tap.
+		if (modeState === 'dispensing')
+			return {
+				icon: 'thermometer', label: 'WATER', color: 'var(--tel-temp)',
+				value: mixTempM.value, unit: mixTempM.unit,
+				target: formatTemp(modeTargets.hotWaterTempC, prefs.tempUnit),
+				secondaryLabel: 'COFFEE', secondaryValue: tempM.value, secondaryUnit: tempM.unit
+			};
+		return {
+			icon: 'thermometer', label: 'COFFEE', color: 'var(--tel-temp)',
+			value: tempM.value, unit: tempM.unit,
+			target: brewTempTarget.value,
+			secondaryLabel: 'WATER', secondaryValue: mixTempM.value, secondaryUnit: mixTempM.unit
+		};
+	});
 	let modeNowMs = $state(0);
 	// Tick: pure write — seeds `modeNowMs` to the current wall clock on
 	// transition (so the first frame reads elapsed ≈ 0) and ticks it every
@@ -1431,15 +1478,15 @@
 						secondaryColor="var(--tel-flow-2)"
 					/>
 					<ChannelReadout
-						icon="thermometer"
-						label="COFFEE"
-						value={tempM.value}
-						unit={tempM.unit}
-						color="var(--tel-temp)"
-						target={brewTempTarget.value}
-						secondaryLabel="WATER"
-						secondaryValue={mixTempM.value}
-						secondaryUnit={mixTempM.unit}
+						icon={tempChannel.icon}
+						label={tempChannel.label}
+						value={tempChannel.value}
+						unit={tempChannel.unit}
+						color={tempChannel.color}
+						target={tempChannel.target}
+						secondaryLabel={tempChannel.secondaryLabel}
+						secondaryValue={tempChannel.secondaryValue}
+						secondaryUnit={tempChannel.secondaryUnit}
 						secondaryColor="var(--tel-temp-2)"
 					/>
 					<ChannelReadout
@@ -1556,6 +1603,7 @@
 						kind="steam"
 						active={modeState === 'steaming'}
 						ready={modeReady}
+						atTemperature={steamHot}
 						icon="cloud"
 						label="Steam"
 						sub={steamChipSub}
@@ -1565,6 +1613,7 @@
 						kind="water"
 						active={modeState === 'dispensing'}
 						ready={modeReady}
+						atTemperature={groupHot}
 						icon="drop"
 						label="Hot water"
 						sub={waterChipSub}
@@ -1574,6 +1623,7 @@
 						kind="flush"
 						active={modeState === 'flushing'}
 						ready={modeReady}
+						atTemperature={groupHot}
 						icon="sparkle"
 						label="Flush"
 						sub={flushChipSub}

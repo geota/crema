@@ -9,6 +9,7 @@
 	 * - `is-active is-<kind>` — mode running; mode-colored border + icon,
 	 *   `×` cancel chip on the right
 	 * - `is-disabled`       — DE1 not ready; greyed, `cursor: not-allowed`
+ * - `is-cold`           — heater still warming; the ICON dims, chip stays live
 	 *
 	 * The chip is a single button. The HANDOFF spec says "tap to start,
 	 * again to cancel" — the same click handler fires from any state, the
@@ -23,6 +24,7 @@
 		kind,
 		active = false,
 		ready = true,
+		atTemperature = true,
 		icon,
 		label,
 		sub,
@@ -34,6 +36,14 @@
 		active?: boolean;
 		/** Whether the DE1 is ready to accept the mode-request write. */
 		ready?: boolean;
+		/**
+		 * Whether the heater this mode draws on is up to temperature. Dims the
+		 * ICON ONLY — deliberately not the chip, because `ready` already greys
+		 * the whole chip to mean "you cannot press this". A cold heater IS
+		 * pressable: the DE1 queues the request and heats. Two greys with
+		 * opposite meanings would be worse than none.
+		 */
+		atTemperature?: boolean;
 		/** Phosphor icon name (e.g. `'cloud'`, `'drop'`, `'sparkle'`). */
 		icon: string;
 		/** Top label inside the chip (e.g. `'Steam'`). */
@@ -53,6 +63,7 @@
 	class:is-water={kind === 'water'}
 	class:is-flush={kind === 'flush'}
 	class:is-disabled={!ready}
+	class:is-cold={!atTemperature}
 	disabled={!ready}
 	aria-label={active ? `Cancel ${label}` : `Start ${label}`}
 	onclick={() => onTap?.()}

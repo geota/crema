@@ -53,6 +53,10 @@ import coffee.crema.core.celsiusToFahrenheit
 import coffee.crema.ui.modeLabel
 import coffee.crema.ui.modeRunningSub
 import coffee.crema.ui.modeTargetSeconds
+import coffee.crema.core.steamAtTemperature
+import coffee.crema.core.groupAtTemperature
+import coffee.crema.ui.components.blendOverSurface
+import coffee.crema.ui.components.ModeStatusBanner
 import coffee.crema.ui.rememberModeTargets
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.rankProfilesForPicker
@@ -211,6 +215,8 @@ fun PhoneBrewScreen(
                 onSteam = { if (ui.machineStateName == MachineState.Steam) vm.stopShot() else vm.steam() },
                 onWater = { if (ui.machineStateName == MachineState.HotWater) vm.stopShot() else vm.hotWater() },
                 onFlush = vm::flush,
+                steamTemp = ui.steamTemp,
+                machineSubstate = ui.machineSubstate,
             )
             CoffeeCta(
                 running = espressoActive,
@@ -998,7 +1004,11 @@ private fun RestingBody(
                 active != null && ui.headTemp >= active.brewTemp - 2f
             // Ready tints derived (was hardcoded false): steam boiler up to temp,
             // tank above the low-water mark. Mirrors the Group tile's pattern.
-            val steamOk = connected && (ui.steamTemp ?: 0f) >= 130f
+            // Target-relative, not the hardcoded 130 °C this used to be: an
+            // absolute threshold never lit for a 120 °C steam target and lit
+            // 30 °C early for a 160 °C one. One rule, shared with the chips
+            // and the other shells (core `steam_at_temperature`).
+            val steamOk = connected && steamAtTemperature(ui.steamTemp, rememberModeTargets(ui).steamTempC)
             val tankOk = connected && ui.waterLevelMm != null && !ui.refillSoon()
             // Compact, unit-aware status (issue 44): converted value + explicit
             // glyph, no space — this dense 4-up strip can't fit "148.0 °C".
@@ -1136,6 +1146,9 @@ private fun ModeCluster(
     onSteam: () -> Unit,
     onWater: () -> Unit,
     onFlush: () -> Unit,
+    /** Live steam-boiler reading + wire substate — drive the pill glyphs. */
+    steamTemp: Float?,
+    machineSubstate: String?,
 ) {
     val tel = CremaTheme.telemetry
     // Live pill subs (were hardcoded): resting = the *target* the firmware
@@ -1145,6 +1158,10 @@ private fun ModeCluster(
     val dispensing = machineStateName == MachineState.HotWater
     val flushing = machineStateName == MachineState.HotWaterRinse
     fun deg(c: Float) = fmt("%.0f°", if (tempUnit == "F") celsiusToFahrenheit(c) else c)
+    // Steam has its own boiler; Water and Flush come off the group, so they
+    // share the group signal (as does the Coffee button).
+    val steamHot = steamAtTemperature(steamTemp, targets.steamTempC)
+    val groupHot = groupAtTemperature(machineSubstate)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ModePill(
             "Steam",
@@ -1152,7 +1169,7 @@ private fun ModeCluster(
             else "${deg(targets.steamTempC)} · ${targets.steamTimeoutS.toInt()}s",
             "cloud", tel.modeSteam,
             active = steaming,
-            enabled = connected, onTap = onSteam, modifier = Modifier.weight(1f),
+            enabled = connected, atTemperature = steamHot, onTap = onSteam, modifier = Modifier.weight(1f),
         )
         ModePill(
             "Water",
@@ -1160,7 +1177,7 @@ private fun ModeCluster(
             else "${targets.hotWaterVolumeMl.toInt()}ml · ${deg(targets.hotWaterTempC)}",
             "drop", tel.modeWater,
             active = dispensing,
-            enabled = connected, onTap = onWater, modifier = Modifier.weight(1f),
+            enabled = connected, atTemperature = groupHot, onTap = onWater, modifier = Modifier.weight(1f),
         )
         ModePill(
             "Flush",
@@ -1168,86 +1185,19 @@ private fun ModeCluster(
             else "${targets.flushTimeS.toInt()}s purge",
             "sparkle", tel.modeFlush,
             active = flushing,
-            enabled = connected, onTap = onFlush, modifier = Modifier.weight(1f),
+            enabled = connected, atTemperature = groupHot, onTap = onFlush, modifier = Modifier.weight(1f),
         )
-    }
-}
-
-/**
- * Active service-mode banner — the phone's steaming / hot-water / flushing
- * feedback (web `ModeHeadStatus` parity): mode label, live `elapsed / total s`
- * with the measured temperature, a progress bar against the firmware timeout,
- * and a Stop that requests Idle (same as tapping the active pill).
- */
-@Composable
-private fun ModeStatusBanner(
-    label: String,
-    elapsedMs: Long,
-    targetS: Float,
-    tempLabel: String?,
-    color: Color,
-    onStop: () -> Unit,
-) {
-    val elapsedS = elapsedMs / 1000f
-    val meta = fmt("%.1f / %.0f s", elapsedS, targetS) +
-        (tempLabel?.let { " · $it" } ?: "")
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = color.copy(alpha = 0.16f).blendOverSurface(MaterialTheme.colorScheme.surfaceContainer),
-    ) {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    label,
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Spacer(Modifier.weight(1f))
-                Text(
-                    meta,
-                    style = TextStyle(fontFamily = JetBrainsMono, fontSize = 13.sp, fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum"),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                )
-                Spacer(Modifier.width(10.dp))
-                Surface(
-                    onClick = onStop,
-                    shape = RoundedCornerShape(999.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                ) {
-                    Text(
-                        "Stop",
-                        Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-            }
-            Box(
-                Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(999.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-            ) {
-                Box(
-                    Modifier
-                        .fillMaxWidth(if (targetS > 0f) (elapsedS / targetS).coerceIn(0f, 1f) else 0f)
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(color),
-                )
-            }
-        }
     }
 }
 
 @Composable
 private fun ModePill(
     label: String, sub: String, icon: String, color: Color,
-    active: Boolean, enabled: Boolean, onTap: () -> Unit, modifier: Modifier = Modifier,
+    active: Boolean, enabled: Boolean,
+    /** Heater up to temperature — dims the GLYPH only. `enabled` already
+     *  greys the whole pill for "not pressable"; a cold heater IS pressable. */
+    atTemperature: Boolean,
+    onTap: () -> Unit, modifier: Modifier = Modifier,
 ) {
     val bg = color.copy(alpha = 0.16f).blendOverSurface(MaterialTheme.colorScheme.surfaceContainer)
     Surface(
@@ -1264,7 +1214,7 @@ private fun ModePill(
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                PhIcon(icon, sizeDp = 17, tint = color)
+                PhIcon(icon, sizeDp = 17, tint = if (atTemperature) color else MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
                     label,
                     style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
@@ -1312,10 +1262,3 @@ private fun CoffeeCta(running: Boolean, uploading: Boolean, enabled: Boolean, on
     }
 }
 
-// CSS color-mix helper.
-private fun Color.blendOverSurface(base: Color): Color = Color(
-    red = red * alpha + base.red * (1 - alpha),
-    green = green * alpha + base.green * (1 - alpha),
-    blue = blue * alpha + base.blue * (1 - alpha),
-    alpha = 1f,
-)

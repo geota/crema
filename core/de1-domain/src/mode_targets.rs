@@ -192,3 +192,98 @@ mod tests {
         assert_eq!(t.flush_time_s, 6.0);
     }
 }
+
+/// How far below its target the steam boiler may sit and still count as "at
+/// temperature", °C. Decenza uses the same 5 °C tolerance for its
+/// `isHeatingUp` readout (`SteamPage.qml`), so the ecosystem agrees on when a
+/// machine is warm enough to steam.
+pub const READY_TOLERANCE_C: f32 = 5.0;
+
+/// Whether the steam boiler has reached its target, within
+/// [`READY_TOLERANCE_C`].
+///
+/// Drives the Brew screen's Steam chip glyph: lit at temperature, dimmed while
+/// the boiler is still climbing. Lives here rather than in each shell because
+/// all three previously would have carried their own threshold — the Android
+/// phone actually did, as a hardcoded `>= 130 °C` that lied for anyone whose
+/// steam target wasn't near the default (never lighting at a 120 °C target,
+/// lighting 30 °C early at 160 °C).
+///
+/// `None` (no reading yet) is NOT at temperature: before the first telemetry
+/// sample the honest answer is "not yet", not "ready".
+#[must_use]
+pub fn steam_at_temperature(steam_temp_c: Option<f32>, target_c: f32) -> bool {
+    match steam_temp_c {
+        Some(t) if t.is_finite() && target_c > 0.0 => t >= target_c - READY_TOLERANCE_C,
+        // A target of 0 means the steam heater is disabled entirely (the DE1's
+        // documented sentinel) — nothing to be ready for, so never lit.
+        _ => false,
+    }
+}
+
+/// Whether the GROUP is up to temperature, from the DE1's reported substate.
+///
+/// Drives the Coffee / Hot water / Flush chip glyphs — all three draw on the
+/// group path, so they share one readiness signal, distinct from the steam
+/// boiler's ([`steam_at_temperature`]).
+///
+/// Takes the substate's wire name (the shells hold it as a string) so no shell
+/// has to enumerate the warming substates itself. An absent substate is
+/// treated as ready: before the first `StateInfo` there is nothing to warn
+/// about, and dimming every chip on connect would be noise.
+#[must_use]
+pub fn group_at_temperature(substate: Option<&str>) -> bool {
+    !matches!(substate, Some("Heating" | "FinalHeating" | "Stabilising"))
+}
+
+#[cfg(test)]
+mod ready_tests {
+    use super::*;
+
+    #[test]
+    fn at_temperature_within_the_tolerance() {
+        assert!(steam_at_temperature(Some(150.0), 150.0));
+        assert!(
+            steam_at_temperature(Some(145.0), 150.0),
+            "exactly -5 counts"
+        );
+        assert!(
+            steam_at_temperature(Some(160.0), 150.0),
+            "over target counts"
+        );
+        assert!(!steam_at_temperature(Some(144.9), 150.0));
+    }
+
+    /// The bug this replaces: a hardcoded 130 °C threshold never lit a 120 °C
+    /// target and lit a 160 °C one 30 °C early.
+    #[test]
+    fn the_threshold_follows_the_users_target() {
+        assert!(
+            steam_at_temperature(Some(118.0), 120.0),
+            "low target reachable"
+        );
+        assert!(
+            !steam_at_temperature(Some(131.0), 160.0),
+            "high target not early"
+        );
+    }
+
+    #[test]
+    fn the_group_is_cold_only_while_actually_warming() {
+        assert!(!group_at_temperature(Some("Heating")));
+        assert!(!group_at_temperature(Some("FinalHeating")));
+        assert!(!group_at_temperature(Some("Stabilising")));
+        assert!(group_at_temperature(Some("Ready")));
+        assert!(group_at_temperature(Some("Pouring")));
+        // Nothing reported yet — don't dim every chip on connect.
+        assert!(group_at_temperature(None));
+    }
+
+    #[test]
+    fn no_reading_or_disabled_heater_is_never_ready() {
+        assert!(!steam_at_temperature(None, 150.0));
+        assert!(!steam_at_temperature(Some(f32::NAN), 150.0));
+        // Steam target 0 = heater off (DE1 sentinel).
+        assert!(!steam_at_temperature(Some(150.0), 0.0));
+    }
+}

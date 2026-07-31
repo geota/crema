@@ -115,7 +115,10 @@ pub use ids::{new_profile_id, new_shot_id};
 pub use maintenance::{
     MaintenanceReadout, MaintenanceState, maintenance_readout, maintenance_readout_json,
 };
-pub use mode_targets::{ModeTargetInputs, ModeTargets, resolve_mode_targets};
+pub use mode_targets::{
+    ModeTargetInputs, ModeTargets, READY_TOLERANCE_C, group_at_temperature, resolve_mode_targets,
+    steam_at_temperature,
+};
 pub use profile::{
     AssembledProfile, BeverageType, Compare, ExitCondition, ExitMetric, Limiter, Profile,
     ProfileStep, Pump, TempSensor, Transition,
