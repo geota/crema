@@ -1495,14 +1495,46 @@ private fun ChannelsRow(
             secValue = water.value, secUnit = water.unit,
         )
     }
+    // The temperature card follows the running mode (geota/crema#57). During a
+    // steam or hot-water session the group temperature is not what the user is
+    // watching, and it was occupying the card while the number that mattered
+    // sat in the foot as a 13sp meta. The displaced channel is DEMOTED to the
+    // secondary rather than dropped — the group temp still tells you whether
+    // the machine is ready for the next shot. Only the LABEL moves: the
+    // thermometer and the temperature colour identify the channel, and this is
+    // the temperature card in every mode, so swapping the glyph or the tint
+    // made it read as a different card appearing rather than the same one
+    // retargeting. The word alone is what stops "Coffee 150°".
+    val steamTempM = convertTemp(ui.steamTemp, ui.tempUnit)
+    val modeTargets = rememberModeTargets(ui)
     val tempCard: @Composable (Modifier) -> Unit = { m ->
-        ChannelCard(
-            m, primLabel = "Coffee", primIcon = "thermometer", primColor = tel.temp,
-            primValue = coffeeTemp.value, primUnit = coffeeTemp.unit,
-            secLabel = "Water", secColor = tel.temp2,
-            secValue = mixTempM.value, secUnit = mixTempM.unit,
-            target = active?.let { "target ${formatTemp(it.brewTemp, ui.tempUnit)}" },
-        )
+        when (ui.machineStateName) {
+            MachineState.Steam -> ChannelCard(
+                m, primLabel = "Steam", primIcon = "thermometer", primColor = tel.temp,
+                primValue = steamTempM.value, primUnit = steamTempM.unit,
+                secLabel = "Coffee", secColor = tel.temp2,
+                secValue = coffeeTemp.value, secUnit = coffeeTemp.unit,
+                target = "target ${formatTemp(modeTargets.steamTempC, ui.tempUnit)}",
+            )
+            // Hot water shows the MIX reading — the blended water the DE1
+            // actually delivers — promoted from its usual secondary slot. No
+            // new channel, so no claim about which heater feeds the tap.
+            MachineState.HotWater -> ChannelCard(
+                m, primLabel = "Water", primIcon = "thermometer", primColor = tel.temp,
+                primValue = mixTempM.value, primUnit = mixTempM.unit,
+                secLabel = "Coffee", secColor = tel.temp2,
+                secValue = coffeeTemp.value, secUnit = coffeeTemp.unit,
+                target = "target ${formatTemp(modeTargets.hotWaterTempC, ui.tempUnit)}",
+            )
+            // Espresso and Flush are both group-path: Coffee stays primary.
+            else -> ChannelCard(
+                m, primLabel = "Coffee", primIcon = "thermometer", primColor = tel.temp,
+                primValue = coffeeTemp.value, primUnit = coffeeTemp.unit,
+                secLabel = "Water", secColor = tel.temp2,
+                secValue = mixTempM.value, secUnit = mixTempM.unit,
+                target = active?.let { "target ${formatTemp(it.brewTemp, ui.tempUnit)}" },
+            )
+        }
     }
     val weightCard: @Composable (Modifier) -> Unit = { m ->
         ChannelCard(
