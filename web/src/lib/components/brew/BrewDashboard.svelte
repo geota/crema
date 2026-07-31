@@ -231,41 +231,6 @@
 	);
 	const groupHot = $derived(wasmGroupAtTemperature(ui.machineSubstate ?? undefined));
 
-	/**
-	 * The temperature channel follows the running mode (geota/crema#57).
-	 * During steam or hot water the group temperature is not what the user is
-	 * watching; the displaced channel is DEMOTED to the secondary rather than
-	 * dropped, and label/icon/colour move together so the tile can never read
-	 * as a mislabelled "COFFEE 150°". Only the LABEL moves — the thermometer
-	 * and the temperature colour identify the channel, and this is the
-	 * temperature card in every mode. Espresso and Flush are both group-path,
-	 * so Coffee stays primary for them.
-	 */
-	const tempChannel = $derived.by(() => {
-		if (modeState === 'steaming')
-			return {
-				icon: 'thermometer', label: 'STEAM', color: 'var(--tel-temp)',
-				value: steamTempM.value, unit: steamTempM.unit,
-				target: formatTemp(modeTargets.steamTempC, prefs.tempUnit),
-				secondaryLabel: 'COFFEE', secondaryValue: tempM.value, secondaryUnit: tempM.unit
-			};
-		// Hot water shows the MIX reading — the blended water the DE1 actually
-		// delivers — promoted from its usual secondary slot. No new channel, so
-		// no claim about which heater feeds the tap.
-		if (modeState === 'dispensing')
-			return {
-				icon: 'thermometer', label: 'WATER', color: 'var(--tel-temp)',
-				value: mixTempM.value, unit: mixTempM.unit,
-				target: formatTemp(modeTargets.hotWaterTempC, prefs.tempUnit),
-				secondaryLabel: 'COFFEE', secondaryValue: tempM.value, secondaryUnit: tempM.unit
-			};
-		return {
-			icon: 'thermometer', label: 'COFFEE', color: 'var(--tel-temp)',
-			value: tempM.value, unit: tempM.unit,
-			target: brewTempTarget.value,
-			secondaryLabel: 'WATER', secondaryValue: mixTempM.value, secondaryUnit: mixTempM.unit
-		};
-	});
 	let modeNowMs = $state(0);
 	// Tick: pure write — seeds `modeNowMs` to the current wall clock on
 	// transition (so the first frame reads elapsed ≈ 0) and ticks it every
@@ -1478,15 +1443,15 @@
 						secondaryColor="var(--tel-flow-2)"
 					/>
 					<ChannelReadout
-						icon={tempChannel.icon}
-						label={tempChannel.label}
-						value={tempChannel.value}
-						unit={tempChannel.unit}
-						color={tempChannel.color}
-						target={tempChannel.target}
-						secondaryLabel={tempChannel.secondaryLabel}
-						secondaryValue={tempChannel.secondaryValue}
-						secondaryUnit={tempChannel.secondaryUnit}
+						icon="thermometer"
+						label="COFFEE"
+						value={tempM.value}
+						unit={tempM.unit}
+						color="var(--tel-temp)"
+						target={brewTempTarget.value}
+						secondaryLabel="WATER"
+						secondaryValue={mixTempM.value}
+						secondaryUnit={mixTempM.unit}
 						secondaryColor="var(--tel-temp-2)"
 					/>
 					<ChannelReadout

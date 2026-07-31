@@ -55,8 +55,6 @@ import coffee.crema.ui.modeRunningSub
 import coffee.crema.ui.modeTargetSeconds
 import coffee.crema.core.steamAtTemperature
 import coffee.crema.core.groupAtTemperature
-import coffee.crema.ui.components.blendOverSurface
-import coffee.crema.ui.components.ModeStatusBanner
 import coffee.crema.ui.rememberModeTargets
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.rankProfilesForPicker
@@ -1190,6 +1188,77 @@ private fun ModeCluster(
     }
 }
 
+/**
+ * Active service-mode banner — the phone's steaming / hot-water / flushing
+ * feedback (web `ModeHeadStatus` parity): mode label, live `elapsed / total s`
+ * with the measured temperature, a progress bar against the firmware timeout,
+ * and a Stop that requests Idle (same as tapping the active pill).
+ */
+@Composable
+private fun ModeStatusBanner(
+    label: String,
+    elapsedMs: Long,
+    targetS: Float,
+    tempLabel: String?,
+    color: Color,
+    onStop: () -> Unit,
+) {
+    val elapsedS = elapsedMs / 1000f
+    val meta = fmt("%.1f / %.0f s", elapsedS, targetS) +
+        (tempLabel?.let { " · $it" } ?: "")
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = color.copy(alpha = 0.16f).blendOverSurface(MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    meta,
+                    style = TextStyle(fontFamily = JetBrainsMono, fontSize = 13.sp, fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum"),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                )
+                Spacer(Modifier.width(10.dp))
+                Surface(
+                    onClick = onStop,
+                    shape = RoundedCornerShape(999.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                ) {
+                    Text(
+                        "Stop",
+                        Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+            Box(
+                Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(999.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(if (targetS > 0f) (elapsedS / targetS).coerceIn(0f, 1f) else 0f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(color),
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun ModePill(
     label: String, sub: String, icon: String, color: Color,
@@ -1262,3 +1331,10 @@ private fun CoffeeCta(running: Boolean, uploading: Boolean, enabled: Boolean, on
     }
 }
 
+// CSS color-mix helper.
+private fun Color.blendOverSurface(base: Color): Color = Color(
+    red = red * alpha + base.red * (1 - alpha),
+    green = green * alpha + base.green * (1 - alpha),
+    blue = blue * alpha + base.blue * (1 - alpha),
+    alpha = 1f,
+)
