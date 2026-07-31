@@ -17,4 +17,4 @@ export { default as StSegment } from './StSegment.svelte';
 export { default as StButton } from './StButton.svelte';
 export { default as StStatusDot } from './StStatusDot.svelte';
 export { default as StValueChip } from './StValueChip.svelte';
-export { default as StMaintenanceCard } from './StMaintenanceCard.svelte';
+export { default as StMaintenanceRow } from './StMaintenanceRow.svelte';

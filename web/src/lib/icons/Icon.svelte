@@ -14,6 +14,7 @@
 	import SpinnerGapIcon from 'phosphor-svelte/lib/SpinnerGapIcon';
 	import SunIcon from 'phosphor-svelte/lib/SunIcon';
 	import WarningIcon from 'phosphor-svelte/lib/WarningIcon';
+	import WindIcon from 'phosphor-svelte/lib/WindIcon';
 	import CalendarIcon from 'phosphor-svelte/lib/CalendarIcon';
 	import CameraPlusIcon from 'phosphor-svelte/lib/CameraPlusIcon';
 	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
@@ -135,6 +136,9 @@
 		'sort-ascending': SortAscendingIcon,
 		'sort-descending': SortDescendingIcon,
 		sparkle: SparkleIcon,
+		// Steam rinse (Water & maintenance). Was referenced by name but never
+		// registered, so that row rendered with no glyph at all.
+		wind: WindIcon,
 		'spinner-gap': SpinnerGapIcon,
 		sun: SunIcon,
 		square: SquareIcon,

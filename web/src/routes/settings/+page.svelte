@@ -638,72 +638,9 @@
 		margin-top: auto;
 	}
 
-	/* ── Maintenance cards ──────────────────────────────────────────────── */
-	:global(.st-content .st-maint-grid) {
-		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 12px;
-		margin-bottom: 8px;
-	}
-	:global(.st-content .st-maint) {
-		background: var(--bg-surface);
-		border: 1px solid rgba(var(--tint-rgb), 0.05);
-		border-radius: var(--radius-md);
-		padding: 16px;
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
-	:global(.st-content .st-maint-head) {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-	:global(.st-content .st-maint-head i) {
-		font-size: 18px;
-		color: var(--copper-400);
-	}
-	:global(.st-content .st-maint-title) {
-		font-family: var(--font-sans);
-		font-size: 12px;
-		font-weight: 600;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: var(--fg-1);
-	}
-	:global(.st-content .st-maint-state) {
-		font-family: var(--font-sans);
-		font-size: 11px;
-		color: var(--success);
-		font-weight: 500;
-	}
-	:global(.st-content .st-maint-state.is-warn) {
-		color: var(--warning);
-	}
-	:global(.st-content .st-maint-metric) {
-		display: flex;
-		align-items: baseline;
-		gap: 6px;
-		font-family: var(--font-mono);
-		font-variant-numeric: tabular-nums;
-		font-size: 22px;
-		color: var(--fg-1);
-		margin-top: 4px;
-	}
-	:global(.st-content .st-maint-metric em) {
-		font-style: normal;
-		font-family: var(--font-sans);
-		font-size: 10px;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
-	}
-	:global(.st-content .st-maint-detail) {
-		font-family: var(--font-sans);
-		font-size: 11px;
-		line-height: 1.5;
-		color: rgba(var(--tint-rgb), 0.45);
-	}
+	/* ── Maintenance ────────────────────────────────────────────────────── */
+	/* The card grid is gone (see StMaintenanceRow); only the shared action
+	   button treatment survives, now used by the rows. */
 	:global(.st-content .st-maint-action) {
 		margin-top: 4px;
 		background: transparent;
@@ -873,7 +810,6 @@
 		:global(.st-content .st-visualizer) {
 			grid-template-columns: 1fr;
 		}
-		:global(.st-content .st-maint-grid),
 		:global(.st-content .st-otherint-grid) {
 			grid-template-columns: 1fr;
 		}

@@ -42,7 +42,7 @@
 	import StSegment from '../StSegment.svelte';
 	import StStepper from '../StStepper.svelte';
 	import StToggle from '../StToggle.svelte';
-	import StMaintenanceCard from '../StMaintenanceCard.svelte';
+	import StMaintenanceRow from '../StMaintenanceRow.svelte';
 
 	let { app }: { app: CremaApp | null } = $props();
 
@@ -277,67 +277,57 @@
 	</StRow>
 </StGroup>
 
-<div class="st-maint-grid">
-	<!-- 3-cycle row across the top; the Water filter card spans the full
-	     3-column row below them. Cycles share a Run button; the filter is
-	     a Mark-complete-only physical action. The layout puts the three
-	     wire-triggered actions together and leaves the filter as a wide
-	     "long shallow" tile with no orphan column on the second row. -->
-	<StMaintenanceCard
+<!--
+	Upkeep — one full-width row per item, matching every other group on this
+	page and the Compose `MaintenanceRow`. Was a three-across card grid; see
+	StMaintenanceRow's doc for why that went.
+-->
+<StGroup title="Maintenance">
+	<StMaintenanceRow
 		icon="wind"
 		title="Steam rinse"
-		state="Manual"
-		stateOk={true}
-		metric="—"
-		metricLabel="purge the steam line"
-		detail="Clears any residual milk from the steam wand. Run it after every steam session."
+		note="Clears any residual milk from the steam wand. Run it after every steam session."
 		onRun={() => openCycle('steamrinse')}
-		runLabel="Run"
 		{runDisabled}
 		{runDisabledReason}
 	/>
-	<StMaintenanceCard
+	<StMaintenanceRow
 		icon="snowflake"
 		title="Descale cycle"
-		state={readout.descaleOk ? 'On schedule' : 'Descale due'}
-		stateOk={readout.descaleOk}
-		metric={`${readout.descaleSinceLitres.toFixed(0)} L`}
-		metricLabel="since last descale"
-		detail={`Threshold: ${m.descaleIntervalLitres} L · last descaled ${shortDate(m.descaleAtMs)}`}
-		onComplete={() => maintenance.markDescaled()}
+		note={`${readout.descaleSinceLitres.toFixed(0)} L since last descale · every ${m.descaleIntervalLitres} L · last descaled ${shortDate(m.descaleAtMs)}`}
+		metric={readout.descaleSinceLitres.toFixed(0)}
+		unit="L"
+		pct={(readout.descaleSinceLitres / m.descaleIntervalLitres) * 100}
+		due={!readout.descaleOk}
 		onRun={() => openCycle('descale')}
-		runLabel="Run"
 		{runDisabled}
 		{runDisabledReason}
+		onComplete={() => maintenance.markDescaled()}
 	/>
-	<StMaintenanceCard
+	<StMaintenanceRow
 		icon="sparkle"
 		title="Clean cycle"
-		state={readout.cleanOk ? 'On schedule' : 'Clean due'}
-		stateOk={readout.cleanOk}
-		metric={`${readout.cleanSinceHours} hr`}
-		metricLabel="since last cycle"
-		detail={`Recommended every ${m.cleanIntervalHours} hr · last done ${shortDate(m.cleanAtMs)}`}
-		onComplete={() => maintenance.markCleaned()}
+		note={`${readout.cleanSinceHours} hr since last cycle · every ${m.cleanIntervalHours} hr · last done ${shortDate(m.cleanAtMs)}`}
+		metric={`${readout.cleanSinceHours}`}
+		unit="hr"
+		pct={(readout.cleanSinceHours / m.cleanIntervalHours) * 100}
+		due={!readout.cleanOk}
 		onRun={() => openCycle('clean')}
-		runLabel="Run"
 		{runDisabled}
 		{runDisabledReason}
+		onComplete={() => maintenance.markCleaned()}
 	/>
-	<StMaintenanceCard
+	<StMaintenanceRow
 		icon="funnel"
 		title="Water filter"
-		state={readout.filterOk
-			? `${Math.round(readout.filterPercent)}% capacity left`
-			: 'Clean now'}
-		stateOk={readout.filterOk}
-		metric={`${Math.round(readout.filterPercent)}%`}
-		metricLabel="capacity left"
-		detail={`${readout.filterUsedLitres.toFixed(1)} L of ${m.filterCapacityLitres} L used · last cleaned ${shortDate(m.filterAtMs)}`}
+		note={`${readout.filterUsedLitres.toFixed(1)} L of ${m.filterCapacityLitres} L used · last cleaned ${shortDate(m.filterAtMs)}`}
+		metric={`${Math.round(readout.filterPercent)}`}
+		unit="%"
+		pct={readout.filterPercent}
+		due={!readout.filterOk}
 		onComplete={() => maintenance.markFilterCleaned()}
-		wide
 	/>
-</div>
+</StGroup>
 
 <StGroup
 	title="Water chemistry"
