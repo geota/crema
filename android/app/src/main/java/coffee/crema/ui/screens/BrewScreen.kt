@@ -61,6 +61,7 @@ import coffee.crema.beans.daysOffRoast
 import coffee.crema.beans.isFrozen
 import coffee.crema.ui.activeProfile
 import coffee.crema.ui.convertPressure
+import coffee.crema.ui.Measurement
 import coffee.crema.ui.convertTemp
 import coffee.crema.ui.convertVolume
 import coffee.crema.ui.convertWeight
@@ -74,6 +75,7 @@ import coffee.crema.ui.formatWeight
 import coffee.crema.ui.freshnessColor
 import coffee.crema.ui.modeLabel
 import coffee.crema.ui.modeRunningSub
+import coffee.crema.ui.modeTargetSeconds
 import coffee.crema.ui.rememberModeTargets
 import coffee.crema.beans.roastBand
 import coffee.crema.ble.De1BleManager
@@ -235,13 +237,55 @@ fun BrewScreen(
                         substate = ui.machineSubstate,
                     )
                     RatioCard(active = active, weightG = ratioWeight(ui, running))
-                    PhaseCard(
-                        active = active,
-                        running = running,
-                        frame = ui.shotFrame,
-                        phase = ui.shotPhase,
-                        modifier = Modifier.weight(1f),
-                    )
+                    // Steam / hot water / flush run no profile, so the phase
+                    // list has nothing to say — this slot otherwise sits on
+                    // "Idle" above a static segment track for the whole mode.
+                    // Handing it to the mode costs no vertical space, which is
+                    // the whole point: a header banner would have taken ~55dp
+                    // off the chart, and a 7" tablet in landscape is 600dp tall
+                    // and has none to give (geota/crema#57).
+                    if (mode != null) {
+                        val t = rememberModeTargets(ui)
+                        ModeCard(
+                            label = when (ui.machineStateName) {
+                                MachineState.Steam -> "Steam"
+                                MachineState.HotWater -> "Hot water"
+                                else -> "Flush"
+                            },
+                            icon = when (ui.machineStateName) {
+                                MachineState.Steam -> "cloud"
+                                MachineState.HotWater -> "drop"
+                                else -> "sparkle"
+                            },
+                            elapsedMs = ui.modeElapsedMs,
+                            targetS = modeTargetSeconds(ui.machineStateName, t) ?: 0f,
+                            target = when (ui.machineStateName) {
+                                MachineState.Steam -> convertTemp(t.steamTempC, ui.tempUnit)
+                                MachineState.HotWater -> convertVolume(t.hotWaterVolumeMl, ui.volumeUnit)
+                                else -> convertTemp(t.flushTempC, ui.tempUnit)
+                            },
+                            color = when (ui.machineStateName) {
+                                MachineState.Steam -> CremaTheme.telemetry.modeSteam
+                                MachineState.HotWater -> CremaTheme.telemetry.modeWater
+                                else -> CremaTheme.telemetry.modeFlush
+                            },
+                        )
+                        // The card wraps its content instead of inheriting the
+                        // Phase card's weight: a mode has three short lines, and
+                        // stretched over the leftover height of a 10" column it
+                        // read as a mostly-empty box. The slack goes here, so
+                        // Stop conditions and Last shot stay anchored to the
+                        // column's bottom edge exactly where Phase leaves them.
+                        Spacer(Modifier.weight(1f))
+                    } else {
+                        PhaseCard(
+                            active = active,
+                            running = running,
+                            frame = ui.shotFrame,
+                            phase = ui.shotPhase,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                     LimitsCard(
                         // The core's projection is the ONLY stop-condition
                         // source now — no scalePresent / volumeStopWithScale /
@@ -1033,6 +1077,67 @@ private fun RatioCard(active: CremaProfile?, weightG: Float?) {
                         modifier = Modifier.alignByBaseline(),
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * The Phase card's stand-in while a service mode runs. Steam / hot water /
+ * flush run no profile, so the phase list has nothing to say — the slot
+ * otherwise sits on "Idle" above a static segment track for the whole mode.
+ * Handing it to the mode costs no vertical space, which is the point: a header
+ * banner would have taken ~55dp off the chart, and a 7" tablet in landscape is
+ * 600dp tall with none to give (geota/crema#57).
+ *
+ * Built from the Stop-conditions row idiom — 16dp glyph, `labelLarge` name,
+ * 15sp/10sp value, [StatBar] — because that card sits directly beneath this
+ * one and the two read as a pair. It is deliberately NOT a copy of the phone's
+ * `ModeStatusBanner`: the TimerCard above already leads with the mode name and
+ * its clock, and the retargeted temperature card carries the live reading, so
+ * progress against the firmware timeout is the only thing the tablet had
+ * nowhere to put.
+ */
+@Composable
+private fun ModeCard(
+    label: String,
+    icon: String,
+    elapsedMs: Long,
+    targetS: Float,
+    target: Measurement,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    val elapsedS = elapsedMs / 1000f
+    CremaCard(modifier.fillMaxWidth()) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Eyebrow("Mode")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    PhIcon(icon, sizeDp = 16, tint = color)
+                    Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                CremaValueUnit(
+                    fmt("%.1f / %.0f", elapsedS, targetS), "s",
+                    valueSize = 15.sp, unitSize = 10.sp,
+                    valueColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            StatBar(fraction = if (targetS > 0f) elapsedS / targetS else 0f, color = color)
+            // The mode's fixed target, unlabelled and right-aligned under the
+            // live value it is the ceiling for. "Target" spelled out earned
+            // nothing: the number sits directly beneath `elapsed / total` in a
+            // card headed by the mode, which is all the context it needs.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.weight(1f))
+                CremaValueUnit(
+                    target.value, target.unit,
+                    valueSize = 15.sp, unitSize = 10.sp,
+                    valueColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

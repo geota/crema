@@ -3,10 +3,11 @@
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `MachineErrorBanner` — the red dashboard header pill that surfaces a
-	 * DE1 firmware fault. Reuses the `.mc-head-status` shape from
-	 * `ModeHeadStatus` so an error and a service-mode banner occupy the
-	 * same slot and read with the same visual language; the `.is-error`
-	 * CSS variant in `mode-controls.css` swaps in the danger palette.
+	 * DE1 firmware fault. Owns the `.mc-head-status` shape in
+	 * `mode-controls.css`, whose `.is-error` / `.is-warning` variants swap in
+	 * the danger and caution palettes. The shape was shared with a
+	 * service-mode banner until the mode moved into the left column's
+	 * `ModeCard`, so this is now the only surface in the header slot.
 	 *
 	 * Renders nothing when `text` is `null` — caller wraps with `{#if}`.
 	 *

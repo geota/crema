@@ -9,10 +9,13 @@
                             main grid and the foot (Brew page).
      2. `.mc-chip`        — a single chip; class-driven states for active /
                             disabled, with mode-specific color tint.
-     3. `.mc-head-status` — a colored pill that appears in the dashboard
-                            header while a mode is active, between the
-                            profile-info block (left) and the Edit / Switch
-                            buttons (right).
+     3. `.mc-head-status` — a colored pill in the dashboard header, between
+                            the profile-info block (left) and the Edit /
+                            Switch buttons (right). Now carries errors and
+                            maintenance only (`MachineErrorBanner`); the
+                            service-mode banner it was built for moved into
+                            the left column as `ModeCard`, where it costs no
+                            layout height.
 
    The mode tokens (`--mc-steam`, `--mc-water`, `--mc-flush`) are scoped to
    `:root` so they're available to both surfaces and to any future per-mode

@@ -39,7 +39,7 @@
 	} from '$lib/state';
 	import { ShotPhase, MachineState, MmrRegister } from '$lib/core/crema-core';
 	import ModeChip from './ModeChip.svelte';
-	import ModeHeadStatus from './ModeHeadStatus.svelte';
+	import ModeCard from './ModeCard.svelte';
 	import MachineErrorBanner from './MachineErrorBanner.svelte';
 	import {
 		getSettingsStore,
@@ -138,16 +138,6 @@
 	function cancelMode(): void {
 		void appCtx().app?.requestMachineState(MachineState.Idle);
 	}
-	/** Header pill labels — keyed by active mode. */
-	const headStatusName = $derived(
-		modeState === 'steaming'
-			? 'Steaming'
-			: modeState === 'dispensing'
-				? 'Hot water'
-				: modeState === 'flushing'
-					? 'Flushing'
-					: ''
-	);
 
 	// ── Unit preferences (real — the lib/settings store) ─────────────────
 	/** The shared app-preferences store — drives every readout's display unit. */
@@ -197,9 +187,8 @@
 	/**
 	 * The resting chip sub-labels — the *target* (set) values the firmware
 	 * will hold during the session, formatted from {@link modeTargets}.
-	 * The *active* banner (`headStatusMeta` below) uses the *measured*
-	 * live values instead — so the chip says "what will happen" and the
-	 * banner says "what's happening now."
+	 * While a mode runs the chip swaps to a live `elapsed / total` counter,
+	 * so the chip says "what will happen" until it says "what's happening."
 	 */
 	const MODE_TARGET_LABEL = $derived.by<
 		Record<'steaming' | 'dispensing' | 'flushing', string>
@@ -286,41 +275,39 @@
 	const modeTargetSec = $derived(
 		modeState === 'idle' ? 0 : MODE_TARGET_SEC[modeState]
 	);
-	/** Progress percentage 0-100 for the head pill's inline bar. */
+	/** Progress percentage 0-100 for the mode card's bar. */
 	const modeProgressPct = $derived(
 		modeTargetSec > 0 ? Math.min(100, (modeElapsedSec / modeTargetSec) * 100) : 0
 	);
 	/**
-	 * Meta line in the head pill. While running, formats `elapsed / total`
-	 * seconds with the live measured temperature where it's meaningful
-	 * (steam → steam heater temp; hot water → head temp; flush → head
-	 * temp, since the firmware holds head_temp to FlushTemp during a
-	 * rinse cycle). The resting chip sub-labels carry the *target*
-	 * temperature; this active banner carries the *measured* one.
+	 * Everything the mode card needs that varies by mode. The label is the
+	 * NOUN, matching the foot chips — the extraction timer's step line already
+	 * carries the gerund, and the same word in two places two cards apart reads
+	 * as a rendering fault. Hot water's fixed target is its VOLUME rather than a
+	 * temperature: the millilitres are what the user set, and the temperature
+	 * is already promoted into the temperature channel while it dispenses.
 	 */
-	const headStatusMeta = $derived.by(() => {
-		if (modeState === 'idle') return '';
-		const total = modeTargetSec.toFixed(1);
-		const elapsed = modeElapsedSec.toFixed(1);
-		if (modeState === 'steaming') {
-			const steamTemp = ui.latestTelemetry?.steamTemp;
-			const tempLabel =
-				steamTemp != null ? ` · ${formatTemp(steamTemp, prefs.tempUnit)}` : '';
-			return `${elapsed} / ${total} s${tempLabel}`;
-		}
-		if (modeState === 'dispensing') {
-			const headTemp = ui.latestTelemetry?.temp;
-			const tempLabel =
-				headTemp != null ? ` · ${formatTemp(headTemp, prefs.tempUnit)}` : '';
-			return `${elapsed} / ${total} s${tempLabel}`;
-		}
-		if (modeState === 'flushing') {
-			const headTemp = ui.latestTelemetry?.temp;
-			const tempLabel =
-				headTemp != null ? ` · ${formatTemp(headTemp, prefs.tempUnit)}` : '';
-			return `${elapsed} / ${total} s${tempLabel}`;
-		}
-		return `${elapsed} / ${total} s`;
+	const modeCardView = $derived.by(() => {
+		if (modeState === 'dispensing')
+			return {
+				label: 'Hot water',
+				icon: 'drop',
+				color: 'var(--mc-water)',
+				target: convertVolume(modeTargets.hotWaterVolumeMl, prefs.volumeUnit)
+			};
+		if (modeState === 'flushing')
+			return {
+				label: 'Flush',
+				icon: 'sparkle',
+				color: 'var(--mc-flush)',
+				target: convertTemp(modeTargets.flushTempC, prefs.tempUnit)
+			};
+		return {
+			label: 'Steam',
+			icon: 'cloud',
+			color: 'var(--mc-steam)',
+			target: convertTemp(modeTargets.steamTempC, prefs.tempUnit)
+		};
 	});
 	/**
 	 * Per-chip sub line — the resting target when idle, a live
@@ -1409,16 +1396,6 @@
 							onDismiss={dismissMaintenance}
 						/>
 					</div>
-				{:else if modeState !== 'idle'}
-					<div class="crema-dash-head-mid">
-						<ModeHeadStatus
-							state={modeState}
-							nameLabel={headStatusName}
-							metaLabel={headStatusMeta}
-							progressPct={modeProgressPct}
-							onCancel={cancelMode}
-						/>
-					</div>
 				{/if}
 			{/snippet}
 		</BrewHeader>
@@ -1442,11 +1419,24 @@
 					     closed; the open sheet would overlap them. The Phase card flex-grows
 					     to fill the column's remaining height. -->
 					{#if !quickSheetOpen}
-						<PhaseIndicatorCard
-							seconds={elapsedSec}
-							frame={ui.shotFrame}
-							segments={activeProfile?.segments}
-						/>
+						{#if modeState !== 'idle'}
+							<ModeCard
+								label={modeCardView.label}
+								icon={modeCardView.icon}
+								color={modeCardView.color}
+								elapsedSec={modeElapsedSec}
+								targetSec={modeTargetSec}
+								pct={modeProgressPct}
+								targetValue={modeCardView.target.value}
+								targetUnit={modeCardView.target.unit}
+							/>
+						{:else}
+							<PhaseIndicatorCard
+								seconds={elapsedSec}
+								frame={ui.shotFrame}
+								segments={activeProfile?.segments}
+							/>
+						{/if}
 						{#if showLastShot && lastShot}
 							<LastShotCard shot={lastShot} dose={p.dose} stopReason={ui.lastStopReason} />
 						{/if}
