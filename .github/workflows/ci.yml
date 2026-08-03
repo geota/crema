@@ -41,7 +41,7 @@ jobs:
       # Pinned (not `stable`) to match core/Cargo.toml's rust-version — F-Droid's
       # reproducible-build recipe needs a fixed compiler, not a floating channel.
       - name: Install Rust toolchain (stable + wasm32 + rustfmt + clippy)
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
@@ -101,7 +101,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Rust toolchain (stable + wasm32)
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: wasm32-unknown-unknown
 
@@ -113,7 +113,7 @@ jobs:
 
       # Prebuilt wasm-pack binary — saves ~3 min over `cargo install`.
       - name: Install wasm-pack
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.5
         with:
           tool: wasm-pack
 
@@ -163,10 +163,10 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1.100.0
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.5
         with:
           tool: cargo-audit
 
