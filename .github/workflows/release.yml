@@ -103,7 +103,7 @@ jobs:
       # Pinned (not `stable`) to match core/Cargo.toml's rust-version — F-Droid's
       # reproducible-build recipe needs a fixed compiler, not a floating channel.
       - name: Install Rust toolchain (wasm32)
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: wasm32-unknown-unknown
 
@@ -114,7 +114,7 @@ jobs:
           shared-key: rust-core
 
       - name: Install wasm-pack
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.5
         with:
           tool: wasm-pack
 
@@ -212,7 +212,7 @@ jobs:
         run: sdkmanager "ndk;30.0.14904198" "platforms;android-37.0"
 
       - name: Install Rust toolchain (android target)
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: aarch64-linux-android
 
@@ -223,7 +223,7 @@ jobs:
           shared-key: rust-android
 
       - name: Set up Gradle (with cache)
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v6.2.0
 
       # Decode the release keystore if configured; export its path so the Gradle
       # signingConfig (build.gradle.kts) picks it up. Absent secret => unsigned.
