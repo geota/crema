@@ -45,7 +45,19 @@ const config = {
 				'style-src': ['self', 'unsafe-inline', 'https://fonts.googleapis.com'],
 				// 'self' → self-hosted Phosphor icon fonts; gstatic → Google Fonts files.
 				'font-src': ['self', 'https://fonts.gstatic.com'],
-				'img-src': ['self', 'data:'],
+				// `blob:` is required for bean bag photos: the bytes live in
+				// IndexedDB and are rendered through `URL.createObjectURL`
+				// (`$lib/components/beans/BeanImage`). Without it EVERY bag photo
+				// is blocked and silently falls back to the roaster mark — which
+				// is exactly what issue 61 reported as "photos can't be viewed".
+				// A blob: URL is same-origin and minted by this app's own code, so
+				// allowing it grants no reach an attacker did not already have
+				// under `script-src`.
+				// `https:` covers roaster logos, which are arbitrary user- or
+				// Visualizer-supplied URLs (`Roaster.imageUrl`, and the favicon
+				// fallback in `RoasterAvatar`) and so cannot be enumerated.
+				// Plaintext http: stays blocked.
+				'img-src': ['self', 'data:', 'blob:', 'https:'],
 				// 'self' covers the wasm/app bundle and same-origin (incl. the
 				// dev server). `https:` is required by the user-configurable
 				// webhook feature, which POSTs shot/connection events to an

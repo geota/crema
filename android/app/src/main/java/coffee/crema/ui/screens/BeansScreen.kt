@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -70,6 +71,8 @@ import coffee.crema.core.Roaster
 import coffee.crema.core.SearchField
 import coffee.crema.core.SearchHit
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.beans.linkedProfileNameFor
+import coffee.crema.ui.beans.shotRowSummary
 import coffee.crema.ui.freshnessColor
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
@@ -128,6 +131,10 @@ fun BeansScreen(
     var beanFilter by remember { mutableStateOf("all") }
     var beanSort by remember { mutableStateOf("freshest") }
     var beanSortDesc by remember { mutableStateOf(false) }
+    // The bag whose read-only detail is open (issue 61). Held as an id, not a
+    // Bean, so the sheet re-renders live as the bag is favourited/archived
+    // from inside it.
+    var detailBeanId by remember { mutableStateOf<String?>(null) }
     // Beanconqueror import — the system file picker hands back a Uri the VM reads
     // (single JSON or a .zip archive) and merges via the core importer.
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -305,6 +312,7 @@ fun BeansScreen(
                                 roasterName = ui.roasters.firstOrNull { it.id == bean.roasterId }?.name,
                                 hit = beanHits.hit(bean.id),
                                 isActive = bean.id == ui.activeBeanId,
+                                onOpen = { detailBeanId = bean.id },
                                 onSetActive = { vm.setActiveBean(bean.id) },
                                 onEdit = { vm.startEditBean(bean.id); onNav("bean-edit") },
                                 onDuplicate = { vm.duplicateBean(bean.id) },
@@ -346,6 +354,34 @@ fun BeansScreen(
         }
     }
 
+    // Read-only detail (issue 61) — resolved from the live library each frame
+    // so mutations made inside the sheet are reflected immediately, and the
+    // sheet closes by itself if the bag is deleted underneath it.
+    detailBeanId?.let { id ->
+        val bean = ui.beans.firstOrNull { it.id == id }
+        if (bean == null) {
+            detailBeanId = null
+        } else {
+            val shots = ui.history.filter { it.bean?.beanId == bean.id }
+            BeanDetailSheet(
+                bean = bean,
+                roasterName = ui.roasters.firstOrNull { it.id == bean.roasterId }?.name,
+                linkedProfileName = linkedProfileNameFor(bean, ui.profiles.map { it.id to it.name }),
+                shotCount = shots.size,
+                recentShots = shots.take(5).map { shotRowSummary(it) },
+                isActive = bean.id == ui.activeBeanId,
+                onDismiss = { detailBeanId = null },
+                onEdit = { detailBeanId = null; vm.startEditBean(bean.id); onNav("bean-edit") },
+                onSetActive = { vm.setActiveBean(bean.id) },
+                onToggleFavourite = { vm.toggleBeanFavourite(bean.id) },
+                onToggleArchived = {
+                    if (bean.archivedAt != null) vm.unarchiveBean(bean.id) else vm.archiveBean(bean.id)
+                },
+                onDelete = { vm.deleteBean(bean.id) },
+            )
+        }
+    }
+
     if (roasterDialogOpen) {
         RoasterDialog(
             initial = roasterEditing,
@@ -365,6 +401,9 @@ private fun BeanCard(
     roasterName: String?,
     hit: SearchHit?,
     isActive: Boolean,
+    /** Tap the card BODY → the read-only detail sheet (issue 61). Deliberately
+     *  not the whole card: the action row below owns its own taps. */
+    onOpen: () -> Unit,
     onSetActive: () -> Unit,
     onEdit: () -> Unit,
     onDuplicate: () -> Unit,
@@ -387,6 +426,13 @@ private fun BeanCard(
         border = if (isActive) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
     ) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+          // The card BODY opens the detail sheet; the action row below stays
+          // outside this clickable so Set active / duplicate / edit / kebab do
+          // not also open the sheet behind their own dialogs.
+          Column(
+              Modifier.fillMaxWidth().clickable(onClick = onOpen),
+              verticalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
                 // The bag photo if one's set, else the roaster's mark ("?" when roasterless).
                 BeanAvatar(
@@ -481,6 +527,7 @@ private fun BeanCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+          }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 CremaButton(
                     onClick = onSetActive,

@@ -67,6 +67,20 @@ fun PhoneBeansScreen(
     var menuFor by remember { mutableStateOf<Bean?>(null) }
     var confirmDelete by remember { mutableStateOf<Bean?>(null) }
     var exportSheet by remember { mutableStateOf(false) }
+    // Read-only detail (issue 61). Swapped in over this screen rather than
+    // pushed as its own route — the same idiom PhoneHistoryScreen uses for the
+    // shot detail, so the bottom nav behaves consistently between the two.
+    var detailId by remember { mutableStateOf<String?>(null) }
+
+    if (detailId != null) {
+        PhoneBeanDetailScreen(
+            vm = vm,
+            beanId = detailId!!,
+            onBack = { detailId = null },
+            onEdit = { val id = detailId; detailId = null; if (id != null) { vm.startEditBean(id); onNav("bean-edit") } },
+        )
+        return
+    }
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importBeanconquerorUri(uri)
@@ -168,6 +182,7 @@ fun PhoneBeansScreen(
                             roasterName = roasterNameOf(bean),
                             hit = beanHits.hit(bean.id),
                             isActive = bean.id == ui.activeBeanId,
+                            onOpen = { detailId = bean.id },
                             onPrimary = {
                                 if (bean.archivedAt != null) vm.unarchiveBean(bean.id)
                                 else vm.setActiveBean(bean.id)
@@ -294,6 +309,10 @@ private fun PhoneBeanTile(
     roasterName: String?,
     hit: SearchHit?,
     isActive: Boolean,
+    /** Tap the tile BODY → the read-only detail (issue 61). The action row
+     *  keeps its own taps: users who know what they want should not be routed
+     *  through a detail screen to get there. */
+    onOpen: () -> Unit,
     onPrimary: () -> Unit,
     onEdit: () -> Unit,
     onMenu: () -> Unit,
@@ -316,6 +335,10 @@ private fun PhoneBeanTile(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+          Column(
+              Modifier.fillMaxWidth().clickable(onClick = onOpen),
+              verticalArrangement = Arrangement.spacedBy(11.dp),
+          ) {
             // Head: avatar + roaster/name/origin + Active badge or rating stars.
             Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 BeanAvatar(
@@ -439,6 +462,7 @@ private fun PhoneBeanTile(
                     }
                 }
             }
+          }
 
             // Actions: Set active / Active bean / Restore + edit + overflow.
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -2,6 +2,7 @@
 	import Icon from '$lib/icons/Icon.svelte';
 	import StarRating from '$lib/components/common/StarRating.svelte';
 	import CoffeeIcon from 'phosphor-svelte/lib/CoffeeIcon';
+	import MagnifyingGlassPlusIcon from 'phosphor-svelte/lib/MagnifyingGlassPlusIcon';
 	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
 	import SnowflakeIcon from 'phosphor-svelte/lib/SnowflakeIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
@@ -26,7 +27,9 @@
 		type Roaster
 	} from '$lib/bean';
 	import { getHistoryStore } from '$lib/history';
+	import { getProfileStore } from '$lib/profiles';
 	import BeanImage from './BeanImage.svelte';
+	import BeanPhotoViewer from './BeanPhotoViewer.svelte';
 	import RoastSlider from './RoastSlider.svelte';
 	import BeanDeleteSplit from './BeanDeleteSplit.svelte';
 
@@ -51,6 +54,22 @@
 	} = $props();
 
 	const history = getHistoryStore();
+	const profiles = getProfileStore();
+
+	/**
+	 * The bag's linked profile, resolved for display. A dangling id (profile
+	 * deleted, or a cross-device import of a device-local custom) is tolerated
+	 * everywhere else, so it is tolerated here too — the row reads "(missing
+	 * profile)" rather than going blank, which is the difference between "no
+	 * link" and "a link that no longer resolves".
+	 */
+	const linkedProfileLabel = $derived.by<string | null>(() => {
+		if (!bean.linkedProfileId) return null;
+		return profiles.all.find((p) => p.id === bean.linkedProfileId)?.name ?? '(missing profile)';
+	});
+
+	/** Full-size photo overlay — only reachable when a photo exists. */
+	let photoOpen = $state(false);
 
 	const mt = $derived(roasterMarkTone(roaster));
 	const days = $derived(daysOffRoast(bean.roastedOn));
@@ -166,20 +185,42 @@
 	</header>
 
 	<div class="bn-drawer-scroll">
-		<!-- Hero -->
+		<!-- Hero. With a photo the tile becomes a button into the full-size
+		     viewer — a bag label is unreadable at 96 px, which is the whole
+		     complaint in issue 61. Without one it stays inert chrome. -->
 		<div class="bn-drawer-hero">
-			<div class="bn-drawer-photo" style="--tone: {mt.tone}">
+			{#snippet photoInner(zoomable: boolean)}
 				<BeanImage ref={bean.imageRef} className="bn-drawer-photo-img">
 					{#snippet fallback()}
 						<div class="bn-drawer-photo-mark">{mt.mark}</div>
 					{/snippet}
 				</BeanImage>
+				{#if zoomable}
+					<span class="bn-drawer-photo-zoom" aria-hidden="true">
+						<MagnifyingGlassPlusIcon />
+					</span>
+				{/if}
 				{#if isFrozen}
 					<div class="bn-drawer-photo-frozen" title="Frozen storage">
 						<SnowflakeIcon weight="fill" aria-hidden="true" />
 					</div>
 				{/if}
-			</div>
+			{/snippet}
+			{#if bean.imageRef}
+				<button
+					class="bn-drawer-photo is-zoomable"
+					style="--tone: {mt.tone}"
+					onclick={() => (photoOpen = true)}
+					title="View photo"
+					aria-label={`View ${bean.name || 'bag'} photo`}
+				>
+					{@render photoInner(true)}
+				</button>
+			{:else}
+				<div class="bn-drawer-photo" style="--tone: {mt.tone}">
+					{@render photoInner(false)}
+				</div>
+			{/if}
 			<div class="bn-drawer-hero-text">
 				<div class="bn-drawer-name" id="bn-drawer-name">
 					{bean.name || 'Untitled bag'}
@@ -273,8 +314,20 @@
 						<div class="bn-row-label">Roast level</div>
 						<div class="bn-row-val"><RoastSlider value={bean.roastLevel} /></div>
 					</div>
+					<div class="bn-row">
+						<div class="bn-row-label">Roasted for</div>
+						<div class="bn-row-val">
+							{bean.roastType
+								? bean.roastType.charAt(0).toUpperCase() + bean.roastType.slice(1)
+								: '—'}
+						</div>
+					</div>
 					<div class="bn-row"><div class="bn-row-label">Mix</div><div class="bn-row-val">{bean.mix === 'blend' ? 'Blend' : bean.mix === 'single' ? 'Single origin' : '—'}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Decaf</div><div class="bn-row-val">{bean.decaf ? 'Yes' : 'No'}</div></div>
+					<div class="bn-row">
+						<div class="bn-row-label">Linked profile</div>
+						<div class="bn-row-val">{linkedProfileLabel ?? '—'}</div>
+					</div>
 					{#if bean.tags.length > 0}
 						<div class="bn-row">
 							<div class="bn-row-label">Tags</div>
@@ -384,8 +437,17 @@
 					</div></div>
 					{#if bean.tastingNotes}
 						<div class="bn-row bn-row-stack">
-							<div class="bn-row-label">Notes</div>
+							<div class="bn-row-label">Tasting notes</div>
 							<div class="bn-row-val bn-row-notes">{bean.tastingNotes}</div>
+						</div>
+					{/if}
+					<!-- The free-form box, distinct from tasting notes. It had no
+					     read-only surface at all before issue 61 — the editor was
+					     the only place it existed. -->
+					{#if bean.notes}
+						<div class="bn-row bn-row-stack">
+							<div class="bn-row-label">Notes</div>
+							<div class="bn-row-val bn-row-notes">{bean.notes}</div>
 						</div>
 					{/if}
 				</div>
@@ -408,6 +470,10 @@
 			{#if openBuyAgain}
 				<div class="bn-group-body">
 					<div class="bn-row"><div class="bn-row-label">Place</div><div class="bn-row-val">{bean.placeOfPurchase || '—'}</div></div>
+					<div class="bn-row">
+						<div class="bn-row-label">Cost</div>
+						<div class="bn-row-val">{bean.cost != null ? bean.cost.toFixed(2) : '—'}</div>
+					</div>
 					<div class="bn-row">
 						<div class="bn-row-label">URL</div>
 						<div class="bn-row-val">
@@ -489,6 +555,14 @@
 		</div>
 	</div>
 </aside>
+
+{#if photoOpen}
+	<BeanPhotoViewer
+		imageRef={bean.imageRef}
+		caption={bean.name || 'Untitled bag'}
+		onClose={() => (photoOpen = false)}
+	/>
+{/if}
 
 <style>
 	.bn-drawer-scrim {
@@ -622,6 +696,32 @@
 		justify-content: center;
 		overflow: hidden;
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+		/* Reset the <button> chrome the zoomable variant renders as. */
+		padding: 0;
+		border: 0;
+		font: inherit;
+		color: inherit;
+	}
+	.bn-drawer-photo.is-zoomable {
+		cursor: zoom-in;
+	}
+	/* The magnifier only appears on hover/focus: a persistent badge over a
+	   96 px thumbnail competes with the photo it is advertising. */
+	.bn-drawer-photo-zoom {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: rgba(0, 0, 0, 0.42);
+		color: #fff;
+		font-size: 20px;
+		opacity: 0;
+		transition: opacity var(--dur-1) var(--ease);
+	}
+	.bn-drawer-photo.is-zoomable:hover .bn-drawer-photo-zoom,
+	.bn-drawer-photo.is-zoomable:focus-visible .bn-drawer-photo-zoom {
+		opacity: 1;
 	}
 	:global(.bn-drawer-photo-img) {
 		width: 100%;

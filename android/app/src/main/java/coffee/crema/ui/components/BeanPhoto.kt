@@ -5,19 +5,39 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coffee.crema.beans.BeanImageStore
 import coil3.compose.SubcomposeAsyncImage
 import coil3.request.ImageRequest
@@ -52,6 +72,9 @@ fun BeanPhotoBox(
     imageRef: String?,
     updatedAt: Long,
     modifier: Modifier = Modifier,
+    /** `Crop` for the square avatars/heroes; `Fit` for the full-screen viewer,
+     *  where cropping a bag label would defeat the point. */
+    contentScale: ContentScale = ContentScale.Crop,
     fallback: @Composable () -> Unit,
 ) {
     if (imageRef == null) {
@@ -63,7 +86,7 @@ fun BeanPhotoBox(
     SubcomposeAsyncImage(
         model = model,
         contentDescription = "Bag photo",
-        contentScale = ContentScale.Crop,
+        contentScale = contentScale,
         modifier = modifier,
         loading = { fallback() },
         error = { fallback() },
@@ -89,6 +112,117 @@ fun BeanAvatar(
         modifier = Modifier.size(sizeDp.dp).clip(RoundedCornerShape(cornerDp.dp)),
         fallback = { RoasterMarkAvatar(fallbackName, sizeDp, cornerDp, fontSize) },
     )
+}
+
+/**
+ * The bag photo full-screen, pinch-zoomable (issue 61).
+ *
+ * A bag photo is usually a photo of the *label*, so fit-to-screen on a handset
+ * is not enough — the reason to have taken it is to read it back. Hence zoom
+ * (up to 5×) and pan, with the pan clamped so the image cannot be flung off
+ * the screen and lost. Double-tap toggles between fit and 2.5×, the gesture
+ * every gallery app has trained users to expect.
+ *
+ * Dismissed by a single tap, the close button, or the system back gesture.
+ */
+@Composable
+fun BeanPhotoViewer(
+    beanId: String,
+    imageRef: String?,
+    updatedAt: Long,
+    caption: String,
+    onDismiss: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        var scale by remember { mutableFloatStateOf(1f) }
+        var offset by remember { mutableStateOf(Offset.Zero) }
+        var box by remember { mutableStateOf(IntSize.Zero) }
+
+        // Keep the image anchored: at 1× there is nothing to pan, and beyond it
+        // the offset is bounded by how much of the image is off-screen.
+        fun clamp(next: Offset, s: Float): Offset {
+            val maxX = (box.width * (s - 1f) / 2f).coerceAtLeast(0f)
+            val maxY = (box.height * (s - 1f) / 2f).coerceAtLeast(0f)
+            return Offset(next.x.coerceIn(-maxX, maxX), next.y.coerceIn(-maxY, maxY))
+        }
+
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.94f))
+                .onSizeChanged { box = it }
+                // Transform first: pinch/pan must see the pointer stream before
+                // the tap detector gets a chance to claim it.
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        val next = (scale * zoom).coerceIn(1f, 5f)
+                        scale = next
+                        offset = if (next <= 1f) Offset.Zero else clamp(offset + pan, next)
+                    }
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        // Tap-to-dismiss only applies at fit. While zoomed in, a
+                        // stray tap closing the viewer and losing the user's
+                        // position is the wrong outcome — reset to fit instead,
+                        // so it takes two taps to leave.
+                        onTap = {
+                            if (scale > 1f) {
+                                scale = 1f
+                                offset = Offset.Zero
+                            } else {
+                                onDismiss()
+                            }
+                        },
+                        onDoubleTap = {
+                            if (scale > 1f) {
+                                scale = 1f
+                                offset = Offset.Zero
+                            } else {
+                                scale = 2.5f
+                            }
+                        },
+                    )
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            BeanPhotoBox(
+                beanId = beanId,
+                imageRef = imageRef,
+                updatedAt = updatedAt,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = offset.x,
+                        translationY = offset.y,
+                    ),
+                fallback = {},
+            )
+            Text(
+                caption,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp),
+            )
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.14f)),
+            ) {
+                PhIcon("x", sizeDp = 20, tint = Color.White)
+            }
+        }
+    }
 }
 
 /** The camera + gallery triggers for a bean's photo, wired to the VM. Built by
