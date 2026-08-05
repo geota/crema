@@ -62,6 +62,7 @@
 		freshnessColor,
 		type Bean,
 		type Roaster, activateBean } from '$lib/bean';
+	import { scoreMap, searchBeans } from '$lib/bean/search';
 	import { getMaintenanceStore } from '$lib/maintenance';
 	import { toast } from '$lib/components/shared/toast.svelte';
 	import { getCremaAppContext } from '$lib/shell/app-context';
@@ -1110,6 +1111,16 @@
 			})
 	);
 
+	/**
+	 * Rank the brew bean dropdown with the core matcher (issue 62) so the
+	 * quick picker finds a bag by its origin, process or tasting notes — the
+	 * same query that works on `/beans`, rather than the name-and-country
+	 * prefix the picker's own substring filter managed.
+	 */
+	function rankBeansForPicker(query: string): Map<string, number> | null {
+		return scoreMap(searchBeans(beanLibrary.beans, beanLibrary.roasters, query));
+	}
+
 	/** Profile-upload sync chip for the header, or null when idle. */
 	const profileSyncLabel = $derived(
 		ui.profileUploadProgress
@@ -1365,6 +1376,7 @@
 			freshColor={headerFreshColor}
 			beanItems={beanPickerItems}
 			activeBeanId={beanLibrary.activeBeanId}
+			beanRank={rankBeansForPicker}
 			{quickSheetOpen}
 			onEditProfile={editActiveProfile}
 			onSelectProfile={(id) => {

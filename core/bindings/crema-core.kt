@@ -1097,6 +1097,101 @@ data class DetectorResults (
 	val skipFirstFrame: Boolean
 )
 
+/// Which recorded field a [`FieldHit`] came from. Shells key display
+/// decisions off this (name/roaster hits highlight in place; everything else
+/// gets a "matched in" line), so it is a closed enum rather than a string.
+@Serializable
+enum class SearchField(val string: String) {
+	/// The bag name, or the roastery name on a roaster hit.
+	@SerialName("name")
+	Name("name"),
+	/// The bag's roastery (resolved through `Bean::roaster_id`).
+	@SerialName("roaster")
+	Roaster("roaster"),
+	/// `origin.country`.
+	@SerialName("country")
+	Country("country"),
+	/// `origin.region`.
+	@SerialName("region")
+	Region("region"),
+	/// `origin.farm`.
+	@SerialName("farm")
+	Farm("farm"),
+	/// `origin.farmer` — the producer.
+	@SerialName("farmer")
+	Farmer("farmer"),
+	/// `origin.variety` — the cultivar.
+	@SerialName("variety")
+	Variety("variety"),
+	/// `origin.elevation`.
+	@SerialName("elevation")
+	Elevation("elevation"),
+	/// `origin.processing`.
+	@SerialName("processing")
+	Processing("processing"),
+	/// `origin.harvest_time`.
+	@SerialName("harvest")
+	Harvest("harvest"),
+	/// Free-form user tags.
+	@SerialName("tags")
+	Tags("tags"),
+	/// The tasting-notes box.
+	@SerialName("tastingNotes")
+	TastingNotes("tastingNotes"),
+	/// The free-text cupping / quality score.
+	@SerialName("qualityScore")
+	QualityScore("qualityScore"),
+	/// The free-form notes box (distinct from tasting notes).
+	@SerialName("notes")
+	Notes("notes"),
+	/// Bean-scoped grinder name.
+	@SerialName("grinder")
+	Grinder("grinder"),
+	/// Bean-scoped grind setting.
+	@SerialName("grinderSetting")
+	GrinderSetting("grinderSetting"),
+	/// Where the bag was bought.
+	@SerialName("placeOfPurchase")
+	PlaceOfPurchase("placeOfPurchase"),
+	/// Buy-again URL.
+	@SerialName("url")
+	Url("url"),
+	/// A roaster's city.
+	@SerialName("city")
+	City("city"),
+	/// A roaster's website.
+	@SerialName("website")
+	Website("website"),
+	/// Derived words that are true of the bag but typed into a search box
+	/// like any other term — `decaf`, `blend`, `light roast`, `frozen`.
+	/// See [`attributes_text`].
+	@SerialName("attributes")
+	Attributes("attributes"),
+}
+
+/// One run of snippet text, flagged as matched or not. A shell renders a
+/// snippet by concatenating the segments and emphasising the `hit` ones.
+@Serializable
+data class SearchSegment (
+	/// The literal text of this run, in the field's original casing.
+	val text: String,
+	/// Whether the query matched here.
+	val hit: Boolean
+)
+
+/// One field a row matched on, with a highlightable snippet of it.
+@Serializable
+data class FieldHit (
+	/// Which field matched.
+	val field: SearchField,
+	/// Display label for [`FieldHit::field`], resolved core-side.
+	val label: String,
+	/// A window of the field's text around the first match, pre-split into
+	/// matched / unmatched runs. Ellipses are already folded into the edge
+	/// segments — a shell renders exactly what it is given.
+	val snippet: List<SearchSegment>
+)
+
 /// One profile frame's configured exit, used to infer
 /// [`PhaseMarker::transition_reason`] for reconstructed markers (indexed by
 /// frame number in [`ShotQualityInput::frame_exits`]).
@@ -1577,6 +1672,20 @@ data class ScaleUuids (
 	/// require different write types"). Every other scale (incl. Pyxis)
 	/// accepts the shells' default with-response write.
 	val command_write_no_response: Boolean
+)
+
+/// One row that matched, with its relevance score and what it matched on.
+@Serializable
+data class SearchHit (
+	/// The `Bean::id` / `Roaster::id` that matched.
+	val id: String,
+	/// Relevance in `0.0..=1.0`, higher is better. Comparable across rows
+	/// (it is a mean over query tokens, not a sum), so a shell can sort on it
+	/// directly.
+	val score: Float,
+	/// The fields that carried the match, best-contribution first, capped at
+	/// [`MAX_FIELD_HITS`].
+	val fields: List<FieldHit>
 )
 
 /// One sample of a time series: `t` seconds from extraction start, `v` the

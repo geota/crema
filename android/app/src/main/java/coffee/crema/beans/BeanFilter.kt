@@ -20,27 +20,23 @@ import coffee.crema.pinActiveThenFavourite
  * medium / dark; [sort] is freshest (default) / name / roast / rating /
  * remaining. Archived bags are hidden from every facet EXCEPT "archived" — the
  * dedicated chip is the only place they surface (web semantics).
+ *
+ * [hits] is the core search result for the current query ([searchBeans]).
+ * While it is active, relevance becomes the primary order and the
+ * loaded/favourite pinning is suspended: a search is a question, and the
+ * answer is the best match, not whichever bag happens to be loaded. Callers
+ * that have no query pass [SearchResults.INACTIVE].
  */
 fun filterAndSortBeans(
     beans: List<Bean>,
     roasters: List<Roaster>,
-    query: String,
+    hits: SearchResults,
     filter: String,
     sort: String,
     sortDesc: Boolean,
     activeId: String?,
 ): List<Bean> {
-    val roasterNameOf: (Bean) -> String? = { b -> roasters.firstOrNull { it.id == b.roasterId }?.name }
     val visible = beans.filter { b ->
-        val matchesSearch = query.isBlank() ||
-            b.name.contains(query, ignoreCase = true) ||
-            (roasterNameOf(b)?.contains(query, ignoreCase = true) == true) ||
-            (b.origin?.country?.contains(query, ignoreCase = true) == true) ||
-            (b.origin?.region?.contains(query, ignoreCase = true) == true) ||
-            (b.origin?.farm?.contains(query, ignoreCase = true) == true) ||
-            (b.origin?.farmer?.contains(query, ignoreCase = true) == true) ||
-            (b.origin?.variety?.contains(query, ignoreCase = true) == true) ||
-            (b.tastingNotes?.contains(query, ignoreCase = true) == true)
         val matchesFilter = when (filter) {
             "archived" -> b.archivedAt != null
             "active" -> b.archivedAt == null && !b.isFrozen
@@ -50,7 +46,9 @@ fun filterAndSortBeans(
                 b.archivedAt == null && roastBand(b.roastLevel?.toInt())?.equals(filter, ignoreCase = true) == true
             else -> b.archivedAt == null // "All" excludes archived
         }
-        matchesSearch && matchesFilter
+        // Facets still apply while searching — the query narrows what the chips
+        // already selected, it does not replace them.
+        hits.matches(b.id) && matchesFilter
     }
     val asc = when (sort) {
         "name" -> visible.sortedBy { it.name.lowercase() }
@@ -60,6 +58,9 @@ fun filterAndSortBeans(
         else -> visible.sortedBy { daysOffRoast(it.roastedOn) ?: Int.MAX_VALUE } // freshest first
     }
     val sorted = if (sortDesc) asc.reversed() else asc
+    // Relevance first while searching; `sortedByDescending` is stable, so the
+    // sort above survives as the tiebreak between equally-relevant bags.
+    if (hits.active) return sorted.sortedByDescending { hits.score(it.id) }
     // Loaded bean to the top, then favourites, then the rest; [sort] above is the
     // within-group order. Shared with profiles + the Brew pickers.
     return sorted.pinActiveThenFavourite({ it.id == activeId }, { it.favourite == true })

@@ -415,6 +415,29 @@ fun Eyebrow(text: String, modifier: Modifier = Modifier, color: Color = Material
     )
 }
 
+/**
+ * [Eyebrow] over pre-styled text — the search-highlight path (issue 62).
+ * The caller has already cased the runs (via `highlighted(…, transform =
+ * UPPERCASE)`), because uppercasing an `AnnotatedString` here would have to
+ * re-map every span offset.
+ */
+@Composable
+fun Eyebrow(
+    text: androidx.compose.ui.text.AnnotatedString,
+    modifier: Modifier = Modifier,
+    color: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall.copy(fontSize = androidx.compose.ui.unit.TextUnit(10.5f, androidx.compose.ui.unit.TextUnitType.Sp)),
+        color = color,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Clip,
+        modifier = modifier,
+    )
+}
+
 // ── Buttons ─────────────────────────────────────────────────────────────────
 enum class CremaButtonVariant { Filled, Tonal, Outlined, Text }
 

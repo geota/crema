@@ -42,6 +42,7 @@
 		mintRoasterId,
 		type Bean,
 		type Roaster, activateBean } from '$lib/bean';
+	import { searchBeans, searchRoasters } from '$lib/bean/search';
 	import BeanTile from '$lib/components/beans/BeanTile.svelte';
 	import RoasterCard from '$lib/components/beans/RoasterCard.svelte';
 	import BeanDrawer from '$lib/components/beans/BeanDrawer.svelte';
@@ -154,8 +155,13 @@
 		return b.roastLevel >= 8;
 	}
 
+	// Search runs in the core (issue 62): typo-tolerant, weighted across every
+	// recorded field, and identical on Android. The old inline `includes`
+	// chain covered nine fields and no typos.
+	const bagHits = $derived(searchBeans(allBeans, allRoasters, q));
+	const roasterHits = $derived(searchRoasters(allRoasters, q));
+
 	const filtered = $derived.by(() => {
-		const query = q.trim().toLowerCase();
 		return allBeans.filter((b) => {
 			if (!matchesStatus(b, status)) return false;
 			if (!matchesRoast(b, roast)) return false;
@@ -164,19 +170,9 @@
 					if (!b.tags.includes(t)) return false;
 				}
 			}
-			if (!query) return true;
-			const r = b.roasterId ? library.getRoaster(b.roasterId) : null;
-			return (
-				b.name.toLowerCase().includes(query) ||
-				r?.name.toLowerCase().includes(query) ||
-				b.origin.country?.toLowerCase().includes(query) ||
-				b.origin.region?.toLowerCase().includes(query) ||
-				b.origin.farm?.toLowerCase().includes(query) ||
-				b.origin.farmer?.toLowerCase().includes(query) ||
-				b.origin.variety?.toLowerCase().includes(query) ||
-				b.tastingNotes.toLowerCase().includes(query) ||
-				b.tags.some((t) => t.toLowerCase().includes(query))
-			);
+			// Facets still apply while searching — the query narrows what the
+			// chips already selected, it does not replace them.
+			return !bagHits.active || bagHits.byId.has(b.id);
 		});
 	});
 
@@ -219,6 +215,14 @@
 		};
 		const dir = sortDir === 'asc' ? 1 : -1;
 		arr.sort((a, b) => keyCmp(a, b) * dir || cmpName(a, b));
+		// While a query is running, relevance is the answer to the question the
+		// user asked, so it becomes the primary key — the sort above survives as
+		// the tiebreak between equally-relevant bags (`sort` is stable), and the
+		// loaded/favourite pinning is suspended so the best match is the first
+		// tile rather than whatever bag happens to be loaded.
+		if (bagHits.active) {
+			return arr.sort((a, b) => bagHits.score(b.id) - bagHits.score(a.id));
+		}
 		// Pin the loaded bean to the top, then favourites — primary grouping on
 		// every sort (the chosen sort above is the within-group order). Shared
 		// with the brew picker + the profiles page.
@@ -428,6 +432,12 @@
 					(x.roaster.country ?? '').toLowerCase() === roasterRegion.toLowerCase()
 			);
 		}
+		// The search box used to be inert on this tab — typing filtered bags
+		// and left the roaster directory untouched. It now runs the same core
+		// matcher over name / city / country / notes / website.
+		if (roasterHits.active) {
+			rows = rows.filter((x) => roasterHits.byId.has(x.roaster.id));
+		}
 		const cmpName = (a: typeof rows[number], b: typeof rows[number]) =>
 			a.roaster.name.localeCompare(b.roaster.name);
 		const keyCmp = (a: typeof rows[number], b: typeof rows[number]): number => {
@@ -441,7 +451,13 @@
 			}
 		};
 		const dir = roasterSortDir === 'asc' ? 1 : -1;
-		return rows.sort((a, b) => keyCmp(a, b) * dir || cmpName(a, b));
+		rows.sort((a, b) => keyCmp(a, b) * dir || cmpName(a, b));
+		// Relevance first while searching, the chosen sort as the (stable) tiebreak.
+		return roasterHits.active
+			? rows.sort(
+					(a, b) => roasterHits.score(b.roaster.id) - roasterHits.score(a.roaster.id)
+				)
+			: rows;
 	});
 
 	// Detect probable duplicates by normalized roaster name (case-insensitive,
@@ -650,7 +666,11 @@
 		<div class="bn-head-r">
 			<label class="bn-search">
 				<MagnifyingGlassIcon aria-hidden="true" />
-				<input bind:value={q} placeholder="Search beans, roasters, origin…" />
+				<input
+					bind:value={q}
+					placeholder="Search beans, roasters, origin, notes…"
+					title="Searches every field you've recorded — origin, process, tasting notes, grinder, tags — and tolerates typos."
+				/>
 				{#if q}
 					<button
 						class="bn-search-clear"
@@ -911,6 +931,7 @@
 								onSetActive={setActive}
 								onDuplicate={duplicateBean}
 								onEdit={gotoEdit}
+								hit={bagHits.byId.get(b.id)}
 							/>
 						{/each}
 						<button class="bn-tile-new" onclick={() => (quickAddOpen = true)}>

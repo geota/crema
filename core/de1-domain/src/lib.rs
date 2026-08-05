@@ -44,6 +44,7 @@
 pub mod app_settings;
 pub mod bean;
 pub mod bean_coerce;
+pub mod bean_search;
 pub mod beanconqueror;
 pub mod brand;
 pub mod builtin;
@@ -87,6 +88,10 @@ pub use bean::{
     credit_remaining, days_off_roast, debit_remaining, roast_band, roast_band5, roast_freshness,
 };
 pub use bean_coerce::{coerce_bean, coerce_bean_json, coerce_roaster, coerce_roaster_json};
+pub use bean_search::{
+    FieldHit, SearchField, SearchHit, SearchSegment, search_beans, search_beans_json,
+    search_roasters, search_roasters_json,
+};
 pub use beanconqueror::{
     ImportDiagnostics, ImportPlan, ImportedShot, crema_to_bc_main_json,
     crema_to_bc_main_json_from_envelope, import_beanconqueror_json,

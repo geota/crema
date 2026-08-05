@@ -1082,6 +1082,85 @@ export interface DetectorResults {
 }
 
 /**
+ * Which recorded field a [`FieldHit`] came from. Shells key display
+ * decisions off this (name/roaster hits highlight in place; everything else
+ * gets a "matched in" line), so it is a closed enum rather than a string.
+ */
+export enum SearchField {
+	/** The bag name, or the roastery name on a roaster hit. */
+	Name = "name",
+	/** The bag's roastery (resolved through `Bean::roaster_id`). */
+	Roaster = "roaster",
+	/** `origin.country`. */
+	Country = "country",
+	/** `origin.region`. */
+	Region = "region",
+	/** `origin.farm`. */
+	Farm = "farm",
+	/** `origin.farmer` — the producer. */
+	Farmer = "farmer",
+	/** `origin.variety` — the cultivar. */
+	Variety = "variety",
+	/** `origin.elevation`. */
+	Elevation = "elevation",
+	/** `origin.processing`. */
+	Processing = "processing",
+	/** `origin.harvest_time`. */
+	Harvest = "harvest",
+	/** Free-form user tags. */
+	Tags = "tags",
+	/** The tasting-notes box. */
+	TastingNotes = "tastingNotes",
+	/** The free-text cupping / quality score. */
+	QualityScore = "qualityScore",
+	/** The free-form notes box (distinct from tasting notes). */
+	Notes = "notes",
+	/** Bean-scoped grinder name. */
+	Grinder = "grinder",
+	/** Bean-scoped grind setting. */
+	GrinderSetting = "grinderSetting",
+	/** Where the bag was bought. */
+	PlaceOfPurchase = "placeOfPurchase",
+	/** Buy-again URL. */
+	Url = "url",
+	/** A roaster's city. */
+	City = "city",
+	/** A roaster's website. */
+	Website = "website",
+	/**
+	 * Derived words that are true of the bag but typed into a search box
+	 * like any other term — `decaf`, `blend`, `light roast`, `frozen`.
+	 * See [`attributes_text`].
+	 */
+	Attributes = "attributes",
+}
+
+/**
+ * One run of snippet text, flagged as matched or not. A shell renders a
+ * snippet by concatenating the segments and emphasising the `hit` ones.
+ */
+export interface SearchSegment {
+	/** The literal text of this run, in the field's original casing. */
+	text: string;
+	/** Whether the query matched here. */
+	hit: boolean;
+}
+
+/** One field a row matched on, with a highlightable snippet of it. */
+export interface FieldHit {
+	/** Which field matched. */
+	field: SearchField;
+	/** Display label for [`FieldHit::field`], resolved core-side. */
+	label: string;
+	/**
+	 * A window of the field's text around the first match, pre-split into
+	 * matched / unmatched runs. Ellipses are already folded into the edge
+	 * segments — a shell renders exactly what it is given.
+	 */
+	snippet: SearchSegment[];
+}
+
+/**
  * One profile frame's configured exit, used to infer
  * [`PhaseMarker::transition_reason`] for reconstructed markers (indexed by
  * frame number in [`ShotQualityInput::frame_exits`]).
@@ -1634,6 +1713,23 @@ export interface ScaleUuids {
 	 * accepts the shells' default with-response write.
 	 */
 	command_write_no_response: boolean;
+}
+
+/** One row that matched, with its relevance score and what it matched on. */
+export interface SearchHit {
+	/** The `Bean::id` / `Roaster::id` that matched. */
+	id: string;
+	/**
+	 * Relevance in `0.0..=1.0`, higher is better. Comparable across rows
+	 * (it is a mean over query tokens, not a sum), so a shell can sort on it
+	 * directly.
+	 */
+	score: number;
+	/**
+	 * The fields that carried the match, best-contribution first, capped at
+	 * [`MAX_FIELD_HITS`].
+	 */
+	fields: FieldHit[];
 }
 
 /**

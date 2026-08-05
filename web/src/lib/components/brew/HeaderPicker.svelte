@@ -52,12 +52,21 @@
 		onAdd,
 		onEdit,
 		onLibrary,
-		onClose
+		onClose,
+		rank
 	}: {
 		open?: boolean;
 		items: PickerItem[];
 		activeId?: string | null;
 		searchPlaceholder?: string;
+		/**
+		 * Optional relevance ranker: given the typed query, return `id → score`
+		 * for the items that match (higher = better), or `null` to fall back to
+		 * the built-in substring filter. The bean picker passes the core's fuzzy
+		 * matcher through here so the dropdown finds the same bags the library
+		 * page does; profiles keep the substring path.
+		 */
+		rank?: (query: string) => Map<string, number> | null;
 		/** Footer add label, e.g. "Add profile". */
 		addLabel: string;
 		/** Whether the active item can be edited (disables the ✎ when false). */
@@ -83,14 +92,23 @@
 
 	const filtered = $derived.by(() => {
 		const q = query.trim().toLowerCase();
-		const base =
-			q === ''
-				? items
-				: items.filter((it) =>
-						(it.search ?? `${it.primary} ${it.secondary ?? ''}`).toLowerCase().includes(q)
-					);
-		// Active item first, then pinned/favourites — shared library ordering
-		// (same primitive as the beans/profiles pages).
+		if (q === '') {
+			// Active item first, then pinned/favourites — shared library ordering
+			// (same primitive as the beans/profiles pages).
+			return pinActiveThenFavourite(items, activeId, (it) => it.pinned ?? false);
+		}
+		const scores = rank?.(query.trim()) ?? null;
+		if (scores) {
+			// Ranked: relevance decides, and the pinning is suspended — the same
+			// rule the library page follows, so a search behaves identically
+			// wherever it is run.
+			return items
+				.filter((it) => scores.has(it.id))
+				.sort((a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0));
+		}
+		const base = items.filter((it) =>
+			(it.search ?? `${it.primary} ${it.secondary ?? ''}`).toLowerCase().includes(q)
+		);
 		return pinActiveThenFavourite(base, activeId, (it) => it.pinned ?? false);
 	});
 

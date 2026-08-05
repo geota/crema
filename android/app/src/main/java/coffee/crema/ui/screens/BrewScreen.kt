@@ -90,6 +90,7 @@ import coffee.crema.core.Roaster
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.rankProfilesForPicker
 import coffee.crema.beans.rankBeansForPicker
+import coffee.crema.beans.searchBeans
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.TooltipBox
@@ -752,16 +753,20 @@ private fun BeanBlock(
                 CremaSearchPill(
                     query = query,
                     onQueryChange = { query = it },
-                    placeholder = "Search beans…",
+                    placeholder = "Search beans, origin, notes…",
                     modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                     compact = true,
                 )
                 // Loaded bean first, then favourite, then store order (shared rank).
                 val sorted = rankBeansForPicker(beans, activeBean?.id)
-                val shown = sorted.filter { b ->
-                    query.isBlank() || b.name.contains(query, ignoreCase = true) ||
-                        (roasterNameOf(b)?.contains(query, ignoreCase = true) ?: false) ||
-                        (b.origin?.country?.contains(query, ignoreCase = true) ?: false)
+                // While searching, the core matcher (issue 62) decides both which
+                // bags show and in what order — same query, same answer as the
+                // library page. The pinning above is the no-query order.
+                val hits = searchBeans(beans, roasters, query)
+                val shown = if (hits.active) {
+                    sorted.filter { hits.matches(it.id) }.sortedByDescending { hits.score(it.id) }
+                } else {
+                    sorted
                 }
                 if (shown.isEmpty()) {
                     Text(

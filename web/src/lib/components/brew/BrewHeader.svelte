@@ -38,6 +38,7 @@
 		freshColor = 'rgba(var(--tint-rgb), 0.4)',
 		beanItems,
 		activeBeanId = null,
+		beanRank,
 		// Right cluster + middle
 		quickSheetOpen = false,
 		status,
@@ -78,6 +79,8 @@
 		freshColor?: string;
 		beanItems: PickerItem[];
 		activeBeanId?: string | null;
+		/** Relevance ranker for the bean dropdown — see `HeaderPicker.rank`. */
+		beanRank?: (query: string) => Map<string, number> | null;
 		quickSheetOpen?: boolean;
 		status?: Snippet;
 		onEditProfile?: () => void;
@@ -178,8 +181,9 @@
 				open={openPicker === 'bean'}
 				items={beanItems}
 				activeId={activeBeanId}
-				searchPlaceholder="Search beans…"
+				searchPlaceholder="Search beans, origin, notes…"
 				addLabel="Add bean"
+				rank={beanRank}
 				onSelect={onSelectBean}
 				onAdd={onAddBean}
 				onEdit={onEditBean}

@@ -772,6 +772,26 @@ pub fn coerce_roaster(raw_json: &str, now_ms: f64) -> Option<String> {
     de1_domain::coerce_roaster_json(raw_json, f64_to_ms(now_ms))
 }
 
+/// Rank the bean library against a free-text query (issue 62) — typo-tolerant,
+/// weighted across every recorded field, best match first.
+///
+/// `beans_json` / `roasters_json` are arrays of `Bean` / `Roaster`; the result
+/// is a `SearchHit[]` carrying the score and the matched fields with their
+/// snippets already split into highlight runs. A blank query yields `[]` —
+/// "no query" is not "no results", and the caller keeps its own ordering.
+/// See `de1_domain::search_beans`.
+#[wasm_bindgen(js_name = searchBeans)]
+pub fn search_beans(beans_json: &str, roasters_json: &str, query: &str) -> Result<String, String> {
+    de1_domain::search_beans_json(beans_json, roasters_json, query)
+}
+
+/// The roaster-directory half of [`search_beans`] — same contract, over
+/// name / city / country / notes / website. See `de1_domain::search_roasters`.
+#[wasm_bindgen(js_name = searchRoasters)]
+pub fn search_roasters(roasters_json: &str, query: &str) -> Result<String, String> {
+    de1_domain::search_roasters_json(roasters_json, query)
+}
+
 /// The Visualizer-call retry policy (CORE5): whether an error tagged `tag`
 /// (with `status` for the HTTP case) is worth a time-based retry. The shell
 /// marshals its tagged error into `(tag, status)`. See

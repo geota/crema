@@ -24,12 +24,18 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.beans.beanFilterCounts
 import coffee.crema.beans.daysOffRoast
+import coffee.crema.beans.explanatory
 import coffee.crema.beans.filterAndSortBeans
+import coffee.crema.beans.forField
 import coffee.crema.beans.isFrozen
 import coffee.crema.beans.roastBand
 import coffee.crema.beans.roastBand5
+import coffee.crema.beans.searchBeans
+import coffee.crema.beans.searchRoasters
 import coffee.crema.core.Bean
 import coffee.crema.core.Roaster
+import coffee.crema.core.SearchField
+import coffee.crema.core.SearchHit
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.freshnessColor
 import coffee.crema.ui.components.*
@@ -75,12 +81,15 @@ fun PhoneBeansScreen(
     }
 
     val roasterNameOf: (Bean) -> String? = { b -> ui.roasters.firstOrNull { it.id == b.roasterId }?.name }
-    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, query, filter, sort, sortDesc, ui.activeBeanId)
-    val visibleRoasters = ui.roasters.filter {
-        query.isBlank() || it.name.contains(query, ignoreCase = true) ||
-            (it.city?.contains(query, ignoreCase = true) == true) ||
-            (it.country?.contains(query, ignoreCase = true) == true)
-    }.sortedBy { it.name.lowercase() }
+    // Core-ranked search (issue 62) — identical matcher, weights and ordering
+    // to the tablet and the web PWA.
+    val beanHits = searchBeans(ui.beans, ui.roasters, query)
+    val roasterHits = searchRoasters(ui.roasters, query)
+    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, filter, sort, sortDesc, ui.activeBeanId)
+    val visibleRoasters = ui.roasters
+        .filter { roasterHits.matches(it.id) }
+        .sortedBy { it.name.lowercase() }
+        .let { if (roasterHits.active) it.sortedByDescending { r -> roasterHits.score(r.id) } else it }
 
     Scaffold(
         topBar = {
@@ -146,7 +155,7 @@ fun PhoneBeansScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 item {
-                    CremaPhoneSearch(query = query, onQueryChange = { query = it }, placeholder = "Search beans & roasters")
+                    CremaPhoneSearch(query = query, onQueryChange = { query = it }, placeholder = "Search beans, origin, notes…")
                 }
                 if (tab == "bags") {
                     // Flat list ordered by the shared sort (loaded → favourites →
@@ -157,6 +166,7 @@ fun PhoneBeansScreen(
                         PhoneBeanTile(
                             bean = bean,
                             roasterName = roasterNameOf(bean),
+                            hit = beanHits.hit(bean.id),
                             isActive = bean.id == ui.activeBeanId,
                             onPrimary = {
                                 if (bean.archivedAt != null) vm.unarchiveBean(bean.id)
@@ -282,6 +292,7 @@ internal fun PhoneTabs(options: List<Pair<String, String>>, value: String, onCha
 private fun PhoneBeanTile(
     bean: Bean,
     roasterName: String?,
+    hit: SearchHit?,
     isActive: Boolean,
     onPrimary: () -> Unit,
     onEdit: () -> Unit,
@@ -313,12 +324,12 @@ private fun PhoneBeanTile(
                 )
                 Column(Modifier.weight(1f)) {
                     if (roasterName != null) Text(
-                        roasterName,
+                        highlighted(hit.forField(SearchField.Roaster)?.snippet, roasterName),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
-                        bean.name,
+                        highlighted(hit.forField(SearchField.Name)?.snippet, bean.name),
                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
@@ -334,6 +345,9 @@ private fun PhoneBeanTile(
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = 1.dp),
                     )
+                    // Why this bag is in the results — only when the query landed
+                    // somewhere the tile does not already show.
+                    hit.explanatory()?.let { why -> SearchWhy(why) }
                 }
                 // Top-right reserved for the favourite star (the clear, direct way to
                 // favourite — mirrors the tablet) + the ACTIVE badge when loaded. The

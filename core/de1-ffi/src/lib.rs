@@ -659,6 +659,39 @@ pub fn coerce_roaster(raw_json: String, now_unix_ms: i64) -> Option<String> {
     de1_domain::coerce_roaster_json(&raw_json, now_unix_ms)
 }
 
+/// Rank the bean library against a free-text query (issue 62) — typo-tolerant,
+/// weighted across every recorded field, best match first.
+///
+/// `beans_json` / `roasters_json` are arrays of `Bean` / `Roaster`; the result
+/// is a `SearchHit[]` JSON array carrying the score and the matched fields
+/// with their snippets already split into highlight runs. A blank query yields
+/// `[]` — "no query" is not "no results", and the caller keeps its own
+/// ordering. Mirrors the wasm `searchBeans`; see [`de1_domain::search_beans`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when either array can't be deserialised.
+#[uniffi::export]
+pub fn search_beans(
+    beans_json: String,
+    roasters_json: String,
+    query: String,
+) -> Result<String, CremaError> {
+    de1_domain::search_beans_json(&beans_json, &roasters_json, &query).map_err(crema_err)
+}
+
+/// The roaster-directory half of [`search_beans`] — same contract, over
+/// name / city / country / notes / website. Mirrors the wasm `searchRoasters`;
+/// see [`de1_domain::search_roasters`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when `roasters_json` can't be deserialised.
+#[uniffi::export]
+pub fn search_roasters(roasters_json: String, query: String) -> Result<String, CremaError> {
+    de1_domain::search_roasters_json(&roasters_json, &query).map_err(crema_err)
+}
+
 // ── Machine error / model strings ────────────────────────────────────────
 //
 // Human-readable machine text the shells show instead of raw enum / register

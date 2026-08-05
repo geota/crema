@@ -37,7 +37,14 @@
 		type Bean,
 		type Roaster
 	} from '$lib/bean';
+	import {
+		explanatoryHit,
+		hitForField,
+		SearchField,
+		type SearchHit
+	} from '$lib/bean/search';
 	import LibraryCardShell from '$lib/components/shared/LibraryCardShell.svelte';
+	import HighlightedText from '$lib/components/shared/HighlightedText.svelte';
 	import BeanImage from './BeanImage.svelte';
 	import BeanDeleteSplit from './BeanDeleteSplit.svelte';
 
@@ -49,7 +56,8 @@
 		onToggleFavourite,
 		onSetActive,
 		onDuplicate,
-		onEdit
+		onEdit,
+		hit
 	}: {
 		bean: Bean;
 		roaster: Roaster | null;
@@ -59,7 +67,17 @@
 		onSetActive: (id: string) => void;
 		onDuplicate: (id: string) => void;
 		onEdit: (id: string) => void;
+		/** This bag's search match, when a query is running (issue 62). */
+		hit?: SearchHit;
 	} = $props();
+
+	// Name + roaster highlight in place; anything else the query landed on
+	// gets one explanatory line, because a bag matching on its process or a
+	// tasting note is otherwise indistinguishable from a bag matching on
+	// nothing at all.
+	const nameHit = $derived(hitForField(hit, SearchField.Name));
+	const roasterHit = $derived(hitForField(hit, SearchField.Roaster));
+	const whyHit = $derived(explanatoryHit(hit));
 
 	const mt = $derived(roasterMarkTone(roaster));
 
@@ -137,8 +155,15 @@
 	{/snippet}
 
 	{#snippet head()}
-		<div class="bn-tile-roaster">{roaster?.name ?? 'No roaster'}</div>
-		<div class="bn-tile-name">{bean.name || 'Untitled bag'}</div>
+		<div class="bn-tile-roaster">
+			<HighlightedText
+				segments={roasterHit?.snippet}
+				fallback={roaster?.name ?? 'No roaster'}
+			/>
+		</div>
+		<div class="bn-tile-name">
+			<HighlightedText segments={nameHit?.snippet} fallback={bean.name || 'Untitled bag'} />
+		</div>
 		<div class="bn-tile-meta">
 			<span class="bn-tile-origin">
 				{#if bean.origin.country}
@@ -148,6 +173,12 @@
 				{/if}
 			</span>
 		</div>
+		{#if whyHit}
+			<div class="bn-tile-why" title="Matched your search">
+				<span class="bn-tile-why-lab">{whyHit.label}</span>
+				<HighlightedText segments={whyHit.snippet} className="bn-tile-why-text" />
+			</div>
+		{/if}
 		<div class="bn-tile-tags">
 			{#if bean.roastLevel != null}
 				<span class="bn-tile-roastpill">{roastBand5(bean.roastLevel)}</span>
@@ -361,6 +392,36 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	/*
+	 * "Why this bag is in your results" — only rendered when the query landed
+	 * somewhere the tile does not already show (a process, a tasting note,
+	 * where it was bought). One line, clipped: it is a hint, not content.
+	 */
+	.bn-tile-why {
+		display: flex;
+		align-items: baseline;
+		gap: 5px;
+		margin-top: 4px;
+		font-family: var(--font-sans);
+		font-size: 11px;
+		min-width: 0;
+	}
+	.bn-tile-why-lab {
+		flex-shrink: 0;
+		font-size: 9px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: var(--track-allcaps);
+		color: rgba(var(--tint-rgb), 0.45);
+	}
+	:global(.bn-tile-why-text) {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: rgba(var(--tint-rgb), 0.7);
 	}
 
 	/* Pills row — roast band + Blend/Decaf + tags */

@@ -55,14 +55,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.beans.beanFilterCounts
 import coffee.crema.beans.daysOffRoast
+import coffee.crema.beans.explanatory
 import coffee.crema.beans.filterAndSortBeans
+import coffee.crema.beans.forField
 import coffee.crema.beans.isFrozen
 import coffee.crema.beans.roastBand
 import coffee.crema.beans.roastBand5
+import coffee.crema.beans.searchBeans
+import coffee.crema.beans.searchRoasters
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.Bean
 import coffee.crema.core.Roaster
+import coffee.crema.core.SearchField
+import coffee.crema.core.SearchHit
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.freshnessColor
 import coffee.crema.ui.components.CremaButton
@@ -77,6 +83,9 @@ import coffee.crema.ui.components.CremaNavigationRail
 import coffee.crema.ui.components.CremaSearchPill
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
+import coffee.crema.ui.components.SearchWhy
+import coffee.crema.ui.components.UPPERCASE
+import coffee.crema.ui.components.highlighted
 import coffee.crema.ui.components.BeanAvatar
 import coffee.crema.ui.components.RoasterMarkAvatar
 import coffee.crema.ui.components.CremaConfirmDialog
@@ -131,14 +140,15 @@ fun BeansScreen(
     }
     val launchSave: (String, String?) -> Unit = { name, content -> if (content != null) { pendingExport = content; saveLauncher.launch(name) } }
 
-    val roasterNameOf: (Bean) -> String? = { b -> ui.roasters.firstOrNull { it.id == b.roasterId }?.name }
-    // Bags — client-side search + filter + sort over the in-memory library.
-    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, query, beanFilter, beanSort, beanSortDesc, ui.activeBeanId)
-    val visibleRoasters = ui.roasters.filter {
-        query.isBlank() || it.name.contains(query, ignoreCase = true) ||
-            (it.city?.contains(query, ignoreCase = true) == true) ||
-            (it.country?.contains(query, ignoreCase = true) == true)
-    }
+    // Bags — core-ranked search (issue 62) + facet filter + sort over the
+    // in-memory library. The search itself is memoised on the library, so a
+    // keystroke costs one FFI call rather than a re-serialisation.
+    val beanHits = searchBeans(ui.beans, ui.roasters, query)
+    val roasterHits = searchRoasters(ui.roasters, query)
+    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, beanFilter, beanSort, beanSortDesc, ui.activeBeanId)
+    val visibleRoasters = ui.roasters
+        .filter { roasterHits.matches(it.id) }
+        .sortedByDescending { roasterHits.score(it.id) }
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(
@@ -180,7 +190,7 @@ fun BeansScreen(
                 CremaSearchPill(
                     query = query,
                     onQueryChange = { query = it },
-                    placeholder = "Search beans, roasters…",
+                    placeholder = "Search beans, origin, notes…",
                     modifier = if (narrowBar) Modifier.weight(1f) else Modifier.width(240.dp),
                 )
                 Spacer(Modifier.width(8.dp))
@@ -293,6 +303,7 @@ fun BeansScreen(
                             BeanCard(
                                 bean = bean,
                                 roasterName = ui.roasters.firstOrNull { it.id == bean.roasterId }?.name,
+                                hit = beanHits.hit(bean.id),
                                 isActive = bean.id == ui.activeBeanId,
                                 onSetActive = { vm.setActiveBean(bean.id) },
                                 onEdit = { vm.startEditBean(bean.id); onNav("bean-edit") },
@@ -352,6 +363,7 @@ fun BeansScreen(
 private fun BeanCard(
     bean: Bean,
     roasterName: String?,
+    hit: SearchHit?,
     isActive: Boolean,
     onSetActive: () -> Unit,
     onEdit: () -> Unit,
@@ -382,9 +394,17 @@ private fun BeanCard(
                     fallbackName = roasterName, sizeDp = 44, cornerDp = 12, fontSize = 16.sp,
                 )
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    if (roasterName != null) Eyebrow(roasterName)
+                    if (roasterName != null) {
+                        Eyebrow(
+                            highlighted(
+                                hit.forField(SearchField.Roaster)?.snippet,
+                                roasterName,
+                                transform = UPPERCASE,
+                            ),
+                        )
+                    }
                     Text(
-                        bean.name,
+                        highlighted(hit.forField(SearchField.Name)?.snippet, bean.name),
                         style = MaterialTheme.typography.titleLarge.copy(fontSize = 19.sp, lineHeight = 24.sp),
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 2,
@@ -393,6 +413,9 @@ private fun BeanCard(
                     bean.origin?.country?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
+                    // Why this bag is in the results — only when the query landed
+                    // somewhere the card does not already show.
+                    hit.explanatory()?.let { why -> SearchWhy(why) }
                 }
                 IconButton(onClick = onToggleFavourite, modifier = Modifier.size(32.dp)) {
                     PhIcon(if (bean.favourite == true) "star-fill" else "star", sizeDp = 18, tint = if (bean.favourite == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
