@@ -188,19 +188,36 @@ class NordicBleTransport(context: Context) : BleTransport {
             .onEach { result ->
                 runCatching { advertWhileConnectedProbe(result.peripheral.address) }
             }
-            // Nordic's scan throws (BluetoothUnavailableException) from INSIDE
-            // this shared upstream when Bluetooth is off. A plain `.catch` here
-            // is a TRAP: swallowing the error COMPLETES the shared upstream, and
-            // because `SharingStarted.WhileSubscribed` only (re)starts the scan on
-            // a 0→1 subscriber transition, a "want" that stayed subscribed the
-            // whole time (BleScanner never got a match — see BleScanner.scanFor)
-            // keeps the subscriber count at 1. So turning Bluetooth back ON never
-            // restarts the scan and the app wedges on "Scanning…" until it is
-            // killed (the reported BT-off→on bug). Instead, RETRY: on a
-            // Bluetooth-off failure, park (zero-CPU) until the adapter reports
-            // POWERED_ON again, settle briefly, then re-collect the cold scan —
-            // the still-subscribed want gets a live scan with no re-subscribe.
-            .retryWhen { cause, _ ->
+            // Nordic's scan throws from INSIDE this shared upstream on various
+            // failures — BluetoothUnavailableException when Bluetooth is off, and
+            // (observed after a multi-hour background idle — a device rebooting
+            // out of Doze, background scan-start throttling, or some other
+            // transient stack hiccup we don't have a name for yet) other,
+            // unnamed exceptions too. A plain `.catch` here is a TRAP: swallowing
+            // the error COMPLETES the shared upstream, and because
+            // `SharingStarted.WhileSubscribed` only (re)starts the scan on a 0→1
+            // subscriber transition, a "want" that stayed subscribed the whole
+            // time (BleScanner never got a match — see BleScanner.scanFor, or the
+            // reconnect supervisor's persistent lurk tier) keeps the subscriber
+            // count at 1 forever. So ANY unretried scan failure — not just
+            // Bluetooth being toggled off — wedges the scan permanently: the
+            // manual "Pair" button and a never-before-paired scale (which has no
+            // remembered-address fallback, so it's 100% scan-dependent) both go
+            // silent until the process is killed and a fresh CentralManager /
+            // rawScan gets created. RETRY EVERYTHING, not just the named
+            // BT-off case:
+            //  - BluetoothUnavailableException: park (zero-CPU) until the adapter
+            //    reports POWERED_ON again, settle briefly, then re-collect — the
+            //    original fix, unchanged.
+            //  - anything else: back off (capped exponential, same shape as
+            //    BleReconnectSupervisor's device-level backoff) and retry anyway.
+            //    A truly permanent failure (e.g. a revoked permission) just
+            //    retries slowly forever rather than dying — matching this
+            //    codebase's existing "never truly give up, just go quiet"
+            //    philosophy (BleReconnectSupervisor's lurk tier, de1app's/
+            //    Decenza's forever-tiers). That beats the alternative, which is a
+            //    scan that's dead for the rest of the process's life.
+            .retryWhen { cause, attempt ->
                 if (cause is BluetoothUnavailableException) {
                     Log.w(TAG, "BLE scan stopped (Bluetooth off) — waiting for the adapter to power on", cause)
                     // Suspends here with no CPU cost until Nordic's adapter watcher
@@ -211,17 +228,18 @@ class NordicBleTransport(context: Context) : BleTransport {
                     // loop across that window (and it's not a tight loop regardless).
                     delay(SCAN_RESTART_SETTLE_MS)
                     Log.i(TAG, "Bluetooth powered on — restarting BLE scan")
-                    true
                 } else {
-                    // A non-Bluetooth scan failure (permission, scan-start error):
-                    // don't retry — fall through to the terminal .catch below.
-                    false
+                    val backoff = scanRetryBackoffMs(attempt)
+                    Log.w(TAG, "BLE scan stopped (attempt ${attempt + 1}, retrying in ${backoff}ms): ${cause.message}", cause)
+                    delay(backoff)
                 }
+                true
             }
-            // Terminal guard: a non-retried failure must not kill the shareIn
-            // collector on `scope` (an uncaught coroutine crash) — swallow + log so
-            // it degrades to "no scan", not an app crash. (shareIn isolates upstream
-            // errors from subscribers, so this never reaches a per-want .catch.)
+            // Defensive only: retryWhen above now always retries, so this should
+            // be unreachable in practice. Kept as a last-resort guard so a bug in
+            // the retry logic itself degrades to "no scan" rather than an
+            // uncaught coroutine crash on `scope` (shareIn isolates upstream
+            // errors from subscribers, so this never reaches a per-want .catch).
             .catch { t -> Log.w(TAG, "BLE scan stopped (unrecoverable): ${t.message}", t) }
             .shareIn(scope, SharingStarted.WhileSubscribed(), replay = 0)
 
@@ -530,6 +548,12 @@ class NordicBleTransport(context: Context) : BleTransport {
          *  disconnected peripheral advertises ~1/s during a scan; one action
          *  per window is plenty (reaprime's throttle). */
         const val ADVERT_PROBE_THROTTLE_MS = 5_000L
+
+        /** Backoff for a non-Bluetooth-off scan failure: 1 s doubling, capped at
+         *  30 s (same shape as [BleReconnectSupervisor]'s device-level backoff).
+         *  `attempt` is retryWhen's own 0-based counter. */
+        fun scanRetryBackoffMs(attempt: Long): Long =
+            (1_000L shl attempt.coerceIn(0, 10).toInt()).coerceAtMost(30_000L)
 
         /** Flatten Nordic's sealed [ConnectionState] into [BleTransport.ConnState]. */
         fun ConnectionState.toConnState(): BleTransport.ConnState = when (this) {
