@@ -5,6 +5,15 @@ All notable changes to Crema are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.6] — 2026-08-07
+
+More reliable Bluetooth reconnects — the app recovers on its own after long idle periods, no more force-quit needed.
+
+• Bean search finds any recorded term and tolerates typos
+• See a bean's photo and details without opening its editor
+• Water & maintenance items are easier to scan at a glance
+• Shot log now flags when a pour ends before your stop target was reached
+
 ## [0.0.5] — 2026-07-31
 
 ### Fixed
@@ -125,3 +134,4 @@ shot state machine, and domain model.
   firmware updates).
 
 [0.0.1]: https://github.com/geota/crema/releases/tag/v0.0.1
+[0.0.6]: https://github.com/geota/crema/releases/tag/v0.0.6
