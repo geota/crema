@@ -1,0 +1,4 @@
+Fixed stop-at-weight reliability after a DE1 reconnect, corrected water-level
+readings, and tightened Visualizer sync (upload scale + per-shot re-upload).
+Steam/hot-water service modes now show their own progress and temperature
+target. Tablet layout polish for smaller and wide-aspect screens.
