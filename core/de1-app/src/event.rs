@@ -290,6 +290,17 @@ pub enum Event {
         /// core's event stream still decodes.
         #[serde(default)]
         disposition: ShotDisposition,
+        /// True when a weight/volume/max-time stop target was armed for
+        /// this shot, yet the app never triggered its own auto-stop — the
+        /// DE1's own profile frame timing ended the pour on its own instead
+        /// (e.g. a Quick Controls yield bump past what the profile's frames
+        /// can physically produce in their configured duration). `false`
+        /// for an ordinary on-target stop AND for a shot with no target
+        /// armed at all (nothing was expected to fire). `serde(default)` (=
+        /// `false`) so a version-skewed consumer parsing an older core's
+        /// event stream still decodes.
+        #[serde(default)]
+        ended_without_triggering_stop: bool,
     },
     /// A hot-water or flush session began (the DE1 entered the `HotWater` or
     /// `HotWaterRinse` state).

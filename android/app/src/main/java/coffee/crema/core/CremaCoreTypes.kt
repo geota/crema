@@ -494,7 +494,17 @@ data class EventShotCompletedInner (
 	/// (crate::CremaCore::set_active_beverage_type)). `serde(default)`
 	/// (= `Record`) so a version-skewed consumer parsing an older
 	/// core's event stream still decodes.
-	val disposition: ShotDisposition? = null
+	val disposition: ShotDisposition? = null,
+	/// True when a weight/volume/max-time stop target was armed for
+	/// this shot, yet the app never triggered its own auto-stop — the
+	/// DE1's own profile frame timing ended the pour on its own instead
+	/// (e.g. a Quick Controls yield bump past what the profile's frames
+	/// can physically produce in their configured duration). `false`
+	/// for an ordinary on-target stop AND for a shot with no target
+	/// armed at all (nothing was expected to fire). `serde(default)` (=
+	/// `false`) so a version-skewed consumer parsing an older core's
+	/// event stream still decodes.
+	val ended_without_triggering_stop: Boolean? = null
 )
 
 /// Generated type representing the anonymous struct variant `WaterSessionStarted` of the `Event` Rust enum

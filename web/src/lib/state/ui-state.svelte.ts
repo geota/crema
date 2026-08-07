@@ -958,6 +958,31 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			// `final_weight` is `None` when no scale was paired. The card
 			// uses `0` / `null` as the displayable fallback (matches what
 			// the previous re-derivation produced for an empty series).
+			let eventLog = appendLog(
+				snapshot.eventLog,
+				`Shot completed: ${event.content.duration}ms, ` +
+					`${event.content.sample_count} samples`
+			);
+			// A weight/volume/max-time target was armed, yet the app never
+			// triggered its own stop — the DE1's own profile frame timing
+			// ended the pour on its own instead (most often a Quick
+			// Controls yield bump past what the profile's frames can
+			// physically produce in their configured duration). Called out
+			// distinctly so "why did my shot end short" doesn't require
+			// correlating timestamps by hand.
+			if (event.content.ended_without_triggering_stop) {
+				const st = snapshot.stopTargets;
+				const part = (v: number | null | undefined, unit: string) =>
+					v != null ? `${v.toFixed(unit === 'g' ? 1 : 0)} ${unit}` : '—';
+				const armed = st
+					? `weight ${part(st.weightG, 'g')} · volume ${part(st.volumeMl, 'ml')} · max ${part(st.maxTimeS, 's')}`
+					: 'unknown';
+				eventLog = appendLog(
+					eventLog,
+					`Shot ended on the profile's own timing, not the app's stop ` +
+						`(armed: ${armed}) — the profile's frames ran out before the target could be reached`
+				);
+			}
 			return {
 				...snapshot,
 				shotInProgress: false,
@@ -968,11 +993,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					peakTemp: event.content.peak_temp ?? 0,
 					completedAt: performance.now()
 				},
-				eventLog: appendLog(
-					snapshot.eventLog,
-					`Shot completed: ${event.content.duration}ms, ` +
-						`${event.content.sample_count} samples`
-				)
+				eventLog
 			};
 		}
 		case 'WaterSessionStarted':

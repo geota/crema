@@ -138,6 +138,7 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
                 duration,
                 sample_count,
                 disposition,
+                ended_without_triggering_stop,
                 ..
             } => Event::ShotCompleted {
                 duration,
@@ -147,8 +148,11 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
                 peak_weight: None,
                 final_weight: None,
                 // Passed through un-stripped: the expected vec pins the
-                // classification (a 71 s espresso pull → `Record`).
+                // classification (a 71 s espresso pull → `Record`) and
+                // whether an armed target went unstopped (this capture has
+                // no scale / no configured targets, so it's always `false`).
                 disposition,
+                ended_without_triggering_stop,
             },
             other => other,
         })
@@ -227,6 +231,9 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
             peak_weight: None,
             final_weight: None,
             disposition: ShotDisposition::Record,
+            // No scale / no configured targets in this capture — nothing was
+            // armed, so nothing could have gone unstopped.
+            ended_without_triggering_stop: false,
         },
         // The core's stop-target projection: this capture has no scale and
         // no configured targets, so it correctly reports "nothing will stop

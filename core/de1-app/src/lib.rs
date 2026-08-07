@@ -429,6 +429,18 @@ pub struct CremaCore {
     /// only emits on change (arming, a late scale, a toggle) — compared on
     /// every scale reading / telemetry sample, both cheap `Copy` structs.
     reported_stop_targets: Option<(bool, StopTargets, Option<f32>, Option<&'static str>)>,
+    /// Whether [`push_stop`](Self::push_stop) fired at least once THIS shot
+    /// (reset at `ShotEvent::Started`, set in `push_stop` alongside
+    /// [`Event::StopTriggered`]). Distinct from [`pending_stop`](Self::pending_stop),
+    /// which can already be cleared by the time `ShotEvent::Completed` is
+    /// handled — this survives to that point so `Completed` can tell "the app
+    /// stopped this shot" apart from "the DE1's own profile timing ended it
+    /// on its own", the latter being invisible to the app's own stop-target
+    /// arming (a profile whose frames physically can't reach an armed target
+    /// within their own duration — e.g. Quick Controls dialling yield up past
+    /// what the profile's frame timing produces — ends the pour with no
+    /// stop ever fired).
+    stop_triggered_this_shot: bool,
     /// Per-shot SAW kill switch. Latched flag, default `false`; the shell
     /// pushes `true` when the user toggles the QC yield dot OFF, back to
     /// `false` when it turns ON. Independent of
@@ -690,6 +702,7 @@ impl CremaCore {
             stop_on_weight: true,
             pending_stop: None,
             reported_stop_targets: None,
+            stop_triggered_this_shot: false,
             weight_target_disabled: false,
             volume_stop_with_scale: false,
             profile_target_weight: None,
@@ -3451,6 +3464,9 @@ impl CremaCore {
                 self.saw_zero_offset_g = 0.0;
                 self.untared_settle = None;
                 self.untared_window_reopened = false;
+                // Re-arm the "did the app stop this shot" latch — see the
+                // field doc.
+                self.stop_triggered_this_shot = false;
                 // Auto-tare the connected scale so the cup starts from zero,
                 // mirroring the legacy app's tare-at-shot-start behaviour —
                 // gated on the latched user preference (default true). The
@@ -3492,6 +3508,23 @@ impl CremaCore {
             ShotEvent::Completed(record) => {
                 self.shot_started = None;
                 self.flow_started = None;
+                // Read BEFORE the reset two lines down: did this shot have a
+                // weight/volume/max-time target armed, yet the app never
+                // triggered its own stop? That means the DE1's own profile
+                // frame timing ended the pour on its own — e.g. Quick
+                // Controls dialled the yield up past what the profile's
+                // frames can physically produce in their configured
+                // duration. Silent otherwise: nothing here distinguishes it
+                // from an ordinary, on-target app-triggered stop.
+                let ended_without_triggering_stop =
+                    self.reported_stop_targets
+                        .is_some_and(|(armed, targets, _, _)| {
+                            armed
+                                && (targets.weight.is_some()
+                                    || targets.volume.is_some()
+                                    || targets.max_time.is_some())
+                        })
+                        && !self.stop_triggered_this_shot;
                 // The stop was honoured (or the shot ended some other way) —
                 // stand the enforcer down and reset the arming reporter so
                 // the NEXT shot re-announces its targets.
@@ -3537,6 +3570,7 @@ impl CremaCore {
                         final_weight,
                         self.active_beverage_type,
                     ),
+                    ended_without_triggering_stop,
                 });
                 // Drip learning (Decenza SAW learning): the measured sample is
                 // (final settled weight − weight at the stop trigger) at the
@@ -3705,6 +3739,7 @@ impl CremaCore {
     /// until the shot actually ends (issue #15).
     fn push_stop(&mut self, reason: Option<StopReason>, now: Duration, out: &mut CoreOutput) {
         if let Some(reason) = reason {
+            self.stop_triggered_this_shot = true;
             out.events.push(Event::StopTriggered { reason });
             out.commands.push(Command::WriteCharacteristic {
                 target: WriteTarget::De1RequestedState,
@@ -5741,6 +5776,82 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    /// Extract `ended_without_triggering_stop` from a `Completed` shot's
+    /// `Event::ShotCompleted`, driven directly via `map_shot_event` — the
+    /// domain-level seam, so these tests don't need to reverse-engineer the
+    /// DE1's Idle-transition wire bytes just to reach `Completed`.
+    fn ended_without_triggering_stop(core: &mut CremaCore, now_ms: u64) -> bool {
+        let mut out = CoreOutput::default();
+        core.map_shot_event(
+            ShotEvent::Completed(de1_domain::ShotRecord {
+                duration: Duration::from_secs(10),
+                samples: vec![],
+            }),
+            Duration::from_millis(now_ms),
+            &mut out,
+        );
+        out.events
+            .into_iter()
+            .find_map(|e| match e {
+                Event::ShotCompleted {
+                    ended_without_triggering_stop,
+                    ..
+                } => Some(ended_without_triggering_stop),
+                _ => None,
+            })
+            .expect("map_shot_event(Completed) must push Event::ShotCompleted")
+    }
+
+    #[test]
+    fn ended_without_triggering_stop_is_false_when_the_app_stopped_the_shot() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        // Crosses the target — the app's own SAW fires the stop.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
+        assert!(out.events.contains(&Event::StopTriggered {
+            reason: StopReason::Weight,
+        }));
+        assert!(
+            !ended_without_triggering_stop(&mut core, 10_000),
+            "the app triggered this stop — it must not read as an unstopped, \
+             profile-timed-out shot"
+        );
+    }
+
+    #[test]
+    fn ended_without_triggering_stop_is_true_when_an_armed_target_never_fires() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        // A real shot has telemetry/scale readings flowing throughout — this
+        // one stays well under the 30 g target (`report_stop_targets` only
+        // populates `reported_stop_targets` on a scale/telemetry tick, not
+        // at arm-time itself, so a reading here matters for the test to be
+        // representative). No weight reading ever crosses the target, so the
+        // app's own stop never fires — the reported bug: the profile's own
+        // frame timing ends the pour on its own instead (e.g. Quick
+        // Controls dialled the yield up past what the profile's frames can
+        // physically produce).
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(1_000), 6_000);
+        assert!(
+            ended_without_triggering_stop(&mut core, 10_000),
+            "a target was armed and never fired — the log should call this out"
+        );
+    }
+
+    #[test]
+    fn ended_without_triggering_stop_is_false_with_no_armed_target() {
+        let mut core = CremaCore::new();
+        // No scale, no profile target weight — nothing armed, so an
+        // ordinary un-timed profile finishing on its own is completely
+        // normal and must not be flagged.
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        assert!(!ended_without_triggering_stop(&mut core, 10_000));
     }
 
     #[test]

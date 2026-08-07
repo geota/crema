@@ -4142,6 +4142,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ),
                 ) }
                 appendLog("Shot completed: ${c.duration}ms, ${c.sample_count} samples")
+                // A weight/volume/max-time target was armed, yet the app
+                // never triggered its own stop — the DE1's own profile
+                // frame timing ended the pour on its own instead (core:
+                // Event::ShotCompleted.ended_without_triggering_stop). Most
+                // often a Quick Controls yield bump past what the profile's
+                // frames can physically produce in their configured
+                // duration. Called out distinctly so "why did my shot end
+                // short" doesn't require correlating timestamps by hand.
+                if (c.ended_without_triggering_stop == true) {
+                    appendLog(
+                        "Shot ended on the profile's own timing, not the app's stop " +
+                            "(armed: ${lastArmedTargets ?: "unknown"}) — the profile's frames " +
+                            "ran out before the target could be reached",
+                    )
+                }
                 // Shot window over — release the HIGH-priority link hint
                 // requested on ShotStarted.
                 viewModelScope.launch { ble.setConnectionPriority(high = false) }
