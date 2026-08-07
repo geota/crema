@@ -262,8 +262,20 @@ fun setProfilePinnedJson(baseJson: String, pinned: Boolean, json: Json): String 
 /**
  * Override the top-level dose / yield / brew-temp on a complete CremaProfile
  * JSON, leaving every other field (segments, limiters, …) untouched — the
- * Quick-Controls transient override baked into a shot upload (the web shell's
- * re-upload-with-overrides). Does NOT persist to the library.
+ * Quick-Controls transient override baked into a shot upload (the web
+ * shell's re-upload-with-overrides). Does NOT persist to the library.
+ *
+ * Deliberately does NOT reconcile `maxTotalVolumeMl` / segment
+ * `volumeLimitMl` (or frame durations) with the new yield, even when one of
+ * them would now cut the shot short of it: Quick Controls edits exactly the
+ * field you're dialling and nothing else — a silent rewrite of a DIFFERENT
+ * field, however well-intentioned, is a second thing to reason about on top
+ * of "what does this dial do." When a stale cap or a profile's own frame
+ * timing DOES end a shot short of an armed target, that surfaces instead as
+ * `Event::ShotCompleted.endedWithoutTriggeringStop` (core/de1-app) — a
+ * visible diagnostic signal rather than an invisible auto-fix. Go widen the
+ * cap, or the frame duration, in the full segment editor
+ * ([patchCremaProfileJson]) if that's what you actually want.
  *
  * When [preinf] is non-null it also caps the **leading pre-infuse segment's**
  * time (issue 15): pre-infusion isn't a separate machine setting — it's just the
@@ -298,8 +310,9 @@ fun overrideBrewParamsJson(
 /**
  * Clone the active profile into a NEW custom profile carrying the Quick-Controls
  * dial values (the web shell's "Save preset"): fresh id + source:custom + the
- * given name + dose/yield/brew-temp, every segment preserved. Does NOT mutate the
- * source profile.
+ * given name + dose/yield/brew-temp, every segment preserved verbatim (see
+ * [overrideBrewParamsJson] for why volume caps are deliberately not
+ * reconciled here). Does NOT mutate the source profile.
  */
 fun quickPresetJson(baseJson: String, name: String, dose: Float, yieldOut: Float, brewTemp: Float, json: Json): String {
     val dup = duplicatedCustomProfileJson(baseJson, json)

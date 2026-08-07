@@ -8,12 +8,23 @@
  * the user mutates a control.
  *
  * Wiring status (kept here so changes stay coherent with the orchestrator):
- *   - `yield` — wired (core SAW target; see `applyShotTargetWeight`).
- *   - `brewTemp`, `preinf` — wired as profile QC overrides at activation.
- *   - `dose` — recorded only (no DE1 control; logged on `ShotCompleted`).
- *   - `grind` — log-only.
+ *   - `dose`, `brewTemp`, `preinf` — wired as profile QC overrides, baked
+ *     into the uploaded profile bytes at shot start (see `qcOverrides()`
+ *     below and `BrewParamSeedKey`).
+ *   - `yield` — wired BOTH ways: `applyShotTargetWeight` arms the core's
+ *     SAW target immediately on edit, and it's also one of the four
+ *     `qcOverrides()` keys baked in at shot start.
+ *   - `grind` — log-only; never reaches the machine or a profile.
  *   - steam (`steamTime` / `steamFlow` / `steamTemp`), hot water
- *     (`waterTemp` / `waterVolume`) — local UI only; no DE1 control yet.
+ *     (`waterTemp` / `waterVolume`), flush (`flushTime` / `flushTemp`) —
+ *     DE1 system settings, written live on edit via BLE (RMW for the
+ *     steam+hot-water settings blob, standalone writes for steam flow /
+ *     flush) — see `BrewDashboard.svelte`'s steam/water/flush `onWrite`
+ *     cases. Persisted to local prefs and re-seeded on load, independent
+ *     of any profile.
+ *   - `stopOnWeight`, `autoTare` — behaviour toggles, persisted to local
+ *     prefs and pushed to the core via `applyAutoTare` / the SAW gate in
+ *     `startShot`.
  */
 
 /** The full mode-aware Quick Sheet parameter set — mirrors `DEFAULT_PARAMS_V2`. */
