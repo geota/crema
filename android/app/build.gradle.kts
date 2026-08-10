@@ -370,7 +370,7 @@ dependencies {
     // Server + client sessions are both `WebSocketSession`, so ONE
     // `KtorWsFrameLink` backs both. The same framed protocol later serves the
     // PWA (M4) and a cloud relay (M5); the JSON frames ride as WS text.
-    val ktor = "3.5.1"
+    val ktor = "3.5.2"
     implementation("io.ktor:ktor-server-core:$ktor")
     implementation("io.ktor:ktor-server-cio:$ktor")
     implementation("io.ktor:ktor-server-websockets:$ktor")
