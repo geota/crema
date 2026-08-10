@@ -76,7 +76,7 @@ jobs:
       # Pinned (not `stable`) to match core/Cargo.toml's rust-version — F-Droid's
       # reproducible-build recipe needs a fixed compiler, not a floating channel.
       - name: Install Rust toolchain (android target)
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: aarch64-linux-android
 
