@@ -191,6 +191,12 @@ fun SettingsScreen(
                             CremaSettingsRow("Sleep the DE1 when you quit Crema", "Swiping Crema out of recents puts an idle machine to sleep first (best effort). Just switching apps never sleeps it.") {
                                 CremaSwitch(ui.sleepOnQuit, vm::setSleepOnQuit)
                             }
+                            // Screen-off keep-alive (#65): a foreground service
+                            // that keeps the link + reconnect loop alive with the
+                            // screen off — engages only while charging.
+                            CremaSettingsRow("Keep connected in the background", "Reconnects the machine even while the screen is off — so it's ready again after a power cut. Runs only while this device is charging. Default on for tablets, off for phones.") {
+                                CremaSwitch(ui.keepConnectedScreenOff, vm::setKeepConnectedScreenOff)
+                            }
                             // Fan threshold is REAL: written now + re-seeded on every
                             // connect (the DE1 forgets it across power cycles, #31).
                             // Commit goes through a confirm dialog — Decenza treats

@@ -103,6 +103,13 @@ data class AppPrefs(
      *  fires while the machine is idle and this device is the primary.
      *  Platform extra — the swipe-away signal is Android-only. */
     val sleepOnQuit: Boolean = true,
+    /** Keep the DE1 connected — and auto-reconnecting — while the screen is OFF,
+     *  via a foreground service (geota/crema#65). `null` = unset → use the
+     *  form-factor default (ON for tablets, OFF for phones). When effectively ON
+     *  the service still only engages while the device is on external power, so a
+     *  battery device never drains and never shows the notification unless it's
+     *  charging. Platform extra — Android-only, per-device. */
+    val keepConnectedScreenOff: Boolean? = null,
     /** Show the inline debug / event-log panel in Settings → Advanced
      *  (web `showDebugPanel`). */
     val showDebugPanel: Boolean = false,
@@ -285,6 +292,7 @@ private data class PersistedPrefs(
     val sleepMachineWithSaver: Boolean = true,
     val wakeMachineWithSaver: Boolean = true,
     val sleepOnQuit: Boolean = true,
+    val keepConnectedScreenOff: Boolean? = null,
     val autoDriveBackup: Boolean = true,
     val autoUpdateCheck: Boolean = false,
     val lastUpdateCheckAtMs: Long? = null,
@@ -307,6 +315,7 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     sleepMachineWithSaver = sleepMachineWithSaver,
     wakeMachineWithSaver = wakeMachineWithSaver,
     sleepOnQuit = sleepOnQuit,
+    keepConnectedScreenOff = keepConnectedScreenOff,
     autoDriveBackup = autoDriveBackup,
     autoUpdateCheck = autoUpdateCheck,
     lastUpdateCheckAtMs = lastUpdateCheckAtMs,
@@ -328,6 +337,7 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     sleepMachineWithSaver = sleepMachineWithSaver,
     wakeMachineWithSaver = wakeMachineWithSaver,
     sleepOnQuit = sleepOnQuit,
+    keepConnectedScreenOff = keepConnectedScreenOff,
     autoDriveBackup = autoDriveBackup,
     autoUpdateCheck = autoUpdateCheck,
     lastUpdateCheckAtMs = lastUpdateCheckAtMs,

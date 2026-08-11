@@ -490,6 +490,11 @@ data class MainUiState(
     /** Put the DE1 to sleep when Crema is QUIT (task swiped from recents) —
      *  never on mere backgrounding. Best-effort; idle + primary only. */
     val sleepOnQuit: Boolean = true,
+    /** Keep the DE1 connected + auto-reconnecting while the screen is OFF, via a
+     *  foreground service (geota/crema#65). The EFFECTIVE value (the raw pref
+     *  resolved against the form-factor default: tablet on / phone off); the
+     *  service still only engages while charging. */
+    val keepConnectedScreenOff: Boolean = false,
     /** Daily automatic Google Drive backup while Drive is linked (issue #36). */
     val autoDriveBackup: Boolean = true,
     /** Daily automatic release check against GitHub — default OFF (opt-in
@@ -1124,6 +1129,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onStatus = { line -> _ui.update { it.copy(status = line) } },
     )
 
+    /** Keeps the process — and thus the DE1 link + its reconnect loop — alive
+     *  while the screen is off (geota/crema#65). Gated on the user's pref AND
+     *  charging by [BackgroundConnectionController]; fed the live DE1 state,
+     *  effective setting, and foreground state below. */
+    private val bgConnection = coffee.crema.ble.BackgroundConnectionController(app)
+
+    /** True on tablet-class displays (≥600dp smallest width) — the form-factor
+     *  default for [MainUiState.keepConnectedScreenOff] (tablet on / phone off). */
+    private val isTablet = app.resources.configuration.smallestScreenWidthDp >= 600
+
     /**
      * The Bookoo scale connection. Shares the one [bridge] with [ble]: the core
      * is internally `Mutex`-guarded, so both managers feeding it concurrently
@@ -1271,6 +1286,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // manager-state collectors, and the DE1 keep-awake tick — and mirror
         // its state slice into the UI snapshot.
         connection.start()
+        // Keep-alive service watcher: register the power receiver + evaluate.
+        bgConnection.start()
         viewModelScope.launch {
             connection.state.collect { cs ->
                 _ui.update {
@@ -1284,6 +1301,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         rememberedScaleName = cs.rememberedScaleName,
                     )
                 }
+                // The background keep-alive is wanted whenever a DE1 connection
+                // is live or being pursued (not idle / not user-disconnected).
+                bgConnection.setDe1Active(
+                    cs.de1 != De1BleManager.State.IDLE &&
+                        cs.de1 != De1BleManager.State.DISCONNECTED,
+                )
             }
         }
         library.loadBuiltinProfiles()
@@ -2497,6 +2520,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         sleepMachineWithSaver = _ui.value.sleepMachineWithSaver,
         wakeMachineWithSaver = _ui.value.wakeMachineWithSaver,
         sleepOnQuit = _ui.value.sleepOnQuit,
+        keepConnectedScreenOff = _ui.value.keepConnectedScreenOff,
         autoDriveBackup = _ui.value.autoDriveBackup,
         autoUpdateCheck = _ui.value.autoUpdateCheck,
         lastUpdateCheckAtMs = _ui.value.lastUpdateCheckAtMs,
@@ -3044,6 +3068,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sleepMachineWithSaver = p.sleepMachineWithSaver,
             wakeMachineWithSaver = p.wakeMachineWithSaver,
             sleepOnQuit = p.sleepOnQuit,
+            // Resolve the nullable pref against the form-factor default (#65).
+            keepConnectedScreenOff = p.keepConnectedScreenOff ?: isTablet,
             autoDriveBackup = p.autoDriveBackup,
             autoUpdateCheck = p.autoUpdateCheck,
             lastUpdateCheckAtMs = p.lastUpdateCheckAtMs,
@@ -3079,6 +3105,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             replayPrimary = p.replayPrimary,
             pairedDevices = p.pairedDevices,
         ) }
+        // Prime the background keep-alive with the resolved setting (#65).
+        bgConnection.setEnabled(p.keepConnectedScreenOff ?: isTablet)
         // Push the persisted cap + behaviour toggles to the core so they're live
         // from launch (the core doesn't echo these back as events).
         runCatching { bridge.setMaxShotDuration(p.maxShotDurationS) }
@@ -3111,6 +3139,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setSleepOnQuit(on: Boolean) {
         _ui.update { it.copy(sleepOnQuit = on) }
         persistPrefs()
+    }
+
+    /** Keep the DE1 connected + auto-reconnecting while the screen is off (#65).
+     *  Persisted as an explicit value (overriding the form-factor default); the
+     *  keep-alive service still only engages while the device is charging. */
+    fun setKeepConnectedScreenOff(on: Boolean) {
+        _ui.update { it.copy(keepConnectedScreenOff = on) }
+        persistPrefs()
+        bgConnection.setEnabled(on)
     }
 
     /** One UserPresent write (MMR **0x803860** — 0x803858 is the separate
@@ -3183,6 +3220,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  minutes from its own sleep deadline after a background stretch. */
     fun setAppForeground(foreground: Boolean) {
         appInForeground = foreground
+        // A foreground service may only be STARTED from the foreground (Android
+        // 12+); the keep-alive is therefore armed while visible and survives the
+        // screen turning off after (#65).
+        bgConnection.setForeground(foreground)
         if (foreground) {
             noteUserInteraction()
             if (_ui.value.suppressDe1Sleep) pokeUserPresent()
@@ -4362,6 +4403,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // (which outlives us) before the scope cancellation lands.
         QuitSleep.fire()
         QuitSleep.clear()
+        // Unregister the power receiver + stop the keep-alive service (#65).
+        bgConnection.close()
         super.onCleared()
         // Adapter watcher off, scans cancelled, both device links down…
         connection.close()
