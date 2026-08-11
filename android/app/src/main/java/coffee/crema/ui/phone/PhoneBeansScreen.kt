@@ -23,7 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.beans.beanFilterCounts
-import coffee.crema.beans.daysOffRoast
+import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.beans.explanatory
 import coffee.crema.beans.filterAndSortBeans
 import coffee.crema.beans.forField
@@ -78,6 +78,17 @@ fun PhoneBeansScreen(
             beanId = detailId!!,
             onBack = { detailId = null },
             onEdit = { val id = detailId; detailId = null; if (id != null) { vm.startEditBean(id); onNav("bean-edit") } },
+            onOpenShot = { sid ->
+                detailId = null
+                vm.openShotInHistory(sid)
+                onNav("history")
+            },
+            onSeeAllShots = {
+                val id = detailId
+                detailId = null
+                vm.openBeanShotsInHistory(id)
+                onNav("history")
+            },
         )
         return
     }
@@ -320,7 +331,7 @@ private fun PhoneBeanTile(
 ) {
     val tel = CremaTheme.telemetry
     val band = roastBand5(bean.roastLevel?.toInt())
-    val days = daysOffRoast(bean.roastedOn)
+    val days = beanDaysOffRoast(bean)
     val frozen = bean.isFrozen
     val archived = bean.archivedAt != null
     val tileBg =

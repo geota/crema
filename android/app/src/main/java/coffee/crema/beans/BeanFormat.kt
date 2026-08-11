@@ -40,9 +40,21 @@ fun roastBand5(level: Int?): String? = coreRoastBand5(level)
  * Whole UTC days between the ISO `yyyy-mm-dd` roast date and today; null if
  * unparseable. Delegates to core `daysOffRoast` so web, Android, and the core
  * all report the same integer (device-local dates drifted ±1 around midnight).
+ * A plain calendar diff — for a bag's roast age use [beanDaysOffRoast], which
+ * pauses the count while frozen.
  */
 fun daysOffRoast(roastedOn: String?): Int? =
-    coreDaysOffRoast(roastedOn, System.currentTimeMillis())?.toInt()
+    coreDaysOffRoast(roastedOn, null, null, System.currentTimeMillis())?.toInt()
+
+/**
+ * A bag's days off roast with the core's freeze-pause: days spent frozen don't
+ * age the bag (still frozen → the count stops at `frozenOn`; thawed → the
+ * frozen span is subtracted). Use this wherever the number describes a *bag*
+ * rather than a bare date — it is what makes the day count agree with the
+ * "Paused (frozen)" label sitting next to it. Mirrors web `beanDaysOffRoast`.
+ */
+fun beanDaysOffRoast(bean: coffee.crema.core.Bean): Int? =
+    coreDaysOffRoast(bean.roastedOn, bean.frozenOn, bean.defrostedOn, System.currentTimeMillis())?.toInt()
 
 /**
  * Band-aware freshness verdict for the bean status dot — `"frozen"` while the

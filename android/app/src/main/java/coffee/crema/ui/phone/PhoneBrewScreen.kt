@@ -29,7 +29,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coffee.crema.beans.daysOffRoast
+import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.beans.isFrozen
 import coffee.crema.history.beanLabel
 import coffee.crema.ui.convertPressure
@@ -133,7 +133,7 @@ fun PhoneBrewScreen(
                 // ("● 20d off roast", coloured by freshness band), which frees
                 // the meta line below for grind-at-a-glance (issue #16).
                 val frozen = activeBean?.isFrozen == true
-                val daysOff = activeBean?.let { daysOffRoast(it.roastedOn) }
+                val daysOff = activeBean?.let { beanDaysOffRoast(it) }
                 ProfileStrip(
                     title = active?.name ?: "No profile loaded",
                     // Remembered (review #37): the lines do list scans + joins,
@@ -198,6 +198,7 @@ fun PhoneBrewScreen(
                     scaleConnected = scaleConnected,
                     onOpenLastShot = { id -> vm.openShotInHistory(id); onNav("history") },
                     onRate = { id, r -> vm.updateShot(id, r, ui.history.firstOrNull { it.id == id }?.notes ?: "") },
+                    onStartFromShot = { id -> vm.startFromShot(id) },
                     onTareScale = vm::tareScale,
                     modifier = Modifier.weight(1f),
                 )
@@ -440,7 +441,7 @@ private fun SwapDropdown(
                 beans.forEach { b ->
                     val activeRow = b.id == ui.activeBeanId
                     val roaster = ui.roasters.firstOrNull { it.id == b.roasterId }?.name
-                    val days = daysOffRoast(b.roastedOn)
+                    val days = beanDaysOffRoast(b)
                     DdRow(active = activeRow, onClick = { onSelectBean(b.id) }) {
                         RoasterMarkAvatar(name = roaster ?: b.name, sizeDp = 30, cornerDp = 8, fontSize = 13.sp)
                         Column(Modifier.weight(1f)) {
@@ -789,6 +790,8 @@ private fun RestingBody(
     scaleConnected: Boolean,
     onOpenLastShot: (String?) -> Unit,
     onRate: (String, Int) -> Unit,
+    /** Prefill Brew from a stored shot — the dial-in card's button. */
+    onStartFromShot: (String) -> Unit = {},
     /** Tap-to-tare for the Scale stat tile (issue #37). */
     onTareScale: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -993,6 +996,21 @@ private fun RestingBody(
                         )
                     }
                 }
+            }
+        } else {
+            // Dial-in card — the active bag's last STORED shot + its "next
+            // time" plan (bean-workflow-unify §A2). Only when no session
+            // Last-shot card is up, so the same shot is never shown twice.
+            val lastBeanShot = ui.activeBeanId?.let { bid ->
+                ui.history.firstOrNull { it.bean?.beanId == bid }
+            }
+            if (lastBeanShot != null) {
+                DialInCard(
+                    shot = lastBeanShot,
+                    weightUnit = ui.weightUnit,
+                    onStart = { onStartFromShot(lastBeanShot.id) },
+                    onOpen = { onOpenLastShot(lastBeanShot.id) },
+                )
             }
         }
 

@@ -28,7 +28,7 @@ import coffee.crema.core.exportBackupJsonl
 import coffee.crema.core.maintenanceReadout
 import androidx.core.content.FileProvider
 import coffee.crema.beans.LibraryStore
-import coffee.crema.beans.daysOffRoast
+import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.beans.isFrozen
 import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
@@ -602,6 +602,9 @@ data class MainUiState(
     /** A shot id the History screen should select on next open (set when the Brew
      *  "Last shot" card is tapped). Consumed + cleared by HistoryScreen. */
     val pendingHistoryShotId: String? = null,
+    /** A bean id the History screen should filter to on next open (the bean
+     *  detail's "See all N shots"). Consumed + cleared by HistoryScreen. */
+    val pendingHistoryBeanId: String? = null,
     /**
      * The persisted water-accumulation & maintenance state — counters, baselines,
      * and user-set intervals. The DE1 has no cumulative water counter, so the
@@ -1554,6 +1557,56 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Re-attribute a logged shot to another bean, or none (issue #16). */
     fun setShotBean(id: String, beanId: String?) = library.setShotBean(id, beanId)
 
+    /** Set a shot's forward-looking "next time" plan (local-only). */
+    fun setShotNextPlan(id: String, nextPlan: String) = library.setShotNextPlan(id, nextPlan)
+
+    /**
+     * Prefill Brew from a logged shot — "start from this shot". Re-activates
+     * the shot's bag (while it still exists un-archived), loads its profile
+     * by name, sets the QC grind to what the shot was actually pulled at,
+     * and lays the shot's recorded dose / yield target over the loaded
+     * recipe. Load-into-brew: no history record is created. Android
+     * persists fewer targets than web (no brew-temp / pre-infuse on
+     * [coffee.crema.history.StoredShot]), so the profile's own recipe
+     * covers whatever the shot didn't record.
+     */
+    fun startFromShot(id: String) {
+        val shot = _ui.value.history.firstOrNull { it.id == id } ?: return
+        // 1. The bag.
+        shot.bean?.beanId?.let { bid ->
+            val bean = _ui.value.beans.firstOrNull { it.id == bid }
+            if (bean != null && bean.archivedAt == null && _ui.value.activeBeanId != bid) {
+                setActiveBean(bid)
+            }
+        }
+        // 2. The profile — by name; a renamed/deleted one degrades to "the rest".
+        val match = shot.profileName?.let { n ->
+            _ui.value.profiles.firstOrNull { it.name.equals(n, ignoreCase = true) }
+        }
+        if (match != null) setActiveProfile(match.id)
+        // 3. The dial: the shot's own grind (falling back to its bag snapshot's
+        //    reference setting), then dose/yield over the loaded recipe.
+        val grind = shot.grindSetting
+            ?: shot.bean?.grinderSetting?.trim()?.replace(',', '.')?.toFloatOrNull()
+        grind?.let { setQcGrind(it) }
+        if (shot.doseG != null || shot.yieldTargetG != null) {
+            val active = match ?: _ui.value.activeProfile()
+            val dose = shot.doseG?.toDouble() ?: active?.dose?.toDouble() ?: 18.0
+            quickAdjustBrew(
+                dose = dose,
+                yieldOut = shot.yieldTargetG?.toDouble() ?: active?.yieldOut?.toDouble() ?: (dose * 2),
+                brewTemp = active?.brewTemp?.toDouble() ?: 93.0,
+            )
+        }
+        val stamp = java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
+            .format(java.util.Date(shot.completedAtMs))
+        val missing = shot.profileName?.takeIf { match == null }
+        notifyUser(
+            if (missing == null) "Dialed in from the $stamp shot"
+            else "Dialed in from the $stamp shot (profile “$missing” isn’t in your library)",
+        )
+    }
+
     /** Apply a Quick-Controls brew override (dose/yield/brew-temp). Transient —
      *  not saved to the profile; baked into the next shot's upload by [startShot]. */
     fun quickAdjustBrew(dose: Double, yieldOut: Double, brewTemp: Double, preinf: Double? = null) {
@@ -1713,6 +1766,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun consumePendingHistoryShot() {
         if (_ui.value.pendingHistoryShotId != null) {
             _ui.update { it.copy(pendingHistoryShotId = null) }
+        }
+    }
+
+    /** Request that History filter to [beanId]'s shots when it next opens (the
+     *  bean detail's "See all N shots" tap-through). */
+    fun openBeanShotsInHistory(beanId: String?) {
+        if (beanId != null) _ui.update { it.copy(pendingHistoryBeanId = beanId) }
+    }
+
+    /** Clear the pending History bean filter once HistoryScreen has applied it. */
+    fun consumePendingHistoryBean() {
+        if (_ui.value.pendingHistoryBeanId != null) {
+            _ui.update { it.copy(pendingHistoryBeanId = null) }
         }
     }
 
@@ -2073,7 +2139,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val ui = _ui.value
         val bean = ui.beans.firstOrNull { it.id == ui.activeBeanId } ?: return null
         val roaster = ui.roasters.firstOrNull { it.id == bean.roasterId }?.name
-        val days = daysOffRoast(bean.roastedOn)
+        val days = beanDaysOffRoast(bean)
         return listOfNotNull(
             roaster,
             bean.name,

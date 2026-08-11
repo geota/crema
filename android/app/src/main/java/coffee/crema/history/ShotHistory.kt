@@ -88,6 +88,14 @@ data class StoredShot(
     /** User tasting notes for this shot; null = none. Edited from the detail. */
     val notes: String? = null,
     /**
+     * Forward-looking dial-in plan — what to change on the *next* shot
+     * ("go finer, +2 drops"). Kept apart from [notes] (how this shot tasted)
+     * so the Brew screen can surface it when the bag is next selected.
+     * Local workflow state: never uploaded to Visualizer. Additive — older
+     * records deserialise cleanly. Mirrors core `ShotMetadata.next_plan`.
+     */
+    val nextPlan: String? = null,
+    /**
      * A downsampled telemetry slice for the History detail chart (≤
      * [SHOT_SAMPLE_CAP] points). Empty for shots captured before this field
      * existed (additive — older records deserialise cleanly).

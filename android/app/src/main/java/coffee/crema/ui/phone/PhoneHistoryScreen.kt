@@ -32,7 +32,7 @@ import coffee.crema.history.StoredShot
 import coffee.crema.beans.rankBeansForPicker
 import coffee.crema.core.daysOffRoast as coreDaysOffRoast
 import coffee.crema.ui.freshnessColor
-import coffee.crema.beans.daysOffRoast
+import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.history.beanLabel
 import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.history.grindLabel
@@ -77,6 +77,8 @@ fun PhoneHistoryScreen(
     var query by remember { mutableStateOf("") }
     var searchOpen by remember { mutableStateOf(false) }
     var profileFilter by remember { mutableStateOf<String?>(null) }
+    // Bean filter — scope the log to one bag (bean-workflow-unify §B).
+    var beanFilter by remember { mutableStateOf<String?>(null) }
     var range by remember { mutableStateOf("all") }
     var sort by remember { mutableStateOf("date") }
     var sortDesc by remember { mutableStateOf(true) } // newest / highest first
@@ -91,7 +93,17 @@ fun PhoneHistoryScreen(
             detailId = it
             range = "all"
             profileFilter = null
+            beanFilter = null
             vm.consumePendingHistoryShot()
+        }
+    }
+    // The bean detail's "See all N shots" deep-links here: scope to that bag.
+    LaunchedEffect(ui.pendingHistoryBeanId) {
+        ui.pendingHistoryBeanId?.let {
+            beanFilter = it
+            range = "all"
+            profileFilter = null
+            vm.consumePendingHistoryBean()
         }
     }
 
@@ -116,7 +128,7 @@ fun PhoneHistoryScreen(
         cal.set(java.util.Calendar.SECOND, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
         cal.timeInMillis
     }
-    val filtered = filterAndSortShots(ui.history, query, range, profileFilter, sort, sortDesc, now)
+    val filtered = filterAndSortShots(ui.history, query, range, profileFilter, sort, sortDesc, now, beanFilter)
 
     val detail = detailId?.let { id -> ui.history.firstOrNull { it.id == id } }
 
@@ -134,6 +146,7 @@ fun PhoneHistoryScreen(
             onBack = { detailId = null },
             onDeleted = { detailId = null },
             onLoadOnBrew = { vm.loadProfileOnBrew(detail.profileName); onNav("brew") },
+            onStartFromShot = { vm.startFromShot(detail.id); onNav("brew") },
             onExport = { launchSave("crema-shot.json", vm.shotsJson(listOf(detail.id))) },
         )
         return
@@ -224,6 +237,25 @@ fun PhoneHistoryScreen(
                             }
                         },
                         trailing = {
+                            // Bean — scope the log to one bag (tablet parity).
+                            val byBean = ui.history.mapNotNull { it.bean?.beanId }
+                                .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
+                            if (byBean.isNotEmpty()) {
+                                CremaFilterDropdown(
+                                    icon = "coffee-bean",
+                                    keys = buildList {
+                                        add(SortKey("all", "All beans"))
+                                        byBean.forEach { (bid, _) ->
+                                            val label = ui.beans.firstOrNull { it.id == bid }?.name
+                                                ?: ui.history.firstOrNull { it.bean?.beanId == bid }?.beanLabel
+                                                ?: "Unnamed bag"
+                                            add(SortKey(bid, label))
+                                        }
+                                    },
+                                    selectedKey = beanFilter ?: "all",
+                                    onKeyChange = { beanFilter = if (it == "all") null else it },
+                                )
+                            }
                             // Date range as a split dropdown (tablet parity) — the
                             // range pills crowded the profile chips out of the row.
                             CremaFilterDropdown(
@@ -427,6 +459,20 @@ private fun PhoneShotRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
+            // One glance-able journal line: the forward-looking plan when set,
+            // else the tasting notes. Absent \u2192 no extra line (tablet parity).
+            val snippet = shot.nextPlan?.trim()?.takeIf { it.isNotEmpty() }
+                ?: shot.notes?.trim()?.takeIf { it.isNotEmpty() }
+            if (snippet != null) {
+                Text(
+                    snippet.replace(Regex("\\s+"), " "),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CremaStarRating(
                     shot.rating ?: 0,
@@ -470,6 +516,8 @@ private fun PhoneShotDetail(
     onBack: () -> Unit,
     onDeleted: () -> Unit,
     onLoadOnBrew: () -> Unit,
+    /** Prefill Brew from this shot: profile + bag + grind + targets. */
+    onStartFromShot: () -> Unit,
     onExport: () -> Unit,
 ) {
     val tel = CremaTheme.telemetry
@@ -478,6 +526,7 @@ private fun PhoneShotDetail(
     var changeBean by remember(shot.id) { mutableStateOf(false) }
     var rating by remember(shot.id) { mutableStateOf(shot.rating ?: 0) }
     var notes by remember(shot.id) { mutableStateOf(shot.notes ?: "") }
+    var nextPlan by remember(shot.id) { mutableStateOf(shot.nextPlan ?: "") }
     val context = androidx.compose.ui.platform.LocalContext.current
 
     Scaffold(
@@ -505,10 +554,12 @@ private fun PhoneShotDetail(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 FilledTonalButton(
-                    onClick = onLoadOnBrew,
+                    // The full dial-in leads (profile + bag + grind + targets);
+                    // the profile-only reload moves to the overflow sheet.
+                    onClick = onStartFromShot,
                     shape = MaterialTheme.shapes.extraLarge,
                     modifier = Modifier.weight(1f).height(48.dp),
-                ) { PhIcon("arrow-line-down", sizeDp = 18); Spacer(Modifier.width(8.dp)); Text("Load on Brew") }
+                ) { PhIcon("coffee", sizeDp = 18); Spacer(Modifier.width(8.dp)); Text("Start from shot") }
                 Button(
                     onClick = onExport,
                     shape = MaterialTheme.shapes.extraLarge,
@@ -533,7 +584,7 @@ private fun PhoneShotDetail(
             // opens the beans-only swap dropdown to re-attribute.
             Box {
                 val daysAtPull = remember(shot.id) {
-                    coreDaysOffRoast(shot.bean?.roastedOn, shot.completedAtMs)?.toInt()
+                    coreDaysOffRoast(shot.bean?.roastedOn, null, null, shot.completedAtMs)?.toInt()
                 }
                 ProfileStrip(
                     title = shot.profileName ?: "Shot",
@@ -653,6 +704,18 @@ private fun PhoneShotDetail(
                         minLines = 3,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    // The forward-looking half of the journal: what to change
+                    // on the NEXT shot. Surfaces on the Brew dial-in card when
+                    // this bag is selected again (tablet parity).
+                    CremaTextField(
+                        value = nextPlan,
+                        onValueChange = { nextPlan = it; vm.setShotNextPlan(shot.id, it) },
+                        label = "Next time",
+                        placeholder = "What will you change next shot?",
+                        singleLine = false,
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     // No override (privacy == null) highlights the chip matching
                     // the Settings → Sharing default — no duplicated "Default · x"
                     // chip. Tapping a chip pins this shot; tapping the pinned chip
@@ -684,6 +747,7 @@ private fun PhoneShotDetail(
                 java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(shot.completedAtMs))
             },
             items = buildList {
+                add(SheetItem("arrow-counter-clockwise", "Load profile only", sub = "Just this shot’s recipe, nothing else") { onLoadOnBrew() })
                 add(SheetItem("download-simple", "Download shot", sub = "Crema JSON") { onExport() })
                 // A bound shot re-uploads: Visualizer de-dupes by telemetry
                 // SHA, so the re-POST updates the same remote row (fixing an
@@ -767,7 +831,7 @@ private fun ShotBeanSwapDropdown(
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
-                            val days = daysOffRoast(b.roastedOn)
+                            val days = beanDaysOffRoast(b)
                             Text(
                                 listOfNotNull(
                                     days?.let { "${it}d off roast" },

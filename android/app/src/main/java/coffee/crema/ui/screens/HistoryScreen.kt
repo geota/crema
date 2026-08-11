@@ -145,6 +145,8 @@ fun HistoryScreen(
     var range by remember { mutableStateOf("all") }
     // Web history: per-profile filter pills ahead of the range chips.
     var profileFilter by remember { mutableStateOf<String?>(null) }
+    // Bean filter — scope the log to one bag (bean-workflow-unify §B).
+    var beanFilter by remember { mutableStateOf<String?>(null) }
     var sort by remember { mutableStateOf("date") }
     var sortDesc by remember { mutableStateOf(true) } // newest / highest first
     // Compare: select 2–5 shots → overlay their curves in a modal (HistoryCompareHooks).
@@ -157,7 +159,17 @@ fun HistoryScreen(
             selectedId = it
             range = "all"
             profileFilter = null // an active profile pill must not hide the deep-linked shot
+            beanFilter = null
             vm.consumePendingHistoryShot()
+        }
+    }
+    // The bean detail's "See all N shots" deep-links here: scope to that bag.
+    LaunchedEffect(ui.pendingHistoryBeanId) {
+        ui.pendingHistoryBeanId?.let {
+            beanFilter = it
+            range = "all"
+            profileFilter = null
+            vm.consumePendingHistoryBean()
         }
     }
 
@@ -174,7 +186,7 @@ fun HistoryScreen(
     // Client-side search + time-range filter + sort over the shot log. The stat
     // strip is scoped to the same filtered set (issue 48) — it reflects what the
     // current filter / range shows, not all-time.
-    val shots = filterAndSortShots(ui.history, query, range, profileFilter, sort, sortDesc, System.currentTimeMillis())
+    val shots = filterAndSortShots(ui.history, query, range, profileFilter, sort, sortDesc, System.currentTimeMillis(), beanFilter)
     // Default the detail to the newest (top) shot until the user picks one.
     val selected = shots.firstOrNull { it.id == selectedId } ?: shots.firstOrNull()
 
@@ -310,6 +322,30 @@ fun HistoryScreen(
                             )
                         }
                     }
+                    // Bean — a split dropdown scoping the log to one bag (the
+                    // bag as a unit of history, bean-workflow-unify §B). Only
+                    // bags that actually have shots, ordered by shot count;
+                    // labels prefer the live library name over the snapshot's.
+                    run {
+                        val byBean = ui.history.mapNotNull { it.bean?.beanId }
+                            .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
+                        if (byBean.isNotEmpty()) {
+                            CremaFilterDropdown(
+                                icon = "coffee-bean",
+                                keys = buildList {
+                                    add(SortKey("all", "All beans"))
+                                    byBean.forEach { (bid, _) ->
+                                        val label = ui.beans.firstOrNull { it.id == bid }?.name
+                                            ?: ui.history.firstOrNull { it.bean?.beanId == bid }?.beanLabel
+                                            ?: "Unnamed bag"
+                                        add(SortKey(bid, label))
+                                    }
+                                },
+                                selectedKey = beanFilter ?: "all",
+                                onKeyChange = { beanFilter = if (it == "all") null else it },
+                            )
+                        }
+                    }
                     // Date range — a split dropdown (calendar glyph · value),
                     // not pills: it's a low-frequency pick beside the sort.
                     CremaFilterDropdown(
@@ -384,6 +420,8 @@ fun HistoryScreen(
                             tempUnit = ui.tempUnit,
                             pressureUnit = ui.pressureUnit,
                             onRate = { r, n -> vm.updateShot(selected.id, r, n) },
+                            onNextPlanChange = { p -> vm.setShotNextPlan(selected.id, p) },
+                            onStartFromShot = { vm.startFromShot(selected.id) },
                             onLoadOnBrew = { vm.loadProfileOnBrew(selected.profileName) },
                             onExport = { vm.exportShot(selected.id) },
                             onDelete = { vm.deleteShot(selected.id); selectedId = null },
@@ -554,6 +592,23 @@ private fun ShotRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // One glance-able journal line: the forward-looking plan when
+            // set (the most actionable thing a row can say), else the
+            // tasting notes. Absent \u2192 no extra line, layout unchanged.
+            val snippet = shot.nextPlan?.trim()?.takeIf { it.isNotEmpty() }
+                ?: shot.notes?.trim()?.takeIf { it.isNotEmpty() }
+            if (snippet != null) {
+                Text(
+                    snippet.replace(Regex("\\s+"), " "),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 11.sp,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         // Ratio + Yield metrics, each value over a dimmed caps label (PWA .hi-row-metric).
         RowMetric(shotRatio(shot) ?: "—", null, "Ratio")
@@ -623,6 +678,10 @@ private fun ShotDetail(
     onGrindChange: (Float?) -> Unit = {},
     /** Re-attribute this shot to another bean; null = no bean (issue #16). */
     onBeanChange: (String?) -> Unit = {},
+    /** Edit the forward-looking "next time" plan (local-only). */
+    onNextPlanChange: (String) -> Unit = {},
+    /** Prefill Brew from this shot: profile + grind + yield target. */
+    onStartFromShot: (() -> Unit)? = null,
 ) {
     // The pane scrolls: the chart keeps its full (pre-quality-card) height and
     // the quality card / rating / notes live below the fold instead of
@@ -689,7 +748,7 @@ private fun ShotDetail(
             // the snapshot reference, exactly what History rows show.
             run {
                 val daysAtPull = remember(shot.id) {
-                    coreDaysOffRoast(shot.bean?.roastedOn, shot.completedAtMs)?.toInt()
+                    coreDaysOffRoast(shot.bean?.roastedOn, null, null, shot.completedAtMs)?.toInt()
                 }
                 CremaHeaderBlock(
                     eyebrow = "Bean",
@@ -720,7 +779,10 @@ private fun ShotDetail(
                 )
             }
             CremaOverflowMenu(items = buildList {
-                add(OverflowItem("coffee", "Load on Brew", onLoadOnBrew))
+                // The full dial-in leads; the profile-only reload stays for
+                // users who want just the recipe (web SplitButton parity).
+                onStartFromShot?.let { add(OverflowItem("coffee", "Start from this shot", it)) }
+                add(OverflowItem("arrow-counter-clockwise", "Load profile only", onLoadOnBrew))
                 add(OverflowItem("download-simple", "Export", onExport))
                 // Signed out (null handler) the item stays VISIBLE but
                 // disabled — a hidden action is undiscoverable (user feedback).
@@ -803,6 +865,7 @@ private fun ShotDetail(
         if (quality != null) ShotQualityCard(quality)
         var rating by remember(shot.id) { mutableStateOf(shot.rating ?: 0) }
         var notes by remember(shot.id) { mutableStateOf(shot.notes ?: "") }
+        var nextPlan by remember(shot.id) { mutableStateOf(shot.nextPlan ?: "") }
         // Rating (left) + the grind stepper (right) share one line (user
         // direction, issue #16 round 4) — a FlowRow so a narrow detail pane
         // (7-8" tablets) wraps the stepper onto its own line instead of
@@ -834,6 +897,18 @@ private fun ShotDetail(
             onValueChange = { notes = it; onRate(rating, it) },
             label = "Tasting notes",
             placeholder = "How did it taste?",
+            singleLine = false,
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        // The forward-looking half of the journal: what to change on the
+        // NEXT shot. Surfaces on the Brew dial-in card when this bag is
+        // selected again — the reason it is a separate field from notes.
+        CremaTextField(
+            value = nextPlan,
+            onValueChange = { nextPlan = it; onNextPlanChange(it) },
+            label = "Next time",
+            placeholder = "What will you change next shot?",
             singleLine = false,
             minLines = 2,
             modifier = Modifier.fillMaxWidth(),

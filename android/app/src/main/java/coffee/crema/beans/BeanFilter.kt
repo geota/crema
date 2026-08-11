@@ -55,7 +55,7 @@ fun filterAndSortBeans(
         "roast" -> visible.sortedBy { it.roastLevel?.toInt() ?: Int.MAX_VALUE }
         "rating" -> visible.sortedBy { it.rating?.toInt() ?: 0 }
         "remaining" -> visible.sortedBy { it.remaining }
-        else -> visible.sortedBy { daysOffRoast(it.roastedOn) ?: Int.MAX_VALUE } // freshest first
+        else -> visible.sortedBy { beanDaysOffRoast(it) ?: Int.MAX_VALUE } // freshest first
     }
     val sorted = if (sortDesc) asc.reversed() else asc
     // Relevance first while searching; `sortedByDescending` is stable, so the

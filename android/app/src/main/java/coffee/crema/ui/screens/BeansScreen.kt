@@ -55,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.beans.beanFilterCounts
+import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.beans.daysOffRoast
 import coffee.crema.beans.explanatory
 import coffee.crema.beans.filterAndSortBeans
@@ -378,6 +379,16 @@ fun BeansScreen(
                     if (bean.archivedAt != null) vm.unarchiveBean(bean.id) else vm.archiveBean(bean.id)
                 },
                 onDelete = { vm.deleteBean(bean.id) },
+                onOpenShot = { sid ->
+                    detailBeanId = null
+                    vm.openShotInHistory(sid)
+                    onNav("history")
+                },
+                onSeeAllShots = {
+                    detailBeanId = null
+                    vm.openBeanShotsInHistory(bean.id)
+                    onNav("history")
+                },
             )
         }
     }
@@ -415,7 +426,7 @@ private fun BeanCard(
     // Tile pill shows the finer 5-band display label (web roastBand5);
     // filters/freshness elsewhere stay on the canonical 3-band roastBand.
     val band = roastBand5(bean.roastLevel?.toInt())
-    val days = daysOffRoast(bean.roastedOn)
+    val days = beanDaysOffRoast(bean)
     val frozen = bean.isFrozen
     val tagList = bean.tags?.filter { it.isNotBlank() }.orEmpty()
     var confirmDelete by remember { mutableStateOf(false) }

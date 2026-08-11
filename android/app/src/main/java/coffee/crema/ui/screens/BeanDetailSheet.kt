@@ -68,6 +68,10 @@ fun BeanDetailSheet(
     onToggleFavourite: () -> Unit,
     onToggleArchived: () -> Unit,
     onDelete: () -> Unit,
+    /** Open one of this bag's shots in History; null = rows not tappable. */
+    onOpenShot: ((String) -> Unit)? = null,
+    /** Open History filtered to this bag ("See all N shots"); null = hidden. */
+    onSeeAllShots: (() -> Unit)? = null,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
     var photoOpen by remember { mutableStateOf(false) }
@@ -153,6 +157,8 @@ fun BeanDetailSheet(
                             shotCount = shotCount,
                             recentShots = recentShots,
                             onPhotoTap = if (bean.imageRef != null) ({ photoOpen = true }) else null,
+                            onOpenShot = onOpenShot,
+                            onSeeAllShots = onSeeAllShots,
                         )
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

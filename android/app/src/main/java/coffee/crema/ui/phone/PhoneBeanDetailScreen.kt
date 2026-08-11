@@ -47,7 +47,16 @@ import coffee.crema.ui.phone.components.CremaPhoneBackBar
  * drift on what a bag "is".
  */
 @Composable
-fun PhoneBeanDetailScreen(vm: MainViewModel, beanId: String, onBack: () -> Unit, onEdit: () -> Unit) {
+fun PhoneBeanDetailScreen(
+    vm: MainViewModel,
+    beanId: String,
+    onBack: () -> Unit,
+    onEdit: () -> Unit,
+    /** Open one of this bag's shots in History; null = rows not tappable. */
+    onOpenShot: ((String) -> Unit)? = null,
+    /** Open History filtered to this bag ("See all N shots"); null = hidden. */
+    onSeeAllShots: (() -> Unit)? = null,
+) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val bean = ui.beans.firstOrNull { it.id == beanId }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -109,6 +118,8 @@ fun PhoneBeanDetailScreen(vm: MainViewModel, beanId: String, onBack: () -> Unit,
                 shotCount = shots.size,
                 recentShots = shots.take(5).map { shotRowSummary(it) },
                 onPhotoTap = if (bean.imageRef != null) ({ photoOpen = true }) else null,
+                onOpenShot = onOpenShot,
+                onSeeAllShots = onSeeAllShots,
             )
             Row(
                 Modifier.fillMaxWidth(),

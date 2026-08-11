@@ -26,11 +26,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.beans.daysOffRoast
 import coffee.crema.beans.isFrozen
 import coffee.crema.beans.roastBand5
 import coffee.crema.core.Bean
 import coffee.crema.history.StoredShot
+import coffee.crema.history.grindLabel
 import coffee.crema.ui.components.BeanPhotoBox
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaStarRating
@@ -91,8 +93,12 @@ fun BeanDetailContent(
     recentShots: List<ShotRowSummary>,
     onPhotoTap: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    /** Open one of this bag's shots in History; null = rows not tappable. */
+    onOpenShot: ((String) -> Unit)? = null,
+    /** Open History filtered to this bag ("See all N shots"); null = hidden. */
+    onSeeAllShots: (() -> Unit)? = null,
 ) {
-    val days = daysOffRoast(bean.roastedOn)
+    val days = beanDaysOffRoast(bean)
     val frozen = bean.isFrozen
     val openedDays = daysOffRoast(bean.openedOn)
     val bagSize = bean.bagSize ?: 0f
@@ -183,7 +189,13 @@ fun BeanDetailContent(
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                     }
                     Row(
-                        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        Modifier
+                            .fillMaxWidth()
+                            .then(
+                                if (onOpenShot != null) Modifier.clickable { onOpenShot(s.id) }
+                                else Modifier,
+                            )
+                            .padding(vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
@@ -192,14 +204,38 @@ fun BeanDetailContent(
                             style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp, fontFeatureSettings = "tnum"),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Text(
-                            s.profileName ?: EMPTY,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            Text(
+                                s.profileName ?: EMPTY,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            // The dial-in facts at a glance: grind · yield · time.
+                            if (s.dial != null) {
+                                Text(
+                                    s.dial,
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            // The journal line: the forward-looking plan, else notes.
+                            if (s.snippet != null) {
+                                Text(
+                                    s.snippet,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontSize = 10.sp,
+                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
                         CremaStarRating(
                             s.rating,
                             starDp = 11,
@@ -207,19 +243,50 @@ fun BeanDetailContent(
                         )
                     }
                 }
+                if (onSeeAllShots != null && shotCount > recentShots.size) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                    Text(
+                        "See all $shotCount shots",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSeeAllShots() }
+                            .padding(vertical = 8.dp),
+                    )
+                }
             }
         }
     }
 }
 
 /** One row of the "Shots with this bean" list. */
-data class ShotRowSummary(val date: String, val profileName: String?, val rating: Int)
+data class ShotRowSummary(
+    val id: String,
+    val date: String,
+    val profileName: String?,
+    val rating: Int,
+    /** "Grind 4.2 · 36.5 g · 28 s" — the dial-in facts, pieces omitted when unknown. */
+    val dial: String?,
+    /** One journal line: the forward-looking plan, else the tasting notes. */
+    val snippet: String?,
+)
 
 /** Project a stored shot down to what the detail's shot list shows. */
 fun shotRowSummary(shot: StoredShot): ShotRowSummary = ShotRowSummary(
+    id = shot.id,
     date = SHOT_DATE_FORMAT.format(Date(shot.completedAtMs)),
     profileName = shot.profileName,
     rating = shot.rating ?: 0,
+    dial = listOfNotNull(
+        shot.grindLabel,
+        shot.yieldG?.let { String.format(Locale.US, "%.1f g", it) },
+        "${(shot.durationMs / 1000.0).toInt()} s",
+    ).joinToString(" · ").ifBlank { null },
+    snippet = (
+        shot.nextPlan?.trim()?.takeIf { it.isNotEmpty() }
+            ?: shot.notes?.trim()?.takeIf { it.isNotEmpty() }
+        )?.replace(Regex("\\s+"), " "),
 )
 
 private val SHOT_DATE_FORMAT = SimpleDateFormat("d MMM", Locale.getDefault())

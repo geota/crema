@@ -57,7 +57,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coffee.crema.beans.daysOffRoast
+import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.beans.isFrozen
 import coffee.crema.ui.activeProfile
 import coffee.crema.ui.convertPressure
@@ -104,6 +104,7 @@ import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.StopTargetsView
 import coffee.crema.ui.components.CremaAnchoredPopup
 import coffee.crema.ui.components.CremaCard
+import coffee.crema.ui.components.DialInCard
 import coffee.crema.ui.components.CremaFreshnessChip
 import coffee.crema.ui.components.CremaHeaderBlock
 import coffee.crema.ui.components.HeaderBlockLine
@@ -308,6 +309,22 @@ fun BrewScreen(
                             stopReason = ui.lastStopReason,
                             onClick = { vm.openShotInHistory(ui.lastShot!!.id); onNav("history") },
                         )
+                    } else if (!running) {
+                        // Dial-in card — the active bag's last STORED shot + its
+                        // "next time" plan (bean-workflow-unify §A2). Only when
+                        // no session Last-shot card is up, so the same shot is
+                        // never described twice.
+                        val lastBeanShot = ui.activeBeanId?.let { bid ->
+                            ui.history.firstOrNull { it.bean?.beanId == bid }
+                        }
+                        if (lastBeanShot != null) {
+                            DialInCard(
+                                shot = lastBeanShot,
+                                weightUnit = ui.weightUnit,
+                                onStart = { vm.startFromShot(lastBeanShot.id) },
+                                onOpen = { vm.openShotInHistory(lastBeanShot.id); onNav("history") },
+                            )
+                        }
                     }
                 }
                 // Right column (fills remainder).
@@ -691,7 +708,7 @@ private fun BeanBlock(
         // .bh-eyebrow-row chip — "Nd off roast" / "Frozen", coloured by
         // freshness band, shown only when a roast date (or freeze) is known.
         val frozen = activeBean?.isFrozen == true
-        val daysOff = activeBean?.let { daysOffRoast(it.roastedOn) }
+        val daysOff = activeBean?.let { beanDaysOffRoast(it) }
         val freshLabel = when {
             activeBean == null -> null
             frozen -> "Frozen"

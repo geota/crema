@@ -1201,8 +1201,9 @@ class LibraryController(
      * or a `.zip` archive whose chunked BEANS/BREWS files are merged back into the
      * main JSON ([mergeBcZip], the inverse of BC's chunked writer) — hands the
      * merged JSON to the core's [importBeanconquerorJson], then merges the
-     * resulting plan into the library via [applyBeanImportPlan]. (Shots in the
-     * plan are deferred to a later history-enrichment pass.)
+     * resulting plan into the library via [applyBeanImportPlan] — beans,
+     * roasters, AND the espresso brews as history rows (metadata only, no
+     * telemetry; web parity).
      */
     fun importBeanconquerorUri(uri: Uri) {
         scope.launch {
@@ -1286,31 +1287,44 @@ class LibraryController(
 
         val s = uiState()
         val existingRoasterByLc = s.roasters.associateBy { it.name.trim().lowercase() }
-        val existingBcIds = s.beans.mapNotNull { it.beanconquerorId }.toHashSet()
+        val existingByBcId = s.beans.filter { it.beanconquerorId != null }.associateBy { it.beanconquerorId!! }
         val wireRoasterById = wireRoasters.associateBy { it.id }
 
         val newBeans = ArrayList<Bean>()
         val keptRoasterIds = HashSet<String>()
+        // Wire bean id → the id the shot should reference after dedupe: a bean
+        // skipped as already-imported re-points its shots at the EXISTING
+        // library row, so a re-run still bean-links its history correctly.
+        val beanIdRemap = HashMap<String, String>()
         var skipped = 0
         for (bean in wireBeans) {
-            if (bean.beanconquerorId != null && existingBcIds.contains(bean.beanconquerorId)) { skipped++; continue }
+            val prior = bean.beanconquerorId?.let { existingByBcId[it] }
+            if (prior != null) { beanIdRemap[bean.id] = prior.id; skipped++; continue }
             val wireRoaster = bean.roasterId?.let { wireRoasterById[it] }
             val libRoaster = wireRoaster?.name?.let { existingRoasterByLc[it.trim().lowercase()] }
             val resolved = when {
                 libRoaster != null && wireRoaster.id != libRoaster.id -> bean.copy(roasterId = libRoaster.id)
                 else -> { if (wireRoaster != null) keptRoasterIds.add(wireRoaster.id); bean }
             }
-            val tripleDupe = libRoaster != null && s.beans.any {
+            val tripleDupe = libRoaster != null && s.beans.firstOrNull {
                 it.roasterId == libRoaster.id &&
                     it.name.trim().equals(bean.name.trim(), ignoreCase = true) &&
                     (it.roastedOn ?: "") == (bean.roastedOn ?: "")
-            }
+            }?.also { beanIdRemap[bean.id] = it.id } != null
             if (tripleDupe) { skipped++; continue }
+            beanIdRemap[bean.id] = bean.id
             newBeans.add(resolved)
         }
         val newRoasters = wireRoasters.filter { keptRoasterIds.contains(it.id) }
 
-        if (newBeans.isEmpty() && newRoasters.isEmpty()) {
+        // Shots — the core has already mapped BC brews (espresso-only,
+        // metadata, no telemetry); land them as history rows, web parity.
+        // Re-import dedupe: a BC brew's unix-second timestamp is stable
+        // across exports, so (completedAt, bean name) identifies a row —
+        // BC ids aren't carried on the shot, and our own ids are minted.
+        val importedShots = buildImportedShots(plan, beanIdRemap)
+
+        if (newBeans.isEmpty() && newRoasters.isEmpty() && importedShots.isEmpty()) {
             notify(if (skipped > 0) "Already imported — nothing new to add" else "No beans found in that file")
             return
         }
@@ -1321,13 +1335,84 @@ class LibraryController(
                 beans = cur.beans + newBeans,
                 roasters = cur.roasters + newRoasters,
                 activeBeanId = cur.activeBeanId ?: newBeans.firstOrNull()?.id,
+                history = (importedShots + cur.history)
+                    .sortedByDescending { it.completedAtMs }
+                    .take(HistoryStore.MAX_SHOTS),
             )
         }
         persistLibrary()
-        val bn = newBeans.size; val rn = newRoasters.size
+        if (importedShots.isNotEmpty()) {
+            val snapshot = uiState().history
+            scope.launch { historyStore.save(snapshot) }
+        }
+        val bn = newBeans.size; val rn = newRoasters.size; val sn = importedShots.size
         updateUi { it.copy(
-            status = "Imported $bn bean${if (bn == 1) "" else "s"} · $rn roaster${if (rn == 1) "" else "s"}",
+            status = buildString {
+                append("Imported $bn bean${if (bn == 1) "" else "s"} · $rn roaster${if (rn == 1) "" else "s"}")
+                if (sn > 0) append(" · $sn shot${if (sn == 1) "" else "s"}")
+            },
         ) }
+    }
+
+    /**
+     * Decode the import plan's `shots` (core `ImportedShot`: the sans-IO
+     * `StoredShot` + resolved bean/roaster/grinder strings) into this shell's
+     * flattened [StoredShot] rows, dropping any already in history (same
+     * completed-at ms + same bean name = the same BC brew on a re-import).
+     * Telemetry stays empty — BC's `flow_profile` sidecar parse is deferred,
+     * exactly as on web.
+     */
+    private fun buildImportedShots(plan: JsonObject, beanIdRemap: Map<String, String>): List<StoredShot> {
+        val entries = plan["shots"]?.let { runCatching { it.jsonArray }.getOrNull() } ?: return emptyList()
+        val existingKeys = uiState().history
+            .map { it.completedAtMs to it.bean?.name?.trim()?.lowercase().orEmpty() }
+            .toHashSet()
+        val out = ArrayList<StoredShot>(entries.size)
+        for (el in entries) {
+            val imp = runCatching { el.jsonObject }.getOrNull() ?: continue
+            val stored = imp["storedShot"]?.let { runCatching { it.jsonObject }.getOrNull() } ?: continue
+            val meta = stored["metadata"]?.let { runCatching { it.jsonObject }.getOrNull() }
+            fun JsonObject.num(key: String): Double? =
+                runCatching { (this[key] as? JsonPrimitive)?.content?.toDoubleOrNull() }.getOrNull()
+            fun JsonObject.str(key: String): String? =
+                runCatching { (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content }.getOrNull()
+            val completedAt = stored.num("completedAt")?.toLong() ?: continue
+            val beanName = imp.str("beanName")?.trim().orEmpty()
+            if (!existingKeys.add(completedAt to beanName.lowercase())) continue // re-import dupe
+            // Core `record.duration` is a serde `Duration` — `{secs, nanos}`.
+            val durationMs = stored["record"]?.let { runCatching { it.jsonObject }.getOrNull() }
+                ?.get("duration")?.let { d ->
+                    runCatching { d.jsonObject }.getOrNull()?.let { obj ->
+                        ((obj.num("secs") ?: 0.0) * 1000.0 + (obj.num("nanos") ?: 0.0) / 1_000_000.0).toLong()
+                    } ?: (d as? JsonPrimitive)?.content?.toDoubleOrNull()?.toLong()
+                } ?: 0L
+            val bean = if (beanName.isNotEmpty()) {
+                ShotBean(
+                    beanId = imp.str("beanId")?.let { beanIdRemap[it] ?: it },
+                    name = beanName,
+                    roasterName = imp.str("roasterName"),
+                    roastedOn = imp.str("roastedOn"),
+                    roastLevel = imp.num("roastLevel")?.toInt()?.toUByte(),
+                )
+            } else {
+                null
+            }
+            out.add(
+                StoredShot(
+                    id = "shot:bc:" + java.util.UUID.randomUUID(),
+                    completedAtMs = completedAt,
+                    durationMs = durationMs,
+                    yieldG = meta?.num("yieldOut")?.toFloat(),
+                    doseG = meta?.num("dose")?.toFloat(),
+                    grindSetting = meta?.str("grinderSetting")?.replace(',', '.')?.toFloatOrNull(),
+                    profileName = null,
+                    bean = bean,
+                    rating = meta?.num("rating")?.toInt()?.takeIf { it > 0 },
+                    notes = meta?.str("notes")?.takeIf { it.isNotBlank() },
+                ),
+            )
+        }
+        return out
     }
 
     /** Open a bean in the editor (the `bean-edit` route reads this). */
@@ -1701,6 +1786,24 @@ class LibraryController(
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
         schedulePatchEdited(id)
+    }
+
+    /**
+     * Set a shot's forward-looking "next time" plan. Persisted. Local-only
+     * workflow state — deliberately NOT mirrored to Visualizer (no
+     * [schedulePatchEdited]): the exporter never carries it, so a PATCH
+     * would be a no-op round trip.
+     */
+    fun setShotNextPlan(id: String, nextPlan: String) {
+        updateUi { st ->
+            st.copy(
+                history = st.history.map {
+                    if (it.id == id) it.copy(nextPlan = nextPlan.ifBlank { null }) else it
+                },
+            )
+        }
+        val snapshot = uiState().history
+        scope.launch { historyStore.save(snapshot) }
     }
 
     /**
