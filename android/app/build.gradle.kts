@@ -358,7 +358,7 @@ dependencies {
     //   - client-android     : CentralManager.native, Peripheral, scanning
     //   - environment-android: NativeAndroidEnvironment (must be close()d)
     // Server / advertiser modules are intentionally NOT included.
-    val nordicBle = "2.0.0-beta04"
+    val nordicBle = "2.0.0-beta05"
     implementation("no.nordicsemi.kotlin.ble:core:$nordicBle")
     implementation("no.nordicsemi.kotlin.ble:client-android:$nordicBle")
     implementation("no.nordicsemi.kotlin.ble:environment-android:$nordicBle")
