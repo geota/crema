@@ -126,6 +126,24 @@ class De1BleManager(
     /** The connect-and-reconnect supervisor loop; cancelled on [disconnect]. */
     private var sessionJob: Job? = null
 
+    /**
+     * Passive dead-link detector (geota/crema#65); runs while the link is READY,
+     * cancelled on every drop / reconnect / [disconnect]. See [livenessLoop].
+     */
+    private var livenessJob: Job? = null
+
+    /**
+     * `elapsedRealtime()` of the last inbound DE1 notification (or seed/liveness
+     * read). A healthy connected DE1 streams water-level notifications ~2/s, so
+     * [livenessLoop] only issues an active probe read once this goes quiet — a
+     * healthy link (and any in-progress shot) therefore costs no extra GATT ops.
+     */
+    @Volatile
+    private var lastInboundMs = 0L
+
+    /** Consecutive failed liveness probe reads; teardown at [MAX_CONSECUTIVE_WRITE_FAILURES]. */
+    private var consecutiveLivenessFailures = 0
+
     // ---- Connect ----------------------------------------------------------
 
     /**
@@ -188,9 +206,15 @@ class De1BleManager(
                 // those rows blank. Re-seeded on every (re)connect so a reconnect
                 // re-syncs state. Best-effort, off the loop.
                 scope.launch { seedReads(device) }
+                // Watch for a silent drop even on the idle screensaver (#65).
+                startLivenessLoop(device)
             },
-            onConnecting = { _state.value = State.CONNECTING },
+            onConnecting = {
+                _state.value = State.CONNECTING
+                stopLivenessLoop()
+            },
             teardown = {
+                stopLivenessLoop()
                 if (recording) {
                     recording = false
                     recorder.close()
@@ -212,6 +236,23 @@ class De1BleManager(
         _state.value = State.CONNECTING
         consecutiveWriteFailures = 0 // fresh link, fresh dead-link budget
         onStatus(if (firstConnect) "Connecting…" else "Reconnecting…")
+        // On a RECONNECT, wait for the DE1 to re-advertise before connecting. A
+        // machine that power-cycled (e.g. a power outage — the reported case in
+        // geota/crema#65) comes back with a fresh GATT, and Android won't reliably
+        // direct-connect a device it hasn't just re-seen in a scan: a blind connect
+        // to the stale cached handle storms GATT_ERROR(133) forever. Scanning first
+        // primes the stack and refreshes the handle. Throwing on timeout lets the
+        // supervisor back off and rescan rather than burn a full connect timeout on
+        // an absent machine. (First connect already arrived via the scanner.)
+        if (!firstConnect) {
+            _state.value = State.SCANNING
+            onStatus("Looking for the DE1…")
+            if (!transport.awaitAdvertisement(device, RECONNECT_SCAN_TIMEOUT_MS)) {
+                error("DE1 not seen advertising within ${RECONNECT_SCAN_TIMEOUT_MS / 1000}s")
+            }
+            _state.value = State.CONNECTING
+            onStatus("Reconnecting…")
+        }
         // BleTransport.connect suspends until connected AND services discovered.
         transport.connect(device)
         _state.value = State.DISCOVERING
@@ -233,6 +274,7 @@ class De1BleManager(
         userInitiated = true
         sessionJob?.cancel()
         sessionJob = null
+        stopLivenessLoop()
         val d = device
         // Leave the shared recording; the capture file closes only once the
         // last device (DE1 or scale) has disconnected.
@@ -343,6 +385,9 @@ class De1BleManager(
         // value goes to the recorder and the core, so a replayed capture
         // decodes identically to the live session.
         val tMs = notification.atMs
+        // Liveness heartbeat: any inbound traffic proves the link is alive, so
+        // the passive [livenessLoop] holds off its active probe read (#65).
+        lastInboundMs = tMs
         recorder.recordInbound(source, notification.data, tMs)
         feedCore(source, notification.data, tMs, "DE1 ${source.name}")
     }
@@ -463,6 +508,73 @@ class De1BleManager(
             .onFailure { Log.w(TAG, "Forced DE1 teardown failed", it) }
     }
 
+    // ---- Liveness (geota/crema#65) ----------------------------------------
+
+    private fun startLivenessLoop(device: BleTransport.DeviceHandle) {
+        livenessJob?.cancel()
+        lastInboundMs = SystemClock.elapsedRealtime()
+        consecutiveLivenessFailures = 0
+        livenessJob = scope.launch { livenessLoop(device) }
+    }
+
+    private fun stopLivenessLoop() {
+        livenessJob?.cancel()
+        livenessJob = null
+    }
+
+    /**
+     * Passive dead-link detection for the idle screensaver (geota/crema#65).
+     *
+     * The keep-awake WRITE that feeds [onWriteFailure] is deliberately suppressed
+     * on the screensaver (it would wake the machine) — which also disabled the
+     * only other silent-drop detector there, so a DE1 that power-cycled under us
+     * (a power outage, the reported case) went unnoticed and never reconnected.
+     *
+     * This loop closes that gap WITHOUT waking the machine. A healthy connected
+     * DE1 streams water-level notifications ~2/s, so while inbound traffic is
+     * recent ([lastInboundMs]) it does nothing — and it therefore never issues a
+     * read mid-shot (ShotSamples keep the link busy). Only once the link has been
+     * silent for [LIVENESS_QUIET_MS] does it issue a passive GATT READ of
+     * StateInfo, which succeeds even while the DE1 is asleep (a firmware state;
+     * the BLE link stays up) but times out on a truly dead link. After
+     * [MAX_CONSECUTIVE_WRITE_FAILURES] failed probes it tears the link down at the
+     * transport level; the [reconnectingSession] supervisor then rescans and
+     * reconnects.
+     */
+    private suspend fun livenessLoop(device: BleTransport.DeviceHandle) {
+        while (true) {
+            delay(LIVENESS_CHECK_INTERVAL_MS)
+            val quietForMs = SystemClock.elapsedRealtime() - lastInboundMs
+            if (quietForMs < LIVENESS_QUIET_MS) {
+                consecutiveLivenessFailures = 0
+                continue
+            }
+            val ok = runCatching {
+                withTimeout(WRITE_TIMEOUT_MS) {
+                    transport.read(device, De1Uuids.SERVICE, De1Uuids.STATE_INFO)
+                }
+            }.isSuccess
+            if (ok) {
+                lastInboundMs = SystemClock.elapsedRealtime()
+                consecutiveLivenessFailures = 0
+                continue
+            }
+            consecutiveLivenessFailures++
+            Log.w(
+                TAG,
+                "DE1 liveness probe failed ($consecutiveLivenessFailures/$MAX_CONSECUTIVE_WRITE_FAILURES) " +
+                    "after ${quietForMs}ms quiet",
+            )
+            if (consecutiveLivenessFailures >= MAX_CONSECUTIVE_WRITE_FAILURES) {
+                consecutiveLivenessFailures = 0
+                onStatus("DE1 link went quiet — reconnecting…")
+                runCatching { transport.disconnect(device) }
+                    .onFailure { Log.w(TAG, "Forced DE1 teardown (liveness) failed", it) }
+                return
+            }
+        }
+    }
+
     /**
      * One GATT write with a single spaced retry, each attempt bounded — a hang
      * counts as a failure (a dead link doesn't always deliver a disconnect
@@ -506,6 +618,21 @@ class De1BleManager(
 
         /** Spacing before the single write retry (Decenza's retry delay). */
         private const val WRITE_RETRY_DELAY_MS = 500L
+
+        /** How long to wait for the DE1 to re-advertise before a reconnect
+         *  attempt gives up and lets the supervisor back off + rescan (#65).
+         *  Short enough to retry briskly, long enough to catch a machine still
+         *  booting after a power outage across a couple of advertise cycles. */
+        private const val RECONNECT_SCAN_TIMEOUT_MS = 12_000L
+
+        /** How often the passive liveness loop wakes to check link activity (#65). */
+        private const val LIVENESS_CHECK_INTERVAL_MS = 15_000L
+
+        /** Inbound-notification silence tolerated before the liveness loop issues
+         *  an active probe read. A healthy connected DE1 streams water levels well
+         *  inside this window, so an active read only ever happens on a link that
+         *  has genuinely gone quiet — never mid-shot, and it doesn't wake the DE1. */
+        private const val LIVENESS_QUIET_MS = 30_000L
 
         /**
          * The DE1 `Version` (`A001`) and `Calibration` (`A012`) characteristic

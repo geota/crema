@@ -99,6 +99,22 @@ interface BleTransport {
     fun resolveByAddress(address: String, name: String?): DeviceHandle? = null
 
     /**
+     * Wait until [device] is seen advertising again (matched by address), up to
+     * [timeoutMs], refreshing the cached peripheral handle to the freshly-seen
+     * one. Returns `true` if seen, `false` on timeout.
+     *
+     * Used on RECONNECT: a peer that power-cycled (e.g. a power outage) comes
+     * back with a fresh GATT, and Android won't reliably *direct*-connect a
+     * device it hasn't just re-discovered in a scan — a blind connect to the
+     * stale handle storms GATT_ERROR(133) instead (de1app documents the same
+     * Android behaviour, geota/crema#65). Scanning first, then connecting to the
+     * re-advertised device, is the reliable path. The default is an immediate
+     * `true` for transports with no radio to scan (replay / LAN proxy), which
+     * connect without discovery.
+     */
+    suspend fun awaitAdvertisement(device: DeviceHandle, timeoutMs: Long): Boolean = true
+
+    /**
      * Connect to [device] and discover its GATT services. Suspends until the
      * device is connected and services are resolved, or throws on failure /
      * timeout. After this returns, [observe] and [write] may be called for

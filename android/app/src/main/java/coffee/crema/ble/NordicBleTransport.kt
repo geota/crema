@@ -9,6 +9,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
@@ -281,6 +282,28 @@ class NordicBleTransport(context: Context) : BleTransport {
         }.getOrNull()
 
     // ---- Connect ----------------------------------------------------------
+
+    /**
+     * Wait (up to [timeoutMs]) for the device to re-advertise, matched by
+     * address, then refresh its cached [Peripheral] to the one the scan just saw.
+     * Subscribing to [rawScan] starts the shared radio scan (it stops again when
+     * this drops out). On RECONNECT this primes Android's stack with the device's
+     * current advertisement so the following direct [connect] succeeds against a
+     * power-cycled peer instead of 133-storming a stale handle (geota/crema#65).
+     */
+    override suspend fun awaitAdvertisement(
+        device: BleTransport.DeviceHandle,
+        timeoutMs: Long,
+    ): Boolean {
+        val handle = device as NordicDeviceHandle
+        return withTimeoutOrNull(timeoutMs) {
+            val result = rawScan.first { it.peripheral.address == handle.address }
+            // Refresh the cached peripheral so connect() targets the current GATT.
+            peripherals[handle] = result.peripheral
+            Log.i(TAG, "${handle.address} re-advertised — reconnecting")
+            true
+        } ?: false
+    }
 
     override suspend fun connect(device: BleTransport.DeviceHandle) {
         val handle = device as NordicDeviceHandle
