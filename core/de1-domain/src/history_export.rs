@@ -712,6 +712,7 @@ mod tests {
             beans: Some("Banibeans · Ethiopia Yirgacheffe".to_string()),
             grinder_setting: Some("15".to_string()),
             notes: Some("Good body".to_string()),
+            next_plan: None,
             rating: Some(4),
             tds: Some(8.5),
             extraction_yield: Some(20.5),

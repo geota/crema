@@ -517,11 +517,23 @@ pub fn roast_band5(level: Option<i32>) -> Option<String> {
 
 /// Whole calendar days (UTC) between an ISO `yyyy-mm-dd` roast date and
 /// `now_unix_ms` — the bean's "days off roast". `None` when the date is
-/// malformed or empty. Mirrors the wasm `days_off_roast`; see
+/// malformed or empty. Days spent frozen don't age the bag: pass the
+/// bean's `frozen_on` / `defrosted_on` for the freeze-pause, or nulls
+/// for a plain diff. Mirrors the wasm `days_off_roast`; see
 /// [`de1_domain::days_off_roast`].
 #[uniffi::export]
-pub fn days_off_roast(roasted_on: Option<String>, now_unix_ms: i64) -> Option<i64> {
-    de1_domain::days_off_roast(roasted_on.as_deref()?, now_unix_ms)
+pub fn days_off_roast(
+    roasted_on: Option<String>,
+    frozen_on: Option<String>,
+    defrosted_on: Option<String>,
+    now_unix_ms: i64,
+) -> Option<i64> {
+    de1_domain::days_off_roast(
+        roasted_on.as_deref()?,
+        frozen_on.as_deref(),
+        defrosted_on.as_deref(),
+        now_unix_ms,
+    )
 }
 
 /// Rate how a bean's `days` off roast sits against the ideal rest window

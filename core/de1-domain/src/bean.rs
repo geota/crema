@@ -214,15 +214,48 @@ mod roast_band5_tests {
 ///
 /// `now_unix_ms` is a parameter rather than a wall-clock read so the
 /// core stays sans-IO; the shell passes `Date.now()` at the call site.
-pub fn days_off_roast(roasted_on: &str, now_unix_ms: i64) -> Option<i64> {
+///
+/// Days spent frozen do not age the bag (the freeze-pause promised on
+/// [`Bean::frozen_on`]): while `frozen_on` is set and `defrosted_on` is
+/// not, the count stops at the freeze date; once defrosted, the frozen
+/// span is subtracted. A malformed freeze date, a freeze before the
+/// roast date, or a defrost before the freeze is ignored rather than
+/// poisoning the count. Pass `None, None` for a plain calendar diff.
+pub fn days_off_roast(
+    roasted_on: &str,
+    frozen_on: Option<&str>,
+    defrosted_on: Option<&str>,
+    now_unix_ms: i64,
+) -> Option<i64> {
     let roast_unix_ms = parse_iso_date_to_unix_ms(roasted_on)?;
     // Floor-divide `now_unix_ms` to the UTC midnight of "today" so the
     // result is the integer day count regardless of the time of day
     // `now` is read at. Rust's integer `div_euclid` floors toward
     // negative infinity, matching the JS `Math.floor` semantics.
     let today_unix_ms = now_unix_ms.div_euclid(MS_PER_DAY) * MS_PER_DAY;
-    let days = (today_unix_ms - roast_unix_ms).div_euclid(MS_PER_DAY);
-    Some(days.max(0))
+    let total = (today_unix_ms - roast_unix_ms).div_euclid(MS_PER_DAY);
+
+    let frozen_ms = frozen_on
+        .and_then(parse_iso_date_to_unix_ms)
+        .filter(|f| *f >= roast_unix_ms);
+    let Some(frozen_ms) = frozen_ms else {
+        return Some(total.max(0));
+    };
+    match defrosted_on.and_then(parse_iso_date_to_unix_ms) {
+        // Still frozen: the counter stopped the day the bag went in
+        // (capped at today so a future-dated freeze cannot inflate it).
+        None => {
+            let capped = frozen_ms.min(today_unix_ms);
+            Some((capped - roast_unix_ms).div_euclid(MS_PER_DAY).max(0))
+        }
+        // Thawed: subtract the frozen span from the running total.
+        Some(defrosted_ms) if defrosted_ms >= frozen_ms => {
+            let span_days = (defrosted_ms.min(today_unix_ms) - frozen_ms).div_euclid(MS_PER_DAY);
+            Some((total - span_days).max(0))
+        }
+        // Defrost recorded before the freeze — malformed pair; ignore.
+        Some(_) => Some(total.max(0)),
+    }
 }
 
 /// Rate how a bean's `days` off roast sits against the ideal rest window
@@ -624,7 +657,12 @@ impl Bean {
         let Some(roasted_on) = self.roasted_on.as_deref() else {
             return false;
         };
-        let Some(days) = days_off_roast(roasted_on, now_unix_ms) else {
+        let Some(days) = days_off_roast(
+            roasted_on,
+            self.frozen_on.as_deref(),
+            self.defrosted_on.as_deref(),
+            now_unix_ms,
+        ) else {
             return false;
         };
         matches!(roast_freshness(band, days), RoastFreshness::Bad)
@@ -649,7 +687,12 @@ impl Bean {
             parts.push(roaster.trim().to_owned());
         }
         if let Some(roasted_on) = self.roasted_on.as_deref()
-            && let Some(days) = days_off_roast(roasted_on, now_unix_ms)
+            && let Some(days) = days_off_roast(
+                roasted_on,
+                self.frozen_on.as_deref(),
+                self.defrosted_on.as_deref(),
+                now_unix_ms,
+            )
         {
             parts.push(format!("{days}d off roast"));
         }
@@ -867,18 +910,23 @@ mod tests {
     /// `2026-05-22T00:00:00Z` — the UTC-midnight of the reference now.
     const TODAY_MIDNIGHT: i64 = 1_779_408_000_000;
 
+    /// Plain calendar diff — no freeze window.
+    fn days_plain(roasted_on: &str, now: i64) -> Option<i64> {
+        days_off_roast(roasted_on, None, None, now)
+    }
+
     #[test]
     fn days_off_roast_zero_today() {
-        assert_eq!(days_off_roast("2026-05-22", NOW), Some(0));
+        assert_eq!(days_plain("2026-05-22", NOW), Some(0));
     }
 
     #[test]
     fn days_off_roast_handles_time_of_day_consistently() {
         // Same calendar day, any time of day → same answer.
-        assert_eq!(days_off_roast("2026-05-22", TODAY_MIDNIGHT), Some(0));
+        assert_eq!(days_plain("2026-05-22", TODAY_MIDNIGHT), Some(0));
         // 23:59:59 UTC on the same day still reads 0.
         assert_eq!(
-            days_off_roast("2026-05-22", TODAY_MIDNIGHT + (86_400_000 - 1)),
+            days_plain("2026-05-22", TODAY_MIDNIGHT + (86_400_000 - 1)),
             Some(0)
         );
     }
@@ -886,36 +934,90 @@ mod tests {
     #[test]
     fn days_off_roast_counts_whole_days() {
         // 7 days earlier reads as 7.
-        assert_eq!(days_off_roast("2026-05-15", NOW), Some(7));
+        assert_eq!(days_plain("2026-05-15", NOW), Some(7));
         // 1 day earlier reads as 1.
-        assert_eq!(days_off_roast("2026-05-21", NOW), Some(1));
+        assert_eq!(days_plain("2026-05-21", NOW), Some(1));
     }
 
     #[test]
     fn days_off_roast_clamps_future_dates_to_zero() {
         // A future roast date never reads negative.
-        assert_eq!(days_off_roast("2026-06-01", NOW), Some(0));
-        assert_eq!(days_off_roast("2099-01-01", NOW), Some(0));
+        assert_eq!(days_plain("2026-06-01", NOW), Some(0));
+        assert_eq!(days_plain("2099-01-01", NOW), Some(0));
     }
 
     #[test]
     fn days_off_roast_crosses_year_boundary() {
         // 2026-05-22 vs 2025-05-22 → 365 days (2025 is not a leap year).
-        assert_eq!(days_off_roast("2025-05-22", NOW), Some(365));
+        assert_eq!(days_plain("2025-05-22", NOW), Some(365));
         // Across a leap day: 2024-02-28 → 2024-03-01 is 2 days.
         let mar_1_2024 = days_from_civil(2024, 3, 1).unwrap() * MS_PER_DAY;
-        assert_eq!(days_off_roast("2024-02-28", mar_1_2024), Some(2));
+        assert_eq!(days_plain("2024-02-28", mar_1_2024), Some(2));
     }
 
     #[test]
     fn days_off_roast_rejects_malformed_strings() {
-        assert_eq!(days_off_roast("", NOW), None);
-        assert_eq!(days_off_roast("not-a-date", NOW), None);
-        assert_eq!(days_off_roast("2026/05/22", NOW), None);
-        assert_eq!(days_off_roast("2026-5-22", NOW), None); // single-digit month
-        assert_eq!(days_off_roast("2026-13-01", NOW), None); // month out of range
-        assert_eq!(days_off_roast("2026-05-32", NOW), None); // day out of range
-        assert_eq!(days_off_roast("20260522xx", NOW), None); // shape mismatch
+        assert_eq!(days_plain("", NOW), None);
+        assert_eq!(days_plain("not-a-date", NOW), None);
+        assert_eq!(days_plain("2026/05/22", NOW), None);
+        assert_eq!(days_plain("2026-5-22", NOW), None); // single-digit month
+        assert_eq!(days_plain("2026-13-01", NOW), None); // month out of range
+        assert_eq!(days_plain("2026-05-32", NOW), None); // day out of range
+        assert_eq!(days_plain("20260522xx", NOW), None); // shape mismatch
+    }
+
+    #[test]
+    fn days_off_roast_pauses_while_frozen() {
+        // Roasted 2026-05-01, frozen 2026-05-08, still frozen "now"
+        // (2026-05-22): the counter stopped at 7 days.
+        assert_eq!(
+            days_off_roast("2026-05-01", Some("2026-05-08"), None, NOW),
+            Some(7)
+        );
+        // Frozen the day it was roasted → 0, forever.
+        assert_eq!(
+            days_off_roast("2026-05-01", Some("2026-05-01"), None, NOW),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn days_off_roast_subtracts_a_thawed_span() {
+        // Roasted 05-01, frozen 05-08..05-18 (10 days), now 05-22:
+        // 21 total − 10 frozen = 11.
+        assert_eq!(
+            days_off_roast("2026-05-01", Some("2026-05-08"), Some("2026-05-18"), NOW),
+            Some(11)
+        );
+        // Defrosted the same day it froze → span 0, plain count.
+        assert_eq!(
+            days_off_roast("2026-05-01", Some("2026-05-08"), Some("2026-05-08"), NOW),
+            Some(21)
+        );
+    }
+
+    #[test]
+    fn days_off_roast_ignores_bad_freeze_windows() {
+        // Malformed freeze date → plain count.
+        assert_eq!(
+            days_off_roast("2026-05-01", Some("not-a-date"), None, NOW),
+            Some(21)
+        );
+        // Freeze before the roast → ignored.
+        assert_eq!(
+            days_off_roast("2026-05-01", Some("2026-04-01"), None, NOW),
+            Some(21)
+        );
+        // Defrost before the freeze → ignored.
+        assert_eq!(
+            days_off_roast("2026-05-01", Some("2026-05-10"), Some("2026-05-02"), NOW),
+            Some(21)
+        );
+        // Future-dated freeze cannot inflate the count past today.
+        assert_eq!(
+            days_off_roast("2026-05-01", Some("2026-06-01"), None, NOW),
+            Some(21)
+        );
     }
 
     // -- roast_freshness ----------------------------------------------

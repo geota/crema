@@ -1015,11 +1015,19 @@ pub fn roast_band5(level: Option<i32>) -> Option<String> {
 /// the date string is malformed or empty. See `de1_domain::days_off_roast`
 /// for the canonical implementation.
 ///
+/// Days spent frozen don't age the bag: pass the bean's `frozen_on` /
+/// `defrosted_on` for the freeze-pause, or `null`s for a plain diff.
+///
 /// `now_unix_ms` is an `f64` because the wasm-bindgen ABI cannot cross
 /// `i64` cleanly; the caller passes `Date.now()` (an integer-valued
 /// `f64`). Internally truncated to `i64` for the calendar math.
 #[wasm_bindgen]
-pub fn days_off_roast(roasted_on: Option<String>, now_unix_ms: f64) -> Option<f64> {
+pub fn days_off_roast(
+    roasted_on: Option<String>,
+    frozen_on: Option<String>,
+    defrosted_on: Option<String>,
+    now_unix_ms: f64,
+) -> Option<f64> {
     let date = roasted_on?;
     // `Date.now()` is always integer-valued in JS; truncate defensively
     // so a non-finite caller value yields `None` rather than a panic.
@@ -1029,7 +1037,8 @@ pub fn days_off_roast(roasted_on: Option<String>, now_unix_ms: f64) -> Option<f6
     #[allow(clippy::cast_possible_truncation)]
     let now_ms = now_unix_ms as i64;
     #[allow(clippy::cast_precision_loss)]
-    de1_domain::days_off_roast(&date, now_ms).map(|d| d as f64)
+    de1_domain::days_off_roast(&date, frozen_on.as_deref(), defrosted_on.as_deref(), now_ms)
+        .map(|d| d as f64)
 }
 
 /// Rate how a bean's `days` off roast sits against the ideal rest window
@@ -2323,17 +2332,31 @@ mod tests {
         // 2026-05-22T12:00:00Z — same reference as the de1-domain tests.
         let now_ms = 1_779_451_200_000.0;
         assert_eq!(
-            days_off_roast(Some("2026-05-15".to_owned()), now_ms),
+            days_off_roast(Some("2026-05-15".to_owned()), None, None, now_ms),
             Some(7.0)
         );
         // Missing date → None.
-        assert_eq!(days_off_roast(None, now_ms), None);
+        assert_eq!(days_off_roast(None, None, None, now_ms), None);
         // Malformed date → None.
-        assert_eq!(days_off_roast(Some("not-a-date".to_owned()), now_ms), None);
+        assert_eq!(
+            days_off_roast(Some("not-a-date".to_owned()), None, None, now_ms),
+            None
+        );
         // Non-finite now → None (defensive).
         assert_eq!(
-            days_off_roast(Some("2026-05-22".to_owned()), f64::NAN),
+            days_off_roast(Some("2026-05-22".to_owned()), None, None, f64::NAN),
             None
+        );
+        // Freeze-pause crosses the wasm seam: frozen a week after roast,
+        // never thawed → the counter stopped at 7.
+        assert_eq!(
+            days_off_roast(
+                Some("2026-05-01".to_owned()),
+                Some("2026-05-08".to_owned()),
+                None,
+                now_ms
+            ),
+            Some(7.0)
         );
     }
 

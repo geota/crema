@@ -45,6 +45,11 @@ pub struct ShotMetadata {
     pub grinder_setting: Option<String>,
     /// Free-form tasting notes.
     pub notes: Option<String>,
+    /// Forward-looking dial-in plan — what to change on the *next* shot
+    /// ("go finer, +2 drops"). Kept apart from `notes` (how this shot
+    /// tasted) so the brew screen can surface it when the bag is next
+    /// selected. Local workflow state: not exported to Visualizer.
+    pub next_plan: Option<String>,
     /// Personal rating, 1–5.
     pub rating: Option<u8>,
     /// Total dissolved solids in the beverage, percent — typically from a
@@ -512,6 +517,7 @@ mod tests {
                 beans: Some("washed Ethiopia".to_owned()),
                 grinder_setting: Some("3.2".to_owned()),
                 notes: None,
+                next_plan: Some("go finer, +2 drops".to_owned()),
                 rating: Some(4),
                 tds: Some(9.1),
                 extraction_yield: Some(20.5),

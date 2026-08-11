@@ -1351,6 +1351,7 @@ where
             beans: beans_label,
             grinder_setting: opt_nonempty(&bc_brew.grind_size),
             notes: opt_nonempty(&bc_brew.note),
+            next_plan: None,
             rating: rating_u,
             tds: None,
             extraction_yield: None,
