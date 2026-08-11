@@ -15,6 +15,16 @@
         android:name="android.permission.BLUETOOTH_CONNECT"
         tools:targetApi="s" />
 
+    <!-- Keep the DE1 link (and its auto-reconnect) alive while the screen is
+         off, via a connectedDevice foreground service (geota/crema#65). Only
+         engaged while charging + the user opts in, so a battery device is
+         unaffected. FOREGROUND_SERVICE_CONNECTED_DEVICE is the API 34+ typed
+         permission the connectedDevice service type requires. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"
+        tools:targetApi="34" />
+
     <!-- Visualizer sync — OAuth token exchange + shot uploads to
          visualizer.coffee. The only network feature in the app. -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -72,6 +82,15 @@
         <service
             android:name=".ui.QuitSleepService"
             android:exported="false" />
+
+        <!-- Keeps the process (and thus the DE1 BLE link + reconnect loop) alive
+             while the screen is off (geota/crema#65). connectedDevice type: the
+             app holds an active BLE connection to the DE1. Started only from the
+             foreground, only while charging + opted in; stopped otherwise. -->
+        <service
+            android:name=".ble.De1ConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <!-- FileProvider — hands the camera app (TakePicture) a writable content
              Uri for the bean-photo capture temp file. Authority tracks the build's
