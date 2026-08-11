@@ -5,7 +5,7 @@
 	 * profile name, the ratio + yield metrics and a star rating.
 	 */
 	import type { StoredShot } from '$lib/history';
-	import { grindLabel, ratioLabel, peaksOf, flatSamplesOf } from '$lib/history';
+	import { grindLabel, ratioLabel, peaksOf, yieldOf, flatSamplesOf } from '$lib/history';
 	import StarRating from '$lib/components/common/StarRating.svelte';
 	import { getSettingsStore, convertWeight } from '$lib/settings';
 	import MiniShotChart from './MiniShotChart.svelte';
@@ -87,8 +87,8 @@
 
 	/** Peaks derived once from the shot's wire-shape record. */
 	const peaks = $derived(peaksOf(shot));
-	/** Final (or peak) yield weight, grams, for the yield metric. */
-	const yieldOut = $derived(peaks.finalWeight ?? peaks.peakWeight);
+	/** Settled yield weight, grams (recorded `yieldOut`, else peak), for the metric. */
+	const yieldOut = $derived(yieldOf(shot, peaks));
 	/** The yield weight in the chosen weight unit (D1). */
 	const settings = getSettingsStore();
 	const yieldM = $derived(convertWeight(yieldOut, settings.current.weightUnit));

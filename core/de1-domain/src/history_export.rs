@@ -100,15 +100,23 @@ fn build_v2_document(shot: &StoredShot, truncate_at_flow_end: bool) -> V2Documen
             .collect()
     };
 
-    // The settled drink weight: the last positive scale reading across the
-    // FULL recording (before the flow-window cut — the post-stop tail is
-    // exactly where the drips land in the cup).
-    let drink_weight = shot
-        .record
-        .samples
-        .iter()
-        .rev()
-        .find_map(|t| t.scale_weight.filter(|w| *w > 0.0));
+    // The settled drink weight the user reads — Visualizer displays this from
+    // `app.data.settings.drink_weight`. Prefer the shot's recorded settled
+    // yield: the metrics tracker's post-drip "cup at rest" weight
+    // (`ShotMetricsAccumulator.final_weight`, surfaced as `metadata.yield_out`).
+    // crema's drip-compensated stop-at-weight halts the pump EARLY, so the last
+    // recorded *sample* is the mid-drip stop-moment weight (~34.5 g), NOT the
+    // settled weight (~36 g) — reporting it made Visualizer show the pre-drip
+    // number (geota/crema#64). Fall back to the last positive scale reading
+    // across the FULL recording only when no settled yield was captured (older
+    // web shots that predate persisting it; imports without a drink weight).
+    let drink_weight = shot.metadata.yield_out.filter(|w| *w > 0.0).or_else(|| {
+        shot.record
+            .samples
+            .iter()
+            .rev()
+            .find_map(|t| t.scale_weight.filter(|w| *w > 0.0))
+    });
 
     let mut elapsed = Vec::with_capacity(samples.len());
     let mut pressure = Vec::with_capacity(samples.len());
@@ -153,6 +161,48 @@ fn build_v2_document(shot: &StoredShot, truncate_at_flow_end: bool) -> V2Documen
         // The profile frame this sample was taken in — what Visualizer
         // draws its step bars from (geota/crema#49).
         state_change.push(u32::from(t.sample.frame_number));
+    }
+
+    // Chart-tail fidelity (geota/crema#64): the recorded samples freeze at the
+    // pump-stop, so the uploaded weight curve ends at the pre-drip stop-moment
+    // value while `drink_weight` reports the settled weight — the chart's last
+    // point disagrees with the headline number. Append one synthetic terminal
+    // point at the settled weight so they agree. Guarded so it can never change
+    // the re-upload SHA (Visualizer de-dupes by a hash over the telemetry
+    // columns, #44): only for a drip-plausible rise, and only when the shot has
+    // no real post-flow tail — which a freshly-recorded shot never has, so the
+    // truncated and full-series exports build from the same samples and append
+    // the same point, staying byte-identical.
+    const SETTLE_TAIL_MIN_RISE_G: f32 = 0.1;
+    const SETTLE_TAIL_MAX_RISE_G: f32 = 5.0;
+    const SETTLE_TAIL_SECS: f32 = 0.5;
+    if let Some(settled) = drink_weight
+        && let Some(&last_w) = weight_series.last()
+        && let Some(&last_t) = elapsed.last()
+    {
+        let rise = settled - last_w;
+        let no_raw_tail = shot
+            .record
+            .samples
+            .last()
+            .is_none_or(|t| t.elapsed <= cutoff);
+        if rise > SETTLE_TAIL_MIN_RISE_G && rise <= SETTLE_TAIL_MAX_RISE_G && no_raw_tail {
+            elapsed.push(last_t + SETTLE_TAIL_SECS);
+            // Pump off — pressure / flow are zero at the settle point.
+            pressure.push(0.0);
+            pressure_goal.push(0.0);
+            flow.push(0.0);
+            flow_goal.push(0.0);
+            // Temperatures hold their last value (the group doesn't cool
+            // instantly); dispensing and the profile frame likewise carry over.
+            basket.push(*basket.last().unwrap_or(&0.0));
+            mix.push(*mix.last().unwrap_or(&0.0));
+            temp_goal.push(*temp_goal.last().unwrap_or(&0.0));
+            weight_series.push(settled);
+            flow_by_weight.push(0.0);
+            water_dispensed.push(*water_dispensed.last().unwrap_or(&0.0));
+            state_change.push(*state_change.last().unwrap_or(&0));
+        }
     }
 
     // `by_weight_raw` is the unsmoothed sibling of `by_weight`. Crema
@@ -745,9 +795,11 @@ mod tests {
         assert_eq!(settings["drink_ey"], 20.5);
         assert_eq!(settings["espresso_enjoyment"], 75.0);
         assert_eq!(settings["bean_weight"], 18.0);
-        // The settled drink weight = last positive scale reading (8.5 g
-        // at the 1 s sample in the fixture).
-        assert_eq!(settings["drink_weight"], 8.5);
+        // The settled drink weight = the recorded settled yield
+        // (`metadata.yield_out`, the accumulator's post-drip "cup at rest"
+        // weight), NOT the mid-pour sample tail (8.5 g) — crema stops the pump
+        // early so the last sample is the pre-drip weight (geota/crema#64).
+        assert_eq!(settings["drink_weight"], 36.0);
     }
 
     #[test]
@@ -770,6 +822,10 @@ mod tests {
         tail.elapsed = Duration::from_secs(31);
         tail.scale_weight = Some(36.2);
         shot.record.samples.push(tail);
+        // With no recorded settled yield, `drink_weight` falls back to the last
+        // positive scale reading across the FULL (untruncated) tail (#64
+        // fallback path — older web shots + imports without a drink weight).
+        shot.metadata.yield_out = None;
 
         let json = export_v2_json_shot(&shot).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
@@ -787,7 +843,8 @@ mod tests {
         assert_eq!(settings["grinder_setting"], "15");
         // The tail sample is cut from the series…
         assert_eq!(v["elapsed"].as_array().unwrap().len(), 2);
-        // …but still supplies the settled drink weight.
+        // …but still supplies the fallback drink weight (last positive reading
+        // across the full tail) when no settled yield_out was recorded.
         assert_eq!(settings["drink_weight"], 36.2);
     }
 
@@ -806,6 +863,67 @@ mod tests {
         assert_eq!(v["elapsed"].as_array().unwrap().len(), 3);
         // Same-length columns still hold with the tail kept.
         assert_eq!(v["pressure"]["pressure"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_settled_yield_appends_a_matching_chart_tail() {
+        // #64 Part C: the samples freeze at the early pump-stop (~34 g) while
+        // the settled yield is a drip-plausible bit higher (35.8 g). Export
+        // appends one terminal point at the settled weight so the chart's last
+        // point matches the headline `drink_weight`.
+        let mut shot = fixture();
+        shot.record.samples[1].scale_weight = Some(34.0);
+        shot.metadata.yield_out = Some(35.8);
+
+        let json = export_v2_json_shot(&shot).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let w = v["totals"]["weight"].as_array().unwrap();
+        assert_eq!(w.len(), 3, "a synthetic settle-tail point is appended");
+        // Every column stays position-aligned (v2 readers index by position).
+        assert_eq!(v["elapsed"].as_array().unwrap().len(), 3);
+        assert_eq!(v["pressure"]["pressure"].as_array().unwrap().len(), 3);
+        assert_eq!(v["flow"]["by_weight_raw"].as_array().unwrap().len(), 3);
+        assert_eq!(v["state_change"].as_array().unwrap().len(), 3);
+        let last = w.last().unwrap().as_f64().unwrap();
+        assert!(
+            (last - 35.8).abs() < 1e-3,
+            "the tail point carries the settled weight, got {last}",
+        );
+        assert_eq!(v["app"]["data"]["settings"]["drink_weight"], 35.8);
+    }
+
+    #[test]
+    fn the_settle_tail_keeps_the_re_upload_series_identical() {
+        // The synthetic settle tail must be byte-identical between the normal
+        // and full-series exports for a freshly-recorded shot (no raw tail), so
+        // a bound-shot re-upload matches Visualizer's telemetry-column SHA and
+        // updates the same row instead of minting a duplicate (#44 dedup, #64).
+        let mut shot = fixture();
+        shot.record.samples[1].scale_weight = Some(34.0);
+        shot.metadata.yield_out = Some(35.8);
+
+        let normal: serde_json::Value =
+            serde_json::from_str(&export_v2_json_shot(&shot).unwrap()).unwrap();
+        let full: serde_json::Value =
+            serde_json::from_str(&export_v2_json_shot_full(&shot).unwrap()).unwrap();
+        assert_eq!(normal["totals"]["weight"], full["totals"]["weight"]);
+        assert_eq!(normal["elapsed"], full["elapsed"]);
+        assert_eq!(
+            normal["flow"]["by_weight_raw"],
+            full["flow"]["by_weight_raw"]
+        );
+    }
+
+    #[test]
+    fn an_implausible_yield_gap_appends_no_tail() {
+        // A settled yield far above the last sample is not a drip (a huge gap
+        // would draw a vertical spike). The fixture's 8.5 g last sample vs the
+        // 36 g yield_out is 27.5 g apart → no synthetic tail; series stays len 2.
+        let shot = fixture(); // yield_out = 36.0, last sample scale_weight = 8.5
+        let v: serde_json::Value =
+            serde_json::from_str(&export_v2_json_shot(&shot).unwrap()).unwrap();
+        assert_eq!(v["elapsed"].as_array().unwrap().len(), 2);
+        assert_eq!(v["totals"]["weight"].as_array().unwrap().len(), 2);
     }
 
     #[test]

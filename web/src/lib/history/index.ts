@@ -19,6 +19,7 @@ export {
 	shotFilename,
 	snapshotFromBean,
 	peaksOf,
+	yieldOf,
 	statsOf,
 	flatSamplesOf
 } from './model';

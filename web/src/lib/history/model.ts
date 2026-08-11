@@ -349,6 +349,26 @@ export function peaksOf(shot: StoredShot): ShotPeaks {
 }
 
 /**
+ * The yield (grams in the cup) to DISPLAY for a stored shot. Prefers the
+ * recorded settled weight — `metadata.yieldOut`, the core
+ * `ShotMetricsAccumulator`'s post-drip "cup at rest" value — over the
+ * sample-derived peak, because crema's drip-compensated stop-at-weight halts
+ * the pump early so the last recorded sample is the mid-drip stop-moment
+ * weight, not the settled weight (geota/crema#64). Keeps the app's own yield
+ * in agreement with what the exporter reports to Visualizer (which reads the
+ * same `yieldOut` as `drink_weight`) and with Android (which already displays
+ * the settled `yieldG`). Falls back to the peak for older shots that predate
+ * persisting `yieldOut`. Pass a precomputed `peaks` to avoid a redundant wasm
+ * call at a site that already has it.
+ */
+export function yieldOf(shot: StoredShot, peaks?: ShotPeaks): number | null {
+	const settled = shot.metadata?.yieldOut;
+	if (settled != null && settled > 0) return settled;
+	const p = peaks ?? peaksOf(shot);
+	return p.finalWeight ?? p.peakWeight ?? null;
+}
+
+/**
  * The History page's stat strip over a (filter/range-scoped) set of
  * shots — one core derivation shared with Android (review #41,
  * `de1_domain::history_stats`). Ships a light 5-field projection per
@@ -451,8 +471,7 @@ export function grindLabel(shot: StoredShot): string | null {
 }
 
 export function ratioLabel(record: StoredShot): string {
-	const peaks = peaksOf(record);
-	const yieldOut = peaks.finalWeight ?? peaks.peakWeight;
+	const yieldOut = yieldOf(record);
 	const dose =
 		record.metadata.dose != null && record.metadata.dose > 0
 			? record.metadata.dose

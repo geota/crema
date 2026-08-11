@@ -24,7 +24,7 @@
 	 * require resampling every shot to a common grid; SVG paths sidestep that.
 	 */
 	import type { StoredShot } from '$lib/history';
-	import { ratioLabel, peaksOf, flatSamplesOf } from '$lib/history';
+	import { ratioLabel, peaksOf, yieldOf, flatSamplesOf } from '$lib/history';
 	import type { TelemetrySample } from '$lib/state';
 	import {
 		getSettingsStore,
@@ -252,8 +252,7 @@
 
 	/** Yield (final or peak) in the user's weight unit. */
 	function shotYield(shot: StoredShot): string {
-		const p = peaksOf(shot);
-		const y = p.finalWeight ?? p.peakWeight;
+		const y = yieldOf(shot);
 		const m = convertWeight(y, prefs.weightUnit);
 		return m.unit ? `${m.value} ${m.unit}` : m.value;
 	}

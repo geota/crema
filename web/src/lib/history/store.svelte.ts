@@ -253,6 +253,13 @@ export class HistoryStore {
 		const samples = series.map(toWire);
 		const metadata: ShotMetadata = {
 			dose: completion.dose ?? null,
+			// The settled drink weight from the core's `ShotMetricsAccumulator`
+			// (post-drip "cup at rest"), delivered on `Event::ShotCompleted`.
+			// Persisting it is what lets the exporter report the settled weight
+			// to Visualizer instead of the mid-drip stop-moment sample, and keeps
+			// the app's own displayed yield in agreement (geota/crema#64). Android
+			// already routed `final_weight → yieldOut`; web dropped it until now.
+			yieldOut: completion.finalWeight ?? null,
 			rating: null,
 			notes: null,
 			// Same number formatting as the history grind stepper's commit.

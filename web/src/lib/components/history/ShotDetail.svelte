@@ -23,6 +23,7 @@
 		shotFilename,
 		exportStoredShotAsV2Json,
 		peaksOf,
+		yieldOf,
 		flatSamplesOf,
 		effectiveGrindSetting,
 	} from '$lib/history';
@@ -167,8 +168,8 @@
 	const peaks = $derived(peaksOf(shot));
 	/** Flat chart-friendly samples — derived from `shot.record.samples`. */
 	const flatSeries = $derived(flatSamplesOf(shot));
-	/** Final (or peak) yield, grams. */
-	const yieldOut = $derived(peaks.finalWeight ?? peaks.peakWeight);
+	/** Settled yield, grams — recorded `yieldOut` (post-drip) else peak (#64). */
+	const yieldOut = $derived(yieldOf(shot, peaks));
 
 	// ── Shot quality ─────────────────────────────────────────────────────
 	/**

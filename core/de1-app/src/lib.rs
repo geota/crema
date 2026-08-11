@@ -30,9 +30,9 @@ use std::time::Duration;
 use de1_domain::saw_learning::SawLearningModel;
 use de1_domain::{
     AutoStop, BeverageType, Estimate, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile,
-    STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StopConfig,
-    StopReason, StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor, WeightSpikeGate,
-    WeightUnit, shot_disposition,
+    STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StopCapture,
+    StopConfig, StopReason, StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor,
+    WeightSpikeGate, WeightUnit, shot_disposition,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -340,6 +340,46 @@ impl ShotMetricsAccumulator {
     }
 }
 
+/// Post-stop drip settle (geota/crema#64). crema's drip-compensated
+/// stop-at-weight halts the pump EARLY, so the cup keeps filling for a few
+/// seconds after the DE1 reports Idle. Left to the machine-idle boundary, the
+/// [`ShotMetricsAccumulator`]'s `final_weight` is only "settled-at-idle" — it
+/// can fall short of the true settled weight when the DE1 idles before the
+/// drips finish. So when a shot completes with a scale paired, the
+/// [`Event::ShotCompleted`] emit is deferred by a short, stillness-gated window
+/// while the accumulator keeps ingesting scale readings, then finalized with
+/// the settled weight. Matches how de1app / despresso / reaprime capture the
+/// drink weight (a ~1–4 s settle after the pump stops).
+#[derive(Debug, Clone)]
+struct PostShotSettle {
+    /// `Event::ShotCompleted.sample_count`, captured at Idle.
+    sample_count: u32,
+    /// `Event::ShotCompleted.duration`, captured at Idle (ms).
+    duration_ms: u32,
+    /// The weight-stop capture (SAW drip-learning input), captured at Idle.
+    stop_capture: Option<StopCapture>,
+    /// Whether the app's own stop never fired (`ended_without_triggering_stop`),
+    /// computed at Idle before the arming reporter was reset.
+    ended_without_triggering_stop: bool,
+    /// Hard backstop — finalize no later than this instant regardless of the
+    /// drip. Bounds the deferral so a shot is always saved promptly.
+    deadline: Duration,
+    /// Highest settled weight seen so far, and when it last climbed — lock the
+    /// settle early once the drip stops rising.
+    best_weight: f32,
+    /// The last instant `best_weight` rose. `now − last_rise ≥ SETTLE_QUIET`
+    /// means the cup has stopped filling.
+    last_rise: Duration,
+}
+
+/// Hard cap on the post-stop drip settle (reaprime uses ≤4 s, despresso ≤2 s).
+const POST_SHOT_SETTLE_MAX: Duration = Duration::from_millis(3000);
+/// The settled weight is locked once it has not climbed for this long — the
+/// drips have stopped landing.
+const POST_SHOT_SETTLE_QUIET: Duration = Duration::from_millis(700);
+/// A weight rise smaller than this is noise, not a landing drip.
+const POST_SHOT_SETTLE_RISE_G: f32 = 0.1;
+
 /// The headless Crema application core.
 ///
 /// One `CremaCore` tracks one machine session. The FFI bridges wrap it behind
@@ -571,6 +611,12 @@ pub struct CremaCore {
     /// on every `ShotEvent::Started`; drained into `Event::ShotCompleted`
     /// on every `ShotEvent::Completed`. See [`ShotMetricsAccumulator`].
     shot_metrics: ShotMetricsAccumulator,
+    /// In-flight post-stop drip settle: when set, the `Event::ShotCompleted`
+    /// emit is deferred while the accumulator keeps ingesting scale readings so
+    /// the reported weight is the settled one (geota/crema#64). `None` outside
+    /// the brief window after a scale-paired shot completes. See
+    /// [`PostShotSettle`].
+    post_shot_settle: Option<PostShotSettle>,
     /// Rolling BLE-capture buffer + identity-keeper. Fed at the top of
     /// [`on_notification`](Self::on_notification) (gated on
     /// [`CaptureRecorder::is_suppressed`] so replays don't re-record
@@ -728,6 +774,7 @@ impl CremaCore {
             line_freq_detector: LineFreqDetector::new(),
             line_freq_override: None,
             shot_metrics: ShotMetricsAccumulator::default(),
+            post_shot_settle: None,
             capture: CaptureRecorder::default(),
             weight_unit_pref: WeightUnit::default(),
             auto_off_scale_on_sleep: false,
@@ -2479,6 +2526,10 @@ impl CremaCore {
                 reason: ProfileUploadFailure::AckTimeout { awaiting },
             });
         }
+        // Backstop for the post-stop drip settle (#64): guarantees a deferred
+        // completion finalizes on the [`POST_SHOT_SETTLE_MAX`] deadline even if
+        // the scale stream stalls (the tick is the shells' periodic watchdog).
+        self.maybe_finalize_post_shot_settle(now, &mut out);
         self.gate_read_only(out)
     }
 
@@ -2882,12 +2933,15 @@ impl CremaCore {
         // export + Visualizer upload.
         self.last_scale_estimate = Some(estimate);
         // Update the in-progress shot's running peak / final weight from
-        // the smoothed scale weight — only while a shot is in progress so
-        // post-shot trickle readings (cup-removal etc.) don't pollute the
-        // next shot's metrics. The smoothed `estimate.weight` is the
-        // value the shell sees on its TelemetrySample.weight channel, so
-        // peak / final stay aligned with what the chart actually drew.
-        if self.shot_started.is_some() {
+        // the smoothed scale weight — while a shot is in progress, AND through
+        // the brief post-stop drip settle (geota/crema#64), so the reported
+        // final weight reaches the settled value the drip-compensated stop was
+        // aiming for. Outside those windows, post-shot trickle readings
+        // (cup-removal etc.) must NOT pollute the next shot's metrics. The
+        // smoothed `estimate.weight` is the value the shell sees on its
+        // TelemetrySample.weight channel, so peak / final stay aligned with
+        // what the chart actually drew.
+        if self.shot_started.is_some() || self.post_shot_settle.is_some() {
             self.shot_metrics.feed_weight(estimate.weight, now);
         }
         out.events.push(Event::ScaleReading {
@@ -2923,6 +2977,9 @@ impl CremaCore {
                 self.push_stop(Some(StopReason::Weight), now, out);
             }
         }
+        // A deferred completion locks on this fresh reading once the drip has
+        // settled (geota/crema#64) — the scale's stream is the primary driver.
+        self.maybe_finalize_post_shot_settle(now, out);
     }
 
     /// The untared-cup guard (Decenza `weightprocessor.cpp:242-253`, evolved
@@ -3438,9 +3495,103 @@ impl CremaCore {
     /// All three timer writes are capability-gated by [`Scale::timer`], so
     /// scales without software timer commands stay silent — matching the
     /// reactive auto-policy of the legacy app.
+    /// Emit the (possibly deferred) `Event::ShotCompleted` and feed the SAW
+    /// drip-learning model — the tail of the `ShotEvent::Completed` handler,
+    /// split out so it can run either immediately (no scale paired) or after the
+    /// post-stop drip settle locks (geota/crema#64).
+    fn finalize_shot_completed(
+        &mut self,
+        settle: PostShotSettle,
+        now: Duration,
+        out: &mut CoreOutput,
+    ) {
+        let PostShotSettle {
+            sample_count,
+            duration_ms,
+            stop_capture,
+            ended_without_triggering_stop,
+            ..
+        } = settle;
+        // Drain the running peak / final-weight tracker into the event — one
+        // computation at the core boundary that every shell can consume directly.
+        let (peak_pressure, peak_temp, peak_weight, final_weight) = self
+            .shot_metrics
+            .drain(stop_capture.as_ref().map(|c| c.weight_g));
+        out.events.push(Event::ShotCompleted {
+            duration: duration_ms,
+            sample_count,
+            peak_pressure,
+            peak_temp,
+            peak_weight,
+            final_weight,
+            // Classified here so both shells act on the same rule (previously
+            // each re-implemented the aborted thresholds + cleaning-profile lookup).
+            disposition: shot_disposition(duration_ms, final_weight, self.active_beverage_type),
+            ended_without_triggering_stop,
+        });
+        // Drip learning (Decenza SAW learning): the measured sample is (final
+        // settled weight − weight at the stop trigger) at the trigger's flow.
+        // The settle window above (#64) lets `final_weight` reach the true
+        // settled weight rather than the machine-idle snapshot, sharpening the
+        // learned drip; the model's own validity gates (flow ≥ 0.5, dispersion,
+        // outlier-vs-expected) reject bad samples.
+        if let (Some(capture), Some(final_g)) = (stop_capture, final_weight) {
+            let profile = self.last_active_profile_title.clone().unwrap_or_default();
+            let scale_label = self.scale.as_ref().map_or("", |s| s.label()).to_owned();
+            let drip = f64::from((final_g - capture.weight_g).max(0.0));
+            let overshoot = f64::from(final_g - capture.target_g);
+            self.saw_model.add_learning_point(
+                &profile,
+                &scale_label,
+                drip,
+                f64::from(capture.flow_g_per_s),
+                overshoot,
+                now.as_secs(),
+            );
+        }
+    }
+
+    /// Lock a deferred completion once the post-stop drip has settled — the
+    /// weight stopped climbing for [`POST_SHOT_SETTLE_QUIET`], the cup was
+    /// lifted, or the [`POST_SHOT_SETTLE_MAX`] backstop elapsed (geota/crema#64).
+    /// Driven by the scale stream and `on_tick`; a no-op when no settle is in
+    /// flight.
+    fn maybe_finalize_post_shot_settle(&mut self, now: Duration, out: &mut CoreOutput) {
+        if self.post_shot_settle.is_none() {
+            return;
+        }
+        // Read the accumulator's fields out first so the `&mut` borrow of
+        // `post_shot_settle` below doesn't overlap them.
+        let current = self.shot_metrics.final_weight;
+        let cup_lifted = self.shot_metrics.cup_lifted;
+        let settle = self
+            .post_shot_settle
+            .as_mut()
+            .expect("checked is_some above");
+        if let Some(w) = current
+            && w > settle.best_weight + POST_SHOT_SETTLE_RISE_G
+        {
+            settle.best_weight = w;
+            settle.last_rise = now;
+        }
+        let done = cup_lifted
+            || now >= settle.deadline
+            || now.saturating_sub(settle.last_rise) >= POST_SHOT_SETTLE_QUIET;
+        if done {
+            let settle = self.post_shot_settle.take().expect("checked is_some above");
+            self.finalize_shot_completed(settle, now, out);
+        }
+    }
+
     fn map_shot_event(&mut self, event: ShotEvent, now: Duration, out: &mut CoreOutput) {
         match event {
             ShotEvent::Started => {
+                // A new shot before the previous shot's drip settle finalized —
+                // flush it now so its (settled-so-far) completion is never lost
+                // and the accumulator reset below starts from a clean slate (#64).
+                if let Some(settle) = self.post_shot_settle.take() {
+                    self.finalize_shot_completed(settle, now, out);
+                }
                 self.shot_started = Some(now);
                 // Flow hasn't begun yet (the shot opens in the heating phase) —
                 // the elapsed clock is zeroed at the first preinfusion/pouring
@@ -3549,49 +3700,29 @@ impl CremaCore {
                 // `record.duration` is the domain `Duration`; narrow to the
                 // u32 ms the FFI `ShotCompleted` event carries.
                 let duration = u32::try_from(record.duration.as_millis()).unwrap_or(u32::MAX);
-                // Drain the running peak / final-weight tracker into the
-                // event — one computation at the core boundary that every
-                // shell can consume directly.
-                let (peak_pressure, peak_temp, peak_weight, final_weight) = self
-                    .shot_metrics
-                    .drain(stop_capture.as_ref().map(|c| c.weight_g));
-                out.events.push(Event::ShotCompleted {
-                    duration,
-                    sample_count: u32::try_from(record.samples.len()).unwrap_or(u32::MAX),
-                    peak_pressure,
-                    peak_temp,
-                    peak_weight,
-                    final_weight,
-                    // Classified here so both shells act on the same rule
-                    // (previously each re-implemented the aborted
-                    // thresholds and the cleaning-profile lookup).
-                    disposition: shot_disposition(
-                        duration,
-                        final_weight,
-                        self.active_beverage_type,
-                    ),
+                let sample_count = u32::try_from(record.samples.len()).unwrap_or(u32::MAX);
+                let settle = PostShotSettle {
+                    sample_count,
+                    duration_ms: duration,
+                    stop_capture,
                     ended_without_triggering_stop,
-                });
-                // Drip learning (Decenza SAW learning): the measured sample is
-                // (final settled weight − weight at the stop trigger) at the
-                // trigger's flow. crema's `final_weight` is the metrics
-                // tracker's settled value at machine-idle — a coarser settle
-                // window than Decenza's 6-sample state machine, accepted as
-                // the v1 capture; the model's own validity gates (flow ≥ 0.5,
-                // dispersion, outlier-vs-expected) reject bad samples.
-                if let (Some(capture), Some(final_g)) = (stop_capture, final_weight) {
-                    let profile = self.last_active_profile_title.clone().unwrap_or_default();
-                    let scale_label = self.scale.as_ref().map_or("", |s| s.label()).to_owned();
-                    let drip = f64::from((final_g - capture.weight_g).max(0.0));
-                    let overshoot = f64::from(final_g - capture.target_g);
-                    self.saw_model.add_learning_point(
-                        &profile,
-                        &scale_label,
-                        drip,
-                        f64::from(capture.flow_g_per_s),
-                        overshoot,
-                        now.as_secs(),
-                    );
+                    deadline: now + POST_SHOT_SETTLE_MAX,
+                    best_weight: self.shot_metrics.final_weight.unwrap_or(f32::MIN),
+                    last_rise: now,
+                };
+                // Post-stop drip settle (geota/crema#64): crema's drip-compensated
+                // stop-at-weight halts the pump EARLY, so with a scale paired the
+                // cup keeps filling for a few seconds after the DE1 reports Idle.
+                // Defer the completion while the accumulator keeps ingesting scale
+                // readings, then finalize with the settled weight — the scale's
+                // ~10 Hz stream and `on_tick` drive the lock/backstop
+                // ([`maybe_finalize_post_shot_settle`]). With no scale — or a shot
+                // that recorded no weight — there is nothing to settle, so
+                // finalize immediately (the unchanged, prompt path).
+                if self.scale.is_some() && self.shot_metrics.final_weight.is_some() {
+                    self.post_shot_settle = Some(settle);
+                } else {
+                    self.finalize_shot_completed(settle, now, out);
                 }
             }
         }
@@ -5792,8 +5923,13 @@ mod tests {
             Duration::from_millis(now_ms),
             &mut out,
         );
+        // With a scale paired, the completion is deferred for the post-stop
+        // drip settle (geota/crema#64); drive the backstop tick so it finalizes.
+        let backstop_ms = u64::try_from(POST_SHOT_SETTLE_MAX.as_millis()).unwrap();
+        let tick = core.on_tick(now_ms + backstop_ms + 100);
         out.events
             .into_iter()
+            .chain(tick.events)
             .find_map(|e| match e {
                 Event::ShotCompleted {
                     ended_without_triggering_stop,
@@ -7068,8 +7204,12 @@ mod tests {
         core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_100);
         core.on_notification(Source::ScaleWeight, &bookoo_packet(3_200), 1_200);
         core.on_notification(Source::ScaleWeight, &bookoo_packet(3_000), 1_300);
-        // Transition to Idle to complete the shot.
-        let out = core.on_notification(Source::De1State, &[2, 0], 5_000);
+        // Transition to Idle to complete the shot. With a scale paired the
+        // completion is deferred for the post-stop drip settle (#64) — no more
+        // readings arrive, so the backstop tick finalizes it with the last
+        // settled weight.
+        core.on_notification(Source::De1State, &[2, 0], 5_000);
+        let out = core.on_tick(9_000);
         let completed = out
             .events
             .iter()
@@ -7099,6 +7239,80 @@ mod tests {
         assert!(
             (15.0..=40.0).contains(&last),
             "final {last} g should be in a plausible espresso range",
+        );
+    }
+
+    #[test]
+    fn a_scale_shot_defers_completion_and_reports_the_settled_drip_weight() {
+        // geota/crema#64: crema's drip-compensated stop halts the pump early,
+        // so the cup keeps filling after the DE1 reports Idle. The completion
+        // is deferred while the accumulator ingests the drips, then reports the
+        // settled weight — not the ~30 g stop-moment value.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::De1State, &[4, 5], 1_000);
+        // Auto-tare lands, then the pour climbs to the early-stop weight.
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 1_050);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(2_800), 1_200);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(3_000), 1_400);
+        // DE1 goes Idle — the pump stopped early (drip compensation).
+        let idle = core.on_notification(Source::De1State, &[2, 0], 1_600);
+        assert!(
+            !idle
+                .events
+                .iter()
+                .any(|e| matches!(e, Event::ShotCompleted { .. })),
+            "with a scale paired the completion is deferred for the drip settle (#64)",
+        );
+        // Drips keep landing over the next second: the cup fills toward 36 g.
+        for (t, cg) in [
+            (1_900u64, 3_300u32),
+            (2_200, 3_500),
+            (2_500, 3_600),
+            (2_800, 3_600),
+        ] {
+            let o = core.on_notification(Source::ScaleWeight, &bookoo_packet(cg), t);
+            assert!(
+                !o.events
+                    .iter()
+                    .any(|e| matches!(e, Event::ShotCompleted { .. })),
+                "still filling — the settle must not lock while the weight climbs",
+            );
+        }
+        // The backstop tick finalizes the deferred completion.
+        let out = core.on_tick(5_000);
+        let completed = out
+            .events
+            .iter()
+            .find(|e| matches!(e, Event::ShotCompleted { .. }))
+            .expect("the deferred completion finalizes on the settle backstop");
+        let Event::ShotCompleted { final_weight, .. } = completed else {
+            unreachable!("filtered for ShotCompleted");
+        };
+        let f = final_weight.expect("scale readings arrived → final_weight is Some");
+        assert!(
+            f > 33.0,
+            "settled weight {f} g must reflect the post-stop drip climb toward 36 g, \
+             not the ~30 g early-stop reading",
+        );
+    }
+
+    #[test]
+    fn a_new_shot_flushes_a_pending_drip_settle() {
+        // A new shot before the previous shot's drip settle locks must flush the
+        // deferred completion so shot 1 is never lost (#64).
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.on_notification(Source::De1State, &[4, 5], 1_000);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 1_050);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(3_000), 1_300);
+        core.on_notification(Source::De1State, &[2, 0], 1_600); // Idle → deferred
+        let out = core.on_notification(Source::De1State, &[4, 5], 2_000); // new shot
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::ShotCompleted { .. })),
+            "starting a new shot flushes the deferred completion of the previous one",
         );
     }
 
