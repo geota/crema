@@ -36,6 +36,16 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+    # `/web` CI runs `pnpm install --frozen-lockfile` under a minimumReleaseAge
+    # supply-chain policy (~1 day) that rejects lockfile entries published inside
+    # the cutoff. This cooldown holds a bump until the deps it updates have aged
+    # past that window, cutting the red-on-first-run churn. CAVEAT: it applies to
+    # the deps dependabot bumps, NOT to daily-churning transitive browser-data
+    # packages (browserslist / electron-to-chromium / baseline-browser-mapping)
+    # that get re-resolved into the lockfile — those can still trip the policy;
+    # a re-run / `@dependabot rebase` clears them once they age out.
+    cooldown:
+      default-days: 7
     groups:
       npm-minor-patch:
         patterns: ["*"]
@@ -78,3 +88,10 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+    ignore:
+      # `dtolnay/rust-toolchain` uses its git tag AS the Rust toolchain to
+      # install, so dependabot can bump the pin to a far-future tag (e.g.
+      # 1.100.0) that maps to a Rust release that does not exist yet — then
+      # `rustup toolchain install` 404s and both the rust and web(wasm) jobs
+      # fail (PR #68). Bump this action deliberately/manually instead.
+      - dependency-name: dtolnay/rust-toolchain
