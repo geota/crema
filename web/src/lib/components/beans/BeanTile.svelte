@@ -30,6 +30,7 @@
 	 */
 	import {
 		daysOffRoast,
+		beanDaysOffRoast,
 		roastBand5,
 		roasterMarkTone,
 		beanFreshness,
@@ -81,7 +82,7 @@
 
 	const mt = $derived(roasterMarkTone(roaster));
 
-	const days = $derived(daysOffRoast(bean.roastedOn));
+	const days = $derived(beanDaysOffRoast(bean));
 	const freshness = $derived(beanFreshness(bean));
 	const freshColor = $derived(freshnessColor(freshness));
 

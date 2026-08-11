@@ -19,7 +19,7 @@
 	 * Sort: most-recently-updated bag first — same default the brew
 	 * page's library page uses for the bags tab.
 	 */
-	import { getBeanStore, daysOffRoast, type Bean, type Roaster } from '$lib/bean';
+	import { getBeanStore, beanDaysOffRoast, type Bean, type Roaster } from '$lib/bean';
 
 	let {
 		currentBeanId,
@@ -81,7 +81,7 @@
 		const parts: string[] = [];
 		const r = b.roasterId ? library.getRoaster(b.roasterId) : null;
 		if (r?.name) parts.push(r.name);
-		const days = daysOffRoast(b.roastedOn);
+		const days = beanDaysOffRoast(b);
 		if (days != null) parts.push(`${days}d off roast`);
 		return parts.join(' · ');
 	}

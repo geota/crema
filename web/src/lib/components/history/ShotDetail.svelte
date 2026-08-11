@@ -45,10 +45,14 @@
 	import BeanPicker from './BeanPicker.svelte';
 	import HeaderBlock from '$lib/components/brew/HeaderBlock.svelte';
 	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
+	import { requestDialIn } from '$lib/components/brew/dial-in.svelte';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 
 	let {
 		shot,
 		onNotesChange,
+		onNextPlanChange,
 		onRatingChange,
 		onPrivacyChange,
 		onGrinderModelChange,
@@ -63,6 +67,8 @@
 		shot: StoredShot;
 		/** Persist edited tasting notes. */
 		onNotesChange: (notes: string) => void;
+		/** Persist the edited forward-looking "next time" plan. */
+		onNextPlanChange: (nextPlan: string) => void;
 		/** Persist an edited star rating. */
 		onRatingChange: (rating: number) => void;
 		/**
@@ -327,6 +333,22 @@
 		editing = false;
 	}
 
+	// ── "Next time" plan — same edit pattern as the notes block.
+	/** Whether the plan block is in edit mode. */
+	let planEditing = $state(false);
+	/** The draft plan text while editing. */
+	let planDraft = $state('');
+	/** Open the plan editor, seeding the draft from the current plan. */
+	function startPlanEdit(): void {
+		planDraft = shot.metadata.nextPlan ?? '';
+		planEditing = true;
+	}
+	/** Save the draft plan and leave edit mode. */
+	function savePlan(): void {
+		onNextPlanChange(planDraft);
+		planEditing = false;
+	}
+
 	/** Current star rating (0..5); coerce undefined/null to 0. */
 	const rating = $derived(shot.metadata.rating ?? 0);
 	/** Set the star rating (clicking the same star again clears it). */
@@ -450,6 +472,18 @@
 		void app.syncActiveProfile(profile, {});
 	}
 
+	/**
+	 * The full "clone this shot's setup" path: record the shot in the
+	 * dial-in mailbox and land on Brew, where `BrewDashboard.applyDialIn`
+	 * activates the shot's bag, reloads its profile, and prefills grind,
+	 * dose and the persisted dial targets. Load-into-brew — no duplicate
+	 * history record is created.
+	 */
+	function startFromShot(): void {
+		requestDialIn(shot);
+		void goto(resolve('/'));
+	}
+
 	// Save-as-profile needs a curve-to-profile deriver (not the same as the
 	// v2 profile importer); deferred.
 	function saveAsProfile(): void {
@@ -534,17 +568,24 @@
 					}
 				]}
 			/>
-			<!-- Load on Brew leads; Save-as-profile / the Visualizer actions
-			     ride its menu — the header blocks need the room (issue #16
-			     round 4). -->
+			<!-- Start-from-this-shot leads (the full dial-in: profile + bean +
+			     grind + targets); the profile-only reload and Save-as-profile /
+			     the Visualizer actions ride its menu — the header blocks need
+			     the room (issue #16 round 4). -->
 			<SplitButton
 				icon="ph ph-coffee"
-				label="Load on Brew"
-				title="Reload this shot's profile on the Brew page"
-				onPrimary={loadOnBrew}
+				label="Start from this shot"
+				title="Prefill the Brew page from this shot — profile, bean, grind and targets"
+				onPrimary={startFromShot}
 				caretAriaLabel="More shot actions"
 				menuHead="Shot actions"
 				items={[
+					{
+						icon: 'ph-duotone ph-arrow-counter-clockwise',
+						title: 'Load profile only',
+						sub: "Reload this shot's profile, nothing else.",
+						onclick: loadOnBrew
+					},
 					{
 						icon: 'ph-duotone ph-bookmark-simple',
 						title: 'Save as profile',
@@ -811,6 +852,36 @@
 		{:else}
 			<div class="hi-notes-body" class:is-empty={!shot.metadata.notes}>
 				{shot.metadata.notes || 'No notes for this shot yet.'}
+			</div>
+		{/if}
+	</div>
+
+	<!-- Next time — the forward-looking dial-in plan. Same edit pattern
+	     as the notes block; surfaces on the Brew dial-in card when this
+	     bag is next selected. -->
+	<div class="hi-notes">
+		<div class="hi-notes-head">
+			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Next time</span>
+			{#if planEditing}
+				<button class="hi-notes-edit" onclick={savePlan}>
+					<CheckIcon aria-hidden="true" /> Save
+				</button>
+			{:else}
+				<button class="hi-notes-edit" onclick={startPlanEdit}>
+					<PencilSimpleIcon aria-hidden="true" /> Edit
+				</button>
+			{/if}
+		</div>
+		{#if planEditing}
+			<textarea
+				class="hi-notes-input"
+				bind:value={planDraft}
+				placeholder="What will you change next shot? (e.g. go finer, +2 g yield)"
+				rows="3"
+			></textarea>
+		{:else}
+			<div class="hi-notes-body" class:is-empty={!shot.metadata.nextPlan}>
+				{shot.metadata.nextPlan || 'No plan yet — jot what to change next time.'}
 			</div>
 		{/if}
 	</div>

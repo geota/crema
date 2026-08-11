@@ -201,6 +201,13 @@ export interface ShotMetadata {
 	grinderSetting?: string | null;
 	/** Free-form tasting notes. Editable. */
 	notes?: string | null;
+	/**
+	 * Forward-looking dial-in plan — what to change on the *next* shot
+	 * ("go finer, +2 drops"). Kept apart from `notes` (how this shot
+	 * tasted) so the brew screen can surface it when the bag is next
+	 * selected. Local workflow state: not uploaded to Visualizer. Editable.
+	 */
+	nextPlan?: string | null;
 	/** Personal rating, 0..5. `0` means unrated. Editable. */
 	rating?: number | null;
 	/** Total dissolved solids in the beverage, percent. */

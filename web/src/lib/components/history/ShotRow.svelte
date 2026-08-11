@@ -98,6 +98,17 @@
 
 	/** Star rating (0..5); coerce undefined/null to 0 (unrated). */
 	const rating = $derived(shot.metadata.rating ?? 0);
+
+	/**
+	 * One glance-able line of text: the forward-looking plan when set
+	 * (what to do next time — the most actionable thing a row can say),
+	 * else the tasting notes. Empty → the line is omitted entirely so
+	 * untouched rows keep today's exact layout.
+	 */
+	const noteSnippet = $derived.by(() => {
+		const text = shot.metadata.nextPlan?.trim() || shot.metadata.notes?.trim() || '';
+		return text.replace(/\s+/g, ' ');
+	});
 </script>
 
 <button
@@ -123,6 +134,9 @@
 	<div class="hi-row-main">
 		<div class="hi-row-name">{shot.profileName ?? 'Untitled shot'}</div>
 		<div class="hi-row-bean">{rowBeanLine}</div>
+		{#if noteSnippet}
+			<div class="hi-row-note">{noteSnippet}</div>
+		{/if}
 	</div>
 	<div class="hi-row-metric">
 		<div class="hi-row-metric-val">{ratioLabel(shot)}</div>
@@ -236,6 +250,15 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 		color: rgba(var(--tint-rgb), 0.5);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.hi-row-note {
+		font-family: var(--font-sans);
+		font-size: 11px;
+		font-style: italic;
+		color: rgba(var(--tint-rgb), 0.65);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;

@@ -6,7 +6,7 @@
 		group_at_temperature as wasmGroupAtTemperature,
 	} from '$lib/wasm/de1_wasm';
 	import type { ModeTargetInputs, ModeTargets } from '$lib/core/crema-core';
-	import { untrack } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import Icon from '$lib/icons/Icon.svelte';
 	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
 	/**
@@ -56,7 +56,7 @@
 	import {
 		getBeanStore,
 		roasterMarkTone,
-		daysOffRoast,
+		beanDaysOffRoast,
 		roastBand,
 		beanFreshness,
 		freshnessColor,
@@ -78,6 +78,9 @@
 	import ChartModal from '$lib/components/shared/ChartModal.svelte';
 	import QuickSheet from './QuickSheet.svelte';
 	import LastShotCard from './LastShotCard.svelte';
+	import DialInCard from './DialInCard.svelte';
+	import { takePendingDialIn } from './dial-in.svelte';
+	import { getHistoryStore, effectiveGrindSetting, type StoredShot } from '$lib/history';
 	import PowerButton from '$lib/components/PowerButton.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -669,6 +672,81 @@
 	/** Show the Last-shot card once a shot has finished, until the next starts. */
 	const showLastShot = $derived(lastShot !== null && !ui.shotInProgress);
 
+	// ── Dial-in card — "pick up where you left off" for the active bag ──
+	const historyStore = getHistoryStore();
+	/**
+	 * The active bag's most recent stored shot — the dial-in card's source.
+	 * The history store is newest-first, so `find` is the latest match;
+	 * shots are matched by the frozen bean snapshot's id, same as the
+	 * bean drawer's per-bag shot list.
+	 */
+	const lastBeanShot = $derived.by<StoredShot | null>(() => {
+		const beanId = beanLibrary.activeBeanId;
+		if (!beanId) return null;
+		return historyStore.all.find((s) => s.bean?.beanId === beanId) ?? null;
+	});
+	/**
+	 * Show the dial-in card when idle — but yield to the session Last-shot
+	 * card right after a pull, so the same shot is never described twice.
+	 */
+	const showDialIn = $derived(!ui.shotInProgress && !showLastShot && lastBeanShot !== null);
+
+	/**
+	 * Re-apply a stored shot's whole setup — the "start from this shot" /
+	 * "use these settings" action (load-into-brew; no history record is
+	 * created). Order matters: bag + profile first (each re-seeds the
+	 * Quick Sheet), one `tick` to let those re-seeds flush, then the
+	 * shot's own dial values on top so they win.
+	 */
+	async function applyDialIn(shot: StoredShot): Promise<void> {
+		// 1. The bag: re-activate the shot's bean while it exists un-archived.
+		const beanId = shot.bean?.beanId ?? null;
+		const liveBean = beanId ? beanLibrary.getBean(beanId) : null;
+		if (liveBean && liveBean.archivedAt == null && beanLibrary.activeBeanId !== liveBean.id) {
+			activateBean(liveBean.id, { shotInProgress: ui.shotInProgress });
+		}
+		// 2. The profile — by name; `profileName` is all a shot persists.
+		if (shot.profileName) {
+			const profile = profileStore.all.find((pr) => pr.name === shot.profileName);
+			if (profile) {
+				profileStore.setActive(profile.id);
+				void app?.syncActiveProfile(profile, {});
+			} else {
+				toast.info(
+					`Profile "${shot.profileName}" was renamed or deleted since this shot; loaded the rest.`
+				);
+			}
+		}
+		// 3. Lay the shot's recorded dial on top of the fresh seeds.
+		await tick();
+		const grindRaw = effectiveGrindSetting(shot)?.replace(',', '.');
+		const grind = grindRaw ? Number.parseFloat(grindRaw) : NaN;
+		if (Number.isFinite(grind)) params.set('grind', grind);
+		if (shot.metadata.dose != null) params.set('dose', shot.metadata.dose);
+		if (shot.yieldTarget != null) params.set('yield', shot.yieldTarget);
+		if (shot.brewTempTarget != null) params.set('brewTemp', shot.brewTempTarget);
+		if (shot.preinfuseTarget != null) params.set('preinf', shot.preinfuseTarget);
+		// SAW / auto-tare ride Settings, same as the Quick Sheet toggles.
+		if (shot.stopOnWeight != null && shot.stopOnWeight !== prefs.stopOnWeight) {
+			settings.set('stopOnWeight', shot.stopOnWeight);
+			void app?.applyStopOnWeight(shot.stopOnWeight);
+		}
+		if (shot.autoTare != null && shot.autoTare !== prefs.autoTareOnShotStart) {
+			settings.set('autoTareOnShotStart', shot.autoTare);
+			void app?.applyAutoTare(shot.autoTare);
+		}
+		toast.success(
+			`Dialed in from the ${new Date(shot.completedAt).toLocaleDateString()} shot`
+		);
+	}
+
+	// Consume a "start from this shot" hand-off from /history (the mailbox
+	// is one-shot, so a plain visit to Brew never replays a stale request).
+	onMount(() => {
+		const pendingShot = takePendingDialIn();
+		if (pendingShot) void applyDialIn(pendingShot);
+	});
+
 	/** A human phase caption for the timer, from the core's shot phase. */
 	const phaseLabel = $derived.by(() => {
 		if (!ui.shotInProgress) return 'Ready';
@@ -1050,7 +1128,7 @@
 		return band ? band[0].toUpperCase() + band.slice(1) : null;
 	});
 	const headerBeanDaysOff = $derived(
-		beanLibrary.activeBean ? daysOffRoast(beanLibrary.activeBean.roastedOn) : null
+		beanLibrary.activeBean ? beanDaysOffRoast(beanLibrary.activeBean) : null
 	);
 	const headerFreshLabel = $derived(
 		headerBeanDaysOff != null ? `${headerBeanDaysOff}d off roast` : null
@@ -1451,6 +1529,12 @@
 						{/if}
 						{#if showLastShot && lastShot}
 							<LastShotCard shot={lastShot} dose={p.dose} stopReason={ui.lastStopReason} />
+						{:else if showDialIn && lastBeanShot}
+							<DialInCard
+								shot={lastBeanShot}
+								onStart={(s) => void applyDialIn(s)}
+								onOpen={(s) => void goto(resolve(`/history?shot=${encodeURIComponent(s.id)}`))}
+							/>
 						{/if}
 					{/if}
 				</div>

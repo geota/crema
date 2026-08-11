@@ -1052,6 +1052,9 @@
 		}}
 		onToggleArchived={toggleArchived}
 		onToggleFavourite={toggleFavourite}
+		onOpenShot={(shotId) => void goto(resolve(`/history?shot=${encodeURIComponent(shotId)}`))}
+		onSeeAllShots={() =>
+			void goto(resolve(`/history?bean=${encodeURIComponent(drawerBean?.id ?? '')}`))}
 	/>
 {/if}
 

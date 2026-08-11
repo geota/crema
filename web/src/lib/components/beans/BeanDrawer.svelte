@@ -19,6 +19,7 @@
 	 */
 	import {
 		daysOffRoast,
+		beanDaysOffRoast,
 		roastBand5,
 		roasterMarkTone,
 		beanFreshness,
@@ -26,7 +27,7 @@
 		type Bean,
 		type Roaster
 	} from '$lib/bean';
-	import { getHistoryStore } from '$lib/history';
+	import { getHistoryStore, effectiveGrindSetting, yieldOf } from '$lib/history';
 	import { getProfileStore } from '$lib/profiles';
 	import BeanImage from './BeanImage.svelte';
 	import BeanPhotoViewer from './BeanPhotoViewer.svelte';
@@ -41,7 +42,9 @@
 		onSetActive,
 		onEdit,
 		onToggleArchived,
-		onToggleFavourite
+		onToggleFavourite,
+		onOpenShot,
+		onSeeAllShots
 	}: {
 		bean: Bean;
 		roaster: Roaster | null;
@@ -51,6 +54,10 @@
 		onEdit: (id: string) => void;
 		onToggleArchived: (id: string) => void;
 		onToggleFavourite: (id: string) => void;
+		/** Open one of this bag's shots in History (detail selected). */
+		onOpenShot: (shotId: string) => void;
+		/** Open History filtered to this bag ("See all N shots"). */
+		onSeeAllShots: () => void;
 	} = $props();
 
 	const history = getHistoryStore();
@@ -72,7 +79,7 @@
 	let photoOpen = $state(false);
 
 	const mt = $derived(roasterMarkTone(roaster));
-	const days = $derived(daysOffRoast(bean.roastedOn));
+	const days = $derived(beanDaysOffRoast(bean));
 	const freshness = $derived(beanFreshness(bean));
 	const freshColor = $derived(freshnessColor(freshness));
 	const freshLabel = $derived(
@@ -511,7 +518,14 @@
 						<div class="bn-shotrows">
 							{#each shotsWithThis.slice(0, 5) as s (s.id)}
 								{@const sRating = s.metadata.rating ?? 0}
-								<div class="bn-shotrow">
+								{@const sGrind = effectiveGrindSetting(s)}
+								{@const sYield = yieldOf(s)}
+								{@const sNote = s.metadata.nextPlan?.trim() || s.metadata.notes?.trim() || ''}
+								<button
+									class="bn-shotrow"
+									onclick={() => onOpenShot(s.id)}
+									title="Open this shot in History"
+								>
 									<div class="bn-shotrow-time">
 										{new Date(s.completedAt).toLocaleDateString(undefined, {
 											month: 'short',
@@ -520,13 +534,30 @@
 									</div>
 									<div class="bn-shotrow-meta">
 										<span class="bn-shotrow-profile">{s.profileName ?? '—'}</span>
+										<span class="bn-shotrow-dial">
+											{[
+												sGrind ? `Grind ${sGrind}` : null,
+												sYield != null ? `${sYield.toFixed(1)} g` : null,
+												`${Math.round(s.record.duration / 1000)} s`
+											]
+												.filter(Boolean)
+												.join(' · ')}
+										</span>
+										{#if sNote}
+											<span class="bn-shotrow-note">{sNote}</span>
+										{/if}
 									</div>
 									<div class="bn-shotrow-rating">
-											<StarRating rating={sRating} />
+										<StarRating rating={sRating} />
 									</div>
-								</div>
+								</button>
 							{/each}
 						</div>
+						{#if shotsWithThis.length > 5}
+							<button class="bn-shots-all" onclick={onSeeAllShots}>
+								See all {shotsWithThis.length} shots
+							</button>
+						{/if}
 					</div>
 				{/if}
 			</section>
@@ -1001,9 +1032,61 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 		border-top: 1px solid rgba(var(--tint-rgb), 0.05);
+		/* Row is a button now (tap-through to History) — keep the flat
+		   list look, gain focus/hover affordances. */
+		background: transparent;
+		border-left: 0;
+		border-right: 0;
+		border-bottom: 0;
+		width: 100%;
+		text-align: left;
+		cursor: pointer;
+		color: inherit;
+		border-radius: var(--radius-sm);
+		transition: background var(--dur-1) var(--ease);
+	}
+	.bn-shotrow:hover {
+		background: rgba(var(--tint-rgb), 0.06);
 	}
 	.bn-shotrow:first-child {
 		border-top: 0;
+	}
+	.bn-shotrow-meta {
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+		min-width: 0;
+	}
+	.bn-shotrow-dial {
+		color: rgba(var(--tint-rgb), 0.55);
+		font-size: 10px;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.bn-shotrow-note {
+		color: rgba(var(--tint-rgb), 0.65);
+		font-size: 10px;
+		font-style: italic;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.bn-shots-all {
+		margin-top: 6px;
+		background: transparent;
+		border: 1px solid rgba(var(--tint-rgb), 0.2);
+		border-radius: var(--radius-sm);
+		padding: 4px 10px;
+		font-family: var(--font-sans);
+		font-size: 10.5px;
+		font-weight: 600;
+		color: var(--fg-1);
+		cursor: pointer;
+		transition: background var(--dur-1) var(--ease);
+	}
+	.bn-shots-all:hover {
+		background: rgba(var(--tint-rgb), 0.08);
 	}
 	.bn-shotrow-time {
 		font-family: var(--font-mono);

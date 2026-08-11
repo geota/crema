@@ -259,6 +259,15 @@
 	}
 	onMount(() => {
 		void refreshConnected();
+		// Deep links: `?bean=<id>` scopes the list to one bag (the bean
+		// drawer's "See all N shots"), `?shot=<id>` pre-selects a shot
+		// (the Brew dial-in card's tap-through). Read once on mount —
+		// filters stay plain page state afterwards.
+		const url = new URL(window.location.href);
+		const beanParam = url.searchParams.get('bean');
+		if (beanParam) filterBean = beanParam;
+		const shotParam = url.searchParams.get('shot');
+		if (shotParam) selectedId = shotParam;
 	});
 	/** Pip kind for the per-row indicator. */
 	function pipFor(shot: { id: string; visualizerId?: string | null }): 'uploaded' | 'pending' | 'local' {
@@ -386,6 +395,13 @@
 	/** The active profile filter — `all` or a profile name. */
 	let filterProfile = $state('all');
 	/**
+	 * The active bean filter — `all` or a bean id, matched against the
+	 * shot's frozen bean-snapshot id. Single-select like the profile
+	 * filter; deep-linkable via `?bean=<id>` so the bean drawer's
+	 * "See all N shots" lands scoped to that bag.
+	 */
+	let filterBean = $state('all');
+	/**
 	 * Tags the user has pinned on. AND semantics (a shot matches when
 	 * every selected tag is in its `tags` array) — mirrors `/profiles`
 	 * and `/beans`. An empty list means "no tag filter applied".
@@ -403,6 +419,32 @@
 	const profilesInUse = $derived([
 		...new Set(shots.map((s) => s.profileName).filter((n): n is string => !!n))
 	]);
+
+	/**
+	 * Distinct beans across the history (by snapshot id), counted, for the
+	 * bean filter pills — the bag as a unit of history. The label prefers
+	 * the live library row's name (it may have been edited since) and
+	 * falls back to the frozen snapshot's, so archived and since-deleted
+	 * bags keep their shots reachable.
+	 */
+	const beansInUse = $derived.by(() => {
+		const m = new Map<string, { label: string; count: number }>();
+		for (const s of shots) {
+			const id = s.bean?.beanId;
+			if (!id) continue;
+			const entry = m.get(id);
+			if (entry) {
+				entry.count += 1;
+			} else {
+				const live = beanLibrary.getBean(id);
+				const label = live?.name.trim() || s.bean?.name?.trim() || 'Unnamed bag';
+				m.set(id, { label, count: 1 });
+			}
+		}
+		return [...m.entries()]
+			.map(([id, v]) => ({ id, ...v }))
+			.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+	});
 
 	/**
 	 * Distinct tags across the history, counted, sorted by frequency
@@ -458,6 +500,18 @@
 				selected: filterProfile === name
 			});
 		}
+		if (beansInUse.length > 0) {
+			items.push({ id: '__divbeans', divider: true });
+			items.push({ id: '__beans', groupLabel: 'Beans' });
+			for (const b of beansInUse) {
+				items.push({
+					id: `b:${b.id}`,
+					label: b.label,
+					count: b.count,
+					selected: filterBean === b.id
+				});
+			}
+		}
 		if (tagFacets.length > 0) {
 			items.push({ id: '__divtags', divider: true });
 			items.push({ id: '__tags', groupLabel: 'Tags' });
@@ -478,6 +532,10 @@
 		if (id.startsWith('p:')) {
 			const v = id.slice(2);
 			filterProfile = v === 'all' ? 'all' : v;
+		} else if (id.startsWith('b:')) {
+			// Single-select with re-click-to-clear, like the roast pills on /beans.
+			const v = id.slice(2);
+			filterBean = filterBean === v ? 'all' : v;
 		} else if (id.startsWith('t:')) {
 			const t = id.slice(2);
 			selectedTags = selectedTags.includes(t)
@@ -494,6 +552,7 @@
 		const base = shots.filter((s) => {
 			if (cutoff != null && s.completedAt < cutoff) return false;
 			if (filterProfile !== 'all' && s.profileName !== filterProfile) return false;
+			if (filterBean !== 'all' && s.bean?.beanId !== filterBean) return false;
 			// AND semantics — a shot must carry every selected tag.
 			// Pulls through `effectiveShotTags` so legacy / retroactive
 			// bean tags filter just like persisted shot tags.
@@ -507,6 +566,7 @@
 			return (
 				(s.profileName ?? '').toLowerCase().includes(query) ||
 				(s.metadata.notes ?? '').toLowerCase().includes(query) ||
+				(s.metadata.nextPlan ?? '').toLowerCase().includes(query) ||
 				effectiveShotTags(s).some((t) => t.toLowerCase().includes(query))
 			);
 		});
@@ -967,6 +1027,11 @@
 						onNotesChange={(notes) => {
 							store.setNotes(selected.id, notes);
 							syncEditToVisualizer(selected.id);
+						}}
+						onNextPlanChange={(nextPlan) => {
+							// Local-only workflow state — the exporter never sends
+							// it, so no Visualizer mirror.
+							store.setNextPlan(selected.id, nextPlan);
 						}}
 						onRatingChange={(rating) => {
 							store.setRating(selected.id, rating);

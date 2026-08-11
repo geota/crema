@@ -262,6 +262,7 @@ export class HistoryStore {
 			yieldOut: completion.finalWeight ?? null,
 			rating: null,
 			notes: null,
+			nextPlan: null,
 			// Same number formatting as the history grind stepper's commit.
 			...(completion.grindSetting != null
 				? {
@@ -309,6 +310,25 @@ export class HistoryStore {
 		this.shots = [
 			...this.shots.slice(0, idx),
 			{ ...target, metadata: { ...target.metadata, notes } },
+			...this.shots.slice(idx + 1)
+		];
+		this.persist();
+	}
+
+	/**
+	 * Update a shot's forward-looking "next time" plan and persist.
+	 * Mirrors {@link setNotes}: a thin replace-and-persist. An empty
+	 * trimmed string clears the plan (stored as `null`) so the brew
+	 * screen's dial-in card doesn't render blank text.
+	 */
+	setNextPlan(id: string, nextPlan: string): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		const target = this.shots[idx];
+		const value = nextPlan.trim() === '' ? null : nextPlan;
+		this.shots = [
+			...this.shots.slice(0, idx),
+			{ ...target, metadata: { ...target.metadata, nextPlan: value } },
 			...this.shots.slice(idx + 1)
 		];
 		this.persist();

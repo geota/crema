@@ -332,7 +332,8 @@ export function bagState(bean: Bean): BagState {
 /**
  * Whole days between a `yyyy-mm-dd` roast date and `asOf` (default: now).
  * Returns `null` when no roast date is set; clamped at `0` so a future-dated
- * roast never reads negative.
+ * roast never reads negative. A plain calendar diff — for a bag's roast age
+ * use {@link beanDaysOffRoast}, which pauses the count while frozen.
  */
 export function daysOffRoast(
 	roastedOn: string | null,
@@ -340,7 +341,29 @@ export function daysOffRoast(
 ): number | null {
 	if (!roastedOn) return null;
 	const nowMs = asOf instanceof Date ? asOf.getTime() : asOf;
-	const days = wasmDaysOffRoast(roastedOn, nowMs);
+	const days = wasmDaysOffRoast(roastedOn, null, null, nowMs);
+	return days == null ? null : days;
+}
+
+/**
+ * A bag's days off roast with the core's freeze-pause: days spent frozen
+ * don't age the bag (still frozen → the count stops at `frozenOn`; thawed →
+ * the frozen span is subtracted). Use this wherever the number describes a
+ * *bag* rather than a bare date — it is what makes the day count agree with
+ * the "frozen" pip sitting next to it.
+ */
+export function beanDaysOffRoast(
+	bean: Pick<Bean, 'roastedOn'> & Partial<Pick<Bean, 'frozenOn' | 'defrostedOn'>>,
+	asOf: number | Date = Date.now()
+): number | null {
+	if (!bean.roastedOn) return null;
+	const nowMs = asOf instanceof Date ? asOf.getTime() : asOf;
+	const days = wasmDaysOffRoast(
+		bean.roastedOn,
+		bean.frozenOn ?? null,
+		bean.defrostedOn ?? null,
+		nowMs
+	);
 	return days == null ? null : days;
 }
 
@@ -371,7 +394,8 @@ export function beanFreshness(
 	bean: Pick<Bean, 'roastLevel' | 'roastedOn'> & Partial<Pick<Bean, 'frozenOn' | 'defrostedOn'>>
 ): Freshness | 'frozen' | null {
 	if (bean.frozenOn && !bean.defrostedOn) return 'frozen';
-	const days = daysOffRoast(bean.roastedOn);
+	// Freeze-aware: a defrosted bag's frozen span doesn't count against it.
+	const days = beanDaysOffRoast(bean);
 	if (days == null) return null;
 	return roastFreshness(roastBand(bean.roastLevel) ?? 'medium', days);
 }
@@ -413,7 +437,7 @@ export function beanDisplaySummary(
 	else if (country) parts.push(country);
 	const roasterName = roaster?.name.trim();
 	if (roasterName) parts.push(roasterName);
-	const days = daysOffRoast(bean.roastedOn, asOf);
+	const days = beanDaysOffRoast(bean, asOf);
 	if (days != null) parts.push(`${days}d off roast`);
 	return parts.join(' · ');
 }
