@@ -130,6 +130,8 @@
 		newRoasters: Roaster[];
 		newShots: PreparedShot[];
 		duplicatesSkipped: number;
+		/** Shots already in history (same completed-at + bean — a re-import). */
+		shotDuplicatesSkipped: number;
 		droppedCategories: string[];
 		nonEspressoBrewsSkipped: number;
 		brewsDanglingPreparation: number;
@@ -439,10 +441,15 @@
 	 *     pointer because we filter the duplicate-name roaster out
 	 *     of `newRoasters`.
 	 *
-	 * Shots are not dedup'd — their UUID makes them unique by
-	 * construction. (Could be tightened by a `beanconquerorId`
-	 * snapshot on `StoredShot` in a follow-up if users start
-	 * re-importing the same history.)
+	 * Shots ARE dedup'd (bean-workflow-unify issue 08, Android parity):
+	 * our own shot ids are minted per import, but a BC brew's
+	 * unix-second timestamp is stable across exports, so
+	 * (completedAt, bean name) identifies a row — a re-imported .zip
+	 * adds only what a previous run didn't land. Shots of a bean that
+	 * was itself dedup'd re-point at the surviving library bean via
+	 * `beanIdRemap` (BC-uuid dupes keep the same stable `bean:<uuid>`
+	 * id; the remap matters for the (roaster, name, roastedOn)
+	 * triple-dupes, whose library row has a Crema-minted id).
 	 */
 	function buildPreview(plan: CorePlan, filename: string): Preview {
 		const wireBeans = plan.beans;
@@ -452,9 +459,9 @@
 		for (const r of library.roasters) {
 			existingRoasterByLc.set(r.name.trim().toLowerCase(), r);
 		}
-		const existingBeanconquerorIds = new Set<string>();
+		const existingBeanByBcId = new Map<string, Bean>();
 		for (const b of library.beans) {
-			if (b.beanconquerorId) existingBeanconquerorIds.add(b.beanconquerorId);
+			if (b.beanconquerorId) existingBeanByBcId.set(b.beanconquerorId, b);
 		}
 
 		// Build a roaster lookup from the wire beans' BC-side ids so we
@@ -464,6 +471,9 @@
 
 		const newBeans: Bean[] = [];
 		let duplicatesSkipped = 0;
+		// Wire bean id → the id a shot should reference after dedupe, so a
+		// skipped bean's shots still link to the surviving library row.
+		const beanIdRemap = new Map<string, string>();
 		// Roasters that ended up referenced by a kept bean — we'll
 		// emit only these in `newRoasters` (dropping any name-collision
 		// roaster and rewriting the bean's pointer to the live one).
@@ -472,10 +482,11 @@
 			// Resumability: same BC uuid as a bean already in the library
 			// → skip. This lets a re-import of the same .zip pick up
 			// where a previous run left off without producing duplicates.
-			if (
-				bean.beanconquerorId &&
-				existingBeanconquerorIds.has(bean.beanconquerorId)
-			) {
+			const priorImport = bean.beanconquerorId
+				? existingBeanByBcId.get(bean.beanconquerorId)
+				: undefined;
+			if (priorImport) {
+				beanIdRemap.set(bean.id, priorImport.id);
 				duplicatesSkipped += 1;
 				continue;
 			}
@@ -499,17 +510,19 @@
 			}
 
 			// Soft dedup: same (roaster, name, roastedOn) triple as a
-			// library bean → skip. Catches hand-entered Crema beans
+			// library bean → skip, re-pointing its shots at the existing
+			// (Crema-minted-id) row. Catches hand-entered Crema beans
 			// that match a BC import.
-			const isTripleDupe =
-				libRoaster &&
-				library.beans.some(
-					(existing) =>
-						existing.roasterId === libRoaster.id &&
-						existing.name.trim().toLowerCase() === bean.name.trim().toLowerCase() &&
-						(existing.roastedOn ?? null) === (bean.roastedOn ?? null)
-				);
-			if (isTripleDupe) {
+			const tripleDupe = libRoaster
+				? library.beans.find(
+						(existing) =>
+							existing.roasterId === libRoaster.id &&
+							existing.name.trim().toLowerCase() === bean.name.trim().toLowerCase() &&
+							(existing.roastedOn ?? null) === (bean.roastedOn ?? null)
+					)
+				: undefined;
+			if (tripleDupe) {
+				beanIdRemap.set(bean.id, tripleDupe.id);
 				duplicatesSkipped += 1;
 				continue;
 			}
@@ -519,9 +532,26 @@
 
 		const newRoasters = wireRoasters.filter((r) => keptNewRoasterIds.has(r.id));
 
-		const newShots: PreparedShot[] = plan.shots.map((imp) => ({
-			shot: prepareShot(imp)
-		}));
+		// Shots — skip rows already in history (a re-imported .zip), keyed
+		// by the stable BC brew timestamp + bean name; the set grows as we
+		// keep, so an export with two identical rows can't double-land
+		// either. Mirrors the Android `buildImportedShots` dedupe.
+		const existingShotKeys = new Set(
+			history.all.map(
+				(s) => `${s.completedAt}·${(s.bean?.name ?? '').trim().toLowerCase()}`
+			)
+		);
+		let shotDuplicatesSkipped = 0;
+		const newShots: PreparedShot[] = [];
+		for (const imp of plan.shots) {
+			const key = `${imp.storedShot.completedAt}·${imp.beanName.trim().toLowerCase()}`;
+			if (existingShotKeys.has(key)) {
+				shotDuplicatesSkipped += 1;
+				continue;
+			}
+			existingShotKeys.add(key);
+			newShots.push({ shot: prepareShot(imp, beanIdRemap) });
+		}
 
 		const droppedCategories = plan.diagnostics.droppedBeanCategories
 			.filter((entry) => entry[1] > 0)
@@ -544,6 +574,7 @@
 			newRoasters,
 			newShots,
 			duplicatesSkipped,
+			shotDuplicatesSkipped,
 			droppedCategories,
 			nonEspressoBrewsSkipped: plan.diagnostics.nonEspressoBrewsSkipped,
 			brewsDanglingPreparation: plan.diagnostics.brewsDanglingPreparation,
@@ -575,10 +606,12 @@
 	 * metadata all come through so a History row renders without needing
 	 * the wasm result again.
 	 */
-	function prepareShot(imp: CoreImportedShot): StoredShot {
+	function prepareShot(imp: CoreImportedShot, beanIdRemap: Map<string, string>): StoredShot {
 		const bean: ShotBean | null = imp.beanName
 			? {
-					beanId: imp.beanId,
+					// Through the dedupe remap: a skipped bean's shots link to
+					// the surviving library row, not the dropped wire one.
+					beanId: imp.beanId ? beanIdRemap.get(imp.beanId) ?? imp.beanId : imp.beanId,
 					name: imp.beanName,
 					roasterName: imp.roasterName ?? null,
 					roastedOn: imp.roastedOn,
@@ -844,6 +877,12 @@
 				<div class="bd-stat">
 					<div class="bd-stat-n">{preview.duplicatesSkipped}</div>
 					<div class="bd-stat-label">skipped (duplicates)</div>
+				</div>
+			{/if}
+			{#if preview.shotDuplicatesSkipped > 0}
+				<div class="bd-stat">
+					<div class="bd-stat-n">{preview.shotDuplicatesSkipped}</div>
+					<div class="bd-stat-label">shots already imported</div>
 				</div>
 			{/if}
 		</div>
