@@ -132,8 +132,11 @@
 	function matchesStatus(b: Bean, f: StatusFilter): boolean {
 		const state = bagState(b);
 		switch (f) {
+			// "All" and "Favourite" exclude archived bags (Android parity):
+			// archiving exists to keep the working list clean, and the
+			// Archived chip stays the dedicated view for finished bags.
 			case 'all':
-				return true;
+				return state !== 'archived';
 			case 'active':
 				return state === 'active';
 			case 'frozen':
@@ -141,9 +144,9 @@
 			case 'archived':
 				return state === 'archived';
 			case 'favourite':
-				return b.favourite;
+				return b.favourite && state !== 'archived';
 			default:
-				return true;
+				return state !== 'archived';
 		}
 	}
 
@@ -232,12 +235,14 @@
 	const counts = $derived.by(() => {
 		const c = { all: 0, active: 0, frozen: 0, archived: 0, favourite: 0 };
 		for (const b of allBeans) {
-			c.all += 1;
+			// Keep the badges in lockstep with `matchesStatus`: archived
+			// bags count only under their own chip.
 			const s = bagState(b);
+			if (s !== 'archived') c.all += 1;
 			if (s === 'active') c.active += 1;
 			if (s === 'frozen') c.frozen += 1;
 			if (s === 'archived') c.archived += 1;
-			if (b.favourite) c.favourite += 1;
+			if (b.favourite && s !== 'archived') c.favourite += 1;
 		}
 		return c;
 	});
