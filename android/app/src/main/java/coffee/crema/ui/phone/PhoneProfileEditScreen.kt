@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -108,6 +109,7 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
         }
     }
     var openPhase by remember(profile.id) { mutableStateOf(-1) }
+    val tagPending = remember(profile.id) { mutableStateOf("") }
 
     Scaffold(
         topBar = {
@@ -117,6 +119,7 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 saveEnabled = name.isNotBlank(),
                 onCancel = back,
                 onSave = {
+                    commitPendingTag(tags, tagPending)
                     vm.saveProfile(
                         id = profile.id,
                         name = name,
@@ -265,7 +268,7 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             EdGroup("Tags & options") {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Tags", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    PhoneTagChips(tags)
+                    PhoneTagChips(tags, tagPending)
                 }
                 EdRow("Pin to favourites", sub = "Shows in the Brew swap dropdown") {
                     CremaSwitch(pinned, { pinned = it })
@@ -550,12 +553,24 @@ internal fun OptionalField(
 
 // (EdStepper removed — phone editors route through CremaStepper / BareCompact.)
 
-/** Input-chip tag row + inline add (phone editors). */
+/** Input-chip tag row + inline add (phone editors). Commits on IME Done and
+ *  focus loss; the draft lives in [pending] so the editor's Save can commit an
+ *  uncommitted tag too (geota/crema#73). */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun PhoneTagChips(tags: androidx.compose.runtime.snapshots.SnapshotStateList<String>) {
+internal fun PhoneTagChips(
+    tags: androidx.compose.runtime.snapshots.SnapshotStateList<String>,
+    pending: MutableState<String>,
+) {
     var adding by remember { mutableStateOf(false) }
-    var draft by remember { mutableStateOf("") }
+    var draft by pending
+    var wasFocused by remember { mutableStateOf(false) }
+
+    fun commit() {
+        commitPendingTag(tags, pending)
+        adding = false
+        wasFocused = false
+    }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         tags.forEach { tag ->
             Surface(
@@ -584,15 +599,16 @@ internal fun PhoneTagChips(tags: androidx.compose.runtime.snapshots.SnapshotStat
                 textStyle = MaterialTheme.typography.labelMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
-                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = {
-                    draft.trim().takeIf { it.isNotEmpty() && it !in tags }?.let { tags.add(it) }
-                    draft = ""; adding = false
-                }),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { commit() }),
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
                     .background(MaterialTheme.colorScheme.surfaceContainerHighest)
                     .padding(horizontal = 12.dp, vertical = 8.dp)
-                    .widthIn(min = 60.dp, max = 140.dp),
+                    .widthIn(min = 60.dp, max = 140.dp)
+                    .onFocusChanged { fs ->
+                        if (fs.isFocused) wasFocused = true
+                        else if (wasFocused) commit()
+                    },
             )
         } else {
             Surface(

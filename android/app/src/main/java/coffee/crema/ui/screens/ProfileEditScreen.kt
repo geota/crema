@@ -34,6 +34,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -91,6 +92,7 @@ import coffee.crema.ui.theme.JetBrainsMono
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.SegOption
+import coffee.crema.ui.components.commitPendingTag
 import kotlin.math.roundToInt
 
 /*
@@ -141,6 +143,7 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     val tags = remember(profile.id) {
         mutableStateListOf<String>().apply { addAll(profile.tags.filterNot { it.equals("Built-in", ignoreCase = true) }) }
     }
+    val tagPending = remember(profile.id) { mutableStateOf("") }
     var pinned by remember(profile.id) { mutableStateOf(profile.pinned) }
     var notes by remember(profile.id) { mutableStateOf(profile.notes) }
     var author by remember(profile.id) { mutableStateOf(profile.author) }
@@ -178,6 +181,7 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             )
             CremaButton(
                 onClick = {
+                    commitPendingTag(tags, tagPending)
                     vm.saveProfile(
                         id = profile.id,
                         name = name,
@@ -269,7 +273,7 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                             }
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Eyebrow("Tags")
-                                TagChips(tags)
+                                TagChips(tags, tagPending)
                             }
                         }
                         // Roast + Beverage type share a full-width line.
@@ -685,18 +689,18 @@ private fun MiniSegmented(options: List<SegOption>, value: String, onChange: (St
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TagChips(tags: SnapshotStateList<String>) {
+private fun TagChips(tags: SnapshotStateList<String>, pending: MutableState<String>) {
     var adding by remember { mutableStateOf(false) }
-    var draft by remember { mutableStateOf("") }
+    var draft by pending
     var wasFocused by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     val copper = MaterialTheme.colorScheme.primary
     val tint = MaterialTheme.colorScheme.onSurface
 
+    // Draft lives in [pending] so the editor's Save can commit an
+    // uncommitted tag too (geota/crema#73).
     fun commit() {
-        val t = draft.trim()
-        if (t.isNotEmpty() && tags.none { it.equals(t, ignoreCase = true) }) tags.add(t)
-        draft = ""
+        commitPendingTag(tags, pending)
         adding = false
         wasFocused = false
     }

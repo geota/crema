@@ -61,6 +61,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var name by remember(bean.id) { mutableStateOf(bean.name) }
     var roaster by remember(bean.id) { mutableStateOf(roasterName0) }
     val tags = remember(bean.id) { mutableStateListOf<String>().apply { addAll(bean.tags.orEmpty()) } }
+    val tagPending = remember(bean.id) { mutableStateOf("") }
     var active by remember(bean.id) { mutableStateOf(bean.id == ui.activeBeanId) }
     var pinned by remember(bean.id) { mutableStateOf(bean.favourite == true) }
     var decaf by remember(bean.id) { mutableStateOf(bean.decaf == true) }
@@ -99,6 +100,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     val datesValid = roasted.isBlank() || opened.isBlank() || opened >= roasted
 
     val save: () -> Unit = {
+        commitPendingTag(tags, tagPending)
         vm.updateBean(bean.id, roaster) { b ->
             applyBeanEdits(b, BeanDraft(
                 name = name, roast = roast, mixSel = mixSel, roastTypeSel = roastTypeSel,
@@ -169,7 +171,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Tags", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    PhoneTagChips(tags)
+                    PhoneTagChips(tags, tagPending)
                 }
                 EdRow("Active bean", sub = "Selected on Brew") { CremaSwitch(active, { active = it }) }
                 EdRow("Favourite", sub = "Star in the library") { CremaSwitch(pinned, { pinned = it }) }

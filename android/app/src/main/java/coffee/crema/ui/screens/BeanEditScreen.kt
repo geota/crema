@@ -33,6 +33,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -73,6 +75,7 @@ import coffee.crema.ui.components.CremaTextField
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.SegOption
+import coffee.crema.ui.components.commitPendingTag
 import coffee.crema.ui.theme.JetBrainsMono
 
 /*
@@ -112,6 +115,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var name by remember(bean.id) { mutableStateOf(bean.name) }
     var roaster by remember(bean.id) { mutableStateOf(roasterName0) }
     val tags = remember(bean.id) { mutableStateListOf<String>().apply { addAll(bean.tags.orEmpty()) } }
+    val tagPending = remember(bean.id) { mutableStateOf("") }
     var active by remember(bean.id) { mutableStateOf(bean.id == ui.activeBeanId) }
     var pinned by remember(bean.id) { mutableStateOf(bean.favourite == true) }
     var decaf by remember(bean.id) { mutableStateOf(bean.decaf == true) }
@@ -143,6 +147,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     val datesValid = roasted.isBlank() || opened.isBlank() || opened >= roasted
 
     val save: () -> Unit = {
+        commitPendingTag(tags, tagPending)
         vm.updateBean(bean.id, roaster) { b ->
             applyBeanEdits(b, BeanDraft(
                 name = name, roast = roast, mixSel = mixSel, roastTypeSel = roastTypeSel,
@@ -226,7 +231,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     BeField("Name *", name) { name = it }
                     BeField("Roaster *", roaster) { roaster = it }
                     Eyebrow("Tags")
-                    TagChips(tags)
+                    TagChips(tags, tagPending)
                     Eyebrow("Flags")
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         BeFlag("check-circle", "Active", active) { active = it }
@@ -503,11 +508,13 @@ private fun PresetChip(value: Int, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Tag input — removable chips over an "Add tag" field (commits on IME Done). */
+/** Tag input — removable chips over an "Add tag" field. Commits on IME Done and
+ *  focus loss; the field text lives in [pending] so Save can commit it too
+ *  (geota/crema#73). */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TagChips(tags: SnapshotStateList<String>) {
-    var input by remember { mutableStateOf("") }
+private fun TagChips(tags: SnapshotStateList<String>, pending: MutableState<String>) {
+    var input by pending
     if (tags.isNotEmpty()) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             tags.toList().forEach { tag ->
@@ -525,14 +532,12 @@ private fun TagChips(tags: SnapshotStateList<String>) {
         onValueChange = { input = it },
         label = { Text("Add tag") },
         singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { if (!it.isFocused) commitPendingTag(tags, pending) },
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(
-            onDone = {
-                val t = input.trim()
-                if (t.isNotEmpty() && tags.none { it.equals(t, ignoreCase = true) }) tags.add(t)
-                input = ""
-            },
+            onDone = { commitPendingTag(tags, pending) },
         ),
     )
 }
