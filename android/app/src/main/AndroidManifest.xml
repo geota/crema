@@ -24,6 +24,10 @@
     <uses-permission
         android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"
         tools:targetApi="34" />
+    <!-- WAKE_LOCK: De1ConnectionService holds a partial wake lock while engaged.
+         Normal permission (auto-granted); without the declaration acquire()
+         throws SecurityException and crashes the app (geota/crema#72). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Visualizer sync — OAuth token exchange + shot uploads to
          visualizer.coffee. The only network feature in the app. -->

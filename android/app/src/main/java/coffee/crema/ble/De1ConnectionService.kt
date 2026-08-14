@@ -94,13 +94,20 @@ class De1ConnectionService : Service() {
 
     private fun acquireWakeLock() {
         if (wakeLock?.isHeld == true) return
-        wakeLock = getSystemService(PowerManager::class.java)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_TAG)
-            .apply {
-                setReferenceCounted(false)
-                acquire()
-            }
-        Log.i(TAG, "background-connection service started — wake lock held")
+        // A denied WAKE_LOCK (OEM AppOps quirk) must degrade to "no wake lock",
+        // not crash the app (geota/crema#72) — the foreground service alone
+        // still keeps the process unfrozen.
+        wakeLock = runCatching {
+            getSystemService(PowerManager::class.java)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_TAG)
+                .apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+        }
+            .onFailure { Log.w(TAG, "wake lock unavailable — continuing without it", it) }
+            .getOrNull()
+        Log.i(TAG, "background-connection service started — wake lock ${if (wakeLock != null) "held" else "unavailable"}")
     }
 
     private fun releaseWakeLock() {
