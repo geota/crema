@@ -198,6 +198,13 @@ pub fn import_v2_json_shot(content: &str) -> Result<StoredShot, ImportError> {
     if let Some(profile) = profile {
         stored = stored.with_profile(profile);
     }
+    // Crema Brew Log extension keys, when the document carries them.
+    if let Some(app) = &raw.app {
+        if let Some(method) = &app.data.settings.crema_brew_method {
+            stored.brew_method = crate::brew::normalize_brew_method(method);
+        }
+        stored.metadata.water_g = app.data.settings.crema_water_g.filter(|w| *w > 0.0);
+    }
     stored.format_version = STORED_SHOT_FORMAT_VERSION;
     Ok(stored)
 }
@@ -367,6 +374,7 @@ fn tcl_metadata(settings: &TclDict) -> ShotMetadata {
         rating,
         tds,
         extraction_yield,
+        water_g: None,
     }
 }
 
@@ -460,6 +468,32 @@ struct V2ShotJson {
     profile: Option<serde_json::Value>,
     #[serde(default)]
     meta: V2Meta,
+    /// The exporting app's own block. Crema stashes its Brew Log
+    /// extension keys under `app.data.settings` (`crema_brew_method`,
+    /// `crema_water_g`) so a crema → v2 → crema round-trip keeps a
+    /// logged V60 a V60. Foreign exports simply omit them.
+    #[serde(default)]
+    app: Option<V2App>,
+}
+
+#[derive(Deserialize, Default)]
+struct V2App {
+    #[serde(default)]
+    data: V2AppData,
+}
+
+#[derive(Deserialize, Default)]
+struct V2AppData {
+    #[serde(default)]
+    settings: V2AppSettings,
+}
+
+#[derive(Deserialize, Default)]
+struct V2AppSettings {
+    #[serde(default)]
+    crema_brew_method: Option<String>,
+    #[serde(default)]
+    crema_water_g: Option<f32>,
 }
 
 #[derive(Deserialize, Default)]
@@ -585,6 +619,7 @@ fn v2_metadata(raw: &V2ShotJson) -> ShotMetadata {
         rating,
         tds,
         extraction_yield,
+        water_g: None,
     }
 }
 

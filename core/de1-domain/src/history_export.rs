@@ -310,6 +310,13 @@ fn build_v2_document(shot: &StoredShot, truncate_at_flow_end: bool) -> V2Documen
         espresso_enjoyment: enjoyment,
         bean_weight: shot.metadata.dose,
         drink_weight,
+        // Crema-extension keys (`crema_`-prefixed so they can never
+        // collide with de1app settings names): the Brew Log method +
+        // water-in, so a crema → v2 → crema round-trip keeps a logged
+        // V60 a V60. Espresso exports omit both keys and stay
+        // byte-identical to the pre-Brew-Log shape.
+        crema_brew_method: shot.brew_method.clone(),
+        crema_water_g: shot.metadata.water_g,
     };
 
     V2DocumentOut {
@@ -640,6 +647,13 @@ struct V2AppSettingsOut {
     bean_weight: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     drink_weight: Option<f32>,
+    /// Crema extension: the Brew Log method (`"pourover"`, …). Absent
+    /// on espresso exports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crema_brew_method: Option<String>,
+    /// Crema extension: water in, grams, for filter/immersion brews.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crema_water_g: Option<f32>,
 }
 
 #[cfg(test)]
@@ -716,6 +730,7 @@ mod tests {
             rating: Some(4),
             tds: Some(8.5),
             extraction_yield: Some(20.5),
+            water_g: None,
         };
         shot
     }
@@ -801,6 +816,28 @@ mod tests {
         // weight), NOT the mid-pour sample tail (8.5 g) — crema stops the pump
         // early so the last sample is the pre-drip weight (geota/crema#64).
         assert_eq!(settings["drink_weight"], 36.0);
+        // Espresso exports carry no Brew Log extension keys — the shape
+        // stays byte-identical to the pre-Brew-Log exporter.
+        assert!(settings.get("crema_brew_method").is_none());
+        assert!(settings.get("crema_water_g").is_none());
+    }
+
+    #[test]
+    fn brew_log_extension_keys_round_trip_through_v2() {
+        let mut shot = fixture();
+        shot.brew_method = Some("pourover".to_owned());
+        shot.metadata.water_g = Some(250.0);
+        let json = export_v2_json_shot(&shot).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            v["app"]["data"]["settings"]["crema_brew_method"],
+            "pourover"
+        );
+        assert_eq!(v["app"]["data"]["settings"]["crema_water_g"], 250.0);
+
+        let imported = import_v2_json_shot(&json).expect("re-imports");
+        assert_eq!(imported.brew_method.as_deref(), Some("pourover"));
+        assert_eq!(imported.metadata.water_g, Some(250.0));
     }
 
     #[test]

@@ -18,8 +18,6 @@
 //!
 //! ## What we skip
 //!
-//! - Non-espresso brews — counted in diagnostics, but Crema has no
-//!   surface for V60 / AeroPress / etc.
 //! - `WATER`, `GREEN_BEANS`, `ROASTING_MACHINES`, `SETTINGS`, `VERSION`,
 //!   `GRAPH` — no Crema analogue today.
 //! - Per-bean fields Crema doesn't model (cupping form, frozen-group
@@ -556,7 +554,13 @@ pub struct ImportDiagnostics {
     /// the source schema era — the importer tolerates every shape back to v4.0.
     pub source_app_version: Option<String>,
     /// Number of brews skipped because their preparation wasn't espresso.
+    /// Always 0 since the Brew Log landed (issue #10) — kept so older
+    /// import-summary UIs render a stable shape.
     pub non_espresso_brews_skipped: usize,
+    /// Number of non-espresso brews imported as Brew Log rows (V60,
+    /// AeroPress, …) — these used to be counted in
+    /// `non_espresso_brews_skipped` and dropped.
+    pub brews_imported_non_espresso: usize,
     /// Number of brews skipped because their preparation reference
     /// dangles (no matching `PREPARATION[]` entry).
     pub brews_dangling_preparation: usize,
@@ -1230,25 +1234,35 @@ where
         .dropped_bean_categories
         .sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-    // ── Brews → StoredShot (espresso-only, no telemetry yet) ──
+    // ── Brews → StoredShot (all methods, no telemetry yet) ──
     let bean_index: HashMap<&str, &BcBean> = export
         .beans
         .iter()
         .map(|b| (b.config.uuid.as_str(), b))
         .collect();
-    let prep_is_espresso: HashMap<&str, bool> = export
+    // Per preparation: `None` = espresso, `Some(method)` = Brew Log method.
+    let prep_method: HashMap<&str, Option<String>> = export
         .preparations
         .iter()
         .map(|p| {
             // v5.2.0+ exports carry `style_type`; pre-v5.2.0 ones don't, so
             // derive espresso-ness from the preparation `type` instead —
-            // otherwise every brew from an old export is skipped as "non-espresso".
+            // otherwise every brew from an old export would be treated as
+            // non-espresso.
             let espresso = if p.style_type.trim().is_empty() {
                 is_espresso_type(&p.prep_type)
             } else {
                 is_espresso_style(&p.style_type)
             };
-            (p.config.uuid.as_str(), espresso)
+            // Espresso brews import method-less (matching Crema's own
+            // machine shots); everything else gets a Brew Log method
+            // (issue #10 — these used to be skipped outright).
+            let method = if espresso {
+                None
+            } else {
+                Some(non_espresso_method(p))
+            };
+            (p.config.uuid.as_str(), method)
         })
         .collect();
     let mill_by_uuid: HashMap<&str, &BcMill> = export
@@ -1270,8 +1284,8 @@ where
 
     for bc_brew in &export.brews {
         let prep_uuid = bc_brew.method_of_preparation.as_str();
-        let espresso = match prep_is_espresso.get(prep_uuid) {
-            Some(&v) => v,
+        let brew_method = match prep_method.get(prep_uuid) {
+            Some(m) => m.clone(),
             None => {
                 if !prep_uuid.is_empty() {
                     plan.diagnostics.brews_dangling_preparation += 1;
@@ -1279,9 +1293,8 @@ where
                 continue;
             }
         };
-        if !espresso {
-            plan.diagnostics.non_espresso_brews_skipped += 1;
-            continue;
+        if brew_method.is_some() {
+            plan.diagnostics.brews_imported_non_espresso += 1;
         }
         let bean_uuid = bc_brew.bean.as_str();
         let bc_bean = match bean_index.get(bean_uuid) {
@@ -1317,18 +1330,36 @@ where
         } else {
             bc_brew.grind_weight
         };
-        // Espresso yield. v5.2.0+ exports use `brew_beverage_quantity` (+ type);
-        // older ones store it in `brew_quantity` (+ type). Mirror BC's UPDATE_1
-        // fallback: when `brew_beverage_quantity` is 0, use `brew_quantity`.
-        let (qty, qty_type) = if bc_brew.brew_beverage_quantity > 0.0 {
-            (
-                bc_brew.brew_beverage_quantity,
-                bc_brew.brew_beverage_quantity_type,
-            )
+        // Beverage / water quantities diverge by method.
+        //
+        // Espresso: v5.2.0+ exports use `brew_beverage_quantity` (+ type);
+        // older ones store it in `brew_quantity` (+ type). Mirror BC's
+        // UPDATE_1 fallback: when `brew_beverage_quantity` is 0, use
+        // `brew_quantity`.
+        //
+        // Non-espresso: `brew_quantity` is the *water in* (BC labels it
+        // "water amount" for filter preparations) — it must NOT stand in
+        // for the beverage, it feeds `metadata.water_g` instead.
+        let (yield_out, water_g) = if brew_method.is_none() {
+            let (qty, qty_type) = if bc_brew.brew_beverage_quantity > 0.0 {
+                (
+                    bc_brew.brew_beverage_quantity,
+                    bc_brew.brew_beverage_quantity_type,
+                )
+            } else {
+                (bc_brew.brew_quantity, bc_brew.brew_quantity_type)
+            };
+            let y = (matches!(qty_type, BcQuantityKind::Grams) && qty > 0.0).then_some(qty);
+            (y, None)
         } else {
-            (bc_brew.brew_quantity, bc_brew.brew_quantity_type)
+            let y = (matches!(bc_brew.brew_beverage_quantity_type, BcQuantityKind::Grams)
+                && bc_brew.brew_beverage_quantity > 0.0)
+                .then_some(bc_brew.brew_beverage_quantity);
+            let w = (matches!(bc_brew.brew_quantity_type, BcQuantityKind::Grams)
+                && bc_brew.brew_quantity > 0.0)
+                .then_some(bc_brew.brew_quantity);
+            (y, w)
         };
-        let yield_out = (matches!(qty_type, BcQuantityKind::Grams) && qty > 0.0).then_some(qty);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let rating_u = if bc_brew.rating >= 0.5 && bc_brew.rating <= 5.0 {
             Some(bc_brew.rating.round().min(5.0) as u8)
@@ -1355,8 +1386,18 @@ where
             rating: rating_u,
             tds: None,
             extraction_yield: None,
+            water_g,
         };
         shot = shot.with_metadata(meta);
+        if let Some(method) = brew_method.clone() {
+            shot.brew_method = Some(method);
+            // BC records the brew water temperature per brew; keep it on
+            // the same slot the manual log uses. Espresso imports stay
+            // unchanged (their temp semantics belong to the profile).
+            if bc_brew.brew_temperature > 0.0 {
+                shot.brew_temp_target = Some(bc_brew.brew_temperature);
+            }
+        }
 
         let imported = ImportedShot {
             stored_shot: shot,
@@ -1446,6 +1487,70 @@ fn is_zero(v: &Value) -> bool {
         Value::Object(o) => o.is_empty(),
         Value::Null => true,
     }
+}
+
+/// Map a non-espresso BC preparation onto a Brew Log method string.
+///
+/// Highest-signal source first: the device *name* the user typed
+/// ("Hario V60" → `pourover`), then the preset `type`
+/// (`FRENCH_PRESS` → `french_press`), then the coarse style bucket.
+/// Anything unrecognized passes through as its normalized name — the
+/// Brew Log's method field is an open string, so a "Karlsbad Kanne"
+/// survives the trip verbatim rather than flattening to "other".
+fn non_espresso_method(p: &BcPreparation) -> String {
+    if let Some(m) = method_alias(&p.name) {
+        return m;
+    }
+    if let Some(m) = method_alias(&p.prep_type) {
+        return m;
+    }
+    let style = p.style_type.trim().to_ascii_uppercase().replace(' ', "_");
+    match style.as_str() {
+        "POUR_OVER" => "pourover".to_owned(),
+        "PERCOLATION" => "drip".to_owned(),
+        _ => crate::brew::normalize_brew_method(&p.name)
+            .or_else(|| crate::brew::normalize_brew_method(&p.prep_type))
+            .unwrap_or_else(|| "other".to_owned()),
+    }
+}
+
+/// Recognize common device names / BC `PREPARATION_TYPES` spellings as
+/// one of the curated Brew Log method presets.
+fn method_alias(raw: &str) -> Option<String> {
+    let n = raw.trim().to_ascii_lowercase();
+    if n.is_empty() {
+        return None;
+    }
+    let has = |pat: &str| n.contains(pat);
+    let m = if has("v60")
+        || has("chemex")
+        || has("kalita")
+        || has("origami")
+        || has("melitta")
+        || has("bee house")
+        || has("pour over")
+        || has("pour_over")
+        || has("pourover")
+    {
+        "pourover"
+    } else if has("aeropress") || has("aero press") || has("delter") {
+        "aeropress"
+    } else if has("french press") || has("french_press") || has("frenchpress") || has("press pot") {
+        "french_press"
+    } else if has("moka") || has("bialetti") {
+        "moka"
+    } else if has("cold brew") || has("cold_brew") || has("coldbrew") {
+        "cold_brew"
+    } else if has("clever") || has("switch") {
+        "clever"
+    } else if has("siphon") || has("syphon") {
+        "siphon"
+    } else if has("batch") || has("moccamaster") || has("filter machine") || has("drip") {
+        "drip"
+    } else {
+        return None;
+    };
+    Some(m.to_owned())
 }
 
 fn is_espresso_style(style: &str) -> bool {
@@ -1613,9 +1718,11 @@ mod tests {
     }
 
     #[test]
-    fn legacy_non_espresso_type_is_skipped() {
-        // No style_type, and the `type` (V60) maps to pour-over → the brew is
-        // correctly skipped, proving the type-derivation discriminates.
+    fn legacy_non_espresso_type_imports_as_a_brew() {
+        // No style_type, and the `type` (V60) maps to pour-over → the brew
+        // imports as a Brew Log row with a pourover method (issue #10;
+        // these used to be skipped), proving the type-derivation
+        // discriminates.
         let json = r#"{
             "PREPARATION": [
                 {"config":{"uuid":"prep-v60","unix_timestamp":1600000000},"name":"V60","type":"V60"}
@@ -1627,8 +1734,13 @@ mod tests {
         }"#;
         let export = parse_export(json).expect("parses");
         let plan = bc_to_crema(&export, 1_700_000_000_000, seq_id());
-        assert_eq!(plan.shots.len(), 0, "V60 is pour-over → skipped");
-        assert_eq!(plan.diagnostics.non_espresso_brews_skipped, 1);
+        assert_eq!(plan.shots.len(), 1, "V60 is pour-over → imported as a brew");
+        assert_eq!(
+            plan.shots[0].stored_shot.brew_method.as_deref(),
+            Some("pourover")
+        );
+        assert_eq!(plan.diagnostics.non_espresso_brews_skipped, 0);
+        assert_eq!(plan.diagnostics.brews_imported_non_espresso, 1);
         // No VERSION record → no source version.
         assert_eq!(plan.diagnostics.source_app_version, None);
     }
@@ -1919,8 +2031,9 @@ mod tests {
     }
 
     #[test]
-    fn brews_filter_skips_non_espresso() {
+    fn brews_import_espresso_and_non_espresso_alike() {
         // Two preparations: one espresso, one V60. Two brews: one each.
+        // Both import (issue #10); the V60 carries a method + water-in.
         let json = r#"{
             "BEANS": [{
                 "config":{"uuid":"bean-1","unix_timestamp":0},
@@ -1938,13 +2051,16 @@ mod tests {
                  "brew_beverage_quantity":36.0,"brew_beverage_quantity_type":"GR"},
                 {"config":{"uuid":"b-2","unix_timestamp":1730000100},
                  "bean":"bean-1","method_of_preparation":"prep-v60",
-                 "bean_weight_in":18.0,"brew_time":180.0}
+                 "bean_weight_in":15.0,"brew_time":180.0,
+                 "brew_temperature":96.0,
+                 "brew_quantity":250.0,"brew_quantity_type":"GR"}
             ]
         }"#;
         let plan = bc_to_crema(&parse_export(json).unwrap(), 1, seq_id());
-        assert_eq!(plan.shots.len(), 1);
-        assert_eq!(plan.diagnostics.non_espresso_brews_skipped, 1);
-        assert_eq!(plan.diagnostics.shots_imported, 1);
+        assert_eq!(plan.shots.len(), 2);
+        assert_eq!(plan.diagnostics.non_espresso_brews_skipped, 0);
+        assert_eq!(plan.diagnostics.brews_imported_non_espresso, 1);
+        assert_eq!(plan.diagnostics.shots_imported, 2);
 
         let shot = &plan.shots[0];
         assert_eq!(shot.stored_shot.completed_at, 1_730_000_000_000); // seconds → ms
@@ -1952,10 +2068,22 @@ mod tests {
             shot.stored_shot.record.duration,
             Duration::from_millis(28_000)
         );
+        assert_eq!(shot.stored_shot.brew_method, None, "espresso stays method-less");
         assert_eq!(shot.stored_shot.metadata.dose, Some(18.0));
         assert_eq!(shot.stored_shot.metadata.yield_out, Some(36.0));
+        assert_eq!(shot.stored_shot.metadata.water_g, None);
         assert_eq!(shot.bean_name, "Bean");
         assert_eq!(shot.roaster_name.as_deref(), Some("R"));
+
+        let v60 = &plan.shots[1];
+        assert_eq!(v60.stored_shot.brew_method.as_deref(), Some("pourover"));
+        assert_eq!(v60.stored_shot.metadata.dose, Some(15.0));
+        // brew_quantity is *water in* for filter preparations — it must
+        // land on water_g, never stand in for the beverage yield.
+        assert_eq!(v60.stored_shot.metadata.water_g, Some(250.0));
+        assert_eq!(v60.stored_shot.metadata.yield_out, None);
+        assert_eq!(v60.stored_shot.brew_temp_target, Some(96.0));
+        assert!(v60.stored_shot.is_manual_log());
     }
 
     #[test]

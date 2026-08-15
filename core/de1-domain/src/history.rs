@@ -58,6 +58,11 @@ pub struct ShotMetadata {
     /// Extraction yield, percent — the fraction of the dry dose extracted into
     /// the cup.
     pub extraction_yield: Option<f32>,
+    /// Water in, grams — the pour total for filter / immersion brews.
+    /// Distinct from `yield_out` (beverage in the cup): a 15 g / 250 g
+    /// V60 speaks its ratio in water-in (1:16.7), an espresso in
+    /// beverage-out. `None` on espresso rows.
+    pub water_g: Option<f32>,
 }
 
 impl ShotMetadata {
@@ -393,6 +398,22 @@ pub struct StoredShot {
     /// to the connected machine at upload time).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<ShotMachine>,
+    /// How this was brewed — a normalized method string
+    /// ([`normalize_brew_method`](crate::normalize_brew_method)):
+    /// `"pourover"`, `"aeropress"`, `"espresso"` (a manually logged
+    /// machine-free shot), … `None` = machine espresso, so every
+    /// pre-existing record is already a valid brew row (issue #10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brew_method: Option<String>,
+    /// The recipe a guided session followed, denormalized by name at
+    /// completion — snapshot-wins, like `profile_name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipe_name: Option<String>,
+    /// Weight-only telemetry from a guided brew session. `None` for
+    /// machine shots (their telemetry is `record.samples`) and for
+    /// manual logs (no telemetry at all).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brew_series: Option<crate::brew::BrewSeries>,
 }
 
 /// Machine identity frozen onto a [`StoredShot`] at completion — the exact
@@ -440,7 +461,20 @@ impl StoredShot {
             deleted_at: None,
             decent_id: None,
             machine: None,
+            brew_method: None,
+            recipe_name: None,
+            brew_series: None,
         }
+    }
+
+    /// Whether this row is a *manually logged* brew: a method was
+    /// declared but no telemetry of any kind was captured. Manual rows
+    /// keep their dose / water / time / temp editable in the detail
+    /// pane (they are user-entered facts, not measurements) and never
+    /// enter a Visualizer upload queue.
+    #[must_use]
+    pub fn is_manual_log(&self) -> bool {
+        self.brew_method.is_some() && self.record.samples.is_empty() && self.brew_series.is_none()
     }
 
     /// Attach the profile that was pulled.
@@ -552,6 +586,7 @@ mod tests {
                 rating: Some(4),
                 tds: Some(9.1),
                 extraction_yield: Some(20.5),
+                water_g: None,
             });
         let json = shot.to_json().unwrap();
         assert_eq!(StoredShot::from_json(&json), Ok(shot));
@@ -610,6 +645,60 @@ mod tests {
     #[test]
     fn from_json_rejects_malformed_input() {
         assert!(StoredShot::from_json("not json").is_err());
+    }
+
+    #[test]
+    fn brew_fields_round_trip_and_default_absent() {
+        // A manual V60 log: method + water, no telemetry.
+        let mut brew = StoredShot::new(
+            1_700_000_000_000,
+            ShotRecord {
+                duration: Duration::from_secs(185),
+                samples: Vec::new(),
+            },
+        );
+        brew.brew_method = Some("pourover".to_owned());
+        brew.recipe_name = Some("Morning V60".to_owned());
+        brew.metadata.water_g = Some(250.0);
+        let json = brew.to_json().unwrap();
+        let parsed = StoredShot::from_json(&json).unwrap();
+        assert_eq!(parsed, brew);
+        assert!(parsed.is_manual_log());
+
+        // A machine shot serializes without the brew keys at all —
+        // pre-Brew-Log records and readers are unaffected.
+        let shot = StoredShot::new(1_700_000_000_000, sample_record());
+        let json = shot.to_json().unwrap();
+        assert!(!json.contains("brewMethod"));
+        assert!(!json.contains("brewSeries"));
+        assert!(!shot.is_manual_log());
+        // And a pre-Brew-Log document (no brew keys) parses to None.
+        let parsed = StoredShot::from_json(&json).unwrap();
+        assert_eq!(parsed.brew_method, None);
+        assert_eq!(parsed.brew_series, None);
+    }
+
+    #[test]
+    fn a_guided_brew_with_a_series_is_not_a_manual_log() {
+        let mut brew = StoredShot::new(
+            1_700_000_000_000,
+            ShotRecord {
+                duration: Duration::from_secs(185),
+                samples: Vec::new(),
+            },
+        );
+        brew.brew_method = Some("pourover".to_owned());
+        brew.brew_series = Some(crate::brew::BrewSeries {
+            samples: vec![crate::brew::BrewSample {
+                elapsed_ms: 250,
+                weight_g: 1.5,
+                flow_g_s: None,
+            }],
+            stage_marks: Vec::new(),
+        });
+        assert!(!brew.is_manual_log());
+        let json = brew.to_json().unwrap();
+        assert_eq!(StoredShot::from_json(&json), Ok(brew));
     }
 
     #[test]
