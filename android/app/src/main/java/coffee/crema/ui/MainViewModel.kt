@@ -569,6 +569,9 @@ data class MainUiState(
     val brewRecipes: List<coffee.crema.core.BrewRecipe> = emptyList(),
     /** Per-method last-used recipe pointer (method → recipe id). */
     val lastRecipeByMethod: Map<String, String> = emptyMap(),
+    /** Recipe id the Profiles screen should open in its editor — the Scale
+     *  screen's "Edit recipe" deep-link (recipes are authored on Profiles). */
+    val pendingRecipeEditId: String? = null,
     /**
      * Queued user-facing feedback lines (imports, exports, blocked actions).
      * MainActivity surfaces them as snackbars, dequeuing via
@@ -1230,6 +1233,53 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             st.copy(brewRecipes = list)
         }
         persistRecipes()
+    }
+
+    /**
+     * Clone [id] into a sibling recipe ("<name> copy", fresh id) and persist
+     * it — the Profiles screen's Duplicate door, which is how a method grows
+     * a second recipe. Returns the copy so the caller can open the editor.
+     */
+    fun duplicateBrewRecipe(id: String): coffee.crema.core.BrewRecipe? {
+        val base = _ui.value.brewRecipes.firstOrNull { it.id == id && it.deletedAt == null } ?: return null
+        val now = System.currentTimeMillis()
+        val copy = base.copy(
+            id = coffee.crema.core.newRecipeId(),
+            name = "${base.name} copy",
+            favourite = false,
+            createdAt = now,
+            updatedAt = now,
+        )
+        _ui.update { it.copy(brewRecipes = it.brewRecipes + copy) }
+        persistRecipes()
+        return copy
+    }
+
+    /** Tombstone a recipe and drop any last-used pointer at it. */
+    fun deleteBrewRecipe(id: String) {
+        val now = System.currentTimeMillis()
+        _ui.update { st ->
+            st.copy(
+                brewRecipes = st.brewRecipes.map { if (it.id == id) it.copy(deletedAt = now) else it },
+                lastRecipeByMethod = st.lastRecipeByMethod.filterValues { it != id },
+            )
+        }
+        persistRecipes()
+    }
+
+    /** Make [recipe] what the Scale screen opens for its method. */
+    fun setDefaultBrewRecipe(recipe: coffee.crema.core.BrewRecipe) = rememberRecipeUsed(recipe)
+
+    /** Ask the Profiles screen to open [id] in the recipe editor. */
+    fun requestRecipeEdit(id: String) {
+        _ui.update { it.copy(pendingRecipeEditId = id) }
+    }
+
+    /** Clear the pending recipe-edit request once Profiles has applied it. */
+    fun consumePendingRecipeEdit() {
+        if (_ui.value.pendingRecipeEditId != null) {
+            _ui.update { it.copy(pendingRecipeEditId = null) }
+        }
     }
 
     /** Remember [recipe] as its method's last-used (persisting it if new). */

@@ -11,10 +11,13 @@
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	import type { BrewRecipe, BrewStep } from '$lib/core/crema-core';
 	import { BrewStepKind, StepAdvance } from '$lib/core/crema-core';
-	import { recipeId } from '$lib/brew/recipes.svelte';
+	import { defaultRecipeFor, recipeId } from '$lib/brew/recipes.svelte';
+	import { BREW_METHOD_PRESETS, methodLabel } from '$lib/brew/methods';
 
 	let {
 		recipe,
+		heading = 'Edit recipe',
+		reseedOnMethodChange = false,
 		onSave,
 		onClose
 	}: {
@@ -23,6 +26,12 @@
 		 *  default template, in which case the id is kept anyway: recipes
 		 *  are per-user rows, not shared. */
 		recipe: BrewRecipe;
+		/** Dialog title — "Edit recipe" / "New recipe". */
+		heading?: string;
+		/** New-recipe mode: switching the method swaps in that method's
+		 *  classic template (name, numbers, steps) so "New recipe →
+		 *  AeroPress" starts from the AeroPress plan, not V60 steps. */
+		reseedOnMethodChange?: boolean;
 		onSave: (recipe: BrewRecipe) => void;
 		onClose: () => void;
 	} = $props();
@@ -31,11 +40,31 @@
 	const base = recipe;
 
 	// Draft state — committed on Save only.
+	let method = $state(base.method);
 	let name = $state(base.name);
 	let doseG = $state(base.doseG);
 	let waterG = $state(base.waterG);
 	let tempC = $state<number | null>(base.tempC ?? null);
 	let steps = $state<BrewStep[]>((base.steps ?? []).map((s) => ({ ...s })));
+
+	/** The method options — the preset chips, plus the recipe's own
+	 *  free-text method when it isn't a curated one. */
+	const methodOptions = $derived.by(() => {
+		const opts = BREW_METHOD_PRESETS.map((p) => ({ id: p.id, label: p.label }));
+		if (!opts.some((o) => o.id === method)) opts.push({ id: method, label: methodLabel(method) });
+		return opts;
+	});
+
+	function pickMethod(next: string): void {
+		method = next;
+		if (!reseedOnMethodChange) return;
+		const seed = defaultRecipeFor(next);
+		name = seed.name;
+		doseG = seed.doseG;
+		waterG = seed.waterG;
+		tempC = seed.tempC ?? null;
+		steps = (seed.steps ?? []).map((s) => ({ ...s }));
+	}
 
 	const KINDS: { id: BrewStepKind; label: string }[] = [
 		{ id: BrewStepKind.Bloom, label: 'Bloom' },
@@ -75,6 +104,7 @@
 		onSave({
 			...base,
 			id: base.id || recipeId(),
+			method,
 			name: trimmed || base.name,
 			doseG,
 			waterG,
@@ -108,7 +138,7 @@
 	<header class="re-head">
 		<div>
 			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Recipe</div>
-			<h2 class="re-title" id="re-title">Edit recipe</h2>
+			<h2 class="re-title" id="re-title">{heading}</h2>
 		</div>
 		<button class="re-x" onclick={onClose} aria-label="Close">
 			<XIcon aria-hidden="true" />
@@ -116,10 +146,24 @@
 	</header>
 
 	<div class="re-body">
-		<label class="re-fld">
-			<span class="re-label">Name</span>
-			<input class="re-input" bind:value={name} />
-		</label>
+		<div class="re-duo">
+			<label class="re-fld">
+				<span class="re-label">Method</span>
+				<select
+					class="re-input"
+					value={method}
+					onchange={(e) => pickMethod(e.currentTarget.value)}
+				>
+					{#each methodOptions as o (o.id)}
+						<option value={o.id}>{o.label}</option>
+					{/each}
+				</select>
+			</label>
+			<label class="re-fld">
+				<span class="re-label">Name</span>
+				<input class="re-input" bind:value={name} />
+			</label>
+		</div>
 		<div class="re-triple">
 			<label class="re-fld">
 				<span class="re-label">Dose g</span>
@@ -295,6 +339,11 @@
 	.re-num {
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
+	}
+	.re-duo {
+		display: grid;
+		grid-template-columns: 150px 1fr;
+		gap: 10px;
 	}
 	.re-triple {
 		display: grid;

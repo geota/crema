@@ -25,6 +25,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import coffee.crema.brew.BREW_METHOD_PRESETS
+import coffee.crema.brew.defaultRecipeFor
+import coffee.crema.brew.methodIcon
+import coffee.crema.brew.methodLabel
 import coffee.crema.brew.stepKindLabel
 import coffee.crema.core.BrewRecipe
 import coffee.crema.core.BrewStep
@@ -51,7 +55,12 @@ fun RecipeEditorDialog(
     recipe: BrewRecipe,
     onSave: (BrewRecipe) -> Unit,
     onDismiss: () -> Unit,
+    heading: String = "Edit recipe",
+    /** New-recipe mode: switching the method swaps in that method's classic
+     *  template so "New recipe → AeroPress" starts from the AeroPress plan. */
+    reseedOnMethodChange: Boolean = false,
 ) {
+    var method by remember { mutableStateOf(recipe.method) }
     var name by remember { mutableStateOf(recipe.name) }
     var dose by remember { mutableStateOf(recipe.doseG.toDouble()) }
     var water by remember { mutableStateOf(recipe.waterG.toDouble()) }
@@ -75,8 +84,37 @@ fun RecipeEditorDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Eyebrow("Recipe")
-                Text("Edit recipe", style = MaterialTheme.typography.titleLarge)
-                CremaTextField(value = name, onValueChange = { name = it }, label = "Name")
+                Text(heading, style = MaterialTheme.typography.titleLarge)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // The method vocabulary — presets plus this recipe's own
+                    // free-text method when it isn't a curated one.
+                    val methodKeys = buildList {
+                        BREW_METHOD_PRESETS.forEach { add(SortKey(it.id, it.label, it.icon)) }
+                        if (none { it.id == method }) add(SortKey(method, methodLabel(method), methodIcon(method)))
+                    }
+                    CremaFilterDropdown(
+                        icon = methodIcon(method),
+                        keys = methodKeys,
+                        selectedKey = method,
+                        onKeyChange = { key ->
+                            method = key
+                            if (reseedOnMethodChange) {
+                                val seed = defaultRecipeFor(key, System.currentTimeMillis())
+                                name = seed.name
+                                dose = seed.doseG.toDouble()
+                                water = seed.waterG.toDouble()
+                                temp = (seed.tempC ?: 0f).toDouble()
+                                steps = seed.steps.orEmpty()
+                            }
+                        },
+                    )
+                    CremaTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = "Name",
+                        modifier = Modifier.weight(1f),
+                    )
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     CremaStepper(label = "Dose", value = dose, unit = "g", onChange = { dose = it }, step = 0.5, min = 0.0, max = 200.0)
                     CremaStepper(label = "Water", value = water, unit = "g", onChange = { water = it }, step = 10.0, min = 0.0, max = 2000.0, fmt = { fmt("%.0f", it) })
@@ -179,6 +217,7 @@ fun RecipeEditorDialog(
                         onClick = {
                             onSave(
                                 recipe.copy(
+                                    method = method,
                                     name = name.trim().ifBlank { recipe.name },
                                     doseG = dose.toFloat(),
                                     waterG = water.toFloat(),

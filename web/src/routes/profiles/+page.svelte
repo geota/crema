@@ -26,6 +26,7 @@
 	 */
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import {
 		getProfileStore,
 		toCoreProfile,
@@ -33,6 +34,17 @@
 		newProfileId,
 		type CremaProfile
 	} from '$lib/profiles';
+	import {
+		defaultRecipeFor,
+		getRecipeStore,
+		nominalRecipeMs
+	} from '$lib/brew/recipes.svelte';
+	import { methodLabel } from '$lib/brew/methods';
+	import MethodMark from '$lib/components/brewlog/MethodMark.svelte';
+	import RecipeEditor from '$lib/components/brewlog/RecipeEditor.svelte';
+	import TrashIcon from 'phosphor-svelte/lib/TrashIcon';
+	import type { BrewRecipe } from '$lib/core/crema-core';
+	import { BrewStepKind } from '$lib/core/crema-core';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { ProfileCard } from '$lib/components/profiles';
 	import SortPill from '$lib/components/shared/SortPill.svelte';
@@ -547,6 +559,121 @@
 
 	/** Whether a card is the active profile. */
 	const activeId = $derived(store.activeId);
+
+	// ── Brew recipes — the guided-brew plans (issue #10) ─────────────────
+	// A second library section: unlike machine profiles these are
+	// followed by hand, never uploaded to the DE1. Authored here; the
+	// Scale page's Brew tab picks + runs them and deep-links back via
+	// `?recipe=<id>`.
+	const recipeStore = getRecipeStore();
+
+	/** Recipes, method-grouped (label order) then most-recent, honoring
+	 *  the page search. */
+	const recipeList = $derived.by(() => {
+		const query = q.trim().toLowerCase();
+		const list =
+			query === ''
+				? recipeStore.all
+				: recipeStore.all.filter(
+						(r) =>
+							r.name.toLowerCase().includes(query) ||
+							methodLabel(r.method).toLowerCase().includes(query) ||
+							r.method.toLowerCase().includes(query)
+					);
+		return [...list].sort(
+			(a, b) =>
+				methodLabel(a.method).localeCompare(methodLabel(b.method)) || b.updatedAt - a.updatedAt
+		);
+	});
+
+	let recipeEditing = $state<BrewRecipe | null>(null);
+	let recipeEditingNew = $state(false);
+	/** The `?recipe=` value already opened, so closing doesn't re-open
+	 *  before the replaceState navigation lands. */
+	let handledRecipeParam = $state<string | null>(null);
+
+	// The Scale page's "Edit recipe" deep-link: `/profiles?recipe=<id>`.
+	$effect(() => {
+		const rid = page.url.searchParams.get('recipe');
+		if (rid === null) {
+			handledRecipeParam = null;
+			return;
+		}
+		if (rid === handledRecipeParam) return;
+		handledRecipeParam = rid;
+		const r = recipeStore.get(rid);
+		if (r) {
+			recipeEditing = r;
+			recipeEditingNew = false;
+		}
+	});
+
+	function newRecipe(): void {
+		recipeEditing = defaultRecipeFor('pourover');
+		recipeEditingNew = true;
+	}
+
+	function duplicateRecipe(r: BrewRecipe): void {
+		const copy = recipeStore.duplicate(r.id);
+		if (copy) {
+			recipeEditing = copy;
+			recipeEditingNew = false;
+		}
+	}
+
+	async function removeRecipe(r: BrewRecipe): Promise<void> {
+		if (
+			await confirmDialog({
+				message: `Delete the "${r.name}" recipe?`,
+				confirmLabel: 'Delete',
+				danger: true
+			})
+		) {
+			recipeStore.remove(r.id);
+		}
+	}
+
+	function saveRecipe(r: BrewRecipe): void {
+		recipeStore.upsert(r);
+		// A method's first recipe becomes its default — the Scale page
+		// opens on it without a separate "make default" step.
+		if (!recipeStore.lastUsedFor(r.method)) recipeStore.touch(r);
+		closeRecipeEditor();
+	}
+
+	function closeRecipeEditor(): void {
+		recipeEditing = null;
+		recipeEditingNew = false;
+		if (page.url.searchParams.has('recipe')) {
+			void goto(resolve('/profiles'), { replaceState: true, noScroll: true });
+		}
+	}
+
+	/** Whether `r` is what the Scale page opens for its method. */
+	function isDefaultRecipe(r: BrewRecipe): boolean {
+		return recipeStore.lastUsedFor(r.method)?.id === r.id;
+	}
+
+	const RECIPE_KIND_LABEL: Record<string, string> = {
+		[BrewStepKind.Bloom]: 'Bloom',
+		[BrewStepKind.Pour]: 'Pour',
+		[BrewStepKind.Wait]: 'Wait',
+		[BrewStepKind.Steep]: 'Steep',
+		[BrewStepKind.Stir]: 'Stir',
+		[BrewStepKind.Press]: 'Press',
+		[BrewStepKind.Drawdown]: 'Drawdown',
+		[BrewStepKind.Other]: 'Step'
+	};
+
+	/** "Bloom → Pour → Wait → Pour → Drawdown" — the card's plan line. */
+	function stepChain(r: BrewRecipe): string {
+		return (r.steps ?? []).map((s) => RECIPE_KIND_LABEL[s.kind] ?? 'Step').join(' → ');
+	}
+
+	function recipeClock(ms: number): string {
+		const total = Math.floor(ms / 1000);
+		return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+	}
 </script>
 
 <svelte:head>
@@ -696,7 +823,99 @@
 		{/if}
 	</div>
 
+	<!-- ── Brew recipes — guided plans, followed by hand (issue #10).
+	     A separate section, not rows in the machine grid: selecting a
+	     profile uploads it to the DE1; a recipe never touches the
+	     machine. Hidden while browsing the Hidden archive. -->
+	{#if !showingHidden}
+		<div class="pp-recipes">
+			<div class="pp-recipes-head">
+				<div>
+					<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Guided brews</div>
+					<div class="pp-recipes-title">Brew recipes</div>
+					<div class="pp-sub">
+						Step plans you follow by hand — run them from the Scale page's Brew tab.
+					</div>
+				</div>
+				<button class="pp-btn pp-btn-secondary" onclick={newRecipe}>
+					<PlusIcon aria-hidden="true" /> New recipe
+				</button>
+			</div>
+			{#if recipeList.length > 0}
+				<div class="pp-recipes-grid">
+					{#each recipeList as r (r.id)}
+						<div class="pp-recipe-card">
+							<div class="pp-recipe-top">
+								<span class="pp-recipe-method">
+									<MethodMark method={r.method} size={13} />
+									{methodLabel(r.method)}
+								</span>
+								{#if isDefaultRecipe(r)}
+									<span
+										class="pp-recipe-default"
+										title="The Scale page opens this recipe for {methodLabel(r.method)}"
+										>DEFAULT</span
+									>
+								{/if}
+							</div>
+							<div class="pp-recipe-name">{r.name}</div>
+							<div class="pp-recipe-meta">
+								{r.doseG} g · {r.waterG} g water{#if r.tempC != null}
+									· {Math.round(r.tempC)} °C{/if} · ~{recipeClock(nominalRecipeMs(r))}
+							</div>
+							<div class="pp-recipe-steps">{stepChain(r)}</div>
+							<div class="pp-recipe-actions">
+								<button
+									class="pp-recipe-btn"
+									onclick={() => {
+										recipeEditingNew = false;
+										recipeEditing = r;
+									}}>Edit</button
+								>
+								<button class="pp-recipe-btn" onclick={() => duplicateRecipe(r)}>Duplicate</button>
+								{#if !isDefaultRecipe(r)}
+									<button
+										class="pp-recipe-btn"
+										onclick={() => recipeStore.touch(r)}
+										title="The Scale page opens the default recipe for {methodLabel(r.method)}"
+										>Make default</button
+									>
+								{/if}
+								<button
+									class="pp-recipe-del"
+									aria-label="Delete recipe"
+									onclick={() => void removeRecipe(r)}
+								>
+									<TrashIcon aria-hidden="true" />
+								</button>
+							</div>
+						</div>
+					{/each}
+				</div>
+			{:else}
+				<div class="pp-recipes-empty">
+					{#if recipeStore.all.length === 0}
+						No recipes yet — running a brew from the Scale page saves its recipe here, or start
+						one with New recipe.
+					{:else}
+						No recipes match the current search.
+					{/if}
+				</div>
+			{/if}
+		</div>
+	{/if}
+
 </div>
+
+{#if recipeEditing}
+	<RecipeEditor
+		recipe={recipeEditing}
+		heading={recipeEditingNew ? 'New recipe' : 'Edit recipe'}
+		reseedOnMethodChange={recipeEditingNew}
+		onSave={saveRecipe}
+		onClose={closeRecipeEditor}
+	/>
+{/if}
 
 <style>
 	.pp-page {
@@ -920,6 +1139,124 @@
 		cursor: pointer;
 		font-size: 13px;
 		text-decoration: underline;
+	}
+
+	/* ── Brew recipes section ──────────────────────────────────────────── */
+	.pp-recipes {
+		padding: 8px var(--page-pad-x) 48px;
+		border-top: 1px solid rgba(var(--tint-rgb), 0.05);
+	}
+	.pp-recipes-head {
+		display: flex;
+		align-items: flex-end;
+		justify-content: space-between;
+		gap: 24px;
+		padding: 18px 0 16px;
+	}
+	.pp-recipes-title {
+		font-family: var(--font-serif);
+		font-size: 22px;
+		font-weight: 500;
+		margin-top: 2px;
+	}
+	.pp-recipes-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+		gap: 14px;
+	}
+	.pp-recipe-card {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		background: rgba(var(--tint-rgb), 0.03);
+		border: 1px solid rgba(var(--tint-rgb), 0.1);
+		border-radius: var(--radius-md);
+		padding: 14px 16px;
+	}
+	.pp-recipe-top {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 10px;
+	}
+	.pp-recipe-method {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-family: var(--font-sans);
+		font-size: 10px;
+		font-weight: 600;
+		letter-spacing: var(--track-allcaps);
+		text-transform: uppercase;
+		color: rgba(var(--tint-rgb), 0.55);
+	}
+	.pp-recipe-default {
+		font-family: var(--font-sans);
+		font-size: 9px;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		color: var(--copper-400);
+		border: 1px solid var(--copper-400);
+		border-radius: var(--radius-pill);
+		padding: 2px 8px;
+	}
+	.pp-recipe-name {
+		font-family: var(--font-serif);
+		font-size: 18px;
+	}
+	.pp-recipe-meta {
+		font-family: var(--font-mono);
+		font-variant-numeric: tabular-nums;
+		font-size: 11.5px;
+		color: rgba(var(--tint-rgb), 0.55);
+	}
+	.pp-recipe-steps {
+		font-family: var(--font-sans);
+		font-size: 11.5px;
+		color: rgba(var(--tint-rgb), 0.5);
+	}
+	.pp-recipe-actions {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		margin-top: 8px;
+	}
+	.pp-recipe-btn {
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.1);
+		color: var(--fg-1);
+		font-family: var(--font-sans);
+		font-size: 12px;
+		font-weight: 500;
+		padding: 6px 11px;
+		border-radius: var(--radius-pill);
+		cursor: pointer;
+	}
+	.pp-recipe-btn:hover {
+		background: rgba(var(--tint-rgb), 0.08);
+	}
+	.pp-recipe-del {
+		margin-left: auto;
+		background: transparent;
+		border: 0;
+		color: rgba(var(--tint-rgb), 0.4);
+		cursor: pointer;
+		padding: 4px;
+	}
+	.pp-recipe-del:hover {
+		color: var(--danger);
+	}
+	.pp-recipes-empty {
+		padding: 26px 0 8px;
+		color: rgba(var(--tint-rgb), 0.5);
+		font-family: var(--font-sans);
+		font-size: 13px;
+	}
+	@media (max-width: 720px) {
+		.pp-recipes {
+			padding-left: 20px;
+			padding-right: 20px;
+		}
 	}
 
 	/* ── Import (header button + result banner) ────────────────────────── */

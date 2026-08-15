@@ -12,6 +12,8 @@
 	 */
 	import PauseIcon from 'phosphor-svelte/lib/PauseIcon';
 	import PlayIcon from 'phosphor-svelte/lib/PlayIcon';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getGuidedBrewStore } from '$lib/brew/session.svelte';
 	import { defaultRecipeFor, getRecipeStore } from '$lib/brew/recipes.svelte';
@@ -28,7 +30,6 @@
 	import { toast } from '$lib/components/shared/toast.svelte';
 	import LogBrewDialog from './LogBrewDialog.svelte';
 	import MethodMark from './MethodMark.svelte';
-	import RecipeEditor from './RecipeEditor.svelte';
 
 	let {
 		connected = false,
@@ -53,7 +54,6 @@
 	let method = $state(lastUsedMethod());
 	let recipe = $state<BrewRecipe>(resolveRecipe(lastUsedMethod()));
 	let startOnPour = $state(true);
-	let editorOpen = $state(false);
 	let logOpen = $state(false);
 
 	function resolveRecipe(m: string): BrewRecipe {
@@ -63,6 +63,17 @@
 	function pickMethod(id: string): void {
 		method = id;
 		recipe = resolveRecipe(id);
+	}
+
+	/**
+	 * Recipes live in the Profiles library — editing deep-links there
+	 * (`/profiles?recipe=<id>`). Touch first so an unsaved default is
+	 * persisted (and remembered for the method) before the editor looks
+	 * it up.
+	 */
+	function editRecipe(): void {
+		recipes.touch(recipe);
+		void goto(`${resolve('/profiles')}?recipe=${encodeURIComponent(recipe.id)}`);
 	}
 
 	// ── The display clock ────────────────────────────────────────
@@ -239,7 +250,7 @@
 							{/each}
 						</select>
 					{/if}
-					<button class="gb-ghost" onclick={() => (editorOpen = true)}>Edit recipe</button>
+					<button class="gb-ghost" onclick={editRecipe}>Edit recipe</button>
 				</div>
 			</div>
 			<ol class="gb-steps">
@@ -394,18 +405,6 @@
 		</div>
 	{/if}
 </div>
-
-{#if editorOpen}
-	<RecipeEditor
-		{recipe}
-		onSave={(r) => {
-			recipes.upsert(r);
-			recipe = r;
-			editorOpen = false;
-		}}
-		onClose={() => (editorOpen = false)}
-	/>
-{/if}
 
 {#if logOpen && logPrefill}
 	<LogBrewDialog

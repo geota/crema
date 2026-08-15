@@ -72,6 +72,9 @@ import kotlin.math.roundToInt
 @Composable
 fun GuidedBrewPanel(
     vm: MainViewModel,
+    /** Shell navigation — "Edit recipe" deep-links to the Profiles screen,
+     *  where recipes are authored (the Brew recipes library section). */
+    onNav: (String) -> Unit,
     modifier: Modifier = Modifier,
     /** False when the HOST already scrolls (the phone screen) — nested
      *  same-direction scrollables would crash on the infinite height. */
@@ -89,7 +92,6 @@ fun GuidedBrewPanel(
             ?: defaultRecipeFor(m, System.currentTimeMillis())
     var recipe by remember { mutableStateOf(resolveRecipe(method)) }
     var startOnPour by remember { mutableStateOf(true) }
-    var editorOpen by remember { mutableStateOf(false) }
     var logOpen by remember { mutableStateOf(false) }
 
     // The display clock — the shell shares elapsedRealtime with the core,
@@ -144,8 +146,25 @@ fun GuidedBrewPanel(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
+                            val forMethod = ui.brewRecipes.filter { it.method == method && it.deletedAt == null }
+                            if (forMethod.size > 1) {
+                                coffee.crema.ui.components.CremaFilterDropdown(
+                                    icon = "list-bullets",
+                                    keys = forMethod.map { coffee.crema.ui.components.SortKey(it.id, it.name) },
+                                    selectedKey = recipe.id,
+                                    onKeyChange = { id -> forMethod.firstOrNull { it.id == id }?.let { recipe = it } },
+                                )
+                                Spacer(Modifier.width(8.dp))
+                            }
                             CremaButton(
-                                onClick = { editorOpen = true },
+                                onClick = {
+                                    // Recipes are authored on Profiles — persist the
+                                    // (possibly unsaved default) recipe, then deep-link
+                                    // into the library's editor.
+                                    vm.setDefaultBrewRecipe(recipe)
+                                    vm.requestRecipeEdit(recipe.id)
+                                    onNav("profiles")
+                                },
                                 variant = CremaButtonVariant.Outlined,
                                 label = "Edit recipe",
                             )
@@ -325,18 +344,6 @@ fun GuidedBrewPanel(
                 }
             }
         }
-    }
-
-    if (editorOpen) {
-        RecipeEditorDialog(
-            recipe = recipe,
-            onSave = { r ->
-                vm.upsertBrewRecipe(r)
-                recipe = r
-                editorOpen = false
-            },
-            onDismiss = { editorOpen = false },
-        )
     }
 
     if (logOpen) {

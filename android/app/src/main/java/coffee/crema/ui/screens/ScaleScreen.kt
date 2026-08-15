@@ -142,6 +142,7 @@ fun ScaleScreen(
             if (scaleMode == "brew") {
                 coffee.crema.ui.brewlog.GuidedBrewPanel(
                     vm = vm,
+                    onNav = onNav,
                     modifier = Modifier.fillMaxSize().padding(top = sp.s2),
                 )
             } else {
