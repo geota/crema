@@ -34,6 +34,7 @@ class BackgroundConnectionController(private val context: Context) {
 
     private var enabled = false
     private var de1Active = false
+    private var brewSessionActive = false
     private var foreground = true
     private var plugged = isPluggedIn(context)
     private var running = false
@@ -78,12 +79,25 @@ class BackgroundConnectionController(private val context: Context) {
         if (de1Active != value) { de1Active = value; reconcile() }
     }
 
+    /**
+     * A guided brew session is live (issue #10) — the scale link is the
+     * session's telemetry, so it gets the same keep-alive treatment as a
+     * DE1 connection: a backgrounded phone must not drop the scale
+     * mid-pourover. Unlike the DE1 leg this is NOT gated on the user's
+     * keep-connected setting — a running session is explicit intent —
+     * but the charging gate still applies (never drain a battery
+     * device from the background).
+     */
+    fun setBrewSessionActive(value: Boolean) {
+        if (brewSessionActive != value) { brewSessionActive = value; reconcile() }
+    }
+
     fun setForeground(value: Boolean) {
         if (foreground != value) { foreground = value; reconcile() }
     }
 
     private fun reconcile() {
-        val desired = enabled && de1Active && plugged
+        val desired = ((enabled && de1Active) || brewSessionActive) && plugged
         when {
             // Foreground-only start (Android 12+ background-start restriction);
             // in the target case the app is foreground on its screensaver.

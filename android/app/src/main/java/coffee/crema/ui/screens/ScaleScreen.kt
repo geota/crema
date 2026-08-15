@@ -118,7 +118,33 @@ fun ScaleScreen(
             Modifier.fillMaxSize().padding(start = sp.edge, top = sp.s4, end = sp.edge, bottom = sp.s5),
             verticalArrangement = Arrangement.spacedBy(sp.s5),
         ) {
-            ScaleHeader(connected, caps)
+            // Weigh | Brew segment (issue #10): the scale is the instrument
+            // for both — Weigh is the classic standalone weighing surface,
+            // Brew the guided session. A live session pins the screen to
+            // Brew on entry so navigating away and back mid-pourover lands
+            // on the running clock.
+            var scaleMode by androidx.compose.runtime.remember {
+                androidx.compose.runtime.mutableStateOf(
+                    if (ui.guidedBrew.phase != "idle") "brew" else "weigh",
+                )
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Box(Modifier.weight(1f)) { ScaleHeader(connected, caps) }
+                coffee.crema.ui.components.CremaTabSwitch(
+                    options = listOf(
+                        coffee.crema.ui.components.TabOption("weigh", "Weigh"),
+                        coffee.crema.ui.components.TabOption("brew", "Brew"),
+                    ),
+                    value = scaleMode,
+                    onChange = { scaleMode = it },
+                )
+            }
+            if (scaleMode == "brew") {
+                coffee.crema.ui.brewlog.GuidedBrewPanel(
+                    vm = vm,
+                    modifier = Modifier.fillMaxSize().padding(top = sp.s2),
+                )
+            } else {
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(sp.s5)) {
                 // Left column — readout, dose helper, recent activity
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(sp.s4)) {
@@ -142,6 +168,7 @@ fun ScaleScreen(
                     connected = connected,
                     modifier = Modifier.width(372.dp).fillMaxHeight(),
                 )
+            }
             }
         }
     }
