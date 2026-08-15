@@ -18,6 +18,7 @@
  */
 
 import type { RustStoredShot, TimedSample } from '$lib/core';
+import type { BrewSeries } from '$lib/core/crema-core';
 import type { TelemetrySample } from '$lib/state';
 import { toWire } from './telemetry-wire';
 import { readJson, writeJsonChecked } from '$lib/utils/storage';
@@ -601,7 +602,10 @@ export class HistoryStore {
 	 * UI treats this as a "couldn't parse" error and toasts).
 	 */
 	addImported(imported: RustStoredShot, extras?: ImportExtras): StoredShot | null {
-		if (imported.record.samples.length === 0) return null;
+		// Zero telemetry is a parse failure for espresso files — but a
+		// legitimate shape for a Brew Log row (a re-imported manual V60
+		// carries the crema_brew_method extension key and no samples).
+		if (imported.record.samples.length === 0 && !imported.brewMethod) return null;
 		const bean = beanFromImported(
 			imported.metadata.beans ?? null,
 			imported.metadata.grinderSetting ?? null,
@@ -626,13 +630,143 @@ export class HistoryStore {
 			preinfuseTarget: extras?.preinfuseTarget ?? null,
 			stopOnWeight: extras?.stopOnWeight,
 			autoTare: extras?.autoTare,
-			tags: extras?.tags ? [...extras.tags] : []
+			tags: extras?.tags ? [...extras.tags] : [],
+			...(imported.brewMethod ? { brewMethod: imported.brewMethod } : {}),
+			...(imported.recipeName ? { recipeName: imported.recipeName } : {}),
+			...(imported.brewSeries ? { brewSeries: imported.brewSeries } : {})
 		};
 		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
 		this.persist();
 		void putSeries(record.id, record.record.samples).catch(() => {});
 		return record;
 	}
+
+	/**
+	 * Record a Brew Log entry (issue #10) — a manually logged brew, or a
+	 * finished guided session. The one path that legitimately persists a
+	 * zero-sample row: `record()` / `addImported()` keep their guards so
+	 * the live-espresso and file-import paths can't regress into storing
+	 * empty telemetry by accident.
+	 *
+	 * Inventory is NOT debited here — the caller pairs this with
+	 * `debitBean(beanId, dose)` exactly like the live-shot persistence
+	 * path, so the bag-empty prompt logic stays in one place.
+	 */
+	addManualBrew(input: ManualBrewInput): StoredShot {
+		const metadata: ShotMetadata = {
+			dose: input.dose ?? null,
+			yieldOut: input.yieldOut ?? null,
+			waterG: input.waterG ?? null,
+			grinderSetting: input.grinderSetting ?? null,
+			rating: input.rating ?? null,
+			notes: input.notes ?? null,
+			nextPlan: input.nextPlan ?? null
+		};
+		const record: StoredShot = {
+			formatVersion: STORED_SHOT_FORMAT_VERSION,
+			id: shotId(),
+			completedAt: input.completedAt,
+			profileName: null,
+			profile: null,
+			metadata,
+			record: {
+				duration: input.durationMs ?? 0,
+				samples: []
+			},
+			bean: input.bean ?? null,
+			brewMethod: input.method,
+			...(input.recipeName ? { recipeName: input.recipeName } : {}),
+			...(input.brewSeries
+				? { brewSeries: downsampleBrewSeries(input.brewSeries) }
+				: {}),
+			brewTempTarget: input.brewTempC ?? null,
+			tags: []
+		};
+		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
+		this.persist();
+		return record;
+	}
+
+	/**
+	 * Edit the user-entered facts of a manual brew row. Only rows for
+	 * which {@link isManualLog} holds may be edited this way — measured
+	 * (machine / guided) rows keep their captured values immutable.
+	 * Inventory re-settling on a dose change is the caller's job (the
+	 * same credit/debit pair bean re-attribution uses). No-ops on an
+	 * unknown id.
+	 */
+	updateManualBrew(id: string, patch: ManualBrewPatch): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		const shot = this.shots[idx];
+		if (!(shot.brewMethod && shot.record.samples.length === 0 && !shot.brewSeries)) return;
+		const next: StoredShot = {
+			...shot,
+			...(patch.method !== undefined ? { brewMethod: patch.method } : {}),
+			...(patch.completedAt !== undefined ? { completedAt: patch.completedAt } : {}),
+			...(patch.brewTempC !== undefined ? { brewTempTarget: patch.brewTempC } : {}),
+			...(patch.durationMs !== undefined
+				? { record: { ...shot.record, duration: patch.durationMs ?? 0 } }
+				: {}),
+			metadata: {
+				...shot.metadata,
+				...(patch.dose !== undefined ? { dose: patch.dose } : {}),
+				...(patch.waterG !== undefined ? { waterG: patch.waterG } : {}),
+				...(patch.yieldOut !== undefined ? { yieldOut: patch.yieldOut } : {})
+			}
+		};
+		this.shots = this.shots.map((s, i) => (i === idx ? next : s));
+		this.persist();
+	}
+}
+
+/** Input to {@link HistoryStore.addManualBrew}. */
+export interface ManualBrewInput {
+	/** Normalized method string (`"pourover"`, `"espresso"`, …). */
+	method: string;
+	/** Unix epoch ms the brew happened (user-editable for backfill). */
+	completedAt: number;
+	/** Frozen bean snapshot, or `null` for an untracked coffee. */
+	bean: ShotBean | null;
+	dose: number | null;
+	waterG: number | null;
+	yieldOut: number | null;
+	grinderSetting: string | null;
+	brewTempC: number | null;
+	durationMs: number | null;
+	rating: number | null;
+	notes: string | null;
+	nextPlan: string | null;
+	/** Guided sessions only: the recipe name + weight series. */
+	recipeName?: string | null;
+	brewSeries?: BrewSeries | null;
+}
+
+/** Editable-fact patch for {@link HistoryStore.updateManualBrew}. */
+export interface ManualBrewPatch {
+	method?: string;
+	completedAt?: number;
+	dose?: number | null;
+	waterG?: number | null;
+	yieldOut?: number | null;
+	brewTempC?: number | null;
+	durationMs?: number | null;
+}
+
+/**
+ * Cap a guided session's weight series to ≤200 evenly-spaced samples
+ * before it rides the localStorage row (matching the espresso
+ * `STORAGE_SAMPLE_CAP` posture; stage marks are tiny and kept whole).
+ */
+function downsampleBrewSeries(series: BrewSeries): BrewSeries {
+	const CAP = 200;
+	const n = series.samples.length;
+	if (n <= CAP) return series;
+	const samples = Array.from(
+		{ length: CAP },
+		(_, i) => series.samples[Math.min(n - 1, Math.round((i * (n - 1)) / (CAP - 1)))]
+	);
+	return { ...series, samples };
 }
 
 /**

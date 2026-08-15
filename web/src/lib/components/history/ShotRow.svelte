@@ -5,10 +5,21 @@
 	 * profile name, the ratio + yield metrics and a star rating.
 	 */
 	import type { StoredShot } from '$lib/history';
-	import { grindLabel, ratioLabel, peaksOf, yieldOf, flatSamplesOf } from '$lib/history';
+	import {
+		grindLabel,
+		isManualLog,
+		methodOf,
+		ratioLabel,
+		peaksOf,
+		yieldOf,
+		flatSamplesOf
+	} from '$lib/history';
+	import { methodLabel } from '$lib/brew/methods';
 	import StarRating from '$lib/components/common/StarRating.svelte';
+	import MethodMark from '$lib/components/brewlog/MethodMark.svelte';
 	import { getSettingsStore, convertWeight } from '$lib/settings';
 	import MiniShotChart from './MiniShotChart.svelte';
+	import MiniBrewChart from './MiniBrewChart.svelte';
 	import Icon from '$lib/icons/Icon.svelte';
 	import { relativeAgo } from '$lib/utils/relative-time';
 
@@ -69,6 +80,18 @@
 	 * ending with the extraction time. Bean-less shots keep the original
 	 * "Ns extraction" line.
 	 */
+	/** Row method — `null` for machine espresso (issue #10). */
+	const method = $derived(methodOf(shot));
+	/** Manually logged (no telemetry of any kind) → "logged" tag. */
+	const manual = $derived(isManualLog(shot));
+
+	/** "0:27" / "3:05" — mm:ss reads right for both shot and pourover. */
+	function fmtTime(ms: number): string {
+		const total = Math.round(ms / 1000);
+		if (total < 90) return `${total} s`;
+		return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+	}
+
 	const rowBeanLine = $derived.by(() => {
 		const parts: string[] = [];
 		const b = shot.bean;
@@ -80,9 +103,12 @@
 		}
 		const label = grindLabel(shot);
 		if (label) parts.push(label);
-		const secs = `${(shot.record.duration / 1000).toFixed(0)} s`;
-		if (parts.length === 0) return `${secs} extraction`;
-		parts.push(secs);
+		// Manual logs may have no recorded time — omit rather than "0 s".
+		if (shot.record.duration > 0) {
+			const secs = fmtTime(shot.record.duration);
+			if (parts.length === 0) return `${secs} extraction`;
+			parts.push(secs);
+		}
 		return parts.join(' · ');
 	});
 
@@ -133,10 +159,19 @@
 		<div class="hi-row-time-d">{ago}</div>
 	</div>
 	<div class="hi-row-spark">
-		<MiniShotChart series={sparkSeries} width={96} height={32} />
+		{#if shot.record.samples.length > 0}
+			<MiniShotChart series={sparkSeries} width={96} height={32} />
+		{:else if shot.brewSeries && shot.brewSeries.samples.length > 0}
+			<MiniBrewChart series={shot.brewSeries} width={96} height={32} />
+		{:else}
+			<MethodMark {method} tile />
+		{/if}
 	</div>
 	<div class="hi-row-main">
-		<div class="hi-row-name">{shot.profileName ?? 'Untitled shot'}</div>
+		<div class="hi-row-name">
+			{shot.profileName ?? shot.recipeName ?? (method ? methodLabel(method) : 'Untitled shot')}
+			{#if manual}<span class="hi-row-logged">· logged</span>{/if}
+		</div>
 		<div class="hi-row-bean">{rowBeanLine}</div>
 		{#if noteSnippet}
 			<div class="hi-row-note">{noteSnippet}</div>
@@ -147,10 +182,17 @@
 		<div class="hi-row-metric-l">ratio</div>
 	</div>
 	<div class="hi-row-metric">
-		<div class="hi-row-metric-val">
-			{yieldM.value}<em>{yieldM.unit}</em>
-		</div>
-		<div class="hi-row-metric-l">yield</div>
+		{#if method && method !== 'espresso' && (shot.metadata.waterG ?? 0) > 0}
+			<div class="hi-row-metric-val">
+				{Math.round(shot.metadata.waterG ?? 0)}<em>g</em>
+			</div>
+			<div class="hi-row-metric-l">water</div>
+		{:else}
+			<div class="hi-row-metric-val">
+				{yieldM.value}<em>{yieldM.unit}</em>
+			</div>
+			<div class="hi-row-metric-l">yield</div>
+		{/if}
 	</div>
 	<div class="hi-row-stars" class:is-unrated={rating <= 0}>
 			<StarRating rating={rating} />
@@ -252,6 +294,12 @@
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+	/* Quiet provenance tag on manually logged brews. */
+	.hi-row-logged {
+		font-weight: 400;
+		font-size: 11px;
+		color: rgba(var(--tint-rgb), 0.5);
 	}
 	.hi-row-bean {
 		font-family: var(--font-sans);

@@ -750,7 +750,10 @@ export const ShotSyncLive = Layer.effect(
 		const uploadUnsyncedShots = Effect.fn('ShotSync.uploadUnsyncedShots')(function* (
 			history: HistoryStore
 		) {
-			const list = history.all.filter((s) => !s.visualizerId);
+			// Brew Log rows (any `brewMethod`) never sync: Visualizer is a
+			// DE1-telemetry service and logged brews carry none (issue #10 —
+			// the same local-only posture as `nextPlan`).
+			const list = history.all.filter((s) => !s.visualizerId && !s.brewMethod);
 
 			/**
 			 * Record a non-success outcome: enqueue a recoverable error for a timed

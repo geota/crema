@@ -18,7 +18,7 @@
 	 * and persisted to the `lib/history` store. Save-as-profile is a stub
 	 * (`// TODO`).
 	 */
-	import type { StoredShot } from '$lib/history';
+	import type { ManualBrewPatch, StoredShot } from '$lib/history';
 	import {
 		ratioLabel,
 		shotFilename,
@@ -27,7 +27,12 @@
 		yieldOf,
 		flatSamplesOf,
 		effectiveGrindSetting,
+		isManualLog,
+		methodOf,
 	} from '$lib/history';
+	import { methodLabel } from '$lib/brew/methods';
+	import MethodMark from '$lib/components/brewlog/MethodMark.svelte';
+	import BrewSessionChart from './BrewSessionChart.svelte';
 	import { loadCore, type ShotQualityReport } from '$lib/core';
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
 	import { daysOffRoast, roastBand, roastFreshness, freshnessColor, type Bean, type Roaster } from '$lib/bean';
@@ -63,7 +68,9 @@
 		onDelete,
 		canDeleteRemote = false,
 		uploadTargets = [],
-		onUpload = null
+		onUpload = null,
+		onLogAgain = null,
+		onManualBrewEdit = null
 	}: {
 		/** The selected stored shot. */
 		shot: StoredShot;
@@ -125,11 +132,46 @@
 		 * SHA; Decent replaces its copy). `null` = nothing to upload with.
 		 */
 		onUpload?: ((targets: UploadTarget[]) => void) | null;
+		/**
+		 * Re-open the Log-brew form seeded from this brew, dated now —
+		 * the Brew Log's sibling of "Start from this shot" (issue #10).
+		 * Only rendered for brew rows.
+		 */
+		onLogAgain?: (() => void) | null;
+		/**
+		 * Persist an edited user-entered fact of a MANUAL brew row
+		 * (dose / water / temp / time). The caller re-settles bean
+		 * inventory on dose changes. `null` (or a non-manual row)
+		 * renders the facts read-only.
+		 */
+		onManualBrewEdit?: ((patch: ManualBrewPatch) => void) | null;
 	} = $props();
 
 	const uploadEntry = $derived(uploadMenuEntry(uploadTargets));
 	const viewRows = $derived(viewableTargets(uploadTargets));
 	const shareableCount = $derived(viewRows.filter((t) => t.shareable).length);
+
+	// ── Brew Log rows (issue #10) ────────────────────────────────────────
+	/** The row's brew method — `null` for machine espresso. */
+	const method = $derived(methodOf(shot));
+	/** Any brew-method row (manual log OR guided session). */
+	const isBrew = $derived(method != null);
+	/** Manually logged: user-entered facts stay editable. */
+	const manual = $derived(isManualLog(shot));
+	const factsEditable = $derived(manual && onManualBrewEdit != null);
+
+	/** "0:27" / "3:05" — one duration format for shots and pourovers. */
+	function fmtDuration(ms: number): string {
+		const total = Math.round(ms / 1000);
+		if (total < 90) return `${total} s`;
+		return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+	}
+
+	/** The read-only "Water"/"Yield" tile value for a brew row. */
+	const brewOutValue = $derived.by(() => {
+		const v = method === 'espresso' ? shot.metadata.yieldOut : shot.metadata.waterG;
+		return v != null && v > 0 ? String(Math.round(v)) : '—';
+	});
 
 	/** Whether the notes block is in edit mode. */
 	let editing = $state(false);
@@ -286,6 +328,15 @@
 	// freshness chip is STATIC: the bean's age at PULL time, derived from
 	// the shot's own `completedAt` — a shot pulled at 7 days says 7d forever.
 	const profileMetaLine = $derived.by(() => {
+		if (isBrew) {
+			const parts: string[] = [];
+			if (shot.record.duration > 0) parts.push(fmtDuration(shot.record.duration));
+			const water = shot.metadata.waterG;
+			if (water != null && water > 0) parts.push(`${Math.round(water)} g water`);
+			else if (yieldOut != null) parts.push(`${yieldM.value} ${yieldM.unit}`);
+			parts.push(ratioLabel(shot));
+			return parts.join(' · ');
+		}
 		const parts: string[] = [`${(shot.record.duration / 1000).toFixed(0)} s`];
 		if (yieldOut != null) parts.push(`${yieldM.value} ${yieldM.unit}`, ratioLabel(shot));
 		return parts.join(' · ');
@@ -547,9 +598,12 @@
 			     the grind this shot was pulled at on the prep line. -->
 			<HeaderBlock
 				variant="profile"
-				eyebrow="Profile"
+				eyebrow={isBrew ? 'Method' : 'Profile'}
 				{stamp}
-				title={shot.profileName ?? 'Untitled shot'}
+				title={isBrew
+					? (shot.recipeName ?? methodLabel(method)) +
+						(manual ? ' · logged' : '')
+					: (shot.profileName ?? 'Untitled shot')}
 				meta={profileMetaLine}
 				interactive={false}
 			/>
@@ -594,6 +648,21 @@
 					}
 				]}
 			/>
+			{#if isBrew}
+				<!-- Brew rows: "Log again" is the dial-in loop's sibling —
+				     re-open the form seeded from this brew, dated now
+				     (issue #10). The machine actions don't apply. -->
+				{#if onLogAgain}
+					<button
+						class="st-btn st-btn-primary"
+						onclick={onLogAgain}
+						title="Log another brew with these settings — same method, bean, dose and water"
+					>
+						<Icon cls="ph ph-arrow-counter-clockwise" aria-hidden="true" />
+						Log again
+					</button>
+				{/if}
+			{:else}
 			<!-- Start-from-this-shot leads (the full dial-in: profile + bean +
 			     grind + targets); the profile-only reload and Save-as-profile /
 			     the Visualizer actions ride its menu — the header blocks need
@@ -651,6 +720,7 @@
 					)
 				]}
 			/>
+			{/if}
 			{#if onDelete}
 				<SplitButton
 					variant="danger"
@@ -686,6 +756,23 @@
 	{#snippet shotChart(height: number)}
 		<StaticShotChart series={flatSeries} {height} />
 	{/snippet}
+	{#if shot.record.samples.length === 0}
+		<!-- Brew rows: no DE1 telemetry. A guided session draws its
+		     weight curve with stage bands; a manual log shows no chart
+		     region at all — the pane simply tightens up (issue #10). -->
+		{#if shot.brewSeries && shot.brewSeries.samples.length > 0}
+			<div class="hi-chart hi-chart-brew">
+				<BrewSessionChart series={shot.brewSeries} height={300} />
+				<div class="hi-chart-legend">
+					<span class="hi-leg-group">
+						<ScalesIcon class="hi-leg-icon" aria-hidden="true" />
+						<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-weight)"></i>Weight</span>
+						<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-flow)"></i>Pour rate</span>
+					</span>
+				</div>
+			</div>
+		{/if}
+	{:else}
 	<div class="hi-chart">
 		{@render shotChart(380)}
 		<button
@@ -731,6 +818,7 @@
 			</span>
 		</div>
 	</div>
+	{/if}
 
 	{#if chartExpanded}
 		<ChartModal onclose={() => (chartExpanded = false)}>
@@ -773,6 +861,102 @@
 	{/if}
 
 	<!-- Metric strip -->
+	{#if isBrew}
+		<!-- Brew rows: five method-shaped tiles. On a MANUAL log the
+		     facts are user-entered, so they stay editable (steppers /
+		     time field); measured (guided) rows render read-only. -->
+		<div class="hi-metrics hi-metrics-brew">
+			<div class="hi-metric">
+				<div class="hi-metric-l">Method</div>
+				<div class="hi-metric-v hi-metric-method">
+					<MethodMark {method} size={14} />
+					<span>{methodLabel(method)}</span>
+				</div>
+			</div>
+			<div class="hi-metric">
+				<div class="hi-metric-l">Time</div>
+				{#if factsEditable}
+					<input
+						class="hi-fact-input"
+						value={shot.record.duration > 0 ? fmtDuration(shot.record.duration).replace(' s', '') : ''}
+						placeholder="m:ss"
+						aria-label="Brew time"
+						onchange={(e) => {
+							const raw = e.currentTarget.value.trim();
+							const m = /^(\d+):([0-5]?\d)$/.exec(raw);
+							const secs = m ? Number(m[1]) * 60 + Number(m[2]) : Number(raw);
+							onManualBrewEdit?.({
+								durationMs:
+									Number.isFinite(secs) && secs > 0 ? Math.round(secs * 1000) : null
+							});
+						}}
+					/>
+				{:else}
+					<div class="hi-metric-v">
+						{shot.record.duration > 0 ? fmtDuration(shot.record.duration) : '—'}
+					</div>
+				{/if}
+			</div>
+			<div class="hi-metric">
+				<div class="hi-metric-l">Dose</div>
+				{#if factsEditable}
+					<QuickStepper
+						value={shot.metadata.dose ?? 0}
+						unit="g"
+						min={0}
+						max={200}
+						step={0.5}
+						onChange={(n) => onManualBrewEdit?.({ dose: n > 0 ? n : null })}
+					/>
+				{:else}
+					<div class="hi-metric-v">
+						{shot.metadata.dose != null ? `${shot.metadata.dose}` : '—'}<em>g</em>
+					</div>
+				{/if}
+			</div>
+			<div class="hi-metric">
+				<div class="hi-metric-l">{method === 'espresso' ? 'Yield' : 'Water'}</div>
+				{#if factsEditable}
+					<QuickStepper
+						value={(method === 'espresso' ? shot.metadata.yieldOut : shot.metadata.waterG) ?? 0}
+						unit="g"
+						min={0}
+						max={2000}
+						step={method === 'espresso' ? 1 : 10}
+						onChange={(n) =>
+							onManualBrewEdit?.(
+								method === 'espresso'
+									? { yieldOut: n > 0 ? n : null }
+									: { waterG: n > 0 ? n : null }
+							)}
+					/>
+				{:else}
+					<div class="hi-metric-v">{brewOutValue}<em>g</em></div>
+				{/if}
+			</div>
+			<div class="hi-metric">
+				<div class="hi-metric-l">Ratio</div>
+				<div class="hi-metric-v">{ratioLabel(shot)}</div>
+			</div>
+			<div class="hi-metric">
+				<div class="hi-metric-l">Temp</div>
+				{#if factsEditable}
+					<QuickStepper
+						value={shot.brewTempTarget ?? 0}
+						unit="°C"
+						min={0}
+						max={100}
+						step={1}
+						onChange={(n) => onManualBrewEdit?.({ brewTempC: n > 0 ? n : null })}
+					/>
+				{:else}
+					<div class="hi-metric-v">
+						{shot.brewTempTarget != null ? Math.round(shot.brewTempTarget) : '—'}<em>°C</em>
+					</div>
+				{/if}
+			</div>
+		</div>
+	{:else}
 	<div class="hi-metrics">
 		<div class="hi-metric">
 			<div class="hi-metric-l">Time</div>
@@ -803,6 +987,7 @@
 			<div class="hi-metric-v">{flatSeries.length}</div>
 		</div>
 	</div>
+	{/if}
 
 	<!-- Rating (left) + the grind stepper (right) share one line (issue
 	     #16 round 4, Android parity). The stepper edits the grind THIS
@@ -1064,6 +1249,42 @@
 		display: grid;
 		grid-template-columns: repeat(7, minmax(0, 1fr));
 		gap: 6px;
+	}
+	/* Brew rows carry 6 method-shaped tiles (issue #10); editable ones
+	   hold a QuickStepper, so give the row a touch more room. */
+	.hi-metrics-brew {
+		grid-template-columns: repeat(6, minmax(0, 1fr));
+	}
+	.hi-metric-method {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-family: var(--font-sans);
+		font-size: 12.5px;
+		font-weight: 600;
+	}
+	.hi-metric-method :global(svg) {
+		color: var(--copper-400);
+		flex: none;
+	}
+	.hi-fact-input {
+		background: rgba(var(--tint-rgb), 0.05);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border-radius: var(--radius-xs);
+		color: var(--fg-1);
+		font-family: var(--font-mono);
+		font-variant-numeric: tabular-nums;
+		font-size: 13px;
+		padding: 4px 8px;
+		width: 100%;
+		box-sizing: border-box;
+		outline: 0;
+	}
+	.hi-fact-input:focus {
+		border-color: var(--copper-400);
+	}
+	.hi-metrics-brew .hi-metric :global(.qcs) {
+		width: 100%;
 	}
 	.hi-metric {
 		display: flex;
