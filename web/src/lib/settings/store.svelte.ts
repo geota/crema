@@ -222,6 +222,15 @@ export interface Settings {
 	 */
 	keepScreenOnBrew: boolean;
 
+	/**
+	 * Guided-brew step cues as sound (issue #10) — short WebAudio blips
+	 * at approach / boundary / step-change. Default on: a brew timer
+	 * that doesn't beep is a bad timer.
+	 */
+	brewCueSound: boolean;
+	/** Guided-brew step cues as vibration, where the device supports it. */
+	brewCueHaptics: boolean;
+
 	// ── Quick-Controls steam / hot-water / flush (issue 14) ──────────────────
 	// Persisted Quick Sheet values for the machine's steam / hot-water / flush
 	// params. Unlike most of this store these *are* machine settings — but they
@@ -344,6 +353,11 @@ export const DEFAULT_SETTINGS: Settings = {
 
 	keepScreenOnBrew: false,
 
+	// Guided-brew cues (issue #10) — both on out of the box; the Scale
+	// page's Brew segment is the surface they serve.
+	brewCueSound: true,
+	brewCueHaptics: true,
+
 	// Quick-Controls steam / hot-water / flush — match DEFAULT_BREW_PARAMS so a
 	// fresh install seeds the Quick Sheet identically to before persistence.
 	qcSteamTimeS: 12,
@@ -444,6 +458,8 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		waterRefillPointMm: s.waterRefillPointMm ?? undefined,
 		chartChannels: CHART_FLAG_TO_KEY.filter(([flag]) => s[flag]).map(([, key]) => key),
 		keepScreenOnBrew: s.keepScreenOnBrew,
+		brewCueSound: s.brewCueSound,
+		brewCueHaptics: s.brewCueHaptics,
 		showDebugPanel: s.showDebugPanel,
 		defaultDoseG: s.defaultDoseG,
 		defaultRatio: s.defaultRatio,
@@ -501,6 +517,8 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		showWeight: on.has('weight'),
 		showWeightFlow: on.has('weightFlow'),
 		keepScreenOnBrew: c.keepScreenOnBrew,
+		brewCueSound: c.brewCueSound ?? true,
+		brewCueHaptics: c.brewCueHaptics ?? true,
 		showDebugPanel: c.showDebugPanel,
 		defaultDoseG: c.defaultDoseG,
 		defaultRatio: c.defaultRatio,

@@ -109,6 +109,13 @@ pub struct CommonSettings {
     pub chart_channels: Vec<String>,
     /// Hold the screen awake while a shot pulls.
     pub keep_screen_on_brew: bool,
+    /// Guided-brew step cues as sound (issue #10). `None` = default on:
+    /// a brew timer that doesn't beep is a bad timer. Option per the
+    /// additive-CommonSettings rule so older backups round-trip.
+    pub brew_cue_sound: Option<bool>,
+    /// Guided-brew step cues as vibration, where the device supports it.
+    /// `None` = default on.
+    pub brew_cue_haptics: Option<bool>,
     /// Show the debug / event-log panel.
     pub show_debug_panel: bool,
     /// Default dose for new profiles, grams.
@@ -166,6 +173,8 @@ impl Default for CommonSettings {
                 "weight".to_owned(),
             ],
             keep_screen_on_brew: false,
+            brew_cue_sound: None,
+            brew_cue_haptics: None,
             show_debug_panel: false,
             default_dose_g: 18.0,
             default_ratio: 2.0,

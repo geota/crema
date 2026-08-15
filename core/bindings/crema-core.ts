@@ -520,6 +520,17 @@ export interface CommonSettings {
 	chartChannels: string[];
 	/** Hold the screen awake while a shot pulls. */
 	keepScreenOnBrew: boolean;
+	/**
+	 * Guided-brew step cues as sound (issue #10). `None` = default on:
+	 * a brew timer that doesn't beep is a bad timer. Option per the
+	 * additive-CommonSettings rule so older backups round-trip.
+	 */
+	brewCueSound?: boolean;
+	/**
+	 * Guided-brew step cues as vibration, where the device supports it.
+	 * `None` = default on.
+	 */
+	brewCueHaptics?: boolean;
 	/** Show the debug / event-log panel. */
 	showDebugPanel: boolean;
 	/** Default dose for new profiles, grams. */

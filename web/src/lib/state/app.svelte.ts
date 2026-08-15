@@ -24,6 +24,9 @@ import {
 	type FirmwareUpdateStatus
 } from '$lib/core';
 import { MachineState, MmrRegister } from '$lib/core/crema-core';
+import type { BrewRecipe } from '$lib/core/crema-core';
+import { getGuidedBrewStore } from '$lib/brew/session.svelte';
+import { playBrewCue } from '$lib/brew/cues';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore, getBeanLibraryStore } from '$lib/bean';
 import { getHistoryStore, snapshotFromBean, extractCremaExtras } from '$lib/history';
@@ -579,6 +582,24 @@ export class CremaApp {
 					.sawModelJson()
 					.then((blob) => writeJson(SAW_MODEL_KEY, blob))
 					.catch(() => undefined);
+			}
+			if (event.type === 'BrewSessionStarted') {
+				getGuidedBrewStore().started(performance.now());
+			}
+			if (event.type === 'BrewStepChanged') {
+				const store = getGuidedBrewStore();
+				store.stepChanged(event.content.step_index, event.content.at_ms);
+				// The chime for an auto-advanced boundary rides the step
+				// change itself (the Boundary cue covers hold-steps).
+				if (event.content.step_index > 0) playBrewCue('step');
+			}
+			if (event.type === 'BrewCueDue') {
+				playBrewCue(event.content.cue === 'approach' ? 'approach' : 'boundary');
+			}
+			if (event.type === 'BrewSessionCompleted') {
+				getGuidedBrewStore().completed(event.content.summary);
+				playBrewCue('done');
+				this.stopBrewTick();
 			}
 			if (event.type === 'ScaleReading') {
 				// Low-battery warning (issue #29): one toast per connection
@@ -1687,6 +1708,72 @@ export class CremaApp {
 	/** Tare the connected scale. Routes the core's `WriteScale` to the scale. */
 	async tareScale(): Promise<void> {
 		this.applyCoreOutput(await this.core.tareScale());
+	}
+
+	// ---- Guided brew sessions (issue #10) ---------------------------------
+	//
+	// The scale-only session lane. Commands round-trip through the core's
+	// `BrewSessionMonitor`; while a session is live a 250 ms tick drives
+	// its countdowns (the core's `on_tick` is timestamp-based, so cadence
+	// jitter is harmless). No DE1 write ever originates here.
+
+	/** The session-countdown tick, live only while a session runs. */
+	private brewTick: ReturnType<typeof setInterval> | null = null;
+
+	private startBrewTick(): void {
+		this.brewTick ??= setInterval(() => {
+			void this.core
+				.onTick(performance.now())
+				.then((out) => this.applyCoreOutput(out));
+		}, 250);
+	}
+
+	private stopBrewTick(): void {
+		if (this.brewTick !== null) {
+			clearInterval(this.brewTick);
+			this.brewTick = null;
+		}
+	}
+
+	/** Arm a session for `recipe`; `startOnPour` starts it at first pour. */
+	async brewSessionArm(recipe: BrewRecipe, startOnPour: boolean): Promise<void> {
+		this.applyCoreOutput(
+			await this.core.brewSessionArm(JSON.stringify(recipe), startOnPour)
+		);
+		getGuidedBrewStore().armed(recipe, startOnPour);
+		this.startBrewTick();
+	}
+
+	/** Start an armed session's clock (the Start tap). */
+	async brewSessionBegin(): Promise<void> {
+		this.applyCoreOutput(await this.core.brewSessionBegin(performance.now()));
+	}
+
+	async brewSessionPause(): Promise<void> {
+		const now = performance.now();
+		this.applyCoreOutput(await this.core.brewSessionPause(now));
+		getGuidedBrewStore().paused(now);
+	}
+
+	async brewSessionResume(): Promise<void> {
+		const now = performance.now();
+		this.applyCoreOutput(await this.core.brewSessionResume(now));
+		getGuidedBrewStore().resumed(now);
+	}
+
+	async brewSessionSkip(): Promise<void> {
+		this.applyCoreOutput(await this.core.brewSessionSkip(performance.now()));
+	}
+
+	async brewSessionFinish(): Promise<void> {
+		this.applyCoreOutput(await this.core.brewSessionFinish(performance.now()));
+	}
+
+	/** Drop the session without a summary (backing out of setup). */
+	async brewSessionCancel(): Promise<void> {
+		this.applyCoreOutput(await this.core.brewSessionCancel());
+		getGuidedBrewStore().reset();
+		this.stopBrewTick();
 	}
 
 	/**
