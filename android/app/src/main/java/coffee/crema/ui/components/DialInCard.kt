@@ -1,14 +1,17 @@
 package coffee.crema.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -35,10 +38,18 @@ import coffee.crema.ui.theme.JetBrainsMono
  * bean has at least one stored shot AND no session Last-shot card is up (the
  * two never describe the same shot twice): that bag's most recent shot
  * (grind · yield · ratio · time · rating) with its forward-looking "next
- * time" plan rendered prominently, a tap-through to the shot in History,
- * and one button that re-applies the whole setup (MainViewModel.startFromShot).
- * Shared by the tablet BrewScreen and PhoneBrewScreen; web parity:
- * `DialInCard.svelte`.
+ * time" plan rendered as an accent-barred quote, a tap-through to the shot
+ * in History, and one button that re-applies the whole setup
+ * (MainViewModel.startFromShot). Shared by the tablet BrewScreen and
+ * PhoneBrewScreen; web parity: `DialInCard.svelte`.
+ *
+ * The tablet hosts this in the left column's FIXED bottom slot (the Phase
+ * card is the column's only shock absorber), so the card must never outgrow
+ * what the column has left — on a 600–800dp-tall window Compose clips the
+ * column's last child, which used to eat the button. The card therefore
+ * keeps everything but the plan at a fixed, small cost, and the HOST states
+ * how many plan lines fit via [planMaxLines] (the tablet derives it from
+ * measured leftover height; the phone's scrolling column keeps the default).
  */
 @Composable
 fun DialInCard(
@@ -50,22 +61,31 @@ fun DialInCard(
     /** Open this shot in History. */
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
+    /** How many lines the "next time" plan may take; 0 hides the plan. */
+    planMaxLines: Int = 3,
 ) {
     val yieldM = convertWeight(shot.yieldG, weightUnit)
     val ratio = formatRatio(shot.doseG, shot.yieldG)
-    val plan = shot.nextPlan?.trim()?.takeIf { it.isNotEmpty() }
+    val plan = shot.nextPlan?.trim()?.takeIf { it.isNotEmpty() && planMaxLines > 0 }
     CremaCard(modifier.fillMaxWidth().clickable(onClick = onOpen)) {
         Column(
-            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            // Header — eyebrow left, rating right. No caret: the whole card is
+            // the tap-through (kept the row within a 248dp column's width).
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Eyebrow("Where you left off · ${relativeAgo(shot.completedAtMs)}")
-                PhIcon("caret-right", sizeDp = 13, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Eyebrow("Where you left off · ${relativeAgo(shot.completedAtMs)}", Modifier.weight(1f))
+                if ((shot.rating ?: 0) > 0) {
+                    CremaStarRating(
+                        shot.rating ?: 0,
+                        starDp = 9,
+                        emptyTint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
+                    )
+                }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 DialInStat("Grind", shot.effectiveGrindSetting ?: "—", null, Modifier.weight(1f))
@@ -73,26 +93,25 @@ fun DialInCard(
                 DialInStat("Ratio", ratio, null, Modifier.weight(1f))
                 DialInStat("Time", fmt("%.0f", shot.durationMs / 1000.0), "s", Modifier.weight(1f))
             }
-            if ((shot.rating ?: 0) > 0) {
-                CremaStarRating(
-                    shot.rating ?: 0,
-                    starDp = 11,
-                    emptyTint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
-                )
-            }
             if (plan != null) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Eyebrow("Next time")
+                // The plan as a quote — accent bar left, italic snippet (the
+                // same treatment the history rows give it), no label row.
+                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                    Spacer(
+                        Modifier.width(2.dp).fillMaxHeight()
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
+                    )
                     Text(
                         plan,
                         style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
                         color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 3,
+                        maxLines = planMaxLines,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 8.dp),
                     )
                 }
             }
-            FilledTonalButton(onClick = onStart, modifier = Modifier.height(36.dp)) {
+            FilledTonalButton(onClick = onStart, modifier = Modifier.height(32.dp)) {
                 PhIcon("coffee", sizeDp = 15)
                 Spacer(Modifier.width(6.dp))
                 Text("Use these settings")

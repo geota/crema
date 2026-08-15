@@ -705,9 +705,11 @@
 		if (liveBean && liveBean.archivedAt == null && beanLibrary.activeBeanId !== liveBean.id) {
 			activateBean(liveBean.id, { shotInProgress: ui.shotInProgress });
 		}
-		// 2. The profile — by name; `profileName` is all a shot persists.
+		// 2. The profile — by name (case-insensitive, Android parity);
+		// `profileName` is all a shot persists.
 		if (shot.profileName) {
-			const profile = profileStore.all.find((pr) => pr.name === shot.profileName);
+			const wanted = shot.profileName.toLowerCase();
+			const profile = profileStore.all.find((pr) => pr.name.toLowerCase() === wanted);
 			if (profile) {
 				profileStore.setActive(profile.id);
 				void app?.syncActiveProfile(profile, {});

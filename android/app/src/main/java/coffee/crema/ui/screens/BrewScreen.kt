@@ -19,6 +19,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -246,6 +247,17 @@ fun BrewScreen(
                     // the whole point: a header banner would have taken ~55dp
                     // off the chart, and a 7" tablet in landscape is 600dp tall
                     // and has none to give (geota/crema#57).
+                    // Idle with a bag that has history and no session Last-shot
+                    // card → the dial-in card (below Limits) is the "what's
+                    // next" surface, and the static phase preview yields its
+                    // slot: on a 600dp-tall column the preview was an empty
+                    // sliver anyway, and the freed height is what lets the
+                    // card show its "next time" plan.
+                    val dialInShot = if (!running && ui.lastShot == null) {
+                        ui.activeBeanId?.let { bid ->
+                            ui.history.firstOrNull { it.bean?.beanId == bid }
+                        }
+                    } else null
                     if (mode != null) {
                         val t = rememberModeTargets(ui)
                         ModeCard(
@@ -279,6 +291,10 @@ fun BrewScreen(
                         // Stop conditions and Last shot stay anchored to the
                         // column's bottom edge exactly where Phase leaves them.
                         Spacer(Modifier.weight(1f))
+                    } else if (dialInShot != null) {
+                        // Same wrap-plus-spacer treatment while the dial-in card
+                        // owns the bottom slot — Limits + card stay anchored.
+                        Spacer(Modifier.weight(1f))
                     } else {
                         PhaseCard(
                             active = active,
@@ -309,20 +325,25 @@ fun BrewScreen(
                             stopReason = ui.lastStopReason,
                             onClick = { vm.openShotInHistory(ui.lastShot!!.id); onNav("history") },
                         )
-                    } else if (!running) {
+                    } else if (dialInShot != null) {
                         // Dial-in card — the active bag's last STORED shot + its
                         // "next time" plan (bean-workflow-unify §A2). Only when
                         // no session Last-shot card is up, so the same shot is
-                        // never described twice.
-                        val lastBeanShot = ui.activeBeanId?.let { bid ->
-                            ui.history.firstOrNull { it.bean?.beanId == bid }
-                        }
-                        if (lastBeanShot != null) {
+                        // never described twice. This is the column's FIXED
+                        // bottom slot, so grant the plan only the lines that
+                        // measurably fit — on a 600dp-tall window an unbounded
+                        // card used to clip its own button.
+                        BoxWithConstraints {
+                            val planLines =
+                                if (constraints.hasBoundedHeight)
+                                    ((maxHeight - 112.dp) / 16.dp).toInt().coerceIn(0, 3)
+                                else 3
                             DialInCard(
-                                shot = lastBeanShot,
+                                shot = dialInShot,
                                 weightUnit = ui.weightUnit,
-                                onStart = { vm.startFromShot(lastBeanShot.id) },
-                                onOpen = { vm.openShotInHistory(lastBeanShot.id); onNav("history") },
+                                onStart = { vm.startFromShot(dialInShot.id) },
+                                onOpen = { vm.openShotInHistory(dialInShot.id); onNav("history") },
+                                planMaxLines = planLines,
                             )
                         }
                     }
