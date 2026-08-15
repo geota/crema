@@ -297,6 +297,39 @@ fun MainUiState.refillSoon(): Boolean {
     return level <= threshold + REFILL_SOON_MARGIN_MM
 }
 
+/**
+ * The guided-brew session's SHELL state (issue #10) — the core's
+ * `BrewSessionMonitor` owns the truth (boundaries, cues, the recording);
+ * this holds what the Scale screen's Brew segment renders between events.
+ * Timestamps are `SystemClock.elapsedRealtime()` — the same monotonic
+ * clock every BLE notification stamps into the core, so the shell clock
+ * and the core's step boundaries can't drift apart.
+ */
+data class GuidedBrewUi(
+    /** idle | armed | running | paused | done. */
+    val phase: String = "idle",
+    val recipe: coffee.crema.core.BrewRecipe? = null,
+    val startOnPour: Boolean = false,
+    val stepIndex: Int = 0,
+    /** elapsedRealtime() the clock started; null before Started. */
+    val startedAtRealtime: Long? = null,
+    /** Session-elapsed ms the current step began (from BrewStepChanged). */
+    val stepStartedAtMs: Long = 0L,
+    /** Accumulated paused time, ms. */
+    val pausedAccumMs: Long = 0L,
+    /** elapsedRealtime() the current pause began; null while running. */
+    val pausedSinceRealtime: Long? = null,
+    /** The finished session's summary, until saved or discarded. */
+    val summary: coffee.crema.core.BrewSessionSummary? = null,
+) {
+    /** Session time at wall-clock [nowRealtime], pauses excluded. */
+    fun elapsedMs(nowRealtime: Long): Long {
+        val started = startedAtRealtime ?: return 0L
+        val effective = pausedSinceRealtime ?: nowRealtime
+        return (effective - started - pausedAccumMs).coerceAtLeast(0L)
+    }
+}
+
 data class MainUiState(
     val bleState: De1BleManager.State = De1BleManager.State.IDLE,
     /** Coarse state of the scale connection. */
@@ -529,6 +562,13 @@ data class MainUiState(
     val qcFlushTempC: Float = 95f,
     /** Persisted Quick-Controls grinder click (issue 15); null = never dialed. */
     val qcGrind: Float? = null,
+    // ── Brew Log (issue #10) ─────────────────────────────────────────────
+    /** The live guided-brew session, when one is armed/running. */
+    val guidedBrew: GuidedBrewUi = GuidedBrewUi(),
+    /** The guided-brew recipe library (tombstones filtered on read). */
+    val brewRecipes: List<coffee.crema.core.BrewRecipe> = emptyList(),
+    /** Per-method last-used recipe pointer (method → recipe id). */
+    val lastRecipeByMethod: Map<String, String> = emptyMap(),
     /**
      * Queued user-facing feedback lines (imports, exports, blocked actions).
      * MainActivity surfaces them as snackbars, dequeuing via
@@ -1087,6 +1127,170 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         setActiveProfile = { setActiveProfile(it) },
         resetBrewParams = { resetBrewParams() },
     )
+
+    // ── Guided brew sessions (issue #10) ─────────────────────────────────
+    //
+    // The scale-only session lane: commands round-trip through the core's
+    // BrewSessionMonitor; while a session is live a 250 ms tick drives its
+    // countdowns (the core's on_tick is timestamp-based, so cadence jitter
+    // is harmless). Cues render as a tone + vibration; no DE1 write ever
+    // originates here.
+
+    private val recipeStore = coffee.crema.brew.RecipeFileStore(app, json)
+    private var brewTickJob: kotlinx.coroutines.Job? = null
+
+    init {
+        // Seed the recipe library from disk — cheap (a handful of rows).
+        viewModelScope.launch {
+            val env = recipeStore.load()
+            _ui.update { it.copy(brewRecipes = env.recipes, lastRecipeByMethod = env.lastUsedByMethod) }
+        }
+    }
+
+    private fun startBrewTick() {
+        if (brewTickJob?.isActive == true) return
+        brewTickJob = viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(250)
+                onCoreOutputJson(bridge.onTick(SystemClock.elapsedRealtime().toULong()))
+            }
+        }
+    }
+
+    private fun stopBrewTick() {
+        brewTickJob?.cancel()
+        brewTickJob = null
+    }
+
+    /** Arm a session for [recipe]; [startOnPour] starts it at the first pour. */
+    fun brewSessionArm(recipe: coffee.crema.core.BrewRecipe, startOnPour: Boolean) {
+        val recipeJson = json.encodeToString(coffee.crema.core.BrewRecipe.serializer(), recipe)
+        onCoreOutputJson(bridge.brewSessionArm(recipeJson, startOnPour))
+        rememberRecipeUsed(recipe)
+        _ui.update {
+            it.copy(guidedBrew = GuidedBrewUi(phase = "armed", recipe = recipe, startOnPour = startOnPour))
+        }
+        startBrewTick()
+        bgConnection.setBrewSessionActive(true)
+    }
+
+    /** Start an armed session's clock (the Start tap). */
+    fun brewSessionBegin() =
+        onCoreOutputJson(bridge.brewSessionBegin(SystemClock.elapsedRealtime().toULong()))
+
+    fun brewSessionPause() {
+        val now = SystemClock.elapsedRealtime()
+        onCoreOutputJson(bridge.brewSessionPause(now.toULong()))
+        _ui.update { st ->
+            st.copy(guidedBrew = st.guidedBrew.copy(phase = "paused", pausedSinceRealtime = now))
+        }
+    }
+
+    fun brewSessionResume() {
+        val now = SystemClock.elapsedRealtime()
+        onCoreOutputJson(bridge.brewSessionResume(now.toULong()))
+        _ui.update { st ->
+            val since = st.guidedBrew.pausedSinceRealtime
+            st.copy(
+                guidedBrew = st.guidedBrew.copy(
+                    phase = "running",
+                    pausedAccumMs = st.guidedBrew.pausedAccumMs + (since?.let { s -> now - s } ?: 0L),
+                    pausedSinceRealtime = null,
+                ),
+            )
+        }
+    }
+
+    fun brewSessionSkip() =
+        onCoreOutputJson(bridge.brewSessionSkip(SystemClock.elapsedRealtime().toULong()))
+
+    fun brewSessionFinish() =
+        onCoreOutputJson(bridge.brewSessionFinish(SystemClock.elapsedRealtime().toULong()))
+
+    /** Drop the session without a summary (backing out of setup / discard). */
+    fun brewSessionCancel() {
+        onCoreOutputJson(bridge.brewSessionCancel())
+        stopBrewTick()
+        bgConnection.setBrewSessionActive(false)
+        _ui.update { it.copy(guidedBrew = GuidedBrewUi()) }
+    }
+
+    /** Clear a finished session's summary card (after save or discard). */
+    fun brewSessionClearSummary() {
+        _ui.update { it.copy(guidedBrew = GuidedBrewUi()) }
+    }
+
+    // ── Recipe library ───────────────────────────────────────────────
+
+    /** Create-or-replace a recipe (bumps `updatedAt`) and persist. */
+    fun upsertBrewRecipe(recipe: coffee.crema.core.BrewRecipe) {
+        val next = recipe.copy(updatedAt = System.currentTimeMillis())
+        _ui.update { st ->
+            val list = st.brewRecipes.filter { it.id != recipe.id } + next
+            st.copy(brewRecipes = list)
+        }
+        persistRecipes()
+    }
+
+    /** Remember [recipe] as its method's last-used (persisting it if new). */
+    private fun rememberRecipeUsed(recipe: coffee.crema.core.BrewRecipe) {
+        _ui.update { st ->
+            val list = if (st.brewRecipes.any { it.id == recipe.id }) st.brewRecipes
+            else st.brewRecipes + recipe
+            st.copy(
+                brewRecipes = list,
+                lastRecipeByMethod = st.lastRecipeByMethod + (recipe.method to recipe.id),
+            )
+        }
+        persistRecipes()
+    }
+
+    private fun persistRecipes() {
+        val st = _ui.value
+        viewModelScope.launch {
+            recipeStore.save(
+                coffee.crema.brew.RecipeFileStore.Envelope(st.brewRecipes, st.lastRecipeByMethod),
+            )
+        }
+    }
+
+    // ── Cues ─────────────────────────────────────────────────────────
+
+    /**
+     * Render one guided-brew cue as a short tone + vibration. Best-effort
+     * on both legs — a cue is advisory by definition. Tones ride the
+     * notification stream (kitchen volume), vibration uses the default
+     * amplitude; devices without a vibrator (most tablets) get tone-only.
+     */
+    private fun playBrewCue(kind: String) {
+        runCatching {
+            val tone = android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 70)
+            when (kind) {
+                "approach" -> tone.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 120)
+                "boundary" -> tone.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 220)
+                "step" -> tone.startTone(android.media.ToneGenerator.TONE_PROP_ACK, 180)
+                "done" -> tone.startTone(android.media.ToneGenerator.TONE_CDMA_CONFIRM, 400)
+            }
+            // Release after the tone has played out.
+            viewModelScope.launch {
+                kotlinx.coroutines.delay(600)
+                runCatching { tone.release() }
+            }
+        }
+        runCatching {
+            val vibrator = androidx.core.content.ContextCompat.getSystemService(
+                getApplication(),
+                android.os.Vibrator::class.java,
+            )
+            val pattern = when (kind) {
+                "approach" -> longArrayOf(0, 60)
+                "boundary" -> longArrayOf(0, 80, 60, 80)
+                "step" -> longArrayOf(0, 120)
+                else -> longArrayOf(0, 100, 60, 100, 60, 160)
+            }
+            vibrator?.vibrate(android.os.VibrationEffect.createWaveform(pattern, -1))
+        }
+    }
 
     /**
      * The live integrated water total, litres — seeded from the loaded
@@ -4477,6 +4681,47 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (event.content.kind == WaterSessionKind.Flush) {
                     pendingPreshotFlush?.invoke()
                 }
+            }
+            is Event.BrewSessionStarted -> {
+                // Anchor the shell clock on the SAME monotonic timebase the
+                // notifications feed the core (elapsedRealtime).
+                _ui.update { st ->
+                    st.copy(
+                        guidedBrew = st.guidedBrew.copy(
+                            phase = "running",
+                            startedAtRealtime = SystemClock.elapsedRealtime(),
+                            stepIndex = 0,
+                            stepStartedAtMs = 0L,
+                            pausedAccumMs = 0L,
+                            pausedSinceRealtime = null,
+                        ),
+                    )
+                }
+                appendLog("Guided brew started — ${event.content.recipe_name}")
+            }
+            is Event.BrewStepChanged -> {
+                _ui.update { st ->
+                    st.copy(
+                        guidedBrew = st.guidedBrew.copy(
+                            stepIndex = event.content.step_index.toInt(),
+                            stepStartedAtMs = event.content.at_ms.toLong(),
+                        ),
+                    )
+                }
+                // The chime for an auto-advanced boundary rides the step
+                // change itself (Boundary cues cover hold-steps).
+                if (event.content.step_index.toInt() > 0) playBrewCue("step")
+            }
+            is Event.BrewCueDue ->
+                playBrewCue(if (event.content.cue == coffee.crema.core.BrewCue.Approach) "approach" else "boundary")
+            is Event.BrewSessionCompleted -> {
+                stopBrewTick()
+                bgConnection.setBrewSessionActive(false)
+                _ui.update { st ->
+                    st.copy(guidedBrew = st.guidedBrew.copy(phase = "done", summary = event.content.summary))
+                }
+                playBrewCue("done")
+                appendLog("Guided brew completed — ${event.content.summary.recipeName}")
             }
             is Event.SteamSessionStarted -> appendLog("Steam session started")
             is Event.SteamSessionCompleted -> {

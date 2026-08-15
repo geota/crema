@@ -78,6 +78,11 @@ fun PhoneScaleScreen(
         },
         containerColor = MaterialTheme.colorScheme.background,
     ) { inner ->
+        // Weigh | Brew segment (issue #10) — a live guided session pins the
+        // screen to Brew on entry.
+        var scaleMode by remember {
+            mutableStateOf(if (ui.guidedBrew.phase != "idle") "brew" else "weigh")
+        }
         Column(
             Modifier
                 .padding(inner)
@@ -87,6 +92,23 @@ fun PhoneScaleScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Spacer(Modifier.height(2.dp))
+
+            CremaTabSwitch(
+                options = listOf(TabOption("weigh", "Weigh"), TabOption("brew", "Brew")),
+                value = scaleMode,
+                onChange = { scaleMode = it },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            if (scaleMode == "brew") {
+                coffee.crema.ui.brewlog.GuidedBrewPanel(
+                    vm = vm,
+                    modifier = Modifier.fillMaxWidth(),
+                    scrollable = false,
+                )
+                Spacer(Modifier.height(24.dp))
+                return@Column
+            }
 
             // ── Header (readout-focused, no pairing buttons) ────────────────
             Column {
