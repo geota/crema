@@ -32,6 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.beans.isFrozen
 import coffee.crema.history.beanLabel
+import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.ui.convertPressure
 import coffee.crema.ui.convertTemp
 import coffee.crema.ui.convertVolume
@@ -1005,7 +1006,7 @@ private fun RestingBody(
                 ui.history.firstOrNull { it.bean?.beanId == bid }
             }
             if (lastBeanShot != null) {
-                DialInCard(
+                PhoneDialInCard(
                     shot = lastBeanShot,
                     weightUnit = ui.weightUnit,
                     onStart = { onStartFromShot(lastBeanShot.id) },
@@ -1105,6 +1106,101 @@ private fun ReadyParam(
         // hand-roll it with a box-bottom align + 1 dp gap + full-strength
         // unit colour, which read squished and heavy next to the other shells.
         CremaValueUnit(value, unit.takeIf { it.isNotEmpty() }, valueSize = 15.sp, unitSize = 10.sp)
+    }
+}
+
+/**
+ * Phone-native dial-in card (bean-workflow-unify §A2) — the active bag's last
+ * STORED shot + its "next time" plan, in the SAME card language as the session
+ * Last-shot card above it (Surface 16dp / surfaceContainer, eyebrow + context
+ * line + caret header, [ReadyParam] stat cells). The scrollable ready column
+ * has no height budget, so unlike the tablet's slot-measured card the plan
+ * gets room to breathe (4 lines) and the apply is a full-width tonal button.
+ * The shared `ui/components/DialInCard` stays the tablet rendering.
+ */
+@Composable
+private fun PhoneDialInCard(
+    shot: coffee.crema.history.StoredShot,
+    weightUnit: String,
+    /** Re-apply this shot's setup (profile + bag + grind + targets). */
+    onStart: () -> Unit,
+    /** Open this shot in History. */
+    onOpen: () -> Unit,
+) {
+    val ago = shot.completedAtMs.takeIf { it > 0L }?.let { coffee.crema.ui.relativeAgo(it) }
+    val yieldM = convertWeight(shot.yieldG, weightUnit)
+    val ratio = formatRatio(shot.doseG, shot.yieldG)
+    val plan = shot.nextPlan?.trim()?.takeIf { it.isNotEmpty() }
+    Surface(
+        onClick = onOpen,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // Header — eyebrow + the profile the apply will load; rating and
+            // the tap-through caret on the right (Last-shot card parity).
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Eyebrow(if (ago != null) "Where you left off · $ago" else "Where you left off")
+                    shot.profileName?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if ((shot.rating ?: 0) > 0) {
+                    CremaStarRating(
+                        shot.rating ?: 0,
+                        starDp = 11,
+                        emptyTint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
+                    )
+                }
+                PhIcon("caret-right", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            // What that shot actually was — same stat cells as the hero strip.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ReadyParam("GRIND", shot.effectiveGrindSetting ?: "—", "", Modifier.weight(1f))
+                ReadyParam("YIELD", if (shot.yieldG != null) yieldM.value else "—", if (shot.yieldG != null) yieldM.unit else "", Modifier.weight(1f))
+                ReadyParam("RATIO", ratio, "", Modifier.weight(1f))
+                ReadyParam("TIME", fmt("%.0f", shot.durationMs / 1000.0), "s", Modifier.weight(1f))
+            }
+            // The plan — the card's reason to exist: accent bar + italic quote.
+            if (plan != null) {
+                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                    Spacer(
+                        Modifier.width(2.dp).fillMaxHeight()
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
+                    )
+                    Text(
+                        plan,
+                        style = MaterialTheme.typography.bodySmall.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 8.dp),
+                    )
+                }
+            }
+            FilledTonalButton(
+                onClick = onStart,
+                modifier = Modifier.fillMaxWidth().height(40.dp),
+            ) {
+                PhIcon("coffee", sizeDp = 16)
+                Spacer(Modifier.width(7.dp))
+                Text("Use these settings")
+            }
+        }
     }
 }
 
