@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -78,6 +79,12 @@ import coffee.crema.ui.components.CremaConfirmDialog
 import coffee.crema.ui.components.CremaOverflowMenu
 import coffee.crema.ui.components.OverflowItem
 import coffee.crema.ui.theme.JetBrainsMono
+import androidx.compose.runtime.LaunchedEffect
+import coffee.crema.brew.defaultRecipeFor
+import coffee.crema.core.BrewRecipe
+import coffee.crema.ui.brewlog.BrewRecipeCard
+import coffee.crema.ui.brewlog.RecipeEditorDialog
+import coffee.crema.ui.brewlog.visibleBrewRecipes
 
 /*
  * Profiles (library) — M3 v1. A grid of profile cards over the core's built-in
@@ -115,6 +122,23 @@ fun ProfilesScreen(
     // the grid key off effectiveFilter (issue 28).
     val effectiveFilter = effectiveProfileFilter(filter, ui.hiddenProfileIds)
     val sorted = filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, sort, sortDesc, ui.activeProfileId)
+
+    // ── Brew recipes — the guided-brew library section (issue #10). A
+    // separate section, not rows in the machine grid: loading a profile
+    // uploads it to the DE1; a recipe never touches the machine.
+    val recipes = visibleBrewRecipes(ui.brewRecipes, query)
+    var recipeEditing by remember { mutableStateOf<BrewRecipe?>(null) }
+    var recipeEditingNew by remember { mutableStateOf(false) }
+    // The Scale screen's "Edit recipe" deep-link.
+    LaunchedEffect(ui.pendingRecipeEditId) {
+        ui.pendingRecipeEditId?.let { id ->
+            ui.brewRecipes.firstOrNull { it.id == id && it.deletedAt == null }?.let {
+                recipeEditing = it
+                recipeEditingNew = false
+            }
+            vm.consumePendingRecipeEdit()
+        }
+    }
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(
@@ -239,8 +263,83 @@ fun ProfilesScreen(
                         onUnarchive = { vm.unarchiveBuiltinProfile(profile.id) },
                     )
                 }
+                // ── Brew recipes section (hidden while browsing the archive).
+                if (effectiveFilter != "hidden") {
+                    item(key = "recipes-head", span = { GridItemSpan(maxLineSpan) }) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.Bottom,
+                        ) {
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Eyebrow("Guided brews")
+                                Text(
+                                    "Brew recipes",
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    "Step plans you follow by hand — run them from the Scale screen's Brew tab.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            CremaButton(
+                                onClick = {
+                                    recipeEditing = defaultRecipeFor("pourover", System.currentTimeMillis())
+                                    recipeEditingNew = true
+                                },
+                                variant = CremaButtonVariant.Outlined,
+                                icon = "plus",
+                                label = "New recipe",
+                            )
+                        }
+                    }
+                    items(recipes, key = { it.id }) { r ->
+                        BrewRecipeCard(
+                            recipe = r,
+                            isDefault = ui.lastRecipeByMethod[r.method] == r.id,
+                            onEdit = { recipeEditing = r; recipeEditingNew = false },
+                            onDuplicate = {
+                                vm.duplicateBrewRecipe(r.id)?.let { recipeEditing = it; recipeEditingNew = false }
+                            },
+                            onMakeDefault = { vm.setDefaultBrewRecipe(r) },
+                            onDelete = { vm.deleteBrewRecipe(r.id) },
+                        )
+                    }
+                    if (recipes.isEmpty()) {
+                        item(key = "recipes-empty", span = { GridItemSpan(maxLineSpan) }) {
+                            Text(
+                                if (query.isBlank()) {
+                                    "No recipes yet — running a brew from the Scale screen saves its recipe here, or start one with New recipe."
+                                } else {
+                                    "No recipes match your search."
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 10.dp),
+                            )
+                        }
+                    }
+                }
             }
         }
+    }
+
+    recipeEditing?.let { editing ->
+        RecipeEditorDialog(
+            recipe = editing,
+            heading = if (recipeEditingNew) "New recipe" else "Edit recipe",
+            reseedOnMethodChange = recipeEditingNew,
+            onSave = { r ->
+                vm.upsertBrewRecipe(r)
+                // A method's first recipe becomes its default — the Scale
+                // screen opens on it without a separate "make default" step.
+                if (ui.lastRecipeByMethod[r.method] == null) vm.setDefaultBrewRecipe(r)
+                recipeEditing = null
+                recipeEditingNew = false
+            },
+            onDismiss = { recipeEditing = null; recipeEditingNew = false },
+        )
     }
 }
 

@@ -131,6 +131,19 @@ function defaultStepsFor(method: string, dose: number, water: number): BrewStep[
 }
 
 /**
+ * A recipe's nominal run time, ms — the sum of its step durations, with
+ * pour-only steps counted a notional 30 s each (matches the guided
+ * panel's "of about m:ss" line).
+ */
+export function nominalRecipeMs(recipe: BrewRecipe): number {
+	return (recipe.steps ?? []).reduce(
+		(acc, s) =>
+			acc + (s.durationS != null ? s.durationS * 1000 : s.targetWaterG != null ? 30_000 : 0),
+		0
+	);
+}
+
+/**
  * The recipe library — a Svelte 5 `$state` class; obtain the singleton
  * with {@link getRecipeStore}.
  */
@@ -179,11 +192,41 @@ export class RecipeStore {
 		this.persist();
 	}
 
+	/**
+	 * Clone `id` into a sibling recipe ("<name> copy", fresh id) and
+	 * persist it — the Profiles page's "Duplicate" door, which is how a
+	 * method grows a second recipe (e.g. a 1-pour and a 3-pour V60).
+	 */
+	duplicate(id: string): BrewRecipe | undefined {
+		const base = this.get(id);
+		if (!base) return undefined;
+		const copy: BrewRecipe = {
+			...base,
+			id: recipeId(),
+			name: `${base.name} copy`,
+			steps: (base.steps ?? []).map((s) => ({ ...s })),
+			favourite: false,
+			createdAt: Date.now(),
+			updatedAt: Date.now()
+		};
+		this.upsert(copy);
+		return copy;
+	}
+
 	/** Soft-delete (tombstone) and persist. */
 	remove(id: string): void {
 		this.recipes = this.recipes.map((r) =>
 			r.id === id ? { ...r, deletedAt: Date.now() } : r
 		);
+		// Drop any last-used pointer at the tombstone so the method falls
+		// back to its remaining recipes (or the built-in default).
+		const cleaned = Object.fromEntries(
+			Object.entries(this.lastUsed).filter(([, rid]) => rid !== id)
+		);
+		if (Object.keys(cleaned).length !== Object.keys(this.lastUsed).length) {
+			this.lastUsed = cleaned;
+			writeJsonChecked(LAST_USED_KEY, this.lastUsed);
+		}
 		this.persist();
 	}
 
