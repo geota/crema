@@ -41,10 +41,20 @@
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getProfileStore } from '$lib/profiles';
 	import { getSettingsStore, convertWeight, formatWeight } from '$lib/settings';
+	import GuidedBrewPanel from '$lib/components/brewlog/GuidedBrewPanel.svelte';
+	import { getGuidedBrewStore } from '$lib/brew/session.svelte';
 
 	const ctx = getCremaAppContext();
 	const profiles = getProfileStore();
 	const settings = getSettingsStore();
+
+	// ── Weigh | Brew segment (issue #10 Phase 2) ─────────────────────────
+	// Weigh is the classic standalone weighing surface; Brew is the guided
+	// session. A live session pins the page to Brew on entry so navigating
+	// away and back mid-pourover lands on the running clock.
+	const guidedBrew = getGuidedBrewStore();
+	// svelte-ignore state_referenced_locally
+	let mode = $state<'weigh' | 'brew'>(guidedBrew.phase === 'idle' ? 'weigh' : 'brew');
 	/** The reactive preference bundle — `prefs.weightUnit` drives the display-unit row. */
 	const prefs = $derived(settings.current);
 
@@ -402,9 +412,36 @@
 		     now, alongside the Grinder peripheral row. The Scale page hero
 		     stays focused on the live readout; pairing is a setup-once
 		     action that belongs in settings. -->
-		<div class="sc-head-r"></div>
+		<div class="sc-head-r">
+			<!-- Weigh | Brew segment (issue #10): the scale is the
+			     instrument for both; guided brews live here rather than
+			     on the machine's Brew dashboard. -->
+			<div class="sc-mode" role="tablist" aria-label="Scale page mode">
+				<button
+					class="sc-mode-btn"
+					class:is-on={mode === 'weigh'}
+					role="tab"
+					aria-selected={mode === 'weigh'}
+					onclick={() => (mode = 'weigh')}
+				>
+					Weigh
+				</button>
+				<button
+					class="sc-mode-btn"
+					class:is-on={mode === 'brew'}
+					role="tab"
+					aria-selected={mode === 'brew'}
+					onclick={() => (mode = 'brew')}
+				>
+					Brew
+				</button>
+			</div>
+		</div>
 	</div>
 
+	{#if mode === 'brew'}
+		<GuidedBrewPanel {connected} {weightG} flowGs={deviceFlow} />
+	{:else}
 	<!-- Live readout hero -->
 	<div class="sc-hero">
 		<div class="sc-readout">
@@ -751,6 +788,7 @@
 			</div>
 		</div>
 	</div>
+	{/if}
 </div>
 
 <style>
@@ -764,6 +802,33 @@
 		/* Shared page-header rhythm — see --page-pad-* in app.css. */
 		padding: var(--page-pad-top) var(--page-pad-x) 40px;
 		gap: 24px;
+	}
+	/* Weigh | Brew segment (issue #10). */
+	.sc-mode {
+		display: inline-flex;
+		border: 1px solid rgba(var(--tint-rgb), 0.14);
+		border-radius: var(--radius-pill);
+		padding: 3px;
+		gap: 2px;
+	}
+	.sc-mode-btn {
+		background: transparent;
+		border: 0;
+		border-radius: var(--radius-pill);
+		color: rgba(var(--tint-rgb), 0.6);
+		font-family: var(--font-sans);
+		font-size: 12.5px;
+		font-weight: 600;
+		padding: 6px 16px;
+		cursor: pointer;
+		transition: all var(--dur-1) var(--ease);
+	}
+	.sc-mode-btn:hover {
+		color: var(--fg-1);
+	}
+	.sc-mode-btn.is-on {
+		background: var(--copper-500);
+		color: var(--fg-on-accent);
 	}
 
 	/* Header */

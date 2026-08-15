@@ -113,6 +113,32 @@
 			/>
 		{/snippet}
 	</StRow>
+	<!-- Guided-brew cues (issue #10) — the Scale page's Brew segment
+	     signals step boundaries with these; both default on. -->
+	<StRow
+		title="Guided brew sounds"
+		sub="Short chimes at pour targets and step changes during a guided brew."
+	>
+		{#snippet control()}
+			<StToggle
+				on={prefs.brewCueSound}
+				onChange={(v) => settings.set('brewCueSound', v)}
+				label="Guided brew sounds"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Guided brew vibration"
+		sub="Vibration cues on devices that support it (phones and some tablets)."
+	>
+		{#snippet control()}
+			<StToggle
+				on={prefs.brewCueHaptics}
+				onChange={(v) => settings.set('brewCueHaptics', v)}
+				label="Guided brew vibration"
+			/>
+		{/snippet}
+	</StRow>
 </StGroup>
 
 <StGroup title="Units">

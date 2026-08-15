@@ -29,6 +29,7 @@
 	import { createCremaServices, type CremaServices } from '$lib/effect/crema-services';
 	import { setBrewWakeLock } from '$lib/shell/wake-lock';
 	import { retryPendingDecentUploads } from '$lib/decent/upload';
+	import { getGuidedBrewStore } from '$lib/brew/session.svelte';
 	import { getSettingsStore } from '$lib/settings';
 
 	let { children } = $props();
@@ -118,10 +119,17 @@
 	// app-wide, not page-scoped (the user may navigate mid-shot).
 	$effect(() => {
 		const a = app;
+		// A live guided-brew session (issue #10) holds the screen
+		// unconditionally — a step timer behind a dark screen is a missed
+		// pour. Shots keep honoring the Display setting.
+		const brewSession = getGuidedBrewStore().phase;
 		const on =
-			a !== null &&
-			getSettingsStore().current.keepScreenOnBrew &&
-			a.state.current.shotInProgress;
+			(a !== null &&
+				getSettingsStore().current.keepScreenOnBrew &&
+				a.state.current.shotInProgress) ||
+			brewSession === 'running' ||
+			brewSession === 'paused' ||
+			brewSession === 'armed';
 		setBrewWakeLock(on);
 	});
 
