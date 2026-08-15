@@ -378,6 +378,21 @@ export interface BrewSeries {
 }
 
 /**
+ * Everything the completed session hands back — the shell pre-fills
+ * the log form from this and attaches the series to the stored row.
+ */
+export interface BrewSessionSummary {
+	method: string;
+	recipeId: string;
+	recipeName: string;
+	/** Total session time, milliseconds (pauses excluded). */
+	durationMs: number;
+	/** Last net scale weight seen, grams — the measured water total. */
+	finalWeightG?: number;
+	series: BrewSeries;
+}
+
+/**
  * One brew's inputs to the method-aware History summary strip — the
  * [`ShotStatInput`](crate::ShotStatInput) projection plus the two
  * fields that separate a pourover from a shot.
@@ -830,6 +845,48 @@ export type Event =
 	kind: WaterSessionKind;
 	/** Total session duration, milliseconds. */
 	duration: number;
+}}
+	/**
+	 * A guided brew session's clock started — the Start tap, or the
+	 * first sustained pour when armed for start-on-pour (issue #10).
+	 * Purely scale/timer-driven: no DE1 involvement anywhere in the
+	 * brew-session events.
+	 */
+	| { type: "BrewSessionStarted", content: {
+	/** The recipe's brew method (`"pourover"`, …). */
+	method: string;
+	/** The recipe's display name. */
+	recipe_name: string;
+}}
+	/**
+	 * A guided brew session advanced to a new recipe step. Fires for
+	 * step 0 at start; shells chime/haptic here for auto-advanced
+	 * boundaries.
+	 */
+	| { type: "BrewStepChanged", content: {
+	/** Zero-based index into the recipe's steps. */
+	step_index: number;
+	/** Session time at the boundary, milliseconds. */
+	at_ms: number;
+}}
+	/**
+	 * A guided brew cue is due — the shell renders it as sound/haptic
+	 * (Settings-gated). Never accompanied by any machine write.
+	 */
+	| { type: "BrewCueDue", content: {
+	/** Which cue. */
+	cue: BrewCue;
+	/** The step the cue belongs to. */
+	step_index: number;
+}}
+	/**
+	 * A guided brew session ended — the last step finished, or the
+	 * user tapped Finish. The summary carries everything the shell
+	 * needs to pre-fill the log form and persist the row.
+	 */
+	| { type: "BrewSessionCompleted", content: {
+	/** The measured session summary, weight series included. */
+	summary: BrewSessionSummary;
 }}
 	/** A steam session began (the DE1 entered the `Steam` state). */
 	| { type: "SteamSessionStarted", content?: undefined }
@@ -2456,6 +2513,30 @@ export enum BeverageType {
 	Manual = "manual",
 	/** Pour-over style profile (long, low-pressure). */
 	Pourover = "pourover",
+}
+
+/** A cue the shell renders as sound/haptic. */
+export enum BrewCue {
+	/**
+	 * A boundary is coming: ~3 s before a countdown ends, or a pour is
+	 * within sensor-lag + reaction of its weight target. Once per step.
+	 */
+	Approach = "approach",
+	/**
+	 * The boundary itself: stop pouring / countdown hit zero on a step
+	 * that holds for a tap. Steps that auto-advance signal the boundary
+	 * via [`BrewSessionEvent::StepChanged`] instead. Once per step.
+	 */
+	Boundary = "boundary",
+}
+
+/** What phase the session is in. */
+export enum BrewSessionPhase {
+	/** Waiting to start — for the tap, or for the first pour. */
+	Armed = "armed",
+	Running = "running",
+	Paused = "paused",
+	Done = "done",
 }
 
 /**

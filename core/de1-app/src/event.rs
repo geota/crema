@@ -1,7 +1,10 @@
 //! FFI value types: the input discriminator [`Source`], the observed [`Event`]s
 //! and [`Command`]s the core emits, and the [`CoreOutput`] envelope.
 
-use de1_domain::{ShotDisposition, ShotPhase, SteamClogReason, StopReason, WaterSessionKind};
+use de1_domain::{
+    BrewCue, BrewSessionSummary, ShotDisposition, ShotPhase, SteamClogReason, StopReason,
+    WaterSessionKind,
+};
 use de1_protocol::{CalCommand, CalTarget, MachineState, MmrRegister, SubState};
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
@@ -314,6 +317,40 @@ pub enum Event {
         kind: WaterSessionKind,
         /// Total session duration, milliseconds.
         duration: u32,
+    },
+    /// A guided brew session's clock started — the Start tap, or the
+    /// first sustained pour when armed for start-on-pour (issue #10).
+    /// Purely scale/timer-driven: no DE1 involvement anywhere in the
+    /// brew-session events.
+    BrewSessionStarted {
+        /// The recipe's brew method (`"pourover"`, …).
+        method: String,
+        /// The recipe's display name.
+        recipe_name: String,
+    },
+    /// A guided brew session advanced to a new recipe step. Fires for
+    /// step 0 at start; shells chime/haptic here for auto-advanced
+    /// boundaries.
+    BrewStepChanged {
+        /// Zero-based index into the recipe's steps.
+        step_index: u32,
+        /// Session time at the boundary, milliseconds.
+        at_ms: u32,
+    },
+    /// A guided brew cue is due — the shell renders it as sound/haptic
+    /// (Settings-gated). Never accompanied by any machine write.
+    BrewCueDue {
+        /// Which cue.
+        cue: BrewCue,
+        /// The step the cue belongs to.
+        step_index: u32,
+    },
+    /// A guided brew session ended — the last step finished, or the
+    /// user tapped Finish. The summary carries everything the shell
+    /// needs to pre-fill the log form and persist the row.
+    BrewSessionCompleted {
+        /// The measured session summary, weight series included.
+        summary: BrewSessionSummary,
     },
     /// A steam session began (the DE1 entered the `Steam` state).
     SteamSessionStarted,
