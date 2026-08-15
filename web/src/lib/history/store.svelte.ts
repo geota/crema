@@ -1017,6 +1017,22 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 	const autoTare = typeof obj.autoTare === 'boolean' ? obj.autoTare : undefined;
 	const visualizerId = typeof obj.visualizerId === 'string' ? obj.visualizerId : null;
 	const deletedAt = typeof obj.deletedAt === 'number' ? obj.deletedAt : null;
+	// Brew Log fields (issue #10) — all additive; absent on machine shots.
+	const brewMethod =
+		typeof obj.brewMethod === 'string' && obj.brewMethod.trim().length > 0
+			? obj.brewMethod
+			: null;
+	const recipeName =
+		typeof obj.recipeName === 'string' && obj.recipeName.trim().length > 0
+			? obj.recipeName
+			: null;
+	const brewSeriesRaw = obj.brewSeries;
+	const brewSeries =
+		typeof brewSeriesRaw === 'object' &&
+		brewSeriesRaw !== null &&
+		Array.isArray((brewSeriesRaw as { samples?: unknown }).samples)
+			? (brewSeriesRaw as StoredShot['brewSeries'])
+			: null;
 
 	// v3 wire records carry `metadata` + `record`. v2 records have
 	// top-level `dose` / `rating` / `notes` + `series` / `duration`.
@@ -1074,7 +1090,10 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 		stopOnWeight,
 		autoTare,
 		visualizerId,
-		deletedAt
+		deletedAt,
+		...(brewMethod ? { brewMethod } : {}),
+		...(recipeName ? { recipeName } : {}),
+		...(brewSeries ? { brewSeries } : {})
 	};
 }
 

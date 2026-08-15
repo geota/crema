@@ -1006,7 +1006,9 @@ private fun RestingBody(
             // time" plan (bean-workflow-unify §A2). Only when no session
             // Last-shot card is up, so the same shot is never shown twice.
             val lastBeanShot = ui.activeBeanId?.let { bid ->
-                ui.history.firstOrNull { it.bean?.beanId == bid }
+                // Machine shots only (issue #10) — a logged pourover on the
+                // same bag must not seed the DE1 dial-in card.
+                ui.history.firstOrNull { it.bean?.beanId == bid && it.brewMethod == null }
             }
             if (lastBeanShot != null) {
                 PhoneDialInCard(

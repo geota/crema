@@ -69,6 +69,13 @@ fun methodLabel(method: String?): String {
     return words.replaceFirstChar { it.uppercase() }
 }
 
+/**
+ * Compact label for tight surfaces (metric tiles): the preset label's
+ * first alternative — "V60 / pourover" → "V60" — else the full label.
+ */
+fun methodShortLabel(method: String?): String =
+    methodLabel(method).substringBefore(" / ").trim()
+
 /** The espresso-family rule — mirrors `de1_domain::is_espresso_method`. */
 fun isEspressoMethod(method: String?): Boolean {
     val m = method?.trim()?.lowercase()

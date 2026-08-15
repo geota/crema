@@ -237,20 +237,31 @@ fun HistoryScreen(
                 Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = if (shortWindow) 12.dp else 20.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Rows are "shots" only while the log is purely espresso —
+                // once a pourover exists the page is honestly a brew log
+                // (issue #10; web parity).
+                val nonEsp = ui.history.any { it.methodOf != null && it.methodOf != "espresso" }
+                val rowNoun = if (nonEsp) "brew" else "shot"
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (!shortWindow) Eyebrow("Library")
                     Text(
-                        "Shot history",
+                        if (nonEsp) "Brew history" else "Shot history",
                         style = if (shortWindow) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.headlineLarge,
                         color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     if (!shortWindow) Text(
-                        "${ui.history.size} shots on this device",
+                        "${ui.history.size} ${rowNoun}s on this device",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 840
+                // The header row gained a fourth action (Log brew) — collapse
+                // to icon buttons whenever the window is narrow OR short
+                // (the compact-header variant already trades chrome for the
+                // list), so the serif title never wraps a letter at a time.
+                val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1000 || shortWindow
                 if (ui.history.isNotEmpty()) {
                     Spacer(Modifier.width(12.dp))
                     CremaSearchPill(
@@ -993,7 +1004,7 @@ private fun ShotDetail(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 val out = if (espressoRow) shot.yieldG else shot.waterG ?: shot.yieldG
                 val mOut = convertWeight(out, weightUnit)
-                MetricCard("Method", methodLabel(method), null, Modifier.weight(1f), isText = true)
+                MetricCard("Method", coffee.crema.brew.methodShortLabel(method), null, Modifier.weight(1f), isText = true)
                 MetricCard("Time", if (shot.durationMs > 0) formatShotDuration(shot.durationMs) else "—", null, Modifier.weight(1f))
                 MetricCard("Dose", shot.doseG?.let { fmt("%.1f", it.toDouble()) } ?: "—", shot.doseG?.let { "g" }, Modifier.weight(1f))
                 MetricCard(if (espressoRow) "Yield" else "Water", mOut.value, out?.let { mOut.unit }, Modifier.weight(1f))

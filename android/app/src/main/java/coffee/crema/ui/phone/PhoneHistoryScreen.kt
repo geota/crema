@@ -577,8 +577,15 @@ private fun PhoneShotRow(
                     emptyTint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
                 )
                 RowMono(shotRatioLabel(shot) ?: "—")
-                RowMono(shot.yieldG?.let { convertWeight(it, weightUnit).let { m -> "${m.value}${m.unit}" } } ?: "—")
-                RowMono(fmt("%.0fs", shot.durationMs / 1000.0))
+                // Filter brews speak water-in where espresso speaks yield
+                // (issue #10) — never a dash next to a 1:16 ratio.
+                val rowOut = if (shot.methodOf != null && shot.methodOf != "espresso") {
+                    shot.waterG ?: shot.yieldG
+                } else {
+                    shot.yieldG
+                }
+                RowMono(rowOut?.let { convertWeight(it, weightUnit).let { m -> "${m.value}${m.unit}" } } ?: "—")
+                RowMono(if (shot.durationMs > 0) formatShotDuration(shot.durationMs).replace(" ", "") else "—")
             }
         }
         when {
