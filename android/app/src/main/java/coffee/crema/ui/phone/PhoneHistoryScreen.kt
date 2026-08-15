@@ -33,11 +33,20 @@ import coffee.crema.beans.rankBeansForPicker
 import coffee.crema.core.daysOffRoast as coreDaysOffRoast
 import coffee.crema.ui.freshnessColor
 import coffee.crema.beans.beanDaysOffRoast
+import coffee.crema.brew.methodIcon
+import coffee.crema.brew.methodLabel
 import coffee.crema.history.beanLabel
+import coffee.crema.history.brewHistoryStats
 import coffee.crema.history.effectiveGrindSetting
+import coffee.crema.history.formatShotDuration
 import coffee.crema.history.grindLabel
 import coffee.crema.history.filterAndSortShots
-import coffee.crema.history.historyStats
+import coffee.crema.history.isManualLog
+import coffee.crema.history.methodOf
+import coffee.crema.history.methodRatioLabel
+import coffee.crema.ui.brewlog.BrewSessionCanvas
+import coffee.crema.ui.brewlog.BrewSparkChart
+import coffee.crema.ui.phone.components.CremaNewFab
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.convertPressure
 import coffee.crema.ui.convertTemp
@@ -91,6 +100,10 @@ fun PhoneHistoryScreen(
     var sort by remember { mutableStateOf("date") }
     var sortDesc by remember { mutableStateOf(true) } // newest / highest first
     var exportSheet by remember { mutableStateOf(false) }
+    // Brew Log (issue #10): the method filter + the Log-brew form.
+    var methodFilter by remember { mutableStateOf<String?>(null) }
+    var logBrewOpen by remember { mutableStateOf(false) }
+    var logBrewPrefill by remember { mutableStateOf<StoredShot?>(null) }
     // Compare: select 2–5 shots, then push the full-screen overlay (HistoryCompareHooks).
     val sel = rememberCompareSelection()
     var compareOpen by remember { mutableStateOf(false) }
@@ -136,7 +149,7 @@ fun PhoneHistoryScreen(
         cal.set(java.util.Calendar.SECOND, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
         cal.timeInMillis
     }
-    val filtered = filterAndSortShots(ui.history, query, range, profileFilter, sort, sortDesc, now, beanFilter)
+    val filtered = filterAndSortShots(ui.history, query, range, profileFilter, sort, sortDesc, now, beanFilter, methodFilter)
 
     val detail = detailId?.let { id -> ui.history.firstOrNull { it.id == id } }
 
@@ -156,7 +169,15 @@ fun PhoneHistoryScreen(
             onLoadOnBrew = { vm.loadProfileOnBrew(detail.profileName); onNav("brew") },
             onStartFromShot = { vm.startFromShot(detail.id); onNav("brew") },
             onExport = { launchSave("crema-shot.json", vm.shotsJson(listOf(detail.id))) },
+            onLogAgain = { logBrewPrefill = detail; logBrewOpen = true },
         )
+        if (logBrewOpen) {
+            coffee.crema.ui.brewlog.LogBrewSheet(
+                vm = vm,
+                prefill = logBrewPrefill,
+                onDismiss = { logBrewOpen = false; logBrewPrefill = null },
+            )
+        }
         return
     }
 
@@ -198,6 +219,13 @@ fun PhoneHistoryScreen(
             }
         },
         bottomBar = { if (sel.selecting) PhoneSelectBar(sel, onCompare = { compareOpen = true }) },
+        floatingActionButton = {
+            // The Brew Log's manual-entry door (issue #10) — the same FAB
+            // idiom as Beans and Profiles.
+            if (!sel.selecting) {
+                CremaNewFab("Log brew") { logBrewPrefill = null; logBrewOpen = true }
+            }
+        },
         containerColor = MaterialTheme.colorScheme.background,
     ) { inner ->
         Column(Modifier.padding(inner).fillMaxSize()) {
@@ -245,6 +273,22 @@ fun PhoneHistoryScreen(
                             }
                         },
                         trailing = {
+                            // Method — the Brew Log filter (issue #10); only
+                            // rendered once a second method exists.
+                            val byMethod = ui.history
+                                .groupingBy { it.methodOf ?: "espresso" }.eachCount()
+                                .entries.sortedByDescending { it.value }
+                            if (byMethod.size > 1) {
+                                CremaFilterDropdown(
+                                    icon = methodIcon(methodFilter),
+                                    keys = buildList {
+                                        add(SortKey("all", "All methods"))
+                                        byMethod.forEach { (m, _) -> add(SortKey(m, methodLabel(m))) }
+                                    },
+                                    selectedKey = methodFilter ?: "all",
+                                    onKeyChange = { methodFilter = if (it == "all") null else it },
+                                )
+                            }
                             // Bean — scope the log to one bag (tablet parity).
                             val byBean = ui.history.mapNotNull { it.bean?.beanId }
                                 .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
@@ -398,13 +442,16 @@ private fun dayLabel(ms: Long, startOfDay: Long, dayMs: Long): String = when {
 private fun PhoneStatsStrip(history: List<StoredShot>) {
     // The three averages, scoped to the filtered set (issue 48). The tablet/PWA
     // add Shots + total/avg Weight; the phone keeps it to the three.
-    val s = historyStats(history)
+    // Method-aware (issue #10): a mixed set scopes ratio/time to espresso
+    // rows — the "esp" tag says so.
+    val s = brewHistoryStats(history)
+    fun scoped(label: String) = if (s.mixedMethods) "$label · esp" else label
     Row(
         Modifier.fillMaxWidth().padding(horizontal = CremaEdge, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        PhoneStatTile("Avg ratio", s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—", Modifier.weight(1f))
-        PhoneStatTile("Avg time", s.avgTimeS?.let { fmt("%.0fs", it) } ?: "—", Modifier.weight(1f))
+        PhoneStatTile(scoped("Avg ratio"), s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—", Modifier.weight(1f))
+        PhoneStatTile(scoped("Avg time"), s.avgTimeS?.let { formatShotDuration((it * 1000).toLong()) } ?: "—", Modifier.weight(1f))
         PhoneStatTile("Avg rating", s.avgRating?.let { fmt("%.1f★", it) } ?: "—", Modifier.weight(1f))
     }
 }
@@ -458,22 +505,37 @@ private fun PhoneShotRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (selecting) RowCheck(picked)
-        CremaSparkChart(
-            samples = shot.samples,
-            insetDp = 3f,
-            tempStroke = 1.0f,
-            weightStroke = 1.2f,
-            flowStroke = 1.2f,
-            modifier = Modifier
-                .width(58.dp)
-                .height(36.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainer),
-        )
+        // The sparkline slot: DE1 telemetry when recorded; a guided brew's
+        // weight curve; else the method mark tile (issue #10).
+        val rowSeries = shot.brewSeries
+        val sparkModifier = Modifier
+            .width(58.dp)
+            .height(36.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+        when {
+            shot.samples.isNotEmpty() -> CremaSparkChart(
+                samples = shot.samples,
+                insetDp = 3f,
+                tempStroke = 1.0f,
+                weightStroke = 1.2f,
+                flowStroke = 1.2f,
+                modifier = sparkModifier,
+            )
+            rowSeries != null && rowSeries.samples.isNotEmpty() ->
+                BrewSparkChart(series = rowSeries, modifier = sparkModifier)
+            else -> Box(sparkModifier, contentAlignment = Alignment.Center) {
+                PhIcon(methodIcon(shot.methodOf), sizeDp = 16, tint = MaterialTheme.colorScheme.primary)
+            }
+        }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                val rowName = shot.profileName
+                    ?: shot.recipeName
+                    ?: shot.methodOf?.let { methodLabel(it) }
+                    ?: "Shot"
                 Text(
-                    shot.profileName ?: "Shot",
+                    if (shot.isManualLog) "$rowName · logged" else rowName,
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -556,8 +618,14 @@ private fun PhoneShotDetail(
     /** Prefill Brew from this shot: profile + bag + grind + targets. */
     onStartFromShot: () -> Unit,
     onExport: () -> Unit,
+    /** Brew rows (issue #10): re-open the Log-brew form seeded from this brew. */
+    onLogAgain: (() -> Unit)? = null,
 ) {
     val tel = CremaTheme.telemetry
+    // Brew Log rows (issue #10).
+    val method = shot.methodOf
+    val isBrew = method != null
+    val manual = shot.isManualLog
     var menu by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var changeBean by remember(shot.id) { mutableStateOf(false) }
@@ -590,13 +658,23 @@ private fun PhoneShotDetail(
                     .padding(horizontal = CremaEdge, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                FilledTonalButton(
-                    // The full dial-in leads (profile + bag + grind + targets);
-                    // the profile-only reload moves to the overflow sheet.
-                    onClick = onStartFromShot,
-                    shape = MaterialTheme.shapes.extraLarge,
-                    modifier = Modifier.weight(1f).height(48.dp),
-                ) { PhIcon("coffee", sizeDp = 18); Spacer(Modifier.width(8.dp)); Text("Start from shot") }
+                if (isBrew) {
+                    // Brew rows (issue #10): "Log again" is the dial-in loop's
+                    // sibling — the machine prefill doesn't apply.
+                    FilledTonalButton(
+                        onClick = { onLogAgain?.invoke() },
+                        shape = MaterialTheme.shapes.extraLarge,
+                        modifier = Modifier.weight(1f).height(48.dp),
+                    ) { PhIcon("arrow-counter-clockwise", sizeDp = 18); Spacer(Modifier.width(8.dp)); Text("Log again") }
+                } else {
+                    FilledTonalButton(
+                        // The full dial-in leads (profile + bag + grind + targets);
+                        // the profile-only reload moves to the overflow sheet.
+                        onClick = onStartFromShot,
+                        shape = MaterialTheme.shapes.extraLarge,
+                        modifier = Modifier.weight(1f).height(48.dp),
+                    ) { PhIcon("coffee", sizeDp = 18); Spacer(Modifier.width(8.dp)); Text("Start from shot") }
+                }
                 Button(
                     onClick = onExport,
                     shape = MaterialTheme.shapes.extraLarge,
@@ -624,7 +702,10 @@ private fun PhoneShotDetail(
                     coreDaysOffRoast(shot.bean?.roastedOn, null, null, shot.completedAtMs)?.toInt()
                 }
                 ProfileStrip(
-                    title = shot.profileName ?: "Shot",
+                    title = when {
+                        isBrew -> (shot.recipeName ?: methodLabel(method)) + if (manual) " · logged" else ""
+                        else -> shot.profileName ?: "Shot"
+                    },
                     beanLine = shot.beanLabel ?: "No bean",
                     // Bottom row: the grind this shot was pulled at + the
                     // grinder, fainter (tablet/web .bh-spec tier).
@@ -649,7 +730,26 @@ private fun PhoneShotDetail(
                 }
             }
 
-            // Chart card + legend.
+            // Chart card + legend. Brew rows (issue #10): a guided session
+            // draws its weight curve with stage bands; a manual log shows no
+            // chart card at all — the screen tightens up.
+            val brewSeries = shot.brewSeries
+            if (isBrew) {
+                if (brewSeries != null && brewSeries.samples.isNotEmpty()) {
+                    Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer) {
+                        Column(Modifier.padding(start = 6.dp, end = 10.dp, top = 10.dp, bottom = 6.dp)) {
+                            Row(
+                                Modifier.padding(start = 10.dp, bottom = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                DetailLegend("WEIGHT", tel.weight)
+                                DetailLegend("POUR RATE", tel.flow)
+                            }
+                            BrewSessionCanvas(brewSeries, Modifier.fillMaxWidth().height(190.dp))
+                        }
+                    }
+                }
+            } else {
             Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer) {
                 Column(Modifier.padding(start = 6.dp, end = 10.dp, top = 10.dp, bottom = 6.dp)) {
                     Row(
@@ -681,8 +781,25 @@ private fun PhoneShotDetail(
                     }
                 }
             }
+            }
 
-            // 4-up metric strip (proto .ph-dmetrics).
+            // 4-up metric strip (proto .ph-dmetrics). Brew rows swap the
+            // machine peaks for the method-shaped facts (issue #10).
+            if (isBrew) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val out = if (method == "espresso") shot.yieldG else shot.waterG ?: shot.yieldG
+                    val dOut = convertWeight(out, weightUnit)
+                    DetailMetric(
+                        if (shot.durationMs > 0) formatShotDuration(shot.durationMs) else "—",
+                        "Time",
+                        null,
+                        Modifier.weight(1f),
+                    )
+                    DetailMetric(shot.doseG?.let { fmt("%.1fg", it.toDouble()) } ?: "—", "Dose", null, Modifier.weight(1f))
+                    DetailMetric(out?.let { "${dOut.value}${dOut.unit}" } ?: "—", if (method == "espresso") "Yield" else "Water", tel.weight, Modifier.weight(1f))
+                    DetailMetric(shotRatioLabel(shot) ?: "—", "Ratio", null, Modifier.weight(1f))
+                }
+            } else {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val dPeakP = convertPressure(shot.peakPressure, pressureUnit)
                 val dPeakT = convertTemp(shot.peakTemp, tempUnit)
@@ -691,6 +808,36 @@ private fun PhoneShotDetail(
                 DetailMetric(shot.peakPressure?.let { dPeakP.value } ?: "—", "Peak ${dPeakP.unit}", tel.pressure, Modifier.weight(1f))
                 DetailMetric(shot.peakTemp?.let { "${dPeakT.value}${dPeakT.unit}" } ?: "—", "Peak temp", tel.temp, Modifier.weight(1f))
                 DetailMetric(shot.yieldG?.let { "${dYield.value}${dYield.unit}" } ?: "—", "Yield", tel.weight, Modifier.weight(1f))
+            }
+            }
+            // Manual rows keep their user-entered facts editable (issue #10) —
+            // dose re-settles the bag through the credit/debit pair.
+            if (manual) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    CremaStepper(
+                        label = "Dose",
+                        value = (shot.doseG ?: 0f).toDouble(),
+                        unit = "g",
+                        onChange = { vm.updateManualBrew(shot.id, doseG = it.toFloat().takeIf { v -> v > 0f }) },
+                        step = 0.5,
+                        min = 0.0,
+                        max = 200.0,
+                    )
+                    CremaStepper(
+                        label = if (method == "espresso") "Yield" else "Water",
+                        value = ((if (method == "espresso") shot.yieldG else shot.waterG) ?: 0f).toDouble(),
+                        unit = "g",
+                        onChange = {
+                            val v = it.toFloat().takeIf { f -> f > 0f }
+                            if (method == "espresso") vm.updateManualBrew(shot.id, yieldG = v)
+                            else vm.updateManualBrew(shot.id, waterG = v)
+                        },
+                        step = if (method == "espresso") 1.0 else 10.0,
+                        min = 0.0,
+                        max = 2000.0,
+                        fmt = { fmt("%.0f", it) },
+                    )
+                }
             }
 
             // Shot quality — the core's analysis (Decenza port) over the stored
@@ -780,10 +927,18 @@ private fun PhoneShotDetail(
 
     if (menu) {
         CremaOverflowSheet(
-            title = (shot.profileName ?: "Shot") + " · " + remember(shot.completedAtMs) {
+            title = (shot.profileName ?: shot.recipeName ?: methodLabel(shot.methodOf)) + " · " + remember(shot.completedAtMs) {
                 java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(shot.completedAtMs))
             },
             items = buildList {
+                if (isBrew) {
+                    // Brew rows (issue #10): the machine + Visualizer actions
+                    // don't apply — logged brews are local-only.
+                    add(SheetItem("download-simple", "Download brew", sub = "Crema JSON") { onExport() })
+                    add(SheetItem(divider = true))
+                    add(SheetItem("trash", "Delete brew", danger = true) { confirmDelete = true })
+                    return@buildList
+                }
                 add(SheetItem("arrow-counter-clockwise", "Load profile only", sub = "Just this shot’s recipe, nothing else") { onLoadOnBrew() })
                 add(SheetItem("download-simple", "Download shot", sub = "Crema JSON") { onExport() })
                 // One "Upload" row over every cloud destination (Visualizer,
@@ -948,8 +1103,7 @@ private fun PrivacyPill(label: String, on: Boolean, onClick: () -> Unit) {
     }
 }
 
-private fun shotRatioLabel(shot: StoredShot): String? {
-    val y = shot.yieldG
-    val d = shot.doseG
-    return if (y != null && d != null && d > 0f) formatRatio(d, y) else null
-}
+private fun shotRatioLabel(shot: StoredShot): String? =
+    // Method-aware (issue #10): espresso speaks yield-out, filter methods
+    // water-in — one core rule shared with the tablet + web.
+    shot.methodRatioLabel()

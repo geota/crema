@@ -72,6 +72,10 @@ fun BeanDetailSheet(
     onOpenShot: ((String) -> Unit)? = null,
     /** Open History filtered to this bag ("See all N shots"); null = hidden. */
     onSeeAllShots: (() -> Unit)? = null,
+    /** Open the Log-brew form with this bag pre-selected (issue #10). */
+    onLogBrew: (() -> Unit)? = null,
+    /** This bag's recent mean dose, g — the "≈N brews" estimate. */
+    avgDoseG: Float? = null,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
     var photoOpen by remember { mutableStateOf(false) }
@@ -159,6 +163,7 @@ fun BeanDetailSheet(
                             onPhotoTap = if (bean.imageRef != null) ({ photoOpen = true }) else null,
                             onOpenShot = onOpenShot,
                             onSeeAllShots = onSeeAllShots,
+                            avgDoseG = avgDoseG,
                         )
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -181,6 +186,16 @@ fun BeanDetailSheet(
                             label = "Delete",
                         )
                         Spacer(Modifier.weight(1f))
+                        // The inventory-first door to the Brew Log (issue #10):
+                        // bag in hand, log what you just used.
+                        if (onLogBrew != null && !archived) {
+                            CremaButton(
+                                onClick = onLogBrew,
+                                variant = CremaButtonVariant.Outlined,
+                                icon = "plus-circle",
+                                label = "Log a brew",
+                            )
+                        }
                         if (!isActive && !archived) {
                             CremaButton(onClick = onSetActive, icon = "coffee-bean", label = "Set active")
                         }

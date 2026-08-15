@@ -174,7 +174,15 @@ import com.adamglin.phosphoricons.regular.ArrowsClockwise
 import com.adamglin.phosphoricons.regular.ArrowsLeftRight
 import com.adamglin.phosphoricons.regular.DownloadSimple
 import com.adamglin.phosphoricons.regular.PaperPlaneTilt
+import com.adamglin.phosphoricons.regular.Cylinder
+import com.adamglin.phosphoricons.regular.Flask
 import com.adamglin.phosphoricons.regular.Funnel
+import com.adamglin.phosphoricons.regular.FunnelSimple
+import com.adamglin.phosphoricons.regular.Hourglass
+import com.adamglin.phosphoricons.regular.Jar
+import com.adamglin.phosphoricons.regular.Pause
+import com.adamglin.phosphoricons.regular.PlusCircle
+import com.adamglin.phosphoricons.regular.SkipForward
 import com.adamglin.phosphoricons.regular.Sparkle
 import com.adamglin.phosphoricons.regular.Wind
 import com.adamglin.phosphoricons.regular.Target
@@ -288,6 +296,16 @@ fun PhIcon(
         "download-simple" -> PhosphorIcons.Regular.DownloadSimple
         "paper-plane-tilt" -> PhosphorIcons.Regular.PaperPlaneTilt
         "funnel" -> PhosphorIcons.Regular.Funnel
+        // Brew Log method marks (issue #10) — one glyph per method,
+        // shared with the web MethodMark mapping.
+        "funnel-simple" -> PhosphorIcons.Regular.FunnelSimple
+        "cylinder" -> PhosphorIcons.Regular.Cylinder
+        "jar" -> PhosphorIcons.Regular.Jar
+        "hourglass" -> PhosphorIcons.Regular.Hourglass
+        "flask" -> PhosphorIcons.Regular.Flask
+        "pause" -> PhosphorIcons.Regular.Pause
+        "skip-forward" -> PhosphorIcons.Regular.SkipForward
+        "plus-circle" -> PhosphorIcons.Regular.PlusCircle
         "sparkle" -> PhosphorIcons.Regular.Sparkle
         "wind" -> PhosphorIcons.Regular.Wind
         "target" -> PhosphorIcons.Regular.Target

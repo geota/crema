@@ -97,6 +97,9 @@ fun BeanDetailContent(
     onOpenShot: ((String) -> Unit)? = null,
     /** Open History filtered to this bag ("See all N shots"); null = hidden. */
     onSeeAllShots: (() -> Unit)? = null,
+    /** This bag's recent mean dose, g — drives the "≈N brews" estimate
+     *  (issue #10). Null falls back to the 18 g espresso default. */
+    avgDoseG: Float? = null,
 ) {
     val days = beanDaysOffRoast(bean)
     val frozen = bean.isFrozen
@@ -106,7 +109,7 @@ fun BeanDetailContent(
 
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         BeanDetailHero(bean, roasterName, frozen, onPhotoTap)
-        BeanStatusStrip(bean, days, frozen, openedDays, bagSize, remaining, shotCount)
+        BeanStatusStrip(bean, days, frozen, openedDays, bagSize, remaining, shotCount, avgDoseG)
 
         DetailGroup("Identity") {
             DetailRow("Name", bean.name)
@@ -402,6 +405,7 @@ private fun BeanStatusStrip(
     bagSize: Float,
     remaining: Float,
     shotCount: Int,
+    avgDoseG: Float? = null,
 ) {
     CremaCard(shape = RoundedCornerShape(14.dp)) {
         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -424,15 +428,20 @@ private fun BeanStatusStrip(
                     label = "Remaining",
                     value = if (bagSize > 0f || remaining > 0f) "${remaining.toInt()}g" else EMPTY,
                     sub = if (bagSize > 0f) {
-                        val shots = (remaining / GRAMS_PER_SHOT).toInt()
-                        "of ${bagSize.toInt()}g" + if (shots > 0) " · ~$shots shots" else ""
+                        // "≈N brews" from this bag's OWN recent mean dose
+                        // (issue #10) — a 30 g French-press habit stops
+                        // reading as phantom 18 g shots. Espresso default
+                        // for an unbrewed bag.
+                        val perBrew = avgDoseG?.takeIf { it > 0f } ?: GRAMS_PER_SHOT
+                        val brews = (remaining / perBrew).toInt()
+                        "of ${bagSize.toInt()}g" + if (brews > 0) " · ≈$brews brews" else ""
                     } else {
                         EMPTY
                     },
                 )
                 StatusCell(
                     Modifier.weight(1f),
-                    label = "Shots",
+                    label = "Brews",
                     value = "$shotCount",
                     sub = bean.qualityScore?.takeIf { it.isNotBlank() }?.let { "$it score" } ?: "in history",
                 )

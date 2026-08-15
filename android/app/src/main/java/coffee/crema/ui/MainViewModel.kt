@@ -1648,6 +1648,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Re-attribute a logged shot to another bean, or none (issue #16). */
     fun setShotBean(id: String, beanId: String?) = library.setShotBean(id, beanId)
 
+    // ── Brew Log (issue #10) ─────────────────────────────────────────
+    /** Record a manual brew / guided-session result; debits the bag. */
+    fun addManualBrew(input: LibraryController.ManualBrewInput) = library.addManualBrew(input)
+
+    /** Edit a MANUAL brew row's user-entered facts (re-settles the bag on dose). */
+    fun updateManualBrew(
+        id: String,
+        doseG: Float? = null,
+        waterG: Float? = null,
+        yieldG: Float? = null,
+        brewTempC: Float? = null,
+        durationMs: Long? = null,
+    ) = library.updateManualBrew(id, doseG, waterG, yieldG, brewTempC, durationMs)
+
     /** Set a shot's forward-looking "next time" plan (local-only). */
     fun setShotNextPlan(id: String, nextPlan: String) = library.setShotNextPlan(id, nextPlan)
 

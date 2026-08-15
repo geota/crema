@@ -61,6 +61,8 @@ fun PhoneBeanDetailScreen(
     val bean = ui.beans.firstOrNull { it.id == beanId }
     var confirmDelete by remember { mutableStateOf(false) }
     var photoOpen by remember { mutableStateOf(false) }
+    // The Log-brew form (issue #10), pre-selected to this bag.
+    var logBrewOpen by remember { mutableStateOf(false) }
 
     BackHandler { onBack() }
 
@@ -117,6 +119,8 @@ fun PhoneBeanDetailScreen(
                 linkedProfileName = linkedProfileNameFor(bean, ui.profiles.map { it.id to it.name }),
                 shotCount = shots.size,
                 recentShots = shots.take(5).map { shotRowSummary(it) },
+                avgDoseG = shots.take(10).mapNotNull { it.doseG }.filter { it > 0f }
+                    .takeIf { it.isNotEmpty() }?.average()?.toFloat(),
                 onPhotoTap = if (bean.imageRef != null) ({ photoOpen = true }) else null,
                 onOpenShot = onOpenShot,
                 onSeeAllShots = onSeeAllShots,
@@ -150,7 +154,25 @@ fun PhoneBeanDetailScreen(
                     )
                 }
             }
+            // The inventory-first door to the Brew Log (issue #10).
+            if (!archived) {
+                CremaButton(
+                    onClick = { logBrewOpen = true },
+                    variant = CremaButtonVariant.Outlined,
+                    icon = "plus-circle",
+                    label = "Log a brew with this bag",
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
+    }
+
+    if (logBrewOpen) {
+        coffee.crema.ui.brewlog.LogBrewSheet(
+            vm = vm,
+            prefillBeanId = bean.id,
+            onDismiss = { logBrewOpen = false },
+        )
     }
 
     if (photoOpen) {

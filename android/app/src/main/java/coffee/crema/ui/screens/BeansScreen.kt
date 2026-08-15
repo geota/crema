@@ -150,6 +150,9 @@ fun BeansScreen(
     // Bean, so the sheet re-renders live as the bag is favourited/archived
     // from inside it.
     var detailBeanId by remember { mutableStateOf<String?>(null) }
+    // The Log-brew sheet (issue #10), opened from the bean detail footer
+    // with that bag pre-selected.
+    var logBrewBeanId by remember { mutableStateOf<String?>(null) }
     // Beanconqueror import — the system file picker hands back a Uri the VM reads
     // (single JSON or a .zip archive) and merges via the core importer.
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -409,6 +412,9 @@ fun BeansScreen(
                 linkedProfileName = linkedProfileNameFor(bean, ui.profiles.map { it.id to it.name }),
                 shotCount = shots.size,
                 recentShots = shots.take(5).map { shotRowSummary(it) },
+                avgDoseG = shots.take(10).mapNotNull { it.doseG }.filter { it > 0f }
+                    .takeIf { it.isNotEmpty() }?.average()?.toFloat(),
+                onLogBrew = { logBrewBeanId = bean.id },
                 isActive = bean.id == ui.activeBeanId,
                 onDismiss = { detailBeanId = null },
                 onEdit = { detailBeanId = null; vm.startEditBean(bean.id); onNav("bean-edit") },
@@ -430,6 +436,14 @@ fun BeansScreen(
                 },
             )
         }
+    }
+
+    logBrewBeanId?.let { bid ->
+        coffee.crema.ui.brewlog.LogBrewSheet(
+            vm = vm,
+            prefillBeanId = bid,
+            onDismiss = { logBrewBeanId = null },
+        )
     }
 
     if (roasterDialogOpen) {

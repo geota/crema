@@ -32,6 +32,7 @@ import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
 import coffee.crema.history.coreShotJson
 import coffee.crema.history.downsampleForStorage
+import coffee.crema.history.isManualLog
 import coffee.crema.profiles.BrewDefaults
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.CustomProfileStore
@@ -1438,6 +1439,12 @@ class LibraryController(
                     bean = bean,
                     rating = meta?.num("rating")?.toInt()?.takeIf { it > 0 },
                     notes = meta?.str("notes")?.takeIf { it.isNotBlank() },
+                    // Brew Log rows (issue #10): the core now imports BC's
+                    // non-espresso brews with a method + water-in instead of
+                    // skipping them.
+                    brewMethod = stored.str("brewMethod"),
+                    waterG = meta?.num("waterG")?.toFloat(),
+                    brewTempC = stored.num("brewTempTarget")?.toFloat(),
                 ),
             )
         }
@@ -1809,6 +1816,134 @@ class LibraryController(
                 }
             }
         }
+    }
+
+    /** The Log-brew form's payload (issue #10). */
+    data class ManualBrewInput(
+        val method: String,
+        val completedAtMs: Long,
+        val beanId: String?,
+        val doseG: Float?,
+        val waterG: Float?,
+        val yieldG: Float?,
+        val grindSetting: Float?,
+        val brewTempC: Float?,
+        val durationMs: Long?,
+        val rating: Int?,
+        val notes: String?,
+        val nextPlan: String?,
+        val recipeName: String? = null,
+        val brewSeries: coffee.crema.core.BrewSeries? = null,
+    )
+
+    /**
+     * Record a Brew Log entry (issue #10) — a manually logged brew, or a
+     * finished guided session. The one path that legitimately persists a
+     * telemetry-less row. Debits the bag exactly like a live shot
+     * (`debitRemaining` → bag-empty notice) and never touches Visualizer
+     * (logged brews are local-only, like `nextPlan`).
+     */
+    fun addManualBrew(input: ManualBrewInput): StoredShot {
+        val s = uiState()
+        val bean = input.beanId?.let { id -> s.beans.firstOrNull { it.id == id } }
+        val roasterName = bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
+        val beanSnapshot = bean?.let { b ->
+            ShotBean(
+                beanId = b.id,
+                name = b.name,
+                roasterName = roasterName,
+                roastedOn = b.roastedOn,
+                roastLevel = b.roastLevel,
+                tags = b.tags,
+                grinderSetting = b.grinderSetting?.takeIf { it.isNotBlank() },
+                grinder = b.grinder?.takeIf { it.isNotBlank() },
+            )
+        }
+        val shot = StoredShot(
+            id = coffee.crema.core.newShotId(),
+            completedAtMs = input.completedAtMs,
+            durationMs = input.durationMs ?: 0L,
+            yieldG = input.yieldG,
+            doseG = input.doseG,
+            grindSetting = input.grindSetting,
+            profileName = null,
+            bean = beanSnapshot,
+            rating = input.rating?.coerceIn(1, 5),
+            notes = input.notes?.ifBlank { null },
+            nextPlan = input.nextPlan?.ifBlank { null },
+            brewMethod = input.method,
+            recipeName = input.recipeName?.ifBlank { null },
+            waterG = input.waterG,
+            brewTempC = input.brewTempC,
+            brewSeries = input.brewSeries,
+        )
+        val next = (listOf(shot) + s.history).take(HistoryStore.MAX_SHOTS)
+        updateUi { it.copy(history = next) }
+        scope.launch { historyStore.save(next) }
+        // Burn the dose down from the bag — the whole point of the feature.
+        val dose = input.doseG
+        if (bean != null && dose != null && dose > 0f) {
+            val debited = debitRemaining(bean.remaining ?: 0f, dose)
+            if (debited != null) {
+                mutateBean(bean.id) { it.copy(remaining = debited) }
+                if (debited == 0f) {
+                    val rateHint = if ((bean.rating?.toInt() ?: 0) == 0) " — rate it in Beans" else ""
+                    notify("That was the last of ${bean.name}; bag empty$rateHint")
+                }
+            }
+        }
+        notify("Brew logged")
+        return shot
+    }
+
+    /**
+     * Edit the user-entered facts of a MANUAL brew row (dose / water /
+     * yield / temp / time). Measured (machine / guided) rows are left
+     * alone. A dose change re-settles the bag through the same
+     * credit/debit pair bean re-attribution uses.
+     */
+    fun updateManualBrew(
+        id: String,
+        doseG: Float? = null,
+        waterG: Float? = null,
+        yieldG: Float? = null,
+        brewTempC: Float? = null,
+        durationMs: Long? = null,
+    ) {
+        val s = uiState()
+        val shot = s.history.firstOrNull { it.id == id } ?: return
+        if (!shot.isManualLog) return
+        // Re-settle inventory before the row mutates, using the OLD dose.
+        if (doseG != null && doseG != shot.doseG) {
+            shot.bean?.beanId?.let { beanId ->
+                s.beans.firstOrNull { it.id == beanId }?.let { bean ->
+                    var rem = bean.remaining ?: 0f
+                    shot.doseG?.takeIf { it > 0f }?.let { old ->
+                        creditRemaining(rem, old, bean.bagSize ?: 0f)?.let { rem = it }
+                    }
+                    if (doseG > 0f) {
+                        debitRemaining(rem, doseG)?.let { rem = it }
+                    }
+                    mutateBean(bean.id) { it.copy(remaining = rem) }
+                }
+            }
+        }
+        updateUi { st ->
+            st.copy(
+                history = st.history.map {
+                    if (it.id != id) it
+                    else it.copy(
+                        doseG = doseG ?: it.doseG,
+                        waterG = waterG ?: it.waterG,
+                        yieldG = yieldG ?: it.yieldG,
+                        brewTempC = brewTempC ?: it.brewTempC,
+                        durationMs = durationMs ?: it.durationMs,
+                    )
+                },
+            )
+        }
+        val snapshot = uiState().history
+        scope.launch { historyStore.save(snapshot) }
     }
 
     /** Apply a user rating / tasting-notes edit to a logged shot. Persisted.
