@@ -34,11 +34,16 @@ data class BeanDraft(
     val variety: String,
     val elevation: String,
     val processing: String,
+    val harvestTime: String,
     val grinder: String,
     val grind: String,
     val linkedProfileId: String?,
     val rating: Int,
+    val qualityScore: String,
     val tastingNotes: String,
+    val placeOfPurchase: String,
+    /** Raw text from the cost field — parsed by [applyBeanEdits] via [parseCost]. */
+    val cost: String,
     val url: String,
     val notes: String,
     val tags: List<String>,
@@ -84,13 +89,36 @@ fun applyBeanEdits(b: Bean, draft: BeanDraft): Bean = b.copy(
         variety = draft.variety.ifBlank { null },
         elevation = draft.elevation.ifBlank { null },
         processing = draft.processing.ifBlank { null },
+        harvestTime = draft.harvestTime.ifBlank { null },
     ),
     grinder = draft.grinder.trim(),
     grinderSetting = draft.grind.trim(),
     linkedProfileId = draft.linkedProfileId,
     rating = draft.rating.coerceIn(0, 5).toUByte(),
+    qualityScore = draft.qualityScore.trim(),
     tastingNotes = draft.tastingNotes,
+    placeOfPurchase = draft.placeOfPurchase.ifBlank { null },
+    cost = parseCost(draft.cost),
     url = draft.url.ifBlank { null },
     notes = draft.notes,
     tags = draft.tags.toList().ifEmpty { null },
 )
+
+/**
+ * Parse the cost field's raw text into the stored currency-less number.
+ * Tolerates a comma decimal separator (`"12,50"`); blank, non-numeric, or
+ * negative input clears the field to null (web editor parity).
+ */
+fun parseCost(raw: String): Float? =
+    raw.trim().replace(',', '.').toFloatOrNull()?.takeIf { it.isFinite() && it >= 0f }
+
+/**
+ * The cost field's initial editor text for a stored value — `""` when
+ * unrecorded, whole numbers without the trailing `.0`. Always `.`-decimal
+ * (Float.toString), so the text round-trips through [parseCost] unchanged.
+ */
+fun costText(cost: Float?): String = when {
+    cost == null -> ""
+    cost % 1f == 0f && kotlin.math.abs(cost) < 1e7f -> cost.toLong().toString()
+    else -> cost.toString()
+}

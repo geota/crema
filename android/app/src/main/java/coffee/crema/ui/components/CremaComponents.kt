@@ -1303,6 +1303,7 @@ fun CremaTextField(
     placeholder: String? = null,
     singleLine: Boolean = true,
     minLines: Int = 1,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (label.isNotEmpty()) Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1321,6 +1322,7 @@ fun CremaTextField(
                 onValueChange = onValueChange,
                 singleLine = singleLine,
                 minLines = minLines,
+                keyboardOptions = keyboardOptions,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 modifier = Modifier.fillMaxWidth(),

@@ -48,10 +48,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import coffee.crema.beans.BAG_PRESETS
 import coffee.crema.beans.BeanDraft
 import coffee.crema.beans.applyBeanEdits
+import coffee.crema.beans.costText
 import coffee.crema.beans.isFrozen
 import coffee.crema.core.Bean
 import coffee.crema.ui.MainViewModel
@@ -138,8 +140,12 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var variety by remember(bean.id) { mutableStateOf(bean.origin?.variety ?: "") }
     var elevation by remember(bean.id) { mutableStateOf(bean.origin?.elevation ?: "") }
     var processing by remember(bean.id) { mutableStateOf(bean.origin?.processing ?: "") }
+    var harvestTime by remember(bean.id) { mutableStateOf(bean.origin?.harvestTime ?: "") }
     var rating by remember(bean.id) { mutableStateOf(bean.rating?.toInt() ?: 0) }
+    var qualityScore by remember(bean.id) { mutableStateOf(bean.qualityScore ?: "") }
     var tastingNotes by remember(bean.id) { mutableStateOf(bean.tastingNotes ?: "") }
+    var placeOfPurchase by remember(bean.id) { mutableStateOf(bean.placeOfPurchase ?: "") }
+    var cost by remember(bean.id) { mutableStateOf(costText(bean.cost)) }
     var url by remember(bean.id) { mutableStateOf(bean.url ?: "") }
     var notes by remember(bean.id) { mutableStateOf(bean.notes ?: "") }
 
@@ -154,8 +160,10 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 roasted = roasted, opened = opened, frozen = frozen, archived = archived,
                 decaf = decaf, pinned = pinned, bagSize = bagSize, remaining = remaining,
                 country = country, region = region, farm = farm, farmer = farmer, variety = variety,
-                elevation = elevation, processing = processing, grinder = grinder, grind = grind,
-                linkedProfileId = linkedProfileId, rating = rating, tastingNotes = tastingNotes,
+                elevation = elevation, processing = processing, harvestTime = harvestTime,
+                grinder = grinder, grind = grind,
+                linkedProfileId = linkedProfileId, rating = rating, qualityScore = qualityScore,
+                tastingNotes = tastingNotes, placeOfPurchase = placeOfPurchase, cost = cost,
                 url = url, notes = notes, tags = tags.toList(),
             ))
         }
@@ -342,14 +350,28 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         Box(Modifier.weight(1f)) { BeField("Elevation", elevation) { elevation = it } }
                         Box(Modifier.weight(1f)) { BeField("Processing", processing) { processing = it } }
                     }
+                    BeField("Harvest time", harvestTime) { harvestTime = it }
                 }
 
                 BeBlock("06", "Tasting", "How the bag is drinking — surfaces on the brew card and history.") {
+                    BeField("Score — number, letter grade, whatever you log", qualityScore) { qualityScore = it }
                     BeRow("Rating", stack = true) { CremaStarRating(rating, onChange = { rating = it }) }
                     BeField("Tasting notes", tastingNotes, singleLine = false) { tastingNotes = it }
                 }
 
-                BeBlock("07", "Buy again", "A roastery link for quick reordering.") {
+                BeBlock("07", "Buy again", "Where the bag was bought, what it cost, and a link for reordering.") {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Box(Modifier.weight(1f)) { BeField("Place of purchase", placeOfPurchase) { placeOfPurchase = it } }
+                        Box(Modifier.weight(1f)) {
+                            CremaTextField(
+                                value = cost,
+                                onValueChange = { cost = it },
+                                label = "Cost",
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
                     BeField("Product URL", url) { url = it }
                 }
 

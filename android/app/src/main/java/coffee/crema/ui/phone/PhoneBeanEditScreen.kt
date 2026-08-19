@@ -18,9 +18,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import coffee.crema.beans.BAG_PRESETS
 import coffee.crema.beans.BeanDraft
 import coffee.crema.beans.applyBeanEdits
+import coffee.crema.beans.costText
 import coffee.crema.beans.isFrozen
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.*
@@ -84,8 +87,12 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var variety by remember(bean.id) { mutableStateOf(bean.origin?.variety ?: "") }
     var elevation by remember(bean.id) { mutableStateOf(bean.origin?.elevation ?: "") }
     var processing by remember(bean.id) { mutableStateOf(bean.origin?.processing ?: "") }
+    var harvestTime by remember(bean.id) { mutableStateOf(bean.origin?.harvestTime ?: "") }
     var rating by remember(bean.id) { mutableStateOf(bean.rating?.toInt() ?: 0) }
+    var qualityScore by remember(bean.id) { mutableStateOf(bean.qualityScore ?: "") }
     var tastingNotes by remember(bean.id) { mutableStateOf(bean.tastingNotes ?: "") }
+    var placeOfPurchase by remember(bean.id) { mutableStateOf(bean.placeOfPurchase ?: "") }
+    var cost by remember(bean.id) { mutableStateOf(costText(bean.cost)) }
     var url by remember(bean.id) { mutableStateOf(bean.url ?: "") }
     var notes by remember(bean.id) { mutableStateOf(bean.notes ?: "") }
 
@@ -107,8 +114,10 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 roasted = roasted, opened = opened, frozen = frozen, archived = archived,
                 decaf = decaf, pinned = pinned, bagSize = bagSize, remaining = remaining,
                 country = country, region = region, farm = farm, farmer = farmer, variety = variety,
-                elevation = elevation, processing = processing, grinder = grinder, grind = grind,
-                linkedProfileId = linkedProfileId, rating = rating, tastingNotes = tastingNotes,
+                elevation = elevation, processing = processing, harvestTime = harvestTime,
+                grinder = grinder, grind = grind,
+                linkedProfileId = linkedProfileId, rating = rating, qualityScore = qualityScore,
+                tastingNotes = tastingNotes, placeOfPurchase = placeOfPurchase, cost = cost,
                 url = url, notes = notes, tags = tags.toList(),
             ))
         }
@@ -335,6 +344,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     CremaTextField(value = elevation, onValueChange = { elevation = it }, label = "Elevation", placeholder = "1900 masl", modifier = Modifier.weight(1f))
                     CremaTextField(value = processing, onValueChange = { processing = it }, label = "Process", placeholder = "Natural", modifier = Modifier.weight(1f))
                 }
+                CremaTextField(value = harvestTime, onValueChange = { harvestTime = it }, label = "Harvest time", placeholder = "Nov 2025", modifier = Modifier.fillMaxWidth())
             }
 
             // 06 · Tasting
@@ -342,6 +352,12 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 EdRow("Rating") {
                     CremaStarRating(rating, onChange = { rating = it }, touchDp = 36)
                 }
+                CremaTextField(
+                    value = qualityScore,
+                    onValueChange = { qualityScore = it },
+                    label = "Score",
+                    placeholder = "88, A- — any format",
+                )
                 CremaTextField(
                     value = tastingNotes,
                     onValueChange = { tastingNotes = it },
@@ -354,6 +370,14 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
 
             // 07 · Buy again
             NumberedGroup("07", "Buy again") {
+                CremaTextField(value = placeOfPurchase, onValueChange = { placeOfPurchase = it }, label = "Place of purchase", placeholder = "Roastery website · Cafe · Subscription")
+                CremaTextField(
+                    value = cost,
+                    onValueChange = { cost = it },
+                    label = "Cost",
+                    placeholder = "What you paid",
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                )
                 CremaTextField(value = url, onValueChange = { url = it }, label = "Product URL", placeholder = "https://…")
             }
 
