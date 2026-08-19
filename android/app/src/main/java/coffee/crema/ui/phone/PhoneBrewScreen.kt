@@ -1192,14 +1192,10 @@ private fun PhoneDialInCard(
                     )
                 }
             }
-            FilledTonalButton(
-                onClick = onStart,
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-            ) {
-                PhIcon("coffee", sizeDp = 16)
-                Spacer(Modifier.width(7.dp))
-                Text("Use these settings")
-            }
+            // Compact end-aligned action pill (shared with the tablet card) —
+            // the old full-width tonal button overweighted a card whose whole
+            // surface is already the tap-through.
+            DialInApplyChip(onClick = onStart, modifier = Modifier.align(Alignment.End))
         }
     }
 }

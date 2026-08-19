@@ -1,5 +1,6 @@
 package coffee.crema.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -12,8 +13,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -111,11 +113,41 @@ fun DialInCard(
                     )
                 }
             }
-            FilledTonalButton(onClick = onStart, modifier = Modifier.height(32.dp)) {
-                PhIcon("coffee", sizeDp = 15)
-                Spacer(Modifier.width(6.dp))
-                Text("Use these settings")
-            }
+            DialInApplyChip(onClick = onStart, modifier = Modifier.align(Alignment.End))
+        }
+    }
+}
+
+/**
+ * The card's one action as a compact, self-sized pill — "Load setup"
+ * re-applies the shot's whole setup (profile + bag + grind + targets).
+ * Replaces the old squeezed FilledTonalButton ("Use these settings"), whose
+ * M3 content padding drew the label low inside a forced 32dp height and
+ * whose width dominated the card. Explicit padding here centres the label by
+ * construction; the border + neutral fill mirror the web `.di-start` pill.
+ * Shared by the tablet [DialInCard] and the phone Brew screen's variant.
+ */
+@Composable
+fun DialInApplyChip(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(999.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = modifier,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            PhIcon("arrow-counter-clockwise", sizeDp = 13, tint = MaterialTheme.colorScheme.primary)
+            Text(
+                "Load setup",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+            )
         }
     }
 }

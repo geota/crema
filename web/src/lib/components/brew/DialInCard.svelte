@@ -15,6 +15,7 @@
 	import { formatRatio } from '$lib/utils/ratio';
 	import { effectiveGrindSetting, yieldOf, type StoredShot } from '$lib/history';
 	import StarRating from '$lib/components/common/StarRating.svelte';
+	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
 
 	let {
 		shot,
@@ -90,7 +91,9 @@
 			<span class="di-plan-t">{plan}</span>
 		</div>
 	{/if}
-	<button class="di-start" onclick={() => onStart(shot)}>Use these settings</button>
+	<button class="di-start" onclick={() => onStart(shot)}>
+		<ArrowCounterClockwiseIcon aria-hidden="true" /> Load setup
+	</button>
 </div>
 
 <style>
@@ -185,18 +188,28 @@
 		-webkit-box-orient: vertical;
 		overflow: hidden;
 	}
+	/* End-aligned compact pill — matches the Android DialInApplyChip ("Load
+	   setup"): the card's whole surface reads as content, the one action sits
+	   bottom-right like a card action. */
 	.di-start {
-		align-self: flex-start;
+		align-self: flex-end;
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
 		font-family: var(--font-sans);
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--fg-1);
 		background: rgba(var(--tint-rgb), 0.12);
 		border: 1px solid rgba(var(--tint-rgb), 0.25);
-		border-radius: var(--radius-sm);
+		border-radius: var(--radius-pill);
 		padding: 5px 10px;
 		cursor: pointer;
 		transition: background var(--dur-1) var(--ease);
+	}
+	.di-start :global(svg) {
+		font-size: 12px;
+		color: var(--copper-400);
 	}
 	.di-start:hover {
 		background: rgba(var(--tint-rgb), 0.2);
