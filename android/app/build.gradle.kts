@@ -285,7 +285,7 @@ kotlin {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.08.00")
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.19.0")
@@ -304,7 +304,7 @@ dependencies {
     // system families and the type scale still renders.
     implementation("androidx.compose.ui:ui-text-google-fonts")
     // Navigation for the 6-destination rail + 2 pushed editors (AppNavHost).
-    implementation("androidx.navigation:navigation-compose:2.9.8")
+    implementation("androidx.navigation:navigation-compose:2.10.1")
     // Phosphor icons as Compose ImageVectors — the PhIcon binding in
     // CremaComponents maps each screen's kebab-case glyph name to a regular-weight
     // vector. Pure-Kotlin vector lib (no Compose-compiler version coupling). NOTE:
@@ -319,7 +319,7 @@ dependencies {
     // Coil 3.5.0 pulls kotlin-stdlib 2.4.0 — fine now the project is on the Kotlin
     // 2.4.0 compiler (reads ≤2.4.0 metadata). Keep Coil's transitive stdlib ≤ the
     // project's Kotlin, or the generated UniFFI bindings (de1_ffi.kt) won't compile.
-    implementation("io.coil-kt.coil3:coil-compose:3.5.0")
+    implementation("io.coil-kt.coil3:coil-compose:3.6.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // UniFFI's generated Kotlin depends on JNA for the FFI calls and on
@@ -331,7 +331,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     // Visualizer HTTP — OkHttp because HttpURLConnection rejects the PATCH
     // verb (shot edits sync via PATCH /api/shots/{id}).
-    implementation("com.squareup.okhttp3:okhttp:5.4.0")
+    implementation("com.squareup.okhttp3:okhttp:5.5.0")
 
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
     // The generated `core/bindings/crema-core.kt` types are @Serializable.
@@ -380,7 +380,7 @@ dependencies {
 
     // JVM unit tests for pure shell logic (no device / FFI). kotlin-test mapped
     // onto the JUnit 4 runner AGP's unit-test task uses.
-    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.4.10")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.4.20")
     testImplementation("junit:junit:4.13.2")
 }
 
