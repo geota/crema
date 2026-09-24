@@ -5,6 +5,15 @@ All notable changes to Crema are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Both flow readings now share the Flow card** (#92) — machine flow (ml/s)
+  on the left, scale flow (g/s) on the right, so the two numbers being compared
+  sit side by side. Dispensed water volume moved to the Weight card next to the
+  scale weight. Web, tablet and phone.
+
 ## [0.0.6] — 2026-08-07
 
 More reliable Bluetooth reconnects — the app recovers on its own after long idle periods, no more force-quit needed.

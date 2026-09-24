@@ -655,6 +655,9 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
         }
 
         // 2×2 dual-channel chips — these are the chart legend.
+        // Both flow readings share the FLOW chip (machine ml/s on top, scale g/s
+        // below) so they can be compared in one place (geota/crema#92); dispensed
+        // volume sits with the scale weight.
         // Unit-aware (issue 44): pressure / volume / temp / weight convert to the
         // chosen unit; flow (ml/s, g/s) and resistance are not toggled dimensions.
         val resist = ui.resistanceWeight ?: ui.resistance
@@ -672,7 +675,7 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
             DualChip(
                 Modifier.weight(1f),
                 "FLOW", fmtF(ui.flow), "ml/s", tel.flow,
-                "VOLUME", cVolume.value, cVolume.unit, tel.flow2,
+                "SCALE", fmtF(ui.scaleFlowGPerS), "g/s", tel.weight2,
             )
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -684,7 +687,7 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
             DualChip(
                 Modifier.weight(1f),
                 "WEIGHT", cWeight.value, cWeight.unit, tel.weight,
-                "FLOW", fmtF(ui.scaleFlowGPerS), "g/s", tel.weight2,
+                "VOLUME", cVolume.value, cVolume.unit, tel.flow2,
             )
         }
 
