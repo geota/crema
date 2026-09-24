@@ -34,7 +34,7 @@
 	import { OAuth, OAuthLive } from '$lib/services/oauth';
 	import { HttpClientLive } from '$lib/services/http-client';
 	import { TokenVault, TokenVaultLive } from '$lib/services/token-vault';
-	import { takeReturnPath } from '$lib/visualizer';
+	import { markVisualizerJustConnected, takeReturnPath } from '$lib/visualizer';
 
 	type Status =
 		| { kind: 'working' }
@@ -104,6 +104,8 @@
 			if (Exit.isFailure(exit)) throw Cause.squash(exit.cause);
 			const tokens = exit.value;
 			await runtime.runPromise(Effect.flatMap(TokenVault, (v) => v.storeTokens(tokens)));
+			// Settings offers the catch-up upload once, on arrival.
+			markVisualizerJustConnected();
 			const returnTo = takeReturnPath('/settings');
 			status = { kind: 'done', returnTo };
 			// Tiny delay so the user sees the success state before navigating.

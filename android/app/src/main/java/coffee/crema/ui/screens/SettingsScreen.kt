@@ -83,6 +83,12 @@ import coffee.crema.ui.components.SegOption
 import coffee.crema.ui.components.CremaConfirmDialog
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.theme.JetBrainsMono
+import coffee.crema.decent.DECENT_HISTORY_URL
+import coffee.crema.ui.UploadTargetId
+import coffee.crema.ui.components.CatchUpRow
+import coffee.crema.ui.components.DecentSignInForm
+import coffee.crema.ui.components.DecentUploadRows
+import coffee.crema.ui.components.decentAccountSummary
 
 /*
  * Settings — a port of tablet/settings-screen.jsx: a two-pane shell (248dp
@@ -688,8 +694,11 @@ fun SettingsScreen(
                                         uniform = true,
                                     )
                                 }
-                                CremaSettingsRow("Auto-sync new shots", "Upload each shot as it finishes (needs a pushing direction).") {
-                                    CremaSwitch(vz.autoSync, vm.visualizer::setAutoSync, enabled = vz.shotsDirection == "backup" || vz.shotsDirection == "two-way")
+                                CremaSettingsRow("Upload finished shots", "Push each shot to Visualizer as it finishes (needs a pushing direction).") {
+                                    CremaSwitch(vz.autoSync, vm::setVisualizerAutoSync, enabled = vz.shotsDirection == "backup" || vz.shotsDirection == "two-way")
+                                }
+                                ui.sharing.catchUpOffer?.takeIf { it.destination == UploadTargetId.Visualizer }?.let { offer ->
+                                    CatchUpRow(offer, busy = ui.sharing.catchUpBusy, onUpload = vm::runCatchUp, onDismiss = vm::dismissCatchUp)
                                 }
                                 CremaSettingsRow(
                                     "Sync now",
@@ -729,27 +738,49 @@ fun SettingsScreen(
                                 CremaSettingsRow("Include tasting notes", "Attach your journal text to uploads. Ratings always ride along.", last = true) { CremaSwitch(vz.includeNotes, vm.visualizer::setIncludeNotes) }
                             }
                         }
-                        if (vz.signedIn) {
+                        if (vz.signedIn || ui.decent.linked || ui.sharing.syncLog.isNotEmpty()) {
                             var showLog by remember { mutableStateOf(false) }
                             SetGroup("Recent activity") {
                                 CremaSettingsRow(
                                     "Sync log",
-                                    if (vz.log.isEmpty()) "No sync activity yet."
-                                    else "${vz.log.size} recent event(s).",
-                                    last = !showLog || vz.log.isEmpty(),
+                                    if (ui.sharing.syncLog.isEmpty()) "No sync activity yet."
+                                    else "${ui.sharing.syncLog.size} recent event(s).",
+                                    last = !showLog || ui.sharing.syncLog.isEmpty(),
                                 ) {
                                     CremaButton(
                                         onClick = { showLog = !showLog },
                                         variant = CremaButtonVariant.Text,
                                         label = if (showLog) "Hide log" else "Show log",
-                                        enabled = vz.log.isNotEmpty(),
+                                        enabled = ui.sharing.syncLog.isNotEmpty(),
                                     )
                                 }
                                 if (showLog) {
-                                    vz.log.forEachIndexed { i, entry ->
-                                        SyncLogRow(entry, last = i == vz.log.lastIndex)
+                                    ui.sharing.syncLog.forEachIndexed { i, entry ->
+                                        SyncLogRow(entry, last = i == ui.sharing.syncLog.lastIndex)
                                     }
                                 }
+                            }
+                        }
+                        // Decent account (#84) — the owner's shot history on decentespresso.com.
+                        val dc = ui.decent
+                        DecentAccountCard(
+                            dc = dc,
+                            connectedSerial = ui.sharing.connectedSerial,
+                            serialOnAccount = ui.sharing.connectedSerialOnDecent,
+                            onSignIn = { e, p -> vm.decent.signIn(e, p) },
+                            onSignOut = { vm.decent.signOut() },
+                            onOpenSite = { openUrl(DECENT_HISTORY_URL) },
+                        )
+                        if (dc.linked) {
+                            SetGroup("Decent shot history") {
+                                DecentUploadRows(
+                                    dc = dc,
+                                    offer = ui.sharing.catchUpOffer,
+                                    busy = ui.sharing.catchUpBusy,
+                                    onAutoUpload = vm::setDecentAutoUpload,
+                                    onRunCatchUp = vm::runCatchUp,
+                                    onDismissCatchUp = vm::dismissCatchUp,
+                                )
                             }
                         }
                         SetGroup("Backup & restore") {
@@ -1313,6 +1344,12 @@ private fun MachineHeroCard(
 private fun SyncLogRow(entry: coffee.crema.visualizer.SyncLogEntry, last: Boolean) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Destination tag — one log across Visualizer + Decent.
+            Text(
+                entry.destination.displayName,
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono, fontSize = 10.sp),
+                color = MaterialTheme.colorScheme.primary,
+            )
             PhIcon(
                 when (entry.direction) {
                     "pull" -> "cloud-arrow-down"
@@ -1521,6 +1558,80 @@ private fun VisualizerHeroCard(
                         enabled = vz.configured && !vz.busy,
                         label = if (vz.busy) "Signing in…" else "Sign in",
                     )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The Decent account card (#84) — same grammar as [VisualizerHeroCard]:
+ * glyph · identity/status · actions. Signed out (or signing in again after the
+ * login stopped working), the action column is the shared [DecentSignInForm]
+ * (exchanged once for a server token; the password is never stored).
+ */
+@Composable
+private fun DecentAccountCard(
+    dc: coffee.crema.decent.DecentSync.UiState,
+    connectedSerial: String?,
+    serialOnAccount: Boolean?,
+    onSignIn: (String, String) -> Unit,
+    onSignOut: () -> Unit,
+    onOpenSite: () -> Unit,
+) {
+    CremaCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
+            Box(
+                Modifier.size(64.dp)
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                    .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f), MaterialTheme.shapes.medium),
+                contentAlignment = Alignment.Center,
+            ) { PhIcon("coffee", sizeDp = 34, tint = MaterialTheme.colorScheme.primary) }
+
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Eyebrow(
+                    when {
+                        dc.needsReauth -> "Sign in again"
+                        !dc.linked -> "Not linked"
+                        else -> "Linked"
+                    },
+                    color = when {
+                        dc.needsReauth -> Color(0xFFDBA764)
+                        !dc.linked -> MaterialTheme.colorScheme.onSurfaceVariant
+                        else -> MaterialTheme.colorScheme.primary
+                    },
+                )
+                Text("Decent account", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    decentAccountSummary(dc, connectedSerial, serialOnAccount),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onOpenSite).padding(vertical = 4.dp, horizontal = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        "decentespresso.com shot history",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono, fontSize = 11.sp),
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    PhIcon("arrow-square-out", sizeDp = 11, tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!dc.linked || dc.needsReauth) {
+                    DecentSignInForm(dc = dc, onSignIn = onSignIn, fieldModifier = Modifier.width(240.dp))
+                }
+                if (dc.linked || dc.needsReauth) {
+                    CremaButton(onClick = onSignOut, variant = CremaButtonVariant.Text, danger = true, icon = "sign-out", label = "Sign out")
                 }
             }
         }

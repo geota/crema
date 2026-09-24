@@ -832,8 +832,11 @@ private fun SharingSection(
                     fillWidth = true,
                 )
             }
-            CremaSettingsRow("Auto-sync new shots", "Upload each shot as it finishes (needs a pushing direction).") {
-                CremaSwitch(vz.autoSync, vm.visualizer::setAutoSync, enabled = vz.shotsDirection == "backup" || vz.shotsDirection == "two-way")
+            CremaSettingsRow("Upload finished shots", "Push each shot to Visualizer as it finishes (needs a pushing direction).") {
+                CremaSwitch(vz.autoSync, vm::setVisualizerAutoSync, enabled = vz.shotsDirection == "backup" || vz.shotsDirection == "two-way")
+            }
+            ui.sharing.catchUpOffer?.takeIf { it.destination == coffee.crema.ui.UploadTargetId.Visualizer }?.let { offer ->
+                CatchUpRow(offer, busy = ui.sharing.catchUpBusy, onUpload = vm::runCatchUp, onDismiss = vm::dismissCatchUp)
             }
             CremaSettingsRow(
                 "Sync now",
@@ -863,17 +866,19 @@ private fun SharingSection(
             CremaSettingsRow("Include profile", "Attach the full recipe (every segment) to uploads.") { CremaSwitch(vz.includeProfile, vm.visualizer::setIncludeProfile) }
             CremaSettingsRow("Include tasting notes", "Attach your journal text to uploads. Ratings always ride along.", last = true) { CremaSwitch(vz.includeNotes, vm.visualizer::setIncludeNotes) }
         }
+    }
+    if (vz.signedIn || ui.decent.linked || ui.sharing.syncLog.isNotEmpty()) {
         var showLog by remember { mutableStateOf(false) }
         SettingsGroup("Recent activity") {
             CremaSettingsRow(
                 "Sync log",
-                if (vz.log.isEmpty()) "No sync activity yet." else "${vz.log.size} recent event(s).",
-                last = !showLog || vz.log.isEmpty(),
+                if (ui.sharing.syncLog.isEmpty()) "No sync activity yet." else "${ui.sharing.syncLog.size} recent event(s).",
+                last = !showLog || ui.sharing.syncLog.isEmpty(),
             ) {
-                CremaButton(onClick = { showLog = !showLog }, variant = CremaButtonVariant.Text, label = if (showLog) "Hide" else "Show", enabled = vz.log.isNotEmpty())
+                CremaButton(onClick = { showLog = !showLog }, variant = CremaButtonVariant.Text, label = if (showLog) "Hide" else "Show", enabled = ui.sharing.syncLog.isNotEmpty())
             }
             if (showLog) {
-                vz.log.forEachIndexed { i, entry ->
+                ui.sharing.syncLog.forEachIndexed { i, entry ->
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -885,7 +890,10 @@ private fun SharingSection(
                             tint = if (entry.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Column(Modifier.weight(1f)) {
-                            Text(entry.name, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                "${entry.destination.displayName} · ${entry.name}",
+                                style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
                             entry.error?.let {
                                 Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
@@ -896,7 +904,40 @@ private fun SharingSection(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    if (i != vz.log.lastIndex) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    if (i != ui.sharing.syncLog.lastIndex) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                }
+            }
+        }
+    }
+    // Decent account (#84) — the owner's shot history on decentespresso.com.
+    val dc = ui.decent
+    SettingsGroup("Decent account") {
+        if (dc.linked && !dc.needsReauth) {
+            CremaSettingsRow("Account", decentAccountSummary(dc, ui.sharing.connectedSerial, ui.sharing.connectedSerialOnDecent)) {
+                CremaButton(onClick = { vm.decent.signOut() }, variant = CremaButtonVariant.Outlined, label = "Sign out")
+            }
+            DecentUploadRows(
+                dc = dc,
+                offer = ui.sharing.catchUpOffer,
+                busy = ui.sharing.catchUpBusy,
+                onAutoUpload = vm::setDecentAutoUpload,
+                onRunCatchUp = vm::runCatchUp,
+                onDismissCatchUp = vm::dismissCatchUp,
+            )
+        } else {
+            // Not linked, or the login stopped working: the form (prefilled when
+            // signing in again), plus a way out for the stale account.
+            CremaSettingsRow(
+                "Account",
+                decentAccountSummary(dc, ui.sharing.connectedSerial, ui.sharing.connectedSerialOnDecent),
+                stacked = true,
+                last = true,
+            ) {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DecentSignInForm(dc = dc, onSignIn = { e, p -> vm.decent.signIn(e, p) })
+                    if (dc.needsReauth) {
+                        CremaButton(onClick = { vm.decent.signOut() }, variant = CremaButtonVariant.Text, label = "Sign out")
+                    }
                 }
             }
         }

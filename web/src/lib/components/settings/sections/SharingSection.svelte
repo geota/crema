@@ -7,13 +7,15 @@
 	import LinkIcon from 'phosphor-svelte/lib/LinkIcon';
 	import SignOutIcon from 'phosphor-svelte/lib/SignOutIcon';
 	/**
-	 * Sharing section — the Visualizer integration.
+	 * Sharing section — every cloud destination, plus backup / restore.
 	 *
 	 * The big visual Visualizer card lives here and owns the entire
 	 * connection life-cycle: sign in / out, fetching the user's account
 	 * identity, the "Test" health-check. Once connected,
-	 * `BeanSyncSection` renders below with the actual sync controls
-	 * (Sync now + last-result log).
+	 * `BeanSyncSection` renders below with the actual sync controls. The
+	 * Decent account card is `DecentAccountCard`; this section owns the
+	 * one-time catch-up offer (`CatchUpRow`) for both destinations and the
+	 * shared `ActivityLog`.
 	 */
 	import { onMount } from 'svelte';
 	import { getHistoryStore } from '$lib/history';
@@ -25,7 +27,13 @@
 		startVisualizerLogin,
 		type VisualizerAccount
 	} from '$lib/bean';
-	import { onSyncConfigChange, readSyncConfig, updateSyncConfig } from '$lib/visualizer';
+	import {
+		directionPushes,
+		onSyncConfigChange,
+		readSyncConfig,
+		takeVisualizerJustConnected,
+		updateSyncConfig
+	} from '$lib/visualizer';
 	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import StSectionHead from '../StSectionHead.svelte';
@@ -35,6 +43,10 @@
 	import StSelect from '../StSelect.svelte';
 	import StToggle from '../StToggle.svelte';
 	import BeanSyncSection from './BeanSyncSection.svelte';
+	import ActivityLog from './ActivityLog.svelte';
+	import CatchUpRow from './CatchUpRow.svelte';
+	import DecentAccountCard from './DecentAccountCard.svelte';
+	import { toast } from '$lib/components/shared/toast.svelte';
 	import { type SharingPrivacy } from '$lib/settings';
 	import {
 		backupFileName,
@@ -45,6 +57,15 @@
 		type RestoreMode
 	} from '$lib/backup';
 	import { getDriveAuthStore } from '$lib/drive/store.svelte';
+	import {
+		describeDecentDrain,
+		isDecentLinked,
+		onDecentAccountChange,
+		readDecentAccount,
+		unsentDecentShots,
+		uploadUnsentDecentShots
+	} from '$lib/decent';
+	import { getMachineReadout } from '$lib/state';
 	import { downloadBackup, listBackups, uploadBackup } from '$lib/drive/rest';
 
 	const history = getHistoryStore();
@@ -83,6 +104,78 @@
 			syncCfg = next;
 		})
 	);
+
+	// ── Decent account (geota/crema#84) ─────────────────────────────────
+	// The card itself (sign-in / out, status, auto-upload toggle) is
+	// `DecentAccountCard`; this section keeps the account state because the
+	// catch-up offer below needs it.
+	const machine = getMachineReadout();
+	let decent = $state(readDecentAccount());
+	const decentLinked = $derived(isDecentLinked(decent));
+	const liveSerial = $derived(machine.serialNumber);
+	onMount(() => onDecentAccountChange((next) => (decent = next)));
+
+	// ── Catch-up offer ──────────────────────────────────────────────────
+	// The moment a destination becomes able to receive shots is when the
+	// user is thinking about it — offer the existing shots once, inline,
+	// instead of a permanent "upload unsent" row. Raised from the handlers
+	// where that happens (sign-in, auto-upload on, shot push direction on,
+	// a Visualizer sign-in landing back here); "Not now" dismisses it.
+	type CatchUp = { destination: 'Visualizer' | 'Decent'; count: number };
+	let catchUp = $state<CatchUp | null>(null);
+	let catchUpBusy = $state<{ done: number; total: number } | null>(null);
+
+	function vizBacklogCount(): number {
+		return history.all.filter((s) => !s.visualizerId && !s.deletedAt).length;
+	}
+	/** Offer the Visualizer catch-up if shots would now auto-upload there. */
+	function offerVisualizerCatchUp(): void {
+		const cfg = readSyncConfig();
+		if (!directionPushes(cfg.direction.shots) || !cfg.autoUpload) return;
+		const count = vizBacklogCount();
+		if (count > 0) catchUp = { destination: 'Visualizer', count };
+	}
+	/** Offer the Decent catch-up if shots would now auto-upload there. */
+	function offerDecentCatchUp(): void {
+		const acct = readDecentAccount();
+		if (!isDecentLinked(acct) || !acct.autoUpload || acct.needsReauth) return;
+		const count = unsentDecentShots(history.all).length;
+		if (count > 0) catchUp = { destination: 'Decent', count };
+	}
+	function setVisualizerAutoUpload(on: boolean): void {
+		updateSyncConfig({ autoUpload: on });
+		if (on) offerVisualizerCatchUp();
+	}
+	// A Visualizer sign-in just completed (the OAuth callback flagged it).
+	onMount(() => {
+		if (takeVisualizerJustConnected()) offerVisualizerCatchUp();
+	});
+
+	async function runCatchUp(): Promise<void> {
+		const offer = catchUp;
+		if (!offer || catchUpBusy) return;
+		catchUpBusy = { done: 0, total: offer.count };
+		try {
+			if (offer.destination === 'Visualizer') {
+				const api = appCtx().services;
+				if (api) {
+					await api.shots.uploadUnsynced(history);
+					await api.queue.drain();
+				}
+			} else {
+				const result = await uploadUnsentDecentShots({
+					onProgress: (done, total) => (catchUpBusy = { done, total })
+				});
+				const notice = describeDecentDrain(result);
+				if (notice) toast[notice.kind](notice.message);
+			}
+		} catch (err) {
+			toast.error(`Upload failed: ${err instanceof Error ? err.message : String(err)}`);
+		} finally {
+			catchUpBusy = null;
+			catchUp = null;
+		}
+	}
 
 	async function loadAccount(): Promise<void> {
 		const api = appCtx().services;
@@ -399,9 +492,14 @@
 	</div>
 </div>
 
-<!-- Connected-state sync controls + log. -->
+<!-- Connected-state sync controls (the shared activity log renders below the cards). -->
 {#if viz.connected}
-	<BeanSyncSection />
+	<BeanSyncSection onShotPushEnabled={offerVisualizerCatchUp} />
+	{#if catchUp?.destination === 'Visualizer'}
+		<StGroup title="Catch up">
+			{@render catchUpRow(catchUp)}
+		</StGroup>
+	{/if}
 
 	<!-- Upload options — the three settings buildShotPayload has always
 	     applied on the wire (privacy / include profile / include notes);
@@ -414,10 +512,7 @@
 			sub="Push each shot to Visualizer when it completes. Off = upload manually from History."
 		>
 			{#snippet control()}
-				<StToggle
-					on={syncCfg.autoUpload}
-					onChange={(v) => updateSyncConfig({ autoUpload: v })}
-				/>
+				<StToggle on={syncCfg.autoUpload} onChange={setVisualizerAutoUpload} />
 			{/snippet}
 		</StRow>
 		<StRow
@@ -459,6 +554,32 @@
 			{/snippet}
 		</StRow>
 	</StGroup>
+{/if}
+
+<DecentAccountCard
+	account={decent}
+	{liveSerial}
+	onLinked={offerDecentCatchUp}
+	onAutoUploadEnabled={offerDecentCatchUp}
+>
+	{#if catchUp?.destination === 'Decent'}
+		{@render catchUpRow(catchUp)}
+	{/if}
+</DecentAccountCard>
+
+{#snippet catchUpRow(offer: CatchUp)}
+	<CatchUpRow
+		destination={offer.destination}
+		count={offer.count}
+		progress={catchUpBusy}
+		onUpload={() => void runCatchUp()}
+		onDismiss={() => (catchUp = null)}
+	/>
+{/snippet}
+
+<!-- One activity log across every destination. -->
+{#if viz.connected || decentLinked}
+	<ActivityLog />
 {/if}
 
 <StGroup

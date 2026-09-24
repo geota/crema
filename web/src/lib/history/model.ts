@@ -25,6 +25,7 @@ import type {
 	ShotStatInput,
 	TimedSample
 } from '$lib/core';
+import type { ShotMachine as CoreShotMachine } from '$lib/core/crema-core';
 import {
 	peaksForShot as wasmPeaksForShot,
 	historyStats as wasmHistoryStats
@@ -186,6 +187,28 @@ export interface ShotPeaks {
 }
 
 /**
+ * Machine identity frozen at shot completion — see {@link StoredShot.machine}.
+ * The generated core {@link CoreShotMachine} (optional, never `null`), widened
+ * to accept the `null`s that rows persisted before the core type existed may
+ * carry (serde reads a JSON `null` as `None`, so both shapes deserialise).
+ * New rows are written in the core shape — see {@link toCoreShotMachine}.
+ */
+export type ShotMachine = {
+	[K in keyof CoreShotMachine]: undefined extends CoreShotMachine[K]
+		? CoreShotMachine[K] | null
+		: CoreShotMachine[K];
+};
+
+/** Normalise a persisted {@link ShotMachine} to the core shape (drops `null`s and blanks). */
+export function toCoreShotMachine(m: ShotMachine): CoreShotMachine {
+	return {
+		serialNumber: m.serialNumber,
+		...(m.firmwareVersion ? { firmwareVersion: m.firmwareVersion } : {}),
+		...(m.model ? { model: m.model } : {})
+	};
+}
+
+/**
  * The shell-side `ShotMetadata` — mirrors Rust's `ShotMetadata`
  * camelCase wire shape so the shell and Rust hold the same record on
  * read and write.
@@ -286,6 +309,21 @@ export interface StoredShot {
 	privacy?: 'public' | 'unlisted' | 'private' | null;
 	/** Visualizer `shot.id` once uploaded; `null` until pushed. */
 	visualizerId?: string | null;
+	/**
+	 * Decent account shot id once uploaded to decentespresso.com's shot
+	 * history (geota/crema#84); `null`/absent until pushed. Core
+	 * `StoredShot::decent_id` (so backups keep it); a legacy
+	 * `uploaded:<ms>` placeholder marks an upload whose reply carried no id.
+	 */
+	decentId?: string | null;
+	/**
+	 * The DE1 this shot was pulled on, stamped at record time (#84). The
+	 * Decent upload needs the serial (the server checks it belongs to the
+	 * account); a shot recorded before this field falls back to the
+	 * connected machine at upload time, which is then stamped here. Core
+	 * `StoredShot::machine`.
+	 */
+	machine?: ShotMachine | null;
 	/** Unix epoch ms when this shot was soft-deleted, or `null`. */
 	deletedAt?: number | null;
 }

@@ -481,7 +481,7 @@ fn format_clock_label(clock_s: u64) -> String {
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss
 )]
-fn civil_from_days(days: u64) -> (u32, u32, u32) {
+pub(crate) fn civil_from_days(days: u64) -> (u32, u32, u32) {
     let z = days as i64 + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = (z - era * 146_097) as u64;

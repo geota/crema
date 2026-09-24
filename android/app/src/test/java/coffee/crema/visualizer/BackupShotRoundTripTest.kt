@@ -93,4 +93,37 @@ class BackupShotRoundTripTest {
         assertNull(restored.rating)
         assertNull(restored.bean)
     }
+
+    @Test
+    fun `decentId, machine and yield target survive the backup round trip`() {
+        val original = StoredShot(
+            id = "shot:3", completedAtMs = 5, durationMs = 30_000, yieldTargetG = 36f,
+            decentId = "d-77", machineSerial = "6262", machineFirmware = "v1.43 build 1352", machineModel = "DE1PRO",
+        )
+        val wire = wireShotJson(original, forBackup = true)
+        assertEquals("d-77", wire["decentId"]!!.jsonPrimitive.content)
+        val machine = wire["machine"]!!.jsonObject
+        assertEquals("6262", machine["serialNumber"]!!.jsonPrimitive.content)
+        assertEquals("DE1PRO", machine["model"]!!.jsonPrimitive.content)
+        val restored = storedShotFromBackupJson(wire, json)!!
+        assertEquals(original.decentId, restored.decentId)
+        assertEquals(original.machineSerial, restored.machineSerial)
+        assertEquals(original.machineFirmware, restored.machineFirmware)
+        assertEquals(original.machineModel, restored.machineModel)
+        assertEquals(36f, restored.yieldTargetG!!, 1e-3f)
+        // The whole row round-trips — nothing else changed on the way.
+        assertEquals(original, restored)
+    }
+
+    @Test
+    fun `the upload wire omits decentId but keeps the machine, and a machineless shot has none`() {
+        val s = StoredShot(id = "shot:4", completedAtMs = 5, durationMs = 30_000, decentId = "d-1", machineSerial = "6262")
+        val up = wireShotJson(s)
+        assertNull(up["decentId"])
+        assertEquals("6262", up["machine"]!!.jsonObject["serialNumber"]!!.jsonPrimitive.content)
+        val bare = wireShotJson(StoredShot(id = "shot:5", completedAtMs = 5, durationMs = 1), forBackup = true)
+        assertNull(bare["machine"])
+        assertNull(bare["decentId"])
+        assertNull(storedShotFromBackupJson(bare, json)!!.machineSerial)
+    }
 }

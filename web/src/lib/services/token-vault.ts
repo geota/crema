@@ -27,15 +27,70 @@ import { TokenSetSchema } from '../effect/schema/tokens.ts';
 import { HttpStatusError, NotAuthenticatedError, TokenRefreshFailedError } from '../effect/errors.ts';
 import { OAuth } from './oauth.ts';
 import type { TokenSet } from '../visualizer/oauth.ts';
+import { secretBox } from '../security/secret-box.ts';
 
 const TOKENS_KEY = 'crema.visualizer.tokens.v1';
 /** Refresh proactively when the access token has < 5 minutes left. */
 const EXPIRY_SAFETY_MS = 5 * 60 * 1000;
 
-/** Read + validate the persisted token set (null when absent / invalid). */
-function loadTokens(): TokenSet | null {
+/**
+ * Set when the last read found a stored token set it could not unwrap (the
+ * secret-box key is gone — IndexedDB cleared while localStorage survived, or
+ * momentarily unavailable). Cleared by the next readable load, a store or a
+ * clear. In-memory only: every `getTokens` re-reads storage, so it tracks the
+ * truth within a read of it.
+ */
+let storedButUnreadable = false;
+
+/**
+ * Is a USABLE Visualizer session stored on this device? A synchronous probe
+ * for gates that run before an async read is possible — e.g. deciding which
+ * destinations a shot completion will push to. A stored set that the last
+ * read could not unwrap does not count: the app reads as disconnected (the
+ * Settings card offers Sign in) instead of failing every push on auth.
+ */
+export function hasStoredVisualizerTokens(): boolean {
+	return readJson<unknown>(TOKENS_KEY, null) !== null && !storedButUnreadable;
+}
+
+/** Did the last read find stored tokens it could not unwrap? (The user must sign in again.) */
+export function visualizerTokensUnreadable(): boolean {
+	return storedButUnreadable;
+}
+
+/**
+ * Read + validate the persisted token set (null when absent / invalid), then
+ * unwrap the two secrets. The access + refresh tokens sit in localStorage
+ * wrapped by the secret box (AES-GCM under a non-extractable IndexedDB key)
+ * so a storage dump does not hand out a live session; a set written before
+ * wrapping existed still reads (plaintext passes through) and is re-wrapped
+ * on the next `storeTokens`. A wrapped set whose key is gone reads as null —
+ * disconnected, so the user is asked to sign in again — and flips
+ * {@link hasStoredVisualizerTokens} off. Exported for tests.
+ */
+export async function loadTokens(): Promise<TokenSet | null> {
 	const raw = readJson<unknown>(TOKENS_KEY, null);
-	return raw === null ? null : decodeOr(TokenSetSchema, raw, null, TOKENS_KEY);
+	const stored = raw === null ? null : decodeOr(TokenSetSchema, raw, null, TOKENS_KEY);
+	if (stored === null) {
+		storedButUnreadable = false;
+		return null;
+	}
+	const accessToken = await secretBox.unwrap(stored.accessToken);
+	const refreshToken = stored.refreshToken === null ? null : await secretBox.unwrap(stored.refreshToken);
+	if (accessToken === null || (stored.refreshToken !== null && refreshToken === null)) {
+		storedButUnreadable = true;
+		return null;
+	}
+	storedButUnreadable = false;
+	return { ...stored, accessToken, refreshToken };
+}
+
+async function wrapTokens(t: TokenSet): Promise<TokenSet> {
+	return {
+		...t,
+		accessToken: await secretBox.wrap(t.accessToken),
+		refreshToken: t.refreshToken === null ? null : await secretBox.wrap(t.refreshToken)
+	};
 }
 
 export class TokenVault extends Context.Tag('crema/TokenVault')<
@@ -61,7 +116,9 @@ export const TokenVaultLive = Layer.effect(
 	TokenVault,
 	Effect.gen(function* () {
 		const oauth = yield* OAuth;
-		const ref = yield* SubscriptionRef.make<TokenSet | null>(loadTokens());
+		const ref = yield* SubscriptionRef.make<TokenSet | null>(
+			typeof localStorage !== 'undefined' ? yield* Effect.promise(loadTokens) : null
+		);
 
 		/**
 		 * The persisted token set is the source of truth. During the T-16 phase
@@ -77,18 +134,22 @@ export const TokenVaultLive = Layer.effect(
 		 * the sole source again.
 		 */
 		const getTokens: Effect.Effect<TokenSet | null> = Effect.suspend(() =>
-			typeof localStorage !== 'undefined' ? Effect.sync(loadTokens) : Ref.get(ref)
+			typeof localStorage !== 'undefined' ? Effect.promise(loadTokens) : Ref.get(ref)
 		);
 
 		const storeTokens = (t: TokenSet) =>
 			Effect.zipRight(
-				Effect.sync(() => writeJson(TOKENS_KEY, t)),
+				Effect.promise(async () => {
+					writeJson(TOKENS_KEY, await wrapTokens(t));
+					storedButUnreadable = false;
+				}),
 				Ref.set(ref, t)
 			);
 
 		const clearTokens = Effect.zipRight(
 			Effect.sync(() => {
 				if (typeof localStorage !== 'undefined') localStorage.removeItem(TOKENS_KEY);
+				storedButUnreadable = false;
 			}),
 			Ref.set(ref, null)
 		);

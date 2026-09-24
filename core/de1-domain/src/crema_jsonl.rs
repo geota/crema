@@ -659,6 +659,65 @@ mod tests {
     }
 
     #[test]
+    fn backup_round_trip_keeps_the_decent_id_and_machine() {
+        // Regression (#84): backup export/import parse through `StoredShot`,
+        // which used to drop the web-persisted `decentId` / `machine`, so a
+        // restored shot re-uploaded as a duplicate and lost its provenance.
+        let envelope = serde_json::json!({
+            "shots": [{
+                "formatVersion": 3,
+                "id": "shot:rt-2",
+                "completedAt": 1_700_000_000_000_i64,
+                "record": { "duration": 30_000, "samples": [] },
+                "decentId": "98765",
+                "machine": {
+                    "serialNumber": "6262",
+                    "firmwareVersion": "v1.43 build 1352",
+                    "model": "DE1PRO",
+                },
+            }],
+        });
+        let jsonl =
+            export_backup_jsonl_from_json(&envelope.to_string(), 1_700_000_000_000, "0.1", "Pixel")
+                .unwrap();
+        assert!(jsonl.contains(r#""decentId":"98765""#), "{jsonl}");
+        assert!(jsonl.contains(r#""serialNumber":"6262""#), "{jsonl}");
+
+        let plan = parse_backup_jsonl(&jsonl);
+        assert_eq!(plan.shots.len(), 1);
+        let shot = &plan.shots[0];
+        assert_eq!(shot.decent_id.as_deref(), Some("98765"));
+        assert_eq!(
+            shot.machine,
+            Some(crate::ShotMachine {
+                serial_number: "6262".to_owned(),
+                firmware_version: Some("v1.43 build 1352".to_owned()),
+                model: Some("DE1PRO".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn a_shot_without_decent_fields_serialises_without_them() {
+        // Older rows / fixtures stay byte-stable: absent fields are not
+        // written back as `null`.
+        let envelope = serde_json::json!({
+            "shots": [{
+                "formatVersion": 3,
+                "id": "shot:rt-3",
+                "completedAt": 1_700_000_000_000_i64,
+                "record": { "duration": 30_000, "samples": [] },
+            }],
+        });
+        let jsonl =
+            export_backup_jsonl_from_json(&envelope.to_string(), 1_700_000_000_000, "0.1", "Pixel")
+                .unwrap();
+        assert!(!jsonl.contains("decentId"), "{jsonl}");
+        assert!(!jsonl.contains("\"machine\""), "{jsonl}");
+        assert_eq!(parse_backup_jsonl(&jsonl).shots[0].machine, None);
+    }
+
+    #[test]
     fn empty_input_writes_header_only() {
         let jsonl = export_jsonl(&[], &[], &[], 1, "x");
         assert_eq!(jsonl.lines().count(), 1);

@@ -32,6 +32,14 @@
 	import StSegment from '../StSegment.svelte';
 	import StToggle from '../StToggle.svelte';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
+	import { syncTimeLabel } from '$lib/utils/relative-time';
+
+	let {
+		onShotPushEnabled
+	}: {
+		/** The shot direction just changed to one that pushes (backup / two-way). */
+		onShotPushEnabled?: () => void;
+	} = $props();
 
 	const library = getBeanStore();
 	const history = getHistoryStore();
@@ -67,7 +75,6 @@
 	let syncing = $state(false);
 	let resyncing = $state(false);
 	let lastResult = $state<BeanSyncResult | null>(null);
-	let logCollapsed = $state(true);
 	/** Pull-pagination progress — non-null only while shots are streaming in. */
 	let pullProgress = $state<{ fetched: number; page: number } | null>(null);
 
@@ -122,9 +129,11 @@
 		) {
 			return;
 		}
+		const wasPushing = directionPushes(config.direction.shots);
 		config = updateSyncConfig({
 			direction: { ...config.direction, [entity]: direction }
 		});
+		if (entity === 'shots' && !wasPushing && directionPushes(direction)) onShotPushEnabled?.();
 	}
 
 	function setAutoSync(on: boolean): void {
@@ -314,33 +323,6 @@
 		}
 	}
 
-	function fmtTime(at: number | null): string {
-		if (!at) return 'never';
-		const elapsed = (Date.now() - at) / 1000;
-		if (elapsed < 60) return 'just now';
-		if (elapsed < 3600) return `${Math.round(elapsed / 60)} min ago`;
-		if (elapsed < 86_400) return `${Math.round(elapsed / 3600)} h ago`;
-		return new Date(at).toLocaleString('en-US', {
-			month: 'short',
-			day: 'numeric',
-			hour: 'numeric',
-			minute: '2-digit'
-		});
-	}
-
-	function logArrow(direction: string): string {
-		if (direction === 'push') return '↑';
-		if (direction === 'pull') return '↓';
-		if (direction === 'delete') return '✕';
-		return '·';
-	}
-
-	function entityLabel(entity: string): string {
-		if (entity === 'bean') return 'Bag';
-		if (entity === 'roaster') return 'Roaster';
-		return 'Shot';
-	}
-
 	const unsyncedShotCount = $derived(history.all.filter((s) => !s.visualizerId).length);
 </script>
 
@@ -360,7 +342,7 @@
 
 		<StRow
 			title="Beans"
-			sub={`${library.beans.length} bag(s). Last sync: ${fmtTime(config.lastSyncAt.beans ?? beanLastSync)}.`}
+			sub={`${library.beans.length} bag(s). Last sync: ${syncTimeLabel(config.lastSyncAt.beans ?? beanLastSync)}.`}
 		>
 			{#snippet control()}
 				<div class="bs-direction">
@@ -387,7 +369,7 @@
 
 		<StRow
 			title="Roasters"
-			sub={`${library.roasters.length} roaster(s). Last sync: ${fmtTime(config.lastSyncAt.roasters ?? beanLastSync)}.`}
+			sub={`${library.roasters.length} roaster(s). Last sync: ${syncTimeLabel(config.lastSyncAt.roasters ?? beanLastSync)}.`}
 		>
 			{#snippet control()}
 				<div class="bs-direction">
@@ -414,7 +396,7 @@
 
 		<StRow
 			title="Shots"
-			sub={`${history.all.length} shot(s) on this device${unsyncedShotCount > 0 ? `, ${unsyncedShotCount} unsynced` : ''}. Last sync: ${fmtTime(config.lastSyncAt.shots)}.`}
+			sub={`${history.all.length} shot(s) on this device${unsyncedShotCount > 0 ? `, ${unsyncedShotCount} unsynced` : ''}. Last sync: ${syncTimeLabel(config.lastSyncAt.shots)}.`}
 		>
 			{#snippet control()}
 				<StSegment
@@ -470,40 +452,7 @@
 			{/snippet}
 		</StRow>
 
-		<StRow
-			title="Recent activity"
-			sub={`${config.log.length} entr${config.log.length === 1 ? 'y' : 'ies'} logged.`}
-		>
-			{#snippet control()}
-				<button
-					type="button"
-					class="bs-btn"
-					onclick={() => (logCollapsed = !logCollapsed)}
-				>
-					<Icon
-						cls={logCollapsed ? 'ph ph-caret-down' : 'ph ph-caret-up'}
-						aria-hidden="true"
-					 />
-					{logCollapsed ? 'Show log' : 'Hide log'}
-				</button>
-			{/snippet}
-		</StRow>
-
-		{#if !logCollapsed && config.log.length > 0}
-			<ul class="bs-log">
-				{#each config.log as entry (entry.at + entry.id)}
-					<li class={entry.error ? 'bs-log-err' : ''}>
-						<span class="bs-log-arrow">{logArrow(entry.direction)}</span>
-						<span class="bs-log-kind">{entityLabel(entry.entity)}</span>
-						<span class="bs-log-name">"{entry.name}"</span>
-						<span class="bs-log-time">{fmtTime(entry.at)}</span>
-						{#if entry.error}
-							<span class="bs-log-msg">— {entry.error}</span>
-						{/if}
-					</li>
-				{/each}
-			</ul>
-		{/if}
+		<!-- The activity log moved to the shared `ActivityLog` (Sharing section) — one log across destinations. -->
 
 		{#if lastResult?.premiumLocked}
 			<div class="bs-premium">
@@ -605,53 +554,5 @@
 	}
 	.bs-premium a {
 		color: var(--copper-400);
-	}
-	.bs-log {
-		list-style: none;
-		padding: 0;
-		margin: 4px 0 8px;
-		font-family: var(--font-sans);
-		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.65);
-		grid-column: 1 / -1;
-		max-height: 280px;
-		overflow-y: auto;
-	}
-	.bs-log li {
-		display: flex;
-		align-items: baseline;
-		gap: 6px;
-		padding: 4px 0;
-		border-bottom: 1px dashed rgba(var(--tint-rgb), 0.06);
-	}
-	.bs-log li:last-child {
-		border-bottom: 0;
-	}
-	.bs-log-err {
-		color: rgba(var(--danger-rgb, 204 76 76), 0.95);
-	}
-	.bs-log-arrow {
-		font-family: var(--font-mono);
-		color: var(--copper-400);
-		width: 12px;
-		text-align: center;
-	}
-	.bs-log-kind {
-		color: rgba(var(--tint-rgb), 0.5);
-		min-width: 50px;
-	}
-	.bs-log-name {
-		color: var(--fg-1);
-		max-width: 240px;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-	.bs-log-time {
-		color: rgba(var(--tint-rgb), 0.4);
-		margin-left: auto;
-	}
-	.bs-log-msg {
-		color: rgba(var(--danger-rgb, 204 76 76), 0.95);
 	}
 </style>

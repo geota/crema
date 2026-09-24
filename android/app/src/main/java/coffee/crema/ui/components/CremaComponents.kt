@@ -41,6 +41,8 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentType
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -1332,6 +1334,11 @@ fun CremaTextField(
     singleLine: Boolean = true,
     minLines: Int = 1,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    /** e.g. `PasswordVisualTransformation()` for a secret field. */
+    visualTransformation: androidx.compose.ui.text.input.VisualTransformation = androidx.compose.ui.text.input.VisualTransformation.None,
+    keyboardActions: androidx.compose.foundation.text.KeyboardActions = androidx.compose.foundation.text.KeyboardActions.Default,
+    /** Autofill hint (e.g. `ContentType.Username` / `ContentType.Password`), so a password manager can fill it. */
+    contentType: androidx.compose.ui.autofill.ContentType? = null,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (label.isNotEmpty()) Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1351,9 +1358,17 @@ fun CremaTextField(
                 singleLine = singleLine,
                 minLines = minLines,
                 keyboardOptions = keyboardOptions,
+                keyboardActions = keyboardActions,
+                visualTransformation = visualTransformation,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().then(
+                    if (contentType != null) {
+                        Modifier.semantics { this.contentType = contentType }
+                    } else {
+                        Modifier
+                    },
+                ),
             )
         }
     }

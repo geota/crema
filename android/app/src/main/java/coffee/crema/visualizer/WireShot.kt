@@ -96,7 +96,7 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
                                             put("setMixTemp", s.setHeadTemp)
                                             put("setGroupPressure", s.setGroupPressure)
                                             put("setGroupFlow", s.setGroupFlow)
-                                            put("frameNumber", 0)
+                                            put("frameNumber", s.frameNumber ?: 0)
                                             put("steamTemp", 0)
                                         },
                                     )
@@ -128,12 +128,17 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
                     put("roastedOn", b.roastedOn)
                     put("roastLevel", b.roastLevel?.toInt())
                     put("tags", buildJsonArray { b.tags?.forEach { add(JsonPrimitive(it)) } })
+                    // The bag's reference dial + grinder — Decent's grinder
+                    // fallbacks, and preserved through a backup.
+                    put("grinderSetting", b.grinderSetting)
+                    put("grinder", b.grinder)
                 }
             } ?: JsonNull,
         )
         put("grinderModel", grinderModel)
         put("tags", buildJsonArray {})
-        put("yieldTarget", JsonNull)
+        // The stop-at-weight target dialled for this shot (Decent's `targetYield`).
+        put("yieldTarget", shot.yieldTargetG)
         put("brewTempTarget", JsonNull)
         put("preinfuseTarget", JsonNull)
         put("stopOnWeight", false)
@@ -142,8 +147,28 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
         // restore PATCHes the same Visualizer row instead of duplicating it.
         if (forBackup) put("visualizerId", shot.visualizerId) else put("visualizerId", JsonNull)
         put("deletedAt", JsonNull)
+        // Decent (#84): the server id is local identity, like visualizerId —
+        // kept for a backup, omitted from the upload. The machine is the
+        // nested core `ShotMachine` built from the flat stamped fields.
+        if (forBackup) shot.decentId?.let { put("decentId", it) }
+        shotMachineOf(shot)?.let { m ->
+            put(
+                "machine",
+                buildJsonObject {
+                    put("serialNumber", m.serialNumber)
+                    m.firmwareVersion?.let { put("firmwareVersion", it) }
+                    m.model?.let { put("model", it) }
+                },
+            )
+        }
     }
 }
+
+/** The shot's stamped DE1 identity as the core `ShotMachine`, or null when none was stamped. */
+fun shotMachineOf(shot: StoredShot): coffee.crema.core.ShotMachine? =
+    shot.machineSerial?.takeIf { it.isNotBlank() }?.let {
+        coffee.crema.core.ShotMachine(serialNumber = it, firmwareVersion = shot.machineFirmware, model = shot.machineModel)
+    }
 
 /**
  * Materialise a pulled remote shot as a local flat [StoredShot] stub — the
@@ -179,7 +204,7 @@ fun storedShotFromWire(wire: JsonObject, samplesJson: String?, json: kotlinx.ser
         null
     }
     return StoredShot(
-        id = "shot:remote:$vid",
+        id = "${coffee.crema.history.PULLED_SHOT_ID_PREFIX}$vid",
         completedAtMs = num("clock")?.toLong() ?: 0L,
         durationMs = num("duration_ms")?.toLong() ?: 0L,
         yieldG = num("final_weight_g")?.toFloat(),
@@ -218,6 +243,8 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
     val bean = (o["bean"] as? JsonObject)?.let {
         runCatching { json.decodeFromString(coffee.crema.core.ShotBean.serializer(), it.toString()) }.getOrNull()
     }
+    val machine = o["machine"] as? JsonObject
+    fun machineStr(k: String) = (machine?.get(k) as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
     return StoredShot(
         id = id,
         completedAtMs = longOf(str("completedAt")) ?: 0L,
@@ -234,6 +261,11 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
         samples = coffee.crema.history.downsampleForStorage(samples),
         privacy = str("privacy"),
         visualizerId = str("visualizerId"),
+        yieldTargetG = str("yieldTarget")?.toFloatOrNull(),
+        decentId = str("decentId")?.takeIf { it.isNotBlank() },
+        machineSerial = machineStr("serialNumber"),
+        machineFirmware = machineStr("serialNumber")?.let { machineStr("firmwareVersion") },
+        machineModel = machineStr("serialNumber")?.let { machineStr("model") },
     )
 }
 
@@ -259,6 +291,7 @@ fun parseTimedSamples(samplesJson: String, json: kotlinx.serialization.json.Json
                 setHeadTemp = sp("setHeadTemp") ?: 0f,
                 setGroupPressure = sp("setGroupPressure") ?: 0f,
                 setGroupFlow = sp("setGroupFlow") ?: 0f,
+                frameNumber = sp("frameNumber")?.toInt()?.takeIf { it != 0 },
             )
         }
     }.getOrDefault(emptyList())

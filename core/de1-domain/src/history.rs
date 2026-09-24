@@ -381,6 +381,35 @@ pub struct StoredShot {
     /// tombstone.
     #[serde(default)]
     pub deleted_at: Option<i64>,
+    /// decentespresso.com shot id once uploaded to the user's Decent
+    /// account (#84) — what [`crate::decent_shot_view_url`] links to.
+    /// `None` until uploaded. Omitted when absent so pre-#84 rows and
+    /// fixtures serialise byte-identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decent_id: Option<String>,
+    /// The DE1 this shot was pulled on, stamped by the shell at record
+    /// time (#84) — the provenance the Decent upload sends. `None` for
+    /// shots recorded before the field existed (the shell then falls back
+    /// to the connected machine at upload time).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<ShotMachine>,
+}
+
+/// Machine identity frozen onto a [`StoredShot`] at completion — the exact
+/// shape the web shell's `model.ts` persists. Decent's upload endpoint checks
+/// `serial_number` against the account's registered machines.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotMachine {
+    /// The DE1's serial number (MMR `SerialNumber`), as text.
+    pub serial_number: String,
+    /// Human firmware label (e.g. `"v1.43 build 1352"`), if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firmware_version: Option<String>,
+    /// Human model name (e.g. `"DE1PRO"`, see `machine_model_name`), if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl StoredShot {
@@ -409,6 +438,8 @@ impl StoredShot {
             auto_tare: None,
             visualizer_id: None,
             deleted_at: None,
+            decent_id: None,
+            machine: None,
         }
     }
 

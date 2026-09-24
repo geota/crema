@@ -445,6 +445,41 @@
   display: flex; flex-direction: column; gap: 8px;
 }
 
+/* ───────────────────────────── Decent account card (#84) */
+/* Sign-in form in the card's action column: two stacked inputs + the
+   primary button. Inputs borrow the Advanced-section URL field look. */
+.dc-form {
+  display: flex; flex-direction: column; gap: 6px;
+  min-width: 220px;
+}
+.dc-input {
+  width: 100%;
+  padding: 6px 10px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--fg-1);
+  background: rgba(var(--tint-rgb), 0.06);
+  border: 1px solid rgba(var(--tint-rgb), 0.12);
+  border-radius: 6px;
+  outline: none;
+}
+.dc-input:focus { border-color: rgba(var(--tint-rgb), 0.4); }
+.dc-input:disabled { opacity: 0.5; cursor: not-allowed; }
+.dc-label {
+  display: flex; flex-direction: column; gap: 3px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: rgba(var(--tint-rgb), 0.6);
+}
+.dc-warn { color: var(--warning); }
+.dc-warn svg, .dc-state svg { vertical-align: -2px; }
+/* Account status: text + icon carry it; colour only reinforces. */
+.dc-state { display: inline-flex; align-items: center; gap: 4px; }
+.dc-state-ok { color: var(--copper-400); }
+.dc-state-reauth { color: var(--warning); }
+.dc-state-off { color: rgba(var(--tint-rgb), 0.5); }
+.cu-actions { display: flex; gap: 8px; align-items: center; }
+
 /* ───────────────────────────── Other integration cards */
 .st-otherint {
   margin-top: 28px;

@@ -113,6 +113,15 @@ import coffee.crema.ui.components.ShotQualityCard
 import coffee.crema.core.ShotQualityReport
 import coffee.crema.ui.theme.CremaTheme
 import androidx.core.net.toUri
+import coffee.crema.ui.UploadTarget
+import coffee.crema.ui.uploadMenuEntry
+import coffee.crema.ui.viewableTargets
+import coffee.crema.ui.shareableTargets
+import coffee.crema.ui.openUploadedCopy
+import coffee.crema.ui.UploadPip
+import coffee.crema.ui.uploadPipFor
+import androidx.compose.ui.graphics.Color
+import coffee.crema.ui.shareUploadedLink
 
 /*
  * History (shot log) — M4. A master-detail over the captured shots: the list on
@@ -151,6 +160,8 @@ fun HistoryScreen(
     var sortDesc by remember { mutableStateOf(true) } // newest / highest first
     // Compare: select 2–5 shots → overlay their curves in a modal (HistoryCompareHooks).
     val sel = rememberCompareSelection()
+    // Shots missing from at least one enabled destination — the "Upload N" catch-up.
+    val missingUploads = ui.sharing.missingUploadTotal
     var compareOpen by remember { mutableStateOf(false) }
     // Tapping Brew's "Last shot" card requests that shot here — select it + clear
     // any active range filter so it's guaranteed visible, then consume the request.
@@ -238,6 +249,10 @@ fun HistoryScreen(
                     // landscape affordance; the icon runs the primary all-shots export.
                     Spacer(Modifier.width(8.dp))
                     CremaIconButton("upload-simple", { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) }, tone = CremaIconTone.Tonal)
+                    if (missingUploads > 0) {
+                        Spacer(Modifier.width(4.dp))
+                        CremaIconButton("cloud-arrow-up", { vm.uploadMissing() }, tone = CremaIconTone.Tonal)
+                    }
                     if (ui.history.isNotEmpty()) {
                         Spacer(Modifier.width(4.dp))
                         CremaIconButton("download-simple", { launchSave("crema-history.json", vm.shotsJson(null)) }, tone = CremaIconTone.Tonal)
@@ -254,6 +269,17 @@ fun HistoryScreen(
                             icon = "upload-simple",
                             label = "Import",
                         )
+                        // Catch-up: every shot missing from an enabled destination, in one
+                        // tap (web "Upload N"). Hidden at zero.
+                        if (missingUploads > 0) {
+                            CremaButton(
+                                onClick = { vm.uploadMissing() },
+                                variant = CremaButtonVariant.Outlined,
+                                icon = "cloud-arrow-up",
+                                enabled = !ui.sharing.catchUpBusy,
+                                label = if (ui.sharing.catchUpBusy) "Uploading…" else "Upload $missingUploads",
+                            )
+                        }
                         if (ui.history.isNotEmpty()) {
                             CremaSplitButton(
                                 icon = "download-simple",
@@ -396,7 +422,8 @@ fun HistoryScreen(
                             ShotRow(
                                 shot = shot,
                                 selected = if (sel.selecting) sel.isPicked(shot.id) else shot.id == selected?.id,
-                                syncing = shot.id in ui.visualizer.uploadingShotIds,
+                                syncing = shot.id in ui.sharing.uploadingShotIds,
+                                pip = uploadPipFor(ui.sharing.uploadTargets[shot.id].orEmpty()),
                                 weightUnit = ui.weightUnit,
                                 selecting = sel.selecting,
                                 picked = sel.isPicked(shot.id),
@@ -425,15 +452,14 @@ fun HistoryScreen(
                             onLoadOnBrew = { vm.loadProfileOnBrew(selected.profileName) },
                             onExport = { vm.exportShot(selected.id) },
                             onDelete = { vm.deleteShot(selected.id); selectedId = null },
-                            // Also offered for an already-bound shot as "Re-upload":
-                            // Visualizer de-dupes by telemetry SHA, so the re-POST
-                            // updates the same remote row (fixing an old wrongly-dated
-                            // / bean-less copy) — issue #44 follow-up.
-                            onUploadVisualizer = if (ui.visualizer.signedIn) {
-                                { vm.visualizer.uploadShot(selected) }
-                            } else {
-                                null
-                            },
+                            // One Upload row over Visualizer + Decent (a re-upload for a
+                            // destination that already has the shot: Visualizer de-dupes
+                            // by telemetry SHA; Decent replaces its copy) — #44 follow-up.
+                            uploadTargets = ui.sharing.uploadTargets[selected.id].orEmpty(),
+                            syncing = selected.id in ui.sharing.uploadingShotIds,
+                            onUpload = { targets -> vm.uploadShotTo(selected, targets) },
+                            onViewUploaded = { t -> openUploadedCopy(detailContext, t) },
+                            onShareUploaded = { t -> shareUploadedLink(detailContext, t) },
                             defaultPrivacy = ui.visualizer.privacy,
                             onPrivacyChange = { p -> vm.setShotPrivacy(selected.id, p) },
                             // Post-hoc log fix-ups (issue #16): the dial-in loop spans
@@ -446,16 +472,6 @@ fun HistoryScreen(
                             },
                             onGrindChange = { g -> vm.setShotGrind(selected.id, g) },
                             onBeanChange = { bid -> vm.setShotBean(selected.id, bid) },
-                            onViewVisualizer = selected.visualizerId?.let { vid ->
-                                {
-                                    detailContext.startActivity(
-                                        android.content.Intent(
-                                            android.content.Intent.ACTION_VIEW,
-                                            "https://visualizer.coffee/shots/$vid".toUri(),
-                                        ),
-                                    )
-                                }
-                            },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
                     }
@@ -534,6 +550,8 @@ private fun ShotRow(
     shot: StoredShot,
     selected: Boolean,
     syncing: Boolean,
+    /** Cloud status across every enabled destination. */
+    pip: UploadPip = UploadPip.Local,
     weightUnit: String,
     onClick: () -> Unit,
     selecting: Boolean = false,
@@ -628,7 +646,9 @@ private fun ShotRow(
                 strokeWidth = 1.5.dp,
                 color = MaterialTheme.colorScheme.primary,
             )
-            shot.visualizerId != null -> PhIcon("cloud-check", sizeDp = 13, tint = CremaTheme.telemetry.success)
+            pip == UploadPip.Uploaded -> PhIcon("cloud-check", sizeDp = 13, tint = CremaTheme.telemetry.success)
+            // On some enabled destinations, missing from another.
+            pip == UploadPip.Partial -> PhIcon("cloud-arrow-up", sizeDp = 13, tint = Color(0xFFDBA764))
             else -> PhIcon("cloud", sizeDp = 13, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f))
         }
     }
@@ -663,11 +683,21 @@ private fun ShotDetail(
     onLoadOnBrew: () -> Unit,
     onExport: () -> Unit,
     onDelete: () -> Unit,
-    /** Push this shot to Visualizer; null when signed out. For an
-     *  already-bound shot this is a RE-upload (the menu relabels). */
-    onUploadVisualizer: (() -> Unit)? = null,
-    /** Open the shot on visualizer.coffee; null until it has been uploaded. */
-    onViewVisualizer: (() -> Unit)? = null,
+    /**
+     * The cloud destinations (Visualizer, Decent) with their enabled /
+     * uploaded state for this shot — folded into ONE "Upload" menu row by
+     * [uploadMenuEntry] plus a "View on X" per destination that holds the
+     * shot, so adding a destination never adds a row.
+     */
+    uploadTargets: List<UploadTarget> = emptyList(),
+    /** An upload of this shot is in flight — the Upload row hides until it lands. */
+    syncing: Boolean = false,
+    /** Push this shot to the given destinations (a re-upload for ones that already have it). */
+    onUpload: (List<UploadTarget>) -> Unit = {},
+    /** Open an uploaded copy ("View on X"). */
+    onViewUploaded: (UploadTarget) -> Unit = {},
+    /** Share the public link to an uploaded copy (system share sheet). */
+    onShareUploaded: (UploadTarget) -> Unit = {},
     /** The Sharing default the "Default" privacy chip names. */
     defaultPrivacy: String = "unlisted",
     /** Per-shot privacy override edit; null reverts to the Sharing default. */
@@ -784,18 +814,24 @@ private fun ShotDetail(
                 onStartFromShot?.let { add(OverflowItem("coffee", "Start from this shot", it)) }
                 add(OverflowItem("arrow-counter-clockwise", "Load profile only", onLoadOnBrew))
                 add(OverflowItem("download-simple", "Export", onExport))
-                // Signed out (null handler) the item stays VISIBLE but
-                // disabled — a hidden action is undiscoverable (user feedback).
-                run {
-                    val label = if (shot.visualizerId != null) "Re-upload to Visualizer" else "Upload to Visualizer"
-                    val handler = onUploadVisualizer
-                    if (handler != null) {
-                        add(OverflowItem("cloud-arrow-up", label, handler))
-                    } else {
-                        add(OverflowItem("cloud-arrow-up", label, {}, enabled = false))
-                    }
+                // One "Upload" row for every cloud destination (Visualizer, Decent),
+                // naming the ones still missing the shot; a "View on X" per
+                // destination that holds it. Nothing connected → the row stays
+                // VISIBLE but disabled — a hidden action is undiscoverable.
+                // Hidden while an upload of this shot is in flight (no double POST).
+                if (!syncing) {
+                    val entry = uploadMenuEntry(uploadTargets)
+                    add(OverflowItem("cloud-arrow-up", entry.title, { onUpload(entry.targets) }, enabled = entry.enabled))
                 }
-                onViewVisualizer?.let { add(OverflowItem("cloud-check", "View on Visualizer", it)) }
+                viewableTargets(uploadTargets).forEach { t ->
+                    add(OverflowItem("arrow-square-out", "View on ${t.name}", { onViewUploaded(t) }))
+                }
+                // Share = the PUBLIC link to an uploaded copy: one row when the shot
+                // is shareable from one destination, one per destination otherwise.
+                val shareable = shareableTargets(uploadTargets)
+                shareable.forEach { t ->
+                    add(OverflowItem("share-network", if (shareable.size == 1) "Share link" else "Share ${t.name} link", { onShareUploaded(t) }))
+                }
                 add(OverflowItem("trash", "Delete shot", { confirmDelete = true }, danger = true))
             })
         }

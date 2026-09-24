@@ -67,6 +67,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import coffee.crema.core.ShotMachine
 
 /*
  * The library controller — profiles (built-in + custom + editor), the bean
@@ -95,6 +96,10 @@ class LibraryController(
     private val bridge: CremaBridge,
     /** Visualizer sync — auto-upload on capture, edit PATCH mirror, backup prefs. */
     private val visualizer: VisualizerSync,
+    /** The connected DE1's identity, stamped onto each recorded shot (#84). */
+    private val liveMachine: () -> ShotMachine?,
+    /** Push a just-recorded shot to every armed destination, one notice for the batch ([SharingController.autoUpload]). */
+    private val autoUploadShot: (shot: StoredShot, fullSamples: List<TelemetrySample>?) -> Unit,
     /** Read the live UI snapshot (library rows, active ids, live-shot state). */
     private val uiState: () -> MainUiState,
     /** Synchronously update the UI snapshot (the VM's `_ui.update`). */
@@ -1157,6 +1162,30 @@ class LibraryController(
         scope.launch { historyStore.save(snapshot) }
     }
 
+    /** Stamp a successful Decent shot-history upload onto the local shot (#84). Persisted. */
+    fun markShotDecentUploaded(localId: String, decentId: String, machine: ShotMachine? = null) {
+        updateUi { st ->
+            st.copy(
+                history = st.history.map { shot ->
+                    when {
+                        shot.id != localId -> shot
+                        // The upload used the connected DE1: stamp its identity too, so
+                        // the share link names the serial the server filed it under.
+                        machine != null && shot.machineSerial.isNullOrBlank() -> shot.copy(
+                            decentId = decentId,
+                            machineSerial = machine.serialNumber,
+                            machineFirmware = machine.firmwareVersion,
+                            machineModel = machine.model,
+                        )
+                        else -> shot.copy(decentId = decentId)
+                    }
+                },
+            )
+        }
+        val snapshot = uiState().history
+        scope.launch { historyStore.save(snapshot) }
+    }
+
     /** Stamp a successful Visualizer upload onto the local shot. Persisted. */
     fun markShotSynced(localId: String, visualizerId: String) {
         updateUi { st ->
@@ -1706,6 +1735,7 @@ class LibraryController(
                 grinder = b.grinder?.takeIf { it.isNotBlank() },
             )
         }
+        val machine = liveMachine()
         val shot = StoredShot(
             id = shotId,
             completedAtMs = now,
@@ -1726,6 +1756,12 @@ class LibraryController(
             // The buffer still holds the just-finished shot (cleared on the next
             // ShotStarted); downsample it for the detail chart.
             samples = downsampleForStorage(s.shotTelemetry),
+            // The DE1 this ran on — frozen here so a later Decent upload (#84)
+            // carries the serial the server verifies, even after the machine
+            // disconnects or another one is paired.
+            machineSerial = machine?.serialNumber,
+            machineFirmware = machine?.firmwareVersion,
+            machineModel = machine?.model,
         )
         // Aborted-shot auto-discard (Decenza abortedshotclassifier.h:19-25,
         // validated over 882 shots): under 10 s of flow AND under 5 g in the
@@ -1747,8 +1783,10 @@ class LibraryController(
             val next = (listOf(shot) + s.history).take(HistoryStore.MAX_SHOTS)
             updateUi { it.copy(history = next) }
             scope.launch { historyStore.save(next) }
-            // Auto-sync: push the fresh shot to Visualizer when armed + signed in.
-            visualizer.maybeAutoUpload(shot)
+            // Auto-upload to every armed destination (Visualizer, Decent), one
+            // notice for the batch. The full telemetry buffer rides along (the
+            // stored row is downsampled) for the destinations that take it.
+            autoUploadShot(shot, s.shotTelemetry)
         }
         // Persist the learned SAW drip model — a weight-stopped shot just
         // added a training sample in the core.
@@ -1924,7 +1962,7 @@ class LibraryController(
             ),
         ) }
         scope.launch { historyStore.save(next) }
-        visualizer.maybeAutoUpload(shot)
+        autoUploadShot(shot, null)
     }
 
     /** The discard snackbar timed out / was dismissed — drop the held shot. */

@@ -20,7 +20,12 @@ import { Effect, Layer } from 'effect';
 const h = vi.hoisted(() => {
 	let direction: 'push' | 'off' = 'push';
 	let autoUpload = true;
+	let tokensReadable = true;
 	return {
+		hasTokens: () => tokensReadable,
+		setTokensReadable: (v: boolean) => {
+			tokensReadable = v;
+		},
 		mockHistory: { get: vi.fn(), bindVisualizerId: vi.fn() },
 		appendSyncLog: vi.fn(),
 		getDirection: () => direction,
@@ -43,6 +48,12 @@ vi.mock('$lib/visualizer', () => ({
 	appendSyncLog: h.appendSyncLog,
 	directionPushes: (d: string) => d === 'push',
 	readSyncConfig: () => ({ direction: { shots: h.getDirection() }, autoUpload: h.getAutoUpload() })
+}));
+
+// The auto path skips when no readable Visualizer session is stored.
+vi.mock('$lib/services/token-vault', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/services/token-vault')>()),
+	hasStoredVisualizerTokens: () => h.hasTokens()
 }));
 
 import { pushShotToVisualizer } from './shot-persistence.ts';
@@ -90,6 +101,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	h.setDirection('push');
 	h.setAutoUpload(true);
+	h.setTokensReadable(true);
 	mockHistory.get.mockReturnValue({ id: 's1', profileName: 'Test', visualizerId: undefined });
 });
 
@@ -107,6 +119,14 @@ describe('pushShotToVisualizer — gating', () => {
 		const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'v1' }));
 		await run(uploadShot);
 		expect(uploadShot).not.toHaveBeenCalled();
+	});
+
+	it('skips (no auth-failure toast) when the stored session is missing or unreadable', async () => {
+		h.setTokensReadable(false);
+		const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'v1' }));
+		await run(uploadShot);
+		expect(uploadShot).not.toHaveBeenCalled();
+		expect(appendSyncLog).not.toHaveBeenCalled();
 	});
 
 	it('no-ops when the local row has vanished', async () => {

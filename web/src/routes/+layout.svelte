@@ -28,6 +28,7 @@
 	import { createAppRuntime, type AppRuntime } from '$lib/effect/runtime';
 	import { createCremaServices, type CremaServices } from '$lib/effect/crema-services';
 	import { setBrewWakeLock } from '$lib/shell/wake-lock';
+	import { retryPendingDecentUploads } from '$lib/decent/upload';
 	import { getSettingsStore } from '$lib/settings';
 
 	let { children } = $props();
@@ -79,7 +80,20 @@
 		const drainNow = (): void => {
 			void services?.queue.drain();
 		};
-		onOnline = () => drainNow();
+		// Decent auto-uploads that failed on the network (`retryShotIds`) are
+		// retried on reconnect and once at launch — only once the core (wasm)
+		// is up, since the upload builds its payload there. The catch keeps a
+		// surprise from becoming an unhandled rejection.
+		const retryDecent = (): void => {
+			if (loadState !== 'ready') return;
+			retryPendingDecentUploads().catch((e: unknown) =>
+				console.warn('[Crema] Decent retry failed:', e)
+			);
+		};
+		onOnline = () => {
+			drainNow();
+			retryDecent();
+		};
 		onVisibility = () => {
 			if (document.visibilityState === 'visible') drainNow();
 		};
@@ -90,6 +104,7 @@
 			// effects (queue lifecycle, shot-completion upload) run on it.
 			app = await createCremaApp(runtime);
 			loadState = 'ready';
+			retryDecent();
 		} catch (err) {
 			loadState = 'failed';
 			loadError = describeError(err);

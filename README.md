@@ -47,6 +47,7 @@ Crema is a clean-room reimplementation of the DE1 tablet experience as a **fast,
 - **Bean + roaster library** — track bags, roast levels, grinder settings, and per-shot retroactive bean rebinding with snapshot semantics.
 - **Bluetooth scales** — first-class support for Bookoo Themis, Decent Scale, Acaia (Lunar / Pyxis / Pearl), Skale, Eureka Precisa, Solo Barista, Hiroia Jimmy, Difluid, Felicita, Atomheart Eclair, Varia Aku, and Smartchef.
 - **Visualizer integration** — OAuth 2.0 + PKCE auth, full two-way sync of shots, beans, and roasters with LWW conflict resolution.
+- **Decent account shot history** — link your decentespresso.com account in Settings → Sharing and every shot is uploaded to Decent's shot history + charts, in the same format the tablet app and decaid use.
 - **Maintenance tracking** — water filter, descale, and cleaning cycle reminders with one-click "Run" buttons that drive the DE1's built-in cycles.
 - **Replay capture** — record BLE traces of real sessions and replay them deterministically through the core for development and regression testing.
 

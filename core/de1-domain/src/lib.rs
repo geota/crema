@@ -21,6 +21,9 @@
 //! - [`history_import`] / [`history_export`] — legacy `.shot` and modern v2
 //!   `.shot.json` importers, plus the symmetric v2 exporter so a shell can
 //!   share / upload a Crema shot in the community contract.
+//! - [`decent_shot_record`](mod@decent_shot_record) / [`decent_wire`] — the decentespresso.com
+//!   shot upload: a [`StoredShot`] as a decaid `ShotRecord`, and the
+//!   classification of the support API's HTTP replies, shared by both shells.
 //! - [`stop`] — [`AutoStop`], the stop-at-weight / stop-at-volume controller.
 //! - [`flow`] — [`FlowEstimator`], robust weight/mass-flow estimation for SAW.
 //! - [`filter`] — [`median`](filter::median) computation, for smoothing a
@@ -52,6 +55,8 @@ pub mod builtin;
 mod coerce;
 pub mod crema_jsonl;
 pub mod crema_profile;
+pub mod decent_shot_record;
+pub mod decent_wire;
 pub mod error;
 pub mod filter;
 pub mod flow;
@@ -108,11 +113,17 @@ pub use crema_profile::{
     crema_profile_to_wire_json, default_brew_defaults_json, default_segments,
     default_segments_json, from_wire, to_wire,
 };
+pub use decent_shot_record::{decent_shot_record, decent_shot_record_json};
+pub use decent_wire::{
+    DecentLoginReply, DecentMachine, DecentMachinesReply, DecentUploadReply, decent_login_token,
+    decent_login_token_json, decent_machines, decent_machines_json, decent_shot_view_url,
+    decent_upload_reply, decent_upload_reply_json, extract_decent_id, parse_decent_machines,
+};
 pub use error::{DomainError, ImportError};
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
 pub use history::{
-    HistoryStats, STORED_SHOT_FORMAT_VERSION, ShotMetadata, ShotStatInput, StoredShot, brew_ratio,
-    history_stats,
+    HistoryStats, STORED_SHOT_FORMAT_VERSION, ShotMachine, ShotMetadata, ShotStatInput, StoredShot,
+    brew_ratio, history_stats,
 };
 pub use history_export::{export_v2_json_shot, export_v2_json_shot_full};
 pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};

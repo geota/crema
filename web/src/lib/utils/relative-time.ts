@@ -32,3 +32,22 @@ export function relativeAgo(ms: number, asOf: number = Date.now()): string {
 	if (months < 12) return `${months}mo ago`;
 	return `${Math.floor(days / 365)}y ago`;
 }
+
+/**
+ * The sync surfaces' "when" label (Settings → Sharing: last-sync times, the
+ * activity log): `never` / `just now` / `N min ago` / `N h ago`, then a short
+ * absolute date + time once a day has passed.
+ */
+export function syncTimeLabel(at: number | null | undefined, asOf: number = Date.now()): string {
+	if (!at) return 'never';
+	const elapsed = (asOf - at) / 1000;
+	if (elapsed < 60) return 'just now';
+	if (elapsed < 3600) return `${Math.round(elapsed / 60)} min ago`;
+	if (elapsed < 86_400) return `${Math.round(elapsed / 3600)} h ago`;
+	return new Date(at).toLocaleString('en-US', {
+		month: 'short',
+		day: 'numeric',
+		hour: 'numeric',
+		minute: '2-digit'
+	});
+}

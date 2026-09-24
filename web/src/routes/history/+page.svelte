@@ -1,4 +1,20 @@
 <script lang="ts">
+	import {
+		describeDecentDrain,
+		isDecentLinked,
+		liveMachineIdentity,
+		onDecentAccountChange,
+		readDecentAccount,
+		unsentDecentShots,
+		uploadAndReportDecent,
+		uploadUnsentDecentShots
+	} from '$lib/decent';
+	import {
+		decentUploadTarget,
+		visualizerUploadTarget,
+		type UploadTarget
+	} from '$lib/history/upload-targets';
+	import { registerUploadBatch, reportUploadOutcome } from '$lib/history/upload-toast';
 	import Icon from '$lib/icons/Icon.svelte';
 	import ArrowsLeftRightIcon from 'phosphor-svelte/lib/ArrowsLeftRightIcon';
 	import ChartLineIcon from 'phosphor-svelte/lib/ChartLineIcon';
@@ -269,11 +285,26 @@
 		const shotParam = url.searchParams.get('shot');
 		if (shotParam) selectedId = shotParam;
 	});
-	/** Pip kind for the per-row indicator. */
-	function pipFor(shot: { id: string; visualizerId?: string | null }): 'uploaded' | 'pending' | 'local' {
-		if (shot.visualizerId) return 'uploaded';
-		if (pendingShotIds.has(shot.id)) return 'pending';
-		return 'local';
+	/**
+	 * Pip for the per-row indicator, across every enabled destination: on
+	 * all of them → uploaded; on some → partial; queued → pending; none
+	 * enabled → local. The title spells out which is which.
+	 */
+	function pipFor(shot: StoredShot): { pip: 'uploaded' | 'partial' | 'pending' | 'local'; title: string } {
+		const enabled = uploadTargetsFor(shot).filter((t) => t.enabled);
+		if (pendingShotIds.has(shot.id)) return { pip: 'pending', title: 'Upload pending — will retry' };
+		if (enabled.length === 0) {
+			return {
+				pip: 'local',
+				title: shot.visualizerId || shot.decentId ? 'Uploaded earlier — no destination enabled now' : 'Local only'
+			};
+		}
+		const on = enabled.filter((t) => t.uploaded).map((t) => t.name);
+		const off = enabled.filter((t) => !t.uploaded).map((t) => t.name);
+		const title = [on.length ? `On ${on.join(' + ')}` : '', off.length ? `not on ${off.join(' + ')}` : '']
+			.filter(Boolean)
+			.join(' · ');
+		return { pip: off.length === 0 ? 'uploaded' : 'partial', title: title || 'Local only' };
 	}
 	/** Are we connected + push-enabled? Gates the "Upload all" button. */
 	const canPushShots = $derived(connected && directionPushes(syncConfig.direction.shots));
@@ -311,26 +342,107 @@
 	/**
 	 * Manual per-shot upload / re-upload — the detail pane's "Upload to
 	 * Visualizer" action (issue #44 follow-up). The facade uploads, binds
-	 * the returned id, writes the sync log and toasts success / failure
-	 * itself; nothing to do here but fire it.
+	 * the returned id, writes the sync log and reports to the shot's toast
+	 * batch itself. A missing runtime or an unexpected rejection is reported
+	 * as a failure here, so the batch never waits out its timeout.
 	 */
-	function uploadShotToVisualizer(id: string): void {
-		void appCtx().services?.shots.uploadOne(id);
-	}
-	/** Shots that need an upload — no `visualizerId` and not soft-deleted. */
-	const unsyncedShots = $derived(shots.filter((s) => !s.visualizerId));
-
-	async function uploadAll(): Promise<void> {
-		if (uploadingAll || !canPushShots) return;
+	async function uploadShotToVisualizer(id: string): Promise<void> {
 		const api = appCtx().services;
-		if (!api) return;
+		if (!api) {
+			reportUploadOutcome(id, 'Visualizer', { kind: 'failed', message: 'Visualizer is not ready yet' });
+			return;
+		}
+		try {
+			await api.shots.uploadOne(id);
+		} catch (e) {
+			console.warn('[Crema] Visualizer upload threw:', e);
+			reportUploadOutcome(id, 'Visualizer', {
+				kind: 'failed',
+				message: e instanceof Error ? e.message : String(e)
+			});
+		}
+	}
+	let decentAccount = $state(readDecentAccount());
+	onMount(() => onDecentAccountChange((next) => (decentAccount = next)));
+	const decentLinked = $derived(isDecentLinked(decentAccount) && !decentAccount.needsReauth);
+
+	/**
+	 * The cloud destinations for a shot — one row per service the user can
+	 * enable in Settings → Sharing, with whether it is on and whether this
+	 * shot is already there. The detail folds these into a single Upload
+	 * menu entry (`uploadMenuEntry`) plus a Share / View row per holder.
+	 */
+	function uploadTargetsFor(shot: StoredShot): UploadTarget[] {
+		return [visualizerUploadTarget(shot, canPushShots), decentUploadTarget(shot, decentLinked)];
+	}
+	/** Push one shot to the chosen destinations (the menu picked them) — one toast for all. */
+	function uploadShotTo(id: string, targets: UploadTarget[]): void {
+		registerUploadBatch(
+			id,
+			targets.map((t) => t.name),
+			{ manual: true }
+		);
+		for (const t of targets) {
+			if (t.id === 'visualizer') void uploadShotToVisualizer(id);
+			// Never rejects: an unexpected throw is reported to the batch as a failure.
+			else if (t.id === 'decent') void uploadAndReportDecent(id, { manual: true, replace: !!store.get(id)?.decentId });
+		}
+	}
+	/**
+	 * Shots a Decent catch-up would actually send — `unsentDecentShots`
+	 * applies the same eligibility as the push (≥ 5 s, not refused before,
+	 * not pulled from Visualizer, a serial known: stamped on the shot, else
+	 * a connected DE1), so the count never promises an upload that would be
+	 * skipped.
+	 */
+	const decentUnsentIds = $derived(
+		decentLinked
+			? new Set(
+					unsentDecentShots(shots, {
+						hasLiveMachine: liveMachineIdentity() !== null,
+						rejectedShotIds: decentAccount.rejectedShotIds
+					}).map((s) => s.id)
+				)
+			: new Set<string>()
+	);
+	/** The catch-up backlog: shots missing from at least one ENABLED destination, per destination. */
+	const missingByDestination = $derived.by(() => {
+		const out: { name: string; count: number }[] = [];
+		if (canPushShots) {
+			const n = shots.filter((s) => !s.visualizerId).length;
+			if (n > 0) out.push({ name: 'Visualizer', count: n });
+		}
+		if (decentUnsentIds.size > 0) out.push({ name: 'Decent', count: decentUnsentIds.size });
+		return out;
+	});
+	const missingTotal = $derived(
+		shots.filter((s) => (canPushShots && !s.visualizerId) || decentUnsentIds.has(s.id)).length
+	);
+	const missingTitle = $derived(
+		missingByDestination.map((d) => `${d.count} not on ${d.name}`).join(' · ')
+	);
+
+	/** Push the whole backlog to every enabled destination. */
+	async function uploadMissing(): Promise<void> {
+		if (uploadingAll || missingTotal === 0) return;
+		const api = appCtx().services;
 		uploadingAll = true;
 		try {
-			// `shots.uploadUnsynced` reproduces the old per-shot loop: upload +
-			// bind + sync-log each unsynced shot, routing recoverable failures to
-			// the retry queue; then drain whatever it enqueued.
-			await api.shots.uploadUnsynced(store);
-			await api.queue.drain();
+			if (canPushShots && api) {
+				// `shots.uploadUnsynced` reproduces the old per-shot loop: upload +
+				// bind + sync-log each unsynced shot, routing recoverable failures to
+				// the retry queue; then drain whatever it enqueued. Single-flight, so a
+				// Settings catch-up already running is joined, not repeated.
+				await api.shots.uploadUnsynced(store);
+				await api.queue.drain();
+			}
+			if (decentUnsentIds.size > 0) {
+				// Shares one drain lock with the Settings catch-up.
+				const notice = describeDecentDrain(await uploadUnsentDecentShots());
+				if (notice) toast[notice.kind](notice.message);
+			}
+		} catch (err) {
+			toast.error(`Upload failed: ${err instanceof Error ? err.message : String(err)}`);
 		} finally {
 			refreshSyncState();
 			uploadingAll = false;
@@ -756,20 +868,20 @@
 					}
 				]}
 			/>
-			{#if canPushShots && unsyncedShots.length > 0}
+			<!-- Catch-up: every shot missing from an enabled destination, in one
+			     tap. Hidden at zero; the title gives the per-destination split. -->
+			{#if missingTotal > 0}
 				<button
 					class="st-btn st-btn-secondary"
 					disabled={uploadingAll}
-					onclick={uploadAll}
-					title={`Upload ${unsyncedShots.length} unsynced shot${unsyncedShots.length === 1 ? '' : 's'} to Visualizer`}
+					onclick={uploadMissing}
+					title={missingTitle}
 				>
 					<Icon
 						cls={uploadingAll ? 'ph ph-spinner-gap hi-spin' : 'ph ph-cloud-arrow-up'}
 						aria-hidden="true"
 					 />
-					{uploadingAll
-						? 'Uploading…'
-						: `Upload all (${unsyncedShots.length})`}
+					{uploadingAll ? 'Uploading…' : `Upload ${missingTotal}`}
 				</button>
 			{/if}
 			{#if selectMode}
@@ -963,13 +1075,15 @@
 		<div class="hi-split">
 			<div class="hi-list">
 				{#each filtered as s (s.id)}
+					{@const pip = pipFor(s)}
 					<ShotRow
 						shot={s}
 						active={selected?.id === s.id}
 						selectable={selectMode}
 						selected={selectedIdSet.has(s.id)}
 						selectionDisabled={selectedIds.length >= COMPARE_MAX}
-						syncPip={pipFor(s)}
+						syncPip={pip.pip}
+						syncTitle={pip.title}
 						onclick={() => (selectMode ? toggleCompareSelection(s.id) : select(s.id))}
 					/>
 				{/each}
@@ -1070,7 +1184,8 @@
 						}}
 						onDelete={(opts) => handleDelete(selected, opts)}
 						canDeleteRemote={canPushShots && !!selected.visualizerId}
-						onUploadVisualizer={canPushShots ? () => uploadShotToVisualizer(selected.id) : null}
+						uploadTargets={uploadTargetsFor(selected)}
+						onUpload={(targets) => uploadShotTo(selected.id, targets)}
 					/>
 				{/key}
 			{:else}
