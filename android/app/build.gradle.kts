@@ -332,6 +332,8 @@ dependencies {
     // Visualizer HTTP — OkHttp because HttpURLConnection rejects the PATCH
     // verb (shot edits sync via PATCH /api/shots/{id}).
     implementation("com.squareup.okhttp3:okhttp:5.4.0")
+    // `Call.executeAsync()` — a suspending, cancellable call (the Decent client).
+    implementation("com.squareup.okhttp3:okhttp-coroutines:5.4.0")
 
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
     // The generated `core/bindings/crema-core.kt` types are @Serializable.
@@ -382,6 +384,10 @@ dependencies {
     // onto the JUnit 4 runner AGP's unit-test task uses.
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.4.10")
     testImplementation("junit:junit:4.13.2")
+    // Coroutine tests (runTest / virtual time) and a real HTTP stub for the
+    // Decent client's status mapping. mockwebserver tracks the OkHttp version.
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.4.0")
 }
 
 // ---------------------------------------------------------------------------

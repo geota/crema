@@ -26,6 +26,8 @@ export {
 	refreshAccessToken,
 	revokeToken,
 	takeReturnPath,
+	markVisualizerJustConnected,
+	takeVisualizerJustConnected,
 	generateCodeVerifier,
 	codeChallengeFromVerifier,
 	randomState,

@@ -1098,6 +1098,73 @@ pub fn export_v2_json_shot_full(shot_json: &str) -> Result<String, String> {
     de1_domain::export_v2_json_shot_full(&shot).map_err(|e| e.to_string())
 }
 
+/// Build the decaid `ShotRecord` (the decentespresso.com shot-upload body)
+/// for a Rust-shape `StoredShot` JSON — one converter for both shells
+/// (#84). `machine_json` is a `ShotMachine` (`{serialNumber,
+/// firmwareVersion?, model?}`); put full-resolution telemetry into the
+/// shot's `record.samples` first when the shell still has it. Returns the
+/// compact ShotRecord JSON, ready to POST. See
+/// `de1_domain::decent_shot_record`.
+///
+/// # Errors
+///
+/// The JSON parse error when `shot_json` / `machine_json` do not
+/// deserialise.
+#[wasm_bindgen(js_name = decentShotRecordJson)]
+pub fn decent_shot_record_json(
+    shot_json: &str,
+    machine_json: &str,
+    app_version: &str,
+) -> Result<String, String> {
+    de1_domain::decent_shot_record_json(shot_json, machine_json, app_version)
+}
+
+/// Classify a Decent `login_test` reply (`status`, raw body text) as a
+/// `DecentLoginReply` JSON (`{type:"Token",content:{token}}` /
+/// `{type:"Rejected"}` / `{type:"Retry",content:{status,detail}}`). See
+/// `de1_domain::decent_login_token`.
+///
+/// # Errors
+///
+/// The serialise error string (effectively never).
+#[wasm_bindgen(js_name = decentLoginTokenJson)]
+pub fn decent_login_token_json(status: u16, body: &str) -> Result<String, String> {
+    de1_domain::decent_login_token_json(status, body)
+}
+
+/// Classify a Decent `sn` (registered machines) reply as a
+/// `DecentMachinesReply` JSON. See `de1_domain::decent_machines`.
+///
+/// # Errors
+///
+/// The serialise error string (effectively never).
+#[wasm_bindgen(js_name = decentMachinesJson)]
+pub fn decent_machines_json(status: u16, body: &str) -> Result<String, String> {
+    de1_domain::decent_machines_json(status, body)
+}
+
+/// Classify a Decent `shot_upload` reply as a `DecentUploadReply` JSON
+/// (a 2xx `0` is `Auth`, not an upload). See
+/// `de1_domain::decent_upload_reply`.
+///
+/// # Errors
+///
+/// The serialise error string (effectively never).
+#[wasm_bindgen(js_name = decentUploadReplyJson)]
+pub fn decent_upload_reply_json(status: u16, body: &str) -> Result<String, String> {
+    de1_domain::decent_upload_reply_json(status, body)
+}
+
+/// The uploaded shot's public decentespresso.com page
+/// (`https://decentespresso.com/shot/<serial>/<id>`), or `undefined`
+/// unless both are present and the id is a real server id (not a legacy
+/// `uploaded:` placeholder). No account-page fallback. See
+/// `de1_domain::decent_shot_view_url`.
+#[wasm_bindgen(js_name = decentShotViewUrl)]
+pub fn decent_shot_view_url(serial: Option<String>, decent_id: Option<String>) -> Option<String> {
+    de1_domain::decent_shot_view_url(serial.as_deref(), decent_id.as_deref())
+}
+
 /// Mint a fresh profile ID — a standard UUID v7 (RFC 9562, 2024) in
 /// the 36-character dashed form, e.g. `01910f80-7a3b-7c54-b2d1-23a4f8e9cd00`.
 /// The 48-bit timestamp prefix makes IDs lexicographically sortable by

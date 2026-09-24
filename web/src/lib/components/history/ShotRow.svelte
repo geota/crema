@@ -19,6 +19,7 @@
 		selected = false,
 		selectionDisabled = false,
 		syncPip = 'local',
+		syncTitle,
 		onclick
 	}: {
 		/** The stored shot this row renders. */
@@ -26,12 +27,15 @@
 		/** Whether this row is the selected-detail one. */
 		active?: boolean;
 		/**
-		 * Visualizer sync status pip — `uploaded` (🟢) when this shot has a
-		 * remote id, `pending` (🟡) when it sits in the retry queue,
-		 * `failed` (🔴) when the last attempt errored, `local` (⚪) when
-		 * sync is off / pull-only.
+		 * Cloud status pip across every enabled destination — `uploaded`
+		 * (🟢) when the shot is on all of them, `partial` (◐) when it is
+		 * missing from one, `pending` (🟡) when it sits in the retry queue,
+		 * `failed` (🔴) when the last attempt errored, `local` (⚪) when no
+		 * destination is enabled.
 		 */
-		syncPip?: 'uploaded' | 'pending' | 'failed' | 'local';
+		syncPip?: 'uploaded' | 'partial' | 'pending' | 'failed' | 'local';
+		/** Tooltip naming the destinations, e.g. "On Visualizer · not on Decent". */
+		syncTitle?: string;
 		/**
 		 * When true, the row is in **compare-select mode**: a leading
 		 * checkbox replaces the active-row treatment, and clicking toggles
@@ -153,14 +157,17 @@
 		</div>
 	<div
 		class="hi-row-pip hi-pip-{syncPip}"
-		title={syncPip === 'uploaded'
-			? 'Uploaded to Visualizer'
-			: syncPip === 'pending'
-				? 'Upload pending — will retry'
-				: syncPip === 'failed'
-					? 'Upload failed — open settings to retry'
-					: 'Not uploaded — local only'}
-		aria-label="Visualizer sync status: {syncPip}"
+		title={syncTitle ??
+			(syncPip === 'uploaded'
+				? 'Uploaded'
+				: syncPip === 'partial'
+					? 'Missing from a destination'
+					: syncPip === 'pending'
+						? 'Upload pending — will retry'
+						: syncPip === 'failed'
+							? 'Upload failed — open settings to retry'
+							: 'Not uploaded — local only')}
+		aria-label="Cloud status: {syncPip}"
 	></div>
 </button>
 
@@ -307,6 +314,11 @@
 	}
 	.hi-pip-uploaded {
 		background: var(--success, #2faa5a);
+	}
+	/* On some enabled destinations but not all — a hollow ring. */
+	.hi-pip-partial {
+		background: transparent;
+		box-shadow: inset 0 0 0 1.5px var(--success, #2faa5a);
 	}
 	.hi-pip-pending {
 		background: var(--warning, #d9a55a);

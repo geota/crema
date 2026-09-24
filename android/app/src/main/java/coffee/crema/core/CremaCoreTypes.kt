@@ -1041,6 +1041,15 @@ data class De1Uuids (
 	val frameWrite: String
 )
 
+/// A DE1 registered on the linked account.
+@Serializable
+data class DecentMachine (
+	/// The machine's serial number, as the server lists it.
+	val serial: String,
+	/// Raw SKU text when the server sent one (`"DE1PRO"`, …), else `""`.
+	val sku: String
+)
+
 /// Structured detector outputs — the typed values behind the prose lines,
 /// mirroring Decenza's `DetectorResults` (`shotanalysis.h:479-600`).
 /// `*_checked == false` means the detector was suppressed (pour-truncated
@@ -1754,6 +1763,19 @@ data class ShotBean (
 	val grinder: String? = null
 )
 
+/// Machine identity frozen onto a [`StoredShot`] at completion — the exact
+/// shape the web shell's `model.ts` persists. Decent's upload endpoint checks
+/// `serial_number` against the account's registered machines.
+@Serializable
+data class ShotMachine (
+	/// The DE1's serial number (MMR `SerialNumber`), as text.
+	val serialNumber: String,
+	/// Human firmware label (e.g. `"v1.43 build 1352"`), if known.
+	val firmwareVersion: String? = null,
+	/// Human model name (e.g. `"DE1PRO"`, see `machine_model_name`), if known.
+	val model: String? = null
+)
+
 /// Everything a shot-annotation PATCH can carry, gathered by the shell
 /// (which owns the config lookups — include-notes opt-out, effective
 /// privacy, bag/tag resolution) and assembled here so both shells emit
@@ -2179,6 +2201,124 @@ enum class Compare(val string: String) {
 	/// Exit when the metric falls below the threshold.
 	@SerialName("under")
 	Under("under"),
+}
+
+/// Generated type representing the anonymous struct variant `Token` of the `DecentLoginReply` Rust enum
+@Serializable
+data class DecentLoginReplyTokenInner (
+	/// The account token, trimmed.
+	val token: String
+)
+
+/// Generated type representing the anonymous struct variant `Retry` of the `DecentLoginReply` Rust enum
+@Serializable
+data class DecentLoginReplyRetryInner (
+	/// The HTTP status.
+	val status: UShort,
+	/// The reply body, trimmed and cut to 200 characters.
+	val detail: String
+)
+
+/// The `login_test` answer, classified.
+@Serializable
+sealed class DecentLoginReply {
+	/// A good login: the account token (the one-way "encrypted password"
+	/// de1app stores) every later call sends in the password slot.
+	@Serializable
+	@SerialName("Token")
+	data class Token(val content: DecentLoginReplyTokenInner): DecentLoginReply()
+	/// The server refused the login (HTTP 401, or its `0` / too-short
+	/// answer). The password is wrong — do not retry.
+	@Serializable
+	@SerialName("Rejected")
+	object Rejected: DecentLoginReply()
+	/// A non-2xx answer other than 401 — worth retrying later.
+	@Serializable
+	@SerialName("Retry")
+	data class Retry(val content: DecentLoginReplyRetryInner): DecentLoginReply()
+}
+
+/// Generated type representing the anonymous struct variant `Machines` of the `DecentMachinesReply` Rust enum
+@Serializable
+data class DecentMachinesReplyMachinesInner (
+	/// The registered machines (possibly empty).
+	val machines: List<DecentMachine>
+)
+
+/// Generated type representing the anonymous struct variant `Retry` of the `DecentMachinesReply` Rust enum
+@Serializable
+data class DecentMachinesReplyRetryInner (
+	/// The HTTP status.
+	val status: UShort,
+	/// The reply body, trimmed and cut to 200 characters.
+	val detail: String
+)
+
+/// The `sn` (registered machines) answer, classified.
+@Serializable
+sealed class DecentMachinesReply {
+	/// The DE1s on the account, de-duplicated by serial, server order.
+	@Serializable
+	@SerialName("Machines")
+	data class Machines(val content: DecentMachinesReplyMachinesInner): DecentMachinesReply()
+	/// The stored token stopped working (HTTP 401, or a 2xx `0` answer) —
+	/// the user must re-link.
+	@Serializable
+	@SerialName("Auth")
+	object Auth: DecentMachinesReply()
+	/// A non-2xx answer other than 401 — worth retrying later.
+	@Serializable
+	@SerialName("Retry")
+	data class Retry(val content: DecentMachinesReplyRetryInner): DecentMachinesReply()
+}
+
+/// Generated type representing the anonymous struct variant `Uploaded` of the `DecentUploadReply` Rust enum
+@Serializable
+data class DecentUploadReplyUploadedInner (
+	/// The stored shot's server id, when the answer carried one —
+	/// persist it as `StoredShot::decent_id`.
+	val id: String? = null
+)
+
+/// Generated type representing the anonymous struct variant `Rejected` of the `DecentUploadReply` Rust enum
+@Serializable
+data class DecentUploadReplyRejectedInner (
+	/// The HTTP status.
+	val status: UShort,
+	/// The reply body, trimmed and cut to 200 characters.
+	val body: String
+)
+
+/// Generated type representing the anonymous struct variant `Retry` of the `DecentUploadReply` Rust enum
+@Serializable
+data class DecentUploadReplyRetryInner (
+	/// The HTTP status.
+	val status: UShort,
+	/// The reply body, trimmed and cut to 200 characters.
+	val detail: String
+)
+
+/// The `shot_upload` answer, classified.
+@Serializable
+sealed class DecentUploadReply {
+	/// The server stored the shot.
+	@Serializable
+	@SerialName("Uploaded")
+	data class Uploaded(val content: DecentUploadReplyUploadedInner): DecentUploadReply()
+	/// The stored token stopped working (HTTP 401, or a 2xx whose body is
+	/// exactly `0`) — the user must re-link; the shot stays queued.
+	@Serializable
+	@SerialName("Auth")
+	object Auth: DecentUploadReply()
+	/// The server refused this shot for good (a 4xx other than
+	/// 401 / 403 / 408 / 429) — do not retry it.
+	@Serializable
+	@SerialName("Rejected")
+	data class Rejected(val content: DecentUploadReplyRejectedInner): DecentUploadReply()
+	/// A 5xx / 403 / 408 / 429 / other non-2xx answer — worth retrying.
+	@Serializable
+	@SerialName("Retry")
+	data class Retry(val content: DecentUploadReplyRetryInner): DecentUploadReply()
 }
 
 /// The metric an exit condition watches. Lowercase wire spelling

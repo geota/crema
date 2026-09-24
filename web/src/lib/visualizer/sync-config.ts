@@ -27,6 +27,8 @@ export type SyncDirection = 'off' | 'backup' | 'pull' | 'two-way';
 
 /** A single sync-log entry surfaced in the Sync UI. */
 export interface SyncLogEntry {
+	/** Where it went — absent means Visualizer (entries predate the field). */
+	destination?: 'visualizer' | 'decent';
 	direction: 'push' | 'pull' | 'skip' | 'delete';
 	entity: 'shot' | 'bean' | 'roaster';
 	id: string;

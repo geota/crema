@@ -1010,6 +1010,14 @@ export interface De1Uuids {
 	frameWrite: string;
 }
 
+/** A DE1 registered on the linked account. */
+export interface DecentMachine {
+	/** The machine's serial number, as the server lists it. */
+	serial: string;
+	/** Raw SKU text when the server sent one (`"DE1PRO"`, …), else `""`. */
+	sku: string;
+}
+
 /**
  * Structured detector outputs — the typed values behind the prose lines,
  * mirroring Decenza's `DetectorResults` (`shotanalysis.h:479-600`).
@@ -1811,6 +1819,20 @@ export interface ShotBean {
 }
 
 /**
+ * Machine identity frozen onto a [`StoredShot`] at completion — the exact
+ * shape the web shell's `model.ts` persists. Decent's upload endpoint checks
+ * `serial_number` against the account's registered machines.
+ */
+export interface ShotMachine {
+	/** The DE1's serial number (MMR `SerialNumber`), as text. */
+	serialNumber: string;
+	/** Human firmware label (e.g. `"v1.43 build 1352"`), if known. */
+	firmwareVersion?: string;
+	/** Human model name (e.g. `"DE1PRO"`, see `machine_model_name`), if known. */
+	model?: string;
+}
+
+/**
  * Everything a shot-annotation PATCH can carry, gathered by the shell
  * (which owns the config lookups — include-notes opt-out, effective
  * privacy, bag/tag resolution) and assembled here so both shells emit
@@ -2288,6 +2310,82 @@ export enum Compare {
 	/** Exit when the metric falls below the threshold. */
 	Under = "under",
 }
+
+/** The `login_test` answer, classified. */
+export type DecentLoginReply = 
+	/**
+	 * A good login: the account token (the one-way "encrypted password"
+	 * de1app stores) every later call sends in the password slot.
+	 */
+	| { type: "Token", content: {
+	/** The account token, trimmed. */
+	token: string;
+}}
+	/**
+	 * The server refused the login (HTTP 401, or its `0` / too-short
+	 * answer). The password is wrong — do not retry.
+	 */
+	| { type: "Rejected", content?: undefined }
+	/** A non-2xx answer other than 401 — worth retrying later. */
+	| { type: "Retry", content: {
+	/** The HTTP status. */
+	status: number;
+	/** The reply body, trimmed and cut to 200 characters. */
+	detail: string;
+}};
+
+/** The `sn` (registered machines) answer, classified. */
+export type DecentMachinesReply = 
+	/** The DE1s on the account, de-duplicated by serial, server order. */
+	| { type: "Machines", content: {
+	/** The registered machines (possibly empty). */
+	machines: DecentMachine[];
+}}
+	/**
+	 * The stored token stopped working (HTTP 401, or a 2xx `0` answer) —
+	 * the user must re-link.
+	 */
+	| { type: "Auth", content?: undefined }
+	/** A non-2xx answer other than 401 — worth retrying later. */
+	| { type: "Retry", content: {
+	/** The HTTP status. */
+	status: number;
+	/** The reply body, trimmed and cut to 200 characters. */
+	detail: string;
+}};
+
+/** The `shot_upload` answer, classified. */
+export type DecentUploadReply = 
+	/** The server stored the shot. */
+	| { type: "Uploaded", content: {
+	/**
+	 * The stored shot's server id, when the answer carried one —
+	 * persist it as `StoredShot::decent_id`.
+	 */
+	id?: string;
+}}
+	/**
+	 * The stored token stopped working (HTTP 401, or a 2xx whose body is
+	 * exactly `0`) — the user must re-link; the shot stays queued.
+	 */
+	| { type: "Auth", content?: undefined }
+	/**
+	 * The server refused this shot for good (a 4xx other than
+	 * 401 / 403 / 408 / 429) — do not retry it.
+	 */
+	| { type: "Rejected", content: {
+	/** The HTTP status. */
+	status: number;
+	/** The reply body, trimmed and cut to 200 characters. */
+	body: string;
+}}
+	/** A 5xx / 403 / 408 / 429 / other non-2xx answer — worth retrying. */
+	| { type: "Retry", content: {
+	/** The HTTP status. */
+	status: number;
+	/** The reply body, trimmed and cut to 200 characters. */
+	detail: string;
+}};
 
 /**
  * The metric an exit condition watches. Lowercase wire spelling

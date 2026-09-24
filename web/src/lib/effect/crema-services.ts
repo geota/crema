@@ -85,7 +85,12 @@ export interface CremaServices {
 			sinceMs: number,
 			opts?: PullOptions
 		): Promise<{ pulled: number; truncated: boolean }>;
-		/** Upload every local shot lacking a `visualizerId`. */
+		/**
+		 * Upload every local shot lacking a `visualizerId`. Single-flight: a
+		 * call while one is running (Settings catch-up, History "Upload N" and
+		 * the Sync card all reach it) joins that run instead of uploading the
+		 * backlog twice.
+		 */
 		uploadUnsynced(history: HistoryStore): Promise<void>;
 		/**
 		 * Upload (or RE-upload) one shot by id — the History detail's manual
@@ -117,6 +122,8 @@ export function createCremaServices(runtime: AppRuntime): CremaServices {
 	/** Run one service effect on the bound runtime, resolving as a `Promise`. */
 	const run = <A, E, R extends AppServices>(eff: Effect.Effect<A, E, R>): Promise<A> =>
 		runtimePromise(runtime, eff);
+	/** The running Visualizer backlog upload, joined by concurrent callers. */
+	let unsyncedRun: Promise<void> | null = null;
 
 	return {
 		tokens: {
@@ -149,7 +156,14 @@ export function createCremaServices(runtime: AppRuntime): CremaServices {
 		shots: {
 			pullAndReconcile: (history, sinceMs, opts) =>
 				run(Effect.flatMap(ShotSync, (s) => s.pullAndReconcileShots(history, sinceMs, opts))),
-			uploadUnsynced: (history) => run(Effect.flatMap(ShotSync, (s) => s.uploadUnsyncedShots(history))),
+			uploadUnsynced: (history) => {
+				if (unsyncedRun) return unsyncedRun;
+				const current = run(Effect.flatMap(ShotSync, (s) => s.uploadUnsyncedShots(history))).finally(() => {
+					if (unsyncedRun === current) unsyncedRun = null;
+				});
+				unsyncedRun = current;
+				return current;
+			},
 			uploadOne: (shotId) => run(pushShotToVisualizer(shotId, { manual: true })),
 			patch: (visualizerId, patch) =>
 				run(Effect.flatMap(ShotSync, (s) => s.patchShot(visualizerId, patch))),

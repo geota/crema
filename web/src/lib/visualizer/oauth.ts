@@ -62,6 +62,7 @@ const VERIFIER_KEY = 'crema.visualizer.oauth.pkce.v1';
 const STATE_KEY = 'crema.visualizer.oauth.state.v1';
 /** `sessionStorage` key for the post-login return path. */
 const RETURN_KEY = 'crema.visualizer.oauth.return.v1';
+const JUST_CONNECTED_KEY = 'crema.visualizer.oauth.just-connected.v1';
 
 // ── Public token shape ─────────────────────────────────────────────────
 
@@ -232,6 +233,24 @@ export function takeReturnPath(fallback: string = '/settings'): string {
 	// protocol-relative URLs that start with `/` but navigate off-site — reject
 	// them so a poisoned `returnTo` can't open-redirect after sign-in.
 	return v && v.startsWith('/') && !v.startsWith('//') && !v.startsWith('/\\') ? v : fallback;
+}
+
+/**
+ * One-shot "a sign-in just completed" flag: the callback sets it after the
+ * tokens are stored, and Settings → Sharing consumes it on mount to offer the
+ * catch-up upload of shots already on the device — at the moment of the
+ * connection, not on every later visit.
+ */
+export function markVisualizerJustConnected(): void {
+	if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(JUST_CONNECTED_KEY, '1');
+}
+
+/** Read + clear the {@link markVisualizerJustConnected} flag. */
+export function takeVisualizerJustConnected(): boolean {
+	if (typeof sessionStorage === 'undefined') return false;
+	const v = sessionStorage.getItem(JUST_CONNECTED_KEY);
+	sessionStorage.removeItem(JUST_CONNECTED_KEY);
+	return v !== null;
 }
 
 // ── Token exchange ─────────────────────────────────────────────────────

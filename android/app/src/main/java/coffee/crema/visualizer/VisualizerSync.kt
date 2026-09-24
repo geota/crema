@@ -1,6 +1,7 @@
 package coffee.crema.visualizer
 
 import coffee.crema.core.ShotPatchInputs
+import coffee.crema.runCatchingCancellable
 import coffee.crema.core.exportV2JsonShot
 import coffee.crema.core.exportV2JsonShotFull
 import coffee.crema.core.signatureForShot
@@ -8,6 +9,13 @@ import coffee.crema.core.visualizerShotPatchJson
 import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.history.StoredShot
 import coffee.crema.history.effectiveGrindSetting
+import coffee.crema.ui.DrainResult
+import coffee.crema.ui.TelemetrySample
+import coffee.crema.ui.UploadDestination
+import coffee.crema.ui.UploadOutcome
+import coffee.crema.ui.UploadOutcomeKind
+import coffee.crema.ui.UploadTargetId
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -59,7 +67,11 @@ class VisualizerSync(
     private val onPulledShots: (List<StoredShot>) -> Unit = {},
     /** Backfill a bound local's telemetry from a pull (no-op when it has a curve). */
     private val onBackfillTelemetry: (localId: String, samples: List<coffee.crema.ui.TelemetrySample>, durationMs: Long) -> Unit = { _, _, _ -> },
-) {
+    /** Sign-in just completed — the moment to offer a catch-up of existing shots. */
+    private val onSignedIn: () -> Unit = {},
+    /** The shot as history holds it now (null = deleted) — re-read before a backlog POST. */
+    private val currentShot: (localId: String) -> StoredShot? = { null },
+) : UploadDestination {
 
     private companion object {
         /** Backstop on the pull walk — mirrors the web's maxPages default. */
@@ -92,8 +104,46 @@ class VisualizerSync(
     private val _state = MutableStateFlow(UiState(configured = clientId.isNotBlank()))
     val state: StateFlow<UiState> = _state.asStateFlow()
 
+    @Volatile
     private var persisted = VisualizerState()
     private val persistMutex = Mutex()
+
+    /** Shot ids with an upload running — checked and claimed atomically. */
+    private val inFlight = HashSet<String>()
+
+    /** One backlog pass at a time. */
+    private val drainMutex = Mutex()
+
+    /**
+     * Per-shot upload outcome for the cross-destination notice (one snackbar
+     * for Visualizer + Decent together). When set, [uploadShot] reports here
+     * instead of raising its own snackbar.
+     */
+    override var onUploadOutcome: ((shotId: String, outcome: UploadOutcome) -> Unit)? = null
+
+    // ── UploadDestination ────────────────────────────────────────────────────
+
+    override val id: UploadTargetId get() = UploadTargetId.Visualizer
+    override val enabled: Boolean get() = persisted.tokens != null && directionPushes(persisted.prefs.shotsDirection)
+    override val autoUpload: Boolean get() = persisted.prefs.autoUpload
+    override fun isUploaded(shot: StoredShot): Boolean = shot.visualizerId != null
+    override fun viewUrl(shot: StoredShot): String? = shot.visualizerId?.let { "https://visualizer.coffee/shots/$it" }
+    override fun inBacklog(shot: StoredShot): Boolean = shot.visualizerId == null
+    override fun pushShot(shot: StoredShot, replace: Boolean): Boolean = uploadShot(shot, silent = false)
+    override suspend fun setAutoUploadNow(enabled: Boolean) {
+        persist { it.copy(prefs = it.prefs.copy(autoUpload = enabled)) }
+    }
+
+    private fun claim(shotId: String): Boolean {
+        val claimed = synchronized(inFlight) { inFlight.add(shotId) }
+        if (claimed) _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shotId) }
+        return claimed
+    }
+
+    private fun release(shotId: String) {
+        synchronized(inFlight) { inFlight.remove(shotId) }
+        _state.update { it.copy(uploadingShotIds = it.uploadingShotIds - shotId) }
+    }
 
     /** Hydrate from disk at startup (called from the VM's init coroutine). */
     suspend fun load() {
@@ -120,12 +170,14 @@ class VisualizerSync(
         }
     }
 
-    private suspend fun persist(mutate: (VisualizerState) -> VisualizerState) {
-        persistMutex.withLock {
+    /** Apply + store [mutate]; false when the write failed (the in-memory state still applies). */
+    private suspend fun persist(mutate: (VisualizerState) -> VisualizerState): Boolean {
+        val ok = persistMutex.withLock {
             persisted = mutate(persisted)
             store.save(persisted)
         }
         fold()
+        return ok
     }
 
     // ── Whole-app backup (sync PREFERENCES only — never the token) ─────────────
@@ -187,12 +239,13 @@ class VisualizerSync(
                     notify("Visualizer sign-in failed — state mismatch, try again")
                 else -> {
                     _state.update { it.copy(busy = true) }
-                    runCatching { exchangeCodeForToken(clientId, code, verifier, json) }
+                    runCatchingCancellable { exchangeCodeForToken(clientId, code, verifier, json) }
                         .onSuccess { tokens ->
-                            persist { it.copy(tokens = tokens) }
-                            val account = runCatching { client.fetchAccount(tokens.accessToken) }.getOrNull()
+                            if (!persist { it.copy(tokens = tokens) }) notify("Couldn’t save the Visualizer login on this device")
+                            val account = runCatchingCancellable { client.fetchAccount(tokens.accessToken) }.getOrNull()
                             persist { it.copy(account = account) }
                             notify("Signed in to Visualizer${account?.let { a -> " as ${a.name}" }.orEmpty()}")
+                            onSignedIn()
                         }
                         .onFailure { notify("Visualizer sign-in failed: ${it.message}") }
                     _state.update { it.copy(busy = false) }
@@ -214,7 +267,7 @@ class VisualizerSync(
     fun refreshAccount() {
         if (persisted.tokens == null) return
         scope.launch {
-            runCatching { withFreshToken { client.fetchAccount(it) } }
+            runCatchingCancellable { withFreshToken { client.fetchAccount(it) } }
                 .onSuccess { account -> persist { it.copy(account = account) } }
         }
     }
@@ -227,7 +280,7 @@ class VisualizerSync(
         }
         _state.update { it.copy(busy = true) }
         scope.launch {
-            runCatching { withFreshToken { client.fetchAccount(it) } }
+            runCatchingCancellable { withFreshToken { client.fetchAccount(it) } }
                 .onSuccess { account ->
                     persist { it.copy(account = account) }
                     notify("Visualizer connection OK — signed in as ${account.name}")
@@ -239,7 +292,7 @@ class VisualizerSync(
 
     // ── Preferences ──────────────────────────────────────────────────────────
 
-    fun setAutoSync(enabled: Boolean) = scope.launch { persist { it.copy(prefs = it.prefs.copy(autoUpload = enabled)) } }
+    fun setAutoSync(enabled: Boolean) = scope.launch { setAutoUploadNow(enabled) }
     fun setShotsDirection(direction: String) = scope.launch { persist { it.copy(prefs = it.prefs.copy(shotsDirection = direction)) } }
     fun setPrivacy(privacy: String) = scope.launch { persist { it.copy(prefs = it.prefs.copy(privacy = privacy)) } }
     fun setIncludeProfile(enabled: Boolean) = scope.launch { persist { it.copy(prefs = it.prefs.copy(includeProfile = enabled)) } }
@@ -280,7 +333,7 @@ class VisualizerSync(
             persist { it.copy(tokens = null) }
             return null
         }
-        return runCatching { refreshAccessToken(clientId, refresh, json) }
+        return runCatchingCancellable { refreshAccessToken(clientId, refresh, json) }
             .onSuccess { fresh -> persist { it.copy(tokens = fresh) } }
             .getOrElse {
                 persist { it.copy(tokens = null) }
@@ -351,21 +404,84 @@ class VisualizerSync(
         return JsonObject(doc)
     }
 
-    /** Upload one shot in the background; stamps `visualizerId` on success. */
-    fun uploadShot(shot: StoredShot, silent: Boolean = false) {
+    /**
+     * Upload one shot in the background; stamps `visualizerId` on success.
+     * Returns false without POSTing when signed out or the shot is already in flight.
+     */
+    fun uploadShot(shot: StoredShot, silent: Boolean = false): Boolean {
         if (persisted.tokens == null) {
             if (!silent) notify("Sign in to Visualizer first (Settings → Sharing)")
-            return
+            return false
         }
-        _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shot.id) }
+        if (!claim(shot.id)) return false
         scope.launch {
-            runCatching { uploadShotNow(shot) }
-                .onSuccess { id ->
-                    if (!silent) notify("Shot uploaded to Visualizer")
-                    onShotSynced(shot.id, id)
+            val result = try {
+                Result.success(uploadShotNow(shot))
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                Result.failure(e)
+            } finally {
+                release(shot.id)
+            }
+            result.onSuccess { id -> onShotSynced(shot.id, id) }
+            if (silent) return@launch
+            val sink = onUploadOutcome
+            result
+                .onSuccess {
+                    if (sink != null) sink(shot.id, UploadOutcome(UploadOutcomeKind.Uploaded)) else notify("Shot uploaded to Visualizer")
                 }
-                .onFailure { if (!silent) notify("Visualizer upload failed: ${it.message}") }
-            _state.update { it.copy(uploadingShotIds = it.uploadingShotIds - shot.id) }
+                .onFailure { e ->
+                    if (sink != null) sink(shot.id, UploadOutcome(UploadOutcomeKind.Failed, e.message ?: "failed"))
+                    else notify("Visualizer upload failed: ${e.message}")
+                }
+        }
+        return true
+    }
+
+    /**
+     * Push every unsynced shot, awaiting the whole pass. Used by the
+     * cross-destination catch-up. Skips shots already in flight (a live push
+     * or a manual tap) and re-reads each shot first, so nothing is POSTed
+     * twice; stops when the session is gone. A second call while a pass runs
+     * returns at once.
+     */
+    override suspend fun uploadUnsentNow(shots: List<StoredShot>): DrainResult {
+        if (!drainMutex.tryLock()) return DrainResult(stopped = "A Visualizer upload pass is already running")
+        try {
+            if (!enabled) return DrainResult()
+            val unsynced = unsent(shots)
+            if (unsynced.isEmpty()) return DrainResult()
+            _state.update { it.copy(busy = true) }
+            var ok = 0
+            var failed = 0
+            var skipped = 0
+            var stopped: String? = null
+            for (snapshot in unsynced) {
+                if (!claim(snapshot.id)) { skipped++; continue }
+                try {
+                    val shot = currentShot(snapshot.id) ?: snapshot
+                    if (shot.visualizerId != null) { skipped++; continue }
+                    val id = uploadShotNow(shot)
+                    ok++
+                    onShotSynced(shot.id, id)
+                } catch (c: CancellationException) {
+                    throw c
+                } catch (e: VisualizerError.Auth) {
+                    failed++
+                    stopped = "Visualizer session expired"
+                } catch (e: Exception) {
+                    failed++
+                    logSync("skip", snapshot.id, snapshot.profileName ?: "Shot", e.message)
+                } finally {
+                    release(snapshot.id)
+                }
+                if (stopped != null) break
+            }
+            return DrainResult(ok, failed, skipped, stopped)
+        } finally {
+            _state.update { it.copy(busy = false) }
+            drainMutex.unlock()
         }
     }
 
@@ -412,14 +528,14 @@ class VisualizerSync(
             // (issue #16: a grind edit must reach the uploaded copy).
             grinderSetting = shot.effectiveGrindSetting,
         )
-        val body = runCatching {
+        val body = runCatchingCancellable {
             json.decodeFromString(
                 JsonObject.serializer(),
                 visualizerShotPatchJson(json.encodeToString(ShotPatchInputs.serializer(), inputs)),
             )
         }.getOrElse { notify("Visualizer update failed: ${it.message}"); return }
         scope.launch {
-            runCatching { withFreshToken { client.patchShot(it, vid, body) } }
+            runCatchingCancellable { withFreshToken { client.patchShot(it, vid, body) } }
                 .onFailure { notify("Visualizer update failed: ${it.message}") }
         }
     }
@@ -428,10 +544,11 @@ class VisualizerSync(
      *  and the shots direction pushes. Verbose: the upload snackbar confirms
      *  the push (and surfaces a failure — a silent miss left users believing
      *  the shot was synced), per the issue #44 follow-up ask. */
-    fun maybeAutoUpload(shot: StoredShot) {
+    override fun maybeAutoUpload(shot: StoredShot, fullSamples: List<TelemetrySample>?): Boolean {
         if (persisted.prefs.autoUpload && persisted.tokens != null && directionPushes(persisted.prefs.shotsDirection)) {
-            uploadShot(shot)
+            return uploadShot(shot)
         }
+        return false
     }
 
     // ── Pull / reconcile (web pullAllShotsSince + applyShotReconciliation) ──
@@ -462,7 +579,7 @@ class VisualizerSync(
                     reachedOlder = true
                     continue
                 }
-                val detail = runCatching { withFreshToken { client.fetchShotDetail(it, summary.id) } }
+                val detail = runCatchingCancellable { withFreshToken { client.fetchShotDetail(it, summary.id) } }
                     .getOrElse { e ->
                         if (e is VisualizerError.Auth) throw e
                         continue
@@ -479,20 +596,20 @@ class VisualizerSync(
                     )
                     put("detail", detail)
                 }
-                val wire = runCatching {
+                val wire = runCatchingCancellable {
                     json.parseToJsonElement(
                         coffee.crema.core.wireShotFromDetail(json.encodeToString(JsonObject.serializer(), payload)),
                     ).jsonObject
                 }.getOrNull() ?: continue
                 wires += wire
-                runCatching { coffee.crema.core.samplesFromVisualizerDetail(detailStr) }
+                runCatchingCancellable { coffee.crema.core.samplesFromVisualizerDetail(detailStr) }
                     .getOrNull()?.let { samplesById[summary.id] = it }
                 // Pull the recipe too (the detail carries no step list) so the shot
                 // is self-contained (#12); a profile-less stub / error → name-only.
-                runCatching {
+                runCatchingCancellable {
                     val v2 = withFreshToken {
                         client.request("GET", "/shots/${summary.id}/profile?format=json", it)
-                    } ?: return@runCatching null
+                    } ?: return@runCatchingCancellable null
                     json.parseToJsonElement(coffee.crema.core.parseV2Profile(v2.toString())).jsonObject
                 }.getOrNull()?.let { profilesById[summary.id] = it }
             }
@@ -529,7 +646,7 @@ class VisualizerSync(
             )
             put("remote", kotlinx.serialization.json.JsonArray(wires))
         }
-        val actions = runCatching {
+        val actions = runCatchingCancellable {
             json.parseToJsonElement(
                 coffee.crema.core.reconcileShots(json.encodeToString(JsonObject.serializer(), payload)),
             ) as kotlinx.serialization.json.JsonArray
@@ -595,7 +712,7 @@ class VisualizerSync(
             var pushed = 0
             var failed = false
             if (directionPulls(direction)) {
-                runCatching {
+                runCatchingCancellable {
                     val since = persisted.shotPullCursor ?: 0L
                     val (wires, samples, profiles) = pullAllShotsSince(since)
                     pulled = reconcileAndApply(shots, wires, samples, profiles)
@@ -609,7 +726,7 @@ class VisualizerSync(
                 val unsynced = shots.filter { it.visualizerId == null }
                 for (shot in unsynced) {
                     _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shot.id) }
-                    runCatching { uploadShotNow(shot) }
+                    runCatchingCancellable { uploadShotNow(shot) }
                         .onSuccess { id ->
                             pushed++
                             onShotSynced(shot.id, id)
@@ -663,7 +780,7 @@ class VisualizerSync(
             var failed = 0
             for (shot in unsynced) {
                 _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shot.id) }
-                runCatching { uploadShotNow(shot) }
+                runCatchingCancellable { uploadShotNow(shot) }
                     .onSuccess { id ->
                         ok++
                         onShotSynced(shot.id, id)

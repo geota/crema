@@ -1,0 +1,174 @@
+{
+  "id": "crema-shot:019e5fb5-0000-7000-8000-000000000001",
+  "timestamp": "2026-01-02T03:04:05.678Z",
+  "measurements": [
+    {
+      "machine": {
+        "timestamp": "2026-01-02T03:04:05.678Z",
+        "state": {
+          "state": "espresso",
+          "substate": "pouring"
+        },
+        "flow": 2.1,
+        "pressure": 8.5,
+        "targetFlow": 0,
+        "targetPressure": 9,
+        "mixTemperature": 93.1,
+        "groupTemperature": 92.4,
+        "targetMixTemperature": 93.5,
+        "targetGroupTemperature": 92,
+        "profileFrame": 1,
+        "steamTemperature": 140.3
+      },
+      "scale": {
+        "timestamp": "2026-01-02T03:04:05.678Z",
+        "weight": 0,
+        "weightFlow": 0,
+        "battery": null,
+        "timerValue": null
+      }
+    },
+    {
+      "machine": {
+        "timestamp": "2026-01-02T03:04:05.928Z",
+        "state": {
+          "state": "espresso",
+          "substate": "pouring"
+        },
+        "flow": 2.1,
+        "pressure": 3.33,
+        "targetFlow": 0,
+        "targetPressure": 9,
+        "mixTemperature": 93.1,
+        "groupTemperature": 92.4,
+        "targetMixTemperature": 93.5,
+        "targetGroupTemperature": 92,
+        "profileFrame": 2,
+        "steamTemperature": 140.3
+      },
+      "scale": {
+        "timestamp": "2026-01-02T03:04:05.928Z",
+        "weight": 12.5,
+        "weightFlow": 1.9,
+        "battery": null,
+        "timerValue": null
+      }
+    },
+    {
+      "machine": {
+        "timestamp": "2026-01-02T03:04:06.912Z",
+        "state": {
+          "state": "espresso",
+          "substate": "pouring"
+        },
+        "flow": 2.1,
+        "pressure": 8.5,
+        "targetFlow": 0,
+        "targetPressure": 9,
+        "mixTemperature": 93.1,
+        "groupTemperature": 92.4,
+        "targetMixTemperature": 93.5,
+        "targetGroupTemperature": 92,
+        "profileFrame": 1,
+        "steamTemperature": 140.3
+      },
+      "scale": {
+        "timestamp": "2026-01-02T03:04:06.912Z",
+        "weight": 0,
+        "weightFlow": 1.9,
+        "battery": null,
+        "timerValue": null
+      }
+    }
+  ],
+  "workflow": {
+    "id": "crema-wf-shot:019e5fb5-0000-7000-8000-000000000001",
+    "name": "Blooming Espresso",
+    "description": null,
+    "profile": {
+      "id": "019e5fb5-63b5-7333-a2ac-34b9f4f0e604",
+      "title": "Blooming Espresso",
+      "notes": "Two-step fixture profile.",
+      "steps": [
+        {
+          "name": "preinfusion temp boost",
+          "pump": "flow",
+          "target": 2.4,
+          "temperature_c": 90,
+          "temp_sensor": "coffee",
+          "transition": "fast",
+          "duration_seconds": 2,
+          "exit": {
+            "metric": "pressure",
+            "compare": "over",
+            "threshold": 4.5
+          },
+          "volume_limit_ml": 0,
+          "limiter": null,
+          "weight": null
+        },
+        {
+          "name": "preinfusion",
+          "pump": "flow",
+          "target": 2.4,
+          "temperature_c": 90,
+          "temp_sensor": "coffee",
+          "transition": "fast",
+          "duration_seconds": 6,
+          "exit": {
+            "metric": "pressure",
+            "compare": "over",
+            "threshold": 4.5
+          },
+          "volume_limit_ml": 0,
+          "limiter": null,
+          "weight": null
+        }
+      ],
+      "preinfuse_step_count": 2,
+      "minimum_pressure": 0,
+      "maximum_flow": 0,
+      "max_total_volume_ml": 36,
+      "target_weight": 0,
+      "dose": 0,
+      "author": "",
+      "beverage_type": "espresso",
+      "tank_temperature": 0,
+      "version": "2"
+    },
+    "context": {
+      "targetDoseWeight": 18,
+      "targetYield": 36,
+      "grinderModel": "Niche Zero",
+      "grinderSetting": "2.4",
+      "coffeeName": "Yirgacheffe",
+      "coffeeRoaster": "Counter Culture",
+      "extras": {
+        "roastDate": "2025-12-09",
+        "roastLevel": 3
+      }
+    },
+    "steamSettings": {},
+    "hotWaterData": {},
+    "rinseData": {}
+  },
+  "annotations": {
+    "actualDoseWeight": 18,
+    "actualYield": 36.2,
+    "drinkTds": 9.1,
+    "drinkEy": 20.3,
+    "enjoyment": 8,
+    "espressoNotes": "juicy, bright"
+  },
+  "machine": {
+    "serialNumber": "6262",
+    "firmwareVersion": "v1.43 build 1352",
+    "model": "DE1PRO"
+  },
+  "app": {
+    "name": "crema",
+    "version": "0.0.7",
+    "sourceFormat": "crema"
+  },
+  "schemaVersion": 1
+}

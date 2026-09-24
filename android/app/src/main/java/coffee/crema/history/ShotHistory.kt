@@ -112,7 +112,30 @@ data class StoredShot(
      * StoredShot field — drives the History sync pip + "Upload all unsynced").
      */
     val visualizerId: String? = null,
+    /**
+     * Decent account shot id once uploaded to decentespresso.com's shot history
+     * (geota/crema#84); null until pushed.
+     */
+    val decentId: String? = null,
+    /**
+     * The DE1 this shot was pulled on, stamped at record time (#84). The Decent
+     * upload needs the serial (the server checks it belongs to the account);
+     * shots recorded before these fields fall back to the connected machine.
+     */
+    val machineSerial: String? = null,
+    val machineFirmware: String? = null,
+    val machineModel: String? = null,
 )
+
+/** Id prefix of a shot materialised from a Visualizer pull (see `storedShotFromWire`). */
+const val PULLED_SHOT_ID_PREFIX = "shot:remote:"
+
+/**
+ * True for a shot pulled from Visualizer rather than recorded here: it may
+ * have been pulled on another DE1, so the connected machine's serial is never
+ * stamped onto it, and it stays out of the Decent backlog.
+ */
+val StoredShot.pulledFromVisualizer: Boolean get() = id.startsWith(PULLED_SHOT_ID_PREFIX)
 
 /**
  * The grind THIS shot was pulled at, as a raw setting string (issue #16): the

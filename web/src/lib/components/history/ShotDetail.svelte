@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { uploadMenuEntry, viewableTargets, type UploadTarget } from '$lib/history/upload-targets';
 	import Icon from '$lib/icons/Icon.svelte';
 	import StarRating from '$lib/components/common/StarRating.svelte';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
@@ -61,7 +62,8 @@
 		onBeanChange,
 		onDelete,
 		canDeleteRemote = false,
-		onUploadVisualizer = null
+		uploadTargets = [],
+		onUpload = null
 	}: {
 		/** The selected stored shot. */
 		shot: StoredShot;
@@ -110,15 +112,24 @@
 		 */
 		canDeleteRemote?: boolean;
 		/**
-		 * Push this shot to Visualizer — the manual per-shot upload (issue
-		 * #44 follow-up). `null` when not connected or shot push is off,
-		 * which dims the menu item. For an already-bound shot this is a
-		 * RE-upload: Visualizer de-dupes by telemetry SHA, so the re-POST
-		 * updates the same remote row — fixes old wrongly-dated / bean-less
-		 * copies.
+		 * The cloud destinations (Visualizer, Decent account) with their
+		 * enabled / uploaded state for this shot. Folded into ONE "Upload"
+		 * menu row by `uploadMenuEntry` plus a "View on X" per destination
+		 * that holds the shot — adding a destination never adds a row.
 		 */
-		onUploadVisualizer?: (() => void) | null;
+		uploadTargets?: readonly UploadTarget[];
+		/**
+		 * Push this shot to the given destinations — the manual per-shot
+		 * upload (issue #44 follow-up). For a destination that already has
+		 * the shot this is a RE-upload (Visualizer de-dupes by telemetry
+		 * SHA; Decent replaces its copy). `null` = nothing to upload with.
+		 */
+		onUpload?: ((targets: UploadTarget[]) => void) | null;
 	} = $props();
+
+	const uploadEntry = $derived(uploadMenuEntry(uploadTargets));
+	const viewRows = $derived(viewableTargets(uploadTargets));
+	const shareableCount = $derived(viewRows.filter((t) => t.shareable).length);
 
 	/** Whether the notes block is in edit mode. */
 	let editing = $state(false);
@@ -489,9 +500,24 @@
 	function saveAsProfile(): void {
 		toast.info('Save-as-profile is coming in a later step.');
 	}
-	/** Open this shot's uploaded copy on visualizer.coffee in a new tab. */
-	function viewOnVisualizer(): void {
-		window.open(`https://visualizer.coffee/shots/${shot.visualizerId}`, '_blank', 'noopener');
+	/**
+	 * Share = hand someone the link to an uploaded copy. Copies it and offers
+	 * Open; falls back to opening when the clipboard is unavailable.
+	 */
+	async function shareLink(target: UploadTarget): Promise<void> {
+		const url = target.viewUrl;
+		if (!url || !target.shareable) return;
+		try {
+			await navigator.clipboard.writeText(url);
+			toast.action(`${target.name} link copied`, 'Open', () => window.open(url, '_blank', 'noopener'));
+		} catch {
+			window.open(url, '_blank', 'noopener');
+		}
+	}
+
+	/** Open an uploaded copy that has no public page (the owner's account view). */
+	function openView(target: UploadTarget): void {
+		if (target.viewUrl) window.open(target.viewUrl, '_blank', 'noopener');
 	}
 
 	// ── Bean rebind (retroactive) ────────────────────────────────────────
@@ -592,27 +618,37 @@
 						sub: 'Derive a reusable profile from this shot.',
 						onclick: saveAsProfile
 					},
+					// One "Upload" row for every cloud destination (Visualizer, Decent),
+					// naming the ones still missing the shot; a "View on X" per
+					// destination that holds it. Dimmed, not hidden, when nothing is
+					// connected — a hidden action is undiscoverable.
 					{
 						icon: 'ph-duotone ph-cloud-arrow-up',
-						title: shot.visualizerId ? 'Re-upload to Visualizer' : 'Upload to Visualizer',
-						sub: onUploadVisualizer
-							? shot.visualizerId
-								? 'Refreshes the copy on visualizer.coffee.'
-								: 'Push this shot to visualizer.coffee.'
-							: 'Connect Visualizer in Settings → Sharing.',
-						disabled: !onUploadVisualizer,
-						onclick: () => onUploadVisualizer?.()
+						title: uploadEntry.title,
+						sub: uploadEntry.sub,
+						disabled: !uploadEntry.enabled || !onUpload,
+						onclick: () => onUpload?.(uploadEntry.targets)
 					},
-					...(shot.visualizerId
-						? [
-								{
-									icon: 'ph-duotone ph-arrow-square-out',
-									title: 'View on Visualizer',
-									sub: 'Open the uploaded copy in a new tab.',
-									onclick: viewOnVisualizer
+					// Share = the public link to an uploaded copy: one row when the
+					// shot is on one destination, one per destination when on both.
+					// A copy with no public page (a Decent upload whose serial or
+					// server id is unknown) gets "View on X" — the owner's account
+					// page — and never the "anyone can view" copy.
+					...viewRows.map((t) =>
+						t.shareable
+							? {
+									icon: 'ph-duotone ph-share-network',
+									title: shareableCount === 1 ? 'Share link' : `Share ${t.name} link`,
+									sub: `Copies the ${t.name} link — anyone with it can view the shot.`,
+									onclick: () => void shareLink(t)
 								}
-							]
-						: [])
+							: {
+									icon: 'ph-duotone ph-arrow-square-out',
+									title: `View on ${t.name}`,
+									sub: `Open your ${t.name} shot history in a new tab.`,
+									onclick: () => openView(t)
+								}
+					)
 				]}
 			/>
 			{#if onDelete}

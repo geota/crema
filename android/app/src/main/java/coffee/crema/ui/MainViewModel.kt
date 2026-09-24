@@ -85,6 +85,11 @@ import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlin.math.roundToInt
+import coffee.crema.decent.DecentClient
+import coffee.crema.decent.DecentStore
+import coffee.crema.decent.DecentSync
+import coffee.crema.decent.UniffiDecentCore
+import coffee.crema.decent.decentShotRecordJson
 
 /**
  * Default scale beeper-volume step shown before the first live reading.
@@ -596,6 +601,14 @@ data class MainUiState(
     /** Visualizer sync state (account / prefs / in-flight uploads) — mirrored
      *  from [MainViewModel.visualizer]'s controller flow. */
     val visualizer: VisualizerSync.UiState = VisualizerSync.UiState(),
+    /** Decent account shot-upload state (#84) — mirrored from [MainViewModel.decent]. */
+    val decent: DecentSync.UiState = DecentSync.UiState(),
+    /**
+     * Cloud-destination state derived by [SharingController]: the catch-up
+     * offer, per-shot upload targets, the "Upload N" backlog, the connected
+     * serial's Decent registration, the merged activity log.
+     */
+    val sharing: SharingUiState = SharingUiState(),
     /** Google Drive backup state (configured / connected / busy) — mirrored from
      *  [MainViewModel.drive]'s controller flow. */
     val drive: DriveSync.UiState = DriveSync.UiState(),
@@ -926,6 +939,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val maintenanceStore = MaintenanceStore(app, json)
 
     /**
+     * Decent account shot upload (#84) — sign-in + the per-shot push to
+     * decentespresso.com's shot history. Same self-contained-controller shape
+     * as [visualizer]; its [state] is mirrored into [MainUiState.decent] and
+     * [sharing] drives it as an upload destination.
+     */
+    val decent: DecentSync = DecentSync(
+        store = DecentStore(app, json),
+        client = DecentClient(json),
+        scope = viewModelScope,
+        buildRecord = { shot, machine, fullSamples ->
+            decentShotRecordJson(
+                core = UniffiDecentCore,
+                json = json,
+                shot = shot,
+                machine = machine,
+                appVersion = coffee.crema.BuildConfig.VERSION_NAME,
+                grinderModel = _ui.value.grinderModel.trim().takeIf { it.isNotEmpty() },
+                fullSamples = fullSamples,
+            )
+        },
+        shotViewUrl = { serial, id -> UniffiDecentCore.shotViewUrl(serial, id) },
+        notify = { msg -> notifyUser(msg) },
+        onShotUploaded = { localId, decentId, machine -> library.markShotDecentUploaded(localId, decentId, machine) },
+        liveMachine = { sharing.liveMachine() },
+        currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
+        onLinked = { sharing.offerCatchUp(UploadTargetId.Decent) },
+    )
+
+    /**
      * Visualizer sync — sign-in, account, shot upload. A self-contained
      * controller (deliberately NOT folded into this ViewModel); its [state]
      * is mirrored into [MainUiState.visualizer] below and the UI calls its
@@ -945,7 +987,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         grinderModel = { _ui.value.grinderModel.trim().takeIf { it.isNotEmpty() } },
         onPulledShots = { stubs -> library.insertPulledShots(stubs) },
         onBackfillTelemetry = { localId, samples, durationMs -> library.backfillShotTelemetry(localId, samples, durationMs) },
+        onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
+        currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
     )
+
+    /**
+     * Sharing coordination across the cloud destinations ([visualizer],
+     * [decent]) — the capture-time fan-out + one notice per shot, the History
+     * menu push, the "Upload N" backlog + catch-up offer, and the derived
+     * [MainUiState.sharing]. See [SharingController].
+     */
+    val sharing: SharingController = SharingController(
+        scope = viewModelScope,
+        visualizer = visualizer,
+        decent = decent,
+        uiFlow = _ui,
+        updateUi = { transform -> _ui.update(transform) },
+        notify = { notifyUser(it) },
+    )
+
+    /** Visualizer's auto-upload toggle; turning it on offers the backlog once. */
+    fun setVisualizerAutoSync(enabled: Boolean) = sharing.setAutoUpload(UploadTargetId.Visualizer, enabled)
+
+    /** Decent's auto-upload toggle; turning it on offers the backlog once. */
+    fun setDecentAutoUpload(enabled: Boolean) = sharing.setAutoUpload(UploadTargetId.Decent, enabled)
+
+    fun runCatchUp() = sharing.runCatchUp()
+
+    fun dismissCatchUp() = sharing.dismissCatchUp()
+
+    /** Push the whole backlog to every enabled destination ("Upload N"). */
+    fun uploadMissing() = sharing.uploadMissing()
+
+    /** Push one shot to the chosen destinations (the menu picked them) — one notice for all. */
+    fun uploadShotTo(shot: StoredShot, targets: List<UploadTarget>) = sharing.uploadShotTo(shot, targets)
 
     /**
      * Google Drive backup controller — a self-contained sibling of [visualizer].
@@ -986,6 +1061,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         scope = viewModelScope,
         bridge = bridge,
         visualizer = visualizer,
+        liveMachine = { sharing.liveMachine() },
+        autoUploadShot = { shot, fullSamples -> sharing.autoUpload(shot, fullSamples) },
         uiState = { _ui.value },
         updateUi = { transform -> _ui.update(transform) },
         notify = { notifyUser(it) },
@@ -1336,6 +1413,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             pushStopTargets()
             loadMaintenance()
             visualizer.load()
+            decent.load()
+            sharing.start()
             drive.load()
             // Daily automatic Drive backup (issue #36) — after both the prefs
             // (the toggle) and the Drive tokens have hydrated.
@@ -1348,6 +1427,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             visualizer.state.collect { vs ->
                 _ui.update { it.copy(visualizer = vs) }
+            }
+        }
+        // Mirror the Decent account controller's state (#84).
+        viewModelScope.launch {
+            decent.state.collect { ds ->
+                _ui.update { it.copy(decent = ds) }
             }
         }
         // Mirror the Drive controller's state into the UI snapshot.

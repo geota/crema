@@ -61,6 +61,16 @@ export class MachineReadout {
 	}
 
 	/**
+	 * DE1 serial number (MMR `SerialNumber`), the identity Decent's shot
+	 * history checks against the owner's account (#84). `null` until the
+	 * connect-phase MMR sweep has read it.
+	 */
+	get serialNumber(): number | null {
+		const v = this.snapshot.de1MachineInfo[MmrRegister.SerialNumber];
+		return v == null ? null : v;
+	}
+
+	/**
 	 * Machine-model identifier (MMR `0x80000C`): 0 = unknown, 1 = DE1,
 	 * 2 = DE1+, 3 = DE1PRO, 4 = DE1XL, 5 = DE1CAFE, 6 = DE1XXL,
 	 * 7 = DE1XXXL. `null` until the connect-phase MMR sweep has read it.

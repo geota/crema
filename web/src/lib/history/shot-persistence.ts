@@ -26,6 +26,10 @@ import { promptBagEmpty } from '$lib/bean/bag-empty-prompt';
 import { getProfileStore, toCoreProfile } from '$lib/profiles';
 import { getActiveShotStore, type ActiveShotData } from '$lib/state/active-shot.svelte';
 import { appendSyncLog, directionPushes, readSyncConfig } from '$lib/visualizer';
+import { liveMachineIdentity, pushShotToDecent } from '$lib/decent/upload';
+import { isDecentLinked, readDecentAccount } from '$lib/decent/account';
+import { hasStoredVisualizerTokens } from '$lib/services/token-vault';
+import { registerUploadBatch, reportUploadOutcome } from './upload-toast';
 import type { AppRuntime } from '$lib/effect/runtime';
 import type {
 	HttpStatusError,
@@ -141,7 +145,11 @@ export function commitShotCompletion(
 			() => {
 				const record = recordShotHistory(event, frozenShot, frozenSnapshot);
 				if (!record) return;
-				if (frozenCtx.runtime) frozenCtx.runtime.runFork(pushShotToVisualizer(record.id));
+				if (frozenCtx.runtime) {
+					registerUploadBatch(record.id, autoUploadDestinations());
+					frozenCtx.runtime.runFork(pushShotToVisualizer(record.id));
+					frozenCtx.runtime.runFork(pushShotToDecent(record.id));
+				}
 				if (frozenCtx.shotStartedAtMs !== null) {
 					const fromMs = frozenCtx.shotStartedAtMs - CAPTURE_LEAD_MS;
 					const toMs = frozenCtx.lastNotificationAtMs ?? performance.now();
@@ -163,7 +171,14 @@ export function commitShotCompletion(
 		// retry queue. Runs on the app runtime (T-22) so it sees ShotSync /
 		// UploadQueue and the REAL typed errors (no boundary squash); `runFork`
 		// is detached, same posture as before. No runtime → skip (non-fatal).
-		if (ctx.runtime) ctx.runtime.runFork(pushShotToVisualizer(record.id));
+		if (ctx.runtime) {
+			// One toast for the whole batch, however many destinations answer.
+			registerUploadBatch(record.id, autoUploadDestinations());
+			ctx.runtime.runFork(pushShotToVisualizer(record.id));
+			// Decent shot history (#84) — same fire-and-forget posture; its own
+			// gates (linked account, auto-upload on, ≥ 5 s, serial known).
+			ctx.runtime.runFork(pushShotToDecent(record.id));
+		}
 		// Capture persistence — only when we observed a ShotStarted (replays
 		// always do; manual / phantom completions might not).
 		if (ctx.shotStartedAtMs !== null) {
@@ -175,6 +190,21 @@ export function commitShotCompletion(
 
 	// The replay path also clears in its `finally`; clear() is idempotent.
 	getActiveShotStore().clear();
+}
+
+/**
+ * The destinations an automatic push will actually try, by the same gates
+ * the pushes apply (sync-readable, so the batch is declared before they run).
+ */
+function autoUploadDestinations(): string[] {
+	const out: string[] = [];
+	const cfg = readSyncConfig();
+	if (directionPushes(cfg.direction.shots) && cfg.autoUpload && hasStoredVisualizerTokens()) {
+		out.push('Visualizer');
+	}
+	const decent = readDecentAccount();
+	if (isDecentLinked(decent) && decent.autoUpload && !decent.needsReauth) out.push('Decent');
+	return out;
 }
 
 /**
@@ -202,6 +232,10 @@ function recordShotHistory(
 		dose: activeShot?.dose ?? null,
 		series: snapshot.shotTelemetry,
 		grinderModel: activeShot?.grinderModel ?? null,
+		// The DE1 this ran on — frozen here so a later upload (Decent shot
+		// history, #84) carries the serial the server verifies, even after
+		// the machine disconnects or another one is paired.
+		machine: liveMachineIdentity(),
 		peakPressure: event.content.peak_pressure ?? null,
 		peakTemp: event.content.peak_temp ?? null,
 		peakWeight: event.content.peak_weight ?? null,
@@ -408,11 +442,23 @@ export function pushShotToVisualizer(
 		// direction, and the auto-upload pref must not veto an explicit tap.
 		if (!opts?.manual) {
 			const config = readSyncConfig();
-			if (!directionPushes(config.direction.shots)) return;
-			if (!config.autoUpload) return;
+			if (!directionPushes(config.direction.shots) || !config.autoUpload) {
+				reportUploadOutcome(shotId, 'Visualizer', { kind: 'skipped', message: 'Auto-upload is off' });
+				return;
+			}
+			// Not signed in, or the stored session can no longer be read (the
+			// card then offers Sign in): skip quietly instead of an auth-failure
+			// toast on every shot.
+			if (!hasStoredVisualizerTokens()) {
+				reportUploadOutcome(shotId, 'Visualizer', { kind: 'skipped', message: 'Not signed in to Visualizer' });
+				return;
+			}
 		}
 		const shot = getHistoryStore().get(shotId);
-		if (!shot) return;
+		if (!shot) {
+			reportUploadOutcome(shotId, 'Visualizer', { kind: 'skipped', message: 'Shot not found' });
+			return;
+		}
 
 		const shotSync = yield* ShotSync;
 		const queue = yield* UploadQueue;
@@ -424,9 +470,9 @@ export function pushShotToVisualizer(
 					getHistoryStore().bindVisualizerId(shotId, visualizerId);
 					appendSyncLog({ direction: 'push', entity: 'shot', id: shotId, name, at: Date.now() });
 					// Confirm the push (issue #44 follow-up): auto-uploads used
-					// to succeed invisibly, leaving users unsure the shot made
-					// it to Visualizer.
-					toast.success('Shot uploaded to Visualizer');
+					// to succeed invisibly. One toast per shot across every
+					// destination — see `upload-toast`.
+					reportUploadOutcome(shotId, 'Visualizer', { kind: 'uploaded' });
 				})
 			),
 			Effect.catchAll((e) =>
@@ -450,10 +496,10 @@ export function pushShotToVisualizer(
 					});
 					// A silent miss reads as "synced" — surface it. Recoverable
 					// failures are queued, so name the retry.
-					toast.error(
-						queued
-							? 'Visualizer upload failed — queued to retry'
-							: `Visualizer upload failed: ${describePushError(e)}`
+					reportUploadOutcome(
+						shotId,
+						'Visualizer',
+						queued ? { kind: 'queued' } : { kind: 'failed', message: describePushError(e) }
 					);
 				})
 			)

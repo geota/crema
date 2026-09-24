@@ -1,6 +1,9 @@
 package coffee.crema.visualizer
 
 import android.content.Context
+import android.util.Log
+import coffee.crema.security.DeviceSecretBox
+import coffee.crema.security.SecretBox
 import coffee.crema.core.VisualizerSyncPrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -36,6 +39,8 @@ data class VisualizerAccount(
 /** One sync activity-log line (web `SyncLogEntry`) — capped, newest first. */
 @Serializable
 data class SyncLogEntry(
+    /** Where it went (serialised `"visualizer"` / `"decent"`; entries predating the field are Visualizer's). */
+    val destination: coffee.crema.ui.UploadTargetId = coffee.crema.ui.UploadTargetId.Visualizer,
     /** `"push" | "pull" | "skip" | "delete"`. */
     val direction: String,
     /** `"shot" | "bean" | "roaster"`. */
@@ -90,12 +95,49 @@ val DEFAULT_VISUALIZER_SYNC_PREFS: VisualizerSyncPrefs = VisualizerSyncPrefs(
     roastersDirection = "two-way",
 )
 
+/** The at-rest form: token + PKCE verifier sealed ([SecretBox]). Idempotent. */
+internal fun VisualizerState.sealedWith(box: SecretBox): VisualizerState {
+    fun seal(v: String) = if (SecretBox.isWrapped(v)) v else box.wrap(v)
+    return copy(
+        tokens = tokens?.let { t -> t.copy(accessToken = seal(t.accessToken), refreshToken = t.refreshToken?.let(::seal)) },
+        pendingVerifier = pendingVerifier?.let(::seal),
+    )
+}
+
+/**
+ * The in-memory form, plus whether to re-save (a legacy plaintext secret, or
+ * one the key can no longer open — then the session is dropped: signed out).
+ */
+internal fun VisualizerState.openedWith(box: SecretBox): Pair<VisualizerState, Boolean> {
+    var resave = false
+    var lost = false
+    fun open(v: String?): String? = when (val o = box.openOrNull(v)) {
+        null -> null
+        is SecretBox.Opened.Value -> { if (o.migrate) resave = true; o.value }
+        SecretBox.Opened.Lost -> { lost = true; resave = true; null }
+    }
+    val access = tokens?.let { open(it.accessToken) }
+    val refresh = tokens?.refreshToken?.let { open(it) }
+    val verifier = open(pendingVerifier)
+    val opened = copy(
+        tokens = if (lost || access == null) null else tokens.copy(accessToken = access, refreshToken = refresh),
+        account = if (lost) null else account,
+        pendingVerifier = if (lost) null else verifier,
+        pendingState = if (lost) null else pendingState,
+    )
+    return opened to resave
+}
+
 /** File-backed JSON persistence for [VisualizerState] (`filesDir/visualizer.json`). */
-class VisualizerStore(private val context: Context, private val json: Json) {
+class VisualizerStore(
+    private val context: Context,
+    private val json: Json,
+    private val box: SecretBox = DeviceSecretBox.instance,
+) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
     suspend fun load(): VisualizerState = withContext(Dispatchers.IO) {
-        runCatching {
+        val raw = runCatching {
             val text = file.takeIf { it.exists() }?.readText() ?: return@runCatching null
             val state = json.decodeFromString(VisualizerState.serializer(), text)
             // Migrate a pre-unification file (flat `autoSync`/`privacy`/… fields and
@@ -106,7 +148,11 @@ class VisualizerStore(private val context: Context, private val json: Json) {
             } else {
                 state
             }
-        }.getOrNull() ?: VisualizerState()
+        }.onFailure { Log.w(TAG, "visualizer.json unreadable; starting signed out", it) }
+            .getOrNull() ?: return@withContext VisualizerState()
+        val (state, resave) = raw.openedWith(box)
+        if (resave) write(state)
+        state
     }
 
     /** Build [VisualizerSyncPrefs] from a pre-unification file's flat fields. The
@@ -126,14 +172,21 @@ class VisualizerStore(private val context: Context, private val json: Json) {
         )
     }
 
-    suspend fun save(state: VisualizerState) {
-        withContext(Dispatchers.IO) {
-            runCatching { file.writeText(json.encodeToString(VisualizerState.serializer(), state)) }
-        }
+    /** Write [state]; false (logged) when it could not be stored. */
+    suspend fun save(state: VisualizerState): Boolean = withContext(Dispatchers.IO) { write(state) }
+
+    private fun write(state: VisualizerState): Boolean = try {
+        file.writeText(json.encodeToString(VisualizerState.serializer(), state.sealedWith(box)))
+        true
+    } catch (e: Exception) {
+        // Includes a keystore failure while sealing: never fall back to plaintext.
+        Log.e(TAG, "couldn't save visualizer.json", e)
+        false
     }
 
     private companion object {
         const val FILE_NAME = "visualizer.json"
+        const val TAG = "VisualizerStore"
         val LEGACY_PREF_KEYS = setOf(
             "autoSync", "privacy", "includeProfile", "includeNotes", "shotsDirection",
         )

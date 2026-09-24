@@ -33,6 +33,7 @@ import {
 	shotId,
 	snapshotFromBean,
 	type ShotBean,
+	type ShotMachine,
 	type ShotMetadata,
 	type StoredShot
 } from './model';
@@ -72,6 +73,8 @@ const MAX_RECORDS = 300;
  * longer re-iterates the buffered series for them.
  */
 export interface ShotCompletion {
+	/** The DE1 the shot ran on (serial + firmware + model), if known. */
+	machine?: ShotMachine | null;
 	/** Total shot duration, milliseconds (from `Event::ShotCompleted`). */
 	duration: number;
 	/** The active profile's name at the time of the shot, or `null`. */
@@ -290,7 +293,8 @@ export class HistoryStore {
 			preinfuseTarget: completion.preinfuseTarget ?? null,
 			stopOnWeight: completion.stopOnWeight,
 			autoTare: completion.autoTare,
-			tags: completion.tags ? [...completion.tags] : []
+			tags: completion.tags ? [...completion.tags] : [],
+			...(completion.machine ? { machine: { ...completion.machine } } : {})
 		};
 		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
 		this.persist();
@@ -511,6 +515,25 @@ export class HistoryStore {
 		this.shots = [
 			...this.shots.slice(0, idx),
 			{ ...this.shots[idx], visualizerId },
+			...this.shots.slice(idx + 1)
+		];
+		this.persist();
+	}
+
+	/**
+	 * Stamp the Decent shot-history id onto a local shot once the upload
+	 * returns it (geota/crema#84). Persists. Mirrors {@link bindVisualizerId}.
+	 * `machine` — the identity the upload was sent with, stamped when the
+	 * shot had none (a pre-#84 row uploaded with the connected DE1's serial),
+	 * so its share link (`/shot/<serial>/<id>`) resolves later.
+	 */
+	bindDecentId(id: string, decentId: string, machine?: ShotMachine): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		const cur = this.shots[idx];
+		this.shots = [
+			...this.shots.slice(0, idx),
+			{ ...cur, decentId, ...(machine && !cur.machine ? { machine: { ...machine } } : {}) },
 			...this.shots.slice(idx + 1)
 		];
 		this.persist();

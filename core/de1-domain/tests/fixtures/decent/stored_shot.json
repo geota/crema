@@ -1,0 +1,164 @@
+{
+  "_comment": "Golden input for de1-domain::decent_shot_record — a web-persisted StoredShot row, the machine identity and app version. Expected output: shot_record.json.",
+  "shot": {
+    "formatVersion": 3,
+    "id": "shot:019e5fb5-0000-7000-8000-000000000001",
+    "completedAt": 1767323075678,
+    "profileName": "Blooming Espresso",
+    "profile": {
+      "id": "019e5fb5-63b5-7333-a2ac-34b9f4f0e604",
+      "title": "Blooming Espresso",
+      "notes": "Two-step fixture profile.",
+      "steps": [
+        {
+          "name": "preinfusion temp boost",
+          "pump": "flow",
+          "target": 2.4,
+          "temperature_c": 90.0,
+          "temp_sensor": "coffee",
+          "transition": "fast",
+          "duration_seconds": 2.0,
+          "exit": {
+            "metric": "pressure",
+            "compare": "over",
+            "threshold": 4.5
+          },
+          "volume_limit_ml": 0,
+          "limiter": null,
+          "weight": null
+        },
+        {
+          "name": "preinfusion",
+          "pump": "flow",
+          "target": 2.4,
+          "temperature_c": 90.0,
+          "temp_sensor": "coffee",
+          "transition": "fast",
+          "duration_seconds": 6.0,
+          "exit": {
+            "metric": "pressure",
+            "compare": "over",
+            "threshold": 4.5
+          },
+          "volume_limit_ml": 0,
+          "limiter": null,
+          "weight": null
+        }
+      ],
+      "preinfuse_step_count": 2,
+      "minimum_pressure": 0.0,
+      "maximum_flow": 0.0,
+      "max_total_volume_ml": 36,
+      "target_weight": 0.0,
+      "dose": 0.0,
+      "author": "",
+      "beverage_type": "espresso",
+      "tank_temperature": 0.0,
+      "version": "2"
+    },
+    "stopReason": "Weight",
+    "metadata": {
+      "dose": 18.0,
+      "yieldOut": 36.2,
+      "beans": "Counter Culture · Yirgacheffe",
+      "grinderSetting": null,
+      "notes": "juicy, bright",
+      "nextPlan": "go finer",
+      "rating": 4,
+      "tds": 9.1,
+      "extractionYield": 20.3
+    },
+    "record": {
+      "duration": 30000,
+      "samples": [
+        {
+          "elapsed": 0,
+          "sample": {
+            "sampleTime": 0,
+            "groupPressure": 8.5,
+            "groupFlow": 2.1,
+            "headTemp": 92.4,
+            "mixTemp": 93.1,
+            "setMixTemp": 93.5,
+            "setHeadTemp": 92,
+            "setGroupPressure": 9,
+            "setGroupFlow": 0,
+            "frameNumber": 1,
+            "steamTemp": 140.3
+          },
+          "scaleWeight": 0.0,
+          "scaleFlowWeight": 0.0,
+          "dispensedVolume": 20.1
+        },
+        {
+          "elapsed": 250,
+          "sample": {
+            "sampleTime": 25,
+            "groupPressure": 3.33,
+            "groupFlow": 2.1,
+            "headTemp": 92.4,
+            "mixTemp": 93.1,
+            "setMixTemp": 93.5,
+            "setHeadTemp": 92,
+            "setGroupPressure": 9,
+            "setGroupFlow": 0,
+            "frameNumber": 2,
+            "steamTemp": 140.3
+          },
+          "scaleWeight": 12.5,
+          "scaleFlowWeight": 1.9,
+          "dispensedVolume": 20.1
+        },
+        {
+          "elapsed": 1234,
+          "sample": {
+            "sampleTime": 123,
+            "groupPressure": 8.5,
+            "groupFlow": 2.1,
+            "headTemp": 92.4,
+            "mixTemp": 93.1,
+            "setMixTemp": 93.5,
+            "setHeadTemp": 92,
+            "setGroupPressure": 9,
+            "setGroupFlow": 0,
+            "frameNumber": 1,
+            "steamTemp": 140.3
+          },
+          "scaleFlowWeight": 1.9,
+          "dispensedVolume": 20.1
+        }
+      ]
+    },
+    "bean": {
+      "beanId": "bean:1",
+      "name": "Yirgacheffe",
+      "roasterName": "Counter Culture",
+      "roastedOn": "2025-12-9",
+      "roastLevel": 3,
+      "tags": [
+        "washed"
+      ],
+      "grinderSetting": "2.4",
+      "grinder": "Niche Zero"
+    },
+    "grinderModel": "Niche Zero",
+    "tags": [
+      "morning"
+    ],
+    "yieldTarget": 36.0,
+    "visualizerId": null,
+    "deletedAt": null,
+    "decentId": "12345",
+    "machine": {
+      "serialNumber": "6262",
+      "firmwareVersion": "v1.43 build 1352",
+      "model": "DE1PRO"
+    }
+  },
+  "machine": {
+    "serialNumber": "6262",
+    "firmwareVersion": "v1.43 build 1352",
+    "model": "DE1PRO"
+  },
+  "appVersion": "0.0.7"
+}

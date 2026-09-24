@@ -14,6 +14,78 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   sit side by side. Dispensed water volume moved to the Weight card next to the
   scale weight. Web, tablet and phone.
 
+### Added
+
+- **Upload shots to your Decent account** (#84) — Settings → Sharing gains a
+  "Decent account" card next to Visualizer. Sign in with your decentespresso.com
+  email + password (exchanged once for a server token; the password is never
+  stored) and every finished shot is uploaded to Decent's shot history + charts
+  in the decaid `ShotRecord` format — the same endpoint and shape the tablet
+  app's `shot_upload` plugin and decaid's `shot-upload.reaplugin` use, so Crema
+  shots sit alongside theirs. Flushes under 5 s are skipped; "Upload unsent
+  shots" backfills older shots. Once uploaded, "View on Decent" opens the
+  shot's public share link (`decentespresso.com/shot/<serial>/<id>`, the same
+  link Decent's own "copy link" button gives). The card shows the account's
+  registered machines and warns when the connected DE1 isn't one of them (the
+  server refuses those). Web, Android tablet and phone.
+- **One Upload row in the shot menu** — History's per-shot menu folds every
+  cloud destination into a single "Upload to Visualizer + Decent" entry that
+  names whichever is still missing the shot (a re-upload once it is
+  everywhere). Turn on one, the other, or both in Settings → Sharing; the
+  menu never grows.
+- **Share link** — once a shot is uploaded anywhere, the menu offers "Share
+  link" next to "View on X" (one row per destination that holds it): copies
+  the public link (visualizer.coffee/shots/… or decentespresso.com/shot/…).
+  Android hands the link to the system share sheet. A Decent upload with no
+  public link offers only "View on Decent" (your account history), never a
+  link you can't share.
+- **Catch up when you enable, not later** — signing in to a destination, or
+  turning its "Upload finished shots" on, asks once whether to upload the
+  shots already on this device. Afterwards History carries one "Upload N"
+  button for everything missing from any enabled destination (tooltip gives
+  the per-destination split). Replaces Visualizer-only "Upload all" and the
+  Decent "Upload unsent" settings row.
+- **History tells the truth across destinations** — the row pip is filled
+  when the shot is on every enabled destination, hollow when it is missing
+  from one, with the breakdown in its tooltip. One completion notice per shot
+  ("Uploaded to Visualizer + Decent", or naming the one that failed) instead
+  of one per destination, and one "Recent activity" log tagged by
+  destination.
+- **Uploads that behave** — a shot is never uploaded twice to the same
+  destination at once, "Upload N" and the Settings catch-up share one run,
+  the run stops when you go offline or after three failures in a row, and a
+  shot Decent refuses is not offered again until you upload it by hand. Web
+  retries Decent uploads that failed offline once you are back online.
+- **Backups keep upload status** — a backup now carries each shot's Decent id
+  and the machine it was pulled on, so a restore doesn't offer to upload
+  everything again.
+- **One Decent shot format** — the `ShotRecord` converter and Decent's reply
+  handling now live in the shared core, so web and Android upload identical
+  shots (previously the two drifted on mix-temperature targets, steam
+  temperature, TDS/EY and roast dates). A server reply of `0` is treated as an
+  expired login instead of a successful upload.
+
+### Security
+
+- **Credentials wrapped at rest (web)** — the Visualizer OAuth tokens and the
+  Decent account token are now stored AES-GCM-encrypted under a
+  non-extractable Web Crypto key kept in IndexedDB, so a copy of browser
+  storage no longer contains a usable session. Existing plaintext tokens are
+  wrapped on first read. This is a second layer behind the CSP; script running
+  on the origin can still use the tokens, as before.
+- **Credential files excluded from device transfer (Android)** — data
+  extraction rules keep `visualizer.json`, `decent.json` and `drive.json` out
+  of cloud backup and device-to-device transfer (`allowBackup="false"` alone
+  does not stop the latter on every manufacturer). Shots, beans, profiles and
+  prefs still transfer.
+- **Credentials wrapped at rest (Android)** — the Visualizer, Decent and Drive
+  tokens are sealed with a non-exportable Android Keystore AES-GCM key;
+  existing plaintext files are sealed on first read. If the key is lost the
+  app asks you to sign in again rather than failing.
+- **No lost encryption key across tabs (web)** — two tabs opening at once can
+  no longer each create their own key and strand the other's tokens; a token
+  that can't be read asks you to sign in again.
+
 ## [0.0.6] — 2026-08-07
 
 More reliable Bluetooth reconnects — the app recovers on its own after long idle periods, no more force-quit needed.

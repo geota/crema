@@ -1016,6 +1016,71 @@ pub fn export_v2_json_shot_full(shot_json: String) -> Result<String, CremaError>
     de1_domain::export_v2_json_shot_full(&shot).map_err(crema_err)
 }
 
+/// Build the decaid `ShotRecord` (the decentespresso.com shot-upload body)
+/// for a Rust-shape `StoredShot` JSON — one converter for both shells
+/// (#84). `machine_json` is a `ShotMachine` (`{serialNumber,
+/// firmwareVersion?, model?}`); put full-resolution telemetry into the
+/// shot's `record.samples` first when the shell still has it. Mirrors the
+/// wasm `decentShotRecordJson`; see [`de1_domain::decent_shot_record`].
+///
+/// # Errors
+///
+/// The JSON parse error when `shot_json` / `machine_json` do not
+/// deserialise.
+#[uniffi::export]
+pub fn decent_shot_record_json(
+    shot_json: String,
+    machine_json: String,
+    app_version: String,
+) -> Result<String, CremaError> {
+    de1_domain::decent_shot_record_json(&shot_json, &machine_json, &app_version)
+        .map_err(CremaError::from)
+}
+
+/// Classify a Decent `login_test` reply (`status`, raw body text) as a
+/// `DecentLoginReply` JSON. Mirrors the wasm `decentLoginTokenJson`; see
+/// [`de1_domain::decent_login_token`].
+///
+/// # Errors
+///
+/// The serialise error string (effectively never).
+#[uniffi::export]
+pub fn decent_login_token_json(status: u16, body: String) -> Result<String, CremaError> {
+    de1_domain::decent_login_token_json(status, &body).map_err(CremaError::from)
+}
+
+/// Classify a Decent `sn` (registered machines) reply as a
+/// `DecentMachinesReply` JSON. Mirrors the wasm `decentMachinesJson`; see
+/// [`de1_domain::decent_machines`].
+///
+/// # Errors
+///
+/// The serialise error string (effectively never).
+#[uniffi::export]
+pub fn decent_machines_json(status: u16, body: String) -> Result<String, CremaError> {
+    de1_domain::decent_machines_json(status, &body).map_err(CremaError::from)
+}
+
+/// Classify a Decent `shot_upload` reply as a `DecentUploadReply` JSON
+/// (a 2xx `0` is `Auth`, not an upload). Mirrors the wasm
+/// `decentUploadReplyJson`; see [`de1_domain::decent_upload_reply`].
+///
+/// # Errors
+///
+/// The serialise error string (effectively never).
+#[uniffi::export]
+pub fn decent_upload_reply_json(status: u16, body: String) -> Result<String, CremaError> {
+    de1_domain::decent_upload_reply_json(status, &body).map_err(CremaError::from)
+}
+
+/// The uploaded shot's public decentespresso.com page, or `null` unless
+/// both the serial and a real server id are known. Mirrors the wasm
+/// `decentShotViewUrl`; see [`de1_domain::decent_shot_view_url`].
+#[uniffi::export]
+pub fn decent_shot_view_url(serial: Option<String>, decent_id: Option<String>) -> Option<String> {
+    de1_domain::decent_shot_view_url(serial.as_deref(), decent_id.as_deref())
+}
+
 /// The core crate version as a borrowed static; [`core_version`] owns a copy
 /// only at the binding boundary (uniffi can't return a borrowed `&str`).
 const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");

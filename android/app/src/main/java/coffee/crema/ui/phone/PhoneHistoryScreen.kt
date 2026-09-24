@@ -56,6 +56,14 @@ import coffee.crema.ui.screens.EnlargeableChart
 import coffee.crema.ui.screens.historySortKeys
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.theme.JetBrainsMono
+import coffee.crema.ui.UploadTarget
+import coffee.crema.ui.uploadMenuEntry
+import coffee.crema.ui.viewableTargets
+import coffee.crema.ui.shareableTargets
+import coffee.crema.ui.openUploadedCopy
+import coffee.crema.ui.UploadPip
+import coffee.crema.ui.uploadPipFor
+import coffee.crema.ui.shareUploadedLink
 
 /*
  * PhoneHistoryScreen — the handset shot log (port of
@@ -137,8 +145,8 @@ fun PhoneHistoryScreen(
         PhoneShotDetail(
             vm = vm,
             shot = detail,
-            signedIn = ui.visualizer.signedIn,
-            syncing = detail.id in ui.visualizer.uploadingShotIds,
+            uploadTargets = ui.sharing.uploadTargets[detail.id].orEmpty(),
+            syncing = detail.id in ui.sharing.uploadingShotIds,
             defaultPrivacy = ui.visualizer.privacy,
             weightUnit = ui.weightUnit,
             tempUnit = ui.tempUnit,
@@ -295,6 +303,30 @@ fun PhoneHistoryScreen(
                 }
             }
 
+            // Catch-up strip (web "Upload N"): every shot missing from an enabled
+            // destination, one tap. Hidden at zero.
+            val missingUploads = ui.sharing.missingUploadTotal
+            if (missingUploads > 0 && !sel.selecting) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = CremaEdge, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        "$missingUploads shot(s) not uploaded everywhere",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    CremaButton(
+                        onClick = { vm.uploadMissing() },
+                        variant = CremaButtonVariant.Tonal,
+                        icon = "cloud-arrow-up",
+                        enabled = !ui.sharing.catchUpBusy,
+                        label = if (ui.sharing.catchUpBusy) "Uploading…" else "Upload $missingUploads",
+                    )
+                }
+            }
             // Day-grouped shot list (headers only under the date sort —
             // rating/name orders interleave days, so groups would repeat).
             LazyColumn(
@@ -319,7 +351,8 @@ fun PhoneHistoryScreen(
                     item(key = shot.id) {
                         PhoneShotRow(
                             shot = shot,
-                            syncing = shot.id in ui.visualizer.uploadingShotIds,
+                            syncing = shot.id in ui.sharing.uploadingShotIds,
+                            pip = uploadPipFor(ui.sharing.uploadTargets[shot.id].orEmpty()),
                             weightUnit = ui.weightUnit,
                             selecting = sel.selecting,
                             picked = sel.isPicked(shot.id),
@@ -403,6 +436,8 @@ private fun PhoneStatTile(label: String, value: String, modifier: Modifier = Mod
 private fun PhoneShotRow(
     shot: StoredShot,
     syncing: Boolean,
+    /** Cloud status across every enabled destination. */
+    pip: UploadPip = UploadPip.Local,
     weightUnit: String,
     selecting: Boolean = false,
     picked: Boolean = false,
@@ -486,7 +521,8 @@ private fun PhoneShotRow(
         }
         when {
             syncing -> CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 1.5.dp, color = MaterialTheme.colorScheme.primary)
-            shot.visualizerId != null -> PhIcon("cloud-check", sizeDp = 16, tint = tel.success)
+            pip == UploadPip.Uploaded -> PhIcon("cloud-check", sizeDp = 16, tint = tel.success)
+            pip == UploadPip.Partial -> PhIcon("cloud-arrow-up", sizeDp = 16, tint = androidx.compose.ui.graphics.Color(0xFFDBA764))
             else -> PhIcon("device-mobile", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f))
         }
     }
@@ -507,7 +543,8 @@ private fun RowMono(text: String) {
 private fun PhoneShotDetail(
     vm: MainViewModel,
     shot: StoredShot,
-    signedIn: Boolean,
+    /** Cloud destinations + their state for this shot — one Upload row via [uploadMenuEntry]. */
+    uploadTargets: List<UploadTarget>,
     syncing: Boolean,
     defaultPrivacy: String,
     weightUnit: String,
@@ -749,27 +786,25 @@ private fun PhoneShotDetail(
             items = buildList {
                 add(SheetItem("arrow-counter-clockwise", "Load profile only", sub = "Just this shot’s recipe, nothing else") { onLoadOnBrew() })
                 add(SheetItem("download-simple", "Download shot", sub = "Crema JSON") { onExport() })
-                // A bound shot re-uploads: Visualizer de-dupes by telemetry
-                // SHA, so the re-POST updates the same remote row (fixing an
-                // old wrongly-dated / bean-less copy) — issue #44 follow-up.
-                // Signed out, the row stays VISIBLE but disabled with the way
-                // in — a hidden action is undiscoverable (user feedback).
+                // One "Upload" row over every cloud destination (Visualizer,
+                // Decent), naming the ones still missing the shot — a re-upload
+                // once it is everywhere (Visualizer de-dupes by telemetry SHA;
+                // Decent replaces its copy). Nothing connected → the row stays
+                // VISIBLE but disabled with the way in (a hidden action is
+                // undiscoverable). Then a "View on X" per destination that has it.
                 if (!syncing) {
-                    val label = if (shot.visualizerId != null) "Re-upload to Visualizer" else "Upload to Visualizer"
-                    if (signedIn) {
-                        add(SheetItem("cloud-arrow-up", label) { vm.visualizer.uploadShot(shot) })
-                    } else {
-                        add(SheetItem("cloud-arrow-up", label, sub = "Sign in via Settings → Sharing first", disabled = true))
-                    }
+                    val entry = uploadMenuEntry(uploadTargets)
+                    add(SheetItem("cloud-arrow-up", entry.title, sub = entry.sub, disabled = !entry.enabled) { vm.uploadShotTo(shot, entry.targets) })
                 }
-                if (shot.visualizerId != null) {
-                    add(SheetItem("arrow-square-out", "View on Visualizer") {
-                        context.startActivity(
-                            android.content.Intent(
-                                android.content.Intent.ACTION_VIEW,
-                                android.net.Uri.parse("https://visualizer.coffee/shots/${shot.visualizerId}"),
-                            ),
-                        )
+                viewableTargets(uploadTargets).forEach { t ->
+                    add(SheetItem("arrow-square-out", "View on ${t.name}") { openUploadedCopy(context, t) })
+                }
+                // Share = the PUBLIC link to an uploaded copy, via the system share
+                // sheet — only for destinations that have one.
+                val shareable = shareableTargets(uploadTargets)
+                shareable.forEach { t ->
+                    add(SheetItem("share-network", if (shareable.size == 1) "Share link" else "Share ${t.name} link", sub = "Anyone with the link can view the shot") {
+                        shareUploadedLink(context, t)
                     })
                 }
                 add(SheetItem(divider = true))
