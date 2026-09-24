@@ -30,6 +30,7 @@
 	let {
 		roaster,
 		count,
+		archivedCount = 0,
 		dupOf,
 		onOpen,
 		onEdit,
@@ -37,11 +38,16 @@
 		onUnmerge
 	}: {
 		roaster: Roaster;
+		/** Every bag from this roaster, archived ones included. */
 		count: number;
+		/** How many of `count` are archived — rendered as "· N archived" so
+		 *  the directory hints at bags the unscoped Bags tab hides (#86). */
+		archivedCount?: number;
 		/** Non-null when this roaster row is tagged as a duplicate of
 		 *  another. Drives the inline badge + the un-merge button. */
 		dupOf: Roaster | null;
-		/** Card click — opens the editor (mirrors the bean tile). */
+		/** Card click — opens the roaster's shelf (its bags on the Bags
+		 *  tab, archived included; #86). The pencil still edits. */
 		onOpen: (id: string) => void;
 		onEdit: (id: string) => void;
 		onDuplicate: (id: string) => void;
@@ -60,9 +66,9 @@
 	});
 
 	function onCardClick(): void {
-		// Card click opens the editor — mirrors BeanTile's "click anywhere
-		// outside the action row" behaviour.
-		onEdit(roaster.id);
+		// Card click opens the roaster's shelf — every bag from them,
+		// archived included (#86). Editing stays on the pencil.
+		onOpen(roaster.id);
 	}
 	function onEditClick(e: MouseEvent): void {
 		e.stopPropagation();
@@ -148,7 +154,7 @@
 				</a>
 			{/if}
 			<span class="rcd-count">
-				{count} bag{count === 1 ? '' : 's'}
+				{count} bag{count === 1 ? '' : 's'}{archivedCount > 0 ? ` · ${archivedCount} archived` : ''}
 			</span>
 		</div>
 	{/snippet}

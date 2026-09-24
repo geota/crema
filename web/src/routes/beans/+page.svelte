@@ -101,6 +101,15 @@
 	type RoastFilter = 'light' | 'medium' | 'dark';
 
 	let status = $state<StatusFilter>('all');
+	/**
+	 * Roaster scope (geota/crema#86). Set by clicking a roaster in the
+	 * Roasters directory: the Bags tab then shows only that roaster's bags,
+	 * and — unlike the unscoped list — "All" includes the archived ones.
+	 * Archiving keeps the working list clean, but a roaster's shelf is the
+	 * one place you expect to see every bag you ever bought from them.
+	 * `?roaster=<id>` seeds it so a link can land on a roaster's shelf.
+	 */
+	let roasterScopeId = $state<string | null>(page.url.searchParams.get('roaster'));
 	// `null` = no roast filter applied (replaces the prior `'any'` sentinel
 	// so the Roast group can mirror the `/profiles` pattern: no "Any" pill,
 	// re-clicking the active pill clears the filter).
@@ -129,14 +138,16 @@
 
 	const drawerBean = $derived(drawerBeanId ? library.getBean(drawerBeanId) : null);
 
-	function matchesStatus(b: Bean, f: StatusFilter): boolean {
+	function matchesStatus(b: Bean, f: StatusFilter, includeArchived = false): boolean {
 		const state = bagState(b);
 		switch (f) {
 			// "All" and "Favourite" exclude archived bags (Android parity):
 			// archiving exists to keep the working list clean, and the
 			// Archived chip stays the dedicated view for finished bags.
+			// Inside a roaster scope (`includeArchived`) they show everything —
+			// see `roasterScopeId`.
 			case 'all':
-				return state !== 'archived';
+				return includeArchived || state !== 'archived';
 			case 'active':
 				return state === 'active';
 			case 'frozen':
@@ -144,9 +155,9 @@
 			case 'archived':
 				return state === 'archived';
 			case 'favourite':
-				return b.favourite && state !== 'archived';
+				return b.favourite && (includeArchived || state !== 'archived');
 			default:
-				return state !== 'archived';
+				return includeArchived || state !== 'archived';
 		}
 	}
 
@@ -164,9 +175,17 @@
 	const bagHits = $derived(searchBeans(allBeans, allRoasters, q));
 	const roasterHits = $derived(searchRoasters(allRoasters, q));
 
+	const scopeRoaster = $derived(roasterScopeId ? library.getRoaster(roasterScopeId) : null);
+	// Bags inside the roaster scope (all bags when unscoped). Both the list
+	// and the chip counts read from this so they cannot disagree.
+	const scopedBeans = $derived(
+		roasterScopeId ? allBeans.filter((b) => b.roasterId === roasterScopeId) : allBeans
+	);
+
 	const filtered = $derived.by(() => {
-		return allBeans.filter((b) => {
-			if (!matchesStatus(b, status)) return false;
+		const inScope = roasterScopeId != null;
+		return scopedBeans.filter((b) => {
+			if (!matchesStatus(b, status, inScope)) return false;
 			if (!matchesRoast(b, roast)) return false;
 			if (selectedTags.length > 0) {
 				for (const t of selectedTags) {
@@ -234,15 +253,17 @@
 
 	const counts = $derived.by(() => {
 		const c = { all: 0, active: 0, frozen: 0, archived: 0, favourite: 0 };
-		for (const b of allBeans) {
+		const inScope = roasterScopeId != null;
+		for (const b of scopedBeans) {
 			// Keep the badges in lockstep with `matchesStatus`: archived
-			// bags count only under their own chip.
+			// bags count only under their own chip — except inside a
+			// roaster scope, where "All" really is all.
 			const s = bagState(b);
-			if (s !== 'archived') c.all += 1;
+			if (inScope || s !== 'archived') c.all += 1;
 			if (s === 'active') c.active += 1;
 			if (s === 'frozen') c.frozen += 1;
 			if (s === 'archived') c.archived += 1;
-			if (b.favourite && s !== 'archived') c.favourite += 1;
+			if (b.favourite && (inScope || s !== 'archived')) c.favourite += 1;
 		}
 		return c;
 	});
@@ -417,13 +438,17 @@
 
 	const roasterRows = $derived.by(() => {
 		const counts = new Map<string, number>();
+		const archivedCounts = new Map<string, number>();
 		for (const b of allBeans) {
 			const id = b.roasterId;
-			if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+			if (!id) continue;
+			counts.set(id, (counts.get(id) ?? 0) + 1);
+			if (b.archivedAt != null) archivedCounts.set(id, (archivedCounts.get(id) ?? 0) + 1);
 		}
 		let rows = allRoasters.map((r) => ({
 			roaster: r,
-			count: counts.get(r.id) ?? 0
+			count: counts.get(r.id) ?? 0,
+			archivedCount: archivedCounts.get(r.id) ?? 0
 		}));
 		// Filter out rows tagged as duplicates unless the user opted in.
 		// The badge on the directory makes the merged state obvious, so the
@@ -529,6 +554,15 @@
 		status = 'all';
 		roast = null;
 		selectedTags = [];
+	}
+	/** Roaster card click → that roaster's shelf on the Bags tab (#86). */
+	function openRoasterShelf(id: string): void {
+		roasterScopeId = id;
+		status = 'all';
+		tab = 'bags';
+	}
+	function clearRoasterScope(): void {
+		roasterScopeId = null;
 	}
 	function gotoNew(): void {
 		goto(resolve('/beans/new'));
@@ -843,6 +877,20 @@
 		</div>
 		{#if tab === 'bags' && allBeans.length > 0}
 			<span class="bn-tabs-divider" aria-hidden="true"></span>
+			{#if scopeRoaster}
+				<!-- Roaster scope pill (#86): the Bags tab is showing one
+				     roaster's shelf, archived bags included. ✕ returns to the
+				     full library. -->
+				<button
+					class="bn-chip-clear bn-chip-toggle is-on bn-chip-scope"
+					onclick={clearRoasterScope}
+					title="Showing every bag from {scopeRoaster.name}, including archived. Click to show all roasters."
+				>
+					<Icon cls="ph ph-storefront" />
+					{scopeRoaster.name}
+					<XIcon aria-hidden="true" />
+				</button>
+			{/if}
 			<div class="bn-tabs-filters">
 				<FilterPills pills={bagsFilterPills} onclick={onBagPillClick} />
 			</div>
@@ -997,15 +1045,16 @@
 					<span class="bn-section-rule"></span>
 				</header>
 				<div class="bn-roaster-grid">
-					{#each roasterRows as { roaster, count } (roaster.id)}
+					{#each roasterRows as { roaster, count, archivedCount } (roaster.id)}
 						{@const dupOf = roaster.canonicalRoasterId
 							? library.getRoaster(roaster.canonicalRoasterId)
 							: null}
 						<RoasterCard
 							{roaster}
 							{count}
+							{archivedCount}
 							{dupOf}
-							onOpen={editRoaster}
+							onOpen={openRoasterShelf}
 							onEdit={editRoaster}
 							onDuplicate={duplicateRoaster}
 							onUnmerge={unmergeRoaster}
@@ -1379,6 +1428,13 @@
 	}
 	.bn-chip-clear:hover {
 		color: var(--fg-1);
+	}
+	.bn-chip-scope {
+		gap: 6px;
+		white-space: nowrap;
+		max-width: 220px;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	/* Grid + sections */

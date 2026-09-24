@@ -42,6 +42,10 @@ import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.theme.JetBrainsMono
+import coffee.crema.beans.roasterBagCountLabel
+import coffee.crema.ui.components.CremaFilterChip
+import androidx.compose.material3.IconButton
+import androidx.compose.foundation.layout.size
 
 /*
  * PhoneBeansScreen — the handset Beans library (port of
@@ -62,6 +66,9 @@ fun PhoneBeansScreen(
     var tab by remember { mutableStateOf("bags") }
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("all") }
+    // Roaster scope (#86): tapping a roaster row shows its shelf on the Bags
+    // tab, archived bags included. Cleared by its chip.
+    var roasterScopeId by remember { mutableStateOf<String?>(null) }
     var sort by remember { mutableStateOf("freshest") }
     var sortDesc by remember { mutableStateOf(false) }
     var menuFor by remember { mutableStateOf<Bean?>(null) }
@@ -110,7 +117,8 @@ fun PhoneBeansScreen(
     // to the tablet and the web PWA.
     val beanHits = searchBeans(ui.beans, ui.roasters, query)
     val roasterHits = searchRoasters(ui.roasters, query)
-    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, filter, sort, sortDesc, ui.activeBeanId)
+    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, filter, sort, sortDesc, ui.activeBeanId, roasterScopeId)
+    val scopeRoaster = roasterScopeId?.let { id -> ui.roasters.firstOrNull { it.id == id } }
     val visibleRoasters = ui.roasters
         .filter { roasterHits.matches(it.id) }
         .sortedBy { it.name.lowercase() }
@@ -143,7 +151,18 @@ fun PhoneBeansScreen(
             )
             if (tab == "bags") {
                 Spacer(Modifier.height(6.dp))
-                val counts = beanFilterCounts(ui.beans)
+                if (scopeRoaster != null) {
+                    // Scope chip: "<roaster> ✕" — tap to return to the full library.
+                    Row(Modifier.fillMaxWidth().padding(horizontal = CremaEdge, vertical = 2.dp)) {
+                        CremaFilterChip(
+                            label = "${scopeRoaster.name} ✕",
+                            selected = true,
+                            icon = "storefront",
+                            onClick = { roasterScopeId = null },
+                        )
+                    }
+                }
+                val counts = beanFilterCounts(ui.beans, roasterScopeId)
                 CremaFilterChipRow(
                     chips = buildList {
                         add(FilterChipSpec("all", "All", counts["all"] ?: 0))
@@ -215,8 +234,9 @@ fun PhoneBeansScreen(
                     items(visibleRoasters, key = { it.id }) { roaster ->
                         PhoneRoasterRow(
                             roaster = roaster,
-                            bagCount = ui.beans.count { it.roasterId == roaster.id && it.archivedAt == null },
-                            onClick = { vm.startEditRoaster(roaster.id); onNav("roaster-edit") },
+                            bagCountLabel = roasterBagCountLabel(ui.beans, roaster.id),
+                            onClick = { roasterScopeId = roaster.id; filter = "all"; tab = "bags" },
+                            onEdit = { vm.startEditRoaster(roaster.id); onNav("roaster-edit") },
                         )
                     }
                     if (visibleRoasters.isEmpty()) {
@@ -541,8 +561,10 @@ private fun NeutralPill(text: String) {
 }
 
 // ── Roaster push row (proto .pb-roaster) ─────────────────────────────────────
+// Tap → the roaster's shelf on the Bags tab, archived bags included (#86);
+// the trailing pencil edits.
 @Composable
-private fun PhoneRoasterRow(roaster: Roaster, bagCount: Int, onClick: () -> Unit) {
+private fun PhoneRoasterRow(roaster: Roaster, bagCountLabel: String, onClick: () -> Unit, onEdit: () -> Unit) {
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(16.dp),
@@ -566,12 +588,14 @@ private fun PhoneRoasterRow(roaster: Roaster, bagCount: Int, onClick: () -> Unit
                     roaster.country?.takeIf { it.isNotBlank() },
                 ).joinToString(", ")
                 Text(
-                    listOf(loc, "$bagCount active ${if (bagCount == 1) "bag" else "bags"}")
-                        .filter { it.isNotEmpty() }.joinToString(" · "),
+                    listOf(loc, bagCountLabel).filter { it.isNotEmpty() }.joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
+            }
+            IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
+                PhIcon("pencil-simple", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             PhIcon("caret-right", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }

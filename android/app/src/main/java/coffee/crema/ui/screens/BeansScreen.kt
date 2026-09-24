@@ -105,6 +105,7 @@ import coffee.crema.ui.components.CremaValueUnit
 import coffee.crema.ui.components.CremaSortControl
 import coffee.crema.ui.components.SortKey
 import androidx.compose.material3.IconButton
+import coffee.crema.beans.roasterBagCountLabel
 
 /*
  * Beans (library) — M3 v1. The bean bags the user has on hand, persisted via
@@ -130,6 +131,9 @@ fun BeansScreen(
     var roasterEditing by remember { mutableStateOf<Roaster?>(null) }
     var query by remember { mutableStateOf("") }
     var beanFilter by remember { mutableStateOf("all") }
+    // Roaster scope (#86): set by tapping a roaster card; the Bags tab then
+    // shows that roaster's shelf, archived bags included. Cleared by its chip.
+    var roasterScopeId by remember { mutableStateOf<String?>(null) }
     var beanSort by remember { mutableStateOf("freshest") }
     var beanSortDesc by remember { mutableStateOf(false) }
     // The bag whose read-only detail is open (issue 61). Held as an id, not a
@@ -153,7 +157,8 @@ fun BeansScreen(
     // keystroke costs one FFI call rather than a re-serialisation.
     val beanHits = searchBeans(ui.beans, ui.roasters, query)
     val roasterHits = searchRoasters(ui.roasters, query)
-    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, beanFilter, beanSort, beanSortDesc, ui.activeBeanId)
+    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, beanFilter, beanSort, beanSortDesc, ui.activeBeanId, roasterScopeId)
+    val scopeRoaster = roasterScopeId?.let { id -> ui.roasters.firstOrNull { it.id == id } }
     val visibleRoasters = ui.roasters
         .filter { roasterHits.matches(it.id) }
         .sortedByDescending { roasterHits.score(it.id) }
@@ -264,7 +269,17 @@ fun BeansScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    val counts = beanFilterCounts(ui.beans)
+                    val counts = beanFilterCounts(ui.beans, roasterScopeId)
+                    if (scopeRoaster != null) {
+                        // Scope chip: "<roaster> ✕" — tap to return to the full library.
+                        CremaFilterChip(
+                            label = "${scopeRoaster.name} ✕",
+                            selected = true,
+                            icon = "storefront",
+                            onClick = { roasterScopeId = null },
+                        )
+                        CremaFilterDivider()
+                    }
                     CremaFilterGroupLabel("Status")
                     listOf("all" to "All", "active" to "Active", "favourite" to "Favourite", "frozen" to "Frozen", "archived" to "Archived").forEach { (id, label) ->
                         CremaFilterChip(label = label, selected = beanFilter == id, count = counts[id] ?: 0, onClick = { beanFilter = id })
@@ -343,7 +358,8 @@ fun BeansScreen(
                         items(visibleRoasters, key = { it.id }) { roaster ->
                             RoasterCard(
                                 roaster = roaster,
-                                bagCount = ui.beans.count { it.roasterId == roaster.id },
+                                bagCountLabel = roasterBagCountLabel(ui.beans, roaster.id),
+                                onOpen = { roasterScopeId = roaster.id; beanFilter = "all"; tab = "bags" },
                                 onEdit = { roasterEditing = roaster; roasterDialogOpen = true },
                                 onVisit = { vm.visitRoasterWebsite(roaster.website) },
                                 onDelete = { vm.deleteRoaster(roaster.id) },
@@ -608,18 +624,23 @@ private fun BeanStat(modifier: Modifier = Modifier, leading: @Composable () -> U
     }
 }
 
-// A roaster directory card — avatar + name + "City · Country · N bags", with a
-// kebab (Edit / Visit website / Delete). Proto's kebab-only roaster pattern.
+// A roaster directory card — avatar + name + "City · Country · N bags · M
+// archived", with a kebab (Edit / Visit website / Delete). Tapping the card
+// opens the roaster's shelf on the Bags tab (#86).
 @Composable
 private fun RoasterCard(
     roaster: Roaster,
-    bagCount: Int,
+    bagCountLabel: String,
+    onOpen: () -> Unit,
     onEdit: () -> Unit,
     onVisit: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
-    CremaCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+    CremaCard(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(onClick = onOpen),
+        shape = RoundedCornerShape(16.dp),
+    ) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
                 RoasterMarkAvatar(roaster.name, sizeDp = 44, cornerDp = 12, fontSize = 16.sp)
@@ -632,7 +653,7 @@ private fun RoasterCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     val place = listOfNotNull(roaster.city, roaster.country).joinToString(" · ")
-                    val sub = listOfNotNull(place.ifBlank { null }, "$bagCount ${if (bagCount == 1) "bag" else "bags"}").joinToString(" · ")
+                    val sub = listOfNotNull(place.ifBlank { null }, bagCountLabel).joinToString(" · ")
                     Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 CremaOverflowMenu(items = buildList {
