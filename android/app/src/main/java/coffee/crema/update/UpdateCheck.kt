@@ -1,16 +1,22 @@
 package coffee.crema.update
 
+import coffee.crema.net.HttpClients
+import coffee.crema.net.unwrapNotSent
+import coffee.crema.runCatchingCancellable
+import io.ktor.client.HttpClient
+import io.ktor.client.request.get
+import io.ktor.client.request.header
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
+import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.time.Instant
 import java.time.temporal.ChronoUnit
-import java.util.concurrent.TimeUnit
 
 /*
  * On-demand release check against the crema GitHub repo (issue #36).
@@ -43,30 +49,29 @@ data class UpdateInfo(
 
 private const val REPO_API = "https://api.github.com/repos/geota/crema"
 
-private val http = OkHttpClient.Builder()
-    .connectTimeout(10, TimeUnit.SECONDS)
-    .readTimeout(15, TimeUnit.SECONDS)
-    .build()
+/**
+ * Process-lifetime client over the shared OkHttp engine (no engine of its
+ * own, so it costs nothing idle). The GETs get the shared retry policy.
+ */
+private val updateHttp: HttpClient by lazy {
+    HttpClients.create(connectTimeoutMs = 10_000, socketTimeoutMs = 15_000)
+}
 
-private fun getJson(url: String, json: Json): kotlinx.serialization.json.JsonObject? {
-    val req = Request.Builder()
-        .url(url)
-        .header("Accept", "application/vnd.github+json")
+private suspend fun getJson(http: HttpClient, url: String, json: Json): kotlinx.serialization.json.JsonObject? {
+    val res = http.get(url) {
+        header(HttpHeaders.Accept, "application/vnd.github+json")
         // GitHub rejects UA-less requests.
-        .header("User-Agent", "crema-app")
-        .build()
-    return http.newCall(req).execute().use { res ->
-        if (!res.isSuccessful) return@use null
-        val text = res.body?.string().orEmpty()
-        runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
+        header(HttpHeaders.UserAgent, "crema-app")
     }
+    if (!res.status.isSuccess()) return null
+    val text = res.bodyAsText(Charsets.UTF_8)
+    return runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
 }
 
 private fun ageDays(publishedAt: String?): Long? = runCatching {
     publishedAt?.let { ChronoUnit.DAYS.between(Instant.parse(it), Instant.now()) }
 }.getOrNull()
 
-/** One release check — two GETs, no auth, no caching. Call off the main thread. */
 /**
  * Extract the nightly versionName from the release's asset names. The
  * nightly release carries the APK **plus** its `.apk.idsig` and
@@ -172,10 +177,11 @@ fun isNewerBuild(installed: String, published: String?): Boolean {
     return true
 }
 
-suspend fun checkForUpdates(json: Json): UpdateInfo = withContext(Dispatchers.IO) {
-    runCatching {
-        val stable = getJson("$REPO_API/releases/latest", json)
-        val nightly = getJson("$REPO_API/releases/tags/nightly", json)
+/** One release check — two GETs, no auth, no caching. [http] is for tests. */
+suspend fun checkForUpdates(json: Json, http: HttpClient = updateHttp): UpdateInfo = withContext(Dispatchers.IO) {
+    runCatchingCancellable {
+        val stable = getJson(http, "$REPO_API/releases/latest", json)
+        val nightly = getJson(http, "$REPO_API/releases/tags/nightly", json)
         val stableTag = stable?.get("tag_name")?.jsonPrimitive?.content
         // The nightly's versionName rides its APK asset name — the release
         // name/tag are both just "nightly".
@@ -190,6 +196,6 @@ suspend fun checkForUpdates(json: Json): UpdateInfo = withContext(Dispatchers.IO
             nightlyAgeDays = ageDays(nightly?.get("published_at")?.jsonPrimitive?.content),
         )
     }.getOrElse {
-        UpdateInfo(null, null, null, null, error = it.message ?: "Update check failed")
+        UpdateInfo(null, null, null, null, error = it.unwrapNotSent().message ?: "Update check failed")
     }
 }

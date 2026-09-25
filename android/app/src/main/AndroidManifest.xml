@@ -29,8 +29,8 @@
          throws SecurityException and crashes the app (geota/crema#72). -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Visualizer sync — OAuth token exchange + shot uploads to
-         visualizer.coffee. The only network feature in the app. -->
+    <!-- Network: Visualizer + Decent shot sync, the on-demand update check,
+         Google Drive backup, and the multi-device LAN proxy. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- Require BLE hardware. -->
@@ -38,10 +38,15 @@
         android:name="android.hardware.bluetooth_le"
         android:required="true" />
 
+    <!-- networkSecurityConfig: cleartext is allowed ONLY so a secondary can
+         dial the primary's LAN relay (ws://<lan-ip>:<port>); a domain-config
+         can't name "any LAN IP". The REST clients refuse non-https URLs
+         themselves (net/HttpClients.kt). See res/xml/network_security_config.xml. -->
     <application
         android:name=".CremaApplication"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"

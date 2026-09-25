@@ -329,11 +329,6 @@ dependencies {
     // API 36+ devices + emulators (16 KB pages); older JNA fails to dlopen there.
     implementation("net.java.dev.jna:jna:5.19.1@aar")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
-    // Visualizer HTTP — OkHttp because HttpURLConnection rejects the PATCH
-    // verb (shot edits sync via PATCH /api/shots/{id}).
-    implementation("com.squareup.okhttp3:okhttp:5.4.0")
-    // `Call.executeAsync()` — a suspending, cancellable call (the Decent client).
-    implementation("com.squareup.okhttp3:okhttp-coroutines:5.4.0")
 
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
     // The generated `core/bindings/crema-core.kt` types are @Serializable.
@@ -365,10 +360,10 @@ dependencies {
     implementation("no.nordicsemi.kotlin.ble:client-android:$nordicBle")
     implementation("no.nordicsemi.kotlin.ble:environment-android:$nordicBle")
 
-    // Ktor — the multi-device LAN proxy (M1). The PRIMARY embeds a small
-    // WebSocket server (`LanRelayServer`) so secondaries can mirror/drive the
-    // DE1 over the LAN; a SECONDARY dials it as a Ktor WebSocket client. CIO
-    // (coroutine IO) on both ends — pure-Kotlin, no Netty, light on Android.
+    // Ktor — the multi-device LAN proxy (M1) and the REST clients. The PRIMARY
+    // embeds a small WebSocket server (`LanRelayServer`, CIO server engine —
+    // pure-Kotlin, no Netty, light on Android) so secondaries can mirror/drive
+    // the DE1 over the LAN; a SECONDARY dials it as a Ktor WebSocket client.
     // Server + client sessions are both `WebSocketSession`, so ONE
     // `KtorWsFrameLink` backs both. The same framed protocol later serves the
     // PWA (M4) and a cloud relay (M5); the JSON frames ride as WS text.
@@ -377,17 +372,27 @@ dependencies {
     implementation("io.ktor:ktor-server-cio:$ktor")
     implementation("io.ktor:ktor-server-websockets:$ktor")
     implementation("io.ktor:ktor-client-core:$ktor")
-    implementation("io.ktor:ktor-client-cio:$ktor")
+    // Every Ktor CLIENT (Visualizer, Decent, the update check, the proxy's
+    // WebSocket link) runs on the OkHttp engine, all sharing one OkHttpClient
+    // (net/HttpClients.kt): HTTP/2, one connection pool, and interceptors
+    // that say precisely whether a failed request reached the server — what
+    // the single retry policy keys on. (NOT ktor-client-android: it sits on
+    // HttpURLConnection, which rejects the PATCH verb Visualizer shot-edit
+    // sync needs.) Pulls OkHttp 5.x transitively — see HttpClients.kt.
+    implementation("io.ktor:ktor-client-okhttp:$ktor")
     implementation("io.ktor:ktor-client-websockets:$ktor")
 
     // JVM unit tests for pure shell logic (no device / FFI). kotlin-test mapped
     // onto the JUnit 4 runner AGP's unit-test task uses.
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.4.10")
     testImplementation("junit:junit:4.13.2")
-    // Coroutine tests (runTest / virtual time) and a real HTTP stub for the
-    // Decent client's status mapping. mockwebserver tracks the OkHttp version.
+    // Coroutine tests (runTest / virtual time), Ktor's MockEngine for the
+    // HTTP clients' request shape + status mapping (tracks the Ktor version),
+    // and a real HTTP stub for the retry policy / sent signal over real
+    // OkHttp (tracks the OkHttp version ktor-client-okhttp brings).
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
-    testImplementation("com.squareup.okhttp3:mockwebserver:5.4.0")
+    testImplementation("io.ktor:ktor-client-mock:$ktor")
+    testImplementation("com.squareup.okhttp3:mockwebserver3:5.3.2")
 }
 
 // ---------------------------------------------------------------------------

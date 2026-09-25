@@ -1,5 +1,18 @@
 package coffee.crema.visualizer
 
+import coffee.crema.net.HttpClients
+import coffee.crema.net.unwrapNotSent
+import io.ktor.client.engine.HttpClientEngine
+import io.ktor.client.request.header
+import io.ktor.client.request.request
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
+import io.ktor.http.content.TextContent
+import io.ktor.http.withCharset
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -8,18 +21,21 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import java.util.concurrent.TimeUnit
+import java.io.Closeable
 
 /*
  * The authenticated Visualizer API client — the Android `visualizerCall`
  * (web `$lib/services/visualizer-call.ts`): one entry point, the same error
  * taxonomy (401 → auth, 402/403 → premium-gated, 404 → not-found, transport
- * → network), JSON bodies in and out over OkHttp (HttpURLConnection can't
- * send the PATCH verb shot-edit sync needs).
+ * → network), JSON bodies in and out over Ktor on OkHttp (HttpURLConnection
+ * — and so ktor-client-android — can't send the PATCH verb shot-edit sync
+ * needs).
+ *
+ * Retries are the shared policy's (`net/HttpClients.kt`): GETs are retried on
+ * 5xx / 408 / 429 and transport failures; POST / PATCH carry no safe-resend
+ * marker, so they are retried only when the request provably never reached
+ * the server (a failed DNS lookup or connect) — never after a response or a
+ * maybe-sent failure, since a re-POST could duplicate a shot.
  *
  * Token freshness (proactive refresh + the one-shot 401 retry) lives in
  * [VisualizerSync.withFreshToken], which owns the store — this client is
@@ -47,14 +63,25 @@ sealed class VisualizerError(message: String) : Exception(message) {
     class Http(val status: Int, message: String) : VisualizerError(message)
 }
 
-class VisualizerClient(private val json: Json) {
+class VisualizerClient(
+    private val json: Json,
+    /** Tests inject a MockEngine / a test OkHttp engine; null → the shared OkHttp engine. */
+    engine: HttpClientEngine? = null,
+    /** The retry policy's first backoff (tests shrink it). */
+    retryBaseDelayMs: Long = HttpClients.RETRY_BASE_DELAY_MS,
+    /** Tests only: the API base (a local `http://` stub, with cleartext allowed). */
+    private val apiBase: String = API_BASE,
+) : Closeable {
 
-    // OkHttp rather than HttpURLConnection: the latter rejects the PATCH verb,
-    // which shot-edit sync (PATCH /shots/{id}) requires.
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .build()
+    private val http = HttpClients.create(
+        connectTimeoutMs = 15_000,
+        socketTimeoutMs = 30_000,
+        engine = engine,
+        retryBaseDelayMs = retryBaseDelayMs,
+        httpsOnly = apiBase == API_BASE,
+    )
+
+    override fun close() = http.close()
 
     /**
      * One authenticated request. Returns the parsed JSON body for a 2xx (null
@@ -66,35 +93,30 @@ class VisualizerClient(private val json: Json) {
         accessToken: String,
         body: JsonElement? = null,
     ): JsonElement? = withContext(Dispatchers.IO) {
-        val req = Request.Builder()
-            .url("$API_BASE$path")
-            .header("Authorization", "Bearer $accessToken")
-            .header("Accept", "application/json")
-            .method(
-                method,
-                body?.let {
-                    json.encodeToString(JsonElement.serializer(), it)
-                        .toRequestBody("application/json".toMediaType())
-                },
-            )
-            .build()
-        val response = try {
-            http.newCall(req).execute()
-        } catch (e: Exception) {
-            throw VisualizerError.Network("Couldn't reach Visualizer: ${e.message}")
-        }
-        response.use { res ->
-            val status = res.code
-            val text = res.body?.string().orEmpty()
-            when {
-                status == 401 -> throw VisualizerError.Auth()
-                status == 402 || status == 403 -> throw VisualizerError.PremiumGated()
-                status == 404 -> throw VisualizerError.NotFound()
-                status !in 200..299 -> throw VisualizerError.Http(status, "Visualizer HTTP $status")
-                text.isBlank() -> null
-                else -> runCatching { json.parseToJsonElement(text) }
-                    .getOrElse { throw VisualizerError.Network("Visualizer returned a malformed body") }
+        val (status, text) = try {
+            val res = http.request("$apiBase$path") {
+                this.method = HttpMethod.parse(method)
+                header(HttpHeaders.Authorization, "Bearer $accessToken")
+                header(HttpHeaders.Accept, "application/json")
+                header(HttpHeaders.UserAgent, "crema-android")
+                if (body != null) {
+                    setBody(TextContent(json.encodeToString(JsonElement.serializer(), body), JSON_UTF8))
+                }
             }
+            res.status.value to res.bodyAsText(Charsets.UTF_8)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw VisualizerError.Network("Couldn't reach Visualizer: ${e.unwrapNotSent().message}")
+        }
+        when {
+            status == 401 -> throw VisualizerError.Auth()
+            status == 402 || status == 403 -> throw VisualizerError.PremiumGated()
+            status == 404 -> throw VisualizerError.NotFound()
+            status !in 200..299 -> throw VisualizerError.Http(status, "Visualizer HTTP $status")
+            text.isBlank() -> null
+            else -> runCatching { json.parseToJsonElement(text) }
+                .getOrElse { throw VisualizerError.Network("Visualizer returned a malformed body") }
         }
     }
 
@@ -162,3 +184,6 @@ class VisualizerClient(private val json: Json) {
         )
     }
 }
+
+/** What OkHttp sent for a JSON String body: `application/json; charset=utf-8`. */
+private val JSON_UTF8 = ContentType.Application.Json.withCharset(Charsets.UTF_8)

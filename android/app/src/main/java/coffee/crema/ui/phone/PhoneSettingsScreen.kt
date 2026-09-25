@@ -1264,8 +1264,8 @@ private fun AboutSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiState) {
             "Rust, serde, thiserror" to "The shared de1 core",
             "Coil" to "Bean bag photo loading",
             "phosphor-icon" to "Icon set (Compose ImageVectors)",
-            "OkHttp" to "Visualizer HTTP client",
-            "Ktor" to "WebSocket LAN proxy (multi-device)",
+            "Ktor" to "HTTP clients (Visualizer, Decent, update check) + LAN proxy WebSocket server & client",
+            "OkHttp" to "HTTP/2 transport under the Ktor clients",
             "Decent de1app & reaprime" to "Protocol documentation lineage",
         )
         libs.forEachIndexed { i, (name, desc) ->
