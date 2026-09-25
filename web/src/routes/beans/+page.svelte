@@ -32,7 +32,7 @@
 	 * The old card / facet / inline-editor flow is gone — the new
 	 * design's tile + drawer + dedicated editor route replaces it.
 	 */
-	import { goto } from '$app/navigation';
+	import { goto, replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import {
@@ -176,14 +176,19 @@
 	const roasterHits = $derived(searchRoasters(allRoasters, q));
 
 	const scopeRoaster = $derived(roasterScopeId ? library.getRoaster(roasterScopeId) : null);
-	// Bags inside the roaster scope (all bags when unscoped). Both the list
-	// and the chip counts read from this so they cannot disagree.
+	// The scope only applies while its roaster exists: a stale `?roaster=`
+	// link or a roaster deleted while scoped would otherwise filter the list
+	// down to nothing with no pill left to clear it.
+	const scopeId = $derived(scopeRoaster?.id ?? null);
+	// Bags inside the roaster scope (all bags when unscoped). The list and
+	// the status and roast chip counts read from this so they cannot
+	// disagree.
 	const scopedBeans = $derived(
-		roasterScopeId ? allBeans.filter((b) => b.roasterId === roasterScopeId) : allBeans
+		scopeId ? allBeans.filter((b) => b.roasterId === scopeId) : allBeans
 	);
 
 	const filtered = $derived.by(() => {
-		const inScope = roasterScopeId != null;
+		const inScope = scopeId != null;
 		return scopedBeans.filter((b) => {
 			if (!matchesStatus(b, status, inScope)) return false;
 			if (!matchesRoast(b, roast)) return false;
@@ -253,7 +258,7 @@
 
 	const counts = $derived.by(() => {
 		const c = { all: 0, active: 0, frozen: 0, archived: 0, favourite: 0 };
-		const inScope = roasterScopeId != null;
+		const inScope = scopeId != null;
 		for (const b of scopedBeans) {
 			// Keep the badges in lockstep with `matchesStatus`: archived
 			// bags count only under their own chip — except inside a
@@ -274,7 +279,7 @@
 	// with the actual filter result.
 	const roastCounts = $derived.by(() => {
 		const c: Record<RoastFilter, number> = { light: 0, medium: 0, dark: 0 };
-		for (const b of allBeans) {
+		for (const b of scopedBeans) {
 			if (matchesRoast(b, 'light')) c.light += 1;
 			else if (matchesRoast(b, 'medium')) c.medium += 1;
 			else if (matchesRoast(b, 'dark')) c.dark += 1;
@@ -563,12 +568,18 @@
 	}
 	function clearRoasterScope(): void {
 		roasterScopeId = null;
+		// Drop a `?roaster=` seed (a link, or the return from the bag editor)
+		// so a reload doesn't bring the dismissed scope back.
+		if (page.url.searchParams.has('roaster')) replaceState(resolve('/beans'), page.state);
 	}
 	function gotoNew(): void {
 		goto(resolve('/beans/new'));
 	}
 	function gotoEdit(id: string): void {
-		goto(resolve(`/beans/${encodeURIComponent(id)}/edit`));
+		// Carry the roaster scope through the editor so saving or backing
+		// out lands on the same shelf rather than the unscoped library (#86).
+		const scope = scopeId ? `?roaster=${encodeURIComponent(scopeId)}` : '';
+		goto(resolve(`/beans/${encodeURIComponent(id)}/edit`) + scope);
 	}
 	function gotoNewRoaster(): void {
 		goto(resolve('/beans/roasters/new'));
@@ -885,9 +896,10 @@
 					class="bn-chip-clear bn-chip-toggle is-on bn-chip-scope"
 					onclick={clearRoasterScope}
 					title="Showing every bag from {scopeRoaster.name}, including archived. Click to show all roasters."
+					aria-label="Showing {scopeRoaster.name}'s bags. Show all roasters"
 				>
-					<Icon cls="ph ph-storefront" />
-					{scopeRoaster.name}
+					<StorefrontIcon aria-hidden="true" />
+					<span class="bn-chip-scope-name">{scopeRoaster.name}</span>
 					<XIcon aria-hidden="true" />
 				</button>
 			{/if}
@@ -1432,7 +1444,16 @@
 	.bn-chip-scope {
 		gap: 6px;
 		white-space: nowrap;
-		max-width: 220px;
+		max-width: min(220px, 100%);
+		min-width: 0;
+		flex-shrink: 0;
+	}
+	/* The name truncates; the storefront and ✕ glyphs never clip away. */
+	.bn-chip-scope :global(svg) {
+		flex-shrink: 0;
+	}
+	.bn-chip-scope-name {
+		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}

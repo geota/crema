@@ -50,6 +50,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -126,14 +129,18 @@ fun BeansScreen(
     val ui by vm.ui.collectAsStateWithLifecycle()
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
-    var tab by remember { mutableStateOf("bags") }
+    // Saveable: editing a bag navigates to its own destination, and plain
+    // `remember` state was dropped on the way back — a roaster's shelf (#86)
+    // came back as the unscoped library.
+    var tab by rememberSaveable { mutableStateOf("bags") }
     var roasterDialogOpen by remember { mutableStateOf(false) }
     var roasterEditing by remember { mutableStateOf<Roaster?>(null) }
     var query by remember { mutableStateOf("") }
-    var beanFilter by remember { mutableStateOf("all") }
+    var beanFilter by rememberSaveable { mutableStateOf("all") }
     // Roaster scope (#86): set by tapping a roaster card; the Bags tab then
-    // shows that roaster's shelf, archived bags included. Cleared by its chip.
-    var roasterScopeId by remember { mutableStateOf<String?>(null) }
+    // shows that roaster's shelf, archived bags included. Cleared by its chip
+    // or by Back.
+    var roasterScopeId by rememberSaveable { mutableStateOf<String?>(null) }
     var beanSort by remember { mutableStateOf("freshest") }
     var beanSortDesc by remember { mutableStateOf(false) }
     // The bag whose read-only detail is open (issue 61). Held as an id, not a
@@ -157,8 +164,16 @@ fun BeansScreen(
     // keystroke costs one FFI call rather than a re-serialisation.
     val beanHits = searchBeans(ui.beans, ui.roasters, query)
     val roasterHits = searchRoasters(ui.roasters, query)
-    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, beanFilter, beanSort, beanSortDesc, ui.activeBeanId, roasterScopeId)
+    // The scope only applies while its roaster exists — deleting the roaster
+    // (its card kebab) while scoped must not leave an empty, chip-less list.
     val scopeRoaster = roasterScopeId?.let { id -> ui.roasters.firstOrNull { it.id == id } }
+    val scopeId = scopeRoaster?.id
+    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, beanFilter, beanSort, beanSortDesc, ui.activeBeanId, scopeId)
+    // Back from a roaster's shelf returns to the Roasters directory.
+    BackHandler(enabled = scopeId != null && tab == "bags") {
+        roasterScopeId = null
+        tab = "roasters"
+    }
     val visibleRoasters = ui.roasters
         .filter { roasterHits.matches(it.id) }
         .sortedByDescending { roasterHits.score(it.id) }
@@ -260,7 +275,25 @@ fun BeansScreen(
                 // Wide: one row, sort pinned right. Narrow 7"/portrait: the Status +
                 // Roast chip groups + sort overflow, so the row scrolls horizontally
                 // (the sort travels with it) instead of clipping the chip labels.
-                val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 840
+                if (scopeRoaster != null) {
+                    // Scope chip: "<roaster> ✕" — tap to return to the full
+                    // library. Its own line (as on the phone): inside the filter
+                    // rail it pushed the Roast group off a ~950dp landscape row.
+                    Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 4.dp)) {
+                        CremaFilterChip(
+                            label = scopeRoaster.name,
+                            selected = true,
+                            icon = "storefront",
+                            trailingIcon = "x",
+                            modifier = Modifier.widthIn(max = 480.dp),
+                            onClick = { roasterScopeId = null },
+                        )
+                    }
+                }
+                // The one-row rail (5 Status + 3 Roast chips + sort) needs ~1170dp of
+                // screen. 7" and phone landscape (~950dp) already get this rail layout,
+                // so below that it scrolls rather than clipping Dark and the sort away.
+                val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1200
                 val filterScroll = rememberScrollState()
                 Row(
                     Modifier.fillMaxWidth().height(IntrinsicSize.Min)
@@ -269,17 +302,7 @@ fun BeansScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    val counts = beanFilterCounts(ui.beans, roasterScopeId)
-                    if (scopeRoaster != null) {
-                        // Scope chip: "<roaster> ✕" — tap to return to the full library.
-                        CremaFilterChip(
-                            label = "${scopeRoaster.name} ✕",
-                            selected = true,
-                            icon = "storefront",
-                            onClick = { roasterScopeId = null },
-                        )
-                        CremaFilterDivider()
-                    }
+                    val counts = beanFilterCounts(ui.beans, scopeId)
                     CremaFilterGroupLabel("Status")
                     listOf("all" to "All", "active" to "Active", "favourite" to "Favourite", "frozen" to "Frozen", "archived" to "Archived").forEach { (id, label) ->
                         CremaFilterChip(label = label, selected = beanFilter == id, count = counts[id] ?: 0, onClick = { beanFilter = id })
@@ -447,7 +470,9 @@ private fun BeanCard(
     val tagList = bean.tags?.filter { it.isNotBlank() }.orEmpty()
     var confirmDelete by remember { mutableStateOf(false) }
     CremaCard(
-        modifier = Modifier.fillMaxWidth(),
+        // Archived bags are dimmed (web parity) — a roaster's shelf mixes them
+        // in with the live ones (#86).
+        modifier = Modifier.fillMaxWidth().alpha(if (bean.archivedAt != null) 0.6f else 1f),
         container = if (isActive) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
         shape = RoundedCornerShape(16.dp),
         border = if (isActive) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,

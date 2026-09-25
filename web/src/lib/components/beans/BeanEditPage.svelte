@@ -34,6 +34,7 @@
 	import { getProfileStore } from '$lib/profiles';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import {
 		getBeanStore,
 		getBeanImageStore,
@@ -294,7 +295,7 @@
 			};
 			library.upsertBean(persisted);
 			if (activate) activateBean(persisted.id);
-			goto(resolve('/beans'));
+			goto(returnTo());
 		} else {
 			// Live mode — already saved every patch. Just commit any pending
 			// roaster name change and bounce back.
@@ -307,12 +308,19 @@
 				}
 			}
 			if (activate && !isActive) activateBean(current.id);
-			goto(resolve('/beans'));
+			goto(returnTo());
 		}
 	}
 
+	/** `/beans`, or the roaster shelf the editor was opened from
+	 *  (`?roaster=<id>`, set by the library's edit action; #86). */
+	function returnTo(): string {
+		const scope = page.url.searchParams.get('roaster');
+		return resolve('/beans') + (scope ? `?roaster=${encodeURIComponent(scope)}` : '');
+	}
+
 	function back(): void {
-		goto(resolve('/beans'));
+		goto(returnTo());
 	}
 
 	async function discard(): Promise<void> {
@@ -1296,7 +1304,7 @@
 							beanName={current.name || 'this bag'}
 							label="Delete bean"
 							size="md"
-							onDeleted={() => goto(resolve('/beans'))}
+							onDeleted={() => goto(returnTo())}
 						/>
 					</div>
 				{/if}

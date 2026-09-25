@@ -46,6 +46,9 @@ import coffee.crema.beans.roasterBagCountLabel
 import coffee.crema.ui.components.CremaFilterChip
 import androidx.compose.material3.IconButton
 import androidx.compose.foundation.layout.size
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.alpha
 
 /*
  * PhoneBeansScreen — the handset Beans library (port of
@@ -63,12 +66,15 @@ fun PhoneBeansScreen(
     onConnect: (String) -> Unit,
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
-    var tab by remember { mutableStateOf("bags") }
+    // Saveable: the phone pushes the bag / roaster editors as separate nav
+    // destinations, so plain `remember` state was dropped on the way back —
+    // editing a bag from a roaster's shelf returned to the unscoped library.
+    var tab by rememberSaveable { mutableStateOf("bags") }
     var query by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf("all") }
+    var filter by rememberSaveable { mutableStateOf("all") }
     // Roaster scope (#86): tapping a roaster row shows its shelf on the Bags
-    // tab, archived bags included. Cleared by its chip.
-    var roasterScopeId by remember { mutableStateOf<String?>(null) }
+    // tab, archived bags included. Cleared by its chip or by Back.
+    var roasterScopeId by rememberSaveable { mutableStateOf<String?>(null) }
     var sort by remember { mutableStateOf("freshest") }
     var sortDesc by remember { mutableStateOf(false) }
     var menuFor by remember { mutableStateOf<Bean?>(null) }
@@ -117,8 +123,17 @@ fun PhoneBeansScreen(
     // to the tablet and the web PWA.
     val beanHits = searchBeans(ui.beans, ui.roasters, query)
     val roasterHits = searchRoasters(ui.roasters, query)
-    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, filter, sort, sortDesc, ui.activeBeanId, roasterScopeId)
+    // The scope only applies while its roaster exists — a roaster deleted
+    // while scoped must not leave an empty, chip-less list behind.
     val scopeRoaster = roasterScopeId?.let { id -> ui.roasters.firstOrNull { it.id == id } }
+    val scopeId = scopeRoaster?.id
+    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, filter, sort, sortDesc, ui.activeBeanId, scopeId)
+    // Back from a roaster's shelf returns to the Roasters directory it came
+    // from, rather than leaving the Beans screen.
+    BackHandler(enabled = scopeId != null && tab == "bags") {
+        roasterScopeId = null
+        tab = "roasters"
+    }
     val visibleRoasters = ui.roasters
         .filter { roasterHits.matches(it.id) }
         .sortedBy { it.name.lowercase() }
@@ -155,14 +170,15 @@ fun PhoneBeansScreen(
                     // Scope chip: "<roaster> ✕" — tap to return to the full library.
                     Row(Modifier.fillMaxWidth().padding(horizontal = CremaEdge, vertical = 2.dp)) {
                         CremaFilterChip(
-                            label = "${scopeRoaster.name} ✕",
+                            label = scopeRoaster.name,
                             selected = true,
                             icon = "storefront",
+                            trailingIcon = "x",
                             onClick = { roasterScopeId = null },
                         )
                     }
                 }
-                val counts = beanFilterCounts(ui.beans, roasterScopeId)
+                val counts = beanFilterCounts(ui.beans, scopeId)
                 CremaFilterChipRow(
                     chips = buildList {
                         add(FilterChipSpec("all", "All", counts["all"] ?: 0))
@@ -363,7 +379,9 @@ private fun PhoneBeanTile(
         shape = RoundedCornerShape(CremaCardSpec.phoneRadius),
         color = tileBg,
         border = if (isActive) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
-        modifier = Modifier.fillMaxWidth(),
+        // Archived bags are dimmed (web parity) — a roaster's shelf mixes them
+        // in with the live ones (#86).
+        modifier = Modifier.fillMaxWidth().alpha(if (archived) 0.6f else 1f),
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
           Column(
@@ -595,7 +613,10 @@ private fun PhoneRoasterRow(roaster: Roaster, bagCountLabel: String, onClick: ()
                 )
             }
             IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
-                PhIcon("pencil-simple", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                PhIcon(
+                    "pencil-simple", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    contentDescription = "Edit ${roaster.name}",
+                )
             }
             PhIcon("caret-right", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
