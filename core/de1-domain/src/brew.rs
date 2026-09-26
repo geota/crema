@@ -291,6 +291,12 @@ pub struct StageMark {
     /// Index into the recipe's `steps` of the step that *began* here.
     #[typeshare(serialized_as = "I64")]
     pub step_index: u64,
+    /// The step's cumulative planned water target, grams, snapshotted
+    /// from the recipe at this boundary (so the "planned vs poured"
+    /// chart survives the recipe being edited, duplicated or deleted).
+    /// `None` for timed steps (no target) and for older records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_water_g: Option<f32>,
 }
 
 /// The weight-only telemetry of a guided brew session, persisted on
@@ -626,6 +632,7 @@ mod tests {
             stage_marks: vec![StageMark {
                 elapsed_ms: 0,
                 step_index: 0,
+                target_water_g: Some(45.0),
             }],
         };
         let json = serde_json::to_string(&series).unwrap();
@@ -634,5 +641,31 @@ mod tests {
         // A bare object parses to empty defaults.
         let empty: BrewSeries = serde_json::from_str("{}").unwrap();
         assert!(empty.samples.is_empty());
+    }
+
+    #[test]
+    fn stage_mark_target_is_optional_on_the_wire() {
+        // An older record, written before targets were snapshotted.
+        let old: StageMark = serde_json::from_str(r#"{"elapsedMs":45000,"stepIndex":1}"#).unwrap();
+        assert_eq!(old.target_water_g, None);
+        assert_eq!(old.step_index, 1);
+        // A timed step's mark omits the field rather than writing null.
+        let timed = StageMark {
+            elapsed_ms: 90_000,
+            step_index: 2,
+            target_water_g: None,
+        };
+        assert!(
+            !serde_json::to_string(&timed)
+                .unwrap()
+                .contains("targetWaterG")
+        );
+        let pour = StageMark {
+            target_water_g: Some(250.0),
+            ..timed
+        };
+        let json = serde_json::to_string(&pour).unwrap();
+        assert!(json.contains(r#""targetWaterG":250.0"#), "{json}");
+        assert_eq!(serde_json::from_str::<StageMark>(&json).unwrap(), pour);
     }
 }

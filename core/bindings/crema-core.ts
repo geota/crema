@@ -363,6 +363,13 @@ export interface StageMark {
 	elapsedMs: number;
 	/** Index into the recipe's `steps` of the step that *began* here. */
 	stepIndex: number;
+	/**
+	 * The step's cumulative planned water target, grams, snapshotted
+	 * from the recipe at this boundary (so the "planned vs poured"
+	 * chart survives the recipe being edited, duplicated or deleted).
+	 * `None` for timed steps (no target) and for older records.
+	 */
+	targetWaterG?: number;
 }
 
 /**

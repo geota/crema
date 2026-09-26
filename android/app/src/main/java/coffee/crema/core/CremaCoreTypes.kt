@@ -329,7 +329,12 @@ data class StageMark (
 	/// Milliseconds since the session clock started.
 	val elapsedMs: Long,
 	/// Index into the recipe's `steps` of the step that *began* here.
-	val stepIndex: Long
+	val stepIndex: Long,
+	/// The step's cumulative planned water target, grams, snapshotted
+	/// from the recipe at this boundary (so the "planned vs poured"
+	/// chart survives the recipe being edited, duplicated or deleted).
+	/// `None` for timed steps (no target) and for older records.
+	val targetWaterG: Float? = null
 )
 
 /// The weight-only telemetry of a guided brew session, persisted on

@@ -4918,7 +4918,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 _liveBrewSeries.value = coffee.crema.core.BrewSeries(
                     samples = emptyList(),
-                    stageMarks = listOf(coffee.crema.core.StageMark(elapsedMs = 0L, stepIndex = 0L)),
+                    stageMarks = listOf(coffee.crema.ui.brewlog.liveStageMark(_ui.value.guidedBrew.recipe, 0, 0L)),
                 )
                 appendLog("Guided brew started — ${event.content.recipe_name}")
             }
@@ -4934,9 +4934,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (event.content.step_index.toInt() > 0) {
                     _liveBrewSeries.update { s ->
                         s.copy(
-                            stageMarks = s.stageMarks + coffee.crema.core.StageMark(
-                                elapsedMs = event.content.at_ms.toLong(),
-                                stepIndex = event.content.step_index.toLong(),
+                            stageMarks = s.stageMarks + coffee.crema.ui.brewlog.liveStageMark(
+                                _ui.value.guidedBrew.recipe,
+                                event.content.step_index.toInt(),
+                                event.content.at_ms.toLong(),
                             ),
                         )
                     }
