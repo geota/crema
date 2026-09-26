@@ -82,31 +82,31 @@ class DecentSyncTest {
         Harness(this, initial, shots).also { it.sync.load() }
 
     @Test
-    fun `retries a 5xx with backoff, then uploads`() = runTest {
+    fun `a retryable failure is one call here, reported as failed`() = runTest {
+        // Retries are the HTTP layer's (net/HttpClients.kt): whatever the client
+        // throws is final, so DecentSync never re-POSTs.
         val h = harness(listOf(shot("s1")))
-        h.api.answers += { throw DecentError.Network(503, "down", requestSent = true) }
-        h.api.answers += { throw DecentError.Network(502, "down", requestSent = true) }
+        h.api.answers += { throw DecentError.Network(503, "down") }
         val start = currentTime
         val o = h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null)
-        assertTrue(o is DecentSync.Outcome.Uploaded)
-        assertEquals(3, h.api.posts.size)
-        assertEquals(2000L + 4000L, currentTime - start)
-        assertEquals("id-3", h.history.getValue("s1").decentId)
-        assertEquals(listOf(false, false, false), h.api.posts.map { it.second })
+        assertTrue(o is DecentSync.Outcome.Failed)
+        assertEquals(1, h.api.posts.size)
+        assertEquals(0L, currentTime - start)
+        assertFalse(h.store.state.lastUpload!!.ok)
+        assertFalse("s1" in h.store.state.rejectedShotIds)
     }
 
     @Test
-    fun `a failure after the request went out retries with replace, never a blind re-POST`() = runTest {
+    fun `the caller's replace flag goes through unchanged`() = runTest {
         val h = harness(listOf(shot("s1")))
-        h.api.answers += { throw DecentError.Network(null, "timeout", requestSent = true) }
-        h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null)
-        assertEquals(listOf(false, true), h.api.posts.map { it.second })
+        h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = true, fullSamples = null)
+        assertEquals(listOf(true), h.api.posts.map { it.second })
     }
 
     @Test
     fun `a 403 is not retried in the call`() = runTest {
         val h = harness(listOf(shot("s1")))
-        h.api.answers += { throw DecentError.Network(403, "no", requestSent = true) }
+        h.api.answers += { throw DecentError.Network(403, "no") }
         val o = h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null)
         assertTrue(o is DecentSync.Outcome.Failed)
         assertEquals(1, h.api.posts.size)
@@ -195,12 +195,12 @@ class DecentSyncTest {
     fun `the drain stops at the first offline error`() = runTest {
         val shots = listOf(shot("a", at = 1), shot("b", at = 2), shot("c", at = 3))
         val h = harness(shots)
-        repeat(3) { h.api.answers += { throw DecentError.Network(null, "no route", requestSent = false) } }
+        repeat(3) { h.api.answers += { throw DecentError.Network(null, "no route") } }
         val r = h.sync.uploadUnsentNow(shots)
         assertEquals("Offline", r.stopped)
         assertEquals(1, r.failed)
-        // Three attempts at "a", nothing for "b" / "c".
-        assertEquals(3, h.api.posts.size)
+        // One (final) answer for "a", nothing for "b" / "c".
+        assertEquals(1, h.api.posts.size)
         assertTrue(h.api.posts.all { it.first.contains("\"a\"") })
     }
 
@@ -228,14 +228,14 @@ class DecentSyncTest {
         h.api.answers += { throw DecentError.Rejected(422, "bad") }
         h.api.answers += { DecentUploadResult("ok") }
         h.api.answers += { throw DecentError.Rejected(422, "bad") }
-        // Three 5xx answers use up s5's three attempts; then one more rejection.
-        repeat(3) { h.api.answers += { throw DecentError.Network(500, "boom", requestSent = true) } }
+        // s5's final answer is a 5xx (the HTTP layer already retried it).
+        h.api.answers += { throw DecentError.Network(500, "boom") }
         h.api.answers += { throw DecentError.Rejected(422, "bad") }
         val r = h.sync.uploadUnsentNow(shots)
         assertEquals(1, r.uploaded)
         assertEquals(5, r.failed)
         assertTrue(r.stopped!!.contains("in a row"))
-        // s4 (rejected), s5 (5xx x3), s6 (rejected) → streak of 3 after the upload.
+        // s4 (rejected), s5 (5xx), s6 (rejected) → streak of 3 after the upload.
         assertEquals(setOf("s1", "s2", "s4", "s6"), h.store.state.rejectedShotIds)
     }
 

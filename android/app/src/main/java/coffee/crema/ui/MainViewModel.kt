@@ -938,6 +938,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Maintenance-state persistence — a JSON file in filesDir. */
     private val maintenanceStore = MaintenanceStore(app, json)
 
+    /** Closed in [onCleared]; lives exactly as long as this ViewModel. */
+    private val decentClient = DecentClient(json)
+
     /**
      * Decent account shot upload (#84) — sign-in + the per-shot push to
      * decentespresso.com's shot history. Same self-contained-controller shape
@@ -946,7 +949,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     val decent: DecentSync = DecentSync(
         store = DecentStore(app, json),
-        client = DecentClient(json),
+        client = decentClient,
         scope = viewModelScope,
         buildRecord = { shot, machine, fullSamples ->
             decentShotRecordJson(
@@ -967,6 +970,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onLinked = { sharing.offerCatchUp(UploadTargetId.Decent) },
     )
 
+    /** Closed in [onCleared]; lives exactly as long as this ViewModel. */
+    private val visualizerClient = VisualizerClient(json)
+
     /**
      * Visualizer sync — sign-in, account, shot upload. A self-contained
      * controller (deliberately NOT folded into this ViewModel); its [state]
@@ -975,7 +981,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     val visualizer: VisualizerSync = VisualizerSync(
         store = VisualizerStore(app, json),
-        client = VisualizerClient(json),
+        client = visualizerClient,
         json = json,
         scope = viewModelScope,
         clientId = coffee.crema.BuildConfig.VISUALIZER_CLIENT_ID,
@@ -4564,6 +4570,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // disconnect() calls above are fire-and-forget coroutines; closing the
         // transport also cancels its scope, so any in-flight disconnect ends.
         proxy.close()
+        // The HTTP clients (viewModelScope is already cancelled, so no
+        // Visualizer / Decent call is still in flight). They sit on the
+        // shared, process-lifetime OkHttp engine, which stays up.
+        visualizerClient.close()
+        decentClient.close()
     }
 
     private companion object {
