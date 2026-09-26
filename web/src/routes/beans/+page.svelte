@@ -33,6 +33,7 @@
 	 * design's tile + drawer + dedicated editor route replaces it.
 	 */
 	import { goto } from '$app/navigation';
+	import { openEditor, toQuery, type Query } from '$lib/beans/editor-nav';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import {
@@ -94,21 +95,20 @@
 			: 'roasters'
 	);
 	/** The `/beans` query for the given tab / roaster scope. */
-	function beansQuery(nextTab: Tab, roaster: string | null = null): string {
+	function beansQuery(nextTab: Tab, roaster: string | null = null): Query {
 		const params = new URLSearchParams();
 		if (nextTab === 'roasters') params.set('tab', 'roasters');
 		else if (roaster) {
 			params.set('tab', 'bags');
 			params.set('roaster', roaster);
 		}
-		const qs = params.toString();
-		return qs ? `?${qs}` : '';
+		return toQuery(params);
 	}
 	/** Switch tabs in place — a tab switch replaces the history entry rather
 	 *  than stacking one, as before; only opening a shelf pushes. */
 	function selectTab(next: Tab): void {
 		if (next === tab && !page.url.searchParams.has('roaster')) return;
-		goto(resolve('/beans') + beansQuery(next), { replaceState: true, noScroll: true, keepFocus: true });
+		goto(resolve(`/beans${beansQuery(next)}`), { replaceState: true, noScroll: true, keepFocus: true });
 	}
 
 	type StatusFilter =
@@ -585,27 +585,27 @@
 	 *  Forward re-opens the shelf. */
 	function openRoasterShelf(id: string): void {
 		status = 'all';
-		goto(resolve('/beans') + beansQuery('bags', id), { noScroll: true });
+		goto(resolve(`/beans${beansQuery('bags', id)}`), { noScroll: true });
 	}
 	/** Scope pill ✕ → the unscoped Bags tab, replacing the shelf's entry so a
 	 *  reload (or Back then Forward) doesn't bring the dismissed scope back. */
 	function clearRoasterScope(): void {
-		goto(resolve('/beans') + beansQuery('bags'), { replaceState: true, noScroll: true, keepFocus: true });
+		goto(resolve(`/beans${beansQuery('bags')}`), { replaceState: true, noScroll: true, keepFocus: true });
 	}
 	function gotoNew(): void {
-		goto(resolve('/beans/new'));
+		void openEditor(resolve('/beans/new'));
 	}
 	function gotoEdit(id: string): void {
 		// Carry the roaster scope through the editor so saving or backing
 		// out lands on the same shelf rather than the unscoped library (#86).
-		const scope = scopeId ? `?roaster=${encodeURIComponent(scopeId)}` : '';
-		goto(resolve(`/beans/${encodeURIComponent(id)}/edit`) + scope);
+		const scope = toQuery(new URLSearchParams(scopeId ? { roaster: scopeId } : {}));
+		void openEditor(resolve(`/beans/${encodeURIComponent(id)}/edit${scope}`));
 	}
 	function gotoNewRoaster(): void {
-		goto(resolve('/beans/roasters/new'));
+		void openEditor(resolve('/beans/roasters/new'));
 	}
 	function gotoEditRoaster(id: string): void {
-		goto(resolve(`/beans/roasters/${encodeURIComponent(id)}/edit`));
+		void openEditor(resolve(`/beans/roasters/${encodeURIComponent(id)}/edit`));
 	}
 	function setActive(id: string): void {
 		activateBean(id);

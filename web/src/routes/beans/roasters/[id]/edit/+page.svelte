@@ -21,7 +21,7 @@
 
 	$effect(() => {
 		if (id && !roaster) {
-			queueMicrotask(() => goto(resolve('/beans?tab=roasters')));
+			queueMicrotask(() => goto(resolve('/beans?tab=roasters'), { replaceState: true }));
 		}
 	});
 </script>

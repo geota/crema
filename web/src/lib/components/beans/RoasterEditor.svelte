@@ -34,7 +34,7 @@
 	 * URL is caught at save rather than rendering a sad-cloud thumbnail.
 	 */
 	import { tick, untrack } from 'svelte';
-	import { goto } from '$app/navigation';
+	import { leaveEditor } from '$lib/beans/editor-nav';
 	import { resolve } from '$app/paths';
 	import { getBeanStore, roasterMarkTone, type Roaster } from '$lib/bean';
 	import RoasterDeleteSplit from './RoasterDeleteSplit.svelte';
@@ -136,11 +136,11 @@
 		// `?tab=roasters` query keeps the Roasters tab pinned on return so
 		// the user lands where they came from rather than getting bumped
 		// to the Bags tab.
-		goto(resolve('/beans?tab=roasters'));
+		leaveEditor(resolve('/beans?tab=roasters'));
 	}
 
 	function back(): void {
-		goto(resolve('/beans?tab=roasters'));
+		leaveEditor(resolve('/beans?tab=roasters'));
 	}
 
 	async function discard(): Promise<void> {
@@ -159,7 +159,7 @@
 	}
 
 	function onRoasterDeleted(): void {
-		goto(resolve('/beans?tab=roasters'));
+		leaveEditor(resolve('/beans?tab=roasters'));
 	}
 </script>
 
