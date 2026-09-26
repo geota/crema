@@ -455,8 +455,10 @@
 		top: 50%;
 		left: 50%;
 		transform: translate(-50%, -50%);
-		width: min(540px, calc(100vw - 32px));
-		max-height: calc(100vh - 64px);
+		/* The BeanQuickAdd family: max 520px, the body scrolls inside, the
+		   header + Save footer never leave the dialog (issue #10). */
+		width: min(520px, calc(100vw - 32px));
+		max-height: calc(100dvh - 64px);
 		background: var(--bg-page);
 		border: 1px solid rgba(var(--tint-rgb), 0.14);
 		border-radius: var(--radius-lg);
@@ -494,12 +496,18 @@
 		background: rgba(var(--tint-rgb), 0.08);
 		color: var(--fg-1);
 	}
+	.bl-head {
+		flex-shrink: 0;
+	}
 	.bl-body {
 		padding: 4px 22px 16px;
 		display: flex;
 		flex-direction: column;
 		gap: 12px;
+		flex: 1 1 auto;
+		min-height: 0;
 		overflow-y: auto;
+		overscroll-behavior: contain;
 	}
 	.bl-chips {
 		display: flex;
@@ -675,11 +683,29 @@
 		gap: 10px;
 	}
 	.bl-foot {
+		flex-shrink: 0;
 		display: flex;
 		gap: 8px;
 		justify-content: flex-end;
 		padding: 12px 22px 18px;
 		border-top: 1px solid rgba(var(--tint-rgb), 0.08);
+		background: var(--bg-page);
+	}
+	/* Short viewports (a laptop with the dock up, a landscape tablet): use the
+	   height, tighten the chrome, and pin Save as a sticky footer over the
+	   scrolling body. */
+	@media (max-height: 700px) {
+		.bl-dialog {
+			max-height: calc(100dvh - 24px);
+		}
+		.bl-head {
+			padding: 12px 22px 8px;
+		}
+		.bl-foot {
+			position: sticky;
+			bottom: 0;
+			padding: 10px 22px 12px;
+		}
 	}
 	.bl-btn {
 		display: inline-flex;
