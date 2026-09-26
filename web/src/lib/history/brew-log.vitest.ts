@@ -10,7 +10,7 @@ import { coerceBean } from '$lib/bean/model';
 import { brewLogSeeds, brewMethodPresets } from '$lib/brew/methods';
 import { brews_remaining_estimate } from '$lib/wasm/de1_wasm';
 import { HistoryStore } from './store.svelte';
-import { isBrewLog, isManualLog, ratioLabel } from './model';
+import { isBrewLog, isManualLog, ratioLabel, type StoredShot } from './model';
 
 const input = {
 	method: 'pourover',
@@ -59,6 +59,15 @@ describe('isBrewLog', () => {
 		expect(isBrewLog({})).toBe(false);
 		expect(isBrewLog({ brewMethod: 'espresso' })).toBe(true);
 		expect(isBrewLog({ brewMethod: 'aeropress' })).toBe(true);
+	});
+	it('covers guided brews — a recorded weight series does not make a row uploadable', () => {
+		const guided = {
+			brewMethod: 'pourover',
+			record: { duration: 180_000, samples: [] },
+			brewSeries: { samples: [{ elapsedMs: 0, weightG: 0 }], stageMarks: [] }
+		} as unknown as StoredShot;
+		expect(isBrewLog(guided)).toBe(true);
+		expect(isManualLog(guided)).toBe(false);
 	});
 });
 

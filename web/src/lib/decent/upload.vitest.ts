@@ -160,6 +160,32 @@ describe('Brew Log rows never reach the Decent account (issue #10)', () => {
 		expect(r.uploaded).toBe(ids.length);
 		expect(shots.get('v60')?.decentId).toBeUndefined();
 	});
+	it('treats a GUIDED brew (weight series, no DE1 samples) the same — skipped and never queued', async () => {
+		const series = {
+			samples: [
+				{ elapsedMs: 0, weightG: 0 },
+				{ elapsedMs: 45_000, weightG: 45 },
+				{ elapsedMs: 180_000, weightG: 250, flowGS: 0.4 }
+			],
+			stageMarks: [
+				{ elapsedMs: 0, stepIndex: 0 },
+				{ elapsedMs: 45_000, stepIndex: 1 }
+			]
+		};
+		shots.set('guided', brew('guided', { recipeName: 'Morning V60', brewSeries: series }));
+		writeDecentAccount(linked);
+		liveSerial = 6262;
+		for (const manual of [false, true]) {
+			expect(await uploadShotToDecent('guided', { fetchFn: ok, appVersion: 't', manual })).toMatchObject({
+				kind: 'skipped',
+				reason: 'Brew Log entries stay on this device'
+			});
+		}
+		const ids = unsentDecentShots([...shots.values()], { hasLiveMachine: true, rejectedShotIds: [] }).map((s) => s.id);
+		expect(ids).not.toContain('guided');
+		expect(posts).toBe(0);
+		expect(shots.get('guided')?.machine).toBeUndefined();
+	});
 });
 
 describe('uploadShotToDecent outcomes', () => {
