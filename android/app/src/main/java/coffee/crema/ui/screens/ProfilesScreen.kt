@@ -83,7 +83,6 @@ import androidx.compose.runtime.LaunchedEffect
 import coffee.crema.brew.defaultRecipeFor
 import coffee.crema.core.BrewRecipe
 import coffee.crema.ui.brewlog.BrewRecipeCard
-import coffee.crema.ui.brewlog.RecipeEditorDialog
 import coffee.crema.ui.brewlog.visibleBrewRecipes
 
 /*
@@ -127,17 +126,10 @@ fun ProfilesScreen(
     // separate section, not rows in the machine grid: loading a profile
     // uploads it to the DE1; a recipe never touches the machine.
     val recipes = visibleBrewRecipes(ui.brewRecipes, query)
-    var recipeEditing by remember { mutableStateOf<BrewRecipe?>(null) }
-    var recipeEditingNew by remember { mutableStateOf(false) }
-    // The Scale screen's "Edit recipe" deep-link.
-    LaunchedEffect(ui.pendingRecipeEditId) {
-        ui.pendingRecipeEditId?.let { id ->
-            ui.brewRecipes.firstOrNull { it.id == id && it.deletedAt == null }?.let {
-                recipeEditing = it
-                recipeEditingNew = false
-            }
-            vm.consumePendingRecipeEdit()
-        }
+    // The editor opens in place as a side sheet over a VM-held draft
+    // (RecipeEditorSheet, below) — it survives a rotation to the phone shell.
+    val editRecipe: (BrewRecipe, Boolean) -> Unit = { r, isNew ->
+        vm.openRecipeEdit(coffee.crema.ui.brewlog.RecipeEditOwner.PROFILES, r, isNew)
     }
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -285,8 +277,7 @@ fun ProfilesScreen(
                             }
                             CremaButton(
                                 onClick = {
-                                    recipeEditing = defaultRecipeFor("pourover", System.currentTimeMillis())
-                                    recipeEditingNew = true
+                                    editRecipe(defaultRecipeFor("pourover", System.currentTimeMillis()), true)
                                 },
                                 variant = CremaButtonVariant.Outlined,
                                 icon = "plus",
@@ -298,9 +289,9 @@ fun ProfilesScreen(
                         BrewRecipeCard(
                             recipe = r,
                             isDefault = ui.lastRecipeByMethod[r.method] == r.id,
-                            onEdit = { recipeEditing = r; recipeEditingNew = false },
+                            onEdit = { editRecipe(r, false) },
                             onDuplicate = {
-                                vm.duplicateBrewRecipe(r.id)?.let { recipeEditing = it; recipeEditingNew = false }
+                                vm.duplicateBrewRecipe(r.id)?.let { editRecipe(it, false) }
                             },
                             onMakeDefault = { vm.setDefaultBrewRecipe(r) },
                             onDelete = { vm.deleteBrewRecipe(r.id) },
@@ -325,22 +316,7 @@ fun ProfilesScreen(
         }
     }
 
-    recipeEditing?.let { editing ->
-        RecipeEditorDialog(
-            recipe = editing,
-            heading = if (recipeEditingNew) "New recipe" else "Edit recipe",
-            reseedOnMethodChange = recipeEditingNew,
-            onSave = { r ->
-                vm.upsertBrewRecipe(r)
-                // A method's first recipe becomes its default — the Scale
-                // screen opens on it without a separate "make default" step.
-                if (ui.lastRecipeByMethod[r.method] == null) vm.setDefaultBrewRecipe(r)
-                recipeEditing = null
-                recipeEditingNew = false
-            },
-            onDismiss = { recipeEditing = null; recipeEditingNew = false },
-        )
-    }
+    coffee.crema.ui.brewlog.RecipeEditorSheet(vm, owner = coffee.crema.ui.brewlog.RecipeEditOwner.PROFILES)
 }
 
 @Composable

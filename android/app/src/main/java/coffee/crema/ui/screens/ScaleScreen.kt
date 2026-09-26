@@ -120,14 +120,11 @@ fun ScaleScreen(
         ) {
             // Weigh | Brew segment (issue #10): the scale is the instrument
             // for both — Weigh is the classic standalone weighing surface,
-            // Brew the guided session. A live session pins the screen to
-            // Brew on entry so navigating away and back mid-pourover lands
-            // on the running clock.
-            var scaleMode by androidx.compose.runtime.remember {
-                androidx.compose.runtime.mutableStateOf(
-                    if (ui.guidedBrew.phase != "idle") "brew" else "weigh",
-                )
-            }
+            // Brew the guided session. The mode is VM-held (it survives the
+            // phone↔tablet host swap), and arming a session pins it to Brew
+            // so navigating away and back mid-pourover lands on the clock.
+            val setup by vm.guidedSetup.collectAsStateWithLifecycle()
+            val scaleMode = setup.scaleMode
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
                 Box(Modifier.weight(1f)) { ScaleHeader(connected, caps) }
                 coffee.crema.ui.components.CremaTabSwitch(
@@ -136,14 +133,15 @@ fun ScaleScreen(
                         coffee.crema.ui.components.TabOption("brew", "Brew"),
                     ),
                     value = scaleMode,
-                    onChange = { scaleMode = it },
+                    onChange = vm::setScaleMode,
                 )
             }
             if (scaleMode == "brew") {
                 coffee.crema.ui.brewlog.GuidedBrewPanel(
                     vm = vm,
                     onNav = onNav,
-                    modifier = Modifier.fillMaxSize().padding(top = sp.s2),
+                    phone = false,
+                    modifier = Modifier.fillMaxSize(),
                 )
             } else {
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(sp.s5)) {
@@ -173,6 +171,10 @@ fun ScaleScreen(
             }
         }
     }
+    // The guided brew's side sheets on this tab (tablet): the recipe editor
+    // opened in place from the Brew setup, and the finished session's log form.
+    coffee.crema.ui.brewlog.RecipeEditorSheet(vm, owner = coffee.crema.ui.brewlog.RecipeEditOwner.SCALE)
+    coffee.crema.ui.brewlog.LogBrewSheet(vm, owner = coffee.crema.ui.brewlog.BrewLogOwner.SCALE)
 }
 
 @Composable

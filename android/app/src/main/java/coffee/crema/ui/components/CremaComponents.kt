@@ -123,6 +123,8 @@ import com.adamglin.phosphoricons.regular.SpeakerHigh
 import com.adamglin.phosphoricons.regular.Timer
 import com.adamglin.phosphoricons.regular.Trash
 import com.adamglin.phosphoricons.regular.X
+import com.adamglin.phosphoricons.regular.Bell
+import com.adamglin.phosphoricons.regular.BellSlash
 import com.adamglin.phosphoricons.regular.CaretDown
 import com.adamglin.phosphoricons.regular.CaretRight
 import com.adamglin.phosphoricons.regular.CheckCircle
@@ -267,6 +269,8 @@ fun PhIcon(
         "timer" -> PhosphorIcons.Regular.Timer
         "trash" -> PhosphorIcons.Regular.Trash
         "x" -> PhosphorIcons.Regular.X
+        "bell" -> PhosphorIcons.Regular.Bell
+        "bell-slash" -> PhosphorIcons.Regular.BellSlash
         "caret-down" -> PhosphorIcons.Regular.CaretDown
         "caret-right" -> PhosphorIcons.Regular.CaretRight
         "check-circle" -> PhosphorIcons.Regular.CheckCircle

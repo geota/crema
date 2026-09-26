@@ -24,6 +24,9 @@ import coffee.crema.core.BrewLogSeeds as CoreBrewLogSeeds
 object BrewLogOwner {
     const val HISTORY = "history"
     const val BEANS = "beans"
+
+    /** A finished guided session's "Save brew…" (issue #10 Phase 2). */
+    const val SCALE = "scale"
 }
 
 /** The pushed phone route for the form (see [coffee.crema.ui.NavRestore]). */
