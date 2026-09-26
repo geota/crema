@@ -26,7 +26,6 @@
 	 */
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { page } from '$app/state';
 	import {
 		getProfileStore,
 		toCoreProfile,
@@ -563,8 +562,8 @@
 	// ── Brew recipes — the guided-brew plans (issue #10) ─────────────────
 	// A second library section: unlike machine profiles these are
 	// followed by hand, never uploaded to the DE1. Authored here; the
-	// Scale page's Brew tab picks + runs them and deep-links back via
-	// `?recipe=<id>`.
+	// Scale page's Brew tab picks + runs them and edits the selected one
+	// in place (its own RecipeEditor modal — no hop back here).
 	const recipeStore = getRecipeStore();
 
 	/** Recipes, method-grouped (label order) then most-recent, honoring
@@ -588,25 +587,6 @@
 
 	let recipeEditing = $state<BrewRecipe | null>(null);
 	let recipeEditingNew = $state(false);
-	/** The `?recipe=` value already opened, so closing doesn't re-open
-	 *  before the replaceState navigation lands. */
-	let handledRecipeParam = $state<string | null>(null);
-
-	// The Scale page's "Edit recipe" deep-link: `/profiles?recipe=<id>`.
-	$effect(() => {
-		const rid = page.url.searchParams.get('recipe');
-		if (rid === null) {
-			handledRecipeParam = null;
-			return;
-		}
-		if (rid === handledRecipeParam) return;
-		handledRecipeParam = rid;
-		const r = recipeStore.get(rid);
-		if (r) {
-			recipeEditing = r;
-			recipeEditingNew = false;
-		}
-	});
 
 	function newRecipe(): void {
 		recipeEditing = defaultRecipeFor('pourover');
@@ -644,9 +624,6 @@
 	function closeRecipeEditor(): void {
 		recipeEditing = null;
 		recipeEditingNew = false;
-		if (page.url.searchParams.has('recipe')) {
-			void goto(resolve('/profiles'), { replaceState: true, noScroll: true });
-		}
 	}
 
 	/** Whether `r` is what the Scale page opens for its method. */

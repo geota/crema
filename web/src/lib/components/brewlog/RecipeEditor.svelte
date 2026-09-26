@@ -265,6 +265,7 @@
 		transform: translate(-50%, -50%);
 		width: min(560px, calc(100vw - 32px));
 		max-height: calc(100vh - 64px);
+		max-height: calc(100dvh - 64px);
 		background: var(--bg-page);
 		border: 1px solid rgba(var(--tint-rgb), 0.14);
 		border-radius: var(--radius-lg);
@@ -275,6 +276,7 @@
 		box-shadow: var(--shadow-lg);
 	}
 	.re-head {
+		flex: none;
 		display: flex;
 		justify-content: space-between;
 		align-items: flex-start;
@@ -306,6 +308,31 @@
 		flex-direction: column;
 		gap: 12px;
 		overflow-y: auto;
+		min-height: 0;
+		flex: 1 1 auto;
+	}
+	/* Short viewports: the body scrolls inside the modal while the header
+	   and the Cancel / Save footer stay put. */
+	@media (max-height: 700px) {
+		.re {
+			max-height: calc(100dvh - 24px);
+		}
+		.re-head {
+			padding: 14px 22px 6px;
+		}
+		.re-foot {
+			padding: 10px 22px 12px;
+			background: var(--bg-page);
+		}
+	}
+	/* Narrow: a step's numbers + AUTO/TAP wrap under its kind. */
+	@media (max-width: 520px) {
+		.re-step {
+			flex-wrap: wrap;
+		}
+		.re-duo {
+			grid-template-columns: 1fr;
+		}
 	}
 	.re-fld {
 		display: flex;
@@ -445,6 +472,7 @@
 		color: var(--success);
 	}
 	.re-foot {
+		flex: none;
 		display: flex;
 		gap: 8px;
 		justify-content: flex-end;
