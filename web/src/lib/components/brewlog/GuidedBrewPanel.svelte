@@ -243,7 +243,9 @@
 			waterG: s.finalWeightG ?? (liveRecipe.waterG > 0 ? liveRecipe.waterG : null),
 			tempC: liveRecipe.tempC ?? null,
 			durationMs: s.durationMs,
-			brewSeries: s.series
+			// A scale-less run records no weight — it saves as a plain
+			// logged brew, without a series (spec §8).
+			brewSeries: s.series.samples.length > 0 ? s.series : undefined
 		};
 	});
 </script>

@@ -311,6 +311,11 @@
 		min-height: 0;
 		flex: 1 1 auto;
 	}
+	/* The body scrolls; its sections never shrink (the step list would
+	   otherwise be clipped by its own overflow instead). */
+	.re-body > :global(*) {
+		flex-shrink: 0;
+	}
 	/* Short viewports: the body scrolls inside the modal while the header
 	   and the Cancel / Save footer stay put. */
 	@media (max-height: 700px) {
