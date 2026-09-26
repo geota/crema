@@ -285,10 +285,10 @@ kotlin {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.08.00")
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
 
-    implementation("androidx.core:core-ktx:1.19.0")
+    implementation("androidx.core:core-ktx:1.19.1")
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
@@ -304,7 +304,7 @@ dependencies {
     // system families and the type scale still renders.
     implementation("androidx.compose.ui:ui-text-google-fonts")
     // Navigation for the 6-destination rail + 2 pushed editors (AppNavHost).
-    implementation("androidx.navigation:navigation-compose:2.9.8")
+    implementation("androidx.navigation:navigation-compose:2.10.2")
     // Phosphor icons as Compose ImageVectors — the PhIcon binding in
     // CremaComponents maps each screen's kebab-case glyph name to a regular-weight
     // vector. Pure-Kotlin vector lib (no Compose-compiler version coupling). NOTE:
@@ -319,7 +319,7 @@ dependencies {
     // Coil 3.5.0 pulls kotlin-stdlib 2.4.0 — fine now the project is on the Kotlin
     // 2.4.0 compiler (reads ≤2.4.0 metadata). Keep Coil's transitive stdlib ≤ the
     // project's Kotlin, or the generated UniFFI bindings (de1_ffi.kt) won't compile.
-    implementation("io.coil-kt.coil3:coil-compose:3.5.0")
+    implementation("io.coil-kt.coil3:coil-compose:3.6.3")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // UniFFI's generated Kotlin depends on JNA for the FFI calls and on
@@ -367,7 +367,7 @@ dependencies {
     // Server + client sessions are both `WebSocketSession`, so ONE
     // `KtorWsFrameLink` backs both. The same framed protocol later serves the
     // PWA (M4) and a cloud relay (M5); the JSON frames ride as WS text.
-    val ktor = "3.5.2"
+    val ktor = "3.6.0"
     implementation("io.ktor:ktor-server-core:$ktor")
     implementation("io.ktor:ktor-server-cio:$ktor")
     implementation("io.ktor:ktor-server-websockets:$ktor")
@@ -384,7 +384,7 @@ dependencies {
 
     // JVM unit tests for pure shell logic (no device / FFI). kotlin-test mapped
     // onto the JUnit 4 runner AGP's unit-test task uses.
-    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.4.10")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.4.20")
     testImplementation("junit:junit:4.13.2")
     // Coroutine tests (runTest / virtual time), Ktor's MockEngine for the
     // HTTP clients' request shape + status mapping (tracks the Ktor version),
@@ -392,7 +392,7 @@ dependencies {
     // OkHttp (tracks the OkHttp version ktor-client-okhttp brings).
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("io.ktor:ktor-client-mock:$ktor")
-    testImplementation("com.squareup.okhttp3:mockwebserver3:5.3.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.0")
 }
 
 // ---------------------------------------------------------------------------
