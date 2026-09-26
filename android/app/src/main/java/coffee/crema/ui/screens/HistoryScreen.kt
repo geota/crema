@@ -603,7 +603,7 @@ private fun StatsStrip(history: List<StoredShot>, weightUnit: String, compact: B
     val s = brewHistoryStats(history)
     val mixed = s.mixedMethods
     val nonEsp = history.any { it.methodOf != null && it.methodOf != "espresso" }
-    val noun = if (nonEsp) "brews" else "shots"
+    val noun = (if (nonEsp) "brew" else "shot") + if (s.count == 1u) "" else "s"
     fun scoped(label: String) = if (mixed) "$label · esp" else label
     // Six tiles (the Brew Log added "Beans used"). They wrap by the width the
     // strip actually gets: one row from 600dp, 3×2 below — never a thin,

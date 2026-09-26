@@ -70,6 +70,7 @@ import coffee.crema.ui.uploadMenuEntry
 import coffee.crema.ui.viewableTargets
 import coffee.crema.ui.shareableTargets
 import coffee.crema.ui.openUploadedCopy
+import coffee.crema.history.isBrewLog
 import coffee.crema.ui.UploadPip
 import coffee.crema.ui.uploadPipFor
 import coffee.crema.ui.shareUploadedLink
@@ -602,6 +603,8 @@ private fun PhoneShotRow(
             }
         }
         when {
+            // Brew-log rows never upload (issue #10), so they carry no cloud pip.
+            shot.isBrewLog -> {}
             syncing -> CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 1.5.dp, color = MaterialTheme.colorScheme.primary)
             pip == UploadPip.Uploaded -> PhIcon("cloud-check", sizeDp = 16, tint = tel.success)
             pip == UploadPip.Partial -> PhIcon("cloud-arrow-up", sizeDp = 16, tint = androidx.compose.ui.graphics.Color(0xFFDBA764))
