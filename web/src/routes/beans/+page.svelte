@@ -32,7 +32,7 @@
 	 * The old card / facet / inline-editor flow is gone — the new
 	 * design's tile + drawer + dedicated editor route replaces it.
 	 */
-	import { goto, replaceState } from '$app/navigation';
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import {
@@ -83,14 +83,33 @@
 
 	// ── UI state ───────────────────────────────────────────────────────
 	type Tab = 'bags' | 'roasters';
-	// Initial tab honours `?tab=roasters` so return paths from
-	// `/beans/roasters/new` and `/beans/roasters/[id]/edit` land on the
-	// Roasters tab instead of defaulting back to Bags. Read once at mount
-	// time — once the user clicks a tab the local state takes over and the
-	// URL is no longer consulted (avoids fighting an `$effect` loop).
-	let tab = $state<Tab>(
-		page.url.searchParams.get('tab') === 'roasters' ? 'roasters' : 'bags'
+	// The tab and the roaster scope live in the URL (`?tab=roasters`,
+	// `?tab=bags&roaster=<id>`) and are derived from it, so browser Back /
+	// Forward step between the Roasters directory and a roaster's shelf (the
+	// same as Android's Back), a reload restores the view, and return paths
+	// from the roaster / bag editors land on the right tab.
+	const tab = $derived<Tab>(
+		page.url.searchParams.get('roaster') || page.url.searchParams.get('tab') !== 'roasters'
+			? 'bags'
+			: 'roasters'
 	);
+	/** The `/beans` query for the given tab / roaster scope. */
+	function beansQuery(nextTab: Tab, roaster: string | null = null): string {
+		const params = new URLSearchParams();
+		if (nextTab === 'roasters') params.set('tab', 'roasters');
+		else if (roaster) {
+			params.set('tab', 'bags');
+			params.set('roaster', roaster);
+		}
+		const qs = params.toString();
+		return qs ? `?${qs}` : '';
+	}
+	/** Switch tabs in place — a tab switch replaces the history entry rather
+	 *  than stacking one, as before; only opening a shelf pushes. */
+	function selectTab(next: Tab): void {
+		if (next === tab && !page.url.searchParams.has('roaster')) return;
+		goto(resolve('/beans') + beansQuery(next), { replaceState: true, noScroll: true, keepFocus: true });
+	}
 
 	type StatusFilter =
 		| 'all'
@@ -107,9 +126,10 @@
 	 * and — unlike the unscoped list — "All" includes the archived ones.
 	 * Archiving keeps the working list clean, but a roaster's shelf is the
 	 * one place you expect to see every bag you ever bought from them.
-	 * `?roaster=<id>` seeds it so a link can land on a roaster's shelf.
+	 * Derived from `?roaster=<id>`, so a link (or the bag editor's return
+	 * path) lands on a roaster's shelf; a stale id is ignored (see `scopeId`).
 	 */
-	let roasterScopeId = $state<string | null>(page.url.searchParams.get('roaster'));
+	const roasterScopeId = $derived(page.url.searchParams.get('roaster'));
 	// `null` = no roast filter applied (replaces the prior `'any'` sentinel
 	// so the Roast group can mirror the `/profiles` pattern: no "Any" pill,
 	// re-clicking the active pill clears the filter).
@@ -560,17 +580,17 @@
 		roast = null;
 		selectedTags = [];
 	}
-	/** Roaster card click → that roaster's shelf on the Bags tab (#86). */
+	/** Roaster card click → that roaster's shelf on the Bags tab (#86).
+	 *  Pushes a history entry, so Back returns to the Roasters directory and
+	 *  Forward re-opens the shelf. */
 	function openRoasterShelf(id: string): void {
-		roasterScopeId = id;
 		status = 'all';
-		tab = 'bags';
+		goto(resolve('/beans') + beansQuery('bags', id), { noScroll: true });
 	}
+	/** Scope pill ✕ → the unscoped Bags tab, replacing the shelf's entry so a
+	 *  reload (or Back then Forward) doesn't bring the dismissed scope back. */
 	function clearRoasterScope(): void {
-		roasterScopeId = null;
-		// Drop a `?roaster=` seed (a link, or the return from the bag editor)
-		// so a reload doesn't bring the dismissed scope back.
-		if (page.url.searchParams.has('roaster')) replaceState(resolve('/beans'), page.state);
+		goto(resolve('/beans') + beansQuery('bags'), { replaceState: true, noScroll: true, keepFocus: true });
 	}
 	function gotoNew(): void {
 		goto(resolve('/beans/new'));
@@ -870,7 +890,7 @@
 			<button
 				class="bn-tab"
 				class:is-active={tab === 'bags'}
-				onclick={() => (tab = 'bags')}
+				onclick={() => selectTab('bags')}
 			>
 				<CoffeeBeanIcon weight="duotone" aria-hidden="true" />
 				<span>Bags</span>
@@ -879,7 +899,7 @@
 			<button
 				class="bn-tab"
 				class:is-active={tab === 'roasters'}
-				onclick={() => (tab = 'roasters')}
+				onclick={() => selectTab('roasters')}
 			>
 				<StorefrontIcon weight="duotone" aria-hidden="true" />
 				<span>Roasters</span>

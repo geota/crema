@@ -52,7 +52,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
 import androidx.activity.compose.BackHandler
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -74,7 +73,9 @@ import coffee.crema.core.Bean
 import coffee.crema.core.Roaster
 import coffee.crema.core.SearchField
 import coffee.crema.core.SearchHit
+import coffee.crema.ui.BeansViewState
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.rememberBeansViewState
 import coffee.crema.ui.beans.linkedProfileNameFor
 import coffee.crema.ui.beans.shotRowSummary
 import coffee.crema.ui.freshnessColor
@@ -125,22 +126,24 @@ fun BeansScreen(
     vm: MainViewModel,
     onNav: (String) -> Unit,
     onConnect: (String) -> Unit,
+    beansState: BeansViewState = rememberBeansViewState(),
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
-    // Saveable: editing a bag navigates to its own destination, and plain
-    // `remember` state was dropped on the way back — a roaster's shelf (#86)
-    // came back as the unscoped library.
-    var tab by rememberSaveable { mutableStateOf("bags") }
+    // Tab / filter / roaster scope live in the hoisted [BeansViewState]:
+    // editing a bag navigates to its own destination, and rotating across the
+    // 840dp breakpoint swaps in the phone host — local state was dropped either
+    // way (a roaster's shelf, #86, came back as the unscoped library).
+    var tab by beansState::tab
     var roasterDialogOpen by remember { mutableStateOf(false) }
     var roasterEditing by remember { mutableStateOf<Roaster?>(null) }
     var query by remember { mutableStateOf("") }
-    var beanFilter by rememberSaveable { mutableStateOf("all") }
+    var beanFilter by beansState::filter
     // Roaster scope (#86): set by tapping a roaster card; the Bags tab then
     // shows that roaster's shelf, archived bags included. Cleared by its chip
     // or by Back.
-    var roasterScopeId by rememberSaveable { mutableStateOf<String?>(null) }
+    var roasterScopeId by beansState::roasterScopeId
     var beanSort by remember { mutableStateOf("freshest") }
     var beanSortDesc by remember { mutableStateOf(false) }
     // The bag whose read-only detail is open (issue 61). Held as an id, not a
@@ -170,10 +173,7 @@ fun BeansScreen(
     val scopeId = scopeRoaster?.id
     val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, beanFilter, beanSort, beanSortDesc, ui.activeBeanId, scopeId)
     // Back from a roaster's shelf returns to the Roasters directory.
-    BackHandler(enabled = scopeId != null && tab == "bags") {
-        roasterScopeId = null
-        tab = "roasters"
-    }
+    BackHandler(enabled = scopeId != null && tab == "bags") { beansState.closeShelf() }
     val visibleRoasters = ui.roasters
         .filter { roasterHits.matches(it.id) }
         .sortedByDescending { roasterHits.score(it.id) }
@@ -382,7 +382,7 @@ fun BeansScreen(
                             RoasterCard(
                                 roaster = roaster,
                                 bagCountLabel = roasterBagCountLabel(ui.beans, roaster.id),
-                                onOpen = { roasterScopeId = roaster.id; beanFilter = "all"; tab = "bags" },
+                                onOpen = { beansState.openShelf(roaster.id) },
                                 onEdit = { roasterEditing = roaster; roasterDialogOpen = true },
                                 onVisit = { vm.visitRoasterWebsite(roaster.website) },
                                 onDelete = { vm.deleteRoaster(roaster.id) },
@@ -649,9 +649,10 @@ private fun BeanStat(modifier: Modifier = Modifier, leading: @Composable () -> U
     }
 }
 
-// A roaster directory card — avatar + name + "City · Country · N bags · M
-// archived", with a kebab (Edit / Visit website / Delete). Tapping the card
-// opens the roaster's shelf on the Bags tab (#86).
+// A roaster directory card — avatar + name, a "City · Country" line, then a
+// meta row (website · "N bags · M archived"), with a kebab (Edit / Visit
+// website / Delete). Tapping the card opens the roaster's shelf on the Bags
+// tab (#86).
 @Composable
 private fun RoasterCard(
     roaster: Roaster,
@@ -677,18 +678,45 @@ private fun RoasterCard(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    val place = listOfNotNull(roaster.city, roaster.country).joinToString(" · ")
-                    val sub = listOfNotNull(place.ifBlank { null }, bagCountLabel).joinToString(" · ")
-                    Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    // Location on its own line (web RoasterCard's row), so a long
+                    // city/country ellipsizes itself rather than the bag counts.
+                    val place = listOfNotNull(roaster.city, roaster.country)
+                        .filter { it.isNotBlank() }
+                        .joinToString(" · ")
+                    if (place.isNotEmpty()) {
+                        Text(place, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    // Meta row: website (shrinks, ellipsized) · bag counts (never
+                    // truncated — they are what the card is for at a glance).
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        roaster.website?.takeIf { it.isNotBlank() }?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false).padding(end = 12.dp),
+                            )
+                        }
+                        Text(
+                            bagCountLabel,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
                 }
                 CremaOverflowMenu(items = buildList {
                     add(OverflowItem("pencil-simple", "Edit roaster", onEdit))
                     if (!roaster.website.isNullOrBlank()) add(OverflowItem("arrow-square-out", "Visit website", onVisit))
                     add(OverflowItem("trash", "Delete roaster", { confirmDelete = true }, danger = true))
                 })
-            }
-            roaster.website?.takeIf { it.isNotBlank() }?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }

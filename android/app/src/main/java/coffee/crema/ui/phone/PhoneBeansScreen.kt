@@ -36,7 +36,9 @@ import coffee.crema.core.Bean
 import coffee.crema.core.Roaster
 import coffee.crema.core.SearchField
 import coffee.crema.core.SearchHit
+import coffee.crema.ui.BeansViewState
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.rememberBeansViewState
 import coffee.crema.ui.freshnessColor
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
@@ -47,7 +49,6 @@ import coffee.crema.ui.components.CremaFilterChip
 import androidx.compose.material3.IconButton
 import androidx.compose.foundation.layout.size
 import androidx.activity.compose.BackHandler
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.draw.alpha
 
 /*
@@ -64,17 +65,18 @@ fun PhoneBeansScreen(
     vm: MainViewModel,
     onNav: (String) -> Unit,
     onConnect: (String) -> Unit,
+    beansState: BeansViewState = rememberBeansViewState(),
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
-    // Saveable: the phone pushes the bag / roaster editors as separate nav
-    // destinations, so plain `remember` state was dropped on the way back —
-    // editing a bag from a roaster's shelf returned to the unscoped library.
-    var tab by rememberSaveable { mutableStateOf("bags") }
+    // Tab / filter / roaster scope live in the hoisted [BeansViewState]: the
+    // bag / roaster editors are separate nav destinations, and rotating across
+    // the 840dp breakpoint swaps in the tablet host — local state was dropped
+    // either way. Roaster scope (#86): tapping a roaster row shows its shelf on
+    // the Bags tab, archived bags included. Cleared by its chip or by Back.
+    var tab by beansState::tab
     var query by remember { mutableStateOf("") }
-    var filter by rememberSaveable { mutableStateOf("all") }
-    // Roaster scope (#86): tapping a roaster row shows its shelf on the Bags
-    // tab, archived bags included. Cleared by its chip or by Back.
-    var roasterScopeId by rememberSaveable { mutableStateOf<String?>(null) }
+    var filter by beansState::filter
+    var roasterScopeId by beansState::roasterScopeId
     var sort by remember { mutableStateOf("freshest") }
     var sortDesc by remember { mutableStateOf(false) }
     var menuFor by remember { mutableStateOf<Bean?>(null) }
@@ -130,10 +132,7 @@ fun PhoneBeansScreen(
     val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, filter, sort, sortDesc, ui.activeBeanId, scopeId)
     // Back from a roaster's shelf returns to the Roasters directory it came
     // from, rather than leaving the Beans screen.
-    BackHandler(enabled = scopeId != null && tab == "bags") {
-        roasterScopeId = null
-        tab = "roasters"
-    }
+    BackHandler(enabled = scopeId != null && tab == "bags") { beansState.closeShelf() }
     val visibleRoasters = ui.roasters
         .filter { roasterHits.matches(it.id) }
         .sortedBy { it.name.lowercase() }
@@ -251,7 +250,7 @@ fun PhoneBeansScreen(
                         PhoneRoasterRow(
                             roaster = roaster,
                             bagCountLabel = roasterBagCountLabel(ui.beans, roaster.id),
-                            onClick = { roasterScopeId = roaster.id; filter = "all"; tab = "bags" },
+                            onClick = { beansState.openShelf(roaster.id) },
                             onEdit = { vm.startEditRoaster(roaster.id); onNav("roaster-edit") },
                         )
                     }

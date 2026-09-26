@@ -35,6 +35,8 @@ import androidx.navigation.compose.rememberNavController
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.NavRestore
+import coffee.crema.ui.SyncNavRoute
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.phone.components.CremaBottomNav
 
@@ -72,6 +74,11 @@ fun PhoneNavHost(
     beanEditContent: @Composable (onBack: () -> Unit) -> Unit,
     roasterEditContent: @Composable (onBack: () -> Unit) -> Unit,
     debugContent: @Composable () -> Unit,
+    /** The route to reopen on first composition (the tablet host's route when
+     *  the window shrinks across the 840dp breakpoint); `brew` = start fresh. */
+    initialRoute: String = "brew",
+    /** Reports the current route so MainActivity can hand it to the tablet host. */
+    onRouteChange: (String) -> Unit = {},
 ) {
     val nav = rememberNavController()
     val tabRoutes = setOf("brew", "scale", "profiles", "beans", "history", "settings")
@@ -148,6 +155,7 @@ fun PhoneNavHost(
                     composable("roaster-edit") { roasterEditContent(onBack) }
                     composable("debug") { debugContent() }
                 }
+                SyncNavRoute(nav, initialRoute, NavRestore.PHONE_ROUTES, onNav, onRouteChange)
             }
         }
     }
