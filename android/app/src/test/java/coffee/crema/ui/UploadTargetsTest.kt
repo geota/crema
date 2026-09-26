@@ -113,4 +113,19 @@ class UploadTargetsTest {
         assertEquals(listOf(real), vizDest.unsent(listOf(v60, real)))
         assertEquals(2, uploadTargetsFor(real, dests).size)
     }
+
+    @Test
+    fun `a guided brew row (weight series, no samples) has no destinations either`() {
+        val guided = StoredShot(
+            id = "g", completedAtMs = 0, durationMs = 180_000, brewMethod = "aeropress",
+            brewSeries = coffee.crema.core.BrewSeries(
+                samples = listOf(coffee.crema.core.BrewSample(elapsedMs = 0, weightG = 0f), coffee.crema.core.BrewSample(elapsedMs = 1_000, weightG = 20f)),
+                stageMarks = emptyList(),
+            ),
+        )
+        val dests = listOf(vizDest, decDest())
+        assertTrue(uploadTargetsFor(guided, dests).isEmpty())
+        assertEquals(0, missingUploadTotal(listOf(guided), dests))
+        assertTrue(vizDest.unsent(listOf(guided)).isEmpty())
+    }
 }

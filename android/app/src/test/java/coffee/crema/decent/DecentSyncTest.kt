@@ -205,6 +205,36 @@ class DecentSyncTest {
     }
 
     @Test
+    fun `a guided brew row with a weight series never uploads either`() = runTest {
+        // Issue #10 Phase 2: a guided session's row carries a BrewSeries (weight
+        // only, no DE1 telemetry) — still a brew, still local-only.
+        val series = coffee.crema.core.BrewSeries(
+            samples = listOf(
+                coffee.crema.core.BrewSample(elapsedMs = 0, weightG = 0f),
+                coffee.crema.core.BrewSample(elapsedMs = 45_000, weightG = 45f, flowGS = 1f),
+            ),
+            stageMarks = listOf(coffee.crema.core.StageMark(elapsedMs = 0, stepIndex = 0)),
+        )
+        val guided = StoredShot(
+            id = "guided", completedAtMs = 1, durationMs = 180_000, brewMethod = "pourover",
+            waterG = 250f, recipeName = "V60 classic", brewSeries = series,
+        )
+        val real = shot("real")
+        val h = harness(listOf(guided, real))
+        h.live = ShotMachine("6262")
+        assertFalse(h.sync.inBacklog(guided))
+        assertFalse(h.sync.canUpload(guided))
+        assertFalse(h.sync.maybeAutoUpload(guided, null))
+        assertEquals(
+            DecentSync.Outcome.Skipped(coffee.crema.history.BREW_LOG_UPLOAD_SKIP),
+            h.sync.uploadNow(guided, manual = true, replace = false, fullSamples = null),
+        )
+        assertEquals(listOf(real), h.sync.unsent(listOf(guided, real)))
+        assertEquals(1, h.sync.uploadUnsentNow(listOf(guided, real)).uploaded)
+        assertEquals(listOf("real"), h.stamped.map { it.first })
+    }
+
+    @Test
     fun `short shots are out of the backlog but a manual push still goes`() = runTest {
         val flush = shot("flush", durationMs = 3_000)
         val h = harness(listOf(flush))

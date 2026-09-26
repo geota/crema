@@ -79,29 +79,43 @@ fun BrewSparkChart(series: BrewSeries, modifier: Modifier = Modifier) {
  * The guided-brew detail chart: the weight curve (hero) + derived pour rate,
  * alternating stage bands at the recorded boundaries. The brew sibling of
  * `CanvasShotChart` for rows whose telemetry is a `BrewSeries`.
+ *
+ * The live session reuses it (issue #10 Phase 2): [minSpanMs] grows the
+ * x-axis with the session clock (so bands draw before any weight arrives —
+ * a scale-less session still shows its stages), [nowMs] draws the playhead,
+ * and [targetG] the current step's cumulative pour target, dashed.
  */
 @Composable
-fun BrewSessionCanvas(series: BrewSeries, modifier: Modifier = Modifier) {
+fun BrewSessionCanvas(
+    series: BrewSeries,
+    modifier: Modifier = Modifier,
+    minSpanMs: Long? = null,
+    nowMs: Long? = null,
+    targetG: Float? = null,
+) {
     val weightColor = CremaTheme.telemetry.weight
     val flowColor = CremaTheme.telemetry.flow
     val bandColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f)
     val boundColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)
     val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    val cursorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
     Canvas(modifier) {
         val samples = series.samples
-        if (samples.size < 2) return@Canvas
-        val span = max(1L, samples.last().elapsedMs).toFloat()
-        val maxW = max(50f, samples.maxOf { it.weightG })
+        val live = minSpanMs != null
+        if (samples.size < 2 && !live) return@Canvas
+        val span = max(1L, max(samples.lastOrNull()?.elapsedMs ?: 0L, minSpanMs ?: 0L)).toFloat()
+        val maxW = max(50f, max(samples.maxOfOrNull { it.weightG } ?: 0f, (targetG ?: 0f) * 1.1f))
         val maxF = max(4f, samples.mapNotNull { it.flowGS }.maxOrNull() ?: 0f)
         val inset = 8.dp.toPx()
         val plotW = (size.width - inset * 2f).coerceAtLeast(1f)
         val plotH = (size.height - inset * 2f).coerceAtLeast(1f)
-        fun x(t: Long) = inset + (t / span) * plotW
+        fun x(t: Long) = inset + (t / span).coerceIn(0f, 1f) * plotW
+        fun yW(w: Float) = inset + (1f - (w / maxW).coerceIn(0f, 1f)) * plotH
         // Alternating stage bands + dashed boundaries.
         val marks = series.stageMarks.sortedBy { it.elapsedMs }
         marks.forEachIndexed { i, m ->
             val from = x(m.elapsedMs)
-            val to = if (i + 1 < marks.size) x(marks[i + 1].elapsedMs) else inset + plotW
+            val to = if (i + 1 < marks.size) x(marks[i + 1].elapsedMs) else if (nowMs != null) x(nowMs) else inset + plotW
             if (i % 2 == 1) {
                 drawRect(
                     bandColor,
@@ -124,6 +138,22 @@ fun BrewSessionCanvas(series: BrewSeries, modifier: Modifier = Modifier) {
             val y = inset + (1f - frac) * plotH
             drawLine(gridColor, androidx.compose.ui.geometry.Offset(inset, y), androidx.compose.ui.geometry.Offset(inset + plotW, y), 1f)
         }
+        // The current step's pour target (live only).
+        if (targetG != null && targetG > 0f) {
+            val y = yW(targetG)
+            drawLine(
+                weightColor.copy(alpha = 0.45f),
+                androidx.compose.ui.geometry.Offset(inset, y),
+                androidx.compose.ui.geometry.Offset(inset + plotW, y),
+                strokeWidth = 1.2.dp.toPx(),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f)),
+            )
+        }
+        if (nowMs != null) {
+            val px = x(nowMs)
+            drawLine(cursorColor, androidx.compose.ui.geometry.Offset(px, inset), androidx.compose.ui.geometry.Offset(px, inset + plotH), 1.5f)
+        }
+        if (samples.size < 2) return@Canvas
         // Pour rate (secondary) beneath the weight curve.
         run {
             val path = Path()
@@ -140,7 +170,7 @@ fun BrewSessionCanvas(series: BrewSeries, modifier: Modifier = Modifier) {
             val path = Path()
             samples.forEachIndexed { i, s ->
                 val px = x(s.elapsedMs)
-                val py = inset + (1f - (s.weightG / maxW).coerceIn(0f, 1f)) * plotH
+                val py = yW(s.weightG)
                 if (i == 0) path.moveTo(px, py) else path.lineTo(px, py)
             }
             drawPath(path, weightColor, style = Stroke(width = 2.dp.toPx()))

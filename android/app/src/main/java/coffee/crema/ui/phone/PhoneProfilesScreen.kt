@@ -31,7 +31,6 @@ import coffee.crema.ui.screens.CanvasProfilePreview
 import coffee.crema.brew.defaultRecipeFor
 import coffee.crema.core.BrewRecipe
 import coffee.crema.ui.brewlog.BrewRecipeCard
-import coffee.crema.ui.brewlog.RecipeEditorDialog
 import coffee.crema.ui.brewlog.visibleBrewRecipes
 
 /*
@@ -74,17 +73,11 @@ fun PhoneProfilesScreen(
     // Brew recipes — the guided-brew library section (issue #10); authored
     // here, run from the Scale screen's Brew tab.
     val recipes = visibleBrewRecipes(ui.brewRecipes, query)
-    var recipeEditing by remember { mutableStateOf<BrewRecipe?>(null) }
-    var recipeEditingNew by remember { mutableStateOf(false) }
-    // The Scale screen's "Edit recipe" deep-link.
-    LaunchedEffect(ui.pendingRecipeEditId) {
-        ui.pendingRecipeEditId?.let { id ->
-            ui.brewRecipes.firstOrNull { it.id == id && it.deletedAt == null }?.let {
-                recipeEditing = it
-                recipeEditingNew = false
-            }
-            vm.consumePendingRecipeEdit()
-        }
+    // The editor opens in place over a VM-held draft: a pushed `recipe-edit`
+    // route here on the phone (see RecipeEditorScreen).
+    val editRecipe: (BrewRecipe, Boolean) -> Unit = { r, isNew ->
+        vm.openRecipeEdit(coffee.crema.ui.brewlog.RecipeEditOwner.PROFILES, r, isNew)
+        onNav(coffee.crema.ui.brewlog.RECIPE_EDIT_ROUTE)
     }
 
     Scaffold(
@@ -178,8 +171,7 @@ fun PhoneProfilesScreen(
                                 )
                                 CremaButton(
                                     onClick = {
-                                        recipeEditing = defaultRecipeFor("pourover", System.currentTimeMillis())
-                                        recipeEditingNew = true
+                                        editRecipe(defaultRecipeFor("pourover", System.currentTimeMillis()), true)
                                     },
                                     variant = CremaButtonVariant.Text,
                                     icon = "plus",
@@ -197,9 +189,9 @@ fun PhoneProfilesScreen(
                         BrewRecipeCard(
                             recipe = r,
                             isDefault = ui.lastRecipeByMethod[r.method] == r.id,
-                            onEdit = { recipeEditing = r; recipeEditingNew = false },
+                            onEdit = { editRecipe(r, false) },
                             onDuplicate = {
-                                vm.duplicateBrewRecipe(r.id)?.let { recipeEditing = it; recipeEditingNew = false }
+                                vm.duplicateBrewRecipe(r.id)?.let { editRecipe(it, false) }
                             },
                             onMakeDefault = { vm.setDefaultBrewRecipe(r) },
                             onDelete = { vm.deleteBrewRecipe(r.id) },
@@ -224,22 +216,6 @@ fun PhoneProfilesScreen(
         }
     }
 
-    recipeEditing?.let { editing ->
-        RecipeEditorDialog(
-            recipe = editing,
-            heading = if (recipeEditingNew) "New recipe" else "Edit recipe",
-            reseedOnMethodChange = recipeEditingNew,
-            onSave = { r ->
-                vm.upsertBrewRecipe(r)
-                // A method's first recipe becomes its default — the Scale
-                // tab opens on it without a separate "make default" step.
-                if (ui.lastRecipeByMethod[r.method] == null) vm.setDefaultBrewRecipe(r)
-                recipeEditing = null
-                recipeEditingNew = false
-            },
-            onDismiss = { recipeEditing = null; recipeEditingNew = false },
-        )
-    }
 
     // Card overflow — modal bottom sheet (the tablet's kebab menu re-homed).
     menuFor?.let { p ->
