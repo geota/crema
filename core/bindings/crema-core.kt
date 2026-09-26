@@ -463,12 +463,15 @@ data class CommonSettings (
 	val chartChannels: List<String>,
 	/// Hold the screen awake while a shot pulls.
 	val keepScreenOnBrew: Boolean,
-	/// Guided-brew step cues as sound (issue #10). `None` = default on:
-	/// a brew timer that doesn't beep is a bad timer. Option per the
-	/// additive-CommonSettings rule so older backups round-trip.
+	/// Guided-brew step cues as sound (issue #10). `None` = never set,
+	/// read as [`DEFAULT_BREW_CUE_SOUND`] (off: a kitchen-safe default; the
+	/// session's visual cues are always on). Option per the
+	/// additive-CommonSettings rule so older backups round-trip, and so a
+	/// user who never touched it follows the default rather than a frozen
+	/// copy of it. Shells persist only an explicit choice.
 	val brewCueSound: Boolean? = null,
 	/// Guided-brew step cues as vibration, where the device supports it.
-	/// `None` = default on.
+	/// `None` = never set, read as [`DEFAULT_BREW_CUE_HAPTICS`] (on).
 	val brewCueHaptics: Boolean? = null,
 	/// Show the debug / event-log panel.
 	val showDebugPanel: Boolean,
