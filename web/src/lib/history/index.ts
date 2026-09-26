@@ -23,6 +23,7 @@ export {
 	statsOf,
 	brewStatsOf,
 	methodOf,
+	isBrewLog,
 	isManualLog,
 	hasTelemetry,
 	flatSamplesOf

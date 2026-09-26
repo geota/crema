@@ -32,6 +32,7 @@ import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
 import coffee.crema.history.coreShotJson
 import coffee.crema.history.downsampleForStorage
+import coffee.crema.history.isBrewLog
 import coffee.crema.history.isManualLog
 import coffee.crema.profiles.BrewDefaults
 import coffee.crema.profiles.CremaProfile
@@ -1170,6 +1171,8 @@ class LibraryController(
                 history = st.history.map { shot ->
                     when {
                         shot.id != localId -> shot
+                        // Brew Log rows (issue #10) never carry a machine stamp.
+                        shot.isBrewLog -> shot
                         // The upload used the connected DE1: stamp its identity too, so
                         // the share link names the serial the server filed it under.
                         machine != null && shot.machineSerial.isNullOrBlank() -> shot.copy(
@@ -1876,6 +1879,9 @@ class LibraryController(
             waterG = input.waterG,
             brewTempC = input.brewTempC,
             brewSeries = input.brewSeries,
+            // No machine stamp (issue #10): a logged brew involves no DE1, so
+            // machineSerial / Firmware / Model stay null — the #84 record-time
+            // stamp belongs to the live-shot path only.
         )
         val next = (listOf(shot) + s.history).take(HistoryStore.MAX_SHOTS)
         updateUi { it.copy(history = next) }

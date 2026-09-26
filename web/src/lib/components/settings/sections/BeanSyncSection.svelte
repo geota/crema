@@ -14,7 +14,7 @@
 	 */
 	import { onMount } from 'svelte';
 	import { getBeanStore, readSyncSettings, type SyncResult as BeanSyncResult } from '$lib/bean';
-	import { getHistoryStore } from '$lib/history';
+	import { getHistoryStore, isBrewLog } from '$lib/history';
 	import {
 		appendSyncLog,
 		directionPulls,
@@ -323,7 +323,7 @@
 		}
 	}
 
-	const unsyncedShotCount = $derived(history.all.filter((s) => !s.visualizerId).length);
+	const unsyncedShotCount = $derived(history.all.filter((s) => !s.visualizerId && !isBrewLog(s)).length);
 </script>
 
 {#if viz.connected}

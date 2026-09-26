@@ -27,6 +27,7 @@
 		yieldOf,
 		flatSamplesOf,
 		effectiveGrindSetting,
+		isBrewLog,
 		isManualLog,
 		methodOf,
 	} from '$lib/history';
@@ -154,8 +155,12 @@
 	// ── Brew Log rows (issue #10) ────────────────────────────────────────
 	/** The row's brew method — `null` for machine espresso. */
 	const method = $derived(methodOf(shot));
-	/** Any brew-method row (manual log OR guided session). */
-	const isBrew = $derived(method != null);
+	/**
+	 * Any Brew Log row (manual log OR guided session) — `isBrewLog`, the one
+	 * gate that also keeps the upload menu / Share / View rows away (brews
+	 * are local-only).
+	 */
+	const isBrew = $derived(isBrewLog(shot));
 	/** Manually logged: user-entered facts stay editable. */
 	const manual = $derived(isManualLog(shot));
 	const factsEditable = $derived(manual && onManualBrewEdit != null);

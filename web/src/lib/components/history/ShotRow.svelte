@@ -7,6 +7,7 @@
 	import type { StoredShot } from '$lib/history';
 	import {
 		grindLabel,
+		isBrewLog,
 		isManualLog,
 		methodOf,
 		ratioLabel,
@@ -197,6 +198,11 @@
 	<div class="hi-row-stars" class:is-unrated={rating <= 0}>
 			<StarRating rating={rating} />
 		</div>
+	{#if isBrewLog(shot)}
+		<!-- Brew Log rows are local-only (issue #10): no cloud pip, the cell
+		     stays so the row grid keeps its columns. -->
+		<div class="hi-row-pip hi-pip-none" aria-hidden="true"></div>
+	{:else}
 	<div
 		class="hi-row-pip hi-pip-{syncPip}"
 		title={syncTitle ??
@@ -211,6 +217,7 @@
 							: 'Not uploaded — local only')}
 		aria-label="Cloud status: {syncPip}"
 	></div>
+	{/if}
 </button>
 
 <style>
@@ -359,6 +366,9 @@
 		border-radius: 50%;
 		justify-self: end;
 		background: rgba(var(--tint-rgb), 0.2);
+	}
+	.hi-pip-none {
+		visibility: hidden;
 	}
 	.hi-pip-uploaded {
 		background: var(--success, #2faa5a);

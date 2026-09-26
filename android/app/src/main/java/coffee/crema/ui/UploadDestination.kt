@@ -1,6 +1,7 @@
 package coffee.crema.ui
 
 import coffee.crema.history.StoredShot
+import coffee.crema.history.isBrewLog
 
 /*
  * One cloud destination for shots (Visualizer, the Decent account). Both sync
@@ -38,7 +39,8 @@ interface UploadDestination {
     /** Does this shot belong to the backlog (not here yet, and eligible to be)? */
     fun inBacklog(shot: StoredShot): Boolean
 
-    fun unsent(shots: List<StoredShot>): List<StoredShot> = shots.filter(::inBacklog)
+    /** The backlog. Brew Log rows (issue #10) are local-only and never in it. */
+    fun unsent(shots: List<StoredShot>): List<StoredShot> = shots.filter { !it.isBrewLog && inBacklog(it) }
 
     /** The capture-time push. Returns true when an upload actually started (it will report an outcome). */
     fun maybeAutoUpload(shot: StoredShot, fullSamples: List<TelemetrySample>? = null): Boolean

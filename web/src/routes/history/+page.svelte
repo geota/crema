@@ -10,8 +10,7 @@
 		uploadUnsentDecentShots
 	} from '$lib/decent';
 	import {
-		decentUploadTarget,
-		visualizerUploadTarget,
+		shotUploadTargets,
 		type UploadTarget
 	} from '$lib/history/upload-targets';
 	import { registerUploadBatch, reportUploadOutcome } from '$lib/history/upload-toast';
@@ -46,6 +45,7 @@
 		exportStoredShotAsV2Json,
 		shotFilename,
 		brewStatsOf,
+		isBrewLog,
 		isManualLog,
 		methodOf
 	} from '$lib/history';
@@ -296,6 +296,8 @@
 	 * enabled → local. The title spells out which is which.
 	 */
 	function pipFor(shot: StoredShot): { pip: 'uploaded' | 'partial' | 'pending' | 'local'; title: string } {
+		// Brew Log rows are local-only (issue #10): no destination, no pip state.
+		if (isBrewLog(shot)) return { pip: 'local', title: 'Brew Log — stays on this device' };
 		const enabled = uploadTargetsFor(shot).filter((t) => t.enabled);
 		if (pendingShotIds.has(shot.id)) return { pip: 'pending', title: 'Upload pending — will retry' };
 		if (enabled.length === 0) {
@@ -378,7 +380,7 @@
 	 * menu entry (`uploadMenuEntry`) plus a Share / View row per holder.
 	 */
 	function uploadTargetsFor(shot: StoredShot): UploadTarget[] {
-		return [visualizerUploadTarget(shot, canPushShots), decentUploadTarget(shot, decentLinked)];
+		return shotUploadTargets(shot, { visualizer: canPushShots, decent: decentLinked });
 	}
 	/** Push one shot to the chosen destinations (the menu picked them) — one toast for all. */
 	function uploadShotTo(id: string, targets: UploadTarget[]): void {
@@ -414,7 +416,7 @@
 	const missingByDestination = $derived.by(() => {
 		const out: { name: string; count: number }[] = [];
 		if (canPushShots) {
-			const n = shots.filter((s) => !s.visualizerId && !methodOf(s)).length;
+			const n = shots.filter((s) => !s.visualizerId && !isBrewLog(s)).length;
 			if (n > 0) out.push({ name: 'Visualizer', count: n });
 		}
 		if (decentUnsentIds.size > 0) out.push({ name: 'Decent', count: decentUnsentIds.size });
@@ -422,7 +424,7 @@
 	});
 	const missingTotal = $derived(
 		shots.filter(
-			(s) => (canPushShots && !s.visualizerId && !methodOf(s)) || decentUnsentIds.has(s.id)
+			(s) => (canPushShots && !s.visualizerId && !isBrewLog(s)) || decentUnsentIds.has(s.id)
 		).length
 	);
 	const missingTitle = $derived(

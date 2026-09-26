@@ -364,6 +364,17 @@ export function methodOf(shot: StoredShot): string | null {
 }
 
 /**
+ * Whether this row is a Brew Log entry of any kind — `brewMethod` set,
+ * manual or guided (issue #10). Brew rows are local-only: they never reach
+ * an upload path (Visualizer or the Decent account — auto, manual or
+ * backlog), show no upload menu or cloud pip, and carry no DE1 machine
+ * stamp. Mirrors Rust `StoredShot::is_brew_log` and Android `isBrewLog`.
+ */
+export function isBrewLog(shot: Pick<StoredShot, 'brewMethod'>): boolean {
+	return !!shot.brewMethod;
+}
+
+/**
  * Whether this row was *manually logged*: a method was declared but no
  * telemetry of any kind was captured. Manual rows keep dose / water /
  * time / temp / method editable in the detail pane (user-entered facts,

@@ -182,6 +182,29 @@ class DecentSyncTest {
     }
 
     @Test
+    fun `a Brew Log row never uploads, never borrows the live serial, and stays out of the backlog`() = runTest {
+        // Issue #10: a manual V60 (and a manual espresso carrying a stale stamp)
+        // are brews — no auto, manual or backlog path takes them.
+        val v60 = StoredShot(id = "v60", completedAtMs = 1, durationMs = 185_000, brewMethod = "pourover", waterG = 250f)
+        val stamped = v60.copy(id = "esp", brewMethod = "espresso", machineSerial = "6262")
+        val real = shot("real")
+        val h = harness(listOf(v60, stamped, real))
+        h.live = ShotMachine("6262")
+        for (brew in listOf(v60, stamped)) {
+            assertFalse(h.sync.inBacklog(brew))
+            assertFalse(h.sync.canUpload(brew))
+            assertFalse(h.sync.maybeAutoUpload(brew, null))
+            val o = h.sync.uploadNow(brew, manual = true, replace = false, fullSamples = null)
+            assertEquals(DecentSync.Outcome.Skipped(coffee.crema.history.BREW_LOG_UPLOAD_SKIP), o)
+        }
+        assertEquals(listOf(real), h.sync.unsent(listOf(v60, stamped, real)))
+        val r = h.sync.uploadUnsentNow(listOf(v60, stamped, real))
+        assertEquals(1, r.uploaded)
+        assertEquals(listOf("real"), h.stamped.map { it.first })
+        assertEquals(1, h.api.posts.size)
+    }
+
+    @Test
     fun `short shots are out of the backlog but a manual push still goes`() = runTest {
         val flush = shot("flush", durationMs = 3_000)
         val h = harness(listOf(flush))

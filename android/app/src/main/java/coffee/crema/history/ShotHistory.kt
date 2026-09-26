@@ -169,6 +169,19 @@ const val PULLED_SHOT_ID_PREFIX = "shot:remote:"
  */
 val StoredShot.pulledFromVisualizer: Boolean get() = id.startsWith(PULLED_SHOT_ID_PREFIX)
 
+/**
+ * A Brew Log entry of any kind — `brewMethod` set, manual or guided (issue
+ * #10). Brew rows are local-only: no upload path (Visualizer or the Decent
+ * account — auto, manual or backlog) ever takes one, they get no upload menu
+ * or cloud pip, and they carry no DE1 machine stamp. Mirrors core
+ * `StoredShot::is_brew_log` and the web `isBrewLog`.
+ */
+val StoredShot.isBrewLog: Boolean
+    get() = brewMethod != null
+
+/** Why an upload path skipped a [isBrewLog] row — shared by every destination. */
+const val BREW_LOG_UPLOAD_SKIP = "Brew Log entries stay on this device"
+
 /** The row's method for display: the stored method, null = machine espresso. */
 val StoredShot.methodOf: String?
     get() = brewMethod?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }

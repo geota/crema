@@ -131,6 +131,37 @@ describe('uploadShotToDecent gates', () => {
 	});
 });
 
+describe('Brew Log rows never reach the Decent account (issue #10)', () => {
+	const brew = (id: string, over: Partial<StoredShot> = {}): StoredShot =>
+		shot(id, 185_000, { brewMethod: 'pourover', record: { duration: 185_000, samples: [] }, ...over });
+	it('skips a brew on the auto AND manual paths, POSTs nothing and stamps no machine', async () => {
+		writeDecentAccount(linked);
+		liveSerial = 6262; // a connected DE1 must not be borrowed for a pourover
+		shots.set('v60', brew('v60'));
+		for (const manual of [false, true]) {
+			expect(await uploadShotToDecent('v60', { fetchFn: ok, appVersion: 't', manual })).toMatchObject({
+				kind: 'skipped',
+				reason: 'Brew Log entries stay on this device'
+			});
+		}
+		expect(posts).toBe(0);
+		expect(shots.get('v60')?.machine).toBeUndefined();
+		expect(shots.get('v60')?.decentId).toBeUndefined();
+	});
+	it('keeps brews out of the backlog — even one carrying a machine stamp', async () => {
+		shots.set('v60', brew('v60'));
+		shots.set('stamped', brew('stamped', { brewMethod: 'espresso', machine: { serialNumber: '6262' } }));
+		const ids = unsentDecentShots([...shots.values()], { hasLiveMachine: false, rejectedShotIds: [] }).map((s) => s.id);
+		expect(ids).not.toContain('v60');
+		expect(ids).not.toContain('stamped');
+		expect(ids).toEqual(['a']);
+		writeDecentAccount(linked);
+		const r = await uploadUnsentDecentShots({ fetchFn: ok });
+		expect(r.uploaded).toBe(ids.length);
+		expect(shots.get('v60')?.decentId).toBeUndefined();
+	});
+});
+
 describe('uploadShotToDecent outcomes', () => {
 	it('binds the server id, records the last upload with its URL, and skips a re-upload', async () => {
 		writeDecentAccount(linked);

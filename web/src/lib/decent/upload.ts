@@ -30,7 +30,7 @@ import { Effect, Schedule } from 'effect';
 import { getHistoryStore } from '$lib/history/store.svelte';
 import { reportUploadOutcome } from '$lib/history/upload-toast';
 import { appendSyncLog } from '$lib/visualizer/sync-config';
-import { toCoreShotMachine, type StoredShot } from '$lib/history/model';
+import { isBrewLog, toCoreShotMachine, type StoredShot } from '$lib/history/model';
 import type { ShotMachine, TimedSample } from '$lib/core/crema-core';
 import { getMachineReadout } from '$lib/state/machine-readout.svelte';
 import {
@@ -182,6 +182,9 @@ async function runUpload(shotId: string, opts: DecentUploadOptions): Promise<Dec
 	const history = getHistoryStore();
 	const shot = history.get(shotId);
 	if (!shot || shot.deletedAt) return skipped('Shot not found');
+	// Brew Log rows (issue #10) are not DE1 shots: never uploaded, and never
+	// stamped with the live machine (which the bind below would do).
+	if (isBrewLog(shot)) return skipped('Brew Log entries stay on this device');
 	if (shot.decentId && !opts.replace) return skipped('Already on Decent');
 	if (!opts.manual && shotDurationSeconds(shot) < MIN_SHOT_SECONDS) {
 		return skipped(`Shorter than ${MIN_SHOT_SECONDS} s`);
@@ -290,7 +293,8 @@ export interface DecentBacklogContext {
 
 /**
  * Shots a catch-up would actually upload — the Settings / History backlog.
- * Excludes: already uploaded, deleted, flushes under 5 s, shots Decent
+ * Excludes: Brew Log rows (issue #10 — local-only), already uploaded,
+ * deleted, flushes under 5 s, shots Decent
  * refused, shots pulled from Visualizer without a stamped machine, and
  * unstamped rows while no DE1 serial is known.
  */
@@ -304,6 +308,7 @@ export function unsentDecentShots(
 	const rejected = new Set(ctx.rejectedShotIds);
 	return shots.filter(
 		(s) =>
+			!isBrewLog(s) &&
 			!s.decentId &&
 			!s.deletedAt &&
 			shotDurationSeconds(s) >= MIN_SHOT_SECONDS &&

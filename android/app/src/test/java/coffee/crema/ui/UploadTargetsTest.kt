@@ -95,4 +95,22 @@ class UploadTargetsTest {
             missingUploadCounts(listOf(flush, real), listOf(vizDest, decDest())),
         )
     }
+
+    @Test
+    fun `a Brew Log row has no destinations, no pip and no backlog count`() {
+        // Issue #10: brews are local-only on every destination, even with a
+        // destination whose own rules would take the row.
+        val v60 = StoredShot(id = "b", completedAtMs = 0, durationMs = 185_000, brewMethod = "pourover")
+        val real = StoredShot(id = "r", completedAtMs = 0, durationMs = 30_000)
+        val dests = listOf(vizDest, decDest())
+        assertTrue(uploadTargetsFor(v60, dests).isEmpty())
+        assertFalse(uploadMenuEntry(uploadTargetsFor(v60, dests)).enabled)
+        assertEquals(1, missingUploadTotal(listOf(v60, real), dests))
+        assertEquals(
+            mapOf(UploadTargetId.Visualizer to 1, UploadTargetId.Decent to 1),
+            missingUploadCounts(listOf(v60, real), dests),
+        )
+        assertEquals(listOf(real), vizDest.unsent(listOf(v60, real)))
+        assertEquals(2, uploadTargetsFor(real, dests).size)
+    }
 }
