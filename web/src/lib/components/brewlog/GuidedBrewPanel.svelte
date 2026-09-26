@@ -10,10 +10,11 @@
 	 * running — Finish, Pause/Resume, Skip. Fully usable scale-less:
 	 * pour steps become tap-to-advance, timed steps run on the clock.
 	 */
+	import BellIcon from 'phosphor-svelte/lib/BellIcon';
+	import BellSlashIcon from 'phosphor-svelte/lib/BellSlashIcon';
 	import PauseIcon from 'phosphor-svelte/lib/PauseIcon';
 	import PlayIcon from 'phosphor-svelte/lib/PlayIcon';
-	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
+	import { brewCueSoundOn, getSettingsStore } from '$lib/settings';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getGuidedBrewStore } from '$lib/brew/session.svelte';
 	import { defaultRecipeFor, getRecipeStore } from '$lib/brew/recipes.svelte';
@@ -28,8 +29,10 @@
 	import { BrewStepKind, StepAdvance } from '$lib/core/crema-core';
 	import { getBeanStore } from '$lib/bean';
 	import { toast } from '$lib/components/shared/toast.svelte';
+	import BrewSessionChart from '$lib/components/history/BrewSessionChart.svelte';
 	import LogBrewDialog from './LogBrewDialog.svelte';
 	import MethodMark from './MethodMark.svelte';
+	import RecipeEditor from './RecipeEditor.svelte';
 
 	let {
 		connected = false,
@@ -49,6 +52,7 @@
 	const session = getGuidedBrewStore();
 	const recipes = getRecipeStore();
 	const library = getBeanStore();
+	const settings = getSettingsStore();
 
 	// ── Setup state ──────────────────────────────────────────────
 	let method = $state(lastUsedMethod());
@@ -65,16 +69,56 @@
 		recipe = resolveRecipe(id);
 	}
 
-	/**
-	 * Recipes live in the Profiles library — editing deep-links there
-	 * (`/profiles?recipe=<id>`). Touch first so an unsaved default is
-	 * persisted (and remembered for the method) before the editor looks
-	 * it up.
-	 */
+	// ── Recipe editor, in place ──────────────────────────────────
+	// The library lives in Profiles (its own editor entry), but "Edit
+	// recipe" here opens the same editor as a modal over this setup and
+	// saving lands back on it, the edited recipe still selected.
+	let editing = $state<BrewRecipe | null>(null);
+
 	function editRecipe(): void {
-		recipes.touch(recipe);
-		void goto(`${resolve('/profiles')}?recipe=${encodeURIComponent(recipe.id)}`);
+		editing = recipe;
 	}
+
+	function saveEdited(r: BrewRecipe): void {
+		recipes.upsert(r);
+		// Editing is choosing: the saved recipe becomes the method's
+		// remembered one, so the setup (and the next visit) opens on it.
+		recipes.touch(r);
+		method = r.method;
+		recipe = recipes.get(r.id) ?? r;
+		editing = null;
+	}
+
+	// ── Cue sound (the bell) ─────────────────────────────────────
+	// The same shared setting as Settings → Display → Guided brew sounds.
+	const soundOn = $derived(brewCueSoundOn(settings.current));
+
+	function toggleSound(): void {
+		const next = !soundOn;
+		settings.set('brewCueSound', next);
+		if (next) primeBrewCues();
+	}
+
+	// ── Visual cues (always on) ──────────────────────────────────
+	// The step card flashes at every step change and pour-target cue,
+	// independent of the sound / haptics settings.
+	let flash = $state<string | null>(null);
+	// svelte-ignore state_referenced_locally
+	let seenCueSeq = session.cueSeq;
+	$effect(() => {
+		const seq = session.cueSeq;
+		if (seq === seenCueSeq) return;
+		seenCueSeq = seq;
+		const kind = session.cueKind;
+		flash = null;
+		// Re-add the class on the next frame so the animation replays.
+		const raf = requestAnimationFrame(() => (flash = kind));
+		const t = setTimeout(() => (flash = null), 1000);
+		return () => {
+			cancelAnimationFrame(raf);
+			clearTimeout(t);
+		};
+	});
 
 	// ── The display clock ────────────────────────────────────────
 	// Shell + core share performance.now(), so the panel can render the
@@ -207,6 +251,7 @@
 <div class="gb">
 	{#if session.phase === 'idle'}
 		<!-- ── Setup ─────────────────────────────────────────── -->
+		<div class="gb-setup">
 		<div class="gb-chips" role="radiogroup" aria-label="Brew method">
 			{#each BREW_METHOD_PRESETS as p (p.id)}
 				<button
@@ -284,7 +329,25 @@
 			{/if}
 		</div>
 
-		<button class="gb-start" onclick={() => void start()}>Start brew</button>
+		<div class="gb-start-row">
+			<button class="gb-start" onclick={() => void start()}>Start brew</button>
+			<button
+				type="button"
+				class="gb-bell"
+				class:is-on={soundOn}
+				aria-pressed={soundOn}
+				aria-label={soundOn ? 'Cue sound on' : 'Cue sound off'}
+				title={soundOn ? 'Cue sound on — tap to mute' : 'Cue sound off — tap to chime at steps'}
+				onclick={toggleSound}
+			>
+				{#if soundOn}
+					<BellIcon size={18} weight="fill" aria-hidden="true" />
+				{:else}
+					<BellSlashIcon size={18} aria-hidden="true" />
+				{/if}
+			</button>
+		</div>
+		</div>
 	{:else if session.phase === 'armed'}
 		<!-- ── Armed: waiting for the first pour ─────────────── -->
 		<div class="gb-live">
@@ -305,7 +368,10 @@
 			</div>
 		</div>
 	{:else if session.phase === 'running' || session.phase === 'paused'}
-		<!-- ── Live session ──────────────────────────────────── -->
+		<!-- ── Live session — never scrolls: the clock and the three
+		     controls always stay on screen. Two columns (session +
+		     live weight chart) at ≥1100px, one below. ── -->
+		<div class="gb-live-grid">
 		<div class="gb-live">
 			<div class="gb-live-head">
 				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">
@@ -326,7 +392,13 @@
 				<div class="gb-clock-sub">of about {clock(nominalTotalMs)}</div>
 			{/if}
 
-			<div class="gb-step-card">
+			<div
+				class="gb-step-card"
+				class:is-cue-step={flash === 'step'}
+				class:is-cue-approach={flash === 'approach'}
+				class:is-cue-boundary={flash === 'boundary'}
+				data-cue={flash ?? undefined}
+			>
 				<div class="gb-step-card-head">
 					<span class="gb-step-eyebrow">
 						Step {session.stepIndex + 1} of {steps.length} · {stepLabel(currentStep)}
@@ -380,6 +452,18 @@
 				<button class="gb-text-btn" onclick={() => void skip()}>Skip ›</button>
 			</div>
 		</div>
+		<div class="gb-live-chart">
+			<div class="gb-live-chart-head">
+				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Weight</span>
+				{#if !connected}
+					<span class="gb-live-chart-note">No scale — stage bands only</span>
+				{/if}
+			</div>
+			<div class="gb-live-chart-plot">
+				<BrewSessionChart series={session.liveSeries} extentMs={elapsedMs} height={360} />
+			</div>
+		</div>
+		</div>
 	{:else if session.phase === 'done' && session.summary}
 		<!-- ── Summary ───────────────────────────────────────── -->
 		<div class="gb-done">
@@ -406,6 +490,10 @@
 	{/if}
 </div>
 
+{#if editing}
+	<RecipeEditor recipe={editing} onSave={saveEdited} onClose={() => (editing = null)} />
+{/if}
+
 {#if logOpen && logPrefill}
 	<LogBrewDialog
 		prefill={logPrefill}
@@ -422,6 +510,44 @@
 		display: flex;
 		flex-direction: column;
 		gap: 16px;
+	}
+	.gb-setup {
+		display: flex;
+		flex-direction: column;
+		gap: 16px;
+		width: 100%;
+		max-width: 640px;
+	}
+	.gb-start-row {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+	.gb-bell {
+		width: 40px;
+		height: 40px;
+		border-radius: 50%;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		color: rgba(var(--tint-rgb), 0.55);
+		cursor: pointer;
+		transition: all var(--dur-1) var(--ease);
+	}
+	.gb-bell:hover {
+		background: rgba(var(--tint-rgb), 0.08);
+		color: var(--fg-1);
+	}
+	.gb-bell.is-on {
+		color: var(--copper-400);
+		border-color: var(--copper-600);
+	}
+	.gb-bell:focus-visible,
+	.gb-start:focus-visible {
+		outline: 2px solid var(--copper-400);
+		outline-offset: 2px;
 	}
 	.gb-chips {
 		display: flex;
@@ -453,6 +579,7 @@
 		font-weight: 600;
 	}
 	.gb-recipe {
+		container-type: inline-size;
 		background: rgba(var(--tint-rgb), 0.03);
 		border: 1px solid rgba(var(--tint-rgb), 0.1);
 		border-radius: var(--radius-md);
@@ -528,6 +655,17 @@
 		color: var(--copper-400);
 		flex: none;
 	}
+	/* Narrow card: the AUTO/TAP tag wraps under its step. */
+	@container (max-width: 420px) {
+		.gb-steps li {
+			flex-wrap: wrap;
+			row-gap: 2px;
+		}
+		.gb-step-adv {
+			flex-basis: 100%;
+			padding-left: 24px;
+		}
+	}
 	.gb-setup-row {
 		display: flex;
 		align-items: center;
@@ -599,6 +737,47 @@
 	}
 
 	/* ── Live session ─────────────────────────────────────── */
+	.gb-live-grid {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: 24px;
+		align-items: stretch;
+	}
+	.gb-live-chart {
+		display: none;
+	}
+	@media (min-width: 1100px) {
+		.gb-live-grid {
+			grid-template-columns: minmax(380px, 440px) minmax(0, 1fr);
+		}
+		.gb-live-chart {
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+			min-width: 0;
+			background: rgba(var(--tint-rgb), 0.03);
+			border: 1px solid rgba(var(--tint-rgb), 0.1);
+			border-radius: var(--radius-md);
+			padding: 14px 16px;
+		}
+	}
+	.gb-live-chart-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		gap: 10px;
+	}
+	.gb-live-chart-note {
+		font-family: var(--font-sans);
+		font-size: 11.5px;
+		color: rgba(var(--tint-rgb), 0.5);
+	}
+	.gb-live-chart-plot {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		align-items: center;
+	}
 	.gb-live {
 		display: flex;
 		flex-direction: column;
@@ -619,10 +798,11 @@
 	.gb-clock {
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
-		font-size: 72px;
+		/* Scales with the viewport height so the controls stay on screen. */
+		font-size: clamp(48px, 11vh, 96px);
 		line-height: 1;
 		letter-spacing: -0.03em;
-		margin-top: 10px;
+		margin-top: 6px;
 	}
 	.gb-clock.is-paused {
 		opacity: 0.45;
@@ -644,7 +824,50 @@
 		border: 1px solid var(--copper-600);
 		border-radius: var(--radius-md);
 		padding: 14px 16px;
-		margin-top: 14px;
+		margin-top: 10px;
+	}
+	/* Visual cues — always on, whatever the sound / haptics settings. */
+	.gb-step-card.is-cue-step,
+	.gb-step-card.is-cue-boundary {
+		animation: gb-cue-flash 900ms var(--ease) 1;
+	}
+	.gb-step-card.is-cue-approach {
+		animation: gb-cue-approach 900ms var(--ease) 1;
+	}
+	@keyframes gb-cue-flash {
+		0% {
+			background: rgba(var(--tint-rgb), 0.03);
+			box-shadow: 0 0 0 0 var(--copper-500);
+		}
+		20% {
+			background: color-mix(in srgb, var(--copper-500) 22%, transparent);
+			box-shadow: 0 0 0 4px color-mix(in srgb, var(--copper-500) 45%, transparent);
+		}
+		100% {
+			background: rgba(var(--tint-rgb), 0.03);
+			box-shadow: 0 0 0 0 transparent;
+		}
+	}
+	@keyframes gb-cue-approach {
+		0%,
+		100% {
+			box-shadow: 0 0 0 0 transparent;
+		}
+		30% {
+			box-shadow: 0 0 0 3px color-mix(in srgb, var(--tel-weight) 55%, transparent);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.gb-step-card.is-cue-step,
+		.gb-step-card.is-cue-boundary,
+		.gb-step-card.is-cue-approach {
+			animation: none;
+			border-color: var(--copper-400);
+			border-width: 2px;
+		}
+		.gb-step-card.is-cue-approach {
+			border-color: var(--tel-weight);
+		}
 	}
 	.gb-step-card-head {
 		display: flex;
@@ -713,8 +936,19 @@
 	.gb-controls {
 		display: flex;
 		align-items: center;
+		justify-content: center;
 		gap: 26px;
-		margin-top: 16px;
+		margin-top: 12px;
+	}
+	/* The live controls pin to the bottom of the viewport should the page
+	   ever be too short to show the whole column. */
+	.gb-live .gb-controls {
+		position: sticky;
+		bottom: 0;
+		z-index: 1;
+		width: 100%;
+		padding: 8px 0 max(8px, env(safe-area-inset-bottom));
+		background: var(--bg-page);
 	}
 	.gb-text-btn {
 		background: transparent;

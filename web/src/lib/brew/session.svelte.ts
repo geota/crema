@@ -12,7 +12,20 @@
  * Written by `CremaApp` (commands + event routing); read by the UI.
  */
 
-import type { BrewRecipe, BrewSessionSummary } from '$lib/core/crema-core';
+import type {
+	BrewRecipe,
+	BrewSample,
+	BrewSeries,
+	BrewSessionSummary,
+	StageMark
+} from '$lib/core/crema-core';
+
+/** The live chart's sample cap — ~18 min at the 4 Hz session tick. */
+export const LIVE_SAMPLE_CAP = 4500;
+
+/** A visual cue kind — the step card flashes on every one, regardless of
+ *  the sound / haptics settings (visual cues are always on). */
+export type BrewVisualCue = 'approach' | 'boundary' | 'step';
 
 export type GuidedBrewPhase = 'idle' | 'armed' | 'running' | 'paused' | 'done';
 
@@ -31,6 +44,38 @@ export class GuidedBrewStore {
 	pausedSinceMs = $state<number | null>(null);
 	/** The finished session's summary, until saved or discarded. */
 	summary = $state<BrewSessionSummary | null>(null);
+	/**
+	 * The live weight curve for the session chart, sampled on the session
+	 * tick while running with a scale connected. Display-only: the
+	 * recording that gets saved is the core's (`summary.series`).
+	 */
+	liveSamples = $state.raw<BrewSample[]>([]);
+	/** Live step boundaries (session-elapsed ms), for the chart's bands. */
+	liveMarks = $state.raw<StageMark[]>([]);
+	/** Bumps on every visual cue so the step card can replay its flash. */
+	cueSeq = $state(0);
+	/** The latest visual cue's kind. */
+	cueKind = $state<BrewVisualCue | null>(null);
+
+	/** The live curve as a {@link BrewSeries} for the chart. */
+	get liveSeries(): BrewSeries {
+		return { samples: this.liveSamples, stageMarks: this.liveMarks };
+	}
+
+	/** Record one live weight sample (no-op unless running). */
+	sample(nowMs: number, weightG: number | null, flowGs: number | null): void {
+		if (this.phase !== 'running' || weightG == null || !Number.isFinite(weightG)) return;
+		if (this.liveSamples.length >= LIVE_SAMPLE_CAP) return;
+		const s: BrewSample = { elapsedMs: Math.round(this.elapsedMs(nowMs)), weightG };
+		if (flowGs != null && Number.isFinite(flowGs)) s.flowGS = flowGs;
+		this.liveSamples = [...this.liveSamples, s];
+	}
+
+	/** Flash the step card (visual cue — always on). */
+	cue(kind: BrewVisualCue): void {
+		this.cueKind = kind;
+		this.cueSeq += 1;
+	}
 
 	/** Session time at wall-clock `nowMs`, pauses excluded. */
 	elapsedMs(nowMs: number): number {
@@ -56,17 +101,28 @@ export class GuidedBrewStore {
 		this.pausedAccumMs = 0;
 		this.pausedSinceMs = null;
 		this.summary = null;
+		this.clearLive();
 	}
 
 	started(nowMs: number): void {
 		this.phase = 'running';
 		this.startedAtMs = nowMs;
 		this.stepStartedAtMs = 0;
+		this.liveMarks = [{ elapsedMs: 0, stepIndex: 0 }];
 	}
 
 	stepChanged(stepIndex: number, atMs: number): void {
 		this.stepIndex = stepIndex;
 		this.stepStartedAtMs = atMs;
+		if (!this.liveMarks.some((m) => m.stepIndex === stepIndex)) {
+			this.liveMarks = [...this.liveMarks, { elapsedMs: atMs, stepIndex }];
+		}
+	}
+
+	private clearLive(): void {
+		this.liveSamples = [];
+		this.liveMarks = [];
+		this.cueKind = null;
 	}
 
 	paused(nowMs: number): void {
@@ -99,6 +155,7 @@ export class GuidedBrewStore {
 		this.pausedAccumMs = 0;
 		this.pausedSinceMs = null;
 		this.summary = null;
+		this.clearLive();
 	}
 }
 

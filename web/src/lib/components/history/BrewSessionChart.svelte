@@ -12,10 +12,15 @@
 
 	let {
 		series,
-		height = 300
+		height = 300,
+		extentMs = 0
 	}: {
 		series: BrewSeries;
 		height?: number;
+		/** Live use (the running session): the session clock, so the time
+		 *  axis and the current stage band grow with it even between
+		 *  samples — or with no scale at all. 0 = size to the samples. */
+		extentMs?: number;
 	} = $props();
 
 	// Fixed virtual width; the SVG scales to its container.
@@ -27,9 +32,10 @@
 
 	const maxTimeMs = $derived.by(() => {
 		const s = series.samples;
-		if (s.length === 0) return 1000;
+		const lastSample = s.length ? s[s.length - 1].elapsedMs : 0;
+		if (s.length === 0 && extentMs <= 0) return 1000;
 		// Round up to a 30 s grid so the axis ends on a clean tick.
-		const last = s[s.length - 1].elapsedMs;
+		const last = Math.max(lastSample, extentMs);
 		return Math.max(30_000, Math.ceil(last / 30_000) * 30_000);
 	});
 
@@ -80,9 +86,10 @@
 	const bands = $derived.by(() => {
 		const marks = [...series.stageMarks].sort((a, b) => a.elapsedMs - b.elapsedMs);
 		if (marks.length === 0) return [];
-		const lastT = series.samples.length
+		const lastSample = series.samples.length
 			? series.samples[series.samples.length - 1].elapsedMs
-			: maxTimeMs;
+			: 0;
+		const lastT = extentMs > 0 ? Math.max(lastSample, extentMs) : series.samples.length ? lastSample : maxTimeMs;
 		return marks.map((m, i) => {
 			const from = m.elapsedMs;
 			const to = i + 1 < marks.length ? marks[i + 1].elapsedMs : lastT;

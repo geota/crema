@@ -591,10 +591,17 @@ export class CremaApp {
 				store.stepChanged(event.content.step_index, event.content.at_ms);
 				// The chime for an auto-advanced boundary rides the step
 				// change itself (the Boundary cue covers hold-steps).
-				if (event.content.step_index > 0) playBrewCue('step');
+				if (event.content.step_index > 0) {
+					playBrewCue('step');
+					store.cue('step');
+				}
 			}
 			if (event.type === 'BrewCueDue') {
-				playBrewCue(event.content.cue === 'approach' ? 'approach' : 'boundary');
+				const kind = event.content.cue === 'approach' ? 'approach' : 'boundary';
+				playBrewCue(kind);
+				// Visual cues are always on — the sound / haptics toggles
+				// only gate the audible and tactile legs.
+				getGuidedBrewStore().cue(kind);
 			}
 			if (event.type === 'BrewSessionCompleted') {
 				getGuidedBrewStore().completed(event.content.summary);
@@ -1722,9 +1729,12 @@ export class CremaApp {
 
 	private startBrewTick(): void {
 		this.brewTick ??= setInterval(() => {
-			void this.core
-				.onTick(performance.now())
-				.then((out) => this.applyCoreOutput(out));
+			const now = performance.now();
+			void this.core.onTick(now).then((out) => this.applyCoreOutput(out));
+			// Feed the live session chart (display-only; the core records
+			// the series that gets saved).
+			const snap = this.state.current;
+			getGuidedBrewStore().sample(now, snap.scaleWeight, snap.scaleFlow);
 		}, 250);
 	}
 
