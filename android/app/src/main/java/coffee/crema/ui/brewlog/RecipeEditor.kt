@@ -80,7 +80,7 @@ private val EDITOR_MAX_WIDTH = 640.dp
 private val EDITOR_SHEET_WIDTH = 560.dp
 
 /** Below this body width a step splits over two lines. */
-private val STEP_ONE_LINE_MIN = 520.dp
+private val STEP_ONE_LINE_MIN = 600.dp
 
 private val STEP_KINDS = listOf(
     BrewStepKind.Bloom, BrewStepKind.Pour, BrewStepKind.Wait, BrewStepKind.Steep,

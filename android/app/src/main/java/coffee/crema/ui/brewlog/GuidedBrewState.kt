@@ -166,22 +166,25 @@ enum class LivePane {
     /** < 600dp wide: one column, controls pinned at the bottom. */
     COMPACT,
 
-    /** 600–840dp: one centred ≤460dp column; chart only when very tall. */
+    /** 600–840dp wide and ≥ 600 tall: one centred ≤460dp column; chart only when very tall. */
     MEDIUM,
 
     /** ≥ 840 wide, ≥ 600 tall: session column + live chart. */
     TWO_COLUMN,
 
-    /** ≥ 840 wide, < 600 tall: clock + controls | step card + next; no chart. */
+    /** ≥ 600 wide, < 600 tall: clock + controls | step card + next; no chart. */
     COCKPIT,
     ;
 
     companion object {
         fun of(widthDp: Float, heightDp: Float): LivePane = when {
             widthDp < 600f -> COMPACT
+            // Short panes go cockpit even below 840: a phone in landscape
+            // lands on the tablet shell, and the rail leaves its pane
+            // ~780dp wide and ~330dp tall.
+            heightDp < 600f -> COCKPIT
             widthDp < 840f -> MEDIUM
-            heightDp >= 600f -> TWO_COLUMN
-            else -> COCKPIT
+            else -> TWO_COLUMN
         }
 
         /** MEDIUM panes show the chart under the step card only from this height. */
