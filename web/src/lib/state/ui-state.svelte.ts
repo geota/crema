@@ -1012,6 +1012,28 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					`Water session completed: ${event.content.kind}`
 				)
 			};
+		case 'BrewSessionStarted':
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Guided brew started — ${event.content.recipe_name}`
+				)
+			};
+		case 'BrewStepChanged':
+		case 'BrewCueDue':
+			// High-level session UI state lives in the scale page's own
+			// brew-session store (issue #10); the snapshot fold only logs
+			// the session boundaries.
+			return snapshot;
+		case 'BrewSessionCompleted':
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Guided brew completed — ${event.content.summary.recipeName}`
+				)
+			};
 		case 'SteamSessionStarted':
 			return {
 				...snapshot,
