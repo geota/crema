@@ -45,6 +45,11 @@ fun AppNavHost(
     /** The profile editor (pushed `profile-edit` route); receives the host's back action. */
     profileEditContent: @Composable (onBack: () -> Unit) -> Unit,
     debugContent: @Composable () -> Unit,
+    /** The route to reopen on first composition (the phone host's route when
+     *  the window grows across the 840dp breakpoint); `brew` = start fresh. */
+    initialRoute: String = "brew",
+    /** Reports the current route so MainActivity can hand it to the phone host. */
+    onRouteChange: (String) -> Unit = {},
 ) {
     val nav = rememberNavController()
     // Rail destinations replace one another (single-top, no back-stack buildup);
@@ -78,4 +83,5 @@ fun AppNavHost(
         composable("bean-edit") { beanEditContent(onBack) }
         composable("debug") { debugContent() }
     }
+    SyncNavRoute(nav, initialRoute, NavRestore.TABLET_ROUTES, onNav, onRouteChange)
 }

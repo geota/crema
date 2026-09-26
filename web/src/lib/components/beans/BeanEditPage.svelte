@@ -32,8 +32,10 @@
 	 */
 	import { tick, untrack } from 'svelte';
 	import { getProfileStore } from '$lib/profiles';
-	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
+	import type { ResolvedPathname } from '$app/types';
+	import { leaveEditor, toQuery } from '$lib/beans/editor-nav';
 	import {
 		getBeanStore,
 		getBeanImageStore,
@@ -294,7 +296,7 @@
 			};
 			library.upsertBean(persisted);
 			if (activate) activateBean(persisted.id);
-			goto(resolve('/beans'));
+			leaveEditor(returnTo());
 		} else {
 			// Live mode — already saved every patch. Just commit any pending
 			// roaster name change and bounce back.
@@ -307,12 +309,20 @@
 				}
 			}
 			if (activate && !isActive) activateBean(current.id);
-			goto(resolve('/beans'));
+			leaveEditor(returnTo());
 		}
 	}
 
+	/** `/beans`, or the roaster shelf the editor was opened from
+	 *  (`?roaster=<id>`, set by the library's edit action; #86). Only used
+	 *  when there is no list entry to step back to (see leaveEditor). */
+	function returnTo(): ResolvedPathname {
+		const scope = page.url.searchParams.get('roaster');
+		return resolve(`/beans${toQuery(new URLSearchParams(scope ? { tab: 'bags', roaster: scope } : {}))}`);
+	}
+
 	function back(): void {
-		goto(resolve('/beans'));
+		leaveEditor(returnTo());
 	}
 
 	async function discard(): Promise<void> {
@@ -1296,7 +1306,7 @@
 							beanName={current.name || 'this bag'}
 							label="Delete bean"
 							size="md"
-							onDeleted={() => goto(resolve('/beans'))}
+							onDeleted={() => leaveEditor(returnTo())}
 						/>
 					</div>
 				{/if}

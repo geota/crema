@@ -35,16 +35,22 @@ fun filterAndSortBeans(
     sort: String,
     sortDesc: Boolean,
     activeId: String?,
+    roasterId: String? = null,
 ): List<Bean> {
-    val visible = beans.filter { b ->
+    // Roaster scope (geota/crema#86): tapping a roaster shows that roaster's
+    // shelf — only its bags, and "All" / "Favourite" include the archived ones.
+    // Archiving keeps the working list clean, but a roaster's shelf is the one
+    // place you expect to see every bag you ever bought from them.
+    val inScope = roasterId != null
+    val visible = scopeBeans(beans, roasterId).filter { b ->
         val matchesFilter = when (filter) {
             "archived" -> b.archivedAt != null
             "active" -> b.archivedAt == null && !b.isFrozen
-            "favourite" -> b.archivedAt == null && b.favourite == true
+            "favourite" -> (inScope || b.archivedAt == null) && b.favourite == true
             "frozen" -> b.archivedAt == null && b.isFrozen
             "light", "medium", "dark" ->
                 b.archivedAt == null && roastBand(b.roastLevel?.toInt())?.equals(filter, ignoreCase = true) == true
-            else -> b.archivedAt == null // "All" excludes archived
+            else -> inScope || b.archivedAt == null // "All" excludes archived (unless scoped)
         }
         // Facets still apply while searching — the query narrows what the chips
         // already selected, it does not replace them.
@@ -66,6 +72,18 @@ fun filterAndSortBeans(
     return sorted.pinActiveThenFavourite({ it.id == activeId }, { it.favourite == true })
 }
 
+/** The bags in a roaster scope — all bags when [roasterId] is null. */
+fun scopeBeans(beans: List<Bean>, roasterId: String?): List<Bean> =
+    if (roasterId == null) beans else beans.filter { it.roasterId == roasterId }
+
+/** "N bags · M archived" — the roaster-card bag count, archived hinted (#86). */
+fun roasterBagCountLabel(beans: List<Bean>, roasterId: String): String {
+    val mine = beans.filter { it.roasterId == roasterId }
+    val archived = mine.count { it.archivedAt != null }
+    val base = "${mine.size} ${if (mine.size == 1) "bag" else "bags"}"
+    return if (archived > 0) "$base · $archived archived" else base
+}
+
 /**
  * Brew-PICKER order: the same active→favourite→rest grouping as the library
  * [filterAndSortBeans] (both via [pinActiveThenFavourite]), but over a list the
@@ -81,14 +99,19 @@ fun rankBeansForPicker(beans: List<Bean>, activeId: String?): List<Bean> =
  * "All" badge (was `beans.size`, incl. archived) drifting from the tablet's
  * non-archived count while both lists already hid archived bags (issue 28).
  */
-fun beanFilterCounts(beans: List<Bean>): Map<String, Int> {
-    val nonArchived = beans.filter { it.archivedAt == null }
+fun beanFilterCounts(beans: List<Bean>, roasterId: String? = null): Map<String, Int> {
+    val scoped = scopeBeans(beans, roasterId)
+    val nonArchived = scoped.filter { it.archivedAt == null }
+    // Inside a roaster scope "All" / "Favourite" really are all (see
+    // [filterAndSortBeans]); the counts follow the same rule so the badges
+    // cannot disagree with the list.
+    val allish = if (roasterId != null) scoped else nonArchived
     return mapOf(
-        "all" to nonArchived.size,
+        "all" to allish.size,
         "active" to nonArchived.count { !it.isFrozen },
-        "favourite" to nonArchived.count { it.favourite == true },
+        "favourite" to allish.count { it.favourite == true },
         "frozen" to nonArchived.count { it.isFrozen },
-        "archived" to beans.count { it.archivedAt != null },
+        "archived" to scoped.count { it.archivedAt != null },
         "light" to nonArchived.count { roastBand(it.roastLevel?.toInt()).equals("light", ignoreCase = true) },
         "medium" to nonArchived.count { roastBand(it.roastLevel?.toInt()).equals("medium", ignoreCase = true) },
         "dark" to nonArchived.count { roastBand(it.roastLevel?.toInt()).equals("dark", ignoreCase = true) },

@@ -7,7 +7,10 @@ declare global {
 		// interface Error {}
 		// interface Locals {}
 		// interface PageData {}
-		// interface PageState {}
+		interface PageState {
+			/** Set on an editor entry opened from the Beans list ($lib/beans/editor-nav). */
+			fromBeansList?: boolean;
+		}
 		// interface Platform {}
 	}
 }

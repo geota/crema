@@ -13,6 +13,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   on the left, scale flow (g/s) on the right, so the two numbers being compared
   sit side by side. Dispensed water volume moved to the Weight card next to the
   scale weight. Web, tablet and phone.
+- **Roaster cards open the roaster's shelf** (#86) — tapping a roaster in
+  Beans → Roasters now shows that roaster's bags on the Bags tab, archived ones
+  included (dimmed), with a pill to return to the full library. Roaster cards
+  also say how many of their bags are archived. Editing stays on the pencil.
 
 ## [0.0.6] — 2026-08-07
 

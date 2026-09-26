@@ -366,6 +366,14 @@ class MainActivity : ComponentActivity() {
                 }
                 if (!chartHold) stableCompact = rawCompact
                 val isCompact = stableCompact
+                // The two hosts keep independent NavControllers, so crossing the
+                // breakpoint (e.g. a Pixel rotated to landscape, ~950dp) would
+                // otherwise drop you on Brew. Hoist the current route — and the
+                // Beans tab / filter / roaster shelf — above both, so the incoming
+                // host reopens where the outgoing one was.
+                var currentRoute by rememberSaveable { mutableStateOf("brew") }
+                val onRouteChange: (String) -> Unit = { currentRoute = it }
+                val beansState = rememberBeansViewState()
                 if (isCompact) {
                     PhoneNavHost(
                         vm = viewModel,
@@ -380,7 +388,7 @@ class MainActivity : ComponentActivity() {
                             PhoneProfilesScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
                         },
                         beansContent = { navTo ->
-                            PhoneBeansScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                            PhoneBeansScreen(viewModel, onNav = navTo, onConnect = onRailConnect, beansState = beansState)
                         },
                         historyContent = { navTo ->
                             PhoneHistoryScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
@@ -398,6 +406,8 @@ class MainActivity : ComponentActivity() {
                             PhoneRoasterEditScreen(viewModel, onBack = back)
                         },
                         debugContent = debugSlot,
+                        initialRoute = currentRoute,
+                        onRouteChange = onRouteChange,
                     )
                 } else {
                 // Tablet: tapping a rail connection pip opens the shared Devices
@@ -416,7 +426,7 @@ class MainActivity : ComponentActivity() {
                         ProfilesScreen(viewModel, onNav = navTo, onConnect = openDevices)
                     },
                     beansContent = { navTo ->
-                        BeansScreen(viewModel, onNav = navTo, onConnect = openDevices)
+                        BeansScreen(viewModel, onNav = navTo, onConnect = openDevices, beansState = beansState)
                     },
                     historyContent = { navTo ->
                         HistoryScreen(viewModel, onNav = navTo, onConnect = openDevices)
@@ -434,6 +444,8 @@ class MainActivity : ComponentActivity() {
                         ProfileEditScreen(viewModel, onBack = back)
                     },
                     debugContent = debugSlot,
+                    initialRoute = currentRoute,
+                    onRouteChange = onRouteChange,
                 )
                 if (showDevices) {
                     TabletDevicesSheet(

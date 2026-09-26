@@ -199,7 +199,13 @@ import com.adamglin.phosphoricons.regular.Stop
 // fall back to a question-mark glyph rather than crashing. sizeDp ∈ {16,18,20,24,
 // 32} per the icon spec; tint defaults to the current content color.
 @Composable
-fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalContentColor.current, sizeDp: Int = 20) {
+fun PhIcon(
+    name: String,
+    modifier: Modifier = Modifier,
+    tint: Color = LocalContentColor.current,
+    sizeDp: Int = 20,
+    contentDescription: String? = name,
+) {
     val vector: ImageVector = when (name) {
         "arrow-counter-clockwise" -> PhosphorIcons.Regular.ArrowCounterClockwise
         "arrow-down" -> PhosphorIcons.Regular.ArrowDown
@@ -306,7 +312,7 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
     }
     Icon(
         imageVector = vector,
-        contentDescription = name,
+        contentDescription = contentDescription,
         modifier = modifier.size(sizeDp.dp),
         tint = tint,
     )
@@ -962,7 +968,17 @@ fun CremaTabSwitch(
 
 // ── Chips ─────────────────────────────────────────────────────────────────
 @Composable
-fun CremaFilterChip(label: String, selected: Boolean, modifier: Modifier = Modifier, count: Int? = null, icon: String? = null, onClick: () -> Unit) {
+fun CremaFilterChip(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    count: Int? = null,
+    icon: String? = null,
+    // A trailing glyph (e.g. "x" on a dismissible scope chip). When set, the
+    // label is single-line and ellipsizes so the glyph is never pushed out.
+    trailingIcon: String? = null,
+    onClick: () -> Unit,
+) {
     // PWA `.pp-tag`: a borderless ghost chip — faint label, subtle wash when
     // active — with a faint count pill (`.pp-tag-count`) that turns copper when
     // selected. NOT the bordered M3 FilterChip.
@@ -977,7 +993,18 @@ fun CremaFilterChip(label: String, selected: Boolean, modifier: Modifier = Modif
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (icon != null) PhIcon(icon, sizeDp = 15, tint = fg)
-        Text(label, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp), color = fg)
+        if (trailingIcon != null) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
+                color = fg,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+        } else {
+            Text(label, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp), color = fg)
+        }
         if (count != null) {
             Box(
                 Modifier
@@ -992,6 +1019,7 @@ fun CremaFilterChip(label: String, selected: Boolean, modifier: Modifier = Modif
                 )
             }
         }
+        if (trailingIcon != null) PhIcon(trailingIcon, sizeDp = 14, tint = fg)
     }
 }
 

@@ -24,7 +24,7 @@
 	$effect(() => {
 		if (id && !bean) {
 			// Defer one tick so the navigation isn't fighting the route load.
-			queueMicrotask(() => goto(resolve('/beans')));
+			queueMicrotask(() => goto(resolve('/beans'), { replaceState: true }));
 		}
 	});
 
