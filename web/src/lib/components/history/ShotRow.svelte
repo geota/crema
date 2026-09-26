@@ -107,7 +107,8 @@
 		// Manual logs may have no recorded time — omit rather than "0 s".
 		if (shot.record.duration > 0) {
 			const secs = fmtTime(shot.record.duration);
-			if (parts.length === 0) return `${secs} extraction`;
+			// Filter brews aren't extractions in the espresso sense.
+			if (parts.length === 0) return `${secs} ${method && method !== 'espresso' ? 'brew' : 'extraction'}`;
 			parts.push(secs);
 		}
 		return parts.join(' · ');

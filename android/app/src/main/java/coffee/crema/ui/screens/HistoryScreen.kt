@@ -131,6 +131,7 @@ import coffee.crema.ui.viewableTargets
 import coffee.crema.ui.shareableTargets
 import coffee.crema.ui.openUploadedCopy
 import coffee.crema.ui.UploadPip
+import coffee.crema.history.isBrewLog
 import coffee.crema.ui.uploadPipFor
 import androidx.compose.ui.graphics.Color
 import coffee.crema.ui.shareUploadedLink
@@ -768,6 +769,8 @@ private fun ShotRow(
         // Visualizer sync pip (web .hi-row pip): cloud-check once uploaded,
         // a spinner mid-upload, a faint cloud when local-only.
         when {
+            // Brew-log rows never upload (issue #10), so they carry no cloud pip.
+            shot.isBrewLog -> {}
             syncing -> CircularProgressIndicator(
                 modifier = Modifier.size(12.dp),
                 strokeWidth = 1.5.dp,
