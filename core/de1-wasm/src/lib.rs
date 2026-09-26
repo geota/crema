@@ -342,12 +342,6 @@ pub fn normalize_brew_method(raw: &str) -> Option<String> {
     de1_domain::normalize_brew_method(raw)
 }
 
-/// Mint a `recipe:<uuid-v7>` id for a new brew recipe.
-#[wasm_bindgen(js_name = newRecipeId)]
-pub fn new_recipe_id() -> String {
-    de1_domain::new_recipe_id()
-}
-
 /// Resolve the Brew screen's service-mode display targets (steam /
 /// hot-water / flush) — machine value → Quick-Controls dial → legacy
 /// default, per field. Takes `ModeTargetInputs` JSON, returns
