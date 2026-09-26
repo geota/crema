@@ -4384,6 +4384,47 @@ mod tests {
     }
 
     #[test]
+    fn a_guided_brew_session_never_issues_a_machine_command() {
+        // Spec §8 Phase 2: "No DE1 write is ever issued by a brew session."
+        // Drive every session entry point — arm, start-on-pour, scale
+        // readings, pause / resume, skip, the tick, finish — and collect
+        // every CoreOutput: none may carry a DE1 write
+        // (`Command::WriteCharacteristic`, the only path to the machine).
+        // Scale housekeeping writes from the scale driver are not the
+        // session's and are allowed. Cues surface as events for the shell.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let mut outs = vec![core.brew_session_arm(&brew_recipe_json(), true)];
+        let mut t = 500;
+        for w in [0, 400, 600, 1_500, 3_000, 4_900, 5_100] {
+            outs.push(core.on_notification(Source::ScaleWeight, &bookoo_packet(w), t));
+            outs.push(core.on_tick(t));
+            t += 700;
+        }
+        outs.push(core.brew_session_pause(t));
+        outs.push(core.brew_session_resume(t + 2_000));
+        outs.push(core.brew_session_skip(t + 3_000));
+        outs.push(core.on_tick(t + 4_000));
+        outs.push(core.brew_session_finish(t + 5_000));
+        // A scale-less run too, cancelled mid-way.
+        outs.push(core.brew_session_arm(&brew_recipe_json(), false));
+        outs.push(core.brew_session_begin(100_000));
+        outs.push(core.on_tick(140_000));
+        outs.push(core.brew_session_cancel());
+        let events: usize = outs.iter().map(|o| o.events.len()).sum();
+        assert!(events > 0, "the session did emit events");
+        for o in &outs {
+            assert!(
+                !o.commands
+                    .iter()
+                    .any(|c| matches!(c, Command::WriteCharacteristic { .. })),
+                "brew session issued a DE1 write: {:?}",
+                o.commands
+            );
+        }
+    }
+
+    #[test]
     fn brew_session_survives_a_de1_reset() {
         let mut core = CremaCore::new();
         core.brew_session_arm(&brew_recipe_json(), false);
