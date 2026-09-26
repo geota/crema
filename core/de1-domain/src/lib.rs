@@ -119,7 +119,9 @@ pub use crema_profile::{
     crema_profile_to_wire_json, default_brew_defaults_json, default_segments,
     default_segments_json, from_wire, to_wire,
 };
-pub use decent_shot_record::{decent_shot_record, decent_shot_record_json};
+pub use decent_shot_record::{
+    BREW_LOG_NOT_UPLOADABLE, decent_shot_record, decent_shot_record_json,
+};
 pub use decent_wire::{
     DecentLoginReply, DecentMachine, DecentMachinesReply, DecentUploadReply, decent_login_token,
     decent_login_token_json, decent_machines, decent_machines_json, decent_shot_view_url,

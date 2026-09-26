@@ -220,7 +220,9 @@ pub fn decent_shot_record(shot: &StoredShot, machine: &ShotMachine, app_version:
 ///
 /// # Errors
 ///
-/// The JSON parse error string when either input does not deserialise, or
+/// [`BREW_LOG_NOT_UPLOADABLE`] for a Brew Log row (`brewMethod` set —
+/// issue #10); the JSON parse error string when either input does not
+/// deserialise, or
 /// the (effectively unreachable) serialise error — RS5: surfaced rather
 /// than yielding an empty body the server would reject opaquely.
 pub fn decent_shot_record_json(
@@ -229,10 +231,18 @@ pub fn decent_shot_record_json(
     app_version: &str,
 ) -> Result<String, String> {
     let shot: StoredShot = serde_json::from_str(shot_json).map_err(|e| e.to_string())?;
+    // Brew Log rows (issue #10) are not DE1 shots — the shells never offer
+    // them for upload, and this is the backstop: no ShotRecord is built.
+    if shot.is_brew_log() {
+        return Err(BREW_LOG_NOT_UPLOADABLE.to_owned());
+    }
     let machine: ShotMachine = serde_json::from_str(machine_json).map_err(|e| e.to_string())?;
     serde_json::to_string(&decent_shot_record(&shot, &machine, app_version))
         .map_err(|e| e.to_string())
 }
+
+/// The error [`decent_shot_record_json`] returns for a Brew Log row.
+pub const BREW_LOG_NOT_UPLOADABLE: &str = "brew-log rows are not DE1 shots and are never uploaded";
 
 /// Normalise a free-text roast date to ISO `yyyy-mm-dd`, or `None`.
 ///
@@ -766,6 +776,27 @@ mod tests {
         assert_eq!(parsed, decent_shot_record(&shot(), &machine(), "0.0.7"));
         assert!(decent_shot_record_json("{", &machine_json, "x").is_err());
         assert!(decent_shot_record_json(&shot_json, "[]", "x").is_err());
+    }
+
+    #[test]
+    fn a_brew_log_row_never_becomes_a_shot_record() {
+        // Issue #10: a manual V60 and a guided brew (weight series) are both
+        // brew rows — the converter refuses them outright.
+        let machine_json = serde_json::to_string(&machine()).unwrap();
+        let mut manual = shot();
+        manual.brew_method = Some("pourover".to_owned());
+        manual.record.samples.clear();
+        let mut guided = manual.clone();
+        guided.brew_series = Some(crate::BrewSeries::default());
+        for brew in [manual, guided] {
+            assert!(brew.is_brew_log());
+            let err =
+                decent_shot_record_json(&serde_json::to_string(&brew).unwrap(), &machine_json, "x")
+                    .unwrap_err();
+            assert_eq!(err, BREW_LOG_NOT_UPLOADABLE);
+        }
+        // A machine shot is untouched by the gate.
+        assert!(!shot().is_brew_log());
     }
 
     /// The contract, pinned in one place: a web-shaped StoredShot row in,

@@ -467,6 +467,16 @@ impl StoredShot {
         }
     }
 
+    /// Whether this row is a Brew Log entry of any kind — a declared
+    /// `brew_method`, manual or guided (issue #10). Brew rows are
+    /// local-only: they never reach an upload path (Visualizer or the
+    /// Decent account), carry no DE1 machine stamp, and never feed a
+    /// machine converter. Each shell mirrors this as `isBrewLog`.
+    #[must_use]
+    pub fn is_brew_log(&self) -> bool {
+        self.brew_method.is_some()
+    }
+
     /// Whether this row is a *manually logged* brew: a method was
     /// declared but no telemetry of any kind was captured. Manual rows
     /// keep their dose / water / time / temp editable in the detail
