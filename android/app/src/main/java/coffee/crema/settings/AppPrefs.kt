@@ -89,6 +89,11 @@ data class AppPrefs(
     val chartChannels: Set<String> = setOf("pressure", "flow", "weight"),
     /** Hold FLAG_KEEP_SCREEN_ON while a shot is pulling. */
     val keepScreenOnBrew: Boolean = false,
+    /** Guided-brew cue sound (issue #10). Null = never chosen → off
+     *  ([coffee.crema.ui.brewlog.BrewCueDefaults]); only a toggle stores a value. */
+    val brewCueSound: Boolean? = null,
+    /** Guided-brew cue vibration. Null = never chosen → on. */
+    val brewCueHaptics: Boolean? = null,
     // ── Sleep & screensaver (platform extras — deliberately NOT in
     // CommonSettings; the backup design keeps screensaver per-shell) ─────────
     /** Idle minutes before the screensaver shows; 0 = never. */
@@ -219,6 +224,8 @@ fun AppPrefs.toCommonSettings(): CommonSettings = CommonSettings(
     waterRefillPointMm = waterRefillPointMm,
     chartChannels = chartChannels.toList(),
     keepScreenOnBrew = keepScreenOnBrew,
+    brewCueSound = brewCueSound,
+    brewCueHaptics = brewCueHaptics,
     showDebugPanel = showDebugPanel,
     defaultDoseG = defaultDoseG,
     defaultRatio = defaultRatio,
@@ -261,6 +268,8 @@ fun AppPrefs.withCommonSettings(c: CommonSettings): AppPrefs = copy(
     waterRefillPointMm = c.waterRefillPointMm,
     chartChannels = c.chartChannels.toSet(),
     keepScreenOnBrew = c.keepScreenOnBrew,
+    brewCueSound = c.brewCueSound,
+    brewCueHaptics = c.brewCueHaptics,
     showDebugPanel = c.showDebugPanel,
     defaultDoseG = c.defaultDoseG,
     defaultRatio = c.defaultRatio,

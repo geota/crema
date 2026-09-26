@@ -283,7 +283,9 @@ class MainActivity : ComponentActivity() {
                 // dims mid-use (the flag only applies while this window is visible).
                 // Also held while the SAVER is up: the wall-tablet clock must stay
                 // visible instead of Android blanking the screen underneath it.
-                val keepOn = ui.keepScreenOnBrew || ui.saverVisible
+                // A live guided brew (issue #10) holds it unconditionally too —
+                // a step timer behind a dark screen is a missed pour.
+                val keepOn = ui.keepScreenOnBrew || ui.saverVisible || ui.guidedBrew.live
                 LaunchedEffect(keepOn) {
                     if (keepOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -378,8 +380,17 @@ class MainActivity : ComponentActivity() {
                 // phone and a sheet on its owning tab on the tablet; the draft is
                 // VM-held, so the incoming host just needs the right route.
                 val logBrewOwner = viewModel.logBrew.collectAsStateWithLifecycle().value?.owner
-                val restoreRoute = NavRestore.restoreRoute(currentRoute, logBrewOwner, phone = isCompact) ?: "brew"
-                val routeOwners = NavRestore.owners(logBrewOwner)
+                // The guided-brew recipe editor (issue #10 Phase 2): the same
+                // hand-off — a pushed `recipe-edit` route on the phone, a side
+                // sheet on the owning tab (Scale or Profiles) on the tablet.
+                val recipeEditOwner = viewModel.recipeEdit.collectAsStateWithLifecycle().value?.owner
+                val restoreRoute = NavRestore.restoreRoute(
+                    currentRoute,
+                    logBrewOwner,
+                    phone = isCompact,
+                    recipeEditOwner = recipeEditOwner,
+                ) ?: "brew"
+                val routeOwners = NavRestore.owners(logBrewOwner, recipeEditOwner)
                 if (isCompact) {
                     PhoneNavHost(
                         vm = viewModel,
@@ -413,6 +424,9 @@ class MainActivity : ComponentActivity() {
                         },
                         logBrewContent = { back ->
                             coffee.crema.ui.brewlog.LogBrewScreen(viewModel, onBack = back)
+                        },
+                        recipeEditContent = { back ->
+                            coffee.crema.ui.brewlog.RecipeEditorScreen(viewModel, onBack = back)
                         },
                         debugContent = debugSlot,
                         initialRoute = restoreRoute,

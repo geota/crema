@@ -329,7 +329,12 @@ data class StageMark (
 	/// Milliseconds since the session clock started.
 	val elapsedMs: Long,
 	/// Index into the recipe's `steps` of the step that *began* here.
-	val stepIndex: Long
+	val stepIndex: Long,
+	/// The step's cumulative planned water target, grams, snapshotted
+	/// from the recipe at this boundary (so the "planned vs poured"
+	/// chart survives the recipe being edited, duplicated or deleted).
+	/// `None` for timed steps (no target) and for older records.
+	val targetWaterG: Float? = null
 )
 
 /// The weight-only telemetry of a guided brew session, persisted on
@@ -341,6 +346,20 @@ data class BrewSeries (
 	val samples: List<BrewSample>,
 	/// Step boundaries as they actually happened (skips included).
 	val stageMarks: List<StageMark>
+)
+
+/// Everything the completed session hands back — the shell pre-fills
+/// the log form from this and attaches the series to the stored row.
+@Serializable
+data class BrewSessionSummary (
+	val method: String,
+	val recipeId: String,
+	val recipeName: String,
+	/// Total session time, milliseconds (pauses excluded).
+	val durationMs: Long,
+	/// Last net scale weight seen, grams — the measured water total.
+	val finalWeightG: Float? = null,
+	val series: BrewSeries
 )
 
 /// One brew's inputs to the method-aware History summary strip — the
@@ -449,6 +468,16 @@ data class CommonSettings (
 	val chartChannels: List<String>,
 	/// Hold the screen awake while a shot pulls.
 	val keepScreenOnBrew: Boolean,
+	/// Guided-brew step cues as sound (issue #10). `None` = never set,
+	/// read as [`DEFAULT_BREW_CUE_SOUND`] (off: a kitchen-safe default; the
+	/// session's visual cues are always on). Option per the
+	/// additive-CommonSettings rule so older backups round-trip, and so a
+	/// user who never touched it follows the default rather than a frozen
+	/// copy of it. Shells persist only an explicit choice.
+	val brewCueSound: Boolean? = null,
+	/// Guided-brew step cues as vibration, where the device supports it.
+	/// `None` = never set, read as [`DEFAULT_BREW_CUE_HAPTICS`] (on).
+	val brewCueHaptics: Boolean? = null,
 	/// Show the debug / event-log panel.
 	val showDebugPanel: Boolean,
 	/// Default dose for new profiles, grams.
@@ -698,6 +727,40 @@ data class EventWaterSessionCompletedInner (
 	val kind: WaterSessionKind,
 	/// Total session duration, milliseconds.
 	val duration: UInt
+)
+
+/// Generated type representing the anonymous struct variant `BrewSessionStarted` of the `Event` Rust enum
+@Serializable
+data class EventBrewSessionStartedInner (
+	/// The recipe's brew method (`"pourover"`, …).
+	val method: String,
+	/// The recipe's display name.
+	val recipe_name: String
+)
+
+/// Generated type representing the anonymous struct variant `BrewStepChanged` of the `Event` Rust enum
+@Serializable
+data class EventBrewStepChangedInner (
+	/// Zero-based index into the recipe's steps.
+	val step_index: UInt,
+	/// Session time at the boundary, milliseconds.
+	val at_ms: UInt
+)
+
+/// Generated type representing the anonymous struct variant `BrewCueDue` of the `Event` Rust enum
+@Serializable
+data class EventBrewCueDueInner (
+	/// Which cue.
+	val cue: BrewCue,
+	/// The step the cue belongs to.
+	val step_index: UInt
+)
+
+/// Generated type representing the anonymous struct variant `BrewSessionCompleted` of the `Event` Rust enum
+@Serializable
+data class EventBrewSessionCompletedInner (
+	/// The measured session summary, weight series included.
+	val summary: BrewSessionSummary
 )
 
 /// Generated type representing the anonymous struct variant `SteamSessionCompleted` of the `Event` Rust enum
@@ -985,6 +1048,30 @@ sealed class Event {
 	@Serializable
 	@SerialName("WaterSessionCompleted")
 	data class WaterSessionCompleted(val content: EventWaterSessionCompletedInner): Event()
+	/// A guided brew session's clock started — the Start tap, or the
+	/// first sustained pour when armed for start-on-pour (issue #10).
+	/// Purely scale/timer-driven: no DE1 involvement anywhere in the
+	/// brew-session events.
+	@Serializable
+	@SerialName("BrewSessionStarted")
+	data class BrewSessionStarted(val content: EventBrewSessionStartedInner): Event()
+	/// A guided brew session advanced to a new recipe step. Fires for
+	/// step 0 at start; shells chime/haptic here for auto-advanced
+	/// boundaries.
+	@Serializable
+	@SerialName("BrewStepChanged")
+	data class BrewStepChanged(val content: EventBrewStepChangedInner): Event()
+	/// A guided brew cue is due — the shell renders it as sound/haptic
+	/// (Settings-gated). Never accompanied by any machine write.
+	@Serializable
+	@SerialName("BrewCueDue")
+	data class BrewCueDue(val content: EventBrewCueDueInner): Event()
+	/// A guided brew session ended — the last step finished, or the
+	/// user tapped Finish. The summary carries everything the shell
+	/// needs to pre-fill the log form and persist the row.
+	@Serializable
+	@SerialName("BrewSessionCompleted")
+	data class BrewSessionCompleted(val content: EventBrewSessionCompletedInner): Event()
 	/// A steam session began (the DE1 entered the `Steam` state).
 	@Serializable
 	@SerialName("SteamSessionStarted")
@@ -2331,6 +2418,34 @@ enum class BeverageType(val string: String) {
 	/// Pour-over style profile (long, low-pressure).
 	@SerialName("pourover")
 	Pourover("pourover"),
+}
+
+/// A cue the shell renders as sound/haptic.
+@Serializable
+enum class BrewCue(val string: String) {
+	/// A boundary is coming: ~3 s before a countdown ends, or a pour is
+	/// within sensor-lag + reaction of its weight target. Once per step.
+	@SerialName("approach")
+	Approach("approach"),
+	/// The boundary itself: stop pouring / countdown hit zero on a step
+	/// that holds for a tap. Steps that auto-advance signal the boundary
+	/// via [`BrewSessionEvent::StepChanged`] instead. Once per step.
+	@SerialName("boundary")
+	Boundary("boundary"),
+}
+
+/// What phase the session is in.
+@Serializable
+enum class BrewSessionPhase(val string: String) {
+	/// Waiting to start — for the tap, or for the first pour.
+	@SerialName("armed")
+	Armed("armed"),
+	@SerialName("running")
+	Running("running"),
+	@SerialName("paused")
+	Paused("paused"),
+	@SerialName("done")
+	Done("done"),
 }
 
 /// What a calibration packet asks the DE1 to do.

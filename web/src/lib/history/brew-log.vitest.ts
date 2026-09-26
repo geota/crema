@@ -5,7 +5,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { HistoryStore } from './store.svelte';
-import { isBrewLog, isManualLog } from './model';
+import { isBrewLog, isManualLog, type StoredShot } from './model';
 
 const input = {
 	method: 'pourover',
@@ -54,5 +54,14 @@ describe('isBrewLog', () => {
 		expect(isBrewLog({})).toBe(false);
 		expect(isBrewLog({ brewMethod: 'espresso' })).toBe(true);
 		expect(isBrewLog({ brewMethod: 'aeropress' })).toBe(true);
+	});
+	it('covers guided brews — a recorded weight series does not make a row uploadable', () => {
+		const guided = {
+			brewMethod: 'pourover',
+			record: { duration: 180_000, samples: [] },
+			brewSeries: { samples: [{ elapsedMs: 0, weightG: 0 }], stageMarks: [] }
+		} as unknown as StoredShot;
+		expect(isBrewLog(guided)).toBe(true);
+		expect(isManualLog(guided)).toBe(false);
 	});
 });

@@ -12,11 +12,12 @@ object NavRestore {
     val TAB_ROUTES: Set<String> = setOf("brew", "scale", "profiles", "beans", "history", "settings")
 
     /** Every route the phone host knows. */
-    val PHONE_ROUTES: Set<String> = TAB_ROUTES + setOf("profile-edit", "bean-edit", "roaster-edit", "log-brew", "debug")
+    val PHONE_ROUTES: Set<String> = TAB_ROUTES + setOf("profile-edit", "bean-edit", "roaster-edit", "log-brew", "recipe-edit", "debug")
 
     /**
      * Every route the tablet host knows (roasters are edited in a dialog
-     * there; the Brew Log form is a side sheet on its owning tab).
+     * there; the Brew Log form and the recipe editor are side sheets on their
+     * owning tab).
      */
     val TABLET_ROUTES: Set<String> = TAB_ROUTES + setOf("profile-edit", "bean-edit", "debug")
 
@@ -28,11 +29,16 @@ object NavRestore {
         // The Brew Log form's owner is dynamic (History or Beans — wherever it
         // was opened); this is only the fallback. See [restoreRoute].
         "log-brew" to "history",
+        // Likewise the recipe editor's (Scale's Brew setup or Profiles).
+        "recipe-edit" to "profiles",
         "debug" to "settings",
     )
 
     /** The phone's pushed Brew Log form (issue #10). */
     const val LOG_BREW = "log-brew"
+
+    /** The phone's pushed guided-brew recipe editor (issue #10 Phase 2). */
+    const val RECIPE_EDIT = "recipe-edit"
 
     /**
      * The navigations to perform, in order, on top of the `brew` start
@@ -56,14 +62,25 @@ object NavRestore {
      *  • tablet ← phone: `log-brew` collapses to the owning tab (via [steps]
      *    with [owners]), where the tablet re-opens the sheet;
      *  • a stale `log-brew` with no form open falls back to History.
+     * The recipe editor ([recipeEditOwner]: Scale or Profiles) follows the
+     * same rules with `recipe-edit`; a stale one falls back to Profiles.
      */
-    fun restoreRoute(route: String?, logBrewOwner: String?, phone: Boolean): String? = when {
+    fun restoreRoute(
+        route: String?,
+        logBrewOwner: String?,
+        phone: Boolean,
+        recipeEditOwner: String? = null,
+    ): String? = when {
         route == LOG_BREW && logBrewOwner == null -> "history"
+        route == RECIPE_EDIT && recipeEditOwner == null -> "profiles"
+        phone && recipeEditOwner != null && route == recipeEditOwner -> RECIPE_EDIT
         phone && logBrewOwner != null && route == logBrewOwner -> LOG_BREW
         else -> route
     }
 
-    /** [steps]' dynamic owners for the open form. */
-    fun owners(logBrewOwner: String?): Map<String, String> =
-        if (logBrewOwner != null) mapOf(LOG_BREW to logBrewOwner) else emptyMap()
+    /** [steps]' dynamic owners for the open form / editor. */
+    fun owners(logBrewOwner: String?, recipeEditOwner: String? = null): Map<String, String> = buildMap {
+        if (logBrewOwner != null) put(LOG_BREW, logBrewOwner)
+        if (recipeEditOwner != null) put(RECIPE_EDIT, recipeEditOwner)
+    }
 }

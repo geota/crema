@@ -51,6 +51,7 @@ pub mod bean_search;
 pub mod beanconqueror;
 pub mod brand;
 pub mod brew;
+pub mod brew_session;
 pub mod builtin;
 /// Lenient number-or-string deserialization shared by the JSON importers.
 mod coerce;
@@ -106,6 +107,10 @@ pub use brew::{
     BREW_METHOD_PRESETS, BrewHistoryStats, BrewRecipe, BrewSample, BrewSeries, BrewStatInput,
     BrewStep, BrewStepKind, StageMark, StepAdvance, brew_history_stats, is_espresso_method,
     normalize_brew_method, ratio_for_method,
+};
+pub use brew_session::{
+    APPROACH_LEAD, BREW_SAMPLE_MIN_INTERVAL, BrewCue, BrewSessionEvent, BrewSessionMonitor,
+    BrewSessionPhase, BrewSessionSummary, MAX_BREW_SAMPLES, START_ON_POUR_THRESHOLD_G,
 };
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use crema_jsonl::{

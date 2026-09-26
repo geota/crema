@@ -1,11 +1,19 @@
 package coffee.crema.brew
 
+import coffee.crema.core.BrewRecipe
+import coffee.crema.core.BrewStep
+import coffee.crema.core.BrewStepKind
+import coffee.crema.core.StepAdvance
+import coffee.crema.core.newRecipeId
+import kotlin.math.min
+import kotlin.math.roundToInt
+
 /*
  * The Brew Log method vocabulary (issue #10) — the Android twin of the web's
  * `$lib/brew/methods`. Storage accepts ANY normalized method string (the
  * core's `normalize_brew_method` rule); this file owns what the UI makes of
  * one: the curated preset chips, display labels, per-method seed values for
- * the log form. Tea is deliberately
+ * the log form, and the default guided-brew recipes. Tea is deliberately
  * absent — a BC tea brew still imports, carrying its name as free text.
  */
 
@@ -72,6 +80,87 @@ fun methodShortLabel(method: String?): String =
 fun isEspressoMethod(method: String?): Boolean {
     val m = method?.trim()?.lowercase()
     return m.isNullOrEmpty() || m == "espresso"
+}
+
+/**
+ * Build the sensible starter recipe for a method — what the Scale screen's
+ * Brew segment offers before the user has saved anything. Twin of the web's
+ * `defaultRecipeFor`.
+ */
+fun defaultRecipeFor(method: String, nowMs: Long): BrewRecipe {
+    val preset = presetFor(method)
+    val dose = preset?.seedDose ?: 15f
+    val water = preset?.seedWater ?: preset?.seedYield ?: 250f
+    return BrewRecipe(
+        id = newRecipeId(),
+        name = "${(preset?.label ?: method).substringBefore(" / ")} classic",
+        method = method,
+        doseG = dose,
+        waterG = water,
+        tempC = preset?.seedTemp,
+        steps = defaultStepsFor(method, dose, water),
+        notes = null,
+        favourite = false,
+        createdAt = nowMs,
+        updatedAt = nowMs,
+        deletedAt = null,
+    )
+}
+
+private fun defaultStepsFor(method: String, dose: Float, water: Float): List<BrewStep> {
+    val bloom = min((dose * 3).roundToInt(), (water * 0.25f).roundToInt()).toFloat()
+    fun pour(target: Float) =
+        BrewStep(kind = BrewStepKind.Pour, targetWaterG = target, advance = StepAdvance.Auto)
+    fun timed(kind: BrewStepKind, s: Long, advance: StepAdvance = StepAdvance.Auto) =
+        BrewStep(kind = kind, durationS = s, advance = advance)
+    fun open(kind: BrewStepKind) = BrewStep(kind = kind, advance = StepAdvance.Manual)
+    return when (method) {
+        "pourover" -> listOf(
+            BrewStep(
+                kind = BrewStepKind.Bloom,
+                targetWaterG = bloom,
+                durationS = 45,
+                advance = StepAdvance.Auto,
+            ),
+            pour((water * 0.6f).roundToInt().toFloat()),
+            timed(BrewStepKind.Wait, 30),
+            pour(water),
+            open(BrewStepKind.Drawdown),
+        )
+        "aeropress" -> listOf(
+            pour(water),
+            timed(BrewStepKind.Stir, 10),
+            timed(BrewStepKind.Steep, 60),
+            timed(BrewStepKind.Press, 25),
+        )
+        "french_press" -> listOf(pour(water), timed(BrewStepKind.Steep, 240), open(BrewStepKind.Press))
+        "clever" -> listOf(pour(water), timed(BrewStepKind.Steep, 150), open(BrewStepKind.Drawdown))
+        "siphon" -> listOf(pour(water), timed(BrewStepKind.Steep, 90), open(BrewStepKind.Drawdown))
+        // Espresso / moka / drip / cold brew / free-text: one open pour to
+        // the water (or yield) target — "just time it for me".
+        else -> listOf(pour(water))
+    }
+}
+
+/** Display label for a step's kind. */
+fun stepKindLabel(kind: BrewStepKind): String = when (kind) {
+    BrewStepKind.Bloom -> "Bloom"
+    BrewStepKind.Pour -> "Pour"
+    BrewStepKind.Wait -> "Wait"
+    BrewStepKind.Steep -> "Steep"
+    BrewStepKind.Stir -> "Stir"
+    BrewStepKind.Press -> "Press"
+    BrewStepKind.Drawdown -> "Drawdown"
+    BrewStepKind.Other -> "Step"
+}
+
+/** "to 250 g · 0:45" / "until you tap" — one spec line per step. */
+fun stepSpec(step: BrewStep): String {
+    val parts = mutableListOf<String>()
+    step.targetWaterG?.let { parts.add("to ${it.roundToInt()} g") }
+    step.durationS?.let { parts.add(formatClock(it * 1000)) }
+    if (parts.isEmpty()) parts.add("until you tap")
+    return parts.joinToString(" · ")
 }
 
 /** "3:05" — mm:ss for any duration in ms. */

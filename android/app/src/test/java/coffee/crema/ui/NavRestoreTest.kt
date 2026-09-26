@@ -62,4 +62,46 @@ class NavRestoreTest {
         // And the static fallback owner still resolves without a draft.
         assertEquals(listOf("history"), NavRestore.steps("log-brew", TABLET_ROUTES))
     }
+
+    // ── Guided-brew recipe editor (issue #10 Phase 2) ────────────────────
+
+    @Test fun phoneRecipeEditOpensTheSheetOnTheOwningTabOnTablet() {
+        // Opened from Scale's Brew setup or from Profiles: the tablet lands on
+        // that tab, where the side sheet re-opens from the VM-held draft.
+        for (owner in listOf("scale", "profiles")) {
+            val route = NavRestore.restoreRoute("recipe-edit", null, phone = false, recipeEditOwner = owner)
+            assertEquals("recipe-edit", route)
+            assertEquals(
+                listOf(owner),
+                NavRestore.steps(route, TABLET_ROUTES, NavRestore.owners(null, recipeEditOwner = owner)),
+            )
+        }
+    }
+
+    @Test fun tabletRecipeSheetBecomesThePushedRouteOnPhone() {
+        for (owner in listOf("scale", "profiles")) {
+            val route = NavRestore.restoreRoute(owner, null, phone = true, recipeEditOwner = owner)
+            assertEquals("recipe-edit", route)
+            assertEquals(
+                listOf(owner, "recipe-edit"),
+                NavRestore.steps(route, PHONE_ROUTES, NavRestore.owners(null, recipeEditOwner = owner)),
+            )
+        }
+    }
+
+    @Test fun guidedLogBrewFromScaleFollowsTheSameHandOff() {
+        // The finished session's "Save brew…" opens the log form owned by Scale.
+        assertEquals("log-brew", NavRestore.restoreRoute("scale", "scale", phone = true))
+        assertEquals(listOf("scale"), NavRestore.steps("log-brew", TABLET_ROUTES, NavRestore.owners("scale")))
+    }
+
+    @Test fun anOpenRecipeEditorOnAnotherTabDoesNotHijackTheRoute() {
+        assertEquals("history", NavRestore.restoreRoute("history", null, phone = true, recipeEditOwner = "scale"))
+        assertEquals("scale", NavRestore.restoreRoute("scale", null, phone = false, recipeEditOwner = "scale"))
+    }
+
+    @Test fun aStaleRecipeEditRouteFallsBackToProfiles() {
+        assertEquals("profiles", NavRestore.restoreRoute("recipe-edit", null, phone = true))
+        assertEquals(listOf("profiles"), NavRestore.steps("recipe-edit", TABLET_ROUTES))
+    }
 }

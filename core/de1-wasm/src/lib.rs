@@ -342,6 +342,12 @@ pub fn normalize_brew_method(raw: &str) -> Option<String> {
     de1_domain::normalize_brew_method(raw)
 }
 
+/// Mint a `recipe:<uuid-v7>` id for a new brew recipe.
+#[wasm_bindgen(js_name = newRecipeId)]
+pub fn new_recipe_id() -> String {
+    de1_domain::new_recipe_id()
+}
+
 /// Resolve the Brew screen's service-mode display targets (steam /
 /// hot-water / flush) — machine value → Quick-Controls dial → legacy
 /// default, per field. Takes `ModeTargetInputs` JSON, returns
@@ -1334,6 +1340,45 @@ impl CremaBridge {
     /// Feed a periodic clock tick. Returns a JSON-encoded [`CoreOutput`].
     pub fn on_tick(&mut self, now_ms: f64) -> String {
         json(self.core.on_tick(now_ms as u64))
+    }
+
+    // ── Guided brew sessions (issue #10) ─────────────────────────
+
+    /// Arm a guided brew session for a JSON-encoded `BrewRecipe`.
+    /// `start_on_pour` starts the clock at the first sustained pour.
+    /// Returns a JSON-encoded [`CoreOutput`].
+    pub fn brew_session_arm(&mut self, recipe_json: &str, start_on_pour: bool) -> String {
+        json(self.core.brew_session_arm(recipe_json, start_on_pour))
+    }
+
+    /// Start an armed session's clock (the Start tap).
+    pub fn brew_session_begin(&mut self, now_ms: f64) -> String {
+        json(self.core.brew_session_begin(now_ms as u64))
+    }
+
+    /// Freeze a running session's clock.
+    pub fn brew_session_pause(&mut self, now_ms: f64) -> String {
+        json(self.core.brew_session_pause(now_ms as u64))
+    }
+
+    /// Resume a paused session.
+    pub fn brew_session_resume(&mut self, now_ms: f64) -> String {
+        json(self.core.brew_session_resume(now_ms as u64))
+    }
+
+    /// Advance to the next recipe step.
+    pub fn brew_session_skip(&mut self, now_ms: f64) -> String {
+        json(self.core.brew_session_skip(now_ms as u64))
+    }
+
+    /// End the session now; the output carries `BrewSessionCompleted`.
+    pub fn brew_session_finish(&mut self, now_ms: f64) -> String {
+        json(self.core.brew_session_finish(now_ms as u64))
+    }
+
+    /// Drop the session without a summary.
+    pub fn brew_session_cancel(&mut self) -> String {
+        json(self.core.brew_session_cancel())
     }
 
     /// Discard all session state — e.g. on disconnect.

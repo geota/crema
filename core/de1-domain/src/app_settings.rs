@@ -24,6 +24,11 @@
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
+/// Guided-brew cue sound when the user never chose (issue #10): off.
+pub const DEFAULT_BREW_CUE_SOUND: bool = false;
+/// Guided-brew cue haptics when the user never chose (issue #10): on.
+pub const DEFAULT_BREW_CUE_HAPTICS: bool = true;
+
 /// The portable, cross-shell app-preferences subset. `#[serde(default)]` on the
 /// whole struct (via [`Default`]) so a partial blob — an older backup, or one
 /// shell omitting a field it shares — fills gaps from the canonical defaults
@@ -109,6 +114,18 @@ pub struct CommonSettings {
     pub chart_channels: Vec<String>,
     /// Hold the screen awake while a shot pulls.
     pub keep_screen_on_brew: bool,
+    /// Guided-brew step cues as sound (issue #10). `None` = never set,
+    /// read as [`DEFAULT_BREW_CUE_SOUND`] (off: a kitchen-safe default; the
+    /// session's visual cues are always on). Option per the
+    /// additive-CommonSettings rule so older backups round-trip, and so a
+    /// user who never touched it follows the default rather than a frozen
+    /// copy of it. Shells persist only an explicit choice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brew_cue_sound: Option<bool>,
+    /// Guided-brew step cues as vibration, where the device supports it.
+    /// `None` = never set, read as [`DEFAULT_BREW_CUE_HAPTICS`] (on).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brew_cue_haptics: Option<bool>,
     /// Show the debug / event-log panel.
     pub show_debug_panel: bool,
     /// Default dose for new profiles, grams.
@@ -166,6 +183,8 @@ impl Default for CommonSettings {
                 "weight".to_owned(),
             ],
             keep_screen_on_brew: false,
+            brew_cue_sound: None,
+            brew_cue_haptics: None,
             show_debug_panel: false,
             default_dose_g: 18.0,
             default_ratio: 2.0,
@@ -181,5 +200,57 @@ impl Default for CommonSettings {
             qc_flush_time_s: 4.0,
             qc_flush_temp_c: 95.0,
         }
+    }
+}
+
+impl CommonSettings {
+    /// Effective guided-brew cue sound: the explicit choice, else
+    /// [`DEFAULT_BREW_CUE_SOUND`].
+    pub fn brew_cue_sound_on(&self) -> bool {
+        self.brew_cue_sound.unwrap_or(DEFAULT_BREW_CUE_SOUND)
+    }
+
+    /// Effective guided-brew cue haptics: the explicit choice, else
+    /// [`DEFAULT_BREW_CUE_HAPTICS`].
+    pub fn brew_cue_haptics_on(&self) -> bool {
+        self.brew_cue_haptics.unwrap_or(DEFAULT_BREW_CUE_HAPTICS)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn brew_cues_default_to_haptics_on_sound_off() {
+        let d = CommonSettings::default();
+        assert_eq!(d.brew_cue_sound, None);
+        assert_eq!(d.brew_cue_haptics, None);
+        assert!(!d.brew_cue_sound_on());
+        assert!(d.brew_cue_haptics_on());
+    }
+
+    #[test]
+    fn untouched_brew_cues_stay_unset_through_a_round_trip() {
+        // A blob that never carried the fields (an older backup, or a user
+        // who never touched them) reads as the defaults — and serialises
+        // without them, so a later default change still reaches that user.
+        let c: CommonSettings = serde_json::from_str(r#"{"themeMode":"light"}"#).unwrap();
+        assert!(!c.brew_cue_sound_on());
+        assert!(c.brew_cue_haptics_on());
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(!json.contains("brewCueSound"), "{json}");
+        assert!(!json.contains("brewCueHaptics"), "{json}");
+    }
+
+    #[test]
+    fn explicit_brew_cue_choices_win_and_round_trip() {
+        let c: CommonSettings =
+            serde_json::from_str(r#"{"brewCueSound":true,"brewCueHaptics":false}"#).unwrap();
+        assert!(c.brew_cue_sound_on());
+        assert!(!c.brew_cue_haptics_on());
+        let back: CommonSettings =
+            serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back, c);
     }
 }

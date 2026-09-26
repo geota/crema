@@ -737,6 +737,15 @@ private fun DisplaySection(
         CremaSettingsRow("Wake machine with screensaver", "Tapping the saver also wakes a sleeping DE1. Off: the tap only dismisses — wake with the power button.") { CremaSwitch(wakeMachineWithSaver, vm::setWakeMachineWithSaver) }
         CremaSettingsRow("Keep screen on", "Hold the display awake while Crema is open.", last = true) { CremaSwitch(keepScreenOnBrew, vm::setKeepScreenOnBrew) }
     }
+    SettingsGroup("Guided brew cues") {
+        val ui by vm.ui.collectAsStateWithLifecycle()
+        CremaSettingsRow("Cue sound", "A short tone at step changes and before a pour target. Off by default — the step card always flashes.") {
+            CremaSwitch(coffee.crema.ui.brewlog.BrewCueDefaults.soundOn(ui.brewCueSound), vm::setBrewCueSound)
+        }
+        CremaSettingsRow("Cue vibration", "A buzz at the same moments, where the device can vibrate.", last = true) {
+            CremaSwitch(coffee.crema.ui.brewlog.BrewCueDefaults.hapticsOn(ui.brewCueHaptics), vm::setBrewCueHaptics)
+        }
+    }
     SettingsGroup("Units") {
         CremaSettingsRow("Temperature", "Units for every temperature readout.") {
             CremaSegmentedButton(

@@ -80,4 +80,15 @@ describe('shotUploadTargets', () => {
 		expect(uploadMenuEntry(ts).enabled).toBe(false);
 		expect(viewableTargets(ts)).toEqual([]);
 	});
+	it('is empty for a GUIDED brew row too (weight series, no DE1 samples)', () => {
+		const guided = {
+			...base,
+			brewMethod: 'pourover',
+			recipeName: 'Morning V60',
+			brewSeries: { samples: [{ elapsedMs: 1000, weightG: 40 }], stageMarks: [{ elapsedMs: 0, stepIndex: 0 }] }
+		} as StoredShot;
+		const ts = shotUploadTargets(guided, { visualizer: true, decent: true });
+		expect(ts).toEqual([]);
+		expect(uploadMenuEntry(ts).enabled).toBe(false);
+	});
 });
