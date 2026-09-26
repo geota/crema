@@ -254,7 +254,7 @@ fun HistoryScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (!shortWindow) Text(
-                        "${ui.history.size} ${rowNoun}s on this device",
+                        "${ui.history.size} ${rowNoun}${if (ui.history.size == 1) "" else "s"} on this device",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1201,7 +1201,7 @@ private fun ShotDetail(
             value = nextPlan,
             onValueChange = { nextPlan = it; onNextPlanChange(it) },
             label = "Next time",
-            placeholder = "What will you change next shot?",
+            placeholder = if (shot.isBrewLog) "What will you change next time?" else "What will you change next shot?",
             singleLine = false,
             minLines = 2,
             modifier = Modifier.fillMaxWidth(),

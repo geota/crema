@@ -952,7 +952,7 @@ private fun PhoneShotDetail(
                         value = nextPlan,
                         onValueChange = { nextPlan = it; vm.setShotNextPlan(shot.id, it) },
                         label = "Next time",
-                        placeholder = "What will you change next shot?",
+                        placeholder = if (shot.isBrewLog) "What will you change next time?" else "What will you change next shot?",
                         singleLine = false,
                         minLines = 2,
                         modifier = Modifier.fillMaxWidth(),

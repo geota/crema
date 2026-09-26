@@ -1102,7 +1102,9 @@
 			<textarea
 				class="hi-notes-input"
 				bind:value={planDraft}
-				placeholder="What will you change next shot? (e.g. go finer, +2 g yield)"
+				placeholder={isBrew
+					? 'What will you change next time? (e.g. go finer, longer bloom)'
+					: 'What will you change next shot? (e.g. go finer, +2 g yield)'}
 				rows="3"
 			></textarea>
 		{:else}
