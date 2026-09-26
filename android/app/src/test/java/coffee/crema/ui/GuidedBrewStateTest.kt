@@ -144,7 +144,8 @@ class GuidedBrewStateTest {
         assertEquals(LivePane.COMPACT, LivePane.of(427f, 700f)) // Pixel portrait
         assertEquals(LivePane.MEDIUM, LivePane.of(600f, 820f)) // 7" portrait (phone shell)
         assertEquals(LivePane.MEDIUM, LivePane.of(800f, 1100f)) // medium tablet portrait
-        assertEquals(LivePane.COCKPIT, LivePane.of(860f, 300f)) // Pixel landscape, minus rail + header
+        assertEquals(LivePane.COCKPIT, LivePane.of(780f, 330f)) // Pixel landscape, minus rail + header
+        assertEquals(LivePane.COCKPIT, LivePane.of(860f, 300f))
         assertEquals(LivePane.COCKPIT, LivePane.of(870f, 450f)) // 7" landscape
         assertEquals(LivePane.TWO_COLUMN, LivePane.of(1350f, 780f)) // large tablet landscape
     }
