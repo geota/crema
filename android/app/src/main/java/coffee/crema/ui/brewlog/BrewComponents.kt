@@ -5,8 +5,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -109,17 +110,25 @@ fun BrewSessionCanvas(
     showLegend: Boolean = true,
 ) {
     val hasPlan = series.stageMarks.any { it.targetWaterG != null }
-    Box(modifier) {
-        BrewSessionPlot(series, Modifier.fillMaxSize(), minSpanMs, nowMs, targetG)
-        if (hasPlan && showLegend) {
-            Row(
-                Modifier.align(Alignment.TopStart).padding(start = 14.dp, top = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                PlannedLegend()
+    if (!(hasPlan && showLegend)) {
+        BrewSessionPlot(series, modifier, minSpanMs, nowMs, targetG)
+        return
+    }
+    // The legend gets its own strip above the plot: drawn over it, it sat
+    // on the flow line (which tops out at the plot's upper edge) and, early
+    // in a live brew, on the weight curve.
+    Column(modifier) {
+        Row(
+            Modifier.padding(start = 8.dp, top = 2.dp, bottom = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            PlannedLegend()
+            // A scale-less live session has no poured curve to label.
+            if (series.samples.isNotEmpty()) {
                 LegendEntry("poured", dashed = false, color = CremaTheme.telemetry.weight)
             }
         }
+        BrewSessionPlot(series, Modifier.fillMaxWidth().weight(1f), minSpanMs, nowMs, targetG)
     }
 }
 

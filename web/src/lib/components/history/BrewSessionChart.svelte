@@ -35,6 +35,10 @@
 	const PAD_L = 34;
 	const PAD_R = 10;
 	const PAD_T = 8;
+	/** Top padding with the legend on: a strip above the plot, so the
+	 *  legend never sits on the data (the flow line tops out at the plot's
+	 *  upper edge, and early in a live brew so does the weight curve). */
+	const PAD_T_LEGEND = 24;
 	const PAD_B = 22;
 
 	const maxTimeMs = $derived.by(() => {
@@ -68,14 +72,18 @@
 		return Math.max(4, Math.ceil(m));
 	});
 
+	/** The in-chart legend shows only when a mark carries a target. */
+	const showLegend = $derived(legend && plannedMax > 0);
+	const padT = $derived(showLegend ? PAD_T_LEGEND : PAD_T);
+
 	const plotW = W - PAD_L - PAD_R;
-	const plotH = $derived(height - PAD_T - PAD_B);
+	const plotH = $derived(height - padT - PAD_B);
 
 	const xAt = (tMs: number): number => PAD_L + (tMs / maxTimeMs) * plotW;
 	const yAtW = (g: number): number =>
-		PAD_T + (1 - Math.min(1, Math.max(0, g / maxWeight))) * plotH;
+		padT + (1 - Math.min(1, Math.max(0, g / maxWeight))) * plotH;
 	const yAtF = (f: number): number =>
-		PAD_T + (1 - Math.min(1, Math.max(0, f / maxFlow))) * plotH;
+		padT + (1 - Math.min(1, Math.max(0, f / maxFlow))) * plotH;
 
 	function pathFor(pick: (s: BrewSeries['samples'][number]) => number | null): string {
 		const segs: string[] = [];
@@ -153,13 +161,13 @@
 			<rect
 				class="bsc-band"
 				x={xAt(b.from)}
-				y={PAD_T}
+				y={padT}
 				width={Math.max(0, xAt(b.to) - xAt(b.from))}
 				height={plotH}
 			/>
 		{/if}
 		{#if b.from > 0}
-			<line class="bsc-bound" x1={xAt(b.from)} y1={PAD_T} x2={xAt(b.from)} y2={PAD_T + plotH} />
+			<line class="bsc-bound" x1={xAt(b.from)} y1={padT} x2={xAt(b.from)} y2={padT + plotH} />
 		{/if}
 	{/each}
 
@@ -188,14 +196,17 @@
 	{/if}
 	<path class="bsc-weight" d={weightPath} fill="none" />
 
-	{#if plannedPath && legend}
-		<!-- Legend: planned (dashed) vs poured (solid), top-left where the
-		     curve is still near zero. -->
+	{#if plannedPath && showLegend}
+		<!-- Legend: planned (dashed) vs poured (solid), in its own strip
+		     above the plot so it never covers the curves. -->
 		<g class="bsc-legend" aria-hidden="true">
-			<line class="bsc-planned" x1={PAD_L + 8} y1={PAD_T + 12} x2={PAD_L + 26} y2={PAD_T + 12} />
-			<text class="bsc-legend-text" x={PAD_L + 31} y={PAD_T + 15}>planned</text>
-			<line class="bsc-weight" x1={PAD_L + 80} y1={PAD_T + 12} x2={PAD_L + 98} y2={PAD_T + 12} />
-			<text class="bsc-legend-text" x={PAD_L + 103} y={PAD_T + 15}>poured</text>
+			<line class="bsc-planned" x1={PAD_L + 2} y1={11} x2={PAD_L + 20} y2={11} />
+			<text class="bsc-legend-text" x={PAD_L + 25} y={14}>planned</text>
+			{#if series.samples.length > 0}
+				<!-- A scale-less live session has no poured curve to label. -->
+				<line class="bsc-weight" x1={PAD_L + 74} y1={11} x2={PAD_L + 92} y2={11} />
+				<text class="bsc-legend-text" x={PAD_L + 97} y={14}>poured</text>
+			{/if}
 		</g>
 	{/if}
 </svg>
