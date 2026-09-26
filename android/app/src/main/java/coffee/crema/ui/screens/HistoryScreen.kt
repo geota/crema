@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -860,8 +861,13 @@ private fun ShotDetail(
     // The pane scrolls: the chart keeps its full (pre-quality-card) height and
     // the quality card / rating / notes live below the fold instead of
     // squeezing the chart (user feedback 2026-07-07).
+    // The pane's visible height (measured before the scroll), so the brew
+    // chart never outgrows it: a phone in landscape leaves this pane ~200dp.
+    var paneHeightPx by remember { mutableStateOf(0) }
     Column(
-        modifier.verticalScroll(rememberScrollState()),
+        modifier
+            .onSizeChanged { paneHeightPx = it.height }
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         var confirmDelete by remember(shot.id) { mutableStateOf(false) }
@@ -1102,8 +1108,12 @@ private fun ShotDetail(
             // manual log shows no chart region at all — the pane tightens up.
             val series = shot.brewSeries
             if (series != null && series.samples.isNotEmpty()) {
+                val paneH = with(androidx.compose.ui.platform.LocalDensity.current) { paneHeightPx.toDp() }
+                // Full 300dp where it fits; on a short pane, the pane's height
+                // (so the whole chart can sit in view), floored for legibility.
+                val chartH = if (paneHeightPx == 0) 300.dp else (paneH - 16.dp).coerceIn(160.dp, 300.dp)
                 Surface(
-                    modifier = Modifier.height(300.dp).fillMaxWidth(),
+                    modifier = Modifier.height(chartH).fillMaxWidth(),
                     shape = MaterialTheme.shapes.medium,
                     color = MaterialTheme.colorScheme.surfaceContainer,
                 ) {
