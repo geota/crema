@@ -163,7 +163,7 @@ data class RecipeEditDraft(
  * eat space, and a phone in landscape lands on the tablet shell at ~400dp tall.
  */
 enum class LivePane {
-    /** < 600dp wide: one column, controls pinned at the bottom. */
+    /** < ~600dp window (a < 560dp pane): one column, controls pinned at the bottom. */
     COMPACT,
 
     /** 600–840dp wide and ≥ 600 tall: one centred ≤460dp column; chart only when very tall. */
@@ -177,8 +177,16 @@ enum class LivePane {
     ;
 
     companion object {
+        /**
+         * Below this pane width: COMPACT. A 600dp window (a 7" portrait on
+         * the phone shell) leaves a ~568dp pane after the shell's 16dp
+         * edges, and still gets the MEDIUM layout; the widest phones stay
+         * under ~450dp.
+         */
+        const val COMPACT_MAX_WIDTH = 560f
+
         fun of(widthDp: Float, heightDp: Float): LivePane = when {
-            widthDp < 600f -> COMPACT
+            widthDp < COMPACT_MAX_WIDTH -> COMPACT
             // Short panes go cockpit even below 840: a phone in landscape
             // lands on the tablet shell, and the rail leaves its pane
             // ~780dp wide and ~330dp tall.

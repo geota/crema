@@ -142,7 +142,8 @@ class GuidedBrewStateTest {
 
     @Test fun paneClassesFollowThePaneNotTheDevice() {
         assertEquals(LivePane.COMPACT, LivePane.of(427f, 700f)) // Pixel portrait
-        assertEquals(LivePane.MEDIUM, LivePane.of(600f, 820f)) // 7" portrait (phone shell)
+        assertEquals(LivePane.MEDIUM, LivePane.of(568f, 820f)) // 7" portrait: 600dp minus shell edges
+        assertEquals(LivePane.COMPACT, LivePane.of(440f, 820f)) // widest phones
         assertEquals(LivePane.MEDIUM, LivePane.of(800f, 1100f)) // medium tablet portrait
         assertEquals(LivePane.COCKPIT, LivePane.of(780f, 330f)) // Pixel landscape, minus rail + header
         assertEquals(LivePane.COCKPIT, LivePane.of(860f, 300f))
