@@ -1648,6 +1648,91 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Re-attribute a logged shot to another bean, or none (issue #16). */
     fun setShotBean(id: String, beanId: String?) = library.setShotBean(id, beanId)
 
+    // ── Brew Log (issue #10) ─────────────────────────────────────────
+    /** Record a manual brew / guided-session result; debits the bag. */
+    fun addManualBrew(input: LibraryController.ManualBrewInput) = library.addManualBrew(input)
+
+    /**
+     * The open Log-brew form's draft, or null. VM-held (not a screen
+     * `remember`) so it survives rotation and the phone↔tablet host swap:
+     * the phone's pushed `log-brew` route and the tablet's side sheet on the
+     * owning tab render this same draft (see [NavRestore.restoreRoute]).
+     */
+    private val _logBrew = MutableStateFlow<coffee.crema.ui.brewlog.BrewLogDraft?>(null)
+    val logBrew: StateFlow<coffee.crema.ui.brewlog.BrewLogDraft?> = _logBrew.asStateFlow()
+
+    /** Open the form on [owner]'s tab — seeded from [prefill] ("Log again") or [beanId]'s bag. */
+    fun openLogBrew(owner: String, prefill: StoredShot? = null, beanId: String? = null) {
+        val s = _ui.value
+        _logBrew.value = coffee.crema.ui.brewlog.BrewLogSeeds.open(
+            owner = owner,
+            history = s.history,
+            activeBeanId = s.activeBeanId,
+            prefill = prefill,
+            prefillBeanId = beanId,
+        )
+    }
+
+    fun updateLogBrew(transform: (coffee.crema.ui.brewlog.BrewLogDraft) -> coffee.crema.ui.brewlog.BrewLogDraft) {
+        _logBrew.update { it?.let(transform) }
+    }
+
+    /** A method chip: re-template the draft's seeds for [method]. */
+    fun reseedLogBrew(method: String) {
+        val history = _ui.value.history
+        _logBrew.update { it?.let { d -> coffee.crema.ui.brewlog.BrewLogSeeds.reseed(d, history, method) } }
+    }
+
+    fun closeLogBrew() {
+        _logBrew.value = null
+    }
+
+    /**
+     * Validate + save the draft as a manual brew (bag debit included) and
+     * close the form. Returns false — the draft stays open, flagged
+     * `attempted` — when the method name or a debit-able dose is missing.
+     */
+    fun saveLogBrew(nowMs: Long = System.currentTimeMillis()): Boolean {
+        val d = _logBrew.value ?: return false
+        val flagged = d.copy(attempted = true)
+        val bean = d.beanId?.let { id -> _ui.value.beans.firstOrNull { it.id == id } }
+        val storedMethod = if (d.isCustom) coffee.crema.core.normalizeBrewMethod(d.customMethod) else d.method
+        if (storedMethod == null || d.doseMissing(bean != null)) {
+            _logBrew.value = flagged
+            return false
+        }
+        library.addManualBrew(
+            LibraryController.ManualBrewInput(
+                method = storedMethod,
+                completedAtMs = nowMs - (d.minutesAgo * 60_000).toLong(),
+                beanId = bean?.id,
+                doseG = d.dose.toFloat().takeIf { it > 0f },
+                waterG = if (!d.espresso) d.water.toFloat().takeIf { it > 0f } else null,
+                yieldG = if (d.espresso) d.water.toFloat().takeIf { it > 0f } else null,
+                grindSetting = d.grind.toFloat().takeIf { it > 0f },
+                brewTempC = d.temp.toFloat().takeIf { it > 0f },
+                durationMs = coffee.crema.ui.brewlog.parseBrewDurationMs(d.timeStr),
+                rating = d.rating.takeIf { it > 0 },
+                notes = d.notes.ifBlank { null },
+                nextPlan = d.nextPlan.ifBlank { null },
+                recipeName = d.recipeName,
+                brewSeries = d.series,
+            ),
+        )
+        _logBrew.value = null
+        return true
+    }
+
+    /** Edit a MANUAL brew row's user-entered facts (re-settles the bag on dose). */
+    fun updateManualBrew(
+        id: String,
+        doseG: Float? = null,
+        waterG: Float? = null,
+        yieldG: Float? = null,
+        brewTempC: Float? = null,
+        durationMs: Long? = null,
+    ) = library.updateManualBrew(id, doseG, waterG, yieldG, brewTempC, durationMs)
+
     /** Set a shot's forward-looking "next time" plan (local-only). */
     fun setShotNextPlan(id: String, nextPlan: String) = library.setShotNextPlan(id, nextPlan)
 

@@ -15,10 +15,23 @@ import androidx.compose.runtime.setValue
  * and a phone↔tablet host swap (rotating across the 840dp breakpoint).
  */
 @Stable
-class BeansViewState(tab: String = "bags", filter: String = "all", roasterScopeId: String? = null) {
+class BeansViewState(
+    tab: String = "bags",
+    filter: String = "all",
+    roasterScopeId: String? = null,
+    detailBeanId: String? = null,
+) {
     var tab by mutableStateOf(tab)
     var filter by mutableStateOf(filter)
     var roasterScopeId by mutableStateOf(roasterScopeId)
+
+    /**
+     * The bag whose read-only detail is open (phone: swapped-in screen,
+     * tablet: side sheet), or null. Shared so the detail — and the Brew Log
+     * form its "Log a brew" action opens (issue #10) — comes back on the other
+     * host after a rotation across 840dp.
+     */
+    var detailBeanId by mutableStateOf(detailBeanId)
 
     /** Open [roasterId]'s shelf: the Bags tab scoped to it, unfiltered. */
     fun openShelf(roasterId: String) {
@@ -35,8 +48,8 @@ class BeansViewState(tab: String = "bags", filter: String = "all", roasterScopeI
 
     companion object {
         val Saver = listSaver<BeansViewState, String?>(
-            save = { listOf(it.tab, it.filter, it.roasterScopeId) },
-            restore = { BeansViewState(it[0] ?: "bags", it[1] ?: "all", it[2]) },
+            save = { listOf(it.tab, it.filter, it.roasterScopeId, it.detailBeanId) },
+            restore = { BeansViewState(it[0] ?: "bags", it[1] ?: "all", it[2], it.getOrNull(3)) },
         )
     }
 }

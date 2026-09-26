@@ -129,6 +129,19 @@ describe('pushShotToVisualizer — gating', () => {
 		expect(appendSyncLog).not.toHaveBeenCalled();
 	});
 
+	it('never uploads a Brew Log row (issue #10) — manual or guided', async () => {
+		for (const row of [
+			{ id: 's1', brewMethod: 'pourover', record: { duration: 0, samples: [] } },
+			{ id: 's1', brewMethod: 'aeropress', record: { duration: 0, samples: [] }, brewSeries: { samples: [], stageMarks: [] } }
+		]) {
+			mockHistory.get.mockReturnValue(row);
+			const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'v1' }));
+			await run(uploadShot);
+			expect(uploadShot).not.toHaveBeenCalled();
+			expect(appendSyncLog).not.toHaveBeenCalled();
+		}
+	});
+
 	it('no-ops when the local row has vanished', async () => {
 		mockHistory.get.mockReturnValue(undefined);
 		const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'v1' }));

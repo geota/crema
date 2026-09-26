@@ -10,8 +10,7 @@
 		uploadUnsentDecentShots
 	} from '$lib/decent';
 	import {
-		decentUploadTarget,
-		visualizerUploadTarget,
+		shotUploadTargets,
 		type UploadTarget
 	} from '$lib/history/upload-targets';
 	import { registerUploadBatch, reportUploadOutcome } from '$lib/history/upload-toast';
@@ -19,6 +18,7 @@
 	import ArrowsLeftRightIcon from 'phosphor-svelte/lib/ArrowsLeftRightIcon';
 	import ChartLineIcon from 'phosphor-svelte/lib/ChartLineIcon';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import UploadSimpleIcon from 'phosphor-svelte/lib/UploadSimpleIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
@@ -44,11 +44,16 @@
 		getHistoryStore,
 		exportStoredShotAsV2Json,
 		shotFilename,
-		statsOf
+		brewStatsOf,
+		isBrewLog,
+		isManualLog,
+		methodOf
 	} from '$lib/history';
 	import type { StoredShot } from '$lib/history';
 	import { ShotRow, ShotDetail, CompareOverlay } from '$lib/components/history';
 	import ShotImportDialog from '$lib/components/history/ShotImportDialog.svelte';
+	import LogBrewDialog from '$lib/components/brewlog/LogBrewDialog.svelte';
+	import { methodLabel, type LogBrewPrefill } from '$lib/brew/methods';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getSettingsStore, convertWeight } from '$lib/settings';
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
@@ -291,6 +296,8 @@
 	 * enabled → local. The title spells out which is which.
 	 */
 	function pipFor(shot: StoredShot): { pip: 'uploaded' | 'partial' | 'pending' | 'local'; title: string } {
+		// Brew Log rows are local-only (issue #10): no destination, no pip state.
+		if (isBrewLog(shot)) return { pip: 'local', title: 'Brew Log — stays on this device' };
 		const enabled = uploadTargetsFor(shot).filter((t) => t.enabled);
 		if (pendingShotIds.has(shot.id)) return { pip: 'pending', title: 'Upload pending — will retry' };
 		if (enabled.length === 0) {
@@ -373,7 +380,7 @@
 	 * menu entry (`uploadMenuEntry`) plus a Share / View row per holder.
 	 */
 	function uploadTargetsFor(shot: StoredShot): UploadTarget[] {
-		return [visualizerUploadTarget(shot, canPushShots), decentUploadTarget(shot, decentLinked)];
+		return shotUploadTargets(shot, { visualizer: canPushShots, decent: decentLinked });
 	}
 	/** Push one shot to the chosen destinations (the menu picked them) — one toast for all. */
 	function uploadShotTo(id: string, targets: UploadTarget[]): void {
@@ -409,18 +416,38 @@
 	const missingByDestination = $derived.by(() => {
 		const out: { name: string; count: number }[] = [];
 		if (canPushShots) {
-			const n = shots.filter((s) => !s.visualizerId).length;
+			const n = shots.filter((s) => !s.visualizerId && !isBrewLog(s)).length;
 			if (n > 0) out.push({ name: 'Visualizer', count: n });
 		}
 		if (decentUnsentIds.size > 0) out.push({ name: 'Decent', count: decentUnsentIds.size });
 		return out;
 	});
 	const missingTotal = $derived(
-		shots.filter((s) => (canPushShots && !s.visualizerId) || decentUnsentIds.has(s.id)).length
+		shots.filter(
+			(s) => (canPushShots && !s.visualizerId && !isBrewLog(s)) || decentUnsentIds.has(s.id)
+		).length
 	);
 	const missingTitle = $derived(
 		missingByDestination.map((d) => `${d.count} not on ${d.name}`).join(' · ')
 	);
+
+	// ── Brew Log dialog state (issue #10) ────────────────────────────────
+	let logBrewOpen = $state(false);
+	let logBrewPrefill = $state<LogBrewPrefill | undefined>(undefined);
+	/** "Log again" — re-open the form seeded from a prior brew, dated now. */
+	function logAgain(shot: StoredShot): void {
+		logBrewPrefill = {
+			method: methodOf(shot) ?? 'espresso',
+			beanId: shot.bean?.beanId ?? null,
+			dose: shot.metadata.dose ?? null,
+			waterG: shot.metadata.waterG ?? null,
+			yieldOut: shot.metadata.yieldOut ?? null,
+			grinderSetting: shot.metadata.grinderSetting ?? null,
+			tempC: shot.brewTempTarget ?? null,
+			durationMs: shot.record.duration > 0 ? shot.record.duration : null
+		};
+		logBrewOpen = true;
+	}
 
 	/** Push the whole backlog to every enabled destination. */
 	async function uploadMissing(): Promise<void> {
@@ -456,7 +483,7 @@
 	 * and drains it now, so the uploaded copy is removed too.
 	 */
 	async function handleDelete(shot: StoredShot, opts: { remote: boolean }): Promise<void> {
-		const label = shot.profileName ?? 'this shot';
+		const label = shot.profileName ?? (methodOf(shot) ? methodLabel(methodOf(shot)) : 'this shot');
 		const msg = opts.remote
 			? `Delete "${label}" from this device and Visualizer? This cannot be undone.`
 			: `Delete "${label}" from this device? This cannot be undone.`;
@@ -514,6 +541,13 @@
 	 */
 	let filterBean = $state('all');
 	/**
+	 * The active brew-method filter — `all` or a normalized method
+	 * (`espresso` covers machine shots + manual espresso logs). The
+	 * facet group only renders once a second method exists in history,
+	 * so espresso-only users never see it (issue #10).
+	 */
+	let filterMethod = $state('all');
+	/**
 	 * Tags the user has pinned on. AND semantics (a shot matches when
 	 * every selected tag is in its `tags` array) — mirrors `/profiles`
 	 * and `/beans`. An empty list means "no tag filter applied".
@@ -531,6 +565,22 @@
 	const profilesInUse = $derived([
 		...new Set(shots.map((s) => s.profileName).filter((n): n is string => !!n))
 	]);
+
+	/**
+	 * Distinct brew methods across the history, counted, for the Method
+	 * facet group. Machine shots fold into `espresso`. Rendered only
+	 * when 2+ methods exist.
+	 */
+	const methodsInUse = $derived.by(() => {
+		const m = new Map<string, number>();
+		for (const s of shots) {
+			const key = methodOf(s) ?? 'espresso';
+			m.set(key, (m.get(key) ?? 0) + 1);
+		}
+		return [...m.entries()]
+			.map(([id, count]) => ({ id, count }))
+			.sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
+	});
 
 	/**
 	 * Distinct beans across the history (by snapshot id), counted, for the
@@ -612,6 +662,18 @@
 				selected: filterProfile === name
 			});
 		}
+		if (methodsInUse.length > 1) {
+			items.push({ id: '__divmethods', divider: true });
+			items.push({ id: '__methods', groupLabel: 'Method' });
+			for (const m of methodsInUse) {
+				items.push({
+					id: `m:${m.id}`,
+					label: methodLabel(m.id),
+					count: m.count,
+					selected: filterMethod === m.id
+				});
+			}
+		}
 		if (beansInUse.length > 0) {
 			items.push({ id: '__divbeans', divider: true });
 			items.push({ id: '__beans', groupLabel: 'Beans' });
@@ -648,6 +710,9 @@
 			// Single-select with re-click-to-clear, like the roast pills on /beans.
 			const v = id.slice(2);
 			filterBean = filterBean === v ? 'all' : v;
+		} else if (id.startsWith('m:')) {
+			const v = id.slice(2);
+			filterMethod = filterMethod === v ? 'all' : v;
 		} else if (id.startsWith('t:')) {
 			const t = id.slice(2);
 			selectedTags = selectedTags.includes(t)
@@ -665,6 +730,8 @@
 			if (cutoff != null && s.completedAt < cutoff) return false;
 			if (filterProfile !== 'all' && s.profileName !== filterProfile) return false;
 			if (filterBean !== 'all' && s.bean?.beanId !== filterBean) return false;
+			if (filterMethod !== 'all' && (methodOf(s) ?? 'espresso') !== filterMethod)
+				return false;
 			// AND semantics — a shot must carry every selected tag.
 			// Pulls through `effectiveShotTags` so legacy / retroactive
 			// bean tags filter just like persisted shot tags.
@@ -677,6 +744,7 @@
 			if (query === '') return true;
 			return (
 				(s.profileName ?? '').toLowerCase().includes(query) ||
+				methodLabel(methodOf(s)).toLowerCase().includes(query) ||
 				(s.metadata.notes ?? '').toLowerCase().includes(query) ||
 				(s.metadata.nextPlan ?? '').toLowerCase().includes(query) ||
 				effectiveShotTags(s).some((t) => t.toLowerCase().includes(query))
@@ -727,11 +795,13 @@
 	// the three averages (ratio / time / rating). The aggregation rules live in
 	// the core (`de1_domain::history_stats`, review #41) so both shells produce
 	// identical numbers; only unit conversion + formatting stay here.
-	const stats = $derived(statsOf(filtered));
-	/** Total weight dispensed across the filtered shots, unit-converted. */
-	const totalWeight = $derived(
-		stats?.totalWeightG != null
-			? convertWeight(stats.totalWeightG, settings.current.weightUnit)
+	const stats = $derived(brewStatsOf(filtered));
+	/** Total dry coffee consumed across the filtered brews, unit-converted
+	 * — the inventory number the Brew Log exists for (issue #10; replaces
+	 * the beverage-weight tile). */
+	const beansUsed = $derived(
+		stats?.beansUsedG != null
+			? convertWeight(stats.beansUsedG, settings.current.weightUnit)
 			: null
 	);
 	/** Mean yield weight across the filtered shots ("Avg weight"). */
@@ -740,10 +810,30 @@
 			? convertWeight(stats.avgWeightG, settings.current.weightUnit)
 			: null
 	);
+	/**
+	 * Mixed-method view: the weight / ratio / time averages are
+	 * espresso-scoped (core rule) — the tiles carry an "esp" tag so the
+	 * numbers aren't misread as spanning the pourovers too.
+	 */
+	const espScoped = $derived(stats?.mixedMethods ?? false);
+	/** Rows are "shots" only while the view is purely espresso. */
+	const rowNoun = $derived.by(() => {
+		const nonEsp = filtered.some((s) => {
+			const m = methodOf(s);
+			return m != null && m !== 'espresso';
+		});
+		return nonEsp ? 'brew' : 'shot';
+	});
 	/** Mean brew ratio (yield ÷ dose) over filtered shots that recorded both. */
 	const avgRatio = $derived(stats?.avgRatio ?? null);
 	/** Mean shot duration, seconds. */
 	const avgTime = $derived(stats?.avgTimeS != null ? Math.round(stats.avgTimeS) : null);
+	/** "28s" under 90 s (espresso), "3:05" beyond (filter brews). */
+	function formatStatTime(secs: number): string {
+		if (secs < 90) return `${secs}s`;
+		const m = Math.floor(secs / 60);
+		return `${m}:${String(secs % 60).padStart(2, '0')}`;
+	}
 	/** Mean star rating across rated filtered shots. */
 	const avgRating = $derived(stats?.avgRating != null ? stats.avgRating.toFixed(1) : null);
 
@@ -818,10 +908,10 @@
 	<div class="hi-head">
 		<div>
 			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Library</div>
-			<div class="t-page-title hi-title">Shot history</div>
+			<div class="t-page-title hi-title">{rowNoun === 'brew' ? 'Brew history' : 'Shot history'}</div>
 			<div class="hi-sub">
 				{shots.length}
-				{shots.length === 1 ? 'shot' : 'shots'} on this device
+				{shots.length === 1 ? rowNoun : `${rowNoun}s`} on this device
 			</div>
 		</div>
 		<div class="hi-head-r">
@@ -829,6 +919,19 @@
 				<MagnifyingGlassIcon aria-hidden="true" />
 				<input bind:value={q} placeholder="Search profile, notes…" />
 			</div>
+			<!-- Log brew — the Brew Log's manual-entry door (issue #10). -->
+			<button
+				class="st-btn st-btn-secondary"
+				style="white-space: nowrap"
+				onclick={() => {
+					logBrewPrefill = undefined;
+					logBrewOpen = true;
+				}}
+				title="Log a brew made off the machine — pourover, AeroPress, French press…"
+			>
+				<PlusIcon aria-hidden="true" />
+				<span>Log brew</span>
+			</button>
 			<!-- Import: opens the ShotImportDialog so users get a
 			     draggable picker that matches the BeanImportDialog
 			     pattern. The dialog calls `runImport` with the chosen
@@ -969,35 +1072,39 @@
 		<!-- Stats strip -->
 		<div class="hi-stats">
 			<div class="hi-stat">
-				<div class="hi-stat-label">Shots</div>
-				<div class="hi-stat-val"><span>{filtered.length}</span><em>shots</em></div>
+				<div class="hi-stat-label">{rowNoun === 'brew' ? 'Brews' : 'Shots'}</div>
+				<div class="hi-stat-val"><span>{filtered.length}</span><em>{rowNoun}s</em></div>
 			</div>
 			<div class="hi-stat">
-				<div class="hi-stat-label">Weight</div>
+				<div class="hi-stat-label">Beans used</div>
 				<div class="hi-stat-val">
-					<span>{totalWeight?.value ?? '—'}</span>{#if totalWeight != null}<em
-							>{totalWeight.unit}</em
+					<span>{beansUsed?.value ?? '—'}</span>{#if beansUsed != null}<em
+							>{beansUsed.unit}</em
 						>{/if}
 				</div>
 			</div>
 			<div class="hi-stat">
-				<div class="hi-stat-label">Avg weight</div>
+				<div class="hi-stat-label">
+					Avg weight{#if espScoped}<i class="hi-stat-scope">esp</i>{/if}
+				</div>
 				<div class="hi-stat-val">
 					<span>{avgYield?.value ?? '—'}</span>{#if avgYield != null}<em>{avgYield.unit}</em>{/if}
 				</div>
 			</div>
 			<div class="hi-stat">
-				<div class="hi-stat-label">Avg ratio</div>
+				<div class="hi-stat-label">
+					Avg ratio{#if espScoped}<i class="hi-stat-scope">esp</i>{/if}
+				</div>
 				<div class="hi-stat-val">
 					<span>{avgRatio != null ? `1:${avgRatio.toFixed(1)}` : '—'}</span>
 				</div>
 			</div>
 			<div class="hi-stat">
-				<div class="hi-stat-label">Avg time</div>
+				<div class="hi-stat-label">
+					Avg time{#if espScoped}<i class="hi-stat-scope">esp</i>{/if}
+				</div>
 				<div class="hi-stat-val">
-					<span>{avgTime != null ? avgTime : '—'}</span>{#if avgTime != null}<em
-							>s</em
-						>{/if}
+					<span>{avgTime != null ? formatStatTime(avgTime) : '—'}</span>
 				</div>
 			</div>
 			<div class="hi-stat">
@@ -1186,6 +1293,19 @@
 						canDeleteRemote={canPushShots && !!selected.visualizerId}
 						uploadTargets={uploadTargetsFor(selected)}
 						onUpload={(targets) => uploadShotTo(selected.id, targets)}
+						onLogAgain={() => logAgain(selected)}
+						onManualBrewEdit={(patch) => {
+							// Manual rows keep their facts editable; a dose change
+							// re-settles the bag exactly like re-attribution.
+							const oldDose = selected.metadata.dose ?? 0;
+							const beanId = selected.bean?.beanId ?? null;
+							if (patch.dose !== undefined && beanId) {
+								const newDose = patch.dose ?? 0;
+								if (oldDose > 0) beanLibrary.creditBean(beanId, oldDose);
+								if (newDose > 0) beanLibrary.debitBean(beanId, newDose);
+							}
+							store.updateManualBrew(selected.id, patch);
+						}}
 					/>
 				{/key}
 			{:else}
@@ -1204,6 +1324,16 @@
 		{importing}
 		onClose={() => (importOpen = false)}
 		onImport={runImport}
+	/>
+{/if}
+
+{#if logBrewOpen}
+	<LogBrewDialog
+		prefill={logBrewPrefill}
+		onClose={() => (logBrewOpen = false)}
+		onSaved={(record) => {
+			selectedId = record.id;
+		}}
 	/>
 {/if}
 
@@ -1237,6 +1367,16 @@
 		font-size: 12px;
 		color: rgba(var(--tint-rgb), 0.5);
 		margin-top: 4px;
+	}
+	/* "esp" scope tag on the mixed-view espresso-scoped average tiles. */
+	.hi-stat-scope {
+		font-style: normal;
+		font-size: 9px;
+		font-weight: 600;
+		color: var(--copper-400);
+		margin-left: 5px;
+		letter-spacing: 0.06em;
+		text-transform: lowercase;
 	}
 	.hi-head-r {
 		display: flex;

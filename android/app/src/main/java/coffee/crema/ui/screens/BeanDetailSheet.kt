@@ -72,6 +72,10 @@ fun BeanDetailSheet(
     onOpenShot: ((String) -> Unit)? = null,
     /** Open History filtered to this bag ("See all N shots"); null = hidden. */
     onSeeAllShots: (() -> Unit)? = null,
+    /** Open the Log-brew form with this bag pre-selected (issue #10). */
+    onLogBrew: (() -> Unit)? = null,
+    /** This bag's recent mean dose, g — the "≈N brews" estimate. */
+    avgDoseG: Float? = null,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
     var photoOpen by remember { mutableStateOf(false) }
@@ -159,32 +163,21 @@ fun BeanDetailSheet(
                             onPhotoTap = if (bean.imageRef != null) ({ photoOpen = true }) else null,
                             onOpenShot = onOpenShot,
                             onSeeAllShots = onSeeAllShots,
+                            avgDoseG = avgDoseG,
                         )
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CremaButton(
-                            onClick = onToggleArchived,
-                            variant = CremaButtonVariant.Outlined,
-                            icon = if (archived) "archive-box" else "archive",
-                            label = if (archived) "Restore" else "Archive",
-                        )
-                        CremaButton(
-                            onClick = { confirmDelete = true },
-                            variant = CremaButtonVariant.Text,
-                            icon = "trash",
-                            danger = true,
-                            label = "Delete",
-                        )
-                        Spacer(Modifier.weight(1f))
-                        if (!isActive && !archived) {
-                            CremaButton(onClick = onSetActive, icon = "coffee-bean", label = "Set active")
-                        }
-                    }
+                    // Footer actions — "Log a brew" wraps under "Set active"
+                    // on a narrow pane (issue #10).
+                    coffee.crema.ui.beans.BeanDetailFooterActions(
+                        archived = archived,
+                        isActive = isActive,
+                        onToggleArchived = onToggleArchived,
+                        onDelete = { confirmDelete = true },
+                        onSetActive = onSetActive,
+                        onLogBrew = onLogBrew,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                    )
                 }
             }
         }

@@ -56,6 +56,8 @@ fun PhoneBeanDetailScreen(
     onOpenShot: ((String) -> Unit)? = null,
     /** Open History filtered to this bag ("See all N shots"); null = hidden. */
     onSeeAllShots: (() -> Unit)? = null,
+    /** Log a brew with this bag — the pushed Brew Log form (issue #10); null = hidden. */
+    onLogBrew: ((beanId: String) -> Unit)? = null,
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val bean = ui.beans.firstOrNull { it.id == beanId }
@@ -117,39 +119,22 @@ fun PhoneBeanDetailScreen(
                 linkedProfileName = linkedProfileNameFor(bean, ui.profiles.map { it.id to it.name }),
                 shotCount = shots.size,
                 recentShots = shots.take(5).map { shotRowSummary(it) },
+                avgDoseG = shots.take(10).mapNotNull { it.doseG }.filter { it > 0f }
+                    .takeIf { it.isNotEmpty() }?.average()?.toFloat(),
                 onPhotoTap = if (bean.imageRef != null) ({ photoOpen = true }) else null,
                 onOpenShot = onOpenShot,
                 onSeeAllShots = onSeeAllShots,
             )
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CremaButton(
-                    onClick = {
-                        if (archived) vm.unarchiveBean(bean.id) else vm.archiveBean(bean.id)
-                    },
-                    variant = CremaButtonVariant.Outlined,
-                    icon = if (archived) "archive-box" else "archive",
-                    label = if (archived) "Restore" else "Archive",
-                )
-                CremaButton(
-                    onClick = { confirmDelete = true },
-                    variant = CremaButtonVariant.Text,
-                    icon = "trash",
-                    danger = true,
-                    label = "Delete",
-                )
-                Spacer(Modifier.weight(1f))
-                if (!isActive && !archived) {
-                    CremaButton(
-                        onClick = { vm.setActiveBean(bean.id) },
-                        icon = "coffee-bean",
-                        label = "Set active",
-                    )
-                }
-            }
+            // Footer actions — the inventory-first door to the Brew Log
+            // (issue #10) wraps under "Set active" below 360dp.
+            coffee.crema.ui.beans.BeanDetailFooterActions(
+                archived = archived,
+                isActive = isActive,
+                onToggleArchived = { if (archived) vm.unarchiveBean(bean.id) else vm.archiveBean(bean.id) },
+                onDelete = { confirmDelete = true },
+                onSetActive = { vm.setActiveBean(bean.id) },
+                onLogBrew = onLogBrew?.let { cb -> { cb(bean.id) } },
+            )
         }
     }
 

@@ -50,6 +50,7 @@ pub mod bean_coerce;
 pub mod bean_search;
 pub mod beanconqueror;
 pub mod brand;
+pub mod brew;
 pub mod builtin;
 /// Lenient number-or-string deserialization shared by the JSON importers.
 mod coerce;
@@ -101,6 +102,11 @@ pub use beanconqueror::{
     ImportDiagnostics, ImportPlan, ImportedShot, crema_to_bc_main_json,
     crema_to_bc_main_json_from_envelope, import_beanconqueror_json,
 };
+pub use brew::{
+    BREW_METHOD_PRESETS, BrewHistoryStats, BrewRecipe, BrewSample, BrewSeries, BrewStatInput,
+    BrewStep, BrewStepKind, StageMark, StepAdvance, brew_history_stats, is_espresso_method,
+    normalize_brew_method, ratio_for_method,
+};
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use crema_jsonl::{
     BackupHeader, BackupImportPlan, CremaExportHeader, export_backup_jsonl_from_json, export_jsonl,
@@ -113,7 +119,9 @@ pub use crema_profile::{
     crema_profile_to_wire_json, default_brew_defaults_json, default_segments,
     default_segments_json, from_wire, to_wire,
 };
-pub use decent_shot_record::{decent_shot_record, decent_shot_record_json};
+pub use decent_shot_record::{
+    BREW_LOG_NOT_UPLOADABLE, decent_shot_record, decent_shot_record_json,
+};
 pub use decent_wire::{
     DecentLoginReply, DecentMachine, DecentMachinesReply, DecentUploadReply, decent_login_token,
     decent_login_token_json, decent_machines, decent_machines_json, decent_shot_view_url,
@@ -127,7 +135,7 @@ pub use history::{
 };
 pub use history_export::{export_v2_json_shot, export_v2_json_shot_full};
 pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};
-pub use ids::{new_profile_id, new_shot_id};
+pub use ids::{new_profile_id, new_recipe_id, new_shot_id};
 pub use maintenance::{
     MaintenanceReadout, MaintenanceState, maintenance_readout, maintenance_readout_json,
 };

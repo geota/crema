@@ -26,9 +26,11 @@ import type {
 	TimedSample
 } from '$lib/core';
 import type { ShotMachine as CoreShotMachine } from '$lib/core/crema-core';
+import type { BrewHistoryStats, BrewSeries, BrewStatInput } from '$lib/core/crema-core';
 import {
 	peaksForShot as wasmPeaksForShot,
-	historyStats as wasmHistoryStats
+	historyStats as wasmHistoryStats,
+	brewHistoryStats as wasmBrewHistoryStats
 } from '$lib/wasm/de1_wasm';
 import type { TelemetrySample } from '$lib/state';
 import { filenameStamp } from '$lib/utils/download';
@@ -237,6 +239,13 @@ export interface ShotMetadata {
 	tds?: number | null;
 	/** Extraction yield, percent. */
 	extractionYield?: number | null;
+	/**
+	 * Water in, grams — the pour total for filter / immersion brews.
+	 * Distinct from `yieldOut` (beverage in the cup): a 15 g / 250 g V60
+	 * speaks its ratio in water-in (1:16.7), an espresso in beverage-out.
+	 * Absent on espresso rows. Editable on manual brew logs.
+	 */
+	waterG?: number | null;
 }
 
 /**
@@ -326,6 +335,63 @@ export interface StoredShot {
 	machine?: ShotMachine | null;
 	/** Unix epoch ms when this shot was soft-deleted, or `null`. */
 	deletedAt?: number | null;
+	/**
+	 * How this was brewed — a normalized method string (`"pourover"`,
+	 * `"aeropress"`, `"espresso"` for a manually logged machine-free
+	 * shot, …). Absent/`null` = machine espresso, so every pre-Brew-Log
+	 * record is already valid (issue #10).
+	 */
+	brewMethod?: string | null;
+	/** The guided-session recipe name, snapshot at completion. */
+	recipeName?: string | null;
+	/**
+	 * Weight-only guided-session telemetry. Absent for machine shots
+	 * (their telemetry is `record.samples`) and manual logs (none at
+	 * all). Downsampled to ≤200 samples before persisting.
+	 */
+	brewSeries?: BrewSeries | null;
+}
+
+/**
+ * The row's method for display purposes: the stored method for brew
+ * rows, `null` for machine espresso. A manually logged espresso
+ * (`brewMethod: "espresso"`) also returns `"espresso"` — it renders
+ * with the espresso mark but the "logged" provenance tag.
+ */
+export function methodOf(shot: StoredShot): string | null {
+	const m = shot.brewMethod?.trim();
+	return m ? m.toLowerCase() : null;
+}
+
+/**
+ * Whether this row is a Brew Log entry of any kind — `brewMethod` set,
+ * manual or guided (issue #10). Brew rows are local-only: they never reach
+ * an upload path (Visualizer or the Decent account — auto, manual or
+ * backlog), show no upload menu or cloud pip, and carry no DE1 machine
+ * stamp. Mirrors Rust `StoredShot::is_brew_log` and Android `isBrewLog`.
+ */
+export function isBrewLog(shot: Pick<StoredShot, 'brewMethod'>): boolean {
+	return !!shot.brewMethod;
+}
+
+/**
+ * Whether this row was *manually logged*: a method was declared but no
+ * telemetry of any kind was captured. Manual rows keep dose / water /
+ * time / temp / method editable in the detail pane (user-entered facts,
+ * not measurements) and never enter a Visualizer upload queue. Mirrors
+ * Rust `StoredShot::is_manual_log`.
+ */
+export function isManualLog(shot: StoredShot): boolean {
+	return !!shot.brewMethod && shot.record.samples.length === 0 && !shot.brewSeries;
+}
+
+/**
+ * Whether the row has any drawable telemetry — the DE1 sample series or
+ * a guided-brew weight series. Drives the row sparkline / detail chart
+ * slot: rows without either show the method mark instead.
+ */
+export function hasTelemetry(shot: StoredShot): boolean {
+	return shot.record.samples.length > 0 || (shot.brewSeries?.samples.length ?? 0) > 0;
 }
 
 /**
@@ -440,6 +506,34 @@ export function statsOf(shots: StoredShot[]): HistoryStats | null {
 }
 
 /**
+ * The method-aware stat strip (issue #10) — {@link statsOf}'s Brew Log
+ * sibling. Adds water-in + method per row so the core can apply the
+ * mixed-set scoping rules (`de1_domain::brew_history_stats`): count /
+ * beans-used / rating span every row; weight / ratio / time scope to
+ * espresso rows in a mixed set (the strip tags those tiles "esp") or to
+ * the single method the whole set belongs to.
+ */
+export function brewStatsOf(shots: StoredShot[]): BrewHistoryStats | null {
+	const rows: BrewStatInput[] = shots.map((s) => {
+		const p = peaksOf(s);
+		return {
+			durationMs: s.record.duration,
+			finalWeightG: s.metadata.yieldOut ?? p.finalWeight ?? undefined,
+			peakWeightG: p.peakWeight ?? undefined,
+			doseG: s.metadata.dose ?? undefined,
+			waterG: s.metadata.waterG ?? undefined,
+			rating: s.metadata.rating ?? undefined,
+			brewMethod: s.brewMethod ?? undefined
+		};
+	});
+	try {
+		return JSON.parse(wasmBrewHistoryStats(JSON.stringify(rows))) as BrewHistoryStats;
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Flatten the wire-shape sample series into the chart-friendly
  * {@link TelemetrySample} shape the live + history charts consume.
  *
@@ -516,6 +610,17 @@ export function grindLabel(shot: StoredShot): string | null {
 }
 
 export function ratioLabel(record: StoredShot): string {
+	const method = methodOf(record);
+	if (method && method !== 'espresso') {
+		// Filter/immersion rows speak water-in (1:16), falling back to
+		// the beverage weight when no water was recorded — and NEVER
+		// borrow the espresso 18 g dose default (a pourover without a
+		// recorded dose has no meaningful ratio).
+		const water = record.metadata.waterG;
+		const numerator = water != null && water > 0 ? water : yieldOf(record);
+		const dose = record.metadata.dose;
+		return formatRatio(dose != null && dose > 0 ? dose : 0, numerator);
+	}
 	const yieldOut = yieldOf(record);
 	const dose =
 		record.metadata.dose != null && record.metadata.dose > 0

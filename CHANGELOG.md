@@ -20,6 +20,26 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **The Brew Log, Phase 1** (#10) — log what you brew off the machine: V60 /
+  pourover, AeroPress, French press, moka, cold brew, drip, siphon, Clever, a
+  manual espresso, or any method you type. "Log brew" in History (a button on
+  web and tablet, the + button on phone) and "Log a brew" on a bag's detail
+  open a short form: method chips, the active bag with its remaining grams,
+  dose / water / grind / temp / time seeded from that bag's last brew of the
+  method, and the rating / notes / next-time journal behind one disclosure.
+  Saving takes the dose off the bag's Remaining — the bag-empty prompt fires
+  at zero, like a live shot — and "Log again" on any brew re-fills the form.
+  Brews sit in History beside your shots with a method mark, a quiet "logged"
+  tag and 1:16-style water-in ratios; a Method filter appears once you've
+  logged a second method, and the stats strip counts "Beans used". A logged
+  brew's dose, water, temp and time stay editable, and a dose edit re-settles
+  the bag. Beanconqueror imports now bring pourovers and other non-espresso
+  brews in as Brew Log rows instead of skipping them, and backups keep them.
+  Brews stay on your device: they are never uploaded to Visualizer or your
+  Decent account and carry no machine stamp. On phones the form is a
+  full-screen page with Save above the keyboard; on tablets a side sheet that
+  keeps Save on screen in landscape; rotating mid-entry keeps what you typed.
+  Web, Android tablet and phone.
 - **Upload shots to your Decent account** (#84) — Settings → Sharing gains a
   "Decent account" card next to Visualizer. Sign in with your decentespresso.com
   email + password (exchanged once for a server token; the password is never

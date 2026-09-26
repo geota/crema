@@ -44,7 +44,8 @@
 		onToggleArchived,
 		onToggleFavourite,
 		onOpenShot,
-		onSeeAllShots
+		onSeeAllShots,
+		onLogBrew = null
 	}: {
 		bean: Bean;
 		roaster: Roaster | null;
@@ -58,6 +59,12 @@
 		onOpenShot: (shotId: string) => void;
 		/** Open History filtered to this bag ("See all N shots"). */
 		onSeeAllShots: () => void;
+		/**
+		 * Open the Log-brew form pre-filled with this bag (issue #10) —
+		 * the "bag in hand, log what you just used" door. Optional so
+		 * embedding surfaces without the dialog can omit it.
+		 */
+		onLogBrew?: ((beanId: string) => void) | null;
 	} = $props();
 
 	const history = getHistoryStore();
@@ -100,12 +107,24 @@
 		if (bean.bagSize <= 0) return 0;
 		return Math.max(0, Math.min(100, (bean.remaining / bean.bagSize) * 100));
 	});
-	const shotsRemaining = $derived.by<number>(() => {
-		if (bean.bagSize <= 0) return 0;
-		return Math.max(0, Math.floor(bean.remaining / 18));
-	});
-
 	const shotsWithThis = $derived(history.all.filter((s) => s.bean?.beanId === bean.id));
+
+	/**
+	 * "≈ N brews" left in the bag — estimated from this bag's OWN recent
+	 * mean dose (last 10 records), so a 30 g French-press habit stops
+	 * reading as phantom 18 g shots (issue #10). Falls back to the 18 g
+	 * espresso default for an unbrewed bag.
+	 */
+	const brewsRemaining = $derived.by<number>(() => {
+		if (bean.bagSize <= 0) return 0;
+		const doses = shotsWithThis
+			.slice(0, 10)
+			.map((s) => s.metadata.dose)
+			.filter((d): d is number => d != null && d > 0);
+		const meanDose =
+			doses.length > 0 ? doses.reduce((a, b) => a + b, 0) / doses.length : 18;
+		return Math.max(0, Math.floor(bean.remaining / meanDose));
+	});
 
 	// Group open/closed state — match the design's defaults.
 	let openIdentity = $state(true);
@@ -281,11 +300,11 @@
 					<div class="bn-cell-val">{bean.remaining.toFixed(0)}<em>g</em></div>
 					<div class="bn-cell-sub">
 						of {bean.bagSize.toFixed(0)}<em>g</em>
-						{#if shotsRemaining > 0}· ~{shotsRemaining} shots{/if}
+						{#if brewsRemaining > 0}· ≈{brewsRemaining} brews{/if}
 					</div>
 				</div>
 				<div class="bn-drawer-status-cell">
-					<div class="bn-cell-label">Shots</div>
+					<div class="bn-cell-label">Brews</div>
 					<div class="bn-cell-val">{shotsWithThis.length}</div>
 					<div class="bn-cell-sub">
 						{bean.qualityScore ? bean.qualityScore + ' score' : 'in history'}
@@ -578,6 +597,13 @@
 				size="md"
 				onDeleted={onClose}
 			/>
+			{#if onLogBrew && !isArchived}
+				<!-- The inventory-first door to the Brew Log (issue #10):
+				     bag in hand, log what you just used. -->
+				<button class="bn-foot-btn" onclick={() => onLogBrew?.(bean.id)}>
+					<Icon cls="ph ph-plus-circle" aria-hidden="true" /> Log a brew
+				</button>
+			{/if}
 			{#if !isActive && !isArchived}
 				<button class="bn-foot-btn bn-foot-btn-primary" onclick={() => onSetActive(bean.id)}>
 					<CoffeeIcon aria-hidden="true" /> Set active

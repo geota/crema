@@ -218,6 +218,192 @@ export interface Bean {
 }
 
 /**
+ * Summary metrics over a (filter/range-scoped) set of brews — the
+ * History stat strip once non-espresso rows exist. `None` = "no data"
+ * (render as "—").
+ * 
+ * Scope rule (spec §4): count, beans-used, and rating span every row;
+ * the weight / ratio / time averages compute over one method family —
+ * the whole set when it is single-method, espresso rows only when it
+ * is mixed (`mixed_methods = true`, shells tag the tiles "esp").
+ */
+export interface BrewHistoryStats {
+	/** Number of brews in the set. */
+	count: number;
+	/**
+	 * Total dry coffee consumed, grams (Σ dose over all rows) — the
+	 * inventory number the Brew Log exists for.
+	 */
+	beansUsedG?: number;
+	/** Mean beverage weight, grams, over the scoped rows. */
+	avgWeightG?: number;
+	/**
+	 * Mean ratio over the scoped rows, in the scoped method's own
+	 * semantics (espresso: yield ÷ dose; filter: water ÷ dose).
+	 */
+	avgRatio?: number;
+	/** Mean duration, seconds, over scoped rows that recorded a time. */
+	avgTimeS?: number;
+	/** Mean star rating over rated rows (all methods). */
+	avgRating?: number;
+	/**
+	 * `true` when the set spans more than one method family — the
+	 * weight / ratio / time averages are then espresso-scoped and the
+	 * shell tags those tiles.
+	 */
+	mixedMethods: boolean;
+	/**
+	 * The single non-espresso method the whole set belongs to, when it
+	 * does — lets the shell title the strip ("V60") and pick the
+	 * water-in ratio label. `None` for espresso-only or mixed sets.
+	 */
+	scopeMethod?: string;
+}
+
+/**
+ * What a [`BrewStep`] is, for its icon / default label. Lowercase wire
+ * spelling, like [`BeverageType`](crate::BeverageType).
+ */
+export enum BrewStepKind {
+	/** The first wetting pour, usually followed by a rest. */
+	Bloom = "bloom",
+	/** A pour to a cumulative weight target. */
+	Pour = "pour",
+	/** A timed rest. */
+	Wait = "wait",
+	/** A timed immersion rest (French press, clever). */
+	Steep = "steep",
+	/** A timed stir. */
+	Stir = "stir",
+	/** The plunge (AeroPress, French press). */
+	Press = "press",
+	/** The final drain — often open-ended ("until you tap"). */
+	Drawdown = "drawdown",
+	/** Anything else; carries its meaning in `label`. */
+	Other = "other",
+}
+
+/** How a step ends during a guided session. */
+export enum StepAdvance {
+	/**
+	 * Advance when the target is met — a timed step's countdown
+	 * reaching zero, or a pour step's weight target (scale present).
+	 * Scale-less pour steps fall back to manual.
+	 */
+	Auto = "auto",
+	/** Advance only on an explicit tap. */
+	Manual = "manual",
+}
+
+/**
+ * One step of a [`BrewRecipe`].
+ * 
+ * A step may carry a cumulative water target, a duration, or both
+ * (bloom: pour to 45 g, rest until 0:45 *from step start*). A step
+ * with neither is open-ended — it holds until tapped, regardless of
+ * `advance`.
+ */
+export interface BrewStep {
+	kind: BrewStepKind;
+	/**
+	 * Display label override; the shell derives one from `kind` when
+	 * absent.
+	 */
+	label?: string;
+	/**
+	 * Cumulative scale weight at which this step's pour is complete,
+	 * grams.
+	 */
+	targetWaterG?: number;
+	/** Step duration, seconds, counted from step start. */
+	durationS?: number;
+	advance: StepAdvance;
+}
+
+/**
+ * A named multi-stage plan for a brew method. Followed by a human —
+ * deliberately *not* a `Profile`, which is executed by the machine.
+ * 
+ * Shell-persisted (like beans); the core owns the shape and the
+ * session engine that runs it.
+ */
+export interface BrewRecipe {
+	/** Stable id — `recipe:<uuid-v7>`. */
+	id: string;
+	name: string;
+	/** Normalized method string ([`normalize_brew_method`]). */
+	method: string;
+	/** Planned dry dose, grams. */
+	doseG: number;
+	/** Planned total water, grams. */
+	waterG: number;
+	tempC?: number;
+	steps?: BrewStep[];
+	notes?: string;
+	favourite?: boolean;
+	createdAt: number;
+	updatedAt: number;
+	/** Soft-delete tombstone, Unix ms — same lifecycle as beans. */
+	deletedAt?: number;
+}
+
+/** One sample of a guided brew's weight-only telemetry, ~4 Hz. */
+export interface BrewSample {
+	/** Milliseconds since the session clock started. */
+	elapsedMs: number;
+	/** Net scale weight, grams. */
+	weightG: number;
+	/** Estimated pour rate, g/s, when derivable. */
+	flowGS?: number;
+}
+
+/** A recipe-step boundary as it actually happened in a session. */
+export interface StageMark {
+	/** Milliseconds since the session clock started. */
+	elapsedMs: number;
+	/** Index into the recipe's `steps` of the step that *began* here. */
+	stepIndex: number;
+}
+
+/**
+ * The weight-only telemetry of a guided brew session, persisted on
+ * [`StoredShot::brew_series`](crate::StoredShot). Deliberately not a
+ * [`TimedSample`](crate::TimedSample) series — that type's DE1
+ * `ShotSample` is structurally required, and a pourover has none.
+ */
+export interface BrewSeries {
+	samples: BrewSample[];
+	/** Step boundaries as they actually happened (skips included). */
+	stageMarks: StageMark[];
+}
+
+/**
+ * One brew's inputs to the method-aware History summary strip — the
+ * [`ShotStatInput`](crate::ShotStatInput) projection plus the two
+ * fields that separate a pourover from a shot.
+ */
+export interface BrewStatInput {
+	/**
+	 * Total brew duration, milliseconds. `0` = not recorded (manual
+	 * logs may omit time) — such rows are excluded from the time
+	 * average rather than dragging it toward zero.
+	 */
+	durationMs: number;
+	/** Final settled beverage weight, grams, or `None`. */
+	finalWeightG?: number;
+	/** Peak scale weight, grams — the yield fallback. */
+	peakWeightG?: number;
+	/** Dry dose, grams. */
+	doseG?: number;
+	/** Water in, grams — set on filter/immersion brews. */
+	waterG?: number;
+	/** Star rating 1..=5; `None` / 0 = unrated. */
+	rating?: number;
+	/** The brew method; `None` = machine espresso. */
+	brewMethod?: string;
+}
+
+/**
  * The portable, cross-shell app-preferences subset. `#[serde(default)]` on the
  * whole struct (via [`Default`]) so a partial blob — an older backup, or one
  * shell omitting a field it shares — fills gaps from the canonical defaults

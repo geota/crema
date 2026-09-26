@@ -47,6 +47,7 @@
 	import BeanTile from '$lib/components/beans/BeanTile.svelte';
 	import RoasterCard from '$lib/components/beans/RoasterCard.svelte';
 	import BeanDrawer from '$lib/components/beans/BeanDrawer.svelte';
+	import LogBrewDialog from '$lib/components/brewlog/LogBrewDialog.svelte';
 	import BeanQuickAdd from '$lib/components/beans/BeanQuickAdd.svelte';
 	import BeanImportDialog from '$lib/components/beans/BeanImportDialog.svelte';
 	import { exportCrema, exportBeanconqueror } from '$lib/bean/export';
@@ -151,6 +152,10 @@
 	let drawerBeanId = $state<string | null>(null);
 	let quickAddOpen = $state(false);
 	let importOpen = $state(false);
+	// Log-brew dialog (issue #10), opened from the drawer footer with
+	// the drawer's bag pre-selected.
+	let logBrewOpen = $state(false);
+	let logBrewBeanId = $state<string | null>(null);
 
 	// ── Derived ────────────────────────────────────────────────────────
 	const allBeans = $derived(library.beans);
@@ -1136,6 +1141,20 @@
 		onOpenShot={(shotId) => void goto(resolve(`/history?shot=${encodeURIComponent(shotId)}`))}
 		onSeeAllShots={() =>
 			void goto(resolve(`/history?bean=${encodeURIComponent(drawerBean?.id ?? '')}`))}
+		onLogBrew={(beanId) => {
+			logBrewBeanId = beanId;
+			logBrewOpen = true;
+		}}
+	/>
+{/if}
+
+{#if logBrewOpen}
+	<LogBrewDialog
+		prefill={{ beanId: logBrewBeanId }}
+		onClose={() => (logBrewOpen = false)}
+		onSaved={(record) => {
+			void goto(resolve(`/history?shot=${encodeURIComponent(record.id)}`));
+		}}
 	/>
 {/if}
 

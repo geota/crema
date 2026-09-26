@@ -2,6 +2,8 @@ package coffee.crema.decent
 
 import coffee.crema.core.ShotMachine
 import coffee.crema.history.StoredShot
+import coffee.crema.history.BREW_LOG_UPLOAD_SKIP
+import coffee.crema.history.isBrewLog
 import coffee.crema.history.pulledFromVisualizer
 import coffee.crema.ui.DrainResult
 import coffee.crema.ui.TelemetrySample
@@ -225,8 +227,12 @@ class DecentSync(
 
     override fun shareUrl(shot: StoredShot): String? = shotViewUrl(shot.machineSerial, shot.decentId)
 
-    /** A shot pulled from Visualizer can go only with its own stamped serial. */
-    override fun canUpload(shot: StoredShot): Boolean = !shot.pulledFromVisualizer || shotMachineOf(shot) != null
+    /**
+     * A shot pulled from Visualizer can go only with its own stamped serial;
+     * a Brew Log row (issue #10) never goes — it is not a DE1 shot.
+     */
+    override fun canUpload(shot: StoredShot): Boolean =
+        !shot.isBrewLog && (!shot.pulledFromVisualizer || shotMachineOf(shot) != null)
 
     override fun inBacklog(shot: StoredShot): Boolean =
         shot.decentId == null &&
@@ -237,6 +243,7 @@ class DecentSync(
     override fun maybeAutoUpload(shot: StoredShot, fullSamples: List<TelemetrySample>?): Boolean {
         val p = persisted
         if (!p.linked || !p.autoUpload || p.needsReauth) return false
+        if (shot.isBrewLog) return false
         if (shot.durationMs < MIN_SHOT_SECONDS * 1000L) return false
         if (machineFor(shot) == null) return false
         return uploadShot(shot, manual = false, fullSamples = fullSamples)
@@ -353,6 +360,9 @@ class DecentSync(
         if (p.needsReauth) return Outcome.Skipped("Decent login needs re-linking")
         // The caller's copy may be stale (a second tap, a drain racing a live push).
         val shot = currentShot(snapshot.id) ?: return Outcome.Skipped("Shot no longer in history")
+        // Brew Log rows (issue #10): never uploaded, and never stamped with
+        // the live DE1 (which the bind after a successful POST would do).
+        if (shot.isBrewLog) return Outcome.Skipped(BREW_LOG_UPLOAD_SKIP)
         if (shot.decentId != null && !replace) return Outcome.Skipped("Already on Decent")
         if (!manual && shot.durationMs < MIN_SHOT_SECONDS * 1000L) return Outcome.Skipped("Shorter than $MIN_SHOT_SECONDS s")
         val (machine, fromLive) = resolveMachine(shot) ?: return Outcome.Skipped(

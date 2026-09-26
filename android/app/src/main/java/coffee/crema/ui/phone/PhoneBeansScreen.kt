@@ -85,7 +85,9 @@ fun PhoneBeansScreen(
     // Read-only detail (issue 61). Swapped in over this screen rather than
     // pushed as its own route — the same idiom PhoneHistoryScreen uses for the
     // shot detail, so the bottom nav behaves consistently between the two.
-    var detailId by remember { mutableStateOf<String?>(null) }
+    // Hoisted into BeansViewState (#96), shared with the tablet: the detail
+    // (and a Log-brew form opened from it — issue #10) survives the host swap.
+    var detailId by beansState::detailBeanId
 
     if (detailId != null) {
         PhoneBeanDetailScreen(
@@ -103,6 +105,12 @@ fun PhoneBeansScreen(
                 detailId = null
                 vm.openBeanShotsInHistory(id)
                 onNav("history")
+            },
+            // The inventory-first door to the Brew Log (issue #10): the bag
+            // comes from BeansViewState, the form is the pushed route.
+            onLogBrew = { id ->
+                vm.openLogBrew(coffee.crema.ui.brewlog.BrewLogOwner.BEANS, beanId = id)
+                onNav(coffee.crema.ui.brewlog.LOG_BREW_ROUTE)
             },
         )
         return
