@@ -225,12 +225,7 @@ pub fn brew_history_stats(brews: &[BrewStatInput]) -> BrewHistoryStats {
         .iter()
         .filter(|b| in_scope(b))
         .filter_map(|b| {
-            ratio_for_method(
-                b.brew_method.as_deref(),
-                b.dose_g,
-                b.water_g,
-                yield_of(b),
-            )
+            ratio_for_method(b.brew_method.as_deref(), b.dose_g, b.water_g, yield_of(b))
         })
         .collect();
     let times: Vec<f32> = brews
@@ -474,7 +469,10 @@ mod tests {
         let r = ratio_for_method(Some("pourover"), Some(15.0), None, Some(210.0));
         assert!((r.unwrap() - 14.0).abs() < 1e-4);
         // Neither → None.
-        assert_eq!(ratio_for_method(Some("pourover"), Some(15.0), None, None), None);
+        assert_eq!(
+            ratio_for_method(Some("pourover"), Some(15.0), None, None),
+            None
+        );
     }
 
     // ── stats ────────────────────────────────────────────────────

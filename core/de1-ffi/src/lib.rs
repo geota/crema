@@ -398,6 +398,43 @@ pub fn history_stats(shots_json: String) -> Result<String, CremaError> {
     serde_json::to_string(&de1_domain::history_stats(&shots)).map_err(crema_err)
 }
 
+/// Derive the method-aware History stat strip over a JSON array of
+/// `BrewStatInput`; returns `BrewHistoryStats` JSON. The Brew Log
+/// sibling of [`history_stats`] — see [`de1_domain::brew_history_stats`]
+/// for the mixed-set scoping rules.
+#[uniffi::export]
+pub fn brew_history_stats(brews_json: String) -> Result<String, CremaError> {
+    let brews: Vec<de1_domain::BrewStatInput> =
+        serde_json::from_str(&brews_json).map_err(crema_err)?;
+    serde_json::to_string(&de1_domain::brew_history_stats(&brews)).map_err(crema_err)
+}
+
+/// The method-aware brew ratio — espresso speaks yield-out, filter
+/// methods water-in (yield fallback). `method` absent/empty = espresso.
+/// See [`de1_domain::ratio_for_method`].
+#[uniffi::export]
+pub fn ratio_for_method(
+    method: Option<String>,
+    dose: Option<f32>,
+    water_g: Option<f32>,
+    yield_g: Option<f32>,
+) -> Option<f32> {
+    de1_domain::ratio_for_method(method.as_deref(), dose, water_g, yield_g)
+}
+
+/// Canonicalize a brew-method string for storage (trim / lowercase /
+/// separators → `_`), or `None` for an effectively empty input.
+#[uniffi::export]
+pub fn normalize_brew_method(raw: String) -> Option<String> {
+    de1_domain::normalize_brew_method(&raw)
+}
+
+/// Mint a `recipe:<uuid-v7>` id for a new brew recipe.
+#[uniffi::export]
+pub fn new_recipe_id() -> String {
+    de1_domain::new_recipe_id()
+}
+
 /// Resolve the Brew screen's service-mode display targets (steam /
 /// hot-water / flush) — machine value → Quick-Controls dial → legacy
 /// default, per field. Takes `ModeTargetInputs` JSON, returns

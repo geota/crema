@@ -189,6 +189,183 @@ data class Bean (
 	val updatedAt: Long
 )
 
+/// Summary metrics over a (filter/range-scoped) set of brews — the
+/// History stat strip once non-espresso rows exist. `None` = "no data"
+/// (render as "—").
+/// 
+/// Scope rule (spec §4): count, beans-used, and rating span every row;
+/// the weight / ratio / time averages compute over one method family —
+/// the whole set when it is single-method, espresso rows only when it
+/// is mixed (`mixed_methods = true`, shells tag the tiles "esp").
+@Serializable
+data class BrewHistoryStats (
+	/// Number of brews in the set.
+	val count: UInt,
+	/// Total dry coffee consumed, grams (Σ dose over all rows) — the
+	/// inventory number the Brew Log exists for.
+	val beansUsedG: Float? = null,
+	/// Mean beverage weight, grams, over the scoped rows.
+	val avgWeightG: Float? = null,
+	/// Mean ratio over the scoped rows, in the scoped method's own
+	/// semantics (espresso: yield ÷ dose; filter: water ÷ dose).
+	val avgRatio: Float? = null,
+	/// Mean duration, seconds, over scoped rows that recorded a time.
+	val avgTimeS: Float? = null,
+	/// Mean star rating over rated rows (all methods).
+	val avgRating: Float? = null,
+	/// `true` when the set spans more than one method family — the
+	/// weight / ratio / time averages are then espresso-scoped and the
+	/// shell tags those tiles.
+	val mixedMethods: Boolean,
+	/// The single non-espresso method the whole set belongs to, when it
+	/// does — lets the shell title the strip ("V60") and pick the
+	/// water-in ratio label. `None` for espresso-only or mixed sets.
+	val scopeMethod: String? = null
+)
+
+/// What a [`BrewStep`] is, for its icon / default label. Lowercase wire
+/// spelling, like [`BeverageType`](crate::BeverageType).
+@Serializable
+enum class BrewStepKind(val string: String) {
+	/// The first wetting pour, usually followed by a rest.
+	@SerialName("bloom")
+	Bloom("bloom"),
+	/// A pour to a cumulative weight target.
+	@SerialName("pour")
+	Pour("pour"),
+	/// A timed rest.
+	@SerialName("wait")
+	Wait("wait"),
+	/// A timed immersion rest (French press, clever).
+	@SerialName("steep")
+	Steep("steep"),
+	/// A timed stir.
+	@SerialName("stir")
+	Stir("stir"),
+	/// The plunge (AeroPress, French press).
+	@SerialName("press")
+	Press("press"),
+	/// The final drain — often open-ended ("until you tap").
+	@SerialName("drawdown")
+	Drawdown("drawdown"),
+	/// Anything else; carries its meaning in `label`.
+	@SerialName("other")
+	Other("other"),
+}
+
+/// How a step ends during a guided session.
+@Serializable
+enum class StepAdvance(val string: String) {
+	/// Advance when the target is met — a timed step's countdown
+	/// reaching zero, or a pour step's weight target (scale present).
+	/// Scale-less pour steps fall back to manual.
+	@SerialName("auto")
+	Auto("auto"),
+	/// Advance only on an explicit tap.
+	@SerialName("manual")
+	Manual("manual"),
+}
+
+/// One step of a [`BrewRecipe`].
+/// 
+/// A step may carry a cumulative water target, a duration, or both
+/// (bloom: pour to 45 g, rest until 0:45 *from step start*). A step
+/// with neither is open-ended — it holds until tapped, regardless of
+/// `advance`.
+@Serializable
+data class BrewStep (
+	val kind: BrewStepKind,
+	/// Display label override; the shell derives one from `kind` when
+	/// absent.
+	val label: String? = null,
+	/// Cumulative scale weight at which this step's pour is complete,
+	/// grams.
+	val targetWaterG: Float? = null,
+	/// Step duration, seconds, counted from step start.
+	val durationS: Long? = null,
+	val advance: StepAdvance
+)
+
+/// A named multi-stage plan for a brew method. Followed by a human —
+/// deliberately *not* a `Profile`, which is executed by the machine.
+/// 
+/// Shell-persisted (like beans); the core owns the shape and the
+/// session engine that runs it.
+@Serializable
+data class BrewRecipe (
+	/// Stable id — `recipe:<uuid-v7>`.
+	val id: String,
+	val name: String,
+	/// Normalized method string ([`normalize_brew_method`]).
+	val method: String,
+	/// Planned dry dose, grams.
+	val doseG: Float,
+	/// Planned total water, grams.
+	val waterG: Float,
+	val tempC: Float? = null,
+	val steps: List<BrewStep>? = null,
+	val notes: String? = null,
+	val favourite: Boolean? = null,
+	val createdAt: Long,
+	val updatedAt: Long,
+	/// Soft-delete tombstone, Unix ms — same lifecycle as beans.
+	val deletedAt: Long? = null
+)
+
+/// One sample of a guided brew's weight-only telemetry, ~4 Hz.
+@Serializable
+data class BrewSample (
+	/// Milliseconds since the session clock started.
+	val elapsedMs: Long,
+	/// Net scale weight, grams.
+	val weightG: Float,
+	/// Estimated pour rate, g/s, when derivable.
+	val flowGS: Float? = null
+)
+
+/// A recipe-step boundary as it actually happened in a session.
+@Serializable
+data class StageMark (
+	/// Milliseconds since the session clock started.
+	val elapsedMs: Long,
+	/// Index into the recipe's `steps` of the step that *began* here.
+	val stepIndex: Long
+)
+
+/// The weight-only telemetry of a guided brew session, persisted on
+/// [`StoredShot::brew_series`](crate::StoredShot). Deliberately not a
+/// [`TimedSample`](crate::TimedSample) series — that type's DE1
+/// `ShotSample` is structurally required, and a pourover has none.
+@Serializable
+data class BrewSeries (
+	val samples: List<BrewSample>,
+	/// Step boundaries as they actually happened (skips included).
+	val stageMarks: List<StageMark>
+)
+
+/// One brew's inputs to the method-aware History summary strip — the
+/// [`ShotStatInput`](crate::ShotStatInput) projection plus the two
+/// fields that separate a pourover from a shot.
+@Serializable
+data class BrewStatInput (
+	/// Total brew duration, milliseconds. `0` = not recorded (manual
+	/// logs may omit time) — such rows are excluded from the time
+	/// average rather than dragging it toward zero.
+	val durationMs: Long,
+	/// Final settled beverage weight, grams, or `None`.
+	val finalWeightG: Float? = null,
+	/// Peak scale weight, grams — the yield fallback.
+	val peakWeightG: Float? = null,
+	/// Dry dose, grams.
+	val doseG: Float? = null,
+	/// Water in, grams — set on filter/immersion brews.
+	val waterG: Float? = null,
+	/// Star rating 1..=5; `None` / 0 = unrated.
+	val rating: UByte? = null,
+	/// The brew method; `None` = machine espresso.
+	val brewMethod: String? = null
+)
+
 /// The portable, cross-shell app-preferences subset. `#[serde(default)]` on the
 /// whole struct (via [`Default`]) so a partial blob — an older backup, or one
 /// shell omitting a field it shares — fills gaps from the canonical defaults

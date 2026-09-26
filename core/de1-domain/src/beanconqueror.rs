@@ -2068,7 +2068,10 @@ mod tests {
             shot.stored_shot.record.duration,
             Duration::from_millis(28_000)
         );
-        assert_eq!(shot.stored_shot.brew_method, None, "espresso stays method-less");
+        assert_eq!(
+            shot.stored_shot.brew_method, None,
+            "espresso stays method-less"
+        );
         assert_eq!(shot.stored_shot.metadata.dose, Some(18.0));
         assert_eq!(shot.stored_shot.metadata.yield_out, Some(36.0));
         assert_eq!(shot.stored_shot.metadata.water_g, None);
