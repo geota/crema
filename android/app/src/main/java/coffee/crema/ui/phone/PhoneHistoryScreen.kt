@@ -90,7 +90,9 @@ fun PhoneHistoryScreen(
     onConnect: (String) -> Unit,
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
-    var detailId by remember { mutableStateOf<String?>(null) }
+    // Saveable: the pushed Log-brew route ("Log again") keeps this entry on the
+    // back stack, and Cancel should land back on the brew's detail.
+    var detailId by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     var searchOpen by remember { mutableStateOf(false) }
     var profileFilter by remember { mutableStateOf<String?>(null) }
@@ -102,8 +104,12 @@ fun PhoneHistoryScreen(
     var exportSheet by remember { mutableStateOf(false) }
     // Brew Log (issue #10): the method filter + the Log-brew form.
     var methodFilter by remember { mutableStateOf<String?>(null) }
-    var logBrewOpen by remember { mutableStateOf(false) }
-    var logBrewPrefill by remember { mutableStateOf<StoredShot?>(null) }
+    // The form itself is the pushed `log-brew` route over a VM-held draft
+    // (it survives rotation and the phone↔tablet swap).
+    val openLogBrew: (StoredShot?) -> Unit = { prefill ->
+        vm.openLogBrew(coffee.crema.ui.brewlog.BrewLogOwner.HISTORY, prefill = prefill)
+        onNav(coffee.crema.ui.brewlog.LOG_BREW_ROUTE)
+    }
     // Compare: select 2–5 shots, then push the full-screen overlay (HistoryCompareHooks).
     val sel = rememberCompareSelection()
     var compareOpen by remember { mutableStateOf(false) }
@@ -169,15 +175,8 @@ fun PhoneHistoryScreen(
             onLoadOnBrew = { vm.loadProfileOnBrew(detail.profileName); onNav("brew") },
             onStartFromShot = { vm.startFromShot(detail.id); onNav("brew") },
             onExport = { launchSave("crema-shot.json", vm.shotsJson(listOf(detail.id))) },
-            onLogAgain = { logBrewPrefill = detail; logBrewOpen = true },
+            onLogAgain = { openLogBrew(detail) },
         )
-        if (logBrewOpen) {
-            coffee.crema.ui.brewlog.LogBrewSheet(
-                vm = vm,
-                prefill = logBrewPrefill,
-                onDismiss = { logBrewOpen = false; logBrewPrefill = null },
-            )
-        }
         return
     }
 
@@ -223,7 +222,7 @@ fun PhoneHistoryScreen(
             // The Brew Log's manual-entry door (issue #10) — the same FAB
             // idiom as Beans and Profiles.
             if (!sel.selecting) {
-                CremaNewFab("Log brew") { logBrewPrefill = null; logBrewOpen = true }
+                CremaNewFab("Log brew") { openLogBrew(null) }
             }
         },
         containerColor = MaterialTheme.colorScheme.background,
@@ -250,7 +249,7 @@ fun PhoneHistoryScreen(
             if (sel.selecting) {
                 PhoneSelectHint(Modifier.fillMaxWidth().padding(horizontal = CremaEdge, vertical = 6.dp))
             } else {
-                PhoneStatsStrip(filtered)
+                PhoneStatsStrip(filtered, ui.weightUnit)
             }
 
             if (!sel.selecting) {
@@ -439,20 +438,34 @@ private fun dayLabel(ms: Long, startOfDay: Long, dayMs: Long): String = when {
 
 // ── Stats strip (proto .ph-stats — 3-up) ─────────────────────────────────────
 @Composable
-private fun PhoneStatsStrip(history: List<StoredShot>) {
-    // The three averages, scoped to the filtered set (issue 48). The tablet/PWA
-    // add Shots + total/avg Weight; the phone keeps it to the three.
-    // Method-aware (issue #10): a mixed set scopes ratio/time to espresso
-    // rows — the "esp" tag says so.
+private fun PhoneStatsStrip(history: List<StoredShot>, weightUnit: String) {
+    // Scoped to the filtered set (issue 48), method-aware (issue #10): a mixed
+    // set scopes the weight / ratio / time averages to espresso rows — the
+    // "esp" tag says so. The Brew Log adds the count and "Beans used" (Σ dose,
+    // the inventory number), so six tiles wrap by the width the strip gets:
+    // 3×2 under 600dp (every phone), one row from 600dp (7" portrait).
     val s = brewHistoryStats(history)
     fun scoped(label: String) = if (s.mixedMethods) "$label · esp" else label
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = CremaEdge, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        PhoneStatTile(scoped("Avg ratio"), s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—", Modifier.weight(1f))
-        PhoneStatTile(scoped("Avg time"), s.avgTimeS?.let { formatShotDuration((it * 1000).toLong()) } ?: "—", Modifier.weight(1f))
-        PhoneStatTile("Avg rating", s.avgRating?.let { fmt("%.1f★", it) } ?: "—", Modifier.weight(1f))
+    val nonEsp = history.any { it.methodOf != null && it.methodOf != "espresso" }
+    val beansUsed = convertWeight(s.beansUsedG?.toFloat(), weightUnit)
+    val avgWt = convertWeight(s.avgWeightG?.toFloat(), weightUnit)
+    val tiles: List<Pair<String, String>> = listOf(
+        (if (nonEsp) "Brews" else "Shots") to "${s.count}",
+        "Beans used" to (s.beansUsedG?.let { "${beansUsed.value}${beansUsed.unit}" } ?: "—"),
+        scoped("Avg weight") to (s.avgWeightG?.let { "${avgWt.value}${avgWt.unit}" } ?: "—"),
+        scoped("Avg ratio") to (s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—"),
+        scoped("Avg time") to (s.avgTimeS?.let { formatShotDuration((it * 1000).toLong()) } ?: "—"),
+        "Avg rating" to (s.avgRating?.let { fmt("%.1f★", it) } ?: "—"),
+    )
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = CremaEdge, vertical = 4.dp)) {
+        val perRow = if (maxWidth >= 600.dp) 6 else 3
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            tiles.chunked(perRow).forEach { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    row.forEach { (label, value) -> PhoneStatTile(label, value, Modifier.weight(1f)) }
+                }
+            }
+        }
     }
 }
 
@@ -818,32 +831,66 @@ private fun PhoneShotDetail(
             }
             }
             // Manual rows keep their user-entered facts editable (issue #10) —
-            // dose re-settles the bag through the credit/debit pair.
+            // dose re-settles the bag through the credit/debit pair; brew time
+            // and temp are editable too (web parity). Two-up from 360dp.
             if (manual) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    CremaStepper(
-                        label = "Dose",
-                        value = (shot.doseG ?: 0f).toDouble(),
-                        unit = "g",
-                        onChange = { vm.updateManualBrew(shot.id, doseG = it.toFloat().takeIf { v -> v > 0f }) },
-                        step = 0.5,
-                        min = 0.0,
-                        max = 200.0,
-                    )
-                    CremaStepper(
-                        label = if (method == "espresso") "Yield" else "Water",
-                        value = ((if (method == "espresso") shot.yieldG else shot.waterG) ?: 0f).toDouble(),
-                        unit = "g",
-                        onChange = {
-                            val v = it.toFloat().takeIf { f -> f > 0f }
-                            if (method == "espresso") vm.updateManualBrew(shot.id, yieldG = v)
-                            else vm.updateManualBrew(shot.id, waterG = v)
-                        },
-                        step = if (method == "espresso") 1.0 else 10.0,
-                        min = 0.0,
-                        max = 2000.0,
-                        fmt = { fmt("%.0f", it) },
-                    )
+                val esp = method == "espresso"
+                val editors: List<@Composable (Modifier) -> Unit> = listOf(
+                    { m ->
+                        CremaStepper(
+                            label = "Dose",
+                            value = (shot.doseG ?: 0f).toDouble(),
+                            unit = "g",
+                            onChange = { vm.updateManualBrew(shot.id, doseG = it.toFloat().takeIf { v -> v > 0f }) },
+                            step = 0.5, min = 0.0, max = 200.0,
+                            modifier = m, style = CremaStepperStyle.Boxed,
+                        )
+                    },
+                    { m ->
+                        CremaStepper(
+                            label = if (esp) "Yield" else "Water",
+                            value = ((if (esp) shot.yieldG else shot.waterG) ?: 0f).toDouble(),
+                            unit = "g",
+                            onChange = {
+                                val v = it.toFloat().takeIf { f -> f > 0f }
+                                if (esp) vm.updateManualBrew(shot.id, yieldG = v) else vm.updateManualBrew(shot.id, waterG = v)
+                            },
+                            step = if (esp) 1.0 else 10.0, min = 0.0, max = 2000.0,
+                            fmt = { fmt("%.0f", it) },
+                            modifier = m, style = CremaStepperStyle.Boxed,
+                        )
+                    },
+                    { m ->
+                        CremaStepper(
+                            label = "Time",
+                            value = (shot.durationMs / 1000L).toDouble(),
+                            onChange = { vm.updateManualBrew(shot.id, durationMs = (it * 1000).toLong().takeIf { v -> v > 0L }) },
+                            step = 5.0, min = 0.0, max = 86_400.0,
+                            fmt = { coffee.crema.brew.formatClock((it * 1000).toLong()) },
+                            modifier = m, style = CremaStepperStyle.Boxed,
+                        )
+                    },
+                    { m ->
+                        CremaStepper(
+                            label = "Temp",
+                            value = (shot.brewTempC ?: 0f).toDouble(),
+                            unit = "°C",
+                            onChange = { vm.updateManualBrew(shot.id, brewTempC = it.toFloat().takeIf { v -> v > 0f }) },
+                            step = 1.0, min = 0.0, max = 100.0,
+                            fmt = { fmt("%.0f", it) },
+                            modifier = m, style = CremaStepperStyle.Boxed,
+                        )
+                    },
+                )
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    val cols = if (maxWidth >= 360.dp) 2 else 1
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        editors.chunked(cols).forEach { row ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                row.forEach { e -> e(Modifier.weight(1f)) }
+                            }
+                        }
+                    }
                 }
             }
 

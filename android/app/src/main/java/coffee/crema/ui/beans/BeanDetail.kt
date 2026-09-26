@@ -612,3 +612,80 @@ private fun DetailPill(text: String, accent: Boolean = false) {
  *  freshness maths derives from it. */
 private fun dateWithAge(iso: String, days: Int?): String =
     if (days == null) iso else "$iso · ${days}d ago"
+
+/**
+ * The bag detail's footer actions, shared by the tablet sheet and the phone
+ * detail screen. Archive / Delete lead; the primary pair — "Log a brew" (the
+ * Brew Log's inventory-first door, issue #10) and "Set active" — share a row
+ * on a roomy pane and, under 360dp, stack with "Log a brew" wrapping UNDER
+ * "Set active" so neither label truncates. Sized by the pane it gets
+ * (BoxWithConstraints), not the device.
+ */
+@Composable
+fun BeanDetailFooterActions(
+    archived: Boolean,
+    isActive: Boolean,
+    onToggleArchived: () -> Unit,
+    onDelete: () -> Unit,
+    onSetActive: () -> Unit,
+    onLogBrew: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val showLog = onLogBrew != null && !archived
+    val showActive = !isActive && !archived
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier.fillMaxWidth()) {
+        val secondary: @Composable () -> Unit = {
+            coffee.crema.ui.components.CremaButton(
+                onClick = onToggleArchived,
+                variant = coffee.crema.ui.components.CremaButtonVariant.Outlined,
+                icon = if (archived) "archive-box" else "archive",
+                label = if (archived) "Restore" else "Archive",
+            )
+            coffee.crema.ui.components.CremaButton(
+                onClick = onDelete,
+                variant = coffee.crema.ui.components.CremaButtonVariant.Text,
+                icon = "trash",
+                danger = true,
+                label = "Delete",
+            )
+        }
+        val logBrew: @Composable (Modifier) -> Unit = { m ->
+            coffee.crema.ui.components.CremaButton(
+                onClick = { onLogBrew?.invoke() },
+                variant = coffee.crema.ui.components.CremaButtonVariant.Outlined,
+                icon = "plus-circle",
+                label = "Log a brew",
+                modifier = m,
+            )
+        }
+        val setActive: @Composable (Modifier) -> Unit = { m ->
+            coffee.crema.ui.components.CremaButton(onClick = onSetActive, icon = "coffee-bean", label = "Set active", modifier = m)
+        }
+        val gap = Arrangement.spacedBy(8.dp)
+        when {
+            // Everything on one line.
+            maxWidth >= 520.dp -> Row(Modifier.fillMaxWidth(), horizontalArrangement = gap, verticalAlignment = Alignment.CenterVertically) {
+                secondary()
+                Spacer(Modifier.weight(1f))
+                if (showLog) logBrew(Modifier)
+                if (showActive) setActive(Modifier)
+            }
+            // Secondary row, then the primary pair side by side.
+            maxWidth >= 360.dp -> Column(verticalArrangement = gap) {
+                Row(horizontalArrangement = gap, verticalAlignment = Alignment.CenterVertically) { secondary() }
+                if (showLog || showActive) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = gap) {
+                        if (showLog) logBrew(Modifier.weight(1f))
+                        if (showActive) setActive(Modifier.weight(1f))
+                    }
+                }
+            }
+            // Narrow: "Log a brew" wraps under "Set active", both full width.
+            else -> Column(verticalArrangement = gap) {
+                Row(horizontalArrangement = gap, verticalAlignment = Alignment.CenterVertically) { secondary() }
+                if (showActive) setActive(Modifier.fillMaxWidth())
+                if (showLog) logBrew(Modifier.fillMaxWidth())
+            }
+        }
+    }
+}

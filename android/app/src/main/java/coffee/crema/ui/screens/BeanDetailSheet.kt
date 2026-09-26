@@ -167,39 +167,17 @@ fun BeanDetailSheet(
                         )
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CremaButton(
-                            onClick = onToggleArchived,
-                            variant = CremaButtonVariant.Outlined,
-                            icon = if (archived) "archive-box" else "archive",
-                            label = if (archived) "Restore" else "Archive",
-                        )
-                        CremaButton(
-                            onClick = { confirmDelete = true },
-                            variant = CremaButtonVariant.Text,
-                            icon = "trash",
-                            danger = true,
-                            label = "Delete",
-                        )
-                        Spacer(Modifier.weight(1f))
-                        // The inventory-first door to the Brew Log (issue #10):
-                        // bag in hand, log what you just used.
-                        if (onLogBrew != null && !archived) {
-                            CremaButton(
-                                onClick = onLogBrew,
-                                variant = CremaButtonVariant.Outlined,
-                                icon = "plus-circle",
-                                label = "Log a brew",
-                            )
-                        }
-                        if (!isActive && !archived) {
-                            CremaButton(onClick = onSetActive, icon = "coffee-bean", label = "Set active")
-                        }
-                    }
+                    // Footer actions — "Log a brew" wraps under "Set active"
+                    // on a narrow pane (issue #10).
+                    coffee.crema.ui.beans.BeanDetailFooterActions(
+                        archived = archived,
+                        isActive = isActive,
+                        onToggleArchived = onToggleArchived,
+                        onDelete = { confirmDelete = true },
+                        onSetActive = onSetActive,
+                        onLogBrew = onLogBrew,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                    )
                 }
             }
         }

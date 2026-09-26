@@ -149,10 +149,9 @@ fun BeansScreen(
     // The bag whose read-only detail is open (issue 61). Held as an id, not a
     // Bean, so the sheet re-renders live as the bag is favourited/archived
     // from inside it.
-    var detailBeanId by remember { mutableStateOf<String?>(null) }
-    // The Log-brew sheet (issue #10), opened from the bean detail footer
-    // with that bag pre-selected.
-    var logBrewBeanId by remember { mutableStateOf<String?>(null) }
+    // Hoisted into BeansViewState (#96) so the bag detail — and a Log-brew
+    // form opened from it (issue #10) — survive the phone↔tablet host swap.
+    var detailBeanId by beansState::detailBeanId
     // Beanconqueror import — the system file picker hands back a Uri the VM reads
     // (single JSON or a .zip archive) and merges via the core importer.
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -414,7 +413,7 @@ fun BeansScreen(
                 recentShots = shots.take(5).map { shotRowSummary(it) },
                 avgDoseG = shots.take(10).mapNotNull { it.doseG }.filter { it > 0f }
                     .takeIf { it.isNotEmpty() }?.average()?.toFloat(),
-                onLogBrew = { logBrewBeanId = bean.id },
+                onLogBrew = { vm.openLogBrew(coffee.crema.ui.brewlog.BrewLogOwner.BEANS, beanId = bean.id) },
                 isActive = bean.id == ui.activeBeanId,
                 onDismiss = { detailBeanId = null },
                 onEdit = { detailBeanId = null; vm.startEditBean(bean.id); onNav("bean-edit") },
@@ -438,13 +437,9 @@ fun BeansScreen(
         }
     }
 
-    logBrewBeanId?.let { bid ->
-        coffee.crema.ui.brewlog.LogBrewSheet(
-            vm = vm,
-            prefillBeanId = bid,
-            onDismiss = { logBrewBeanId = null },
-        )
-    }
+    // The Log-brew sheet (issue #10), opened from the bean detail footer with
+    // that bag pre-selected — VM-held, so it survives the phone↔tablet swap.
+    coffee.crema.ui.brewlog.LogBrewSheet(vm, owner = coffee.crema.ui.brewlog.BrewLogOwner.BEANS)
 
     if (roasterDialogOpen) {
         RoasterDialog(

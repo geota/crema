@@ -374,6 +374,12 @@ class MainActivity : ComponentActivity() {
                 var currentRoute by rememberSaveable { mutableStateOf("brew") }
                 val onRouteChange: (String) -> Unit = { currentRoute = it }
                 val beansState = rememberBeansViewState()
+                // An open Brew Log form (issue #10) is a pushed route on the
+                // phone and a sheet on its owning tab on the tablet; the draft is
+                // VM-held, so the incoming host just needs the right route.
+                val logBrewOwner = viewModel.logBrew.collectAsStateWithLifecycle().value?.owner
+                val restoreRoute = NavRestore.restoreRoute(currentRoute, logBrewOwner, phone = isCompact) ?: "brew"
+                val routeOwners = NavRestore.owners(logBrewOwner)
                 if (isCompact) {
                     PhoneNavHost(
                         vm = viewModel,
@@ -405,9 +411,13 @@ class MainActivity : ComponentActivity() {
                         roasterEditContent = { back ->
                             PhoneRoasterEditScreen(viewModel, onBack = back)
                         },
+                        logBrewContent = { back ->
+                            coffee.crema.ui.brewlog.LogBrewScreen(viewModel, onBack = back)
+                        },
                         debugContent = debugSlot,
-                        initialRoute = currentRoute,
+                        initialRoute = restoreRoute,
                         onRouteChange = onRouteChange,
+                        routeOwners = routeOwners,
                     )
                 } else {
                 // Tablet: tapping a rail connection pip opens the shared Devices
@@ -444,8 +454,9 @@ class MainActivity : ComponentActivity() {
                         ProfileEditScreen(viewModel, onBack = back)
                     },
                     debugContent = debugSlot,
-                    initialRoute = currentRoute,
+                    initialRoute = restoreRoute,
                     onRouteChange = onRouteChange,
+                    routeOwners = routeOwners,
                 )
                 if (showDevices) {
                     TabletDevicesSheet(

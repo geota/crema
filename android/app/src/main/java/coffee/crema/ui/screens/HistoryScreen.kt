@@ -22,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.text.BasicTextField
@@ -77,6 +78,7 @@ import coffee.crema.history.methodOf
 import coffee.crema.history.methodRatioLabel
 import coffee.crema.ui.brewlog.BrewSessionCanvas
 import coffee.crema.ui.brewlog.BrewSparkChart
+import coffee.crema.ui.brewlog.BrewLogOwner
 import coffee.crema.ui.brewlog.LogBrewSheet
 import coffee.crema.ui.brewlog.MethodMarkTile
 import coffee.crema.ui.MainViewModel
@@ -169,10 +171,9 @@ fun HistoryScreen(
     // Brew Log method filter (issue #10) — rendered only once a second
     // method exists in history, so espresso-only users never see it.
     var methodFilter by remember { mutableStateOf<String?>(null) }
-    // The Log-brew sheet — the Brew Log's manual-entry door. `logBrewPrefill`
-    // carries a prior brew for "Log again".
-    var logBrewOpen by remember { mutableStateOf(false) }
-    var logBrewPrefill by remember { mutableStateOf<StoredShot?>(null) }
+    // The Log-brew sheet — the Brew Log's manual-entry door. Its draft is
+    // VM-held ([MainViewModel.logBrew]) so a rotation across 840dp hands it to
+    // the phone's pushed route intact; this tab shows it when it owns it.
     var sort by remember { mutableStateOf("date") }
     var sortDesc by remember { mutableStateOf(true) } // newest / highest first
     // Compare: select 2–5 shots → overlay their curves in a modal (HistoryCompareHooks).
@@ -276,7 +277,7 @@ fun HistoryScreen(
                     // their width. Export's secondary "current filter" format stays a
                     // landscape affordance; the icon runs the primary all-shots export.
                     Spacer(Modifier.width(8.dp))
-                    CremaIconButton("plus-circle", { logBrewPrefill = null; logBrewOpen = true }, tone = CremaIconTone.Tonal)
+                    CremaIconButton("plus-circle", { vm.openLogBrew(BrewLogOwner.HISTORY) }, tone = CremaIconTone.Tonal)
                     Spacer(Modifier.width(4.dp))
                     CremaIconButton("upload-simple", { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) }, tone = CremaIconTone.Tonal)
                     if (missingUploads > 0) {
@@ -296,7 +297,7 @@ fun HistoryScreen(
                         // Log brew — the Brew Log's manual-entry door (issue #10):
                         // pourover / AeroPress / French press made off the machine.
                         CremaButton(
-                            onClick = { logBrewPrefill = null; logBrewOpen = true },
+                            onClick = { vm.openLogBrew(BrewLogOwner.HISTORY) },
                             variant = CremaButtonVariant.Outlined,
                             icon = "plus-circle",
                             label = "Log brew",
@@ -520,13 +521,14 @@ fun HistoryScreen(
                             // Brew rows (issue #10): Log again re-opens the form
                             // seeded from this brew; manual rows keep their facts
                             // editable, re-settling the bag on a dose change.
-                            onLogAgain = { logBrewPrefill = selected; logBrewOpen = true },
+                            onLogAgain = { vm.openLogBrew(BrewLogOwner.HISTORY, prefill = selected) },
                             onManualDoseChange = { vm.updateManualBrew(selected.id, doseG = it) },
                             onManualWaterChange = {
                                 if (selected.methodOf == "espresso") vm.updateManualBrew(selected.id, yieldG = it)
                                 else vm.updateManualBrew(selected.id, waterG = it)
                             },
                             onManualTempChange = { vm.updateManualBrew(selected.id, brewTempC = it) },
+                            onManualTimeChange = { vm.updateManualBrew(selected.id, durationMs = it) },
                             defaultPrivacy = ui.visualizer.privacy,
                             onPrivacyChange = { p -> vm.setShotPrivacy(selected.id, p) },
                             // Post-hoc log fix-ups (issue #16): the dial-in loop spans
@@ -562,13 +564,7 @@ fun HistoryScreen(
         }
     }
 
-    if (logBrewOpen) {
-        LogBrewSheet(
-            vm = vm,
-            prefill = logBrewPrefill,
-            onDismiss = { logBrewOpen = false; logBrewPrefill = null },
-        )
-    }
+    LogBrewSheet(vm, owner = BrewLogOwner.HISTORY)
 }
 
 // Aggregate stats strip — 6 tiles matching the prototype (.hist2-stats,
@@ -589,25 +585,28 @@ private fun StatsStrip(history: List<StoredShot>, weightUnit: String, compact: B
     val nonEsp = history.any { it.methodOf != null && it.methodOf != "espresso" }
     val noun = if (nonEsp) "brews" else "shots"
     fun scoped(label: String) = if (mixed) "$label · esp" else label
-    // 6 tiles fill the width on a wide tablet; on a narrow 7"/portrait one they'd
-    // each be too thin (labels + values clip), so they take a readable fixed width
-    // and the strip scrolls horizontally instead.
-    val narrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 840
-    val scroll = rememberScrollState()
-    Row(
-        Modifier.fillMaxWidth()
-            .then(if (narrow) Modifier.horizontalScroll(scroll) else Modifier)
-            .padding(horizontal = 24.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        val beansUsed = convertWeight(s.beansUsedG?.toFloat(), weightUnit)
-        val avgWt = convertWeight(s.avgWeightG?.toFloat(), weightUnit)
-        StatTile(if (nonEsp) "Brews" else "Shots", "${s.count}", noun, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f), compact)
-        StatTile("Beans used", beansUsed.value, s.beansUsedG?.let { beansUsed.unit }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f), compact)
-        StatTile(scoped("Avg weight"), avgWt.value, s.avgWeightG?.let { avgWt.unit }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f), compact)
-        StatTile(scoped("Avg ratio"), s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f), compact)
-        StatTile(scoped("Avg time"), s.avgTimeS?.let { formatShotDuration((it * 1000).toLong()) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f), compact)
-        StatTile("Avg rating", s.avgRating?.let { fmt("%.1f", it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f), compact)
+    // Six tiles (the Brew Log added "Beans used"). They wrap by the width the
+    // strip actually gets: one row from 600dp, 3×2 below — never a thin,
+    // clipped tile and never a sideways scroll.
+    val beansUsed = convertWeight(s.beansUsedG?.toFloat(), weightUnit)
+    val avgWt = convertWeight(s.avgWeightG?.toFloat(), weightUnit)
+    val tiles: List<@Composable (Modifier) -> Unit> = listOf(
+        { m -> StatTile(if (nonEsp) "Brews" else "Shots", "${s.count}", noun, m, compact) },
+        { m -> StatTile("Beans used", beansUsed.value, s.beansUsedG?.let { beansUsed.unit }, m, compact) },
+        { m -> StatTile(scoped("Avg weight"), avgWt.value, s.avgWeightG?.let { avgWt.unit }, m, compact) },
+        { m -> StatTile(scoped("Avg ratio"), s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—", null, m, compact) },
+        { m -> StatTile(scoped("Avg time"), s.avgTimeS?.let { formatShotDuration((it * 1000).toLong()) } ?: "—", null, m, compact) },
+        { m -> StatTile("Avg rating", s.avgRating?.let { fmt("%.1f", it) } ?: "—", null, m, compact) },
+    )
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp)) {
+        val perRow = if (maxWidth >= 600.dp) 6 else 3
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            tiles.chunked(perRow).forEach { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    row.forEach { tile -> tile(Modifier.weight(1f)) }
+                }
+            }
+        }
     }
 }
 
@@ -828,6 +827,8 @@ private fun ShotDetail(
     onManualDoseChange: ((Float?) -> Unit)? = null,
     onManualWaterChange: ((Float?) -> Unit)? = null,
     onManualTempChange: ((Float?) -> Unit)? = null,
+    /** Brew time, ms (web parity — the storyboard had deferred it on Android). */
+    onManualTimeChange: ((Long?) -> Unit)? = null,
 ) {
     // Brew Log rows (issue #10).
     val method = shot.methodOf
@@ -1001,19 +1002,29 @@ private fun ShotDetail(
             // Dose / Water|Yield / Ratio / Temp. No peak-anything: there is no
             // machine telemetry to peak.
             val espressoRow = method == "espresso"
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                val out = if (espressoRow) shot.yieldG else shot.waterG ?: shot.yieldG
-                val mOut = convertWeight(out, weightUnit)
-                MetricCard("Method", coffee.crema.brew.methodShortLabel(method), null, Modifier.weight(1f), isText = true)
-                MetricCard("Time", if (shot.durationMs > 0) formatShotDuration(shot.durationMs) else "—", null, Modifier.weight(1f))
-                MetricCard("Dose", shot.doseG?.let { fmt("%.1f", it.toDouble()) } ?: "—", shot.doseG?.let { "g" }, Modifier.weight(1f))
-                MetricCard(if (espressoRow) "Yield" else "Water", mOut.value, out?.let { mOut.unit }, Modifier.weight(1f))
-                MetricCard("Ratio", shotRatio(shot) ?: "—", null, Modifier.weight(1f), isText = true)
-                MetricCard("Temp", shot.brewTempC?.let { fmt("%.0f", it.toDouble()) } ?: "—", shot.brewTempC?.let { "°C" }, Modifier.weight(1f))
+            // FlowRow sized by the detail pane it gets: 3×2 on a narrow pane
+            // (7" landscape ≈ 500dp), 6×1 when wide.
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val perRow = if (maxWidth < 600.dp) 3 else 6
+                FlowRow(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    maxItemsInEachRow = perRow,
+                ) {
+                    val out = if (espressoRow) shot.yieldG else shot.waterG ?: shot.yieldG
+                    val mOut = convertWeight(out, weightUnit)
+                    MetricCard("Method", coffee.crema.brew.methodShortLabel(method), null, Modifier.weight(1f), isText = true)
+                    MetricCard("Time", if (shot.durationMs > 0) formatShotDuration(shot.durationMs) else "—", null, Modifier.weight(1f))
+                    MetricCard("Dose", shot.doseG?.let { fmt("%.1f", it.toDouble()) } ?: "—", shot.doseG?.let { "g" }, Modifier.weight(1f))
+                    MetricCard(if (espressoRow) "Yield" else "Water", mOut.value, out?.let { mOut.unit }, Modifier.weight(1f))
+                    MetricCard("Ratio", shotRatio(shot) ?: "—", null, Modifier.weight(1f), isText = true)
+                    MetricCard("Temp", shot.brewTempC?.let { fmt("%.0f", it.toDouble()) } ?: "—", shot.brewTempC?.let { "°C" }, Modifier.weight(1f))
+                }
             }
             // Manual rows keep their user-entered facts editable — steppers in
             // one wrapping row (the QC idiom), re-settling the bag on dose.
-            if (manual && (onManualDoseChange != null || onManualWaterChange != null || onManualTempChange != null)) {
+            if (manual && (onManualDoseChange != null || onManualWaterChange != null || onManualTempChange != null || onManualTimeChange != null)) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     onManualDoseChange?.let { commit ->
                         CremaStepper(
@@ -1048,6 +1059,18 @@ private fun ShotDetail(
                             min = 0.0,
                             max = 100.0,
                             fmt = { fmt("%.0f", it) },
+                        )
+                    }
+                    onManualTimeChange?.let { commit ->
+                        CremaStepper(
+                            label = "Time",
+                            value = (shot.durationMs / 1000L).toDouble(),
+                            unit = null,
+                            onChange = { commit((it * 1000).toLong().takeIf { v -> v > 0L }) },
+                            step = 5.0,
+                            min = 0.0,
+                            max = 86_400.0,
+                            fmt = { coffee.crema.brew.formatClock((it * 1000).toLong()) },
                         )
                     }
                 }

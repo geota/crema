@@ -56,13 +56,13 @@ fun PhoneBeanDetailScreen(
     onOpenShot: ((String) -> Unit)? = null,
     /** Open History filtered to this bag ("See all N shots"); null = hidden. */
     onSeeAllShots: (() -> Unit)? = null,
+    /** Log a brew with this bag — the pushed Brew Log form (issue #10); null = hidden. */
+    onLogBrew: ((beanId: String) -> Unit)? = null,
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val bean = ui.beans.firstOrNull { it.id == beanId }
     var confirmDelete by remember { mutableStateOf(false) }
     var photoOpen by remember { mutableStateOf(false) }
-    // The Log-brew form (issue #10), pre-selected to this bag.
-    var logBrewOpen by remember { mutableStateOf(false) }
 
     BackHandler { onBack() }
 
@@ -125,54 +125,17 @@ fun PhoneBeanDetailScreen(
                 onOpenShot = onOpenShot,
                 onSeeAllShots = onSeeAllShots,
             )
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CremaButton(
-                    onClick = {
-                        if (archived) vm.unarchiveBean(bean.id) else vm.archiveBean(bean.id)
-                    },
-                    variant = CremaButtonVariant.Outlined,
-                    icon = if (archived) "archive-box" else "archive",
-                    label = if (archived) "Restore" else "Archive",
-                )
-                CremaButton(
-                    onClick = { confirmDelete = true },
-                    variant = CremaButtonVariant.Text,
-                    icon = "trash",
-                    danger = true,
-                    label = "Delete",
-                )
-                Spacer(Modifier.weight(1f))
-                if (!isActive && !archived) {
-                    CremaButton(
-                        onClick = { vm.setActiveBean(bean.id) },
-                        icon = "coffee-bean",
-                        label = "Set active",
-                    )
-                }
-            }
-            // The inventory-first door to the Brew Log (issue #10).
-            if (!archived) {
-                CremaButton(
-                    onClick = { logBrewOpen = true },
-                    variant = CremaButtonVariant.Outlined,
-                    icon = "plus-circle",
-                    label = "Log a brew with this bag",
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+            // Footer actions — the inventory-first door to the Brew Log
+            // (issue #10) wraps under "Set active" below 360dp.
+            coffee.crema.ui.beans.BeanDetailFooterActions(
+                archived = archived,
+                isActive = isActive,
+                onToggleArchived = { if (archived) vm.unarchiveBean(bean.id) else vm.archiveBean(bean.id) },
+                onDelete = { confirmDelete = true },
+                onSetActive = { vm.setActiveBean(bean.id) },
+                onLogBrew = onLogBrew?.let { cb -> { cb(bean.id) } },
+            )
         }
-    }
-
-    if (logBrewOpen) {
-        coffee.crema.ui.brewlog.LogBrewSheet(
-            vm = vm,
-            prefillBeanId = bean.id,
-            onDismiss = { logBrewOpen = false },
-        )
     }
 
     if (photoOpen) {

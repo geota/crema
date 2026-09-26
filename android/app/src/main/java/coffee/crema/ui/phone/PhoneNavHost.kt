@@ -56,7 +56,7 @@ import coffee.crema.ui.phone.components.CremaBottomNav
  *    · settings. Settings is NOT a bottom-bar item — every top bar's gear
  *    navigates to it (its tab row shows no active tab).
  *  • PUSHED full-screen (bottom bar HIDDEN): profile-edit · bean-edit ·
- *    roaster-edit · debug.
+ *    roaster-edit · log-brew · debug.
  *  • list → detail inside history / settings is INTERNAL screen state (the
  *    bottom bar stays put).
  */
@@ -73,12 +73,16 @@ fun PhoneNavHost(
     profileEditContent: @Composable (onBack: () -> Unit) -> Unit,
     beanEditContent: @Composable (onBack: () -> Unit) -> Unit,
     roasterEditContent: @Composable (onBack: () -> Unit) -> Unit,
+    /** The Brew Log form (issue #10) — pushed full-screen, bottom bar hidden. */
+    logBrewContent: @Composable (onBack: () -> Unit) -> Unit,
     debugContent: @Composable () -> Unit,
     /** The route to reopen on first composition (the tablet host's route when
      *  the window shrinks across the 840dp breakpoint); `brew` = start fresh. */
     initialRoute: String = "brew",
     /** Reports the current route so MainActivity can hand it to the tablet host. */
     onRouteChange: (String) -> Unit = {},
+    /** Dynamic owning tabs for [initialRoute]'s pushed routes ([NavRestore.owners]). */
+    routeOwners: Map<String, String> = emptyMap(),
 ) {
     val nav = rememberNavController()
     val tabRoutes = setOf("brew", "scale", "profiles", "beans", "history", "settings")
@@ -153,9 +157,10 @@ fun PhoneNavHost(
                     composable("profile-edit") { profileEditContent(onBack) }
                     composable("bean-edit") { beanEditContent(onBack) }
                     composable("roaster-edit") { roasterEditContent(onBack) }
+                    composable(NavRestore.LOG_BREW) { logBrewContent(onBack) }
                     composable("debug") { debugContent() }
                 }
-                SyncNavRoute(nav, initialRoute, NavRestore.PHONE_ROUTES, onNav, onRouteChange)
+                SyncNavRoute(nav, initialRoute, NavRestore.PHONE_ROUTES, onNav, onRouteChange, routeOwners)
             }
         }
     }
