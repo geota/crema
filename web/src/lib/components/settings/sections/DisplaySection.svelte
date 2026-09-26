@@ -12,7 +12,7 @@
 	 * units feed the rest of the app's value formatting; density and screensaver
 	 * are persisted app preferences.
 	 */
-	import { getSettingsStore } from '$lib/settings';
+	import { brewCueHapticsOn, brewCueSoundOn, getSettingsStore } from '$lib/settings';
 	import { wakeLockSupported } from '$lib/shell/wake-lock';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import StSectionHead from '../StSectionHead.svelte';
@@ -114,14 +114,16 @@
 		{/snippet}
 	</StRow>
 	<!-- Guided-brew cues (issue #10) — the Scale page's Brew segment
-	     signals step boundaries with these; both default on. -->
+	     signals step boundaries with these (the step card's visual flash is
+	     always on). Sound defaults off, vibration on; the Brew setup card's
+	     bell toggles the same sound setting. -->
 	<StRow
 		title="Guided brew sounds"
 		sub="Short chimes at pour targets and step changes during a guided brew."
 	>
 		{#snippet control()}
 			<StToggle
-				on={prefs.brewCueSound}
+				on={brewCueSoundOn(prefs)}
 				onChange={(v) => settings.set('brewCueSound', v)}
 				label="Guided brew sounds"
 			/>
@@ -133,7 +135,7 @@
 	>
 		{#snippet control()}
 			<StToggle
-				on={prefs.brewCueHaptics}
+				on={brewCueHapticsOn(prefs)}
 				onChange={(v) => settings.set('brewCueHaptics', v)}
 				label="Guided brew vibration"
 			/>
