@@ -4,7 +4,8 @@
  * The core decides WHEN a cue is due (`Event::BrewCueDue` /
  * `BrewStepChanged`); this module decides what it sounds and feels
  * like: short WebAudio tones + a vibration pattern, each gated by its
- * Settings toggle. Never a DE1 write — cues terminate here.
+ * Settings toggle (sound defaults OFF, haptics ON). The visual leg — the
+ * step card's flash — is always on and lives in the session store. Never a DE1 write — cues terminate here.
  *
  * The AudioContext is created/resumed by {@link primeBrewCues}, called
  * from the session's Start/Arm tap so it exists inside a user gesture
@@ -13,7 +14,7 @@
  * screen alone.
  */
 
-import { getSettingsStore } from '$lib/settings';
+import { brewCueHapticsOn, brewCueSoundOn, getSettingsStore } from '$lib/settings';
 
 export type BrewCueKind = 'approach' | 'boundary' | 'step' | 'done';
 
@@ -51,7 +52,7 @@ function blip(freq: number, ms: number, at = 0): void {
 /** Render one cue as sound + haptic, per the Settings toggles. */
 export function playBrewCue(kind: BrewCueKind): void {
 	const s = getSettingsStore().current;
-	if (s.brewCueSound) {
+	if (brewCueSoundOn(s)) {
 		switch (kind) {
 			case 'approach':
 				// "Get ready" — one short mid blip.
@@ -75,7 +76,7 @@ export function playBrewCue(kind: BrewCueKind): void {
 				break;
 		}
 	}
-	if (s.brewCueHaptics && typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+	if (brewCueHapticsOn(s) && typeof navigator !== 'undefined' && 'vibrate' in navigator) {
 		try {
 			switch (kind) {
 				case 'approach':

@@ -11,6 +11,8 @@ import {
 	applyCommonToSettings,
 	settingsPlatformExtras,
 	DEFAULT_SETTINGS,
+	brewCueSoundOn,
+	brewCueHapticsOn,
 	type Settings
 } from './store.svelte';
 
@@ -87,6 +89,38 @@ describe('common-settings mapping', () => {
 			webhookUrl: 'https://x.test',
 			smoothPressure: false,
 			telemetryRateHz: 30
+		});
+	});
+
+	describe('guided-brew cue defaults (issue #10)', () => {
+		it('untouched cues read sound off / haptics on and are not serialised', () => {
+			expect(DEFAULT_SETTINGS.brewCueSound).toBeNull();
+			expect(DEFAULT_SETTINGS.brewCueHaptics).toBeNull();
+			expect(brewCueSoundOn(DEFAULT_SETTINGS)).toBe(false);
+			expect(brewCueHapticsOn(DEFAULT_SETTINGS)).toBe(true);
+			const json = JSON.stringify(settingsToCommon(DEFAULT_SETTINGS));
+			expect(json).not.toContain('brewCueSound');
+			expect(json).not.toContain('brewCueHaptics');
+		});
+
+		it('an older blob without the fields follows the defaults', () => {
+			const common = settingsToCommon(DEFAULT_SETTINGS);
+			delete common.brewCueSound;
+			delete common.brewCueHaptics;
+			const back = applyCommonToSettings(common, DEFAULT_SETTINGS);
+			expect(back.brewCueSound).toBeNull();
+			expect(brewCueSoundOn(back)).toBe(false);
+			expect(brewCueHapticsOn(back)).toBe(true);
+		});
+
+		it('explicit choices win and round-trip', () => {
+			const s: Settings = { ...DEFAULT_SETTINGS, brewCueSound: true, brewCueHaptics: false };
+			const common = JSON.parse(JSON.stringify(settingsToCommon(s)));
+			expect(common.brewCueSound).toBe(true);
+			expect(common.brewCueHaptics).toBe(false);
+			const back = applyCommonToSettings(common, DEFAULT_SETTINGS);
+			expect(brewCueSoundOn(back)).toBe(true);
+			expect(brewCueHapticsOn(back)).toBe(false);
 		});
 	});
 });
