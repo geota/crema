@@ -958,7 +958,8 @@ private fun PhoneShotDetail(
                     // the Settings → Sharing default — no duplicated "Default · x"
                     // chip. Tapping a chip pins this shot; tapping the pinned chip
                     // reverts to following the default.
-                    Row(
+                    // Brew Log rows never upload (issue #10), so no Visualizer privacy.
+                    if (!isBrew) Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,

@@ -361,13 +361,14 @@ fun HistoryScreen(
                 }
             } else {
                 StatsStrip(shots, ui.weightUnit, compact = shortWindow)
-                // Range filter chips (left) + sort split-button (right).
-                Row(
-                    Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Profile pills (left) + bean / method / range / sort controls
+                // (right). The Brew Log's method dropdown made the control
+                // group wide enough to crush the pills into a one-word column
+                // on a short/narrow tablet pane (phone landscape, 7"), so:
+                // pills always scroll on ONE line, and under 1000dp the
+                // controls drop to their own line (sized by the pane).
+                val pills: @Composable (Modifier) -> Unit = { m ->
+                    Row(m.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         // Per-profile pills (web .hi-filter p: pills) — only profiles
                         // that actually have shots, ordered by shot count.
                         val byProfile = ui.history.mapNotNull { it.profileName }
@@ -387,6 +388,8 @@ fun HistoryScreen(
                             )
                         }
                     }
+                }
+                val controls: @Composable () -> Unit = {
                     // Bean — a split dropdown scoping the log to one bag (the
                     // bag as a unit of history, bean-workflow-unify §B). Only
                     // bags that actually have shots, ordered by shot count;
@@ -455,6 +458,23 @@ fun HistoryScreen(
                         },
                         onToggleDirection = { sortDesc = !sortDesc },
                     )
+                }
+                BoxWithConstraints(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp)) {
+                    if (maxWidth >= 1000.dp) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            pills(Modifier.weight(1f))
+                            controls()
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            pills(Modifier.fillMaxWidth())
+                            Row(
+                                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+                            ) { controls() }
+                        }
+                    }
                 }
                 if (sel.selecting) {
                     TabletCompareBar(
@@ -1188,7 +1208,8 @@ private fun ShotDetail(
         // override the chip matching the Settings → Sharing default is
         // highlighted; tapping a chip pins this shot; tapping the pinned chip
         // reverts to the default.
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        // Brew Log rows never upload (issue #10), so no Visualizer privacy.
+        if (!isBrew) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Eyebrow("Privacy")
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("public" to "Public", "unlisted" to "Unlisted", "private" to "Private").forEach { (v, label) ->
