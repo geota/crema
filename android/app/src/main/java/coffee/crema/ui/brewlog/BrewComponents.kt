@@ -3,17 +3,25 @@ package coffee.crema.ui.brewlog
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coffee.crema.brew.methodIcon
 import coffee.crema.core.BrewSeries
 import coffee.crema.ui.components.PhIcon
@@ -83,7 +91,13 @@ fun BrewSparkChart(series: BrewSeries, modifier: Modifier = Modifier) {
  * The live session reuses it (issue #10 Phase 2): [minSpanMs] grows the
  * x-axis with the session clock (so bands draw before any weight arrives —
  * a scale-less session still shows its stages), [nowMs] draws the playhead,
- * and [targetG] the current step's cumulative pour target, dashed.
+ * and [targetG] the current step's cumulative pour target, dashed (only
+ * when the marks carry no snapshotted targets — the staircase covers it).
+ *
+ * "Planned vs poured": when the stage marks carry the recipe's snapshotted
+ * water targets, a dashed staircase ([plannedStaircase]) sits under the
+ * solid weight curve, with a small in-chart legend unless [showLegend] is
+ * false (a caller with its own legend row labels the dashed line there).
  */
 @Composable
 fun BrewSessionCanvas(
@@ -92,9 +106,64 @@ fun BrewSessionCanvas(
     minSpanMs: Long? = null,
     nowMs: Long? = null,
     targetG: Float? = null,
+    showLegend: Boolean = true,
+) {
+    val hasPlan = series.stageMarks.any { it.targetWaterG != null }
+    Box(modifier) {
+        BrewSessionPlot(series, Modifier.fillMaxSize(), minSpanMs, nowMs, targetG)
+        if (hasPlan && showLegend) {
+            Row(
+                Modifier.align(Alignment.TopStart).padding(start = 14.dp, top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                PlannedLegend()
+                LegendEntry("poured", dashed = false, color = CremaTheme.telemetry.weight)
+            }
+        }
+    }
+}
+
+/** The "planned" legend entry: a short dashed swatch in the staircase colour. */
+@Composable
+private fun PlannedLegend(label: String = "planned") {
+    LegendEntry(label, dashed = true, color = plannedColor())
+}
+
+@Composable
+private fun plannedColor() = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+
+@Composable
+private fun LegendEntry(label: String, dashed: Boolean, color: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Canvas(Modifier.size(width = 16.dp, height = 6.dp)) {
+            val y = size.height / 2f
+            drawLine(
+                color,
+                start = Offset(0f, y),
+                end = Offset(size.width, y),
+                strokeWidth = if (dashed) 1.4.dp.toPx() else 2.dp.toPx(),
+                pathEffect = if (dashed) PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx())) else null,
+            )
+        }
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun BrewSessionPlot(
+    series: BrewSeries,
+    modifier: Modifier,
+    minSpanMs: Long?,
+    nowMs: Long?,
+    targetG: Float?,
 ) {
     val weightColor = CremaTheme.telemetry.weight
     val flowColor = CremaTheme.telemetry.flow
+    val planColor = plannedColor()
     val bandColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f)
     val boundColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)
     val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
@@ -104,7 +173,12 @@ fun BrewSessionCanvas(
         val live = minSpanMs != null
         if (samples.size < 2 && !live) return@Canvas
         val span = max(1L, max(samples.lastOrNull()?.elapsedMs ?: 0L, minSpanMs ?: 0L)).toFloat()
-        val maxW = max(50f, max(samples.maxOfOrNull { it.weightG } ?: 0f, (targetG ?: 0f) * 1.1f))
+        // Where the series ends: the live clock, else the last sample.
+        val endMs = nowMs ?: samples.lastOrNull()?.elapsedMs ?: 0L
+        val stairs = plannedStaircase(series.stageMarks, endMs)
+        // Keep the planned line in view (with headroom) even on a short pour.
+        val planMax = maxPlannedTarget(series.stageMarks) * 1.04f
+        val maxW = max(50f, maxOf(samples.maxOfOrNull { it.weightG } ?: 0f, (targetG ?: 0f) * 1.1f, planMax))
         val maxF = max(4f, samples.mapNotNull { it.flowGS }.maxOrNull() ?: 0f)
         val inset = 8.dp.toPx()
         val plotW = (size.width - inset * 2f).coerceAtLeast(1f)
@@ -138,8 +212,25 @@ fun BrewSessionCanvas(
             val y = inset + (1f - frac) * plotH
             drawLine(gridColor, androidx.compose.ui.geometry.Offset(inset, y), androidx.compose.ui.geometry.Offset(inset + plotW, y), 1f)
         }
-        // The current step's pour target (live only).
-        if (targetG != null && targetG > 0f) {
+        // Planned water: the dashed staircase, under the weight curve.
+        if (stairs.isNotEmpty()) {
+            val path = Path()
+            stairs.forEachIndexed { i, s ->
+                val y = yW(s.targetG)
+                if (i > 0 && stairs[i - 1].t1Ms == s.t0Ms) path.lineTo(x(s.t0Ms), y) else path.moveTo(x(s.t0Ms), y)
+                path.lineTo(x(s.t1Ms), y)
+            }
+            drawPath(
+                path,
+                planColor,
+                style = Stroke(
+                    width = 1.4.dp.toPx(),
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx())),
+                ),
+            )
+        }
+        // The current step's pour target (live, pre-snapshot fallback).
+        if (stairs.isEmpty() && targetG != null && targetG > 0f) {
             val y = yW(targetG)
             drawLine(
                 weightColor.copy(alpha = 0.45f),

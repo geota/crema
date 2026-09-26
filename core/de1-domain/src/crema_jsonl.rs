@@ -718,7 +718,13 @@ mod tests {
                             { "elapsedMs": 0, "weightG": 0.0 },
                             { "elapsedMs": 250, "weightG": 4.5, "flowGS": 18.0 },
                         ],
-                        "stageMarks": [{ "elapsedMs": 0, "stepIndex": 0 }],
+                        "stageMarks": [
+                            { "elapsedMs": 0, "stepIndex": 0, "targetWaterG": 45.0 },
+                            { "elapsedMs": 45_000, "stepIndex": 1, "targetWaterG": 250.0 },
+                            // A timed wait (no target) — and the shape of an
+                            // older record, written before targets existed.
+                            { "elapsedMs": 90_000, "stepIndex": 2 },
+                        ],
                     },
                 },
                 {
@@ -758,7 +764,14 @@ mod tests {
         assert_eq!(series.samples.len(), 2);
         assert_eq!(series.samples[1].elapsed_ms, 250);
         assert_eq!(series.samples[1].flow_g_s, Some(18.0));
-        assert_eq!(series.stage_marks.len(), 1);
+        assert_eq!(series.stage_marks.len(), 3);
+        // The planned targets snapshotted on the marks survive too.
+        let targets: Vec<_> = series
+            .stage_marks
+            .iter()
+            .map(|m| m.target_water_g)
+            .collect();
+        assert_eq!(targets, vec![Some(45.0), Some(250.0), None]);
         assert!(guided.is_brew_log() && !guided.is_manual_log());
         assert_eq!(guided.machine, None, "brews carry no machine stamp");
 

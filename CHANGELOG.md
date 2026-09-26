@@ -59,7 +59,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   default — the bell next to Start and Settings → Display switch them. On
   tablets and wide browsers the running session sits beside a live weight
   chart; in phone landscape it becomes a compact no-scroll layout; rotating
-  mid-brew keeps the clock running. Guided brews stay on your device like
+  mid-brew keeps the clock running. The brew chart draws the recipe's plan
+  as a dashed "planned" staircase under the solid "poured" weight curve, live
+  and in History (targets are saved with the brew, so editing or deleting the
+  recipe later doesn't change it). Guided brews stay on your device like
   every Brew Log row. Web, Android tablet and phone.
 - **Upload shots to your Decent account** (#84) — Settings → Sharing gains a
   "Decent account" card next to Visualizer. Sign in with your decentespresso.com

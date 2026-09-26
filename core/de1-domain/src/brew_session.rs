@@ -231,6 +231,7 @@ impl BrewSessionMonitor {
         self.stage_marks.push(StageMark {
             elapsed_ms: 0,
             step_index: 0,
+            target_water_g: self.recipe.steps[0].target_water_g,
         });
         vec![
             BrewSessionEvent::Started,
@@ -432,6 +433,7 @@ impl BrewSessionMonitor {
         self.stage_marks.push(StageMark {
             elapsed_ms: u64::try_from(self.step_started.as_millis()).unwrap_or(u64::MAX),
             step_index: u64::try_from(self.step_index).unwrap_or(u64::MAX),
+            target_water_g: self.recipe.steps[self.step_index].target_water_g,
         });
         vec![BrewSessionEvent::StepChanged {
             step_index: self.step_index,
@@ -639,6 +641,59 @@ mod tests {
         assert_eq!(summary.series.stage_marks.len(), 4);
         assert_eq!(summary.series.stage_marks[3].elapsed_ms, 113_200);
         assert_eq!(m.phase(), BrewSessionPhase::Done);
+    }
+
+    #[test]
+    fn stage_marks_snapshot_each_steps_planned_target() {
+        let mut m = BrewSessionMonitor::new(recipe(), false, lag());
+        m.start(ms(0));
+        m.on_weight(ms(9_000), 46.0, Some(4.0));
+        m.on_tick(ms(45_100));
+        m.on_weight(ms(83_000), 250.2, Some(4.0));
+        m.on_tick(ms(113_200));
+        let ev = m.skip(ms(185_000));
+        let BrewSessionEvent::Completed(summary) = &ev[0] else {
+            panic!("expected completion, got {ev:?}");
+        };
+        let targets: Vec<_> = summary
+            .series
+            .stage_marks
+            .iter()
+            .map(|mk| mk.target_water_g)
+            .collect();
+        // Bloom 45, pour 250, timed wait and open drawdown have none.
+        assert_eq!(targets, vec![Some(45.0), Some(250.0), None, None]);
+    }
+
+    #[test]
+    fn a_skip_records_the_skipped_to_steps_target() {
+        let mut m = BrewSessionMonitor::new(recipe(), false, lag());
+        m.start(ms(0));
+        // Skip the bloom before its target: the pour step's 250 g is
+        // what the new mark carries.
+        m.skip(ms(5_000));
+        let ev = m.finish(ms(6_000));
+        let BrewSessionEvent::Completed(summary) = &ev[0] else {
+            panic!("expected completion");
+        };
+        let marks = &summary.series.stage_marks;
+        assert_eq!(marks.len(), 2);
+        assert_eq!(marks[1].elapsed_ms, 5_000);
+        assert_eq!(marks[1].step_index, 1);
+        assert_eq!(marks[1].target_water_g, Some(250.0));
+    }
+
+    #[test]
+    fn an_implicit_single_step_marks_the_recipe_water_target() {
+        let mut r = recipe();
+        r.steps.clear();
+        let mut m = BrewSessionMonitor::new(r, false, lag());
+        m.start(ms(0));
+        let ev = m.finish(ms(1_000));
+        let BrewSessionEvent::Completed(summary) = &ev[0] else {
+            panic!("expected completion");
+        };
+        assert_eq!(summary.series.stage_marks[0].target_water_g, Some(250.0));
     }
 
     #[test]

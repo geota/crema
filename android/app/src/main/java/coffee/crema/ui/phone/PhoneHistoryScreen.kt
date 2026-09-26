@@ -767,8 +767,11 @@ private fun PhoneShotDetail(
                             ) {
                                 DetailLegend("WEIGHT", tel.weight)
                                 DetailLegend("POUR RATE", tel.flow)
+                                if (brewSeries.stageMarks.any { it.targetWaterG != null }) {
+                                    PlannedDetailLegend()
+                                }
                             }
-                            BrewSessionCanvas(brewSeries, Modifier.fillMaxWidth().height(190.dp))
+                            BrewSessionCanvas(brewSeries, Modifier.fillMaxWidth().height(190.dp), showLegend = false)
                         }
                     }
                 }
@@ -1100,6 +1103,28 @@ private fun ShotBeanSwapDropdown(
                 }
             }
         }
+    }
+}
+
+/** The dashed "PLANNED" entry beside WEIGHT / POUR RATE (issue #10). */
+@Composable
+private fun PlannedDetailLegend() {
+    val color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        androidx.compose.foundation.Canvas(Modifier.size(width = 10.dp, height = 3.dp)) {
+            drawLine(
+                color,
+                start = androidx.compose.ui.geometry.Offset(0f, size.height / 2f),
+                end = androidx.compose.ui.geometry.Offset(size.width, size.height / 2f),
+                strokeWidth = size.height * 0.6f,
+                pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 2.dp.toPx())),
+            )
+        }
+        Text(
+            "PLANNED",
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.SemiBold),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

@@ -108,15 +108,37 @@ export class GuidedBrewStore {
 		this.phase = 'running';
 		this.startedAtMs = nowMs;
 		this.stepStartedAtMs = 0;
-		this.liveMarks = [{ elapsedMs: 0, stepIndex: 0 }];
+		this.liveMarks = [this.markAt(0, 0)];
 	}
 
 	stepChanged(stepIndex: number, atMs: number): void {
 		this.stepIndex = stepIndex;
 		this.stepStartedAtMs = atMs;
 		if (!this.liveMarks.some((m) => m.stepIndex === stepIndex)) {
-			this.liveMarks = [...this.liveMarks, { elapsedMs: atMs, stepIndex }];
+			this.liveMarks = [...this.liveMarks, this.markAt(stepIndex, atMs)];
 		}
+	}
+
+	/**
+	 * A live stage mark carrying the step's planned water target, the
+	 * same snapshot the core stamps on the saved record — so the live
+	 * chart's planned staircase matches the saved one. A step-less recipe
+	 * runs as one implicit pour to its water target (as in the core).
+	 */
+	private markAt(stepIndex: number, atMs: number): StageMark {
+		const mark: StageMark = { elapsedMs: atMs, stepIndex };
+		const r = this.recipe;
+		const steps = r?.steps ?? [];
+		const target =
+			r == null
+				? undefined
+				: steps.length === 0
+					? stepIndex === 0 && r.waterG > 0
+						? r.waterG
+						: undefined
+					: steps[stepIndex]?.targetWaterG;
+		if (target != null) mark.targetWaterG = target;
+		return mark;
 	}
 
 	private clearLive(): void {
