@@ -1,9 +1,7 @@
 package coffee.crema.ble.proxy
 
 import coffee.crema.ble.BleTransport
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.websocket.WebSockets
+import coffee.crema.net.HttpClients
 import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.client.request.url
 import io.ktor.websocket.close
@@ -27,7 +25,8 @@ import kotlin.test.assertTrue
 /**
  * The M1 reads-path mirror over a **real WebSocket** — the same [RelayHub] and
  * [ProxyTransport] as the in-process loopback, but bridged by [LanRelayServer]
- * (Ktor CIO server) and a Ktor WebSocket client, both behind [KtorWsFrameLink].
+ * (Ktor CIO server) and the app's Ktor WebSocket client on the OkHttp engine
+ * ([HttpClients.webSocketClient]), both behind [KtorWsFrameLink].
  * Proves the socket layer carries the frames correctly: handshake → roster/scan
  * → attach + snapshot → lossless notify fan-out → read → write-reject. (The
  * 500-sample losslessness stress lives in [ProxyLoopbackTest]; here a smaller
@@ -54,11 +53,11 @@ class LanRelayWsTest {
         )
         val server = LanRelayServer(hub, requestedPort = 0)
         val port = server.start()
-        val client = HttpClient(CIO) { install(WebSockets) }
+        val client = HttpClients.webSocketClient()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val session = client.webSocketSession { url("ws://127.0.0.1:$port${LanRelayServer.PATH}") }
-            val proxy = ProxyTransport(KtorWsFrameLink(session), scope, clientId = "phone-1", clientName = "Phone")
+            val proxy = ProxyTransport(KtorWsFrameLink(session, PROXY_MAX_FRAME_BYTES), scope, clientId = "phone-1", clientName = "Phone")
 
             val match = withTimeout(5_000) { proxy.scan { it == "DE1" }.first() }
             assertEquals(addr, match.device.address)

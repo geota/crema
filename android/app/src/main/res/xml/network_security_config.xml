@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext is permitted app-wide for ONE reason: the multi-device LAN proxy.
+  A secondary dials the primary's relay at ws://<lan-ip>:<port> (built in
+  ui/ProxyController.kt), and the OkHttp engine behind every Ktor client
+  enforces Android's NetworkSecurityPolicy (targetSdk 36: cleartext off by
+  default).
+
+  A <domain-config> can't express this: <domain> matches one exact host name
+  (an IP literal only as that exact string) with no wildcards or CIDR ranges,
+  and includeSubdomains means nothing for an IP. The primary's address is
+  whatever DHCP handed it, discovered at run time over NSD.
+
+  Compensating control: the REST clients (Visualizer, Decent, the update
+  check) refuse any non-https URL themselves before a socket is opened
+  (net/HttpClients.kt, HttpsOnly), so only the LAN WebSocket speaks cleartext.
+  The other network code (Drive, the Visualizer OAuth exchange) calls fixed
+  https:// endpoints.
+-->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <base-config
+        cleartextTrafficPermitted="true"
+        tools:ignore="InsecureBaseConfiguration">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

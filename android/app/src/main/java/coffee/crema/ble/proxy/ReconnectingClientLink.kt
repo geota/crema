@@ -1,9 +1,8 @@
 package coffee.crema.ble.proxy
 
 import android.util.Log
+import coffee.crema.net.HttpClients
 import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.client.request.url
 import kotlinx.coroutines.CoroutineScope
@@ -41,13 +40,18 @@ enum class LinkState { CONNECTING, CONNECTED }
  * The **protocol** half (re-`Hello` → re-`Attach` → re-snapshot on a reconnect)
  * lives in [ProxyTransport], driven by [reconnects] — the link can't re-establish
  * protocol state alone.
+ *
+ * The socket is Ktor's OkHttp engine ([HttpClients.webSocketClient]: no retry
+ * plugin, no read timeout, no ping). OkHttp can't cap the frame size, so each
+ * session's [KtorWsFrameLink] enforces [PROXY_MAX_FRAME_BYTES] itself. The
+ * engine is shared and outlives this link, so teardown cancels the live
+ * session explicitly rather than relying on closing the client.
  */
 class ReconnectingClientLink(
     private val url: String,
     scope: CoroutineScope,
+    private val client: HttpClient = HttpClients.webSocketClient(),
 ) : FrameLink {
-
-    private val client = HttpClient(CIO) { install(WebSockets) { maxFrameSize = PROXY_MAX_FRAME_BYTES } }
 
     /** One continuous inbound stream across all sessions. */
     private val inbox = Channel<Frame>(Channel.UNLIMITED)
@@ -71,7 +75,7 @@ class ReconnectingClientLink(
         while (isActive) {
             try {
                 val session = client.webSocketSession { url(this@ReconnectingClientLink.url) }
-                val link = KtorWsFrameLink(session)
+                val link = KtorWsFrameLink(session, maxFrameBytes = PROXY_MAX_FRAME_BYTES)
                 live = link
                 attempt = 0
                 _state.value = LinkState.CONNECTED
@@ -84,6 +88,8 @@ class ReconnectingClientLink(
             } catch (e: Exception) {
                 Log.i(TAG, "Primary not reachable at $url (attempt ${attempt + 1}): ${e.message}")
             } finally {
+                // Also on cancellation: the session isn't a child of this loop.
+                live?.cancel()
                 live = null
                 if (isActive) _state.value = LinkState.CONNECTING
             }
@@ -103,16 +109,20 @@ class ReconnectingClientLink(
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     override suspend fun close() {
+        val session = live
         loop.cancel()
-        runCatching { live?.close() }
+        runCatching { session?.close() }
+        session?.cancel()
         client.close()
         inbox.close()
     }
 
     /** Synchronous teardown for non-suspend call sites (e.g. `ViewModel.onCleared`).
-     *  Closing the Ktor client tears down the live session with it. */
+     *  Cancels the live session (the shared engine outlives the client). */
     fun dispose() {
+        val session = live
         loop.cancel()
+        session?.cancel()
         runCatching { client.close() }
         // Close the inbox so a consumer of incoming() (the ProxyTransport's dispatch
         // flow) completes instead of suspending forever on a dead link (issue 10).

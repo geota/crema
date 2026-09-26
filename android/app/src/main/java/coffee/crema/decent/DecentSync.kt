@@ -13,7 +13,6 @@ import coffee.crema.visualizer.SyncLogEntry
 import coffee.crema.visualizer.shotMachineOf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -38,12 +37,13 @@ import kotlinx.coroutines.sync.withLock
  *
  * One upload per shot at a time: a second request for a shot already in
  * flight returns without POSTing, and every push re-reads the shot from
- * history first. Retries (three attempts, linear backoff) happen only when
- * the request never went out or the server answered 5xx / 408 / 429; a
- * failure after the request went out (a read timeout) retries with
- * `replace=1`, so a shot the server did store is overwritten, not duplicated.
- * An auth failure flags the account for re-linking; a permanent rejection
- * joins [DecentState.rejectedShotIds] and leaves the backlog.
+ * history first. There is no retry loop here: retries (5xx / 408 / 429 and
+ * transport failures, three attempts with backoff, `replace=1` on a resend
+ * that may duplicate a stored shot) are the shared HTTP retry policy's job
+ * (`net/HttpClients.kt`, applied by [DecentClient]), so each [DecentApi] call
+ * returns the FINAL answer. An auth failure flags the account for
+ * re-linking; a permanent rejection joins [DecentState.rejectedShotIds] and
+ * leaves the backlog; any other failure is recorded and reported.
  */
 class DecentSync(
     private val store: DecentStateStore,
@@ -68,12 +68,9 @@ class DecentSync(
     /** The account was just linked — the moment to offer a catch-up of existing shots. */
     private val onLinked: () -> Unit = {},
     private val now: () -> Long = System::currentTimeMillis,
-    private val retryDelayMs: Long = RETRY_DELAY_MS,
 ) : UploadDestination {
     companion object {
         const val MIN_SHOT_SECONDS = 5
-        private const val RETRIES = 3
-        private const val RETRY_DELAY_MS = 2000L
 
         /** The drain gives up after this many failures in a row (rejections and 5xx alike; web parity). */
         const val FAILURE_STREAK_LIMIT = 3
@@ -341,11 +338,6 @@ class DecentSync(
         }
     }
 
-    private fun retryable(e: DecentError.Network): Boolean {
-        val s = e.status ?: return true
-        return s in 500..599 || s == 408 || s == 429
-    }
-
     private suspend fun uploadClaimed(
         snapshot: StoredShot,
         manual: Boolean,
@@ -376,44 +368,34 @@ class DecentSync(
             return failed(DecentError.Invalid(e.message ?: e.javaClass.simpleName), shot)
         }
 
-        var useReplace = replace
-        var attempt = 0
-        while (true) {
-            try {
-                val result = client.uploadShot(email, token, record, useReplace)
-                val url = shotViewUrl(machine.serialNumber, result.id)
-                // No id in the answer: bound with a placeholder, so it leaves the
-                // backlog — but no share link is offered for it (url stays null).
-                onShotUploaded(shot.id, result.id ?: "uploaded:${now()}", if (fromLive) machine else null)
-                persist {
-                    it.copy(
-                        needsReauth = false,
-                        lastUpload = DecentLastUpload(now(), ok = true, message = "Uploaded", url = url),
-                        rejectedShotIds = it.rejectedShotIds - shot.id,
-                    ).logged("push", shot)
-                }
-                return Outcome.Uploaded(result.id, url)
-            } catch (c: CancellationException) {
-                throw c
-            } catch (e: DecentError.Auth) {
-                persist {
-                    it.copy(needsReauth = true, lastUpload = DecentLastUpload(now(), ok = false, message = e.message ?: "auth"))
-                        .logged("skip", shot, e.message)
-                }
-                return Outcome.Failed(e)
-            } catch (e: DecentError.Rejected) {
-                persist { it.copy(rejectedShotIds = it.rejectedShotIds + shot.id) }
-                return failed(e, shot)
-            } catch (e: DecentError.Network) {
-                attempt++
-                if (attempt >= RETRIES || !retryable(e)) return failed(e, shot)
-                // The request went out before it failed: the server may hold the
-                // shot already, so the retry overwrites instead of duplicating.
-                if (e.status == null && e.requestSent) useReplace = true
-                delay(retryDelayMs * attempt)
-            } catch (e: DecentError) {
-                return failed(e, shot)
+        // One call: the HTTP layer has already retried whatever was retryable.
+        try {
+            val result = client.uploadShot(email, token, record, replace)
+            val url = shotViewUrl(machine.serialNumber, result.id)
+            // No id in the answer: bound with a placeholder, so it leaves the
+            // backlog — but no share link is offered for it (url stays null).
+            onShotUploaded(shot.id, result.id ?: "uploaded:${now()}", if (fromLive) machine else null)
+            persist {
+                it.copy(
+                    needsReauth = false,
+                    lastUpload = DecentLastUpload(now(), ok = true, message = "Uploaded", url = url),
+                    rejectedShotIds = it.rejectedShotIds - shot.id,
+                ).logged("push", shot)
             }
+            return Outcome.Uploaded(result.id, url)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: DecentError.Auth) {
+            persist {
+                it.copy(needsReauth = true, lastUpload = DecentLastUpload(now(), ok = false, message = e.message ?: "auth"))
+                    .logged("skip", shot, e.message)
+            }
+            return Outcome.Failed(e)
+        } catch (e: DecentError.Rejected) {
+            persist { it.copy(rejectedShotIds = it.rejectedShotIds + shot.id) }
+            return failed(e, shot)
+        } catch (e: DecentError) {
+            return failed(e, shot)
         }
     }
 
