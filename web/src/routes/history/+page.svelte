@@ -922,6 +922,7 @@
 			<!-- Log brew — the Brew Log's manual-entry door (issue #10). -->
 			<button
 				class="st-btn st-btn-secondary"
+				style="white-space: nowrap"
 				onclick={() => {
 					logBrewPrefill = undefined;
 					logBrewOpen = true;

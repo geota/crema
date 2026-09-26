@@ -870,7 +870,7 @@
 		<!-- Brew rows: five method-shaped tiles. On a MANUAL log the
 		     facts are user-entered, so they stay editable (steppers /
 		     time field); measured (guided) rows render read-only. -->
-		<div class="hi-metrics hi-metrics-brew">
+		<div class="hi-metrics hi-metrics-brew" class:is-editable={factsEditable}>
 			<div class="hi-metric">
 				<div class="hi-metric-l">Method</div>
 				<div class="hi-metric-v hi-metric-method">
@@ -1117,6 +1117,8 @@
 	     no override the chip matching the Settings → Sharing default is
 	     highlighted — no duplicated "Default · x" chip. Tapping a chip pins
 	     this shot; tapping the pinned chip reverts to the default. -->
+	<!-- Brew Log rows never upload (issue #10): no Visualizer privacy. -->
+	{#if !isBrew}
 	<div class="hi-privacy">
 		<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Privacy</span>
 		<div class="hi-privacy-chips">
@@ -1134,6 +1136,7 @@
 			{/each}
 		</div>
 	</div>
+	{/if}
 </div>
 
 {#if pickerOpen}
@@ -1259,6 +1262,10 @@
 	   hold a QuickStepper, so give the row a touch more room. */
 	.hi-metrics-brew {
 		grid-template-columns: repeat(6, minmax(0, 1fr));
+	}
+	/* Editable facts hold steppers: 3×2 so a stepper never spills its tile. */
+	.hi-metrics-brew.is-editable {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
 	}
 	.hi-metric-method {
 		display: inline-flex;
