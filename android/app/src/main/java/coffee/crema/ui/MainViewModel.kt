@@ -1330,7 +1330,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun resolveGuidedSetup() {
         val st = _ui.value
         _guidedSetup.update {
-            coffee.crema.ui.brewlog.GuidedSetupRules.resolve(it, st.brewRecipes, st.lastRecipeByMethod) { m ->
+            coffee.crema.ui.brewlog.GuidedSetupRules.resolve(
+                it,
+                st.brewRecipes,
+                st.lastRecipeByMethod,
+                st.lastBrewLogMethod,
+            ) { m ->
                 coffee.crema.brew.defaultRecipeFor(m, System.currentTimeMillis())
             }
         }
@@ -1340,13 +1345,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** A method chip: the method's last-used recipe, else its classic template. */
     fun selectGuidedMethod(method: String) {
-        _guidedSetup.update { it.copy(method = method, recipe = null) }
+        _guidedSetup.update { it.copy(method = method, recipe = null, methodChosen = true) }
         resolveGuidedSetup()
     }
 
     /** The multi-recipe dropdown. */
     fun selectGuidedRecipe(recipe: coffee.crema.core.BrewRecipe) {
-        _guidedSetup.update { it.copy(method = recipe.method, recipe = recipe) }
+        _guidedSetup.update { it.copy(method = recipe.method, recipe = recipe, methodChosen = true) }
     }
 
     fun setGuidedStartOnPour(on: Boolean) = _guidedSetup.update { it.copy(startOnPour = on) }
@@ -1386,9 +1391,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val d = _recipeEdit.value ?: return
         val saved = d.toRecipe().copy(updatedAt = System.currentTimeMillis())
         upsertBrewRecipe(saved)
-        if (_ui.value.lastRecipeByMethod[saved.method] == null) rememberRecipeUsed(saved)
+        if (coffee.crema.ui.brewlog.GuidedSetupRules.becomesDefaultOnSave(saved.method, _ui.value.lastRecipeByMethod)) {
+            rememberRecipeUsed(saved)
+        }
         if (d.owner == coffee.crema.ui.brewlog.RecipeEditOwner.SCALE) {
-            _guidedSetup.update { it.copy(method = saved.method, recipe = saved) }
+            _guidedSetup.update { it.copy(method = saved.method, recipe = saved, methodChosen = true) }
         }
         _recipeEdit.value = null
         resolveGuidedSetup()
@@ -1406,7 +1413,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             activeBeanId = s.activeBeanId,
             guidedMethod = summary?.method ?: recipe?.method,
             guidedDoseG = recipe?.doseG,
-            guidedWaterG = summary?.finalWeightG ?: recipe?.waterG,
+            // The scale's final reading (else the plan): the core seeding
+            // routes it to espresso's yield slot or a filter's water-in.
+            guidedWeightG = summary?.finalWeightG ?: recipe?.waterG,
             guidedTempC = recipe?.tempC,
             guidedDurationMs = summary?.durationMs,
             guidedRecipeName = summary?.recipeName,
@@ -2132,6 +2141,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (_ui.value.lastBrewLogMethod != storedMethod) {
             _ui.update { it.copy(lastBrewLogMethod = storedMethod) }
             persistPrefs()
+            resolveGuidedSetup()
         }
         _logBrew.value = null
         // A guided session's summary card ends once its brew is saved.
@@ -3794,6 +3804,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
         runCatching { bridge.setVolumeStopWithScale(p.volumeStopWithScale) }
         prefsLoaded = true
+        // The Brew setup opens on the most recent method, now it's known.
+        resolveGuidedSetup()
         // Hydrate the remembered addresses, arm each manager's reconnect loop,
         // and cold-start auto-connect to each remembered device.
         connection.hydrateRemembered(p.de1Address, p.scaleAddress, p.scaleName)

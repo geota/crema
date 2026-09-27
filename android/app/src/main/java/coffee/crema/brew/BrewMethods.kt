@@ -3,9 +3,8 @@ package coffee.crema.brew
 import coffee.crema.core.BrewRecipe
 import coffee.crema.core.BrewStep
 import coffee.crema.core.BrewStepKind
-import coffee.crema.core.StepAdvance
+import coffee.crema.core.defaultRecipeJson
 import coffee.crema.core.newRecipeId
-import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlinx.serialization.decodeFromString
 
@@ -98,62 +97,18 @@ fun isEspressoMethod(method: String?): Boolean {
 
 /**
  * Build the sensible starter recipe for a method — what the Scale screen's
- * Brew segment offers before the user has saved anything. Twin of the web's
- * `defaultRecipeFor`.
+ * Brew segment offers before the user has saved anything. The template
+ * (preset numbers + the per-method classic steps) is the core's
+ * `default_recipe` (shared with the web); the name is the UI's copy.
+ * [core] is the FFI call, injectable for JVM unit tests.
  */
-fun defaultRecipeFor(method: String, nowMs: Long): BrewRecipe {
-    val preset = BREW_METHOD_PRESETS.firstOrNull { it.id == method }
-    val dose = preset?.seeds?.seedDoseG ?: 15f
-    val water = preset?.seeds?.seedWaterG ?: preset?.seeds?.seedYieldG ?: 250f
-    return BrewRecipe(
-        id = newRecipeId(),
-        name = "${(preset?.label ?: method).substringBefore(" / ")} classic",
-        method = method,
-        doseG = dose,
-        waterG = water,
-        tempC = preset?.seeds?.seedTempC,
-        steps = defaultStepsFor(method, dose, water),
-        notes = null,
-        favourite = false,
-        createdAt = nowMs,
-        updatedAt = nowMs,
-        deletedAt = null,
-    )
-}
-
-private fun defaultStepsFor(method: String, dose: Float, water: Float): List<BrewStep> {
-    val bloom = min((dose * 3).roundToInt(), (water * 0.25f).roundToInt()).toFloat()
-    fun pour(target: Float) =
-        BrewStep(kind = BrewStepKind.Pour, targetWaterG = target, advance = StepAdvance.Auto)
-    fun timed(kind: BrewStepKind, s: Long, advance: StepAdvance = StepAdvance.Auto) =
-        BrewStep(kind = kind, durationS = s, advance = advance)
-    fun open(kind: BrewStepKind) = BrewStep(kind = kind, advance = StepAdvance.Manual)
-    return when (method) {
-        "pourover" -> listOf(
-            BrewStep(
-                kind = BrewStepKind.Bloom,
-                targetWaterG = bloom,
-                durationS = 45,
-                advance = StepAdvance.Auto,
-            ),
-            pour((water * 0.6f).roundToInt().toFloat()),
-            timed(BrewStepKind.Wait, 30),
-            pour(water),
-            open(BrewStepKind.Drawdown),
-        )
-        "aeropress" -> listOf(
-            pour(water),
-            timed(BrewStepKind.Stir, 10),
-            timed(BrewStepKind.Steep, 60),
-            timed(BrewStepKind.Press, 25),
-        )
-        "french_press" -> listOf(pour(water), timed(BrewStepKind.Steep, 240), open(BrewStepKind.Press))
-        "clever" -> listOf(pour(water), timed(BrewStepKind.Steep, 150), open(BrewStepKind.Drawdown))
-        "siphon" -> listOf(pour(water), timed(BrewStepKind.Steep, 90), open(BrewStepKind.Drawdown))
-        // Espresso / moka / drip / cold brew / free-text: one open pour to
-        // the water (or yield) target — "just time it for me".
-        else -> listOf(pour(water))
-    }
+fun defaultRecipeFor(
+    method: String,
+    nowMs: Long,
+    core: (String, String, Long) -> String = ::defaultRecipeJson,
+): BrewRecipe {
+    val recipe = CoreJson.decodeFromString(BrewRecipe.serializer(), core(method, newRecipeId(), nowMs))
+    return recipe.copy(name = "${methodShortLabel(method)} classic")
 }
 
 /** Display label for a step's kind. */
@@ -167,6 +122,12 @@ fun stepKindLabel(kind: BrewStepKind): String = when (kind) {
     BrewStepKind.Drawdown -> "Drawdown"
     BrewStepKind.Other -> "Step"
 }
+
+/**
+ * A step's display name: its own [BrewStep.label] when set ("Second pour"),
+ * else its kind's label — the web guided panel's rule.
+ */
+fun stepLabel(step: BrewStep): String = step.label?.trim()?.takeIf { it.isNotEmpty() } ?: stepKindLabel(step.kind)
 
 /** "to 250 g · 0:45" / "until you tap" — one spec line per step. */
 fun stepSpec(step: BrewStep): String {

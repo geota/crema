@@ -25,7 +25,9 @@ import androidx.compose.ui.unit.sp
 import coffee.crema.brew.formatClock
 import coffee.crema.brew.methodIcon
 import coffee.crema.brew.methodLabel
-import coffee.crema.brew.stepKindLabel
+import coffee.crema.brew.CoreJson
+import coffee.crema.brew.stepLabel
+import coffee.crema.core.recipeNominalDurationMsJson
 import coffee.crema.core.BrewRecipe
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
@@ -59,20 +61,15 @@ fun visibleBrewRecipes(recipes: List<BrewRecipe>, query: String): List<BrewRecip
         .sortedWith(compareBy<BrewRecipe> { methodLabel(it.method) }.thenByDescending { it.updatedAt })
 }
 
-/** Nominal run time, ms — step durations, pours a notional 30 s each
- *  (twin of the web `nominalRecipeMs`). */
-fun nominalRecipeMs(recipe: BrewRecipe): Long =
-    recipe.steps.orEmpty().sumOf { s ->
-        when {
-            s.durationS != null -> s.durationS!! * 1000L
-            s.targetWaterG != null -> 30_000L
-            else -> 0L
-        }
-    }
+/** Nominal run time, ms — the core's `BrewRecipe::nominal_duration_ms`
+ *  (step durations, pour-only steps a notional 30 s each; shared with the
+ *  web). [core] is the FFI call, injectable for JVM unit tests. */
+fun nominalRecipeMs(recipe: BrewRecipe, core: (String) -> Long = ::recipeNominalDurationMsJson): Long =
+    core(CoreJson.encodeToString(BrewRecipe.serializer(), recipe))
 
 /** "Bloom → Pour → Wait → Pour → Drawdown" — the card's plan line. */
 fun recipeStepChain(recipe: BrewRecipe): String =
-    recipe.steps.orEmpty().joinToString(" → ") { stepKindLabel(it.kind) }
+    recipe.steps.orEmpty().joinToString(" → ") { stepLabel(it) }
 
 @Composable
 fun BrewRecipeCard(

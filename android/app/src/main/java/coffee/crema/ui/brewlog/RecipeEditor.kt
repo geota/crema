@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -231,12 +232,14 @@ private fun RecipeEditorBody(vm: MainViewModel, d: RecipeEditDraft, modifier: Mo
                     label = "Add step",
                 )
                 Spacer(Modifier.weight(1f))
-                if (d.plannedTotal > 0f) {
+                val planned = remember(d) { d.plannedTotal() }
+                if (planned > 0f) {
+                    val matches = d.totalMatches(planned)
                     Text(
-                        "${d.plannedTotal.roundToInt()} g planned" +
-                            if (d.totalMatches) " · matches water ✓" else " · water is ${d.water.roundToInt()} g",
+                        "${planned.roundToInt()} g planned" +
+                            if (matches) " · matches water ✓" else " · water is ${d.water.roundToInt()} g",
                         style = MaterialTheme.typography.labelMedium.copy(fontSize = 11.sp),
-                        color = if (d.totalMatches) CremaTheme.telemetry.success else MaterialTheme.colorScheme.tertiary,
+                        color = if (matches) CremaTheme.telemetry.success else MaterialTheme.colorScheme.tertiary,
                     )
                 }
             }

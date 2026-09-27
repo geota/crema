@@ -54,7 +54,7 @@ import coffee.crema.ble.ScaleBleManager
 import coffee.crema.brew.BREW_METHOD_PRESETS
 import coffee.crema.brew.formatClock
 import coffee.crema.brew.methodLabel
-import coffee.crema.brew.stepKindLabel
+import coffee.crema.brew.stepLabel
 import coffee.crema.brew.stepSpec
 import coffee.crema.core.BrewRecipe
 import coffee.crema.core.BrewSeries
@@ -347,7 +347,7 @@ private fun SetupStepRow(i: Int, step: BrewStep) {
             },
         )
     }
-    val label = "${stepKindLabel(step.kind)} — ${stepSpec(step)}"
+    val label = "${stepLabel(step)} — ${stepSpec(step)}"
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val inline = maxWidth >= STEP_TAG_INLINE_MIN
         Row(
@@ -574,7 +574,7 @@ private fun StepCard(m: LiveModel) {
             }
             val current = m.current
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Eyebrow("Step ${m.session.stepIndex + 1} of ${m.steps.size} · ${current?.let { stepKindLabel(it.kind) } ?: ""}")
+                Eyebrow("Step ${m.session.stepIndex + 1} of ${m.steps.size} · ${current?.let { stepLabel(it) } ?: ""}")
                 Text(
                     current?.let { stepSpec(it) } ?: "",
                     style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
@@ -612,8 +612,8 @@ private fun StepCard(m: LiveModel) {
 private fun NextLine(m: LiveModel) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(
-            if (m.armed) "First · ${m.current?.let { "${stepKindLabel(it.kind)} ${stepSpec(it)}" } ?: ""}"
-            else m.next?.let { "Next · ${stepKindLabel(it.kind)} ${stepSpec(it)}" } ?: "Last step",
+            if (m.armed) "First · ${m.current?.let { "${stepLabel(it)} ${stepSpec(it)}" } ?: ""}"
+            else m.next?.let { "Next · ${stepLabel(it)} ${stepSpec(it)}" } ?: "Last step",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,

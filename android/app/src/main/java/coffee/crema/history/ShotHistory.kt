@@ -382,6 +382,22 @@ fun downsampleForStorage(samples: List<TelemetrySample>): List<TelemetrySample> 
         .map { samples[it.toInt()] }
 }
 
+/**
+ * Thin a guided session's weight series to ~[SHOT_SAMPLE_CAP] samples before
+ * it rides the history file — the web's cap, with the same core picker
+ * (`downsample_indices`: every Nth, first and last kept, so the chart's time
+ * axis and the planned staircase's end still line up). Stage marks are tiny
+ * and kept whole. [indices] is the FFI call, injectable for JVM unit tests.
+ */
+fun downsampleBrewSeries(
+    series: BrewSeries,
+    indices: (UInt, UInt) -> List<UInt> = ::downsampleIndices,
+): BrewSeries {
+    val n = series.samples.size
+    if (n <= SHOT_SAMPLE_CAP) return series
+    return series.copy(samples = indices(n.toUInt(), SHOT_SAMPLE_CAP.toUInt()).map { series.samples[it.toInt()] })
+}
+
 /** File-backed JSON persistence for the shot log (`filesDir/shots.json`). */
 class HistoryStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)

@@ -141,4 +141,26 @@ class BrewLogDraftTest {
         assertNull(parseBrewDurationMs(""))
         assertNull(parseBrewDurationMs("abc"))
     }
+
+    @Test fun aGuidedEspressoSeedsItsFinalWeightAsTheYield() {
+        // Drift bug 9: the core seeds espresso from the yield slot, so the
+        // measured weight must travel there, not in water-in.
+        val core = FakeCore(seeds("espresso", 18f, 38.4f))
+        BrewLogSeeds.open(
+            BrewLogOwner.SCALE, emptyList(), activeBeanId = null,
+            guidedMethod = "espresso", guidedDoseG = 18f, guidedWeightG = 38.4f, seedsJson = core::call,
+        )
+        val espresso = core.inputs.single().prefill!!
+        assertEquals(38.4f, espresso.yieldG)
+        assertNull(espresso.waterG)
+
+        val filter = FakeCore(seeds("pourover", 15f, 251f))
+        BrewLogSeeds.open(
+            BrewLogOwner.SCALE, emptyList(), activeBeanId = null,
+            guidedMethod = "pourover", guidedDoseG = 15f, guidedWeightG = 251f, seedsJson = filter::call,
+        )
+        val pour = filter.inputs.single().prefill!!
+        assertEquals(251f, pour.waterG)
+        assertNull(pour.yieldG)
+    }
 }

@@ -1,5 +1,6 @@
 package coffee.crema.ui
 
+import coffee.crema.brew.CoreJson
 import coffee.crema.core.BrewRecipe
 import coffee.crema.core.BrewStep
 import coffee.crema.core.BrewStepKind
@@ -45,11 +46,17 @@ class GuidedBrewStateTest {
 
     // ── Cue defaults ────────────────────────────────────────────────────
 
-    @Test fun cueDefaultsAreHapticsOnSoundOff() {
-        assertFalse(BrewCueDefaults.soundOn(null))
-        assertTrue(BrewCueDefaults.hapticsOn(null))
-        assertTrue(BrewCueDefaults.soundOn(true))
-        assertFalse(BrewCueDefaults.hapticsOn(false))
+    @Test fun unsetCuesReadTheCoreDefaultsAndExplicitChoicesWin() {
+        // The default values themselves are the core's (pinned by core tests).
+        var asked = 0
+        val coreSound = { asked++; false }
+        val coreHaptics = { asked++; true }
+        assertFalse(BrewCueDefaults.soundOn(null, coreSound))
+        assertTrue(BrewCueDefaults.hapticsOn(null, coreHaptics))
+        assertEquals(2, asked)
+        assertTrue(BrewCueDefaults.soundOn(true, coreSound))
+        assertFalse(BrewCueDefaults.hapticsOn(false, coreHaptics))
+        assertEquals(2, asked) // an explicit choice never asks the core
     }
 
     @Test fun untouchedCueSettingsStayUnsetThroughCommonSettings() {
@@ -69,33 +76,64 @@ class GuidedBrewStateTest {
 
     @Test fun blankSetupOpensOnTheLastUsedRecipe() {
         val saved = recipe("a", method = "aeropress")
-        val s = GuidedSetupRules.resolve(GuidedBrewSetup(), listOf(saved), mapOf("aeropress" to "a"), template)
+        val s = GuidedSetupRules.resolve(GuidedBrewSetup(), listOf(saved), mapOf("aeropress" to "a"), "aeropress", template)
         assertEquals("aeropress", s.method)
         assertEquals(saved, s.recipe)
         assertEquals(ScaleMode.WEIGH, s.scaleMode)
     }
 
     @Test fun blankSetupWithoutHistoryUsesTheTemplateAndKeepsItStable() {
-        val s = GuidedSetupRules.resolve(GuidedBrewSetup(), emptyList(), emptyMap(), template)
+        val s = GuidedSetupRules.resolve(GuidedBrewSetup(), emptyList(), emptyMap(), null, template)
         assertEquals("pourover", s.method)
         assertEquals("tpl-pourover", s.recipe?.id)
         // Resolving again (a recomposition / rotation) keeps the same object.
-        assertSame(s, GuidedSetupRules.resolve(s, emptyList(), emptyMap(), template))
+        assertSame(s, GuidedSetupRules.resolve(s, emptyList(), emptyMap(), null, template))
     }
 
     @Test fun anEditedRecipeReplacesTheStaleSelection() {
         val old = recipe("a")
         val edited = old.copy(name = "Renamed", updatedAt = 2)
-        val s = GuidedBrewSetup(scaleMode = ScaleMode.BREW, method = "pourover", recipe = old)
-        val r = GuidedSetupRules.resolve(s, listOf(edited), mapOf("pourover" to "a"), template)
+        val s = GuidedBrewSetup(scaleMode = ScaleMode.BREW, method = "pourover", recipe = old, methodChosen = true)
+        val r = GuidedSetupRules.resolve(s, listOf(edited), mapOf("pourover" to "a"), null, template)
         assertEquals("Renamed", r.recipe?.name)
         assertEquals(ScaleMode.BREW, r.scaleMode)
     }
 
     @Test fun aDeletedSelectionFallsBackToTheMethodDefault() {
-        val s = GuidedBrewSetup(method = "pourover", recipe = recipe("a"))
-        val r = GuidedSetupRules.resolve(s, listOf(recipe("a", deleted = 5)), emptyMap(), template)
+        val s = GuidedBrewSetup(method = "pourover", recipe = recipe("a"), methodChosen = true)
+        val r = GuidedSetupRules.resolve(s, listOf(recipe("a", deleted = 5)), emptyMap(), null, template)
         assertEquals("tpl-pourover", r.recipe?.id)
+    }
+
+    @Test fun theSetupOpensOnTheMostRecentMethodNotTheFirstPinned() {
+        // Drift bug 10: a LinkedHashMap's first key is the first method ever
+        // pinned; the setup must follow the most recent one instead.
+        val pinned = linkedMapOf("pourover" to "p", "aeropress" to "a")
+        val recipes = listOf(recipe("p"), recipe("a", method = "aeropress"))
+        val s = GuidedSetupRules.resolve(GuidedBrewSetup(), recipes, pinned, "aeropress", template)
+        assertEquals("aeropress", s.method)
+        assertEquals("a", s.recipe?.id)
+        assertEquals("pourover", GuidedSetupRules.initialMethod(null))
+        assertEquals("pourover", GuidedSetupRules.initialMethod(" "))
+    }
+
+    @Test fun anUnchosenSetupFollowsTheMostRecentMethodAChosenOneStays() {
+        // Opened before the prefs loaded → pourover; once the last method is
+        // known the untouched setup follows it…
+        val early = GuidedSetupRules.resolve(GuidedBrewSetup(), emptyList(), emptyMap(), null, template)
+        assertEquals("pourover", early.method)
+        val later = GuidedSetupRules.resolve(early, emptyList(), emptyMap(), "french_press", template)
+        assertEquals("french_press", later.method)
+        assertEquals("tpl-french_press", later.recipe?.id)
+        // …but a method the user picked is never overridden.
+        val picked = later.copy(method = "clever", recipe = null, methodChosen = true)
+        assertEquals("clever", GuidedSetupRules.resolve(picked, emptyList(), emptyMap(), "aeropress", template).method)
+    }
+
+    @Test fun anEditedRecipeOnlyBecomesTheDefaultWhenTheMethodHasNone() {
+        // Drift bug 11 (the rule web now shares).
+        assertTrue(GuidedSetupRules.becomesDefaultOnSave("aeropress", mapOf("pourover" to "p")))
+        assertFalse(GuidedSetupRules.becomesDefaultOnSave("pourover", mapOf("pourover" to "p")))
     }
 
     // ── Recipe editor draft ─────────────────────────────────────────────
@@ -104,7 +142,7 @@ class GuidedBrewStateTest {
         val base = recipe("a")
         val d = RecipeEditDraft.of(RecipeEditOwner.SCALE, base, isNew = false)
         assertEquals("Edit recipe", d.heading)
-        assertTrue(d.totalMatches)
+        assertTrue(d.totalMatches(250f))
         val out = d.copy(name = "  Morning V60 ", water = 300.0).addStep().toRecipe()
         assertEquals("a", out.id)
         assertEquals("Morning V60", out.name)
@@ -132,8 +170,16 @@ class GuidedBrewStateTest {
     @Test fun stepEditsAndPlannedTotal() {
         val d = RecipeEditDraft.of(RecipeEditOwner.SCALE, recipe("a"), false)
             .updateStep(1) { it.copy(targetWaterG = 240f, advance = StepAdvance.Manual) }
-        assertEquals(240f, d.plannedTotal)
-        assertFalse(d.totalMatches)
+        // The planned total is the core's; the draft hands it the edited recipe.
+        var sent: BrewRecipe? = null
+        val planned = d.plannedTotal { raw ->
+            sent = CoreJson.decodeFromString(BrewRecipe.serializer(), raw)
+            240f
+        }
+        assertEquals(240f, planned)
+        assertEquals(240f, sent!!.steps!![1].targetWaterG)
+        assertEquals(0f, d.plannedTotal { null })
+        assertFalse(d.totalMatches(planned))
         assertEquals(StepAdvance.Manual, d.steps[1].advance)
         assertEquals(2, d.removeStep(0).steps.size)
     }

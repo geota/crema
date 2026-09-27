@@ -1,27 +1,33 @@
 package coffee.crema.ui.brewlog
 
+import coffee.crema.brew.CoreJson
 import coffee.crema.core.BrewRecipe
 import coffee.crema.core.BrewStep
 import coffee.crema.core.BrewStepKind
 import coffee.crema.core.StepAdvance
+import coffee.crema.core.defaultBrewCueHaptics
+import coffee.crema.core.defaultBrewCueSound
+import coffee.crema.core.recipePlannedPourTotalGJson
 import kotlin.math.abs
 
 /*
  * Guided-brew state that must outlive a layout (issue #10 Phase 2). Rotating
  * across the 840dp breakpoint swaps the phone and tablet nav hosts (#96), so
  * nothing here may live in a screen `remember`: MainViewModel holds these and
- * both hosts render them. Pure Kotlin (no Android, no FFI) — unit-tested.
+ * both hosts render them. Pure Kotlin (no Android; the few core calls are
+ * injectable FFI lambdas) — unit-tested.
  */
 
-/** Effective cue settings: null = never chosen → the shared defaults
- *  (core `DEFAULT_BREW_CUE_SOUND` / `DEFAULT_BREW_CUE_HAPTICS`). Visual cues
- *  are always on and have no setting. */
+/** Effective cue settings: null = never chosen → the core's shared defaults
+ *  (`DEFAULT_BREW_CUE_SOUND` / `DEFAULT_BREW_CUE_HAPTICS`, via the FFI —
+ *  injectable for JVM unit tests). Visual cues are always on and have no
+ *  setting. */
 object BrewCueDefaults {
-    const val SOUND = false
-    const val HAPTICS = true
+    fun soundOn(explicit: Boolean?, default: () -> Boolean = ::defaultBrewCueSound): Boolean =
+        explicit ?: default()
 
-    fun soundOn(explicit: Boolean?): Boolean = explicit ?: SOUND
-    fun hapticsOn(explicit: Boolean?): Boolean = explicit ?: HAPTICS
+    fun hapticsOn(explicit: Boolean?, default: () -> Boolean = ::defaultBrewCueHaptics): Boolean =
+        explicit ?: default()
 }
 
 /** The Scale screen's Weigh | Brew segment. */
@@ -40,11 +46,28 @@ data class GuidedBrewSetup(
     val method: String? = null,
     val recipe: BrewRecipe? = null,
     val startOnPour: Boolean = true,
+    /** The user picked [method] this session (a chip, the dropdown, a saved
+     *  edit). Until then the setup follows the most recent method, so the
+     *  opening pick never freezes on whatever loaded first. */
+    val methodChosen: Boolean = false,
 )
 
 object GuidedSetupRules {
-    /** The method the setup opens on: the most recently pinned one, else pourover. */
-    fun initialMethod(lastByMethod: Map<String, String>): String = lastByMethod.keys.firstOrNull() ?: "pourover"
+    /**
+     * The method the setup opens on: the most recently used one ([lastMethod],
+     * tracked explicitly — the method of the last saved brew log, the web's
+     * `lastUsedMethod()`), else pourover (the core's `DEFAULT_LOG_METHOD`).
+     * Never a map's first key: that's the first method ever pinned.
+     */
+    fun initialMethod(lastMethod: String?): String = lastMethod?.takeIf { it.isNotBlank() } ?: "pourover"
+
+    /**
+     * Whether a recipe saved from the editor becomes its method's default:
+     * only when the method has none yet — editing never silently moves an
+     * existing default ("Make default" in Profiles does that).
+     */
+    fun becomesDefaultOnSave(method: String, lastByMethod: Map<String, String>): Boolean =
+        lastByMethod[method] == null
 
     /** [method]'s last-used saved recipe, if it still exists. */
     fun savedFor(method: String, recipes: List<BrewRecipe>, lastByMethod: Map<String, String>): BrewRecipe? =
@@ -59,9 +82,10 @@ object GuidedSetupRules {
         setup: GuidedBrewSetup,
         recipes: List<BrewRecipe>,
         lastByMethod: Map<String, String>,
+        lastMethod: String?,
         template: (String) -> BrewRecipe,
     ): GuidedBrewSetup {
-        val method = setup.method ?: initialMethod(lastByMethod)
+        val method = setup.method?.takeIf { setup.methodChosen } ?: initialMethod(lastMethod)
         val current = setup.recipe?.takeIf { it.method == method }
         val fresh = when {
             current == null -> savedFor(method, recipes, lastByMethod) ?: template(method)
@@ -106,10 +130,15 @@ data class RecipeEditDraft(
 ) {
     val heading: String get() = if (isNew) "New recipe" else "Edit recipe"
 
-    /** The cumulative water the steps plan to reach (their largest target). */
-    val plannedTotal: Float get() = steps.mapNotNull { it.targetWaterG }.maxOrNull() ?: 0f
+    /** The cumulative water the steps plan to reach — the core's
+     *  `planned_pour_total_g` (largest finite target; 0 when none). [core]
+     *  is the FFI call, injectable for JVM unit tests. */
+    fun plannedTotal(core: (String) -> Float? = ::recipePlannedPourTotalGJson): Float =
+        core(CoreJson.encodeToString(BrewRecipe.serializer(), toRecipe())) ?: 0f
 
-    val totalMatches: Boolean get() = plannedTotal > 0f && abs(plannedTotal - water.toFloat()) < 0.5f
+    /** The editor's "planned · matches water" check. */
+    fun totalMatches(planned: Float = plannedTotal()): Boolean =
+        planned > 0f && abs(planned - water.toFloat()) < 0.5f
 
     fun toRecipe(): BrewRecipe = base.copy(
         method = method,
