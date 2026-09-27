@@ -120,3 +120,25 @@ Two upstream `.tcl` profiles are retained verbatim as **parser test fixtures**
 `author Decent`), used only to exercise Crema's legacy-Tcl profile import. de1app is
 licensed GPL-3.0; Crema is GPL-3.0-or-later, so this use is license-compatible. See
 [`core/de1-domain/profiles/README.md`](core/de1-domain/profiles/README.md).
+
+## Built-in brew recipes — credits
+
+Crema's built-in guided-brew recipes (`core/de1-domain/recipes/builtin.json`) are
+published recipes, each shown in the app with a credit line and a link to its primary
+source. The step plans restate each author's published technique; no text, images,
+video or logos are reproduced. Crema is not affiliated with, or endorsed by, any of
+these authors or companies.
+
+- James Hoffmann — A Better 1 Cup V60 Technique (2022); The Ultimate V60 Technique
+  (2019); The Ultimate AeroPress Technique (2021); The Ultimate French Press Technique
+  (2016); The Ultimate Clever Dripper Technique (2020, water-first method credited by
+  Hoffmann to Workshop Coffee); Everything I Learned About Cold Brew Coffee (2025);
+  adapted from The Ultimate Moka Pot Technique (2022).
+- Tetsu Kasuya — 4:6 Method (2016 World Brewers Cup Champion), via Hario.
+- AeroPress Inc. — official brewing instructions.
+- Tuomas Merikanto — 2021 World AeroPress Champion recipe, via AeroPress.
+- Stumptown Coffee Roasters — Chemex and Kalita Wave brew guides.
+- Hario — Syphon brew guide.
+
+Source links for every recipe are listed in
+[`core/de1-domain/recipes/README.md`](core/de1-domain/recipes/README.md).
