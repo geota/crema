@@ -38,8 +38,8 @@ object ScaleMode {
 
 /**
  * The Brew segment's setup selections. [recipe] is the chosen recipe itself —
- * a saved one, or the method's (unsaved) classic template — so an unsaved
- * default keeps one stable id across recompositions and rotations.
+ * a saved one or a built-in — or null when the method has neither (espresso,
+ * drip, free text: the setup offers "+ New recipe").
  */
 data class GuidedBrewSetup(
     val scaleMode: String = ScaleMode.WEIGH,
@@ -61,39 +61,47 @@ object GuidedSetupRules {
      */
     fun initialMethod(lastMethod: String?): String = lastMethod?.takeIf { it.isNotBlank() } ?: "pourover"
 
-    /**
-     * Whether a recipe saved from the editor becomes its method's default:
-     * only when the method has none yet — editing never silently moves an
-     * existing default ("Make default" in Profiles does that).
-     */
-    fun becomesDefaultOnSave(method: String, lastByMethod: Map<String, String>): Boolean =
-        lastByMethod[method] == null
+    /** Steps longer than this (seconds) don't hold the screen on. */
+    const val LONG_STEP_S = 15 * 60L
 
-    /** [method]'s last-used saved recipe, if it still exists. */
+    /**
+     * Whether a live session holds the display on at [stepIndex]: yes, except
+     * on a step timed longer than [LONG_STEP_S] (a cold brew's 12 h steep) —
+     * nobody watches that countdown, and the session clock is timestamp-based
+     * in the core, so a dark screen loses nothing; the step still ends on a tap.
+     */
+    fun holdsScreenOn(recipe: BrewRecipe?, stepIndex: Int): Boolean {
+        val d = recipe?.steps?.getOrNull(stepIndex)?.durationS ?: return true
+        return d <= LONG_STEP_S
+    }
+
+    /** [method]'s default-pointer recipe, if it still exists (user or built-in). */
     fun savedFor(method: String, recipes: List<BrewRecipe>, lastByMethod: Map<String, String>): BrewRecipe? =
         lastByMethod[method]?.let { id -> recipes.firstOrNull { it.id == id && it.deletedAt == null } }
 
     /**
-     * Fill a blank setup and keep a chosen saved recipe in step with the
-     * library: an edited recipe replaces the stale copy, a deleted one falls
-     * back to the method's default. [template] builds the classic recipe.
+     * Fill a blank setup and keep a chosen recipe in step with the library:
+     * an edited recipe replaces the stale copy, a deleted one falls back to
+     * the method's default. [recipes] is the user's recipes plus the
+     * built-ins; [fallback] is the method's default when no pointer resolves
+     * (its default built-in), or null for a method without one.
      */
     fun resolve(
         setup: GuidedBrewSetup,
         recipes: List<BrewRecipe>,
         lastByMethod: Map<String, String>,
         lastMethod: String?,
-        template: (String) -> BrewRecipe,
+        fallback: (String) -> BrewRecipe?,
     ): GuidedBrewSetup {
         val method = setup.method?.takeIf { setup.methodChosen } ?: initialMethod(lastMethod)
         val current = setup.recipe?.takeIf { it.method == method }
         val fresh = when {
-            current == null -> savedFor(method, recipes, lastByMethod) ?: template(method)
+            current == null -> savedFor(method, recipes, lastByMethod) ?: fallback(method)
             else -> {
                 val stored = recipes.firstOrNull { it.id == current.id }
                 when {
-                    stored == null -> current // an unsaved template
-                    stored.deletedAt != null -> savedFor(method, recipes, lastByMethod) ?: template(method)
+                    stored == null || stored.deletedAt != null ->
+                        savedFor(method, recipes, lastByMethod) ?: fallback(method)
                     else -> stored
                 }
             }
@@ -119,7 +127,7 @@ const val RECIPE_EDIT_ROUTE = "recipe-edit"
 data class RecipeEditDraft(
     val owner: String,
     val base: BrewRecipe,
-    /** New-recipe mode: a method switch re-seeds that method's classic plan. */
+    /** New-recipe mode: a method switch re-seeds that method's blank plan. */
     val isNew: Boolean,
     val method: String,
     val name: String,

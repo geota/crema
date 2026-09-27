@@ -33,7 +33,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Bean, Roaster, StoredShot, beanconqueror::ImportPlan};
+use crate::{Bean, BrewRecipe, Roaster, StoredShot, beanconqueror::ImportPlan, is_builtin_recipe};
 
 /// Header record — the first line of a Crema export.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -305,6 +305,10 @@ pub struct BackupHeader {
     pub bean_count: usize,
     pub roaster_count: usize,
     pub shot_count: usize,
+    /// User brew recipes in the bundle (built-ins are never written).
+    /// Absent in bundles made before recipes were backed up.
+    #[serde(default)]
+    pub recipe_count: usize,
 }
 
 /// The parsed contents of a backup bundle. Beans + roasters reuse the library
@@ -342,17 +346,25 @@ pub struct BackupImportPlan {
     /// Shot history — the full [`StoredShot`] wire shape (including the `bean`
     /// snapshot), parsed straight off the `shot` lines so a restore is verbatim.
     pub shots: Vec<StoredShot>,
+    /// The user's guided-brew recipes (copies and their own), `credit` /
+    /// `sourceUrl` intact. Built-in recipes are bundled with the app, so a
+    /// `recipe` line naming a built-in id is ignored.
+    pub recipes: Vec<BrewRecipe>,
+    /// Recipe organisation (`kind` stripped): `{ defaults:{method:id},
+    /// hiddenBuiltins:[ids] }` — opaque to the core, like `profileMeta`.
+    pub recipe_meta: Option<serde_json::Value>,
 }
 
 /// Build a backup bundle (JSONL): `crema-backup/v1` header → settings →
-/// profileMeta → maintenance → visualizerPrefs → roasters → beans → shots →
-/// profiles. Profiles + the four config blobs ride as verbatim JSON;
+/// profileMeta → recipeMeta → maintenance → visualizerPrefs → roasters →
+/// beans → shots → recipes → profiles. Built-in recipes
+/// ([`is_builtin_recipe`]) are skipped — they ship with the app. Profiles + the four config blobs ride as verbatim JSON;
 /// beans/roasters/shots are typed + lossless. The shell must EXCLUDE OAuth
 /// tokens, per-device/BLE state, and photos before building the envelope.
 ///
 /// `envelope_json` = `{profiles:[…], beans:[Bean], roasters:[Roaster],
-/// shots:[StoredShot], settings:{…}, profileMeta:{…}, maintenance:{…},
-/// visualizerPrefs:{…}}`. The last three are opaque to the core — it just
+/// shots:[StoredShot], recipes:[BrewRecipe], settings:{…}, profileMeta:{…},
+/// recipeMeta:{…}, maintenance:{…}, visualizerPrefs:{…}}`. The last three are opaque to the core — it just
 /// line-tags and passes them through so both shells emit identical bytes.
 ///
 /// # Errors
@@ -374,15 +386,24 @@ pub fn export_backup_jsonl_from_json(
         #[serde(default)]
         shots: Vec<StoredShot>,
         #[serde(default)]
+        recipes: Vec<BrewRecipe>,
+        #[serde(default)]
         settings: serde_json::Value,
         #[serde(default, rename = "profileMeta")]
         profile_meta: serde_json::Value,
+        #[serde(default, rename = "recipeMeta")]
+        recipe_meta: serde_json::Value,
         #[serde(default)]
         maintenance: serde_json::Value,
         #[serde(default, rename = "visualizerPrefs")]
         visualizer_prefs: serde_json::Value,
     }
     let inp: In = serde_json::from_str(envelope_json).map_err(|e| e.to_string())?;
+    let recipes: Vec<&BrewRecipe> = inp
+        .recipes
+        .iter()
+        .filter(|r| !is_builtin_recipe(&r.id))
+        .collect();
     let header = BackupHeader {
         kind: "crema-backup/v1".to_owned(),
         created_at: created_at_unix_ms,
@@ -392,6 +413,7 @@ pub fn export_backup_jsonl_from_json(
         bean_count: inp.beans.len(),
         roaster_count: inp.roasters.len(),
         shot_count: inp.shots.len(),
+        recipe_count: recipes.len(),
     };
     let mut out = String::new();
     push_line(&mut out, &header);
@@ -403,6 +425,9 @@ pub fn export_backup_jsonl_from_json(
     // supplied a non-empty object.
     if inp.profile_meta.is_object() {
         push_tagged_line(&mut out, "profileMeta", &inp.profile_meta);
+    }
+    if inp.recipe_meta.is_object() {
+        push_tagged_line(&mut out, "recipeMeta", &inp.recipe_meta);
     }
     if inp.maintenance.is_object() {
         push_tagged_line(&mut out, "maintenance", &inp.maintenance);
@@ -418,6 +443,9 @@ pub fn export_backup_jsonl_from_json(
     }
     for s in &inp.shots {
         push_tagged_line(&mut out, "shot", s);
+    }
+    for r in recipes {
+        push_tagged_line(&mut out, "recipe", r);
     }
     for p in &inp.profiles {
         push_tagged_line(&mut out, "profile", p);
@@ -441,7 +469,9 @@ pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
     let mut profile_meta = None;
     let mut maintenance = None;
     let mut visualizer_prefs = None;
+    let mut recipe_meta = None;
     let mut shots = Vec::new();
+    let mut recipes = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -480,6 +510,21 @@ pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
                 }
                 maintenance = Some(value);
             }
+            "recipeMeta" => {
+                if let Some(map) = value.as_object_mut() {
+                    map.remove("kind");
+                }
+                recipe_meta = Some(value);
+            }
+            "recipe" => {
+                // Typed (the `kind` key is ignored as unknown); a built-in id
+                // is skipped — the bundled catalogue is the source of truth.
+                if let Ok(r) = serde_json::from_value::<BrewRecipe>(value)
+                    && !is_builtin_recipe(&r.id)
+                {
+                    recipes.push(r);
+                }
+            }
             "visualizerPrefs" => {
                 if let Some(map) = value.as_object_mut() {
                     map.remove("kind");
@@ -507,6 +552,8 @@ pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
         beans: library.beans,
         roasters: library.roasters,
         shots,
+        recipes,
+        recipe_meta,
     }
 }
 
@@ -695,6 +742,54 @@ mod tests {
                 model: Some("DE1PRO".to_owned()),
             })
         );
+    }
+
+    #[test]
+    fn backup_writes_user_recipes_with_credits_but_never_builtins() {
+        let builtin = crate::builtin_brew_recipe("builtin:hoffmann-1-cup-v60").unwrap();
+        let copy = crate::duplicate_recipe(&builtin, "recipe:copy", 1_700);
+        let mut own = copy.clone();
+        own.id = "recipe:own".to_owned();
+        own.name = "Mine".to_owned();
+        own.credit = None;
+        own.source_url = None;
+        let envelope = serde_json::json!({
+            "recipes": [builtin, copy, own],
+            "recipeMeta": { "defaults": { "pourover": "recipe:copy" }, "hiddenBuiltins": ["builtin:kasuya-4-6"] },
+        });
+        let jsonl = export_backup_jsonl_from_json(
+            &envelope.to_string(),
+            1_700_000_000_000,
+            "0.0.1",
+            "Pixel",
+        )
+        .unwrap();
+        assert!(!jsonl.contains("builtin:hoffmann-1-cup-v60"), "{jsonl}");
+        let header: BackupHeader = serde_json::from_str(jsonl.lines().next().unwrap()).unwrap();
+        assert_eq!(header.recipe_count, 2);
+        assert_eq!(jsonl.matches(r#""kind":"recipe""#).count(), 2);
+        let plan = parse_backup_jsonl(&jsonl);
+        assert_eq!(plan.recipes, vec![copy.clone(), own]);
+        let restored = &plan.recipes[0];
+        assert_eq!(
+            restored.credit.as_deref(),
+            Some("Adapted from James Hoffmann — A Better 1 Cup V60 Technique (2022)")
+        );
+        assert_eq!(restored.source_url, builtin.source_url);
+        let meta = plan.recipe_meta.expect("recipeMeta");
+        assert_eq!(meta["defaults"]["pourover"], "recipe:copy");
+        assert!(meta.get("kind").is_none());
+        // A hand-edited bundle that smuggles a built-in in is ignored on read.
+        let smuggled = format!(
+            "{jsonl}{{\"kind\":\"recipe\",{}\n",
+            &serde_json::to_string(&builtin).unwrap()[1..]
+        );
+        assert_eq!(parse_backup_jsonl(&smuggled).recipes.len(), 2);
+        // A bundle from before recipes were backed up parses with none.
+        let old = r#"{"kind":"crema-backup/v1","createdAt":1,"profileCount":0,"beanCount":0,"roasterCount":0,"shotCount":0}"#;
+        let h: BackupHeader = serde_json::from_str(old).unwrap();
+        assert_eq!(h.recipe_count, 0);
+        assert!(parse_backup_jsonl(old).recipes.is_empty());
     }
 
     #[test]

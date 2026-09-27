@@ -21,6 +21,9 @@ import type {
 } from '$lib/core/crema-core';
 import { stageMarkForJson } from '$lib/wasm/de1_wasm';
 
+/** A step at least this long (s) releases the screen wake lock. */
+export const LONG_STEP_S = 15 * 60;
+
 /** The live chart's sample cap — ~18 min at the 4 Hz session tick. */
 export const LIVE_SAMPLE_CAP = 4500;
 
@@ -57,6 +60,22 @@ export class GuidedBrewStore {
 	cueSeq = $state(0);
 	/** The latest visual cue's kind. */
 	cueKind = $state<BrewVisualCue | null>(null);
+
+	/**
+	 * Whether the live session should hold the screen awake. Yes while it
+	 * is armed / running / paused — a step timer behind a dark screen is a
+	 * missed pour — except during a long step (15 min or more, e.g. the
+	 * cold brew's 12-hour steep): nothing needs watching then, the step
+	 * waits for a tap, and holding the screen for hours would drain the
+	 * battery.
+	 */
+	get wantsWakeLock(): boolean {
+		if (this.phase !== 'armed' && this.phase !== 'running' && this.phase !== 'paused') {
+			return false;
+		}
+		const step = this.recipe?.steps?.[this.stepIndex];
+		return !(step?.durationS != null && step.durationS >= LONG_STEP_S);
+	}
 
 	/** The live curve as a {@link BrewSeries} for the chart. */
 	get liveSeries(): BrewSeries {

@@ -34,12 +34,14 @@
 		type CremaProfile
 	} from '$lib/profiles';
 	import {
-		defaultRecipeFor,
 		getRecipeStore,
-		nominalRecipeMs
+		isBuiltinRecipe,
+		newRecipeFor,
+		recipeEstimateLabel
 	} from '$lib/brew/recipes.svelte';
 	import { methodLabel } from '$lib/brew/methods';
 	import MethodMark from '$lib/components/brewlog/MethodMark.svelte';
+	import RecipeCredit from '$lib/components/brewlog/RecipeCredit.svelte';
 	import RecipeEditor from '$lib/components/brewlog/RecipeEditor.svelte';
 	import TrashIcon from 'phosphor-svelte/lib/TrashIcon';
 	import type { BrewRecipe } from '$lib/core/crema-core';
@@ -566,33 +568,50 @@
 	// in place (its own RecipeEditor modal — no hop back here).
 	const recipeStore = getRecipeStore();
 
-	/** Recipes, method-grouped (label order) then most-recent, honoring
-	 *  the page search. */
-	const recipeList = $derived.by(() => {
+	/** Reveal the hidden built-in recipes (with an Unhide door). */
+	let showHiddenRecipes = $state(false);
+	const hiddenRecipeCount = $derived(recipeStore.hiddenBuiltinIds.length);
+	$effect(() => {
+		if (hiddenRecipeCount === 0) showHiddenRecipes = false;
+	});
+
+	/**
+	 * The library — the user's recipes plus the credited built-ins (hidden
+	 * ones only when revealed), grouped by method in label order: within a
+	 * group the user's own first (favourites, then most recent), then the
+	 * built-ins in catalogue order. Honors the page search.
+	 */
+	const recipeGroups = $derived.by(() => {
 		const query = q.trim().toLowerCase();
+		const builtins = showHiddenRecipes ? recipeStore.builtins : recipeStore.visibleBuiltins;
+		const all = [...recipeStore.all, ...builtins];
 		const list =
 			query === ''
-				? recipeStore.all
-				: recipeStore.all.filter(
+				? all
+				: all.filter(
 						(r) =>
 							r.name.toLowerCase().includes(query) ||
 							methodLabel(r.method).toLowerCase().includes(query) ||
-							r.method.toLowerCase().includes(query)
+							r.method.toLowerCase().includes(query) ||
+							(r.credit ?? '').toLowerCase().includes(query)
 					);
-		return [...list].sort(
-			(a, b) =>
-				methodLabel(a.method).localeCompare(methodLabel(b.method)) || b.updatedAt - a.updatedAt
-		);
+		const groups = new Map<string, BrewRecipe[]>();
+		for (const r of list) groups.set(r.method, [...(groups.get(r.method) ?? []), r]);
+		return [...groups.entries()]
+			.sort(([a], [b]) => methodLabel(a).localeCompare(methodLabel(b)))
+			.map(([method, recipes]) => ({ method, recipes }));
 	});
 
 	let recipeEditing = $state<BrewRecipe | null>(null);
 	let recipeEditingNew = $state(false);
 
 	function newRecipe(): void {
-		recipeEditing = defaultRecipeFor('pourover');
+		recipeEditing = newRecipeFor('pourover');
 		recipeEditingNew = true;
 	}
 
+	/** "Duplicate" (a user recipe) / "Duplicate to edit" (a built-in):
+	 *  save a credited copy and open it in the editor. */
 	function duplicateRecipe(r: BrewRecipe): void {
 		const copy = recipeStore.duplicate(r.id);
 		if (copy) {
@@ -614,10 +633,9 @@
 	}
 
 	function saveRecipe(r: BrewRecipe): void {
-		recipeStore.upsert(r);
-		// A method's first recipe becomes its default — the Scale page
-		// opens on it without a separate "make default" step.
-		if (!recipeStore.lastUsedFor(r.method)) recipeStore.touch(r);
+		// Becomes the method's default only when it has none (no pick, no
+		// built-in) — see RecipeStore.saveEdit.
+		recipeStore.saveEdit(r);
 		closeRecipeEditor();
 	}
 
@@ -628,7 +646,7 @@
 
 	/** Whether `r` is what the Scale page opens for its method. */
 	function isDefaultRecipe(r: BrewRecipe): boolean {
-		return recipeStore.lastUsedFor(r.method)?.id === r.id;
+		return recipeStore.isDefault(r);
 	}
 
 	const RECIPE_KIND_LABEL: Record<string, string> = {
@@ -647,10 +665,6 @@
 		return (r.steps ?? []).map((s) => RECIPE_KIND_LABEL[s.kind] ?? 'Step').join(' → ');
 	}
 
-	function recipeClock(ms: number): string {
-		const total = Math.floor(ms / 1000);
-		return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
-	}
 </script>
 
 <svelte:head>
@@ -818,66 +832,107 @@
 					<PlusIcon aria-hidden="true" /> New recipe
 				</button>
 			</div>
-			{#if recipeList.length > 0}
-				<div class="pp-recipes-grid">
-					{#each recipeList as r (r.id)}
-						<div class="pp-recipe-card">
-							<div class="pp-recipe-top">
-								<span class="pp-recipe-method">
-									<MethodMark method={r.method} size={13} />
-									{methodLabel(r.method)}
-								</span>
-								{#if isDefaultRecipe(r)}
-									<span
-										class="pp-recipe-default"
-										title="The Scale page opens this recipe for {methodLabel(r.method)}"
-										>DEFAULT</span
-									>
-								{/if}
-							</div>
-							<div class="pp-recipe-name">{r.name}</div>
-							<div class="pp-recipe-meta">
-								{r.doseG} g · {r.waterG} g water{#if r.tempC != null}
-									· {Math.round(r.tempC)} °C{/if} · ~{recipeClock(nominalRecipeMs(r))}
-							</div>
-							<div class="pp-recipe-steps">{stepChain(r)}</div>
-							<div class="pp-recipe-actions">
-								<button
-									class="pp-recipe-btn"
-									onclick={() => {
-										recipeEditingNew = false;
-										recipeEditing = r;
-									}}>Edit</button
-								>
-								<button class="pp-recipe-btn" onclick={() => duplicateRecipe(r)}>Duplicate</button>
-								{#if !isDefaultRecipe(r)}
-									<button
-										class="pp-recipe-btn"
-										onclick={() => recipeStore.touch(r)}
-										title="The Scale page opens the default recipe for {methodLabel(r.method)}"
-										>Make default</button
-									>
-								{/if}
-								<button
-									class="pp-recipe-del"
-									aria-label="Delete recipe"
-									onclick={() => void removeRecipe(r)}
-								>
-									<TrashIcon aria-hidden="true" />
-								</button>
-							</div>
+			{#if hiddenRecipeCount > 0}
+				<div class="pp-recipes-tools">
+					<button
+						class="pp-link"
+						aria-pressed={showHiddenRecipes}
+						onclick={() => (showHiddenRecipes = !showHiddenRecipes)}
+					>
+						{showHiddenRecipes ? 'Hide hidden built-ins' : `Show hidden (${hiddenRecipeCount})`}
+					</button>
+				</div>
+			{/if}
+			{#if recipeGroups.length > 0}
+				{#each recipeGroups as g (g.method)}
+					<div class="pp-recipe-group">
+						<div class="pp-recipe-group-head">
+							<MethodMark method={g.method} size={14} />
+							{methodLabel(g.method)}
 						</div>
-					{/each}
-				</div>
+						<div class="pp-recipes-grid">
+							{#each g.recipes as r (r.id)}
+								{@const builtin = isBuiltinRecipe(r.id)}
+								{@const hidden = builtin && recipeStore.isHidden(r.id)}
+								{@const estimate = recipeEstimateLabel(r)}
+								<div class="pp-recipe-card" class:is-hidden={hidden}>
+									<div class="pp-recipe-top">
+										<span class="pp-recipe-badges">
+											{#if builtin}
+												<span
+													class="pp-recipe-builtin"
+													title="Ships with Crema — read-only; duplicate it to make your own version"
+													>BUILT-IN</span
+												>
+											{/if}
+											{#if hidden}<span class="pp-recipe-builtin">HIDDEN</span>{/if}
+										</span>
+										{#if isDefaultRecipe(r)}
+											<span
+												class="pp-recipe-default"
+												title="The Scale page opens this recipe for {methodLabel(r.method)}"
+												>DEFAULT</span
+											>
+										{/if}
+									</div>
+									<div class="pp-recipe-name">{r.name}</div>
+									<RecipeCredit credit={r.credit} sourceUrl={r.sourceUrl} />
+									<div class="pp-recipe-meta">
+										{r.doseG} g · {r.waterG} g water{#if r.tempC != null}
+											· {Math.round(r.tempC)} °C{/if}{#if estimate} · ~{estimate}{/if}
+									</div>
+									<div class="pp-recipe-steps">{stepChain(r)}</div>
+									<div class="pp-recipe-actions">
+										{#if builtin}
+											<button class="pp-recipe-btn" onclick={() => duplicateRecipe(r)}
+												>Duplicate to edit</button
+											>
+										{:else}
+											<button
+												class="pp-recipe-btn"
+												onclick={() => {
+													recipeEditingNew = false;
+													recipeEditing = r;
+												}}>Edit</button
+											>
+											<button class="pp-recipe-btn" onclick={() => duplicateRecipe(r)}
+												>Duplicate</button
+											>
+										{/if}
+										{#if !isDefaultRecipe(r)}
+											<button
+												class="pp-recipe-btn"
+												onclick={() => recipeStore.touch(r)}
+												title="The Scale page opens the default recipe for {methodLabel(r.method)}"
+												>Make default</button
+											>
+										{/if}
+										{#if builtin}
+											<button
+												class="pp-recipe-btn pp-recipe-btn-quiet"
+												onclick={() => (hidden ? recipeStore.unhide(r.id) : recipeStore.hide(r.id))}
+												title={hidden
+													? 'Show this built-in in the library and the Scale picker again'
+													: 'Hide this built-in from the library and the Scale picker'}
+												>{hidden ? 'Unhide' : 'Hide'}</button
+											>
+										{:else}
+											<button
+												class="pp-recipe-del"
+												aria-label="Delete recipe"
+												onclick={() => void removeRecipe(r)}
+											>
+												<TrashIcon aria-hidden="true" />
+											</button>
+										{/if}
+									</div>
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/each}
 			{:else}
-				<div class="pp-recipes-empty">
-					{#if recipeStore.all.length === 0}
-						No recipes yet — running a brew from the Scale page saves its recipe here, or start
-						one with New recipe.
-					{:else}
-						No recipes match the current search.
-					{/if}
-				</div>
+				<div class="pp-recipes-empty">No recipes match the current search.</div>
 			{/if}
 		</div>
 	{/if}
@@ -1156,17 +1211,6 @@
 		align-items: center;
 		gap: 10px;
 	}
-	.pp-recipe-method {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		font-family: var(--font-sans);
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.55);
-	}
 	.pp-recipe-default {
 		font-family: var(--font-sans);
 		font-size: 9px;
@@ -1194,9 +1238,22 @@
 	}
 	.pp-recipe-actions {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: 6px;
-		margin-top: 8px;
+		margin-top: auto;
+		padding-top: 8px;
+	}
+	.pp-link {
+		background: transparent;
+		border: 0;
+		padding: 2px 0;
+		color: var(--copper-400);
+		font-family: var(--font-sans);
+		font-size: 12.5px;
+		text-decoration: underline;
+		text-underline-offset: 2px;
+		cursor: pointer;
 	}
 	.pp-recipe-btn {
 		background: rgba(var(--tint-rgb), 0.04);
@@ -1222,6 +1279,49 @@
 	}
 	.pp-recipe-del:hover {
 		color: var(--danger);
+	}
+	.pp-recipes-tools {
+		display: flex;
+		justify-content: flex-end;
+		margin: -6px 0 6px;
+	}
+	.pp-recipe-group + .pp-recipe-group {
+		margin-top: 22px;
+	}
+	.pp-recipe-group-head {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		font-family: var(--font-sans);
+		font-size: 11px;
+		font-weight: 600;
+		letter-spacing: var(--track-allcaps);
+		text-transform: uppercase;
+		color: rgba(var(--tint-rgb), 0.6);
+		margin-bottom: 10px;
+	}
+	.pp-recipe-badges {
+		display: inline-flex;
+		gap: 6px;
+		min-height: 18px;
+	}
+	.pp-recipe-builtin {
+		font-family: var(--font-sans);
+		font-size: 9px;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		color: rgba(var(--tint-rgb), 0.6);
+		border: 1px solid rgba(var(--tint-rgb), 0.2);
+		border-radius: var(--radius-pill);
+		padding: 2px 8px;
+	}
+	.pp-recipe-card.is-hidden {
+		opacity: 0.6;
+	}
+	.pp-recipe-btn-quiet {
+		margin-left: auto;
+		background: transparent;
+		color: rgba(var(--tint-rgb), 0.6);
 	}
 	.pp-recipes-empty {
 		padding: 26px 0 8px;

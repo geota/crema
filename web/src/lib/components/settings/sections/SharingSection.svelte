@@ -335,6 +335,7 @@
 			restoreNote =
 				`${verb} ${r.profiles} profile(s), ${r.beans} bean(s), ` +
 				`${r.roasters} roaster(s), ${r.shots} shot(s)` +
+				(r.recipes > 0 ? `, ${r.recipes} recipe(s)` : '') +
 				(r.settingsApplied ? ' + settings.' : '.');
 		} catch (err) {
 			restoreNote = err instanceof Error ? `Restore failed: ${err.message}` : 'Restore failed.';

@@ -20,6 +20,32 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Built-in brew recipes are now real, credited recipes** — the generic
+  "V60 classic"-style starters are replaced by 13 published recipes, each
+  shown with its author and a link to the source: James Hoffmann (1 Cup V60,
+  Ultimate V60, AeroPress, French Press, Clever Dripper, Cold Brew, and an
+  adapted Moka Pot), Tetsu Kasuya's 4:6 Method, the official AeroPress
+  instructions, Tuomas Merikanto's 2021 World AeroPress Champion recipe,
+  Stumptown's Chemex and Kalita Wave guides, and Hario's Syphon guide. They
+  appear in Profiles → Brew recipes (grouped by method, marked Built-in) and
+  in the Scale page's Brew recipe picker. Built-ins are read-only: "Duplicate
+  to edit" makes your own copy, credited "Adapted from …"; they can be hidden
+  but not deleted. Each method opens on its built-in default until you make
+  another recipe the default. Espresso, drip and free-text methods have no
+  built-in — the Brew setup says so and offers "+ New recipe". Untouched
+  auto-saved "classic" starters are cleaned up on upgrade; ones you edited
+  stay. Step labels now read as instructions and wrap in the live session,
+  clocks show hours for the 12-hour cold-brew steep, and recipes you made
+  are now included in backups (built-ins aren't — they ship with the app).
+  Estimated brew times now include the drawdown: pourovers read their
+  source's finish time (1 Cup V60 ~3:00, Ultimate V60 and 4:6 ~3:30, Chemex
+  ~4:00), a recipe with an open-ended step shows a "+" (AeroPress ~2:45+), and
+  a recipe with no timed steps (moka) shows no estimate instead of "~0:30".
+  During a drawdown the live step shows "about 0:40 left", then how far past
+  the expected time you are; it still finishes only when you tap.
+- **Chemex and Kalita Wave brew methods** — new method chips (under "More"
+  in the log form) with their own marks; Beanconqueror imports of Chemex and
+  Kalita brews now land on them instead of V60 / pourover.
 - **The Brew Log, Phase 1** (#10) — log what you brew off the machine: V60 /
   pourover, AeroPress, French press, moka, cold brew, drip, siphon, Clever, a
   manual espresso, or any method you type. "Log brew" in History (a button on

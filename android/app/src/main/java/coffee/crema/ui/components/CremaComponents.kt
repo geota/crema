@@ -188,6 +188,8 @@ import com.adamglin.phosphoricons.regular.Flask
 import com.adamglin.phosphoricons.regular.Funnel
 import com.adamglin.phosphoricons.regular.FunnelSimple
 import com.adamglin.phosphoricons.regular.Hourglass
+import com.adamglin.phosphoricons.regular.HourglassSimple
+import com.adamglin.phosphoricons.regular.Waves
 import com.adamglin.phosphoricons.regular.Jar
 import com.adamglin.phosphoricons.regular.Pause
 import com.adamglin.phosphoricons.regular.PlusCircle
@@ -314,6 +316,8 @@ fun PhIcon(
         "jar" -> PhosphorIcons.Regular.Jar
         "hourglass" -> PhosphorIcons.Regular.Hourglass
         "flask" -> PhosphorIcons.Regular.Flask
+        "hourglass-simple" -> PhosphorIcons.Regular.HourglassSimple
+        "waves" -> PhosphorIcons.Regular.Waves
         "pause" -> PhosphorIcons.Regular.Pause
         "skip-forward" -> PhosphorIcons.Regular.SkipForward
         "plus-circle" -> PhosphorIcons.Regular.PlusCircle
