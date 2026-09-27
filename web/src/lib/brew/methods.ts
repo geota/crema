@@ -66,7 +66,9 @@ const METHOD_LABELS: Readonly<Record<string, string>> = {
 	cold_brew: 'Cold brew',
 	drip: 'Drip machine',
 	siphon: 'Siphon',
-	clever: 'Clever / Switch'
+	clever: 'Clever / Switch',
+	chemex: 'Chemex',
+	kalita_wave: 'Kalita Wave'
 };
 
 let presetCache: readonly BrewMethodPreset[] | null = null;

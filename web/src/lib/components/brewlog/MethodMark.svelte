@@ -17,8 +17,10 @@
 	import Funnel from 'phosphor-svelte/lib/Funnel';
 	import FunnelSimple from 'phosphor-svelte/lib/FunnelSimple';
 	import Hourglass from 'phosphor-svelte/lib/Hourglass';
+	import HourglassSimple from 'phosphor-svelte/lib/HourglassSimple';
 	import Jar from 'phosphor-svelte/lib/Jar';
 	import Snowflake from 'phosphor-svelte/lib/Snowflake';
+	import Waves from 'phosphor-svelte/lib/Waves';
 
 	let {
 		method = null,
@@ -42,7 +44,9 @@
 		cold_brew: Snowflake,
 		drip: Drop,
 		siphon: Flask,
-		clever: FunnelSimple
+		clever: FunnelSimple,
+		chemex: HourglassSimple,
+		kalita_wave: Waves
 	};
 
 	let Icon = $derived(ICONS[method?.trim().toLowerCase() ?? 'espresso'] ?? CoffeeBean);
