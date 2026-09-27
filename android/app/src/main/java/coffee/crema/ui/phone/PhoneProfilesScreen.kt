@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -28,7 +29,7 @@ import coffee.crema.ui.formatRatio
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
 import coffee.crema.ui.screens.CanvasProfilePreview
-import coffee.crema.brew.defaultRecipeFor
+import coffee.crema.brew.newRecipeFor
 import coffee.crema.core.BrewRecipe
 import coffee.crema.ui.brewlog.BrewRecipeCard
 import coffee.crema.ui.brewlog.visibleBrewRecipes
@@ -72,7 +73,19 @@ fun PhoneProfilesScreen(
 
     // Brew recipes — the guided-brew library section (issue #10); authored
     // here, run from the Scale screen's Brew tab.
-    val recipes = visibleBrewRecipes(ui.brewRecipes, query)
+    var showHiddenRecipes by remember { mutableStateOf(false) }
+    val hiddenRecipeCount = ui.builtinRecipes.count { it.id in ui.hiddenBuiltinRecipes }
+    val recipes = visibleBrewRecipes(
+        ui.brewRecipes,
+        query,
+        builtins = ui.builtinRecipes,
+        hidden = ui.hiddenBuiltinRecipes,
+        showHidden = showHiddenRecipes && hiddenRecipeCount > 0,
+    )
+    val builtinRecipeIds = ui.builtinRecipes.map { it.id }.toSet()
+    // The effective per-method default (pointer, else the built-in default).
+    val defaultRecipeIds = recipes.map { it.method }.distinct()
+        .mapNotNull { m -> vm.defaultBrewRecipeFor(m)?.id }.toSet()
     // The editor opens in place over a VM-held draft: a pushed `recipe-edit`
     // route here on the phone (see RecipeEditorScreen).
     val editRecipe: (BrewRecipe, Boolean) -> Unit = { r, isNew ->
@@ -171,7 +184,7 @@ fun PhoneProfilesScreen(
                                 )
                                 CremaButton(
                                     onClick = {
-                                        editRecipe(defaultRecipeFor("pourover", System.currentTimeMillis()), true)
+                                        editRecipe(newRecipeFor("pourover", System.currentTimeMillis()), true)
                                     },
                                     variant = CremaButtonVariant.Text,
                                     icon = "plus",
@@ -188,20 +201,34 @@ fun PhoneProfilesScreen(
                     items(recipes, key = { it.id }) { r ->
                         BrewRecipeCard(
                             recipe = r,
-                            isDefault = ui.lastRecipeByMethod[r.method] == r.id,
+                            isDefault = r.id in defaultRecipeIds,
                             onEdit = { editRecipe(r, false) },
                             onDuplicate = {
                                 vm.duplicateBrewRecipe(r.id)?.let { editRecipe(it, false) }
                             },
                             onMakeDefault = { vm.setDefaultBrewRecipe(r) },
                             onDelete = { vm.deleteBrewRecipe(r.id) },
+                            isBuiltin = r.id in builtinRecipeIds,
+                            isHidden = r.id in ui.hiddenBuiltinRecipes,
+                            onSetHidden = { h -> vm.setBuiltinRecipeHidden(r.id, h) },
                         )
+                    }
+                    if (hiddenRecipeCount > 0) {
+                        item(key = "recipes-hidden-toggle") {
+                            CremaButton(
+                                onClick = { showHiddenRecipes = !showHiddenRecipes },
+                                variant = CremaButtonVariant.Text,
+                                icon = if (showHiddenRecipes) "caret-down" else "caret-right",
+                                label = if (showHiddenRecipes) "Hide hidden recipes" else "Show hidden ($hiddenRecipeCount)",
+                                modifier = Modifier.testTag("recipes-show-hidden"),
+                            )
+                        }
                     }
                     if (recipes.isEmpty()) {
                         item(key = "recipes-empty") {
                             Text(
                                 if (query.isBlank()) {
-                                    "No recipes yet — running a brew from the Scale tab saves its recipe here, or start one with New recipe."
+                                    "No recipes yet — start one with New recipe."
                                 } else {
                                     "No recipes match your search."
                                 },

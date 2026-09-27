@@ -54,6 +54,7 @@ import coffee.crema.ble.ScaleBleManager
 import coffee.crema.brew.BREW_METHOD_PRESETS
 import coffee.crema.brew.formatClock
 import coffee.crema.brew.methodLabel
+import coffee.crema.brew.stepKindLabel
 import coffee.crema.brew.stepLabel
 import coffee.crema.brew.stepSpec
 import coffee.crema.core.BrewRecipe
@@ -195,20 +196,70 @@ fun GuidedBrewPanel(
                 }
             }
             if (recipe != null) {
+                val isBuiltin = vm.isBuiltinRecipe(recipe.id)
                 SetupCard(
                     vm = vm,
                     recipe = recipe,
                     method = method,
-                    siblings = ui.brewRecipes.filter { it.method == method && it.deletedAt == null },
+                    siblings = coffee.crema.brew.RecipeLibraryRules.pickerFor(
+                        method,
+                        ui.brewRecipes,
+                        ui.builtinRecipes,
+                        ui.hiddenBuiltinRecipes,
+                        keep = recipe.id,
+                    ),
+                    builtinIds = ui.builtinRecipes.map { it.id }.toSet(),
+                    isBuiltin = isBuiltin,
                     connected = connected,
                     startOnPour = setup.startOnPour,
                     soundOn = BrewCueDefaults.soundOn(ui.brewCueSound),
                     onEdit = {
-                        vm.openRecipeEdit(RecipeEditOwner.SCALE, recipe)
-                        if (phone) onNav(RECIPE_EDIT_ROUTE)
+                        // Built-ins are read-only: "Duplicate to edit" opens
+                        // the editor on a credited copy.
+                        val target = if (isBuiltin) vm.duplicateBrewRecipe(recipe.id) else recipe
+                        if (target != null) {
+                            if (isBuiltin) vm.selectGuidedRecipe(target)
+                            vm.openRecipeEdit(RecipeEditOwner.SCALE, target)
+                            if (phone) onNav(RECIPE_EDIT_ROUTE)
+                        }
                     },
                 )
+            } else {
+                NoRecipeCard(method) {
+                    vm.openRecipeEdit(
+                        RecipeEditOwner.SCALE,
+                        coffee.crema.brew.newRecipeFor(method, System.currentTimeMillis()),
+                        isNew = true,
+                    )
+                    if (phone) onNav(RECIPE_EDIT_ROUTE)
+                }
             }
+        }
+    }
+}
+
+/**
+ * A method with no built-in and no recipe of the user's (espresso, drip,
+ * free text): say so and offer "+ New recipe". The method stays loggable
+ * from the Brew Log's Log-brew form.
+ */
+@Composable
+private fun NoRecipeCard(method: String, onNew: () -> Unit) {
+    CremaCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.testTag("guided-no-recipe")) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Eyebrow("Recipe · ${methodLabel(method)}")
+            Text("No built-in recipe for ${methodLabel(method)}", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Build your own step plan to run it here — or log this brew by hand from the Brew Log.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            CremaButton(
+                onClick = onNew,
+                icon = "plus",
+                label = "New recipe",
+                modifier = Modifier.testTag("guided-new-recipe"),
+            )
         }
     }
 }
@@ -230,6 +281,8 @@ private fun SetupCard(
     recipe: BrewRecipe,
     method: String,
     siblings: List<BrewRecipe>,
+    builtinIds: Set<String>,
+    isBuiltin: Boolean,
     connected: Boolean,
     startOnPour: Boolean,
     soundOn: Boolean,
@@ -241,6 +294,7 @@ private fun SetupCard(
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Eyebrow("Recipe · ${methodLabel(method)}")
                     Text(recipe.name, style = MaterialTheme.typography.titleLarge)
+                    RecipeCreditLine(recipe)
                     Text(
                         buildString {
                             append("${recipe.doseG.roundToInt()} g · ${recipe.waterG.roundToInt()} g water")
@@ -253,7 +307,9 @@ private fun SetupCard(
                 if (siblings.size > 1) {
                     coffee.crema.ui.components.CremaFilterDropdown(
                         icon = "list-bullets",
-                        keys = siblings.map { coffee.crema.ui.components.SortKey(it.id, it.name) },
+                        keys = siblings.map {
+                            coffee.crema.ui.components.SortKey(it.id, if (it.id in builtinIds) "${it.name} · Built-in" else it.name)
+                        },
                         selectedKey = recipe.id,
                         onKeyChange = { id -> siblings.firstOrNull { it.id == id }?.let(vm::selectGuidedRecipe) },
                     )
@@ -264,7 +320,7 @@ private fun SetupCard(
                 CremaButton(
                     onClick = onEdit,
                     variant = CremaButtonVariant.Outlined,
-                    label = "Edit recipe",
+                    label = if (isBuiltin) "Duplicate to edit" else "Edit recipe",
                     modifier = Modifier.testTag("guided-edit-recipe"),
                 )
             }
@@ -485,7 +541,7 @@ private fun LiveSession(
                     Modifier.weight(1.1f).fillMaxHeight(),
                     verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
                 ) {
-                    StepCard(m)
+                    StepCard(m, labelLines = 2)
                     NextLine(m)
                 }
             }
@@ -542,7 +598,7 @@ private fun BigClock(m: LiveModel, sizeSp: Float, modifier: Modifier) {
  * pour-target approach, a held boundary) — visual cues are always on.
  */
 @Composable
-private fun StepCard(m: LiveModel) {
+private fun StepCard(m: LiveModel, labelLines: Int = 3) {
     val flash = m.flashing
     val border by animateColorAsState(
         if (flash) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
@@ -574,11 +630,22 @@ private fun StepCard(m: LiveModel) {
             }
             val current = m.current
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Eyebrow("Step ${m.session.stepIndex + 1} of ${m.steps.size} · ${current?.let { stepLabel(it) } ?: ""}")
+                Eyebrow("Step ${m.session.stepIndex + 1} of ${m.steps.size} · ${current?.let { stepKindLabel(it.kind) } ?: ""}")
                 Text(
                     current?.let { stepSpec(it) } ?: "",
                     style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // The step's own instruction wraps (capped so the live session
+            // never scrolls: two lines in the short cockpit pane).
+            current?.label?.trim()?.takeIf { it.isNotEmpty() }?.let { label ->
+                Text(
+                    label,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = labelLines,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("guided-step-label"),
                 )
             }
             val target = current?.targetWaterG

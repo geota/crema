@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -80,7 +81,7 @@ import coffee.crema.ui.components.CremaOverflowMenu
 import coffee.crema.ui.components.OverflowItem
 import coffee.crema.ui.theme.JetBrainsMono
 import androidx.compose.runtime.LaunchedEffect
-import coffee.crema.brew.defaultRecipeFor
+import coffee.crema.brew.newRecipeFor
 import coffee.crema.core.BrewRecipe
 import coffee.crema.ui.brewlog.BrewRecipeCard
 import coffee.crema.ui.brewlog.visibleBrewRecipes
@@ -125,7 +126,19 @@ fun ProfilesScreen(
     // ── Brew recipes — the guided-brew library section (issue #10). A
     // separate section, not rows in the machine grid: loading a profile
     // uploads it to the DE1; a recipe never touches the machine.
-    val recipes = visibleBrewRecipes(ui.brewRecipes, query)
+    var showHiddenRecipes by remember { mutableStateOf(false) }
+    val hiddenRecipeCount = ui.builtinRecipes.count { it.id in ui.hiddenBuiltinRecipes }
+    val recipes = visibleBrewRecipes(
+        ui.brewRecipes,
+        query,
+        builtins = ui.builtinRecipes,
+        hidden = ui.hiddenBuiltinRecipes,
+        showHidden = showHiddenRecipes && hiddenRecipeCount > 0,
+    )
+    val builtinRecipeIds = ui.builtinRecipes.map { it.id }.toSet()
+    // The effective per-method default (pointer, else the built-in default).
+    val defaultRecipeIds = recipes.map { it.method }.distinct()
+        .mapNotNull { m -> vm.defaultBrewRecipeFor(m)?.id }.toSet()
     // The editor opens in place as a side sheet over a VM-held draft
     // (RecipeEditorSheet, below) — it survives a rotation to the phone shell.
     val editRecipe: (BrewRecipe, Boolean) -> Unit = { r, isNew ->
@@ -277,7 +290,7 @@ fun ProfilesScreen(
                             }
                             CremaButton(
                                 onClick = {
-                                    editRecipe(defaultRecipeFor("pourover", System.currentTimeMillis()), true)
+                                    editRecipe(newRecipeFor("pourover", System.currentTimeMillis()), true)
                                 },
                                 variant = CremaButtonVariant.Outlined,
                                 icon = "plus",
@@ -288,20 +301,34 @@ fun ProfilesScreen(
                     items(recipes, key = { it.id }) { r ->
                         BrewRecipeCard(
                             recipe = r,
-                            isDefault = ui.lastRecipeByMethod[r.method] == r.id,
+                            isDefault = r.id in defaultRecipeIds,
                             onEdit = { editRecipe(r, false) },
                             onDuplicate = {
                                 vm.duplicateBrewRecipe(r.id)?.let { editRecipe(it, false) }
                             },
                             onMakeDefault = { vm.setDefaultBrewRecipe(r) },
                             onDelete = { vm.deleteBrewRecipe(r.id) },
+                            isBuiltin = r.id in builtinRecipeIds,
+                            isHidden = r.id in ui.hiddenBuiltinRecipes,
+                            onSetHidden = { h -> vm.setBuiltinRecipeHidden(r.id, h) },
                         )
+                    }
+                    if (hiddenRecipeCount > 0) {
+                        item(key = "recipes-hidden-toggle", span = { GridItemSpan(maxLineSpan) }) {
+                            CremaButton(
+                                onClick = { showHiddenRecipes = !showHiddenRecipes },
+                                variant = CremaButtonVariant.Text,
+                                icon = if (showHiddenRecipes) "caret-down" else "caret-right",
+                                label = if (showHiddenRecipes) "Hide hidden recipes" else "Show hidden ($hiddenRecipeCount)",
+                                modifier = Modifier.testTag("recipes-show-hidden"),
+                            )
+                        }
                     }
                     if (recipes.isEmpty()) {
                         item(key = "recipes-empty", span = { GridItemSpan(maxLineSpan) }) {
                             Text(
                                 if (query.isBlank()) {
-                                    "No recipes yet — running a brew from the Scale screen saves its recipe here, or start one with New recipe."
+                                    "No recipes yet — start one with New recipe."
                                 } else {
                                     "No recipes match your search."
                                 },

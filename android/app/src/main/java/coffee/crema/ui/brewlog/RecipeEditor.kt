@@ -113,6 +113,8 @@ private fun RecipeEditorBody(vm: MainViewModel, d: RecipeEditDraft, modifier: Mo
                     modifier = Modifier.weight(1f).testTag("recipe-name"),
                 )
             }
+            // Attribution, read-only: a built-in's copy reads "Adapted from …".
+            RecipeCreditLine(d.base)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 val m = Modifier.weight(1f)
                 CremaStepper(
@@ -157,7 +159,7 @@ private fun RecipeEditorBody(vm: MainViewModel, d: RecipeEditDraft, modifier: Mo
                 }
                 val secs: @Composable () -> Unit = {
                     CremaStepper(
-                        value = (step.durationS ?: 0L).toDouble(), unit = "s", step = 5.0, min = 0.0, max = 900.0,
+                        value = (step.durationS ?: 0L).toDouble(), unit = "s", step = 5.0, min = 0.0, max = 86_400.0,
                         fmt = { fmt("%.0f", it) },
                         onChange = { v ->
                             vm.updateRecipeEdit { it.updateStep(i) { s -> s.copy(durationS = v.toLong().takeIf { l -> l > 0L }) } }
@@ -222,6 +224,15 @@ private fun RecipeEditorBody(vm: MainViewModel, d: RecipeEditDraft, modifier: Mo
                         ) { grams(); secs() }
                     }
                 }
+                // The step's instruction ("Swirl gently at 0:10"); blank = the kind's name.
+                CremaTextField(
+                    value = step.label.orEmpty(),
+                    onValueChange = { v ->
+                        vm.updateRecipeEdit { it.updateStep(i) { s -> s.copy(label = v.ifBlank { null }) } }
+                    },
+                    placeholder = "Label — e.g. “${stepKindLabel(step.kind)}”",
+                    modifier = Modifier.fillMaxWidth().padding(start = 22.dp).testTag("recipe-step-label-$i"),
+                )
                 if (i < d.steps.lastIndex) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
