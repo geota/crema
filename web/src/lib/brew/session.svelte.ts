@@ -20,6 +20,7 @@ import type {
 	StageMark
 } from '$lib/core/crema-core';
 import { stageMarkForJson } from '$lib/wasm/de1_wasm';
+import type { BeanPick } from './bean-pick';
 
 /** A step at least this long (s) releases the screen wake lock. */
 export const LONG_STEP_S = 15 * 60;
@@ -34,6 +35,14 @@ export type BrewVisualCue = 'approach' | 'boundary' | 'step';
 export type GuidedBrewPhase = 'idle' | 'armed' | 'running' | 'paused' | 'done';
 
 export class GuidedBrewStore {
+	/**
+	 * The Brew setup's bean pick (issue #10 feedback) — a setup selection,
+	 * so it lives here rather than in the panel and survives a remount
+	 * (the recipe editor, a layout swap) and a finished session.
+	 * `undefined` follows the active bag; see `resolveBrewBean`.
+	 * Never reset by {@link reset}, and never written to the active bag.
+	 */
+	beanPick = $state<BeanPick>(undefined);
 	phase = $state<GuidedBrewPhase>('idle');
 	recipe = $state<BrewRecipe | null>(null);
 	startOnPour = $state(false);
@@ -181,6 +190,11 @@ export class GuidedBrewStore {
 	completed(summary: BrewSessionSummary): void {
 		this.phase = 'done';
 		this.summary = summary;
+	}
+
+	/** Choose the setup's bag (`null` = No bean). */
+	pickBean(id: string | null): void {
+		this.beanPick = id;
 	}
 
 	reset(): void {

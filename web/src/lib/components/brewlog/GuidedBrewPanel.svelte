@@ -28,7 +28,6 @@
 	import { primeBrewCues } from '$lib/brew/cues';
 	import {
 		brewMethodPresets,
-		guidedPrefillWeights,
 		openingMethod,
 		methodLabel,
 		type LogBrewPrefill
@@ -36,8 +35,11 @@
 	import type { BrewRecipe, BrewStep } from '$lib/core/crema-core';
 	import { BrewStepKind, StepAdvance } from '$lib/core/crema-core';
 	import { getBeanStore } from '$lib/bean';
+	import { guidedLogPrefill, resolveBrewBean } from '$lib/brew/bean-pick';
 	import { toast } from '$lib/components/shared/toast.svelte';
 	import BrewSessionChart from '$lib/components/history/BrewSessionChart.svelte';
+	import BeanOverdrawNote from './BeanOverdrawNote.svelte';
+	import BrewBeanRow from './BrewBeanRow.svelte';
 	import LogBrewDialog from './LogBrewDialog.svelte';
 	import MethodMark from './MethodMark.svelte';
 	import RecipeCredit from './RecipeCredit.svelte';
@@ -86,6 +88,16 @@
 	const ownPickable = $derived(pickable.filter((r) => !isBuiltinRecipe(r.id)));
 	const builtinPickable = $derived(pickable.filter((r) => isBuiltinRecipe(r.id)));
 	const selectedIsBuiltin = $derived(recipe != null && isBuiltinRecipe(recipe.id));
+
+	// ── Bean (issue #10 feedback) ────────────────────────────────
+	// The pick lives on the guided store (a setup selection that outlives
+	// this panel); it defaults to the active bag, falls back to it if the
+	// chosen bag is archived or deleted, and never changes the active bag.
+	const brewBeanId = $derived(resolveBrewBean(session.beanPick, library));
+	const brewBean = $derived(brewBeanId ? library.getBean(brewBeanId) : null);
+	const brewRoaster = $derived(
+		brewBean?.roasterId ? library.getRoaster(brewBean.roasterId) : null
+	);
 
 	// ── Recipe editor, in place ──────────────────────────────────
 	// The library lives in Profiles (its own editor entry), but "Edit
@@ -277,18 +289,8 @@
 	const logPrefill = $derived.by<LogBrewPrefill | undefined>(() => {
 		const s = session.summary;
 		if (!s || !liveRecipe) return undefined;
-		return {
-			method: s.method,
-			recipeName: s.recipeName,
-			beanId: library.activeBeanId,
-			dose: liveRecipe.doseG > 0 ? liveRecipe.doseG : null,
-			...guidedPrefillWeights(s.method, s.finalWeightG ?? null, liveRecipe.waterG),
-			tempC: liveRecipe.tempC ?? null,
-			durationMs: s.durationMs,
-			// A scale-less run records no weight — it saves as a plain
-			// logged brew, without a series (spec §8).
-			brewSeries: s.series.samples.length > 0 ? s.series : undefined
-		};
+		// The setup's bag, not the active one — still changeable in the form.
+		return guidedLogPrefill(s, liveRecipe, brewBeanId);
 	});
 </script>
 
@@ -363,6 +365,11 @@
 							: undefined}>{selectedIsBuiltin ? 'Duplicate to edit' : 'Edit recipe'}</button
 					>
 				</div>
+			</div>
+			<!-- Bean, under the recipe picker (issue #10 feedback). -->
+			<div class="gb-bean">
+				<BrewBeanRow beanId={brewBeanId} onPick={(id) => session.pickBean(id)} />
+				<BeanOverdrawNote bean={brewBean} dose={recipe.doseG} />
 			</div>
 			<ol class="gb-steps">
 				{#each steps as step, i (i)}
@@ -565,6 +572,13 @@
 		<div class="gb-done">
 			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Brew finished</div>
 			<div class="gb-done-name">{session.summary.recipeName}</div>
+			<div class="gb-done-bean">
+				{#if brewBean}
+					{brewRoaster ? `${brewRoaster.name} · ` : ''}{brewBean.name}
+				{:else}
+					No bean
+				{/if}
+			</div>
 			<div class="gb-done-stats">
 				<span class="gb-done-stat"
 					><b>{clock(session.summary.durationMs)}</b><em>time</em></span
@@ -1173,6 +1187,18 @@
 	.gb-done-name {
 		font-family: var(--font-serif);
 		font-size: 22px;
+	}
+	.gb-done-bean {
+		font-family: var(--font-sans);
+		font-size: 12.5px;
+		color: rgba(var(--tint-rgb), 0.6);
+		margin-top: 2px;
+	}
+	.gb-bean {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		margin-top: 12px;
 	}
 	.gb-done-stats {
 		display: flex;
