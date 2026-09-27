@@ -1522,9 +1522,12 @@ fn method_alias(raw: &str) -> Option<String> {
         return None;
     }
     let has = |pat: &str| n.contains(pat);
-    let m = if has("v60")
-        || has("chemex")
-        || has("kalita")
+    let m = if has("chemex") {
+        "chemex"
+    } else if has("kalita") {
+        // "Kalita Wave" / BC's `KALITA_WAVE` / "Kalita 185".
+        "kalita_wave"
+    } else if has("v60")
         || has("origami")
         || has("melitta")
         || has("bee house")
@@ -1714,6 +1717,35 @@ mod tests {
         assert_eq!(
             shot.stored_shot.metadata.grinder_setting.as_deref(),
             Some("5")
+        );
+    }
+
+    #[test]
+    fn chemex_and_kalita_preparations_import_as_their_own_methods() {
+        // By device name, by BC preset `type`, and a V60 still pourover.
+        let json = r#"{
+            "BEANS":[{"config":{"uuid":"b","unix_timestamp":1600000000},"name":"Beans","roaster":"R"}],
+            "PREPARATION":[
+                {"config":{"uuid":"p-chemex","unix_timestamp":1600000000},"name":"My Chemex 6-cup","style_type":"POUR OVER"},
+                {"config":{"uuid":"p-kalita","unix_timestamp":1600000000},"name":"Wave","type":"KALITA_WAVE","style_type":"POUR OVER"},
+                {"config":{"uuid":"p-v60","unix_timestamp":1600000000},"name":"Hario V60","style_type":"POUR OVER"}
+            ],
+            "BREWS":[
+                {"config":{"uuid":"b1","unix_timestamp":1600000100},"bean":"b","method_of_preparation":"p-chemex","grind_weight":42,"brew_quantity":700},
+                {"config":{"uuid":"b2","unix_timestamp":1600000200},"bean":"b","method_of_preparation":"p-kalita","grind_weight":21,"brew_quantity":345},
+                {"config":{"uuid":"b3","unix_timestamp":1600000300},"bean":"b","method_of_preparation":"p-v60","grind_weight":15,"brew_quantity":250}
+            ]
+        }"#;
+        let export = parse_export(json).expect("parses");
+        let plan = bc_to_crema(&export, 1_700_000_000_000, seq_id());
+        let methods: Vec<Option<&str>> = plan
+            .shots
+            .iter()
+            .map(|s| s.stored_shot.brew_method.as_deref())
+            .collect();
+        assert_eq!(
+            methods,
+            [Some("chemex"), Some("kalita_wave"), Some("pourover")]
         );
     }
 
