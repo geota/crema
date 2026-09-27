@@ -275,6 +275,7 @@ private fun ScrollPane(modifier: Modifier, content: @Composable () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SetupCard(
     vm: MainViewModel,
@@ -290,20 +291,25 @@ private fun SetupCard(
 ) {
     CremaCard(shape = RoundedCornerShape(14.dp)) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Eyebrow("Recipe · ${methodLabel(method)}")
-                    Text(recipe.name, style = MaterialTheme.typography.titleLarge)
-                    RecipeCreditLine(recipe)
-                    Text(
-                        buildString {
-                            append("${recipe.doseG.roundToInt()} g · ${recipe.waterG.roundToInt()} g water")
-                            recipe.tempC?.let { append(" · ${it.roundToInt()} °C") }
-                        },
-                        style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Eyebrow("Recipe · ${methodLabel(method)}")
+                Text(recipe.name, style = MaterialTheme.typography.titleLarge)
+                RecipeCreditLine(recipe)
+                Text(
+                    buildString {
+                        append("${recipe.doseG.roundToInt()} g · ${recipe.waterG.roundToInt()} g water")
+                        recipe.tempC?.let { append(" · ${it.roundToInt()} °C") }
+                    },
+                    style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // The picker + edit door on their own row, so a long recipe name
+            // (or a narrow pane) never squeezes the title column.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 if (siblings.size > 1) {
                     coffee.crema.ui.components.CremaFilterDropdown(
                         icon = "list-bullets",
@@ -313,7 +319,6 @@ private fun SetupCard(
                         selectedKey = recipe.id,
                         onKeyChange = { id -> siblings.firstOrNull { it.id == id }?.let(vm::selectGuidedRecipe) },
                     )
-                    Spacer(Modifier.width(8.dp))
                 }
                 // Opens the editor IN PLACE (side sheet / pushed screen);
                 // Save returns here with the edited recipe selected.
@@ -403,7 +408,16 @@ private fun SetupStepRow(i: Int, step: BrewStep) {
             },
         )
     }
-    val label = "${stepLabel(step)} — ${stepSpec(step)}"
+    val label = "${stepKindLabel(step.kind)} — ${stepSpec(step)}"
+    val note = step.label?.trim()?.takeIf { it.isNotEmpty() }
+    val text: @Composable () -> Unit = {
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            if (note != null) {
+                Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val inline = maxWidth >= STEP_TAG_INLINE_MIN
         Row(
@@ -418,11 +432,11 @@ private fun SetupStepRow(i: Int, step: BrewStep) {
                 modifier = Modifier.width(14.dp),
             )
             if (inline) {
-                Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                Box(Modifier.weight(1f)) { text() }
                 tag()
             } else {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(label, style = MaterialTheme.typography.bodyMedium)
+                    text()
                     tag()
                 }
             }

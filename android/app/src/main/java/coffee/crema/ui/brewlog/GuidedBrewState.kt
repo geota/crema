@@ -61,6 +61,20 @@ object GuidedSetupRules {
      */
     fun initialMethod(lastMethod: String?): String = lastMethod?.takeIf { it.isNotBlank() } ?: "pourover"
 
+    /** Steps longer than this (seconds) don't hold the screen on. */
+    const val LONG_STEP_S = 15 * 60L
+
+    /**
+     * Whether a live session holds the display on at [stepIndex]: yes, except
+     * on a step timed longer than [LONG_STEP_S] (a cold brew's 12 h steep) —
+     * nobody watches that countdown, and the session clock is timestamp-based
+     * in the core, so a dark screen loses nothing; the step still ends on a tap.
+     */
+    fun holdsScreenOn(recipe: BrewRecipe?, stepIndex: Int): Boolean {
+        val d = recipe?.steps?.getOrNull(stepIndex)?.durationS ?: return true
+        return d <= LONG_STEP_S
+    }
+
     /** [method]'s default-pointer recipe, if it still exists (user or built-in). */
     fun savedFor(method: String, recipes: List<BrewRecipe>, lastByMethod: Map<String, String>): BrewRecipe? =
         lastByMethod[method]?.let { id -> recipes.firstOrNull { it.id == id && it.deletedAt == null } }

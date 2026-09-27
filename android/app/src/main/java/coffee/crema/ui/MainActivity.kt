@@ -283,9 +283,13 @@ class MainActivity : ComponentActivity() {
                 // dims mid-use (the flag only applies while this window is visible).
                 // Also held while the SAVER is up: the wall-tablet clock must stay
                 // visible instead of Android blanking the screen underneath it.
-                // A live guided brew (issue #10) holds it unconditionally too —
-                // a step timer behind a dark screen is a missed pour.
-                val keepOn = ui.keepScreenOnBrew || ui.saverVisible || ui.guidedBrew.live
+                // A live guided brew (issue #10) holds it too — a step timer
+                // behind a dark screen is a missed pour — except during a long
+                // steep (a cold brew's 12 h in the fridge), where holding the
+                // display on for hours would only drain the battery.
+                val guidedHolds = ui.guidedBrew.live &&
+                    coffee.crema.ui.brewlog.GuidedSetupRules.holdsScreenOn(ui.guidedBrew.recipe, ui.guidedBrew.stepIndex)
+                val keepOn = ui.keepScreenOnBrew || ui.saverVisible || guidedHolds
                 LaunchedEffect(keepOn) {
                     if (keepOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)

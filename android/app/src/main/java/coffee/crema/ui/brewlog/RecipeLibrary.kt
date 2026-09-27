@@ -35,7 +35,7 @@ import coffee.crema.brew.formatClock
 import coffee.crema.brew.methodIcon
 import coffee.crema.brew.methodLabel
 import coffee.crema.brew.CoreJson
-import coffee.crema.brew.stepLabel
+import coffee.crema.brew.stepKindLabel
 import coffee.crema.core.recipeNominalDurationMsJson
 import coffee.crema.core.BrewRecipe
 import coffee.crema.ui.components.CremaButton
@@ -171,9 +171,10 @@ fun RecipeBadge(text: String, primary: Boolean) {
 fun nominalRecipeMs(recipe: BrewRecipe, core: (String) -> Long = ::recipeNominalDurationMsJson): Long =
     core(CoreJson.encodeToString(BrewRecipe.serializer(), recipe))
 
-/** "Bloom → Pour → Wait → Pour → Drawdown" — the card's plan line. */
+/** "Bloom → Pour → Wait → Pour → Drawdown" — the card's plan line, by step
+ *  kind (a built-in's long step instructions would drown it). */
 fun recipeStepChain(recipe: BrewRecipe): String =
-    recipe.steps.orEmpty().joinToString(" → ") { stepLabel(it) }
+    recipe.steps.orEmpty().joinToString(" → ") { stepKindLabel(it.kind) }
 
 @Composable
 fun BrewRecipeCard(

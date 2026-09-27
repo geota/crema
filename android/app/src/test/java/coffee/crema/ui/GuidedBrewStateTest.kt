@@ -204,4 +204,17 @@ class GuidedBrewStateTest {
         val mid = LivePane.clockSp(700f)
         assertTrue(mid in 48f..96f)
     }
+
+    @Test fun aLongSteepLetsTheScreenSleepEverythingElseHoldsIt() {
+        val cold = recipe("c").copy(
+            steps = listOf(
+                BrewStep(kind = BrewStepKind.Pour, targetWaterG = 1000f, advance = StepAdvance.Auto),
+                BrewStep(kind = BrewStepKind.Steep, durationS = 43_200, advance = StepAdvance.Manual),
+            ),
+        )
+        assertTrue(GuidedSetupRules.holdsScreenOn(cold, 0))
+        assertFalse(GuidedSetupRules.holdsScreenOn(cold, 1))
+        assertTrue(GuidedSetupRules.holdsScreenOn(recipe("a"), 0)) // a 45 s bloom
+        assertTrue(GuidedSetupRules.holdsScreenOn(null, 0))
+    }
 }
