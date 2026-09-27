@@ -7,7 +7,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { initTestWasm } from '$lib/testing/test-init';
 import { BeanLibraryStore } from '$lib/bean/store.svelte';
 import { coerceBean } from '$lib/bean/model';
-import { brewLogSeeds, brewMethodPresets } from '$lib/brew/methods';
+import { brewLogSeeds, brewMethodPresets, guidedPrefillWeights } from '$lib/brew/methods';
 import { brews_remaining_estimate } from '$lib/wasm/de1_wasm';
 import { BREW_SERIES_CAP, HistoryStore, downsampleBrewSeries } from './store.svelte';
 import { plannedStaircase } from '$lib/brew/staircase';
@@ -156,5 +156,26 @@ describe('core-backed brew-log rules', () => {
 		// Short series pass through untouched.
 		const short = { samples: samples.slice(0, 10), stageMarks };
 		expect(downsampleBrewSeries(short)).toBe(short);
+	});
+
+	it('a guided espresso seeds its measured final weight as the yield (drift bug 9)', () => {
+		localStorage.removeItem('crema.brewlog.lastMethod.v1');
+		// A prior espresso with a different yield must not win over the measurement.
+		const rows = [{ brewMethod: 'espresso', doseG: 18, yieldG: 40, durationMs: 0 }];
+		const w = guidedPrefillWeights('espresso', 38.4, 36);
+		expect(w).toEqual({ waterG: null, yieldOut: 38.4 });
+		const s = brewLogSeeds({
+			method: null,
+			beanId: null,
+			beanGrinderSetting: null,
+			prefill: { method: 'espresso', dose: 18, durationMs: 29_000, ...w },
+			rows
+		});
+		expect(s.method).toBe('espresso');
+		expect(s.water).toBeCloseTo(38.4); // the form's espresso field is beverage-out
+		// A filter guided brew keeps the weight as water-in.
+		expect(guidedPrefillWeights('pourover', 251, 250)).toEqual({ waterG: 251, yieldOut: null });
+		// No scale: the plan stands in.
+		expect(guidedPrefillWeights('espresso', null, 36)).toEqual({ waterG: null, yieldOut: 36 });
 	});
 });

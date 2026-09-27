@@ -164,6 +164,18 @@ export class RecipeStore {
 		this.persist();
 	}
 
+	/**
+	 * Save a recipe from the editor. A method's first saved recipe becomes
+	 * its default (the one the Brew segment opens on); an edit never moves
+	 * an existing default — changing that is the Profiles "Make default"
+	 * door's job. Returns the stored copy.
+	 */
+	saveEdit(recipe: BrewRecipe): BrewRecipe {
+		this.upsert(recipe);
+		if (!this.lastUsed[recipe.method]) this.touch(recipe);
+		return this.get(recipe.id) ?? recipe;
+	}
+
 	/** Remember `recipe` as the method's last-used (persisting it if new). */
 	touch(recipe: BrewRecipe): void {
 		if (!this.recipes.some((r) => r.id === recipe.id)) {

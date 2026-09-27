@@ -21,6 +21,7 @@
 	import { primeBrewCues } from '$lib/brew/cues';
 	import {
 		brewMethodPresets,
+		guidedPrefillWeights,
 		openingMethod,
 		methodLabel,
 		type LogBrewPrefill
@@ -81,12 +82,11 @@
 	}
 
 	function saveEdited(r: BrewRecipe): void {
-		recipes.upsert(r);
-		// Editing is choosing: the saved recipe becomes the method's
-		// remembered one, so the setup (and the next visit) opens on it.
-		recipes.touch(r);
+		// The edited recipe comes back as this setup's selection, but it
+		// only becomes the method's default when the method has none —
+		// editing shouldn't silently change your default (Android's rule).
 		method = r.method;
-		recipe = recipes.get(r.id) ?? r;
+		recipe = recipes.saveEdit(r);
 		editing = null;
 	}
 
@@ -235,7 +235,7 @@
 			recipeName: s.recipeName,
 			beanId: library.activeBeanId,
 			dose: liveRecipe.doseG > 0 ? liveRecipe.doseG : null,
-			waterG: s.finalWeightG ?? (liveRecipe.waterG > 0 ? liveRecipe.waterG : null),
+			...guidedPrefillWeights(s.method, s.finalWeightG ?? null, liveRecipe.waterG),
 			tempC: liveRecipe.tempC ?? null,
 			durationMs: s.durationMs,
 			// A scale-less run records no weight — it saves as a plain

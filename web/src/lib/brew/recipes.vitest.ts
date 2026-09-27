@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultRecipeFor, nominalRecipeMs, plannedPourTotalG } from "./recipes.svelte";
+import { RecipeStore, defaultRecipeFor, nominalRecipeMs, plannedPourTotalG } from "./recipes.svelte";
 
 /*
  * The templates and recipe math are the core's (`default_recipe`,
@@ -25,5 +25,21 @@ describe("core-backed recipes", () => {
     const r = defaultRecipeFor("aeropress");
     expect(plannedPourTotalG(r)).toBe(220);
     expect(plannedPourTotalG({ ...r, steps: [] })).toBeNull();
+  });
+});
+
+describe("RecipeStore.saveEdit (drift bug 11)", () => {
+  it("makes a method's first saved recipe its default, never moves an existing one", () => {
+    localStorage.clear();
+    const store = new RecipeStore();
+    const first = defaultRecipeFor("pourover");
+    store.saveEdit(first);
+    expect(store.lastUsedFor("pourover")?.id).toBe(first.id);
+    const second = { ...defaultRecipeFor("pourover"), name: "Two-pour" };
+    const saved = store.saveEdit(second);
+    expect(saved.name).toBe("Two-pour");
+    expect(store.get(second.id)).toBeDefined();
+    // Editing the second recipe left the method's default alone.
+    expect(store.lastUsedFor("pourover")?.id).toBe(first.id);
   });
 });

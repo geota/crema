@@ -162,6 +162,24 @@ export function rememberMethod(method: string): void {
 	}
 }
 
+/**
+ * Where a finished guided session's weight lands in the log prefill. The
+ * scale weighs what's in the vessel: beverage-out for the espresso family
+ * (so it's the **yield** — the core seeding reads espresso's yield slot,
+ * never its water), water-in for filter methods. The scale's final reading
+ * wins over the recipe's planned total; a non-positive plan is no value.
+ */
+export function guidedPrefillWeights(
+	method: string | null | undefined,
+	finalWeightG: number | null,
+	plannedWaterG: number
+): Pick<LogBrewPrefill, 'waterG' | 'yieldOut'> {
+	const weight = finalWeightG ?? (plannedWaterG > 0 ? plannedWaterG : null);
+	return isEspressoMethod(method)
+		? { waterG: null, yieldOut: weight }
+		: { waterG: weight, yieldOut: null };
+}
+
 /** A stored row, projected for {@link brewLogSeeds}. */
 export type { BrewSeedInput, BrewLogSeeds };
 
