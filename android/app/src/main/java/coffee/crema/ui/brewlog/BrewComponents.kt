@@ -21,11 +21,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.brew.methodIcon
+import coffee.crema.core.Bean
 import coffee.crema.core.BrewSeries
+import coffee.crema.core.Roaster
+import coffee.crema.ui.components.CremaFilterDropdown
+import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
+import coffee.crema.ui.components.SortKey
 import coffee.crema.ui.theme.CremaTheme
 import kotlin.math.max
 
@@ -276,4 +283,67 @@ private fun BrewSessionPlot(
             drawPath(path, weightColor, style = Stroke(width = 2.dp.toPx()))
         }
     }
+}
+
+/**
+ * The "Bean" field shared by the Log-brew form and the guided Brew setup
+ * (issue #10): a dropdown of the library's bags — roaster, name and grams
+ * left, archived bags excluded — plus "No bean", and the quiet
+ * "more than the N g left in this bag" note when [doseG] exceeds the chosen
+ * bag. Picking never changes the app's active bag. [onPick] gets a bean id
+ * or [GuidedBeanRules.NO_BEAN].
+ */
+@Composable
+fun BeanPickField(
+    beans: List<Bean>,
+    roasters: List<Roaster>,
+    selectedId: String?,
+    doseG: Double,
+    onPick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    below: @Composable () -> Unit = {},
+) {
+    val bean = selectedId?.let { id -> beans.firstOrNull { it.id == id } }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Eyebrow("Bean")
+        CremaFilterDropdown(
+            icon = "coffee-bean",
+            keys = buildList {
+                add(SortKey(GuidedBeanRules.NO_BEAN, "No bean — inventory untouched"))
+                GuidedBeanRules.choices(beans).forEach { b ->
+                    val roaster = roasters.firstOrNull { it.id == b.roasterId }?.name
+                    val left = b.remaining?.let { " · ${it.toInt()} g left" }.orEmpty()
+                    add(SortKey(b.id, listOfNotNull(roaster, b.name).joinToString(" · ") + left))
+                }
+            },
+            selectedKey = selectedId ?: GuidedBeanRules.NO_BEAN,
+            onKeyChange = onPick,
+            // The closed pill: bag + grams left (the roaster is in the menu),
+            // so the grams never wrap out of a phone-width pill.
+            selectedLabel = bean?.let { b -> b.name + b.remaining?.let { " · ${it.toInt()} g left" }.orEmpty() },
+            modifier = Modifier.testTag("bean-pick"),
+        )
+        below()
+        if (bean != null && GuidedBeanRules.overdraws(bean, doseG)) {
+            BeanOverdrawNote(GuidedBeanRules.overdrawNote(bean))
+        }
+    }
+}
+
+/** The quiet warning note — the web log form's `.bl-warn` (warning ink on a faint well). */
+@Composable
+private fun BeanOverdrawNote(text: String) {
+    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val ink = if (dark) Color(0xFFDBA764) else Color(0xFFC7873B)
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+        color = ink,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f), RoundedCornerShape(6.dp))
+            .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 10.dp, vertical = 7.dp)
+            .testTag("bean-overdraw"),
+    )
 }

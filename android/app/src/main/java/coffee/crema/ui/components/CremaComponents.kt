@@ -1564,6 +1564,8 @@ fun CremaFilterDropdown(
     selectedKey: String,
     onKeyChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** A shorter label for the closed pill (the menu rows keep the full one). */
+    selectedLabel: String? = null,
 ) {
     val current = keys.firstOrNull { it.id == selectedKey } ?: keys.first()
     var menuOpen by remember { mutableStateOf(false) }
@@ -1587,7 +1589,14 @@ fun CremaFilterDropdown(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text(current.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    selectedLabel ?: current.label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
                 PhIcon("caret-down", sizeDp = 13, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             CremaAnchoredPopup(expanded = menuOpen, onDismiss = { menuOpen = false }) {

@@ -139,6 +139,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   temperature, TDS/EY and roast dates). A server reply of `0` is treated as an
   expired login instead of a successful upload.
 
+### Fixed
+
+- Guided brews let you choose the bean before you start (issue #10 feedback)
+
 ### Security
 
 - **Credentials wrapped at rest (web)** — the Visualizer OAuth tokens and the

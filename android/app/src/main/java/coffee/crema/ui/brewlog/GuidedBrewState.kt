@@ -1,6 +1,7 @@
 package coffee.crema.ui.brewlog
 
 import coffee.crema.brew.CoreJson
+import coffee.crema.core.Bean
 import coffee.crema.core.BrewRecipe
 import coffee.crema.core.BrewStep
 import coffee.crema.core.BrewStepKind
@@ -50,7 +51,54 @@ data class GuidedBrewSetup(
      *  edit). Until then the setup follows the most recent method, so the
      *  opening pick never freezes on whatever loaded first. */
     val methodChosen: Boolean = false,
+    /**
+     * The bag this brew debits (issue #10 feedback): null follows the active
+     * bag, [GuidedBeanRules.NO_BEAN] is "No bean", else a bean id. Resolve it
+     * with [GuidedBeanRules.resolve]. Choosing never changes the active bag,
+     * and a method / recipe change keeps it.
+     */
+    val beanPick: String? = null,
 )
+
+/**
+ * Which bag a guided brew uses — the Brew setup's bean picker, carried
+ * through the summary into the Log-brew form (where it's still changeable).
+ * Twin of the web `$lib/brew/bean-pick`.
+ */
+object GuidedBeanRules {
+    /** [GuidedBrewSetup.beanPick] / the dropdown key for "No bean". */
+    const val NO_BEAN = "none"
+
+    /** A bag a brew can use: it exists and is neither archived nor deleted. */
+    fun pickable(b: Bean?): Boolean = b != null && b.archivedAt == null && b.deletedAt == null
+
+    /** The dropdown's bags, in library order — archived bags excluded (the log form's rule). */
+    fun choices(beans: List<Bean>): List<Bean> = beans.filter(::pickable)
+
+    /**
+     * The bag [pick] resolves to: the chosen bag while it's still pickable;
+     * if it was archived or deleted meanwhile (or nothing was chosen), the
+     * active bag; else none. "No bean" stays none.
+     */
+    fun resolve(pick: String?, beans: List<Bean>, activeBeanId: String?): String? {
+        if (pick == NO_BEAN) return null
+        if (pick != null && pickable(beans.firstOrNull { it.id == pick })) return pick
+        return activeBeanId?.takeIf { id -> pickable(beans.firstOrNull { it.id == id }) }
+    }
+
+    /**
+     * The dose would take more than the bag has left (a bag with no
+     * remaining weight recorded never warns) — the web log form's rule.
+     */
+    fun overdraws(bean: Bean?, doseG: Double): Boolean {
+        val left = bean?.remaining ?: return false
+        return doseG > 0.0 && left > 0f && doseG > left + 0.05
+    }
+
+    /** The quiet inline note, worded like the web log form. */
+    fun overdrawNote(bean: Bean): String =
+        "More than the ${kotlin.math.max(0, kotlin.math.round(bean.remaining ?: 0f).toInt())} g left in this bag — saving floors the bag at zero."
+}
 
 object GuidedSetupRules {
     /**

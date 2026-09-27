@@ -121,6 +121,9 @@ fun GuidedBrewPanel(
     val liveSeries by vm.liveBrewSeries.collectAsStateWithLifecycle()
     val session = ui.guidedBrew
     val connected = ui.scaleState == ScaleBleManager.State.READY
+    // The setup's bag (issue #10 feedback): its pick, else the active bag.
+    val brewBeanId = GuidedBeanRules.resolve(setup.beanPick, ui.beans, ui.activeBeanId)
+    val brewBean = brewBeanId?.let { id -> ui.beans.firstOrNull { it.id == id } }
 
     // The display clock — the shell shares elapsedRealtime with the core,
     // so it renders the session clock locally between events. Derived from
@@ -155,6 +158,14 @@ fun GuidedBrewPanel(
                 ) {
                     Eyebrow("Brew finished")
                     Text(summary.recipeName, style = MaterialTheme.typography.headlineSmall)
+                    Text(
+                        brewBean?.let { b ->
+                            listOfNotNull(ui.roasters.firstOrNull { it.id == b.roasterId }?.name, b.name).joinToString(" · ")
+                        } ?: "No bean",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("guided-done-bean"),
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(26.dp)) {
                         DoneStat(formatClock(summary.durationMs), "time")
                         summary.finalWeightG?.let { DoneStat("${it.roundToInt()} g", "water") }
@@ -212,6 +223,15 @@ fun GuidedBrewPanel(
                     builtinIds = ui.builtinRecipes.map { it.id }.toSet(),
                     isBuiltin = isBuiltin,
                     connected = connected,
+                    beanPicker = {
+                        BeanPickField(
+                            beans = ui.beans,
+                            roasters = ui.roasters,
+                            selectedId = brewBeanId,
+                            doseG = recipe.doseG.toDouble(),
+                            onPick = vm::selectGuidedBean,
+                        )
+                    },
                     startOnPour = setup.startOnPour,
                     soundOn = BrewCueDefaults.soundOn(ui.brewCueSound),
                     onEdit = {
@@ -286,6 +306,8 @@ private fun SetupCard(
     builtinIds: Set<String>,
     isBuiltin: Boolean,
     connected: Boolean,
+    /** The bean picker, under the recipe picker (issue #10 feedback). */
+    beanPicker: @Composable () -> Unit,
     startOnPour: Boolean,
     soundOn: Boolean,
     onEdit: () -> Unit,
@@ -331,6 +353,7 @@ private fun SetupCard(
                     modifier = Modifier.testTag("guided-edit-recipe"),
                 )
             }
+            beanPicker()
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             recipe.steps.orEmpty().forEachIndexed { i, step -> SetupStepRow(i, step) }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

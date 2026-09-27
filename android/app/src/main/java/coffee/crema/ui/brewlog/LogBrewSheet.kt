@@ -47,14 +47,12 @@ import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaFilterChip
-import coffee.crema.ui.components.CremaFilterDropdown
 import coffee.crema.ui.components.CremaStarRating
 import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.components.CremaStepperStyle
 import coffee.crema.ui.components.CremaTextField
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
-import coffee.crema.ui.components.SortKey
 import coffee.crema.ui.fmt
 import coffee.crema.ui.phone.components.CremaPhoneBackBar
 
@@ -134,22 +132,15 @@ private fun LogBrewFormBody(
             }
         }
 
-        // Bean — the active bag by default, with its remaining grams.
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Eyebrow("Bean")
-            CremaFilterDropdown(
-                icon = "coffee-bean",
-                keys = buildList {
-                    add(SortKey("none", "No bean — inventory untouched"))
-                    ui.beans.filter { it.archivedAt == null }.forEach { b ->
-                        val roaster = ui.roasters.firstOrNull { it.id == b.roasterId }?.name
-                        val left = b.remaining?.let { " · ${it.toInt()} g left" }.orEmpty()
-                        add(SortKey(b.id, listOfNotNull(roaster, b.name).joinToString(" · ") + left))
-                    }
-                },
-                selectedKey = draft.beanId ?: "none",
-                onKeyChange = { k -> update { it.copy(beanId = if (k == "none") null else k) } },
-            )
+        // Bean — the active bag by default, with its remaining grams (the
+        // guided setup's pick when the form comes from a session).
+        BeanPickField(
+            beans = ui.beans,
+            roasters = ui.roasters,
+            selectedId = draft.beanId,
+            doseG = draft.dose,
+            onPick = { k -> update { it.copy(beanId = if (k == GuidedBeanRules.NO_BEAN) null else k) } },
+        ) {
             if (draft.attempted && doseMissing) {
                 Text(
                     "Enter the dose so the bag can be debited.",
