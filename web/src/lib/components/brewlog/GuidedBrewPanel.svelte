@@ -17,7 +17,13 @@
 	import { brewCueSoundOn, getSettingsStore } from '$lib/settings';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getGuidedBrewStore } from '$lib/brew/session.svelte';
-	import { defaultRecipeFor, getRecipeStore, nominalRecipeMs } from '$lib/brew/recipes.svelte';
+	import {
+		brewClock,
+		getRecipeStore,
+		isBuiltinRecipe,
+		newRecipeFor,
+		nominalRecipeMs
+	} from '$lib/brew/recipes.svelte';
 	import { primeBrewCues } from '$lib/brew/cues';
 	import {
 		brewMethodPresets,
@@ -33,6 +39,7 @@
 	import BrewSessionChart from '$lib/components/history/BrewSessionChart.svelte';
 	import LogBrewDialog from './LogBrewDialog.svelte';
 	import MethodMark from './MethodMark.svelte';
+	import RecipeCredit from './RecipeCredit.svelte';
 	import RecipeEditor from './RecipeEditor.svelte';
 
 	let {
@@ -58,27 +65,45 @@
 	// ── Setup state ──────────────────────────────────────────────
 	const initialMethod = openingMethod();
 	let method = $state(initialMethod);
-	let recipe = $state<BrewRecipe>(resolveRecipe(initialMethod));
+	/** The selected recipe — `null` for a method with no built-in and no
+	 *  recipe of the user's own (espresso, drip, free text). */
+	let recipe = $state<BrewRecipe | null>(resolveRecipe(initialMethod) ?? null);
 	let startOnPour = $state(true);
 	let logOpen = $state(false);
 
-	function resolveRecipe(m: string): BrewRecipe {
-		return getRecipeStore().lastUsedFor(m) ?? defaultRecipeFor(m);
+	function resolveRecipe(m: string): BrewRecipe | undefined {
+		return getRecipeStore().defaultFor(m) ?? getRecipeStore().forMethod(m)[0];
 	}
 
 	function pickMethod(id: string): void {
 		method = id;
-		recipe = resolveRecipe(id);
+		recipe = resolveRecipe(id) ?? null;
 	}
+
+	/** The picker's options: the user's recipes, then the built-ins. */
+	const pickable = $derived(recipes.forMethod(method, recipe?.id));
+	const ownPickable = $derived(pickable.filter((r) => !isBuiltinRecipe(r.id)));
+	const builtinPickable = $derived(pickable.filter((r) => isBuiltinRecipe(r.id)));
+	const selectedIsBuiltin = $derived(recipe != null && isBuiltinRecipe(recipe.id));
 
 	// ── Recipe editor, in place ──────────────────────────────────
 	// The library lives in Profiles (its own editor entry), but "Edit
 	// recipe" here opens the same editor as a modal over this setup and
 	// saving lands back on it, the edited recipe still selected.
 	let editing = $state<BrewRecipe | null>(null);
+	let editingNew = $state(false);
 
 	function editRecipe(): void {
-		editing = recipe;
+		if (!recipe) return;
+		editingNew = false;
+		// Built-ins are read-only: edit a credited copy ("Adapted from …").
+		editing = isBuiltinRecipe(recipe.id) ? (recipes.duplicate(recipe.id) ?? null) : recipe;
+		if (editing && editing.id !== recipe.id) recipe = editing;
+	}
+
+	function createRecipe(): void {
+		editingNew = true;
+		editing = newRecipeFor(method);
 	}
 
 	function saveEdited(r: BrewRecipe): void {
@@ -88,6 +113,7 @@
 		method = r.method;
 		recipe = recipes.saveEdit(r);
 		editing = null;
+		editingNew = false;
 	}
 
 	// ── Cue sound (the bell) ─────────────────────────────────────
@@ -135,10 +161,8 @@
 	const elapsedMs = $derived(session.elapsedMs(nowMs));
 	const stepElapsedMs = $derived(session.stepElapsedMs(nowMs));
 
-	function clock(ms: number): string {
-		const total = Math.floor(ms / 1000);
-		return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
-	}
+	/** "m:ss", or "h:mm:ss" from an hour (the cold brew's 12 h steep). */
+	const clock = brewClock;
 
 	// ── Step presentation ────────────────────────────────────────
 	const KIND_LABEL: Record<string, string> = {
@@ -154,7 +178,16 @@
 
 	function stepLabel(step: BrewStep | undefined): string {
 		if (!step) return '';
-		return step.label?.trim() || (KIND_LABEL[step.kind] ?? 'Step');
+		return step.label?.trim() || kindLabel(step);
+	}
+
+	function kindLabel(step: BrewStep | undefined): string {
+		return step ? (KIND_LABEL[step.kind] ?? 'Step') : '';
+	}
+
+	/** The step's own instruction, when it has one. */
+	function stepNote(step: BrewStep | undefined): string | null {
+		return step?.label?.trim() || null;
 	}
 
 	function stepSpec(step: BrewStep | undefined): string {
@@ -166,12 +199,12 @@
 		return parts.join(' · ');
 	}
 
-	const liveRecipe = $derived(session.recipe ?? recipe);
-	const steps = $derived(liveRecipe.steps ?? []);
+	const liveRecipe = $derived<BrewRecipe | null>(session.recipe ?? recipe);
+	const steps = $derived(liveRecipe?.steps ?? []);
 	const currentStep = $derived(steps[session.stepIndex]);
 	const nextStep = $derived(steps[session.stepIndex + 1]);
 	/** Recipe total time, ms, for the "of about m:ss" line (core rule). */
-	const nominalTotalMs = $derived(nominalRecipeMs(liveRecipe));
+	const nominalTotalMs = $derived(liveRecipe ? nominalRecipeMs(liveRecipe) : 0);
 
 	/** The current step's 0..1 progress — live weight against a pour
 	 *  target when a scale reports, else the countdown. `null` = open. */
@@ -194,6 +227,7 @@
 			toast.info('App is still loading — try again in a moment.');
 			return;
 		}
+		if (!recipe) return;
 		primeBrewCues();
 		recipes.touch(recipe);
 		const armOnPour = startOnPour && connected;
@@ -229,7 +263,7 @@
 	/** The finished session, pre-shaped for the log form. */
 	const logPrefill = $derived.by<LogBrewPrefill | undefined>(() => {
 		const s = session.summary;
-		if (!s) return undefined;
+		if (!s || !liveRecipe) return undefined;
 		return {
 			method: s.method,
 			recipeName: s.recipeName,
@@ -265,20 +299,25 @@
 			{/each}
 		</div>
 
+		{#if recipe}
 		<div class="gb-recipe">
 			<div class="gb-recipe-head">
-				<div>
+				<div class="gb-recipe-id">
 					<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">
 						Recipe · {methodLabel(method)}
 					</div>
-					<div class="gb-recipe-name">{recipe.name}</div>
+					<div class="gb-recipe-name">
+						{recipe.name}
+						{#if selectedIsBuiltin}<span class="gb-badge">Built-in</span>{/if}
+					</div>
+					<RecipeCredit credit={recipe.credit} sourceUrl={recipe.sourceUrl} />
 					<div class="gb-recipe-meta">
 						{recipe.doseG} g · {recipe.waterG} g water{#if recipe.tempC}
 							· {Math.round(recipe.tempC)} °C{/if}
 					</div>
 				</div>
 				<div class="gb-recipe-actions">
-					{#if recipes.forMethod(method).length > 1}
+					{#if pickable.length > 1}
 						<select
 							class="gb-select"
 							aria-label="Choose recipe"
@@ -287,12 +326,29 @@
 								if (found) recipe = found;
 							}}
 						>
-							{#each recipes.forMethod(method) as r (r.id)}
-								<option value={r.id} selected={r.id === recipe.id}>{r.name}</option>
-							{/each}
+							{#if ownPickable.length > 0}
+								<optgroup label="Your recipes">
+									{#each ownPickable as r (r.id)}
+										<option value={r.id} selected={r.id === recipe.id}>{r.name}</option>
+									{/each}
+								</optgroup>
+							{/if}
+							{#if builtinPickable.length > 0}
+								<optgroup label="Built-in">
+									{#each builtinPickable as r (r.id)}
+										<option value={r.id} selected={r.id === recipe.id}>{r.name}</option>
+									{/each}
+								</optgroup>
+							{/if}
 						</select>
 					{/if}
-					<button class="gb-ghost" onclick={editRecipe}>Edit recipe</button>
+					<button
+						class="gb-ghost"
+						onclick={editRecipe}
+						title={selectedIsBuiltin
+							? 'Built-in recipes are read-only — edit your own copy'
+							: undefined}>{selectedIsBuiltin ? 'Duplicate to edit' : 'Edit recipe'}</button
+					>
 				</div>
 			</div>
 			<ol class="gb-steps">
@@ -300,14 +356,29 @@
 					<li>
 						<span class="gb-step-n">{i + 1}</span>
 						<span class="gb-step-body"
-							><b>{stepLabel(step)}</b>
-							<span class="gb-step-spec">— {stepSpec(step)}</span></span
+							><b>{kindLabel(step)}</b>
+							<span class="gb-step-spec">— {stepSpec(step)}</span>
+							{#if stepNote(step)}<span class="gb-step-note">{stepNote(step)}</span>{/if}</span
 						>
 						<span class="gb-step-adv">{step.advance === StepAdvance.Manual ? 'TAP' : 'AUTO'}</span>
 					</li>
 				{/each}
 			</ol>
 		</div>
+		{:else}
+		<div class="gb-recipe gb-recipe-empty">
+			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">
+				Recipe · {methodLabel(method)}
+			</div>
+			<div class="gb-recipe-name">No built-in recipe for {methodLabel(method)}</div>
+			<p class="gb-empty-copy">
+				Write your own step plan to run it guided — or just log the brew from History.
+			</p>
+			<div>
+				<button class="gb-ghost" onclick={createRecipe}>+ New recipe</button>
+			</div>
+		</div>
+		{/if}
 
 		<div class="gb-setup-row">
 			<span class="gb-scale-chip">
@@ -327,7 +398,7 @@
 		</div>
 
 		<div class="gb-start-row">
-			<button class="gb-start" onclick={() => void start()}>Start brew</button>
+			<button class="gb-start" onclick={() => void start()} disabled={!recipe}>Start brew</button>
 			<button
 				type="button"
 				class="gb-bell"
@@ -350,9 +421,9 @@
 		<div class="gb-live">
 			<div class="gb-live-head">
 				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">
-					Guided brew · {methodLabel(liveRecipe.method)}
+					Guided brew · {methodLabel(liveRecipe?.method)}
 				</div>
-				<div class="gb-live-name">{liveRecipe.name}</div>
+				<div class="gb-live-name">{liveRecipe?.name}</div>
 			</div>
 			<div class="gb-clock">0:00</div>
 			<div class="gb-armed-hint">Pour to start — the clock begins at the first water.</div>
@@ -372,9 +443,9 @@
 		<div class="gb-live">
 			<div class="gb-live-head">
 				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">
-					Guided brew · {methodLabel(liveRecipe.method)}
+					Guided brew · {methodLabel(liveRecipe?.method)}
 				</div>
-				<div class="gb-live-name">{liveRecipe.name}</div>
+				<div class="gb-live-name">{liveRecipe?.name}</div>
 				{#if connected && weightG != null}
 					<span class="gb-scale-chip gb-scale-chip-live">
 						<span class="gb-dot" style="background:var(--success)"></span>
@@ -398,10 +469,13 @@
 			>
 				<div class="gb-step-card-head">
 					<span class="gb-step-eyebrow">
-						Step {session.stepIndex + 1} of {steps.length} · {stepLabel(currentStep)}
+						Step {session.stepIndex + 1} of {steps.length} · {kindLabel(currentStep)}
 					</span>
 					<span class="gb-step-target">{stepSpec(currentStep)}</span>
 				</div>
+				{#if stepNote(currentStep)}
+					<div class="gb-step-label" title={stepNote(currentStep)}>{stepNote(currentStep)}</div>
+				{/if}
 				{#if currentStep?.targetWaterG != null && connected && weightG != null}
 					<div class="gb-step-big">
 						{Math.max(0, weightG).toFixed(0)}<span class="gb-step-of">
@@ -427,7 +501,9 @@
 			</div>
 
 			<div class="gb-under-row">
-				<span>{nextStep ? `Next · ${stepLabel(nextStep)} ${stepSpec(nextStep)}` : 'Last step'}</span>
+				<span class="gb-next"
+					>{nextStep ? `Next · ${stepLabel(nextStep)} · ${stepSpec(nextStep)}` : 'Last step'}</span
+				>
 				{#if connected && flowGs != null && flowGs > 0.05}
 					<span class="gb-flow">pour rate {flowGs.toFixed(1)} g/s</span>
 				{/if}
@@ -488,7 +564,16 @@
 </div>
 
 {#if editing}
-	<RecipeEditor recipe={editing} onSave={saveEdited} onClose={() => (editing = null)} />
+	<RecipeEditor
+		recipe={editing}
+		heading={editingNew ? 'New recipe' : 'Edit recipe'}
+		reseedOnMethodChange={editingNew}
+		onSave={saveEdited}
+		onClose={() => {
+			editing = null;
+			editingNew = false;
+		}}
+	/>
 {/if}
 
 {#if logOpen && logPrefill}
@@ -593,6 +678,35 @@
 		font-family: var(--font-serif);
 		font-size: 19px;
 		margin-top: 4px;
+		margin-bottom: 2px;
+	}
+	.gb-recipe-id {
+		min-width: 0;
+	}
+	.gb-badge {
+		display: inline-block;
+		vertical-align: 3px;
+		margin-left: 6px;
+		font-family: var(--font-sans);
+		font-size: 9.5px;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: rgba(var(--tint-rgb), 0.6);
+		border: 1px solid rgba(var(--tint-rgb), 0.18);
+		border-radius: var(--radius-pill);
+		padding: 1px 7px;
+	}
+	.gb-recipe-empty {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.gb-empty-copy {
+		margin: 0;
+		font-family: var(--font-sans);
+		font-size: 13px;
+		color: rgba(var(--tint-rgb), 0.6);
 	}
 	.gb-recipe-meta {
 		font-family: var(--font-mono);
@@ -644,6 +758,12 @@
 	}
 	.gb-step-spec {
 		color: rgba(var(--tint-rgb), 0.55);
+	}
+	.gb-step-note {
+		display: block;
+		font-size: 12px;
+		color: rgba(var(--tint-rgb), 0.62);
+		margin-top: 1px;
 	}
 	.gb-step-adv {
 		font-size: 9.5px;
@@ -731,6 +851,10 @@
 	}
 	.gb-start:hover {
 		background: var(--copper-600);
+	}
+	.gb-start:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
 	}
 
 	/* ── Live session ─────────────────────────────────────── */
@@ -885,6 +1009,29 @@
 		font-variant-numeric: tabular-nums;
 		font-size: 11.5px;
 		color: rgba(var(--tint-rgb), 0.55);
+	}
+	/* The step's instruction — wraps, capped at two lines so a long label
+	   ("Lower the plunger to the surface only, then pour gently") never
+	   pushes the controls off the no-scroll live screen. */
+	.gb-step-label {
+		font-family: var(--font-sans);
+		font-size: 14px;
+		line-height: 1.3;
+		margin-top: 8px;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+		overflow-wrap: anywhere;
+	}
+	.gb-next {
+		min-width: 0;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
 	}
 	.gb-step-big {
 		font-family: var(--font-mono);

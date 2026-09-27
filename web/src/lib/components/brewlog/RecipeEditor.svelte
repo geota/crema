@@ -11,8 +11,9 @@
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	import type { BrewRecipe, BrewStep } from '$lib/core/crema-core';
 	import { BrewStepKind, StepAdvance } from '$lib/core/crema-core';
-	import { defaultRecipeFor, plannedPourTotalG, recipeId } from '$lib/brew/recipes.svelte';
+	import { newRecipeFor, plannedPourTotalG, recipeId } from '$lib/brew/recipes.svelte';
 	import { brewMethodPresets, methodLabel } from '$lib/brew/methods';
+	import RecipeCredit from './RecipeCredit.svelte';
 
 	let {
 		recipe,
@@ -29,8 +30,8 @@
 		/** Dialog title — "Edit recipe" / "New recipe". */
 		heading?: string;
 		/** New-recipe mode: switching the method swaps in that method's
-		 *  classic template (name, numbers, steps) so "New recipe →
-		 *  AeroPress" starts from the AeroPress plan, not V60 steps. */
+		 *  blank template (name, preset numbers, one pour) so "New recipe →
+		 *  AeroPress" starts from AeroPress numbers, not V60 ones. */
 		reseedOnMethodChange?: boolean;
 		onSave: (recipe: BrewRecipe) => void;
 		onClose: () => void;
@@ -58,7 +59,7 @@
 	function pickMethod(next: string): void {
 		method = next;
 		if (!reseedOnMethodChange) return;
-		const seed = defaultRecipeFor(next);
+		const seed = newRecipeFor(next);
 		name = seed.name;
 		doseG = seed.doseG;
 		waterG = seed.waterG;
@@ -110,6 +111,7 @@
 			tempC: tempC ?? undefined,
 			steps: steps.map((s) => ({
 				...s,
+				label: s.label?.trim() ? s.label.trim() : undefined,
 				targetWaterG: s.targetWaterG != null && s.targetWaterG > 0 ? s.targetWaterG : undefined,
 				durationS: s.durationS != null && s.durationS > 0 ? s.durationS : undefined
 			}))
@@ -138,6 +140,11 @@
 		<div>
 			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Recipe</div>
 			<h2 class="re-title" id="re-title">{heading}</h2>
+			{#if base.credit || base.sourceUrl}
+				<div class="re-credit">
+					<RecipeCredit credit={base.credit} sourceUrl={base.sourceUrl} />
+				</div>
+			{/if}
 		</div>
 		<button class="re-x" onclick={onClose} aria-label="Close">
 			<XIcon aria-hidden="true" />
@@ -228,6 +235,13 @@
 					>
 						<TrashIcon aria-hidden="true" />
 					</button>
+					<input
+						class="re-input re-step-label"
+						bind:value={step.label}
+						placeholder="Label — what to do (optional)"
+						aria-label="Step {i + 1} label"
+						maxlength="120"
+					/>
 				</div>
 			{/each}
 		</div>
@@ -390,10 +404,21 @@
 	}
 	.re-step {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: 8px;
 		padding: 8px 10px;
 		border-top: 1px solid rgba(var(--tint-rgb), 0.06);
+	}
+	/* The step's instruction, on its own line under the numbers. */
+	.re-step-label {
+		flex: 1 0 100%;
+		margin-left: 22px;
+		max-width: calc(100% - 22px);
+		font-size: 12.5px;
+	}
+	.re-credit {
+		margin-top: 6px;
 	}
 	.re-step:first-child {
 		border-top: 0;

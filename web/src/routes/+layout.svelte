@@ -120,16 +120,14 @@
 	$effect(() => {
 		const a = app;
 		// A live guided-brew session (issue #10) holds the screen
-		// unconditionally — a step timer behind a dark screen is a missed
-		// pour. Shots keep honoring the Display setting.
-		const brewSession = getGuidedBrewStore().phase;
+		// regardless of the setting — a step timer behind a dark screen is
+		// a missed pour — except during a long step (the cold brew's 12 h
+		// steep), see `wantsWakeLock`. Shots keep honoring the setting.
 		const on =
 			(a !== null &&
 				getSettingsStore().current.keepScreenOnBrew &&
 				a.state.current.shotInProgress) ||
-			brewSession === 'running' ||
-			brewSession === 'paused' ||
-			brewSession === 'armed';
+			getGuidedBrewStore().wantsWakeLock;
 		setBrewWakeLock(on);
 	});
 
