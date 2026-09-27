@@ -261,6 +261,116 @@ export interface BrewHistoryStats {
 }
 
 /**
+ * Explicit seed values a caller opens the form with — "Log again" (a
+ * whole prior brew) or a finished guided session's measured summary.
+ * Every field optional.
+ */
+export interface BrewLogPrefill {
+	/**
+	 * The method the prefill belongs to. The prefill's numbers only seed
+	 * that method — switching the form to another method ignores them.
+	 * `None` = applies to whatever method the form is on.
+	 */
+	method?: string;
+	doseG?: number;
+	waterG?: number;
+	yieldG?: number;
+	grinderSetting?: string;
+	tempC?: number;
+	durationMs?: number;
+}
+
+/**
+ * One prior brew's inputs to [`brew_log_seeds`] — the
+ * [`BrewStatInput`]-style light projection of a stored row. Shells pass
+ * their history **newest first**.
+ */
+export interface BrewSeedInput {
+	/** The row's method; `None` / empty = machine espresso. */
+	brewMethod?: string;
+	/** The library bag the row debited, when attributed. */
+	beanId?: string;
+	/** Dry dose, grams. */
+	doseG?: number;
+	/** Water in, grams (filter / immersion rows). */
+	waterG?: number;
+	/** Beverage out, grams. */
+	yieldG?: number;
+	/** The grind the row recorded, as the raw setting string. */
+	grinderSetting?: string;
+	/** Brew water temperature, °C. */
+	tempC?: number;
+	/** Total brew time, milliseconds; `0` = not recorded. */
+	durationMs: number;
+}
+
+/** Everything [`brew_log_seeds`] needs to seed the Log-brew form. */
+export interface BrewLogSeedInput {
+	/**
+	 * The method to seed for. `None` = open the form: the prefill's
+	 * method, else [`last_used_method`](Self::last_used_method), else
+	 * [`DEFAULT_LOG_METHOD`].
+	 */
+	method?: string;
+	/** The shell-remembered method of the last saved log. */
+	lastUsedMethod?: string;
+	/** The bag the form is logging against. */
+	beanId?: string;
+	/** That bag's own grinder setting — the grind fallback. */
+	beanGrinderSetting?: string;
+	prefill?: BrewLogPrefill;
+	/** Prior brews, newest first. */
+	rows: BrewSeedInput[];
+}
+
+/**
+ * The seeded numeric fields of the Log-brew form. Shells apply each value
+ * only to fields the user has not edited.
+ */
+export interface BrewLogSeeds {
+	/** The resolved method id the seeds belong to. */
+	method: string;
+	/** Dry dose, grams. */
+	dose: number;
+	/**
+	 * Water-in, grams, for filter methods — **beverage-out** for the
+	 * espresso family (the form's single "water / yield" field).
+	 */
+	water: number;
+	/** Grind setting, or `None` when nothing numeric is known. */
+	grind?: number;
+	/** Water temperature, °C, or `None`. */
+	tempC?: number;
+	/** Brew time, milliseconds, or `None` (the time field stays blank). */
+	durationMs?: number;
+}
+
+/**
+ * One curated method preset — a chip in the log form plus the numeric
+ * seeds a first-ever log of that method opens with.
+ * 
+ * The core owns the ids and the seed numbers; the shells own the display
+ * label and icon, keyed by [`id`](Self::id). "Other" is deliberately *not*
+ * a preset: it is the shells' free-text escape hatch (the typed name is
+ * normalized and stored as-is), so it has no seeds.
+ */
+export interface BrewMethodPreset {
+	/** The stored method string (`"french_press"`). */
+	id: string;
+	/** Seed dry dose, grams. */
+	seedDoseG: number;
+	/** Seed water-in, grams — `None` for espresso, which speaks yield. */
+	seedWaterG?: number;
+	/** Seed beverage-out, grams — espresso only. */
+	seedYieldG?: number;
+	/**
+	 * Seed water temperature, °C — `None` where it isn't meaningful
+	 * (moka on the stove, cold brew).
+	 */
+	seedTempC?: number;
+}
+
+/**
  * What a [`BrewStep`] is, for its icon / default label. Lowercase wire
  * spelling, like [`BeverageType`](crate::BeverageType).
  */

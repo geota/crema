@@ -342,6 +342,22 @@ pub fn normalize_brew_method(raw: &str) -> Option<String> {
     de1_domain::normalize_brew_method(raw)
 }
 
+/// The curated brew-method presets (`BrewMethodPreset[]` JSON — id + seed
+/// dose / water / yield / temp), in display order. The shells key their
+/// labels and icons by id. See `de1_domain::brew_method_presets_json`.
+#[wasm_bindgen(js_name = brewMethodPresets)]
+pub fn brew_method_presets() -> String {
+    de1_domain::brew_method_presets_json()
+}
+
+/// Seed the Log-brew form: takes `BrewLogSeedInput` JSON, returns
+/// `BrewLogSeeds` JSON (prefill → last brew of the method → bag grind →
+/// preset, per field). See `de1_domain::brew_log_seeds`.
+#[wasm_bindgen(js_name = brewLogSeedsJson)]
+pub fn brew_log_seeds_json(input_json: &str) -> Result<String, String> {
+    de1_domain::brew_log_seeds_json(input_json)
+}
+
 /// Resolve the Brew screen's service-mode display targets (steam /
 /// hot-water / flush) — machine value → Quick-Controls dial → legacy
 /// default, per field. Takes `ModeTargetInputs` JSON, returns
@@ -400,6 +416,27 @@ pub fn debit_remaining(remaining: f32, dose_g: f32) -> Option<f32> {
 #[wasm_bindgen]
 pub fn credit_remaining(remaining: f32, dose_g: f32, bag_size: f32) -> Option<f32> {
     de1_domain::credit_remaining(remaining, dose_g, bag_size)
+}
+
+/// Re-settle a bag after a logged brew's dose edit — shared
+/// `de1_domain::resettle_remaining` (credit the old dose, debit the new;
+/// `undefined` = nothing to persist, including an unchanged dose).
+#[wasm_bindgen]
+pub fn resettle_remaining(
+    remaining: f32,
+    bag_size: f32,
+    old_dose: f32,
+    new_dose: f32,
+) -> Option<f32> {
+    de1_domain::resettle_remaining(remaining, bag_size, old_dose, new_dose)
+}
+
+/// The "≈N brews left" estimate — shared
+/// `de1_domain::brews_remaining_estimate` (the bag's newest ≤10 doses,
+/// newest first; 18 g fallback).
+#[wasm_bindgen]
+pub fn brews_remaining_estimate(remaining_g: f32, recent_doses: &[f32]) -> u32 {
+    de1_domain::brews_remaining_estimate(remaining_g, recent_doses)
 }
 
 // ─── Unit conversions (audit #1) ────────────────────────────────────────

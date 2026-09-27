@@ -90,8 +90,9 @@ pub mod water;
 pub mod weight_gate;
 
 pub use bean::{
-    Bean, BeanMix, BeanOrigin, BeanRoastType, RoastBand, RoastFreshness, Roaster, ShotBean,
-    credit_remaining, days_off_roast, debit_remaining, roast_band, roast_band5, roast_freshness,
+    BREWS_REMAINING_WINDOW, Bean, BeanMix, BeanOrigin, BeanRoastType, DEFAULT_DOSE_PER_BREW_G,
+    RoastBand, RoastFreshness, Roaster, ShotBean, brews_remaining_estimate, credit_remaining,
+    days_off_roast, debit_remaining, resettle_remaining, roast_band, roast_band5, roast_freshness,
 };
 pub use bean_coerce::{coerce_bean, coerce_bean_json, coerce_roaster, coerce_roaster_json};
 pub use bean_search::{
@@ -103,9 +104,11 @@ pub use beanconqueror::{
     crema_to_bc_main_json_from_envelope, import_beanconqueror_json,
 };
 pub use brew::{
-    BREW_METHOD_PRESETS, BrewHistoryStats, BrewRecipe, BrewSample, BrewSeries, BrewStatInput,
-    BrewStep, BrewStepKind, StageMark, StepAdvance, brew_history_stats, is_espresso_method,
-    normalize_brew_method, ratio_for_method,
+    BREW_METHOD_OTHER, BrewHistoryStats, BrewLogPrefill, BrewLogSeedInput, BrewLogSeeds,
+    BrewMethodPreset, BrewRecipe, BrewSample, BrewSeedInput, BrewSeries, BrewStatInput, BrewStep,
+    BrewStepKind, DEFAULT_LOG_METHOD, StageMark, StepAdvance, brew_history_stats, brew_log_seeds,
+    brew_log_seeds_json, brew_method_preset, brew_method_presets, brew_method_presets_json,
+    is_espresso_method, normalize_brew_method, ratio_for_method,
 };
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use crema_jsonl::{

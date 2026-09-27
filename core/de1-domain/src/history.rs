@@ -472,6 +472,12 @@ impl StoredShot {
     /// local-only: they never reach an upload path (Visualizer or the
     /// Decent account), carry no DE1 machine stamp, and never feed a
     /// machine converter. Each shell mirrors this as `isBrewLog`.
+    ///
+    /// **The rule is presence**: any `Some(_)` is a brew log — including
+    /// `Some("")`, which no shell writes (both normalize an empty method to
+    /// `None` on save) but which an old or foreign record may carry. Such a
+    /// row stays a local-only brew log (never uploaded), classified as
+    /// espresso-family by [`is_espresso_method`](crate::is_espresso_method).
     #[must_use]
     pub fn is_brew_log(&self) -> bool {
         self.brew_method.is_some()
@@ -686,6 +692,20 @@ mod tests {
         let parsed = StoredShot::from_json(&json).unwrap();
         assert_eq!(parsed.brew_method, None);
         assert_eq!(parsed.brew_series, None);
+    }
+
+    #[test]
+    fn an_empty_brew_method_is_still_a_brew_log() {
+        // Drift bug 8 (#99): presence decides, not content — the web used to
+        // treat `brewMethod: ""` as a machine shot.
+        let mut shot = StoredShot::new(1_700_000_000_000, sample_record());
+        assert!(!shot.is_brew_log());
+        shot.brew_method = Some(String::new());
+        assert!(shot.is_brew_log());
+        shot.brew_method = Some("  ".to_owned());
+        assert!(shot.is_brew_log());
+        // …and it reads as espresso-family for ratio / stat scoping.
+        assert!(crate::is_espresso_method(shot.brew_method.as_deref()));
     }
 
     #[test]

@@ -595,6 +595,87 @@ pub fn credit_remaining(remaining: f32, dose_g: f32, bag_size: f32) -> Option<f3
     if next == remaining { None } else { Some(next) }
 }
 
+/// Re-settle a bag when a logged brew's dose is edited after the fact: the
+/// OLD dose goes back on the bag ([`credit_remaining`], capped at
+/// `bag_size`), then the NEW dose comes off ([`debit_remaining`], floored at
+/// 0). A non-positive / non-finite dose means "no dose" (nothing to credit or
+/// debit on that side).
+///
+/// Returns `None` when there is nothing to persist: the dose did not change
+/// (so a full bag never loses grams to a capped credit followed by a real
+/// debit), `remaining` is non-finite / negative, or the credit + debit nets
+/// out to the current value. Callers persist (and touch `updated_at`) only on
+/// `Some`.
+#[must_use]
+pub fn resettle_remaining(
+    remaining: f32,
+    bag_size: f32,
+    old_dose: f32,
+    new_dose: f32,
+) -> Option<f32> {
+    let dose = |d: f32| if d.is_finite() && d > 0.0 { d } else { 0.0 };
+    let (old, new) = (dose(old_dose), dose(new_dose));
+    if (old - new).abs() < f32::EPSILON || !remaining.is_finite() || remaining < 0.0 {
+        return None;
+    }
+    let mut rem = remaining;
+    if let Some(credited) = credit_remaining(rem, old, bag_size) {
+        rem = credited;
+    }
+    if let Some(debited) = debit_remaining(rem, new) {
+        rem = debited;
+    }
+    if (rem - remaining).abs() < f32::EPSILON {
+        None
+    } else {
+        Some(rem)
+    }
+}
+
+/// The per-brew dose assumed for a bag with no brew history yet — the
+/// espresso default.
+pub const DEFAULT_DOSE_PER_BREW_G: f32 = 18.0;
+
+/// How many brews recent entries are averaged over for
+/// [`brews_remaining_estimate`].
+pub const BREWS_REMAINING_WINDOW: usize = 10;
+
+/// The "≈N brews left" estimate for a bag: `remaining_g` divided by the
+/// bag's own recent mean dose, floored. `recent_doses` is the bag's brews'
+/// doses **newest first** (one entry per brew; a non-positive / non-finite
+/// entry = dose not recorded). Only the newest
+/// [`BREWS_REMAINING_WINDOW`] entries count, and the mean covers the
+/// recorded doses among them — so a 30 g French-press habit stops reading as
+/// phantom 18 g shots. With no recorded dose, [`DEFAULT_DOSE_PER_BREW_G`].
+///
+/// A non-positive / non-finite `remaining_g` → 0. Whether the bag is tracked
+/// at all (a declared bag size) stays the shell's display gate.
+#[must_use]
+// ≤10 doses: f32 precision is plenty; the floored quotient of a finite
+// positive remaining by a positive mean is a small non-negative count.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+pub fn brews_remaining_estimate(remaining_g: f32, recent_doses: &[f32]) -> u32 {
+    if !remaining_g.is_finite() || remaining_g <= 0.0 {
+        return 0;
+    }
+    let doses: Vec<f32> = recent_doses
+        .iter()
+        .take(BREWS_REMAINING_WINDOW)
+        .copied()
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .collect();
+    let per_brew = if doses.is_empty() {
+        DEFAULT_DOSE_PER_BREW_G
+    } else {
+        doses.iter().sum::<f32>() / doses.len() as f32
+    };
+    (remaining_g / per_brew).floor() as u32
+}
+
 impl Bean {
     /// Build a brand-new bag with a freshly minted id and `name`. Every
     /// other field starts at its default (empty / `None` / `false` / `0`).
@@ -1373,5 +1454,80 @@ mod tests {
         assert_eq!(credit_remaining(182.0, 0.0, 250.0), None);
         assert_eq!(credit_remaining(182.0, f32::NAN, 250.0), None);
         assert_eq!(credit_remaining(f32::NAN, 18.0, 250.0), None);
+    }
+
+    // ── resettle_remaining (dose edit, drift bug 7) ───────────────────
+
+    #[test]
+    fn resettle_is_a_no_op_when_the_dose_is_unchanged() {
+        // The drift case: a full bag used to credit (capped → no change)
+        // then debit, losing the dose.
+        assert_eq!(resettle_remaining(250.0, 250.0, 18.0, 18.0), None);
+        assert_eq!(resettle_remaining(182.0, 250.0, 18.0, 18.0), None);
+        // "No dose" on both sides is also unchanged.
+        assert_eq!(resettle_remaining(182.0, 250.0, 0.0, f32::NAN), None);
+    }
+
+    #[test]
+    fn resettle_credits_the_old_dose_then_debits_the_new() {
+        assert_eq!(resettle_remaining(182.0, 250.0, 18.0, 20.0), Some(180.0));
+        assert_eq!(resettle_remaining(182.0, 250.0, 18.0, 15.0), Some(185.0));
+        // Dose added to a row that had none: a plain debit.
+        assert_eq!(resettle_remaining(182.0, 250.0, 0.0, 18.0), Some(164.0));
+        // Dose cleared: a plain credit.
+        assert_eq!(resettle_remaining(182.0, 250.0, 18.0, 0.0), Some(200.0));
+    }
+
+    #[test]
+    fn resettle_keeps_the_floor_and_the_bag_size_cap() {
+        // Credit capped at the bag size (refilled since), then the debit.
+        assert_eq!(resettle_remaining(245.0, 250.0, 18.0, 20.0), Some(230.0));
+        // Debit floors at 0.
+        assert_eq!(resettle_remaining(5.0, 250.0, 10.0, 40.0), Some(0.0));
+        // Untracked size: no cap.
+        assert_eq!(resettle_remaining(245.0, 0.0, 18.0, 10.0), Some(253.0));
+        // A full bag whose dose drops: the capped credit changes nothing,
+        // so the edit nets out — nothing to persist.
+        assert_eq!(resettle_remaining(250.0, 250.0, 20.0, 0.0), None);
+        // Bad remaining.
+        assert_eq!(resettle_remaining(f32::NAN, 250.0, 18.0, 20.0), None);
+        assert_eq!(resettle_remaining(-1.0, 250.0, 18.0, 20.0), None);
+    }
+
+    // ── brews_remaining_estimate ("≈N brews left") ────────────────────
+
+    #[test]
+    fn brews_left_uses_the_bags_own_recent_mean_dose() {
+        // A French-press habit: 30 g brews.
+        assert_eq!(brews_remaining_estimate(200.0, &[30.0, 30.0, 30.0]), 6);
+        // Mixed doses: mean 20 g.
+        assert_eq!(brews_remaining_estimate(100.0, &[18.0, 22.0]), 5);
+    }
+
+    #[test]
+    fn brews_left_falls_back_to_18g_and_skips_unrecorded_doses() {
+        assert_eq!(brews_remaining_estimate(180.0, &[]), 10);
+        assert_eq!(brews_remaining_estimate(180.0, &[0.0, f32::NAN, -3.0]), 10);
+        // Unrecorded entries don't drag the mean.
+        assert_eq!(brews_remaining_estimate(150.0, &[0.0, 15.0, 15.0]), 10);
+    }
+
+    #[test]
+    fn brews_left_only_counts_the_newest_ten_entries() {
+        let mut doses = vec![20.0; 10];
+        doses.extend([60.0; 5]); // older, ignored
+        assert_eq!(brews_remaining_estimate(200.0, &doses), 10);
+        // An unrecorded entry inside the window still uses up a slot.
+        let mut doses = vec![0.0; 10];
+        doses.push(50.0);
+        assert_eq!(brews_remaining_estimate(180.0, &doses), 10);
+    }
+
+    #[test]
+    fn brews_left_is_zero_for_an_empty_or_bad_bag() {
+        assert_eq!(brews_remaining_estimate(0.0, &[18.0]), 0);
+        assert_eq!(brews_remaining_estimate(-5.0, &[18.0]), 0);
+        assert_eq!(brews_remaining_estimate(f32::NAN, &[18.0]), 0);
+        assert_eq!(brews_remaining_estimate(17.9, &[18.0]), 0);
     }
 }

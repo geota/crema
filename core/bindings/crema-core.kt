@@ -223,6 +223,105 @@ data class BrewHistoryStats (
 	val scopeMethod: String? = null
 )
 
+/// Explicit seed values a caller opens the form with — "Log again" (a
+/// whole prior brew) or a finished guided session's measured summary.
+/// Every field optional.
+@Serializable
+data class BrewLogPrefill (
+	/// The method the prefill belongs to. The prefill's numbers only seed
+	/// that method — switching the form to another method ignores them.
+	/// `None` = applies to whatever method the form is on.
+	val method: String? = null,
+	val doseG: Float? = null,
+	val waterG: Float? = null,
+	val yieldG: Float? = null,
+	val grinderSetting: String? = null,
+	val tempC: Float? = null,
+	val durationMs: Long? = null
+)
+
+/// One prior brew's inputs to [`brew_log_seeds`] — the
+/// [`BrewStatInput`]-style light projection of a stored row. Shells pass
+/// their history **newest first**.
+@Serializable
+data class BrewSeedInput (
+	/// The row's method; `None` / empty = machine espresso.
+	val brewMethod: String? = null,
+	/// The library bag the row debited, when attributed.
+	val beanId: String? = null,
+	/// Dry dose, grams.
+	val doseG: Float? = null,
+	/// Water in, grams (filter / immersion rows).
+	val waterG: Float? = null,
+	/// Beverage out, grams.
+	val yieldG: Float? = null,
+	/// The grind the row recorded, as the raw setting string.
+	val grinderSetting: String? = null,
+	/// Brew water temperature, °C.
+	val tempC: Float? = null,
+	/// Total brew time, milliseconds; `0` = not recorded.
+	val durationMs: Long
+)
+
+/// Everything [`brew_log_seeds`] needs to seed the Log-brew form.
+@Serializable
+data class BrewLogSeedInput (
+	/// The method to seed for. `None` = open the form: the prefill's
+	/// method, else [`last_used_method`](Self::last_used_method), else
+	/// [`DEFAULT_LOG_METHOD`].
+	val method: String? = null,
+	/// The shell-remembered method of the last saved log.
+	val lastUsedMethod: String? = null,
+	/// The bag the form is logging against.
+	val beanId: String? = null,
+	/// That bag's own grinder setting — the grind fallback.
+	val beanGrinderSetting: String? = null,
+	val prefill: BrewLogPrefill? = null,
+	/// Prior brews, newest first.
+	val rows: List<BrewSeedInput>
+)
+
+/// The seeded numeric fields of the Log-brew form. Shells apply each value
+/// only to fields the user has not edited.
+@Serializable
+data class BrewLogSeeds (
+	/// The resolved method id the seeds belong to.
+	val method: String,
+	/// Dry dose, grams.
+	val dose: Float,
+	/// Water-in, grams, for filter methods — **beverage-out** for the
+	/// espresso family (the form's single "water / yield" field).
+	val water: Float,
+	/// Grind setting, or `None` when nothing numeric is known.
+	val grind: Float? = null,
+	/// Water temperature, °C, or `None`.
+	val tempC: Float? = null,
+	/// Brew time, milliseconds, or `None` (the time field stays blank).
+	val durationMs: Long? = null
+)
+
+/// One curated method preset — a chip in the log form plus the numeric
+/// seeds a first-ever log of that method opens with.
+/// 
+/// The core owns the ids and the seed numbers; the shells own the display
+/// label and icon, keyed by [`id`](Self::id). "Other" is deliberately *not*
+/// a preset: it is the shells' free-text escape hatch (the typed name is
+/// normalized and stored as-is), so it has no seeds.
+@Serializable
+data class BrewMethodPreset (
+	/// The stored method string (`"french_press"`).
+	val id: String,
+	/// Seed dry dose, grams.
+	val seedDoseG: Float,
+	/// Seed water-in, grams — `None` for espresso, which speaks yield.
+	val seedWaterG: Float? = null,
+	/// Seed beverage-out, grams — espresso only.
+	val seedYieldG: Float? = null,
+	/// Seed water temperature, °C — `None` where it isn't meaningful
+	/// (moka on the stove, cold brew).
+	val seedTempC: Float? = null
+)
+
 /// What a [`BrewStep`] is, for its icon / default label. Lowercase wire
 /// spelling, like [`BeverageType`](crate::BeverageType).
 @Serializable
