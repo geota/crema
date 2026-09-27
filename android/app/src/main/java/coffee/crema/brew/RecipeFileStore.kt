@@ -12,7 +12,8 @@ import java.io.File
  * File-backed JSON persistence for the guided-brew recipe library
  * (issue #10) — `filesDir/brew-recipes.json`, the same pattern as the
  * bean library and shot log. Carries the user's recipes, the per-method
- * default pointer and the hidden built-in ids in one envelope. Built-in
+ * default pointer, the hidden built-in ids and the user's own brewing
+ * methods in one envelope. Built-in
  * recipes are bundled with the app and never written here.
  */
 class RecipeFileStore(private val context: Context, private val json: Json) {
@@ -22,6 +23,12 @@ class RecipeFileStore(private val context: Context, private val json: Json) {
         val lastUsedByMethod: Map<String, String> = emptyMap(),
         /** Built-in recipe ids the user hid from the library + picker. */
         val hiddenBuiltins: Set<String> = emptySet(),
+        /**
+         * The user's own brewing methods (`custom:<uuid>`), tombstones kept so
+         * old brews still resolve. Rides here, beside the recipes that use
+         * them — one file, one atomic write.
+         */
+        val customMethods: List<coffee.crema.core.CustomBrewMethod> = emptyList(),
     )
 
     private val file get() = File(context.filesDir, FILE_NAME)

@@ -121,6 +121,7 @@ object BrewLogSeeds {
         beanGrinderSetting: String?,
         prefill: BrewLogPrefill?,
         seedsJson: (String) -> String = ::brewLogSeedsJson,
+        customMethods: List<coffee.crema.core.CustomBrewMethod> = coffee.crema.brew.CustomMethods.all,
     ): CoreBrewLogSeeds {
         val input = BrewLogSeedInput(
             method = method,
@@ -129,6 +130,9 @@ object BrewLogSeeds {
             beanGrinderSetting = beanGrinderSetting,
             prefill = prefill,
             rows = history.map(::seedRow),
+            // Every custom method, tombstones included — a "Log again" of an
+            // old row seeds from its (deleted) method's numbers.
+            customMethods = customMethods,
         )
         return json.decodeFromString(CoreBrewLogSeeds.serializer(), seedsJson(json.encodeToString(BrewLogSeedInput.serializer(), input)))
     }

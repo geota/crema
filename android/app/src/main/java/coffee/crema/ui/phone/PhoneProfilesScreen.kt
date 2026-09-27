@@ -198,6 +198,10 @@ fun PhoneProfilesScreen(
                             )
                         }
                     }
+                    // Your own brewing methods — at the top of the section.
+                    item(key = "your-methods") {
+                        coffee.crema.ui.brewlog.YourMethodsSection(vm, ui.customMethods, Modifier.padding(top = 4.dp, bottom = 4.dp))
+                    }
                     items(recipes, key = { it.id }) { r ->
                         BrewRecipeCard(
                             recipe = r,

@@ -388,13 +388,18 @@ class MainActivity : ComponentActivity() {
                 // hand-off — a pushed `recipe-edit` route on the phone, a side
                 // sheet on the owning tab (Scale or Profiles) on the tablet.
                 val recipeEditOwner = viewModel.recipeEdit.collectAsStateWithLifecycle().value?.owner
+                // The brewing-method dialog (issue #10 feedback) rides on top of
+                // either: a pushed `method-edit` route on the phone (over the
+                // form that opened it), a side sheet on the tablet.
+                val methodEdit = viewModel.methodEdit.collectAsStateWithLifecycle().value
                 val restoreRoute = NavRestore.restoreRoute(
                     currentRoute,
                     logBrewOwner,
                     phone = isCompact,
                     recipeEditOwner = recipeEditOwner,
+                    methodEditOwner = methodEdit?.ownerTab,
                 ) ?: "brew"
-                val routeOwners = NavRestore.owners(logBrewOwner, recipeEditOwner)
+                val routeOwners = NavRestore.owners(logBrewOwner, recipeEditOwner, methodEdit?.ownerTab, methodEdit?.parentRoute)
                 if (isCompact) {
                     PhoneNavHost(
                         vm = viewModel,
@@ -432,6 +437,10 @@ class MainActivity : ComponentActivity() {
                         recipeEditContent = { back ->
                             coffee.crema.ui.brewlog.RecipeEditorScreen(viewModel, onBack = back)
                         },
+                        methodEditContent = { back ->
+                            coffee.crema.ui.brewlog.MethodEditScreen(viewModel, onBack = back)
+                        },
+                        methodEditSession = methodEdit?.session,
                         debugContent = debugSlot,
                         initialRoute = restoreRoute,
                         onRouteChange = onRouteChange,
@@ -476,6 +485,9 @@ class MainActivity : ComponentActivity() {
                     onRouteChange = onRouteChange,
                     routeOwners = routeOwners,
                 )
+                // The brewing-method sheet — composed after the host so it
+                // stacks over the Log-brew / recipe sheet that opened it.
+                coffee.crema.ui.brewlog.MethodEditSheet(viewModel)
                 if (showDevices) {
                     TabletDevicesSheet(
                         ui = ui,

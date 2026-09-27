@@ -107,6 +107,7 @@ import com.adamglin.phosphoricons.regular.CloudCheck
 import com.adamglin.phosphoricons.regular.Check
 import com.adamglin.phosphoricons.regular.Clock
 import com.adamglin.phosphoricons.regular.Fire
+import com.adamglin.phosphoricons.regular.Leaf
 import com.adamglin.phosphoricons.regular.Package
 import com.adamglin.phosphoricons.regular.SortAscending
 import com.adamglin.phosphoricons.regular.Coffee
@@ -250,6 +251,7 @@ fun PhIcon(
         "sign-out" -> PhosphorIcons.Regular.SignOut
         "clock" -> PhosphorIcons.Regular.Clock
         "fire" -> PhosphorIcons.Regular.Fire
+        "leaf" -> PhosphorIcons.Regular.Leaf
         "package" -> PhosphorIcons.Regular.Package
         "sort-ascending" -> PhosphorIcons.Regular.SortAscending
         "coffee" -> PhosphorIcons.Regular.Coffee

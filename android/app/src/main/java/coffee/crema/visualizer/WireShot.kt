@@ -69,6 +69,9 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
                 }
                 put("notes", shot.notes)
                 put("rating", shot.rating ?: 0)
+                // Brew Log water-in (issue #10) — a backup must keep it.
+                if (forBackup) shot.waterG?.let { put("waterG", it) }
+                if (forBackup) shot.nextPlan?.let { put("nextPlan", it) }
                 put("tds", JsonNull)
                 put("extractionYield", JsonNull)
             },
@@ -139,7 +142,7 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
         put("tags", buildJsonArray {})
         // The stop-at-weight target dialled for this shot (Decent's `targetYield`).
         put("yieldTarget", shot.yieldTargetG)
-        put("brewTempTarget", JsonNull)
+        if (forBackup && shot.brewTempC != null) put("brewTempTarget", shot.brewTempC) else put("brewTempTarget", JsonNull)
         put("preinfuseTarget", JsonNull)
         put("stopOnWeight", false)
         put("autoTare", false)
@@ -151,6 +154,16 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
         // kept for a backup, omitted from the upload. The machine is the
         // nested core `ShotMachine` built from the flat stamped fields.
         if (forBackup) shot.decentId?.let { put("decentId", it) }
+        // Brew Log fields (issue #10) — local-only rows, so backup only; the
+        // core StoredShot carries them, and the restore inverts them below.
+        if (forBackup) {
+            shot.brewMethod?.let { put("brewMethod", it) }
+            shot.brewMethodLabel?.let { put("brewMethodLabel", it) }
+            shot.recipeName?.let { put("recipeName", it) }
+            shot.brewSeries?.let {
+                put("brewSeries", backupJson.encodeToJsonElement(coffee.crema.core.BrewSeries.serializer(), it))
+            }
+        }
         shotMachineOf(shot)?.let { m ->
             put(
                 "machine",
@@ -266,8 +279,20 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
         machineSerial = machineStr("serialNumber"),
         machineFirmware = machineStr("serialNumber")?.let { machineStr("firmwareVersion") },
         machineModel = machineStr("serialNumber")?.let { machineStr("model") },
+        brewMethod = str("brewMethod"),
+        brewMethodLabel = str("brewMethodLabel")?.takeIf { it.isNotBlank() },
+        recipeName = str("recipeName"),
+        nextPlan = metaStr("nextPlan"),
+        waterG = metaStr("waterG")?.toFloatOrNull(),
+        brewTempC = str("brewTempTarget")?.toFloatOrNull(),
+        brewSeries = (o["brewSeries"] as? JsonObject)?.let {
+            runCatching { json.decodeFromJsonElement(coffee.crema.core.BrewSeries.serializer(), it) }.getOrNull()
+        },
     )
 }
+
+/** Encoder for the backup-only brew series (drops nulls-as-defaults like the stores). */
+private val backupJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
 /** Parse the core's `TimedSample[]` JSON into flat [TelemetrySample]s. */
 fun parseTimedSamples(samplesJson: String, json: kotlinx.serialization.json.Json): List<coffee.crema.ui.TelemetrySample> =

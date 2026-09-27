@@ -498,6 +498,12 @@ fun HistoryScreen(
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                         contentPadding = PaddingValues(top = 4.dp, bottom = 12.dp),
                     ) {
+                        // "Save 'X' as a method?" after an "Other…" log (one time).
+                        if (ui.saveMethodPrompt != null) {
+                            item(key = "save-method-prompt") {
+                                coffee.crema.ui.brewlog.SaveMethodPromptCard(vm, Modifier.padding(bottom = 6.dp))
+                            }
+                        }
                         items(shots, key = { it.id }) { shot ->
                             ShotRow(
                                 shot = shot,

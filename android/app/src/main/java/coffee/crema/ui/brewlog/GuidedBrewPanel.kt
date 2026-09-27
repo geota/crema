@@ -51,7 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.ble.ScaleBleManager
-import coffee.crema.brew.BREW_METHOD_PRESETS
+import coffee.crema.brew.brewMethodPickerPresets
 import coffee.crema.brew.formatClock
 import coffee.crema.brew.hasExpectedDuration
 import coffee.crema.brew.methodLabel
@@ -198,7 +198,7 @@ fun GuidedBrewPanel(
             val method = setup.method ?: recipe?.method ?: "pourover"
             // ── Setup ───────────────────────────────────────────
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                BREW_METHOD_PRESETS.forEach { p ->
+                brewMethodPickerPresets().forEach { p ->
                     CremaFilterChip(
                         label = p.label,
                         icon = p.icon,
@@ -206,6 +206,7 @@ fun GuidedBrewPanel(
                         onClick = { vm.selectGuidedMethod(p.id) },
                     )
                 }
+                AddMethodChip { vm.openNewMethod(MethodEditTarget.SCALE) }
             }
             if (recipe != null) {
                 val isBuiltin = vm.isBuiltinRecipe(recipe.id)
@@ -269,16 +270,24 @@ private fun NoRecipeCard(method: String, onNew: () -> Unit) {
     CremaCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.testTag("guided-no-recipe")) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Eyebrow("Recipe · ${methodLabel(method)}")
-            Text("No built-in recipe for ${methodLabel(method)}", style = MaterialTheme.typography.titleMedium)
+            val custom = coffee.crema.brew.isCustomMethodId(method)
             Text(
-                "Build your own step plan to run it here — or log this brew by hand from the Brew Log.",
+                if (custom) "No recipe for ${methodLabel(method)} yet" else "No built-in recipe for ${methodLabel(method)}",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                if (custom) {
+                    "Your own method has no built-in plan. Start one from its style — you can run it with or without a scale."
+                } else {
+                    "Build your own step plan to run it here — or log this brew by hand from the Brew Log."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             CremaButton(
                 onClick = onNew,
                 icon = "plus",
-                label = "New recipe",
+                label = if (custom) "New recipe for ${methodLabel(method)}" else "New recipe",
                 modifier = Modifier.testTag("guided-new-recipe"),
             )
         }

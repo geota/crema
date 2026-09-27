@@ -4,6 +4,9 @@ import coffee.crema.core.BrewRecipe
 import coffee.crema.core.BrewStep
 import coffee.crema.core.BrewStepKind
 import coffee.crema.core.StepAdvance
+import coffee.crema.core.BrewMethodStyle
+import coffee.crema.core.CustomBrewMethod
+import coffee.crema.core.blankRecipeForStyleJson
 import coffee.crema.core.blankRecipeJson
 import coffee.crema.core.builtinBrewRecipesJson
 import coffee.crema.core.newRecipeId
@@ -65,23 +68,32 @@ val BREW_METHOD_PRESETS: List<BrewMethodPreset> by lazy {
         }
 }
 
+/** The curated presets' display labels (the custom-name validator checks them). */
+internal val METHOD_FACE_LABELS: List<String> = METHOD_FACES.values.map { it.first }
+
 /** The label + icon face for a stored method, or null for free text. */
 private fun faceFor(method: String?): Pair<String, String>? =
     method?.trim()?.lowercase()?.let { METHOD_FACES[it] }
 
 /** The mark PhIcon name for any method (web MethodMark parity). */
-fun methodIcon(method: String?): String =
-    faceFor(method)?.second ?: if (method.isNullOrBlank()) "coffee" else "coffee-bean"
+fun methodIcon(method: String?): String {
+    faceFor(method)?.let { return it.second }
+    if (isCustomMethodId(method)) return CustomMethods.find(method)?.let(::customMethodIcon) ?: "coffee-bean"
+    return if (method.isNullOrBlank()) "coffee" else "coffee-bean"
+}
 
 /**
- * Display label for any stored method string: the preset label when curated,
- * else the free text re-humanized ("karlsbad_kanne" → "Karlsbad kanne").
+ * Display label for any stored method string: the preset label when curated;
+ * a custom method's own label (live or deleted — a rename shows on past
+ * rows), else the label a row snapshotted when it was saved; else the free
+ * text re-humanized ("karlsbad_kanne" → "Karlsbad kanne").
  * Null/blank (machine espresso) → "Espresso".
  */
 fun methodLabel(method: String?): String {
     val m = method?.trim()?.lowercase().orEmpty()
     if (m.isEmpty()) return "Espresso"
     faceFor(m)?.let { return it.first }
+    if (isCustomMethodId(m)) return customMethodLabel(m)
     val words = m.replace('_', ' ').trim()
     return words.replaceFirstChar { it.uppercase() }
 }
@@ -91,7 +103,7 @@ fun methodLabel(method: String?): String {
  * first alternative — "V60 / pourover" → "V60" — else the full label.
  */
 fun methodShortLabel(method: String?): String =
-    methodLabel(method).substringBefore(" / ").trim()
+    if (isCustomMethodId(method)) methodLabel(method) else methodLabel(method).substringBefore(" / ").trim()
 
 /** The espresso-family rule — mirrors `de1_domain::is_espresso_method`. */
 fun isEspressoMethod(method: String?): Boolean {
@@ -112,15 +124,24 @@ val BUILTIN_BREW_RECIPES: List<BrewRecipe> by lazy {
  * The "+ New recipe" starting point for a method — the core's
  * `blank_recipe` (preset numbers, one pour, no credit), named with the UI's
  * copy ("Chemex recipe"). The runnable per-method defaults are the credited
- * built-ins, not this. [core] is the FFI call, injectable for JVM tests.
+ * built-ins, not this. A custom method starts from its style instead — the
+ * core's `blank_recipe_for_style` (pour / pour + steep / pour + steep + press).
+ * [core] and [styleCore] are the FFI calls, injectable for JVM tests.
  */
 fun newRecipeFor(
     method: String,
     nowMs: Long,
     newId: () -> String = ::newRecipeId,
+    custom: CustomBrewMethod? = if (isCustomMethodId(method)) CustomMethods.find(method) else null,
+    styleCore: (String, String, Long) -> String = ::blankRecipeForStyleJson,
     core: (String, String, Long) -> String = ::blankRecipeJson,
 ): BrewRecipe {
-    val recipe = CoreJson.decodeFromString(BrewRecipe.serializer(), core(method, newId(), nowMs))
+    val raw = if (custom != null) {
+        styleCore(CoreJson.encodeToString(CustomBrewMethod.serializer(), custom.copy(style = custom.style ?: BrewMethodStyle.Percolation)), newId(), nowMs)
+    } else {
+        core(method, newId(), nowMs)
+    }
+    val recipe = CoreJson.decodeFromString(BrewRecipe.serializer(), raw)
     return recipe.copy(name = "${methodShortLabel(method)} recipe")
 }
 

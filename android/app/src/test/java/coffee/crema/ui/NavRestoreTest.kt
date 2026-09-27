@@ -104,4 +104,48 @@ class NavRestoreTest {
         assertEquals("profiles", NavRestore.restoreRoute("recipe-edit", null, phone = true))
         assertEquals(listOf("profiles"), NavRestore.steps("recipe-edit", TABLET_ROUTES))
     }
+
+    // ── Brewing-method dialog (issue #10 feedback) ───────────────────────
+
+    @Test fun phoneMethodDialogCollapsesToTheTabletSheetOnItsTab() {
+        // Opened from the log form on History: the tablet lands on History,
+        // where the log sheet and the method sheet re-open from VM drafts.
+        val route = NavRestore.restoreRoute("method-edit", "history", phone = false, methodEditOwner = "history")
+        assertEquals("method-edit", route)
+        assertEquals(
+            listOf("history"),
+            NavRestore.steps(route, TABLET_ROUTES, NavRestore.owners("history", null, "history", "log-brew")),
+        )
+    }
+
+    @Test fun tabletMethodSheetBecomesThePushedRouteOverItsFormOnPhone() {
+        // Over the log form: tab → log-brew → method-edit, so Back returns to the form.
+        val route = NavRestore.restoreRoute("history", "history", phone = true, methodEditOwner = "history")
+        assertEquals("method-edit", route)
+        assertEquals(
+            listOf("history", "log-brew", "method-edit"),
+            NavRestore.steps(route, PHONE_ROUTES, NavRestore.owners("history", null, "history", "log-brew")),
+        )
+        // Over the recipe editor on Scale.
+        assertEquals(
+            listOf("scale", "recipe-edit", "method-edit"),
+            NavRestore.steps("method-edit", PHONE_ROUTES, NavRestore.owners(null, "scale", "scale", "recipe-edit")),
+        )
+        // From Profiles → Your methods / the Brew setup chips: straight over the tab.
+        val fromProfiles = NavRestore.restoreRoute("profiles", null, phone = true, methodEditOwner = "profiles")
+        assertEquals("method-edit", fromProfiles)
+        assertEquals(
+            listOf("profiles", "method-edit"),
+            NavRestore.steps(fromProfiles, PHONE_ROUTES, NavRestore.owners(null, null, "profiles", null)),
+        )
+    }
+
+    @Test fun aStaleMethodRouteFallsBackToTheFormUnderIt() {
+        assertEquals("log-brew", NavRestore.restoreRoute("method-edit", "history", phone = true))
+        assertEquals("history", NavRestore.restoreRoute("method-edit", "history", phone = false))
+        assertEquals("recipe-edit", NavRestore.restoreRoute("method-edit", null, phone = true, recipeEditOwner = "scale"))
+        assertEquals("profiles", NavRestore.restoreRoute("method-edit", null, phone = true))
+        // A method dialog on another tab doesn't hijack the route.
+        assertEquals("beans", NavRestore.restoreRoute("beans", null, phone = true, methodEditOwner = "profiles"))
+    }
 }

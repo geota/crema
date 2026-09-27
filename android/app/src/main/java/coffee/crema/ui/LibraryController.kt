@@ -106,6 +106,8 @@ class LibraryController(
     /** Merge restored brew recipes + their organisation into the VM-owned
      *  recipe store (WIPE replaces); returns how many recipes were added. */
     private val applyRestoredRecipes: (recipes: List<coffee.crema.core.BrewRecipe>, meta: JsonObject?, wipe: Boolean) -> Int = { _, _, _ -> 0 },
+    /** Apply a backup's custom brewing methods (merge by id / wipe); returns how many were added. */
+    private val applyRestoredCustomMethods: (methods: List<coffee.crema.core.CustomBrewMethod>, wipe: Boolean) -> Int = { _, _ -> 0 },
     /** Read the live UI snapshot (library rows, active ids, live-shot state). */
     private val uiState: () -> MainUiState,
     /** Synchronously update the UI snapshot (the VM's `_ui.update`). */
@@ -864,7 +866,7 @@ class LibraryController(
         // Brew recipes: the user's own + copies only — built-ins are bundled.
         val userRecipes = s.brewRecipes.filterNot { r -> s.builtinRecipes.any { it.id == r.id } }
         val noData = customs.isEmpty() && s.beans.isEmpty() && s.roasters.isEmpty() && s.history.isEmpty() &&
-            userRecipes.isEmpty()
+            userRecipes.isEmpty() && s.customMethods.isEmpty()
         val noProfileOrg = pinnedIds.isEmpty() && hiddenIds.isEmpty() &&
             s.lastRecipeByMethod.isEmpty() && s.hiddenBuiltinRecipes.isEmpty()
         val settingsDefault =
@@ -934,6 +936,9 @@ class LibraryController(
                 ),
             ),
         )
+        val customMethodsJson = runCatching {
+            json.encodeToString(ListSerializer(coffee.crema.core.CustomBrewMethod.serializer()), s.customMethods)
+        }.getOrElse { "[]" }
         val maintenanceJson = runCatching { json.encodeToString(MaintenanceState.serializer(), s.maintenance) }.getOrElse { "{}" }
         val visualizerPrefsJson = runCatching {
             json.encodeToString(VisualizerSyncPrefs.serializer(), visualizer.backupPrefs())
@@ -952,6 +957,9 @@ class LibraryController(
             put("profileMeta", json.parseToJsonElement(profileMetaJson))
             put("recipes", json.parseToJsonElement(recipesJson))
             put("recipeMeta", json.parseToJsonElement(recipeMetaJson))
+            // The user's own brewing methods, tombstones included (their old
+            // brews still resolve) → `kind:"brewMethod"` lines.
+            put("customMethods", json.parseToJsonElement(customMethodsJson))
             put("maintenance", json.parseToJsonElement(maintenanceJson))
             put("visualizerPrefs", json.parseToJsonElement(visualizerPrefsJson))
         }.toString()
@@ -1101,12 +1109,15 @@ class LibraryController(
             // token (re-auth after restore). Reseed the live water integrator.
             restoredMaintenance?.let { applyRestoredMaintenance(it) }
             restoredVisualizerPrefs?.let { visualizer.restorePrefs(it) }
+            // Methods before recipes, so a restored recipe's `custom:` method resolves.
+            val newMethods = applyRestoredCustomMethods(parsed.customMethods, mode == MainViewModel.RestoreMode.WIPE)
             val newRecipes = applyRestoredRecipes(parsed.recipes, parsed.recipeMeta, mode == MainViewModel.RestoreMode.WIPE)
 
             notify(
                 "Restored ${newProfiles.size} profile(s) · ${newBeans.size} bean(s) · " +
                     "${newRoasters.size} roaster(s) · ${newShots.size} shot(s)" +
-                    if (newRecipes > 0) " · $newRecipes recipe(s)" else "",
+                    (if (newRecipes > 0) " · $newRecipes recipe(s)" else "") +
+                    if (newMethods > 0) " · $newMethods method(s)" else "",
             )
         }
     }
@@ -1863,6 +1874,8 @@ class LibraryController(
         val nextPlan: String?,
         val recipeName: String? = null,
         val brewSeries: coffee.crema.core.BrewSeries? = null,
+        /** The custom method's label, snapshotted on the row (`custom:` methods only). */
+        val methodLabel: String? = null,
     )
 
     /**
@@ -1901,6 +1914,7 @@ class LibraryController(
             notes = input.notes?.ifBlank { null },
             nextPlan = input.nextPlan?.ifBlank { null },
             brewMethod = input.method,
+            brewMethodLabel = input.methodLabel?.ifBlank { null },
             recipeName = input.recipeName?.ifBlank { null },
             waterG = input.waterG,
             brewTempC = input.brewTempC,
@@ -1926,6 +1940,16 @@ class LibraryController(
         }
         notify("Brew logged")
         return shot
+    }
+
+    /**
+     * Re-tag a brew row with a (newly saved) custom method — the "Save 'X' as
+     * a method?" offer. Snapshots the label beside the id. Persisted.
+     */
+    fun retagBrewMethod(id: String, method: String, label: String) {
+        val next = uiState().history.map { if (it.id == id) it.copy(brewMethod = method, brewMethodLabel = label) else it }
+        updateUi { it.copy(history = next) }
+        scope.launch { historyStore.save(next) }
     }
 
     /**

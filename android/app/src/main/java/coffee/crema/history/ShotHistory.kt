@@ -136,6 +136,12 @@ data class StoredShot(
      * is already a valid brew row. Mirrors core `StoredShot.brew_method`.
      */
     val brewMethod: String? = null,
+    /**
+     * The method's display label, snapshotted when the brew was saved with a
+     * user-defined method (`custom:<uuid>`), so the row keeps its name after
+     * the method is deleted or lost. Mirrors core `StoredShot.brew_method_label`.
+     */
+    val brewMethodLabel: String? = null,
     /** The guided-session recipe name, snapshot at completion. */
     val recipeName: String? = null,
     /**
@@ -276,6 +282,7 @@ fun StoredShot.coreShotJson(): JsonObject = buildJsonObject {
     // Brew Log fields (issue #10) — ride the core shape so the v2
     // exporter emits the crema_brew_method extension keys.
     brewMethod?.let { put("brewMethod", it) }
+    brewMethodLabel?.let { put("brewMethodLabel", it) }
     recipeName?.let { put("recipeName", it) }
     brewTempC?.let { put("brewTempTarget", it) }
     putJsonObject("record") {
