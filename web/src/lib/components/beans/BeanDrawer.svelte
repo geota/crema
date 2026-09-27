@@ -33,6 +33,7 @@
 	import BeanPhotoViewer from './BeanPhotoViewer.svelte';
 	import RoastSlider from './RoastSlider.svelte';
 	import BeanDeleteSplit from './BeanDeleteSplit.svelte';
+	import { brews_remaining_estimate } from '$lib/wasm/de1_wasm';
 
 	let {
 		bean,
@@ -44,7 +45,8 @@
 		onToggleArchived,
 		onToggleFavourite,
 		onOpenShot,
-		onSeeAllShots
+		onSeeAllShots,
+		onLogBrew = null
 	}: {
 		bean: Bean;
 		roaster: Roaster | null;
@@ -58,6 +60,12 @@
 		onOpenShot: (shotId: string) => void;
 		/** Open History filtered to this bag ("See all N shots"). */
 		onSeeAllShots: () => void;
+		/**
+		 * Open the Log-brew form pre-filled with this bag (issue #10) —
+		 * the "bag in hand, log what you just used" door. Optional so
+		 * embedding surfaces without the dialog can omit it.
+		 */
+		onLogBrew?: ((beanId: string) => void) | null;
 	} = $props();
 
 	const history = getHistoryStore();
@@ -100,12 +108,18 @@
 		if (bean.bagSize <= 0) return 0;
 		return Math.max(0, Math.min(100, (bean.remaining / bean.bagSize) * 100));
 	});
-	const shotsRemaining = $derived.by<number>(() => {
-		if (bean.bagSize <= 0) return 0;
-		return Math.max(0, Math.floor(bean.remaining / 18));
-	});
-
 	const shotsWithThis = $derived(history.all.filter((s) => s.bean?.beanId === bean.id));
+
+	/**
+	 * "≈ N brews" left in the bag — the core's `brews_remaining_estimate`
+	 * (this bag's own mean dose over its newest 10 records, 18 g fallback),
+	 * shared with Android (issue #10). Untracked bags (no size) show none.
+	 */
+	const brewsRemaining = $derived.by<number>(() => {
+		if (bean.bagSize <= 0) return 0;
+		const doses = Float32Array.from(shotsWithThis.map((s) => s.metadata.dose ?? 0));
+		return brews_remaining_estimate(bean.remaining, doses);
+	});
 
 	// Group open/closed state — match the design's defaults.
 	let openIdentity = $state(true);
@@ -281,11 +295,11 @@
 					<div class="bn-cell-val">{bean.remaining.toFixed(0)}<em>g</em></div>
 					<div class="bn-cell-sub">
 						of {bean.bagSize.toFixed(0)}<em>g</em>
-						{#if shotsRemaining > 0}· ~{shotsRemaining} shots{/if}
+						{#if brewsRemaining > 0}· ≈{brewsRemaining} brews{/if}
 					</div>
 				</div>
 				<div class="bn-drawer-status-cell">
-					<div class="bn-cell-label">Shots</div>
+					<div class="bn-cell-label">Brews</div>
 					<div class="bn-cell-val">{shotsWithThis.length}</div>
 					<div class="bn-cell-sub">
 						{bean.qualityScore ? bean.qualityScore + ' score' : 'in history'}
@@ -578,6 +592,13 @@
 				size="md"
 				onDeleted={onClose}
 			/>
+			{#if onLogBrew && !isArchived}
+				<!-- The inventory-first door to the Brew Log (issue #10):
+				     bag in hand, log what you just used. -->
+				<button class="bn-foot-btn" onclick={() => onLogBrew?.(bean.id)}>
+					<Icon cls="ph ph-plus-circle" aria-hidden="true" /> Log a brew
+				</button>
+			{/if}
 			{#if !isActive && !isArchived}
 				<button class="bn-foot-btn bn-foot-btn-primary" onclick={() => onSetActive(bean.id)}>
 					<CoffeeIcon aria-hidden="true" /> Set active

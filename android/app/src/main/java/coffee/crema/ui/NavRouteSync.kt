@@ -27,8 +27,9 @@ internal fun SyncNavRoute(
     supported: Set<String>,
     onNav: (String) -> Unit,
     onRouteChange: (String) -> Unit,
+    owners: Map<String, String> = emptyMap(),
 ) {
-    val replay = remember { NavRestore.steps(initialRoute, supported) }
+    val replay = remember { NavRestore.steps(initialRoute, supported, owners) }
     var restored by remember { mutableStateOf(false) }
     LaunchedEffect(nav) {
         replay.forEach(onNav)

@@ -29,4 +29,37 @@ class NavRestoreTest {
     @Test fun missingEditorFallsBackToOwningTab() {
         assertEquals(listOf("beans"), NavRestore.steps("roaster-edit", TABLET_ROUTES))
     }
+
+    // ── Brew Log form (issue #10) ────────────────────────────────────────
+
+    @Test fun phoneLogBrewOpensTheOwningTabOnTablet() {
+        // Opened from History or from a bean's detail: the tablet lands on
+        // that tab, where the side sheet re-opens from the VM-held draft.
+        for (owner in listOf("history", "beans")) {
+            val route = NavRestore.restoreRoute("log-brew", owner, phone = false)
+            assertEquals("log-brew", route)
+            assertEquals(listOf(owner), NavRestore.steps(route, TABLET_ROUTES, NavRestore.owners(owner)))
+        }
+    }
+
+    @Test fun tabletSheetBecomesThePushedRouteOnPhone() {
+        for (owner in listOf("history", "beans")) {
+            val route = NavRestore.restoreRoute(owner, owner, phone = true)
+            assertEquals("log-brew", route)
+            assertEquals(listOf(owner, "log-brew"), NavRestore.steps(route, PHONE_ROUTES, NavRestore.owners(owner)))
+        }
+    }
+
+    @Test fun anOpenFormOnAnotherTabDoesNotHijackTheRoute() {
+        assertEquals("profiles", NavRestore.restoreRoute("profiles", "history", phone = true))
+        assertEquals("history", NavRestore.restoreRoute("history", null, phone = true))
+        assertEquals("beans", NavRestore.restoreRoute("beans", "beans", phone = false))
+    }
+
+    @Test fun aStaleLogBrewRouteWithNoFormFallsBackToHistory() {
+        assertEquals("history", NavRestore.restoreRoute("log-brew", null, phone = true))
+        assertEquals("history", NavRestore.restoreRoute("log-brew", null, phone = false))
+        // And the static fallback owner still resolves without a draft.
+        assertEquals(listOf("history"), NavRestore.steps("log-brew", TABLET_ROUTES))
+    }
 }

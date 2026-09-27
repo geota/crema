@@ -12,7 +12,7 @@
  */
 
 import { DECENT_HISTORY_URL, decentShotViewUrl } from '$lib/decent/api';
-import type { StoredShot } from './model';
+import { isBrewLog, type StoredShot } from './model';
 
 export interface UploadTarget {
 	id: 'visualizer' | 'decent';
@@ -114,4 +114,18 @@ export function decentUploadTarget(shot: StoredShot, enabled: boolean): UploadTa
 		viewUrl: publicUrl ?? (shot.decentId ? DECENT_HISTORY_URL : null),
 		shareable: publicUrl !== null
 	};
+}
+
+/**
+ * Every cloud destination for a shot, in menu order — or NONE for a Brew
+ * Log row (issue #10): brews are local-only, so they get no Upload row, no
+ * View / Share rows and no cloud pip. The one list both the detail menu and
+ * the row pip read.
+ */
+export function shotUploadTargets(
+	shot: StoredShot,
+	enabled: { visualizer: boolean; decent: boolean }
+): UploadTarget[] {
+	if (isBrewLog(shot)) return [];
+	return [visualizerUploadTarget(shot, enabled.visualizer), decentUploadTarget(shot, enabled.decent)];
 }

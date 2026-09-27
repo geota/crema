@@ -386,6 +386,26 @@ pub fn credit_remaining(remaining: f32, dose_g: f32, bag_size: f32) -> Option<f3
     de1_domain::credit_remaining(remaining, dose_g, bag_size)
 }
 
+/// Re-settle a bag after a logged brew's dose edit —
+/// [`de1_domain::resettle_remaining`] (credit the old dose, debit the new;
+/// `None` = nothing to persist, including an unchanged dose).
+#[uniffi::export]
+pub fn resettle_remaining(
+    remaining: f32,
+    bag_size: f32,
+    old_dose: f32,
+    new_dose: f32,
+) -> Option<f32> {
+    de1_domain::resettle_remaining(remaining, bag_size, old_dose, new_dose)
+}
+
+/// The "≈N brews left" estimate — [`de1_domain::brews_remaining_estimate`]
+/// (the bag's newest ≤10 doses, newest first; 18 g fallback).
+#[uniffi::export]
+pub fn brews_remaining_estimate(remaining_g: f32, recent_doses: Vec<f32>) -> u32 {
+    de1_domain::brews_remaining_estimate(remaining_g, &recent_doses)
+}
+
 /// Derive the History stat strip over a JSON array of light per-shot
 /// tuples (`ShotStatInput`); returns `HistoryStats` JSON. One
 /// derivation for every shell (review #41: Android ignored the
@@ -396,6 +416,56 @@ pub fn history_stats(shots_json: String) -> Result<String, CremaError> {
     let shots: Vec<de1_domain::ShotStatInput> =
         serde_json::from_str(&shots_json).map_err(crema_err)?;
     serde_json::to_string(&de1_domain::history_stats(&shots)).map_err(crema_err)
+}
+
+/// Derive the method-aware History stat strip over a JSON array of
+/// `BrewStatInput`; returns `BrewHistoryStats` JSON. The Brew Log
+/// sibling of [`history_stats`] — see [`de1_domain::brew_history_stats`]
+/// for the mixed-set scoping rules.
+#[uniffi::export]
+pub fn brew_history_stats(brews_json: String) -> Result<String, CremaError> {
+    let brews: Vec<de1_domain::BrewStatInput> =
+        serde_json::from_str(&brews_json).map_err(crema_err)?;
+    serde_json::to_string(&de1_domain::brew_history_stats(&brews)).map_err(crema_err)
+}
+
+/// The method-aware brew ratio — espresso speaks yield-out, filter
+/// methods water-in (yield fallback). `method` absent/empty = espresso.
+/// See [`de1_domain::ratio_for_method`].
+#[uniffi::export]
+pub fn ratio_for_method(
+    method: Option<String>,
+    dose: Option<f32>,
+    water_g: Option<f32>,
+    yield_g: Option<f32>,
+) -> Option<f32> {
+    de1_domain::ratio_for_method(method.as_deref(), dose, water_g, yield_g)
+}
+
+/// Canonicalize a brew-method string for storage (trim / lowercase /
+/// separators → `_`), or `None` for an effectively empty input.
+#[uniffi::export]
+pub fn normalize_brew_method(raw: String) -> Option<String> {
+    de1_domain::normalize_brew_method(&raw)
+}
+
+/// The curated brew-method presets (`BrewMethodPreset` JSON array — id +
+/// seed dose / water / yield / temp), in display order. Mirrors the wasm
+/// `brewMethodPresets`; see [`de1_domain::brew_method_presets_json`].
+#[uniffi::export]
+pub fn brew_method_presets_json() -> String {
+    de1_domain::brew_method_presets_json()
+}
+
+/// Seed the Log-brew form: takes `BrewLogSeedInput` JSON, returns
+/// `BrewLogSeeds` JSON. See [`de1_domain::brew_log_seeds`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the input JSON is malformed.
+#[uniffi::export]
+pub fn brew_log_seeds_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::brew_log_seeds_json(&input_json).map_err(CremaError::from)
 }
 
 /// Resolve the Brew screen's service-mode display targets (steam /

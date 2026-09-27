@@ -21,6 +21,11 @@ export {
 	peaksOf,
 	yieldOf,
 	statsOf,
+	brewStatsOf,
+	methodOf,
+	isBrewLog,
+	isManualLog,
+	hasTelemetry,
 	flatSamplesOf
 } from './model';
 
@@ -29,7 +34,9 @@ export {
 	getHistoryStore,
 	type ShotCompletion,
 	type ImportExtras,
-	type ImportBeanExtras
+	type ImportBeanExtras,
+	type ManualBrewInput,
+	type ManualBrewPatch
 } from './store.svelte';
 
 export { exportStoredShotAsV2Json, extractCremaExtras } from './v2-export';

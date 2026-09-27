@@ -1,6 +1,7 @@
 package coffee.crema.ui
 
 import coffee.crema.history.StoredShot
+import coffee.crema.history.isBrewLog
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -94,9 +95,13 @@ fun viewableTargets(all: List<UploadTarget>): List<UploadTarget> = all.filter { 
 /** The "Share link" rows — only destinations with a public link to the shot. */
 fun shareableTargets(all: List<UploadTarget>): List<UploadTarget> = all.filter { it.shareable }
 
-/** The destinations for one shot — one row per service the user can enable in Settings → Sharing. */
+/**
+ * The destinations for one shot — one row per service the user can enable in
+ * Settings → Sharing. NONE for a Brew Log row (issue #10): brews are
+ * local-only, so no Upload / View / Share rows and no cloud pip.
+ */
 fun uploadTargetsFor(shot: StoredShot, destinations: List<UploadDestination>): List<UploadTarget> =
-    destinations.map { d ->
+    if (shot.isBrewLog) emptyList() else destinations.map { d ->
         val uploaded = d.isUploaded(shot)
         UploadTarget(
             id = d.id,
@@ -113,11 +118,11 @@ fun uploadTargetsFor(shot: StoredShot, destinations: List<UploadDestination>): L
 fun missingUploadTotal(shots: List<StoredShot>, destinations: List<UploadDestination>): Int {
     val on = destinations.filter { it.enabled }
     if (on.isEmpty()) return 0
-    return shots.count { s -> on.any { it.inBacklog(s) } }
+    return shots.count { s -> !s.isBrewLog && on.any { it.inBacklog(s) } }
 }
 
 /** Shots missing from each enabled destination (only non-zero entries). */
 fun missingUploadCounts(shots: List<StoredShot>, destinations: List<UploadDestination>): Map<UploadTargetId, Int> =
     destinations.filter { it.enabled }
-        .associate { d -> d.id to shots.count { d.inBacklog(it) } }
+        .associate { d -> d.id to shots.count { !it.isBrewLog && d.inBacklog(it) } }
         .filterValues { it > 0 }

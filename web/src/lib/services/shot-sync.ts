@@ -52,7 +52,7 @@ import { getBeanStore } from '$lib/bean/store.svelte';
 import { effectiveGrindSetting } from '$lib/history';
 import { exportStoredShotAsV2Json } from '$lib/history/v2-export';
 import type { ShotPatchInputs, TimedSample } from '$lib/core';
-import type { ShotBean, StoredShot } from '$lib/history/model';
+import { isBrewLog, type ShotBean, type StoredShot } from '$lib/history/model';
 import type { HistoryStore } from '$lib/history/store.svelte';
 import { getSettingsStore } from '$lib/settings';
 import type { components } from '$lib/visualizer/openapi';
@@ -750,7 +750,10 @@ export const ShotSyncLive = Layer.effect(
 		const uploadUnsyncedShots = Effect.fn('ShotSync.uploadUnsyncedShots')(function* (
 			history: HistoryStore
 		) {
-			const list = history.all.filter((s) => !s.visualizerId);
+			// Brew Log rows (`isBrewLog`) never sync: Visualizer is a
+			// DE1-telemetry service and brews carry none (issue #10 — the same
+			// local-only posture as `nextPlan`).
+			const list = history.all.filter((s) => !s.visualizerId && !isBrewLog(s));
 
 			/**
 			 * Record a non-success outcome: enqueue a recoverable error for a timed

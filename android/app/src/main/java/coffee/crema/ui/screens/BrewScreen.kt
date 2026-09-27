@@ -255,7 +255,10 @@ fun BrewScreen(
                     // card show its "next time" plan.
                     val dialInShot = if (!running && ui.lastShot == null) {
                         ui.activeBeanId?.let { bid ->
-                            ui.history.firstOrNull { it.bean?.beanId == bid }
+                            // Machine shots only (issue #10): a logged pourover
+                            // on the same bag must not seed the DE1 dial-in
+                            // card — its grind belongs to another instrument.
+                            ui.history.firstOrNull { it.bean?.beanId == bid && it.brewMethod == null }
                         }
                     } else null
                     if (mode != null) {

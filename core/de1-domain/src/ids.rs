@@ -47,6 +47,15 @@ pub fn new_shot_id() -> String {
     format!("shot:{}", Uuid::now_v7())
 }
 
+/// Mint a fresh brew-recipe ID — same UUID v7 scheme, `recipe:` prefix.
+/// Recipes are the guided-brew plans of the Brew Log (issue #10); their
+/// ids share the beans/shots lifecycle (shell-persisted, soft-deleted,
+/// bundled in backups).
+#[must_use]
+pub fn new_recipe_id() -> String {
+    format!("recipe:{}", Uuid::now_v7())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

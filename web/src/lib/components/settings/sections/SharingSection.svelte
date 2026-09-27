@@ -18,7 +18,7 @@
 	 * shared `ActivityLog`.
 	 */
 	import { onMount } from 'svelte';
-	import { getHistoryStore } from '$lib/history';
+	import { getHistoryStore, isBrewLog } from '$lib/history';
 	import { downloadBlob } from '$lib/utils/download';
 	import {
 		clearVisualizerPremiumCache,
@@ -126,7 +126,7 @@
 	let catchUpBusy = $state<{ done: number; total: number } | null>(null);
 
 	function vizBacklogCount(): number {
-		return history.all.filter((s) => !s.visualizerId && !s.deletedAt).length;
+		return history.all.filter((s) => !s.visualizerId && !s.deletedAt && !isBrewLog(s)).length;
 	}
 	/** Offer the Visualizer catch-up if shots would now auto-upload there. */
 	function offerVisualizerCatchUp(): void {

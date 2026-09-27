@@ -129,6 +129,10 @@ data class AppPrefs(
     /** The newest version the user was already notified about, so a new
      *  build notifies exactly once. */
     val lastSeenLatestVersion: String? = null,
+    /** The method of the last saved Brew Log entry — the log form opens on
+     *  it (issue #10; the web keeps the same per-device memory in
+     *  localStorage). Null = never logged; the core then opens on pourover. */
+    val lastBrewLogMethod: String? = null,
     // ── Brew defaults (seed new profiles + the Quick-Controls fallbacks) ─────
     val defaultDoseG: Float = 18f,
     val defaultRatio: Float = 2f,
@@ -297,6 +301,7 @@ private data class PersistedPrefs(
     val autoUpdateCheck: Boolean = false,
     val lastUpdateCheckAtMs: Long? = null,
     val lastSeenLatestVersion: String? = null,
+    val lastBrewLogMethod: String? = null,
     val qcGrind: Float? = null,
     val activeProfileId: String? = null,
     val de1Address: String? = null,
@@ -320,6 +325,7 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     autoUpdateCheck = autoUpdateCheck,
     lastUpdateCheckAtMs = lastUpdateCheckAtMs,
     lastSeenLatestVersion = lastSeenLatestVersion,
+    lastBrewLogMethod = lastBrewLogMethod,
     qcGrind = qcGrind,
     activeProfileId = activeProfileId,
     de1Address = de1Address,
@@ -342,6 +348,7 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     autoUpdateCheck = autoUpdateCheck,
     lastUpdateCheckAtMs = lastUpdateCheckAtMs,
     lastSeenLatestVersion = lastSeenLatestVersion,
+    lastBrewLogMethod = lastBrewLogMethod,
     qcGrind = qcGrind,
     activeProfileId = activeProfileId,
     de1Address = de1Address,

@@ -9,6 +9,7 @@ import coffee.crema.core.visualizerShotPatchJson
 import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.history.StoredShot
 import coffee.crema.history.effectiveGrindSetting
+import coffee.crema.history.isBrewLog
 import coffee.crema.ui.DrainResult
 import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.UploadDestination
@@ -128,7 +129,9 @@ class VisualizerSync(
     override val autoUpload: Boolean get() = persisted.prefs.autoUpload
     override fun isUploaded(shot: StoredShot): Boolean = shot.visualizerId != null
     override fun viewUrl(shot: StoredShot): String? = shot.visualizerId?.let { "https://visualizer.coffee/shots/$it" }
-    override fun inBacklog(shot: StoredShot): Boolean = shot.visualizerId == null
+    /** Brew Log rows (issue #10) are local-only — never in the Visualizer backlog. */
+    override fun inBacklog(shot: StoredShot): Boolean = shot.visualizerId == null && !shot.isBrewLog
+    override fun canUpload(shot: StoredShot): Boolean = !shot.isBrewLog
     override fun pushShot(shot: StoredShot, replace: Boolean): Boolean = uploadShot(shot, silent = false)
     override suspend fun setAutoUploadNow(enabled: Boolean) {
         persist { it.copy(prefs = it.prefs.copy(autoUpload = enabled)) }
@@ -409,6 +412,8 @@ class VisualizerSync(
      * Returns false without POSTing when signed out or the shot is already in flight.
      */
     fun uploadShot(shot: StoredShot, silent: Boolean = false): Boolean {
+        // Brew Log rows (issue #10) never reach Visualizer — auto or manual.
+        if (shot.isBrewLog) return false
         if (persisted.tokens == null) {
             if (!silent) notify("Sign in to Visualizer first (Settings → Sharing)")
             return false
@@ -487,6 +492,8 @@ class VisualizerSync(
 
     /** The suspend upload itself — payload → POST → lastSyncAt + log line. */
     private suspend fun uploadShotNow(shot: StoredShot): String {
+        // Backstop: every caller filters brews out first (issue #10).
+        require(!shot.isBrewLog) { "Brew Log rows are never uploaded to Visualizer" }
         val payload = buildShotPayload(shot)
         val id = withFreshToken { client.uploadShot(it, payload) }
         persist { it.copy(lastShotSyncAt = System.currentTimeMillis()) }
@@ -723,7 +730,7 @@ class VisualizerSync(
                 }
             }
             if (directionPushes(direction)) {
-                val unsynced = shots.filter { it.visualizerId == null }
+                val unsynced = shots.filter { it.visualizerId == null && !it.isBrewLog }
                 for (shot in unsynced) {
                     _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shot.id) }
                     runCatchingCancellable { uploadShotNow(shot) }
@@ -769,7 +776,7 @@ class VisualizerSync(
             notify("Sign in to Visualizer first (Settings → Sharing)")
             return
         }
-        val unsynced = shots.filter { it.visualizerId == null }
+        val unsynced = shots.filter { it.visualizerId == null && !it.isBrewLog }
         if (unsynced.isEmpty()) {
             notify("Everything is already on Visualizer")
             return

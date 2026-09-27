@@ -50,6 +50,10 @@ fun CremaHeaderBlock(
     /** Right end of the eyebrow row — the freshness chip, an uploading label,
      *  or (History) the shot's timestamp. */
     eyebrowTrailing: (@Composable () -> Unit)? = null,
+    /** A line of its own directly under the eyebrow — where History's
+     *  timestamp drops on a narrow detail pane instead of crowding the
+     *  eyebrow row. */
+    eyebrowBelow: (@Composable () -> Unit)? = null,
     /** The picker caret; hidden for non-interactive blocks (a shot's profile
      *  is a historical fact). */
     showCaret: Boolean = true,
@@ -83,6 +87,7 @@ fun CremaHeaderBlock(
             Eyebrow(eyebrow)
             eyebrowTrailing?.invoke()
         }
+        eyebrowBelow?.invoke()
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,

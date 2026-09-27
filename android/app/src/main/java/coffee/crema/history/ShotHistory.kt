@@ -1,9 +1,13 @@
 package coffee.crema.history
 
 import android.content.Context
+import coffee.crema.core.BrewHistoryStats
+import coffee.crema.core.BrewSeries
+import coffee.crema.core.BrewStatInput
 import coffee.crema.core.HistoryStats
 import coffee.crema.core.ShotBean
 import coffee.crema.core.ShotStatInput
+import coffee.crema.core.brewHistoryStats as coreBrewHistoryStats
 import coffee.crema.core.downsampleIndices
 import coffee.crema.core.historyStats as coreHistoryStats
 import coffee.crema.ui.TelemetrySample
@@ -125,6 +129,34 @@ data class StoredShot(
     val machineSerial: String? = null,
     val machineFirmware: String? = null,
     val machineModel: String? = null,
+    /**
+     * Brew Log method (issue #10) — a normalized string (`"pourover"`,
+     * `"aeropress"`, `"espresso"` for a manually logged machine-free
+     * shot, …). Null = machine espresso, so every pre-Brew-Log record
+     * is already a valid brew row. Mirrors core `StoredShot.brew_method`.
+     */
+    val brewMethod: String? = null,
+    /** The guided-session recipe name, snapshot at completion. */
+    val recipeName: String? = null,
+    /**
+     * Water in, g — the pour total for filter / immersion brews.
+     * Distinct from [yieldG] (beverage in the cup): a 15 g / 250 g V60
+     * speaks its ratio in water-in (1:16.7). Mirrors core
+     * `ShotMetadata.water_g`.
+     */
+    val waterG: Float? = null,
+    /**
+     * Brew water temperature, °C, for logged brews. Mirrors core
+     * `StoredShot.brew_temp_target` (Android never persisted it for
+     * machine shots; additive).
+     */
+    val brewTempC: Float? = null,
+    /**
+     * Weight-only guided-session telemetry (core `BrewSeries`,
+     * typeshared). Null for machine shots (their telemetry is
+     * [samples]) and manual logs (none at all).
+     */
+    val brewSeries: BrewSeries? = null,
 )
 
 /** Id prefix of a shot materialised from a Visualizer pull (see `storedShotFromWire`). */
@@ -136,6 +168,32 @@ const val PULLED_SHOT_ID_PREFIX = "shot:remote:"
  * stamped onto it, and it stays out of the Decent backlog.
  */
 val StoredShot.pulledFromVisualizer: Boolean get() = id.startsWith(PULLED_SHOT_ID_PREFIX)
+
+/**
+ * A Brew Log entry of any kind — `brewMethod` set, manual or guided (issue
+ * #10). Brew rows are local-only: no upload path (Visualizer or the Decent
+ * account — auto, manual or backlog) ever takes one, they get no upload menu
+ * or cloud pip, and they carry no DE1 machine stamp. Mirrors core
+ * `StoredShot::is_brew_log` and the web `isBrewLog`.
+ */
+val StoredShot.isBrewLog: Boolean
+    get() = brewMethod != null
+
+/** Why an upload path skipped a [isBrewLog] row — shared by every destination. */
+const val BREW_LOG_UPLOAD_SKIP = "Brew Log entries stay on this device"
+
+/** The row's method for display: the stored method, null = machine espresso. */
+val StoredShot.methodOf: String?
+    get() = brewMethod?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+
+/**
+ * Manually logged: a method was declared but no telemetry of any kind was
+ * captured. Manual rows keep dose / water / time / temp editable (they are
+ * user-entered facts) and never enter a Visualizer upload queue. Mirrors
+ * core `StoredShot::is_manual_log`.
+ */
+val StoredShot.isManualLog: Boolean
+    get() = brewMethod != null && samples.isEmpty() && brewSeries == null
 
 /**
  * The grind THIS shot was pulled at, as a raw setting string (issue #16): the
@@ -153,6 +211,24 @@ val StoredShot.effectiveGrindSetting: String?
 /** "Grind N" display form of [effectiveGrindSetting]. */
 val StoredShot.grindLabel: String?
     get() = effectiveGrindSetting?.let { "Grind $it" }
+
+/**
+ * The method-aware `1:N` ratio label (issue #10): espresso-family rows
+ * divide yield by dose; filter methods divide water-in by dose (yield
+ * fallback). One core rule (`de1_domain::ratio_for_method`) for every
+ * shell. Null when undefined.
+ */
+fun StoredShot.methodRatioLabel(): String? {
+    val r = coffee.crema.core.ratioForMethod(methodOf, doseG, waterG, yieldG) ?: return null
+    return "1:" + String.format(java.util.Locale.US, "%.1f", r)
+}
+
+/** "0:27" under 90 s reads as "27 s"; beyond, mm:ss — one duration format
+ *  for shots and pourovers alike. */
+fun formatShotDuration(ms: Long): String {
+    val total = (ms / 1000).toInt()
+    return if (total < 90) "$total s" else "%d:%02d".format(total / 60, total % 60)
+}
 
 /**
  * The flat "Roaster · Name" label for a shot's bean, derived from the structured
@@ -194,8 +270,14 @@ fun StoredShot.coreShotJson(): JsonObject = buildJsonObject {
         put("yieldOut", yieldG)
         put("rating", rating)
         put("notes", notes)
+        waterG?.let { put("waterG", it) }
     }
     yieldTargetG?.let { put("yieldTarget", it) }
+    // Brew Log fields (issue #10) — ride the core shape so the v2
+    // exporter emits the crema_brew_method extension keys.
+    brewMethod?.let { put("brewMethod", it) }
+    recipeName?.let { put("recipeName", it) }
+    brewTempC?.let { put("brewTempTarget", it) }
     putJsonObject("record") {
         put("duration", durationMs)
         putJsonArray("samples") {
@@ -251,6 +333,36 @@ fun historyStats(shots: List<StoredShot>): HistoryStats {
             coreHistoryStats(statsJson.encodeToString(ListSerializer(ShotStatInput.serializer()), rows)),
         )
     }.getOrElse { HistoryStats(count = shots.size.toUInt()) }
+}
+
+/**
+ * The method-aware stat strip (issue #10) — [historyStats]'s Brew Log
+ * sibling. Adds water-in + method per row so the core can apply the
+ * mixed-set scoping rules (`de1_domain::brew_history_stats`): count /
+ * beans-used / rating span every row; the weight / ratio / time averages
+ * scope to espresso rows in a mixed set (the strip tags those tiles
+ * "esp") or to the single method the whole set belongs to.
+ */
+fun brewHistoryStats(shots: List<StoredShot>): BrewHistoryStats {
+    val rows = shots.map {
+        BrewStatInput(
+            durationMs = it.durationMs,
+            finalWeightG = it.yieldG,
+            peakWeightG = it.peakWeightG,
+            doseG = it.doseG,
+            waterG = it.waterG,
+            rating = it.rating?.toUByte(),
+            brewMethod = it.brewMethod,
+        )
+    }
+    return runCatching {
+        statsJson.decodeFromString(
+            BrewHistoryStats.serializer(),
+            coreBrewHistoryStats(statsJson.encodeToString(ListSerializer(BrewStatInput.serializer()), rows)),
+        )
+    }.getOrElse {
+        BrewHistoryStats(count = shots.size.toUInt(), mixedMethods = false)
+    }
 }
 
 /** Max telemetry points stored per shot — enough for a faithful detail

@@ -198,6 +198,8 @@ export interface RustShotMetadata {
 	rating: number | null;
 	tds: number | null;
 	extractionYield: number | null;
+	/** Water in, grams — the pour total for filter/immersion brews. */
+	waterG?: number | null;
 }
 
 /**
@@ -237,6 +239,12 @@ export interface RustStoredShot {
 	/** Equipment-level grinder model at completion time — feeds the
 	 *  exporter's `app.data.settings.grinder_model`. */
 	grinderModel?: string | null;
+	/** Brew Log method (`"pourover"`, …); absent/`null` = machine espresso. */
+	brewMethod?: string | null;
+	/** The guided-session recipe name, snapshot at completion. */
+	recipeName?: string | null;
+	/** Weight-only guided-session telemetry (Rust `BrewSeries`). */
+	brewSeries?: import('./crema-core').BrewSeries | null;
 }
 
 /**

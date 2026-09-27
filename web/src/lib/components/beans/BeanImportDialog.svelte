@@ -83,6 +83,8 @@
 		readonly shots: CoreImportedShot[];
 		readonly diagnostics: {
 			readonly nonEspressoBrewsSkipped: number;
+			/** Non-espresso brews imported as Brew Log rows (issue #10). */
+			readonly brewsImportedNonEspresso: number;
 			readonly brewsDanglingPreparation: number;
 			readonly brewsDanglingBean: number;
 			readonly beansImported: number;
@@ -121,7 +123,11 @@
 			readonly rating?: number | null;
 			readonly notes?: string | null;
 			readonly grinderSetting?: string | null;
+			readonly waterG?: number | null;
 		};
+		/** Brew Log method for non-espresso BC brews (issue #10). */
+		readonly brewMethod?: string | null;
+		readonly brewTempTarget?: number | null;
 	}
 
 	interface Preview {
@@ -134,6 +140,8 @@
 		shotDuplicatesSkipped: number;
 		droppedCategories: string[];
 		nonEspressoBrewsSkipped: number;
+		/** Non-espresso brews landing as Brew Log rows (issue #10). */
+		brewsImported: number;
 		brewsDanglingPreparation: number;
 		/** Photos referenced in `BEANS[*].attachments` (from the core). */
 		photosReferenced: number;
@@ -577,6 +585,7 @@
 			shotDuplicatesSkipped,
 			droppedCategories,
 			nonEspressoBrewsSkipped: plan.diagnostics.nonEspressoBrewsSkipped,
+			brewsImported: plan.diagnostics.brewsImportedNonEspresso ?? 0,
 			brewsDanglingPreparation: plan.diagnostics.brewsDanglingPreparation,
 			photosReferenced,
 			photosMatched
@@ -629,7 +638,10 @@
 				yieldOut: meta.yieldOut ?? null,
 				rating: meta.rating ?? null,
 				notes: meta.notes ?? null,
-				grinderSetting: meta.grinderSetting ?? null
+				grinderSetting: meta.grinderSetting ?? null,
+				// Water-in for BC filter brews (issue #10) — the core maps
+				// BC's `brew_quantity` here for non-espresso preparations.
+				waterG: meta.waterG ?? null
 			},
 			record: {
 				duration: imp.storedShot.record.duration,
@@ -637,7 +649,13 @@
 			},
 			bean,
 			grinderModel: imp.grinderModel,
-			tags: []
+			tags: [],
+			// Brew Log method for non-espresso BC brews — these used to be
+			// skipped outright; now they land as telemetry-less brew rows.
+			...(imp.storedShot.brewMethod ? { brewMethod: imp.storedShot.brewMethod } : {}),
+			...(imp.storedShot.brewTempTarget != null
+				? { brewTempTarget: imp.storedShot.brewTempTarget }
+				: {})
 		};
 	}
 
@@ -809,8 +827,8 @@
 					A Crema <code>.crema.zip</code> bundles beans + roasters + shots + photos for
 					lossless round-trip (a bare <code>.jsonl</code> also works — photos stay
 					device-local). A Beanconqueror <code>.zip</code> (or a bare <code>.json</code>) imports the high-value subset;
-					drop the photo files alongside for the "with photos" variant. Crema is
-					espresso-only — BC V60 / AeroPress brews are skipped + counted.
+					drop the photo files alongside for the "with photos" variant. BC V60 /
+					AeroPress / French-press brews import as Brew Log entries.
 				{/snippet}
 			</FileDropZone>
 		</div>
@@ -886,16 +904,24 @@
 				</div>
 			{/if}
 		</div>
-		{#if preview.nonEspressoBrewsSkipped > 0 || preview.brewsDanglingPreparation > 0 || preview.droppedCategories.length > 0 || preview.photosReferenced > preview.photosMatched}
+		{#if preview.brewsImported > 0 || preview.nonEspressoBrewsSkipped > 0 || preview.brewsDanglingPreparation > 0 || preview.droppedCategories.length > 0 || preview.photosReferenced > preview.photosMatched}
 			<div class="bd-dropped">
 				<InfoIcon aria-hidden="true" />
 				<div>
-					<div class="bd-dropped-title">Not migrated:</div>
+					<div class="bd-dropped-title">Also in this archive:</div>
 					<ul>
 						{#if preview.nonEspressoBrewsSkipped > 0}
 							<li>
 								{preview.nonEspressoBrewsSkipped} non-espresso brew{preview.nonEspressoBrewsSkipped === 1 ? '' : 's'}
 								(V60 / AeroPress / etc.)
+							</li>
+						{/if}
+						{#if preview.brewsImported > 0}
+							<!-- Not "not migrated" — the happy inverse. Rendered in
+							     this box so the brew accounting reads in one place. -->
+							<li class="bd-dropped-ok">
+								{preview.brewsImported} non-espresso brew{preview.brewsImported === 1 ? '' : 's'}
+								(V60 / AeroPress / …) import as Brew Log entries
 							</li>
 						{/if}
 						{#if preview.brewsDanglingPreparation > 0}
@@ -1090,6 +1116,10 @@
 		margin: 0;
 		padding-left: 18px;
 		font-size: 11px;
+	}
+	/* The happy line in the accounting box — brews landing, not dropping. */
+	.bd-dropped-ok {
+		color: var(--success, #5c8a4c);
 	}
 	.bd-foot {
 		display: flex;

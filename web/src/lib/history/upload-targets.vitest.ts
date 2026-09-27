@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	decentUploadTarget,
+	shotUploadTargets,
 	uploadMenuEntry,
 	viewableTargets,
 	type UploadTarget
@@ -60,5 +61,23 @@ describe('decentUploadTarget', () => {
 			expect(t).toMatchObject({ uploaded: true, shareable: false, viewUrl: 'https://decentespresso.com/support/espressomachine' });
 		}
 		expect(decentUploadTarget(base, true)).toMatchObject({ uploaded: false, viewUrl: null, shareable: false });
+	});
+});
+
+describe('shotUploadTargets', () => {
+	const base = { formatVersion: 3, id: 's', completedAt: 1, metadata: {}, record: { duration: 30_000, samples: [] } } as unknown as StoredShot;
+	it('lists Visualizer then Decent for a machine shot', () => {
+		const ts = shotUploadTargets(base, { visualizer: true, decent: false });
+		expect(ts.map((t) => [t.id, t.enabled])).toEqual([
+			['visualizer', true],
+			['decent', false]
+		]);
+	});
+	it('is empty for a Brew Log row (issue #10) — no Upload / View / Share rows, no pip', () => {
+		const brew = { ...base, brewMethod: 'pourover' } as StoredShot;
+		const ts = shotUploadTargets(brew, { visualizer: true, decent: true });
+		expect(ts).toEqual([]);
+		expect(uploadMenuEntry(ts).enabled).toBe(false);
+		expect(viewableTargets(ts)).toEqual([]);
 	});
 });

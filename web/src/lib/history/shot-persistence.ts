@@ -43,6 +43,7 @@ import type {
 import { ShotSync } from '$lib/services/shot-sync';
 import { UploadQueue } from '$lib/services/upload-queue';
 import { getHistoryStore } from './store.svelte';
+import { isBrewLog } from './model';
 import type { UiSnapshot } from '$lib/state/ui-state.svelte';
 
 /**
@@ -457,6 +458,11 @@ export function pushShotToVisualizer(
 		const shot = getHistoryStore().get(shotId);
 		if (!shot) {
 			reportUploadOutcome(shotId, 'Visualizer', { kind: 'skipped', message: 'Shot not found' });
+			return;
+		}
+		// Brew Log rows (issue #10) never reach Visualizer — auto or manual.
+		if (isBrewLog(shot)) {
+			reportUploadOutcome(shotId, 'Visualizer', { kind: 'skipped', message: 'Brew Log entries stay on this device' });
 			return;
 		}
 

@@ -698,6 +698,110 @@ mod tests {
     }
 
     #[test]
+    fn backup_round_trip_keeps_the_brew_log_fields() {
+        // Issue #10: brew rows ride on kind:"shot" lines. A guided pourover
+        // (method + recipe + weight series + water-in) and a manual log
+        // (method + water-in only) both survive export → import, beside a
+        // machine shot's #84 decentId / machine.
+        let envelope = serde_json::json!({
+            "shots": [
+                {
+                    "formatVersion": 3,
+                    "id": "shot:brew-guided",
+                    "completedAt": 1_700_000_000_000_i64,
+                    "record": { "duration": 185_000, "samples": [] },
+                    "metadata": { "dose": 15.0, "waterG": 250.0 },
+                    "brewMethod": "pourover",
+                    "recipeName": "Hoffmann V60",
+                    "brewSeries": {
+                        "samples": [
+                            { "elapsedMs": 0, "weightG": 0.0 },
+                            { "elapsedMs": 250, "weightG": 4.5, "flowGS": 18.0 },
+                        ],
+                        "stageMarks": [{ "elapsedMs": 0, "stepIndex": 0 }],
+                    },
+                },
+                {
+                    "formatVersion": 3,
+                    "id": "shot:brew-manual",
+                    "completedAt": 1_700_000_100_000_i64,
+                    "record": { "duration": 0, "samples": [] },
+                    "metadata": { "dose": 18.0, "waterG": 300.0 },
+                    "brewMethod": "aeropress",
+                },
+                {
+                    "formatVersion": 3,
+                    "id": "shot:machine",
+                    "completedAt": 1_700_000_200_000_i64,
+                    "record": { "duration": 30_000, "samples": [] },
+                    "decentId": "98765",
+                    "machine": { "serialNumber": "6262" },
+                },
+            ],
+        });
+        let jsonl =
+            export_backup_jsonl_from_json(&envelope.to_string(), 1_700_000_000_000, "0.1", "Pixel")
+                .unwrap();
+        assert!(jsonl.contains(r#""brewMethod":"pourover""#), "{jsonl}");
+        assert!(jsonl.contains(r#""recipeName":"Hoffmann V60""#), "{jsonl}");
+        assert!(jsonl.contains(r#""waterG":250"#), "{jsonl}");
+
+        let plan = parse_backup_jsonl(&jsonl);
+        assert_eq!(plan.shots.len(), 3);
+        let by_id = |id: &str| plan.shots.iter().find(|s| s.id == id).unwrap();
+
+        let guided = by_id("shot:brew-guided");
+        assert_eq!(guided.brew_method.as_deref(), Some("pourover"));
+        assert_eq!(guided.recipe_name.as_deref(), Some("Hoffmann V60"));
+        assert_eq!(guided.metadata.water_g, Some(250.0));
+        let series = guided.brew_series.as_ref().expect("series survives");
+        assert_eq!(series.samples.len(), 2);
+        assert_eq!(series.samples[1].elapsed_ms, 250);
+        assert_eq!(series.samples[1].flow_g_s, Some(18.0));
+        assert_eq!(series.stage_marks.len(), 1);
+        assert!(guided.is_brew_log() && !guided.is_manual_log());
+        assert_eq!(guided.machine, None, "brews carry no machine stamp");
+
+        let manual = by_id("shot:brew-manual");
+        assert_eq!(manual.brew_method.as_deref(), Some("aeropress"));
+        assert_eq!(manual.metadata.water_g, Some(300.0));
+        assert_eq!(manual.recipe_name, None);
+        assert_eq!(manual.brew_series, None);
+        assert!(manual.is_brew_log() && manual.is_manual_log());
+
+        let machine = by_id("shot:machine");
+        assert!(!machine.is_brew_log());
+        assert_eq!(machine.decent_id.as_deref(), Some("98765"));
+        assert_eq!(
+            machine.machine.as_ref().map(|m| m.serial_number.as_str()),
+            Some("6262")
+        );
+    }
+
+    #[test]
+    fn a_machine_shot_serialises_without_brew_fields() {
+        let envelope = serde_json::json!({
+            "shots": [{
+                "formatVersion": 3,
+                "id": "shot:rt-4",
+                "completedAt": 1_700_000_000_000_i64,
+                "record": { "duration": 30_000, "samples": [] },
+            }],
+        });
+        let jsonl =
+            export_backup_jsonl_from_json(&envelope.to_string(), 1_700_000_000_000, "0.1", "Pixel")
+                .unwrap();
+        // The StoredShot-level brew fields are omitted outright; the
+        // metadata's `waterG` follows its siblings (`nextPlan`, `tds`, …)
+        // and serialises as null, which older builds ignore.
+        for key in ["brewMethod", "recipeName", "brewSeries"] {
+            assert!(!jsonl.contains(key), "{key} leaked: {jsonl}");
+        }
+        assert!(!jsonl.contains(r#""waterG":0"#), "{jsonl}");
+        assert_eq!(parse_backup_jsonl(&jsonl).shots[0].metadata.water_g, None);
+    }
+
+    #[test]
     fn a_shot_without_decent_fields_serialises_without_them() {
         // Older rows / fixtures stay byte-stable: absent fields are not
         // written back as `null`.

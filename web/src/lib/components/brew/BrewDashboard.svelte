@@ -683,7 +683,13 @@
 	const lastBeanShot = $derived.by<StoredShot | null>(() => {
 		const beanId = beanLibrary.activeBeanId;
 		if (!beanId) return null;
-		return historyStore.all.find((s) => s.bean?.beanId === beanId) ?? null;
+		// Machine shots only (issue #10): a logged pourover on the same bag
+		// must not seed the DE1 dial-in card — its grind / water targets
+		// belong to a different instrument. Filter dial continuity comes
+		// from "Log again" instead.
+		return (
+			historyStore.all.find((s) => s.bean?.beanId === beanId && !s.brewMethod) ?? null
+		);
 	});
 	/**
 	 * Show the dial-in card when idle — but yield to the session Last-shot

@@ -69,10 +69,6 @@ import java.util.Locale
  *  "nothing recorded" rather than as a broken layout. */
 private const val EMPTY = "—"
 
-/** Grams per shot used for the "~N shots left" estimate — the same 18 g the
- *  web drawer assumes. */
-private const val GRAMS_PER_SHOT = 18f
-
 /**
  * The scrolling body of the bean detail. The caller owns the scroll container
  * (a `LazyColumn` item, or a `verticalScroll` Column) and the surrounding
@@ -97,6 +93,9 @@ fun BeanDetailContent(
     onOpenShot: ((String) -> Unit)? = null,
     /** Open History filtered to this bag ("See all N shots"); null = hidden. */
     onSeeAllShots: (() -> Unit)? = null,
+    /** This bag's brews' doses, g, newest first (0 = not recorded) — the
+     *  core's "≈N brews" estimate (issue #10). */
+    recentDosesG: List<Float> = emptyList(),
 ) {
     val days = beanDaysOffRoast(bean)
     val frozen = bean.isFrozen
@@ -106,7 +105,7 @@ fun BeanDetailContent(
 
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         BeanDetailHero(bean, roasterName, frozen, onPhotoTap)
-        BeanStatusStrip(bean, days, frozen, openedDays, bagSize, remaining, shotCount)
+        BeanStatusStrip(bean, days, frozen, openedDays, bagSize, remaining, shotCount, recentDosesG)
 
         DetailGroup("Identity") {
             DetailRow("Name", bean.name)
@@ -402,6 +401,7 @@ private fun BeanStatusStrip(
     bagSize: Float,
     remaining: Float,
     shotCount: Int,
+    recentDosesG: List<Float> = emptyList(),
 ) {
     CremaCard(shape = RoundedCornerShape(14.dp)) {
         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -424,15 +424,18 @@ private fun BeanStatusStrip(
                     label = "Remaining",
                     value = if (bagSize > 0f || remaining > 0f) "${remaining.toInt()}g" else EMPTY,
                     sub = if (bagSize > 0f) {
-                        val shots = (remaining / GRAMS_PER_SHOT).toInt()
-                        "of ${bagSize.toInt()}g" + if (shots > 0) " · ~$shots shots" else ""
+                        // "≈N brews" — the core's brews_remaining_estimate
+                        // (this bag's own recent mean dose, 18 g fallback;
+                        // shared with the web drawer, issue #10).
+                        val brews = coffee.crema.core.brewsRemainingEstimate(remaining, recentDosesG).toInt()
+                        "of ${bagSize.toInt()}g" + if (brews > 0) " · ≈$brews brews" else ""
                     } else {
                         EMPTY
                     },
                 )
                 StatusCell(
                     Modifier.weight(1f),
-                    label = "Shots",
+                    label = "Brews",
                     value = "$shotCount",
                     sub = bean.qualityScore?.takeIf { it.isNotBlank() }?.let { "$it score" } ?: "in history",
                 )
@@ -603,3 +606,80 @@ private fun DetailPill(text: String, accent: Boolean = false) {
  *  freshness maths derives from it. */
 private fun dateWithAge(iso: String, days: Int?): String =
     if (days == null) iso else "$iso · ${days}d ago"
+
+/**
+ * The bag detail's footer actions, shared by the tablet sheet and the phone
+ * detail screen. Archive / Delete lead; the primary pair — "Log a brew" (the
+ * Brew Log's inventory-first door, issue #10) and "Set active" — share a row
+ * on a roomy pane and, under 360dp, stack with "Log a brew" wrapping UNDER
+ * "Set active" so neither label truncates. Sized by the pane it gets
+ * (BoxWithConstraints), not the device.
+ */
+@Composable
+fun BeanDetailFooterActions(
+    archived: Boolean,
+    isActive: Boolean,
+    onToggleArchived: () -> Unit,
+    onDelete: () -> Unit,
+    onSetActive: () -> Unit,
+    onLogBrew: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val showLog = onLogBrew != null && !archived
+    val showActive = !isActive && !archived
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier.fillMaxWidth()) {
+        val secondary: @Composable () -> Unit = {
+            coffee.crema.ui.components.CremaButton(
+                onClick = onToggleArchived,
+                variant = coffee.crema.ui.components.CremaButtonVariant.Outlined,
+                icon = if (archived) "archive-box" else "archive",
+                label = if (archived) "Restore" else "Archive",
+            )
+            coffee.crema.ui.components.CremaButton(
+                onClick = onDelete,
+                variant = coffee.crema.ui.components.CremaButtonVariant.Text,
+                icon = "trash",
+                danger = true,
+                label = "Delete",
+            )
+        }
+        val logBrew: @Composable (Modifier) -> Unit = { m ->
+            coffee.crema.ui.components.CremaButton(
+                onClick = { onLogBrew?.invoke() },
+                variant = coffee.crema.ui.components.CremaButtonVariant.Outlined,
+                icon = "plus-circle",
+                label = "Log a brew",
+                modifier = m,
+            )
+        }
+        val setActive: @Composable (Modifier) -> Unit = { m ->
+            coffee.crema.ui.components.CremaButton(onClick = onSetActive, icon = "coffee-bean", label = "Set active", modifier = m)
+        }
+        val gap = Arrangement.spacedBy(8.dp)
+        when {
+            // Everything on one line.
+            maxWidth >= 520.dp -> Row(Modifier.fillMaxWidth(), horizontalArrangement = gap, verticalAlignment = Alignment.CenterVertically) {
+                secondary()
+                Spacer(Modifier.weight(1f))
+                if (showLog) logBrew(Modifier)
+                if (showActive) setActive(Modifier)
+            }
+            // Secondary row, then the primary pair side by side.
+            maxWidth >= 360.dp -> Column(verticalArrangement = gap) {
+                Row(horizontalArrangement = gap, verticalAlignment = Alignment.CenterVertically) { secondary() }
+                if (showLog || showActive) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = gap) {
+                        if (showLog) logBrew(Modifier.weight(1f))
+                        if (showActive) setActive(Modifier.weight(1f))
+                    }
+                }
+            }
+            // Narrow: "Log a brew" wraps under "Set active", both full width.
+            else -> Column(verticalArrangement = gap) {
+                Row(horizontalArrangement = gap, verticalAlignment = Alignment.CenterVertically) { secondary() }
+                if (showActive) setActive(Modifier.fillMaxWidth())
+                if (showLog) logBrew(Modifier.fillMaxWidth())
+            }
+        }
+    }
+}

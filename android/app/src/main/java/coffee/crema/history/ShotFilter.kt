@@ -28,6 +28,12 @@ fun filterAndSortShots(
     sortDesc: Boolean,
     now: Long,
     beanFilter: String? = null,
+    /**
+     * Brew Log method scope (issue #10) — a normalized method string;
+     * `"espresso"` covers machine shots + manual espresso logs. Null =
+     * no method filter.
+     */
+    methodFilter: String? = null,
 ): List<StoredShot> {
     val dayMs = 24L * 60L * 60L * 1000L
     val startOfDay = Calendar.getInstance().apply {
@@ -40,7 +46,9 @@ fun filterAndSortShots(
             (s.profileName?.contains(query, ignoreCase = true) == true) ||
             (s.beanLabel?.contains(query, ignoreCase = true) == true) ||
             (s.notes?.contains(query, ignoreCase = true) == true) ||
-            (s.nextPlan?.contains(query, ignoreCase = true) == true)
+            (s.nextPlan?.contains(query, ignoreCase = true) == true) ||
+            coffee.crema.brew.methodLabel(s.methodOf).contains(query, ignoreCase = true) ||
+            (s.recipeName?.contains(query, ignoreCase = true) == true)
         val matchesRange = when (range) {
             "today" -> s.completedAtMs >= startOfDay
             "7d" -> s.completedAtMs >= now - 7L * dayMs
@@ -49,7 +57,8 @@ fun filterAndSortShots(
         }
         val matchesProfile = profileFilter == null || s.profileName == profileFilter
         val matchesBean = beanFilter == null || s.bean?.beanId == beanFilter
-        matchesSearch && matchesRange && matchesProfile && matchesBean
+        val matchesMethod = methodFilter == null || (s.methodOf ?: "espresso") == methodFilter
+        matchesSearch && matchesRange && matchesProfile && matchesBean && matchesMethod
     }
     val asc = when (sort) {
         "rating" -> filtered.sortedBy { it.rating ?: 0 }

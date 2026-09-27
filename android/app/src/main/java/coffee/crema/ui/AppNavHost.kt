@@ -50,6 +50,8 @@ fun AppNavHost(
     initialRoute: String = "brew",
     /** Reports the current route so MainActivity can hand it to the phone host. */
     onRouteChange: (String) -> Unit = {},
+    /** Dynamic owning tabs for [initialRoute]'s pushed routes ([NavRestore.owners]). */
+    routeOwners: Map<String, String> = emptyMap(),
 ) {
     val nav = rememberNavController()
     // Rail destinations replace one another (single-top, no back-stack buildup);
@@ -83,5 +85,5 @@ fun AppNavHost(
         composable("bean-edit") { beanEditContent(onBack) }
         composable("debug") { debugContent() }
     }
-    SyncNavRoute(nav, initialRoute, NavRestore.TABLET_ROUTES, onNav, onRouteChange)
+    SyncNavRoute(nav, initialRoute, NavRestore.TABLET_ROUTES, onNav, onRouteChange, routeOwners)
 }
