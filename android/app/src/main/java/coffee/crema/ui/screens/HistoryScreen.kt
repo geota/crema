@@ -605,7 +605,9 @@ private fun StatsStrip(history: List<StoredShot>, weightUnit: String, compact: B
     val mixed = s.mixedMethods
     val nonEsp = history.any { it.methodOf != null && it.methodOf != "espresso" }
     val noun = (if (nonEsp) "brew" else "shot") + if (s.count == 1u) "" else "s"
-    fun scoped(label: String) = if (mixed) "$label · esp" else label
+    // The espresso scope rides as its own tag (issue 02) — never glued into
+    // the label, where a narrow tile hard-clipped it to "· ESF".
+    val scope = if (mixed) "esp" else null
     // Six tiles (the Brew Log added "Beans used"). They wrap by the width the
     // strip actually gets: one row from 600dp, 3×2 below — never a thin,
     // clipped tile and never a sideways scroll.
@@ -614,9 +616,9 @@ private fun StatsStrip(history: List<StoredShot>, weightUnit: String, compact: B
     val tiles: List<@Composable (Modifier) -> Unit> = listOf(
         { m -> StatTile(if (nonEsp) "Brews" else "Shots", "${s.count}", noun, m, compact) },
         { m -> StatTile("Beans used", beansUsed.value, s.beansUsedG?.let { beansUsed.unit }, m, compact) },
-        { m -> StatTile(scoped("Avg weight"), avgWt.value, s.avgWeightG?.let { avgWt.unit }, m, compact) },
-        { m -> StatTile(scoped("Avg ratio"), s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—", null, m, compact) },
-        { m -> StatTile(scoped("Avg time"), s.avgTimeS?.let { formatShotDuration((it * 1000).toLong()) } ?: "—", null, m, compact) },
+        { m -> StatTile("Avg weight", avgWt.value, s.avgWeightG?.let { avgWt.unit }, m, compact, scope) },
+        { m -> StatTile("Avg ratio", s.avgRatio?.let { fmt("1:%.1f", it) } ?: "—", null, m, compact, scope) },
+        { m -> StatTile("Avg time", s.avgTimeS?.let { formatShotDuration((it * 1000).toLong()) } ?: "—", null, m, compact, scope) },
         { m -> StatTile("Avg rating", s.avgRating?.let { fmt("%.1f", it) } ?: "—", null, m, compact) },
     )
     BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp)) {
@@ -632,13 +634,44 @@ private fun StatsStrip(history: List<StoredShot>, weightUnit: String, compact: B
 }
 
 @Composable
-private fun StatTile(label: String, value: String, unit: String?, modifier: Modifier = Modifier, compact: Boolean = false) {
+private fun StatTile(
+    label: String,
+    value: String,
+    unit: String?,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+    /** A scope tag ("esp" in a mixed set), kept whole while the label ellipsizes. */
+    scope: String? = null,
+) {
     CremaCard(modifier, shape = RoundedCornerShape(12.dp)) {
         Column(
-            Modifier.padding(horizontal = 16.dp, vertical = if (compact) 8.dp else 14.dp),
+            Modifier.padding(horizontal = if (scope != null) 12.dp else 16.dp, vertical = if (compact) 8.dp else 14.dp),
             verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp),
         ) {
-            Eyebrow(label)
+            if (scope == null) {
+                Eyebrow(label)
+            } else {
+                // Label + scope on one line: the label ellipsizes cleanly
+                // ("AVG WEI… · ESP") and the tag never clips (issue 02).
+                val eyebrowStyle = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        label.uppercase(),
+                        style = eyebrowStyle,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Text(
+                        " · ${scope.uppercase()}",
+                        style = eyebrowStyle,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+            }
             // PWA .hi-stat-val (22px mono) + em (11px SANS, half-size) — the unit must
             // be small + sans, not a 0.72x mono subscript (which read too big).
             // Compact (short-window) drops the value a step to trim the strip.
@@ -871,134 +904,167 @@ private fun ShotDetail(
         // lookalike). The one deliberate difference from Brew: the pull
         // timestamp rides the profile block's eyebrow row — a shot is an
         // archival record.
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.Top) {
-            CremaHeaderBlock(
-                eyebrow = if (isBrew) "Method" else "Profile",
-                eyebrowTrailing = {
-                    Text(
-                        remember(shot.completedAtMs) {
-                            java.text.SimpleDateFormat("MMM d · HH:mm", java.util.Locale.getDefault())
-                                .format(java.util.Date(shot.completedAtMs))
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                },
-                title = when {
-                    isBrew -> (shot.recipeName ?: methodLabel(method)) + if (manual) " · logged" else ""
-                    else -> shot.profileName ?: "Shot"
-                },
-                // A shot's profile is a historical fact — no picker, no caret.
-                showCaret = false,
-                modifier = Modifier.weight(1f),
-                lines = if (isBrew) buildList {
-                    // Brew rows: time · water (or yield) · ratio.
-                    val meta = listOfNotNull(
-                        shot.durationMs.takeIf { it > 0 }?.let { formatShotDuration(it) },
-                        shot.waterG?.takeIf { it > 0f }?.let { "${it.toInt()} g water" }
-                            ?: shot.yieldG?.let { formatWeight(it, weightUnit) },
-                        shot.methodRatioLabel(),
-                    ).joinToString(" · ")
-                    if (meta.isNotBlank()) add(HeaderBlockLine(meta))
-                } else buildList {
-                    // Brew's two profile lines, read from the shot's embedded
-                    // profile snapshot — the JSON-v2 shape capture freezes
-                    // (title/steps/target_weight, snake_case) — targets +
-                    // character; the shot's ACTUALS live in the tiles below.
-                    val wire = shot.profile
-                    fun field(key: String) = (wire?.get(key) as? JsonPrimitive)?.contentOrNull
-                    val dose = field("dose")?.toFloatOrNull() ?: shot.doseG
-                    val yieldOut = field("target_weight")?.toFloatOrNull() ?: shot.yieldTargetG
-                    // Brew temp = the first step's setpoint (v2 has no
-                    // top-level brew temp).
-                    val temp = ((wire?.get("steps") as? JsonArray)?.firstOrNull() as? JsonObject)
-                        ?.let { (it["temperature_c"] as? JsonPrimitive)?.contentOrNull?.toFloatOrNull() }
-                    val meta = listOfNotNull(
-                        if (dose != null && yieldOut != null) formatRatio(dose, yieldOut) else null,
-                        yieldOut?.let { formatWeight(it, weightUnit) },
-                        temp?.let { formatTemp(it, tempUnit) },
-                    ).joinToString(" · ")
-                    if (meta.isNotBlank()) add(HeaderBlockLine(meta))
-                    // .bh-spec — "{beverage} · {author}" (v2 carries no roast).
-                    val spec = listOfNotNull(
-                        field("beverage_type")?.replaceFirstChar { it.uppercase() },
-                        field("author")?.takeIf { it.isNotBlank() },
-                    ).joinToString(" · ")
-                    if (spec.isNotBlank()) add(HeaderBlockLine(spec, HeaderLineStyle.Spec))
-                },
-            )
-            // Bean block — tap to re-attribute. The freshness chip is STATIC:
-            // the bean's age at PULL time ("7d off roast" forever if it was
-            // pulled at 7 days), not today's age. The grind moved here from the
-            // profile meta (user direction) — the shot's recorded grind, else
-            // the snapshot reference, exactly what History rows show.
-            run {
-                val daysAtPull = remember(shot.id) {
-                    coreDaysOffRoast(shot.bean?.roastedOn, null, null, shot.completedAtMs)?.toInt()
-                }
+        //
+        // Sized by the detail PANE, not the screen (issue 01): below ≈520dp
+        // (a tablet-rail pane in portrait) the Bean block stacks under the
+        // Method/Profile block and the timestamp drops to its own line under
+        // the eyebrow, so the title keeps its width. Wide panes keep the
+        // side-by-side head. Brew and machine rows share this head.
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val narrow = maxWidth < 520.dp
+            val stampText = remember(shot.completedAtMs) {
+                java.text.SimpleDateFormat("MMM d · HH:mm", java.util.Locale.getDefault())
+                    .format(java.util.Date(shot.completedAtMs))
+            }
+            val stamp: @Composable () -> Unit = {
+                Text(
+                    stampText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+            val profileBlock: @Composable (Modifier) -> Unit = { m ->
                 CremaHeaderBlock(
-                    eyebrow = "Bean",
-                    eyebrowTrailing = if (daysAtPull != null) {
-                        {
-                            CremaFreshnessChip(
-                                "${daysAtPull}d off roast",
-                                freshnessColor(false, shot.bean?.roastLevel?.toInt(), daysAtPull),
-                            )
-                        }
-                    } else {
-                        null
+                    eyebrow = if (isBrew) "Method" else "Profile",
+                    eyebrowTrailing = if (narrow) null else stamp,
+                    eyebrowBelow = if (narrow) stamp else null,
+                    title = when {
+                        isBrew -> (shot.recipeName ?: methodLabel(method)) + if (manual) " · logged" else ""
+                        else -> shot.profileName ?: "Shot"
                     },
-                    title = shot.beanLabel ?: "No bean",
-                    caretAtEnd = true,
-                    onClick = { changeBean = true },
-                    modifier = Modifier.width(264.dp),
-                    lines = buildList {
+                    // A shot's profile is a historical fact — no picker, no caret.
+                    showCaret = false,
+                    modifier = m,
+                    lines = if (isBrew) buildList {
+                        // Brew rows: time · water (or yield) · ratio.
+                        val meta = listOfNotNull(
+                            shot.durationMs.takeIf { it > 0 }?.let { formatShotDuration(it) },
+                            shot.waterG?.takeIf { it > 0f }?.let { "${it.toInt()} g water" }
+                                ?: shot.yieldG?.let { formatWeight(it, weightUnit) },
+                            shot.methodRatioLabel(),
+                        ).joinToString(" · ")
+                        if (meta.isNotBlank()) add(HeaderBlockLine(meta))
+                    } else buildList {
+                        // Brew's two profile lines, read from the shot's embedded
+                        // profile snapshot — the JSON-v2 shape capture freezes
+                        // (title/steps/target_weight, snake_case) — targets +
+                        // character; the shot's ACTUALS live in the tiles below.
+                        val wire = shot.profile
+                        fun field(key: String) = (wire?.get(key) as? JsonPrimitive)?.contentOrNull
+                        val dose = field("dose")?.toFloatOrNull() ?: shot.doseG
+                        val yieldOut = field("target_weight")?.toFloatOrNull() ?: shot.yieldTargetG
+                        // Brew temp = the first step's setpoint (v2 has no
+                        // top-level brew temp).
+                        val temp = ((wire?.get("steps") as? JsonArray)?.firstOrNull() as? JsonObject)
+                            ?.let { (it["temperature_c"] as? JsonPrimitive)?.contentOrNull?.toFloatOrNull() }
+                        val meta = listOfNotNull(
+                            if (dose != null && yieldOut != null) formatRatio(dose, yieldOut) else null,
+                            yieldOut?.let { formatWeight(it, weightUnit) },
+                            temp?.let { formatTemp(it, tempUnit) },
+                        ).joinToString(" · ")
+                        if (meta.isNotBlank()) add(HeaderBlockLine(meta))
+                        // .bh-spec — "{beverage} · {author}" (v2 carries no roast).
                         val spec = listOfNotNull(
-                            roastBand(shot.bean?.roastLevel?.toInt()),
-                            shot.grindLabel,
-                            shot.bean?.grinder?.takeIf { it.isNotBlank() },
+                            field("beverage_type")?.replaceFirstChar { it.uppercase() },
+                            field("author")?.takeIf { it.isNotBlank() },
                         ).joinToString(" · ")
                         if (spec.isNotBlank()) add(HeaderBlockLine(spec, HeaderLineStyle.Spec))
-                        val tags = shot.bean?.tags?.filter { it.isNotBlank() }.orEmpty().joinToString(" · ")
-                        if (tags.isNotBlank()) add(HeaderBlockLine(tags, HeaderLineStyle.Tags))
                     },
                 )
             }
-            CremaOverflowMenu(items = buildList {
-                if (isBrew) {
-                    // Brew rows (issue #10): the machine actions don't apply;
-                    // "Log again" is the dial-in loop's sibling, and logged
-                    // brews never touch Visualizer.
-                    onLogAgain?.let { add(OverflowItem("arrow-counter-clockwise", "Log again", it)) }
+            val beanBlock: @Composable (Modifier) -> Unit = { m ->
+                // Bean block — tap to re-attribute. The freshness chip is STATIC:
+                // the bean's age at PULL time ("7d off roast" forever if it was
+                // pulled at 7 days), not today's age. The grind moved here from the
+                // profile meta (user direction) — the shot's recorded grind, else
+                // the snapshot reference, exactly what History rows show.
+                run {
+                    val daysAtPull = remember(shot.id) {
+                        coreDaysOffRoast(shot.bean?.roastedOn, null, null, shot.completedAtMs)?.toInt()
+                    }
+                    CremaHeaderBlock(
+                        eyebrow = "Bean",
+                        eyebrowTrailing = if (daysAtPull != null) {
+                            {
+                                CremaFreshnessChip(
+                                    "${daysAtPull}d off roast",
+                                    freshnessColor(false, shot.bean?.roastLevel?.toInt(), daysAtPull),
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                        title = shot.beanLabel ?: "No bean",
+                        caretAtEnd = true,
+                        onClick = { changeBean = true },
+                        modifier = m,
+                        lines = buildList {
+                            val spec = listOfNotNull(
+                                roastBand(shot.bean?.roastLevel?.toInt()),
+                                shot.grindLabel,
+                                shot.bean?.grinder?.takeIf { it.isNotBlank() },
+                            ).joinToString(" · ")
+                            if (spec.isNotBlank()) add(HeaderBlockLine(spec, HeaderLineStyle.Spec))
+                            val tags = shot.bean?.tags?.filter { it.isNotBlank() }.orEmpty().joinToString(" · ")
+                            if (tags.isNotBlank()) add(HeaderBlockLine(tags, HeaderLineStyle.Tags))
+                        },
+                    )
+                }
+            }
+            val menu: @Composable () -> Unit = {
+                CremaOverflowMenu(items = buildList {
+                    if (isBrew) {
+                        // Brew rows (issue #10): the machine actions don't apply;
+                        // "Log again" is the dial-in loop's sibling, and logged
+                        // brews never touch Visualizer.
+                        onLogAgain?.let { add(OverflowItem("arrow-counter-clockwise", "Log again", it)) }
+                        add(OverflowItem("download-simple", "Export", onExport))
+                        add(OverflowItem("trash", "Delete brew", { confirmDelete = true }, danger = true))
+                        return@buildList
+                    }
+                    // The full dial-in leads; the profile-only reload stays for
+                    // users who want just the recipe (web SplitButton parity).
+                    onStartFromShot?.let { add(OverflowItem("coffee", "Start from this shot", it)) }
+                    add(OverflowItem("arrow-counter-clockwise", "Load profile only", onLoadOnBrew))
                     add(OverflowItem("download-simple", "Export", onExport))
-                    add(OverflowItem("trash", "Delete brew", { confirmDelete = true }, danger = true))
-                    return@buildList
+                    // One "Upload" row for every cloud destination (Visualizer, Decent),
+                    // naming the ones still missing the shot; a "View on X" per
+                    // destination that holds it. Nothing connected → the row stays
+                    // VISIBLE but disabled — a hidden action is undiscoverable.
+                    // Hidden while an upload of this shot is in flight (no double POST).
+                    if (!syncing) {
+                        val entry = uploadMenuEntry(uploadTargets)
+                        add(OverflowItem("cloud-arrow-up", entry.title, { onUpload(entry.targets) }, enabled = entry.enabled))
+                    }
+                    viewableTargets(uploadTargets).forEach { t ->
+                        add(OverflowItem("arrow-square-out", "View on ${t.name}", { onViewUploaded(t) }))
+                    }
+                    // Share = the PUBLIC link to an uploaded copy: one row when the shot
+                    // is shareable from one destination, one per destination otherwise.
+                    val shareable = shareableTargets(uploadTargets)
+                    shareable.forEach { t ->
+                        add(OverflowItem("share-network", if (shareable.size == 1) "Share link" else "Share ${t.name} link", { onShareUploaded(t) }))
+                    }
+                    add(OverflowItem("trash", "Delete shot", { confirmDelete = true }, danger = true))
+                })
+            }
+            if (narrow) {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                        profileBlock(Modifier.weight(1f))
+                        menu()
+                    }
+                    beanBlock(Modifier.fillMaxWidth())
                 }
-                // The full dial-in leads; the profile-only reload stays for
-                // users who want just the recipe (web SplitButton parity).
-                onStartFromShot?.let { add(OverflowItem("coffee", "Start from this shot", it)) }
-                add(OverflowItem("arrow-counter-clockwise", "Load profile only", onLoadOnBrew))
-                add(OverflowItem("download-simple", "Export", onExport))
-                // One "Upload" row for every cloud destination (Visualizer, Decent),
-                // naming the ones still missing the shot; a "View on X" per
-                // destination that holds it. Nothing connected → the row stays
-                // VISIBLE but disabled — a hidden action is undiscoverable.
-                // Hidden while an upload of this shot is in flight (no double POST).
-                if (!syncing) {
-                    val entry = uploadMenuEntry(uploadTargets)
-                    add(OverflowItem("cloud-arrow-up", entry.title, { onUpload(entry.targets) }, enabled = entry.enabled))
+            } else {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.Top) {
+                    profileBlock(Modifier.weight(1f))
+                    beanBlock(Modifier.width(264.dp))
+                    menu()
                 }
-                viewableTargets(uploadTargets).forEach { t ->
-                    add(OverflowItem("arrow-square-out", "View on ${t.name}", { onViewUploaded(t) }))
-                }
-                // Share = the PUBLIC link to an uploaded copy: one row when the shot
-                // is shareable from one destination, one per destination otherwise.
-                val shareable = shareableTargets(uploadTargets)
-                shareable.forEach { t ->
-                    add(OverflowItem("share-network", if (shareable.size == 1) "Share link" else "Share ${t.name} link", { onShareUploaded(t) }))
-                }
-                add(OverflowItem("trash", "Delete shot", { confirmDelete = true }, danger = true))
-            })
+            }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         if (confirmDelete) {
