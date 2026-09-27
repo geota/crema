@@ -509,6 +509,8 @@ data class MainUiState(
     val lastUpdateCheckAtMs: Long? = null,
     /** The newest version already notified about — notify once per build. */
     val lastSeenLatestVersion: String? = null,
+    /** The last saved Brew Log method — the log form opens on it (issue #10). */
+    val lastBrewLogMethod: String? = null,
     /** Whether the screensaver overlay is currently shown. Set by the idle
      *  checker or a live machine-sleep transition; cleared by tap-to-wake. */
     val saverVisible: Boolean = false,
@@ -1670,8 +1672,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             activeBeanId = s.activeBeanId,
             prefill = prefill,
             prefillBeanId = beanId,
+            lastUsedMethod = s.lastBrewLogMethod,
+            grinderOf = ::beanGrinderSetting,
         )
     }
+
+    /** A library bag's own grinder setting — the log form's grind fallback. */
+    private fun beanGrinderSetting(beanId: String): String? =
+        _ui.value.beans.firstOrNull { it.id == beanId }?.grinderSetting
 
     fun updateLogBrew(transform: (coffee.crema.ui.brewlog.BrewLogDraft) -> coffee.crema.ui.brewlog.BrewLogDraft) {
         _logBrew.update { it?.let(transform) }
@@ -1680,7 +1688,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** A method chip: re-template the draft's seeds for [method]. */
     fun reseedLogBrew(method: String) {
         val history = _ui.value.history
-        _logBrew.update { it?.let { d -> coffee.crema.ui.brewlog.BrewLogSeeds.reseed(d, history, method) } }
+        _logBrew.update { it?.let { d -> coffee.crema.ui.brewlog.BrewLogSeeds.reseed(d, history, method, ::beanGrinderSetting) } }
     }
 
     fun closeLogBrew() {
@@ -1696,7 +1704,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val d = _logBrew.value ?: return false
         val flagged = d.copy(attempted = true)
         val bean = d.beanId?.let { id -> _ui.value.beans.firstOrNull { it.id == id } }
-        val storedMethod = if (d.isCustom) coffee.crema.core.normalizeBrewMethod(d.customMethod) else d.method
+        // Never persist an empty method (blank → null → not saved); the
+        // presets are already normalized ids.
+        val storedMethod = coffee.crema.core.normalizeBrewMethod(if (d.isCustom) d.customMethod else d.method)
         if (storedMethod == null || d.doseMissing(bean != null)) {
             _logBrew.value = flagged
             return false
@@ -1719,6 +1729,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 brewSeries = d.series,
             ),
         )
+        // Remember the method so the next log opens on it (web parity).
+        if (_ui.value.lastBrewLogMethod != storedMethod) {
+            _ui.update { it.copy(lastBrewLogMethod = storedMethod) }
+            persistPrefs()
+        }
         _logBrew.value = null
         return true
     }
@@ -2767,6 +2782,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         autoUpdateCheck = _ui.value.autoUpdateCheck,
         lastUpdateCheckAtMs = _ui.value.lastUpdateCheckAtMs,
         lastSeenLatestVersion = _ui.value.lastSeenLatestVersion,
+        lastBrewLogMethod = _ui.value.lastBrewLogMethod,
         grinderModel = _ui.value.grinderModel,
         suppressDe1Sleep = _ui.value.suppressDe1Sleep,
         showDebugPanel = _ui.value.showDebugPanel,
@@ -3316,6 +3332,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             autoUpdateCheck = p.autoUpdateCheck,
             lastUpdateCheckAtMs = p.lastUpdateCheckAtMs,
             lastSeenLatestVersion = p.lastSeenLatestVersion,
+            lastBrewLogMethod = p.lastBrewLogMethod,
             grinderModel = p.grinderModel,
             suppressDe1Sleep = p.suppressDe1Sleep,
             showDebugPanel = p.showDebugPanel,

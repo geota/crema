@@ -167,14 +167,14 @@ private fun LogBrewFormBody(
                 { m ->
                     CremaStepper(
                         label = "Dose", value = draft.dose, unit = "g",
-                        onChange = { v -> update { it.copy(dose = v) } },
+                        onChange = { v -> update { it.edited(BrewLogDraft.DOSE).copy(dose = v) } },
                         step = 0.5, min = 0.0, max = 200.0, modifier = m, style = CremaStepperStyle.Boxed,
                     )
                 },
                 { m ->
                     CremaStepper(
                         label = if (draft.espresso) "Yield" else "Water", value = draft.water, unit = "g",
-                        onChange = { v -> update { it.copy(water = v) } },
+                        onChange = { v -> update { it.edited(BrewLogDraft.WATER).copy(water = v) } },
                         step = if (draft.espresso) 1.0 else 10.0, min = 0.0, max = 2000.0,
                         fmt = { fmt("%.0f", it) }, modifier = m, style = CremaStepperStyle.Boxed,
                     )
@@ -182,14 +182,14 @@ private fun LogBrewFormBody(
                 { m ->
                     CremaStepper(
                         label = "Grind", value = draft.grind, unit = null,
-                        onChange = { v -> update { it.copy(grind = v) } },
+                        onChange = { v -> update { it.edited(BrewLogDraft.GRIND).copy(grind = v) } },
                         step = 0.1, min = 0.0, max = 200.0, modifier = m, style = CremaStepperStyle.Boxed,
                     )
                 },
                 { m ->
                     CremaStepper(
                         label = "Temp", value = draft.temp, unit = "°C",
-                        onChange = { v -> update { it.copy(temp = v) } },
+                        onChange = { v -> update { it.edited(BrewLogDraft.TEMP).copy(temp = v) } },
                         step = 1.0, min = 0.0, max = 100.0, fmt = { fmt("%.0f", it) },
                         modifier = m, style = CremaStepperStyle.Boxed,
                     )
@@ -197,7 +197,7 @@ private fun LogBrewFormBody(
                 { m ->
                     CremaTextField(
                         value = draft.timeStr,
-                        onValueChange = { v -> update { it.copy(timeStr = v) } },
+                        onValueChange = { v -> update { it.edited(BrewLogDraft.TIME).copy(timeStr = v) } },
                         label = "Brew time",
                         placeholder = "m:ss",
                         modifier = m,

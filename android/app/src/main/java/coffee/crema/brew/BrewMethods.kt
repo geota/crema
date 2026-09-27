@@ -1,15 +1,18 @@
 package coffee.crema.brew
 
+import kotlinx.serialization.decodeFromString
+
 /*
  * The Brew Log method vocabulary (issue #10) — the Android twin of the web's
  * `$lib/brew/methods`. Storage accepts ANY normalized method string (the
- * core's `normalize_brew_method` rule); this file owns what the UI makes of
- * one: the curated preset chips, display labels, per-method seed values for
- * the log form. Tea is deliberately
- * absent — a BC tea brew still imports, carrying its name as free text.
+ * core's `normalize_brew_method` rule). The preset ids + seed numbers live in
+ * the core (`de1_domain::brew_method_presets`, one table for both shells);
+ * this file owns only what the UI makes of an id: its label and icon. Tea is
+ * deliberately absent — a BC tea brew still imports, carrying its name as
+ * free text. "Other" is the free-text chip, not a preset.
  */
 
-/** One curated method preset — a chip in the log form. */
+/** One curated method preset — a chip in the log form: the core preset plus its UI face. */
 data class BrewMethodPreset(
     /** The stored method string (`"french_press"`). */
     val id: String,
@@ -17,36 +20,47 @@ data class BrewMethodPreset(
     val label: String,
     /** The PhIcon name for its mark (web MethodMark parity). */
     val icon: String,
-    /** Seed dry dose, g, for a first-ever log of this method. */
-    val seedDose: Float,
-    /** Seed water-in, g — null for espresso (which speaks yield). */
-    val seedWater: Float?,
-    /** Seed yield-out, g — espresso only. */
-    val seedYield: Float?,
-    /** Seed water temperature, °C, or null (cold brew). */
-    val seedTemp: Float?,
+    /** The core's seed numbers for this preset. */
+    val seeds: coffee.crema.core.BrewMethodPreset,
 )
 
-/** The chip row, in display order (spec §3 defaults). */
-val BREW_METHOD_PRESETS: List<BrewMethodPreset> = listOf(
-    BrewMethodPreset("espresso", "Espresso", "coffee", 18f, null, 36f, 93f),
-    BrewMethodPreset("pourover", "V60 / pourover", "funnel", 15f, 250f, null, 96f),
-    BrewMethodPreset("aeropress", "AeroPress", "cylinder", 14f, 220f, null, 90f),
-    BrewMethodPreset("french_press", "French press", "jar", 30f, 500f, null, 95f),
-    BrewMethodPreset("moka", "Moka", "hourglass", 15f, 150f, null, null),
-    BrewMethodPreset("cold_brew", "Cold brew", "snowflake", 60f, 700f, null, null),
-    BrewMethodPreset("drip", "Drip machine", "drop", 30f, 500f, null, 94f),
-    BrewMethodPreset("siphon", "Siphon", "flask", 20f, 300f, null, 92f),
-    BrewMethodPreset("clever", "Clever / Switch", "funnel-simple", 18f, 300f, null, 94f),
+/** Decodes core JSON; tolerant of fields a newer core adds. */
+internal val CoreJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+/** Label + icon per core preset id — the only per-method data the shell owns. */
+private val METHOD_FACES: Map<String, Pair<String, String>> = mapOf(
+    "espresso" to ("Espresso" to "coffee"),
+    "pourover" to ("V60 / pourover" to "funnel"),
+    "aeropress" to ("AeroPress" to "cylinder"),
+    "french_press" to ("French press" to "jar"),
+    "moka" to ("Moka" to "hourglass"),
+    "cold_brew" to ("Cold brew" to "snowflake"),
+    "drip" to ("Drip machine" to "drop"),
+    "siphon" to ("Siphon" to "flask"),
+    "clever" to ("Clever / Switch" to "funnel-simple"),
 )
 
-/** Look up a preset by stored id, or null for free-text methods. */
-fun presetFor(method: String?): BrewMethodPreset? =
-    method?.trim()?.lowercase()?.let { m -> BREW_METHOD_PRESETS.find { it.id == m } }
+/**
+ * The chip row, in the core's display order — parsed once from
+ * `brewMethodPresetsJson()` (native; call from UI code only, never from a
+ * JVM unit test).
+ */
+val BREW_METHOD_PRESETS: List<BrewMethodPreset> by lazy {
+    CoreJson
+        .decodeFromString<List<coffee.crema.core.BrewMethodPreset>>(coffee.crema.core.brewMethodPresetsJson())
+        .map { p ->
+            val (label, icon) = METHOD_FACES[p.id] ?: (p.id to "coffee-bean")
+            BrewMethodPreset(p.id, label, icon, p)
+        }
+}
+
+/** The label + icon face for a stored method, or null for free text. */
+private fun faceFor(method: String?): Pair<String, String>? =
+    method?.trim()?.lowercase()?.let { METHOD_FACES[it] }
 
 /** The mark PhIcon name for any method (web MethodMark parity). */
 fun methodIcon(method: String?): String =
-    presetFor(method)?.icon ?: if (method.isNullOrBlank()) "coffee" else "coffee-bean"
+    faceFor(method)?.second ?: if (method.isNullOrBlank()) "coffee" else "coffee-bean"
 
 /**
  * Display label for any stored method string: the preset label when curated,
@@ -56,7 +70,7 @@ fun methodIcon(method: String?): String =
 fun methodLabel(method: String?): String {
     val m = method?.trim()?.lowercase().orEmpty()
     if (m.isEmpty()) return "Espresso"
-    presetFor(m)?.let { return it.label }
+    faceFor(m)?.let { return it.first }
     val words = m.replace('_', ' ').trim()
     return words.replaceFirstChar { it.uppercase() }
 }
