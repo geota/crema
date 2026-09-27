@@ -12,7 +12,7 @@
 	 * units feed the rest of the app's value formatting; density and screensaver
 	 * are persisted app preferences.
 	 */
-	import { getSettingsStore } from '$lib/settings';
+	import { brewCueHapticsOn, brewCueSoundOn, getSettingsStore } from '$lib/settings';
 	import { wakeLockSupported } from '$lib/shell/wake-lock';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import StSectionHead from '../StSectionHead.svelte';
@@ -110,6 +110,34 @@
 				onChange={(v) => settings.set('keepScreenOnBrew', v)}
 				disabled={!wakeLockSupported}
 				label="Keep screen on while brewing"
+			/>
+		{/snippet}
+	</StRow>
+	<!-- Guided-brew cues (issue #10) — the Scale page's Brew segment
+	     signals step boundaries with these (the step card's visual flash is
+	     always on). Sound defaults off, vibration on; the Brew setup card's
+	     bell toggles the same sound setting. -->
+	<StRow
+		title="Guided brew sounds"
+		sub="Short chimes at pour targets and step changes during a guided brew."
+	>
+		{#snippet control()}
+			<StToggle
+				on={brewCueSoundOn(prefs)}
+				onChange={(v) => settings.set('brewCueSound', v)}
+				label="Guided brew sounds"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Guided brew vibration"
+		sub="Vibration cues on devices that support it (phones and some tablets)."
+	>
+		{#snippet control()}
+			<StToggle
+				on={brewCueHapticsOn(prefs)}
+				onChange={(v) => settings.set('brewCueHaptics', v)}
+				label="Guided brew vibration"
 			/>
 		{/snippet}
 	</StRow>

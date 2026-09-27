@@ -7,10 +7,11 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { initTestWasm } from '$lib/testing/test-init';
 import { BeanLibraryStore } from '$lib/bean/store.svelte';
 import { coerceBean } from '$lib/bean/model';
-import { brewLogSeeds, brewMethodPresets } from '$lib/brew/methods';
+import { brewLogSeeds, brewMethodPresets, guidedPrefillWeights } from '$lib/brew/methods';
 import { brews_remaining_estimate } from '$lib/wasm/de1_wasm';
-import { HistoryStore } from './store.svelte';
-import { isBrewLog, isManualLog, ratioLabel } from './model';
+import { BREW_SERIES_CAP, HistoryStore, downsampleBrewSeries } from './store.svelte';
+import { plannedStaircase } from '$lib/brew/staircase';
+import { isBrewLog, isManualLog, ratioLabel, type StoredShot } from './model';
 
 const input = {
 	method: 'pourover',
@@ -59,6 +60,15 @@ describe('isBrewLog', () => {
 		expect(isBrewLog({})).toBe(false);
 		expect(isBrewLog({ brewMethod: 'espresso' })).toBe(true);
 		expect(isBrewLog({ brewMethod: 'aeropress' })).toBe(true);
+	});
+	it('covers guided brews — a recorded weight series does not make a row uploadable', () => {
+		const guided = {
+			brewMethod: 'pourover',
+			record: { duration: 180_000, samples: [] },
+			brewSeries: { samples: [{ elapsedMs: 0, weightG: 0 }], stageMarks: [] }
+		} as unknown as StoredShot;
+		expect(isBrewLog(guided)).toBe(true);
+		expect(isManualLog(guided)).toBe(false);
 	});
 });
 
@@ -120,5 +130,52 @@ describe('core-backed brew-log rules', () => {
 	it('brews_remaining_estimate uses the bag’s own mean dose', () => {
 		expect(brews_remaining_estimate(200, Float32Array.from([30, 30]))).toBe(6);
 		expect(brews_remaining_estimate(180, new Float32Array())).toBe(10);
+	});
+
+	it('thins a guided series with the core picker, keeping the ends and every stage mark', () => {
+		const samples = Array.from({ length: 4500 }, (_, i) => ({
+			elapsedMs: i * 50,
+			weightG: i / 18
+		}));
+		const stageMarks = [
+			{ elapsedMs: 0, stepIndex: 0, targetWaterG: 45 },
+			{ elapsedMs: 45_000, stepIndex: 1, targetWaterG: 250 },
+			{ elapsedMs: 130_000, stepIndex: 2 }
+		];
+		const thin = downsampleBrewSeries({ samples, stageMarks });
+		// Every Nth (N = len / cap) plus the last: ~cap, never the raw 4500.
+		expect(thin.samples.length).toBeLessThanOrEqual(BREW_SERIES_CAP * 1.1);
+		expect(thin.samples.length).toBeGreaterThanOrEqual(BREW_SERIES_CAP);
+		expect(thin.samples[0]).toBe(samples[0]);
+		expect(thin.samples.at(-1)).toBe(samples.at(-1));
+		expect(thin.stageMarks).toEqual(stageMarks);
+		// The chart's end (last sample) is unchanged, so the staircase still
+		// runs to the same place over the thinned curve.
+		const endMs = thin.samples.at(-1)!.elapsedMs;
+		expect(plannedStaircase(thin.stageMarks, endMs).at(-1)?.t1Ms).toBe(224_950);
+		// Short series pass through untouched.
+		const short = { samples: samples.slice(0, 10), stageMarks };
+		expect(downsampleBrewSeries(short)).toBe(short);
+	});
+
+	it('a guided espresso seeds its measured final weight as the yield (drift bug 9)', () => {
+		localStorage.removeItem('crema.brewlog.lastMethod.v1');
+		// A prior espresso with a different yield must not win over the measurement.
+		const rows = [{ brewMethod: 'espresso', doseG: 18, yieldG: 40, durationMs: 0 }];
+		const w = guidedPrefillWeights('espresso', 38.4, 36);
+		expect(w).toEqual({ waterG: null, yieldOut: 38.4 });
+		const s = brewLogSeeds({
+			method: null,
+			beanId: null,
+			beanGrinderSetting: null,
+			prefill: { method: 'espresso', dose: 18, durationMs: 29_000, ...w },
+			rows
+		});
+		expect(s.method).toBe('espresso');
+		expect(s.water).toBeCloseTo(38.4); // the form's espresso field is beverage-out
+		// A filter guided brew keeps the weight as water-in.
+		expect(guidedPrefillWeights('pourover', 251, 250)).toEqual({ waterG: 251, yieldOut: null });
+		// No scale: the plan stands in.
+		expect(guidedPrefillWeights('espresso', null, 36)).toEqual({ waterG: null, yieldOut: 36 });
 	});
 });

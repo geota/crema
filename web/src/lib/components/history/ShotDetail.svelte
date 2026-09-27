@@ -767,12 +767,17 @@
 		     region at all — the pane simply tightens up (issue #10). -->
 		{#if shot.brewSeries && shot.brewSeries.samples.length > 0}
 			<div class="hi-chart hi-chart-brew">
-				<BrewSessionChart series={shot.brewSeries} height={300} />
+				<BrewSessionChart series={shot.brewSeries} height={300} legend={false} />
 				<div class="hi-chart-legend">
 					<span class="hi-leg-group">
 						<ScalesIcon class="hi-leg-icon" aria-hidden="true" />
 						<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-weight)"></i>Weight</span>
 						<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-flow)"></i>Pour rate</span>
+						{#if shot.brewSeries.stageMarks.some((m) => m.targetWaterG != null)}
+							<!-- The recipe's snapshotted targets: dashed "planned"
+							     under the solid "poured" weight curve. -->
+							<span class="hi-leg-item"><i class="hi-leg-dash" aria-hidden="true"></i>Planned</span>
+						{/if}
 					</span>
 				</div>
 			</div>
@@ -1252,6 +1257,12 @@
 		width: 8px;
 		height: 8px;
 		border-radius: 50%;
+		display: inline-block;
+	}
+	.hi-leg-dash {
+		width: 14px;
+		height: 0;
+		border-top: 1.5px dashed rgba(var(--tint-rgb), 0.5);
 		display: inline-block;
 	}
 

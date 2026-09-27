@@ -1,5 +1,11 @@
 package coffee.crema.brew
 
+import coffee.crema.core.BrewRecipe
+import coffee.crema.core.BrewStep
+import coffee.crema.core.BrewStepKind
+import coffee.crema.core.defaultRecipeJson
+import coffee.crema.core.newRecipeId
+import kotlin.math.roundToInt
 import kotlinx.serialization.decodeFromString
 
 /*
@@ -7,9 +13,10 @@ import kotlinx.serialization.decodeFromString
  * `$lib/brew/methods`. Storage accepts ANY normalized method string (the
  * core's `normalize_brew_method` rule). The preset ids + seed numbers live in
  * the core (`de1_domain::brew_method_presets`, one table for both shells);
- * this file owns only what the UI makes of an id: its label and icon. Tea is
- * deliberately absent — a BC tea brew still imports, carrying its name as
- * free text. "Other" is the free-text chip, not a preset.
+ * this file owns what the UI makes of an id: its label and icon, plus the
+ * default guided-brew recipes. Tea is deliberately absent — a BC tea brew
+ * still imports, carrying its name as free text. "Other" is the free-text
+ * chip, not a preset.
  */
 
 /** One curated method preset — a chip in the log form: the core preset plus its UI face. */
@@ -86,6 +93,49 @@ fun methodShortLabel(method: String?): String =
 fun isEspressoMethod(method: String?): Boolean {
     val m = method?.trim()?.lowercase()
     return m.isNullOrEmpty() || m == "espresso"
+}
+
+/**
+ * Build the sensible starter recipe for a method — what the Scale screen's
+ * Brew segment offers before the user has saved anything. The template
+ * (preset numbers + the per-method classic steps) is the core's
+ * `default_recipe` (shared with the web); the name is the UI's copy.
+ * [core] is the FFI call, injectable for JVM unit tests.
+ */
+fun defaultRecipeFor(
+    method: String,
+    nowMs: Long,
+    core: (String, String, Long) -> String = ::defaultRecipeJson,
+): BrewRecipe {
+    val recipe = CoreJson.decodeFromString(BrewRecipe.serializer(), core(method, newRecipeId(), nowMs))
+    return recipe.copy(name = "${methodShortLabel(method)} classic")
+}
+
+/** Display label for a step's kind. */
+fun stepKindLabel(kind: BrewStepKind): String = when (kind) {
+    BrewStepKind.Bloom -> "Bloom"
+    BrewStepKind.Pour -> "Pour"
+    BrewStepKind.Wait -> "Wait"
+    BrewStepKind.Steep -> "Steep"
+    BrewStepKind.Stir -> "Stir"
+    BrewStepKind.Press -> "Press"
+    BrewStepKind.Drawdown -> "Drawdown"
+    BrewStepKind.Other -> "Step"
+}
+
+/**
+ * A step's display name: its own [BrewStep.label] when set ("Second pour"),
+ * else its kind's label — the web guided panel's rule.
+ */
+fun stepLabel(step: BrewStep): String = step.label?.trim()?.takeIf { it.isNotEmpty() } ?: stepKindLabel(step.kind)
+
+/** "to 250 g · 0:45" / "until you tap" — one spec line per step. */
+fun stepSpec(step: BrewStep): String {
+    val parts = mutableListOf<String>()
+    step.targetWaterG?.let { parts.add("to ${it.roundToInt()} g") }
+    step.durationS?.let { parts.add(formatClock(it * 1000)) }
+    if (parts.isEmpty()) parts.add("until you tap")
+    return parts.joinToString(" · ")
 }
 
 /** "3:05" — mm:ss for any duration in ms. */

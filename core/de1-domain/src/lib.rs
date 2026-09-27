@@ -51,6 +51,7 @@ pub mod bean_search;
 pub mod beanconqueror;
 pub mod brand;
 pub mod brew;
+pub mod brew_session;
 pub mod builtin;
 /// Lenient number-or-string deserialization shared by the JSON importers.
 mod coerce;
@@ -106,9 +107,16 @@ pub use beanconqueror::{
 pub use brew::{
     BREW_METHOD_OTHER, BrewHistoryStats, BrewLogPrefill, BrewLogSeedInput, BrewLogSeeds,
     BrewMethodPreset, BrewRecipe, BrewSample, BrewSeedInput, BrewSeries, BrewStatInput, BrewStep,
-    BrewStepKind, DEFAULT_LOG_METHOD, StageMark, StepAdvance, brew_history_stats, brew_log_seeds,
-    brew_log_seeds_json, brew_method_preset, brew_method_presets, brew_method_presets_json,
-    is_espresso_method, normalize_brew_method, ratio_for_method,
+    BrewStepKind, DEFAULT_LOG_METHOD, NOMINAL_POUR_STEP_MS, StageMark, StairSegment, StepAdvance,
+    brew_history_stats, brew_log_seeds, brew_log_seeds_json, brew_method_preset,
+    brew_method_presets, brew_method_presets_json, default_recipe, default_recipe_json,
+    is_espresso_method, max_planned_target, max_planned_target_json, normalize_brew_method,
+    planned_staircase, planned_staircase_json, ratio_for_method, recipe_nominal_duration_ms_json,
+    recipe_planned_pour_total_g_json, stage_mark_for, stage_mark_for_json,
+};
+pub use brew_session::{
+    APPROACH_LEAD, BREW_SAMPLE_MIN_INTERVAL, BrewCue, BrewSessionEvent, BrewSessionMonitor,
+    BrewSessionPhase, BrewSessionSummary, MAX_BREW_SAMPLES, START_ON_POUR_THRESHOLD_G,
 };
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use crema_jsonl::{

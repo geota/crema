@@ -15,6 +15,8 @@ export {
 	settingsToCommon,
 	applyCommonToSettings,
 	settingsPlatformExtras,
+	brewCueSoundOn,
+	brewCueHapticsOn,
 	type Settings,
 	type ThemePref,
 	type WeightUnit,

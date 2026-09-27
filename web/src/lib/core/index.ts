@@ -305,6 +305,24 @@ export interface CremaCore {
 	readonly lastNotificationAtMs: number | null;
 	/** Feed a periodic clock tick. Resolves to the parsed `CoreOutput`. */
 	onTick(nowMs: number): Promise<CoreOutput>;
+	/**
+	 * Arm a guided brew session for a JSON-encoded `BrewRecipe`
+	 * (issue #10). `startOnPour` starts the clock at the first
+	 * sustained pour instead of a Start tap.
+	 */
+	brewSessionArm(recipeJson: string, startOnPour: boolean): Promise<CoreOutput>;
+	/** Start an armed guided session's clock (the Start tap). */
+	brewSessionBegin(nowMs: number): Promise<CoreOutput>;
+	/** Freeze a running guided session's clock. */
+	brewSessionPause(nowMs: number): Promise<CoreOutput>;
+	/** Resume a paused guided session. */
+	brewSessionResume(nowMs: number): Promise<CoreOutput>;
+	/** Advance the guided session to the next recipe step. */
+	brewSessionSkip(nowMs: number): Promise<CoreOutput>;
+	/** End the guided session; the output carries `BrewSessionCompleted`. */
+	brewSessionFinish(nowMs: number): Promise<CoreOutput>;
+	/** Drop the guided session without a summary. */
+	brewSessionCancel(): Promise<CoreOutput>;
 	/** Discard all session state — e.g. on disconnect. */
 	reset(): Promise<void>;
 	/**
@@ -908,6 +926,27 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async onTick(nowMs) {
 			return parseOutput(bridge.on_tick(nowMs));
+		},
+		async brewSessionArm(recipeJson, startOnPour) {
+			return parseOutput(bridge.brew_session_arm(recipeJson, startOnPour));
+		},
+		async brewSessionBegin(nowMs) {
+			return parseOutput(bridge.brew_session_begin(nowMs));
+		},
+		async brewSessionPause(nowMs) {
+			return parseOutput(bridge.brew_session_pause(nowMs));
+		},
+		async brewSessionResume(nowMs) {
+			return parseOutput(bridge.brew_session_resume(nowMs));
+		},
+		async brewSessionSkip(nowMs) {
+			return parseOutput(bridge.brew_session_skip(nowMs));
+		},
+		async brewSessionFinish(nowMs) {
+			return parseOutput(bridge.brew_session_finish(nowMs));
+		},
+		async brewSessionCancel() {
+			return parseOutput(bridge.brew_session_cancel());
 		},
 		async reset() {
 			bridge.reset();

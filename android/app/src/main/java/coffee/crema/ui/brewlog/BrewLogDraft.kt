@@ -24,6 +24,9 @@ import coffee.crema.core.BrewLogSeeds as CoreBrewLogSeeds
 object BrewLogOwner {
     const val HISTORY = "history"
     const val BEANS = "beans"
+
+    /** A finished guided session's "Save brew…" (issue #10 Phase 2). */
+    const val SCALE = "scale"
 }
 
 /** The pushed phone route for the form (see [coffee.crema.ui.NavRestore]). */
@@ -155,7 +158,7 @@ object BrewLogSeeds {
         grinderOf: (String) -> String? = { null },
         guidedMethod: String? = null,
         guidedDoseG: Float? = null,
-        guidedWaterG: Float? = null,
+        guidedWeightG: Float? = null,
         guidedTempC: Float? = null,
         guidedDurationMs: Long? = null,
         guidedRecipeName: String? = null,
@@ -167,7 +170,11 @@ object BrewLogSeeds {
             guidedMethod != null -> BrewLogPrefill(
                 method = guidedMethod,
                 doseG = guidedDoseG,
-                waterG = guidedWaterG,
+                // The scale weighs the vessel: beverage-out (yield) for the
+                // espresso family — the slot the core seeds espresso from —
+                // water-in for filter methods (drift bug 9).
+                waterG = guidedWeightG.takeUnless { coffee.crema.brew.isEspressoMethod(guidedMethod) },
+                yieldG = guidedWeightG.takeIf { coffee.crema.brew.isEspressoMethod(guidedMethod) },
                 tempC = guidedTempC,
                 durationMs = guidedDurationMs,
             )

@@ -139,6 +139,20 @@ export function lastUsedMethod(): string | null {
 	return null;
 }
 
+/**
+ * The method a fresh surface (the Scale page's Brew setup) opens on — the
+ * core's seeding rule with nothing prefilled: last-used, else pourover.
+ */
+export function openingMethod(): string {
+	return brewLogSeeds({
+		method: null,
+		beanId: null,
+		beanGrinderSetting: null,
+		prefill: undefined,
+		rows: []
+	}).method;
+}
+
 /** Remember the method of a just-saved log. */
 export function rememberMethod(method: string): void {
 	try {
@@ -146,6 +160,24 @@ export function rememberMethod(method: string): void {
 	} catch {
 		// Best-effort.
 	}
+}
+
+/**
+ * Where a finished guided session's weight lands in the log prefill. The
+ * scale weighs what's in the vessel: beverage-out for the espresso family
+ * (so it's the **yield** — the core seeding reads espresso's yield slot,
+ * never its water), water-in for filter methods. The scale's final reading
+ * wins over the recipe's planned total; a non-positive plan is no value.
+ */
+export function guidedPrefillWeights(
+	method: string | null | undefined,
+	finalWeightG: number | null,
+	plannedWaterG: number
+): Pick<LogBrewPrefill, 'waterG' | 'yieldOut'> {
+	const weight = finalWeightG ?? (plannedWaterG > 0 ? plannedWaterG : null);
+	return isEspressoMethod(method)
+		? { waterG: null, yieldOut: weight }
+		: { waterG: weight, yieldOut: null };
 }
 
 /** A stored row, projected for {@link brewLogSeeds}. */

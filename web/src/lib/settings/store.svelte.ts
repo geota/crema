@@ -18,7 +18,11 @@
  * {@link getSettingsStore}. It loads synchronously from `localStorage`.
  */
 
-import { defaultBrewDefaults } from '$lib/wasm/de1_wasm';
+import {
+	defaultBrewCueHaptics,
+	defaultBrewCueSound,
+	defaultBrewDefaults
+} from '$lib/wasm/de1_wasm';
 import { readJson, writeJson } from '$lib/utils/storage';
 import { readSyncConfig } from '$lib/visualizer/sync-config';
 import type { CommonSettings } from '$lib/core/crema-core';
@@ -222,6 +226,18 @@ export interface Settings {
 	 */
 	keepScreenOnBrew: boolean;
 
+	/**
+	 * Guided-brew step cues as sound (issue #10) — short WebAudio blips
+	 * at approach / boundary / step-change. `null` = never touched, read
+	 * via {@link brewCueSoundOn} as OFF (the kitchen-safe default; the
+	 * step card's visual cues are always on). Only an explicit choice is
+	 * persisted, so an untouched user follows the default.
+	 */
+	brewCueSound: boolean | null;
+	/** Guided-brew step cues as vibration, where the device supports it.
+	 *  `null` = never touched, read via {@link brewCueHapticsOn} as ON. */
+	brewCueHaptics: boolean | null;
+
 	// ── Quick-Controls steam / hot-water / flush (issue 14) ──────────────────
 	// Persisted Quick Sheet values for the machine's steam / hot-water / flush
 	// params. Unlike most of this store these *are* machine settings — but they
@@ -344,6 +360,11 @@ export const DEFAULT_SETTINGS: Settings = {
 
 	keepScreenOnBrew: false,
 
+	// Guided-brew cues (issue #10) — unset: sound reads OFF, haptics ON
+	// (see brewCueSoundOn / brewCueHapticsOn).
+	brewCueSound: null,
+	brewCueHaptics: null,
+
 	// Quick-Controls steam / hot-water / flush — match DEFAULT_BREW_PARAMS so a
 	// fresh install seeds the Quick Sheet identically to before persistence.
 	qcSteamTimeS: 12,
@@ -444,6 +465,9 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		waterRefillPointMm: s.waterRefillPointMm ?? undefined,
 		chartChannels: CHART_FLAG_TO_KEY.filter(([flag]) => s[flag]).map(([, key]) => key),
 		keepScreenOnBrew: s.keepScreenOnBrew,
+		// Only an explicit choice travels — unset stays unset.
+		brewCueSound: s.brewCueSound ?? undefined,
+		brewCueHaptics: s.brewCueHaptics ?? undefined,
 		showDebugPanel: s.showDebugPanel,
 		defaultDoseG: s.defaultDoseG,
 		defaultRatio: s.defaultRatio,
@@ -501,6 +525,8 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		showWeight: on.has('weight'),
 		showWeightFlow: on.has('weightFlow'),
 		keepScreenOnBrew: c.keepScreenOnBrew,
+		brewCueSound: c.brewCueSound ?? null,
+		brewCueHaptics: c.brewCueHaptics ?? null,
 		showDebugPanel: c.showDebugPanel,
 		defaultDoseG: c.defaultDoseG,
 		defaultRatio: c.defaultRatio,
@@ -516,6 +542,21 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		qcFlushTimeS: c.qcFlushTimeS,
 		qcFlushTempC: c.qcFlushTempC
 	};
+}
+
+/**
+ * Effective guided-brew cue sound — the explicit choice, else the core's
+ * never-chosen default (`DEFAULT_BREW_CUE_SOUND`, off). Call after
+ * `loadCore()` (the cue surfaces only render once it has run).
+ */
+export function brewCueSoundOn(s: Pick<Settings, 'brewCueSound'>): boolean {
+	return s.brewCueSound ?? defaultBrewCueSound();
+}
+
+/** Effective guided-brew cue haptics — the explicit choice, else the core's
+ *  never-chosen default (`DEFAULT_BREW_CUE_HAPTICS`, on). */
+export function brewCueHapticsOn(s: Pick<Settings, 'brewCueHaptics'>): boolean {
+	return s.brewCueHaptics ?? defaultBrewCueHaptics();
 }
 
 /**

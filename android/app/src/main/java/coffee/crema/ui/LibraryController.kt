@@ -1879,7 +1879,7 @@ class LibraryController(
             recipeName = input.recipeName?.ifBlank { null },
             waterG = input.waterG,
             brewTempC = input.brewTempC,
-            brewSeries = input.brewSeries,
+            brewSeries = input.brewSeries?.let { coffee.crema.history.downsampleBrewSeries(it) },
             // No machine stamp (issue #10): a logged brew involves no DE1, so
             // machineSerial / Firmware / Model stay null — the #84 record-time
             // stamp belongs to the live-shot path only.

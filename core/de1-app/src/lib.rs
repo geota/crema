@@ -29,10 +29,11 @@ use std::time::Duration;
 
 use de1_domain::saw_learning::SawLearningModel;
 use de1_domain::{
-    AutoStop, BeverageType, Estimate, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile,
-    STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StopCapture,
-    StopConfig, StopReason, StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor,
-    WeightSpikeGate, WeightUnit, shot_disposition,
+    AutoStop, BeverageType, BrewRecipe, BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase,
+    Estimate, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile, STOP_WEIGHT_BEFORE,
+    ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StopCapture, StopConfig,
+    StopReason, StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor, WeightSpikeGate,
+    WeightUnit, shot_disposition,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -388,6 +389,13 @@ const POST_SHOT_SETTLE_RISE_G: f32 = 0.1;
 #[derive(Debug)]
 pub struct CremaCore {
     monitor: ShotMonitor,
+    /// The live guided-brew session, when one is armed/running — the
+    /// scale-only sibling of `monitor` (issue #10). `None` outside a
+    /// session; the shell arms one via
+    /// [`brew_session_arm`](Self::brew_session_arm) and it is dropped on
+    /// completion / cancel. Deliberately NOT reset with DE1 session
+    /// state: a pourover survives a DE1 reconnect.
+    brew_session: Option<BrewSessionMonitor>,
     /// Tracks hot-water and flush sessions, the sibling of `monitor`.
     water: WaterMonitor,
     /// Tracks steam sessions, eco mode, and steam-clog detection.
@@ -731,6 +739,7 @@ impl CremaCore {
     pub fn new() -> CremaCore {
         CremaCore {
             monitor: ShotMonitor::new(),
+            brew_session: None,
             water: WaterMonitor::new(),
             steam: SteamMonitor::new(),
             steam_hotwater_settings: None,
@@ -1988,6 +1997,162 @@ impl CremaCore {
         out
     }
 
+    // ── Guided brew sessions (issue #10) ─────────────────────────────
+    //
+    // The scale-only sibling of the espresso shot lane. No method in
+    // this block ever writes to the DE1 — cues terminate in shell-side
+    // sound/haptics, and the session survives a DE1 reset entirely.
+
+    /// Arm a guided brew session for `recipe_json` (a [`BrewRecipe`]).
+    /// `start_on_pour` starts the clock at the first sustained weight
+    /// rise instead of a Start tap. Replaces a previous armed-or-done
+    /// session; a running/paused one is refused (finish or cancel it
+    /// first) so a stray double-tap can't discard a live recording.
+    pub fn brew_session_arm(&mut self, recipe_json: &str, start_on_pour: bool) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        if let Some(session) = &self.brew_session
+            && matches!(
+                session.phase(),
+                BrewSessionPhase::Running | BrewSessionPhase::Paused
+            )
+        {
+            out.events.push(Event::DecodeError {
+                message: "brew_session_arm refused: a session is already running".to_owned(),
+            });
+            return out;
+        }
+        match serde_json::from_str::<BrewRecipe>(recipe_json) {
+            Ok(recipe) => {
+                let lag = self
+                    .scale
+                    .as_ref()
+                    .map_or(Duration::ZERO, |s| s.sensor_lag());
+                self.brew_session = Some(BrewSessionMonitor::new(recipe, start_on_pour, lag));
+            }
+            Err(e) => out.events.push(Event::DecodeError {
+                message: format!("brew_session_arm: bad recipe JSON: {e}"),
+            }),
+        }
+        out
+    }
+
+    /// Start an armed session's clock now (the Start tap).
+    pub fn brew_session_begin(&mut self, now_ms: u64) -> CoreOutput {
+        self.drive_brew_session(now_ms, |session, now| session.start(now))
+    }
+
+    /// Freeze a running session's clock.
+    pub fn brew_session_pause(&mut self, now_ms: u64) -> CoreOutput {
+        self.drive_brew_session(now_ms, |session, now| {
+            session.pause(now);
+            Vec::new()
+        })
+    }
+
+    /// Resume a paused session.
+    pub fn brew_session_resume(&mut self, now_ms: u64) -> CoreOutput {
+        self.drive_brew_session(now_ms, |session, now| {
+            session.resume(now);
+            Vec::new()
+        })
+    }
+
+    /// Advance to the next recipe step (the Skip tap, or the tap that
+    /// ends an open / manual-hold step).
+    pub fn brew_session_skip(&mut self, now_ms: u64) -> CoreOutput {
+        self.drive_brew_session(now_ms, |session, now| session.skip(now))
+    }
+
+    /// End the session now and emit its summary.
+    pub fn brew_session_finish(&mut self, now_ms: u64) -> CoreOutput {
+        self.drive_brew_session(now_ms, |session, now| session.finish(now))
+    }
+
+    /// Drop the session without a summary (backing out of setup, or
+    /// discarding a run).
+    pub fn brew_session_cancel(&mut self) -> CoreOutput {
+        self.brew_session = None;
+        CoreOutput::default()
+    }
+
+    /// Run `f` against the live session, if any, and map its events.
+    fn drive_brew_session(
+        &mut self,
+        now_ms: u64,
+        f: impl FnOnce(&mut BrewSessionMonitor, Duration) -> Vec<BrewSessionEvent>,
+    ) -> CoreOutput {
+        let now = ms_to_duration(now_ms);
+        let mut out = CoreOutput::default();
+        let Some(session) = self.brew_session.as_mut() else {
+            return out;
+        };
+        let events = f(session, now);
+        for event in events {
+            self.map_brew_session_event(event, now, &mut out);
+        }
+        out
+    }
+
+    /// Translate a domain [`BrewSessionEvent`] into the shell-facing
+    /// [`Event`] stream. Completion drops the monitor.
+    fn map_brew_session_event(
+        &mut self,
+        event: BrewSessionEvent,
+        now: Duration,
+        out: &mut CoreOutput,
+    ) {
+        match event {
+            BrewSessionEvent::Started => {
+                if let Some(session) = &self.brew_session {
+                    out.events.push(Event::BrewSessionStarted {
+                        method: session.recipe().method.clone(),
+                        recipe_name: session.recipe().name.clone(),
+                    });
+                }
+            }
+            BrewSessionEvent::StepChanged { step_index } => {
+                let at_ms = self.brew_session.as_ref().map_or(0, |s| {
+                    u32::try_from(s.elapsed(now).as_millis()).unwrap_or(u32::MAX)
+                });
+                out.events.push(Event::BrewStepChanged {
+                    step_index: u32::try_from(step_index).unwrap_or(u32::MAX),
+                    at_ms,
+                });
+            }
+            BrewSessionEvent::Cue { cue, step_index } => {
+                out.events.push(Event::BrewCueDue {
+                    cue,
+                    step_index: u32::try_from(step_index).unwrap_or(u32::MAX),
+                });
+            }
+            BrewSessionEvent::Completed(summary) => {
+                self.brew_session = None;
+                out.events.push(Event::BrewSessionCompleted { summary });
+            }
+        }
+    }
+
+    /// Feed a smoothed scale reading to the live session, if any.
+    /// Called from the scale-weight handler with the same estimate the
+    /// `ScaleReading` event carries.
+    fn feed_brew_session_weight(
+        &mut self,
+        weight: f32,
+        flow: f32,
+        now: Duration,
+        out: &mut CoreOutput,
+    ) {
+        if self.brew_session.is_none() {
+            return;
+        }
+        let events = self.brew_session.as_mut().map_or_else(Vec::new, |session| {
+            session.on_weight(now, weight, Some(flow))
+        });
+        for event in events {
+            self.map_brew_session_event(event, now, out);
+        }
+    }
+
     /// Append a tare-scale [`Command`] to `out`, if a scale is connected and
     /// supports tare. Shared by [`tare_scale`](Self::tare_scale) and the
     /// automatic tare at shot start.
@@ -2530,6 +2695,18 @@ impl CremaCore {
         // completion finalizes on the [`POST_SHOT_SETTLE_MAX`] deadline even if
         // the scale stream stalls (the tick is the shells' periodic watchdog).
         self.maybe_finalize_post_shot_settle(now, &mut out);
+        // Guided brew countdowns (issue #10). The shells run the tick at
+        // ~250 ms only while a session is active; boundaries compute from
+        // timestamps, so a coarser cadence stays correct.
+        if self.brew_session.is_some() {
+            let events = self
+                .brew_session
+                .as_mut()
+                .map_or_else(Vec::new, |session| session.on_tick(now));
+            for event in events {
+                self.map_brew_session_event(event, now, &mut out);
+            }
+        }
         self.gate_read_only(out)
     }
 
@@ -2615,8 +2792,13 @@ impl CremaCore {
         let shot_target_weight = self.shot_target_weight;
         let profile_volume_limit = self.profile_volume_limit;
         let max_shot_duration = self.max_shot_duration;
+        // A guided brew session is scale/timer state, not DE1 session
+        // state — the BLE managers reset the core on a DE1 drop, and a
+        // pourover mid-bloom must survive that (issue #10).
+        let brew_session = self.brew_session.take();
         *self = CremaCore::new();
         self.read_only = read_only;
+        self.brew_session = brew_session;
         self.scale = scale;
         self.scale_config_queried = scale_config_queried;
         self.saw_model = saw_model;
@@ -2955,6 +3137,10 @@ impl CremaCore {
             device_flow_smoothing: reading.flow_smoothing,
             device_auto_stop: reading.auto_stop,
         });
+        // The guided brew session rides the same smoothed estimate the
+        // ScaleReading event carries (issue #10). No DE1 coupling: this
+        // runs identically with the machine absent.
+        self.feed_brew_session_weight(estimate.weight, estimate.flow, now, out);
         let reason = self
             .auto_stop
             .as_mut()
@@ -4097,6 +4283,165 @@ mod tests {
             (centigrams >> 8) as u8,
             centigrams as u8,
         ]
+    }
+
+    /// A minimal V60 recipe JSON for the guided-brew wiring tests:
+    /// pour to 50 g (auto), then wait 30 s (auto).
+    fn brew_recipe_json() -> String {
+        r#"{
+            "id": "recipe:test", "name": "Test V60", "method": "pourover",
+            "doseG": 15.0, "waterG": 250.0,
+            "steps": [
+                {"kind": "pour", "targetWaterG": 50.0, "advance": "auto"},
+                {"kind": "wait", "durationS": 30, "advance": "auto"}
+            ],
+            "favourite": false, "createdAt": 0, "updatedAt": 0
+        }"#
+        .to_owned()
+    }
+
+    #[test]
+    fn guided_brew_session_runs_on_scale_and_tick_with_no_de1() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+
+        // Arm with start-on-pour. No DE1 state exists anywhere in this test.
+        let out = core.brew_session_arm(&brew_recipe_json(), true);
+        assert!(out.events.is_empty(), "arm is quiet: {:?}", out.events);
+
+        // A couple of baseline readings, then a sustained pour.
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(0), 500);
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(400), 1_000);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::BrewSessionStarted { .. })),
+            "one over-threshold reading must not start the clock"
+        );
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(600), 1_200);
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::BrewSessionStarted { .. })),
+            "sustained pour starts the session: {:?}",
+            out.events
+        );
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::BrewStepChanged { step_index: 0, .. })),
+        );
+
+        // Pour past the 50 g target → step 1.
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(3_000), 5_000);
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(5_100), 9_000);
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::BrewStepChanged { step_index: 1, .. })),
+            "target reach advances: {:?}",
+            out.events
+        );
+
+        // The 30 s wait completes on the tick — last step, so the whole
+        // session completes with a summary carrying the weight series.
+        let out = core.on_tick(45_000);
+        let completed = out.events.iter().find_map(|e| match e {
+            Event::BrewSessionCompleted { summary } => Some(summary.clone()),
+            _ => None,
+        });
+        let summary = completed.expect("countdown end completes the session");
+        assert_eq!(summary.method, "pourover");
+        assert_eq!(summary.recipe_name, "Test V60");
+        assert!(!summary.series.samples.is_empty());
+        assert_eq!(summary.series.stage_marks.len(), 2);
+        // The monitor is gone; further commands are no-ops.
+        assert!(core.brew_session_finish(46_000).events.is_empty());
+    }
+
+    #[test]
+    fn brew_session_arm_refuses_while_running_and_reports_bad_json() {
+        let mut core = CremaCore::new();
+        let out = core.brew_session_arm("not json", false);
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::DecodeError { .. })),
+        );
+        core.brew_session_arm(&brew_recipe_json(), false);
+        core.brew_session_begin(1_000);
+        let out = core.brew_session_arm(&brew_recipe_json(), false);
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::DecodeError { .. })),
+            "re-arm over a running session is refused"
+        );
+        // Cancel drops it; re-arm is fine again.
+        core.brew_session_cancel();
+        let out = core.brew_session_arm(&brew_recipe_json(), false);
+        assert!(out.events.is_empty());
+    }
+
+    #[test]
+    fn a_guided_brew_session_never_issues_a_machine_command() {
+        // Spec §8 Phase 2: "No DE1 write is ever issued by a brew session."
+        // Drive every session entry point — arm, start-on-pour, scale
+        // readings, pause / resume, skip, the tick, finish — and collect
+        // every CoreOutput: none may carry a DE1 write
+        // (`Command::WriteCharacteristic`, the only path to the machine).
+        // Scale housekeeping writes from the scale driver are not the
+        // session's and are allowed. Cues surface as events for the shell.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let mut outs = vec![core.brew_session_arm(&brew_recipe_json(), true)];
+        let mut t = 500;
+        for w in [0, 400, 600, 1_500, 3_000, 4_900, 5_100] {
+            outs.push(core.on_notification(Source::ScaleWeight, &bookoo_packet(w), t));
+            outs.push(core.on_tick(t));
+            t += 700;
+        }
+        outs.push(core.brew_session_pause(t));
+        outs.push(core.brew_session_resume(t + 2_000));
+        outs.push(core.brew_session_skip(t + 3_000));
+        outs.push(core.on_tick(t + 4_000));
+        outs.push(core.brew_session_finish(t + 5_000));
+        // A scale-less run too, cancelled mid-way.
+        outs.push(core.brew_session_arm(&brew_recipe_json(), false));
+        outs.push(core.brew_session_begin(100_000));
+        outs.push(core.on_tick(140_000));
+        outs.push(core.brew_session_cancel());
+        let events: usize = outs.iter().map(|o| o.events.len()).sum();
+        assert!(events > 0, "the session did emit events");
+        for o in &outs {
+            assert!(
+                !o.commands
+                    .iter()
+                    .any(|c| matches!(c, Command::WriteCharacteristic { .. })),
+                "brew session issued a DE1 write: {:?}",
+                o.commands
+            );
+        }
+    }
+
+    #[test]
+    fn brew_session_survives_a_de1_reset() {
+        let mut core = CremaCore::new();
+        core.brew_session_arm(&brew_recipe_json(), false);
+        core.brew_session_begin(1_000);
+        // The BLE manager resets the core on a DE1 drop — mid-pourover.
+        core.reset();
+        // The session clock is still running: skipping both steps
+        // completes it rather than finding no session.
+        core.brew_session_skip(60_000);
+        let out = core.brew_session_finish(70_000);
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::BrewSessionCompleted { .. })),
+            "session survived the reset: {:?}",
+            out.events
+        );
     }
 
     #[test]

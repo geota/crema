@@ -358,6 +358,80 @@ pub fn brew_log_seeds_json(input_json: &str) -> Result<String, String> {
     de1_domain::brew_log_seeds_json(input_json)
 }
 
+/// Mint a `recipe:<uuid-v7>` id for a new brew recipe.
+#[wasm_bindgen(js_name = newRecipeId)]
+pub fn new_recipe_id() -> String {
+    de1_domain::new_recipe_id()
+}
+
+/// The starter recipe for `method` (`BrewRecipe` JSON) — preset dose /
+/// water / temp and the per-method classic step plan. `id` is a fresh
+/// [`new_recipe_id`]; `now_ms` stamps the timestamps. The shell renames it
+/// with its display label. See `de1_domain::default_recipe`.
+#[wasm_bindgen(js_name = defaultRecipeJson)]
+pub fn default_recipe_json(method: &str, id: &str, now_ms: f64) -> String {
+    de1_domain::default_recipe_json(method, id, f64_to_ms(now_ms))
+}
+
+/// A recipe's nominal run time, ms (`BrewRecipe` JSON in). See
+/// `de1_domain::BrewRecipe::nominal_duration_ms`.
+#[wasm_bindgen(js_name = recipeNominalDurationMsJson)]
+pub fn recipe_nominal_duration_ms_json(recipe_json: &str) -> Result<f64, String> {
+    #[allow(clippy::cast_precision_loss)] // ms fits f64's 53-bit mantissa
+    de1_domain::recipe_nominal_duration_ms_json(recipe_json).map(|ms| ms as f64)
+}
+
+/// A recipe's planned cumulative pour total, grams (`BrewRecipe` JSON in),
+/// or `undefined` when no step carries a finite target — the editor's
+/// "250 g planned · matches water" check. See
+/// `de1_domain::BrewRecipe::planned_pour_total_g`.
+#[wasm_bindgen(js_name = recipePlannedPourTotalGJson)]
+pub fn recipe_planned_pour_total_g_json(recipe_json: &str) -> Result<Option<f32>, String> {
+    de1_domain::recipe_planned_pour_total_g_json(recipe_json)
+}
+
+/// The stage mark (`StageMark` JSON) for step `step_index` of a recipe
+/// (`BrewRecipe` JSON) beginning at `at_ms` — the same snapshot the
+/// session engine stamps on the saved record, for the live chart. See
+/// `de1_domain::stage_mark_for`.
+#[wasm_bindgen(js_name = stageMarkForJson)]
+pub fn stage_mark_for_json(
+    recipe_json: &str,
+    step_index: u32,
+    at_ms: f64,
+) -> Result<String, String> {
+    de1_domain::stage_mark_for_json(recipe_json, u64::from(step_index), f64_to_elapsed(at_ms))
+}
+
+/// The planned-vs-poured staircase (`StairSegment[]` JSON) from a
+/// `StageMark[]` JSON, ending at `end_ms`. See
+/// `de1_domain::planned_staircase`.
+#[wasm_bindgen(js_name = plannedStaircaseJson)]
+pub fn planned_staircase_json(marks_json: &str, end_ms: f64) -> Result<String, String> {
+    de1_domain::planned_staircase_json(marks_json, f64_to_elapsed(end_ms))
+}
+
+/// The largest finite planned target in a `StageMark[]` JSON, or 0. See
+/// `de1_domain::max_planned_target`.
+#[wasm_bindgen(js_name = maxPlannedTargetJson)]
+pub fn max_planned_target_json(marks_json: &str) -> Result<f32, String> {
+    de1_domain::max_planned_target_json(marks_json)
+}
+
+/// Guided-brew cue sound when the user never chose — see
+/// `de1_domain::app_settings::DEFAULT_BREW_CUE_SOUND`.
+#[wasm_bindgen(js_name = defaultBrewCueSound)]
+pub fn default_brew_cue_sound() -> bool {
+    de1_domain::app_settings::DEFAULT_BREW_CUE_SOUND
+}
+
+/// Guided-brew cue haptics when the user never chose — see
+/// `de1_domain::app_settings::DEFAULT_BREW_CUE_HAPTICS`.
+#[wasm_bindgen(js_name = defaultBrewCueHaptics)]
+pub fn default_brew_cue_haptics() -> bool {
+    de1_domain::app_settings::DEFAULT_BREW_CUE_HAPTICS
+}
+
 /// Resolve the Brew screen's service-mode display targets (steam /
 /// hot-water / flush) — machine value → Quick-Controls dial → legacy
 /// default, per field. Takes `ModeTargetInputs` JSON, returns
@@ -820,6 +894,16 @@ pub fn core_version() -> String {
 #[allow(clippy::cast_possible_truncation)]
 fn f64_to_ms(now_ms: f64) -> i64 {
     if now_ms.is_finite() { now_ms as i64 } else { 0 }
+}
+
+/// A JS session-elapsed number → `u64` ms: non-finite or negative → 0.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn f64_to_elapsed(ms: f64) -> u64 {
+    if ms.is_finite() && ms > 0.0 {
+        ms as u64
+    } else {
+        0
+    }
 }
 
 /// Coerce a stored bean row JSON → a normalised `Bean` JSON (CORE2), or
@@ -1371,6 +1455,45 @@ impl CremaBridge {
     /// Feed a periodic clock tick. Returns a JSON-encoded [`CoreOutput`].
     pub fn on_tick(&mut self, now_ms: f64) -> String {
         json(self.core.on_tick(now_ms as u64))
+    }
+
+    // ── Guided brew sessions (issue #10) ─────────────────────────
+
+    /// Arm a guided brew session for a JSON-encoded `BrewRecipe`.
+    /// `start_on_pour` starts the clock at the first sustained pour.
+    /// Returns a JSON-encoded [`CoreOutput`].
+    pub fn brew_session_arm(&mut self, recipe_json: &str, start_on_pour: bool) -> String {
+        json(self.core.brew_session_arm(recipe_json, start_on_pour))
+    }
+
+    /// Start an armed session's clock (the Start tap).
+    pub fn brew_session_begin(&mut self, now_ms: f64) -> String {
+        json(self.core.brew_session_begin(now_ms as u64))
+    }
+
+    /// Freeze a running session's clock.
+    pub fn brew_session_pause(&mut self, now_ms: f64) -> String {
+        json(self.core.brew_session_pause(now_ms as u64))
+    }
+
+    /// Resume a paused session.
+    pub fn brew_session_resume(&mut self, now_ms: f64) -> String {
+        json(self.core.brew_session_resume(now_ms as u64))
+    }
+
+    /// Advance to the next recipe step.
+    pub fn brew_session_skip(&mut self, now_ms: f64) -> String {
+        json(self.core.brew_session_skip(now_ms as u64))
+    }
+
+    /// End the session now; the output carries `BrewSessionCompleted`.
+    pub fn brew_session_finish(&mut self, now_ms: f64) -> String {
+        json(self.core.brew_session_finish(now_ms as u64))
+    }
+
+    /// Drop the session without a summary.
+    pub fn brew_session_cancel(&mut self) -> String {
+        json(self.core.brew_session_cancel())
     }
 
     /// Discard all session state — e.g. on disconnect.

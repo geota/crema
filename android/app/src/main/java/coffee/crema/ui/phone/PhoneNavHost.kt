@@ -56,7 +56,7 @@ import coffee.crema.ui.phone.components.CremaBottomNav
  *    · settings. Settings is NOT a bottom-bar item — every top bar's gear
  *    navigates to it (its tab row shows no active tab).
  *  • PUSHED full-screen (bottom bar HIDDEN): profile-edit · bean-edit ·
- *    roaster-edit · log-brew · debug.
+ *    roaster-edit · log-brew · recipe-edit · debug.
  *  • list → detail inside history / settings is INTERNAL screen state (the
  *    bottom bar stays put).
  */
@@ -75,6 +75,8 @@ fun PhoneNavHost(
     roasterEditContent: @Composable (onBack: () -> Unit) -> Unit,
     /** The Brew Log form (issue #10) — pushed full-screen, bottom bar hidden. */
     logBrewContent: @Composable (onBack: () -> Unit) -> Unit,
+    /** The guided-brew recipe editor (issue #10 Phase 2) — pushed full-screen. */
+    recipeEditContent: @Composable (onBack: () -> Unit) -> Unit,
     debugContent: @Composable () -> Unit,
     /** The route to reopen on first composition (the tablet host's route when
      *  the window shrinks across the 840dp breakpoint); `brew` = start fresh. */
@@ -158,6 +160,7 @@ fun PhoneNavHost(
                     composable("bean-edit") { beanEditContent(onBack) }
                     composable("roaster-edit") { roasterEditContent(onBack) }
                     composable(NavRestore.LOG_BREW) { logBrewContent(onBack) }
+                    composable(NavRestore.RECIPE_EDIT) { recipeEditContent(onBack) }
                     composable("debug") { debugContent() }
                 }
                 SyncNavRoute(nav, initialRoute, NavRestore.PHONE_ROUTES, onNav, onRouteChange, routeOwners)
