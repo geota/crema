@@ -19,7 +19,7 @@
  */
 
 import { readJson, writeJson } from '$lib/utils/storage';
-import { credit_remaining, debit_remaining } from '$lib/wasm/de1_wasm';
+import { credit_remaining, debit_remaining, resettle_remaining } from '$lib/wasm/de1_wasm';
 import {
 	type Bean,
 	type Roaster,
@@ -315,6 +315,26 @@ export class BeanLibraryStore {
 		// the debit): capped at bagSize, `undefined` when nothing changed —
 		// persist (and touch `updatedAt`) only on a real credit.
 		const next = credit_remaining(bean.remaining, doseG, bean.bagSize ?? 0);
+		if (next === undefined) return;
+		this.updateBean(bean.id, { remaining: next });
+	}
+
+	/**
+	 * Re-settle a bag after a logged brew's dose is edited from `oldDoseG`
+	 * to `newDoseG` (`null`/0 = no dose) — the shared core rule
+	 * (`de1_domain::resettle_remaining`): credit the old dose back (capped
+	 * at `bagSize`), then debit the new one. An unchanged dose is a no-op,
+	 * so a full bag never loses grams. Untracked bags are left alone.
+	 */
+	resettleBean(beanId: string, oldDoseG: number | null, newDoseG: number | null): void {
+		const bean = this.envelope.beans.find((b) => b.id === beanId);
+		if (!bean || bean.remaining == null) return;
+		const next = resettle_remaining(
+			bean.remaining,
+			bean.bagSize ?? 0,
+			oldDoseG ?? 0,
+			newDoseG ?? 0
+		);
 		if (next === undefined) return;
 		this.updateBean(bean.id, { remaining: next });
 	}

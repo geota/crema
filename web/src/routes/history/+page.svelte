@@ -745,6 +745,7 @@
 			return (
 				(s.profileName ?? '').toLowerCase().includes(query) ||
 				methodLabel(methodOf(s)).toLowerCase().includes(query) ||
+				(s.recipeName ?? '').toLowerCase().includes(query) ||
 				(s.metadata.notes ?? '').toLowerCase().includes(query) ||
 				(s.metadata.nextPlan ?? '').toLowerCase().includes(query) ||
 				effectiveShotTags(s).some((t) => t.toLowerCase().includes(query))
@@ -1296,13 +1297,11 @@
 						onLogAgain={() => logAgain(selected)}
 						onManualBrewEdit={(patch) => {
 							// Manual rows keep their facts editable; a dose change
-							// re-settles the bag exactly like re-attribution.
-							const oldDose = selected.metadata.dose ?? 0;
+							// re-settles the bag through the core rule (credit old,
+							// debit new — a no-op when the dose is unchanged).
 							const beanId = selected.bean?.beanId ?? null;
 							if (patch.dose !== undefined && beanId) {
-								const newDose = patch.dose ?? 0;
-								if (oldDose > 0) beanLibrary.creditBean(beanId, oldDose);
-								if (newDose > 0) beanLibrary.debitBean(beanId, newDose);
+								beanLibrary.resettleBean(beanId, selected.metadata.dose ?? null, patch.dose);
 							}
 							store.updateManualBrew(selected.id, patch);
 						}}

@@ -30,11 +30,11 @@ import type { BrewHistoryStats, BrewSeries, BrewStatInput } from '$lib/core/crem
 import {
 	peaksForShot as wasmPeaksForShot,
 	historyStats as wasmHistoryStats,
-	brewHistoryStats as wasmBrewHistoryStats
+	brewHistoryStats as wasmBrewHistoryStats,
+	ratioForMethod as wasmRatioForMethod
 } from '$lib/wasm/de1_wasm';
 import type { TelemetrySample } from '$lib/state';
 import { filenameStamp } from '$lib/utils/download';
-import { formatRatio } from '$lib/utils/ratio';
 import { fromWire } from './telemetry-wire';
 
 /**
@@ -368,10 +368,14 @@ export function methodOf(shot: StoredShot): string | null {
  * manual or guided (issue #10). Brew rows are local-only: they never reach
  * an upload path (Visualizer or the Decent account — auto, manual or
  * backlog), show no upload menu or cloud pip, and carry no DE1 machine
- * stamp. Mirrors Rust `StoredShot::is_brew_log` and Android `isBrewLog`.
+ * stamp. Mirrors Rust `StoredShot::is_brew_log` and Android `isBrewLog`:
+ * any non-null `brewMethod` — including `""` from an old or foreign
+ * record — makes a row a brew log.
  */
 export function isBrewLog(shot: Pick<StoredShot, 'brewMethod'>): boolean {
-	return !!shot.brewMethod;
+	// Presence, not content: `brewMethod: ""` is still a brew (core rule).
+	// Neither shell writes an empty method — saves normalize it to `null`.
+	return shot.brewMethod != null;
 }
 
 /**
@@ -382,7 +386,7 @@ export function isBrewLog(shot: Pick<StoredShot, 'brewMethod'>): boolean {
  * Rust `StoredShot::is_manual_log`.
  */
 export function isManualLog(shot: StoredShot): boolean {
-	return !!shot.brewMethod && shot.record.samples.length === 0 && !shot.brewSeries;
+	return isBrewLog(shot) && shot.record.samples.length === 0 && !shot.brewSeries;
 }
 
 /**
@@ -574,18 +578,6 @@ export function flatSamplesOf(shot: StoredShot): TelemetrySample[] {
 }
 
 /**
- * A `1:N` ratio label from final weight ÷ the recorded brew dose, or `1:—`.
- *
- * Uses the shot's own `dose` (grams) — captured at `ShotCompleted` time from
- * the active profile. A pre-existing record (or one pulled with no active
- * profile) has no `dose`, so it falls back to the shell-wide 18 g default.
- *
- * The arithmetic + format come from the shared `$lib/utils/ratio.formatRatio`
- * helper, which delegates to `de1_domain::brew_ratio` via the wasm bridge so
- * every shell produces the same number. This wrapper just resolves the
- * shot-level fields and the 18 g dose fallback.
- */
-/**
  * The grind THIS shot was pulled at, as a raw setting string (issue #16):
  * the shot's own `metadata.grinderSetting` (set by the History grind
  * stepper, or carried by an import), else the frozen bean snapshot's
@@ -609,24 +601,22 @@ export function grindLabel(shot: StoredShot): string | null {
 	return setting ? `Grind ${setting}` : null;
 }
 
+/**
+ * The method-aware `1:N` label — the core's `ratio_for_method` (espresso:
+ * yield ÷ dose; filter: water-in ÷ dose, yield fallback), the same rule
+ * Android's `methodRatioLabel` calls. No dose means no ratio (`1:—`) for
+ * every method: an 18 g espresso default would invent a number.
+ */
 export function ratioLabel(record: StoredShot): string {
-	const method = methodOf(record);
-	if (method && method !== 'espresso') {
-		// Filter/immersion rows speak water-in (1:16), falling back to
-		// the beverage weight when no water was recorded — and NEVER
-		// borrow the espresso 18 g dose default (a pourover without a
-		// recorded dose has no meaningful ratio).
-		const water = record.metadata.waterG;
-		const numerator = water != null && water > 0 ? water : yieldOf(record);
-		const dose = record.metadata.dose;
-		return formatRatio(dose != null && dose > 0 ? dose : 0, numerator);
-	}
-	const yieldOut = yieldOf(record);
-	const dose =
-		record.metadata.dose != null && record.metadata.dose > 0
-			? record.metadata.dose
-			: 18;
-	return formatRatio(dose, yieldOut);
+	const dose = record.metadata.dose;
+	const water = record.metadata.waterG;
+	const r = wasmRatioForMethod(
+		methodOf(record) ?? undefined,
+		dose != null && dose > 0 ? dose : undefined,
+		water != null && water > 0 ? water : undefined,
+		yieldOf(record) ?? undefined
+	);
+	return r == null || !Number.isFinite(r) ? '1:—' : `1:${r.toFixed(1)}`;
 }
 
 

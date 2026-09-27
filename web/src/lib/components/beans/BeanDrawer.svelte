@@ -33,6 +33,7 @@
 	import BeanPhotoViewer from './BeanPhotoViewer.svelte';
 	import RoastSlider from './RoastSlider.svelte';
 	import BeanDeleteSplit from './BeanDeleteSplit.svelte';
+	import { brews_remaining_estimate } from '$lib/wasm/de1_wasm';
 
 	let {
 		bean,
@@ -110,20 +111,14 @@
 	const shotsWithThis = $derived(history.all.filter((s) => s.bean?.beanId === bean.id));
 
 	/**
-	 * "≈ N brews" left in the bag — estimated from this bag's OWN recent
-	 * mean dose (last 10 records), so a 30 g French-press habit stops
-	 * reading as phantom 18 g shots (issue #10). Falls back to the 18 g
-	 * espresso default for an unbrewed bag.
+	 * "≈ N brews" left in the bag — the core's `brews_remaining_estimate`
+	 * (this bag's own mean dose over its newest 10 records, 18 g fallback),
+	 * shared with Android (issue #10). Untracked bags (no size) show none.
 	 */
 	const brewsRemaining = $derived.by<number>(() => {
 		if (bean.bagSize <= 0) return 0;
-		const doses = shotsWithThis
-			.slice(0, 10)
-			.map((s) => s.metadata.dose)
-			.filter((d): d is number => d != null && d > 0);
-		const meanDose =
-			doses.length > 0 ? doses.reduce((a, b) => a + b, 0) / doses.length : 18;
-		return Math.max(0, Math.floor(bean.remaining / meanDose));
+		const doses = Float32Array.from(shotsWithThis.map((s) => s.metadata.dose ?? 0));
+		return brews_remaining_estimate(bean.remaining, doses);
 	});
 
 	// Group open/closed state — match the design's defaults.

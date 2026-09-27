@@ -31,6 +31,7 @@ import {
 	putSeries
 } from './series-store';
 import {
+	isManualLog,
 	shotId,
 	snapshotFromBean,
 	type ShotBean,
@@ -674,7 +675,9 @@ export class HistoryStore {
 				samples: []
 			},
 			bean: input.bean ?? null,
-			brewMethod: input.method,
+			// Never persist an empty method: blank → `null` (the one rule
+			// both shells follow; `isBrewLog` is presence-based).
+			brewMethod: input.method.trim() ? input.method : null,
 			...(input.recipeName ? { recipeName: input.recipeName } : {}),
 			...(input.brewSeries
 				? { brewSeries: downsampleBrewSeries(input.brewSeries) }
@@ -699,10 +702,13 @@ export class HistoryStore {
 		const idx = this.shots.findIndex((s) => s.id === id);
 		if (idx < 0) return;
 		const shot = this.shots[idx];
-		if (!(shot.brewMethod && shot.record.samples.length === 0 && !shot.brewSeries)) return;
+		if (!isManualLog(shot)) return;
+		// A blank method patch means "no method given" — it never blanks the
+		// row's method (which would turn a manual log into a machine shot).
+		const method = patch.method?.trim() ? patch.method : undefined;
 		const next: StoredShot = {
 			...shot,
-			...(patch.method !== undefined ? { brewMethod: patch.method } : {}),
+			...(method !== undefined ? { brewMethod: method } : {}),
 			...(patch.completedAt !== undefined ? { completedAt: patch.completedAt } : {}),
 			...(patch.brewTempC !== undefined ? { brewTempTarget: patch.brewTempC } : {}),
 			...(patch.durationMs !== undefined
@@ -1018,10 +1024,9 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 	const visualizerId = typeof obj.visualizerId === 'string' ? obj.visualizerId : null;
 	const deletedAt = typeof obj.deletedAt === 'number' ? obj.deletedAt : null;
 	// Brew Log fields (issue #10) — all additive; absent on machine shots.
-	const brewMethod =
-		typeof obj.brewMethod === 'string' && obj.brewMethod.trim().length > 0
-			? obj.brewMethod
-			: null;
+	// Presence-based like the core's `is_brew_log`: a stored `""` stays a
+	// brew row (local-only), it is not silently upcast to a machine shot.
+	const brewMethod = typeof obj.brewMethod === 'string' ? obj.brewMethod : null;
 	const recipeName =
 		typeof obj.recipeName === 'string' && obj.recipeName.trim().length > 0
 			? obj.recipeName
@@ -1091,7 +1096,7 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 		autoTare,
 		visualizerId,
 		deletedAt,
-		...(brewMethod ? { brewMethod } : {}),
+		...(brewMethod != null ? { brewMethod } : {}),
 		...(recipeName ? { recipeName } : {}),
 		...(brewSeries ? { brewSeries } : {})
 	};
