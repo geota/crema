@@ -3,14 +3,24 @@
  *
  * Storage accepts ANY normalized method string (the core's
  * `normalize_brew_method` rule); this module owns what the *UI* makes
- * of one — the curated preset chips, display labels, per-method seed
- * values for the log form, and the last-used-method memory. Mirrors
- * Rust's `BREW_METHOD_PRESETS` (Tea deliberately absent — a BC tea brew
- * still imports, carrying its name as a free-text method).
+ * of one — display labels, the last-used-method memory, and the bridge
+ * to the core's preset table (`brew_method_presets`) and log-form
+ * seeding rule (`brew_log_seeds`). Tea is deliberately absent — a BC tea
+ * brew still imports, carrying its name as a free-text method.
  */
 
-import type { BrewSeries } from '$lib/core/crema-core';
-import { normalizeBrewMethod as wasmNormalize } from '$lib/wasm/de1_wasm';
+import type {
+	BrewLogPrefill,
+	BrewLogSeeds,
+	BrewMethodPreset as CoreBrewMethodPreset,
+	BrewSeedInput,
+	BrewSeries
+} from '$lib/core/crema-core';
+import {
+	brewLogSeedsJson as wasmBrewLogSeeds,
+	brewMethodPresets as wasmBrewMethodPresets,
+	normalizeBrewMethod as wasmNormalize
+} from '$lib/wasm/de1_wasm';
 
 /**
  * Values a caller seeds the Log-brew form with — "Log again" passes a
@@ -35,49 +45,49 @@ export interface LogBrewPrefill {
 	brewSeries?: BrewSeries | null;
 }
 
-/** One curated method preset — a chip in the log form. */
-export interface BrewMethodPreset {
-	/** The stored method string (`"french_press"`). */
-	readonly id: string;
+/**
+ * One curated method preset — a chip in the log form. The id and the seed
+ * numbers come from the core (`de1_domain::brew_method_presets`, the one
+ * source of truth for both shells); the display label is the UI's, keyed
+ * by id. "Other" is not a preset — it is the free-text chip.
+ */
+export interface BrewMethodPreset extends CoreBrewMethodPreset {
 	/** Display label ("French press"). */
 	readonly label: string;
-	/** Seed dry dose, grams, for a first-ever log of this method. */
-	readonly seedDose: number;
-	/**
-	 * Seed water-in, grams — `null` for espresso (which speaks yield)
-	 * and for methods where water isn't usefully pre-fillable.
-	 */
-	readonly seedWater: number | null;
-	/** Seed yield-out, grams — espresso only. */
-	readonly seedYield: number | null;
-	/** Seed water temperature, °C, or `null` (cold brew). */
-	readonly seedTemp: number | null;
 }
 
+/** Display labels, keyed by the core preset id. */
+const METHOD_LABELS: Readonly<Record<string, string>> = {
+	espresso: 'Espresso',
+	pourover: 'V60 / pourover',
+	aeropress: 'AeroPress',
+	french_press: 'French press',
+	moka: 'Moka',
+	cold_brew: 'Cold brew',
+	drip: 'Drip machine',
+	siphon: 'Siphon',
+	clever: 'Clever / Switch'
+};
+
+let presetCache: readonly BrewMethodPreset[] | null = null;
+
 /**
- * The chip row, in display order. The first six render inline; the rest
- * live behind "More". Mirrors the spec's §3 defaults.
+ * The chip row, in the core's display order, each preset carrying its
+ * label. Parsed once from the core (`brewMethodPresets`) — call after the
+ * wasm bundle is up (the log form only opens once it is).
  */
-export const BREW_METHOD_PRESETS: readonly BrewMethodPreset[] = [
-	{ id: 'espresso', label: 'Espresso', seedDose: 18, seedWater: null, seedYield: 36, seedTemp: 93 },
-	{ id: 'pourover', label: 'V60 / pourover', seedDose: 15, seedWater: 250, seedYield: null, seedTemp: 96 },
-	{ id: 'aeropress', label: 'AeroPress', seedDose: 14, seedWater: 220, seedYield: null, seedTemp: 90 },
-	{ id: 'french_press', label: 'French press', seedDose: 30, seedWater: 500, seedYield: null, seedTemp: 95 },
-	{ id: 'moka', label: 'Moka', seedDose: 15, seedWater: 150, seedYield: null, seedTemp: null },
-	{ id: 'cold_brew', label: 'Cold brew', seedDose: 60, seedWater: 700, seedYield: null, seedTemp: null },
-	{ id: 'drip', label: 'Drip machine', seedDose: 30, seedWater: 500, seedYield: null, seedTemp: 94 },
-	{ id: 'siphon', label: 'Siphon', seedDose: 20, seedWater: 300, seedYield: null, seedTemp: 92 },
-	{ id: 'clever', label: 'Clever / Switch', seedDose: 18, seedWater: 300, seedYield: null, seedTemp: 94 }
-];
+export function brewMethodPresets(): readonly BrewMethodPreset[] {
+	if (presetCache) return presetCache;
+	const core = JSON.parse(wasmBrewMethodPresets()) as CoreBrewMethodPreset[];
+	presetCache = core.map((p) => ({ ...p, label: METHOD_LABELS[p.id] ?? p.id }));
+	return presetCache;
+}
+
+/** The free-text chip's id — typed names are normalized and stored as-is. */
+export const OTHER_METHOD = 'other';
 
 /** How many preset chips render inline before the "More ▾" overflow. */
 export const INLINE_PRESET_COUNT = 6;
-
-/** Look up a preset by stored id, or `undefined` for free-text methods. */
-export function presetFor(method: string | null | undefined): BrewMethodPreset | undefined {
-	if (!method) return undefined;
-	return BREW_METHOD_PRESETS.find((p) => p.id === method);
-}
 
 /**
  * Display label for any stored method string: the preset label when
@@ -87,8 +97,8 @@ export function presetFor(method: string | null | undefined): BrewMethodPreset |
 export function methodLabel(method: string | null | undefined): string {
 	const m = method?.trim().toLowerCase();
 	if (!m) return 'Espresso';
-	const preset = presetFor(m);
-	if (preset) return preset.label;
+	const label = METHOD_LABELS[m];
+	if (label) return label;
 	const words = m.replace(/_/g, ' ').trim();
 	return words.charAt(0).toUpperCase() + words.slice(1);
 }
@@ -115,15 +125,18 @@ export function normalizeMethod(raw: string): string | null {
 
 const LAST_METHOD_KEY = 'crema.brewlog.lastMethod.v1';
 
-/** The method the log form opens on — last saved, else pourover. */
-export function lastUsedMethod(): string {
+/**
+ * The method of the last saved log, or `null` when none was remembered —
+ * the core's seeding rule then opens on pourover.
+ */
+export function lastUsedMethod(): string | null {
 	try {
 		const stored = localStorage.getItem(LAST_METHOD_KEY);
 		if (stored && stored.trim()) return stored;
 	} catch {
 		// Storage unavailable (SSR/private mode) — fall through.
 	}
-	return 'pourover';
+	return null;
 }
 
 /** Remember the method of a just-saved log. */
@@ -133,4 +146,45 @@ export function rememberMethod(method: string): void {
 	} catch {
 		// Best-effort.
 	}
+}
+
+/** A stored row, projected for {@link brewLogSeeds}. */
+export type { BrewSeedInput, BrewLogSeeds };
+
+/**
+ * Seed the log form's numeric fields for `method` (`null` = the opening
+ * method: prefill, then last-used, then pourover) — the core's
+ * `brew_log_seeds` rule. `rows` newest first.
+ */
+export function brewLogSeeds(input: {
+	method: string | null;
+	beanId: string | null;
+	beanGrinderSetting: string | null;
+	prefill: LogBrewPrefill | undefined;
+	rows: BrewSeedInput[];
+}): BrewLogSeeds {
+	const p = input.prefill;
+	const prefill: BrewLogPrefill | undefined = p
+		? {
+				method: p.method ?? undefined,
+				doseG: p.dose ?? undefined,
+				waterG: p.waterG ?? undefined,
+				yieldG: p.yieldOut ?? undefined,
+				grinderSetting: p.grinderSetting ?? undefined,
+				tempC: p.tempC ?? undefined,
+				durationMs: p.durationMs ?? undefined
+			}
+		: undefined;
+	return JSON.parse(
+		wasmBrewLogSeeds(
+			JSON.stringify({
+				method: input.method ?? undefined,
+				lastUsedMethod: lastUsedMethod() ?? undefined,
+				beanId: input.beanId ?? undefined,
+				beanGrinderSetting: input.beanGrinderSetting ?? undefined,
+				prefill,
+				rows: input.rows
+			})
+		)
+	) as BrewLogSeeds;
 }

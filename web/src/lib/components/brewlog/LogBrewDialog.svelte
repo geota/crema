@@ -15,14 +15,14 @@
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	import { getBeanStore, type Bean, type Roaster } from '$lib/bean';
 	import {
-		BREW_METHOD_PRESETS,
 		INLINE_PRESET_COUNT,
+		OTHER_METHOD,
+		brewLogSeeds,
+		brewMethodPresets,
 		isEspressoMethod,
-		lastUsedMethod,
-		methodLabel,
 		normalizeMethod,
-		presetFor,
 		rememberMethod,
+		type BrewSeedInput,
 		type LogBrewPrefill
 	} from '$lib/brew/methods';
 	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
@@ -31,7 +31,7 @@
 	import { toast } from '$lib/components/shared/toast.svelte';
 	import { promptBagEmpty } from '$lib/bean/bag-empty-prompt';
 	import { getHistoryStore } from '$lib/history/store.svelte';
-	import { methodOf, snapshotFromBean, type StoredShot } from '$lib/history/model';
+	import { snapshotFromBean, type StoredShot } from '$lib/history/model';
 	import { formatRatio } from '$lib/utils/ratio';
 	import MethodMark from './MethodMark.svelte';
 
@@ -56,23 +56,32 @@
 	// svelte-ignore state_referenced_locally
 	const seed = prefill;
 
-	/** The newest brew matching `method` — same bag first, then any. */
-	function lastBrewOf(method: string, beanId: string | null): StoredShot | undefined {
-		const matches = (s: StoredShot) => (methodOf(s) ?? 'espresso') === method;
-		if (beanId) {
-			const scoped = history.all.find((s) => matches(s) && s.bean?.beanId === beanId);
-			if (scoped) return scoped;
-		}
-		return history.all.find(matches);
+	/** History projected for the core's seeding rule, newest first. */
+	function seedRows(): BrewSeedInput[] {
+		return history.all.map((s) => ({
+			brewMethod: s.brewMethod ?? undefined,
+			beanId: s.bean?.beanId ?? undefined,
+			doseG: s.metadata.dose ?? undefined,
+			waterG: s.metadata.waterG ?? undefined,
+			yieldG: s.metadata.yieldOut ?? undefined,
+			grinderSetting: s.metadata.grinderSetting ?? undefined,
+			tempC: s.brewTempTarget ?? undefined,
+			durationMs: s.record.duration
+		}));
 	}
 
 	// ── Form state ────────────────────────────────────────────────────
-	let method = $state(seed?.method ?? lastUsedMethod());
+	const presets = brewMethodPresets();
+	let beanId = $state<string | null>(seed?.beanId ?? library.activeBeanId);
+	// The opening method is the core's call: prefill, then last-used,
+	// then pourover — resolved by the first seed pass below.
+	// svelte-ignore state_referenced_locally
+	const openingSeeds = seedsFor(null);
+	let method = $state(openingSeeds.method);
 	let customMethod = $state('');
 	let showAllMethods = $state(
-		seed?.method != null && !BREW_METHOD_PRESETS.slice(0, INLINE_PRESET_COUNT).some((p) => p.id === seed.method)
+		!presets.slice(0, INLINE_PRESET_COUNT).some((p) => p.id === openingSeeds.method)
 	);
-	let beanId = $state<string | null>(seed?.beanId ?? library.activeBeanId);
 	let pickingBean = $state(false);
 	let dose = $state(0);
 	let water = $state(0); // water-in for filter methods, yield-out for espresso
@@ -88,7 +97,7 @@
 	/** Fields the user touched this session — method changes don't re-seed them. */
 	const dirty = new Set<string>();
 
-	const isCustom = $derived(method === 'other');
+	const isCustom = $derived(method === OTHER_METHOD);
 	const espresso = $derived(isEspressoMethod(isCustom ? customMethod : method));
 	const bean = $derived(beanId ? library.getBean(beanId) : null);
 	const roaster = $derived.by<Roaster | null>(() => {
@@ -101,45 +110,38 @@
 	);
 	const ratio = $derived(formatRatio(dose > 0 ? dose : null, water > 0 ? water : null));
 
-	// Seed the numeric fields for the method at open (later re-seeds run
+	// Seed the numeric fields for the opening method (later re-seeds run
 	// from the chip handler with the freshly-picked id).
-	// svelte-ignore state_referenced_locally
-	seedFor(method);
+	applySeeds(openingSeeds);
 
-	function seedFor(m: string): void {
-		const id = m === 'other' ? '' : m;
-		const last = id ? lastBrewOf(id, beanId) : undefined;
-		const preset = presetFor(id);
-		const esp = isEspressoMethod(id);
-		if (!dirty.has('dose')) {
-			dose = seed?.dose ?? last?.metadata.dose ?? preset?.seedDose ?? 15;
-		}
-		if (!dirty.has('water')) {
-			const lastWater = esp ? last?.metadata.yieldOut : (last?.metadata.waterG ?? last?.metadata.yieldOut);
-			water =
-				(esp ? seed?.yieldOut : seed?.waterG) ??
-				lastWater ??
-				(esp ? (preset?.seedYield ?? 36) : (preset?.seedWater ?? 250));
-		}
-		if (!dirty.has('grind')) {
-			const lastGrind = last?.metadata.grinderSetting ?? bean?.grinderSetting;
-			const fromPrefill = seed?.grinderSetting;
-			const raw = fromPrefill ?? lastGrind;
-			const parsed = raw != null ? Number.parseFloat(raw) : NaN;
-			grind = Number.isFinite(parsed) ? parsed : null;
-		}
-		if (!dirty.has('temp')) {
-			temp = seed?.tempC ?? last?.brewTempTarget ?? preset?.seedTemp ?? null;
-		}
+	/** The core's seeds for `m` (`null` = the opening method). */
+	function seedsFor(m: string | null) {
+		const b = beanId ? library.getBean(beanId) : null;
+		return brewLogSeeds({
+			method: m,
+			beanId,
+			beanGrinderSetting: b?.grinderSetting ?? null,
+			prefill: seed,
+			rows: seedRows()
+		});
+	}
+
+	/** Apply seeds to every field the user hasn't touched this session. */
+	function applySeeds(s: ReturnType<typeof seedsFor>): void {
+		if (!dirty.has('dose')) dose = s.dose;
+		if (!dirty.has('water')) water = s.water;
+		if (!dirty.has('grind')) grind = s.grind ?? null;
+		if (!dirty.has('temp')) temp = s.tempC ?? null;
 		if (!dirty.has('time')) {
-			const ms = seed?.durationMs ?? last?.record.duration ?? 0;
+			const ms = s.durationMs ?? 0;
 			timeStr = ms > 0 ? formatDuration(ms) : '';
 		}
 	}
 
 	function pickMethod(id: string): void {
 		method = id;
-		seedFor(id);
+		// "Other…" has no seeds until a name is typed — keep what's there.
+		if (id !== OTHER_METHOD) applySeeds(seedsFor(id));
 	}
 
 	function toLocalInput(ms: number): string {
@@ -239,7 +241,7 @@
 
 	<div class="bl-body">
 		<div class="bl-chips" role="radiogroup" aria-label="Brew method">
-			{#each BREW_METHOD_PRESETS.slice(0, showAllMethods ? undefined : INLINE_PRESET_COUNT) as p (p.id)}
+			{#each presets.slice(0, showAllMethods ? undefined : INLINE_PRESET_COUNT) as p (p.id)}
 				<button
 					type="button"
 					class="bl-chip"
@@ -259,7 +261,7 @@
 					class:is-on={isCustom}
 					role="radio"
 					aria-checked={isCustom}
-					onclick={() => pickMethod('other')}
+					onclick={() => pickMethod(OTHER_METHOD)}
 				>
 					Other…
 				</button>
