@@ -372,6 +372,55 @@ pub fn blank_recipe_json(method: &str, id: &str, now_ms: f64) -> String {
     de1_domain::blank_recipe_json(method, id, f64_to_ms(now_ms))
 }
 
+/// The curated presets followed by the user's live custom methods
+/// (`CustomBrewMethod[]` JSON in, `BrewMethodPreset[]` JSON out) — what
+/// every method picker lists. Tombstoned methods are left out. See
+/// `de1_domain::brew_method_presets_with_custom`.
+#[wasm_bindgen(js_name = brewMethodPresetsWithCustom)]
+pub fn brew_method_presets_with_custom(custom_json: &str) -> Result<String, String> {
+    de1_domain::brew_method_presets_with_custom_json(custom_json)
+}
+
+/// The seeds a custom method's style stands in with (`"percolation"` |
+/// `"immersion"` | `"pressure"` | `"cold"` → `BrewMethodPreset` JSON). See
+/// `de1_domain::brew_method_style_seeds`.
+#[wasm_bindgen(js_name = brewMethodStyleSeedsJson)]
+pub fn brew_method_style_seeds_json(style: &str) -> Result<String, String> {
+    de1_domain::brew_method_style_seeds_json(style)
+}
+
+/// Mint a `custom:<uuid-v7>` id for a new user-defined brew method.
+#[wasm_bindgen(js_name = newCustomMethodId)]
+pub fn new_custom_method_id() -> String {
+    de1_domain::new_custom_method_id()
+}
+
+/// Whether `method` is a user-defined method id (`custom:` namespace).
+#[wasm_bindgen(js_name = isCustomMethodId)]
+pub fn is_custom_method_id(method: &str) -> bool {
+    de1_domain::is_custom_method_id(method)
+}
+
+/// A custom method's first recipe (`CustomBrewMethod` JSON in,
+/// `BrewRecipe` JSON out), shaped by its style. See
+/// `de1_domain::blank_recipe_for_style`.
+#[wasm_bindgen(js_name = blankRecipeForStyleJson)]
+pub fn blank_recipe_for_style_json(
+    method_json: &str,
+    id: &str,
+    now_ms: f64,
+) -> Result<String, String> {
+    de1_domain::blank_recipe_for_style_json(method_json, id, f64_to_ms(now_ms))
+}
+
+/// Validate a custom method's name (`CustomMethodLabelInput` JSON in,
+/// `CustomMethodLabelCheck` JSON out). See
+/// `de1_domain::validate_custom_method_label`.
+#[wasm_bindgen(js_name = validateCustomMethodLabelJson)]
+pub fn validate_custom_method_label_json(input_json: &str) -> Result<String, String> {
+    de1_domain::validate_custom_method_label_json(input_json)
+}
+
 /// The built-in brew recipe catalogue (`BrewRecipe` JSON array) — real,
 /// credited recipes, read-only. See `de1_domain::builtin_brew_recipes`.
 #[wasm_bindgen(js_name = builtinBrewRecipesJson)]

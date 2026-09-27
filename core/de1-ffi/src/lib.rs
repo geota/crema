@@ -483,6 +483,74 @@ pub fn blank_recipe_json(method: String, id: String, now_unix_ms: i64) -> String
     de1_domain::blank_recipe_json(&method, &id, now_unix_ms)
 }
 
+/// The curated presets followed by the user's live custom methods
+/// (`CustomBrewMethod` JSON array in, `BrewMethodPreset` JSON array out).
+/// Mirrors the wasm `brewMethodPresetsWithCustom`; see
+/// [`de1_domain::brew_method_presets_with_custom`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the input JSON is malformed.
+#[uniffi::export]
+pub fn brew_method_presets_with_custom_json(custom_json: String) -> Result<String, CremaError> {
+    de1_domain::brew_method_presets_with_custom_json(&custom_json).map_err(CremaError::from)
+}
+
+/// The seeds a custom method's style stands in with (`"percolation"` |
+/// `"immersion"` | `"pressure"` | `"cold"` → `BrewMethodPreset` JSON). See
+/// [`de1_domain::brew_method_style_seeds`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] for an unknown style.
+#[uniffi::export]
+pub fn brew_method_style_seeds_json(style: String) -> Result<String, CremaError> {
+    de1_domain::brew_method_style_seeds_json(&style).map_err(CremaError::from)
+}
+
+/// Mint a `custom:<uuid-v7>` id for a new user-defined brew method.
+#[uniffi::export]
+#[must_use]
+pub fn new_custom_method_id() -> String {
+    de1_domain::new_custom_method_id()
+}
+
+/// Whether `method` is a user-defined method id (`custom:` namespace).
+#[uniffi::export]
+#[must_use]
+pub fn is_custom_method_id(method: String) -> bool {
+    de1_domain::is_custom_method_id(&method)
+}
+
+/// A custom method's first recipe (`CustomBrewMethod` JSON in,
+/// `BrewRecipe` JSON out), shaped by its style. Mirrors the wasm
+/// `blankRecipeForStyleJson`; see [`de1_domain::blank_recipe_for_style`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the method JSON is malformed.
+#[uniffi::export]
+pub fn blank_recipe_for_style_json(
+    method_json: String,
+    id: String,
+    now_unix_ms: i64,
+) -> Result<String, CremaError> {
+    de1_domain::blank_recipe_for_style_json(&method_json, &id, now_unix_ms)
+        .map_err(CremaError::from)
+}
+
+/// Validate a custom method's name (`CustomMethodLabelInput` JSON in,
+/// `CustomMethodLabelCheck` JSON out). See
+/// [`de1_domain::validate_custom_method_label`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the input JSON is malformed.
+#[uniffi::export]
+pub fn validate_custom_method_label_json(input_json: String) -> Result<String, CremaError> {
+    de1_domain::validate_custom_method_label_json(&input_json).map_err(CremaError::from)
+}
+
 /// The built-in brew recipe catalogue (`BrewRecipe` JSON array) — real,
 /// credited recipes, read-only. Mirrors the wasm `builtinBrewRecipesJson`;
 /// see [`de1_domain::builtin_brew_recipes`].
@@ -2944,5 +3012,28 @@ mod tests {
         assert!(roast_level_to_wire(None).is_none());
         assert!(roast_level_from_wire(roast_level_to_wire(Some(2.0))).is_some());
         assert!(roast_level_from_wire(None).is_none());
+    }
+
+    #[test]
+    fn custom_brew_method_facades_bridge_json() {
+        let id = new_custom_method_id();
+        assert!(id.starts_with("custom:") && is_custom_method_id(id.clone()));
+        let orb = format!(
+            r#"[{{"id":"{id}","label":"ORB","style":"pressure","createdAt":1,"updatedAt":1}}]"#
+        );
+        let merged = brew_method_presets_with_custom_json(orb.clone()).unwrap();
+        assert!(merged.contains(r#""label":"ORB""#), "{merged}");
+        let seeds = brew_method_style_seeds_json("cold".to_owned()).unwrap();
+        assert!(seeds.contains(r#""seedWaterG":700"#), "{seeds}");
+        assert!(brew_method_style_seeds_json("tea".to_owned()).is_err());
+        let one = &orb[1..orb.len() - 1];
+        let recipe = blank_recipe_for_style_json(one.to_owned(), "recipe:r".to_owned(), 5).unwrap();
+        assert!(recipe.contains(r#""kind":"press""#), "{recipe}");
+        let check = validate_custom_method_label_json(format!(
+            r#"{{"label":" orb ","customMethods":{orb}}}"#
+        ))
+        .unwrap();
+        assert!(check.contains(r#""error":"duplicate""#), "{check}");
+        assert!(brew_method_presets_with_custom_json("nope".to_owned()).is_err());
     }
 }

@@ -56,6 +56,14 @@ pub fn new_recipe_id() -> String {
     format!("recipe:{}", Uuid::now_v7())
 }
 
+/// Mint a fresh custom brew-method ID — same UUID v7 scheme, `custom:`
+/// prefix ([`CUSTOM_METHOD_ID_PREFIX`](crate::CUSTOM_METHOD_ID_PREFIX)).
+/// The id is what a brew row stores as its `brew_method`.
+#[must_use]
+pub fn new_custom_method_id() -> String {
+    format!("custom:{}", Uuid::now_v7())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

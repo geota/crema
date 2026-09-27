@@ -52,6 +52,7 @@ pub mod beanconqueror;
 pub mod brand;
 pub mod brew;
 pub mod brew_builtin;
+pub mod brew_custom;
 pub mod brew_session;
 pub mod builtin;
 /// Lenient number-or-string deserialization shared by the JSON importers.
@@ -121,6 +122,14 @@ pub use brew_builtin::{
     default_builtin_recipe_id, duplicate_recipe, duplicate_recipe_json, is_builtin_recipe,
     is_legacy_default_recipe, migrate_recipe_library, migrate_recipe_library_json,
 };
+pub use brew_custom::{
+    BrewMethodStyle, CUSTOM_METHOD_ID_PREFIX, CUSTOM_METHOD_LABEL_MAX_CHARS, CustomBrewMethod,
+    CustomMethodLabelCheck, CustomMethodLabelError, CustomMethodLabelInput, blank_recipe_for_style,
+    blank_recipe_for_style_json, brew_method_presets_with_custom,
+    brew_method_presets_with_custom_json, brew_method_style_seeds, brew_method_style_seeds_json,
+    custom_method_preset, is_custom_method_id, resolve_brew_method_preset,
+    validate_custom_method_label, validate_custom_method_label_json,
+};
 pub use brew_session::{
     APPROACH_LEAD, BREW_SAMPLE_MIN_INTERVAL, BrewCue, BrewSessionEvent, BrewSessionMonitor,
     BrewSessionPhase, BrewSessionSummary, MAX_BREW_SAMPLES, START_ON_POUR_THRESHOLD_G,
@@ -153,7 +162,7 @@ pub use history::{
 };
 pub use history_export::{export_v2_json_shot, export_v2_json_shot_full};
 pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};
-pub use ids::{new_profile_id, new_recipe_id, new_shot_id};
+pub use ids::{new_custom_method_id, new_profile_id, new_recipe_id, new_shot_id};
 pub use maintenance::{
     MaintenanceReadout, MaintenanceState, maintenance_readout, maintenance_readout_json,
 };

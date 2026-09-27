@@ -33,7 +33,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Bean, BrewRecipe, Roaster, StoredShot, beanconqueror::ImportPlan, is_builtin_recipe};
+use crate::{
+    Bean, BrewRecipe, CustomBrewMethod, Roaster, StoredShot, beanconqueror::ImportPlan,
+    is_builtin_recipe, is_custom_method_id,
+};
 
 /// Header record — the first line of a Crema export.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -309,6 +312,10 @@ pub struct BackupHeader {
     /// Absent in bundles made before recipes were backed up.
     #[serde(default)]
     pub recipe_count: usize,
+    /// User-defined brew methods in the bundle, tombstones included.
+    /// Absent in bundles made before custom methods existed.
+    #[serde(default)]
+    pub custom_method_count: usize,
 }
 
 /// The parsed contents of a backup bundle. Beans + roasters reuse the library
@@ -353,17 +360,21 @@ pub struct BackupImportPlan {
     /// Recipe organisation (`kind` stripped): `{ defaults:{method:id},
     /// hiddenBuiltins:[ids] }` — opaque to the core, like `profileMeta`.
     pub recipe_meta: Option<serde_json::Value>,
+    /// The user's own brew methods (`kind:"brewMethod"` lines), tombstones
+    /// included so a deleted method's past brews still resolve.
+    pub custom_methods: Vec<CustomBrewMethod>,
 }
 
 /// Build a backup bundle (JSONL): `crema-backup/v1` header → settings →
 /// profileMeta → recipeMeta → maintenance → visualizerPrefs → roasters →
-/// beans → shots → recipes → profiles. Built-in recipes
+/// beans → shots → brewMethods → recipes → profiles. Built-in recipes
 /// ([`is_builtin_recipe`]) are skipped — they ship with the app. Profiles + the four config blobs ride as verbatim JSON;
 /// beans/roasters/shots are typed + lossless. The shell must EXCLUDE OAuth
 /// tokens, per-device/BLE state, and photos before building the envelope.
 ///
 /// `envelope_json` = `{profiles:[…], beans:[Bean], roasters:[Roaster],
-/// shots:[StoredShot], recipes:[BrewRecipe], settings:{…}, profileMeta:{…},
+/// shots:[StoredShot], recipes:[BrewRecipe], customMethods:[CustomBrewMethod],
+/// settings:{…}, profileMeta:{…},
 /// recipeMeta:{…}, maintenance:{…}, visualizerPrefs:{…}}`. The last three are opaque to the core — it just
 /// line-tags and passes them through so both shells emit identical bytes.
 ///
@@ -387,6 +398,8 @@ pub fn export_backup_jsonl_from_json(
         shots: Vec<StoredShot>,
         #[serde(default)]
         recipes: Vec<BrewRecipe>,
+        #[serde(default, rename = "customMethods")]
+        custom_methods: Vec<CustomBrewMethod>,
         #[serde(default)]
         settings: serde_json::Value,
         #[serde(default, rename = "profileMeta")]
@@ -414,6 +427,7 @@ pub fn export_backup_jsonl_from_json(
         roaster_count: inp.roasters.len(),
         shot_count: inp.shots.len(),
         recipe_count: recipes.len(),
+        custom_method_count: inp.custom_methods.len(),
     };
     let mut out = String::new();
     push_line(&mut out, &header);
@@ -444,6 +458,11 @@ pub fn export_backup_jsonl_from_json(
     for s in &inp.shots {
         push_tagged_line(&mut out, "shot", s);
     }
+    // Custom methods before recipes: a restore that reads top-down meets a
+    // recipe's `custom:` method after the method itself.
+    for m in &inp.custom_methods {
+        push_tagged_line(&mut out, "brewMethod", m);
+    }
     for r in recipes {
         push_tagged_line(&mut out, "recipe", r);
     }
@@ -472,6 +491,7 @@ pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
     let mut recipe_meta = None;
     let mut shots = Vec::new();
     let mut recipes = Vec::new();
+    let mut custom_methods = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -525,6 +545,16 @@ pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
                     recipes.push(r);
                 }
             }
+            "brewMethod" => {
+                // Typed; the `kind` key is ignored as unknown. Only the
+                // `custom:` namespace is accepted — a hand-edited line can't
+                // shadow a curated preset.
+                if let Ok(m) = serde_json::from_value::<CustomBrewMethod>(value)
+                    && is_custom_method_id(&m.id)
+                {
+                    custom_methods.push(m);
+                }
+            }
             "visualizerPrefs" => {
                 if let Some(map) = value.as_object_mut() {
                     map.remove("kind");
@@ -554,6 +584,7 @@ pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
         shots,
         recipes,
         recipe_meta,
+        custom_methods,
     }
 }
 
@@ -790,6 +821,75 @@ mod tests {
         let h: BackupHeader = serde_json::from_str(old).unwrap();
         assert_eq!(h.recipe_count, 0);
         assert!(parse_backup_jsonl(old).recipes.is_empty());
+    }
+
+    #[test]
+    fn backup_round_trips_custom_methods_and_the_label_snapshot() {
+        let orb = crate::CustomBrewMethod {
+            id: "custom:01920000-0000-7000-8000-00000000abcd".to_owned(),
+            label: "ORB".to_owned(),
+            style: crate::BrewMethodStyle::Percolation,
+            icon: Some("funnel".to_owned()),
+            seed_dose_g: Some(16.0),
+            seed_water_g: None,
+            seed_temp_c: None,
+            created_at: 1,
+            updated_at: 2,
+            deleted_at: None,
+        };
+        let mut gone = orb.clone();
+        gone.id = "custom:gone".to_owned();
+        gone.label = "Old brewer".to_owned();
+        gone.deleted_at = Some(3);
+        let shot = serde_json::json!({
+            "formatVersion": 3,
+            "id": "shot:orb",
+            "completedAt": 1_700_000_000_000_i64,
+            "record": { "duration": 0, "samples": [] },
+            "brewMethod": gone.id,
+            "brewMethodLabel": "Old brewer",
+        });
+        let recipe = crate::blank_recipe_for_style(&orb, "recipe:orb", 4);
+        let envelope = serde_json::json!({
+            "customMethods": [orb, gone],
+            "shots": [shot],
+            "recipes": [recipe],
+        });
+        let jsonl =
+            export_backup_jsonl_from_json(&envelope.to_string(), 1, "0.0.1", "Pixel").unwrap();
+        let header: BackupHeader = serde_json::from_str(jsonl.lines().next().unwrap()).unwrap();
+        assert_eq!(header.custom_method_count, 2);
+        assert_eq!(jsonl.matches(r#""kind":"brewMethod""#).count(), 2);
+        // Methods precede the recipes that use them.
+        assert!(jsonl.find("brewMethod").unwrap() < jsonl.find(r#""kind":"recipe""#).unwrap());
+        let plan = parse_backup_jsonl(&jsonl);
+        assert_eq!(plan.custom_methods, vec![orb.clone(), gone.clone()]);
+        assert_eq!(plan.recipes[0].method, orb.id);
+        assert_eq!(
+            plan.shots[0].brew_method_label.as_deref(),
+            Some("Old brewer")
+        );
+        // A line outside the custom: namespace is refused.
+        let mut spoof = orb.clone();
+        spoof.id = "pourover".to_owned();
+        let smuggled = format!(
+            "{jsonl}{{\"kind\":\"brewMethod\",{}\n",
+            &serde_json::to_string(&spoof).unwrap()[1..]
+        );
+        assert_eq!(parse_backup_jsonl(&smuggled).custom_methods.len(), 2);
+        // Older bundles: no count, no methods; a shot without a snapshot
+        // omits the key entirely.
+        let old = r#"{"kind":"crema-backup/v1","createdAt":1,"profileCount":0,"beanCount":0,"roasterCount":0,"shotCount":0}"#;
+        let h: BackupHeader = serde_json::from_str(old).unwrap();
+        assert_eq!(h.custom_method_count, 0);
+        assert!(parse_backup_jsonl(old).custom_methods.is_empty());
+        let mut plain = plan.shots[0].clone();
+        plain.brew_method_label = None;
+        assert!(
+            !serde_json::to_string(&plain)
+                .unwrap()
+                .contains("brewMethodLabel")
+        );
     }
 
     #[test]

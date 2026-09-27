@@ -50,12 +50,19 @@ pub fn is_espresso_method(method: Option<&str>) -> bool {
 /// Canonicalize a user- or import-supplied method string for storage:
 /// trimmed, lowercased, inner whitespace runs collapsed to `_`. Returns
 /// `None` for an effectively empty input. `"French Press"` →
-/// `"french_press"`; `"  V60 "` → `"v60"`.
+/// `"french_press"`; `"  V60 "` → `"v60"`. A custom method's id
+/// (`custom:<uuid>`, [`is_custom_method_id`](crate::is_custom_method_id))
+/// is only trimmed and lowercased.
 #[must_use]
 pub fn normalize_brew_method(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
+    }
+    // A user-defined method's id (`custom:<uuid>`) is stored verbatim —
+    // collapsing its dashes would orphan it from its method.
+    if crate::brew_custom::is_custom_method_id(trimmed) {
+        return Some(trimmed.to_lowercase());
     }
     let mut out = String::with_capacity(trimmed.len());
     let mut last_was_sep = false;
@@ -100,6 +107,18 @@ pub struct BrewMethodPreset {
     /// Seed water temperature, °C — `None` where it isn't meaningful
     /// (moka on the stove, cold brew).
     pub seed_temp_c: Option<f32>,
+    /// The user's name for a custom method
+    /// ([`brew_method_presets_with_custom`](crate::brew_method_presets_with_custom));
+    /// `None` on the curated presets, whose labels the shells own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// A custom method's style — `None` on the curated presets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<crate::brew_custom::BrewMethodStyle>,
+    /// A custom method's chosen icon key — `None` = the style default
+    /// (and always `None` on the curated presets).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 /// `(id, dose, water, yield, temp)` — the curated presets in display
@@ -138,6 +157,9 @@ pub fn brew_method_presets() -> Vec<BrewMethodPreset> {
             seed_water_g: water,
             seed_yield_g: yld,
             seed_temp_c: temp,
+            label: None,
+            style: None,
+            icon: None,
         })
         .collect()
 }
@@ -399,6 +421,10 @@ pub struct BrewLogSeedInput {
     pub prefill: Option<BrewLogPrefill>,
     /// Prior brews, newest first.
     pub rows: Vec<BrewSeedInput>,
+    /// The user's custom methods, tombstoned ones included — a custom
+    /// method id seeds from its own numbers / style
+    /// ([`resolve_brew_method_preset`](crate::resolve_brew_method_preset)).
+    pub custom_methods: Vec<crate::brew_custom::CustomBrewMethod>,
 }
 
 /// The seeded numeric fields of the Log-brew form. Shells apply each value
@@ -465,7 +491,9 @@ fn parse_grind(raw: Option<&str>) -> Option<f32> {
 /// 2. the **last brew of this method** — on this bag first, else on any
 ///    bag (rows are newest first);
 /// 3. for grind only, the **bag's own grinder setting**;
-/// 4. the **method preset** seed ([`brew_method_presets`]), then a
+/// 4. the **method preset** seed ([`brew_method_presets`], or a custom
+///    method's seeds / style defaults from
+///    [`custom_methods`](BrewLogSeedInput::custom_methods)), then a
 ///    generic fallback (15 g dose, 36 g yield / 250 g water, no temp).
 ///
 /// The espresso family seeds `water` from beverage-out (yield); filter
@@ -510,7 +538,7 @@ pub fn brew_log_seeds(input: &BrewLogSeedInput) -> BrewLogSeeds {
     let preset = if is_other {
         None
     } else {
-        brew_method_preset(&method)
+        crate::brew_custom::resolve_brew_method_preset(&method, &input.custom_methods)
     };
 
     let beverage = |dose_water: (Option<f32>, Option<f32>)| {

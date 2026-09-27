@@ -304,6 +304,59 @@ export interface BrewSeedInput {
 	durationMs: number;
 }
 
+/**
+ * How a custom method brews — picks the seed numbers a blank field falls
+ * back to and the shape of the method's first recipe. Lowercase wire
+ * spelling, like [`BrewStepKind`].
+ */
+export enum BrewMethodStyle {
+	/** Water poured through a bed (V60, Kalita, the ORB). */
+	Percolation = "percolation",
+	/** Grounds steep in the water, then separate (French press, clever). */
+	Immersion = "immersion",
+	/** Steep, then push through (AeroPress-like). */
+	Pressure = "pressure",
+	/** Long, cold steep (cold brew, Kyoto drip). */
+	Cold = "cold",
+}
+
+/**
+ * One user-defined brewing method.
+ * 
+ * Shell-persisted with the beans/recipes lifecycle: timestamps in Unix
+ * ms and a soft-delete tombstone. The seeds are optional — a blank one
+ * falls back to the [`style`](Self::style)'s default
+ * ([`brew_method_style_seeds`]).
+ */
+export interface CustomBrewMethod {
+	/** Stable id — `custom:<uuid-v7>`; the stored `brew_method` value. */
+	id: string;
+	/** The user's name for it ("ORB"), trimmed, 1–40 characters. */
+	label: string;
+	style?: BrewMethodStyle;
+	/**
+	 * A shell icon key from the small shared set ("drop", "funnel", …);
+	 * `None` = the style's default icon.
+	 */
+	icon?: string;
+	/** Seed dry dose, grams; `None` = the style default. */
+	seedDoseG?: number;
+	/** Seed water-in, grams; `None` = the style default. */
+	seedWaterG?: number;
+	/**
+	 * Seed water temperature, °C; `None` = the style default (none for
+	 * cold).
+	 */
+	seedTempC?: number;
+	createdAt: number;
+	updatedAt: number;
+	/**
+	 * Soft-delete tombstone, Unix ms. A tombstoned method leaves every
+	 * picker but keeps resolving for the rows that used it.
+	 */
+	deletedAt?: number;
+}
+
 /** Everything [`brew_log_seeds`] needs to seed the Log-brew form. */
 export interface BrewLogSeedInput {
 	/**
@@ -321,6 +374,12 @@ export interface BrewLogSeedInput {
 	prefill?: BrewLogPrefill;
 	/** Prior brews, newest first. */
 	rows: BrewSeedInput[];
+	/**
+	 * The user's custom methods, tombstoned ones included — a custom
+	 * method id seeds from its own numbers / style
+	 * ([`resolve_brew_method_preset`](crate::resolve_brew_method_preset)).
+	 */
+	customMethods: CustomBrewMethod[];
 }
 
 /**
@@ -368,6 +427,19 @@ export interface BrewMethodPreset {
 	 * (moka on the stove, cold brew).
 	 */
 	seedTempC?: number;
+	/**
+	 * The user's name for a custom method
+	 * ([`brew_method_presets_with_custom`](crate::brew_method_presets_with_custom));
+	 * `None` on the curated presets, whose labels the shells own.
+	 */
+	label?: string;
+	/** A custom method's style — `None` on the curated presets. */
+	style?: BrewMethodStyle;
+	/**
+	 * A custom method's chosen icon key — `None` = the style default
+	 * (and always `None` on the curated presets).
+	 */
+	icon?: string;
 }
 
 /**
@@ -1351,6 +1423,44 @@ export interface CoreOutput {
 	events: Event[];
 	/** BLE writes the shell should perform, in order. */
 	commands: Command[];
+}
+
+/**
+ * Why a custom-method label was refused. camelCase wire spelling; the
+ * shells map each to their own copy.
+ */
+export enum CustomMethodLabelError {
+	/** Blank after trimming. */
+	Empty = "empty",
+	/** Longer than [`CUSTOM_METHOD_LABEL_MAX_CHARS`] after trimming. */
+	TooLong = "tooLong",
+	/** Clashes (case-insensitively) with a preset or a live custom method. */
+	Duplicate = "duplicate",
+}
+
+/** The verdict of [`validate_custom_method_label`]. */
+export interface CustomMethodLabelCheck {
+	/** The trimmed label — what to store when `error` is `None`. */
+	label: string;
+	error?: CustomMethodLabelError;
+}
+
+/** Input to [`validate_custom_method_label`]. */
+export interface CustomMethodLabelInput {
+	/** The label as typed. */
+	label: string;
+	/** The method being renamed, so it doesn't clash with itself. */
+	editingId?: string;
+	/**
+	 * The user's custom methods (tombstoned ones are ignored — a deleted
+	 * name is free again).
+	 */
+	customMethods: CustomBrewMethod[];
+	/**
+	 * The shell's display labels for the curated presets ("V60 /
+	 * pourover") — the core owns only the ids, which are checked too.
+	 */
+	presetLabels: string[];
 }
 
 /**
