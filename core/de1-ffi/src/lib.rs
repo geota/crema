@@ -537,17 +537,18 @@ pub fn migrate_recipe_library_json(library_json: String) -> Result<String, Crema
     de1_domain::migrate_recipe_library_json(&library_json).map_err(CremaError::from)
 }
 
-/// A recipe's nominal run time, ms (`BrewRecipe` JSON in). See
-/// [`de1_domain::BrewRecipe::nominal_duration_ms`].
+/// A recipe's estimated run time (`BrewRecipe` JSON in): a
+/// `RecipeTimeEstimate` JSON (`totalMs`, `openEnded` — render "~m:ss", with
+/// a trailing "+" when open-ended), or `null` when no step carries a
+/// duration (show no estimate). See
+/// [`de1_domain::BrewRecipe::estimated_duration`].
 ///
 /// # Errors
 ///
 /// Returns a [`CremaError`] when the recipe JSON is malformed.
 #[uniffi::export]
-pub fn recipe_nominal_duration_ms_json(recipe_json: String) -> Result<i64, CremaError> {
-    de1_domain::recipe_nominal_duration_ms_json(&recipe_json)
-        .map(|ms| i64::try_from(ms).unwrap_or(i64::MAX))
-        .map_err(CremaError::from)
+pub fn recipe_estimated_duration_json(recipe_json: String) -> Result<Option<String>, CremaError> {
+    de1_domain::recipe_estimated_duration_json(&recipe_json).map_err(CremaError::from)
 }
 
 /// A recipe's planned cumulative pour total, grams (`BrewRecipe` JSON in),

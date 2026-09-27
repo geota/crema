@@ -25,6 +25,12 @@
 //!   cue says "stop pouring"), the duration governs the *step end*.
 //! - **Neither** — open-ended (drawdown "until you tap"); only `skip`
 //!   moves on.
+//! - **Expected duration** — a tap-to-finish drawdown with a duration
+//!   ([`BrewStep::has_expected_duration`]): the duration is guidance
+//!   ("finishes around 3:00"), not a countdown. It never auto-advances
+//!   and raises no cue — the drain ends when the coffee says so, and a
+//!   "time's up" chime would read as a step change that didn't happen.
+//!   Only `skip` moves on.
 
 use std::time::Duration;
 
@@ -321,6 +327,10 @@ impl BrewSessionMonitor {
         let Some(duration_s) = step.duration_s else {
             return events;
         };
+        if step.has_expected_duration() {
+            // Guidance only: no approach, no boundary, no advance.
+            return events;
+        }
         let step_len = Duration::from_secs(duration_s);
         let in_step = self.step_elapsed(now);
         // Approach only inside the lead window — a coarse tick that
@@ -748,6 +758,28 @@ mod tests {
         assert!(m.on_tick(ms(120_000)).is_empty());
         let ev = m.skip(ms(125_000));
         assert_eq!(ev, vec![BrewSessionEvent::StepChanged { step_index: 3 }]);
+    }
+
+    #[test]
+    fn an_expected_drawdown_never_advances_or_cues_on_time() {
+        let mut r = recipe();
+        r.steps[3].duration_s = Some(60); // drawdown, manual, "about 1:00"
+        let mut m = BrewSessionMonitor::new(r, false, Duration::ZERO);
+        m.start(ms(0));
+        m.on_weight(ms(1_000), 45.0, None);
+        m.on_tick(ms(45_000)); // bloom → pour
+        m.on_weight(ms(50_000), 250.0, None); // pour → wait
+        m.on_tick(ms(80_000)); // wait → drawdown
+        assert_eq!(m.step_index(), 3);
+        // Through the expected window and far past it: silence, no advance.
+        for t in (80_250..=400_000).step_by(250) {
+            assert!(m.on_tick(ms(t)).is_empty(), "event at {t} ms");
+        }
+        assert_eq!(m.step_index(), 3);
+        assert_eq!(m.phase(), BrewSessionPhase::Running);
+        // Only the tap finishes it.
+        let ev = m.skip(ms(400_000));
+        assert!(matches!(ev.as_slice(), [BrewSessionEvent::Completed(_)]));
     }
 
     #[test]

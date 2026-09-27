@@ -740,25 +740,66 @@ impl BrewRecipe {
             .fold(None, |acc, w| Some(acc.map_or(w, |a: f32| a.max(w))))
     }
 
-    /// The recipe's nominal run time, milliseconds — the sum of its step
-    /// durations, with a pour-only step (a water target, no duration)
-    /// counted a notional 30 s. Step-less recipes read 0. Drives the
-    /// library card's "~m:ss" and the guided panel's "of about m:ss".
+    /// The recipe's estimated run time — the sum of every step's
+    /// duration, a tap-to-finish step's *expected* one included (a
+    /// drawdown's "finishes around 3:00"). No step gets a hidden default
+    /// window: an untimed step adds nothing.
+    ///
+    /// `None` when no step carries a duration (the moka pot): there is
+    /// nothing meaningful to show, so the shells show no estimate at all.
+    /// Otherwise [`RecipeTimeEstimate::open_ended`] flags a plan with a
+    /// step that holds for an unknown time — neither a duration nor a
+    /// water target, e.g. the AeroPress press — which the shells render
+    /// as "~2:45+". A pour-to-weight step without a duration is bounded
+    /// by its target and does not set the flag. Drives the library
+    /// card's "~m:ss" and the guided panel's "of about m:ss".
     #[must_use]
-    pub fn nominal_duration_ms(&self) -> u64 {
-        self.steps
-            .iter()
-            .map(|s| match (s.duration_s, s.target_water_g) {
-                (Some(d), _) => d.saturating_mul(1000),
-                (None, Some(_)) => NOMINAL_POUR_STEP_MS,
-                (None, None) => 0,
-            })
-            .fold(0u64, u64::saturating_add)
+    pub fn estimated_duration(&self) -> Option<RecipeTimeEstimate> {
+        let mut timed = false;
+        let mut total_ms = 0u64;
+        let mut open_ended = false;
+        for s in &self.steps {
+            match s.duration_s {
+                Some(d) => {
+                    timed = true;
+                    total_ms = total_ms.saturating_add(d.saturating_mul(1000));
+                }
+                None => open_ended |= s.target_water_g.is_none(),
+            }
+        }
+        timed.then_some(RecipeTimeEstimate {
+            total_ms,
+            open_ended,
+        })
     }
 }
 
-/// A pour-only step's notional duration in [`BrewRecipe::nominal_duration_ms`].
-pub const NOMINAL_POUR_STEP_MS: u64 = 30_000;
+impl BrewStep {
+    /// Whether this step's duration is an *expectation*, not a countdown:
+    /// a tap-to-finish (`advance: Manual`) drawdown that says how long
+    /// the drain usually takes. The session never advances it on time,
+    /// raises no end-of-step cue for it, and the shells show the time as
+    /// guidance ("about 0:40 left", then "+0:12 over").
+    #[must_use]
+    pub fn has_expected_duration(&self) -> bool {
+        self.kind == BrewStepKind::Drawdown
+            && self.advance == StepAdvance::Manual
+            && self.duration_s.is_some()
+    }
+}
+
+/// A recipe's estimated run time ([`BrewRecipe::estimated_duration`]).
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecipeTimeEstimate {
+    /// The sum of the step durations, milliseconds.
+    #[typeshare(serialized_as = "I64")]
+    pub total_ms: u64,
+    /// Some step holds for an unknown time (no duration, no water
+    /// target) — the shells append "+" ("~2:45+").
+    pub open_ended: bool,
+}
 
 /// JSON-bridged [`BrewRecipe::planned_pour_total_g`]. Input: a
 /// [`BrewRecipe`] JSON. `None` when no step carries a finite target.
@@ -770,14 +811,18 @@ pub fn recipe_planned_pour_total_g_json(recipe_json: &str) -> Result<Option<f32>
     Ok(recipe.planned_pour_total_g())
 }
 
-/// JSON-bridged [`BrewRecipe::nominal_duration_ms`]. Input: a
-/// [`BrewRecipe`] JSON.
+/// JSON-bridged [`BrewRecipe::estimated_duration`]. Input: a
+/// [`BrewRecipe`] JSON; output: a [`RecipeTimeEstimate`] JSON, or `None`
+/// when no step carries a duration (show no estimate).
 ///
 /// # Errors
 /// The JSON parse error string on a malformed `recipe_json`.
-pub fn recipe_nominal_duration_ms_json(recipe_json: &str) -> Result<u64, String> {
+pub fn recipe_estimated_duration_json(recipe_json: &str) -> Result<Option<String>, String> {
     let recipe: BrewRecipe = serde_json::from_str(recipe_json).map_err(|e| e.to_string())?;
-    Ok(recipe.nominal_duration_ms())
+    recipe
+        .estimated_duration()
+        .map(|e| serde_json::to_string(&e).map_err(|e| e.to_string()))
+        .transpose()
 }
 
 // ── Blank recipe ─────────────────────────────────────────────────────
@@ -1648,28 +1693,73 @@ mod tests {
     }
 
     #[test]
-    fn nominal_duration_counts_pours_a_notional_30s() {
+    fn estimate_sums_every_duration_without_hidden_windows() {
         let mut r = v60_recipe();
         // bloom 45 s (duration wins over its target) + wait 30 s.
-        assert_eq!(r.nominal_duration_ms(), 75_000);
+        let est = |r: &BrewRecipe| r.estimated_duration().map(|e| (e.total_ms, e.open_ended));
+        assert_eq!(est(&r), Some((75_000, false)));
+        // A pour-to-weight step adds nothing and stays bounded.
         r.steps.push(BrewStep {
             kind: BrewStepKind::Pour,
             target_water_g: Some(250.0),
             ..BrewStep::default()
         });
+        assert_eq!(est(&r), Some((75_000, false)));
+        // An open drawdown adds nothing but makes the total open-ended.
         r.steps.push(BrewStep {
             kind: BrewStepKind::Drawdown,
             advance: StepAdvance::Manual,
             ..BrewStep::default()
         });
-        assert_eq!(r.nominal_duration_ms(), 105_000);
+        assert_eq!(est(&r), Some((75_000, true)));
+        // Its expected duration counts, and closes the plan.
+        r.steps.last_mut().unwrap().duration_s = Some(60);
+        assert_eq!(est(&r), Some((135_000, false)));
+        assert!(r.steps.last().unwrap().has_expected_duration());
         r.steps.clear();
-        assert_eq!(r.nominal_duration_ms(), 0);
+        assert_eq!(r.estimated_duration(), None);
+    }
+
+    #[test]
+    fn builtin_estimates_match_the_sources_finish_times() {
+        let est = |id: &str| {
+            crate::builtin_brew_recipe(id)
+                .unwrap()
+                .estimated_duration()
+                .map(|e| (e.total_ms / 1000, e.open_ended))
+        };
+        assert_eq!(est("builtin:hoffmann-1-cup-v60"), Some((180, false)));
+        assert_eq!(est("builtin:hoffmann-ultimate-v60"), Some((210, false)));
+        assert_eq!(est("builtin:kasuya-4-6"), Some((210, false)));
+        assert_eq!(est("builtin:stumptown-chemex"), Some((240, false)));
+        assert_eq!(est("builtin:stumptown-kalita-wave"), Some((180, false)));
+        assert_eq!(est("builtin:hoffmann-ultimate-clever"), Some((220, false)));
+        // Moka: no step has a duration — no estimate at all (it used to
+        // read "~0:30" from a notional pour window).
+        assert_eq!(est("builtin:hoffmann-moka"), None);
+        // The presses hold for an unknown time: "~2:45+".
+        assert_eq!(
+            est("builtin:hoffmann-ultimate-aeropress"),
+            Some((165, true))
+        );
+        assert_eq!(est("builtin:aeropress-official"), Some((63, true)));
+        assert_eq!(est("builtin:merikanto-wac-2021"), Some((120, false)));
+        assert_eq!(est("builtin:hario-syphon"), Some((80, true)));
+        assert_eq!(est("builtin:hoffmann-cold-brew"), Some((43_230, true)));
+    }
+
+    #[test]
+    fn estimate_json_bridges_and_is_null_without_durations() {
         let v60 = crate::builtin_brew_recipe("builtin:hoffmann-1-cup-v60").unwrap();
         let json = serde_json::to_string(&v60).unwrap();
-        // 45 + 15 + 3 × (10 wait + 10 pour) + 5 swirl + 0 (open drawdown).
-        assert_eq!(recipe_nominal_duration_ms_json(&json).unwrap(), 125_000);
-        assert!(recipe_nominal_duration_ms_json("x").is_err());
+        assert_eq!(
+            recipe_estimated_duration_json(&json).unwrap().as_deref(),
+            Some(r#"{"totalMs":180000,"openEnded":false}"#)
+        );
+        let moka = crate::builtin_brew_recipe("builtin:hoffmann-moka").unwrap();
+        let json = serde_json::to_string(&moka).unwrap();
+        assert_eq!(recipe_estimated_duration_json(&json).unwrap(), None);
+        assert!(recipe_estimated_duration_json("x").is_err());
     }
 
     #[test]

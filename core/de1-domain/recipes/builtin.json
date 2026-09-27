@@ -74,7 +74,7 @@
         "kind": "drawdown",
         "label": "Finishes around 3:00",
         "targetWaterG": null,
-        "durationS": null,
+        "durationS": 55,
         "advance": "manual"
       }
     ],
@@ -140,7 +140,7 @@
         "kind": "drawdown",
         "label": "Target finish around 3:30",
         "targetWaterG": null,
-        "durationS": null,
+        "durationS": 85,
         "advance": "manual"
       }
     ],
@@ -199,7 +199,7 @@
         "kind": "drawdown",
         "label": "Remove the dripper at 3:30",
         "targetWaterG": null,
-        "durationS": null,
+        "durationS": 20,
         "advance": "manual"
       }
     ],
@@ -480,7 +480,7 @@
         "kind": "drawdown",
         "label": "Set it on the mug to drain",
         "targetWaterG": null,
-        "durationS": null,
+        "durationS": 60,
         "advance": "manual"
       }
     ],
@@ -525,7 +525,7 @@
         "kind": "drawdown",
         "label": "Finish around 4:00",
         "targetWaterG": null,
-        "durationS": null,
+        "durationS": 135,
         "advance": "manual"
       }
     ],
@@ -570,7 +570,7 @@
         "kind": "drawdown",
         "label": "Finish 2:45–3:00",
         "targetWaterG": null,
-        "durationS": null,
+        "durationS": 60,
         "advance": "manual"
       }
     ],

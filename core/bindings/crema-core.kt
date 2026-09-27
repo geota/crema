@@ -1878,6 +1878,16 @@ data class RecipeLibraryMigration (
 	val droppedIds: List<String>
 )
 
+/// A recipe's estimated run time ([`BrewRecipe::estimated_duration`]).
+@Serializable
+data class RecipeTimeEstimate (
+	/// The sum of the step durations, milliseconds.
+	val totalMs: Long,
+	/// Some step holds for an unknown time (no duration, no water
+	/// target) — the shells append "+" ("~2:45+").
+	val openEnded: Boolean
+)
+
 /// Bean snapshot at shot start; nested under [`ReplayMeta::bean`].
 /// 
 /// All fields optional; absent on the connect-phase prelude, present

@@ -415,12 +415,13 @@ pub fn migrate_recipe_library_json(library_json: &str) -> Result<String, String>
     de1_domain::migrate_recipe_library_json(library_json)
 }
 
-/// A recipe's nominal run time, ms (`BrewRecipe` JSON in). See
-/// `de1_domain::BrewRecipe::nominal_duration_ms`.
-#[wasm_bindgen(js_name = recipeNominalDurationMsJson)]
-pub fn recipe_nominal_duration_ms_json(recipe_json: &str) -> Result<f64, String> {
-    #[allow(clippy::cast_precision_loss)] // ms fits f64's 53-bit mantissa
-    de1_domain::recipe_nominal_duration_ms_json(recipe_json).map(|ms| ms as f64)
+/// A recipe's estimated run time (`BrewRecipe` JSON in): a
+/// `RecipeTimeEstimate` JSON (`totalMs`, `openEnded`), or `undefined` when
+/// no step carries a duration — the shells then show no estimate. See
+/// `de1_domain::BrewRecipe::estimated_duration`.
+#[wasm_bindgen(js_name = recipeEstimatedDurationJson)]
+pub fn recipe_estimated_duration_json(recipe_json: &str) -> Result<Option<String>, String> {
+    de1_domain::recipe_estimated_duration_json(recipe_json)
 }
 
 /// A recipe's planned cumulative pour total, grams (`BrewRecipe` JSON in),
