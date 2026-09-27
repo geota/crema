@@ -74,8 +74,8 @@ fun BeanDetailSheet(
     onSeeAllShots: (() -> Unit)? = null,
     /** Open the Log-brew form with this bag pre-selected (issue #10). */
     onLogBrew: (() -> Unit)? = null,
-    /** This bag's recent mean dose, g — the "≈N brews" estimate. */
-    avgDoseG: Float? = null,
+    /** This bag's brews' doses, g, newest first — the "≈N brews" estimate. */
+    recentDosesG: List<Float> = emptyList(),
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
     var photoOpen by remember { mutableStateOf(false) }
@@ -163,7 +163,7 @@ fun BeanDetailSheet(
                             onPhotoTap = if (bean.imageRef != null) ({ photoOpen = true }) else null,
                             onOpenShot = onOpenShot,
                             onSeeAllShots = onSeeAllShots,
-                            avgDoseG = avgDoseG,
+                            recentDosesG = recentDosesG,
                         )
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

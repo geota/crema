@@ -1281,7 +1281,8 @@ private fun MetricCard(label: String, value: String, unit: String?, modifier: Mo
 
 private fun shotRatio(shot: StoredShot): String? =
     // Method-aware (issue #10): espresso speaks yield-out, filter methods
-    // water-in — one core rule shared with the web.
+    // water-in — the core's ratio_for_method, which the web's ratioLabel
+    // also calls.
     shot.methodRatioLabel()
 
 

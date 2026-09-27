@@ -24,6 +24,7 @@ import coffee.crema.core.cremaProfileFromWire
 import coffee.crema.core.cremaProfileToWire
 import coffee.crema.core.creditRemaining
 import coffee.crema.core.debitRemaining
+import coffee.crema.core.resettleRemaining
 import coffee.crema.core.exportBackupJsonl
 import coffee.crema.core.exportBeanconquerorMainJson
 import coffee.crema.core.importBeanconquerorJson
@@ -1919,18 +1920,16 @@ class LibraryController(
         val s = uiState()
         val shot = s.history.firstOrNull { it.id == id } ?: return
         if (!shot.isManualLog) return
-        // Re-settle inventory before the row mutates, using the OLD dose.
-        if (doseG != null && doseG != shot.doseG) {
+        // Re-settle inventory before the row mutates, using the OLD dose —
+        // the core's resettleRemaining (credit old, debit new; null = nothing
+        // to persist, including an unchanged dose).
+        if (doseG != null) {
             shot.bean?.beanId?.let { beanId ->
                 s.beans.firstOrNull { it.id == beanId }?.let { bean ->
-                    var rem = bean.remaining ?: 0f
-                    shot.doseG?.takeIf { it > 0f }?.let { old ->
-                        creditRemaining(rem, old, bean.bagSize ?: 0f)?.let { rem = it }
+                    val rem = bean.remaining ?: return@let
+                    resettleRemaining(rem, bean.bagSize ?: 0f, shot.doseG ?: 0f, doseG)?.let { next ->
+                        mutateBean(bean.id) { it.copy(remaining = next) }
                     }
-                    if (doseG > 0f) {
-                        debitRemaining(rem, doseG)?.let { rem = it }
-                    }
-                    mutateBean(bean.id) { it.copy(remaining = rem) }
                 }
             }
         }

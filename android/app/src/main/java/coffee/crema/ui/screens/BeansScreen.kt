@@ -411,8 +411,7 @@ fun BeansScreen(
                 linkedProfileName = linkedProfileNameFor(bean, ui.profiles.map { it.id to it.name }),
                 shotCount = shots.size,
                 recentShots = shots.take(5).map { shotRowSummary(it) },
-                avgDoseG = shots.take(10).mapNotNull { it.doseG }.filter { it > 0f }
-                    .takeIf { it.isNotEmpty() }?.average()?.toFloat(),
+                recentDosesG = shots.map { it.doseG ?: 0f },
                 onLogBrew = { vm.openLogBrew(coffee.crema.ui.brewlog.BrewLogOwner.BEANS, beanId = bean.id) },
                 isActive = bean.id == ui.activeBeanId,
                 onDismiss = { detailBeanId = null },

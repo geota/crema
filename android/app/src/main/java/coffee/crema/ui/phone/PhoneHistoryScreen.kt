@@ -1163,5 +1163,6 @@ private fun PrivacyPill(label: String, on: Boolean, onClick: () -> Unit) {
 
 private fun shotRatioLabel(shot: StoredShot): String? =
     // Method-aware (issue #10): espresso speaks yield-out, filter methods
-    // water-in — one core rule shared with the tablet + web.
+    // water-in — the core's ratio_for_method, shared with the tablet and
+    // the web's ratioLabel.
     shot.methodRatioLabel()

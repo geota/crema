@@ -69,10 +69,6 @@ import java.util.Locale
  *  "nothing recorded" rather than as a broken layout. */
 private const val EMPTY = "—"
 
-/** Grams per shot used for the "~N shots left" estimate — the same 18 g the
- *  web drawer assumes. */
-private const val GRAMS_PER_SHOT = 18f
-
 /**
  * The scrolling body of the bean detail. The caller owns the scroll container
  * (a `LazyColumn` item, or a `verticalScroll` Column) and the surrounding
@@ -97,9 +93,9 @@ fun BeanDetailContent(
     onOpenShot: ((String) -> Unit)? = null,
     /** Open History filtered to this bag ("See all N shots"); null = hidden. */
     onSeeAllShots: (() -> Unit)? = null,
-    /** This bag's recent mean dose, g — drives the "≈N brews" estimate
-     *  (issue #10). Null falls back to the 18 g espresso default. */
-    avgDoseG: Float? = null,
+    /** This bag's brews' doses, g, newest first (0 = not recorded) — the
+     *  core's "≈N brews" estimate (issue #10). */
+    recentDosesG: List<Float> = emptyList(),
 ) {
     val days = beanDaysOffRoast(bean)
     val frozen = bean.isFrozen
@@ -109,7 +105,7 @@ fun BeanDetailContent(
 
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         BeanDetailHero(bean, roasterName, frozen, onPhotoTap)
-        BeanStatusStrip(bean, days, frozen, openedDays, bagSize, remaining, shotCount, avgDoseG)
+        BeanStatusStrip(bean, days, frozen, openedDays, bagSize, remaining, shotCount, recentDosesG)
 
         DetailGroup("Identity") {
             DetailRow("Name", bean.name)
@@ -405,7 +401,7 @@ private fun BeanStatusStrip(
     bagSize: Float,
     remaining: Float,
     shotCount: Int,
-    avgDoseG: Float? = null,
+    recentDosesG: List<Float> = emptyList(),
 ) {
     CremaCard(shape = RoundedCornerShape(14.dp)) {
         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -428,12 +424,10 @@ private fun BeanStatusStrip(
                     label = "Remaining",
                     value = if (bagSize > 0f || remaining > 0f) "${remaining.toInt()}g" else EMPTY,
                     sub = if (bagSize > 0f) {
-                        // "≈N brews" from this bag's OWN recent mean dose
-                        // (issue #10) — a 30 g French-press habit stops
-                        // reading as phantom 18 g shots. Espresso default
-                        // for an unbrewed bag.
-                        val perBrew = avgDoseG?.takeIf { it > 0f } ?: GRAMS_PER_SHOT
-                        val brews = (remaining / perBrew).toInt()
+                        // "≈N brews" — the core's brews_remaining_estimate
+                        // (this bag's own recent mean dose, 18 g fallback;
+                        // shared with the web drawer, issue #10).
+                        val brews = coffee.crema.core.brewsRemainingEstimate(remaining, recentDosesG).toInt()
                         "of ${bagSize.toInt()}g" + if (brews > 0) " · ≈$brews brews" else ""
                     } else {
                         EMPTY
