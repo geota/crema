@@ -364,6 +364,14 @@ pub fn new_recipe_id() -> String {
     de1_domain::new_recipe_id()
 }
 
+/// The "+ New recipe" starting point for `method` (`BrewRecipe` JSON):
+/// preset dose / water / temp and one pour, empty name, no credit. See
+/// `de1_domain::blank_recipe`.
+#[wasm_bindgen(js_name = blankRecipeJson)]
+pub fn blank_recipe_json(method: &str, id: &str, now_ms: f64) -> String {
+    de1_domain::blank_recipe_json(method, id, f64_to_ms(now_ms))
+}
+
 /// The built-in brew recipe catalogue (`BrewRecipe` JSON array) — real,
 /// credited recipes, read-only. See `de1_domain::builtin_brew_recipes`.
 #[wasm_bindgen(js_name = builtinBrewRecipesJson)]

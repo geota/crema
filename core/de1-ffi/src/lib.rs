@@ -474,6 +474,15 @@ pub fn new_recipe_id() -> String {
     de1_domain::new_recipe_id()
 }
 
+/// The "+ New recipe" starting point for `method` (`BrewRecipe` JSON):
+/// preset dose / water / temp and one pour, empty name, no credit.
+/// Mirrors the wasm `blankRecipeJson`; see [`de1_domain::blank_recipe`].
+#[uniffi::export]
+#[must_use]
+pub fn blank_recipe_json(method: String, id: String, now_unix_ms: i64) -> String {
+    de1_domain::blank_recipe_json(&method, &id, now_unix_ms)
+}
+
 /// The built-in brew recipe catalogue (`BrewRecipe` JSON array) — real,
 /// credited recipes, read-only. Mirrors the wasm `builtinBrewRecipesJson`;
 /// see [`de1_domain::builtin_brew_recipes`].

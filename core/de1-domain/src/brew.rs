@@ -780,6 +780,53 @@ pub fn recipe_nominal_duration_ms_json(recipe_json: &str) -> Result<u64, String>
     Ok(recipe.nominal_duration_ms())
 }
 
+// ── Blank recipe ─────────────────────────────────────────────────────
+
+/// The editor's starting point for a brand-new recipe of `method` — the
+/// "+ New recipe" door. Not a runnable default (the per-method defaults
+/// are the credited built-ins, [`default_builtin_recipe_id`](crate::default_builtin_recipe_id)):
+/// dose / water (or yield) / temp come from the method preset
+/// ([`brew_method_preset`]; 15 g / 250 g / no temp for free text) and the
+/// plan is one pour to the water target, for the user to build on. The
+/// name is empty — the shells fill in their own placeholder — and there
+/// is no credit: a new recipe is the user's own.
+#[must_use]
+pub fn blank_recipe(method: &str, id: &str, now_ms: i64) -> BrewRecipe {
+    let preset = brew_method_preset(method);
+    let dose = preset.as_ref().map_or(FALLBACK_DOSE_G, |p| p.seed_dose_g);
+    let water = preset
+        .as_ref()
+        .and_then(|p| p.seed_water_g.or(p.seed_yield_g))
+        .unwrap_or(FALLBACK_WATER_G);
+    BrewRecipe {
+        id: id.to_owned(),
+        name: String::new(),
+        method: normalize_brew_method(method).unwrap_or_else(|| BREW_METHOD_OTHER.to_owned()),
+        dose_g: dose,
+        water_g: water,
+        temp_c: preset.as_ref().and_then(|p| p.seed_temp_c),
+        steps: vec![BrewStep {
+            kind: BrewStepKind::Pour,
+            target_water_g: Some(water),
+            ..BrewStep::default()
+        }],
+        notes: None,
+        favourite: false,
+        created_at: now_ms,
+        updated_at: now_ms,
+        deleted_at: None,
+        credit: None,
+        source_url: None,
+    }
+}
+
+/// JSON-bridged [`blank_recipe`]: a [`BrewRecipe`] JSON.
+#[must_use]
+pub fn blank_recipe_json(method: &str, id: &str, now_ms: i64) -> String {
+    // Infallible: strings + finite f32s always serialize.
+    serde_json::to_string(&blank_recipe(method, id, now_ms)).unwrap_or_default()
+}
+
 // ── Stage marks + the planned-vs-poured staircase ────────────────────
 
 /// The stage mark for step `step_index` of `recipe` beginning at `at_ms`,
@@ -1674,5 +1721,38 @@ mod tests {
         );
         let back: BrewRecipe = serde_json::from_str(&json).unwrap();
         assert_eq!(back, credited);
+    }
+
+    #[test]
+    fn a_blank_recipe_seeds_from_the_preset_with_one_pour() {
+        let r = blank_recipe("Chemex", "recipe:n", 7);
+        assert_eq!(
+            (r.id.as_str(), r.method.as_str(), r.name.as_str()),
+            ("recipe:n", "chemex", "")
+        );
+        assert_eq!((r.dose_g, r.water_g, r.temp_c), (42.0, 700.0, Some(96.0)));
+        assert_eq!(r.steps.len(), 1);
+        assert_eq!(
+            (r.steps[0].kind, r.steps[0].target_water_g),
+            (BrewStepKind::Pour, Some(700.0))
+        );
+        assert_eq!(
+            (r.created_at, r.updated_at, r.credit.as_deref()),
+            (7, 7, None)
+        );
+        // Espresso speaks yield; free text falls back to 15 g / 250 g.
+        let e = blank_recipe("espresso", "r", 0);
+        assert_eq!((e.dose_g, e.water_g, e.temp_c), (18.0, 36.0, Some(93.0)));
+        let free = blank_recipe("karlsbad kanne", "r", 0);
+        assert_eq!(
+            (free.method.as_str(), free.dose_g, free.water_g, free.temp_c),
+            ("karlsbad_kanne", 15.0, 250.0, None)
+        );
+        // Never mistaken for a legacy starter.
+        assert!(!crate::is_legacy_default_recipe(&blank_recipe(
+            "pourover", "r", 0
+        )));
+        let back: BrewRecipe = serde_json::from_str(&blank_recipe_json("moka", "r", 1)).unwrap();
+        assert_eq!(back, blank_recipe("moka", "r", 1));
     }
 }
