@@ -351,6 +351,8 @@ fun LogBrewSheet(vm: MainViewModel, owner: String) {
                 }
             }
         }
+        // "+ Add method…" from this form: a child sheet, so it stacks on top.
+        MethodEditSheet(vm, parentRoute = LOG_BREW_ROUTE)
     }
 }
 

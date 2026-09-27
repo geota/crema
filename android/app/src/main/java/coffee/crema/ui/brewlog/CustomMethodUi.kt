@@ -82,7 +82,7 @@ private val FORM_MAX_WIDTH = 560.dp
 
 /** The "+ Add method…" entry every method picker ends with. */
 const val ADD_METHOD_KEY = "+add-method"
-const val ADD_METHOD_LABEL = "+ Add method…"
+const val ADD_METHOD_LABEL = "Add method…"
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -204,13 +204,16 @@ private fun MethodEditFooter(isNew: Boolean, onCancel: () -> Unit, onSave: () ->
 }
 
 /**
- * Tablet host — one side sheet, rendered once above the nav host so it
- * stacks over whichever sheet opened it. Renders nothing without a draft.
+ * Tablet host — a side sheet. [parentRoute] names the sheet it's composed
+ * inside (the Log-brew form or the recipe editor render it as a child dialog,
+ * so it always stacks on top of them); null = the top-level instance, above
+ * the nav host, for drafts opened from a tab (Brew setup, Profiles).
  */
 @Composable
-fun MethodEditSheet(vm: MainViewModel) {
+fun MethodEditSheet(vm: MainViewModel, parentRoute: String? = null) {
     val draft by vm.methodEdit.collectAsStateWithLifecycle()
     val d = draft ?: return
+    if (d.parentRoute != parentRoute) return
     val dismiss = vm::closeMethodEdit
     Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         BoxWithConstraints(Modifier.fillMaxSize().clickable(onClick = dismiss), contentAlignment = Alignment.CenterEnd) {

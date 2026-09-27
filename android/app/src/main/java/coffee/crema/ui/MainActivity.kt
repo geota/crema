@@ -485,8 +485,8 @@ class MainActivity : ComponentActivity() {
                     onRouteChange = onRouteChange,
                     routeOwners = routeOwners,
                 )
-                // The brewing-method sheet — composed after the host so it
-                // stacks over the Log-brew / recipe sheet that opened it.
+                // The brewing-method sheet opened from a tab (Brew setup,
+                // Profiles); the log form / recipe editor host their own.
                 coffee.crema.ui.brewlog.MethodEditSheet(viewModel)
                 if (showDevices) {
                     TabletDevicesSheet(

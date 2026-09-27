@@ -324,6 +324,8 @@ fun RecipeEditorSheet(vm: MainViewModel, owner: String) {
                 }
             }
         }
+        // "+ Add method…" from the selector: a child sheet, stacked on top.
+        MethodEditSheet(vm, parentRoute = RECIPE_EDIT_ROUTE)
     }
 }
 
