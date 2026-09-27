@@ -7,57 +7,30 @@
  * records). Drawn over the weight curve as a dashed staircase, it shows
  * the recipe's plan beside what was actually poured.
  *
- * Pure and framework-free so the chart stays a thin renderer.
+ * The segment geometry is the core's (`planned_staircase`); this module
+ * only turns it into SVG path data, so the chart stays a thin renderer.
  */
 
-import type { StageMark } from '$lib/core/crema-core';
+import type { StageMark, StairSegment } from '$lib/core/crema-core';
+import { maxPlannedTargetJson, plannedStaircaseJson } from '$lib/wasm/de1_wasm';
 
-/** One horizontal run of the staircase: level `targetG` from `t0Ms` to `t1Ms`. */
-export interface StairSegment {
-	t0Ms: number;
-	t1Ms: number;
-	targetG: number;
-}
+export type { StairSegment };
 
 /**
- * Build the planned-water staircase.
- *
- * - Each segment starts at a mark and runs to the next mark, or to
- *   `endMs` (the end of the series / the live session clock).
- * - Its level is the most recent non-null target at or before that mark,
- *   so a timed step (a wait, the drawdown) carries the last pour's target
- *   forward.
- * - Nothing is emitted before the first mark with a target, and no
- *   targets at all means an empty staircase (manual logs, old records).
- *
- * Marks need not arrive sorted. Consecutive segments share endpoints, so
- * a renderer joining them with vertical risers draws a staircase.
+ * Build the planned-water staircase — the core's `planned_staircase`
+ * (one rule for both shells): each segment runs from a mark to the next
+ * (or `endMs`) at the latest target so far; nothing before the first
+ * target; empty when no mark carries one. Marks need not arrive sorted.
  */
 export function plannedStaircase(marks: readonly StageMark[], endMs: number): StairSegment[] {
-	const sorted = [...marks].sort((a, b) => a.elapsedMs - b.elapsedMs);
-	const out: StairSegment[] = [];
-	let level: number | null = null;
-	for (let i = 0; i < sorted.length; i++) {
-		const m = sorted[i];
-		const t = m.targetWaterG;
-		if (t != null && Number.isFinite(t)) level = t;
-		if (level == null) continue;
-		const t0Ms = m.elapsedMs;
-		const t1Ms = i + 1 < sorted.length ? sorted[i + 1].elapsedMs : Math.max(t0Ms, endMs);
-		if (t1Ms <= t0Ms && i + 1 < sorted.length) continue; // zero-width (same-instant marks)
-		out.push({ t0Ms, t1Ms, targetG: level });
-	}
-	return out;
+	if (marks.length === 0) return [];
+	return JSON.parse(plannedStaircaseJson(JSON.stringify(marks), endMs)) as StairSegment[];
 }
 
-/** The largest planned target among `marks`, or 0 when none carries one. */
+/** The largest planned target among `marks`, or 0 — core `max_planned_target`. */
 export function maxPlannedTarget(marks: readonly StageMark[]): number {
-	let m = 0;
-	for (const mk of marks) {
-		const t = mk.targetWaterG;
-		if (t != null && Number.isFinite(t) && t > m) m = t;
-	}
-	return m;
+	if (marks.length === 0) return 0;
+	return maxPlannedTargetJson(JSON.stringify(marks));
 }
 
 /**

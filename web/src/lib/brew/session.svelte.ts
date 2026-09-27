@@ -19,6 +19,7 @@ import type {
 	BrewSessionSummary,
 	StageMark
 } from '$lib/core/crema-core';
+import { stageMarkForJson } from '$lib/wasm/de1_wasm';
 
 /** The live chart's sample cap — ~18 min at the 4 Hz session tick. */
 export const LIVE_SAMPLE_CAP = 4500;
@@ -120,25 +121,21 @@ export class GuidedBrewStore {
 	}
 
 	/**
-	 * A live stage mark carrying the step's planned water target, the
-	 * same snapshot the core stamps on the saved record — so the live
-	 * chart's planned staircase matches the saved one. A step-less recipe
-	 * runs as one implicit pour to its water target (as in the core).
+	 * A live stage mark carrying the step's planned water target — the
+	 * core's `stage_mark_for`, the same rule the session engine stamps on
+	 * the saved record, so the live chart's planned staircase matches the
+	 * saved one.
 	 */
 	private markAt(stepIndex: number, atMs: number): StageMark {
-		const mark: StageMark = { elapsedMs: atMs, stepIndex };
 		const r = this.recipe;
-		const steps = r?.steps ?? [];
-		const target =
-			r == null
-				? undefined
-				: steps.length === 0
-					? stepIndex === 0 && r.waterG > 0
-						? r.waterG
-						: undefined
-					: steps[stepIndex]?.targetWaterG;
-		if (target != null) mark.targetWaterG = target;
-		return mark;
+		if (r != null) {
+			try {
+				return JSON.parse(stageMarkForJson(JSON.stringify(r), stepIndex, atMs)) as StageMark;
+			} catch {
+				// A malformed recipe only loses the overlay, never the session.
+			}
+		}
+		return { elapsedMs: atMs, stepIndex };
 	}
 
 	private clearLive(): void {

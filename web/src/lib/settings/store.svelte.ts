@@ -18,7 +18,11 @@
  * {@link getSettingsStore}. It loads synchronously from `localStorage`.
  */
 
-import { defaultBrewDefaults } from '$lib/wasm/de1_wasm';
+import {
+	defaultBrewCueHaptics,
+	defaultBrewCueSound,
+	defaultBrewDefaults
+} from '$lib/wasm/de1_wasm';
 import { readJson, writeJson } from '$lib/utils/storage';
 import { readSyncConfig } from '$lib/visualizer/sync-config';
 import type { CommonSettings } from '$lib/core/crema-core';
@@ -540,20 +544,19 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 	};
 }
 
-/** Guided-brew cue sound when never chosen (issue #10): off. Mirrors the
- *  core's `DEFAULT_BREW_CUE_SOUND`. */
-export const DEFAULT_BREW_CUE_SOUND = false;
-/** Guided-brew cue haptics when never chosen: on (`DEFAULT_BREW_CUE_HAPTICS`). */
-export const DEFAULT_BREW_CUE_HAPTICS = true;
-
-/** Effective guided-brew cue sound — the explicit choice, else off. */
+/**
+ * Effective guided-brew cue sound — the explicit choice, else the core's
+ * never-chosen default (`DEFAULT_BREW_CUE_SOUND`, off). Call after
+ * `loadCore()` (the cue surfaces only render once it has run).
+ */
 export function brewCueSoundOn(s: Pick<Settings, 'brewCueSound'>): boolean {
-	return s.brewCueSound ?? DEFAULT_BREW_CUE_SOUND;
+	return s.brewCueSound ?? defaultBrewCueSound();
 }
 
-/** Effective guided-brew cue haptics — the explicit choice, else on. */
+/** Effective guided-brew cue haptics — the explicit choice, else the core's
+ *  never-chosen default (`DEFAULT_BREW_CUE_HAPTICS`, on). */
 export function brewCueHapticsOn(s: Pick<Settings, 'brewCueHaptics'>): boolean {
-	return s.brewCueHaptics ?? DEFAULT_BREW_CUE_HAPTICS;
+	return s.brewCueHaptics ?? defaultBrewCueHaptics();
 }
 
 /**

@@ -11,7 +11,7 @@
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	import type { BrewRecipe, BrewStep } from '$lib/core/crema-core';
 	import { BrewStepKind, StepAdvance } from '$lib/core/crema-core';
-	import { defaultRecipeFor, recipeId } from '$lib/brew/recipes.svelte';
+	import { defaultRecipeFor, plannedPourTotalG, recipeId } from '$lib/brew/recipes.svelte';
 	import { brewMethodPresets, methodLabel } from '$lib/brew/methods';
 
 	let {
@@ -76,10 +76,9 @@
 		{ id: BrewStepKind.Drawdown, label: 'Drawdown' }
 	];
 
-	/** The largest cumulative pour target across steps, for the check line. */
-	const plannedTotal = $derived(
-		steps.reduce((m, s) => Math.max(m, s.targetWaterG ?? 0), 0)
-	);
+	/** The largest cumulative pour target across steps, for the check line
+	 *  (core `planned_pour_total_g`; 0 when no step has one). */
+	const plannedTotal = $derived(plannedPourTotalG({ ...base, method, doseG, waterG, steps }) ?? 0);
 	const totalMatches = $derived(plannedTotal > 0 && Math.abs(plannedTotal - waterG) < 0.5);
 
 	function addStep(): void {

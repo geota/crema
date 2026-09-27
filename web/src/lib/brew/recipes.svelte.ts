@@ -9,12 +9,14 @@
  * while still letting people who name recipes keep several.
  */
 
-import type { BrewRecipe, BrewStep } from '$lib/core/crema-core';
-import { BrewStepKind, StepAdvance } from '$lib/core/crema-core';
+import type { BrewRecipe } from '$lib/core/crema-core';
 import { readJson, writeJsonChecked } from '$lib/utils/storage';
-import { brewMethodPresets } from './methods';
-
-const presetFor = (method: string) => brewMethodPresets().find((p) => p.id === method);
+import {
+	defaultRecipeJson,
+	recipeNominalDurationMsJson,
+	recipePlannedPourTotalGJson
+} from '$lib/wasm/de1_wasm';
+import { methodLabel } from './methods';
 
 const RECIPES_KEY = 'crema.brewRecipes.v1';
 const LAST_USED_KEY = 'crema.brewRecipes.lastUsed.v1';
@@ -42,107 +44,37 @@ export function recipeId(): string {
 /**
  * Build the sensible starter recipe for a method — what the Brew
  * segment offers before the user has saved anything. NOT persisted
- * until the user edits + saves it; running it untouched is fine.
+ * until the user edits + saves it; running it untouched is fine. The
+ * template (preset numbers + the per-method classic steps) is the
+ * core's `default_recipe`; the name is the UI's copy.
  */
 export function defaultRecipeFor(method: string): BrewRecipe {
-	const preset = presetFor(method);
-	const dose = preset?.seedDoseG ?? 15;
-	const water = preset?.seedWaterG ?? preset?.seedYieldG ?? 250;
-	const steps: BrewStep[] = defaultStepsFor(method, dose, water);
-	return {
-		id: recipeId(),
-		name: defaultRecipeName(method),
-		method,
-		doseG: dose,
-		waterG: water,
-		tempC: preset?.seedTempC ?? undefined,
-		steps,
-		notes: undefined,
-		favourite: false,
-		createdAt: Date.now(),
-		updatedAt: Date.now(),
-		deletedAt: undefined
-	};
+	const recipe = JSON.parse(defaultRecipeJson(method, recipeId(), Date.now())) as BrewRecipe;
+	return { ...recipe, name: defaultRecipeName(method) };
 }
 
 function defaultRecipeName(method: string): string {
-	const preset = presetFor(method);
-	const label = preset?.label ?? method;
 	// "V60 / pourover" reads clumsy as a recipe name — take the first word.
-	return `${label.split(' / ')[0]} classic`;
-}
-
-/** The per-method starter step lists — plain, editable, honest. */
-function defaultStepsFor(method: string, dose: number, water: number): BrewStep[] {
-	const bloom = Math.min(Math.round(dose * 3), Math.round(water * 0.25));
-	const pour = (target: number, kind: BrewStepKind = BrewStepKind.Pour): BrewStep => ({
-		kind,
-		label: undefined,
-		targetWaterG: target,
-		durationS: undefined,
-		advance: StepAdvance.Auto
-	});
-	const timed = (kind: BrewStepKind, s: number, advance = StepAdvance.Auto): BrewStep => ({
-		kind,
-		label: undefined,
-		targetWaterG: undefined,
-		durationS: s,
-		advance
-	});
-	const open = (kind: BrewStepKind): BrewStep => ({
-		kind,
-		label: undefined,
-		targetWaterG: undefined,
-		durationS: undefined,
-		advance: StepAdvance.Manual
-	});
-	switch (method) {
-		case 'pourover':
-			return [
-				// Bloom: pour to the bloom weight, rest until 0:45 from step start.
-				{
-					kind: BrewStepKind.Bloom,
-					label: undefined,
-					targetWaterG: bloom,
-					durationS: 45,
-					advance: StepAdvance.Auto
-				},
-				pour(Math.round(water * 0.6)),
-				timed(BrewStepKind.Wait, 30),
-				pour(water),
-				open(BrewStepKind.Drawdown)
-			];
-		case 'aeropress':
-			return [
-				pour(water),
-				timed(BrewStepKind.Stir, 10),
-				timed(BrewStepKind.Steep, 60),
-				timed(BrewStepKind.Press, 25)
-			];
-		case 'french_press':
-			return [pour(water), timed(BrewStepKind.Steep, 240), open(BrewStepKind.Press)];
-		case 'clever':
-			return [pour(water), timed(BrewStepKind.Steep, 150), open(BrewStepKind.Drawdown)];
-		case 'siphon':
-			return [pour(water), timed(BrewStepKind.Steep, 90), open(BrewStepKind.Drawdown)];
-		default:
-			// Espresso / moka / drip / cold brew / free-text: one open pour
-			// to the water (or yield) target — "just time it for me".
-			return [pour(water)];
-	}
+	return `${methodLabel(method).split(' / ')[0]} classic`;
 }
 
 /**
- * A recipe's nominal run time, ms — the sum of its step durations, with
- * pour-only steps counted a notional 30 s each (matches the guided
- * panel's "of about m:ss" line).
+ * A recipe's nominal run time, ms — the core's
+ * `BrewRecipe::nominal_duration_ms` (step durations, pour-only steps a
+ * notional 30 s each). Drives the library card's "~m:ss" and the guided
+ * panel's "of about m:ss" line.
  */
 export function nominalRecipeMs(recipe: BrewRecipe): number {
-	return (recipe.steps ?? []).reduce(
-		(acc, s) =>
-			acc + (s.durationS != null ? s.durationS * 1000 : s.targetWaterG != null ? 30_000 : 0),
-		0
-	);
+	return recipeNominalDurationMsJson(JSON.stringify(recipe));
+}
+
+/**
+ * The recipe's planned cumulative pour total, grams — the core's
+ * `BrewRecipe::planned_pour_total_g` (largest finite step target), or
+ * `null` when no step has one. The editor's "250 g planned" check.
+ */
+export function plannedPourTotalG(recipe: BrewRecipe): number | null {
+	return recipePlannedPourTotalGJson(JSON.stringify(recipe)) ?? null;
 }
 
 /**

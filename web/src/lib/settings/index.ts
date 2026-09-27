@@ -17,8 +17,6 @@ export {
 	settingsPlatformExtras,
 	brewCueSoundOn,
 	brewCueHapticsOn,
-	DEFAULT_BREW_CUE_SOUND,
-	DEFAULT_BREW_CUE_HAPTICS,
 	type Settings,
 	type ThemePref,
 	type WeightUnit,

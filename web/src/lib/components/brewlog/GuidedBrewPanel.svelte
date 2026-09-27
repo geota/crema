@@ -17,7 +17,7 @@
 	import { brewCueSoundOn, getSettingsStore } from '$lib/settings';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getGuidedBrewStore } from '$lib/brew/session.svelte';
-	import { defaultRecipeFor, getRecipeStore } from '$lib/brew/recipes.svelte';
+	import { defaultRecipeFor, getRecipeStore, nominalRecipeMs } from '$lib/brew/recipes.svelte';
 	import { primeBrewCues } from '$lib/brew/cues';
 	import {
 		brewMethodPresets,
@@ -170,14 +170,8 @@
 	const steps = $derived(liveRecipe.steps ?? []);
 	const currentStep = $derived(steps[session.stepIndex]);
 	const nextStep = $derived(steps[session.stepIndex + 1]);
-	/** Recipe total time, ms, for the "of about m:ss" line — sum of the
-	 *  step durations; pour steps count a nominal 30 s each. */
-	const nominalTotalMs = $derived(
-		steps.reduce(
-			(acc, s) => acc + (s.durationS != null ? s.durationS * 1000 : s.targetWaterG != null ? 30_000 : 0),
-			0
-		)
-	);
+	/** Recipe total time, ms, for the "of about m:ss" line (core rule). */
+	const nominalTotalMs = $derived(nominalRecipeMs(liveRecipe));
 
 	/** The current step's 0..1 progress — live weight against a pour
 	 *  target when a scale reports, else the countdown. `null` = open. */

@@ -19,6 +19,7 @@
 
 import type { RustStoredShot, TimedSample } from '$lib/core';
 import type { BrewSeries } from '$lib/core/crema-core';
+import { downsampleIndices } from '$lib/wasm/de1_wasm';
 import type { TelemetrySample } from '$lib/state';
 import { toWire } from './telemetry-wire';
 import { readJson, writeJsonChecked } from '$lib/utils/storage';
@@ -759,19 +760,20 @@ export interface ManualBrewPatch {
 	durationMs?: number | null;
 }
 
+/** The saved guided-series sample cap — the espresso storage posture. */
+export const BREW_SERIES_CAP = 200;
+
 /**
- * Cap a guided session's weight series to ≤200 evenly-spaced samples
- * before it rides the localStorage row (matching the espresso
- * `STORAGE_SAMPLE_CAP` posture; stage marks are tiny and kept whole).
+ * Thin a guided session's weight series to ~{@link BREW_SERIES_CAP}
+ * samples before it rides the localStorage row, with the core's
+ * `downsample_indices` (#42 — every Nth, first and last kept, so the
+ * chart's time axis and the planned staircase's end still line up).
+ * Stage marks are tiny and kept whole.
  */
-function downsampleBrewSeries(series: BrewSeries): BrewSeries {
-	const CAP = 200;
+export function downsampleBrewSeries(series: BrewSeries): BrewSeries {
 	const n = series.samples.length;
-	if (n <= CAP) return series;
-	const samples = Array.from(
-		{ length: CAP },
-		(_, i) => series.samples[Math.min(n - 1, Math.round((i * (n - 1)) / (CAP - 1)))]
-	);
+	if (n <= BREW_SERIES_CAP) return series;
+	const samples = Array.from(downsampleIndices(n, BREW_SERIES_CAP), (i) => series.samples[i]);
 	return { ...series, samples };
 }
 

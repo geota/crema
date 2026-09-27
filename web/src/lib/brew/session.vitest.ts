@@ -10,6 +10,9 @@ const recipe = (steps: BrewRecipe["steps"]): BrewRecipe =>
     doseG: 15,
     waterG: 250,
     steps,
+    favourite: false,
+    createdAt: 1,
+    updatedAt: 1,
   }) as BrewRecipe;
 
 describe("GuidedBrewStore live marks", () => {
@@ -41,5 +44,12 @@ describe("GuidedBrewStore live marks", () => {
     expect(s.liveMarks).toEqual([
       { elapsedMs: 0, stepIndex: 0, targetWaterG: 250 },
     ]);
+  });
+
+  it("never lets a malformed recipe break the live chart", () => {
+    const s = new GuidedBrewStore();
+    s.armed({ id: "r" } as BrewRecipe, false);
+    s.started(0);
+    expect(s.liveMarks).toEqual([{ elapsedMs: 0, stepIndex: 0 }]);
   });
 });

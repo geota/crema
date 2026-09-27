@@ -5,7 +5,8 @@
  * `themeMode:"system"` coercion, and that web-only platform extras survive.
  */
 
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
+import { initTestWasm } from '$lib/testing/test-init';
 import {
 	settingsToCommon,
 	applyCommonToSettings,
@@ -93,6 +94,11 @@ describe('common-settings mapping', () => {
 	});
 
 	describe('guided-brew cue defaults (issue #10)', () => {
+		// The never-chosen defaults come from the core.
+		beforeAll(async () => {
+			await initTestWasm();
+		});
+
 		it('untouched cues read sound off / haptics on and are not serialised', () => {
 			expect(DEFAULT_SETTINGS.brewCueSound).toBeNull();
 			expect(DEFAULT_SETTINGS.brewCueHaptics).toBeNull();
