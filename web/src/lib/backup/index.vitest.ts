@@ -4,6 +4,7 @@ import { getHistoryStore, type StoredShot } from '$lib/history';
 import { getProfileStore } from '$lib/profiles';
 import { blankProfile } from '$lib/profiles/model';
 import { getSettingsStore } from '$lib/settings';
+import { getRecipeStore } from '$lib/brew/recipes.svelte';
 import { buildBackupJsonl, restoreBackup } from './index';
 
 /**
@@ -53,6 +54,7 @@ function resetAll(): void {
 	getHistoryStore().clearAllShots();
 	getProfileStore().clearAllCustom();
 	getSettingsStore().reset();
+	getRecipeStore().applyBackup([], null, true);
 	localStorage.clear();
 }
 
@@ -134,5 +136,32 @@ describe('backup round-trip (review #07)', () => {
 		expect(() => restoreBackup('{"kind":"something-else"}\n', 'merge')).toThrow(
 			/not a crema backup/i
 		);
+	});
+
+	it('backs up user recipe copies with their credit, never the built-ins', () => {
+		const recipes = getRecipeStore();
+		const copy = recipes.duplicate('builtin:hoffmann-ultimate-v60')!;
+		recipes.hide('builtin:kasuya-4-6');
+		recipes.touch(copy);
+		const built = buildBackupJsonl()!;
+		expect(built.jsonl).toContain('"kind":"recipe"');
+		expect(built.jsonl).toContain('"kind":"recipeMeta"');
+		// Only the copy rides — the catalogue ships with the app.
+		expect(built.jsonl.match(/"kind":"recipe"/g)).toHaveLength(1);
+		expect(built.jsonl).not.toMatch(/"kind":"recipe","id":"builtin:/);
+
+		resetAll();
+		expect(getRecipeStore().backupRecipes()).toHaveLength(0);
+		const summary = restoreBackup(built.jsonl, 'wipe');
+		expect(summary.recipes).toBe(1);
+		const restored = getRecipeStore().get(copy.id)!;
+		expect(restored.name).toBe('Ultimate V60 (copy)');
+		expect(restored.credit).toBe(
+			'Adapted from James Hoffmann — The Ultimate V60 Technique (2019)'
+		);
+		expect(restored.sourceUrl).toBe('https://www.youtube.com/watch?v=AI4ynXzkSQo');
+		// recipeMeta: the default pointer + the hidden built-in come back too.
+		expect(getRecipeStore().defaultFor('pourover')?.id).toBe(copy.id);
+		expect(getRecipeStore().isHidden('builtin:kasuya-4-6')).toBe(true);
 	});
 });
