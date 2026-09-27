@@ -139,6 +139,20 @@ export function lastUsedMethod(): string | null {
 	return null;
 }
 
+/**
+ * The method a fresh surface (the Scale page's Brew setup) opens on — the
+ * core's seeding rule with nothing prefilled: last-used, else pourover.
+ */
+export function openingMethod(): string {
+	return brewLogSeeds({
+		method: null,
+		beanId: null,
+		beanGrinderSetting: null,
+		prefill: undefined,
+		rows: []
+	}).method;
+}
+
 /** Remember the method of a just-saved log. */
 export function rememberMethod(method: string): void {
 	try {

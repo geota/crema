@@ -12,7 +12,9 @@
 import type { BrewRecipe, BrewStep } from '$lib/core/crema-core';
 import { BrewStepKind, StepAdvance } from '$lib/core/crema-core';
 import { readJson, writeJsonChecked } from '$lib/utils/storage';
-import { presetFor } from './methods';
+import { brewMethodPresets } from './methods';
+
+const presetFor = (method: string) => brewMethodPresets().find((p) => p.id === method);
 
 const RECIPES_KEY = 'crema.brewRecipes.v1';
 const LAST_USED_KEY = 'crema.brewRecipes.lastUsed.v1';
@@ -44,8 +46,8 @@ export function recipeId(): string {
  */
 export function defaultRecipeFor(method: string): BrewRecipe {
 	const preset = presetFor(method);
-	const dose = preset?.seedDose ?? 15;
-	const water = preset?.seedWater ?? preset?.seedYield ?? 250;
+	const dose = preset?.seedDoseG ?? 15;
+	const water = preset?.seedWaterG ?? preset?.seedYieldG ?? 250;
 	const steps: BrewStep[] = defaultStepsFor(method, dose, water);
 	return {
 		id: recipeId(),
@@ -53,7 +55,7 @@ export function defaultRecipeFor(method: string): BrewRecipe {
 		method,
 		doseG: dose,
 		waterG: water,
-		tempC: preset?.seedTemp ?? undefined,
+		tempC: preset?.seedTempC ?? undefined,
 		steps,
 		notes: undefined,
 		favourite: false,

@@ -12,7 +12,7 @@
 	import type { BrewRecipe, BrewStep } from '$lib/core/crema-core';
 	import { BrewStepKind, StepAdvance } from '$lib/core/crema-core';
 	import { defaultRecipeFor, recipeId } from '$lib/brew/recipes.svelte';
-	import { BREW_METHOD_PRESETS, methodLabel } from '$lib/brew/methods';
+	import { brewMethodPresets, methodLabel } from '$lib/brew/methods';
 
 	let {
 		recipe,
@@ -50,7 +50,7 @@
 	/** The method options — the preset chips, plus the recipe's own
 	 *  free-text method when it isn't a curated one. */
 	const methodOptions = $derived.by(() => {
-		const opts = BREW_METHOD_PRESETS.map((p) => ({ id: p.id, label: p.label }));
+		const opts = brewMethodPresets().map((p) => ({ id: p.id, label: p.label }));
 		if (!opts.some((o) => o.id === method)) opts.push({ id: method, label: methodLabel(method) });
 		return opts;
 	});

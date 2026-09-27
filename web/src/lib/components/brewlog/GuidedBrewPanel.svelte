@@ -20,8 +20,8 @@
 	import { defaultRecipeFor, getRecipeStore } from '$lib/brew/recipes.svelte';
 	import { primeBrewCues } from '$lib/brew/cues';
 	import {
-		BREW_METHOD_PRESETS,
-		lastUsedMethod,
+		brewMethodPresets,
+		openingMethod,
 		methodLabel,
 		type LogBrewPrefill
 	} from '$lib/brew/methods';
@@ -55,8 +55,9 @@
 	const settings = getSettingsStore();
 
 	// ── Setup state ──────────────────────────────────────────────
-	let method = $state(lastUsedMethod());
-	let recipe = $state<BrewRecipe>(resolveRecipe(lastUsedMethod()));
+	const initialMethod = openingMethod();
+	let method = $state(initialMethod);
+	let recipe = $state<BrewRecipe>(resolveRecipe(initialMethod));
 	let startOnPour = $state(true);
 	let logOpen = $state(false);
 
@@ -255,7 +256,7 @@
 		<!-- ── Setup ─────────────────────────────────────────── -->
 		<div class="gb-setup">
 		<div class="gb-chips" role="radiogroup" aria-label="Brew method">
-			{#each BREW_METHOD_PRESETS as p (p.id)}
+			{#each brewMethodPresets() as p (p.id)}
 				<button
 					type="button"
 					class="gb-chip"
