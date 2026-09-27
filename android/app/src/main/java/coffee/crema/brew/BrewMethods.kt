@@ -3,7 +3,8 @@ package coffee.crema.brew
 import coffee.crema.core.BrewRecipe
 import coffee.crema.core.BrewStep
 import coffee.crema.core.BrewStepKind
-import coffee.crema.core.defaultRecipeJson
+import coffee.crema.core.blankRecipeJson
+import coffee.crema.core.builtinBrewRecipesJson
 import coffee.crema.core.newRecipeId
 import kotlin.math.roundToInt
 import kotlinx.serialization.decodeFromString
@@ -14,7 +15,7 @@ import kotlinx.serialization.decodeFromString
  * core's `normalize_brew_method` rule). The preset ids + seed numbers live in
  * the core (`de1_domain::brew_method_presets`, one table for both shells);
  * this file owns what the UI makes of an id: its label and icon, plus the
- * default guided-brew recipes. Tea is deliberately absent — a BC tea brew
+ * built-in guided-brew recipe catalogue access. Tea is deliberately absent — a BC tea brew
  * still imports, carrying its name as free text. "Other" is the free-text
  * chip, not a preset.
  */
@@ -45,6 +46,8 @@ private val METHOD_FACES: Map<String, Pair<String, String>> = mapOf(
     "drip" to ("Drip machine" to "drop"),
     "siphon" to ("Siphon" to "flask"),
     "clever" to ("Clever / Switch" to "funnel-simple"),
+    "chemex" to ("Chemex" to "hourglass-simple"),
+    "kalita_wave" to ("Kalita Wave" to "waves"),
 )
 
 /**
@@ -96,19 +99,28 @@ fun isEspressoMethod(method: String?): Boolean {
 }
 
 /**
- * Build the sensible starter recipe for a method — what the Scale screen's
- * Brew segment offers before the user has saved anything. The template
- * (preset numbers + the per-method classic steps) is the core's
- * `default_recipe` (shared with the web); the name is the UI's copy.
- * [core] is the FFI call, injectable for JVM unit tests.
+ * The built-in, credited recipe catalogue — the core's
+ * `builtin_brew_recipes` (bundled, read-only, `builtin:` ids), parsed once.
+ * Native; call from UI code only, never from a JVM unit test.
  */
-fun defaultRecipeFor(
+val BUILTIN_BREW_RECIPES: List<BrewRecipe> by lazy {
+    CoreJson.decodeFromString<List<BrewRecipe>>(builtinBrewRecipesJson())
+}
+
+/**
+ * The "+ New recipe" starting point for a method — the core's
+ * `blank_recipe` (preset numbers, one pour, no credit), named with the UI's
+ * copy ("Chemex recipe"). The runnable per-method defaults are the credited
+ * built-ins, not this. [core] is the FFI call, injectable for JVM tests.
+ */
+fun newRecipeFor(
     method: String,
     nowMs: Long,
-    core: (String, String, Long) -> String = ::defaultRecipeJson,
+    newId: () -> String = ::newRecipeId,
+    core: (String, String, Long) -> String = ::blankRecipeJson,
 ): BrewRecipe {
-    val recipe = CoreJson.decodeFromString(BrewRecipe.serializer(), core(method, newRecipeId(), nowMs))
-    return recipe.copy(name = "${methodShortLabel(method)} classic")
+    val recipe = CoreJson.decodeFromString(BrewRecipe.serializer(), core(method, newId(), nowMs))
+    return recipe.copy(name = "${methodShortLabel(method)} recipe")
 }
 
 /** Display label for a step's kind. */
@@ -138,8 +150,14 @@ fun stepSpec(step: BrewStep): String {
     return parts.joinToString(" · ")
 }
 
-/** "3:05" — mm:ss for any duration in ms. */
+/** "3:05" — m:ss for any duration in ms; "12:00:00" (h:mm:ss) from an hour up
+ *  (a cold brew's 12 h steep). */
 fun formatClock(ms: Long): String {
-    val total = ms / 1000
-    return "%d:%02d".format(total / 60, total % 60)
+    val total = ms.coerceAtLeast(0L) / 1000
+    val h = total / 3600
+    return if (h > 0) {
+        "%d:%02d:%02d".format(h, (total % 3600) / 60, total % 60)
+    } else {
+        "%d:%02d".format(total / 60, total % 60)
+    }
 }
