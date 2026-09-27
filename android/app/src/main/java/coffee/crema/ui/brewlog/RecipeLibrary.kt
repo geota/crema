@@ -36,8 +36,9 @@ import coffee.crema.brew.methodIcon
 import coffee.crema.brew.methodLabel
 import coffee.crema.brew.CoreJson
 import coffee.crema.brew.stepKindLabel
-import coffee.crema.core.recipeNominalDurationMsJson
+import coffee.crema.core.recipeEstimatedDurationJson
 import coffee.crema.core.BrewRecipe
+import coffee.crema.core.RecipeTimeEstimate
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaCard
@@ -165,11 +166,19 @@ fun RecipeBadge(text: String, primary: Boolean) {
     }
 }
 
-/** Nominal run time, ms — the core's `BrewRecipe::nominal_duration_ms`
- *  (step durations, pour-only steps a notional 30 s each; shared with the
- *  web). [core] is the FFI call, injectable for JVM unit tests. */
-fun nominalRecipeMs(recipe: BrewRecipe, core: (String) -> Long = ::recipeNominalDurationMsJson): Long =
+/** Estimated run time — the core's `BrewRecipe::estimated_duration`: the
+ *  sum of every step's duration (a drawdown's expected time included, no
+ *  hidden windows for untimed steps), `openEnded` when a step holds for an
+ *  unknown time. Null when no step has a duration (moka): show no
+ *  estimate. [core] is the FFI call, injectable for JVM unit tests. */
+fun recipeEstimate(recipe: BrewRecipe, core: (String) -> String? = ::recipeEstimatedDurationJson): RecipeTimeEstimate? =
     core(CoreJson.encodeToString(BrewRecipe.serializer(), recipe))
+        ?.let { CoreJson.decodeFromString(RecipeTimeEstimate.serializer(), it) }
+
+/** The estimate as display text — "3:00", or "2:45+" when open-ended — for
+ *  the card's "~…"; null = show nothing. The web's `recipeEstimateLabel`. */
+fun recipeEstimateLabel(recipe: BrewRecipe, core: (String) -> String? = ::recipeEstimatedDurationJson): String? =
+    recipeEstimate(recipe, core)?.let { formatClock(it.totalMs) + if (it.openEnded) "+" else "" }
 
 /** "Bloom → Pour → Wait → Pour → Drawdown" — the card's plan line, by step
  *  kind (a built-in's long step instructions would drown it). */
@@ -220,7 +229,7 @@ fun BrewRecipeCard(
                 buildString {
                     append("${recipe.doseG.roundToInt()} g · ${recipe.waterG.roundToInt()} g water")
                     recipe.tempC?.let { append(" · ${it.roundToInt()} °C") }
-                    append(" · ~${formatClock(nominalRecipeMs(recipe))}")
+                    recipeEstimateLabel(recipe)?.let { append(" · ~$it") }
                 },
                 style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.5.sp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

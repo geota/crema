@@ -3,6 +3,7 @@ package coffee.crema.brew
 import coffee.crema.core.BrewRecipe
 import coffee.crema.core.BrewStep
 import coffee.crema.core.BrewStepKind
+import coffee.crema.core.StepAdvance
 import coffee.crema.core.blankRecipeJson
 import coffee.crema.core.builtinBrewRecipesJson
 import coffee.crema.core.newRecipeId
@@ -141,11 +142,27 @@ fun stepKindLabel(kind: BrewStepKind): String = when (kind) {
  */
 fun stepLabel(step: BrewStep): String = step.label?.trim()?.takeIf { it.isNotEmpty() } ?: stepKindLabel(step.kind)
 
-/** "to 250 g · 0:45" / "until you tap" — one spec line per step. */
+/**
+ * Whether a step's duration is an expectation, not a countdown — the core's
+ * `BrewStep::has_expected_duration` (a tap-to-finish drawdown with a
+ * duration). The session never advances or cues it on time; the live card
+ * shows "about 0:40 left", then "+0:12 over". The web's `hasExpectedDuration`.
+ */
+fun hasExpectedDuration(step: BrewStep?): Boolean =
+    step != null && step.kind == BrewStepKind.Drawdown && step.advance == StepAdvance.Manual && step.durationS != null
+
+/** "to 250 g · 0:45" / "about 0:55 · until you tap" (a drawdown's expected
+ *  time) / "until you tap" — one spec line per step, the web's rule. */
 fun stepSpec(step: BrewStep): String {
     val parts = mutableListOf<String>()
     step.targetWaterG?.let { parts.add("to ${it.roundToInt()} g") }
-    step.durationS?.let { parts.add(formatClock(it * 1000)) }
+    val d = step.durationS
+    if (d != null && hasExpectedDuration(step)) {
+        parts.add("about ${formatClock(d * 1000)}")
+        parts.add("until you tap")
+    } else if (d != null) {
+        parts.add(formatClock(d * 1000))
+    }
     if (parts.isEmpty()) parts.add("until you tap")
     return parts.joinToString(" · ")
 }

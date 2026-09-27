@@ -37,6 +37,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   stay. Step labels now read as instructions and wrap in the live session,
   clocks show hours for the 12-hour cold-brew steep, and recipes you made
   are now included in backups (built-ins aren't — they ship with the app).
+  Estimated brew times now include the drawdown: pourovers read their
+  source's finish time (1 Cup V60 ~3:00, Ultimate V60 and 4:6 ~3:30, Chemex
+  ~4:00), a recipe with an open-ended step shows a "+" (AeroPress ~2:45+), and
+  a recipe with no timed steps (moka) shows no estimate instead of "~0:30".
+  During a drawdown the live step shows "about 0:40 left", then how far past
+  the expected time you are; it still finishes only when you tap.
 - **Chemex and Kalita Wave brew methods** — new method chips (under "More"
   in the log form) with their own marks; Beanconqueror imports of Chemex and
   Kalita brews now land on them instead of V60 / pourover.

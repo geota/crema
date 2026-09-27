@@ -53,6 +53,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.brew.BREW_METHOD_PRESETS
 import coffee.crema.brew.formatClock
+import coffee.crema.brew.hasExpectedDuration
 import coffee.crema.brew.methodLabel
 import coffee.crema.brew.stepKindLabel
 import coffee.crema.brew.stepLabel
@@ -299,6 +300,7 @@ private fun SetupCard(
                     buildString {
                         append("${recipe.doseG.roundToInt()} g · ${recipe.waterG.roundToInt()} g water")
                         recipe.tempC?.let { append(" · ${it.roundToInt()} °C") }
+                        recipeEstimateLabel(recipe)?.let { append(" · ~$it") }
                     },
                     style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -669,6 +671,35 @@ private fun StepCard(m: LiveModel, labelLines: Int = 3) {
                 target != null && m.connected && m.weightG != null -> {
                     Text("${m.weightG.coerceAtLeast(0f).roundToInt()} / ${target.roundToInt()} g", style = big)
                     ProgressTrack((m.weightG / target).coerceIn(0f, 1f))
+                }
+                // A drawdown's expected time is guidance: "about 0:40 left",
+                // then overtime — never a deadline, never an auto-advance.
+                durS != null && hasExpectedDuration(current) -> {
+                    val leftMs = durS * 1000 - m.stepElapsedMs
+                    if (leftMs > 0) {
+                        Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.testTag("guided-expected")) {
+                            Text(
+                                "about ",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 4.dp),
+                            )
+                            Text(formatClock(leftMs) + " left", style = big)
+                        }
+                        ProgressTrack((m.stepElapsedMs.toFloat() / (durS * 1000)).coerceIn(0f, 1f))
+                    } else {
+                        Text(
+                            "+${formatClock(-leftMs)} over",
+                            style = big,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("guided-overtime"),
+                        )
+                        Text(
+                            "Finish when it's drained — tap Skip",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 durS != null -> {
                     Text(formatClock((durS * 1000 - m.stepElapsedMs).coerceAtLeast(0L)) + " left", style = big)

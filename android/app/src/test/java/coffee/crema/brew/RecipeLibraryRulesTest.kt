@@ -7,6 +7,8 @@ import coffee.crema.core.RecipeLibrary
 import coffee.crema.core.RecipeLibraryMigration
 import coffee.crema.core.StepAdvance
 import coffee.crema.ui.brewlog.isOpenableSourceUrl
+import coffee.crema.ui.brewlog.recipeEstimate
+import coffee.crema.ui.brewlog.recipeEstimateLabel
 import coffee.crema.ui.brewlog.visibleBrewRecipes
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -165,6 +167,24 @@ class RecipeLibraryRulesTest {
         assertEquals("1:00:00", formatClock(3_600_000))
         assertEquals("12:00:00", formatClock(43_200_000))
         assertEquals("0:00", formatClock(-5))
+    }
+
+    @Test fun `the estimate label renders the core estimate, a plus when open-ended, nothing without durations`() {
+        assertEquals("3:00", recipeEstimateLabel(v60) { """{"totalMs":180000,"openEnded":false}""" })
+        assertEquals("2:45+", recipeEstimateLabel(v60) { """{"totalMs":165000,"openEnded":true}""" })
+        assertNull(recipeEstimateLabel(v60) { null })
+        assertEquals(240_000L, recipeEstimate(v60) { """{"totalMs":240000,"openEnded":false}""" }?.totalMs)
+    }
+
+    @Test fun `a drawdown's expected time reads as guidance, other timed steps as a countdown`() {
+        val drawdown = BrewStep(kind = BrewStepKind.Drawdown, durationS = 55, advance = StepAdvance.Manual)
+        assertTrue(hasExpectedDuration(drawdown))
+        assertEquals("about 0:55 · until you tap", stepSpec(drawdown))
+        assertFalse(hasExpectedDuration(drawdown.copy(durationS = null)))
+        assertEquals("until you tap", stepSpec(drawdown.copy(durationS = null)))
+        val stir = BrewStep(kind = BrewStepKind.Stir, durationS = 5, advance = StepAdvance.Manual)
+        assertFalse(hasExpectedDuration(stir))
+        assertEquals("0:05", stepSpec(stir))
     }
 
     @Test fun `a new recipe is the core blank named with the UI label`() {
