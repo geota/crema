@@ -37,6 +37,7 @@ import {
 	recipeEstimatedDurationJson,
 	recipePlannedPourTotalGJson
 } from '$lib/wasm/de1_wasm';
+import { getCustomMethodStore, isCustomMethodId } from './custom-methods.svelte';
 import { methodLabel } from './methods';
 
 const RECIPES_KEY = 'crema.brewRecipes.v1';
@@ -79,9 +80,15 @@ export function isBuiltinRecipe(id: string): boolean {
 /**
  * A brand-new recipe for the editor's "+ New recipe" door — the core's
  * `blank_recipe` (preset numbers, one pour, no credit) named with the UI
- * label ("Chemex recipe"). NOT persisted until saved.
+ * label ("Chemex recipe"); for a custom method, `blank_recipe_for_style`
+ * ("ORB recipe"). NOT persisted until saved.
  */
 export function newRecipeFor(method: string): BrewRecipe {
+	// A custom method starts from its style's shape (core `blank_recipe_for_style`).
+	if (isCustomMethodId(method)) {
+		const own = getCustomMethodStore().blankRecipe(method, recipeId());
+		if (own) return own;
+	}
 	const recipe = JSON.parse(blankRecipeJson(method, recipeId(), Date.now())) as BrewRecipe;
 	// "V60 / pourover" reads clumsy as a recipe name — take the first word.
 	return { ...recipe, name: `${methodLabel(recipe.method).split(' / ')[0]} recipe` };

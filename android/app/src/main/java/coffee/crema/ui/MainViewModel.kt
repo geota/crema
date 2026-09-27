@@ -70,6 +70,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -590,6 +592,10 @@ data class MainUiState(
     val builtinRecipes: List<coffee.crema.core.BrewRecipe> = emptyList(),
     /** Built-in recipe ids hidden from the library + picker. */
     val hiddenBuiltinRecipes: Set<String> = emptySet(),
+    /** The user's own brewing methods (`custom:<uuid>`), tombstones included. */
+    val customMethods: List<coffee.crema.core.CustomBrewMethod> = emptyList(),
+    /** The one-time "Save 'X' as a method?" offer after an "Other…" log. */
+    val saveMethodPrompt: coffee.crema.ui.brewlog.SaveMethodPrompt? = null,
     /**
      * Queued user-facing feedback lines (imports, exports, blocked actions).
      * MainActivity surfaces them as snackbars, dequeuing via
@@ -1131,6 +1137,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         liveMachine = { sharing.liveMachine() },
         autoUploadShot = { shot, fullSamples -> sharing.autoUpload(shot, fullSamples) },
         applyRestoredRecipes = { recipes, meta, wipe -> applyRestoredRecipes(recipes, meta, wipe) },
+        applyRestoredCustomMethods = { methods, wipe -> applyRestoredCustomMethods(methods, wipe) },
         uiState = { _ui.value },
         updateUi = { transform -> _ui.update(transform) },
         notify = { notifyUser(it) },
@@ -1181,15 +1188,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val migrated = coffee.crema.brew.RecipeLibraryRules.migrate(loaded)
             if (migrated != null) recipeStore.save(migrated)
             val env = migrated ?: loaded
+            coffee.crema.brew.CustomMethods.all = env.customMethods
             _ui.update {
                 it.copy(
                     brewRecipes = env.recipes,
                     lastRecipeByMethod = env.lastUsedByMethod,
                     hiddenBuiltinRecipes = env.hiddenBuiltins,
                     builtinRecipes = coffee.crema.brew.BUILTIN_BREW_RECIPES,
+                    customMethods = env.customMethods,
                 )
             }
             resolveGuidedSetup()
+        }
+        // Rows saved with a custom method snapshot its label; keep the
+        // id → label fallback current for methods this device doesn't know.
+        viewModelScope.launch {
+            _ui.map { it.history }.distinctUntilChanged().collect { rows ->
+                coffee.crema.brew.CustomMethods.snapshotLabels = buildMap {
+                    rows.forEach { r ->
+                        val id = r.brewMethod?.trim()?.lowercase() ?: return@forEach
+                        val label = r.brewMethodLabel ?: return@forEach
+                        if (coffee.crema.brew.isCustomMethodId(id) && id !in this) put(id, label)
+                    }
+                }
+            }
         }
     }
 
@@ -1369,7 +1391,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 it,
                 st.brewRecipes + st.builtinRecipes,
                 st.lastRecipeByMethod,
-                st.lastBrewLogMethod,
+                // A deleted custom method has no chip: open on the default instead.
+                st.lastBrewLogMethod?.takeUnless { m -> isDeletedCustomMethod(m) },
             ) { m ->
                 coffee.crema.brew.RecipeLibraryRules.defaultFor(m, st.brewRecipes, st.builtinRecipes, st.lastRecipeByMethod)
             }
@@ -1453,6 +1476,158 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         _recipeEdit.value = null
         resolveGuidedSetup()
+    }
+
+    // ── Your own brewing methods (issue #10 feedback) ────────────────
+    //
+    // The add / edit dialog's draft is VM-held like the other editors: the
+    // phone pushes the `method-edit` route (PhoneNavHost follows the draft),
+    // the tablet shows a side sheet over whatever is open, and a rotation
+    // across 840dp keeps what was typed (see [NavRestore.restoreRoute]).
+
+    private val _methodEdit = MutableStateFlow<coffee.crema.ui.brewlog.MethodEditDraft?>(null)
+    val methodEdit: StateFlow<coffee.crema.ui.brewlog.MethodEditDraft?> = _methodEdit.asStateFlow()
+
+    /** Whether [method] names a custom method that has been deleted. */
+    private fun isDeletedCustomMethod(method: String): Boolean =
+        coffee.crema.brew.isCustomMethodId(method) &&
+            _ui.value.customMethods.none { it.id == method.trim().lowercase() && it.deletedAt == null }
+
+    /** The tab a [target]'s dialog belongs to (the opener's owning tab). */
+    private fun methodEditOwnerTab(target: String): String = when (target) {
+        coffee.crema.ui.brewlog.MethodEditTarget.LOG -> _logBrew.value?.owner ?: "history"
+        coffee.crema.ui.brewlog.MethodEditTarget.RECIPE -> _recipeEdit.value?.owner ?: "profiles"
+        coffee.crema.ui.brewlog.MethodEditTarget.SCALE -> "scale"
+        else -> "profiles"
+    }
+
+    /** "+ Add method…" from [target] (a [coffee.crema.ui.brewlog.MethodEditTarget]). */
+    fun openNewMethod(target: String, label: String = "") {
+        _methodEdit.value = coffee.crema.ui.brewlog.MethodEditRules.open(
+            target = target,
+            ownerTab = methodEditOwnerTab(target),
+            session = System.nanoTime(),
+            label = label,
+        )
+    }
+
+    /** Profiles → Your methods → Rename / Edit defaults. */
+    fun openEditMethod(id: String) {
+        val m = _ui.value.customMethods.firstOrNull { it.id == id } ?: return
+        _methodEdit.value = coffee.crema.ui.brewlog.MethodEditRules.edit(
+            target = coffee.crema.ui.brewlog.MethodEditTarget.MANAGE,
+            ownerTab = "profiles",
+            session = System.nanoTime(),
+            m = m,
+        )
+    }
+
+    fun updateMethodEdit(transform: (coffee.crema.ui.brewlog.MethodEditDraft) -> coffee.crema.ui.brewlog.MethodEditDraft) {
+        _methodEdit.update { it?.let(transform) }
+    }
+
+    fun setMethodEditStyle(style: coffee.crema.core.BrewMethodStyle) = updateMethodEdit {
+        coffee.crema.ui.brewlog.MethodEditRules.withStyle(it, style)
+    }
+
+    fun closeMethodEdit() {
+        _methodEdit.value = null
+    }
+
+    /**
+     * Validate + save the dialog's method, then select it where it was asked
+     * for (the log form, the recipe editor, the Brew setup). Returns false —
+     * the dialog stays open with the message — on a bad name.
+     */
+    fun saveMethodEdit(): Boolean {
+        val d = _methodEdit.value ?: return false
+        val label = coffee.crema.brew.validateCustomMethodLabel(d.label, d.base?.id, _ui.value.customMethods)
+            .getOrElse { e ->
+                _methodEdit.value = d.copy(error = e.message)
+                return false
+            }
+        val method = coffee.crema.ui.brewlog.MethodEditRules.toMethod(
+            d,
+            label,
+            coffee.crema.core.newCustomMethodId(),
+            System.currentTimeMillis(),
+        )
+        setCustomMethods(coffee.crema.ui.brewlog.MethodEditRules.upsert(_ui.value.customMethods, method))
+        _methodEdit.value = null
+        when (d.target) {
+            coffee.crema.ui.brewlog.MethodEditTarget.LOG -> if (d.isNew) reseedLogBrew(method.id)
+            coffee.crema.ui.brewlog.MethodEditTarget.RECIPE -> if (d.isNew) setRecipeEditMethod(method.id)
+            coffee.crema.ui.brewlog.MethodEditTarget.SCALE -> if (d.isNew) selectGuidedMethod(method.id)
+            else -> {}
+        }
+        if (!d.isNew) resolveGuidedSetup()
+        return true
+    }
+
+    /**
+     * Delete a custom method: a tombstone, so past brews keep their name and
+     * "Log again" still seeds. Recipes that use it are KEPT — still runnable
+     * from Profiles, labelled with the method's name. A setup or log form
+     * sitting on it falls back to the usual opening method.
+     */
+    fun deleteCustomMethod(id: String) {
+        setCustomMethods(coffee.crema.ui.brewlog.MethodEditRules.tombstone(_ui.value.customMethods, id, System.currentTimeMillis()))
+        if (_ui.value.lastBrewLogMethod == id) {
+            _ui.update { it.copy(lastBrewLogMethod = null) }
+            persistPrefs()
+        }
+        if (_guidedSetup.value.method == id) {
+            _guidedSetup.update { it.copy(method = null, recipe = null, methodChosen = false) }
+        }
+        resolveGuidedSetup()
+    }
+
+    /** Keep the registry + UI state in step and persist (the recipe store's envelope). */
+    private fun setCustomMethods(list: List<coffee.crema.core.CustomBrewMethod>) {
+        coffee.crema.brew.CustomMethods.all = list
+        _ui.update { it.copy(customMethods = list) }
+        persistRecipes()
+    }
+
+    /**
+     * "Save 'X' as a method?" → yes: create the method (percolation; editable
+     * later in Profiles) and re-tag that brew with its id + label snapshot. A
+     * name that clashes with an existing method re-tags to that one instead.
+     */
+    fun acceptSaveMethodPrompt() {
+        val p = _ui.value.saveMethodPrompt ?: return
+        _ui.update { it.copy(saveMethodPrompt = null) }
+        val existing = _ui.value.customMethods.firstOrNull {
+            it.deletedAt == null && it.label.equals(p.label, ignoreCase = true)
+        }
+        val method = existing ?: run {
+            val label = coffee.crema.brew.validateCustomMethodLabel(p.label, null, _ui.value.customMethods)
+                .getOrElse { e -> notifyUser(e.message ?: "Couldn’t save that method"); return }
+            val now = System.currentTimeMillis()
+            coffee.crema.core.CustomBrewMethod(
+                id = coffee.crema.core.newCustomMethodId(),
+                label = label,
+                style = coffee.crema.core.BrewMethodStyle.Percolation,
+                createdAt = now,
+                updatedAt = now,
+            ).also { setCustomMethods(_ui.value.customMethods + it) }
+        }
+        library.retagBrewMethod(p.shotId, method.id, method.label)
+        if (_ui.value.lastBrewLogMethod == p.freeText) {
+            _ui.update { it.copy(lastBrewLogMethod = method.id) }
+            persistPrefs()
+        }
+        notifyUser("Saved “${method.label}” as a method")
+    }
+
+    fun dismissSaveMethodPrompt() = _ui.update { it.copy(saveMethodPrompt = null) }
+
+    /** Apply a backup's custom methods (MERGE by id, newer wins / WIPE replaces). */
+    private fun applyRestoredCustomMethods(methods: List<coffee.crema.core.CustomBrewMethod>, wipe: Boolean): Int {
+        if (methods.isEmpty() && !wipe) return 0
+        val (list, added) = coffee.crema.ui.brewlog.MethodEditRules.mergeRestored(_ui.value.customMethods, methods, wipe)
+        setCustomMethods(list)
+        return added
     }
 
     /** The finished session's "Save brew…": the Log-brew form, pre-filled with measured truth. */
@@ -1540,6 +1715,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     st.brewRecipes.filterNot { r -> st.builtinRecipes.any { it.id == r.id } },
                     st.lastRecipeByMethod,
                     st.hiddenBuiltinRecipes,
+                    st.customMethods,
                 ),
             )
         }
@@ -2217,9 +2393,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _logBrew.value = flagged
             return false
         }
-        library.addManualBrew(
+        // A custom method's label rides on the row, so the brew keeps its
+        // name if the method is later deleted (or lost on another device).
+        val customLabel = if (coffee.crema.brew.isCustomMethodId(storedMethod)) {
+            coffee.crema.brew.CustomMethods.find(storedMethod)?.label
+        } else {
+            null
+        }
+        val saved = library.addManualBrew(
             LibraryController.ManualBrewInput(
                 method = storedMethod,
+                methodLabel = customLabel,
                 completedAtMs = nowMs - (d.minutesAgo * 60_000).toLong(),
                 beanId = bean?.id,
                 doseG = d.dose.toFloat().takeIf { it > 0f },
@@ -2235,6 +2419,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 brewSeries = d.series,
             ),
         )
+        // "Other…" free text → a one-time offer to keep it as a method (not
+        // when it already names a preset — the normalized id would match).
+        if (d.isCustom && coffee.crema.brew.BREW_METHOD_PRESETS.none { it.id == storedMethod }) {
+            _ui.update {
+                it.copy(saveMethodPrompt = coffee.crema.ui.brewlog.SaveMethodPrompt(saved.id, d.customMethod.trim(), storedMethod))
+            }
+        }
         // Remember the method so the next log opens on it (web parity).
         if (_ui.value.lastBrewLogMethod != storedMethod) {
             _ui.update { it.copy(lastBrewLogMethod = storedMethod) }

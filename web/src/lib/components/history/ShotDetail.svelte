@@ -606,7 +606,7 @@
 				eyebrow={isBrew ? 'Method' : 'Profile'}
 				{stamp}
 				title={isBrew
-					? (shot.recipeName ?? methodLabel(method)) +
+					? (shot.recipeName ?? methodLabel(method, shot.brewMethodLabel)) +
 						(manual ? ' · logged' : '')
 					: (shot.profileName ?? 'Untitled shot')}
 				meta={profileMetaLine}
@@ -880,7 +880,7 @@
 				<div class="hi-metric-l">Method</div>
 				<div class="hi-metric-v hi-metric-method">
 					<MethodMark {method} size={14} />
-					<span>{methodLabel(method)}</span>
+					<span>{methodLabel(method, shot.brewMethodLabel)}</span>
 				</div>
 			</div>
 			<div class="hi-metric">

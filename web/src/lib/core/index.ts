@@ -241,6 +241,8 @@ export interface RustStoredShot {
 	grinderModel?: string | null;
 	/** Brew Log method (`"pourover"`, …); absent/`null` = machine espresso. */
 	brewMethod?: string | null;
+	/** A custom method's label, snapshotted on save (Rust `brew_method_label`). */
+	brewMethodLabel?: string | null;
 	/** The guided-session recipe name, snapshot at completion. */
 	recipeName?: string | null;
 	/** Weight-only guided-session telemetry (Rust `BrewSeries`). */

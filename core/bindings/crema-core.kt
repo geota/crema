@@ -263,6 +263,55 @@ data class BrewSeedInput (
 	val durationMs: Long
 )
 
+/// How a custom method brews — picks the seed numbers a blank field falls
+/// back to and the shape of the method's first recipe. Lowercase wire
+/// spelling, like [`BrewStepKind`].
+@Serializable
+enum class BrewMethodStyle(val string: String) {
+	/// Water poured through a bed (V60, Kalita, the ORB).
+	@SerialName("percolation")
+	Percolation("percolation"),
+	/// Grounds steep in the water, then separate (French press, clever).
+	@SerialName("immersion")
+	Immersion("immersion"),
+	/// Steep, then push through (AeroPress-like).
+	@SerialName("pressure")
+	Pressure("pressure"),
+	/// Long, cold steep (cold brew, Kyoto drip).
+	@SerialName("cold")
+	Cold("cold"),
+}
+
+/// One user-defined brewing method.
+/// 
+/// Shell-persisted with the beans/recipes lifecycle: timestamps in Unix
+/// ms and a soft-delete tombstone. The seeds are optional — a blank one
+/// falls back to the [`style`](Self::style)'s default
+/// ([`brew_method_style_seeds`]).
+@Serializable
+data class CustomBrewMethod (
+	/// Stable id — `custom:<uuid-v7>`; the stored `brew_method` value.
+	val id: String,
+	/// The user's name for it ("ORB"), trimmed, 1–40 characters.
+	val label: String,
+	val style: BrewMethodStyle? = null,
+	/// A shell icon key from the small shared set ("drop", "funnel", …);
+	/// `None` = the style's default icon.
+	val icon: String? = null,
+	/// Seed dry dose, grams; `None` = the style default.
+	val seedDoseG: Float? = null,
+	/// Seed water-in, grams; `None` = the style default.
+	val seedWaterG: Float? = null,
+	/// Seed water temperature, °C; `None` = the style default (none for
+	/// cold).
+	val seedTempC: Float? = null,
+	val createdAt: Long,
+	val updatedAt: Long,
+	/// Soft-delete tombstone, Unix ms. A tombstoned method leaves every
+	/// picker but keeps resolving for the rows that used it.
+	val deletedAt: Long? = null
+)
+
 /// Everything [`brew_log_seeds`] needs to seed the Log-brew form.
 @Serializable
 data class BrewLogSeedInput (
@@ -278,7 +327,11 @@ data class BrewLogSeedInput (
 	val beanGrinderSetting: String? = null,
 	val prefill: BrewLogPrefill? = null,
 	/// Prior brews, newest first.
-	val rows: List<BrewSeedInput>
+	val rows: List<BrewSeedInput>,
+	/// The user's custom methods, tombstoned ones included — a custom
+	/// method id seeds from its own numbers / style
+	/// ([`resolve_brew_method_preset`](crate::resolve_brew_method_preset)).
+	val customMethods: List<CustomBrewMethod>
 )
 
 /// The seeded numeric fields of the Log-brew form. Shells apply each value
@@ -319,7 +372,16 @@ data class BrewMethodPreset (
 	val seedYieldG: Float? = null,
 	/// Seed water temperature, °C — `None` where it isn't meaningful
 	/// (moka on the stove, cold brew).
-	val seedTempC: Float? = null
+	val seedTempC: Float? = null,
+	/// The user's name for a custom method
+	/// ([`brew_method_presets_with_custom`](crate::brew_method_presets_with_custom));
+	/// `None` on the curated presets, whose labels the shells own.
+	val label: String? = null,
+	/// A custom method's style — `None` on the curated presets.
+	val style: BrewMethodStyle? = null,
+	/// A custom method's chosen icon key — `None` = the style default
+	/// (and always `None` on the curated presets).
+	val icon: String? = null
 )
 
 /// What a [`BrewStep`] is, for its icon / default label. Lowercase wire
@@ -1376,6 +1438,44 @@ data class CoreOutput (
 	val events: List<Event>,
 	/// BLE writes the shell should perform, in order.
 	val commands: List<Command>
+)
+
+/// Why a custom-method label was refused. camelCase wire spelling; the
+/// shells map each to their own copy.
+@Serializable
+enum class CustomMethodLabelError(val string: String) {
+	/// Blank after trimming.
+	@SerialName("empty")
+	Empty("empty"),
+	/// Longer than [`CUSTOM_METHOD_LABEL_MAX_CHARS`] after trimming.
+	@SerialName("tooLong")
+	TooLong("tooLong"),
+	/// Clashes (case-insensitively) with a preset or a live custom method.
+	@SerialName("duplicate")
+	Duplicate("duplicate"),
+}
+
+/// The verdict of [`validate_custom_method_label`].
+@Serializable
+data class CustomMethodLabelCheck (
+	/// The trimmed label — what to store when `error` is `None`.
+	val label: String,
+	val error: CustomMethodLabelError? = null
+)
+
+/// Input to [`validate_custom_method_label`].
+@Serializable
+data class CustomMethodLabelInput (
+	/// The label as typed.
+	val label: String,
+	/// The method being renamed, so it doesn't clash with itself.
+	val editingId: String? = null,
+	/// The user's custom methods (tombstoned ones are ignored — a deleted
+	/// name is free again).
+	val customMethods: List<CustomBrewMethod>,
+	/// The shell's display labels for the curated presets ("V60 /
+	/// pourover") — the core owns only the ids, which are checked too.
+	val presetLabels: List<String>
 )
 
 /// The DE1's GATT service + characteristic UUIDs (full lowercase 128-bit

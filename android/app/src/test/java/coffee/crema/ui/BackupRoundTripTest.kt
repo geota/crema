@@ -130,4 +130,61 @@ class BackupRoundTripTest {
         // A bundle from before recipes were backed up restores none.
         assertTrue(parseBackupRecords(line("crema-backup/v1"), json, 0L).recipes.isEmpty())
     }
+
+    @Test
+    fun `brewMethod lines restore custom methods and shots keep the label snapshot`() {
+        val orb = buildJsonObject {
+            put("id", "custom:01920000-0000-7000-8000-00000000abcd")
+            put("label", "ORB")
+            put("style", "percolation")
+            put("icon", "funnel")
+            put("createdAt", 1)
+            put("updatedAt", 2)
+        }
+        val gone = buildJsonObject {
+            put("id", "custom:gone")
+            put("label", "Old brewer")
+            put("style", "immersion")
+            put("createdAt", 1)
+            put("updatedAt", 3)
+            put("deletedAt", 3)
+        }
+        val spoof = buildJsonObject {
+            put("id", "pourover")
+            put("label", "Spoof")
+            put("createdAt", 1)
+            put("updatedAt", 1)
+        }
+        val shot = StoredShot(
+            id = "shot:orb",
+            completedAtMs = 1_700_000_000_000,
+            durationMs = 0,
+            doseG = 15f,
+            brewMethod = "custom:gone",
+            brewMethodLabel = "Old brewer",
+            waterG = 250f,
+            brewTempC = 94f,
+            recipeName = "Mine",
+        )
+        val wire = wireShotJson(shot, forBackup = true)
+        val bundle = listOf(
+            line("crema-backup/v1"),
+            line("brewMethod", orb),
+            line("brewMethod", gone),
+            line("brewMethod", spoof),
+            json.encodeToString(JsonObject.serializer(), JsonObject(wire + ("kind" to JsonPrimitive("shot")))),
+        ).joinToString("\n")
+        val parsed = parseBackupRecords(bundle, json, 0L)
+        assertEquals(listOf("ORB", "Old brewer"), parsed.customMethods.map { it.label })
+        assertEquals(3L, parsed.customMethods[1].deletedAt)
+        assertEquals(coffee.crema.core.BrewMethodStyle.Immersion, parsed.customMethods[1].style)
+        val back = parsed.shots.single()
+        assertEquals("custom:gone", back.brewMethod)
+        assertEquals("Old brewer", back.brewMethodLabel)
+        assertEquals(250f, back.waterG)
+        assertEquals(94f, back.brewTempC)
+        assertEquals("Mine", back.recipeName)
+        // A bundle from before custom methods restores none.
+        assertTrue(parseBackupRecords(line("crema-backup/v1"), json, 0L).customMethods.isEmpty())
+    }
 }

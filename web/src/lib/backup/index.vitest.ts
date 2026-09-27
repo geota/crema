@@ -5,6 +5,9 @@ import { getProfileStore } from '$lib/profiles';
 import { blankProfile } from '$lib/profiles/model';
 import { getSettingsStore } from '$lib/settings';
 import { getRecipeStore } from '$lib/brew/recipes.svelte';
+import { getCustomMethodStore } from '$lib/brew/custom-methods.svelte';
+import { methodLabel } from '$lib/brew/methods';
+import { BrewMethodStyle } from '$lib/core/crema-core';
 import { buildBackupJsonl, restoreBackup } from './index';
 
 /**
@@ -55,6 +58,7 @@ function resetAll(): void {
 	getProfileStore().clearAllCustom();
 	getSettingsStore().reset();
 	getRecipeStore().applyBackup([], null, true);
+	getCustomMethodStore().applyBackup([], true);
 	localStorage.clear();
 }
 
@@ -163,5 +167,55 @@ describe('backup round-trip (review #07)', () => {
 		// recipeMeta: the default pointer + the hidden built-in come back too.
 		expect(getRecipeStore().defaultFor('pourover')?.id).toBe(copy.id);
 		expect(getRecipeStore().isHidden('builtin:kasuya-4-6')).toBe(true);
+	});
+
+	it('round-trips custom methods (tombstones too) and the brew label snapshot', () => {
+		const methods = getCustomMethodStore();
+		const draft = {
+			style: BrewMethodStyle.Percolation,
+			icon: null,
+			seedDoseG: null,
+			seedWaterG: null,
+			seedTempC: null
+		};
+		const orb = methods.create({ ...draft, label: 'ORB' })!;
+		const gone = methods.create({ ...draft, label: 'Old brewer' })!;
+		methods.remove(gone.id);
+		const history = getHistoryStore();
+		const shot = history.addManualBrew({
+			method: gone.id,
+			methodLabel: 'Old brewer',
+			completedAt: 1_700_000_000_000,
+			bean: null,
+			dose: 15,
+			waterG: 250,
+			yieldOut: null,
+			grinderSetting: null,
+			brewTempC: null,
+			durationMs: null,
+			rating: null,
+			notes: null,
+			nextPlan: null
+		});
+		const recipe = getRecipeStore().saveEdit(
+			getCustomMethodStore().blankRecipe(orb.id, 'recipe:orb')!
+		);
+		const built = buildBackupJsonl()!;
+		expect(built.jsonl.match(/"kind":"brewMethod"/g)).toHaveLength(2);
+		expect(built.jsonl).toContain('"brewMethodLabel":"Old brewer"');
+
+		resetAll();
+		expect(methods.backupMethods()).toHaveLength(0);
+		// With the method list gone, the row falls back to its snapshot.
+		const summary = restoreBackup(built.jsonl, 'wipe');
+		expect(summary.customMethods).toBe(2);
+		expect(getCustomMethodStore().live.map((m) => m.label)).toEqual(['ORB']);
+		expect(getCustomMethodStore().get(gone.id)?.deletedAt).toBeTypeOf('number');
+		expect(getRecipeStore().get(recipe.id)?.method).toBe(orb.id);
+		const restored = getHistoryStore().get(shot.id)!;
+		expect(restored.brewMethodLabel).toBe('Old brewer');
+		expect(methodLabel(restored.brewMethod, restored.brewMethodLabel)).toBe('Old brewer');
+		// A merge re-restore adds nothing.
+		expect(restoreBackup(built.jsonl, 'merge').customMethods).toBe(0);
 	});
 });

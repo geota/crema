@@ -44,6 +44,8 @@
 	import MethodMark from './MethodMark.svelte';
 	import RecipeCredit from './RecipeCredit.svelte';
 	import RecipeEditor from './RecipeEditor.svelte';
+	import CustomMethodDialog from './CustomMethodDialog.svelte';
+	import { isCustomMethodId } from '$lib/brew/custom-methods.svelte';
 
 	let {
 		connected = false,
@@ -82,6 +84,9 @@
 		method = id;
 		recipe = resolveRecipe(id) ?? null;
 	}
+
+	/** "+ Add method…" is open; a created method is selected on save. */
+	let addMethodOpen = $state(false);
 
 	/** The picker's options: the user's recipes, then the built-ins. */
 	const pickable = $derived(recipes.forMethod(method, recipe?.id));
@@ -312,6 +317,9 @@
 					{p.label}
 				</button>
 			{/each}
+			<button type="button" class="gb-chip gb-chip-add" onclick={() => (addMethodOpen = true)}>
+				+ Add method…
+			</button>
 		</div>
 
 		{#if recipe}
@@ -390,12 +398,15 @@
 			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">
 				Recipe · {methodLabel(method)}
 			</div>
-			<div class="gb-recipe-name">No built-in recipe for {methodLabel(method)}</div>
+			<div class="gb-recipe-name">
+				{isCustomMethodId(method) ? 'No recipe yet for' : 'No built-in recipe for'}
+				{methodLabel(method)}
+			</div>
 			<p class="gb-empty-copy">
 				Write your own step plan to run it guided — or just log the brew from History.
 			</p>
 			<div>
-				<button class="gb-ghost" onclick={createRecipe}>+ New recipe</button>
+				<button class="gb-ghost" onclick={createRecipe}>+ New recipe for {methodLabel(method)}</button>
 			</div>
 		</div>
 		{/if}
@@ -613,6 +624,16 @@
 	/>
 {/if}
 
+{#if addMethodOpen}
+	<CustomMethodDialog
+		onSave={(m) => {
+			addMethodOpen = false;
+			pickMethod(m.id);
+		}}
+		onClose={() => (addMethodOpen = false)}
+	/>
+{/if}
+
 {#if logOpen && logPrefill}
 	<LogBrewDialog
 		prefill={logPrefill}
@@ -687,6 +708,9 @@
 		font-weight: 500;
 		cursor: pointer;
 		transition: all var(--dur-1) var(--ease);
+	}
+	.gb-chip-add {
+		color: rgba(var(--tint-rgb), 0.6);
 	}
 	.gb-chip:hover {
 		background: rgba(var(--tint-rgb), 0.06);

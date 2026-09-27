@@ -17,6 +17,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -85,6 +86,10 @@ fun PhoneNavHost(
     onRouteChange: (String) -> Unit = {},
     /** Dynamic owning tabs for [initialRoute]'s pushed routes ([NavRestore.owners]). */
     routeOwners: Map<String, String> = emptyMap(),
+    /** The pushed add / edit brewing-method dialog (issue #10 feedback). */
+    methodEditContent: @Composable (onBack: () -> Unit) -> Unit = {},
+    /** The open method dialog's session token (null = none) — the route follows it. */
+    methodEditSession: Long? = null,
 ) {
     val nav = rememberNavController()
     val tabRoutes = setOf("brew", "scale", "profiles", "beans", "history", "settings")
@@ -161,9 +166,18 @@ fun PhoneNavHost(
                     composable("roaster-edit") { roasterEditContent(onBack) }
                     composable(NavRestore.LOG_BREW) { logBrewContent(onBack) }
                     composable(NavRestore.RECIPE_EDIT) { recipeEditContent(onBack) }
+                    composable(NavRestore.METHOD_EDIT) { methodEditContent(onBack) }
                     composable("debug") { debugContent() }
                 }
                 SyncNavRoute(nav, initialRoute, NavRestore.PHONE_ROUTES, onNav, onRouteChange, routeOwners)
+                // The brewing-method dialog opens from inside other pushed
+                // routes (the log form, the recipe editor) and from tabs; it
+                // follows the VM-held draft — pushed once per open session.
+                LaunchedEffect(methodEditSession) {
+                    if (methodEditSession != null && nav.currentBackStackEntry?.destination?.route != NavRestore.METHOD_EDIT) {
+                        nav.navigate(NavRestore.METHOD_EDIT) { launchSingleTop = true }
+                    }
+                }
             }
         }
     }

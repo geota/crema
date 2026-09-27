@@ -378,6 +378,12 @@ fun PhoneHistoryScreen(
                 contentPadding = PaddingValues(start = CremaEdge, end = CremaEdge, top = 4.dp, bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
+                // "Save 'X' as a method?" after an "Other…" log (one time).
+                if (ui.saveMethodPrompt != null) {
+                    item(key = "save-method-prompt") {
+                        coffee.crema.ui.brewlog.SaveMethodPromptCard(vm, Modifier.padding(bottom = 6.dp))
+                    }
+                }
                 var lastDay: String? = null
                 filtered.forEach { shot ->
                     val day = dayLabel(shot.completedAtMs, startOfDay, dayMs)

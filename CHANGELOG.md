@@ -20,6 +20,20 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Your own brewing methods** (issue #10 feedback: "I only have an ORB this
+  week — can I add it?") — "+ Add method…" in the log form, the recipe
+  editor and the Scale page's Brew setup creates a method with a name, a
+  style (pour-over, immersion, pressure or cold), an optional icon and
+  optional dose / water / temperature that default from the style; it is
+  selected straight away and joins every method picker. Brew setup offers
+  "+ New recipe for ORB", shaped by the style, and your recipes for it are
+  grouped under its name in Profiles → Brew recipes, where a new "Your
+  methods" section renames, edits or deletes methods. Past brews keep the
+  method's name after a rename or delete (each brew remembers the label),
+  recipes that use a deleted method are kept and still run, and History's
+  method filter lists your methods. After logging a one-off "Other…" brew,
+  Crema offers once to save that name as a method. Custom methods ride in
+  backups; older versions skip them. Web, tablet and phone.
 - **Built-in brew recipes are now real, credited recipes** — the generic
   "V60 classic"-style starters are replaced by 13 published recipes, each
   shown with its author and a link to the source: James Hoffmann (1 Cup V60,
@@ -140,6 +154,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   expired login instead of a successful upload.
 
 ### Fixed
+
+- **Android backups keep brew details** — a backup made on Android dropped
+  each brew's method, recipe name, water, temperature, next-time plan and
+  guided weight curve; they now survive backup and restore.
 
 - Guided brews let you choose the bean before you start (issue #10 feedback)
 

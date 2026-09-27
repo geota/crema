@@ -39,7 +39,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coffee.crema.brew.BREW_METHOD_PRESETS
+import coffee.crema.brew.brewMethodPickerPresets
 import coffee.crema.brew.methodIcon
 import coffee.crema.brew.methodLabel
 import coffee.crema.brew.stepKindLabel
@@ -97,14 +97,17 @@ private fun RecipeEditorBody(vm: MainViewModel, d: RecipeEditDraft, modifier: Mo
                 // The method vocabulary — presets plus this recipe's own
                 // free-text method when it isn't a curated one.
                 val methodKeys = buildList {
-                    BREW_METHOD_PRESETS.forEach { add(SortKey(it.id, it.label, it.icon)) }
+                    brewMethodPickerPresets().forEach { add(SortKey(it.id, it.label, it.icon)) }
                     if (none { it.id == d.method }) add(SortKey(d.method, methodLabel(d.method), methodIcon(d.method)))
+                    add(SortKey(ADD_METHOD_KEY, ADD_METHOD_LABEL, "plus"))
                 }
                 CremaFilterDropdown(
                     icon = methodIcon(d.method),
                     keys = methodKeys,
                     selectedKey = d.method,
-                    onKeyChange = vm::setRecipeEditMethod,
+                    onKeyChange = { k ->
+                        if (k == ADD_METHOD_KEY) vm.openNewMethod(MethodEditTarget.RECIPE) else vm.setRecipeEditMethod(k)
+                    },
                 )
                 CremaTextField(
                     value = d.name,
@@ -321,6 +324,8 @@ fun RecipeEditorSheet(vm: MainViewModel, owner: String) {
                 }
             }
         }
+        // "+ Add method…" from the selector: a child sheet, stacked on top.
+        MethodEditSheet(vm, parentRoute = RECIPE_EDIT_ROUTE)
     }
 }
 

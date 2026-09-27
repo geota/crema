@@ -405,6 +405,14 @@ pub struct StoredShot {
     /// pre-existing record is already a valid brew row (issue #10).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brew_method: Option<String>,
+    /// The method's display label, snapshotted when the brew was saved
+    /// with a user-defined method (`brew_method` = `custom:<uuid>`), so
+    /// the row keeps its name after the method is deleted or its list is
+    /// lost (a restore elsewhere). Shells show it only when the id no
+    /// longer resolves to a known method. `None` for curated presets and
+    /// free text (their label derives from the id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brew_method_label: Option<String>,
     /// The recipe a guided session followed, denormalized by name at
     /// completion — snapshot-wins, like `profile_name`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -462,6 +470,7 @@ impl StoredShot {
             decent_id: None,
             machine: None,
             brew_method: None,
+            brew_method_label: None,
             recipe_name: None,
             brew_series: None,
         }

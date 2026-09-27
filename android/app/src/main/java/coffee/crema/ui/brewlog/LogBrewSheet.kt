@@ -40,7 +40,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coffee.crema.brew.BREW_METHOD_PRESETS
+import coffee.crema.brew.brewMethodPickerPresets
 import coffee.crema.brew.methodIcon
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.MainViewModel
@@ -102,7 +102,7 @@ private fun LogBrewFormBody(
         // pane they collapse to ONE horizontally scrolling row so the fields
         // and the Save footer keep the height.
         val chips: @Composable () -> Unit = {
-            BREW_METHOD_PRESETS.forEach { p ->
+            brewMethodPickerPresets().forEach { p ->
                 CremaFilterChip(
                     label = p.label,
                     icon = p.icon,
@@ -111,6 +111,8 @@ private fun LogBrewFormBody(
                 )
             }
             CremaFilterChip(label = "Other…", selected = draft.isCustom, onClick = { vm.reseedLogBrew(BrewLogDraft.OTHER) })
+            // Your own brewer, kept: creates the method AND selects it.
+            AddMethodChip { vm.openNewMethod(MethodEditTarget.LOG, label = if (draft.isCustom) draft.customMethod.trim() else "") }
         }
         if (short) {
             Row(
@@ -349,6 +351,8 @@ fun LogBrewSheet(vm: MainViewModel, owner: String) {
                 }
             }
         }
+        // "+ Add method…" from this form: a child sheet, so it stacks on top.
+        MethodEditSheet(vm, parentRoute = LOG_BREW_ROUTE)
     }
 }
 

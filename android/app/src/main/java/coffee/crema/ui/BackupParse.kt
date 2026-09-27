@@ -40,6 +40,9 @@ data class ParsedBackup(
     val recipes: List<coffee.crema.core.BrewRecipe> = emptyList(),
     /** Recipe organisation: `{ defaults:{method:id}, hiddenBuiltins:[ids] }`. */
     val recipeMeta: JsonObject? = null,
+    /** The user's own brewing methods (`kind:"brewMethod"` lines), tombstones
+     *  included; only the `custom:` namespace is accepted. */
+    val customMethods: List<coffee.crema.core.CustomBrewMethod> = emptyList(),
 )
 
 /**
@@ -65,6 +68,7 @@ fun parseBackupRecords(text: String, json: Json, nowMs: Long): ParsedBackup {
     var visualizerPrefs: VisualizerSyncPrefs? = null
     val recipes = ArrayList<coffee.crema.core.BrewRecipe>()
     var recipeMeta: JsonObject? = null
+    val customMethods = ArrayList<coffee.crema.core.CustomBrewMethod>()
     var sawHeader = false
     for (raw in text.lineSequence()) {
         val line = raw.trim()
@@ -102,6 +106,9 @@ fun parseBackupRecords(text: String, json: Json, nowMs: Long): ParsedBackup {
                 json.decodeFromString(coffee.crema.core.BrewRecipe.serializer(), stripKind(json, obj))
             }.getOrNull()?.let(recipes::add)
             "recipeMeta" -> recipeMeta = obj
+            "brewMethod" -> runCatching {
+                json.decodeFromString(coffee.crema.core.CustomBrewMethod.serializer(), stripKind(json, obj))
+            }.getOrNull()?.takeIf { coffee.crema.brew.isCustomMethodId(it.id) }?.let(customMethods::add)
             else -> {}
         }
     }
@@ -119,6 +126,7 @@ fun parseBackupRecords(text: String, json: Json, nowMs: Long): ParsedBackup {
         sawHeader = sawHeader,
         recipes = recipes,
         recipeMeta = recipeMeta,
+        customMethods = customMethods,
     )
 }
 
