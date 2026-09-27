@@ -52,6 +52,12 @@
 	import FilterPills from '$lib/components/shared/FilterPills.svelte';
 	import { downloadBlob, filenameStamp } from '$lib/utils/download';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
+	import CustomMethodDialog from '$lib/components/brewlog/CustomMethodDialog.svelte';
+	import type { CustomBrewMethod } from '$lib/core/crema-core';
+	import {
+		METHOD_STYLES,
+		getCustomMethodStore
+	} from '$lib/brew/custom-methods.svelte';
 
 	const store = getProfileStore();
 	const ctx = getCremaAppContext();
@@ -605,6 +611,35 @@
 	let recipeEditing = $state<BrewRecipe | null>(null);
 	let recipeEditingNew = $state(false);
 
+	// ── Your methods — the user's own brewers (issue #10 feedback) ───────
+	const customMethods = getCustomMethodStore();
+	/** The add / edit dialog: `null` closed, `'new'` adding, else the method being edited. */
+	let methodDialog = $state<CustomBrewMethod | 'new' | null>(null);
+
+	function styleLabel(m: CustomBrewMethod): string {
+		return METHOD_STYLES.find((s) => s.id === m.style)?.label ?? 'Pour-over';
+	}
+
+	/**
+	 * Delete (tombstone) a method. Past brews keep its name; the user's
+	 * recipes for it are kept, still runnable and labelled — deleting them
+	 * too is one more door in the recipe list, not a second prompt here.
+	 */
+	async function removeMethod(m: CustomBrewMethod): Promise<void> {
+		const n = recipeStore.all.filter((r) => r.method === m.id).length;
+		const recipesNote =
+			n === 0 ? '' : ` Your ${n === 1 ? 'recipe' : `${n} recipes`} for it stay${n === 1 ? 's' : ''} and still run${n === 1 ? 's' : ''}.`;
+		if (
+			await confirmDialog({
+				message: `Delete the "${m.label}" method? Past brews keep the name.${recipesNote}`,
+				confirmLabel: 'Delete',
+				danger: true
+			})
+		) {
+			customMethods.remove(m.id);
+		}
+	}
+
 	function newRecipe(): void {
 		recipeEditing = newRecipeFor('pourover');
 		recipeEditingNew = true;
@@ -832,6 +867,36 @@
 					<PlusIcon aria-hidden="true" /> New recipe
 				</button>
 			</div>
+			<div class="pp-methods" aria-label="Your methods">
+				<div class="pp-methods-head">
+					<span class="pp-recipe-group-head" style="margin:0">Your methods</span>
+					<button class="pp-link" onclick={() => (methodDialog = 'new')}>+ Add method</button>
+				</div>
+				{#if customMethods.live.length === 0}
+					<p class="pp-sub" style="margin:0">
+						Brew with something that isn't listed? Add it — it joins every method picker.
+					</p>
+				{:else}
+					<ul class="pp-methods-list">
+						{#each customMethods.live as m (m.id)}
+							<li class="pp-method">
+								<MethodMark method={m.id} tile />
+								<span class="pp-method-id">
+									<span class="pp-method-name">{m.label}</span>
+									<span class="pp-method-meta">{styleLabel(m)}</span>
+								</span>
+								<span class="pp-method-actions">
+									<button class="pp-link" onclick={() => (methodDialog = m)}>Rename</button>
+									<button class="pp-link" onclick={() => (methodDialog = m)}>Edit defaults</button>
+									<button class="pp-link pp-link-danger" onclick={() => void removeMethod(m)}
+										>Delete</button
+									>
+								</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
 			{#if hiddenRecipeCount > 0}
 				<div class="pp-recipes-tools">
 					<button
@@ -938,6 +1003,14 @@
 	{/if}
 
 </div>
+
+{#if methodDialog}
+	<CustomMethodDialog
+		editing={methodDialog === 'new' ? null : methodDialog}
+		onSave={() => (methodDialog = null)}
+		onClose={() => (methodDialog = null)}
+	/>
+{/if}
 
 {#if recipeEditing}
 	<RecipeEditor
@@ -1278,6 +1351,59 @@
 		padding: 4px;
 	}
 	.pp-recipe-del:hover {
+		color: var(--danger);
+	}
+	.pp-methods {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		padding: 12px 14px;
+		margin-bottom: 18px;
+		border-radius: var(--radius-md, 12px);
+		border: 1px solid rgba(var(--tint-rgb), 0.1);
+		background: rgba(var(--tint-rgb), 0.025);
+	}
+	.pp-methods-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+	}
+	.pp-methods-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.pp-method {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+	}
+	.pp-method-id {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		flex: 1 1 120px;
+	}
+	.pp-method-name {
+		font-family: var(--font-sans);
+		font-size: 14px;
+		font-weight: 600;
+		color: var(--fg-1);
+	}
+	.pp-method-meta {
+		font-size: 11.5px;
+		color: rgba(var(--tint-rgb), 0.55);
+	}
+	.pp-method-actions {
+		display: inline-flex;
+		gap: 12px;
+	}
+	.pp-link-danger:hover {
 		color: var(--danger);
 	}
 	.pp-recipes-tools {

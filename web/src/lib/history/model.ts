@@ -342,6 +342,13 @@ export interface StoredShot {
 	 * record is already valid (issue #10).
 	 */
 	brewMethod?: string | null;
+	/**
+	 * The display label snapshotted when the brew was saved with a custom
+	 * method (`brewMethod` = `custom:<uuid>`) — shown when the method no
+	 * longer resolves, so past brews keep their name. Mirrors the core's
+	 * `StoredShot.brew_method_label`; absent for presets and free text.
+	 */
+	brewMethodLabel?: string | null;
 	/** The guided-session recipe name, snapshot at completion. */
 	recipeName?: string | null;
 	/**

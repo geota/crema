@@ -18,9 +18,11 @@ import type {
 } from '$lib/core/crema-core';
 import {
 	brewLogSeedsJson as wasmBrewLogSeeds,
-	brewMethodPresets as wasmBrewMethodPresets,
+	brewMethodPresetsWithCustom as wasmBrewMethodPresetsWithCustom,
 	normalizeBrewMethod as wasmNormalize
 } from '$lib/wasm/de1_wasm';
+import { getCustomMethodStore, isCustomMethodId } from './custom-methods.svelte';
+import { PRESET_METHOD_LABELS } from './method-labels';
 
 /**
  * Values a caller seeds the Log-brew form with — "Log again" passes a
@@ -46,43 +48,34 @@ export interface LogBrewPrefill {
 }
 
 /**
- * One curated method preset — a chip in the log form. The id and the seed
- * numbers come from the core (`de1_domain::brew_method_presets`, the one
- * source of truth for both shells); the display label is the UI's, keyed
- * by id. "Other" is not a preset — it is the free-text chip.
+ * One method-picker entry — a chip in the log form. The id and the seed
+ * numbers come from the core (`de1_domain::brew_method_presets_with_custom`,
+ * the one source of truth for both shells); a curated preset's display
+ * label is the UI's, keyed by id, a custom method's is the user's. "Other"
+ * is not a preset — it is the free-text chip.
  */
 export interface BrewMethodPreset extends CoreBrewMethodPreset {
-	/** Display label ("French press"). */
+	/** Display label ("French press", "ORB"). */
 	readonly label: string;
+	/** Whether this is one of the user's own methods. */
+	readonly custom: boolean;
 }
 
-/** Display labels, keyed by the core preset id. */
-const METHOD_LABELS: Readonly<Record<string, string>> = {
-	espresso: 'Espresso',
-	pourover: 'V60 / pourover',
-	aeropress: 'AeroPress',
-	french_press: 'French press',
-	moka: 'Moka',
-	cold_brew: 'Cold brew',
-	drip: 'Drip machine',
-	siphon: 'Siphon',
-	clever: 'Clever / Switch',
-	chemex: 'Chemex',
-	kalita_wave: 'Kalita Wave'
-};
-
-let presetCache: readonly BrewMethodPreset[] | null = null;
-
 /**
- * The chip row, in the core's display order, each preset carrying its
- * label. Parsed once from the core (`brewMethodPresets`) — call after the
- * wasm bundle is up (the log form only opens once it is).
+ * Every pickable method, in the core's order: the curated presets, then
+ * the user's live custom methods. Reads the custom-method store, so a
+ * template calling it re-renders when a method is added or renamed.
  */
 export function brewMethodPresets(): readonly BrewMethodPreset[] {
-	if (presetCache) return presetCache;
-	const core = JSON.parse(wasmBrewMethodPresets()) as CoreBrewMethodPreset[];
-	presetCache = core.map((p) => ({ ...p, label: METHOD_LABELS[p.id] ?? p.id }));
-	return presetCache;
+	const custom = getCustomMethodStore().live;
+	const core = JSON.parse(
+		wasmBrewMethodPresetsWithCustom(JSON.stringify(custom))
+	) as CoreBrewMethodPreset[];
+	return core.map((p) => ({
+		...p,
+		label: p.label ?? PRESET_METHOD_LABELS[p.id] ?? p.id,
+		custom: p.label != null
+	}));
 }
 
 /** The free-text chip's id — typed names are normalized and stored as-is. */
@@ -92,17 +85,52 @@ export const OTHER_METHOD = 'other';
 export const INLINE_PRESET_COUNT = 6;
 
 /**
- * Display label for any stored method string: the preset label when
- * curated, else the free text re-humanized ("karlsbad_kanne" →
- * "Karlsbad kanne"). `null`/empty (machine espresso) → "Espresso".
+ * Display label for any stored method string:
+ *
+ * 1. a curated preset's label;
+ * 2. a custom method's current label — live or deleted, so a rename
+ *    follows every past row and a deleted method's rows keep their name;
+ * 3. the row's snapshotted `brewMethodLabel` (the method's list was lost,
+ *    e.g. a restore elsewhere without it);
+ * 4. the free text re-humanized ("karlsbad_kanne" → "Karlsbad kanne").
+ *
+ * `null`/empty (machine espresso) → "Espresso". Android's `methodLabel`
+ * applies the same order.
  */
-export function methodLabel(method: string | null | undefined): string {
+export function methodLabel(
+	method: string | null | undefined,
+	snapshotLabel?: string | null
+): string {
 	const m = method?.trim().toLowerCase();
 	if (!m) return 'Espresso';
-	const label = METHOD_LABELS[m];
+	const label = PRESET_METHOD_LABELS[m];
 	if (label) return label;
+	if (isCustomMethodId(m)) {
+		const own = getCustomMethodStore().get(m)?.label;
+		if (own) return own;
+		if (snapshotLabel?.trim()) return snapshotLabel.trim();
+		return 'Custom method';
+	}
+	if (snapshotLabel?.trim()) return snapshotLabel.trim();
 	const words = m.replace(/_/g, ' ').trim();
 	return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** A stored row's method label — {@link methodLabel} with its snapshot. */
+export function shotMethodLabel(shot: {
+	brewMethod?: string | null;
+	brewMethodLabel?: string | null;
+}): string {
+	return methodLabel(shot.brewMethod, shot.brewMethodLabel);
+}
+
+/**
+ * The label to snapshot onto a brew saved with `method` — the custom
+ * method's current name, `null` for presets and free text (their label
+ * derives from the id).
+ */
+export function methodLabelSnapshot(method: string | null | undefined): string | null {
+	return isCustomMethodId(method) ? (getCustomMethodStore().get(method)?.label ?? null) : null;
 }
 
 /** The espresso-family rule — mirrors `de1_domain::is_espresso_method`. */
@@ -134,6 +162,8 @@ const LAST_METHOD_KEY = 'crema.brewlog.lastMethod.v1';
 export function lastUsedMethod(): string | null {
 	try {
 		const stored = localStorage.getItem(LAST_METHOD_KEY);
+		// A deleted custom method no longer opens the form.
+		if (isCustomMethodId(stored) && !getCustomMethodStore().isLive(stored)) return null;
 		if (stored && stored.trim()) return stored;
 	} catch {
 		// Storage unavailable (SSR/private mode) — fall through.
@@ -217,7 +247,9 @@ export function brewLogSeeds(input: {
 				beanId: input.beanId ?? undefined,
 				beanGrinderSetting: input.beanGrinderSetting ?? undefined,
 				prefill,
-				rows: input.rows
+				rows: input.rows,
+				// Tombstones included: an old row's custom method still seeds.
+				customMethods: getCustomMethodStore().everything
 			})
 		)
 	) as BrewLogSeeds;

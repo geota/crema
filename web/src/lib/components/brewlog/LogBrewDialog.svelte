@@ -10,6 +10,12 @@
 	 * `HistoryStore.addManualBrew` and debits the bean exactly like a
 	 * live shot (`debitBean` → bag-empty prompt). A guided session's
 	 * summary arrives through `prefill` with the weight series attached.
+	 *
+	 * "+ Add method…" (after "Other…") creates one of the user's own
+	 * methods and selects it; a brew saved with a custom method snapshots
+	 * its label on the row. After a free-text "Other…" log the dialog asks
+	 * once, inline, whether to keep that name as a method (and re-tags the
+	 * brew when yes).
 	 */
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
@@ -21,6 +27,7 @@
 		brewLogSeeds,
 		brewMethodPresets,
 		isEspressoMethod,
+		methodLabelSnapshot,
 		normalizeMethod,
 		rememberMethod,
 		type BrewSeedInput,
@@ -36,6 +43,10 @@
 	import BeanOverdrawNote from './BeanOverdrawNote.svelte';
 	import BrewBeanRow from './BrewBeanRow.svelte';
 	import MethodMark from './MethodMark.svelte';
+	import CustomMethodDialog from './CustomMethodDialog.svelte';
+	import type { CustomBrewMethod } from '$lib/core/crema-core';
+	import { getCustomMethodStore } from '$lib/brew/custom-methods.svelte';
+	import { readJson, writeJson } from '$lib/utils/storage';
 
 	let {
 		onClose,
@@ -73,7 +84,8 @@
 	}
 
 	// ── Form state ────────────────────────────────────────────────────
-	const presets = brewMethodPresets();
+	const presets = $derived(brewMethodPresets());
+	const customMethods = getCustomMethodStore();
 	// A guided session's prefill names its bag explicitly — even `null`
 	// (No bean) — so it never falls back to the active one here.
 	let beanId = $state<string | null>(openingBeanId(seed, library.activeBeanId));
@@ -84,8 +96,15 @@
 	let method = $state(openingSeeds.method);
 	let customMethod = $state('');
 	let showAllMethods = $state(
+		// svelte-ignore state_referenced_locally
 		!presets.slice(0, INLINE_PRESET_COUNT).some((p) => p.id === openingSeeds.method)
 	);
+	/** The add-method dialog is open. */
+	let addMethodOpen = $state(false);
+	/** A just-saved free-text brew waiting on "Save 'X' as a method?". */
+	let offer = $state<{ shot: StoredShot; label: string } | null>(null);
+	/** The offer's dialog is open (prefilled with the typed name). */
+	let offerDialogOpen = $state(false);
 	let dose = $state(0);
 	let water = $state(0); // water-in for filter methods, yield-out for espresso
 	let grind = $state<number | null>(null);
@@ -144,6 +163,53 @@
 		if (id !== OTHER_METHOD) applySeeds(seedsFor(id));
 	}
 
+	/** A method was created from "+ Add method…" — select it. */
+	function onMethodAdded(m: CustomBrewMethod): void {
+		addMethodOpen = false;
+		showAllMethods = true;
+		pickMethod(m.id);
+	}
+
+	const OFFERED_KEY = 'crema.brewlog.methodOffers.v1';
+
+	/**
+	 * Whether to offer "Save 'X' as a method?" for a free-text name: once
+	 * per name, and not when a live method already has it.
+	 */
+	function shouldOffer(label: string): boolean {
+		const key = normalizeMethod(label);
+		if (!key) return false;
+		if (readJson<string[]>(OFFERED_KEY, []).includes(key)) return false;
+		return !customMethods.validate(label).error;
+	}
+
+	function markOffered(label: string): void {
+		const key = normalizeMethod(label);
+		if (!key) return;
+		const seen = readJson<string[]>(OFFERED_KEY, []);
+		if (!seen.includes(key)) writeJson(OFFERED_KEY, [...seen, key]);
+	}
+
+	/** Close out the offer — "Not now", or after the method was saved. */
+	function finishOffer(): void {
+		if (!offer) return;
+		const record = history.get(offer.shot.id) ?? offer.shot;
+		markOffered(offer.label);
+		offer = null;
+		onSaved?.(record);
+		onClose();
+	}
+
+	/** The offered method was created — re-tag the brew with it. */
+	function onOfferSaved(m: CustomBrewMethod): void {
+		offerDialogOpen = false;
+		if (!offer) return;
+		history.retagMethod(offer.shot.id, m.id, m.label);
+		rememberMethod(m.id);
+		toast.success(`Saved ${m.label} as a method`);
+		finishOffer();
+	}
+
 	function toLocalInput(ms: number): string {
 		const d = new Date(ms);
 		const pad = (n: number) => String(n).padStart(2, '0');
@@ -175,6 +241,7 @@
 		const completedAt = new Date(whenLocal).getTime() || Date.now();
 		const record = history.addManualBrew({
 			method: storedMethod,
+			methodLabel: methodLabelSnapshot(storedMethod),
 			completedAt,
 			bean: snapshotFromBean(bean, roaster),
 			dose: dose > 0 ? dose : null,
@@ -200,6 +267,12 @@
 		}
 		rememberMethod(storedMethod);
 		toast.success('Brew logged');
+		const typed = customMethod.trim();
+		if (isCustom && shouldOffer(typed)) {
+			// Hold the close: the host may navigate on `onSaved`.
+			offer = { shot: record, label: typed };
+			return;
+		}
 		onSaved?.(record);
 		onClose();
 	}
@@ -207,7 +280,9 @@
 	function onKey(e: KeyboardEvent): void {
 		if (e.key === 'Escape') {
 			e.preventDefault();
-			onClose();
+			if (addMethodOpen || offerDialogOpen) return;
+			if (offer) finishOffer();
+			else onClose();
 		}
 	}
 </script>
@@ -239,6 +314,23 @@
 		</button>
 	</header>
 
+	{#if offer}
+		<div class="bl-body">
+			<div class="bl-offer" role="status">
+				<p class="bl-offer-title">Brew logged.</p>
+				<p class="bl-offer-q">Save “{offer.label}” as a method?</p>
+				<p class="bl-offer-hint">
+					It joins your method chips, with its own seeds and recipes. This brew moves to it.
+				</p>
+			</div>
+		</div>
+		<footer class="bl-foot">
+			<button class="bl-btn bl-btn-ghost" onclick={finishOffer}>Not now</button>
+			<button class="bl-btn bl-btn-primary" onclick={() => (offerDialogOpen = true)}>
+				Save as method
+			</button>
+		</footer>
+	{:else}
 	<div class="bl-body">
 		<div class="bl-chips" role="radiogroup" aria-label="Brew method">
 			{#each presets.slice(0, showAllMethods ? undefined : INLINE_PRESET_COUNT) as p (p.id)}
@@ -264,6 +356,13 @@
 					onclick={() => pickMethod(OTHER_METHOD)}
 				>
 					Other…
+				</button>
+				<button
+					type="button"
+					class="bl-chip bl-chip-more"
+					onclick={() => (addMethodOpen = true)}
+				>
+					+ Add method…
 				</button>
 			{:else}
 				<button
@@ -406,10 +505,46 @@
 			<CheckIcon aria-hidden="true" /> Save brew
 		</button>
 	</footer>
+	{/if}
 </div>
 
+{#if addMethodOpen}
+	<CustomMethodDialog onSave={onMethodAdded} onClose={() => (addMethodOpen = false)} />
+{/if}
+{#if offerDialogOpen && offer}
+	<CustomMethodDialog
+		initialLabel={offer.label}
+		onSave={onOfferSaved}
+		onClose={() => (offerDialogOpen = false)}
+	/>
+{/if}
 
 <style>
+	.bl-offer {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 14px 16px;
+		border-radius: var(--radius-sm);
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.1);
+	}
+	.bl-offer p {
+		margin: 0;
+	}
+	.bl-offer-title {
+		font-size: 12px;
+		color: rgba(var(--tint-rgb), 0.6);
+	}
+	.bl-offer-q {
+		font-family: var(--font-serif);
+		font-size: 18px;
+		color: var(--fg-1);
+	}
+	.bl-offer-hint {
+		font-size: 12.5px;
+		color: rgba(var(--tint-rgb), 0.6);
+	}
 	.bl-scrim {
 		position: fixed;
 		inset: 0;

@@ -3,7 +3,8 @@
 	 * The one mark a brew method wears everywhere it appears — history
 	 * rows, method chips, detail headers (issue #10). Phosphor icons,
 	 * direct-imported (tree-shaken); unknown / free-text methods fall
-	 * back to the coffee bean.
+	 * back to the coffee bean. A custom method (`custom:<uuid>`) wears its
+	 * chosen icon key, else its style's default.
 	 *
 	 * Two shapes: `tile` (a 30px sunken tile, the row's sparkline-slot
 	 * stand-in) and `inline` (bare glyph for chips and headers).
@@ -13,22 +14,32 @@
 	import CoffeeBean from 'phosphor-svelte/lib/CoffeeBean';
 	import Cylinder from 'phosphor-svelte/lib/Cylinder';
 	import Drop from 'phosphor-svelte/lib/Drop';
+	import Fire from 'phosphor-svelte/lib/Fire';
 	import Flask from 'phosphor-svelte/lib/Flask';
 	import Funnel from 'phosphor-svelte/lib/Funnel';
 	import FunnelSimple from 'phosphor-svelte/lib/FunnelSimple';
 	import Hourglass from 'phosphor-svelte/lib/Hourglass';
 	import HourglassSimple from 'phosphor-svelte/lib/HourglassSimple';
 	import Jar from 'phosphor-svelte/lib/Jar';
+	import Leaf from 'phosphor-svelte/lib/Leaf';
 	import Snowflake from 'phosphor-svelte/lib/Snowflake';
 	import Waves from 'phosphor-svelte/lib/Waves';
+	import {
+		getCustomMethodStore,
+		isCustomMethodId,
+		methodIconKey
+	} from '$lib/brew/custom-methods.svelte';
 
 	let {
 		method = null,
+		iconKey = null,
 		tile = false,
 		size = 15
 	}: {
 		/** Normalized method string; `null` = machine espresso. */
 		method?: string | null;
+		/** Render this custom-method icon key instead (the icon picker). */
+		iconKey?: string | null;
 		/** Render as the 30px sunken row tile instead of a bare glyph. */
 		tile?: boolean;
 		/** Glyph size, px (bare form; the tile fixes its own). */
@@ -49,7 +60,29 @@
 		kalita_wave: Waves
 	};
 
-	let Icon = $derived(ICONS[method?.trim().toLowerCase() ?? 'espresso'] ?? CoffeeBean);
+	/** The shared custom-method icon keys (Android maps the same eight). */
+	const CUSTOM_ICONS: Record<string, Component> = {
+		funnel: Funnel,
+		coffee: Coffee,
+		cylinder: Cylinder,
+		snowflake: Snowflake,
+		drop: Drop,
+		flask: Flask,
+		fire: Fire,
+		leaf: Leaf
+	};
+
+	const customStore = getCustomMethodStore();
+
+	let Icon = $derived.by(() => {
+		if (iconKey) return CUSTOM_ICONS[iconKey] ?? CoffeeBean;
+		const m = method?.trim().toLowerCase() ?? 'espresso';
+		if (isCustomMethodId(m)) {
+			const own = customStore.get(m);
+			return own ? (CUSTOM_ICONS[methodIconKey(own)] ?? CoffeeBean) : CoffeeBean;
+		}
+		return ICONS[m] ?? CoffeeBean;
+	});
 </script>
 
 {#if tile}

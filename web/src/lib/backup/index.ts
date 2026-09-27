@@ -32,6 +32,7 @@ import {
 } from '$lib/settings';
 import { getProfileStore } from '$lib/profiles';
 import { getRecipeStore, type RecipeBackupMeta } from '$lib/brew/recipes.svelte';
+import { getCustomMethodStore } from '$lib/brew/custom-methods.svelte';
 import { getMaintenanceStore } from '$lib/maintenance';
 import { visualizerSyncPrefs, applyVisualizerSyncPrefs } from '$lib/visualizer/sync-config';
 import { getBeanImageStore, refForBean } from '$lib/bean/image-storage';
@@ -44,6 +45,7 @@ import type { CremaProfile } from '$lib/profiles/model';
 import type {
 	BrewRecipe,
 	CommonSettings,
+	CustomBrewMethod,
 	MaintenanceState,
 	VisualizerSyncPrefs
 } from '$lib/core/crema-core';
@@ -126,6 +128,8 @@ export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | 
 	const recipeStore = getRecipeStore();
 	const recipes = recipeStore.backupRecipes();
 	const recipeMeta = recipeStore.backupMeta();
+	// The user's own brew methods, tombstones included (`kind:"brewMethod"`).
+	const customMethods = getCustomMethodStore().backupMethods();
 
 	// "Nothing to back up" only when EVERYTHING the bundle carries is empty/default —
 	// not just the four data types. Customised settings (theme, units, …) and
@@ -136,7 +140,8 @@ export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | 
 		beans.length === 0 &&
 		roasters.length === 0 &&
 		shots.length === 0 &&
-		recipes.length === 0;
+		recipes.length === 0 &&
+		customMethods.length === 0;
 	const noProfileOrg =
 		meta.pinned.length === 0 &&
 		meta.hiddenBuiltins.length === 0 &&
@@ -152,6 +157,7 @@ export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | 
 		roasters,
 		shots,
 		recipes,
+		customMethods,
 		// Settings line: the shared cross-shell `common` block (CommonSettings —
 		// both shells emit it identically, so common prefs restore web<->Android)
 		// + this shell's `_shell` tag + the web-only platform extras (webhooks,
@@ -239,6 +245,7 @@ export interface RestoreSummary {
 	roasters: number;
 	shots: number;
 	recipes: number;
+	customMethods: number;
 	settingsApplied: boolean;
 }
 
@@ -277,6 +284,7 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 		shots?: StoredShot[];
 		recipes?: BrewRecipe[];
 		recipeMeta?: Partial<RecipeBackupMeta> | null;
+		customMethods?: CustomBrewMethod[];
 		settings?: Record<string, unknown> | null;
 		profileMeta?: Record<string, unknown> | null;
 		maintenance?: Record<string, unknown> | null;
@@ -363,6 +371,12 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 	if (profileMeta || mode === 'wipe') {
 		profileStore.applyBackupMeta(profileMeta ?? {}, mode === 'wipe');
 	}
+	// Custom brew methods — before recipes, which may name them. Merge adds
+	// unknown ids (local edits win); wipe replaces the list.
+	const methodsAdded =
+		(plan.customMethods?.length ?? 0) > 0 || mode === 'wipe'
+			? getCustomMethodStore().applyBackup(plan.customMethods ?? [], mode === 'wipe')
+			: 0;
 	// Brew recipes + their organisation. Merge adds unknown ids and unions the
 	// hidden set (local default pointers win); wipe replaces the library.
 	const recipesAdded =
@@ -385,6 +399,7 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 		roasters: addedRoasters,
 		shots: addedShots,
 		recipes: recipesAdded,
+		customMethods: methodsAdded,
 		settingsApplied
 	};
 }

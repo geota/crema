@@ -484,7 +484,7 @@
 	 * and drains it now, so the uploaded copy is removed too.
 	 */
 	async function handleDelete(shot: StoredShot, opts: { remote: boolean }): Promise<void> {
-		const label = shot.profileName ?? (methodOf(shot) ? methodLabel(methodOf(shot)) : 'this shot');
+		const label = shot.profileName ?? (methodOf(shot) ? methodLabel(methodOf(shot), shot.brewMethodLabel) : 'this shot');
 		const msg = opts.remote
 			? `Delete "${label}" from this device and Visualizer? This cannot be undone.`
 			: `Delete "${label}" from this device? This cannot be undone.`;
@@ -574,12 +574,15 @@
 	 */
 	const methodsInUse = $derived.by(() => {
 		const m = new Map<string, number>();
+		// A custom method's row snapshot — the facet's label of last resort.
+		const snapshots = new Map<string, string>();
 		for (const s of shots) {
 			const key = methodOf(s) ?? 'espresso';
 			m.set(key, (m.get(key) ?? 0) + 1);
+			if (s.brewMethodLabel && !snapshots.has(key)) snapshots.set(key, s.brewMethodLabel);
 		}
 		return [...m.entries()]
-			.map(([id, count]) => ({ id, count }))
+			.map(([id, count]) => ({ id, count, label: methodLabel(id, snapshots.get(id)) }))
 			.sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
 	});
 
@@ -669,7 +672,7 @@
 			for (const m of methodsInUse) {
 				items.push({
 					id: `m:${m.id}`,
-					label: methodLabel(m.id),
+					label: m.label,
 					count: m.count,
 					selected: filterMethod === m.id
 				});
@@ -745,7 +748,7 @@
 			if (query === '') return true;
 			return (
 				(s.profileName ?? '').toLowerCase().includes(query) ||
-				methodLabel(methodOf(s)).toLowerCase().includes(query) ||
+				methodLabel(methodOf(s), s.brewMethodLabel).toLowerCase().includes(query) ||
 				(s.recipeName ?? '').toLowerCase().includes(query) ||
 				(s.metadata.notes ?? '').toLowerCase().includes(query) ||
 				(s.metadata.nextPlan ?? '').toLowerCase().includes(query) ||

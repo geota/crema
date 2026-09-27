@@ -679,6 +679,7 @@ export class HistoryStore {
 			// Never persist an empty method: blank → `null` (the one rule
 			// both shells follow; `isBrewLog` is presence-based).
 			brewMethod: input.method.trim() ? input.method : null,
+			...(input.methodLabel?.trim() ? { brewMethodLabel: input.methodLabel.trim() } : {}),
 			...(input.recipeName ? { recipeName: input.recipeName } : {}),
 			...(input.brewSeries
 				? { brewSeries: downsampleBrewSeries(input.brewSeries) }
@@ -725,12 +726,31 @@ export class HistoryStore {
 		this.shots = this.shots.map((s, i) => (i === idx ? next : s));
 		this.persist();
 	}
+
+	/**
+	 * Re-tag a brew row with a (new) method id and its label snapshot —
+	 * the "Save 'X' as a method?" door after a free-text log. No-ops on an
+	 * unknown id or a machine shot.
+	 */
+	retagMethod(id: string, method: string, label: string | null): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0 || !method.trim()) return;
+		const shot = this.shots[idx];
+		if (shot.brewMethod == null) return;
+		const next: StoredShot = { ...shot, brewMethod: method };
+		if (label?.trim()) next.brewMethodLabel = label.trim();
+		else delete next.brewMethodLabel;
+		this.shots = this.shots.map((s, i) => (i === idx ? next : s));
+		this.persist();
+	}
 }
 
 /** Input to {@link HistoryStore.addManualBrew}. */
 export interface ManualBrewInput {
 	/** Normalized method string (`"pourover"`, `"espresso"`, …). */
 	method: string;
+	/** A custom method's label, snapshotted onto the row (`null` for presets / free text). */
+	methodLabel?: string | null;
 	/** Unix epoch ms the brew happened (user-editable for backfill). */
 	completedAt: number;
 	/** Frozen bean snapshot, or `null` for an untracked coffee. */
@@ -1029,6 +1049,10 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 	// Presence-based like the core's `is_brew_log`: a stored `""` stays a
 	// brew row (local-only), it is not silently upcast to a machine shot.
 	const brewMethod = typeof obj.brewMethod === 'string' ? obj.brewMethod : null;
+	const brewMethodLabel =
+		typeof obj.brewMethodLabel === 'string' && obj.brewMethodLabel.trim().length > 0
+			? obj.brewMethodLabel
+			: null;
 	const recipeName =
 		typeof obj.recipeName === 'string' && obj.recipeName.trim().length > 0
 			? obj.recipeName
@@ -1099,6 +1123,7 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 		visualizerId,
 		deletedAt,
 		...(brewMethod != null ? { brewMethod } : {}),
+		...(brewMethodLabel ? { brewMethodLabel } : {}),
 		...(recipeName ? { recipeName } : {}),
 		...(brewSeries ? { brewSeries } : {})
 	};

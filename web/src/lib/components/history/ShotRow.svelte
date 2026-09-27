@@ -171,7 +171,7 @@
 	</div>
 	<div class="hi-row-main">
 		<div class="hi-row-name">
-			{shot.profileName ?? shot.recipeName ?? (method ? methodLabel(method) : 'Untitled shot')}
+			{shot.profileName ?? shot.recipeName ?? (method ? methodLabel(method, shot.brewMethodLabel) : 'Untitled shot')}
 			{#if manual}<span class="hi-row-logged">· logged</span>{/if}
 		</div>
 		<div class="hi-row-bean">{rowBeanLine}</div>

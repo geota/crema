@@ -14,6 +14,7 @@
 	import { newRecipeFor, plannedPourTotalG, recipeId } from '$lib/brew/recipes.svelte';
 	import { brewMethodPresets, methodLabel } from '$lib/brew/methods';
 	import RecipeCredit from './RecipeCredit.svelte';
+	import CustomMethodDialog from './CustomMethodDialog.svelte';
 
 	let {
 		recipe,
@@ -55,6 +56,20 @@
 		if (!opts.some((o) => o.id === method)) opts.push({ id: method, label: methodLabel(method) });
 		return opts;
 	});
+
+	/** The select's "+ Add method…" sentinel value. */
+	const ADD_METHOD = '__add_method__';
+	let addMethodOpen = $state(false);
+
+	function onMethodChange(e: Event & { currentTarget: HTMLSelectElement }): void {
+		const next = e.currentTarget.value;
+		if (next === ADD_METHOD) {
+			e.currentTarget.value = method; // keep showing the current one
+			addMethodOpen = true;
+			return;
+		}
+		pickMethod(next);
+	}
 
 	function pickMethod(next: string): void {
 		method = next;
@@ -158,11 +173,12 @@
 				<select
 					class="re-input"
 					value={method}
-					onchange={(e) => pickMethod(e.currentTarget.value)}
+					onchange={onMethodChange}
 				>
 					{#each methodOptions as o (o.id)}
 						<option value={o.id}>{o.label}</option>
 					{/each}
+					<option value={ADD_METHOD}>+ Add method…</option>
 				</select>
 			</label>
 			<label class="re-fld">
@@ -263,6 +279,16 @@
 		<button class="re-btn re-btn-primary" onclick={save}>Save recipe</button>
 	</footer>
 </div>
+
+{#if addMethodOpen}
+	<CustomMethodDialog
+		onSave={(m) => {
+			addMethodOpen = false;
+			pickMethod(m.id);
+		}}
+		onClose={() => (addMethodOpen = false)}
+	/>
+{/if}
 
 <style>
 	.re-scrim {
