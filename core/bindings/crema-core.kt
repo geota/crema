@@ -408,7 +408,16 @@ data class BrewRecipe (
 	val createdAt: Long,
 	val updatedAt: Long,
 	/// Soft-delete tombstone, Unix ms — same lifecycle as beans.
-	val deletedAt: Long? = null
+	val deletedAt: Long? = null,
+	/// Who the recipe is by — "James Hoffmann — The Ultimate V60
+	/// Technique (2019)". Set on the built-in catalogue
+	/// ([`builtin_brew_recipes`](crate::builtin_brew_recipes)); a copy of
+	/// a built-in carries "Adapted from …". Shown as small secondary
+	/// text, never as an endorsement. Absent on older stored recipes.
+	val credit: String? = null,
+	/// The primary source the recipe was taken from (video, brew guide),
+	/// opened externally by the shells.
+	val sourceUrl: String? = null
 )
 
 /// One sample of a guided brew's weight-only telemetry, ~4 Hz.
@@ -1845,6 +1854,28 @@ data class RangeCapability (
 	val min: UByte,
 	/// The largest value the setting accepts.
 	val max: UByte
+)
+
+/// A shell's stored recipe library: its recipes plus the per-method
+/// default pointer (web `lastUsed`, Android `lastUsedByMethod`).
+@Serializable
+data class RecipeLibrary (
+	val recipes: List<BrewRecipe>,
+	/// Method → the id of the recipe the Brew setup opens on.
+	val defaultByMethod: HashMap<String, String>
+)
+
+/// [`migrate_recipe_library`]'s result.
+@Serializable
+data class RecipeLibraryMigration (
+	/// The recipes to keep, in their stored order.
+	val recipes: List<BrewRecipe>,
+	/// The pointers, with any pointer at a dropped recipe moved to the
+	/// method's default built-in (or removed when it has none).
+	val defaultByMethod: HashMap<String, String>,
+	/// The ids that were dropped — empty means nothing changed and the
+	/// shell need not rewrite its store.
+	val droppedIds: List<String>
 )
 
 /// Bean snapshot at shot start; nested under [`ReplayMeta::bean`].

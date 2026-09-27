@@ -500,6 +500,8 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             deleted_at: None,
+            credit: None,
+            source_url: None,
         }
     }
 

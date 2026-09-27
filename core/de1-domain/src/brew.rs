@@ -17,8 +17,7 @@
 //! - the curated method presets and their seeds ([`brew_method_presets`]),
 //! - the Log-brew form's seeding rule ([`brew_log_seeds`]),
 //! - the guided-brew data types ([`BrewSeries`], [`BrewRecipe`],
-//!   [`BrewStep`]), the default recipe templates ([`default_recipe`]),
-//!   the live/saved stage-mark rule ([`stage_mark_for`]) and the
+//!   [`BrewStep`]), the live/saved stage-mark rule ([`stage_mark_for`]) and the
 //!   planned-vs-poured staircase ([`planned_staircase`]).
 //!
 //! The live session state machine lives in
@@ -107,7 +106,7 @@ pub struct BrewMethodPreset {
 /// order (spec §3). Tea is deliberately absent: a BC tea brew still
 /// imports, carrying its name as a free-text method.
 type PresetRow = (&'static str, f32, Option<f32>, Option<f32>, Option<f32>);
-const PRESET_TABLE: [PresetRow; 9] = [
+const PRESET_TABLE: [PresetRow; 11] = [
     ("espresso", 18.0, None, Some(36.0), Some(93.0)),
     ("pourover", 15.0, Some(250.0), None, Some(96.0)),
     ("aeropress", 14.0, Some(220.0), None, Some(90.0)),
@@ -117,6 +116,8 @@ const PRESET_TABLE: [PresetRow; 9] = [
     ("drip", 30.0, Some(500.0), None, Some(94.0)),
     ("siphon", 20.0, Some(300.0), None, Some(92.0)),
     ("clever", 18.0, Some(300.0), None, Some(94.0)),
+    ("chemex", 42.0, Some(700.0), None, Some(96.0)),
+    ("kalita_wave", 21.0, Some(345.0), None, Some(96.0)),
 ];
 
 /// The id of the shells' free-text chip. Not a preset (no seeds); the
@@ -713,6 +714,17 @@ pub struct BrewRecipe {
     #[serde(default)]
     #[typeshare(serialized_as = "Option<I64>")]
     pub deleted_at: Option<i64>,
+    /// Who the recipe is by — "James Hoffmann — The Ultimate V60
+    /// Technique (2019)". Set on the built-in catalogue
+    /// ([`builtin_brew_recipes`](crate::builtin_brew_recipes)); a copy of
+    /// a built-in carries "Adapted from …". Shown as small secondary
+    /// text, never as an endorsement. Absent on older stored recipes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credit: Option<String>,
+    /// The primary source the recipe was taken from (video, brew guide),
+    /// opened externally by the shells.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
 }
 
 impl BrewRecipe {
@@ -766,114 +778,6 @@ pub fn recipe_planned_pour_total_g_json(recipe_json: &str) -> Result<Option<f32>
 pub fn recipe_nominal_duration_ms_json(recipe_json: &str) -> Result<u64, String> {
     let recipe: BrewRecipe = serde_json::from_str(recipe_json).map_err(|e| e.to_string())?;
     Ok(recipe.nominal_duration_ms())
-}
-
-// ── Default recipe templates ─────────────────────────────────────────
-
-/// The starter recipe for `method` — what the Scale screen's Brew segment
-/// offers before the user has saved anything (not persisted until edited
-/// and saved). Dose / water / temp come from the method preset
-/// ([`brew_method_preset`]; 15 g / 250 g / no temp for free text); the
-/// step plan is the per-method classic:
-///
-/// - **pourover**: bloom (to `min(3 × dose, 25 % water)`, 0:45) → pour to
-///   60 % → wait 0:30 → pour to the water → open drawdown;
-/// - **aeropress**: pour → stir 0:10 → steep 1:00 → press 0:25;
-/// - **french press** / **clever** / **siphon**: pour → steep (4:00 /
-///   2:30 / 1:30) → open press or drawdown;
-/// - everything else (espresso, moka, drip, cold brew, free text): one
-///   pour to the water (or yield) target — "just time it for me".
-///
-/// `id` is a freshly minted [`new_recipe_id`](crate::new_recipe_id) and
-/// `now_ms` stamps `created_at` / `updated_at`. `name` is a plain
-/// `"<method> classic"` placeholder — the shells own display labels and
-/// rename it ("V60 classic").
-#[must_use]
-pub fn default_recipe(method: &str, id: &str, now_ms: i64) -> BrewRecipe {
-    let preset = brew_method_preset(method);
-    let dose = preset.as_ref().map_or(FALLBACK_DOSE_G, |p| p.seed_dose_g);
-    let water = preset
-        .as_ref()
-        .and_then(|p| p.seed_water_g.or(p.seed_yield_g))
-        .unwrap_or(FALLBACK_WATER_G);
-    BrewRecipe {
-        id: id.to_owned(),
-        name: format!("{method} classic"),
-        method: method.to_owned(),
-        dose_g: dose,
-        water_g: water,
-        temp_c: preset.as_ref().and_then(|p| p.seed_temp_c),
-        steps: default_steps(method, dose, water),
-        notes: None,
-        favourite: false,
-        created_at: now_ms,
-        updated_at: now_ms,
-        deleted_at: None,
-    }
-}
-
-fn default_steps(method: &str, dose: f32, water: f32) -> Vec<BrewStep> {
-    let pour = |target: f32| BrewStep {
-        kind: BrewStepKind::Pour,
-        target_water_g: Some(target),
-        ..BrewStep::default()
-    };
-    let timed = |kind: BrewStepKind, s: u64| BrewStep {
-        kind,
-        duration_s: Some(s),
-        ..BrewStep::default()
-    };
-    let open = |kind: BrewStepKind| BrewStep {
-        kind,
-        advance: StepAdvance::Manual,
-        ..BrewStep::default()
-    };
-    match method {
-        "pourover" => {
-            let bloom = (dose * 3.0).round().min((water * 0.25).round());
-            vec![
-                BrewStep {
-                    kind: BrewStepKind::Bloom,
-                    target_water_g: Some(bloom),
-                    duration_s: Some(45),
-                    ..BrewStep::default()
-                },
-                pour((water * 0.6).round()),
-                timed(BrewStepKind::Wait, 30),
-                pour(water),
-                open(BrewStepKind::Drawdown),
-            ]
-        }
-        "aeropress" => vec![
-            pour(water),
-            timed(BrewStepKind::Stir, 10),
-            timed(BrewStepKind::Steep, 60),
-            timed(BrewStepKind::Press, 25),
-        ],
-        "french_press" => vec![
-            pour(water),
-            timed(BrewStepKind::Steep, 240),
-            open(BrewStepKind::Press),
-        ],
-        "clever" => vec![
-            pour(water),
-            timed(BrewStepKind::Steep, 150),
-            open(BrewStepKind::Drawdown),
-        ],
-        "siphon" => vec![
-            pour(water),
-            timed(BrewStepKind::Steep, 90),
-            open(BrewStepKind::Drawdown),
-        ],
-        _ => vec![pour(water)],
-    }
-}
-
-/// JSON-bridged [`default_recipe`]: a [`BrewRecipe`] JSON.
-#[must_use]
-pub fn default_recipe_json(method: &str, id: &str, now_ms: i64) -> String {
-    serde_json::to_string(&default_recipe(method, id, now_ms))
-        .expect("BrewRecipe serializes infallibly")
 }
 
 // ── Stage marks + the planned-vs-poured staircase ────────────────────
@@ -1161,7 +1065,7 @@ mod tests {
     // ── method presets ───────────────────────────────────────────
 
     #[test]
-    fn presets_are_the_nine_shell_chips_without_other() {
+    fn presets_are_the_eleven_shell_chips_without_other() {
         let ids: Vec<String> = brew_method_presets().into_iter().map(|p| p.id).collect();
         assert_eq!(
             ids,
@@ -1174,7 +1078,9 @@ mod tests {
                 "cold_brew",
                 "drip",
                 "siphon",
-                "clever"
+                "clever",
+                "chemex",
+                "kalita_wave"
             ]
         );
         assert!(brew_method_preset(BREW_METHOD_OTHER).is_none());
@@ -1453,6 +1359,8 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             deleted_at: None,
+            credit: None,
+            source_url: None,
         };
         assert_eq!(recipe.planned_pour_total_g(), Some(250.0));
     }
@@ -1653,6 +1561,8 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             deleted_at: None,
+            credit: None,
+            source_url: None,
         }
     }
 
@@ -1708,9 +1618,10 @@ mod tests {
         assert_eq!(r.nominal_duration_ms(), 105_000);
         r.steps.clear();
         assert_eq!(r.nominal_duration_ms(), 0);
-        let json = serde_json::to_string(&default_recipe("pourover", "r", 0)).unwrap();
-        // 45 + 30 (pour) + 30 (wait) + 30 (pour) + 0 (open drawdown).
-        assert_eq!(recipe_nominal_duration_ms_json(&json).unwrap(), 135_000);
+        let v60 = crate::builtin_brew_recipe("builtin:hoffmann-1-cup-v60").unwrap();
+        let json = serde_json::to_string(&v60).unwrap();
+        // 45 + 15 + 3 × (10 wait + 10 pour) + 5 swirl + 0 (open drawdown).
+        assert_eq!(recipe_nominal_duration_ms_json(&json).unwrap(), 125_000);
         assert!(recipe_nominal_duration_ms_json("x").is_err());
     }
 
@@ -1721,7 +1632,8 @@ mod tests {
         assert_eq!(r.planned_pour_total_g(), Some(45.0));
         r.steps.clear();
         assert_eq!(r.planned_pour_total_g(), None);
-        let json = serde_json::to_string(&default_recipe("aeropress", "r", 0)).unwrap();
+        let official = crate::builtin_brew_recipe("builtin:aeropress-official").unwrap();
+        let json = serde_json::to_string(&official).unwrap();
         assert_eq!(
             recipe_planned_pour_total_g_json(&json).unwrap(),
             Some(220.0)
@@ -1732,95 +1644,35 @@ mod tests {
     }
 
     #[test]
-    fn default_pourover_is_bloom_pour_wait_pour_drawdown() {
-        let r = default_recipe("pourover", "recipe:x", 1_700);
-        assert_eq!(r.id, "recipe:x");
-        assert_eq!(r.method, "pourover");
-        assert_eq!((r.dose_g, r.water_g, r.temp_c), (15.0, 250.0, Some(96.0)));
-        assert_eq!(
-            (r.created_at, r.updated_at, r.deleted_at),
-            (1_700, 1_700, None)
+    fn a_recipe_stored_before_credits_parses_unchanged() {
+        // Stored by the Brew Log before `credit` / `sourceUrl` existed.
+        let old = r#"{"id":"recipe:x","name":"Morning V60","method":"pourover",
+            "doseG":15,"waterG":250,"tempC":96,"steps":[],"notes":null,
+            "favourite":true,"createdAt":1,"updatedAt":2,"deletedAt":null}"#;
+        let r: BrewRecipe = serde_json::from_str(old).unwrap();
+        assert_eq!((r.credit.as_deref(), r.source_url.as_deref()), (None, None));
+        assert_eq!(r.name, "Morning V60");
+        assert!(r.favourite);
+        // …and re-serializes without the new keys, so older shells and
+        // backups read it back byte-for-byte compatible.
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(
+            !json.contains("credit") && !json.contains("sourceUrl"),
+            "{json}"
         );
-        assert!(!r.favourite);
-        let plan: Vec<_> = r
-            .steps
-            .iter()
-            .map(|s| (s.kind, s.target_water_g, s.duration_s, s.advance))
-            .collect();
-        assert_eq!(
-            plan,
-            vec![
-                (BrewStepKind::Bloom, Some(45.0), Some(45), StepAdvance::Auto),
-                (BrewStepKind::Pour, Some(150.0), None, StepAdvance::Auto),
-                (BrewStepKind::Wait, None, Some(30), StepAdvance::Auto),
-                (BrewStepKind::Pour, Some(250.0), None, StepAdvance::Auto),
-                (BrewStepKind::Drawdown, None, None, StepAdvance::Manual),
-            ]
-        );
-        assert!(r.steps.iter().all(|s| s.label.is_none()));
-    }
-
-    #[test]
-    fn default_immersion_and_open_pour_templates() {
-        let kinds = |m: &str| -> Vec<(BrewStepKind, Option<f32>, Option<u64>, StepAdvance)> {
-            default_recipe(m, "r", 0)
-                .steps
-                .iter()
-                .map(|s| (s.kind, s.target_water_g, s.duration_s, s.advance))
-                .collect()
+        // With a credit, both keys ride camelCase.
+        let credited = BrewRecipe {
+            credit: Some("Someone".to_owned()),
+            source_url: Some("https://example.com".to_owned()),
+            ..r
         };
-        use BrewStepKind as K;
-        use StepAdvance::{Auto, Manual};
-        assert_eq!(
-            kinds("aeropress"),
-            vec![
-                (K::Pour, Some(220.0), None, Auto),
-                (K::Stir, None, Some(10), Auto),
-                (K::Steep, None, Some(60), Auto),
-                (K::Press, None, Some(25), Auto),
-            ]
+        let json = serde_json::to_string(&credited).unwrap();
+        assert!(json.contains(r#""credit":"Someone""#), "{json}");
+        assert!(
+            json.contains(r#""sourceUrl":"https://example.com""#),
+            "{json}"
         );
-        assert_eq!(
-            kinds("french_press"),
-            vec![
-                (K::Pour, Some(500.0), None, Auto),
-                (K::Steep, None, Some(240), Auto),
-                (K::Press, None, None, Manual),
-            ]
-        );
-        assert_eq!(
-            kinds("clever"),
-            vec![
-                (K::Pour, Some(300.0), None, Auto),
-                (K::Steep, None, Some(150), Auto),
-                (K::Drawdown, None, None, Manual),
-            ]
-        );
-        assert_eq!(
-            kinds("siphon"),
-            vec![
-                (K::Pour, Some(300.0), None, Auto),
-                (K::Steep, None, Some(90), Auto),
-                (K::Drawdown, None, None, Manual),
-            ]
-        );
-        // Espresso speaks yield: one pour to 36 g.
-        assert_eq!(kinds("espresso"), vec![(K::Pour, Some(36.0), None, Auto)]);
-        assert_eq!(kinds("cold_brew"), vec![(K::Pour, Some(700.0), None, Auto)]);
-        // Free text: the generic 15 g / 250 g fallback, no temp.
-        let free = default_recipe("karlsbad_kanne", "r", 0);
-        assert_eq!(
-            (free.dose_g, free.water_g, free.temp_c),
-            (15.0, 250.0, None)
-        );
-        assert_eq!(free.steps.len(), 1);
-    }
-
-    #[test]
-    fn default_recipe_json_is_a_brew_recipe() {
-        let json = default_recipe_json("moka", "recipe:m", 42);
-        let r: BrewRecipe = serde_json::from_str(&json).unwrap();
-        assert_eq!(r, default_recipe("moka", "recipe:m", 42));
-        assert!(json.contains(r#""method":"moka""#), "{json}");
+        let back: BrewRecipe = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, credited);
     }
 }

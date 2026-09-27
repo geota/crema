@@ -1,0 +1,720 @@
+[
+  {
+    "id": "builtin:hoffmann-1-cup-v60",
+    "name": "1 Cup V60",
+    "method": "pourover",
+    "doseG": 15.0,
+    "waterG": 250.0,
+    "tempC": 100.0,
+    "steps": [
+      {
+        "kind": "bloom",
+        "label": "Swirl gently at 0:10",
+        "targetWaterG": 50.0,
+        "durationS": 45,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": null,
+        "targetWaterG": 100.0,
+        "durationS": 15,
+        "advance": "auto"
+      },
+      {
+        "kind": "wait",
+        "label": null,
+        "targetWaterG": null,
+        "durationS": 10,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": null,
+        "targetWaterG": 150.0,
+        "durationS": 10,
+        "advance": "auto"
+      },
+      {
+        "kind": "wait",
+        "label": null,
+        "targetWaterG": null,
+        "durationS": 10,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": null,
+        "targetWaterG": 200.0,
+        "durationS": 10,
+        "advance": "auto"
+      },
+      {
+        "kind": "wait",
+        "label": null,
+        "targetWaterG": null,
+        "durationS": 10,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": null,
+        "targetWaterG": 250.0,
+        "durationS": 10,
+        "advance": "auto"
+      },
+      {
+        "kind": "stir",
+        "label": "Gentle swirl",
+        "targetWaterG": null,
+        "durationS": 5,
+        "advance": "auto"
+      },
+      {
+        "kind": "drawdown",
+        "label": "Finishes around 3:00",
+        "targetWaterG": null,
+        "durationS": null,
+        "advance": "manual"
+      }
+    ],
+    "notes": null,
+    "favourite": false,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "deletedAt": null,
+    "credit": "James Hoffmann — A Better 1 Cup V60 Technique (2022)",
+    "sourceUrl": "https://www.youtube.com/watch?v=1oB1oDrDkHM"
+  },
+  {
+    "id": "builtin:hoffmann-ultimate-v60",
+    "name": "Ultimate V60",
+    "method": "pourover",
+    "doseG": 30.0,
+    "waterG": 500.0,
+    "tempC": 100.0,
+    "steps": [
+      {
+        "kind": "bloom",
+        "label": "2× dose — swirl until evenly mixed",
+        "targetWaterG": 60.0,
+        "durationS": 45,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": null,
+        "targetWaterG": 300.0,
+        "durationS": 30,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": null,
+        "targetWaterG": 500.0,
+        "durationS": 30,
+        "advance": "auto"
+      },
+      {
+        "kind": "stir",
+        "label": "Stir once clockwise, once anticlockwise",
+        "targetWaterG": null,
+        "durationS": 5,
+        "advance": "manual"
+      },
+      {
+        "kind": "wait",
+        "label": "Let it drain a little",
+        "targetWaterG": null,
+        "durationS": 10,
+        "advance": "auto"
+      },
+      {
+        "kind": "stir",
+        "label": "Gentle swirl to flatten the bed",
+        "targetWaterG": null,
+        "durationS": 5,
+        "advance": "manual"
+      },
+      {
+        "kind": "drawdown",
+        "label": "Target finish around 3:30",
+        "targetWaterG": null,
+        "durationS": null,
+        "advance": "manual"
+      }
+    ],
+    "notes": null,
+    "favourite": false,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "deletedAt": null,
+    "credit": "James Hoffmann — The Ultimate V60 Technique (2019)",
+    "sourceUrl": "https://www.youtube.com/watch?v=AI4ynXzkSQo"
+  },
+  {
+    "id": "builtin:kasuya-4-6",
+    "name": "4:6 Method",
+    "method": "pourover",
+    "doseG": 20.0,
+    "waterG": 300.0,
+    "tempC": 92.0,
+    "steps": [
+      {
+        "kind": "pour",
+        "label": "First 40% sets sweetness — smaller first pour is sweeter",
+        "targetWaterG": 50.0,
+        "durationS": 45,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": null,
+        "targetWaterG": 120.0,
+        "durationS": 45,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": "Last 60% sets strength",
+        "targetWaterG": 180.0,
+        "durationS": 40,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": null,
+        "targetWaterG": 240.0,
+        "durationS": 30,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": null,
+        "targetWaterG": 300.0,
+        "durationS": 30,
+        "advance": "auto"
+      },
+      {
+        "kind": "drawdown",
+        "label": "Remove the dripper at 3:30",
+        "targetWaterG": null,
+        "durationS": null,
+        "advance": "manual"
+      }
+    ],
+    "notes": null,
+    "favourite": false,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "deletedAt": null,
+    "credit": "Tetsu Kasuya — 4:6 Method (2016 World Brewers Cup Champion)",
+    "sourceUrl": "https://hario.co.uk/blogs/hario-ambassadors/hario-v60-recipe-interview-with-hario-ambassador-tetsu-kasuya"
+  },
+  {
+    "id": "builtin:hoffmann-ultimate-aeropress",
+    "name": "Ultimate AeroPress",
+    "method": "aeropress",
+    "doseG": 11.0,
+    "waterG": 200.0,
+    "tempC": 100.0,
+    "steps": [
+      {
+        "kind": "pour",
+        "label": "Wet all the coffee",
+        "targetWaterG": 200.0,
+        "durationS": 10,
+        "advance": "auto"
+      },
+      {
+        "kind": "steep",
+        "label": "Insert the plunger about 1 cm to stop drips",
+        "targetWaterG": null,
+        "durationS": 120,
+        "advance": "auto"
+      },
+      {
+        "kind": "stir",
+        "label": "Gently swirl the brewer",
+        "targetWaterG": null,
+        "durationS": 5,
+        "advance": "manual"
+      },
+      {
+        "kind": "wait",
+        "label": null,
+        "targetWaterG": null,
+        "durationS": 30,
+        "advance": "auto"
+      },
+      {
+        "kind": "press",
+        "label": "Press gently all the way",
+        "targetWaterG": null,
+        "durationS": null,
+        "advance": "manual"
+      }
+    ],
+    "notes": null,
+    "favourite": false,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "deletedAt": null,
+    "credit": "James Hoffmann — The Ultimate AeroPress Technique (2021)",
+    "sourceUrl": "https://www.youtube.com/watch?v=j6VlT_jUVPc"
+  },
+  {
+    "id": "builtin:aeropress-official",
+    "name": "Official AeroPress",
+    "method": "aeropress",
+    "doseG": 17.0,
+    "waterG": 220.0,
+    "tempC": 85.0,
+    "steps": [
+      {
+        "kind": "pour",
+        "label": "Fill to the (4) mark",
+        "targetWaterG": 220.0,
+        "durationS": null,
+        "advance": "auto"
+      },
+      {
+        "kind": "stir",
+        "label": null,
+        "targetWaterG": null,
+        "durationS": 3,
+        "advance": "auto"
+      },
+      {
+        "kind": "wait",
+        "label": "Insert plunger ½ in, pull up slightly for a vacuum",
+        "targetWaterG": null,
+        "durationS": 60,
+        "advance": "auto"
+      },
+      {
+        "kind": "press",
+        "label": "Gentle pressure until the hiss",
+        "targetWaterG": null,
+        "durationS": null,
+        "advance": "manual"
+      }
+    ],
+    "notes": null,
+    "favourite": false,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "deletedAt": null,
+    "credit": "AeroPress Inc. — official brewing instructions",
+    "sourceUrl": "https://aeropress.com/pages/how-to-use"
+  },
+  {
+    "id": "builtin:merikanto-wac-2021",
+    "name": "2021 World AeroPress Champion",
+    "method": "aeropress",
+    "doseG": 18.0,
+    "waterG": 200.0,
+    "tempC": 80.0,
+    "steps": [
+      {
+        "kind": "pour",
+        "label": null,
+        "targetWaterG": 50.0,
+        "durationS": 10,
+        "advance": "auto"
+      },
+      {
+        "kind": "stir",
+        "label": "3 gentle stirs",
+        "targetWaterG": null,
+        "durationS": 5,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": null,
+        "targetWaterG": 200.0,
+        "durationS": 15,
+        "advance": "auto"
+      },
+      {
+        "kind": "wait",
+        "label": null,
+        "targetWaterG": null,
+        "durationS": 20,
+        "advance": "auto"
+      },
+      {
+        "kind": "stir",
+        "label": "Gentle stir",
+        "targetWaterG": null,
+        "durationS": 5,
+        "advance": "auto"
+      },
+      {
+        "kind": "steep",
+        "label": "Attach the cap",
+        "targetWaterG": null,
+        "durationS": 40,
+        "advance": "auto"
+      },
+      {
+        "kind": "stir",
+        "label": "Flip onto the cup",
+        "targetWaterG": null,
+        "durationS": 5,
+        "advance": "manual"
+      },
+      {
+        "kind": "press",
+        "label": "Press — done by about 2:00",
+        "targetWaterG": null,
+        "durationS": 20,
+        "advance": "auto"
+      }
+    ],
+    "notes": "Inverted, two rinsed paper filters",
+    "favourite": false,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "deletedAt": null,
+    "credit": "Tuomas Merikanto — 2021 World AeroPress Champion",
+    "sourceUrl": "https://aeropress.com/pages/wac-recipes"
+  },
+  {
+    "id": "builtin:hoffmann-ultimate-french-press",
+    "name": "Ultimate French Press",
+    "method": "french_press",
+    "doseG": 30.0,
+    "waterG": 500.0,
+    "tempC": 100.0,
+    "steps": [
+      {
+        "kind": "pour",
+        "label": null,
+        "targetWaterG": 500.0,
+        "durationS": 15,
+        "advance": "auto"
+      },
+      {
+        "kind": "steep",
+        "label": null,
+        "targetWaterG": null,
+        "durationS": 240,
+        "advance": "auto"
+      },
+      {
+        "kind": "stir",
+        "label": "Break the crust, then skim foam and floating bits",
+        "targetWaterG": null,
+        "durationS": 20,
+        "advance": "manual"
+      },
+      {
+        "kind": "wait",
+        "label": "5–8 minutes — don't touch it",
+        "targetWaterG": null,
+        "durationS": 300,
+        "advance": "auto"
+      },
+      {
+        "kind": "press",
+        "label": "Lower the plunger to the surface only, then pour gently",
+        "targetWaterG": null,
+        "durationS": null,
+        "advance": "manual"
+      }
+    ],
+    "notes": null,
+    "favourite": false,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "deletedAt": null,
+    "credit": "James Hoffmann — The Ultimate French Press Technique (2016)",
+    "sourceUrl": "https://www.youtube.com/watch?v=st571DYYTR8"
+  },
+  {
+    "id": "builtin:hoffmann-ultimate-clever",
+    "name": "Ultimate Clever Dripper",
+    "method": "clever",
+    "doseG": 18.0,
+    "waterG": 300.0,
+    "tempC": 100.0,
+    "steps": [
+      {
+        "kind": "pour",
+        "label": "Water first — no coffee yet",
+        "targetWaterG": 300.0,
+        "durationS": null,
+        "advance": "auto"
+      },
+      {
+        "kind": "stir",
+        "label": "Add the coffee, stir gently",
+        "targetWaterG": null,
+        "durationS": 5,
+        "advance": "auto"
+      },
+      {
+        "kind": "steep",
+        "label": "No lid",
+        "targetWaterG": null,
+        "durationS": 120,
+        "advance": "auto"
+      },
+      {
+        "kind": "stir",
+        "label": "Break the crust or give a gentle shake",
+        "targetWaterG": null,
+        "durationS": 5,
+        "advance": "manual"
+      },
+      {
+        "kind": "wait",
+        "label": null,
+        "targetWaterG": null,
+        "durationS": 30,
+        "advance": "auto"
+      },
+      {
+        "kind": "drawdown",
+        "label": "Set it on the mug to drain",
+        "targetWaterG": null,
+        "durationS": null,
+        "advance": "manual"
+      }
+    ],
+    "notes": "Water-first method, credited by Hoffmann to Workshop Coffee",
+    "favourite": false,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "deletedAt": null,
+    "credit": "James Hoffmann — The Ultimate Clever Dripper Technique (2020)",
+    "sourceUrl": "https://www.youtube.com/watch?v=RpOdennxP24"
+  },
+  {
+    "id": "builtin:stumptown-chemex",
+    "name": "Chemex",
+    "method": "chemex",
+    "doseG": 42.0,
+    "waterG": 700.0,
+    "tempC": 96.0,
+    "steps": [
+      {
+        "kind": "bloom",
+        "label": null,
+        "targetWaterG": 150.0,
+        "durationS": 45,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": "Wiggle, then a gentle spiral",
+        "targetWaterG": 450.0,
+        "durationS": 60,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": "Until the slurry is near the top",
+        "targetWaterG": 700.0,
+        "durationS": null,
+        "advance": "manual"
+      },
+      {
+        "kind": "drawdown",
+        "label": "Finish around 4:00",
+        "targetWaterG": null,
+        "durationS": null,
+        "advance": "manual"
+      }
+    ],
+    "notes": null,
+    "favourite": false,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "deletedAt": null,
+    "credit": "Stumptown Coffee Roasters — Chemex Brew Guide",
+    "sourceUrl": "https://www.stumptowncoffee.com/pages/brew-guide-chemex"
+  },
+  {
+    "id": "builtin:stumptown-kalita-wave",
+    "name": "Kalita Wave",
+    "method": "kalita_wave",
+    "doseG": 21.0,
+    "waterG": 345.0,
+    "tempC": 96.0,
+    "steps": [
+      {
+        "kind": "bloom",
+        "label": "Gentle stir",
+        "targetWaterG": 60.0,
+        "durationS": 45,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": "Slow spiral",
+        "targetWaterG": 200.0,
+        "durationS": 15,
+        "advance": "auto"
+      },
+      {
+        "kind": "pour",
+        "label": "Pulses of 25–50 g on the dark spots",
+        "targetWaterG": 345.0,
+        "durationS": 60,
+        "advance": "auto"
+      },
+      {
+        "kind": "drawdown",
+        "label": "Finish 2:45–3:00",
+        "targetWaterG": null,
+        "durationS": null,
+        "advance": "manual"
+      }
+    ],
+    "notes": null,
+    "favourite": false,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "deletedAt": null,
+    "credit": "Stumptown Coffee Roasters — Kalita Wave Brew Guide",
+    "sourceUrl": "https://www.stumptowncoffee.com/pages/brew-guide-kalita-wave"
+  },
+  {
+    "id": "builtin:hoffmann-cold-brew",
+    "name": "Cold Brew",
+    "method": "cold_brew",
+    "doseG": 75.0,
+    "waterG": 1000.0,
+    "tempC": null,
+    "steps": [
+      {
+        "kind": "pour",
+        "label": "Room-temperature water, fine grind",
+        "targetWaterG": 1000.0,
+        "durationS": null,
+        "advance": "auto"
+      },
+      {
+        "kind": "stir",
+        "label": "Stir thoroughly",
+        "targetWaterG": null,
+        "durationS": 30,
+        "advance": "manual"
+      },
+      {
+        "kind": "steep",
+        "label": "Lid on, in the fridge for 12 hours",
+        "targetWaterG": null,
+        "durationS": 43200,
+        "advance": "manual"
+      },
+      {
+        "kind": "drawdown",
+        "label": "Decant gently off the sediment",
+        "targetWaterG": null,
+        "durationS": null,
+        "advance": "manual"
+      }
+    ],
+    "notes": null,
+    "favourite": false,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "deletedAt": null,
+    "credit": "James Hoffmann — Everything I Learned About Cold Brew Coffee (2025)",
+    "sourceUrl": "https://www.youtube.com/watch?v=AB0QLjroFss"
+  },
+  {
+    "id": "builtin:hoffmann-moka",
+    "name": "Moka Pot",
+    "method": "moka",
+    "doseG": 15.0,
+    "waterG": 150.0,
+    "tempC": null,
+    "steps": [
+      {
+        "kind": "pour",
+        "label": "Boiling water in the base, just below the valve",
+        "targetWaterG": 150.0,
+        "durationS": null,
+        "advance": "manual"
+      },
+      {
+        "kind": "wait",
+        "label": "Full basket, assemble, low-medium heat, lid open",
+        "targetWaterG": null,
+        "durationS": null,
+        "advance": "manual"
+      },
+      {
+        "kind": "drawdown",
+        "label": "Stop before it sputters; cool the base under the tap",
+        "targetWaterG": null,
+        "durationS": null,
+        "advance": "manual"
+      }
+    ],
+    "notes": null,
+    "favourite": false,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "deletedAt": null,
+    "credit": "Adapted from James Hoffmann — The Ultimate Moka Pot Technique (2022)",
+    "sourceUrl": "https://www.youtube.com/watch?v=BfDLoIvb0w4"
+  },
+  {
+    "id": "builtin:hario-syphon",
+    "name": "Syphon",
+    "method": "siphon",
+    "doseG": 17.0,
+    "waterG": 250.0,
+    "tempC": null,
+    "steps": [
+      {
+        "kind": "wait",
+        "label": "Heat until the water rises",
+        "targetWaterG": null,
+        "durationS": null,
+        "advance": "manual"
+      },
+      {
+        "kind": "stir",
+        "label": "Add the coffee, stir",
+        "targetWaterG": null,
+        "durationS": 5,
+        "advance": "auto"
+      },
+      {
+        "kind": "steep",
+        "label": null,
+        "targetWaterG": null,
+        "durationS": 70,
+        "advance": "auto"
+      },
+      {
+        "kind": "stir",
+        "label": "Heat off, 3 stirs",
+        "targetWaterG": null,
+        "durationS": 5,
+        "advance": "manual"
+      },
+      {
+        "kind": "drawdown",
+        "label": null,
+        "targetWaterG": null,
+        "durationS": null,
+        "advance": "manual"
+      }
+    ],
+    "notes": null,
+    "favourite": false,
+    "createdAt": 0,
+    "updatedAt": 0,
+    "deletedAt": null,
+    "credit": "Hario — Syphon Brew Guide",
+    "sourceUrl": "https://www.hario.co.uk/pages/brew-guides-syphon"
+  }
+]

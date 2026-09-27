@@ -364,13 +364,47 @@ pub fn new_recipe_id() -> String {
     de1_domain::new_recipe_id()
 }
 
-/// The starter recipe for `method` (`BrewRecipe` JSON) — preset dose /
-/// water / temp and the per-method classic step plan. `id` is a fresh
-/// [`new_recipe_id`]; `now_ms` stamps the timestamps. The shell renames it
-/// with its display label. See `de1_domain::default_recipe`.
-#[wasm_bindgen(js_name = defaultRecipeJson)]
-pub fn default_recipe_json(method: &str, id: &str, now_ms: f64) -> String {
-    de1_domain::default_recipe_json(method, id, f64_to_ms(now_ms))
+/// The built-in brew recipe catalogue (`BrewRecipe` JSON array) — real,
+/// credited recipes, read-only. See `de1_domain::builtin_brew_recipes`.
+#[wasm_bindgen(js_name = builtinBrewRecipesJson)]
+pub fn builtin_brew_recipes_json() -> String {
+    de1_domain::builtin_brew_recipes_json()
+}
+
+/// Whether `id` names a built-in (read-only) brew recipe. See
+/// `de1_domain::is_builtin_recipe`.
+#[wasm_bindgen(js_name = isBuiltinRecipe)]
+pub fn is_builtin_recipe(id: &str) -> bool {
+    de1_domain::is_builtin_recipe(id)
+}
+
+/// The id of `method`'s default built-in recipe, or `undefined` for a
+/// method without one (espresso, drip, free text). See
+/// `de1_domain::default_builtin_recipe_id`.
+#[wasm_bindgen(js_name = defaultBuiltinRecipeId)]
+pub fn default_builtin_recipe_id(method: &str) -> Option<String> {
+    de1_domain::default_builtin_recipe_id(method).map(str::to_owned)
+}
+
+/// An editable copy of a recipe (`BrewRecipe` JSON in and out): `new_id`,
+/// "<name> (copy)", credit "Adapted from …", same source URL. See
+/// `de1_domain::duplicate_recipe`.
+#[wasm_bindgen(js_name = duplicateRecipeJson)]
+pub fn duplicate_recipe_json(
+    recipe_json: &str,
+    new_id: &str,
+    now_ms: f64,
+) -> Result<String, String> {
+    de1_domain::duplicate_recipe_json(recipe_json, new_id, f64_to_ms(now_ms))
+}
+
+/// Clean a stored recipe library on load (`RecipeLibrary` JSON in,
+/// `RecipeLibraryMigration` JSON out): drops untouched legacy "classic"
+/// starters and stored built-ins, repointing defaults at the built-in.
+/// See `de1_domain::migrate_recipe_library`.
+#[wasm_bindgen(js_name = migrateRecipeLibraryJson)]
+pub fn migrate_recipe_library_json(library_json: &str) -> Result<String, String> {
+    de1_domain::migrate_recipe_library_json(library_json)
 }
 
 /// A recipe's nominal run time, ms (`BrewRecipe` JSON in). See

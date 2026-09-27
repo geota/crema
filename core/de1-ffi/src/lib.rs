@@ -474,15 +474,58 @@ pub fn new_recipe_id() -> String {
     de1_domain::new_recipe_id()
 }
 
-/// The starter recipe for `method` (`BrewRecipe` JSON) — preset dose /
-/// water / temp and the per-method classic step plan. `id` is a fresh
-/// [`new_recipe_id`]; `now_unix_ms` stamps the timestamps. The shell
-/// renames it with its display label. Mirrors the wasm
-/// `defaultRecipeJson`; see [`de1_domain::default_recipe`].
+/// The built-in brew recipe catalogue (`BrewRecipe` JSON array) — real,
+/// credited recipes, read-only. Mirrors the wasm `builtinBrewRecipesJson`;
+/// see [`de1_domain::builtin_brew_recipes`].
 #[uniffi::export]
 #[must_use]
-pub fn default_recipe_json(method: String, id: String, now_unix_ms: i64) -> String {
-    de1_domain::default_recipe_json(&method, &id, now_unix_ms)
+pub fn builtin_brew_recipes_json() -> String {
+    de1_domain::builtin_brew_recipes_json()
+}
+
+/// Whether `id` names a built-in (read-only) brew recipe. See
+/// [`de1_domain::is_builtin_recipe`].
+#[uniffi::export]
+#[must_use]
+pub fn is_builtin_recipe(id: String) -> bool {
+    de1_domain::is_builtin_recipe(&id)
+}
+
+/// The id of `method`'s default built-in recipe, or `None` for a method
+/// without one (espresso, drip, free text). See
+/// [`de1_domain::default_builtin_recipe_id`].
+#[uniffi::export]
+#[must_use]
+pub fn default_builtin_recipe_id(method: String) -> Option<String> {
+    de1_domain::default_builtin_recipe_id(&method).map(str::to_owned)
+}
+
+/// An editable copy of a recipe (`BrewRecipe` JSON in and out): `new_id`,
+/// "<name> (copy)", credit "Adapted from …", same source URL. See
+/// [`de1_domain::duplicate_recipe`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the recipe JSON is malformed.
+#[uniffi::export]
+pub fn duplicate_recipe_json(
+    recipe_json: String,
+    new_id: String,
+    now_unix_ms: i64,
+) -> Result<String, CremaError> {
+    de1_domain::duplicate_recipe_json(&recipe_json, &new_id, now_unix_ms).map_err(CremaError::from)
+}
+
+/// Clean a stored recipe library on load (`RecipeLibrary` JSON in,
+/// `RecipeLibraryMigration` JSON out). See
+/// [`de1_domain::migrate_recipe_library`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the library JSON is malformed.
+#[uniffi::export]
+pub fn migrate_recipe_library_json(library_json: String) -> Result<String, CremaError> {
+    de1_domain::migrate_recipe_library_json(&library_json).map_err(CremaError::from)
 }
 
 /// A recipe's nominal run time, ms (`BrewRecipe` JSON in). See

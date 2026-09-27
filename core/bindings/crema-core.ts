@@ -455,6 +455,19 @@ export interface BrewRecipe {
 	updatedAt: number;
 	/** Soft-delete tombstone, Unix ms — same lifecycle as beans. */
 	deletedAt?: number;
+	/**
+	 * Who the recipe is by — "James Hoffmann — The Ultimate V60
+	 * Technique (2019)". Set on the built-in catalogue
+	 * ([`builtin_brew_recipes`](crate::builtin_brew_recipes)); a copy of
+	 * a built-in carries "Adapted from …". Shown as small secondary
+	 * text, never as an endorsement. Absent on older stored recipes.
+	 */
+	credit?: string;
+	/**
+	 * The primary source the recipe was taken from (video, brew guide),
+	 * opened externally by the shells.
+	 */
+	sourceUrl?: string;
 }
 
 /** One sample of a guided brew's weight-only telemetry, ~4 Hz. */
@@ -1851,6 +1864,32 @@ export interface RangeCapability {
 	min: number;
 	/** The largest value the setting accepts. */
 	max: number;
+}
+
+/**
+ * A shell's stored recipe library: its recipes plus the per-method
+ * default pointer (web `lastUsed`, Android `lastUsedByMethod`).
+ */
+export interface RecipeLibrary {
+	recipes: BrewRecipe[];
+	/** Method → the id of the recipe the Brew setup opens on. */
+	defaultByMethod: Record<string, string>;
+}
+
+/** [`migrate_recipe_library`]'s result. */
+export interface RecipeLibraryMigration {
+	/** The recipes to keep, in their stored order. */
+	recipes: BrewRecipe[];
+	/**
+	 * The pointers, with any pointer at a dropped recipe moved to the
+	 * method's default built-in (or removed when it has none).
+	 */
+	defaultByMethod: Record<string, string>;
+	/**
+	 * The ids that were dropped — empty means nothing changed and the
+	 * shell need not rewrite its store.
+	 */
+	droppedIds: string[];
 }
 
 /**
