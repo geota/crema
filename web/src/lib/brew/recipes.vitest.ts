@@ -6,7 +6,9 @@ import {
   builtinRecipes,
   isBuiltinRecipe,
   newRecipeFor,
-  nominalRecipeMs,
+  hasExpectedDuration,
+  recipeEstimate,
+  recipeEstimateLabel,
   plannedPourTotalG,
 } from "./recipes.svelte";
 
@@ -45,9 +47,18 @@ describe("core-backed recipes", () => {
     expect(newRecipeFor("kalita_wave").name).toBe("Kalita Wave recipe");
   });
 
-  it("nominalRecipeMs and plannedPourTotalG delegate to the core", () => {
-    const v60 = builtinRecipes().find((r) => r.id === "builtin:hoffmann-1-cup-v60")!;
-    expect(nominalRecipeMs(v60)).toBe(125_000);
+  it("recipeEstimate / recipeEstimateLabel and plannedPourTotalG delegate to the core", () => {
+    const get = (id: string) => builtinRecipes().find((r) => r.id === id)!;
+    const v60 = get("builtin:hoffmann-1-cup-v60");
+    expect(recipeEstimate(v60)).toEqual({ totalMs: 180_000, openEnded: false });
+    expect(recipeEstimateLabel(v60)).toBe("3:00");
+    expect(recipeEstimateLabel(get("builtin:stumptown-chemex"))).toBe("4:00");
+    expect(recipeEstimateLabel(get("builtin:hoffmann-ultimate-aeropress"))).toBe("2:45+");
+    expect(recipeEstimate(get("builtin:hoffmann-moka"))).toBeNull();
+    expect(recipeEstimateLabel(get("builtin:hoffmann-moka"))).toBeNull();
+    const steps = v60.steps ?? [];
+    expect(hasExpectedDuration(steps[steps.length - 1])).toBe(true);
+    expect(hasExpectedDuration(steps[0])).toBe(false);
     expect(plannedPourTotalG(v60)).toBe(250);
     expect(plannedPourTotalG({ ...v60, steps: [] })).toBeNull();
   });

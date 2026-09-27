@@ -20,9 +20,10 @@
 	import {
 		brewClock,
 		getRecipeStore,
+		hasExpectedDuration,
 		isBuiltinRecipe,
 		newRecipeFor,
-		nominalRecipeMs
+		recipeEstimateLabel
 	} from '$lib/brew/recipes.svelte';
 	import { primeBrewCues } from '$lib/brew/cues';
 	import {
@@ -194,7 +195,9 @@
 		if (!step) return '';
 		const parts: string[] = [];
 		if (step.targetWaterG != null) parts.push(`to ${Math.round(step.targetWaterG)} g`);
-		if (step.durationS != null) parts.push(clock(step.durationS * 1000));
+		// A drawdown's expected time is guidance: "about 0:55 · until you tap".
+		if (hasExpectedDuration(step)) parts.push(`about ${clock((step.durationS ?? 0) * 1000)}`, 'until you tap');
+		else if (step.durationS != null) parts.push(clock(step.durationS * 1000));
 		if (parts.length === 0) parts.push('until you tap');
 		return parts.join(' · ');
 	}
@@ -203,8 +206,18 @@
 	const steps = $derived(liveRecipe?.steps ?? []);
 	const currentStep = $derived(steps[session.stepIndex]);
 	const nextStep = $derived(steps[session.stepIndex + 1]);
-	/** Recipe total time, ms, for the "of about m:ss" line (core rule). */
-	const nominalTotalMs = $derived(liveRecipe ? nominalRecipeMs(liveRecipe) : 0);
+	/** Recipe total time for the "of about m:ss" line — "3:00", "2:45+"
+	 *  (open-ended), or null for no estimate (core rule). */
+	const estimateLabel = $derived(liveRecipe ? recipeEstimateLabel(liveRecipe) : null);
+	/** The setup's estimate, for the selected recipe. */
+	const setupEstimate = $derived(recipe ? recipeEstimateLabel(recipe) : null);
+	/** The current step's duration is an expectation (a drawdown): no
+	 *  countdown to zero — "about 0:40 left", then "+0:12 over". */
+	const expectedStep = $derived(hasExpectedDuration(currentStep));
+	/** ms left of an expected step's duration; negative once past it. */
+	const expectedLeftMs = $derived(
+		expectedStep ? (currentStep?.durationS ?? 0) * 1000 - stepElapsedMs : 0
+	);
 
 	/** The current step's 0..1 progress — live weight against a pour
 	 *  target when a scale reports, else the countdown. `null` = open. */
@@ -313,7 +326,7 @@
 					<RecipeCredit credit={recipe.credit} sourceUrl={recipe.sourceUrl} />
 					<div class="gb-recipe-meta">
 						{recipe.doseG} g · {recipe.waterG} g water{#if recipe.tempC}
-							· {Math.round(recipe.tempC)} °C{/if}
+							· {Math.round(recipe.tempC)} °C{/if}{#if setupEstimate} · ~{setupEstimate}{/if}
 					</div>
 				</div>
 				<div class="gb-recipe-actions">
@@ -456,8 +469,8 @@
 			<div class="gb-clock" class:is-paused={session.phase === 'paused'}>
 				{clock(elapsedMs)}
 			</div>
-			{#if nominalTotalMs > 0}
-				<div class="gb-clock-sub">of about {clock(nominalTotalMs)}</div>
+			{#if estimateLabel}
+				<div class="gb-clock-sub">of about {estimateLabel}</div>
 			{/if}
 
 			<div
@@ -482,6 +495,16 @@
 							/ {Math.round(currentStep.targetWaterG)} g</span
 						>
 					</div>
+				{:else if expectedStep && expectedLeftMs > 0}
+					<div class="gb-step-big" data-testid="gb-expected">
+						<span class="gb-step-about">about</span>
+						{clock(expectedLeftMs)}<span class="gb-step-of"> left</span>
+					</div>
+				{:else if expectedStep}
+					<div class="gb-step-big is-over" data-testid="gb-overtime">
+						+{clock(-expectedLeftMs)}<span class="gb-step-of"> over</span>
+					</div>
+					<div class="gb-step-open">Finish when it's drained — tap Skip</div>
 				{:else if currentStep?.durationS != null}
 					<div class="gb-step-big">
 						{clock(Math.max(0, currentStep.durationS * 1000 - stepElapsedMs))}<span
@@ -493,7 +516,7 @@
 				{:else}
 					<div class="gb-step-open">Until you tap — Skip moves on</div>
 				{/if}
-				{#if stepProgress != null}
+				{#if stepProgress != null && !(expectedStep && expectedLeftMs <= 0)}
 					<div class="gb-bar">
 						<div class="gb-bar-fill" style="width:{(stepProgress * 100).toFixed(1)}%"></div>
 					</div>
@@ -1043,6 +1066,17 @@
 	.gb-step-of {
 		font-size: 16px;
 		color: rgba(var(--tint-rgb), 0.5);
+	}
+	/* A drawdown's expected time is guidance, not a deadline: a quiet
+	   "about" before it, and past it the overtime reads muted, not red. */
+	.gb-step-about {
+		font-family: var(--font-sans);
+		font-size: 16px;
+		color: rgba(var(--tint-rgb), 0.5);
+		margin-right: 2px;
+	}
+	.gb-step-big.is-over {
+		color: rgba(var(--tint-rgb), 0.7);
 	}
 	.gb-step-open {
 		font-family: var(--font-sans);

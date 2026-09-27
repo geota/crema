@@ -19,7 +19,13 @@
  * without one (espresso, drip, free text) open with no recipe.
  */
 
-import type { BrewRecipe, RecipeLibraryMigration } from '$lib/core/crema-core';
+import type {
+	BrewRecipe,
+	BrewStep,
+	RecipeLibraryMigration,
+	RecipeTimeEstimate
+} from '$lib/core/crema-core';
+import { BrewStepKind, StepAdvance } from '$lib/core/crema-core';
 import { readJson, writeJsonChecked } from '$lib/utils/storage';
 import {
 	blankRecipeJson,
@@ -28,7 +34,7 @@ import {
 	duplicateRecipeJson,
 	isBuiltinRecipe as wasmIsBuiltinRecipe,
 	migrateRecipeLibraryJson,
-	recipeNominalDurationMsJson,
+	recipeEstimatedDurationJson,
 	recipePlannedPourTotalGJson
 } from '$lib/wasm/de1_wasm';
 import { methodLabel } from './methods';
@@ -82,13 +88,40 @@ export function newRecipeFor(method: string): BrewRecipe {
 }
 
 /**
- * A recipe's nominal run time, ms — the core's
- * `BrewRecipe::nominal_duration_ms` (step durations, pour-only steps a
- * notional 30 s each). Drives the library card's "~m:ss" and the guided
- * panel's "of about m:ss" line.
+ * A recipe's estimated run time — the core's
+ * `BrewRecipe::estimated_duration`: the sum of every step's duration (a
+ * drawdown's expected time included, no hidden windows for untimed
+ * steps), `openEnded` when some step holds for an unknown time. `null`
+ * when no step has a duration (moka): show no estimate at all.
  */
-export function nominalRecipeMs(recipe: BrewRecipe): number {
-	return recipeNominalDurationMsJson(JSON.stringify(recipe));
+export function recipeEstimate(recipe: BrewRecipe): RecipeTimeEstimate | null {
+	const json = recipeEstimatedDurationJson(JSON.stringify(recipe));
+	return json == null ? null : (JSON.parse(json) as RecipeTimeEstimate);
+}
+
+/**
+ * The estimate as display text — "3:00", or "2:45+" when open-ended —
+ * for the library card's "~…" and the guided panel's "of about …";
+ * `null` = show nothing. Same rule as Android's `recipeEstimateLabel`.
+ */
+export function recipeEstimateLabel(recipe: BrewRecipe): string | null {
+	const e = recipeEstimate(recipe);
+	return e == null ? null : `${brewClock(e.totalMs)}${e.openEnded ? '+' : ''}`;
+}
+
+/**
+ * Whether a step's duration is an expectation, not a countdown — the
+ * core's `BrewStep::has_expected_duration` (a tap-to-finish drawdown with
+ * a duration). The session never advances or cues it on time; the panel
+ * shows "about 0:40 left", then "+0:12 over".
+ */
+export function hasExpectedDuration(step: BrewStep | undefined): boolean {
+	return (
+		step != null &&
+		step.kind === BrewStepKind.Drawdown &&
+		step.advance === StepAdvance.Manual &&
+		step.durationS != null
+	);
 }
 
 /**

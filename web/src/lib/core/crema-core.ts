@@ -1892,6 +1892,17 @@ export interface RecipeLibraryMigration {
 	droppedIds: string[];
 }
 
+/** A recipe's estimated run time ([`BrewRecipe::estimated_duration`]). */
+export interface RecipeTimeEstimate {
+	/** The sum of the step durations, milliseconds. */
+	totalMs: number;
+	/**
+	 * Some step holds for an unknown time (no duration, no water
+	 * target) — the shells append "+" ("~2:45+").
+	 */
+	openEnded: boolean;
+}
+
 /**
  * Bean snapshot at shot start; nested under [`ReplayMeta::bean`].
  * 

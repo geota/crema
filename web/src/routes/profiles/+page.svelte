@@ -34,11 +34,10 @@
 		type CremaProfile
 	} from '$lib/profiles';
 	import {
-		brewClock,
 		getRecipeStore,
 		isBuiltinRecipe,
 		newRecipeFor,
-		nominalRecipeMs
+		recipeEstimateLabel
 	} from '$lib/brew/recipes.svelte';
 	import { methodLabel } from '$lib/brew/methods';
 	import MethodMark from '$lib/components/brewlog/MethodMark.svelte';
@@ -666,7 +665,6 @@
 		return (r.steps ?? []).map((s) => RECIPE_KIND_LABEL[s.kind] ?? 'Step').join(' → ');
 	}
 
-	const recipeClock = brewClock;
 </script>
 
 <svelte:head>
@@ -856,6 +854,7 @@
 							{#each g.recipes as r (r.id)}
 								{@const builtin = isBuiltinRecipe(r.id)}
 								{@const hidden = builtin && recipeStore.isHidden(r.id)}
+								{@const estimate = recipeEstimateLabel(r)}
 								<div class="pp-recipe-card" class:is-hidden={hidden}>
 									<div class="pp-recipe-top">
 										<span class="pp-recipe-badges">
@@ -880,7 +879,7 @@
 									<RecipeCredit credit={r.credit} sourceUrl={r.sourceUrl} />
 									<div class="pp-recipe-meta">
 										{r.doseG} g · {r.waterG} g water{#if r.tempC != null}
-											· {Math.round(r.tempC)} °C{/if} · ~{recipeClock(nominalRecipeMs(r))}
+											· {Math.round(r.tempC)} °C{/if}{#if estimate} · ~{estimate}{/if}
 									</div>
 									<div class="pp-recipe-steps">{stepChain(r)}</div>
 									<div class="pp-recipe-actions">
