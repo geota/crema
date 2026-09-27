@@ -2430,6 +2430,16 @@ export interface ShotStatInput {
 }
 
 /**
+ * One horizontal run of the planned-water staircase: level `target_g`
+ * from `t0_ms` to `t1_ms` (session ms).
+ */
+export interface StairSegment {
+	t0Ms: number;
+	t1Ms: number;
+	targetG: number;
+}
+
+/**
  * A telemetry sample tagged with its time since the shot began.
  * 
  * The DE1's [`ShotSample`] is the raw protocol decode (pressure, flow,

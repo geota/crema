@@ -474,6 +474,103 @@ pub fn new_recipe_id() -> String {
     de1_domain::new_recipe_id()
 }
 
+/// The starter recipe for `method` (`BrewRecipe` JSON) — preset dose /
+/// water / temp and the per-method classic step plan. `id` is a fresh
+/// [`new_recipe_id`]; `now_unix_ms` stamps the timestamps. The shell
+/// renames it with its display label. Mirrors the wasm
+/// `defaultRecipeJson`; see [`de1_domain::default_recipe`].
+#[uniffi::export]
+#[must_use]
+pub fn default_recipe_json(method: String, id: String, now_unix_ms: i64) -> String {
+    de1_domain::default_recipe_json(&method, &id, now_unix_ms)
+}
+
+/// A recipe's nominal run time, ms (`BrewRecipe` JSON in). See
+/// [`de1_domain::BrewRecipe::nominal_duration_ms`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the recipe JSON is malformed.
+#[uniffi::export]
+pub fn recipe_nominal_duration_ms_json(recipe_json: String) -> Result<i64, CremaError> {
+    de1_domain::recipe_nominal_duration_ms_json(&recipe_json)
+        .map(|ms| i64::try_from(ms).unwrap_or(i64::MAX))
+        .map_err(CremaError::from)
+}
+
+/// A recipe's planned cumulative pour total, grams (`BrewRecipe` JSON in),
+/// or `null` when no step carries a finite target. See
+/// [`de1_domain::BrewRecipe::planned_pour_total_g`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the recipe JSON is malformed.
+#[uniffi::export]
+pub fn recipe_planned_pour_total_g_json(recipe_json: String) -> Result<Option<f32>, CremaError> {
+    de1_domain::recipe_planned_pour_total_g_json(&recipe_json).map_err(CremaError::from)
+}
+
+/// The stage mark (`StageMark` JSON) for step `step_index` of a recipe
+/// (`BrewRecipe` JSON) beginning at `at_ms` — the live chart's twin of the
+/// session engine's saved marks. See [`de1_domain::stage_mark_for`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the recipe JSON is malformed.
+#[uniffi::export]
+pub fn stage_mark_for_json(
+    recipe_json: String,
+    step_index: u32,
+    at_ms: i64,
+) -> Result<String, CremaError> {
+    de1_domain::stage_mark_for_json(
+        &recipe_json,
+        u64::from(step_index),
+        u64::try_from(at_ms).unwrap_or(0),
+    )
+    .map_err(CremaError::from)
+}
+
+/// The planned-vs-poured staircase (`StairSegment` JSON array) from a
+/// `StageMark` JSON array, ending at `end_ms`. See
+/// [`de1_domain::planned_staircase`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the marks JSON is malformed.
+#[uniffi::export]
+pub fn planned_staircase_json(marks_json: String, end_ms: i64) -> Result<String, CremaError> {
+    de1_domain::planned_staircase_json(&marks_json, u64::try_from(end_ms).unwrap_or(0))
+        .map_err(CremaError::from)
+}
+
+/// The largest finite planned target in a `StageMark` JSON array, or 0.
+/// See [`de1_domain::max_planned_target`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the marks JSON is malformed.
+#[uniffi::export]
+pub fn max_planned_target_json(marks_json: String) -> Result<f32, CremaError> {
+    de1_domain::max_planned_target_json(&marks_json).map_err(CremaError::from)
+}
+
+/// Guided-brew cue sound when the user never chose — see
+/// [`de1_domain::app_settings::DEFAULT_BREW_CUE_SOUND`].
+#[uniffi::export]
+#[must_use]
+pub fn default_brew_cue_sound() -> bool {
+    de1_domain::app_settings::DEFAULT_BREW_CUE_SOUND
+}
+
+/// Guided-brew cue haptics when the user never chose — see
+/// [`de1_domain::app_settings::DEFAULT_BREW_CUE_HAPTICS`].
+#[uniffi::export]
+#[must_use]
+pub fn default_brew_cue_haptics() -> bool {
+    de1_domain::app_settings::DEFAULT_BREW_CUE_HAPTICS
+}
+
 /// Resolve the Brew screen's service-mode display targets (steam /
 /// hot-water / flush) — machine value → Quick-Controls dial → legacy
 /// default, per field. Takes `ModeTargetInputs` JSON, returns

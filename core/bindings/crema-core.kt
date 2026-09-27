@@ -2326,6 +2326,15 @@ data class ShotStatInput (
 	val rating: UByte? = null
 )
 
+/// One horizontal run of the planned-water staircase: level `target_g`
+/// from `t0_ms` to `t1_ms` (session ms).
+@Serializable
+data class StairSegment (
+	val t0Ms: Long,
+	val t1Ms: Long,
+	val targetG: Float
+)
+
 /// A telemetry sample tagged with its time since the shot began.
 /// 
 /// The DE1's [`ShotSample`] is the raw protocol decode (pressure, flow,

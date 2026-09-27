@@ -17,7 +17,9 @@
 //! - the curated method presets and their seeds ([`brew_method_presets`]),
 //! - the Log-brew form's seeding rule ([`brew_log_seeds`]),
 //! - the guided-brew data types ([`BrewSeries`], [`BrewRecipe`],
-//!   [`BrewStep`]).
+//!   [`BrewStep`]), the default recipe templates ([`default_recipe`]),
+//!   the live/saved stage-mark rule ([`stage_mark_for`]) and the
+//!   planned-vs-poured staircase ([`planned_staircase`]).
 //!
 //! The live session state machine lives in
 //! [`brew_session`](crate::brew_session); this module stays data-only.
@@ -725,6 +727,276 @@ impl BrewRecipe {
             .filter(|w| w.is_finite())
             .fold(None, |acc, w| Some(acc.map_or(w, |a: f32| a.max(w))))
     }
+
+    /// The recipe's nominal run time, milliseconds — the sum of its step
+    /// durations, with a pour-only step (a water target, no duration)
+    /// counted a notional 30 s. Step-less recipes read 0. Drives the
+    /// library card's "~m:ss" and the guided panel's "of about m:ss".
+    #[must_use]
+    pub fn nominal_duration_ms(&self) -> u64 {
+        self.steps
+            .iter()
+            .map(|s| match (s.duration_s, s.target_water_g) {
+                (Some(d), _) => d.saturating_mul(1000),
+                (None, Some(_)) => NOMINAL_POUR_STEP_MS,
+                (None, None) => 0,
+            })
+            .fold(0u64, u64::saturating_add)
+    }
+}
+
+/// A pour-only step's notional duration in [`BrewRecipe::nominal_duration_ms`].
+pub const NOMINAL_POUR_STEP_MS: u64 = 30_000;
+
+/// JSON-bridged [`BrewRecipe::planned_pour_total_g`]. Input: a
+/// [`BrewRecipe`] JSON. `None` when no step carries a finite target.
+///
+/// # Errors
+/// The JSON parse error string on a malformed `recipe_json`.
+pub fn recipe_planned_pour_total_g_json(recipe_json: &str) -> Result<Option<f32>, String> {
+    let recipe: BrewRecipe = serde_json::from_str(recipe_json).map_err(|e| e.to_string())?;
+    Ok(recipe.planned_pour_total_g())
+}
+
+/// JSON-bridged [`BrewRecipe::nominal_duration_ms`]. Input: a
+/// [`BrewRecipe`] JSON.
+///
+/// # Errors
+/// The JSON parse error string on a malformed `recipe_json`.
+pub fn recipe_nominal_duration_ms_json(recipe_json: &str) -> Result<u64, String> {
+    let recipe: BrewRecipe = serde_json::from_str(recipe_json).map_err(|e| e.to_string())?;
+    Ok(recipe.nominal_duration_ms())
+}
+
+// ── Default recipe templates ─────────────────────────────────────────
+
+/// The starter recipe for `method` — what the Scale screen's Brew segment
+/// offers before the user has saved anything (not persisted until edited
+/// and saved). Dose / water / temp come from the method preset
+/// ([`brew_method_preset`]; 15 g / 250 g / no temp for free text); the
+/// step plan is the per-method classic:
+///
+/// - **pourover**: bloom (to `min(3 × dose, 25 % water)`, 0:45) → pour to
+///   60 % → wait 0:30 → pour to the water → open drawdown;
+/// - **aeropress**: pour → stir 0:10 → steep 1:00 → press 0:25;
+/// - **french press** / **clever** / **siphon**: pour → steep (4:00 /
+///   2:30 / 1:30) → open press or drawdown;
+/// - everything else (espresso, moka, drip, cold brew, free text): one
+///   pour to the water (or yield) target — "just time it for me".
+///
+/// `id` is a freshly minted [`new_recipe_id`](crate::new_recipe_id) and
+/// `now_ms` stamps `created_at` / `updated_at`. `name` is a plain
+/// `"<method> classic"` placeholder — the shells own display labels and
+/// rename it ("V60 classic").
+#[must_use]
+pub fn default_recipe(method: &str, id: &str, now_ms: i64) -> BrewRecipe {
+    let preset = brew_method_preset(method);
+    let dose = preset.as_ref().map_or(FALLBACK_DOSE_G, |p| p.seed_dose_g);
+    let water = preset
+        .as_ref()
+        .and_then(|p| p.seed_water_g.or(p.seed_yield_g))
+        .unwrap_or(FALLBACK_WATER_G);
+    BrewRecipe {
+        id: id.to_owned(),
+        name: format!("{method} classic"),
+        method: method.to_owned(),
+        dose_g: dose,
+        water_g: water,
+        temp_c: preset.as_ref().and_then(|p| p.seed_temp_c),
+        steps: default_steps(method, dose, water),
+        notes: None,
+        favourite: false,
+        created_at: now_ms,
+        updated_at: now_ms,
+        deleted_at: None,
+    }
+}
+
+fn default_steps(method: &str, dose: f32, water: f32) -> Vec<BrewStep> {
+    let pour = |target: f32| BrewStep {
+        kind: BrewStepKind::Pour,
+        target_water_g: Some(target),
+        ..BrewStep::default()
+    };
+    let timed = |kind: BrewStepKind, s: u64| BrewStep {
+        kind,
+        duration_s: Some(s),
+        ..BrewStep::default()
+    };
+    let open = |kind: BrewStepKind| BrewStep {
+        kind,
+        advance: StepAdvance::Manual,
+        ..BrewStep::default()
+    };
+    match method {
+        "pourover" => {
+            let bloom = (dose * 3.0).round().min((water * 0.25).round());
+            vec![
+                BrewStep {
+                    kind: BrewStepKind::Bloom,
+                    target_water_g: Some(bloom),
+                    duration_s: Some(45),
+                    ..BrewStep::default()
+                },
+                pour((water * 0.6).round()),
+                timed(BrewStepKind::Wait, 30),
+                pour(water),
+                open(BrewStepKind::Drawdown),
+            ]
+        }
+        "aeropress" => vec![
+            pour(water),
+            timed(BrewStepKind::Stir, 10),
+            timed(BrewStepKind::Steep, 60),
+            timed(BrewStepKind::Press, 25),
+        ],
+        "french_press" => vec![
+            pour(water),
+            timed(BrewStepKind::Steep, 240),
+            open(BrewStepKind::Press),
+        ],
+        "clever" => vec![
+            pour(water),
+            timed(BrewStepKind::Steep, 150),
+            open(BrewStepKind::Drawdown),
+        ],
+        "siphon" => vec![
+            pour(water),
+            timed(BrewStepKind::Steep, 90),
+            open(BrewStepKind::Drawdown),
+        ],
+        _ => vec![pour(water)],
+    }
+}
+
+/// JSON-bridged [`default_recipe`]: a [`BrewRecipe`] JSON.
+#[must_use]
+pub fn default_recipe_json(method: &str, id: &str, now_ms: i64) -> String {
+    serde_json::to_string(&default_recipe(method, id, now_ms))
+        .expect("BrewRecipe serializes infallibly")
+}
+
+// ── Stage marks + the planned-vs-poured staircase ────────────────────
+
+/// The stage mark for step `step_index` of `recipe` beginning at `at_ms`,
+/// snapshotting the step's cumulative planned water target. A step-less
+/// recipe runs as one implicit pour to its water target (see
+/// [`BrewSessionMonitor::new`](crate::BrewSessionMonitor::new)), so its
+/// step 0 carries `water_g`. The one rule for the session engine's saved
+/// marks and the shells' live marks, so the live staircase matches the
+/// saved one.
+#[must_use]
+pub fn stage_mark_for(recipe: &BrewRecipe, step_index: u64, at_ms: u64) -> StageMark {
+    let target = if recipe.steps.is_empty() {
+        (step_index == 0 && recipe.water_g.is_finite() && recipe.water_g > 0.0)
+            .then_some(recipe.water_g)
+    } else {
+        usize::try_from(step_index)
+            .ok()
+            .and_then(|i| recipe.steps.get(i))
+            .and_then(|s| s.target_water_g)
+    };
+    StageMark {
+        elapsed_ms: at_ms,
+        step_index,
+        target_water_g: target,
+    }
+}
+
+/// JSON-bridged [`stage_mark_for`]. Input: a [`BrewRecipe`] JSON; output:
+/// a [`StageMark`] JSON.
+///
+/// # Errors
+/// The JSON parse error string on a malformed `recipe_json`.
+pub fn stage_mark_for_json(
+    recipe_json: &str,
+    step_index: u64,
+    at_ms: u64,
+) -> Result<String, String> {
+    let recipe: BrewRecipe = serde_json::from_str(recipe_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&stage_mark_for(&recipe, step_index, at_ms)).map_err(|e| e.to_string())
+}
+
+/// One horizontal run of the planned-water staircase: level `target_g`
+/// from `t0_ms` to `t1_ms` (session ms).
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StairSegment {
+    #[typeshare(serialized_as = "I64")]
+    pub t0_ms: u64,
+    #[typeshare(serialized_as = "I64")]
+    pub t1_ms: u64,
+    pub target_g: f32,
+}
+
+/// Build the "planned vs poured" staircase from a series' stage marks.
+///
+/// - Each segment starts at a mark and runs to the next mark, or to
+///   `end_ms` (the end of the series / the live session clock).
+/// - Its level is the most recent finite target at or before that mark,
+///   so a timed step (a wait, the drawdown) carries the last pour's
+///   target forward.
+/// - Nothing is emitted before the first mark with a target, and no
+///   targets at all means an empty staircase (manual logs, old records).
+///
+/// Marks need not arrive sorted. Consecutive segments share endpoints,
+/// so a renderer joining them with vertical risers draws a staircase.
+/// Same-instant marks produce no zero-width run.
+#[must_use]
+pub fn planned_staircase(marks: &[StageMark], end_ms: u64) -> Vec<StairSegment> {
+    let mut sorted: Vec<&StageMark> = marks.iter().collect();
+    sorted.sort_by_key(|m| m.elapsed_ms);
+    let mut out = Vec::with_capacity(sorted.len());
+    let mut level: Option<f32> = None;
+    for (i, m) in sorted.iter().enumerate() {
+        if let Some(t) = m.target_water_g.filter(|t| t.is_finite()) {
+            level = Some(t);
+        }
+        let Some(target_g) = level else { continue };
+        let t0_ms = m.elapsed_ms;
+        let t1_ms = match sorted.get(i + 1) {
+            Some(next) if next.elapsed_ms <= t0_ms => continue,
+            Some(next) => next.elapsed_ms,
+            None => t0_ms.max(end_ms),
+        };
+        out.push(StairSegment {
+            t0_ms,
+            t1_ms,
+            target_g,
+        });
+    }
+    out
+}
+
+/// The largest finite planned target among `marks`, or 0 when none
+/// carries one — the chart's y-range floor for the staircase.
+#[must_use]
+pub fn max_planned_target(marks: &[StageMark]) -> f32 {
+    marks
+        .iter()
+        .filter_map(|m| m.target_water_g)
+        .filter(|t| t.is_finite())
+        .fold(0.0, f32::max)
+}
+
+/// JSON-bridged [`planned_staircase`]. Input: a [`StageMark`] JSON array;
+/// output: a [`StairSegment`] JSON array.
+///
+/// # Errors
+/// The JSON parse error string on a malformed `marks_json`.
+pub fn planned_staircase_json(marks_json: &str, end_ms: u64) -> Result<String, String> {
+    let marks: Vec<StageMark> = serde_json::from_str(marks_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&planned_staircase(&marks, end_ms)).map_err(|e| e.to_string())
+}
+
+/// JSON-bridged [`max_planned_target`]. Input: a [`StageMark`] JSON array.
+///
+/// # Errors
+/// The JSON parse error string on a malformed `marks_json`.
+pub fn max_planned_target_json(marks_json: &str) -> Result<f32, String> {
+    let marks: Vec<StageMark> = serde_json::from_str(marks_json).map_err(|e| e.to_string())?;
+    Ok(max_planned_target(&marks))
 }
 
 #[cfg(test)]
@@ -1231,5 +1503,324 @@ mod tests {
         let json = serde_json::to_string(&pour).unwrap();
         assert!(json.contains(r#""targetWaterG":250.0"#), "{json}");
         assert_eq!(serde_json::from_str::<StageMark>(&json).unwrap(), pour);
+    }
+
+    // ── staircase / stage marks / templates (#100 core moves) ────────
+
+    fn mark(t: u64, i: u64, target: Option<f32>) -> StageMark {
+        StageMark {
+            elapsed_ms: t,
+            step_index: i,
+            target_water_g: target,
+        }
+    }
+
+    fn seg(t0_ms: u64, t1_ms: u64, target_g: f32) -> StairSegment {
+        StairSegment {
+            t0_ms,
+            t1_ms,
+            target_g,
+        }
+    }
+
+    /// V60: bloom 45 → pour 150 → wait → pour 250 → drawdown.
+    fn v60_marks() -> Vec<StageMark> {
+        vec![
+            mark(0, 0, Some(45.0)),
+            mark(45_000, 1, Some(150.0)),
+            mark(75_000, 2, None),
+            mark(100_000, 3, Some(250.0)),
+            mark(130_000, 4, None),
+        ]
+    }
+
+    #[test]
+    fn staircase_carries_targets_through_timed_steps() {
+        assert_eq!(
+            planned_staircase(&v60_marks(), 180_000),
+            vec![
+                seg(0, 45_000, 45.0),
+                seg(45_000, 75_000, 150.0),
+                seg(75_000, 100_000, 150.0),
+                seg(100_000, 130_000, 250.0),
+                seg(130_000, 180_000, 250.0),
+            ]
+        );
+        assert!((max_planned_target(&v60_marks()) - 250.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn staircase_follows_a_skip_in_any_input_order() {
+        // Bloom skipped at 20 s straight into the 250 g pour.
+        let marks = [
+            mark(20_000, 1, Some(250.0)),
+            mark(0, 0, Some(45.0)),
+            mark(60_000, 3, None),
+        ];
+        assert_eq!(
+            planned_staircase(&marks, 90_000),
+            vec![
+                seg(0, 20_000, 45.0),
+                seg(20_000, 60_000, 250.0),
+                seg(60_000, 90_000, 250.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn staircase_is_empty_without_targets() {
+        let old = [mark(0, 0, None), mark(30_000, 1, None)];
+        assert!(planned_staircase(&old, 60_000).is_empty());
+        assert!(planned_staircase(&[], 60_000).is_empty());
+        assert!(max_planned_target(&old).abs() < f32::EPSILON);
+        // Non-finite targets count as none.
+        let bad = [
+            mark(0, 0, Some(f32::NAN)),
+            mark(1_000, 1, Some(f32::INFINITY)),
+        ];
+        assert!(planned_staircase(&bad, 5_000).is_empty());
+        assert!(max_planned_target(&bad).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn staircase_starts_at_the_first_target() {
+        let marks = [mark(0, 0, None), mark(10_000, 1, Some(60.0))];
+        assert_eq!(
+            planned_staircase(&marks, 30_000),
+            vec![seg(10_000, 30_000, 60.0)]
+        );
+    }
+
+    #[test]
+    fn a_live_staircase_ends_at_the_clock_mid_step() {
+        let live = &v60_marks()[..2];
+        assert_eq!(
+            planned_staircase(live, 52_000),
+            vec![seg(0, 45_000, 45.0), seg(45_000, 52_000, 150.0)]
+        );
+        // A clock behind the last mark never runs a segment backwards.
+        assert_eq!(
+            planned_staircase(live, 10_000),
+            vec![seg(0, 45_000, 45.0), seg(45_000, 45_000, 150.0)]
+        );
+    }
+
+    #[test]
+    fn same_instant_marks_emit_no_zero_width_run() {
+        let marks = [mark(0, 0, Some(45.0)), mark(0, 1, Some(150.0))];
+        assert_eq!(
+            planned_staircase(&marks, 10_000),
+            vec![seg(0, 10_000, 150.0)]
+        );
+    }
+
+    #[test]
+    fn staircase_json_facades_speak_camel_case() {
+        let marks = serde_json::to_string(&v60_marks()[..2]).unwrap();
+        let out = planned_staircase_json(&marks, 60_000).unwrap();
+        assert_eq!(
+            out,
+            r#"[{"t0Ms":0,"t1Ms":45000,"targetG":45.0},{"t0Ms":45000,"t1Ms":60000,"targetG":150.0}]"#
+        );
+        assert!((max_planned_target_json(&marks).unwrap() - 150.0).abs() < f32::EPSILON);
+        assert!(planned_staircase_json("nope", 0).is_err());
+        assert!(max_planned_target_json("{").is_err());
+    }
+
+    fn v60_recipe() -> BrewRecipe {
+        BrewRecipe {
+            id: "r".to_owned(),
+            name: "V60".to_owned(),
+            method: "pourover".to_owned(),
+            dose_g: 15.0,
+            water_g: 250.0,
+            temp_c: Some(96.0),
+            steps: vec![
+                BrewStep {
+                    kind: BrewStepKind::Bloom,
+                    target_water_g: Some(45.0),
+                    duration_s: Some(45),
+                    ..BrewStep::default()
+                },
+                BrewStep {
+                    kind: BrewStepKind::Wait,
+                    duration_s: Some(30),
+                    ..BrewStep::default()
+                },
+            ],
+            notes: None,
+            favourite: false,
+            created_at: 1,
+            updated_at: 1,
+            deleted_at: None,
+        }
+    }
+
+    #[test]
+    fn stage_marks_snapshot_the_recipe_targets() {
+        let r = v60_recipe();
+        assert_eq!(stage_mark_for(&r, 0, 0), mark(0, 0, Some(45.0)));
+        assert_eq!(stage_mark_for(&r, 1, 45_000), mark(45_000, 1, None));
+        // Past the end of the plan: a mark, no target.
+        assert_eq!(stage_mark_for(&r, 7, 99_000), mark(99_000, 7, None));
+        // A step-less recipe runs as one implicit pour to its water.
+        let stepless = BrewRecipe {
+            steps: vec![],
+            ..r.clone()
+        };
+        assert_eq!(stage_mark_for(&stepless, 0, 0), mark(0, 0, Some(250.0)));
+        assert_eq!(stage_mark_for(&stepless, 1, 5), mark(5, 1, None));
+        let dry = BrewRecipe {
+            water_g: 0.0,
+            ..stepless
+        };
+        assert_eq!(stage_mark_for(&dry, 0, 0), mark(0, 0, None));
+    }
+
+    #[test]
+    fn stage_mark_json_facade_round_trips() {
+        let json = serde_json::to_string(&v60_recipe()).unwrap();
+        let out = stage_mark_for_json(&json, 0, 1_500).unwrap();
+        assert_eq!(
+            out,
+            r#"{"elapsedMs":1500,"stepIndex":0,"targetWaterG":45.0}"#
+        );
+        let timed = stage_mark_for_json(&json, 1, 45_000).unwrap();
+        assert_eq!(timed, r#"{"elapsedMs":45000,"stepIndex":1}"#);
+        assert!(stage_mark_for_json("[]", 0, 0).is_err());
+    }
+
+    #[test]
+    fn nominal_duration_counts_pours_a_notional_30s() {
+        let mut r = v60_recipe();
+        // bloom 45 s (duration wins over its target) + wait 30 s.
+        assert_eq!(r.nominal_duration_ms(), 75_000);
+        r.steps.push(BrewStep {
+            kind: BrewStepKind::Pour,
+            target_water_g: Some(250.0),
+            ..BrewStep::default()
+        });
+        r.steps.push(BrewStep {
+            kind: BrewStepKind::Drawdown,
+            advance: StepAdvance::Manual,
+            ..BrewStep::default()
+        });
+        assert_eq!(r.nominal_duration_ms(), 105_000);
+        r.steps.clear();
+        assert_eq!(r.nominal_duration_ms(), 0);
+        let json = serde_json::to_string(&default_recipe("pourover", "r", 0)).unwrap();
+        // 45 + 30 (pour) + 30 (wait) + 30 (pour) + 0 (open drawdown).
+        assert_eq!(recipe_nominal_duration_ms_json(&json).unwrap(), 135_000);
+        assert!(recipe_nominal_duration_ms_json("x").is_err());
+    }
+
+    #[test]
+    fn planned_pour_total_skips_non_finite_targets_and_bridges() {
+        let mut r = v60_recipe();
+        r.steps[1].target_water_g = Some(f32::NAN);
+        assert_eq!(r.planned_pour_total_g(), Some(45.0));
+        r.steps.clear();
+        assert_eq!(r.planned_pour_total_g(), None);
+        let json = serde_json::to_string(&default_recipe("aeropress", "r", 0)).unwrap();
+        assert_eq!(
+            recipe_planned_pour_total_g_json(&json).unwrap(),
+            Some(220.0)
+        );
+        let empty = serde_json::to_string(&r).unwrap();
+        assert_eq!(recipe_planned_pour_total_g_json(&empty).unwrap(), None);
+        assert!(recipe_planned_pour_total_g_json("").is_err());
+    }
+
+    #[test]
+    fn default_pourover_is_bloom_pour_wait_pour_drawdown() {
+        let r = default_recipe("pourover", "recipe:x", 1_700);
+        assert_eq!(r.id, "recipe:x");
+        assert_eq!(r.method, "pourover");
+        assert_eq!((r.dose_g, r.water_g, r.temp_c), (15.0, 250.0, Some(96.0)));
+        assert_eq!(
+            (r.created_at, r.updated_at, r.deleted_at),
+            (1_700, 1_700, None)
+        );
+        assert!(!r.favourite);
+        let plan: Vec<_> = r
+            .steps
+            .iter()
+            .map(|s| (s.kind, s.target_water_g, s.duration_s, s.advance))
+            .collect();
+        assert_eq!(
+            plan,
+            vec![
+                (BrewStepKind::Bloom, Some(45.0), Some(45), StepAdvance::Auto),
+                (BrewStepKind::Pour, Some(150.0), None, StepAdvance::Auto),
+                (BrewStepKind::Wait, None, Some(30), StepAdvance::Auto),
+                (BrewStepKind::Pour, Some(250.0), None, StepAdvance::Auto),
+                (BrewStepKind::Drawdown, None, None, StepAdvance::Manual),
+            ]
+        );
+        assert!(r.steps.iter().all(|s| s.label.is_none()));
+    }
+
+    #[test]
+    fn default_immersion_and_open_pour_templates() {
+        let kinds = |m: &str| -> Vec<(BrewStepKind, Option<f32>, Option<u64>, StepAdvance)> {
+            default_recipe(m, "r", 0)
+                .steps
+                .iter()
+                .map(|s| (s.kind, s.target_water_g, s.duration_s, s.advance))
+                .collect()
+        };
+        use BrewStepKind as K;
+        use StepAdvance::{Auto, Manual};
+        assert_eq!(
+            kinds("aeropress"),
+            vec![
+                (K::Pour, Some(220.0), None, Auto),
+                (K::Stir, None, Some(10), Auto),
+                (K::Steep, None, Some(60), Auto),
+                (K::Press, None, Some(25), Auto),
+            ]
+        );
+        assert_eq!(
+            kinds("french_press"),
+            vec![
+                (K::Pour, Some(500.0), None, Auto),
+                (K::Steep, None, Some(240), Auto),
+                (K::Press, None, None, Manual),
+            ]
+        );
+        assert_eq!(
+            kinds("clever"),
+            vec![
+                (K::Pour, Some(300.0), None, Auto),
+                (K::Steep, None, Some(150), Auto),
+                (K::Drawdown, None, None, Manual),
+            ]
+        );
+        assert_eq!(
+            kinds("siphon"),
+            vec![
+                (K::Pour, Some(300.0), None, Auto),
+                (K::Steep, None, Some(90), Auto),
+                (K::Drawdown, None, None, Manual),
+            ]
+        );
+        // Espresso speaks yield: one pour to 36 g.
+        assert_eq!(kinds("espresso"), vec![(K::Pour, Some(36.0), None, Auto)]);
+        assert_eq!(kinds("cold_brew"), vec![(K::Pour, Some(700.0), None, Auto)]);
+        // Free text: the generic 15 g / 250 g fallback, no temp.
+        let free = default_recipe("karlsbad_kanne", "r", 0);
+        assert_eq!(
+            (free.dose_g, free.water_g, free.temp_c),
+            (15.0, 250.0, None)
+        );
+        assert_eq!(free.steps.len(), 1);
+    }
+
+    #[test]
+    fn default_recipe_json_is_a_brew_recipe() {
+        let json = default_recipe_json("moka", "recipe:m", 42);
+        let r: BrewRecipe = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, default_recipe("moka", "recipe:m", 42));
+        assert!(json.contains(r#""method":"moka""#), "{json}");
     }
 }

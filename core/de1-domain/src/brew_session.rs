@@ -33,6 +33,7 @@ use typeshare::typeshare;
 
 use crate::brew::{
     BrewRecipe, BrewSample, BrewSeries, BrewStep, BrewStepKind, StageMark, StepAdvance,
+    stage_mark_for,
 };
 
 /// Hard cap on recorded samples — ~18 minutes at the 4 Hz recording
@@ -228,11 +229,7 @@ impl BrewSessionMonitor {
         }
         self.started = Some(now);
         self.phase = BrewSessionPhase::Running;
-        self.stage_marks.push(StageMark {
-            elapsed_ms: 0,
-            step_index: 0,
-            target_water_g: self.recipe.steps[0].target_water_g,
-        });
+        self.stage_marks.push(stage_mark_for(&self.recipe, 0, 0));
         vec![
             BrewSessionEvent::Started,
             BrewSessionEvent::StepChanged { step_index: 0 },
@@ -430,11 +427,11 @@ impl BrewSessionMonitor {
         self.approach_cued = false;
         self.boundary_cued = false;
         self.target_met = false;
-        self.stage_marks.push(StageMark {
-            elapsed_ms: u64::try_from(self.step_started.as_millis()).unwrap_or(u64::MAX),
-            step_index: u64::try_from(self.step_index).unwrap_or(u64::MAX),
-            target_water_g: self.recipe.steps[self.step_index].target_water_g,
-        });
+        self.stage_marks.push(stage_mark_for(
+            &self.recipe,
+            u64::try_from(self.step_index).unwrap_or(u64::MAX),
+            u64::try_from(self.step_started.as_millis()).unwrap_or(u64::MAX),
+        ));
         vec![BrewSessionEvent::StepChanged {
             step_index: self.step_index,
         }]
