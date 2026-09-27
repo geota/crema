@@ -106,7 +106,7 @@ export function labelErrorText(error: CustomMethodLabelError | null | undefined)
 		case CustomMethodLabelError.TooLong:
 			return `Keep it to ${CUSTOM_METHOD_LABEL_MAX} characters.`;
 		case CustomMethodLabelError.Duplicate:
-			return 'You already have a method with that name.';
+			return 'That name is already taken by a method.';
 		default:
 			return null;
 	}

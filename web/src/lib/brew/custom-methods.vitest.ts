@@ -68,7 +68,7 @@ describe('custom brew methods', () => {
 		const orb = store.create(draft('ORB'))!;
 		expect(store.create(draft('orb'))).toBeNull();
 		expect(store.validate('orb', orb.id).error).toBeNull();
-		expect(labelErrorText(CustomMethodLabelError.Duplicate)).toMatch(/already/);
+		expect(labelErrorText(CustomMethodLabelError.Duplicate)).toMatch(/already taken/);
 		store.remove(orb.id);
 		expect(store.validate('ORB').error).toBeNull();
 	});
