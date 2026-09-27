@@ -8,7 +8,9 @@ import coffee.crema.core.StepAdvance
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.toCommonSettings
 import coffee.crema.settings.withCommonSettings
+import coffee.crema.core.Bean
 import coffee.crema.ui.brewlog.BrewCueDefaults
+import coffee.crema.ui.brewlog.GuidedBeanRules
 import coffee.crema.ui.brewlog.GuidedBrewSetup
 import coffee.crema.ui.brewlog.GuidedSetupRules
 import coffee.crema.ui.brewlog.LivePane
@@ -216,5 +218,53 @@ class GuidedBrewStateTest {
         assertFalse(GuidedSetupRules.holdsScreenOn(cold, 1))
         assertTrue(GuidedSetupRules.holdsScreenOn(recipe("a"), 0)) // a 45 s bloom
         assertTrue(GuidedSetupRules.holdsScreenOn(null, 0))
+    }
+
+    // ── Bean pick (issue #10 feedback) ──────────────────────────────────
+
+    private fun bag(id: String, remaining: Float? = 250f, archived: Long? = null, deleted: Long? = null) =
+        Bean(
+            id = id, name = id, metadata = kotlinx.serialization.json.JsonNull, createdAt = 0L, updatedAt = 0L,
+            remaining = remaining, archivedAt = archived, deletedAt = deleted,
+        )
+
+    private val bags = listOf(bag("active"), bag("other"), bag("old", archived = 5), bag("tomb", deleted = 9))
+
+    @Test fun beanPickDefaultsToTheActiveBagAndKeepsAChosenOne() {
+        assertEquals("active", GuidedBeanRules.resolve(null, bags, "active"))
+        assertEquals("other", GuidedBeanRules.resolve("other", bags, "active"))
+        assertNull(GuidedBeanRules.resolve(GuidedBeanRules.NO_BEAN, bags, "active"))
+    }
+
+    @Test fun anArchivedOrDeletedPickFallsBackToTheActiveBagElseNone() {
+        assertEquals("active", GuidedBeanRules.resolve("old", bags, "active"))
+        assertEquals("active", GuidedBeanRules.resolve("tomb", bags, "active"))
+        assertEquals("active", GuidedBeanRules.resolve("gone", bags, "active"))
+        assertNull(GuidedBeanRules.resolve("old", bags, null))
+        assertNull(GuidedBeanRules.resolve("gone", bags, "old")) // the active bag itself archived
+    }
+
+    @Test fun thePickerListsOnlyUsableBags() {
+        assertEquals(listOf("active", "other"), GuidedBeanRules.choices(bags).map { it.id })
+    }
+
+    @Test fun changingMethodOrRecipeKeepsTheChosenBean() {
+        val s = GuidedBrewSetup(method = "pourover", recipe = recipe("a"), methodChosen = true, beanPick = "other")
+        val otherMethod = GuidedSetupRules.resolve(s.copy(method = "aeropress", recipe = null), emptyList(), emptyMap(), null, template)
+        assertEquals("other", otherMethod.beanPick)
+        val edited = GuidedSetupRules.resolve(s, listOf(recipe("a", name = "Edited")), emptyMap(), null, template)
+        assertEquals("other", edited.beanPick)
+    }
+
+    @Test fun overdrawWarnsOnlyWhenTheDoseExceedsWhatIsLeft() {
+        assertTrue(GuidedBeanRules.overdraws(bag("b", remaining = 12f), 15.0))
+        assertFalse(GuidedBeanRules.overdraws(bag("b", remaining = 12f), 12.0))
+        assertFalse(GuidedBeanRules.overdraws(bag("b", remaining = 0f), 15.0)) // nothing recorded
+        assertFalse(GuidedBeanRules.overdraws(bag("b", remaining = null), 15.0))
+        assertFalse(GuidedBeanRules.overdraws(null, 15.0))
+        assertEquals(
+            "More than the 12 g left in this bag — saving floors the bag at zero.",
+            GuidedBeanRules.overdrawNote(bag("b", remaining = 12f)),
+        )
     }
 }

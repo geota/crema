@@ -13,7 +13,8 @@
 	 */
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
-	import { getBeanStore, type Bean, type Roaster } from '$lib/bean';
+	import { getBeanStore, type Roaster } from '$lib/bean';
+	import { openingBeanId } from '$lib/brew/bean-pick';
 	import {
 		INLINE_PRESET_COUNT,
 		OTHER_METHOD,
@@ -26,13 +27,14 @@
 		type LogBrewPrefill
 	} from '$lib/brew/methods';
 	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
-	import BeanPicker from '$lib/components/history/BeanPicker.svelte';
 	import StarRating from '$lib/components/common/StarRating.svelte';
 	import { toast } from '$lib/components/shared/toast.svelte';
 	import { promptBagEmpty } from '$lib/bean/bag-empty-prompt';
 	import { getHistoryStore } from '$lib/history/store.svelte';
 	import { snapshotFromBean, type StoredShot } from '$lib/history/model';
 	import { formatRatio } from '$lib/utils/ratio';
+	import BeanOverdrawNote from './BeanOverdrawNote.svelte';
+	import BrewBeanRow from './BrewBeanRow.svelte';
 	import MethodMark from './MethodMark.svelte';
 
 	let {
@@ -72,7 +74,9 @@
 
 	// ── Form state ────────────────────────────────────────────────────
 	const presets = brewMethodPresets();
-	let beanId = $state<string | null>(seed?.beanId ?? library.activeBeanId);
+	// A guided session's prefill names its bag explicitly — even `null`
+	// (No bean) — so it never falls back to the active one here.
+	let beanId = $state<string | null>(openingBeanId(seed, library.activeBeanId));
 	// The opening method is the core's call: prefill, then last-used,
 	// then pourover — resolved by the first seed pass below.
 	// svelte-ignore state_referenced_locally
@@ -82,7 +86,6 @@
 	let showAllMethods = $state(
 		!presets.slice(0, INLINE_PRESET_COUNT).some((p) => p.id === openingSeeds.method)
 	);
-	let pickingBean = $state(false);
 	let dose = $state(0);
 	let water = $state(0); // water-in for filter methods, yield-out for espresso
 	let grind = $state<number | null>(null);
@@ -105,9 +108,6 @@
 		return rid ? library.getRoaster(rid) : null;
 	});
 	const doseMissing = $derived(bean != null && !(dose > 0));
-	const overdraws = $derived(
-		bean != null && dose > 0 && bean.remaining > 0 && dose > bean.remaining + 0.05
-	);
 	const ratio = $derived(formatRatio(dose > 0 ? dose : null, water > 0 ? water : null));
 
 	// Seed the numeric fields for the opening method (later re-seeds run
@@ -285,24 +285,7 @@
 			/>
 		{/if}
 
-		<button type="button" class="bl-bean" onclick={() => (pickingBean = true)}>
-			<div class="bl-bean-main">
-				<span class="bl-label">Bean</span>
-				{#if bean}
-					<span class="bl-bean-name">
-						{roaster ? `${roaster.name} · ` : ''}{bean.name}
-					</span>
-				{:else}
-					<span class="bl-bean-name bl-bean-none">No bean — inventory untouched</span>
-				{/if}
-			</div>
-			<span class="bl-bean-side">
-				{#if bean}
-					<span class="bl-bean-left">{Math.max(0, Math.round(bean.remaining))} g left</span>
-				{/if}
-				<span aria-hidden="true">▾</span>
-			</span>
-		</button>
+		<BrewBeanRow {beanId} onPick={(id) => (beanId = id)} />
 
 		<div class="bl-grid">
 			<div class="bl-cell" class:is-invalid={attempted && doseMissing}>
@@ -380,12 +363,7 @@
 			</label>
 		</div>
 
-		{#if overdraws}
-			<div class="bl-warn">
-				More than the {Math.max(0, Math.round(bean?.remaining ?? 0))} g left in this bag —
-				saving floors the bag at zero.
-			</div>
-		{/if}
+		<BeanOverdrawNote {bean} {dose} />
 
 		<div class="bl-journal-row">
 			<button
@@ -430,20 +408,6 @@
 	</footer>
 </div>
 
-{#if pickingBean}
-	<BeanPicker
-		currentBeanId={beanId}
-		onPick={(b: Bean) => {
-			beanId = b.id;
-			pickingBean = false;
-		}}
-		onClear={() => {
-			beanId = null;
-			pickingBean = false;
-		}}
-		onClose={() => (pickingBean = false)}
-	/>
-{/if}
 
 <style>
 	.bl-scrim {
@@ -543,53 +507,6 @@
 	.bl-chip-more {
 		color: rgba(var(--tint-rgb), 0.6);
 	}
-	.bl-bean {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		background: rgba(var(--tint-rgb), 0.04);
-		border: 1px solid rgba(var(--tint-rgb), 0.12);
-		border-radius: var(--radius-sm);
-		padding: 8px 12px;
-		cursor: pointer;
-		text-align: left;
-		color: var(--fg-1);
-	}
-	.bl-bean:hover {
-		border-color: var(--copper-400);
-	}
-	.bl-bean-main {
-		display: flex;
-		flex-direction: column;
-		gap: 3px;
-		min-width: 0;
-	}
-	.bl-bean-name {
-		font-family: var(--font-sans);
-		font-size: 13.5px;
-		font-weight: 600;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-	.bl-bean-none {
-		font-weight: 400;
-		color: rgba(var(--tint-rgb), 0.55);
-	}
-	.bl-bean-side {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		color: rgba(var(--tint-rgb), 0.55);
-		font-size: 12px;
-		flex: none;
-	}
-	.bl-bean-left {
-		font-family: var(--font-mono);
-		font-variant-numeric: tabular-nums;
-		font-size: 11.5px;
-	}
 	.bl-grid {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
@@ -644,16 +561,6 @@
 	.bl-area {
 		resize: vertical;
 		min-height: 40px;
-	}
-	.bl-warn {
-		font-family: var(--font-sans);
-		font-size: 11.5px;
-		color: var(--warning);
-		background: rgba(var(--tint-rgb), 0.04);
-		border: 1px solid rgba(var(--tint-rgb), 0.06);
-		border-radius: var(--radius-sm);
-		padding: 7px 10px;
-		line-height: 1.4;
 	}
 	.bl-journal-row {
 		display: flex;

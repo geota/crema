@@ -146,7 +146,9 @@ object BrewLogSeeds {
      * A fresh draft. The opening method is the core's call: a "Log again"
      * [prefill]'s / guided session's method, else [lastUsedMethod], else
      * pourover. [prefillBeanId] (the bean-detail door) wins over the active
-     * bag. [grinderOf] resolves a bag's own grinder setting.
+     * bag. [grinderOf] resolves a bag's own grinder setting. A guided
+     * session passes the setup's bag as [guidedBeanId] — explicitly, so its
+     * "No bean" (null) doesn't fall back to the active bag.
      */
     fun open(
         owner: String,
@@ -163,9 +165,10 @@ object BrewLogSeeds {
         guidedDurationMs: Long? = null,
         guidedRecipeName: String? = null,
         guidedSeries: BrewSeries? = null,
+        guidedBeanId: String? = activeBeanId,
         seedsJson: (String) -> String = ::brewLogSeedsJson,
     ): BrewLogDraft {
-        val beanId = prefillBeanId ?: prefill?.bean?.beanId ?: activeBeanId
+        val beanId = if (guidedMethod != null) guidedBeanId else prefillBeanId ?: prefill?.bean?.beanId ?: activeBeanId
         val corePrefill = when {
             guidedMethod != null -> BrewLogPrefill(
                 method = guidedMethod,

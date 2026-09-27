@@ -1391,6 +1391,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setGuidedStartOnPour(on: Boolean) = _guidedSetup.update { it.copy(startOnPour = on) }
 
+    /**
+     * The setup's bean picker: a bag id or [coffee.crema.ui.brewlog.GuidedBeanRules.NO_BEAN].
+     * Setup-only — the app's active bag is untouched (the log form's rule too).
+     */
+    fun selectGuidedBean(key: String) = _guidedSetup.update { it.copy(beanPick = key) }
+
+    /** The bag the guided brew will debit — the setup's pick, else the active bag. */
+    fun guidedBeanId(st: MainUiState = _ui.value): String? =
+        coffee.crema.ui.brewlog.GuidedBeanRules.resolve(_guidedSetup.value.beanPick, st.beans, st.activeBeanId)
+
 
     /**
      * The open recipe editor's working copy, or null. VM-held so edits
@@ -1466,6 +1476,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // A scale-less session records stage marks but no weight: the
             // row saves without a series (spec §8), like a manual log.
             guidedSeries = summary?.series?.takeIf { it.samples.isNotEmpty() },
+            // The setup's bag, not the active one; still changeable in the form.
+            guidedBeanId = guidedBeanId(s),
         )
     }
 

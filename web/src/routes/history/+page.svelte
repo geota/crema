@@ -438,7 +438,8 @@
 	function logAgain(shot: StoredShot): void {
 		logBrewPrefill = {
 			method: methodOf(shot) ?? 'espresso',
-			beanId: shot.bean?.beanId ?? null,
+			// No bag on the prior brew → the form opens on the active bag.
+			beanId: shot.bean?.beanId ?? undefined,
 			dose: shot.metadata.dose ?? null,
 			waterG: shot.metadata.waterG ?? null,
 			yieldOut: shot.metadata.yieldOut ?? null,

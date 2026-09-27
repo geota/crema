@@ -163,4 +163,22 @@ class BrewLogDraftTest {
         assertEquals(251f, pour.waterG)
         assertNull(pour.yieldG)
     }
+
+    @Test fun aGuidedPrefillCarriesTheSetupBagNotTheActiveOne() {
+        val core = FakeCore(seeds("pourover", 15f, 250f))
+        val d = BrewLogSeeds.open(
+            BrewLogOwner.SCALE, emptyList(), activeBeanId = "active",
+            guidedMethod = "pourover", guidedDoseG = 15f, guidedBeanId = "other", seedsJson = core::call,
+        )
+        assertEquals("other", d.beanId)
+        assertEquals("other", core.inputs.single().beanId)
+        // "No bean" from the setup stays no bean — no fallback to the active bag.
+        val none = BrewLogSeeds.open(
+            BrewLogOwner.SCALE, emptyList(), activeBeanId = "active",
+            guidedMethod = "pourover", guidedBeanId = null, seedsJson = FakeCore(seeds("pourover", 15f, 250f))::call,
+        )
+        assertNull(none.beanId)
+        // Other doors still open on the active bag.
+        assertEquals("active", BrewLogSeeds.open(BrewLogOwner.HISTORY, emptyList(), activeBeanId = "active", seedsJson = core::call).beanId)
+    }
 }
