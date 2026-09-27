@@ -39,6 +39,13 @@ import androidx.compose.runtime.setValue
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentType
@@ -1824,6 +1831,22 @@ private val cremaRailItems = listOf(
     RailItem("settings", "gear-six", "Settings"),
 )
 
+/** How densely the rail lays out, picked from the rail's measured height. */
+enum class RailDensity { Regular, Compact }
+
+/**
+ * Rails shorter than this (dp) get the [RailDensity.Compact] layout. The regular
+ * rail (wordmark + six labelled 56dp items + two stacked pips + M3 padding) needs
+ * ≈535dp, so anything shorter would scroll Scale / Settings out of view: a phone
+ * in landscape (≈360–430dp) is the case that bit. 560 leaves a little headroom;
+ * a 7" tablet in landscape (≈600dp) and taller keep the regular rail.
+ */
+const val COMPACT_RAIL_BELOW_DP = 560f
+
+/** Pure density decision for a rail of [heightDp] (JVM-tested in RailDensityTest). */
+fun railDensity(heightDp: Float): RailDensity =
+    if (heightDp < COMPACT_RAIL_BELOW_DP) RailDensity.Compact else RailDensity.Regular
+
 @Composable
 fun CremaNavigationRail(
     active: String,
@@ -1832,7 +1855,28 @@ fun CremaNavigationRail(
     scaleConnected: Boolean = true,
     onConnect: (String) -> Unit = {},
 ) {
+    // Size by the rail's own measured height (not screenHeightDp) so split-screen,
+    // freeform windows and a landscape phone all get the layout that fits.
+    BoxWithConstraints(Modifier.fillMaxHeight()) {
+        val density = if (constraints.hasBoundedHeight) railDensity(maxHeight.value) else RailDensity.Regular
+        when (density) {
+            RailDensity.Regular -> RegularRail(active, onNav, machineConnected, scaleConnected, onConnect)
+            RailDensity.Compact -> CompactRail(active, onNav, machineConnected, scaleConnected, onConnect)
+        }
+    }
+}
+
+@Composable
+private fun RegularRail(
+    active: String,
+    onNav: (String) -> Unit,
+    machineConnected: Boolean,
+    scaleConnected: Boolean,
+    onConnect: (String) -> Unit,
+) {
+    val containerColor = NavigationRailDefaults.ContainerColor
     NavigationRail(
+        containerColor = containerColor,
         header = {
             // Brand "C" mark — the PWA favicon's Newsreader-500 glyph baked into a
             // vector (R.drawable.ic_crema_logo) so it's font-independent + identical
@@ -1844,11 +1888,12 @@ fun CremaNavigationRail(
             )
         },
     ) {
-        // The nav items scroll when the rail is short (7" landscape ≈ 600dp tall)
-        // so they never push the connection pips off the bottom edge (which clipped
-        // the "SCALE" pip). The pips below stay pinned + always visible.
+        // The nav items scroll if the rail is ever too short for them, so they never
+        // push the connection pips off the bottom edge; a bottom fade shows there's
+        // more. Short rails normally get CompactRail instead. The pips stay pinned.
+        val scroll = rememberScrollState()
         Column(
-            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            modifier = Modifier.weight(1f).railBottomFade(scroll, containerColor).verticalScroll(scroll),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.height(8.dp))
@@ -1875,6 +1920,93 @@ fun CremaNavigationRail(
     }
 }
 
+/*
+ * Compact rail for short windows (a phone in landscape): no wordmark, icon-only
+ * 48dp items (the label is the item's accessible name), and the two pips side by
+ * side in one 48dp row, so the rail's content is 96dp wide. Six items + the pip row need
+ * 4 + 6×48 + 48 + 4 = 344dp, so everything fits without scrolling from ≈344dp
+ * up; below that the items scroll behind a bottom fade and the pips stay put.
+ */
+@Composable
+private fun CompactRail(
+    active: String,
+    onNav: (String) -> Unit,
+    machineConnected: Boolean,
+    scaleConnected: Boolean,
+    onConnect: (String) -> Unit,
+) {
+    val containerColor = NavigationRailDefaults.ContainerColor
+    // No fixed width: the rail wraps its content (the 96dp pip row) plus any start
+    // inset (a landscape phone's camera cutout), so both pips always fit.
+    NavigationRail(containerColor = containerColor) {
+        // One child, so the rail's own 4dp item spacing doesn't eat the budget.
+        Column(Modifier.fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+            val scroll = rememberScrollState()
+            Column(
+                modifier = Modifier.weight(1f).railBottomFade(scroll, containerColor).verticalScroll(scroll),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                cremaRailItems.forEach { item ->
+                    CompactRailItem(item, selected = active == item.id) { onNav(item.id) }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.Center) {
+                ConnectionPip("DE1", machineConnected, compact = true) { onConnect("machine") }
+                ConnectionPip("Scale", scaleConnected, compact = true) { onConnect("scale") }
+            }
+        }
+    }
+}
+
+// Icon-only rail item: 64×48dp touch target (≥48dp), the M3 active pill (48×32)
+// behind a 20dp icon, the label as the accessible name, Tab role + selected state.
+@Composable
+private fun CompactRailItem(item: RailItem, selected: Boolean, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Box(
+        Modifier
+            .size(width = 64.dp, height = 48.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .semantics(mergeDescendants = true) { contentDescription = item.label }
+            .selectable(selected = selected, onClick = onClick, role = Role.Tab),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(width = 48.dp, height = 32.dp)
+                .clip(CircleShape)
+                .background(if (selected) scheme.secondaryContainer else Color.Transparent),
+            contentAlignment = Alignment.Center,
+        ) {
+            PhIcon(
+                item.icon,
+                sizeDp = 20,
+                tint = if (selected) scheme.onSecondaryContainer else scheme.onSurfaceVariant,
+                contentDescription = null,
+            )
+        }
+    }
+}
+
+// Bottom-edge fade over a scrolling rail column, drawn only while there's more
+// below — the affordance that the column scrolls. Apply before verticalScroll so
+// it draws in viewport coordinates.
+private fun Modifier.railBottomFade(scroll: ScrollState, color: Color): Modifier = drawWithContent {
+    drawContent()
+    if (scroll.canScrollForward) {
+        val h = 32.dp.toPx().coerceAtMost(size.height)
+        drawRect(
+            brush = Brush.verticalGradient(
+                listOf(color.copy(alpha = 0f), color),
+                startY = size.height - h,
+                endY = size.height,
+            ),
+            topLeft = Offset(0f, size.height - h),
+            size = Size(size.width, h),
+        )
+    }
+}
+
 // Rail connection status (proto .m3-rail-status): a 56dp-wide VERTICAL column —
 // status dot ABOVE a 9sp uppercase label — that connects/disconnects on tap.
 // Connected = green success dot inside a soft glow ring (proto box-shadow
@@ -1883,7 +2015,7 @@ fun CremaNavigationRail(
 // .m3-rail-status-cta, shown via `:not(.is-connected)`); Android has no hover,
 // so show-when-disconnected is the faithful mapping of that rule.
 @Composable
-private fun ConnectionPip(label: String, connected: Boolean, onClick: () -> Unit) {
+private fun ConnectionPip(label: String, connected: Boolean, compact: Boolean = false, onClick: () -> Unit) {
     val tel = CremaTheme.telemetry
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -1896,7 +2028,7 @@ private fun ConnectionPip(label: String, connected: Boolean, onClick: () -> Unit
     val showCheck = connected && (hovered || pressed)
     Column(
         modifier = Modifier
-            .width(56.dp)
+            .width(if (compact) 48.dp else 56.dp)
             .heightIn(min = 48.dp) // M3 min touch target — this pip is the connect/disconnect control
             .clip(RoundedCornerShape(8.dp))
             // Ripple feedback (the app default indication) so a tap visibly
@@ -1926,7 +2058,7 @@ private fun ConnectionPip(label: String, connected: Boolean, onClick: () -> Unit
             }
             if (cta != null) {
                 Box(
-                    Modifier.align(Alignment.CenterEnd).padding(end = 6.dp).size(14.dp)
+                    Modifier.align(Alignment.CenterEnd).padding(end = if (compact) 2.dp else 6.dp).size(14.dp)
                         .clip(CircleShape).background(MaterialTheme.colorScheme.primary),
                     contentAlignment = Alignment.Center,
                 ) {
