@@ -155,6 +155,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Android backups keep brew details** — a backup made on Android dropped
+  each brew's method, recipe name, water, temperature, next-time plan and
+  guided weight curve; they now survive backup and restore.
+
 - Guided brews let you choose the bean before you start (issue #10 feedback)
 
 ### Security
