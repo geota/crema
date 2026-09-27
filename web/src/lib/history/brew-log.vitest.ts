@@ -112,8 +112,9 @@ describe('core-backed brew-log rules', () => {
 		lib.upsertBean({ ...coerceBean({ id: 'b1', name: 'House' })!, bagSize: 250, remaining: 250 });
 		lib.resettleBean('b1', 18, 18);
 		expect(lib.getBean('b1')?.remaining).toBe(250);
+		// Only the net +2 g comes off; the old full-credit-then-debit lost 18 g.
 		lib.resettleBean('b1', 18, 20);
-		expect(lib.getBean('b1')?.remaining).toBe(230);
+		expect(lib.getBean('b1')?.remaining).toBe(248);
 	});
 
 	it('brews_remaining_estimate uses the bag’s own mean dose', () => {

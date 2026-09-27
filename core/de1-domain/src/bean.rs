@@ -595,17 +595,18 @@ pub fn credit_remaining(remaining: f32, dose_g: f32, bag_size: f32) -> Option<f3
     if next == remaining { None } else { Some(next) }
 }
 
-/// Re-settle a bag when a logged brew's dose is edited after the fact: the
-/// OLD dose goes back on the bag ([`credit_remaining`], capped at
-/// `bag_size`), then the NEW dose comes off ([`debit_remaining`], floored at
-/// 0). A non-positive / non-finite dose means "no dose" (nothing to credit or
-/// debit on that side).
+/// Re-settle a bag when a logged brew's dose is edited after the fact. Only
+/// the NET change moves: a bigger dose debits the difference
+/// ([`debit_remaining`], floored at 0), a smaller one credits the difference
+/// back ([`credit_remaining`], capped at `bag_size`). Crediting the whole old
+/// dose first and then debiting the new one would lose grams on a full bag —
+/// the capped credit swallows part of the old dose. A non-positive /
+/// non-finite dose means "no dose" (0 g on that side).
 ///
-/// Returns `None` when there is nothing to persist: the dose did not change
-/// (so a full bag never loses grams to a capped credit followed by a real
-/// debit), `remaining` is non-finite / negative, or the credit + debit nets
-/// out to the current value. Callers persist (and touch `updated_at`) only on
-/// `Some`.
+/// Returns `None` when there is nothing to persist: the dose did not change,
+/// `remaining` is non-finite / negative, or the adjustment nets out to the
+/// current value (a credit onto an already-full bag). Callers persist (and
+/// touch `updated_at`) only on `Some`.
 #[must_use]
 pub fn resettle_remaining(
     remaining: f32,
@@ -618,13 +619,12 @@ pub fn resettle_remaining(
     if (old - new).abs() < f32::EPSILON || !remaining.is_finite() || remaining < 0.0 {
         return None;
     }
-    let mut rem = remaining;
-    if let Some(credited) = credit_remaining(rem, old, bag_size) {
-        rem = credited;
-    }
-    if let Some(debited) = debit_remaining(rem, new) {
-        rem = debited;
-    }
+    let delta = new - old;
+    let rem = if delta > 0.0 {
+        debit_remaining(remaining, delta)
+    } else {
+        credit_remaining(remaining, -delta, bag_size)
+    }?;
     if (rem - remaining).abs() < f32::EPSILON {
         None
     } else {
@@ -1480,8 +1480,10 @@ mod tests {
 
     #[test]
     fn resettle_keeps_the_floor_and_the_bag_size_cap() {
-        // Credit capped at the bag size (refilled since), then the debit.
-        assert_eq!(resettle_remaining(245.0, 250.0, 18.0, 20.0), Some(230.0));
+        // Only the net change moves: +2 g off a near-full bag.
+        assert_eq!(resettle_remaining(245.0, 250.0, 18.0, 20.0), Some(243.0));
+        // A smaller dose credits the difference, capped at the bag size.
+        assert_eq!(resettle_remaining(245.0, 250.0, 20.0, 10.0), Some(250.0));
         // Debit floors at 0.
         assert_eq!(resettle_remaining(5.0, 250.0, 10.0, 40.0), Some(0.0));
         // Untracked size: no cap.
@@ -1492,6 +1494,14 @@ mod tests {
         // Bad remaining.
         assert_eq!(resettle_remaining(f32::NAN, 250.0, 18.0, 20.0), None);
         assert_eq!(resettle_remaining(-1.0, 250.0, 18.0, 20.0), None);
+    }
+
+    #[test]
+    fn resettle_round_trip_on_a_full_bag_loses_nothing() {
+        // +0.5 g then back: the bag ends where it started, not 15 g lighter.
+        let up = resettle_remaining(250.0, 250.0, 15.0, 15.5).unwrap();
+        assert!((up - 249.5).abs() < 1e-4);
+        assert_eq!(resettle_remaining(up, 250.0, 15.5, 15.0), Some(250.0));
     }
 
     // ── brews_remaining_estimate ("≈N brews left") ────────────────────
