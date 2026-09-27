@@ -94,4 +94,40 @@ class BackupRoundTripTest {
         val parsed = parseBackupRecords(line("profile", buildJsonObject { put("id", "p1") }), json, 0L)
         assertFalse(parsed.sawHeader)
     }
+
+    @Test
+    fun `recipe lines restore with their credit and recipeMeta rides along`() {
+        val recipe = buildJsonObject {
+            put("id", "recipe:copy")
+            put("name", "1 Cup V60 (copy)")
+            put("method", "pourover")
+            put("doseG", 15.0)
+            put("waterG", 250.0)
+            put("tempC", 100.0)
+            put("steps", buildJsonArray { })
+            put("notes", kotlinx.serialization.json.JsonNull)
+            put("favourite", false)
+            put("createdAt", 1)
+            put("updatedAt", 1)
+            put("deletedAt", kotlinx.serialization.json.JsonNull)
+            put("credit", "Adapted from James Hoffmann — A Better 1 Cup V60 Technique (2022)")
+            put("sourceUrl", "https://www.youtube.com/watch?v=1oB1oDrDkHM")
+        }
+        val bundle = listOf(
+            line("crema-backup/v1"),
+            line("recipe", recipe),
+            line("recipeMeta", buildJsonObject {
+                put("defaults", buildJsonObject { put("pourover", "recipe:copy") })
+                put("hiddenBuiltins", buildJsonArray { })
+            }),
+        ).joinToString("\n")
+        val parsed = parseBackupRecords(bundle, json, 0L)
+        assertEquals(1, parsed.recipes.size)
+        val r = parsed.recipes.first()
+        assertEquals("Adapted from James Hoffmann — A Better 1 Cup V60 Technique (2022)", r.credit)
+        assertEquals("https://www.youtube.com/watch?v=1oB1oDrDkHM", r.sourceUrl)
+        assertNotNull(parsed.recipeMeta)
+        // A bundle from before recipes were backed up restores none.
+        assertTrue(parseBackupRecords(line("crema-backup/v1"), json, 0L).recipes.isEmpty())
+    }
 }

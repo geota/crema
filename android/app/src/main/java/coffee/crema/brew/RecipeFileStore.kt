@@ -11,14 +11,17 @@ import java.io.File
 /**
  * File-backed JSON persistence for the guided-brew recipe library
  * (issue #10) — `filesDir/brew-recipes.json`, the same pattern as the
- * bean library and shot log. Carries the recipes plus the per-method
- * last-used pointer in one envelope.
+ * bean library and shot log. Carries the user's recipes, the per-method
+ * default pointer and the hidden built-in ids in one envelope. Built-in
+ * recipes are bundled with the app and never written here.
  */
 class RecipeFileStore(private val context: Context, private val json: Json) {
     @Serializable
     data class Envelope(
         val recipes: List<BrewRecipe> = emptyList(),
         val lastUsedByMethod: Map<String, String> = emptyMap(),
+        /** Built-in recipe ids the user hid from the library + picker. */
+        val hiddenBuiltins: Set<String> = emptySet(),
     )
 
     private val file get() = File(context.filesDir, FILE_NAME)

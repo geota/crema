@@ -103,6 +103,9 @@ class LibraryController(
     private val liveMachine: () -> ShotMachine?,
     /** Push a just-recorded shot to every armed destination, one notice for the batch ([SharingController.autoUpload]). */
     private val autoUploadShot: (shot: StoredShot, fullSamples: List<TelemetrySample>?) -> Unit,
+    /** Merge restored brew recipes + their organisation into the VM-owned
+     *  recipe store (WIPE replaces); returns how many recipes were added. */
+    private val applyRestoredRecipes: (recipes: List<coffee.crema.core.BrewRecipe>, meta: JsonObject?, wipe: Boolean) -> Int = { _, _, _ -> 0 },
     /** Read the live UI snapshot (library rows, active ids, live-shot state). */
     private val uiState: () -> MainUiState,
     /** Synchronously update the UI snapshot (the VM's `_ui.update`). */
@@ -858,8 +861,12 @@ class LibraryController(
         // even with no custom profiles / beans / shots. Match web's
         // `settingsAreDefault` gate so the same app state gives the same answer on
         // both shells (issue 06 F2; web previously said "back up", Android "nothing").
-        val noData = customs.isEmpty() && s.beans.isEmpty() && s.roasters.isEmpty() && s.history.isEmpty()
-        val noProfileOrg = pinnedIds.isEmpty() && hiddenIds.isEmpty()
+        // Brew recipes: the user's own + copies only — built-ins are bundled.
+        val userRecipes = s.brewRecipes.filterNot { r -> s.builtinRecipes.any { it.id == r.id } }
+        val noData = customs.isEmpty() && s.beans.isEmpty() && s.roasters.isEmpty() && s.history.isEmpty() &&
+            userRecipes.isEmpty()
+        val noProfileOrg = pinnedIds.isEmpty() && hiddenIds.isEmpty() &&
+            s.lastRecipeByMethod.isEmpty() && s.hiddenBuiltinRecipes.isEmpty()
         val settingsDefault =
             currentPrefs().toCommonSettings() == AppPrefs().toCommonSettings() && currentPrefs().qcGrind == null
         if (noData && noProfileOrg && settingsDefault) {
@@ -913,6 +920,20 @@ class LibraryController(
                 ),
             ),
         )
+        val recipesJson = runCatching {
+            json.encodeToString(ListSerializer(coffee.crema.core.BrewRecipe.serializer()), userRecipes)
+        }.getOrElse { "[]" }
+        // Recipe organisation — default pointers (may name built-ins) + hidden
+        // built-in ids, cross-shell like profileMeta.
+        val recipeMetaJson = json.encodeToString(
+            JsonObject.serializer(),
+            JsonObject(
+                mapOf(
+                    "defaults" to JsonObject(s.lastRecipeByMethod.mapValues { JsonPrimitive(it.value) }),
+                    "hiddenBuiltins" to JsonArray(s.hiddenBuiltinRecipes.map { JsonPrimitive(it) }),
+                ),
+            ),
+        )
         val maintenanceJson = runCatching { json.encodeToString(MaintenanceState.serializer(), s.maintenance) }.getOrElse { "{}" }
         val visualizerPrefsJson = runCatching {
             json.encodeToString(VisualizerSyncPrefs.serializer(), visualizer.backupPrefs())
@@ -929,6 +950,8 @@ class LibraryController(
             put("shots", json.parseToJsonElement(shotsJson))
             put("settings", json.parseToJsonElement(settingsJson))
             put("profileMeta", json.parseToJsonElement(profileMetaJson))
+            put("recipes", json.parseToJsonElement(recipesJson))
+            put("recipeMeta", json.parseToJsonElement(recipeMetaJson))
             put("maintenance", json.parseToJsonElement(maintenanceJson))
             put("visualizerPrefs", json.parseToJsonElement(visualizerPrefsJson))
         }.toString()
@@ -1078,10 +1101,12 @@ class LibraryController(
             // token (re-auth after restore). Reseed the live water integrator.
             restoredMaintenance?.let { applyRestoredMaintenance(it) }
             restoredVisualizerPrefs?.let { visualizer.restorePrefs(it) }
+            val newRecipes = applyRestoredRecipes(parsed.recipes, parsed.recipeMeta, mode == MainViewModel.RestoreMode.WIPE)
 
             notify(
                 "Restored ${newProfiles.size} profile(s) · ${newBeans.size} bean(s) · " +
-                    "${newRoasters.size} roaster(s) · ${newShots.size} shot(s)",
+                    "${newRoasters.size} roaster(s) · ${newShots.size} shot(s)" +
+                    if (newRecipes > 0) " · $newRecipes recipe(s)" else "",
             )
         }
     }

@@ -132,8 +132,9 @@ class GuidedBrewStateTest {
 
     @Test fun anEditedRecipeOnlyBecomesTheDefaultWhenTheMethodHasNone() {
         // Drift bug 11 (the rule web now shares).
-        assertTrue(GuidedSetupRules.becomesDefaultOnSave("aeropress", mapOf("pourover" to "p")))
-        assertFalse(GuidedSetupRules.becomesDefaultOnSave("pourover", mapOf("pourover" to "p")))
+        val noBuiltin: (String) -> String? = { null }
+        assertTrue(coffee.crema.brew.RecipeLibraryRules.becomesDefaultOnSave("aeropress", mapOf("pourover" to "p"), noBuiltin))
+        assertFalse(coffee.crema.brew.RecipeLibraryRules.becomesDefaultOnSave("pourover", mapOf("pourover" to "p"), noBuiltin))
     }
 
     // ── Recipe editor draft ─────────────────────────────────────────────

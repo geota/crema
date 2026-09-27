@@ -35,6 +35,11 @@ data class ParsedBackup(
     val maintenance: MaintenanceState?,
     val visualizerPrefs: VisualizerSyncPrefs?,
     val sawHeader: Boolean,
+    /** The user's brew recipes (built-ins are never in a bundle; any that is
+     *  is skipped by the caller against the catalogue). */
+    val recipes: List<coffee.crema.core.BrewRecipe> = emptyList(),
+    /** Recipe organisation: `{ defaults:{method:id}, hiddenBuiltins:[ids] }`. */
+    val recipeMeta: JsonObject? = null,
 )
 
 /**
@@ -58,6 +63,8 @@ fun parseBackupRecords(text: String, json: Json, nowMs: Long): ParsedBackup {
     var profileMeta: JsonObject? = null
     var maintenance: MaintenanceState? = null
     var visualizerPrefs: VisualizerSyncPrefs? = null
+    val recipes = ArrayList<coffee.crema.core.BrewRecipe>()
+    var recipeMeta: JsonObject? = null
     var sawHeader = false
     for (raw in text.lineSequence()) {
         val line = raw.trim()
@@ -91,6 +98,10 @@ fun parseBackupRecords(text: String, json: Json, nowMs: Long): ParsedBackup {
             // MissingFieldException'd and silently dropped them) (issue 01).
             "shot" -> storedShotFromBackupJson(obj, json)?.let(shots::add)
             "profile" -> profiles.add(stripKind(json, obj))
+            "recipe" -> runCatching {
+                json.decodeFromString(coffee.crema.core.BrewRecipe.serializer(), stripKind(json, obj))
+            }.getOrNull()?.let(recipes::add)
+            "recipeMeta" -> recipeMeta = obj
             else -> {}
         }
     }
@@ -106,6 +117,8 @@ fun parseBackupRecords(text: String, json: Json, nowMs: Long): ParsedBackup {
         maintenance = maintenance,
         visualizerPrefs = visualizerPrefs,
         sawHeader = sawHeader,
+        recipes = recipes,
+        recipeMeta = recipeMeta,
     )
 }
 

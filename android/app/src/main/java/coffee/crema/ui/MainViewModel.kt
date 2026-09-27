@@ -584,8 +584,12 @@ data class MainUiState(
     val guidedBrew: GuidedBrewUi = GuidedBrewUi(),
     /** The guided-brew recipe library (tombstones filtered on read). */
     val brewRecipes: List<coffee.crema.core.BrewRecipe> = emptyList(),
-    /** Per-method last-used recipe pointer (method → recipe id). */
+    /** Per-method default recipe pointer (method → recipe id; may name a built-in). */
     val lastRecipeByMethod: Map<String, String> = emptyMap(),
+    /** The bundled, credited, read-only built-in recipes (core catalogue). */
+    val builtinRecipes: List<coffee.crema.core.BrewRecipe> = emptyList(),
+    /** Built-in recipe ids hidden from the library + picker. */
+    val hiddenBuiltinRecipes: Set<String> = emptySet(),
     /**
      * Queued user-facing feedback lines (imports, exports, blocked actions).
      * MainActivity surfaces them as snackbars, dequeuing via
@@ -1126,6 +1130,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         visualizer = visualizer,
         liveMachine = { sharing.liveMachine() },
         autoUploadShot = { shot, fullSamples -> sharing.autoUpload(shot, fullSamples) },
+        applyRestoredRecipes = { recipes, meta, wipe -> applyRestoredRecipes(recipes, meta, wipe) },
         uiState = { _ui.value },
         updateUi = { transform -> _ui.update(transform) },
         notify = { notifyUser(it) },
@@ -1170,8 +1175,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     init {
         // Seed the recipe library from disk — cheap (a handful of rows).
         viewModelScope.launch {
-            val env = recipeStore.load()
-            _ui.update { it.copy(brewRecipes = env.recipes, lastRecipeByMethod = env.lastUsedByMethod) }
+            val loaded = recipeStore.load()
+            // One-time clean-up: untouched legacy "… classic" starters go,
+            // their default pointers move to the method's built-in.
+            val migrated = coffee.crema.brew.RecipeLibraryRules.migrate(loaded)
+            if (migrated != null) recipeStore.save(migrated)
+            val env = migrated ?: loaded
+            _ui.update {
+                it.copy(
+                    brewRecipes = env.recipes,
+                    lastRecipeByMethod = env.lastUsedByMethod,
+                    hiddenBuiltinRecipes = env.hiddenBuiltins,
+                    builtinRecipes = coffee.crema.brew.BUILTIN_BREW_RECIPES,
+                )
+            }
             resolveGuidedSetup()
         }
     }
@@ -1283,27 +1300,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Clone [id] into a sibling recipe ("<name> copy", fresh id) and persist
-     * it — the Profiles screen's Duplicate door, which is how a method grows
-     * a second recipe. Returns the copy so the caller can open the editor.
+     * Clone [id] (a user recipe or a built-in) into an editable copy — the
+     * core's `duplicate_recipe`: fresh id, "<name> (copy)", credit "Adapted
+     * from …" — and persist it. The Profiles Duplicate / "Duplicate to edit"
+     * door. Returns the copy so the caller can open the editor.
      */
     fun duplicateBrewRecipe(id: String): coffee.crema.core.BrewRecipe? {
-        val base = _ui.value.brewRecipes.firstOrNull { it.id == id && it.deletedAt == null } ?: return null
-        val now = System.currentTimeMillis()
-        val copy = base.copy(
-            id = coffee.crema.core.newRecipeId(),
-            name = "${base.name} copy",
-            favourite = false,
-            createdAt = now,
-            updatedAt = now,
-        )
+        val st = _ui.value
+        val base = coffee.crema.brew.RecipeLibraryRules.find(id, st.brewRecipes, st.builtinRecipes) ?: return null
+        val copy = runCatching {
+            coffee.crema.brew.RecipeLibraryRules.duplicate(base, coffee.crema.core.newRecipeId(), System.currentTimeMillis())
+        }.getOrNull() ?: return null
         _ui.update { it.copy(brewRecipes = it.brewRecipes + copy) }
         persistRecipes()
         return copy
     }
 
-    /** Tombstone a recipe and drop any last-used pointer at it. */
+    /** Whether [id] is a built-in (read-only) recipe. */
+    fun isBuiltinRecipe(id: String): Boolean =
+        coffee.crema.brew.RecipeLibraryRules.isBuiltin(id, _ui.value.builtinRecipes)
+
+    /** Tombstone a user recipe and drop any default pointer at it. Built-ins can't be deleted. */
     fun deleteBrewRecipe(id: String) {
+        if (isBuiltinRecipe(id)) return
         val now = System.currentTimeMillis()
         _ui.update { st ->
             st.copy(
@@ -1312,10 +1331,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         persistRecipes()
+        resolveGuidedSetup()
+    }
+
+    /** Hide (true) or restore (false) a built-in recipe in the library + picker. */
+    fun setBuiltinRecipeHidden(id: String, hidden: Boolean) {
+        if (!isBuiltinRecipe(id)) return
+        _ui.update {
+            it.copy(hiddenBuiltinRecipes = if (hidden) it.hiddenBuiltinRecipes + id else it.hiddenBuiltinRecipes - id)
+        }
+        persistRecipes()
     }
 
     /** Make [recipe] what the Scale screen opens for its method. */
     fun setDefaultBrewRecipe(recipe: coffee.crema.core.BrewRecipe) = rememberRecipeUsed(recipe)
+
+    /** The recipe [method] opens on (pointer, else its default built-in), or null. */
+    fun defaultBrewRecipeFor(method: String): coffee.crema.core.BrewRecipe? {
+        val st = _ui.value
+        return coffee.crema.brew.RecipeLibraryRules.defaultFor(method, st.brewRecipes, st.builtinRecipes, st.lastRecipeByMethod)
+    }
 
     // ── Setup selections + the recipe editor (VM-held: survive rotation) ──
 
@@ -1332,18 +1367,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _guidedSetup.update {
             coffee.crema.ui.brewlog.GuidedSetupRules.resolve(
                 it,
-                st.brewRecipes,
+                st.brewRecipes + st.builtinRecipes,
                 st.lastRecipeByMethod,
                 st.lastBrewLogMethod,
             ) { m ->
-                coffee.crema.brew.defaultRecipeFor(m, System.currentTimeMillis())
+                coffee.crema.brew.RecipeLibraryRules.defaultFor(m, st.brewRecipes, st.builtinRecipes, st.lastRecipeByMethod)
             }
         }
     }
 
     fun setScaleMode(mode: String) = _guidedSetup.update { it.copy(scaleMode = mode) }
 
-    /** A method chip: the method's last-used recipe, else its classic template. */
+    /** A method chip: the method's default recipe (pointer, else its built-in), or none. */
     fun selectGuidedMethod(method: String) {
         _guidedSetup.update { it.copy(method = method, recipe = null, methodChosen = true) }
         resolveGuidedSetup()
@@ -1373,9 +1408,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _recipeEdit.update { it?.let(transform) }
     }
 
-    /** The editor's method selector (re-seeds the classic plan for a new recipe). */
+    /** The editor's method selector (re-seeds the blank plan for a new recipe). */
     fun setRecipeEditMethod(method: String) = updateRecipeEdit { d ->
-        d.withMethod(method) { m -> coffee.crema.brew.defaultRecipeFor(m, System.currentTimeMillis()) }
+        d.withMethod(method) { m -> coffee.crema.brew.newRecipeFor(m, System.currentTimeMillis()) }
     }
 
     fun closeRecipeEdit() {
@@ -1389,9 +1424,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun saveRecipeEdit() {
         val d = _recipeEdit.value ?: return
-        val saved = d.toRecipe().copy(updatedAt = System.currentTimeMillis())
+        val now = System.currentTimeMillis()
+        val edited = d.toRecipe()
+        // Built-ins are read-only: an edit handed a built-in saves as a
+        // credited copy, never over the bundled id.
+        val saved = if (isBuiltinRecipe(edited.id)) {
+            coffee.crema.brew.RecipeLibraryRules.duplicate(edited, coffee.crema.core.newRecipeId(), now)
+                .copy(name = edited.name.takeIf { it != d.base.name } ?: "${edited.name} (copy)")
+        } else {
+            edited.copy(updatedAt = now)
+        }
         upsertBrewRecipe(saved)
-        if (coffee.crema.ui.brewlog.GuidedSetupRules.becomesDefaultOnSave(saved.method, _ui.value.lastRecipeByMethod)) {
+        if (coffee.crema.brew.RecipeLibraryRules.becomesDefaultOnSave(saved.method, _ui.value.lastRecipeByMethod)) {
             rememberRecipeUsed(saved)
         }
         if (d.owner == coffee.crema.ui.brewlog.RecipeEditOwner.SCALE) {
@@ -1425,10 +1469,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    /** Remember [recipe] as its method's last-used (persisting it if new). */
+    /**
+     * Remember [recipe] as its method's default (persisting a new user
+     * recipe). A built-in only moves the pointer — it's bundled, never stored.
+     */
     private fun rememberRecipeUsed(recipe: coffee.crema.core.BrewRecipe) {
+        val builtin = isBuiltinRecipe(recipe.id)
         _ui.update { st ->
-            val list = if (st.brewRecipes.any { it.id == recipe.id }) st.brewRecipes
+            val list = if (builtin || st.brewRecipes.any { it.id == recipe.id }) st.brewRecipes
             else st.brewRecipes + recipe
             st.copy(
                 brewRecipes = list,
@@ -1438,11 +1486,49 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistRecipes()
     }
 
+    /**
+     * Apply a backup's recipes: adopt user recipes by id (MERGE keeps what's
+     * here; WIPE replaces the library), skipping any built-in id, then the
+     * `recipeMeta` pointers + hidden built-ins. Returns the recipes added.
+     */
+    private fun applyRestoredRecipes(
+        recipes: List<coffee.crema.core.BrewRecipe>,
+        meta: kotlinx.serialization.json.JsonObject?,
+        wipe: Boolean,
+    ): Int {
+        val st = _ui.value
+        val builtinIds = st.builtinRecipes.map { it.id }.toHashSet()
+        val base = if (wipe) emptyList() else st.brewRecipes
+        val have = base.map { it.id }.toHashSet()
+        val added = recipes.filter { it.id !in builtinIds && it.id !in have }
+        val defaults = (meta?.get("defaults") as? kotlinx.serialization.json.JsonObject)
+            ?.mapNotNull { (k, v) -> (v as? kotlinx.serialization.json.JsonPrimitive)?.content?.let { k to it } }
+            ?.toMap().orEmpty()
+        val hidden = (meta?.get("hiddenBuiltins") as? kotlinx.serialization.json.JsonArray)
+            ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+            ?.filter { it in builtinIds }?.toSet().orEmpty()
+        _ui.update {
+            it.copy(
+                brewRecipes = base + added,
+                // MERGE: this device's pointers win; the bundle fills the gaps.
+                lastRecipeByMethod = if (wipe) defaults else defaults + it.lastRecipeByMethod,
+                hiddenBuiltinRecipes = if (wipe) hidden else it.hiddenBuiltinRecipes + hidden,
+            )
+        }
+        persistRecipes()
+        resolveGuidedSetup()
+        return added.size
+    }
+
     private fun persistRecipes() {
         val st = _ui.value
         viewModelScope.launch {
             recipeStore.save(
-                coffee.crema.brew.RecipeFileStore.Envelope(st.brewRecipes, st.lastRecipeByMethod),
+                coffee.crema.brew.RecipeFileStore.Envelope(
+                    st.brewRecipes.filterNot { r -> st.builtinRecipes.any { it.id == r.id } },
+                    st.lastRecipeByMethod,
+                    st.hiddenBuiltinRecipes,
+                ),
             )
         }
     }
