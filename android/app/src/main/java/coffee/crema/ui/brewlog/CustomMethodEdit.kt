@@ -1,6 +1,8 @@
 package coffee.crema.ui.brewlog
 
 import coffee.crema.brew.CoreJson
+import coffee.crema.brew.customMethodIcon
+import coffee.crema.brew.styleIcon
 import coffee.crema.core.BrewMethodPreset
 import coffee.crema.core.BrewMethodStyle
 import coffee.crema.core.CustomBrewMethod
@@ -44,8 +46,13 @@ data class MethodEditDraft(
     val base: CustomBrewMethod? = null,
     val label: String = "",
     val style: BrewMethodStyle = BrewMethodStyle.Percolation,
-    /** A pick from the shared icon set, or null = the style's default. */
-    val icon: String? = null,
+    /**
+     * The icon key the dialog highlights and saves — the style's default
+     * until the user picks one ([iconPicked]), as the web dialog does.
+     */
+    val icon: String = styleIcon(BrewMethodStyle.Percolation),
+    /** The user picked [icon] (or the method being edited stored one): a style change leaves it alone. */
+    val iconPicked: Boolean = false,
     val dose: String = "",
     val water: String = "",
     val temp: String = "",
@@ -95,7 +102,10 @@ object MethodEditRules {
         label: String = "",
         style: BrewMethodStyle = BrewMethodStyle.Percolation,
         core: (String) -> String = ::brewMethodStyleSeedsJson,
-    ): MethodEditDraft = prefill(MethodEditDraft(session = session, target = target, ownerTab = ownerTab, label = label, style = style), core)
+    ): MethodEditDraft = prefill(
+        MethodEditDraft(session = session, target = target, ownerTab = ownerTab, label = label, style = style, icon = styleIcon(style)),
+        core,
+    )
 
     /** Edit an existing method: its own seeds where set (explicit), the style's where blank. */
     fun edit(
@@ -117,7 +127,8 @@ object MethodEditRules {
             base = m,
             label = m.label,
             style = m.style ?: BrewMethodStyle.Percolation,
-            icon = m.icon,
+            icon = customMethodIcon(m),
+            iconPicked = m.icon != null,
             dose = fmt(m.seedDoseG),
             water = fmt(m.seedWaterG),
             temp = fmt(m.seedTempC),
@@ -136,9 +147,12 @@ object MethodEditRules {
         )
     }
 
-    /** A style pick: the untouched seed fields follow it. */
+    /** A style pick: the untouched seed fields — and the icon, until picked — follow it. */
     fun withStyle(d: MethodEditDraft, style: BrewMethodStyle, core: (String) -> String = ::brewMethodStyleSeedsJson): MethodEditDraft =
-        prefill(d.copy(style = style), core)
+        prefill(d.copy(style = style, icon = if (d.iconPicked) d.icon else styleIcon(style)), core)
+
+    /** The user picked an icon: it stays through style changes. */
+    fun withIcon(d: MethodEditDraft, icon: String): MethodEditDraft = d.copy(icon = icon, iconPicked = true)
 
     /** The user typed a seed: it's theirs now (blank → back to the style's default on save). */
     fun withField(d: MethodEditDraft, field: String, value: String): MethodEditDraft {

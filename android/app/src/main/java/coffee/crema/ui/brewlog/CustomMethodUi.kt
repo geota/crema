@@ -164,9 +164,8 @@ private fun MethodEditBody(vm: MainViewModel, d: MethodEditDraft, modifier: Modi
         )
         Eyebrow("Icon")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            IconChoice(styleIcon(d.style), "Style default", selected = d.icon == null) { update { it.copy(icon = null) } }
             CUSTOM_METHOD_ICONS.forEach { key ->
-                IconChoice(key, key, selected = d.icon == key) { update { it.copy(icon = key) } }
+                IconChoice(key, key, selected = d.icon == key) { update { MethodEditRules.withIcon(it, key) } }
             }
         }
     }
