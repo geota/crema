@@ -31,8 +31,11 @@ fun isCustomMethodId(method: String?): Boolean =
 /**
  * The small shared icon set a custom method picks from — Phosphor names, the
  * same keys the web stores, so a backup renders the same mark on both shells.
+ * Same order as the web's `METHOD_ICON_KEYS`: the four style defaults first,
+ * then the extras. The dialog shows exactly this list (no separate
+ * "style default" chip) — the style's key is highlighted until a pick.
  */
-val CUSTOM_METHOD_ICONS: List<String> = listOf("drop", "funnel", "coffee", "flask", "cylinder", "snowflake", "fire", "leaf")
+val CUSTOM_METHOD_ICONS: List<String> = listOf("funnel", "coffee", "cylinder", "snowflake", "drop", "flask", "fire", "leaf")
 
 /** The four styles in display order, with their copy. */
 val BREW_METHOD_STYLES: List<BrewMethodStyle> =
