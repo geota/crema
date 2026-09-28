@@ -1618,6 +1618,44 @@ fun CremaFilterDropdown(
     }
 }
 
+// ── Pill button — CremaFilterDropdown's companion action ────────────────────
+// The same anatomy as the filter / recipe / bean pills (32dp full pill,
+// hairline outline, 15dp glyph, labelLarge in onSurfaceVariant), so an action
+// sitting beside one of those pickers ("Edit recipe" next to the recipe
+// picker) reads as one control family instead of a taller M3 button. The 32dp
+// visual sits in a 48dp interactive slot; pass the same
+// [Modifier.minimumInteractiveComponentSize] to a neighbouring
+// CremaFilterDropdown so the two centre on one row.
+@Composable
+fun CremaPillButton(
+    icon: String,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shape = RoundedCornerShape(999.dp)
+    Row(
+        modifier
+            .minimumInteractiveComponentSize()
+            .height(32.dp)
+            .clip(shape)
+            .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), shape)
+            .clickable(onClickLabel = label, role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+            .padding(start = 12.dp, end = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        PhIcon(icon, sizeDp = 15, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        )
+    }
+}
+
 // ── Menu surface + item — the one polished popup-menu style ──────────────────
 // The shared chrome for every Crema popup menu (sort dropdown, card overflow,
 // and the Brew header pickers' option rows): a bordered surfaceContainerHigh

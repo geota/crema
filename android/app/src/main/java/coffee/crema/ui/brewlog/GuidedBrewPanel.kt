@@ -31,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -65,6 +66,7 @@ import coffee.crema.core.StepAdvance
 import coffee.crema.ui.GuidedBrewUi
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaButton
+import coffee.crema.ui.components.CremaPillButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaFilterChip
@@ -338,11 +340,11 @@ private fun SetupCard(
                 )
             }
             // The picker + edit door on their own row, so a long recipe name
-            // (or a narrow pane) never squeezes the title column.
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+            // (or a narrow pane) never squeezes the title column. Both are
+            // the 32dp pill (the Bean row's control) in a 48dp touch slot, so
+            // they centre on one line and, when the pane is too narrow, the
+            // button wraps under the picker, left-aligned, at the same size.
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (siblings.size > 1) {
                     coffee.crema.ui.components.CremaFilterDropdown(
                         icon = "list-bullets",
@@ -351,14 +353,15 @@ private fun SetupCard(
                         },
                         selectedKey = recipe.id,
                         onKeyChange = { id -> siblings.firstOrNull { it.id == id }?.let(vm::selectGuidedRecipe) },
+                        modifier = Modifier.minimumInteractiveComponentSize(),
                     )
                 }
                 // Opens the editor IN PLACE (side sheet / pushed screen);
                 // Save returns here with the edited recipe selected.
-                CremaButton(
-                    onClick = onEdit,
-                    variant = CremaButtonVariant.Outlined,
+                CremaPillButton(
+                    icon = if (isBuiltin) "copy" else "pencil-simple",
                     label = if (isBuiltin) "Duplicate to edit" else "Edit recipe",
+                    onClick = onEdit,
                     modifier = Modifier.testTag("guided-edit-recipe"),
                 )
             }
