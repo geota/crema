@@ -97,6 +97,41 @@ fun isOpenableSourceUrl(url: String?): Boolean {
 }
 
 /**
+ * The recipe's free-text setup notes (filter, water recipe …) — small
+ * secondary text styled like [RecipeCreditLine]. [maxLines] clamps it on
+ * cards; the setup card shows it in full. [label] prefixes it ("Recipe
+ * notes" on the guided summary). Renders nothing without notes.
+ */
+@Composable
+fun RecipeNotesLine(
+    recipe: BrewRecipe,
+    modifier: Modifier = Modifier,
+    maxLines: Int = Int.MAX_VALUE,
+    label: String? = null,
+    textAlign: androidx.compose.ui.text.style.TextAlign? = null,
+) {
+    val notes = recipe.notes?.trim()?.takeIf { it.isNotEmpty() } ?: return
+    val text = androidx.compose.ui.text.buildAnnotatedString {
+        if (label != null) {
+            pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold))
+            append(label)
+            pop()
+            append("  ")
+        }
+        append(notes)
+    }
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = maxLines,
+        overflow = TextOverflow.Ellipsis,
+        textAlign = textAlign,
+        modifier = modifier.testTag("recipe-notes-line"),
+    )
+}
+
+/**
  * The recipe's credit line — small secondary text, with a "Source" link that
  * opens [BrewRecipe.sourceUrl] externally (ACTION_VIEW). Attribution only:
  * no logos, no endorsement wording. Renders nothing without a credit.
@@ -241,6 +276,7 @@ fun BrewRecipeCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            RecipeNotesLine(recipe, maxLines = 2)
             Row(
                 Modifier.padding(top = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,

@@ -105,7 +105,7 @@ class BackupRoundTripTest {
             put("waterG", 250.0)
             put("tempC", 100.0)
             put("steps", buildJsonArray { })
-            put("notes", kotlinx.serialization.json.JsonNull)
+            put("notes", "Cafec Abaca filter\nTWW light roast")
             put("favourite", false)
             put("createdAt", 1)
             put("updatedAt", 1)
@@ -126,6 +126,7 @@ class BackupRoundTripTest {
         val r = parsed.recipes.first()
         assertEquals("Adapted from James Hoffmann — A Better 1 Cup V60 Technique (2022)", r.credit)
         assertEquals("https://www.youtube.com/watch?v=1oB1oDrDkHM", r.sourceUrl)
+        assertEquals("Cafec Abaca filter\nTWW light roast", r.notes)
         assertNotNull(parsed.recipeMeta)
         // A bundle from before recipes were backed up restores none.
         assertTrue(parseBackupRecords(line("crema-backup/v1"), json, 0L).recipes.isEmpty())

@@ -168,6 +168,15 @@ fun GuidedBrewPanel(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.testTag("guided-done-bean"),
                     )
+                    // The setup they brewed with, read-only — never merged into the brew's notes.
+                    (session.recipe ?: setup.recipe)?.let { r ->
+                        RecipeNotesLine(
+                            r,
+                            Modifier.widthIn(max = 460.dp),
+                            label = "Recipe notes",
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        )
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(26.dp)) {
                         DoneStat(formatClock(summary.durationMs), "time")
                         summary.finalWeightG?.let { DoneStat("${it.roundToInt()} g", "water") }
@@ -338,6 +347,7 @@ private fun SetupCard(
                     style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                RecipeNotesLine(recipe, Modifier.padding(top = 2.dp))
             }
             // The picker + edit door on their own row, so a long recipe name
             // (or a narrow pane) never squeezes the title column. Both are

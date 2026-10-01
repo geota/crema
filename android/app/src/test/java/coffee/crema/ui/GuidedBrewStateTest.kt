@@ -154,6 +154,18 @@ class GuidedBrewStateTest {
         assertEquals(300f, out.steps!!.last().targetWaterG)
     }
 
+    @Test fun notesRideTheDraftTrimmedAndBlankClears() {
+        val base = recipe("a").copy(notes = "Inverted, two rinsed paper filters")
+        val d = RecipeEditDraft.of(RecipeEditOwner.SCALE, base, isNew = false)
+        assertEquals("Inverted, two rinsed paper filters", d.notes)
+        assertEquals("Sibarist Fast\nTWW", d.copy(notes = "  Sibarist Fast\nTWW \n").toRecipe().notes)
+        assertNull(d.copy(notes = "  \n ").toRecipe().notes)
+        // A method switch on a new recipe re-seeds the plan, not the typed notes.
+        val creating = RecipeEditDraft.of(RecipeEditOwner.PROFILES, base, isNew = true)
+            .copy(notes = "Hario 02 paper").withMethod("aeropress", template)
+        assertEquals("Hario 02 paper", creating.toRecipe().notes)
+    }
+
     @Test fun blankNameKeepsTheOriginalAndZeroTempClears() {
         val out = RecipeEditDraft.of(RecipeEditOwner.PROFILES, recipe("a"), false).copy(name = " ", temp = 0.0).toRecipe()
         assertEquals("R a", out.name)
