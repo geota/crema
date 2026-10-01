@@ -20,6 +20,7 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Recipes have a Notes field for filter, water recipe and other setup details (issue #10 feedback)
 - **Your own brewing methods** (issue #10 feedback: "I only have an ORB this
   week — can I add it?") — "+ Add method…" in the log form, the recipe
   editor and the Scale page's Brew setup creates a method with a name, a
