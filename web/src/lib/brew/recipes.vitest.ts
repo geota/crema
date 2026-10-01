@@ -4,6 +4,7 @@ import {
   RecipeStore,
   brewClock,
   builtinRecipes,
+  cleanRecipeNotes,
   isBuiltinRecipe,
   newRecipeFor,
   hasExpectedDuration,
@@ -112,6 +113,19 @@ describe("RecipeStore — built-ins and defaults", () => {
     const saved = store.saveEdit({ ...store.get("builtin:hario-syphon")!, name: "Mine" });
     expect(isBuiltinRecipe(saved.id)).toBe(false);
     expect(store.get("builtin:hario-syphon")?.name).toBe("Syphon");
+  });
+
+  it("recipe notes save trimmed, blank as absent, and ride a duplicate", () => {
+    expect(cleanRecipeNotes("  Sibarist Fast · TWW light  ")).toBe("Sibarist Fast · TWW light");
+    expect(cleanRecipeNotes("   \n ")).toBeUndefined();
+    expect(cleanRecipeNotes(undefined)).toBeUndefined();
+    const store = new RecipeStore();
+    const wac = store.get("builtin:merikanto-wac-2021")!;
+    expect(wac.notes).toBe("Inverted, two rinsed paper filters");
+    const copy = store.duplicate(wac.id)!;
+    expect(copy.notes).toBe(wac.notes);
+    const saved = store.saveEdit({ ...copy, notes: cleanRecipeNotes(" Aeropress paper ×2 ") });
+    expect(store.get(saved.id)?.notes).toBe("Aeropress paper ×2");
   });
 
   it("parity 1: saving never moves a default off a built-in; it defaults a method with none", () => {

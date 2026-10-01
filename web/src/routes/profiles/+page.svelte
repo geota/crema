@@ -42,6 +42,7 @@
 	import { methodLabel } from '$lib/brew/methods';
 	import MethodMark from '$lib/components/brewlog/MethodMark.svelte';
 	import RecipeCredit from '$lib/components/brewlog/RecipeCredit.svelte';
+	import RecipeNotes from '$lib/components/brewlog/RecipeNotes.svelte';
 	import RecipeEditor from '$lib/components/brewlog/RecipeEditor.svelte';
 	import TrashIcon from 'phosphor-svelte/lib/TrashIcon';
 	import type { BrewRecipe } from '$lib/core/crema-core';
@@ -947,6 +948,7 @@
 											· {Math.round(r.tempC)} °C{/if}{#if estimate} · ~{estimate}{/if}
 									</div>
 									<div class="pp-recipe-steps">{stepChain(r)}</div>
+									<RecipeNotes notes={r.notes} lines={2} />
 									<div class="pp-recipe-actions">
 										{#if builtin}
 											<button class="pp-recipe-btn" onclick={() => duplicateRecipe(r)}

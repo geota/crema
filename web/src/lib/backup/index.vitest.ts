@@ -144,7 +144,8 @@ describe('backup round-trip (review #07)', () => {
 
 	it('backs up user recipe copies with their credit, never the built-ins', () => {
 		const recipes = getRecipeStore();
-		const copy = recipes.duplicate('builtin:hoffmann-ultimate-v60')!;
+		const dup = recipes.duplicate('builtin:hoffmann-ultimate-v60')!;
+		const copy = recipes.saveEdit({ ...dup, notes: 'Cafec Abaca filter\nTWW light roast' });
 		recipes.hide('builtin:kasuya-4-6');
 		recipes.touch(copy);
 		const built = buildBackupJsonl()!;
@@ -164,6 +165,7 @@ describe('backup round-trip (review #07)', () => {
 			'Adapted from James Hoffmann — The Ultimate V60 Technique (2019)'
 		);
 		expect(restored.sourceUrl).toBe('https://www.youtube.com/watch?v=AI4ynXzkSQo');
+		expect(restored.notes).toBe('Cafec Abaca filter\nTWW light roast');
 		// recipeMeta: the default pointer + the hidden built-in come back too.
 		expect(getRecipeStore().defaultFor('pourover')?.id).toBe(copy.id);
 		expect(getRecipeStore().isHidden('builtin:kasuya-4-6')).toBe(true);
