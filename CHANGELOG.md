@@ -74,7 +74,8 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   coffee bags and roasters into the library (Visualizer wins when both sides
   changed) and pushes new and edited ones back, with their catalogue links.
   Pushing needs Visualizer Premium; on a free account the sync only pulls and
-  says so. Deleting a bag or roaster can also delete its Visualizer copy.
+  says so. Deleting a bag or roaster can also delete its Visualizer copy,
+  and deleting a roaster can take its bags with it (as on the web).
 - **Roaster duplicate merge on Android** — the Roasters tab suggests merging
   roasters with the same name ("Sey looks like SEY"). Merging moves the bags
   and tags the duplicate, which **Show dupes** brings back for an
