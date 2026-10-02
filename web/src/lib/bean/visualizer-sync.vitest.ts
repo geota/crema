@@ -17,8 +17,8 @@ import {
 	beanToWire,
 	roastLevelFromWire,
 	roastLevelToWire,
-	bagBodyToWriteRequest,
-	roasterBodyToWriteRequest,
+	coffeeBagWriteRequest,
+	roasterWriteRequest,
 	roasterFromWire,
 	roasterToWire
 } from './visualizer-sync.ts';
@@ -135,7 +135,7 @@ describe('catalogue links in the write payloads', () => {
 		bean.name = 'Hambela';
 		bean.canonicalCoffeeBagId = 'cb-1';
 		bean.canonicalRoasterId = 'cr-1';
-		const body = bagBodyToWriteRequest(beanToWire(bean, 'rv-1'));
+		const body = coffeeBagWriteRequest(bean, 'rv-1');
 		expect(body.coffee_bag.canonical_coffee_bag_id).toBe('cb-1');
 		expect(body.coffee_bag.roaster_id).toBe('rv-1');
 		const back = beanFromWire(beanToWire(bean, 'rv-1'), () => null);
@@ -144,16 +144,24 @@ describe('catalogue links in the write payloads', () => {
 
 		const roaster = blankRoaster('Onyx');
 		roaster.catalogueRoasterId = 'cr-1';
-		expect(roasterBodyToWriteRequest(roasterToWire(roaster)).roaster.canonical_roaster_id).toBe(
+		expect(roasterWriteRequest(roaster).roaster.canonical_roaster_id).toBe(
 			'cr-1'
 		);
 	});
 
 	it('omits the link keys for an unlinked bag / roaster so a PATCH never unlinks', () => {
-		const body = bagBodyToWriteRequest(beanToWire(blankBean('bean:2'), null));
+		const body = coffeeBagWriteRequest(blankBean('bean:2'), null);
 		expect('canonical_coffee_bag_id' in body.coffee_bag).toBe(false);
-		const rbody = roasterBodyToWriteRequest(roasterToWire(blankRoaster('Sey')));
+		const rbody = roasterWriteRequest(blankRoaster('Sey'));
 		expect('canonical_roaster_id' in rbody.roaster).toBe(false);
+	});
+
+	it('never sends the local duplicate-of pointer', () => {
+		const roaster = blankRoaster('Sey');
+		roaster.canonicalRoasterId = 'roaster:other';
+		const body = roasterWriteRequest(roaster);
+		expect(JSON.stringify(body)).not.toContain('roaster:other');
+		expect(Object.keys(body.roaster).sort()).toEqual(['name', 'website']);
 	});
 
 	it('keeps a link set on Visualizer when pulling a bag-list summary', () => {

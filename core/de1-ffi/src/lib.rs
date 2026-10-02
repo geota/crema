@@ -1211,6 +1211,115 @@ pub fn catalogue_autofill(
         .map_err(crema_err)
 }
 
+// ── Bean / roaster sync + roaster duplicates (shared with the web) ──────
+//
+// The pure halves of the Visualizer bean sync and the roaster directory's
+// duplicate merge (`de1_domain::bean_sync`). Each mirrors the wasm export of
+// the same name (native `i64` timestamps instead of the wasm `f64`).
+
+/// The `{"coffee_bag": {...}}` write body for a `Bean` JSON (catalogue link
+/// omitted when empty). Mirrors the wasm `coffeeBagWriteRequest`; see
+/// [`de1_domain::coffee_bag_write_request_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when `bean_json` can't be deserialised.
+#[uniffi::export]
+pub fn coffee_bag_write_request(
+    bean_json: String,
+    roaster_remote_id: Option<String>,
+) -> Result<String, CremaError> {
+    de1_domain::coffee_bag_write_request_json(&bean_json, roaster_remote_id.as_deref())
+        .map_err(crema_err)
+}
+
+/// The `{"roaster": {...}}` write body for a `Roaster` JSON (catalogue link
+/// omitted when empty; the local duplicate pointer never sent). Mirrors the
+/// wasm `roasterWriteRequest`; see [`de1_domain::roaster_write_request_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when `roaster_json` can't be deserialised.
+#[uniffi::export]
+pub fn roaster_write_request(roaster_json: String) -> Result<String, CremaError> {
+    de1_domain::roaster_write_request_json(&roaster_json).map_err(crema_err)
+}
+
+/// A roaster's catalogue link for a write (`{"roaster", "beans"}` JSON in).
+/// Mirrors the wasm `resolveRoasterCatalogueLink`; see
+/// [`de1_domain::resolve_roaster_catalogue_link_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] on malformed input.
+#[uniffi::export]
+pub fn resolve_roaster_catalogue_link(payload: String) -> Result<Option<String>, CremaError> {
+    de1_domain::resolve_roaster_catalogue_link_json(&payload).map_err(crema_err)
+}
+
+/// Fold a reconciled remote roaster (`RoasterWire` JSON) into the local
+/// `Roaster` JSON. Mirrors the wasm `mergePulledRoaster`; see
+/// [`de1_domain::merge_pulled_roaster_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] on malformed input.
+#[uniffi::export]
+pub fn merge_pulled_roaster(
+    local_json: String,
+    remote_json: String,
+    refresh: bool,
+    now_unix_ms: i64,
+) -> Result<String, CremaError> {
+    de1_domain::merge_pulled_roaster_json(&local_json, &remote_json, refresh, now_unix_ms)
+        .map_err(crema_err)
+}
+
+/// The bean push leg's work list (`BeanPushItem[]` JSON). Mirrors the wasm
+/// `planBeanPush`; see [`de1_domain::plan_bean_push_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when `beans_json` can't be deserialised.
+#[uniffi::export]
+pub fn plan_bean_push(beans_json: String, last_sync_at: Option<i64>) -> Result<String, CremaError> {
+    de1_domain::plan_bean_push_json(&beans_json, last_sync_at).map_err(crema_err)
+}
+
+/// The catalogue link-PATCH leg's work list (`RoasterLinkPatch[]` JSON).
+/// Mirrors the wasm `planRoasterLinkPatches`; see
+/// [`de1_domain::plan_roaster_link_patches_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] on malformed input.
+#[uniffi::export]
+pub fn plan_roaster_link_patches(payload: String) -> Result<String, CremaError> {
+    de1_domain::plan_roaster_link_patches_json(&payload).map_err(crema_err)
+}
+
+/// Roaster merge suggestions (`RoasterDuplicate[]` JSON). Mirrors the wasm
+/// `detectRoasterDuplicates`; see [`de1_domain::detect_roaster_duplicates_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when `roasters_json` can't be deserialised.
+#[uniffi::export]
+pub fn detect_roaster_duplicates(roasters_json: String) -> Result<String, CremaError> {
+    de1_domain::detect_roaster_duplicates_json(&roasters_json).map_err(crema_err)
+}
+
+/// Plan a roaster merge (`RoasterMergePlan` JSON, or `null`). Mirrors the
+/// wasm `planRoasterMerge`; see [`de1_domain::plan_roaster_merge_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] on malformed input.
+#[uniffi::export]
+pub fn plan_roaster_merge(payload: String) -> Result<String, CremaError> {
+    de1_domain::plan_roaster_merge_json(&payload).map_err(crema_err)
+}
+
 /// Crema's 1..10 roast level → Visualizer's free-text band label (e.g. `"light"`),
 /// or `None` when the level is unset. Mirrors the wasm `roastLevelToWire`; see
 /// [`de1_domain::roast_level_to_wire`].
@@ -3165,6 +3274,43 @@ mod tests {
         assert_eq!(r["bean"]["canonicalRoasterId"], "cr-1");
         assert!(r["roasterName"].is_null());
         assert!(parse_catalogue_coffee_bags("nope".to_owned()).is_err());
+    }
+
+    #[test]
+    fn bean_sync_and_roaster_merge_bridge_round_trip() {
+        // Write bodies: envelope, no empty catalogue link, never the dup pointer.
+        let bag: serde_json::Value = serde_json::from_str(
+            &coffee_bag_write_request(FAKE_BEAN.to_owned(), Some("vz-r".to_owned())).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bag["coffee_bag"]["roaster_id"], "vz-r");
+        assert!(bag["coffee_bag"].get("canonical_coffee_bag_id").is_none());
+        let roaster = r#"{"id":"roaster:b","name":"sey","notes":"","canonicalRoasterId":"roaster:a",
+            "metadata":{},"createdAt":1,"updatedAt":5}"#;
+        let body = roaster_write_request(roaster.to_owned()).unwrap();
+        assert_eq!(body, r#"{"roaster":{"name":"sey","website":null}}"#);
+        // Duplicates + merge plan.
+        let roasters = format!(
+            r#"[{{"id":"roaster:a","name":"Sey","notes":"","metadata":{{}},"createdAt":1,"updatedAt":9}},
+            {{"id":"roaster:c","name":" SEY","notes":"","metadata":{{}},"createdAt":1,"updatedAt":2}},{roaster}]"#
+        );
+        assert_eq!(
+            detect_roaster_duplicates(roasters.clone()).unwrap(),
+            r#"[{"canonicalId":"roaster:a","dupeId":"roaster:c"}]"#
+        );
+        let plan = plan_roaster_merge(format!(
+            r#"{{"roasters":{roasters},"beans":[{FAKE_BEAN}],"canonicalId":"roaster:a","dupeId":"roaster:c"}}"#
+        ))
+        .unwrap();
+        assert_eq!(
+            plan,
+            r#"{"canonicalId":"roaster:a","dupeId":"roaster:c","beanIds":[]}"#
+        );
+        assert_eq!(
+            plan_bean_push(format!("[{FAKE_BEAN}]"), None).unwrap(),
+            r#"[{"localId":"bean:test","create":true}]"#
+        );
+        assert!(detect_roaster_duplicates("nope".to_owned()).is_err());
     }
 
     #[test]

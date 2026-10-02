@@ -37,10 +37,12 @@ import type { components } from '$lib/visualizer/openapi';
 import {
 	beanFromWire as wasmBeanFromWire,
 	beanToWire as wasmBeanToWire,
+	coffeeBagWriteRequest as wasmCoffeeBagWriteRequest,
 	roastLevelFromWire as wasmRoastLevelFromWire,
 	roastLevelToWire as wasmRoastLevelToWire,
 	roasterFromWire as wasmRoasterFromWire,
-	roasterToWire as wasmRoasterToWire
+	roasterToWire as wasmRoasterToWire,
+	roasterWriteRequest as wasmRoasterWriteRequest
 } from '$lib/wasm/de1_wasm';
 import { mintBeanId, mintRoasterId, type Bean, type Roaster } from './model';
 
@@ -131,8 +133,8 @@ export interface SyncResult {
 // fields the spec exposes on the LIST/DETAIL paths but not on the write
 // envelopes (Visualizer round-trips `metadata` losslessly, so the
 // Crema-only extension keys live there). The write paths build the
-// spec's `*WriteRequest` envelopes via {@link bagBodyToWriteRequest} /
-// {@link roasterBodyToWriteRequest} below.
+// spec's `*WriteRequest` envelopes via {@link coffeeBagWriteRequest} /
+// {@link roasterWriteRequest} below.
 
 /** Crema-side merged shape used by `beanToWire` / `beanFromWire`.
  *  Loosens DETAIL's required `id` + `name` so the local-only encode
@@ -219,58 +221,33 @@ export function roasterFromWire(wire: RoasterWire): Roaster {
 	) as Roaster;
 }
 
-// ── Spec-envelope helpers ──────────────────────────────────────────────
+// ── Spec-envelope helpers (delegated to the Rust core) ─────────────────
 //
 // Both `POST /roasters` and `PATCH /roasters/{id}` expect
 // `{ roaster: {...} }` per the `RoasterWriteRequest` schema; ditto
-// `CoffeeBagWriteRequest` → `{ coffee_bag: {...} }`. The previous cut
-// sent the bare body, which the server treats as `{}` (no recognised
-// keys) — every write was a no-op. These two helpers wrap each body in
-// the right envelope so the writes actually land.
+// `CoffeeBagWriteRequest` → `{ coffee_bag: {...} }`. The envelope builders
+// live in `de1_domain::bean_sync` so the Android shell sends byte-identical
+// bodies.
 //
 // Catalogue links (`canonical_roaster_id` / `canonical_coffee_bag_id`) are
 // sent only when Crema has one: omitting the key leaves the remote value
 // alone, so a PATCH from a bag/roaster Crema never linked can't unlink one
-// the user linked on visualizer.coffee.
+// the user linked on visualizer.coffee. The roaster's local duplicate-of
+// pointer (`canonicalRoasterId`) never leaves the device.
 
-export function roasterBodyToWriteRequest(body: RoasterWire): RoasterWriteRequest {
-	return {
-		roaster: {
-			name: body.name,
-			website: body.website ?? null,
-			...(body.canonical_roaster_id ? { canonical_roaster_id: body.canonical_roaster_id } : {})
-		}
-	};
+/** The `CoffeeBagWriteRequest` body for a bean (`roasterRemoteId` = its roaster's Visualizer id). */
+export function coffeeBagWriteRequest(
+	bean: Bean,
+	roasterRemoteId: string | null
+): CoffeeBagWriteRequest {
+	return JSON.parse(
+		wasmCoffeeBagWriteRequest(JSON.stringify(bean), roasterRemoteId ?? undefined)
+	) as CoffeeBagWriteRequest;
 }
 
-export function bagBodyToWriteRequest(body: BagWire): CoffeeBagWriteRequest {
-	return {
-		coffee_bag: {
-			name: body.name,
-			roaster_id: body.roaster_id ?? null,
-			...(body.canonical_coffee_bag_id
-				? { canonical_coffee_bag_id: body.canonical_coffee_bag_id }
-				: {}),
-			roast_date: body.roast_date ?? null,
-			frozen_date: body.frozen_date ?? null,
-			defrosted_date: body.defrosted_date ?? null,
-			roast_level: body.roast_level ?? null,
-			country: body.country ?? null,
-			region: body.region ?? null,
-			farm: body.farm ?? null,
-			farmer: body.farmer ?? null,
-			variety: body.variety ?? null,
-			elevation: body.elevation ?? null,
-			processing: body.processing ?? null,
-			harvest_time: body.harvest_time ?? null,
-			quality_score: body.quality_score ?? null,
-			tasting_notes: body.tasting_notes ?? null,
-			place_of_purchase: body.place_of_purchase ?? null,
-			url: body.url ?? null,
-			notes: body.notes ?? null,
-			metadata: body.metadata ?? null
-		}
-	};
+/** The `RoasterWriteRequest` body for a roaster (its catalogue link, never the dedup pointer). */
+export function roasterWriteRequest(roaster: Roaster): RoasterWriteRequest {
+	return JSON.parse(wasmRoasterWriteRequest(JSON.stringify(roaster))) as RoasterWriteRequest;
 }
 
 /**

@@ -233,6 +233,17 @@ export interface Bean {
 	updatedAt: number;
 }
 
+/** One local bag the push leg writes. */
+export interface BeanPushItem {
+	/** The local bean id. */
+	localId: string;
+	/**
+	 * `true` = never pushed (no `visualizer_id`) → `POST`; `false` = bound
+	 * and edited since the last sync → `PATCH`.
+	 */
+	create: boolean;
+}
+
 /**
  * Summary metrics over a (filter/range-scoped) set of brews — the
  * History stat strip once non-espresso rows exist. `None` = "no data"
@@ -2362,6 +2373,40 @@ export interface Roaster {
 	createdAt: number;
 	/** Unix epoch ms. */
 	updatedAt: number;
+}
+
+/**
+ * A probable duplicate pair in the roaster directory: `dupe_id` looks like
+ * `canonical_id` (same normalised name).
+ */
+export interface RoasterDuplicate {
+	/** The row to keep — the most recently updated of the group. */
+	canonicalId: string;
+	/** The row to fold into it. */
+	dupeId: string;
+}
+
+/** A bound roaster whose remote row lacks the catalogue link Crema knows. */
+export interface RoasterLinkPatch {
+	/** The local roaster id. */
+	localId: string;
+	/** The catalogue roaster id to send (`canonical_roaster_id`). */
+	catalogueRoasterId: string;
+}
+
+/**
+ * What merging `dupe_id` into `canonical_id` does: re-point `bean_ids` at
+ * the canonical roaster, then tag the dupe (`canonical_roaster_id =
+ * canonical_id`). The dupe row is kept, so the merge can be undone by
+ * clearing that pointer (un-merge); the bags stay on the canonical roaster.
+ */
+export interface RoasterMergePlan {
+	/** The roaster that keeps the bags. */
+	canonicalId: string;
+	/** The roaster tagged as a duplicate. */
+	dupeId: string;
+	/** The bags filed under the dupe, in library order. */
+	beanIds: string[];
 }
 
 /**
