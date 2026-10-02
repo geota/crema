@@ -19,6 +19,7 @@ import { HttpStatusError } from '../effect/errors.ts';
 import { blankBean, blankRoaster } from '$lib/bean';
 import type { TokenSet } from '../visualizer/oauth.ts';
 import { initTestWasm } from '$lib/testing/test-init';
+import { readSyncConfig } from '$lib/visualizer/sync-config';
 
 // `uploadBean` / `uploadRoaster` build their bodies through the wasm-backed
 // `beanToWire` / `roasterToWire` (CORE1), so init the bundle first.
@@ -155,6 +156,27 @@ describe('BeanSync.fetchAccount', () => {
 		}));
 		const out = await run(BeanSync.pipe(Effect.flatMap((b) => b.fetchAccount)), layer);
 		expect(out).toEqual({ id: 'u1', name: 'Ada', public: true, avatarUrl: 'http://x/a.png' });
+	});
+
+	it('refreshes the cached premium flag off a no-op PATCH probe (404 premium, 403 free)', async () => {
+		localStorage.clear();
+		const me = { id: 'u1', name: 'Ada', public: true, avatar_url: 'http://x/a.png' };
+		for (const [status, want] of [
+			[404, true],
+			[403, false]
+		] as const) {
+			const { layer, calls } = mkHttp((req) => (req.method === 'PATCH' ? { ok: false, status } : { ok: true, json: me }));
+			await run(BeanSync.pipe(Effect.flatMap((b) => b.fetchAccount)), layer);
+			const probe = calls.find((c) => c.method === 'PATCH')!;
+			expect(probe.url).toContain('/coffee_bags/00000000-0000-0000-0000-000000000000');
+			expect(readSyncConfig().premium).toBe(want);
+			expect(JSON.parse(localStorage.getItem('crema.beans.sync.v1') ?? '{}').premium).toBe(want);
+		}
+		// Inconclusive (any other status) leaves the cache as it was.
+		const { layer } = mkHttp((req) => (req.method === 'PATCH' ? { ok: false, status: 422 } : { ok: true, json: me }));
+		const out = await run(BeanSync.pipe(Effect.flatMap((b) => b.fetchAccount)), layer);
+		expect(out.name).toBe('Ada');
+		expect(readSyncConfig().premium).toBe(false);
 	});
 
 	it('fails ResponseDecodeError on a malformed /me', async () => {

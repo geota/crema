@@ -134,6 +134,31 @@ class VisualizerClient(
     }
 
     /**
+     * The account's premium tier, read without side effects: `/me` has no
+     * premium field (API 1.17.2: id, name, public, avatar_url), so this sends
+     * `PATCH /api/coffee_bags/<nil uuid>` — Visualizer's `check_premium!` (the
+     * controller's first before_action) answers 403 for a free account, and a
+     * premium one gets 404 (no such bag); nothing is ever written. True /
+     * false for those; null when inconclusive. Auth / transport failures
+     * throw like every other call (the caller's token refresh handles 401).
+     */
+    suspend fun probePremium(accessToken: String): Boolean? = try {
+        request(
+            "PATCH",
+            "/coffee_bags/$PREMIUM_PROBE_ID",
+            accessToken,
+            kotlinx.serialization.json.buildJsonObject { put("coffee_bag", kotlinx.serialization.json.buildJsonObject {}) },
+        )
+        null
+    } catch (_: VisualizerError.NotFound) {
+        true
+    } catch (_: VisualizerError.PremiumGated) {
+        false
+    } catch (_: VisualizerError.Http) {
+        null
+    }
+
+    /**
      * `POST /api/shots/upload` with the community-v2 payload. Returns the new
      * Visualizer shot id.
      */
@@ -184,6 +209,9 @@ class VisualizerClient(
         )
     }
 }
+
+/** The nil UUID — no coffee bag has it, so [VisualizerClient.probePremium] never edits one. */
+internal const val PREMIUM_PROBE_ID = "00000000-0000-0000-0000-000000000000"
 
 /** What OkHttp sent for a JSON String body: `application/json; charset=utf-8`. */
 private val JSON_UTF8 = ContentType.Application.Json.withCharset(Charsets.UTF_8)

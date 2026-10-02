@@ -74,6 +74,13 @@ class VisualizerSync(
     private val currentShot: (localId: String) -> StoredShot? = { null },
     /** The core's quota / backoff policy (injected so JVM tests needn't load the native core). */
     private val uploadPolicy: UploadPolicy = UploadPolicy.core(),
+    /**
+     * Core `visualizer_shot_patch_json(inputs, premium)`: the edit-sync PATCH
+     * body fitted to the account tier, or null = skip (injected so JVM tests
+     * needn't load the native core).
+     */
+    private val shotPatchBody: (inputsJson: String, premium: Boolean?) -> String? =
+        { inputs, premium -> visualizerShotPatchJson(inputs, premium) },
 ) : UploadDestination {
 
     private companion object {
@@ -249,6 +256,7 @@ class VisualizerSync(
                             if (!persist { it.copy(tokens = tokens) }) notify("Couldn’t save the Visualizer login on this device")
                             val account = runCatchingCancellable { client.fetchAccount(tokens.accessToken) }.getOrNull()
                             persist { it.copy(account = account) }
+                            refreshPremium()
                             notify("Signed in to Visualizer${account?.let { a -> " as ${a.name}" }.orEmpty()}")
                             onSignedIn()
                         }
@@ -263,18 +271,31 @@ class VisualizerSync(
     fun signOut() {
         scope.launch {
             persisted.tokens?.accessToken?.let { revokeToken(clientId, it) }
-            persist { it.copy(tokens = null, account = null) }
+            // The tier is per-account: a later sign-in re-probes it.
+            persist { it.copy(tokens = null, account = null, premium = null) }
             notify("Signed out of Visualizer")
         }
     }
 
-    /** Re-fetch `/me` (Settings open). Silent on failure — the cache stands. */
+    /** Re-fetch `/me` and the premium tier (Settings open). Silent on failure — the cache stands. */
     fun refreshAccount() {
         if (persisted.tokens == null) return
         scope.launch {
             runCatchingCancellable { withFreshToken { client.fetchAccount(it) } }
-                .onSuccess { account -> persist { it.copy(account = account) } }
+                .onSuccess { account ->
+                    persist { it.copy(account = account) }
+                    refreshPremium()
+                }
         }
+    }
+
+    /**
+     * Re-probe the premium tier ([VisualizerClient.probePremium]) into the
+     * cache. Inconclusive / failed probes leave the cached value alone.
+     */
+    private suspend fun refreshPremium() {
+        val premium = runCatchingCancellable { withFreshToken { client.probePremium(it) } }.getOrNull() ?: return
+        persist { it.copy(premium = premium) }
     }
 
     /** The Sharing card's "Test" — a `/me` round-trip with a visible verdict. */
@@ -288,6 +309,7 @@ class VisualizerSync(
             runCatchingCancellable { withFreshToken { client.fetchAccount(it) } }
                 .onSuccess { account ->
                     persist { it.copy(account = account) }
+                    refreshPremium()
                     notify("Visualizer connection OK — signed in as ${account.name}")
                 }
                 .onFailure { notify("Visualizer connection failed: ${it.message}") }
@@ -519,8 +541,10 @@ class VisualizerSync(
      * the core (`de1_domain::visualizer_shot_patch`, review #42) so both
      * shells emit an identical wire body. What stays here is the config:
      * notes gated on include-notes (an opt-out never leaks via an edit) and
-     * the effective privacy. No-op for never-uploaded shots; soft — a
-     * failure notifies but never blocks the local edit.
+     * the effective privacy, and the cached premium tier (Premium-only fields
+     * are dropped for a free / unknown account; nothing left = no request).
+     * No-op for never-uploaded shots; soft — a failure notifies but never
+     * blocks the local edit.
      */
     fun patchEditedShot(shot: StoredShot) {
         val vid = shot.visualizerId ?: return
@@ -544,12 +568,15 @@ class VisualizerSync(
             // (issue #16: a grind edit must reach the uploaded copy).
             grinderSetting = shot.effectiveGrindSetting,
         )
+        // Fitted to the account tier in core: a free account — or one whose tier
+        // isn't probed yet — silently loses the Premium-only fields
+        // (private_notes, the tasting scores incl. flavor, tag_list,
+        // coffee_bag_id …); null = nothing left the server would apply, so no
+        // request and no notice.
         val body = runCatchingCancellable {
-            json.decodeFromString(
-                JsonObject.serializer(),
-                visualizerShotPatchJson(json.encodeToString(ShotPatchInputs.serializer(), inputs)),
-            )
-        }.getOrElse { notify("Visualizer update failed: ${it.message}"); return }
+            shotPatchBody(json.encodeToString(ShotPatchInputs.serializer(), inputs), persisted.premium)
+                ?.let { json.decodeFromString(JsonObject.serializer(), it) }
+        }.getOrElse { notify("Visualizer update failed: ${it.message}"); return } ?: return
         scope.launch {
             runCatchingCancellable { withFreshToken { client.patchShot(it, vid, body) } }
                 .onFailure { notify("Visualizer update failed: ${it.message}") }

@@ -582,9 +582,17 @@ export const ShotSyncLive = Layer.effect(
 				// Android's patchEditedShot sends the same precedence.
 				grinderSetting: patch.grinderSetting ?? patch.bean?.grinderSetting ?? undefined
 			};
-			const shotBody = JSON.parse(
-				wasmVisualizerShotPatchJson(JSON.stringify(inputs))
-			) as ShotUpdateRequest['shot'];
+			// Fitted to the account tier in core: a free account — or one whose
+			// tier isn't probed yet (`premium: null`) — silently loses the
+			// premium-only fields (private_notes, the tasting scores incl.
+			// `flavor`, tag_list, coffee_bag_id …), and a body left with nothing
+			// the server applies comes back `undefined`: no request, no error.
+			const patchJson = wasmVisualizerShotPatchJson(
+				JSON.stringify(inputs),
+				readSyncConfig().premium ?? undefined
+			);
+			if (patchJson === undefined) return;
+			const shotBody = JSON.parse(patchJson) as ShotUpdateRequest['shot'];
 			const envelope: ShotUpdateRequest = { shot: shotBody };
 			yield* call(`/shots/${visualizerId}`, {
 				method: 'PATCH',

@@ -93,6 +93,24 @@ class VisualizerClientTest {
     }
 
     @Test
+    fun `the premium probe is a no-op PATCH of the nil coffee bag - 404 premium, 403 free`() = runTest {
+        status = HttpStatusCode.NotFound
+        reply = """{"error":"Coffee bag not found"}"""
+        assertEquals(true, client.probePremium("tok"))
+        val r = last()
+        assertEquals(HttpMethod.Patch, r.method)
+        assertEquals("$API_BASE/coffee_bags/00000000-0000-0000-0000-000000000000", r.url.toString())
+        assertEquals("""{"coffee_bag":{}}""", bodies.last())
+        status = HttpStatusCode.Forbidden
+        reply = """{"error":"You must be a premium user to access this feature."}"""
+        assertEquals(false, client.probePremium("tok"))
+        // Anything else is inconclusive (the cache keeps its value).
+        status = HttpStatusCode.UnprocessableEntity
+        reply = """{"error":"nope"}"""
+        assertNull(client.probePremium("tok"))
+    }
+
+    @Test
     fun `PATCH wraps the shot body in a shot envelope`() = runTest {
         status = HttpStatusCode.NoContent
         reply = ""

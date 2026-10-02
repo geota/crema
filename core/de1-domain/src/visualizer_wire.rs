@@ -985,14 +985,98 @@ pub fn visualizer_shot_patch(inputs: &ShotPatchInputs) -> Value {
     Value::Object(body)
 }
 
-/// JSON-bridged [`visualizer_shot_patch`]. Input: a [`ShotPatchInputs`]
-/// JSON. Output: the PATCH body JSON.
+/// `PATCH /shots/{id}` keys Visualizer accepts from **premium** accounts
+/// only — `Shot.editable_attributes(user)` (visualizer `app/models/shot.rb`)
+/// adds `image`, `private_notes`, the eight tasting scores
+/// (`TASTING_ASSESSMENT_ATTRIBUTES`), `tag_list` and `metadata` only when
+/// `user.premium?`, and `coffee_bag_id` only when
+/// `user.coffee_management_enabled?` (which itself requires premium). For a
+/// free account these keys are dropped server-side, and a PATCH left with
+/// nothing permitted fails 400 (`ParameterMissing`).
+pub const VISUALIZER_PREMIUM_SHOT_FIELDS: &[&str] = &[
+    "private_notes",
+    "image",
+    "fragrance",
+    "aroma",
+    "flavor",
+    "aftertaste",
+    "acidity",
+    "bitterness",
+    "sweetness",
+    "mouthfeel",
+    "tag_list",
+    "metadata",
+    "coffee_bag_id",
+];
+
+/// `PATCH /shots/{id}` keys every account may write — the base of
+/// `Shot.editable_attributes`: `profile_title`, `barista`, `bean_weight`,
+/// `canonical_coffee_bag_id` and `Parsers::Base::EXTRA_DATA_METHODS`.
+/// Anything outside this list and [`VISUALIZER_PREMIUM_SHOT_FIELDS`] (e.g.
+/// `privacy`, which the API does not take on a PATCH) is ignored upstream.
+pub const VISUALIZER_SHOT_FIELDS: &[&str] = &[
+    "profile_title",
+    "barista",
+    "bean_weight",
+    "canonical_coffee_bag_id",
+    "drink_weight",
+    "grinder_model",
+    "grinder_setting",
+    "bean_brand",
+    "bean_type",
+    "roast_level",
+    "roast_date",
+    "drink_tds",
+    "drink_ey",
+    "espresso_enjoyment",
+    "espresso_notes",
+    "bean_notes",
+];
+
+/// Fit an edit-sync `PATCH /shots/{id}` body (the inner object) to the
+/// account's tier.
+///
+/// - `premium` — the cached premium flag: `Some(true)` keeps the body as
+///   is; `Some(false)` **and `None` (not probed yet)** drop every
+///   [`VISUALIZER_PREMIUM_SHOT_FIELDS`] key, silently — the server would
+///   drop them anyway, and an unknown tier must never make the PATCH fail.
+///
+/// Returns `None` — skip the request, no error — when nothing the server
+/// would apply is left (no [`VISUALIZER_SHOT_FIELDS`] key, nor a premium
+/// key on a premium account): such a PATCH is a no-op at best and a 400 at
+/// worst. A non-object `body` is `None` too.
+#[must_use]
+pub fn visualizer_shot_patch_for_account(body: Value, premium: Option<bool>) -> Option<Value> {
+    let Value::Object(mut map) = body else {
+        return None;
+    };
+    let premium = premium == Some(true);
+    if !premium {
+        map.retain(|k, _| !VISUALIZER_PREMIUM_SHOT_FIELDS.contains(&k.as_str()));
+    }
+    let applies = map.keys().any(|k| {
+        VISUALIZER_SHOT_FIELDS.contains(&k.as_str())
+            || (premium && VISUALIZER_PREMIUM_SHOT_FIELDS.contains(&k.as_str()))
+    });
+    applies.then_some(Value::Object(map))
+}
+
+/// JSON-bridged [`visualizer_shot_patch`] + [`visualizer_shot_patch_for_account`]
+/// — the edit-sync PATCH body for this account. Input: a [`ShotPatchInputs`]
+/// JSON and the cached premium flag (`None` = unknown → treated as free).
+/// Output: the PATCH body JSON, or `None` when the shell must skip the
+/// request (nothing the server would apply).
 ///
 /// # Errors
 /// The JSON parse error string on a malformed `inputs_json`.
-pub fn visualizer_shot_patch_json(inputs_json: &str) -> Result<String, String> {
+pub fn visualizer_shot_patch_json(
+    inputs_json: &str,
+    premium: Option<bool>,
+) -> Result<Option<String>, String> {
     let inputs: ShotPatchInputs = serde_json::from_str(inputs_json).map_err(|e| e.to_string())?;
-    serde_json::to_string(&visualizer_shot_patch(&inputs)).map_err(|e| e.to_string())
+    visualizer_shot_patch_for_account(visualizer_shot_patch(&inputs), premium)
+        .map(|body| serde_json::to_string(&body).map_err(|e| e.to_string()))
+        .transpose()
 }
 
 // ── Rich-text notes (Visualizer ≥ d4ba57d3) ───────────────────────────────
@@ -1829,11 +1913,127 @@ mod tests {
 
     #[test]
     fn shot_patch_json_facade_round_trips() {
-        let out = visualizer_shot_patch_json(r#"{"rating":5,"privacy":"private"}"#).unwrap();
+        let out = visualizer_shot_patch_json(r#"{"rating":5,"privacy":"private"}"#, Some(true))
+            .unwrap()
+            .unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["flavor"], 15);
         assert_eq!(v["privacy"], "private");
-        assert!(visualizer_shot_patch_json("not json").is_err());
+        // A free (or not-yet-probed) account: `flavor` is premium-only and
+        // `privacy` alone is nothing the server applies → skip.
+        for tier in [Some(false), None] {
+            assert_eq!(
+                visualizer_shot_patch_json(r#"{"rating":5,"privacy":"private"}"#, tier).unwrap(),
+                None
+            );
+        }
+        let out = visualizer_shot_patch_json(r#"{"rating":5,"grinderModel":"EG-1"}"#, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&out).unwrap(),
+            serde_json::json!({ "grinder_model": "EG-1" })
+        );
+        assert!(visualizer_shot_patch_json("not json", Some(true)).is_err());
+    }
+
+    /// Every field the edit sync can send, premium-only ones included.
+    fn full_patch() -> Value {
+        visualizer_shot_patch(&ShotPatchInputs {
+            rating: Some(4),
+            notes: Some("syrupy".to_owned()),
+            privacy: Some("unlisted".to_owned()),
+            grinder_model: Some("Niche Zero".to_owned()),
+            coffee_bag_id: Some("bag-1".to_owned()),
+            tag_list: vec!["crema".to_owned()],
+            bean_brand: Some("Sey".to_owned()),
+            bean_type: Some("Kenya AA".to_owned()),
+            roast_date: Some("2026-06-17".to_owned()),
+            roast_level: Some(3.0),
+            bean_notes: Some("washed".to_owned()),
+            grinder_setting: Some("14".to_owned()),
+        })
+    }
+
+    #[test]
+    fn premium_account_keeps_the_whole_patch() {
+        let body = full_patch();
+        assert_eq!(
+            visualizer_shot_patch_for_account(body.clone(), Some(true)),
+            Some(body)
+        );
+    }
+
+    #[test]
+    fn free_or_unknown_account_drops_the_premium_only_fields() {
+        for tier in [Some(false), None] {
+            let out = visualizer_shot_patch_for_account(full_patch(), tier).unwrap();
+            for key in VISUALIZER_PREMIUM_SHOT_FIELDS {
+                assert!(out.get(key).is_none(), "{key} leaked for {tier:?}");
+            }
+            assert_eq!(
+                out,
+                serde_json::json!({
+                    "bean_brand": "Sey",
+                    "bean_type": "Kenya AA",
+                    "roast_date": "2026-06-17",
+                    "roast_level": "Medium-Light",
+                    "bean_notes": "<p>washed</p>",
+                    "grinder_setting": "14",
+                    "grinder_model": "Niche Zero",
+                    "privacy": "unlisted"
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_patch_of_only_premium_fields_is_skipped_for_a_free_account() {
+        let only_premium = visualizer_shot_patch(&ShotPatchInputs {
+            rating: Some(5),
+            notes: Some("juicy".to_owned()),
+            tag_list: vec!["x".to_owned()],
+            coffee_bag_id: Some("bag-1".to_owned()),
+            privacy: Some("public".to_owned()),
+            ..ShotPatchInputs::default()
+        });
+        assert_eq!(
+            visualizer_shot_patch_for_account(only_premium.clone(), Some(false)),
+            None
+        );
+        assert_eq!(
+            visualizer_shot_patch_for_account(only_premium.clone(), None),
+            None
+        );
+        assert_eq!(
+            visualizer_shot_patch_for_account(only_premium.clone(), Some(true)),
+            Some(only_premium)
+        );
+        // An empty body / a non-object is never sent either.
+        assert_eq!(
+            visualizer_shot_patch_for_account(serde_json::json!({}), Some(true)),
+            None
+        );
+        assert_eq!(
+            visualizer_shot_patch_for_account(Value::Null, Some(true)),
+            None
+        );
+    }
+
+    #[test]
+    fn the_field_lists_are_disjoint_and_cover_what_the_builder_emits() {
+        for key in VISUALIZER_PREMIUM_SHOT_FIELDS {
+            assert!(!VISUALIZER_SHOT_FIELDS.contains(key), "{key} in both lists");
+        }
+        let Value::Object(map) = full_patch() else {
+            panic!("object")
+        };
+        for key in map.keys() {
+            let known = VISUALIZER_SHOT_FIELDS.contains(&key.as_str())
+                || VISUALIZER_PREMIUM_SHOT_FIELDS.contains(&key.as_str())
+                || key == "privacy";
+            assert!(known, "builder emits unclassified key {key}");
+        }
     }
 
     // ── Rich-text notes ─────────────────────────────────────────────────

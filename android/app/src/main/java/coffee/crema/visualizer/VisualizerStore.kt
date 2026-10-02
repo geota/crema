@@ -64,6 +64,13 @@ data class VisualizerState(
     /** Cached `/me` projection; refreshed on sign-in and on Settings open. */
     val account: VisualizerAccount? = null,
     /**
+     * Cached Visualizer premium tier, probed alongside every `/me` fetch
+     * (sign-in, Settings open, Test) — `/me` itself carries no premium field.
+     * Null until probed (or after sign-out): the edit sync then treats the
+     * account as free and drops the Premium-only PATCH fields.
+     */
+    val premium: Boolean? = null,
+    /**
      * Unified sync PREFERENCES — the shared core [VisualizerSyncPrefs] shape both
      * shells serialise identically, so a backup's `visualizerPrefs` line moves
      * between web and Android with no per-shell tag. Pre-unification builds stored

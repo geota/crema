@@ -151,8 +151,22 @@ export class BeanSync extends Context.Tag('crema/BeanSync')<
 		 * result's `log` / `error`), so the boundary stays a plain `Promise`.
 		 */
 		readonly runSync: (library: BeanLibraryStore) => Effect.Effect<SyncResult>;
-		/** Fetch the signed-in user's `/me` profile (replaces `visualizer/account.ts`). */
+		/**
+		 * Fetch the signed-in user's `/me` profile (replaces `visualizer/account.ts`),
+		 * then refresh the cached premium flag ({@link refreshPremium}). Runs on
+		 * every connect (sign-in landing) and Settings open.
+		 */
 		readonly fetchAccount: Effect.Effect<VisualizerAccount, VisualizerCallError | ResponseDecodeError>;
+		/**
+		 * Re-probe the account's premium tier without side effects and cache it
+		 * into both sync stores (`null` result = inconclusive → cache untouched).
+		 * `/me` carries no premium field (API 1.17.2: id, name, public,
+		 * avatar_url), so the tier is read off a premium-gated endpoint: a
+		 * `PATCH /coffee_bags/<nil uuid>` answers 403 from `check_premium!` (its
+		 * first before_action) for a free account, 404 (no such bag) for a
+		 * premium one — nothing is written either way. Never fails.
+		 */
+		readonly refreshPremium: Effect.Effect<boolean | null>;
 		/**
 		 * Verify the connection + probe the premium tier (replaces
 		 * `visualizer-sync.ts` `testConnection`): a read to catch auth errors, then
@@ -162,6 +176,9 @@ export class BeanSync extends Context.Tag('crema/BeanSync')<
 		readonly testConnection: Effect.Effect<ConnectionTestResult>;
 	}
 >() {}
+
+/** The nil UUID — no coffee bag ever has it, so the premium probe never edits one. */
+const PREMIUM_PROBE_ID = '00000000-0000-0000-0000-000000000000';
 
 export const BeanSyncLive = Layer.effect(
 	BeanSync,
@@ -444,6 +461,26 @@ export const BeanSyncLive = Layer.effect(
 			return result;
 		});
 
+		const refreshPremium: Effect.Effect<boolean | null> = Effect.gen(function* () {
+			const probe = yield* Effect.either(
+				call(`/coffee_bags/${PREMIUM_PROBE_ID}`, { method: 'PATCH', body: { coffee_bag: {} } })
+			);
+			const premium =
+				probe._tag === 'Left'
+					? probe.left._tag === 'VisualizerNotFoundError'
+						? true
+						: probe.left._tag === 'VisualizerPremiumGatedError'
+							? false
+							: null
+					: // A 2xx can't happen for the nil id; read it as inconclusive.
+						null;
+			if (premium !== null) {
+				writeSyncSettings({ premium });
+				updateSyncConfig({ premium });
+			}
+			return premium;
+		});
+
 		const fetchAccount = Effect.gen(function* () {
 			const raw = yield* call('/me');
 			const body = decodeResponse(VisualizerAccountSchema, raw, 'GET /me');
@@ -453,6 +490,7 @@ export const BeanSyncLive = Layer.effect(
 					cause: 'Visualizer /me returned an unexpected shape.'
 				});
 			}
+			yield* refreshPremium;
 			return { id: body.id, name: body.name, public: body.public, avatarUrl: body.avatar_url };
 		});
 
@@ -507,6 +545,7 @@ export const BeanSyncLive = Layer.effect(
 			deleteRoaster,
 			runSync,
 			fetchAccount,
+			refreshPremium,
 			testConnection
 		});
 	})

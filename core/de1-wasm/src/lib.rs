@@ -551,12 +551,18 @@ pub fn volume_stop_arms(
 
 /// Assemble the Visualizer `PATCH /shots/{id}` body from a
 /// `ShotPatchInputs` JSON (rating→flavor rule, inline-bean block,
-/// key naming — one builder for both shells; review #42). Returns the
-/// inner body JSON; the caller wraps it in the `{ "shot": … }` envelope.
+/// key naming — one builder for both shells; review #42), fitted to the
+/// account tier: `premium` is the cached flag (`undefined`/`null` =
+/// unknown → treated as free, premium-only fields dropped). Returns the
+/// inner body JSON — the caller wraps it in the `{ "shot": … }` envelope —
+/// or `undefined` when the PATCH must be skipped (nothing left to apply).
 /// See `de1_domain::visualizer_shot_patch_json`.
 #[wasm_bindgen(js_name = visualizerShotPatchJson)]
-pub fn visualizer_shot_patch_json(inputs_json: &str) -> Result<String, String> {
-    de1_domain::visualizer_shot_patch_json(inputs_json)
+pub fn visualizer_shot_patch_json(
+    inputs_json: &str,
+    premium: Option<bool>,
+) -> Result<Option<String>, String> {
+    de1_domain::visualizer_shot_patch_json(inputs_json, premium)
 }
 
 /// The indices to KEEP when downsampling a shot's telemetry for storage

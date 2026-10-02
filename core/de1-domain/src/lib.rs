@@ -212,10 +212,11 @@ pub use visualizer_sync::{
     signature_for_shot,
 };
 pub use visualizer_wire::{
-    BagWire, RoasterWire, ShotPatchInputs, bean_from_wire, bean_from_wire_json, bean_to_wire,
-    bean_to_wire_json, rating_to_flavor, roast_level_from_wire, roast_level_to_wire,
-    roaster_from_wire, roaster_from_wire_json, roaster_to_wire, roaster_to_wire_json,
-    samples_from_visualizer_detail, samples_from_visualizer_detail_json, visualizer_shot_patch,
+    BagWire, RoasterWire, ShotPatchInputs, VISUALIZER_PREMIUM_SHOT_FIELDS, VISUALIZER_SHOT_FIELDS,
+    bean_from_wire, bean_from_wire_json, bean_to_wire, bean_to_wire_json, rating_to_flavor,
+    roast_level_from_wire, roast_level_to_wire, roaster_from_wire, roaster_from_wire_json,
+    roaster_to_wire, roaster_to_wire_json, samples_from_visualizer_detail,
+    samples_from_visualizer_detail_json, visualizer_shot_patch, visualizer_shot_patch_for_account,
     visualizer_shot_patch_json, wire_shot_from_detail, wire_shot_from_detail_json,
 };
 pub use volume::{LineFreqDetector, VolumeIntegrator};
