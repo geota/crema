@@ -5603,18 +5603,24 @@ internal fun shouldRaiseSaver(
  * lives in core ([coffee.crema.core.sleepRequestLatchesInRefill]); [latches]
  * is injectable so the wiring is testable on the JVM without the native lib.
  */
+internal fun sleepLatchesInRefill(s: MainUiState): Boolean =
+    sleepLatchesInRefill(s.machineStateName, s.machineSubstate, s.de1MachineInfo)
+
+/** [sleepLatchesInRefill] over the raw UI fields — the testable seam. */
 internal fun sleepLatchesInRefill(
-    s: MainUiState,
-    latches: (String, String, UInt?, UInt?) -> Boolean = { state, sub, fw, model ->
-        coffee.crema.core.sleepRequestLatchesInRefill(state, sub, fw, model)
+    state: MachineState?,
+    substate: String?,
+    machineInfo: Map<MmrRegister, UInt>,
+    latches: (String, String, UInt?, UInt?) -> Boolean = { st, sub, fw, model ->
+        coffee.crema.core.sleepRequestLatchesInRefill(st, sub, fw, model)
     },
 ): Boolean {
-    val state = s.machineStateName ?: return false
+    if (state == null) return false
     return latches(
         state.string,
-        s.machineSubstate ?: "",
-        s.de1MachineInfo[MmrRegister.FirmwareVersion],
-        s.de1MachineInfo[MmrRegister.MachineModel],
+        substate ?: "",
+        machineInfo[MmrRegister.FirmwareVersion],
+        machineInfo[MmrRegister.MachineModel],
     )
 }
 

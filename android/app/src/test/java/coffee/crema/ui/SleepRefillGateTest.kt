@@ -19,15 +19,11 @@ class SleepRefillGateTest {
     @Test
     fun `passes the live machine identity to core`() {
         val calls = mutableListOf<Call>()
-        val s = MainUiState(
-            machineStateName = MachineState.Idle,
-            machineSubstate = "Refill",
-            de1MachineInfo = mapOf(
-                MmrRegister.FirmwareVersion to 1352u,
-                MmrRegister.MachineModel to 1u,
-            ),
+        val info = mapOf(
+            MmrRegister.FirmwareVersion to 1352u,
+            MmrRegister.MachineModel to 1u,
         )
-        val blocked = sleepLatchesInRefill(s) { st, sub, fw, model ->
+        val blocked = sleepLatchesInRefill(MachineState.Idle, "Refill", info) { st, sub, fw, model ->
             calls += Call(st, sub, fw, model)
             true
         }
@@ -37,15 +33,14 @@ class SleepRefillGateTest {
 
     @Test
     fun `core's verdict decides`() {
-        val s = MainUiState(machineStateName = MachineState.Refill, machineSubstate = "Refill")
-        assertFalse(sleepLatchesInRefill(s) { _, _, _, _ -> false })
-        assertTrue(sleepLatchesInRefill(s) { _, _, fw, _ -> fw == null })
+        assertFalse(sleepLatchesInRefill(MachineState.Refill, "Refill", emptyMap()) { _, _, _, _ -> false })
+        assertTrue(sleepLatchesInRefill(MachineState.Refill, "Refill", emptyMap()) { _, _, fw, _ -> fw == null })
     }
 
     @Test
     fun `no machine state means nothing to gate`() {
         var asked = false
-        assertFalse(sleepLatchesInRefill(MainUiState()) { _, _, _, _ -> asked = true; true })
+        assertFalse(sleepLatchesInRefill(null, null, emptyMap()) { _, _, _, _ -> asked = true; true })
         assertFalse(asked)
     }
 }
