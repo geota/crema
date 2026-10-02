@@ -129,6 +129,20 @@ export interface Bean {
 	 */
 	tags: string[];
 	visualizerId: string | null;
+	/**
+	 * Visualizer catalogue coffee-bag id (`canonical_coffee_bag_id`) — set when
+	 * the bag was picked from the catalogue search in the bean form; sent on
+	 * the coffee-bag write so the remote bag links to the catalogue entry.
+	 * Optional (absent on pre-catalogue records) — `null`/absent = unlinked.
+	 * Mirrors `de1_domain::Bean::canonical_coffee_bag_id`.
+	 */
+	canonicalCoffeeBagId?: string | null;
+	/**
+	 * Visualizer catalogue roaster id of the picked entry's roaster
+	 * (`canonical_roaster_id`). Rides `metadata.crema` on the bag round-trip
+	 * and seeds the roaster row's {@link Roaster.catalogueRoasterId}.
+	 */
+	canonicalRoasterId?: string | null;
 	beanconquerorId: string | null;
 	imageRef: string | null;
 	/**
@@ -178,6 +192,8 @@ export function blankBean(id?: string): Bean {
 		grinderSetting: '',
 		tags: [],
 		visualizerId: null,
+		canonicalCoffeeBagId: null,
+		canonicalRoasterId: null,
 		beanconquerorId: null,
 		imageRef: null,
 		cost: null,
@@ -212,13 +228,20 @@ export interface Roaster {
 	country: string | null;
 	notes: string;
 	/**
-	 * Pointer to the canonical roaster id when this row was tagged as a
-	 * duplicate. `null` = this row is itself canonical (or has not been
-	 * deduped). Mirrors Visualizer `RoasterDetail.canonical_roaster_id`.
+	 * Pointer to the canonical LOCAL roaster row (`roaster:<uuid>`) when this
+	 * row was tagged as a duplicate. `null` = this row is itself canonical (or
+	 * has not been deduped). Local-only — Visualizer's `canonical_roaster_id`
+	 * is its catalogue link, kept in {@link Roaster.catalogueRoasterId}.
 	 * The Roasters tab filters duplicates out by default (showing only
 	 * canonicals); merge-duplicates wires this field on commit.
 	 */
 	canonicalRoasterId: string | null;
+	/**
+	 * Visualizer catalogue roaster id — the wire's `canonical_roaster_id`. Set
+	 * from a catalogue pick in the bean form (or pulled) and sent on the
+	 * roaster write. Optional (absent on older records).
+	 */
+	catalogueRoasterId?: string | null;
 	visualizerId: string | null;
 	/**
 	 * Unix epoch ms when this roaster was soft-deleted, or `null` when
@@ -243,6 +266,7 @@ export function blankRoaster(name: string, id?: string): Roaster {
 		country: null,
 		notes: '',
 		canonicalRoasterId: null,
+		catalogueRoasterId: null,
 		visualizerId: null,
 		deletedAt: null,
 		metadata: {},

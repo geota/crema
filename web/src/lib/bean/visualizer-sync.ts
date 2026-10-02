@@ -227,13 +227,18 @@ export function roasterFromWire(wire: RoasterWire): Roaster {
 // sent the bare body, which the server treats as `{}` (no recognised
 // keys) — every write was a no-op. These two helpers wrap each body in
 // the right envelope so the writes actually land.
+//
+// Catalogue links (`canonical_roaster_id` / `canonical_coffee_bag_id`) are
+// sent only when Crema has one: omitting the key leaves the remote value
+// alone, so a PATCH from a bag/roaster Crema never linked can't unlink one
+// the user linked on visualizer.coffee.
 
 export function roasterBodyToWriteRequest(body: RoasterWire): RoasterWriteRequest {
 	return {
 		roaster: {
 			name: body.name,
 			website: body.website ?? null,
-			canonical_roaster_id: body.canonical_roaster_id ?? null
+			...(body.canonical_roaster_id ? { canonical_roaster_id: body.canonical_roaster_id } : {})
 		}
 	};
 }
@@ -243,7 +248,9 @@ export function bagBodyToWriteRequest(body: BagWire): CoffeeBagWriteRequest {
 		coffee_bag: {
 			name: body.name,
 			roaster_id: body.roaster_id ?? null,
-			canonical_coffee_bag_id: body.canonical_coffee_bag_id ?? null,
+			...(body.canonical_coffee_bag_id
+				? { canonical_coffee_bag_id: body.canonical_coffee_bag_id }
+				: {}),
 			roast_date: body.roast_date ?? null,
 			frozen_date: body.frozen_date ?? null,
 			defrosted_date: body.defrosted_date ?? null,

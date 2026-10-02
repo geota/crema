@@ -57,6 +57,7 @@ import {
 } from '$lib/wasm/de1_wasm';
 import { updateSyncConfig } from '$lib/visualizer/sync-config';
 import type { components } from '$lib/visualizer/openapi';
+import { CATALOGUE_PAGE_SIZE, parseCataloguePage, type CataloguePage } from '$lib/bean/catalogue';
 
 /** Crema-side projection of the Visualizer `/me` response (camel-cased). */
 export interface VisualizerAccount {
@@ -151,6 +152,15 @@ export class BeanSync extends Context.Tag('crema/BeanSync')<
 		 * result's `log` / `error`), so the boundary stays a plain `Promise`.
 		 */
 		readonly runSync: (library: BeanLibraryStore) => Effect.Effect<SyncResult>;
+		/**
+		 * Search the Visualizer canonical catalogue —
+		 * `GET /canonical_coffee_bags?q=…&items=…` (open to free and Premium
+		 * accounts). The body is parsed by the core
+		 * (`de1_domain::parse_catalogue_coffee_bags`).
+		 */
+		readonly searchCatalogue: (
+			query: string
+		) => Effect.Effect<CataloguePage, VisualizerCallError>;
 		/** Fetch the signed-in user's `/me` profile (replaces `visualizer/account.ts`). */
 		readonly fetchAccount: Effect.Effect<VisualizerAccount, VisualizerCallError | ResponseDecodeError>;
 		/**
@@ -238,6 +248,12 @@ export const BeanSyncLive = Layer.effect(
 			return { visualizerId: result.id };
 		});
 
+		const searchCatalogue = Effect.fn('BeanSync.searchCatalogue')(function* (query: string) {
+			const params = new URLSearchParams({ q: query, items: String(CATALOGUE_PAGE_SIZE) });
+			const raw = yield* call(`/canonical_coffee_bags?${params.toString()}`);
+			return parseCataloguePage(raw);
+		});
+
 		const deleteBean = Effect.fn('BeanSync.deleteBean')(function* (visualizerId: string) {
 			yield* call(`/coffee_bags/${visualizerId}`, { method: 'DELETE' }).pipe(
 				Effect.catchTag('VisualizerNotFoundError', () => Effect.void)
@@ -292,6 +308,19 @@ export const BeanSyncLive = Layer.effect(
 				return result;
 			}
 
+			/**
+			 * The roaster with its catalogue link resolved for a write: its own
+			 * `catalogueRoasterId`, else the catalogue roaster id of a bean filed
+			 * under it that was picked from the catalogue.
+			 */
+			const withCatalogueLink = (roaster: Roaster): Roaster => {
+				if (roaster.catalogueRoasterId) return roaster;
+				const fromBean = library.beans.find(
+					(b) => b.roasterId === roaster.id && b.canonicalRoasterId && b.deletedAt == null
+				)?.canonicalRoasterId;
+				return fromBean ? { ...roaster, catalogueRoasterId: fromBean } : roaster;
+			};
+
 			const program = Effect.gen(function* () {
 				// 1) Pull remote roasters → reconcile in the core kernel (CORE4),
 				//    apply the action list shell-side (store mutations + the
@@ -300,21 +329,36 @@ export const BeanSyncLive = Layer.effect(
 					'/roasters'
 				)) as RoasterWire[];
 				const remoteRoasterIdToLocal = new Map<string, string>();
+				// Bound roasters whose remote row has no catalogue link yet — the
+				// link-PATCH leg (2b) fills them in when Crema has one.
+				const remoteUnlinked = new Set<string>();
 				for (const action of reconcileRoasters(library.roasters, remoteRoasters)) {
 					const wire = action.remote;
 					// The kernel only emits actions for remotes that carry an id.
 					const remoteId = wire.id as string;
+					if (!wire.canonical_roaster_id) remoteUnlinked.add(remoteId);
 					if (action.kind === 'update') {
+						// `canonical_roaster_id` is Visualizer's CATALOGUE link — it lands
+						// on `catalogueRoasterId`; the local dedup pointer
+						// (`canonicalRoasterId`) is never overwritten by a pull. A remote
+						// with no link keeps the local one (pushed by leg 2b).
+						const local = library.getRoaster(action.localId);
 						library.updateRoaster(action.localId, {
 							name: wire.name,
 							website: wire.website ?? null,
 							imageUrl: wire.image_url ?? null,
-							canonicalRoasterId: wire.canonical_roaster_id ?? null,
+							catalogueRoasterId: wire.canonical_roaster_id ?? local?.catalogueRoasterId ?? null,
 							visualizerId: remoteId
 						});
 						remoteRoasterIdToLocal.set(remoteId, action.localId);
 					} else if (action.kind === 'bind') {
-						library.updateRoaster(action.localId, { visualizerId: remoteId });
+						const local = library.getRoaster(action.localId);
+						library.updateRoaster(action.localId, {
+							visualizerId: remoteId,
+							...(wire.canonical_roaster_id && !local?.catalogueRoasterId
+								? { catalogueRoasterId: wire.canonical_roaster_id }
+								: {})
+						});
 						remoteRoasterIdToLocal.set(remoteId, action.localId);
 						log.push({ direction: 'pull', kind: 'roaster', id: action.localId, name: wire.name, at: Date.now() });
 					} else {
@@ -354,7 +398,7 @@ export const BeanSyncLive = Layer.effect(
 					// `visualizerId` here (filtered above), so `uploadRoaster` POSTs the
 					// same `roasterBodyToWriteRequest(roasterToWire(local))` body and
 					// returns the bound id.
-					const res = yield* Effect.either(uploadRoaster(local));
+					const res = yield* Effect.either(uploadRoaster(withCatalogueLink(local)));
 					if (res._tag === 'Right') {
 						library.updateRoaster(local.id, { visualizerId: res.right.visualizerId });
 						remoteRoasterIdToLocal.set(res.right.visualizerId, local.id);
@@ -369,6 +413,33 @@ export const BeanSyncLive = Layer.effect(
 					} else {
 						result.error = describeVisualizerError(res.left);
 						log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: result.error });
+					}
+				}
+
+				// 2b) Link already-synced roasters to the catalogue: a bound roaster
+				//     whose remote row has no `canonical_roaster_id` but which Crema
+				//     knows a catalogue id for (its own, or one of its beans' picks)
+				//     gets a roaster PATCH carrying the link. Premium-gated like every
+				//     roaster write; a failure only logs.
+				for (const local of library.roasters) {
+					if (premiumLocked) break;
+					if (!local.visualizerId || !remoteUnlinked.has(local.visualizerId)) continue;
+					const linked = withCatalogueLink(local);
+					if (!linked.catalogueRoasterId) continue;
+					const res = yield* Effect.either(uploadRoaster(linked));
+					if (res._tag === 'Right') {
+						if (!local.catalogueRoasterId) {
+							library.updateRoaster(local.id, { catalogueRoasterId: linked.catalogueRoasterId });
+						}
+						result.pushed += 1;
+						log.push({ direction: 'push', kind: 'roaster', id: local.id, name: local.name, at: Date.now() });
+					} else {
+						if (res.left._tag === 'VisualizerPremiumGatedError') {
+							premiumLocked = true;
+							writeSyncSettings({ premium: false });
+							logPremiumBannerOnce();
+						}
+						log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.left) });
 					}
 				}
 
@@ -545,6 +616,7 @@ export const BeanSyncLive = Layer.effect(
 		return BeanSync.of({
 			uploadBean,
 			uploadRoaster,
+			searchCatalogue,
 			deleteBean,
 			deleteRoaster,
 			runSync,

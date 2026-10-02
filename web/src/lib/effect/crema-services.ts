@@ -45,6 +45,8 @@ import type { SyncResult } from '$lib/bean/visualizer-sync';
 import type { HistoryStore } from '$lib/history/store.svelte';
 import { pushShotToVisualizer } from '$lib/history/shot-persistence.ts';
 import type { BeanLibraryStore } from '$lib/bean/store.svelte';
+import type { CataloguePage } from '$lib/bean/catalogue';
+import { describeVisualizerError } from '../services/visualizer-call.ts';
 
 /**
  * The component-facing surface of the Visualizer sync services. Every method is
@@ -80,6 +82,11 @@ export interface CremaServices {
 		 * never probed); a no-op otherwise, and when signed out. App start.
 		 */
 		refreshPremiumIfStale(): Promise<boolean | null>;
+		/**
+		 * Search the Visualizer canonical catalogue (`GET /canonical_coffee_bags`).
+		 * Rejects with an `Error` whose message is the human-readable failure.
+		 */
+		searchCatalogue(query: string): Promise<CataloguePage>;
 		/** Best-effort remote bag delete (a 404 is success). */
 		deleteBean(visualizerId: string): Promise<void>;
 		/** Best-effort remote roaster delete (a 404 is success). */
@@ -160,6 +167,12 @@ export function createCremaServices(runtime: AppRuntime): CremaServices {
 			fetchAccount: () => run(Effect.flatMap(BeanSync, (b) => b.fetchAccount)),
 			testConnection: () => run(Effect.flatMap(BeanSync, (b) => b.testConnection)),
 			refreshPremiumIfStale: () => run(Effect.flatMap(BeanSync, (b) => b.refreshPremiumIfStale)),
+			searchCatalogue: (query) =>
+				run(
+					Effect.flatMap(BeanSync, (b) => b.searchCatalogue(query)).pipe(
+						Effect.mapError((e) => new Error(describeVisualizerError(e)))
+					)
+				),
 			deleteBean: (visualizerId) => run(Effect.flatMap(BeanSync, (b) => b.deleteBean(visualizerId))),
 			deleteRoaster: (visualizerId) => run(Effect.flatMap(BeanSync, (b) => b.deleteRoaster(visualizerId))),
 			runSync: (library) => run(Effect.flatMap(BeanSync, (b) => b.runSync(library)))
