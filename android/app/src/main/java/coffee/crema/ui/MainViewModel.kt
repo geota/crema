@@ -1155,6 +1155,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         },
         setActiveProfile = { setActiveProfile(it) },
         resetBrewParams = { resetBrewParams() },
+        onShotAnnotationsEdited = { id -> decent.scheduleReplaceAfterEdit(id) },
     )
 
     // ── Guided brew sessions (issue #10) ─────────────────────────────────

@@ -7,7 +7,8 @@
 		readDecentAccount,
 		unsentDecentShots,
 		uploadAndReportDecent,
-		uploadUnsentDecentShots
+		uploadUnsentDecentShots,
+		scheduleDecentReplaceAfterEdit
 	} from '$lib/decent';
 	import {
 		shotUploadTargets,
@@ -1256,6 +1257,7 @@
 						onNotesChange={(notes) => {
 							store.setNotes(selected.id, notes);
 							syncEditToVisualizer(selected.id);
+							scheduleDecentReplaceAfterEdit(selected.id);
 						}}
 						onNextPlanChange={(nextPlan) => {
 							// Local-only workflow state — the exporter never sends
@@ -1265,6 +1267,7 @@
 						onRatingChange={(rating) => {
 							store.setRating(selected.id, rating);
 							syncEditToVisualizer(selected.id);
+							scheduleDecentReplaceAfterEdit(selected.id);
 						}}
 						onPrivacyChange={(privacy) => {
 							store.setPrivacy(selected.id, privacy);
@@ -1273,6 +1276,7 @@
 						onGrinderModelChange={(grinderModel) => {
 							store.setGrinderModel(selected.id, grinderModel);
 							syncEditToVisualizer(selected.id);
+							scheduleDecentReplaceAfterEdit(selected.id);
 						}}
 						onTagsChange={(tags) => {
 							store.setTags(selected.id, tags);
@@ -1281,6 +1285,7 @@
 						onGrindChange={(grinderSetting) => {
 							store.setGrindSetting(selected.id, grinderSetting);
 							syncEditToVisualizer(selected.id);
+							scheduleDecentReplaceAfterEdit(selected.id);
 						}}
 						onBeanChange={(bean, roaster) => {
 							// Move the bag debit with the attribution (Android
@@ -1296,6 +1301,7 @@
 							}
 							store.setBeanFromLive(selected.id, bean, roaster);
 							syncEditToVisualizer(selected.id);
+							scheduleDecentReplaceAfterEdit(selected.id);
 						}}
 						onDelete={(opts) => handleDelete(selected, opts)}
 						canDeleteRemote={canPushShots && !!selected.visualizerId}

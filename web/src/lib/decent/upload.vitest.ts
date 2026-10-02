@@ -35,6 +35,7 @@ vi.mock('$lib/components/shared/toast.svelte', () => ({
 const {
 	describeDecentDrain,
 	retryPendingDecentUploads,
+	scheduleDecentReplaceAfterEdit,
 	unsentDecentShots,
 	uploadShotToDecent,
 	uploadUnsentDecentShots
@@ -332,5 +333,47 @@ describe('network retry', () => {
 		expect(await retryPendingDecentUploads({ fetchFn: ok })).toMatchObject({ uploaded: 1 });
 		expect(shots.get('a')?.decentId).toBe('77');
 		expect(readDecentAccount().retryShotIds).toEqual([]);
+	});
+});
+
+describe('scheduleDecentReplaceAfterEdit (shot-upload 435acabb)', () => {
+	const urls: string[] = [];
+	const capture: FetchLike = async (input) => {
+		posts += 1;
+		urls.push(String(input));
+		return new Response('{"id":"77"}', { status: 200 });
+	};
+	const flush = async () => {
+		for (let i = 0; i < 20; i++) await Promise.resolve();
+	};
+	beforeEach(() => {
+		urls.length = 0;
+		vi.useFakeTimers();
+	});
+
+	it('a burst of edits to an uploaded shot queues exactly one replace upload', async () => {
+		writeDecentAccount(linked);
+		shots.set('a', { ...shots.get('a')!, decentId: '77' });
+		expect(scheduleDecentReplaceAfterEdit('a', { fetchFn: capture, appVersion: 't' })).toBe(true);
+		vi.advanceTimersByTime(500);
+		scheduleDecentReplaceAfterEdit('a', { fetchFn: capture, appVersion: 't' });
+		scheduleDecentReplaceAfterEdit('a', { fetchFn: capture, appVersion: 't' });
+		expect(posts).toBe(0); // debounced
+		await vi.advanceTimersByTimeAsync(1_500);
+		await flush();
+		expect(posts).toBe(1);
+		expect(urls[0]).toMatch(/\/support\/api\/shot_upload\?replace=1$/);
+	});
+
+	it('does nothing for a never-uploaded shot, with auto-upload off, or unlinked', async () => {
+		writeDecentAccount(linked);
+		expect(scheduleDecentReplaceAfterEdit('a', { fetchFn: capture })).toBe(false); // no decentId
+		shots.set('a', { ...shots.get('a')!, decentId: '77' });
+		writeDecentAccount({ ...linked, autoUpload: false });
+		expect(scheduleDecentReplaceAfterEdit('a', { fetchFn: capture })).toBe(false);
+		writeDecentAccount(DEFAULT_DECENT_ACCOUNT);
+		expect(scheduleDecentReplaceAfterEdit('a', { fetchFn: capture })).toBe(false);
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(posts).toBe(0);
 	});
 });

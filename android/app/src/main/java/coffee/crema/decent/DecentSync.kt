@@ -15,6 +15,8 @@ import coffee.crema.visualizer.SyncLogEntry
 import coffee.crema.visualizer.shotMachineOf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -76,6 +78,9 @@ class DecentSync(
 
         /** The drain gives up after this many failures in a row (rejections and 5xx alike; web parity). */
         const val FAILURE_STREAK_LIMIT = 3
+
+        /** Edit → replace debounce: the notes field fires per keystroke, stars in bursts (web parity). */
+        const val EDIT_REPLACE_DEBOUNCE_MS = 1_500L
         private const val LOG_CAP = 20
     }
 
@@ -327,6 +332,44 @@ class DecentSync(
             // Auto-path skips (too short / no serial) are expected, not errors.
             is Outcome.Skipped -> if (manual) notify("Not uploaded: ${outcome.reason}")
         }
+    }
+
+    /** Pending edit → replace uploads, by shot id (still inside their debounce). */
+    private val editReplaceJobs = HashMap<String, Job>()
+
+    /**
+     * After an edit to an ALREADY-UPLOADED shot's annotations (rating, notes,
+     * grind, bean — what the record carries), queue ONE debounced re-upload
+     * with `replace=1` so the Decent copy matches.
+     *
+     * Mirrors the shot-upload plugin's 435acabb: a `shotUpdated` re-POSTs with
+     * `replace=1`; only with auto-upload on; rapid edits coalesce into one
+     * upload of the latest state; the uploader's own bookkeeping (stamping
+     * `decentId`) never triggers it — this runs from the edit paths, not on
+     * history writes; an upload already running for the shot keeps its slot
+     * and the replace follows it. The auto-path gates (length, serial) still
+     * apply. Failures land in Recent activity, without a snackbar. Returns
+     * true when a replace was scheduled.
+     */
+    fun scheduleReplaceAfterEdit(shotId: String): Boolean {
+        val p = persisted
+        if (!p.linked || !p.autoUpload || p.needsReauth) return false
+        val shot = currentShot(shotId) ?: return false
+        if (shot.decentId == null || shot.isBrewLog) return false
+        synchronized(editReplaceJobs) {
+            editReplaceJobs.remove(shotId)?.cancel()
+            lateinit var job: Job
+            job = scope.launch {
+                delay(EDIT_REPLACE_DEBOUNCE_MS)
+                // Past the debounce: a later edit queues a fresh replace
+                // rather than cancelling this one mid-POST.
+                synchronized(editReplaceJobs) { if (editReplaceJobs[shotId] === job) editReplaceJobs.remove(shotId) }
+                while (synchronized(inFlight) { shotId in inFlight }) delay(250)
+                uploadNow(currentShot(shotId) ?: return@launch, manual = false, replace = true, fullSamples = null)
+            }
+            editReplaceJobs[shotId] = job
+        }
+        return true
     }
 
     /** Upload one shot and await the outcome (the backlog drain; tests). */

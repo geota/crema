@@ -254,6 +254,50 @@ export function uploadShotToDecent(
 	return run;
 }
 
+/** Edit → replace debounce: the notes field fires per keystroke, stars in bursts. */
+export const EDIT_REPLACE_DEBOUNCE_MS = 1_500;
+const editReplaceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * After an edit to an ALREADY-UPLOADED shot's annotations (rating, notes,
+ * grinder, grind, bean — what the record carries), queue ONE debounced
+ * re-upload with `?replace=1` so the Decent copy matches.
+ *
+ * Mirrors the shot-upload plugin's 435acabb ("Handle replacement uploads
+ * after shot edits"): a `shotUpdated` re-POSTs with `replace=1`; only with
+ * auto-upload on; rapid edits coalesce into one upload of the latest state;
+ * the uploader's own bookkeeping writes (here: binding the Decent id) never
+ * trigger it — this hook runs from the edit handlers, not on store writes; an
+ * upload already running for the shot keeps its slot and the replace follows
+ * it. The usual auto-path gates still apply in the upload itself (linked,
+ * not refused before, ≥ 5 s). Returns true when a replace was scheduled.
+ */
+export function scheduleDecentReplaceAfterEdit(
+	shotId: string,
+	opts: Pick<DecentUploadOptions, 'fetchFn' | 'appVersion'> = {}
+): boolean {
+	const account = readDecentAccount();
+	if (!isDecentLinked(account) || !account.autoUpload || account.needsReauth) return false;
+	const shot = getHistoryStore().get(shotId);
+	if (!shot?.decentId || shot.deletedAt || isBrewLog(shot)) return false;
+	const previous = editReplaceTimers.get(shotId);
+	if (previous) clearTimeout(previous);
+	editReplaceTimers.set(
+		shotId,
+		setTimeout(() => {
+			editReplaceTimers.delete(shotId);
+			// A running upload of this shot carries the pre-edit state (and
+			// `uploadShotToDecent` would join it): wait, then replace.
+			const running = inFlight.get(shotId) ?? Promise.resolve(null);
+			void running
+				.catch(() => null)
+				.then(() => uploadShotToDecent(shotId, { ...opts, replace: true }))
+				.catch((e) => console.warn('[Crema] Decent replace after edit threw:', e));
+		}, EDIT_REPLACE_DEBOUNCE_MS)
+	);
+	return true;
+}
+
 /** Report an outcome to the per-shot toast batch (`$lib/history/upload-toast`). */
 export function reportDecentOutcome(shotId: string, outcome: DecentUploadOutcome): void {
 	if (outcome.kind === 'uploaded') reportUploadOutcome(shotId, 'Decent', { kind: 'uploaded' });

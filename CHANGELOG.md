@@ -9,6 +9,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Editing an uploaded shot updates its Decent copy** — with Decent
+  auto-upload on, changing the rating, notes, grind or bean of a shot that is
+  already on your Decent account re-uploads it over the old copy
+  (`replace=1`), once, a moment after you stop editing. Same trigger as
+  Decent's own shot-upload plugin. Web and Android.
+
 - **Both flow readings now share the Flow card** (#92) — machine flow (ml/s)
   on the left, scale flow (g/s) on the right, so the two numbers being compared
   sit side by side. Dispensed water volume moved to the Weight card next to the
