@@ -2,6 +2,8 @@ package coffee.crema.visualizer
 
 import coffee.crema.core.Bean
 import coffee.crema.core.BeanPushItem
+import coffee.crema.core.BeanSyncScope
+import coffee.crema.core.RoasterPushItem
 import coffee.crema.core.Roaster
 import coffee.crema.core.RoasterLinkPatch
 import coffee.crema.ui.UploadTargetId
@@ -23,9 +25,11 @@ import java.util.UUID
  * (`web/src/lib/services/bean-sync.ts`).
  *
  * Order (identical to the web):
+ *   0. core `bean_sync_scope` turns the two direction settings into the legs
+ *      that run (backup = push only, pull = pull only, two-way = both);
  *   1. pull every remote roaster (paginated) → core `reconcile_roasters` →
  *      apply (`merge_pulled_roaster` for update / bind, `roaster_from_wire` for add);
- *   2. push every local roaster with no Visualizer id (Premium-gated);
+ *   2. push local roasters per core `plan_roaster_push` (Premium-gated);
  *   2b. PATCH the catalogue link onto bound roasters whose remote row lacks it
  *      (core `plan_roaster_link_patches`);
  *   3. pull every remote bag → `bean_from_wire` → core `reconcile_beans` → apply;
@@ -33,7 +37,9 @@ import java.util.UUID
  *      last sync → PATCH);
  *   5. stamp the sync time and the Premium flag.
  *
- * Remote wins on a pull (last-write-wins via the core reconcilers). Visualizer
+ * Last-write-wins against the previous sync (core reconcilers): a row edited
+ * here since then keeps its edit and is pushed; otherwise the remote copy is
+ * applied, keeping the local `updatedAt` so the pull never reads as an edit. Visualizer
  * bag / roaster WRITES are Premium-only: a cached `premium == false` starts the
  * run read-only (pull only, creates counted as skipped); the first 402/403
  * mid-run downshifts it the same way and logs one "Premium required" line.
@@ -57,9 +63,11 @@ interface BeanSyncCore {
     fun coffeeBagWriteRequest(beanJson: String, roasterRemoteId: String?): String
     fun roasterWriteRequest(roasterJson: String): String
     fun resolveRoasterCatalogueLink(payload: String): String?
-    fun mergePulledRoaster(localJson: String, remoteJson: String, refresh: Boolean, nowMs: Long): String
-    fun planBeanPush(beansJson: String, lastSyncAt: Long?): String
+    fun mergePulledRoaster(localJson: String, remoteJson: String, refresh: Boolean, lastSyncAt: Long?): String
+    fun planBeanPush(payload: String): String
+    fun planRoasterPush(payload: String): String
     fun planRoasterLinkPatches(payload: String): String
+    fun beanSyncScope(beansDirection: String, roastersDirection: String): String
 
     /** The production implementation — the Rust core over UniFFI. */
     object Native : BeanSyncCore {
@@ -73,10 +81,13 @@ interface BeanSyncCore {
             coffee.crema.core.coffeeBagWriteRequest(beanJson, roasterRemoteId)
         override fun roasterWriteRequest(roasterJson: String) = coffee.crema.core.roasterWriteRequest(roasterJson)
         override fun resolveRoasterCatalogueLink(payload: String) = coffee.crema.core.resolveRoasterCatalogueLink(payload)
-        override fun mergePulledRoaster(localJson: String, remoteJson: String, refresh: Boolean, nowMs: Long) =
-            coffee.crema.core.mergePulledRoaster(localJson, remoteJson, refresh, nowMs)
-        override fun planBeanPush(beansJson: String, lastSyncAt: Long?) = coffee.crema.core.planBeanPush(beansJson, lastSyncAt)
+        override fun mergePulledRoaster(localJson: String, remoteJson: String, refresh: Boolean, lastSyncAt: Long?) =
+            coffee.crema.core.mergePulledRoaster(localJson, remoteJson, refresh, lastSyncAt)
+        override fun planBeanPush(payload: String) = coffee.crema.core.planBeanPush(payload)
+        override fun planRoasterPush(payload: String) = coffee.crema.core.planRoasterPush(payload)
         override fun planRoasterLinkPatches(payload: String) = coffee.crema.core.planRoasterLinkPatches(payload)
+        override fun beanSyncScope(beansDirection: String, roastersDirection: String) =
+            coffee.crema.core.beanSyncScope(beansDirection, roastersDirection)
     }
 }
 
@@ -86,6 +97,9 @@ data class BeanSyncSettings(
     val lastSyncAt: Long?,
     /** Cached Premium tier: false = free (writes skipped), null = not probed yet. */
     val premium: Boolean?,
+    /** Beans / roasters directions (`off | backup | pull | two-way`) — which legs run. */
+    val beansDirection: String = "two-way",
+    val roastersDirection: String = "two-way",
 )
 
 /** The aggregate outcome of one run (web `SyncResult`), plus the rows it touched. */
@@ -156,15 +170,21 @@ class BeanSyncRunner(
         fun bean(id: String) = beans.firstOrNull { it.id == id }
 
         /** Replace (or prepend) a roaster, stamping `updatedAt` like the web store. */
-        fun putRoaster(r: Roaster) {
-            val next = r.copy(updatedAt = now())
+        /**
+         * Replace (or prepend) a roaster exactly as given. Rows applied from a
+         * pull keep the stamp the core hands back — a pull is not a local edit,
+         * and re-stamping it would make the next sync push it straight back.
+         * [stamp] = a local change made by this run (binding a pushed row's id).
+         */
+        fun putRoaster(r: Roaster, stamp: Boolean = false) {
+            val next = if (stamp) r.copy(updatedAt = now()) else r
             val i = roasters.indexOfFirst { it.id == r.id }
             if (i >= 0) roasters[i] = next else roasters.add(0, next)
             changedRoasters += r.id
         }
 
-        fun putBean(b: Bean) {
-            val next = b.copy(updatedAt = now())
+        fun putBean(b: Bean, stamp: Boolean = false) {
+            val next = if (stamp) b.copy(updatedAt = now()) else b
             val i = beans.indexOfFirst { it.id == b.id }
             if (i >= 0) beans[i] = next else beans.add(0, next)
             changedBeans += b.id
@@ -209,165 +229,217 @@ class BeanSyncRunner(
         }
 
         suspend fun program() {
-            // 1) Pull remote roasters → reconcile (core) → apply.
-            val remoteRoasters = pullPaged("/roasters")
+            // Which legs run (core `bean_sync_scope`): backup pushes only, pull
+            // pulls only and never writes remote, two-way both, off neither.
+            val scope = json.decodeFromString(
+                BeanSyncScope.serializer(),
+                core.beanSyncScope(settings.beansDirection, settings.roastersDirection),
+            )
+            val lastSync = settings.lastSyncAt
+            // Rows this run took from the remote (added roasters, every applied
+            // bag): they already match it, so the push legs skip them.
+            val pulledRoasterIds = mutableListOf<String>()
+            val pulledBeanIds = mutableListOf<String>()
+            // Remote → local roaster ids for the bag decode, seeded from the
+            // already-bound roasters so a beans-only pull still files bags.
             val remoteToLocal = HashMap<String, String>()
+            roasters.forEach { r -> r.visualizerId?.let { remoteToLocal[it] = r.id } }
             val unlinked = mutableListOf<String>()
-            val roasterActions = json.parseToJsonElement(
-                core.reconcileRoasters(
-                    buildJsonObject {
-                        put("local", json.encodeToJsonElement(roasterList, roasters))
-                        put("remote", JsonArray(remoteRoasters))
-                    }.toString(),
-                ),
-            ) as JsonArray
-            for (el in roasterActions) {
-                val action = el as? JsonObject ?: continue
-                val wire = action["remote"] as? JsonObject ?: continue
-                val remoteId = wire.str("id") ?: continue
-                val name = wire.str("name").orEmpty()
-                if (wire.str("canonical_roaster_id").isNullOrEmpty()) unlinked += remoteId
-                when (val kind = action.str("kind")) {
-                    "update", "bind" -> {
-                        val localId = action.str("localId") ?: continue
-                        roaster(localId)?.let { local ->
-                            putRoaster(
-                                json.decodeFromString(
-                                    Roaster.serializer(),
-                                    core.mergePulledRoaster(
-                                        json.encodeToString(Roaster.serializer(), local),
-                                        wire.toString(),
-                                        kind == "update",
-                                        now(),
+
+            // 1) Pull remote roasters → reconcile (core) → apply.
+            if (scope.pullRoasters) {
+                val remoteRoasters = pullPaged("/roasters")
+                val roasterActions = json.parseToJsonElement(
+                    core.reconcileRoasters(
+                        buildJsonObject {
+                            put("local", json.encodeToJsonElement(roasterList, roasters))
+                            put("remote", JsonArray(remoteRoasters))
+                        }.toString(),
+                    ),
+                ) as JsonArray
+                for (el in roasterActions) {
+                    val action = el as? JsonObject ?: continue
+                    val wire = action["remote"] as? JsonObject ?: continue
+                    val remoteId = wire.str("id") ?: continue
+                    val name = wire.str("name").orEmpty()
+                    if (wire.str("canonical_roaster_id").isNullOrEmpty()) unlinked += remoteId
+                    when (val kind = action.str("kind")) {
+                        "update", "bind" -> {
+                            val localId = action.str("localId") ?: continue
+                            roaster(localId)?.let { local ->
+                                // Core merge: an update takes the remote fields unless the
+                                // local was edited since the last sync; updatedAt is kept.
+                                putRoaster(
+                                    json.decodeFromString(
+                                        Roaster.serializer(),
+                                        core.mergePulledRoaster(
+                                            json.encodeToString(Roaster.serializer(), local),
+                                            wire.toString(),
+                                            kind == "update",
+                                            lastSync,
+                                        ),
                                     ),
-                                ),
-                            )
+                                )
+                            }
+                            // Not skipped by the push leg: a row edited here since the
+                            // last sync kept its edit, and that must push.
+                            remoteToLocal[remoteId] = localId
+                            if (kind == "bind") entry("pull", "roaster", localId, name)
                         }
-                        remoteToLocal[remoteId] = localId
-                        // A refresh of an already-bound row is silent; a new binding logs.
-                        if (kind == "bind") entry("pull", "roaster", localId, name)
-                    }
-                    else -> {
-                        val fresh = json.decodeFromString(
-                            Roaster.serializer(),
-                            core.roasterFromWire(wire.toString(), mintRoasterId(), now()),
-                        )
-                        putRoaster(fresh)
-                        remoteToLocal[remoteId] = fresh.id
-                        pulled++
-                        entry("pull", "roaster", fresh.id, name)
+                        else -> {
+                            val fresh = json.decodeFromString(
+                                Roaster.serializer(),
+                                core.roasterFromWire(wire.toString(), mintRoasterId(), now()),
+                            )
+                            putRoaster(fresh)
+                            remoteToLocal[remoteId] = fresh.id
+                            pulledRoasterIds += fresh.id
+                            pulled++
+                            entry("pull", "roaster", fresh.id, name)
+                        }
                     }
                 }
             }
 
-            // 2) Push local roasters with no Visualizer id (Premium-gated).
-            for (id in roasters.filter { it.visualizerId == null }.map { it.id }) {
-                val local = roaster(id) ?: continue
-                if (premiumLocked) {
-                    skipped++
-                    entry("skip", "roaster", local.id, local.name, "premium required")
-                    continue
-                }
-                try {
-                    val vid = uploadRoaster(withCatalogueLink(local))
-                    putRoaster(local.copy(visualizerId = vid))
-                    remoteToLocal[vid] = local.id
-                    pushed++
-                    premium = true
-                    entry("push", "roaster", local.id, local.name)
-                } catch (e: VisualizerError.PremiumGated) {
-                    lockPremium()
-                    entry("skip", "roaster", local.id, local.name, "premium required")
-                } catch (e: VisualizerError) {
-                    error = describe(e)
-                    entry("skip", "roaster", local.id, local.name, error)
-                }
-            }
-
-            // 2b) Link already-synced roasters to the catalogue (core plan).
-            val patches = json.decodeFromString(
-                ListSerializer(RoasterLinkPatch.serializer()),
-                core.planRoasterLinkPatches(
-                    buildJsonObject {
-                        put("roasters", json.encodeToJsonElement(roasterList, roasters))
-                        put("beans", json.encodeToJsonElement(beanList, beans))
-                        put("unlinkedRemoteIds", buildJsonArray { unlinked.forEach { add(JsonPrimitive(it)) } })
-                    }.toString(),
-                ),
-            )
-            for (patch in patches) {
-                if (premiumLocked) break
-                val local = roaster(patch.localId) ?: continue
-                try {
-                    uploadRoaster(local.copy(catalogueRoasterId = patch.catalogueRoasterId))
-                    if (local.catalogueRoasterId.isNullOrEmpty()) {
-                        putRoaster(local.copy(catalogueRoasterId = patch.catalogueRoasterId))
-                    }
-                    pushed++
-                    entry("push", "roaster", local.id, local.name)
-                } catch (e: VisualizerError) {
-                    if (e is VisualizerError.PremiumGated) lockPremium()
-                    entry("skip", "roaster", local.id, local.name, describe(e))
-                }
-            }
-
-            // 3) Pull remote bags → decode (core) → reconcile (core) → apply.
-            val remoteBags = pullPaged("/coffee_bags")
-            val decoded = remoteBags.map { wire ->
-                val localRoasterId = wire.str("roaster_id")?.let { remoteToLocal[it] }
-                json.decodeFromString(
-                    Bean.serializer(),
-                    core.beanFromWire(wire.toString(), localRoasterId, mintBeanId(), now()),
+            // 2) Push roasters (Premium-gated, core plan): unbound → POST, edited since the last sync → PATCH.
+            val pushedRoasterIds = HashSet<String>()
+            if (scope.pushRoasters) {
+                val plan = json.decodeFromString(
+                    ListSerializer(RoasterPushItem.serializer()),
+                    core.planRoasterPush(
+                        buildJsonObject {
+                            put("roasters", json.encodeToJsonElement(roasterList, roasters))
+                            lastSync?.let { put("lastSyncAt", it) }
+                            put("skipIds", buildJsonArray { pulledRoasterIds.forEach { add(JsonPrimitive(it)) } })
+                        }.toString(),
+                    ),
                 )
-            }
-            val beanActions = json.parseToJsonElement(
-                core.reconcileBeans(
-                    buildJsonObject {
-                        put("local", json.encodeToJsonElement(beanList, beans))
-                        put("remote", json.encodeToJsonElement(beanList, decoded))
-                        put("roasterNames", buildJsonObject { roasters.forEach { put(it.id, it.name) } })
-                    }.toString(),
-                ),
-            ) as JsonArray
-            for (el in beanActions) {
-                val action = el as? JsonObject ?: continue
-                val remote = action["remote"]?.let { json.decodeFromJsonElement(Bean.serializer(), it) } ?: continue
-                if (action.str("kind") == "replace") {
-                    val localId = action.str("localId") ?: continue
-                    putBean(remote.copy(id = localId))
-                    entry("pull", "bean", localId, remote.name)
-                } else {
-                    putBean(remote)
-                    pulled++
-                    entry("pull", "bean", remote.id, remote.name)
+                for (item in plan) {
+                    val local = roaster(item.localId) ?: continue
+                    if (premiumLocked) {
+                        if (item.create) {
+                            skipped++
+                            entry("skip", "roaster", local.id, local.name, "premium required")
+                        }
+                        continue
+                    }
+                    try {
+                        val vid = uploadRoaster(withCatalogueLink(local))
+                        if (item.create) {
+                            putRoaster(local.copy(visualizerId = vid), stamp = true)
+                            remoteToLocal[vid] = local.id
+                        }
+                        pushedRoasterIds += local.id
+                        pushed++
+                        premium = true
+                        entry("push", "roaster", local.id, local.name)
+                    } catch (e: VisualizerError.PremiumGated) {
+                        lockPremium()
+                        entry("skip", "roaster", local.id, local.name, "premium required")
+                    } catch (e: VisualizerError) {
+                        error = describe(e)
+                        entry("skip", "roaster", local.id, local.name, error)
+                    }
+                }
+
+                // 2b) Link already-synced roasters to the catalogue (core plan).
+                val patches = json.decodeFromString(
+                    ListSerializer(RoasterLinkPatch.serializer()),
+                    core.planRoasterLinkPatches(
+                        buildJsonObject {
+                            put("roasters", json.encodeToJsonElement(roasterList, roasters))
+                            put("beans", json.encodeToJsonElement(beanList, beans))
+                            put("unlinkedRemoteIds", buildJsonArray { unlinked.forEach { add(JsonPrimitive(it)) } })
+                        }.toString(),
+                    ),
+                )
+                for (patch in patches) {
+                    if (premiumLocked) break
+                    if (patch.localId in pushedRoasterIds) continue
+                    val local = roaster(patch.localId) ?: continue
+                    try {
+                        uploadRoaster(local.copy(catalogueRoasterId = patch.catalogueRoasterId))
+                        if (local.catalogueRoasterId.isNullOrEmpty()) {
+                            // updatedAt kept: the link now matches the remote.
+                            putRoaster(local.copy(catalogueRoasterId = patch.catalogueRoasterId))
+                        }
+                        pushed++
+                        entry("push", "roaster", local.id, local.name)
+                    } catch (e: VisualizerError) {
+                        if (e is VisualizerError.PremiumGated) lockPremium()
+                        entry("skip", "roaster", local.id, local.name, describe(e))
+                    }
                 }
             }
 
-            // 4) Push bags per the core plan: unbound → POST, edited since the last sync → PATCH.
-            val plan = json.decodeFromString(
-                ListSerializer(BeanPushItem.serializer()),
-                core.planBeanPush(json.encodeToString(beanList, beans), settings.lastSyncAt),
-            )
-            for (item in plan) {
-                val local = bean(item.localId) ?: continue
-                if (premiumLocked) {
-                    if (item.create) {
-                        skipped++
-                        entry("skip", "bean", local.id, local.name, "premium required")
-                    }
-                    continue
+            // 3) Pull remote bags → decode (core) → reconcile against the last-sync baseline (core) → apply.
+            if (scope.pullBeans) {
+                val remoteBags = pullPaged("/coffee_bags")
+                val decoded = remoteBags.map { wire ->
+                    val localRoasterId = wire.str("roaster_id")?.let { remoteToLocal[it] }
+                    json.decodeFromString(
+                        Bean.serializer(),
+                        core.beanFromWire(wire.toString(), localRoasterId, mintBeanId(), now()),
+                    )
                 }
-                val remoteRoasterId = roaster(local.roasterId)?.visualizerId
-                try {
-                    val vid = uploadBean(local, remoteRoasterId)
-                    if (item.create) putBean(local.copy(visualizerId = vid))
-                    pushed++
-                    entry("push", "bean", local.id, local.name)
-                } catch (e: VisualizerError.PremiumGated) {
-                    lockPremium()
-                    entry("skip", "bean", local.id, local.name, if (item.create) "premium required" else describe(e))
-                } catch (e: VisualizerError) {
-                    entry("skip", "bean", local.id, local.name, describe(e))
+                val beanActions = json.parseToJsonElement(
+                    core.reconcileBeans(
+                        buildJsonObject {
+                            put("local", json.encodeToJsonElement(beanList, beans))
+                            put("remote", json.encodeToJsonElement(beanList, decoded))
+                            put("roasterNames", buildJsonObject { roasters.forEach { put(it.id, it.name) } })
+                            lastSync?.let { put("lastSyncAt", it) }
+                        }.toString(),
+                    ),
+                ) as JsonArray
+                for (el in beanActions) {
+                    val action = el as? JsonObject ?: continue
+                    val remote = action["remote"]?.let { json.decodeFromJsonElement(Bean.serializer(), it) } ?: continue
+                    // Stored as the core hands it back (a replace keeps the local id + updatedAt).
+                    putBean(remote)
+                    pulledBeanIds += remote.id
+                    if (action.str("kind") == "replace") {
+                        entry("pull", "bean", remote.id, remote.name)
+                    } else {
+                        pulled++
+                        entry("pull", "bean", remote.id, remote.name)
+                    }
+                }
+            }
+
+            // 4) Push bags per the core plan (unbound → POST, edited since the last sync → PATCH), minus step 3's pulls.
+            if (scope.pushBeans) {
+                val plan = json.decodeFromString(
+                    ListSerializer(BeanPushItem.serializer()),
+                    core.planBeanPush(
+                        buildJsonObject {
+                            put("beans", json.encodeToJsonElement(beanList, beans))
+                            lastSync?.let { put("lastSyncAt", it) }
+                            put("skipIds", buildJsonArray { pulledBeanIds.forEach { add(JsonPrimitive(it)) } })
+                        }.toString(),
+                    ),
+                )
+                for (item in plan) {
+                    val local = bean(item.localId) ?: continue
+                    if (premiumLocked) {
+                        if (item.create) {
+                            skipped++
+                            entry("skip", "bean", local.id, local.name, "premium required")
+                        }
+                        continue
+                    }
+                    val remoteRoasterId = roaster(local.roasterId)?.visualizerId
+                    try {
+                        val vid = uploadBean(local, remoteRoasterId)
+                        if (item.create) putBean(local.copy(visualizerId = vid), stamp = true)
+                        pushed++
+                        entry("push", "bean", local.id, local.name)
+                    } catch (e: VisualizerError.PremiumGated) {
+                        lockPremium()
+                        entry("skip", "bean", local.id, local.name, if (item.create) "premium required" else describe(e))
+                    } catch (e: VisualizerError) {
+                        entry("skip", "bean", local.id, local.name, describe(e))
+                    }
                 }
             }
         }

@@ -842,7 +842,12 @@ class VisualizerSync(
             val result = runner.run(
                 snapshot.beans,
                 snapshot.roasters,
-                BeanSyncSettings(lastSyncAt = persisted.beanLastSyncAt, premium = persisted.premium),
+                BeanSyncSettings(
+                    lastSyncAt = persisted.beanLastSyncAt,
+                    premium = persisted.premium,
+                    beansDirection = persisted.prefs.beansDirection,
+                    roastersDirection = persisted.prefs.roastersDirection,
+                ),
             )
             onBeansSynced(result, snapshot.beans.mapTo(HashSet()) { it.id }, snapshot.roasters.mapTo(HashSet()) { it.id })
             val failure = result.error?.takeIf { !result.ok }?.let {
