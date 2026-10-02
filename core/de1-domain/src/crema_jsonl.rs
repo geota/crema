@@ -784,6 +784,7 @@ mod tests {
         own.name = "Mine".to_owned();
         own.credit = None;
         own.source_url = None;
+        own.notes = Some("Sibarist Fast filter · Third Wave Water, light roast".to_owned());
         let envelope = serde_json::json!({
             "recipes": [builtin, copy, own],
             "recipeMeta": { "defaults": { "pourover": "recipe:copy" }, "hiddenBuiltins": ["builtin:kasuya-4-6"] },
@@ -807,6 +808,10 @@ mod tests {
             Some("Adapted from James Hoffmann — A Better 1 Cup V60 Technique (2022)")
         );
         assert_eq!(restored.source_url, builtin.source_url);
+        assert_eq!(
+            plan.recipes[1].notes.as_deref(),
+            Some("Sibarist Fast filter · Third Wave Water, light roast")
+        );
         let meta = plan.recipe_meta.expect("recipeMeta");
         assert_eq!(meta["defaults"]["pourover"], "recipe:copy");
         assert!(meta.get("kind").is_none());

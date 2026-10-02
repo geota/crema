@@ -11,7 +11,12 @@
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	import type { BrewRecipe, BrewStep } from '$lib/core/crema-core';
 	import { BrewStepKind, StepAdvance } from '$lib/core/crema-core';
-	import { newRecipeFor, plannedPourTotalG, recipeId } from '$lib/brew/recipes.svelte';
+	import {
+		cleanRecipeNotes,
+		newRecipeFor,
+		plannedPourTotalG,
+		recipeId
+	} from '$lib/brew/recipes.svelte';
 	import { brewMethodPresets, methodLabel } from '$lib/brew/methods';
 	import RecipeCredit from './RecipeCredit.svelte';
 	import CustomMethodDialog from './CustomMethodDialog.svelte';
@@ -48,6 +53,7 @@
 	let waterG = $state(base.waterG);
 	let tempC = $state<number | null>(base.tempC ?? null);
 	let steps = $state<BrewStep[]>((base.steps ?? []).map((s) => ({ ...s })));
+	let notes = $state(base.notes ?? '');
 
 	/** The method options — the preset chips, plus the recipe's own
 	 *  free-text method when it isn't a curated one. */
@@ -124,6 +130,7 @@
 			doseG,
 			waterG,
 			tempC: tempC ?? undefined,
+			notes: cleanRecipeNotes(notes),
 			steps: steps.map((s) => ({
 				...s,
 				label: s.label?.trim() ? s.label.trim() : undefined,
@@ -272,6 +279,17 @@
 				</span>
 			{/if}
 		</div>
+
+		<label class="re-fld">
+			<span class="re-label">Notes</span>
+			<textarea
+				class="re-input re-notes"
+				bind:value={notes}
+				rows="3"
+				maxlength="1000"
+				placeholder="Filter, water recipe, grinder, remineralisation…"
+			></textarea>
+		</label>
 	</div>
 
 	<footer class="re-foot">
@@ -406,6 +424,11 @@
 	}
 	.re-input:focus {
 		border-color: var(--copper-400);
+	}
+	.re-notes {
+		resize: vertical;
+		min-height: 64px;
+		line-height: 1.45;
 	}
 	.re-num {
 		font-family: var(--font-mono);

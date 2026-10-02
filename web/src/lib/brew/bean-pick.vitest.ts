@@ -94,6 +94,11 @@ describe('guided prefill carries the chosen bean', () => {
 		expect(openingBeanId(p, 'active')).toBe('other');
 	});
 
+	it("never merges the recipe's notes into the brew's own notes", () => {
+		const p = guidedLogPrefill(summary, { ...recipe, notes: 'Cafec Abaca, TWW' }, 'other');
+		expect(JSON.stringify(p)).not.toContain('Cafec Abaca');
+	});
+
 	it('keeps No bean through to the form', () => {
 		const p = guidedLogPrefill(summary, recipe, null);
 		expect('beanId' in p).toBe(true);

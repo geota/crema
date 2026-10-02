@@ -72,6 +72,13 @@ export function builtinRecipes(): readonly BrewRecipe[] {
 	return builtinCache;
 }
 
+/** A recipe's free-text notes as saved: trimmed, and absent when blank
+ *  (the editor's "Notes" field — filter, water recipe, grinder …). */
+export function cleanRecipeNotes(raw: string | null | undefined): string | undefined {
+	const t = raw?.trim();
+	return t ? t : undefined;
+}
+
 /** Whether `id` names a built-in (read-only) recipe — core catalogue membership. */
 export function isBuiltinRecipe(id: string): boolean {
 	return wasmIsBuiltinRecipe(id);

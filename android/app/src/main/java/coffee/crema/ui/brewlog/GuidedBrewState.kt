@@ -183,6 +183,8 @@ data class RecipeEditDraft(
     val water: Double,
     val temp: Double,
     val steps: List<BrewStep>,
+    /** Free-text setup notes (filter, water recipe …) as typed; saved trimmed, blank = none. */
+    val notes: String = "",
 ) {
     val heading: String get() = if (isNew) "New recipe" else "Edit recipe"
 
@@ -203,6 +205,7 @@ data class RecipeEditDraft(
         waterG = water.toFloat(),
         tempC = temp.toFloat().takeIf { it > 0f },
         steps = steps,
+        notes = notes.trim().ifBlank { null },
     )
 
     /** A method pick; in new-recipe mode [template] re-seeds the whole plan. */
@@ -238,6 +241,7 @@ data class RecipeEditDraft(
             water = recipe.waterG.toDouble(),
             temp = (recipe.tempC ?: 0f).toDouble(),
             steps = recipe.steps.orEmpty(),
+            notes = recipe.notes.orEmpty(),
         )
     }
 }

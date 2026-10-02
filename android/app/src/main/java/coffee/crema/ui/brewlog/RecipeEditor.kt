@@ -257,6 +257,16 @@ private fun RecipeEditorBody(vm: MainViewModel, d: RecipeEditDraft, modifier: Mo
                     )
                 }
             }
+            // Free-text setup notes — filter, water recipe, grinder … (issue #10 feedback).
+            CremaTextField(
+                value = d.notes,
+                onValueChange = { v -> vm.updateRecipeEdit { it.copy(notes = v) } },
+                label = "Notes",
+                placeholder = "Filter, water recipe, grinder, remineralisation…",
+                singleLine = false,
+                minLines = 3,
+                modifier = Modifier.fillMaxWidth().testTag("recipe-notes"),
+            )
         }
     }
 }

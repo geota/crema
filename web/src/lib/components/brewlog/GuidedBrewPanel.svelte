@@ -45,6 +45,7 @@
 	import LogBrewDialog from './LogBrewDialog.svelte';
 	import MethodMark from './MethodMark.svelte';
 	import RecipeCredit from './RecipeCredit.svelte';
+	import RecipeNotes from './RecipeNotes.svelte';
 	import RecipeEditor from './RecipeEditor.svelte';
 	import CustomMethodDialog from './CustomMethodDialog.svelte';
 	import { isCustomMethodId } from '$lib/brew/custom-methods.svelte';
@@ -340,6 +341,9 @@
 						{recipe.doseG} g · {recipe.waterG} g water{#if recipe.tempC}
 							· {Math.round(recipe.tempC)} °C{/if}{#if setupEstimate} · ~{setupEstimate}{/if}
 					</div>
+					{#if recipe.notes?.trim()}
+						<div class="gb-recipe-notes"><RecipeNotes notes={recipe.notes} /></div>
+					{/if}
 				</div>
 				<div class="gb-recipe-actions">
 					{#if pickable.length > 1}
@@ -599,6 +603,11 @@
 					No bean
 				{/if}
 			</div>
+			{#if liveRecipe?.notes?.trim()}
+				<div class="gb-done-notes">
+					<RecipeNotes notes={liveRecipe.notes} label="Recipe notes" />
+				</div>
+			{/if}
 			<div class="gb-done-stats">
 				<span class="gb-done-stat"
 					><b>{clock(session.summary.durationMs)}</b><em>time</em></span
@@ -786,6 +795,9 @@
 		font-size: 11.5px;
 		color: rgba(var(--tint-rgb), 0.55);
 		margin-top: 3px;
+	}
+	.gb-recipe-notes {
+		margin-top: 4px;
 	}
 	/* The recipe picker and its Edit / Duplicate companion: one control
 	   language — the Bean row's well (radius-sm, faint fill, hairline), the
@@ -1265,6 +1277,10 @@
 		flex-direction: column;
 		gap: 8px;
 		margin-top: 12px;
+	}
+	.gb-done-notes {
+		max-width: 460px;
+		text-align: center;
 	}
 	.gb-done-stats {
 		display: flex;

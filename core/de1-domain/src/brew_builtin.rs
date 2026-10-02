@@ -575,11 +575,22 @@ mod tests {
         own.credit = None;
         own.source_url = None;
         assert_eq!(duplicate_recipe(&own, "recipe:c", 3).credit, None);
+        // Recipe notes (filter, water recipe…) carry into the copy.
+        let wac = builtin_brew_recipe("builtin:merikanto-wac-2021").unwrap();
+        assert_eq!(
+            wac.notes.as_deref(),
+            Some("Inverted, two rinsed paper filters")
+        );
+        assert_eq!(duplicate_recipe(&wac, "recipe:n", 4).notes, wac.notes);
         // JSON bridge.
         let json =
             duplicate_recipe_json(&serde_json::to_string(&src).unwrap(), "recipe:j", 9).unwrap();
         let back: BrewRecipe = serde_json::from_str(&json).unwrap();
         assert_eq!(back.id, "recipe:j");
+        let json =
+            duplicate_recipe_json(&serde_json::to_string(&wac).unwrap(), "recipe:k", 9).unwrap();
+        let back: BrewRecipe = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.notes, wac.notes);
         assert!(duplicate_recipe_json("nope", "x", 0).is_err());
     }
 
