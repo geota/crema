@@ -162,6 +162,37 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 - Guided brews let you choose the bean before you start (issue #10 feedback)
 
+- **Decent Scale on v1.2 firmware shows weight again** — the original Decent
+  Scale on firmware v1.2 sends a longer weight message that Crema dropped, so
+  the scale showed no weight. Repeated tares are no longer ignored, and the
+  scale's firmware version is read correctly.
+
+- **Acaia scales no longer stop shots early** — timer and button messages
+  from Acaia scales were sometimes read as weight, which could make
+  stop-at-weight end a shot far too soon. Messages that arrive together are no
+  longer dropped either.
+
+- **Atomheart Eclair connects** — Crema now uses the Eclair's current
+  Bluetooth identifiers, so the scale can be found and connected, and shows
+  its battery level.
+
+- **Skale II, Acaia (first generation) and Timemore Dot stay connected on
+  Android** — commands are now sent the way these scales expect, so a missed
+  reply no longer freezes the connection mid-pour.
+
+- **Skale II reads the right weight** — weights reported at a different
+  precision were off by a factor of 10 or more.
+
+- **Bookoo ignores damaged weight messages** — a corrupted message can no
+  longer show, or stop a shot on, a bogus weight.
+
+- **Timemore Dot reads every weight** — weight is read from every message the
+  scale sends at once, and a battery message is no longer mistaken for weight.
+
+- **DiFluid Microbalance Ti connects** — Crema now recognises the Ti. The
+  DiFluid Microbalance also no longer drops weight readings that arrive
+  together.
+
 ### Security
 
 - **Credentials wrapped at rest (web)** — the Visualizer OAuth tokens and the
