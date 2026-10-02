@@ -58,6 +58,7 @@ import coffee.crema.ui.REFILL_POINT_MAX_MM
 import coffee.crema.ui.REFILL_POINT_MIN_MM
 import coffee.crema.ui.formatTankLevel
 import coffee.crema.ui.refillPointMm
+import coffee.crema.ui.refillThresholdDepthMm
 import coffee.crema.ui.tankDepthMm
 import coffee.crema.ui.waterWarnThresholdMl
 import coffee.crema.ui.components.CopyDiagnosticsRow
@@ -249,7 +250,8 @@ fun SettingsScreen(
                         }
                         SetGroup("Identity") {
                             CremaSettingsRow("Model") { CremaMonoReadout(machineModelLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
-                            CremaSettingsRow("Serial number") { CremaMonoReadout(serialLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
+                            // Non-blocking notice when Decent lists this serial as stolen.
+                            CremaSettingsRow("Serial number", if (ui.serialStolen) STOLEN_SERIAL_NOTICE else null) { CremaMonoReadout(serialLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
                             CremaSettingsRow("CPU board") { CremaMonoReadout(cpuBoardLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
                             CremaSettingsRow("Firmware") { CremaMonoReadout(firmwareLabel(ui.de1MachineInfo, ui.de1Firmware), color = MaterialTheme.colorScheme.onSurface) }
                             CremaSettingsRow("Heater voltage", last = true) { CremaMonoReadout(heaterVoltageLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
@@ -283,7 +285,7 @@ fun SettingsScreen(
                                 )
                             }
                         }
-                        // Cup warmer — Bengle hardware only (models 4–7, the web's
+                        // Cup warmer — Bengle hardware only (model >= 128, the web's
                         // hasCupWarmer gate); hidden entirely on other machines.
                         if (hasCupWarmerPlate(ui.de1MachineInfo)) {
                             SetGroup("Cup warmer") {
@@ -392,17 +394,20 @@ fun SettingsScreen(
                             // "Water tank". It used to hardcode raw sensor mm,
                             // which is why Settings showed "17 mm" while the Brew
                             // footer showed "49 %" for the same tank
-                            // (geota/crema#47). The depth (raw + core's 5 mm
-                            // sensor offset) rides the detail line: it's the
-                            // number de1app and Decenza show, and the unit the
-                            // refill point below is dialled in.
+                            // (geota/crema#47). The depth (the event level —
+                            // core already added the 5 mm sensor offset) rides
+                            // the detail line: it's the number de1app and
+                            // Decenza show. The machine's refill threshold is
+                            // raw sensor mm (the unit the dial below uses), so
+                            // it is converted to depth before it's shown next
+                            // to the level.
                             val tank = formatTankLevel(mm, ui.waterLevelUnit, ui.volumeUnit)
                             val depth = ui.tankDepthMm()
                             CremaSettingsRow(
                                 "Water tank",
                                 when {
                                     mm == null -> "Connect the DE1 to read the tank level."
-                                    low -> "Low — refill soon. ${depth?.toInt()} mm deep, machine refills at ${ui.refillPointMm().toInt()} mm."
+                                    low -> "Low — refill soon. ${depth?.toInt()} mm deep, machine refills below ${ui.refillThresholdDepthMm()?.toInt()} mm."
                                     else -> "Tank level looks good — ${depth?.toInt()} mm deep."
                                 },
                             ) {
@@ -1815,7 +1820,10 @@ internal fun heaterVoltageLabel(info: Map<MmrRegister, UInt>): String =
 internal fun heaterVoltageValue(info: Map<MmrRegister, UInt>): String? =
     heaterVoltageVolts(info)?.takeIf { it > 0 }?.toString()
 
-/** Bengle cup-warmer plate present? Models 4–7 (core `has_cup_warmer`). */
+/** The one-line Settings notice for a DE1 on Decent's stolen-machine list. */
+internal const val STOLEN_SERIAL_NOTICE = "This DE1's serial is on Decent's stolen-machine list"
+
+/** Bengle cup-warmer plate present? Model >= 128 (core `has_cup_warmer`). */
 internal fun hasCupWarmerPlate(info: Map<MmrRegister, UInt>): Boolean =
     info[MmrRegister.MachineModel]?.let { hasCupWarmer(it) } ?: false
 

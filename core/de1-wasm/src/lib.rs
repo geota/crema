@@ -244,26 +244,28 @@ impl From<MachineRequest> for MachineState {
     }
 }
 
-/// Convert a raw DE1 water-tank reading (mm of sensor depth) to the tank's
-/// water volume in ml. Pure helper — does no machine I/O. Exposed here so
+/// Convert a water-tank DEPTH (mm — `Event::WaterLevel.level`, already
+/// offset-corrected in core) to the tank's water volume in ml. Pure helper —
+/// does no machine I/O. Exposed here so
 /// every shell consumes the same tank-geometry calibration (see
 /// `de1_domain::water_tank_ml` for the canonical implementation).
 #[wasm_bindgen]
-pub fn water_tank_ml(mm: f32) -> u16 {
-    de1_domain::water_tank_ml(mm)
+pub fn water_tank_ml(depth_mm: f32) -> u16 {
+    de1_domain::water_tank_ml(depth_mm)
 }
 
-/// Convert a raw DE1 water-tank reading (mm) to a whole percentage of a
-/// typical full fill, clamped `0..=100`. Pure helper — see
+/// Convert a water-tank DEPTH (mm — `Event::WaterLevel.level`) to a whole
+/// percentage of a typical full fill, clamped `0..=100`. Pure helper — see
 /// `de1_domain::water_tank_percent`.
 #[wasm_bindgen]
-pub fn water_tank_percent(mm: f32) -> u8 {
-    de1_domain::water_tank_percent(mm)
+pub fn water_tank_percent(depth_mm: f32) -> u8 {
+    de1_domain::water_tank_percent(depth_mm)
 }
 
-/// The true water depth (mm) for a raw DE1 sensor reading — the reading plus
-/// the 5 mm sensor offset every app in the ecosystem applies. Pure helper —
-/// see `de1_domain::water_tank_depth_mm`.
+/// The true water depth (mm) for a RAW DE1 sensor value — the value plus
+/// the 5 mm sensor offset every app in the ecosystem applies. For raw values
+/// only (the refill threshold / refill point): `Event::WaterLevel.level` is
+/// already a depth. Pure helper — see `de1_domain::water_tank_depth_mm`.
 #[wasm_bindgen]
 pub fn water_tank_depth_mm(sensor_mm: f32) -> f32 {
     de1_domain::water_tank_depth_mm(sensor_mm)
@@ -1073,9 +1075,44 @@ pub fn retry_backoff_ms(status: Option<u32>, attempt: u32) -> f64 {
     ms
 }
 
+/// Whether the DE1 with serial `serial` (MMR `SerialNumber`) is on Decent's
+/// stolen-machine list `list_json` (the published `stolen_serials.json`).
+/// `0` and a malformed list never match. See
+/// [`de1_domain::serial_on_stolen_list`].
+#[wasm_bindgen(js_name = serialOnStolenList)]
+#[must_use]
+pub fn serial_on_stolen_list(serial: u32, list_json: &str) -> bool {
+    de1_domain::serial_on_stolen_list(serial, list_json)
+}
+
+/// Whether a fetched body is a usable stolen-serial list (worth caching).
+#[wasm_bindgen(js_name = stolenSerialsListIsValid)]
+#[must_use]
+pub fn stolen_serials_list_is_valid(list_json: &str) -> bool {
+    de1_domain::stolen_serials_list_is_valid(list_json)
+}
+
+/// Whether the cached stolen-serial list is due a refetch (at most daily).
+/// `last_fetch_ms` is `undefined` when never fetched.
+#[wasm_bindgen(js_name = stolenSerialsRefreshDue)]
+#[must_use]
+pub fn stolen_serials_refresh_due(last_fetch_ms: Option<f64>, now_ms: f64) -> bool {
+    de1_domain::stolen_serials_refresh_due(
+        last_fetch_ms.map(f64_to_elapsed),
+        f64_to_elapsed(now_ms),
+    )
+}
+
+/// Where Decent publishes the stolen-serial list.
+#[wasm_bindgen(js_name = stolenSerialsUrl)]
+#[must_use]
+pub fn stolen_serials_url() -> String {
+    de1_domain::STOLEN_SERIALS_URL.to_owned()
+}
+
 /// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` →
-/// `"DE1"`, `4` → `"DE1XL"`). Values past the table are reported as
-/// `"model N"`. Mirrors [`de1_protocol::machine_model_name`].
+/// `"DE1"`, `4` → `"DE1XL"`, `128+` → `"Bengle"`). Other values are
+/// reported as `"model N"`. Mirrors [`de1_protocol::machine_model_name`].
 #[wasm_bindgen(js_name = machineModelName)]
 #[must_use]
 pub fn machine_model_name(raw: u32) -> String {
@@ -1615,9 +1652,17 @@ impl CremaBridge {
         json(self.core.brew_session_cancel())
     }
 
-    /// Discard all session state — e.g. on disconnect.
-    pub fn reset(&mut self) {
-        self.core.reset();
+    /// Discard all session state — e.g. on disconnect. Returns the teardown's
+    /// `CoreOutput` JSON: a scale-timer stop when the DE1 went away mid-shot.
+    pub fn reset(&mut self) -> String {
+        json(self.core.reset())
+    }
+
+    /// The DE1 link dropped unexpectedly (auto-reconnect starting). Keeps the
+    /// session, stops the scale's timer if a shot had it running. See
+    /// [`CremaCore::de1_link_lost`].
+    pub fn de1_link_lost(&mut self) -> String {
+        json(self.core.de1_link_lost())
     }
 
     /// Slice the rolling BLE-capture buffer to JSONL covering

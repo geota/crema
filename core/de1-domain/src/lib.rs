@@ -45,6 +45,7 @@
 //!   UniFFI bridges.
 
 pub mod app_settings;
+pub mod auto_tare;
 pub mod bean;
 pub mod bean_coerce;
 pub mod bean_search;
@@ -83,6 +84,7 @@ pub mod shot;
 pub mod shot_quality;
 pub mod steam;
 pub mod step_weight;
+pub mod stolen_serials;
 pub mod stop;
 pub mod tank;
 pub mod units;
@@ -93,6 +95,10 @@ pub mod volume;
 pub mod water;
 pub mod weight_gate;
 
+pub use auto_tare::{
+    AUTO_TARE_HOLDOFF_MS, AUTO_TARE_SETTLE_BAND_G, AUTO_TARE_SETTLE_SAMPLES, AUTO_TARE_THRESHOLD_G,
+    MAX_PRE_SHOT_ZERO_OFFSET_G, TareSettleWindow, pre_shot_zero_offset,
+};
 pub use bean::{
     BREWS_REMAINING_WINDOW, Bean, BeanMix, BeanOrigin, BeanRoastType, DEFAULT_DOSE_PER_BREW_G,
     RoastBand, RoastFreshness, Roaster, ShotBean, brews_remaining_estimate, credit_remaining,
@@ -191,13 +197,17 @@ pub use steam::{
     SteamSample,
 };
 pub use step_weight::{SKIP_RETRY_AFTER, SKIP_RETRY_MAX, StepWeightExit};
+pub use stolen_serials::{
+    STOLEN_SERIALS_REFRESH_MS, STOLEN_SERIALS_URL, parse_stolen_serials, serial_on_stolen_list,
+    stolen_serials_list_is_valid, stolen_serials_refresh_due,
+};
 pub use stop::{
     AutoStop, STOP_WEIGHT_BEFORE, StopCapture, StopConfig, StopReason, StopTargets,
     sav_counts_volume, volume_stop_arms,
 };
 pub use tank::{
-    DEFAULT_REFILL_POINT_MM, SENSOR_OFFSET_MM, TANK_FULL_ML, TANK_MM_TO_ML, water_tank_depth_mm,
-    water_tank_ml, water_tank_percent,
+    DEFAULT_REFILL_POINT_MM, SENSOR_OFFSET_MM, TANK_FULL_ML, TANK_LEVEL_SMOOTHING_TAU_S,
+    TANK_MM_TO_ML, TankLevelSmoother, water_tank_depth_mm, water_tank_ml, water_tank_percent,
 };
 pub use units::{
     WeightUnit, bar_to_psi, celsius_to_fahrenheit, fahrenheit_to_celsius, fl_oz_to_ml, grams_to_oz,

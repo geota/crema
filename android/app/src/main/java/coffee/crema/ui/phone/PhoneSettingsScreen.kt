@@ -36,6 +36,7 @@ import coffee.crema.ui.REFILL_POINT_MAX_MM
 import coffee.crema.ui.REFILL_POINT_MIN_MM
 import coffee.crema.ui.formatTankLevel
 import coffee.crema.ui.refillPointMm
+import coffee.crema.ui.refillThresholdDepthMm
 import coffee.crema.ui.tankDepthMm
 import coffee.crema.ui.waterWarnThresholdMl
 import coffee.crema.ui.formatTemp
@@ -51,6 +52,7 @@ import coffee.crema.ui.screens.cupWarmerTempValue
 import coffee.crema.ui.screens.flowMultiplierValue
 import coffee.crema.ui.screens.ghcPresent
 import coffee.crema.ui.screens.ghcRequired
+import coffee.crema.ui.screens.STOLEN_SERIAL_NOTICE
 import coffee.crema.ui.screens.hasCupWarmerPlate
 import coffee.crema.ui.screens.firmwareLabel
 import coffee.crema.ui.screens.heaterVoltageLabel
@@ -396,7 +398,8 @@ private fun MachineSection(
     }
     SettingsGroup("Identity") {
         CremaSettingsRow("Model") { CremaMonoReadout(machineModelLabel(ui.de1MachineInfo), strong = true) }
-        CremaSettingsRow("Serial number") { CremaMonoReadout(serialLabel(ui.de1MachineInfo), strong = true) }
+        // Non-blocking notice when Decent lists this serial as stolen.
+        CremaSettingsRow("Serial number", if (ui.serialStolen) STOLEN_SERIAL_NOTICE else null) { CremaMonoReadout(serialLabel(ui.de1MachineInfo), strong = true) }
         CremaSettingsRow("CPU board") { CremaMonoReadout(cpuBoardLabel(ui.de1MachineInfo), strong = true) }
         CremaSettingsRow("Firmware") { CremaMonoReadout(firmwareLabel(ui.de1MachineInfo, ui.de1Firmware), strong = true) }
         CremaSettingsRow("Heater voltage", last = true) { CremaMonoReadout(heaterVoltageLabel(ui.de1MachineInfo), strong = true) }
@@ -565,7 +568,7 @@ private fun WaterSection(
             "Water tank",
             when {
                 mm == null -> "Connect the DE1 to read the tank level."
-                low -> "Low — refill soon. ${depth?.toInt()} mm deep, machine refills at ${ui.refillPointMm().toInt()} mm."
+                low -> "Low — refill soon. ${depth?.toInt()} mm deep, machine refills below ${ui.refillThresholdDepthMm()?.toInt()} mm."
                 else -> "Tank level looks good — ${depth?.toInt()} mm deep."
             },
         ) {

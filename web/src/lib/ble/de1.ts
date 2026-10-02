@@ -205,10 +205,15 @@ export class De1Manager {
 		this.callbacks.onStatus(`Selected device: ${device.name} (id ${device.id})`);
 		// A terminal disconnect — user-initiated or auto-reconnect giving up.
 		device.onDisconnected(() => {
+			this.notifyLinkLost();
 			this.callbacks.onState('disconnected');
 			this.callbacks.onStatus('DE1 disconnected');
 		});
 		device.onReconnectAttempt((attempt) => {
+			// The link is gone; the core keeps the session for a resume but
+			// stops the scale's timer if a shot had it running (once per
+			// outage — the core latches it).
+			if (attempt === 1) this.notifyLinkLost();
 			this.callbacks.onState('reconnecting');
 			this.callbacks.onStatus(`Reconnecting to DE1… (attempt ${attempt})`);
 		});
@@ -324,11 +329,25 @@ export class De1Manager {
 		}
 	}
 
+	/**
+	 * Tell the core the DE1 link dropped (Decenza 29878266). Fire-and-forget:
+	 * the output (at most one scale-timer stop) routes like any other.
+	 */
+	private notifyLinkLost(): void {
+		this.core
+			.de1LinkLost()
+			.then(this.callbacks.onCoreOutput)
+			.catch(() => {
+				// Best-effort — a failed teardown hint must not break the disconnect.
+			});
+	}
+
 	/** Disconnect the DE1 and discard the core's session state. */
 	async disconnect(): Promise<void> {
 		this.device?.disconnect();
 		this.device = null;
-		await this.core.reset();
+		// The reset's output is the scale-timer stop for a mid-shot teardown.
+		this.callbacks.onCoreOutput(await this.core.reset());
 		// Clear the diagnostics — the device is gone, so its name / id / GATT
 		// verification / notification tally no longer hold.
 		this.patchDiagnostics(EMPTY_DE1_DIAGNOSTICS);

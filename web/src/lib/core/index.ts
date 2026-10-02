@@ -325,8 +325,17 @@ export interface CremaCore {
 	brewSessionFinish(nowMs: number): Promise<CoreOutput>;
 	/** Drop the guided session without a summary. */
 	brewSessionCancel(): Promise<CoreOutput>;
-	/** Discard all session state — e.g. on disconnect. */
-	reset(): Promise<void>;
+	/**
+	 * Discard all session state — e.g. on disconnect. The output carries a
+	 * scale-timer stop when the DE1 went away mid-shot (Decenza 29878266);
+	 * route it like any other `CoreOutput`.
+	 */
+	reset(): Promise<CoreOutput>;
+	/**
+	 * The DE1 link dropped unexpectedly (auto-reconnect starting). The session
+	 * is kept; the output stops the scale's timer if a shot had it running.
+	 */
+	de1LinkLost(): Promise<CoreOutput>;
 	/**
 	 * Slice the rolling BLE-capture buffer to JSONL covering `[fromMs, toMs]`,
 	 * with connect-phase identity entries + META prelude prepended. The shell
@@ -952,7 +961,10 @@ async function createCore(): Promise<CremaCore> {
 			return parseOutput(bridge.brew_session_cancel());
 		},
 		async reset() {
-			bridge.reset();
+			return parseOutput(bridge.reset());
+		},
+		async de1LinkLost() {
+			return parseOutput(bridge.de1_link_lost());
 		},
 		async captureSliceJsonl(fromMs, toMs) {
 			return bridge.capture_slice_jsonl(fromMs, toMs);

@@ -1682,8 +1682,8 @@
 				<span class="t-eyebrow">Steam</span><span
 					>{steamTempM.value}{steamTempM.unit ? ` ${steamTempM.unit}` : ''}</span
 				>
-				<!-- Water tank: real `WaterLevel` telemetry, the sensor depth
-				     converted to a tank volume in ml (see `waterTankMl`), then
+				<!-- Water tank: real `WaterLevel` telemetry, the tank depth
+				     (core already added the 5 mm sensor offset) converted to a tank volume in ml (see `waterTankMl`), then
 				     to the Settings volume unit (D1). A "refill soon" cue (E2)
 				     shows when the level nears the DE1's refill threshold. -->
 				<span class="t-eyebrow">Tank</span>

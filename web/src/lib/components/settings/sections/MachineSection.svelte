@@ -167,7 +167,7 @@
 	/**
 	 * Whether the connected DE1 has the Bengle cup-warmer plate hardware.
 	 * Routed through `de1-protocol::has_cup_warmer` via the wasm
-	 * bridge — the gate's "model 4..7 = Bengle" semantics live in the
+	 * bridge — the gate's "model >= 128 = Bengle" semantics live in the
 	 * protocol crate, not as magic numbers here. Returns `false` until
 	 * the `MachineModel` MMR read lands so the card stays hidden on
 	 * first paint.
@@ -410,6 +410,13 @@
 		{#if updateStubNotice !== null}
 			<div class="st-machinecard-fw-stub" role="status" aria-live="polite">
 				{updateStubNotice}
+			</div>
+		{/if}
+		{#if app?.stolenSerial}
+			<!-- Decent's stolen-machine list (de1app `check_for_missing_sn`):
+			     a non-blocking notice only — nothing is disabled. -->
+			<div class="st-machinecard-stolen" role="status">
+				This DE1's serial is on Decent's stolen-machine list
 			</div>
 		{/if}
 	</div>

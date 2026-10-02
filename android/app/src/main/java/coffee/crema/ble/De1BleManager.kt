@@ -196,6 +196,13 @@ class De1BleManager(
                 transport.connectionState(device).first {
                     it == BleTransport.ConnState.FAILED || it == BleTransport.ConnState.DISCONNECTED
                 }
+                // An unexpected drop keeps the core's session for a resume, but
+                // the scale's on-device timer must stop if a shot had it running
+                // (Decenza 29878266) — the core gates and latches it.
+                if (!userInitiated) {
+                    runCatching { onCoreOutput(bridge.de1LinkLost()) }
+                        .onFailure { Log.e(TAG, "core link-lost output failed", it) }
+                }
             },
             onConnected = {
                 _state.value = State.READY
@@ -288,7 +295,10 @@ class De1BleManager(
         if (d != null) {
             scope.launch { transport.disconnect(d) }
         }
-        bridge.reset()
+        // The reset's output carries a scale-timer stop when the DE1 went away
+        // mid-shot (Decenza 29878266) — the scale link usually survives.
+        runCatching { onCoreOutput(bridge.reset()) }
+            .onFailure { Log.e(TAG, "core reset output failed", it) }
         _state.value = State.DISCONNECTED
         onStatus("Disconnected")
     }

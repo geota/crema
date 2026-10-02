@@ -1459,25 +1459,56 @@ pub fn analyze_stored_shot(shot: &StoredShot) -> Option<ShotQualityReport> {
     input_from_stored_shot(shot).map(|input| analyze_shot(&input))
 }
 
-/// A sensor exit counts as confirmed when the recorded boundary value is
-/// within this margin of the threshold (sampling at ~5 Hz means the exact
-/// crossing sample may sit just shy of it).
-const EXIT_CONFIRM_EPS: f64 = 0.1;
 /// A frame that ran to within this of its configured max exited on time.
 const TIME_EXIT_TOLERANCE_S: f64 = 0.25;
 
-/// The recorded value at the frame boundary: the last sample at or before
-/// `t` (the reading the firmware acted on).
-fn series_value_at(series: &[SeriesPoint], t: f64) -> Option<f64> {
-    let mut last = None;
+/// The recorded value at the frame boundary — the last sample at or before
+/// `t` (the reading the firmware acted on) — and the sample before it, if the
+/// series has one.
+fn series_value_at(series: &[SeriesPoint], t: f64) -> Option<(f64, Option<f64>)> {
+    let mut last: Option<(f64, Option<f64>)> = None;
     for p in series {
         if p.t <= t {
-            last = Some(p.v);
+            last = Some((p.v, last.map(|(v, _)| v)));
         } else {
             break;
         }
     }
     last
+}
+
+/// Whether a rising signal reached `threshold` within one more sample's worth
+/// of the change observed between the previous sample and this one (Decenza
+/// `5ae9edfa`, `FrameExit::reachedOver`). The DE1 checks its exit condition
+/// an order of magnitude faster than the ~5-10 Hz sample stream, so a
+/// fast-rising frame normally crosses its threshold *between* two samples —
+/// a fixed margin could never confirm exactly the frames that exit fastest
+/// (Decenza #1813: `pressure_over 2.10`, boundary sample 2.048 bar, the one
+/// before 1.869 bar → a false "First step skipped"). The tolerance is the
+/// measured per-sample change, never a constant: a flat or receding signal,
+/// or a boundary with no earlier sample, gets none — so a genuinely skipped
+/// frame still lands unconfirmed.
+fn reached_over(now: f64, prev: Option<f64>, threshold: f64) -> bool {
+    if now >= threshold {
+        return true;
+    }
+    let Some(prev) = prev else {
+        return false;
+    };
+    let rise = now - prev;
+    rise > 0.0 && now + rise >= threshold
+}
+
+/// [`reached_over`] for a falling signal (`FrameExit::reachedUnder`).
+fn reached_under(now: f64, prev: Option<f64>, threshold: f64) -> bool {
+    if now <= threshold {
+        return true;
+    }
+    let Some(prev) = prev else {
+        return false;
+    };
+    let fall = prev - now;
+    fall > 0.0 && now - fall <= threshold
 }
 
 /// Fill empty `transition_reason`s on reconstructed phase markers from the
@@ -1512,11 +1543,13 @@ fn infer_transition_reasons(input: &mut ShotQualityInput) {
             "flow" => series_value_at(&input.flow, t),
             _ => None,
         };
-        let confirmed = boundary.is_some_and(|v| {
+        // The `> 0` guard on the under arm keeps a zeroed / absent reading
+        // from confirming an exit it never saw (Decenza `inferReason`).
+        let confirmed = boundary.is_some_and(|(v, prev)| {
             if spec.exit_over {
-                v >= spec.threshold - EXIT_CONFIRM_EPS
+                reached_over(v, prev, spec.threshold)
             } else {
-                v <= spec.threshold + EXIT_CONFIRM_EPS
+                v > 0.0 && reached_under(v, prev, spec.threshold)
             }
         });
         input.phases[i].transition_reason = if confirmed {
@@ -2338,6 +2371,63 @@ mod tests {
         assert_eq!(input.phases[2].transition_reason, "time");
         // The End marker is a stop, not a frame exit — never inferred.
         assert_eq!(input.phases[3].transition_reason, "");
+    }
+
+    /// A pressure series from explicit `(t, v)` points.
+    fn points(pts: &[(f64, f64)]) -> Vec<SeriesPoint> {
+        pts.iter().map(|&(t, v)| SeriesPoint { t, v }).collect()
+    }
+
+    fn first_exit_reason(pressure: Vec<SeriesPoint>, over: bool, threshold: f64) -> String {
+        let mut input = base_input(30.0);
+        input.pressure = pressure;
+        input.phases = vec![
+            marker(0.0, "Start", 0, false, ""),
+            marker(1.888, "Pour", 1, false, ""),
+            marker(30.0, "End", 1, false, ""),
+        ];
+        input.frame_exits = vec![
+            exit_spec("pressure", over, threshold, 25.0),
+            exit_spec("", false, 0.0, 30.0),
+        ];
+        infer_transition_reasons(&mut input);
+        input.phases[1].transition_reason.clone()
+    }
+
+    #[test]
+    fn a_threshold_crossed_between_samples_is_confirmed_by_the_per_sample_rise() {
+        // Decenza #1813, exactly: `pressure_over 2.10`, the boundary sample
+        // read 2.048 bar and the one 210 ms earlier 1.869 bar — one more
+        // sample's rise (0.179) clears 2.10, so the exit is confirmed.
+        let p = points(&[(1.258, 1.2), (1.678, 1.869), (1.888, 2.048), (2.1, 3.0)]);
+        assert_eq!(first_exit_reason(p, true, 2.10), "pressure");
+    }
+
+    #[test]
+    fn a_flat_or_receding_reading_gets_no_tolerance() {
+        // Flat just under the threshold: no rise to extrapolate from. (The old
+        // fixed 0.1 margin confirmed this.)
+        let flat = points(&[(1.5, 2.05), (1.888, 2.05)]);
+        assert_eq!(first_exit_reason(flat, true, 2.10), "");
+        // Moving away from it.
+        let falling = points(&[(1.5, 2.08), (1.888, 2.05)]);
+        assert_eq!(first_exit_reason(falling, true, 2.10), "");
+        // A rise too small to reach it within one more sample.
+        let slow = points(&[(1.5, 1.98), (1.888, 2.03)]);
+        assert_eq!(first_exit_reason(slow, true, 2.10), "");
+        // No earlier sample in the shot: nothing to extrapolate.
+        let lone = points(&[(1.888, 2.048)]);
+        assert_eq!(first_exit_reason(lone, true, 2.10), "");
+    }
+
+    #[test]
+    fn a_falling_exit_extrapolates_the_per_sample_fall() {
+        // pressure_under 1.0: 1.30 → 1.12, one more fall (0.18) reaches 0.94.
+        let p = points(&[(1.5, 1.30), (1.888, 1.12)]);
+        assert_eq!(first_exit_reason(p, false, 1.0), "pressure");
+        // A zero reading never confirms an under-exit it didn't see.
+        let zero = points(&[(1.5, 0.2), (1.888, 0.0)]);
+        assert_eq!(first_exit_reason(zero, false, 1.0), "");
     }
 
     #[test]

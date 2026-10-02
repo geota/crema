@@ -29,15 +29,17 @@ use std::time::Duration;
 
 use de1_domain::saw_learning::SawLearningModel;
 use de1_domain::{
-    AutoStop, BeverageType, BrewRecipe, BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase,
-    Estimate, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile, STOP_WEIGHT_BEFORE,
-    ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StepWeightExit, StopCapture,
-    StopConfig, StopReason, StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor,
-    WeightSpikeGate, WeightUnit, sav_counts_volume, shot_disposition,
+    AUTO_TARE_HOLDOFF_MS, AUTO_TARE_THRESHOLD_G, AutoStop, BeverageType, BrewRecipe,
+    BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase, Estimate, FlowAlgorithm, FlowEstimator,
+    LineFreqDetector, Profile, STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor, ShotPhase, SteamEvent,
+    SteamMonitor, StepWeightExit, StopCapture, StopConfig, StopReason, StopTargets,
+    TankLevelSmoother, TareSettleWindow, VolumeIntegrator, WaterEvent, WaterMonitor,
+    WeightSpikeGate, WeightUnit, pre_shot_zero_offset, sav_counts_volume, shot_disposition,
+    water_tank_depth_mm,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
-    ShotHeader, ShotSample, ShotSettings, StateInfo, Version, WaterLevels, mmr, profile,
+    ShotHeader, ShotSample, ShotSettings, StateInfo, SubState, Version, WaterLevels, mmr, profile,
     requested_state,
 };
 
@@ -61,9 +63,16 @@ pub use de1_scale::Scale as ScaleId;
 /// Scale sensor lag assumed when no scale is connected — a representative
 /// value across the supported scales (380 ms, the legacy default).
 const DEFAULT_SCALE_LAG: Duration = Duration::from_millis(380);
-/// Millimetres added to the DE1's reported tank level — the legacy
-/// `water_level_mm_correction` (`machine.tcl`).
-const WATER_LEVEL_MM_CORRECTION: f32 = 5.0;
+/// How long an `ErrorNoAc` (217) episode must persist before it is surfaced
+/// as a fault. The DE1 reports it spuriously for "about three seconds" while
+/// waking or heating (Decenza #1893, firmware v1363); a snapshot cannot tell
+/// that from an open front switch, so duration is the only discriminator.
+/// 6 s is Decenza's figure (`b8d625ba`, `m_noAcSettleTimer`): that episode
+/// plus margin — their own estimate, not a de1app constant.
+const NO_AC_SETTLE: Duration = Duration::from_secs(6);
+/// Below this firmware build `ErrorNoAc` is not trusted at all — de1app's own
+/// gate, ported by Decenza `98215217` (`firmwareBuildNumber() >= 1337`).
+const NO_AC_MIN_FIRMWARE: u32 = 1337;
 /// How long the scale may go without reporting weight before it is considered
 /// stale — the legacy app warns after roughly one second of silence.
 const SCALE_STALE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -453,8 +462,10 @@ pub struct CremaCore {
     /// via Crema or the DE1's on-machine touch (GHC) — the gating event is
     /// the same.
     auto_tare: bool,
-    /// Tare-settling gate. `Some(t)` from the auto-tare at shot start (where
-    /// `t` is when the tare command was sent) until the hardware tare lands;
+    /// Tare-settling gate. `Some(t)` from an auto-tare (sent once the
+    /// pre-flow reading settled, or at first flow as the fallback — see
+    /// [`auto_tare_pending`](Self::auto_tare_pending); `t` is when the tare
+    /// command was sent) until the hardware tare lands;
     /// `None` otherwise. While set, [`handle_scale_weight`](Self::handle_scale_weight)
     /// reports weight as zero so the pre-tare pan/cup weight never reaches the
     /// live chart or the recorded shot. Cleared on the first near-zero reading
@@ -686,6 +697,56 @@ pub struct CremaCore {
     /// this field with the real upload-phase state machine.
     #[cfg(test)]
     firmware_lock_override: bool,
+    /// Low-pass over the tank level (Decenza `7d291524`): the pump sloshes
+    /// the reading by ~a third of the tank, which fired false low-water
+    /// warnings. Every `Event::WaterLevel` carries the smoothed value, so
+    /// both shells' readouts and low-water toasts inherit it. Re-seeded on
+    /// [`reset`](Self::reset) and [`de1_link_lost`](Self::de1_link_lost).
+    tank_level: TankLevelSmoother,
+    /// The DE1's firmware build (MMR `FirmwareVersion`), cached from the
+    /// connect-time read for firmware-gated behaviour (the `ErrorNoAc`
+    /// gate). Kept here as well as in the capture identity-keeper because
+    /// a read-only mirror does not record captures.
+    de1_firmware_build: Option<u32>,
+    /// When the current `ErrorNoAc` episode began; `None` outside one.
+    no_ac_since: Option<Duration>,
+    /// The fault last surfaced via [`Event::MachineErrorChanged`] (`None` =
+    /// healthy), so the event is edge-triggered.
+    reported_machine_error: Option<SubState>,
+    /// Latched once the scale's timer was stopped for a DE1 link drop
+    /// (Decenza `29878266`), so an outage sends one stop, not one per
+    /// teardown path. Re-armed at the next shot start.
+    scale_timer_stopped_for_drop: bool,
+    /// The shot-start auto-tare is armed but waiting for a settled reading
+    /// (Decenza `da2e5495`): set at `ShotEvent::Started` when auto-tare is
+    /// on, cleared when the tare fires — on the first settled pre-flow
+    /// window, or at first flow as a fallback so a scale that never settles
+    /// still gets the tare it always got. While set, readings report zero
+    /// exactly as under [`tare_gate`](Self::tare_gate).
+    auto_tare_pending: bool,
+    /// The last [`de1_domain::AUTO_TARE_SETTLE_SAMPLES`] raw pre-flow
+    /// readings, for the settle test.
+    auto_tare_window: TareSettleWindow,
+    /// When this shot's last auto-tare was sent, for the
+    /// [`AUTO_TARE_HOLDOFF_MS`] spacing.
+    last_auto_tare: Option<Duration>,
+    /// Whether the last tare was *observed* to land (a near-zero reading
+    /// cleared [`tare_gate`](Self::tare_gate), not its timeout) — the
+    /// precondition for adopting the pre-shot zero.
+    tare_observed: bool,
+    /// The most recent raw scale reading this shot, grams — what the
+    /// pre-shot zero is captured from at first flow.
+    last_raw_weight: Option<f32>,
+    /// The scale's residual zero at first flow, grams, subtracted from every
+    /// reading of the shot (Decenza `da2e5495` pre-shot zero correction;
+    /// bounded to ±2 g and adopted only after an observed tare). `0.0` = none.
+    pre_shot_zero_offset_g: f32,
+    /// The steam heater is held off for a maintenance cycle (de1app
+    /// `dd5ebda4`): set on entering Clean / Descale / AirPurge, cleared on
+    /// leaving, when the normal steam settings are re-sent. While set, every
+    /// outgoing `ShotSettings` write carries a 0 °C steam target without
+    /// touching the user's stored setting.
+    maintenance_steam_off: bool,
 }
 
 /// In-flight state of one profile upload. Owned by
@@ -803,6 +864,18 @@ impl CremaCore {
             read_only: false,
             #[cfg(test)]
             firmware_lock_override: false,
+            tank_level: TankLevelSmoother::new(),
+            de1_firmware_build: None,
+            no_ac_since: None,
+            reported_machine_error: None,
+            scale_timer_stopped_for_drop: false,
+            auto_tare_pending: false,
+            auto_tare_window: TareSettleWindow::new(),
+            last_auto_tare: None,
+            tare_observed: false,
+            last_raw_weight: None,
+            pre_shot_zero_offset_g: 0.0,
+            maintenance_steam_off: false,
         }
     }
 
@@ -1973,6 +2046,11 @@ impl CremaCore {
         if eco {
             settings.steam_temp_c = self.steam_eco_temp;
         }
+        // Maintenance cycle: the steam heater is held off (de1app `dd5ebda4`)
+        // — wins over eco, and over a user edit made mid-cycle.
+        if self.maintenance_steam_off {
+            settings.steam_temp_c = 0.0;
+        }
         // Rebase the volume on the USER's dial before deciding the override:
         // the stored snapshot may hold the machine-echoed 250 ml sentinel,
         // and a scale-less rewrite from that would ask the DE1 for a quarter
@@ -2170,6 +2248,8 @@ impl CremaCore {
     /// supports tare. Shared by [`tare_scale`](Self::tare_scale) and the
     /// automatic tare at shot start.
     fn push_tare_command(&mut self, out: &mut CoreOutput) {
+        // Any tare moves the zero — a captured pre-shot offset no longer applies.
+        self.pre_shot_zero_offset_g = 0.0;
         if let Some(scale) = &mut self.scale
             && let Some(data) = scale.tare()
         {
@@ -2660,7 +2740,7 @@ impl CremaCore {
             Source::De1ShotSample => self.handle_sample(data, now, &mut out),
             Source::ScaleWeight => self.handle_scale_weight(data, now, &mut out),
             Source::ScaleCommand => self.handle_scale_command(data, &mut out),
-            Source::De1WaterLevels => self.handle_water_levels(data, &mut out),
+            Source::De1WaterLevels => self.handle_water_levels(data, now_ms, &mut out),
             Source::De1Version => self.handle_version(data, &mut out),
             Source::De1MmrRead => self.handle_mmr_read(data, &mut out),
             Source::De1Calibration => Self::handle_calibration(data, &mut out),
@@ -2673,6 +2753,10 @@ impl CremaCore {
                 }
             }
         }
+        // Any notification advances the clock the `ErrorNoAc` settle runs on
+        // (the tank level streams ~2-4 Hz even at idle), and a late firmware
+        // read can be what makes an already-settled episode trustworthy.
+        self.update_machine_error(now, &mut out);
         self.gate_read_only(out)
     }
 
@@ -2704,6 +2788,7 @@ impl CremaCore {
                 reason: ProfileUploadFailure::AckTimeout { awaiting },
             });
         }
+        self.update_machine_error(now, &mut out);
         // Backstop for the post-stop drip settle (#64): guarantees a deferred
         // completion finalizes on the [`POST_SHOT_SETTLE_MAX`] deadline even if
         // the scale stream stalls (the tick is the shells' periodic watchdog).
@@ -2748,11 +2833,44 @@ impl CremaCore {
         self.capture.clear();
     }
 
+    /// The DE1's BLE link dropped unexpectedly (the shells' auto-reconnect is
+    /// about to start) — the session state is kept so a reconnect can resume
+    /// a running shot, but the scale's on-device timer is stopped if it was
+    /// running (Decenza `29878266`: the scale is a separate link and kept
+    /// counting with no machine behind it). Gated, like every other stop
+    /// site, on the timer actually running — a drop from Idle or Sleep sends
+    /// nothing, so a timer the user started by hand on the scale is left
+    /// alone — and latched to one stop per outage. The tank-level filter is
+    /// re-seeded on reconnect (Decenza resets it on disconnect).
+    pub fn de1_link_lost(&mut self) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        self.stop_scale_timer_for_link_loss(&mut out);
+        self.tank_level.reset();
+        self.gate_read_only(out)
+    }
+
+    /// Push one scale-timer stop when the DE1 link goes away mid-flow — see
+    /// [`de1_link_lost`](Self::de1_link_lost). `flow_started` is exactly the
+    /// window in which the core has started the scale's timer.
+    fn stop_scale_timer_for_link_loss(&mut self, out: &mut CoreOutput) {
+        if self.flow_started.is_some() && !self.scale_timer_stopped_for_drop {
+            self.scale_timer_stopped_for_drop = true;
+            Self::push_timer_command(&self.scale, TimerCommand::Stop, out);
+        }
+    }
+
     /// Discard all session state — e.g. on disconnect. The connected scale and
     /// armed auto-stop targets are cleared too, and the capture rolling
     /// buffer is wiped (a fresh [`CaptureRecorder`] is part of
     /// [`CremaCore::new`]).
-    pub fn reset(&mut self) {
+    ///
+    /// Returns the one output a teardown can carry: a stop for the scale's
+    /// timer when the DE1 went away mid-shot (Decenza `29878266`) — the
+    /// scale link usually survives a DE1 drop, and without it the on-scale
+    /// clock keeps counting. Empty otherwise.
+    pub fn reset(&mut self) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        self.stop_scale_timer_for_link_loss(&mut out);
         // `read_only` is a device-role config (this core is a secondary mirror),
         // not session/shot state — it must survive a reset, else a reconnect
         // (the BLE manager resets the core on every disconnect) would turn the
@@ -2826,6 +2944,80 @@ impl CremaCore {
         self.shot_target_weight = shot_target_weight;
         self.profile_volume_limit = profile_volume_limit;
         self.max_shot_duration = max_shot_duration;
+        self.gate_read_only(out)
+    }
+
+    /// Turn the steam heater off for the length of a maintenance cycle (de1app
+    /// `dd5ebda4`, `update_de1_state`): on entering Clean / Descale /
+    /// AirPurge from any other state, re-send the steam / hot-water settings
+    /// with a 0 °C steam target (the persistent setting is untouched — the
+    /// override lives in [`steam_settings_for_eco`](Self::steam_settings_for_eco));
+    /// on leaving, re-send the normal settings so the wand returns to the
+    /// user's real target. Skipped when the core has no settings baseline yet
+    /// (nothing read, nothing set) — a write from defaults would clobber the
+    /// machine's other fields.
+    fn steam_off_for_maintenance(
+        &mut self,
+        prev: Option<MachineState>,
+        next: MachineState,
+        out: &mut CoreOutput,
+    ) {
+        let is_maintenance = |s: MachineState| {
+            matches!(
+                s,
+                MachineState::Clean | MachineState::Descale | MachineState::AirPurge
+            )
+        };
+        let entering = is_maintenance(next) && !prev.is_some_and(is_maintenance);
+        let leaving = !is_maintenance(next) && self.maintenance_steam_off;
+        if !(entering || leaving) || self.steam_hotwater_settings.is_none() {
+            return;
+        }
+        self.maintenance_steam_off = entering;
+        out.commands.push(Command::WriteCharacteristic {
+            target: WriteTarget::De1ShotSettings,
+            data: self
+                .steam_settings_for_eco(self.steam.is_eco_mode())
+                .encode()
+                .to_vec(),
+        });
+    }
+
+    /// Emit [`Event::MachineErrorChanged`] when the fault the shells should
+    /// surface changes. Every `Error*` substate is surfaced at once except
+    /// `ErrorNoAc`, which needs firmware ≥ [`NO_AC_MIN_FIRMWARE`] *and* an
+    /// episode that has lasted [`NO_AC_SETTLE`] (Decenza `98215217`,
+    /// `b8d625ba`): the DE1 reports it for a few seconds on every wake /
+    /// warm-up with the switch plainly on. Once surfaced it stays latched
+    /// for the rest of the episode. Runs after every notification and tick,
+    /// so the settle resolves without a dedicated timer.
+    fn update_machine_error(&mut self, now: Duration, out: &mut CoreOutput) {
+        let Some(info) = self.last_state else {
+            return;
+        };
+        let surfaced = if info.substate == SubState::ErrorNoAc {
+            let settled = self
+                .no_ac_since
+                .is_some_and(|since| now.saturating_sub(since) >= NO_AC_SETTLE);
+            let trusted = self
+                .de1_firmware_build
+                .is_some_and(|build| build >= NO_AC_MIN_FIRMWARE);
+            (settled && trusted).then_some(SubState::ErrorNoAc)
+        } else if info.substate.is_error() {
+            Some(info.substate)
+        } else {
+            None
+        };
+        if surfaced != self.reported_machine_error {
+            self.reported_machine_error = surfaced;
+            out.events.push(Event::MachineErrorChanged {
+                state: info.state,
+                substate: info.substate,
+                message: surfaced
+                    .and_then(SubState::error_message)
+                    .map(str::to_owned),
+            });
+        }
     }
 
     /// Decode and process a `StateInfo` notification.
@@ -2890,6 +3082,13 @@ impl CremaCore {
                     _ => {}
                 }
             }
+            self.steam_off_for_maintenance(prev_state, info.state, out);
+        }
+        // `ErrorNoAc` episode clock — see [`update_machine_error`].
+        if info.substate == SubState::ErrorNoAc {
+            self.no_ac_since.get_or_insert(now);
+        } else {
+            self.no_ac_since = None;
         }
         for event in self.monitor.on_state_info(info, now) {
             self.map_shot_event(event, now, out);
@@ -3049,6 +3248,20 @@ impl CremaCore {
         // fire the one-shot serial / settings queries so the anti-mistouch
         // state and active mode are fetched as soon as the scale is reporting.
         self.push_connect_queries_once(out);
+        // Pre-flow auto-tare, settle-gated (Decenza `da2e5495`) — see
+        // [`evaluate_auto_tare`](Self::evaluate_auto_tare). While the
+        // shot-start tare waits for a still reading, and on the reading that
+        // fires a tare, report zero exactly as the tare gate below does.
+        if self.shot_started.is_some() && self.flow_started.is_none() {
+            let fired = self.evaluate_auto_tare(reading.weight_g, now, out);
+            if fired || self.auto_tare_pending {
+                self.push_suppressed_reading(&reading, out);
+                return;
+            }
+        }
+        if self.shot_started.is_some() {
+            self.last_raw_weight = Some(reading.weight_g);
+        }
         // Tare-settling gate. After the auto-tare fired at shot start, the
         // scale keeps reporting the pre-tare pan/cup weight for the ~50–500 ms
         // until the hardware tare physically lands; recording that would
@@ -3065,51 +3278,39 @@ impl CremaCore {
             // de1app's confirmation window is 1 s; allow a touch more before
             // giving up and resuming so a failed tare never zeroes forever.
             const TARE_SETTLE_TIMEOUT: Duration = Duration::from_millis(1500);
-            if reading.weight_g.abs() <= TARE_SETTLE_G
-                || now.saturating_sub(tare_sent) >= TARE_SETTLE_TIMEOUT
-            {
+            let landed = reading.weight_g.abs() <= TARE_SETTLE_G;
+            if landed || now.saturating_sub(tare_sent) >= TARE_SETTLE_TIMEOUT {
                 // Tare landed (or we gave up): start the post-tare series clean
                 // and let this (~zero) reading flow through normally below.
+                // Only an OBSERVED landing qualifies the pre-shot zero capture.
                 self.tare_gate = None;
+                self.tare_observed = landed;
                 self.flow.reset();
                 // The baseline legitimately stepped to ~0 — don't let the
                 // spike gate read the drop as a corrupt jump.
                 self.weight_gate.reset();
             } else {
                 // Still pre-tare — report zero so neither the live chart nor the
-                // recorded shot shows the pan/cup weight. The device's own
-                // passthrough channels ride through unchanged; skip the flow
-                // estimator, shot metrics, and auto-stop so nothing is polluted.
-                self.last_scale_estimate = Some(Estimate {
-                    weight: 0.0,
-                    flow: 0.0,
-                });
-                out.events.push(Event::ScaleReading {
-                    weight: 0.0,
-                    flow: 0.0,
-                    device_flow: reading.flow_g_per_s,
-                    device_timer: reading.timer_ms,
-                    device_volume: reading.volume,
-                    device_standby: reading.standby_minutes,
-                    device_battery: reading.battery_percent,
-                    device_flow_smoothing: reading.flow_smoothing,
-                    device_auto_stop: reading.auto_stop,
-                });
+                // recorded shot shows the pan/cup weight.
+                self.push_suppressed_reading(&reading, out);
                 return;
             }
         }
+        // The pre-shot zero correction (Decenza `da2e5495`): `0.0` except
+        // during a shot whose post-tare zero had crept by ≤ 2 g at first flow.
+        let raw_g = reading.weight_g - self.pre_shot_zero_offset_g;
         // Untared-cup guard: net the reading against the latched software
         // zero (usually 0), or hold the pipeline while a heavy early reading
         // settles — see [`untared_guard`](Self::untared_guard).
-        let Some(net_weight) = self.untared_guard(reading.weight_g, now, out) else {
+        let Some(net_weight) = self.untared_guard(raw_g, now, out) else {
             // Mid-settle: show the raw reading (the user should see the cup
             // land) but keep the estimator / metrics / auto-stop out of it.
             self.last_scale_estimate = Some(Estimate {
-                weight: reading.weight_g,
+                weight: raw_g,
                 flow: 0.0,
             });
             out.events.push(Event::ScaleReading {
-                weight: reading.weight_g,
+                weight: raw_g,
                 flow: 0.0,
                 device_flow: reading.flow_g_per_s,
                 device_timer: reading.timer_ms,
@@ -3194,6 +3395,75 @@ impl CremaCore {
         // A deferred completion locks on this fresh reading once the drip has
         // settled (geota/crema#64) — the scale's stream is the primary driver.
         self.maybe_finalize_post_shot_settle(now, out);
+    }
+
+    /// Report a scale reading as zero weight — the pre-tare suppression shared
+    /// by the tare gate and the pending settle-gated auto-tare. The device's
+    /// own passthrough channels ride through unchanged; the flow estimator,
+    /// shot metrics and auto-stop are skipped so nothing is polluted.
+    fn push_suppressed_reading(&mut self, reading: &de1_scale::ScaleReading, out: &mut CoreOutput) {
+        self.last_scale_estimate = Some(Estimate {
+            weight: 0.0,
+            flow: 0.0,
+        });
+        out.events.push(Event::ScaleReading {
+            weight: 0.0,
+            flow: 0.0,
+            device_flow: reading.flow_g_per_s,
+            device_timer: reading.timer_ms,
+            device_volume: reading.volume,
+            device_standby: reading.standby_minutes,
+            device_battery: reading.battery_percent,
+            device_flow_smoothing: reading.flow_smoothing,
+            device_auto_stop: reading.auto_stop,
+        });
+    }
+
+    /// The pre-flow auto-tare (Decenza `da2e5495`, `onScaleWeightSample`),
+    /// fed every raw reading between shot start and first flow. Two tares can
+    /// fire, both only on a *settled* window (the last four readings within
+    /// 1.0 g — [`TareSettleWindow`]) and at least [`AUTO_TARE_HOLDOFF_MS`]
+    /// apart:
+    ///
+    ///  - the shot-start tare, while [`auto_tare_pending`](Self::auto_tare_pending);
+    ///  - a re-tare when a cup is put down during preheat — a reading above
+    ///    [`AUTO_TARE_THRESHOLD_G`] after the shot-start tare landed.
+    ///
+    /// Returns whether a tare fired on this reading.
+    fn evaluate_auto_tare(&mut self, raw_g: f32, now: Duration, out: &mut CoreOutput) -> bool {
+        if !self.auto_tare {
+            return false;
+        }
+        self.auto_tare_window.push(raw_g);
+        let cup_placed_late = !self.auto_tare_pending
+            && self.tare_gate.is_none()
+            && self.last_auto_tare.is_some()
+            && raw_g > AUTO_TARE_THRESHOLD_G;
+        if !(self.auto_tare_pending || cup_placed_late) || !self.auto_tare_window.is_settled() {
+            return false;
+        }
+        let holdoff = Duration::from_millis(AUTO_TARE_HOLDOFF_MS);
+        if self
+            .last_auto_tare
+            .is_some_and(|at| now.saturating_sub(at) < holdoff)
+        {
+            return false;
+        }
+        self.fire_auto_tare(now, out);
+        true
+    }
+
+    /// Send an auto-tare and open the tare-settling gate so the pre-tare
+    /// weight is suppressed until the hardware tare lands (see `tare_gate`).
+    /// The tare write is a no-op without a capable scale.
+    fn fire_auto_tare(&mut self, now: Duration, out: &mut CoreOutput) {
+        self.auto_tare_pending = false;
+        // The tare itself moves the reading.
+        self.auto_tare_window.reset();
+        self.last_auto_tare = Some(now);
+        self.tare_observed = false;
+        self.push_tare_command(out);
+        self.tare_gate = Some(now);
     }
 
     /// The untared-cup guard (Decenza `weightprocessor.cpp:242-253`, evolved
@@ -3338,12 +3608,19 @@ impl CremaCore {
         out.events.push(event);
     }
 
-    /// Decode and process a `WaterLevels` notification, applying the legacy
-    /// +5 mm sensor correction to the reported tank level.
-    fn handle_water_levels(&self, data: &[u8], out: &mut CoreOutput) {
+    /// Decode and process a `WaterLevels` notification: the raw level is
+    /// converted to a tank depth by [`water_tank_depth_mm`] — the ONE place
+    /// the +5 mm sensor offset is applied (de1app
+    /// `water_level_mm_correction`, Decenza `SENSOR_OFFSET`) — then run
+    /// through the ~3 s slosh filter ([`TankLevelSmoother`], Decenza
+    /// `7d291524`). The refill threshold is passed through raw; see the
+    /// `de1_domain::tank` module docs for the units rule.
+    fn handle_water_levels(&mut self, data: &[u8], now_ms: u64, out: &mut CoreOutput) {
         match WaterLevels::decode(data) {
             Ok(levels) => out.events.push(Event::WaterLevel {
-                level: levels.current_mm + WATER_LEVEL_MM_CORRECTION,
+                level: self
+                    .tank_level
+                    .update(water_tank_depth_mm(levels.current_mm), now_ms),
                 refill_threshold: levels.refill_threshold_mm,
             }),
             Err(e) => out.events.push(Event::DecodeError {
@@ -3670,19 +3947,28 @@ impl CremaCore {
             // recovered on demand from the recorder's identity-keeper —
             // see `CaptureRecorder::meta_snapshot` / `firmware_build` —
             // so this arm just emits the typed value for shell consumers.
+            // The firmware build is also cached for the firmware-gated
+            // `ErrorNoAc` filter (see `de1_firmware_build`).
+            if register == MmrRegister::FirmwareVersion {
+                self.de1_firmware_build = Some(value);
+            }
             out.events.push(Event::MmrValue { register, value });
         }
     }
 
-    /// Decode and process a `Calibration` reply — the DE1's answer to a
-    /// calibration read request issued by
-    /// [`read_calibration`](Self::read_calibration).
+    /// Decode and process a `Calibration` notification (`cuuid_12`).
     ///
-    /// Only a read reply (`ReadCurrent` / `ReadFactory`) is surfaced as an
-    /// [`Event::Calibration`]; a `Write` / `ResetToFactory` echo carries no
-    /// new information and is dropped.
+    /// The characteristic carries three kinds of traffic: echoes of our read
+    /// requests, echoes of our writes, and the machine's real stored value.
+    /// Only the last has `WriteKey == 0` ([`de1_protocol::REPLY_VALUE_KEY`];
+    /// de1app `calibration_ble_received`, decaid `isReturnedData`, Decenza
+    /// `7fed369d`), and only it is surfaced as an [`Event::Calibration`] —
+    /// an echo of our own write treated as a value would make a write the
+    /// firmware refused look like it succeeded. The value is in `measured`;
+    /// a `ReadFactory` reply is the factory slot, anything else the current
+    /// one (de1app's mapping).
     fn handle_calibration(data: &[u8], out: &mut CoreOutput) {
-        let cal = match Calibration::decode(data) {
+        let (cal, write_key) = match Calibration::decode_reply(data) {
             Ok(cal) => cal,
             Err(e) => {
                 out.events.push(Event::DecodeError {
@@ -3691,10 +3977,7 @@ impl CremaCore {
                 return;
             }
         };
-        if matches!(
-            cal.command,
-            de1_protocol::CalCommand::ReadCurrent | de1_protocol::CalCommand::ReadFactory
-        ) {
+        if write_key == de1_protocol::REPLY_VALUE_KEY {
             out.events.push(Event::Calibration {
                 target: cal.target,
                 command: cal.command,
@@ -3711,7 +3994,7 @@ impl CremaCore {
     /// [`steam_hotwater_settings`](Self::steam_hotwater_settings) and
     /// emits one [`Event::ShotSettingsRead`].
     fn handle_shot_settings_read(&mut self, data: &[u8], out: &mut CoreOutput) {
-        let settings = match ShotSettings::decode(data) {
+        let mut settings = match ShotSettings::decode(data) {
             Ok(s) => s,
             Err(e) => {
                 out.events.push(Event::DecodeError {
@@ -3720,6 +4003,15 @@ impl CremaCore {
                 return;
             }
         };
+        // A 0 °C steam target read back during a maintenance cycle is our own
+        // temporary override, not the user's setting — keep the real one, so
+        // neither the shells' snapshot nor the restore on exit adopts it.
+        if self.maintenance_steam_off
+            && settings.steam_temp_c == 0.0
+            && let Some(retained) = &self.steam_hotwater_settings
+        {
+            settings.steam_temp_c = retained.steam_temp_c;
+        }
         out.events.push(Event::ShotSettingsRead {
             steam_temp: settings.steam_temp_c,
             steam_timeout: settings.steam_timeout_s,
@@ -3764,6 +4056,8 @@ impl CremaCore {
         let (peak_pressure, peak_temp, peak_weight, final_weight) = self
             .shot_metrics
             .drain(stop_capture.as_ref().map(|c| c.weight_g));
+        // The pre-shot zero correction belongs to the shot just finalized.
+        self.pre_shot_zero_offset_g = 0.0;
         out.events.push(Event::ShotCompleted {
             duration: duration_ms,
             sample_count,
@@ -3867,18 +4161,22 @@ impl CremaCore {
                 self.stop_triggered_this_shot = false;
                 // Fresh shot → every step's weight exit re-arms.
                 self.step_weight.reset_shot();
+                self.scale_timer_stopped_for_drop = false;
                 // Auto-tare the connected scale so the cup starts from zero,
                 // mirroring the legacy app's tare-at-shot-start behaviour —
                 // gated on the latched user preference (default true). The
-                // tare write is a no-op when no scale is connected, so the
-                // explicit scale check inside `push_tare_command` carries.
-                if self.auto_tare {
-                    self.push_tare_command(out);
-                    // Open the tare-settling gate so the pre-tare pan/cup weight
-                    // is suppressed until the hardware tare lands — see
-                    // `tare_gate` and `handle_scale_weight`.
-                    self.tare_gate = Some(now);
-                }
+                // tare itself waits for a settled reading (Decenza
+                // `da2e5495`): taring a load cell that is still ringing from
+                // the cup going down / the GHC being pressed bakes the
+                // transient in as the zero. See `auto_tare_pending` and
+                // `handle_scale_weight`; first flow is the fallback.
+                self.tare_gate = None;
+                self.auto_tare_pending = self.auto_tare;
+                self.auto_tare_window.reset();
+                self.last_auto_tare = None;
+                self.tare_observed = false;
+                self.last_raw_weight = None;
+                self.pre_shot_zero_offset_g = 0.0;
                 // Reset the scale's built-in timer so any residual from a
                 // prior shot clears — but do NOT start it yet: the start
                 // waits for first flow below, so the on-scale timer matches
@@ -3896,6 +4194,19 @@ impl CremaCore {
                     && matches!(phase, ShotPhase::Preinfusion | ShotPhase::Pouring)
                 {
                     self.flow_started = Some(now);
+                    // Zero held? Capture the residual post-tare zero the scale
+                    // had when flow started and correct every reading of the
+                    // shot by it (Decenza `da2e5495`; ±2 g, observed tare only).
+                    self.pre_shot_zero_offset_g = pre_shot_zero_offset(
+                        self.tare_observed && self.tare_gate.is_none(),
+                        self.last_raw_weight,
+                    );
+                    // Fallback: a scale that never settled during preheat (or
+                    // never reported) still gets its shot-start tare now.
+                    if self.auto_tare_pending {
+                        self.fire_auto_tare(now, out);
+                    }
+                    self.auto_tare_window.reset();
                     // Pump on: start the scale's built-in timer from the same
                     // anchor the inbuilt clock uses (fires once per shot —
                     // `flow_started` latches).
@@ -3947,6 +4258,7 @@ impl CremaCore {
                 self.auto_stop = None;
                 // Close any tare gate that never saw its confirmation reading.
                 self.tare_gate = None;
+                self.auto_tare_pending = false;
                 // Stop the scale's built-in timer alongside the auto-stop.
                 Self::push_timer_command(&self.scale, TimerCommand::Stop, out);
                 // `record.duration` is the domain `Duration`; narrow to the
@@ -4814,6 +5126,190 @@ mod tests {
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(500), 1_500);
         let w = scale_reading_weight(&out).expect("a reading");
         assert!((w - 5.0).abs() < 0.5, "post-tare weight recorded (got {w})");
+    }
+
+    /// A Bookoo weight packet for a signed weight in grams.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn bookoo_grams(g: f32) -> [u8; 20] {
+        let mut p = bookoo_packet((g.abs() * 100.0).round() as u32);
+        if g < 0.0 {
+            p[6] = b'-';
+            p[19] = p[..19].iter().fold(0, |a, &b| a ^ b);
+        }
+        p
+    }
+
+    fn tare_writes(out: &CoreOutput) -> usize {
+        scale_writes(out)
+            .iter()
+            .filter(|w| **w == bookoo::TARE.as_slice())
+            .count()
+    }
+
+    /// Enter Espresso / Heating (preheat, no flow yet) with a Bookoo paired.
+    fn preheating_core() -> CremaCore {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let out = core.on_notification(Source::De1State, &[4, 1], 1_000);
+        assert!(out.events.contains(&Event::ShotStarted));
+        assert_eq!(
+            tare_writes(&out),
+            0,
+            "the shot-start tare waits for a settled reading"
+        );
+        core
+    }
+
+    #[test]
+    fn the_shot_start_tare_waits_for_a_ringing_cell_to_settle() {
+        let mut core = preheating_core();
+        // Decenza's field trace: the cell swings -6.8 → +8.3 g around a 250 g cup.
+        let mut t = 1_100;
+        for g in [243.2, 258.3, 247.9, 254.1, 244.0, 256.5] {
+            let out = core.on_notification(Source::ScaleWeight, &bookoo_grams(g), t);
+            assert_eq!(tare_writes(&out), 0, "no tare on a moving reading ({g} g)");
+            assert_eq!(
+                scale_reading_weight(&out),
+                Some(0.0),
+                "cup weight stays hidden"
+            );
+            t += 100;
+        }
+        // The ringing dies: four readings within 1 g — the tare fires on the fourth.
+        let mut fired = 0;
+        for g in [250.4, 250.2, 250.6, 250.3] {
+            let out = core.on_notification(Source::ScaleWeight, &bookoo_grams(g), t);
+            fired += tare_writes(&out);
+            assert_eq!(scale_reading_weight(&out), Some(0.0));
+            t += 100;
+        }
+        assert_eq!(fired, 1);
+        // The tare lands; nothing else fires.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_grams(0.0), t);
+        assert_eq!(tare_writes(&out), 0);
+        assert_eq!(scale_reading_weight(&out), Some(0.0));
+    }
+
+    #[test]
+    fn a_drifting_reading_never_settles_and_the_tare_falls_back_to_first_flow() {
+        let mut core = preheating_core();
+        let mut t = 1_100;
+        for i in 0..12u16 {
+            // 0.47 g/sample — inside the band per step, outside it per window.
+            let out = core.on_notification(
+                Source::ScaleWeight,
+                &bookoo_grams(200.0 - 0.47 * f32::from(i)),
+                t,
+            );
+            assert_eq!(tare_writes(&out), 0);
+            t += 100;
+        }
+        // First flow: the tare the shot always got, now as the fallback.
+        let out = core.on_notification(Source::De1State, &[4, 4], t);
+        assert_eq!(tare_writes(&out), 1);
+    }
+
+    #[test]
+    fn a_cup_put_down_during_preheat_is_re_tared_once_settled() {
+        let mut core = preheating_core();
+        let mut t = 1_100;
+        // Empty platform: settles at ~0, the shot-start tare fires and lands.
+        let mut fired = 0;
+        for _ in 0..4 {
+            fired += tare_writes(&core.on_notification(Source::ScaleWeight, &bookoo_grams(0.0), t));
+            t += 100;
+        }
+        assert_eq!(fired, 1);
+        core.on_notification(Source::ScaleWeight, &bookoo_grams(0.0), t);
+        t += 1_000;
+        // A 180 g cup goes down and rings, then settles: one re-tare.
+        let mut fired = 0;
+        for g in [172.0, 186.0, 179.0, 180.2, 180.1, 180.3, 180.2, 180.2] {
+            fired += tare_writes(&core.on_notification(Source::ScaleWeight, &bookoo_grams(g), t));
+            t += 100;
+        }
+        assert_eq!(fired, 1, "the late cup gets exactly one settled tare");
+    }
+
+    #[test]
+    fn the_pre_shot_zero_drift_is_corrected_for_the_whole_shot() {
+        let mut core = preheating_core();
+        let mut t = 1_100;
+        for _ in 0..4 {
+            core.on_notification(Source::ScaleWeight, &bookoo_grams(0.0), t);
+            t += 100;
+        }
+        // Tare observed to land, then the zero creeps to -0.4 g during preheat.
+        for g in [0.0, -0.1, -0.2, -0.3, -0.4] {
+            core.on_notification(Source::ScaleWeight, &bookoo_grams(g), t);
+            t += 100;
+        }
+        core.on_notification(Source::De1State, &[4, 4], t); // first flow
+        assert!((core.pre_shot_zero_offset_g + 0.4).abs() < 1e-4);
+        // A steady raw 10.0 g reads as 10.4 g — the true yield.
+        let mut w = None;
+        for _ in 0..40 {
+            t += 100;
+            w = scale_reading_weight(&core.on_notification(
+                Source::ScaleWeight,
+                &bookoo_grams(10.0),
+                t,
+            ));
+        }
+        let w = w.unwrap();
+        assert!((w - 10.4).abs() < 0.2, "corrected weight (got {w})");
+        // The next shot starts from a clean zero.
+        core.on_notification(Source::De1State, &[2, 0], t + 100);
+        core.on_notification(Source::De1State, &[4, 1], t + 10_000);
+        assert_eq!(core.pre_shot_zero_offset_g, 0.0);
+    }
+
+    #[test]
+    fn no_zero_correction_without_an_observed_tare_or_beyond_two_grams() {
+        // Beyond the bound: an untared cup, never an "offset".
+        let mut core = preheating_core();
+        let mut t = 1_100;
+        for _ in 0..4 {
+            core.on_notification(Source::ScaleWeight, &bookoo_grams(0.0), t);
+            t += 100;
+        }
+        core.on_notification(Source::ScaleWeight, &bookoo_grams(0.0), t);
+        t += 100;
+        core.on_notification(Source::ScaleWeight, &bookoo_grams(-2.5), t);
+        core.on_notification(Source::De1State, &[4, 4], t + 100);
+        assert_eq!(core.pre_shot_zero_offset_g, 0.0);
+
+        // The tare gate timed out instead of seeing the zero: not observed.
+        let mut core = preheating_core();
+        let mut t = 1_100;
+        for _ in 0..4 {
+            core.on_notification(Source::ScaleWeight, &bookoo_grams(1.5), t);
+            t += 100;
+        }
+        // Stuck at 1.5 g past the 1.5 s gate timeout.
+        core.on_notification(Source::ScaleWeight, &bookoo_grams(1.5), t + 1_600);
+        core.on_notification(Source::De1State, &[4, 4], t + 1_700);
+        assert_eq!(core.pre_shot_zero_offset_g, 0.0);
+    }
+
+    #[test]
+    fn no_settle_gated_tare_when_auto_tare_is_off() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_auto_tare(false);
+        core.on_notification(Source::De1State, &[4, 1], 1_000);
+        let mut t = 1_100;
+        for _ in 0..6 {
+            let out = core.on_notification(Source::ScaleWeight, &bookoo_grams(250.0), t);
+            assert_eq!(tare_writes(&out), 0);
+            // Not suppressed either: auto-tare off means the raw weight shows.
+            assert!(scale_reading_weight(&out).unwrap() > 100.0);
+            t += 100;
+        }
+        assert_eq!(
+            tare_writes(&core.on_notification(Source::De1State, &[4, 4], t)),
+            0
+        );
     }
 
     #[test]
@@ -5715,6 +6211,36 @@ mod tests {
     }
 
     #[test]
+    fn the_tank_offset_reaches_the_readout_exactly_once() {
+        // Raw 17 mm on the wire (geota/crema#47) → 22 mm of depth on the
+        // event → 592 ml / 54 % through the shells' conversions — the numbers
+        // de1app and Decenza show. The double-offset bug read 27 mm / 704 ml.
+        let mut core = CremaCore::new();
+        let out = core.on_notification(Source::De1WaterLevels, &[17, 0, 5, 0], 0);
+        let (level, threshold) = out
+            .events
+            .iter()
+            .find_map(|e| match e {
+                Event::WaterLevel {
+                    level,
+                    refill_threshold,
+                } => Some((*level, *refill_threshold)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(level, 22.0);
+        assert_eq!(de1_domain::water_tank_ml(level), 592);
+        assert_eq!(de1_domain::water_tank_percent(level), 54);
+        // The threshold stays raw on the event…
+        assert_eq!(threshold, 5.0);
+        // …and the shells' refill comparison converts it to depth first: a
+        // raw level AT the raw threshold compares equal, not 5 mm apart.
+        let mut core = CremaCore::new();
+        let out = core.on_notification(Source::De1WaterLevels, &[5, 0, 5, 0], 0);
+        assert_eq!(water_level(&out), Some(water_tank_depth_mm(threshold)));
+    }
+
+    #[test]
     fn a_version_notification_emits_a_firmware_event() {
         let mut core = CremaCore::new();
         // 18-byte Version packet: BLE then FW block, each
@@ -5775,20 +6301,256 @@ mod tests {
         )));
     }
 
+    /// The `ShotSettings` writes in an output, decoded.
+    fn shot_settings_writes(out: &CoreOutput) -> Vec<ShotSettings> {
+        out.commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1ShotSettings,
+                    data,
+                } => ShotSettings::decode(data).ok(),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_steam_heater_is_off_for_each_maintenance_cycle() {
+        for maintenance in [18u8, 10, 20] {
+            // Clean, Descale, AirPurge
+            let mut core = CremaCore::new();
+            let _ = core.set_steam_hotwater_settings(ShotSettings {
+                steam_temp_c: 155.0,
+                ..ShotSettings::default()
+            });
+            let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+            // Entering: one write with the steam target forced to 0.
+            let out = core.on_notification(Source::De1State, &[maintenance, 0], 1_000);
+            let writes = shot_settings_writes(&out);
+            assert_eq!(writes.len(), 1, "state {maintenance}");
+            assert_eq!(writes[0].steam_temp_c, 0.0);
+            // The other fields are the user's.
+            assert_eq!(writes[0].hot_water_temp_c, 85.0);
+            // A substate change inside the cycle writes nothing more.
+            let out = core.on_notification(Source::De1State, &[maintenance, 13], 2_000);
+            assert!(shot_settings_writes(&out).is_empty());
+            // Leaving: the user's steam target is restored.
+            let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
+            let writes = shot_settings_writes(&out);
+            assert_eq!(writes.len(), 1);
+            assert_eq!(writes[0].steam_temp_c, 155.0);
+        }
+    }
+
+    #[test]
+    fn maintenance_steam_off_survives_echoes_and_user_edits() {
+        let mut core = CremaCore::new();
+        let _ = core.set_steam_hotwater_settings(ShotSettings {
+            steam_temp_c: 150.0,
+            ..ShotSettings::default()
+        });
+        let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+        let _ = core.on_notification(Source::De1State, &[18, 0], 1_000);
+        // A read-back of our own 0 °C override is not adopted as the setting.
+        let echo = ShotSettings {
+            steam_temp_c: 0.0,
+            ..ShotSettings::default()
+        }
+        .encode();
+        let out = core.on_notification(Source::De1ShotSettings, &echo, 1_500);
+        assert!(out.events.iter().any(|e| matches!(
+            e,
+            Event::ShotSettingsRead { steam_temp, .. } if *steam_temp == 150.0
+        )));
+        // A user edit mid-cycle is stored but still written with steam off.
+        let out = core.set_steam_hotwater_settings(ShotSettings {
+            steam_temp_c: 160.0,
+            ..ShotSettings::default()
+        });
+        assert_eq!(shot_settings_writes(&out)[0].steam_temp_c, 0.0);
+        // Leaving restores the latest user target.
+        let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
+        assert_eq!(shot_settings_writes(&out)[0].steam_temp_c, 160.0);
+    }
+
+    #[test]
+    fn maintenance_without_a_settings_baseline_writes_nothing() {
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+        let out = core.on_notification(Source::De1State, &[18, 0], 1_000);
+        assert!(shot_settings_writes(&out).is_empty());
+        let out = core.on_notification(Source::De1State, &[2, 0], 2_000);
+        assert!(shot_settings_writes(&out).is_empty());
+        // And an ordinary flow (espresso) never touches the steam target.
+        let mut core = CremaCore::new();
+        let _ = core.set_steam_hotwater_settings(ShotSettings::default());
+        let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+        let out = core.on_notification(Source::De1State, &[4, 1], 1_000);
+        assert!(shot_settings_writes(&out).is_empty());
+    }
+
+    /// A `ReadFromMMR` reply for the FirmwareVersion register (0x800010).
+    fn firmware_build_packet(build: u32) -> [u8; de1_protocol::MMR_PACKET_LEN] {
+        let mut packet = [0u8; de1_protocol::MMR_PACKET_LEN];
+        packet[1..4].copy_from_slice(&[0x80, 0x00, 0x10]);
+        packet[4..8].copy_from_slice(&build.to_le_bytes());
+        packet
+    }
+
+    fn water_level(out: &CoreOutput) -> Option<f32> {
+        out.events.iter().find_map(|e| match e {
+            Event::WaterLevel { level, .. } => Some(*level),
+            _ => None,
+        })
+    }
+
+    fn machine_error_events(out: &CoreOutput) -> Vec<Option<String>> {
+        out.events
+            .iter()
+            .filter_map(|e| match e {
+                Event::MachineErrorChanged { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_water_level_is_smoothed_against_pump_slosh() {
+        let mut core = CremaCore::new();
+        // First reading seeds the filter: 20 mm raw → 25 mm with the offset.
+        let out = core.on_notification(Source::De1WaterLevels, &[20, 0, 5, 0], 0);
+        assert_eq!(water_level(&out), Some(25.0));
+        // A 28 mm slosh spike 250 ms later moves the reported level ~8 %.
+        let out = core.on_notification(Source::De1WaterLevels, &[48, 0, 5, 0], 250);
+        let level = water_level(&out).unwrap();
+        assert!((level - 27.24).abs() < 0.1, "got {level}");
+        // A link drop re-seeds: the next reading is taken as-is.
+        let _ = core.de1_link_lost();
+        let out = core.on_notification(Source::De1WaterLevels, &[10, 0, 5, 0], 500);
+        assert_eq!(water_level(&out), Some(15.0));
+    }
+
+    #[test]
+    fn a_brief_no_ac_blip_is_never_surfaced() {
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(Source::De1MmrRead, &firmware_build_packet(1363), 0);
+        let _ = core.on_notification(Source::De1State, &[2, 1], 0); // Idle / Heating
+        // Error_NoAc for ~3 s while heating, then back to Heating.
+        let out = core.on_notification(Source::De1State, &[2, 217], 1_000);
+        assert!(machine_error_events(&out).is_empty());
+        let out = core.on_tick(3_500);
+        assert!(machine_error_events(&out).is_empty());
+        let out = core.on_notification(Source::De1State, &[2, 1], 4_000);
+        assert!(machine_error_events(&out).is_empty());
+        // Nothing late either.
+        assert!(machine_error_events(&core.on_tick(20_000)).is_empty());
+    }
+
+    #[test]
+    fn a_persistent_no_ac_is_surfaced_once_and_cleared() {
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(Source::De1MmrRead, &firmware_build_packet(1352), 0);
+        let _ = core.on_notification(Source::De1State, &[2, 217], 1_000);
+        assert!(machine_error_events(&core.on_tick(6_999)).is_empty());
+        // Past the 6 s settle — surfaced exactly once (the webhook edge).
+        let out = core.on_notification(Source::De1WaterLevels, &[20, 0, 5, 0], 7_000);
+        let errors = machine_error_events(&out);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].as_deref().unwrap().contains("power switch"));
+        assert!(machine_error_events(&core.on_tick(8_000)).is_empty());
+        // The switch goes back on: one clearing edge.
+        let out = core.on_notification(Source::De1State, &[2, 0], 9_000);
+        assert_eq!(machine_error_events(&out), vec![None]);
+    }
+
+    #[test]
+    fn no_ac_is_ignored_on_old_or_unknown_firmware() {
+        for fw in [None, Some(1336)] {
+            let mut core = CremaCore::new();
+            if let Some(build) = fw {
+                let _ = core.on_notification(Source::De1MmrRead, &firmware_build_packet(build), 0);
+            }
+            let _ = core.on_notification(Source::De1State, &[2, 217], 0);
+            assert!(machine_error_events(&core.on_tick(60_000)).is_empty());
+        }
+    }
+
+    #[test]
+    fn no_ac_waits_for_a_late_firmware_read() {
+        // The firmware build can land after the settle has already elapsed.
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(Source::De1State, &[2, 217], 0);
+        assert!(machine_error_events(&core.on_tick(10_000)).is_empty());
+        let out = core.on_notification(Source::De1MmrRead, &firmware_build_packet(1340), 10_500);
+        assert_eq!(machine_error_events(&out).len(), 1);
+    }
+
+    #[test]
+    fn other_faults_are_surfaced_immediately() {
+        let mut core = CremaCore::new();
+        let out = core.on_notification(Source::De1State, &[11, 204], 0); // ErrorTSensor
+        let errors = machine_error_events(&out);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].is_some());
+        // A healthy state change on its own emits nothing.
+        let mut core = CremaCore::new();
+        let out = core.on_notification(Source::De1State, &[2, 0], 0);
+        assert!(machine_error_events(&out).is_empty());
+    }
+
+    #[test]
+    fn a_mid_shot_disconnect_stops_the_scale_timer_once() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let _ = core.on_notification(Source::De1State, &[4, 1], 0); // Espresso / Heating
+        let out = core.on_notification(Source::De1State, &[4, 4], 2_000); // Preinfusion
+        assert!(scale_writes(&out).contains(&bookoo::TIMER_START.as_slice()));
+        // The link drops: one stop, and only one across both teardown paths.
+        let out = core.de1_link_lost();
+        assert_eq!(scale_writes(&out), vec![bookoo::TIMER_STOP.as_slice()]);
+        assert!(scale_writes(&core.de1_link_lost()).is_empty());
+        assert!(scale_writes(&core.reset()).is_empty());
+    }
+
+    #[test]
+    fn reset_mid_shot_stops_the_scale_timer() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let _ = core.on_notification(Source::De1State, &[4, 1], 0);
+        let _ = core.on_notification(Source::De1State, &[4, 5], 2_000); // Pouring
+        let out = core.reset();
+        assert_eq!(scale_writes(&out), vec![bookoo::TIMER_STOP.as_slice()]);
+        // The scale link survived the reset.
+        assert!(core.scale.is_some());
+    }
+
+    #[test]
+    fn a_disconnect_while_idle_sends_no_scale_stop() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+        assert!(scale_writes(&core.de1_link_lost()).is_empty());
+        assert!(scale_writes(&core.reset()).is_empty());
+        // Preheat only (the core has not started the timer yet): nothing.
+        let _ = core.on_notification(Source::De1State, &[4, 1], 1_000);
+        assert!(scale_writes(&core.de1_link_lost()).is_empty());
+    }
+
     #[test]
     fn firmware_version_mmr_reply_caches_last_firmware_build() {
         let mut core = CremaCore::new();
         // Before any MMR read, the status check returns Unknown.
         assert_eq!(core.firmware_update_status(), FirmwareUpdateStatus::Unknown);
-        // Feed a ReadFromMMR reply for 0x800010 with value 1352.
+        // Feed a ReadFromMMR reply for 0x800010 with value 1358.
         let mut packet = [0u8; de1_protocol::MMR_PACKET_LEN];
         packet[1..4].copy_from_slice(&[0x80, 0x00, 0x10]);
-        packet[4..8].copy_from_slice(&1352u32.to_le_bytes());
+        packet[4..8].copy_from_slice(&1358u32.to_le_bytes());
         let _ = core.on_notification(Source::De1MmrRead, &packet, 0);
         // The cache is now populated and the status check finds UpToDate.
         assert_eq!(
             core.firmware_update_status(),
-            FirmwareUpdateStatus::UpToDate { installed: 1352 }
+            FirmwareUpdateStatus::UpToDate { installed: 1358 }
         );
     }
 
@@ -5890,23 +6652,52 @@ mod tests {
     #[test]
     fn a_calibration_reply_emits_a_calibration_event() {
         let mut core = CremaCore::new();
-        // A ReadCurrent reply for the temperature sensor: DE1 reported 92.5.
-        let packet = Calibration {
+        // A ReadCurrent value reply (WriteKey 0) for the temperature sensor:
+        // stored value -0.75.
+        let mut packet = Calibration {
             command: de1_protocol::CalCommand::ReadCurrent,
             target: CalTarget::Temperature,
-            de1_reported: 92.5,
-            measured: 0.0,
+            de1_reported: 0.0,
+            measured: -0.75,
         }
         .encode();
+        packet[0..4].copy_from_slice(&de1_protocol::REPLY_VALUE_KEY.to_be_bytes());
         let out = core.on_notification(Source::De1Calibration, &packet, 0);
         assert!(out.events.iter().any(|e| matches!(
             e,
             Event::Calibration {
                 target: CalTarget::Temperature,
                 command: de1_protocol::CalCommand::ReadCurrent,
-                de1_reported,
+                measured,
                 ..
-            } if (*de1_reported - 92.5).abs() < 1e-3
+            } if (*measured + 0.75).abs() < 1e-3
+        )));
+    }
+
+    #[test]
+    fn calibration_request_echoes_never_surface_as_values() {
+        let mut core = CremaCore::new();
+        // Echoes of our own read requests (key 1) and writes (key 0xCAFEF00D)
+        // carry no value — including a write echo whose fields LOOK like one.
+        for packet in [
+            Calibration::read_request(CalTarget::Pressure).encode(),
+            Calibration::read_factory_request(CalTarget::Pressure).encode(),
+            Calibration::write(CalTarget::Pressure, 9.0, 9.4).encode(),
+            Calibration::reset_to_factory(CalTarget::Pressure).encode(),
+        ] {
+            let out = core.on_notification(Source::De1Calibration, &packet, 0);
+            assert!(out.events.is_empty(), "{packet:02x?}");
+        }
+        // A factory value reply is surfaced with its command intact.
+        let mut packet = Calibration::read_factory_request(CalTarget::Flow).encode();
+        packet[0..4].copy_from_slice(&[0, 0, 0, 0]);
+        let out = core.on_notification(Source::De1Calibration, &packet, 0);
+        assert!(out.events.iter().any(|e| matches!(
+            e,
+            Event::Calibration {
+                command: de1_protocol::CalCommand::ReadFactory,
+                ..
+            }
         )));
     }
 

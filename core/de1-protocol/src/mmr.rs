@@ -51,9 +51,11 @@ pub fn write_request(address: u32, data: &[u8]) -> [u8; MMR_PACKET_LEN] {
 
 /// Human-readable name for a raw `MachineModel` MMR value. Mirrors the
 /// legacy de1app lookup (`vars.tcl:3883`) — `0` is the firmware's "unset
-/// / unknown" sentinel; `1..=7` are the released hardware models. Values
-/// past the table are reported as `"model N"` so a future-DE1 model
-/// surfaces something diagnostic rather than crashing the row.
+/// / unknown" sentinel; `1..=7` are the released DE1 models; `128` and up
+/// is Bengle hardware ([`is_bengle_model`], decaid
+/// `DecentMachineModel.fromInt` → `Bengle`). Other values are reported as
+/// `"model N"` so a future model surfaces something diagnostic rather than
+/// crashing the row.
 ///
 /// Why it lives in `de1-protocol`: it is firmware-enum semantics — a
 /// pure lookup over a raw byte the firmware emits — so every shell
@@ -69,17 +71,31 @@ pub fn machine_model_name(raw: u32) -> String {
     {
         return (*name).to_owned();
     }
+    if is_bengle_model(raw) {
+        return "Bengle".to_owned();
+    }
     format!("model {raw}")
 }
 
-/// Whether the connected DE1 has the Bengle cup-warmer plate hardware —
+/// Whether a raw `MachineModel` MMR value is Bengle hardware: model **128 and
+/// above**. A range, not one value, so later Bengle variants need no app
+/// change — de1app `is_bengle_model_value` (`de1_de1.tcl:825-828`) and decaid
+/// `isBengleModelValue` (`de1.models.dart:386`) both use exactly this rule.
+/// Models `1..=7` (DE1 … DE1XXXL) are all classic DE1 hardware.
+#[must_use]
+pub const fn is_bengle_model(raw: u32) -> bool {
+    raw >= 128
+}
+
+/// Whether the connected machine has the Bengle cup-warmer plate hardware —
 /// a capability gate the shell uses to show / hide the cup-warmer card.
-/// Today the gate is `MachineModel ∈ {DE1XL, DE1CAFE, DE1XXL, DE1XXXL}`
-/// (raw values `4..=7`); naming the function instead of grepping for a
-/// numeric range keeps the gate honest if the table ever shifts.
+/// The plate is Bengle-only, so this is exactly [`is_bengle_model`]
+/// (`MachineModel ≥ 128`). It used to be `4..=7`, which are the classic
+/// DE1XL / DE1CAFE / DE1XXL / DE1XXXL — so those machines were shown a
+/// cup-warmer card for hardware they don't have, and real Bengles weren't.
 #[must_use]
 pub const fn has_cup_warmer(raw: u32) -> bool {
-    matches!(raw, 4..=7)
+    is_bengle_model(raw)
 }
 
 /// A decoded `ReadFromMMR` reply: the address echoed back and its data.
@@ -135,8 +151,9 @@ pub enum MmrRegister {
     CpuBoardVersion,
     /// Machine model identifier — `0 = Unset / unknown`, `1 = DE1`,
     /// `2 = DE1+`, `3 = DE1PRO`, `4 = DE1XL`, `5 = DE1CAFE`, `6 = DE1XXL`,
-    /// `7 = DE1XXXL`. The legacy app uses this to gate model-specific
-    /// settings (e.g. the cup-warmer surface on Bengle hardware).
+    /// `7 = DE1XXXL`, `128+` = Bengle ([`is_bengle_model`]). The legacy app
+    /// uses this to gate model-specific settings (e.g. the cup-warmer surface
+    /// on Bengle hardware).
     MachineModel,
     /// Firmware build number.
     FirmwareVersion,
@@ -531,18 +548,30 @@ mod tests {
         assert_eq!(machine_model_name(6), "DE1XXL");
         assert_eq!(machine_model_name(7), "DE1XXXL");
         assert_eq!(machine_model_name(8), "model 8");
-        assert_eq!(machine_model_name(255), "model 255");
+        assert_eq!(machine_model_name(127), "model 127");
+        assert_eq!(machine_model_name(128), "Bengle");
+        assert_eq!(machine_model_name(255), "Bengle");
     }
 
     #[test]
-    fn has_cup_warmer_matches_bengle_range() {
-        for raw in 0..=3 {
+    fn bengle_is_model_128_and_up() {
+        // de1app `de1_de1.tcl:825-828`, decaid `de1.models.dart:386`.
+        for raw in 0..=127 {
+            assert!(!is_bengle_model(raw), "raw {raw} is not a Bengle");
+        }
+        for raw in [128, 129, 200, 255, 1000] {
+            assert!(is_bengle_model(raw), "raw {raw} is a Bengle");
+        }
+    }
+
+    #[test]
+    fn the_cup_warmer_is_bengle_only() {
+        // The classic DE1 range — DE1 … DE1XXXL — has no plate.
+        for raw in 0..=7 {
             assert!(!has_cup_warmer(raw), "raw {raw} should not have cup warmer");
         }
-        for raw in 4..=7 {
-            assert!(has_cup_warmer(raw), "raw {raw} should have cup warmer");
-        }
-        assert!(!has_cup_warmer(8));
-        assert!(!has_cup_warmer(255));
+        assert!(!has_cup_warmer(127));
+        assert!(has_cup_warmer(128));
+        assert!(has_cup_warmer(130));
     }
 }

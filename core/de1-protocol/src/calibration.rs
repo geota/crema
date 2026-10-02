@@ -17,6 +17,13 @@ pub const CALIBRATION_LEN: usize = 14;
 const WRITE_KEY_WRITE: u32 = 0xCAFE_F00D;
 /// `WriteKey` magic for a calibration read request.
 const WRITE_KEY_READ: u32 = 1;
+/// `WriteKey` of a reply that carries the machine's real stored value. Every
+/// other key on `cuuid_12` marks an echo of one of our own read / write
+/// requests, whose value fields mean nothing (de1app
+/// `calibration_ble_received`, `bluetooth.tcl:3475`; decaid
+/// `De1CalibrationPacket.isReturnedData`; Decenza `7fed369d`
+/// `REPLY_VALUE_KEY`).
+pub const REPLY_VALUE_KEY: u32 = 0;
 
 /// Which sensor a calibration applies to.
 #[typeshare]
@@ -167,8 +174,10 @@ impl Calibration {
         packet
     }
 
-    /// Decode a calibration packet. The `WriteKey` is informational on a
-    /// reply and is not retained. Trailing bytes are ignored.
+    /// Decode a calibration packet, dropping its `WriteKey`. Trailing bytes
+    /// are ignored. Use [`decode_reply`](Self::decode_reply) for a packet
+    /// received from the DE1 — the key is what says whether it carries a
+    /// value.
     ///
     /// # Errors
     ///
@@ -176,6 +185,18 @@ impl Calibration {
     /// [`CALIBRATION_LEN`]; [`ProtocolError::UnknownCalCommand`] or
     /// [`ProtocolError::UnknownCalTarget`] on an unrecognised command/target.
     pub fn decode(data: &[u8]) -> Result<Calibration, ProtocolError> {
+        Self::decode_reply(data).map(|(cal, _)| cal)
+    }
+
+    /// Decode a packet received on `cuuid_12` together with its `WriteKey`.
+    /// Only a reply whose key is [`REPLY_VALUE_KEY`] (0) carries the
+    /// machine's stored value — in [`measured`](Self::measured); anything
+    /// else is an echo of our own request.
+    ///
+    /// # Errors
+    ///
+    /// As [`decode`](Self::decode).
+    pub fn decode_reply(data: &[u8]) -> Result<(Calibration, u32), ProtocolError> {
         if data.len() < CALIBRATION_LEN {
             return Err(ProtocolError::PacketTooShort {
                 packet: "Calibration",
@@ -183,12 +204,14 @@ impl Calibration {
                 got: data.len(),
             });
         }
-        Ok(Calibration {
+        let write_key = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        let cal = Calibration {
             command: CalCommand::try_from(data[4])?,
             target: CalTarget::try_from(data[5])?,
             de1_reported: s32p16_decode(i32::from_be_bytes([data[6], data[7], data[8], data[9]])),
             measured: s32p16_decode(i32::from_be_bytes([data[10], data[11], data[12], data[13]])),
-        })
+        };
+        Ok((cal, write_key))
     }
 }
 
@@ -261,6 +284,23 @@ mod tests {
         ] {
             assert_eq!(Calibration::decode(&cal.encode()), Ok(cal));
         }
+    }
+
+    #[test]
+    fn decode_reply_keeps_the_write_key() {
+        // Our own write echoes back with the write magic…
+        let echo = Calibration::write(CalTarget::Pressure, 9.0, 9.2).encode();
+        assert_eq!(Calibration::decode_reply(&echo).unwrap().1, 0xCAFE_F00D);
+        // …a read echo with the read magic…
+        let echo = Calibration::read_request(CalTarget::Pressure).encode();
+        assert_eq!(Calibration::decode_reply(&echo).unwrap().1, 1);
+        // …and only a value reply carries key 0.
+        let mut reply = Calibration::read_request(CalTarget::Pressure).encode();
+        reply[0..4].copy_from_slice(&REPLY_VALUE_KEY.to_be_bytes());
+        assert_eq!(
+            Calibration::decode_reply(&reply).unwrap().1,
+            REPLY_VALUE_KEY
+        );
     }
 
     #[test]

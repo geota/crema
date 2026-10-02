@@ -1019,6 +1019,26 @@ pub fn sub_state_error_message(name: String) -> Option<String> {
     de1_protocol::SubState::error_message_for_name(&name).map(str::to_owned)
 }
 
+/// Whether an automatic sleep request (screensaver / sleep-on-quit) sent now
+/// would be latched by the firmware and fire after the next refill instead —
+/// the machine is in Refill on firmware < 1357 (or unknown), or is a Bengle.
+/// `state` / `substate` are the variant names as they cross the wire
+/// (`"Refill"`, `"Idle"`, …); an unrecognised name counts as "not in Refill".
+/// See [`de1_protocol::sleep_request_latches_in_refill`].
+#[uniffi::export]
+pub fn sleep_request_latches_in_refill(
+    state: String,
+    substate: String,
+    firmware_build: Option<u32>,
+    machine_model: Option<u32>,
+) -> bool {
+    let state = serde_json::from_value(serde_json::Value::String(state))
+        .unwrap_or(de1_protocol::MachineState::Idle);
+    let substate = serde_json::from_value(serde_json::Value::String(substate))
+        .unwrap_or(de1_protocol::SubState::Ready);
+    de1_protocol::sleep_request_latches_in_refill(state, substate, firmware_build, machine_model)
+}
+
 /// Whether a Visualizer call error (`tag` + optional HTTP `status`) is worth
 /// retrying. Mirrors the wasm `isRecoverable`; see [`de1_domain::is_recoverable`].
 #[uniffi::export]
@@ -1048,6 +1068,32 @@ pub fn retry_backoff_ms(status: Option<u16>, attempt: u32) -> u64 {
 #[uniffi::export]
 pub fn machine_model_name(raw: u32) -> String {
     de1_protocol::machine_model_name(raw)
+}
+
+/// Whether the DE1 with serial `serial` (MMR `SerialNumber`) is on Decent's
+/// stolen-machine list `list_json`. Mirrors the wasm `serialOnStolenList`; see
+/// [`de1_domain::serial_on_stolen_list`].
+#[uniffi::export]
+pub fn serial_on_stolen_list(serial: u32, list_json: String) -> bool {
+    de1_domain::serial_on_stolen_list(serial, &list_json)
+}
+
+/// Whether a fetched body is a usable stolen-serial list (worth caching).
+#[uniffi::export]
+pub fn stolen_serials_list_is_valid(list_json: String) -> bool {
+    de1_domain::stolen_serials_list_is_valid(&list_json)
+}
+
+/// Whether the cached stolen-serial list is due a refetch (at most daily).
+#[uniffi::export]
+pub fn stolen_serials_refresh_due(last_fetch_ms: Option<u64>, now_ms: u64) -> bool {
+    de1_domain::stolen_serials_refresh_due(last_fetch_ms, now_ms)
+}
+
+/// Where Decent publishes the stolen-serial list.
+#[uniffi::export]
+pub fn stolen_serials_url() -> String {
+    de1_domain::STOLEN_SERIALS_URL.to_owned()
 }
 
 /// Whether the DE1 with raw `MachineModel` value `raw` has the cup-warmer plate
@@ -1409,28 +1455,30 @@ pub fn core_version() -> String {
     CORE_VERSION.to_owned()
 }
 
-/// Convert a raw DE1 water-tank reading (mm of sensor depth) to the tank's
-/// water volume in ml. Pure helper — does no machine I/O. Mirrors the wasm
+/// Convert a water-tank DEPTH (mm — `Event::WaterLevel.level`, already
+/// offset-corrected in core) to the tank's water volume in ml. Pure helper —
+/// does no machine I/O. Mirrors the wasm
 /// `water_tank_ml` so every shell consumes the same tank-geometry
 /// calibration (see [`de1_domain::water_tank_ml`]).
 #[uniffi::export]
 #[must_use]
-pub fn water_tank_ml(mm: f32) -> u16 {
-    de1_domain::water_tank_ml(mm)
+pub fn water_tank_ml(depth_mm: f32) -> u16 {
+    de1_domain::water_tank_ml(depth_mm)
 }
 
-/// Convert a raw DE1 water-tank reading (mm) to a whole percentage of a
-/// typical full fill, clamped `0..=100`. Pure helper — see
+/// Convert a water-tank DEPTH (mm — `Event::WaterLevel.level`) to a whole
+/// percentage of a typical full fill, clamped `0..=100`. Pure helper — see
 /// [`de1_domain::water_tank_percent`].
 #[uniffi::export]
 #[must_use]
-pub fn water_tank_percent(mm: f32) -> u8 {
-    de1_domain::water_tank_percent(mm)
+pub fn water_tank_percent(depth_mm: f32) -> u8 {
+    de1_domain::water_tank_percent(depth_mm)
 }
 
-/// The true water depth (mm) for a raw DE1 sensor reading — the reading plus
-/// the 5 mm sensor offset every app in the ecosystem applies. Pure helper —
-/// see [`de1_domain::water_tank_depth_mm`].
+/// The true water depth (mm) for a RAW DE1 sensor value — the value plus
+/// the 5 mm sensor offset every app in the ecosystem applies. For raw values
+/// only (the refill threshold / refill point): `Event::WaterLevel.level` is
+/// already a depth. Pure helper — see [`de1_domain::water_tank_depth_mm`].
 #[uniffi::export]
 #[must_use]
 pub fn water_tank_depth_mm(sensor_mm: f32) -> f32 {
@@ -1754,9 +1802,19 @@ impl CremaBridge {
         self.emit(self.core().brew_session_cancel())
     }
 
-    /// Discard all session state — e.g. on disconnect.
-    pub fn reset(&self) {
-        self.core().reset();
+    /// Discard all session state — e.g. on disconnect. Returns the teardown's
+    /// `CoreOutput` JSON: a scale-timer stop when the DE1 went away mid-shot.
+    pub fn reset(&self) -> String {
+        let out = self.core().reset();
+        self.emit(out)
+    }
+
+    /// The DE1 link dropped unexpectedly (auto-reconnect starting). Keeps the
+    /// session, stops the scale's timer if a shot had it running. See
+    /// [`CremaCore::de1_link_lost`].
+    pub fn de1_link_lost(&self) -> String {
+        let out = self.core().de1_link_lost();
+        self.emit(out)
     }
 
     /// Identify and connect a scale from its discovered GATT `service_uuids`
@@ -2568,6 +2626,41 @@ fn json(output: CoreOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sleep_refill_gate_parses_wire_names() {
+        assert!(sleep_request_latches_in_refill(
+            "Refill".into(),
+            "Ready".into(),
+            Some(1352),
+            Some(1)
+        ));
+        assert!(sleep_request_latches_in_refill(
+            "Idle".into(),
+            "Refill".into(),
+            None,
+            None
+        ));
+        assert!(!sleep_request_latches_in_refill(
+            "Idle".into(),
+            "Refill".into(),
+            Some(1358),
+            Some(1)
+        ));
+        assert!(!sleep_request_latches_in_refill(
+            "Idle".into(),
+            "Ready".into(),
+            Some(1300),
+            None
+        ));
+        // Unknown names never block a sleep.
+        assert!(!sleep_request_latches_in_refill(
+            "Bogus".into(),
+            "Nope".into(),
+            None,
+            None
+        ));
+    }
 
     #[test]
     fn on_notification_returns_core_output_json() {

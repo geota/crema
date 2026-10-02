@@ -58,7 +58,6 @@ import coffee.crema.core.ShotQualityReport
 import coffee.crema.core.SteamHotWaterSettings
 import coffee.crema.core.StopReason
 import coffee.crema.core.profileFingerprint
-import coffee.crema.core.subStateErrorMessage
 import coffee.crema.profiles.BrewDefaults
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.brewDefaultsJson
@@ -268,10 +267,18 @@ fun MainUiState.waterWarnThresholdMl(): Float = waterWarnMl ?: WATER_WARN_DEFAUL
  */
 fun MainUiState.refillPointMm(): Float = waterRefillPointMm ?: coffee.crema.core.defaultRefillPointMm()
 
-/** The tank's true water depth (mm) — the raw sensor reading plus core's 5 mm
- *  sensor offset, the number de1app and Decenza both display. Null until the
- *  first report. */
-fun MainUiState.tankDepthMm(): Float? = waterLevelMm?.let { coffee.crema.core.waterTankDepthMm(it) }
+/** The tank's true water depth (mm), the number de1app and Decenza both
+ *  display. `Event.WaterLevel.level` already IS this depth (core adds the 5 mm
+ *  sensor offset once, at decode), so this is the level as-is — never run it
+ *  through `waterTankDepthMm` again (that double offset read ~135 ml high).
+ *  Null until the first report. */
+fun MainUiState.tankDepthMm(): Float? = waterLevelMm
+
+/** The DE1's reported refill threshold (RAW sensor mm on the wire) converted
+ *  to depth mm via core's `waterTankDepthMm`, so it compares and reads in the
+ *  same unit as [tankDepthMm]. Null before the first report. */
+fun MainUiState.refillThresholdDepthMm(): Float? =
+    waterRefillThresholdMm?.let { coffee.crema.core.waterTankDepthMm(it) }
 
 /**
  * Battery percentage at or below which the one-per-connection "charge your
@@ -294,8 +301,10 @@ const val AUTO_UPDATE_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
  * reconciling the former phone 20 mm vs tablet 5 mm constants (issue 29).
  */
 fun MainUiState.refillSoon(): Boolean {
-    val level = waterLevelMm ?: return false
-    val threshold = waterRefillThresholdMm ?: return false
+    // Depth vs depth: the level is offset-corrected, the threshold is raw on
+    // the wire, so it goes through [refillThresholdDepthMm] first.
+    val level = tankDepthMm() ?: return false
+    val threshold = refillThresholdDepthMm() ?: return false
     return level <= threshold + REFILL_SOON_MARGIN_MM
 }
 
@@ -395,13 +404,13 @@ data class MainUiState(
     val machineStateName: MachineState? = null,
     /** Raw machine-substate name (e.g. `"Pouring"`), or null. */
     val machineSubstate: String? = null,
-    /** Human-readable message when the current substate is an *error* (e.g.
-     *  `"No water — refill the tank"`), else null. Sourced from core
-     *  `subStateErrorMessage` so it matches the web shell's copy verbatim. */
+    /** Human-readable message for the machine fault core says to surface
+     *  (`Event.MachineErrorChanged`), else null — the same copy as web. */
     val machineError: String? = null,
-    /** Latest tank level, mm (`Event.WaterLevel`), or null before the first report. */
+    /** Latest tank DEPTH, mm (`Event.WaterLevel.level` — raw + core's 5 mm
+     *  sensor offset, smoothed), or null before the first report. */
     val waterLevelMm: Float? = null,
-    /** The DE1's own refill threshold, mm — reported alongside the level in the
+    /** The DE1's own refill threshold, RAW sensor mm — reported alongside the level in the
      *  same `Event.WaterLevel` packet (null before the first report / while
      *  disconnected). The shell defers to this live machine value for the
      *  "refill soon" cue rather than a hardcoded constant, matching the web
@@ -447,6 +456,9 @@ data class MainUiState(
      * fall back to "—".
      */
     val de1MachineInfo: Map<MmrRegister, UInt> = emptyMap(),
+    /** The connected DE1's serial is on Decent's stolen-machine list
+     *  ([coffee.crema.decent.StolenSerialsCheck]) — a one-line Settings notice. */
+    val serialStolen: Boolean = false,
     /**
      * The mains line frequency the core resolved (`50.0` / `60.0` Hz), or `0.0`
      * when the override is "auto-detect", or null before it is read. A pure
@@ -1001,6 +1013,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Learned SAW drip-model persistence — an opaque core-owned JSON blob. */
     private val sawModelStore = SawModelStore(app)
+    private val stolenSerials = coffee.crema.decent.StolenSerialsCheck(
+        coffee.crema.decent.StolenSerialsFileStore(app),
+    )
 
     /** Maintenance-state persistence — a JSON file in filesDir. */
     private val maintenanceStore = MaintenanceStore(app, json)
@@ -2017,9 +2032,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // skipped those quits. The exclusions are the ones that must never
             // be cut off mid-way — the same set the screensaver refuses to
             // interrupt — plus an already-asleep machine (nothing to do).
+            // ...and never a sleep the firmware would latch in Refill and
+            // honour right after the next refill (firmware < 1357).
             val sleepable = !machineBusyForSaver(s) &&
                 s.machineStateName != MachineState.Sleep &&
-                s.machineStateName != MachineState.GoingToSleep
+                s.machineStateName != MachineState.GoingToSleep &&
+                !sleepLatchesInRefill(s)
             val primary = s.proxyRole != "secondary"
             // Logcat, not appendLog: the in-app event log dies with the task.
             if (s.sleepOnQuit && sleepable && primary) {
@@ -2935,6 +2953,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // line frequency clear too (line freq is re-read on next connect).
             de1Firmware = null,
             de1MachineInfo = emptyMap(),
+            serialStolen = false,
             lineFreqHz = null,
             lineFreqOverride = 0f,
             profileUploading = false,
@@ -4267,12 +4286,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
 
     /** Show the saver; when coupled, also put the DE1 to sleep (only from a
-     *  known-Idle machine — de1app's start_sleep gate). */
+     *  known-Idle machine — de1app's start_sleep gate — and never into the
+     *  firmware's Refill sleep latch, see [sleepLatchesInRefill]). */
     private fun showSaver() {
         _ui.update { it.copy(saverVisible = true) }
         if (_ui.value.sleepMachineWithSaver &&
             ble.state.value == De1BleManager.State.READY &&
-            _ui.value.machineStateName == MachineState.Idle
+            _ui.value.machineStateName == MachineState.Idle &&
+            !sleepLatchesInRefill(_ui.value)
         ) {
             sleep()
         }
@@ -4367,6 +4388,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Start a steam-rinse cycle (Settings → Water → "Run now"). */
     fun startSteamRinse() = requestMachineState(MachineRequest.STEAM_RINSE)
+
+    /** Check the DE1's serial against Decent's stolen-machine list (fetched at
+     *  most daily, cached, failures silent) and raise the Settings notice. */
+    private fun checkStolenSerial(serial: UInt) {
+        viewModelScope.launch {
+            val stolen = stolenSerials.isStolen(serial)
+            _ui.update {
+                if (it.de1MachineInfo[MmrRegister.SerialNumber] == serial) it.copy(serialStolen = stolen) else it
+            }
+        }
+    }
 
     /** Set the Bengle cup-warmer plate temperature (0–80 °C) and re-read the
      *  register so the UI reflects what the machine accepted. */
@@ -4900,15 +4932,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         machineState = "${c.state.string} / ${c.substate.string}",
                         machineStateName = c.state,
                         machineSubstate = c.substate.string,
-                        // Readable error copy for an error substate (null otherwise),
-                        // from core so it matches web. Healthy substates clear it.
-                        machineError = subStateErrorMessage(c.substate.string),
                         modeStartedAtMs = started,
                         modeElapsedMs = if (started == null) 0L else prev.modeElapsedMs,
                     )
                 }
                 updateModeTicker()
                 appendLog("MachineState -> ${c.state.string} / ${c.substate.string}")
+            }
+            is Event.MachineErrorChanged -> {
+                // The fault to surface, decided in core so web and Android agree:
+                // every Error* substate at once, except ErrorNoAc, which the DE1
+                // reports spuriously while waking / heating and core holds until
+                // it persists (firmware >= 1337, 6 s — Decenza 98215217 /
+                // b8d625ba). A null message clears it.
+                val c = event.content
+                _ui.update { it.copy(machineError = c.message) }
+                appendLog(
+                    if (c.message == null) "Machine fault cleared (${c.substate.string})"
+                    else "Machine fault: ${c.substate.string} — ${c.message}",
+                )
             }
             is Event.ShotStarted -> {
                 // Entering a shot: flip the resting↔extracting flag and zero the
@@ -5074,6 +5116,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val s = _ui.value
                 val warnMl = s.waterWarnThresholdMl()
                 if (warnMl > 0f) {
+                    // The event level is already a depth (offset applied in
+                    // core) — the ml conversion takes it as-is.
                     val ml = coffee.crema.core.waterTankMl(event.content.level).toFloat()
                     if (!waterLowWarned && ml <= warnMl) {
                         waterLowWarned = true
@@ -5374,15 +5418,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     de1MachineInfo = it.de1MachineInfo + (c.register to c.value),
                 ) }
                 appendLog("MMR ${c.register}: ${c.value}")
+                if (c.register == MmrRegister.SerialNumber) checkStolenSerial(c.value)
             }
-            // Calibration replies (current / factory) have no settings row yet
-            // (no calibration-write core method — read-only), so keep logging
-            // the decoded values rather than modelling a half-wired type.
+            // Calibration value replies (current / factory) have no settings row
+            // yet, so keep logging them. Core surfaces only WriteKey-0 replies,
+            // never echoes of our own requests; the stored value is `measured`.
             is Event.Calibration ->
                 appendLog(
                     "Calibration ${event.content.target} " +
-                        "(${event.content.command}): de1=${event.content.de1_reported} " +
-                        "measured=${event.content.measured}",
+                        "(${event.content.command}): ${event.content.measured}",
                 )
             // v1 stub never fires this in practice.
             is Event.FirmwareLockoutHit ->
@@ -5580,6 +5624,35 @@ internal fun shouldRaiseSaver(
 ): Boolean {
     if (prev == null || !next.isAsleep() || prev.isAsleep()) return false
     return !appAskedForSleep()
+}
+
+/**
+ * Whether an AUTOMATIC sleep request (screensaver coupling, sleep-on-quit)
+ * would be latched by the DE1 and fire right after the user refills the tank
+ * instead of sleeping the machine now — firmware < 1357 (or unknown) in
+ * Refill, or any Bengle in Refill (decaid 7a0b0c28 / f8cd9553). The rule
+ * lives in core ([coffee.crema.core.sleepRequestLatchesInRefill]); [latches]
+ * is injectable so the wiring is testable on the JVM without the native lib.
+ */
+internal fun sleepLatchesInRefill(s: MainUiState): Boolean =
+    sleepLatchesInRefill(s.machineStateName, s.machineSubstate, s.de1MachineInfo)
+
+/** [sleepLatchesInRefill] over the raw UI fields — the testable seam. */
+internal fun sleepLatchesInRefill(
+    state: MachineState?,
+    substate: String?,
+    machineInfo: Map<MmrRegister, UInt>,
+    latches: (String, String, UInt?, UInt?) -> Boolean = { st, sub, fw, model ->
+        coffee.crema.core.sleepRequestLatchesInRefill(st, sub, fw, model)
+    },
+): Boolean {
+    if (state == null) return false
+    return latches(
+        state.string,
+        substate ?: "",
+        machineInfo[MmrRegister.FirmwareVersion],
+        machineInfo[MmrRegister.MachineModel],
+    )
 }
 
 internal fun buildSteamHotWaterSettings(

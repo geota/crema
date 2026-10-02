@@ -73,7 +73,8 @@ export class MachineReadout {
 	/**
 	 * Machine-model identifier (MMR `0x80000C`): 0 = unknown, 1 = DE1,
 	 * 2 = DE1+, 3 = DE1PRO, 4 = DE1XL, 5 = DE1CAFE, 6 = DE1XXL,
-	 * 7 = DE1XXXL. `null` until the connect-phase MMR sweep has read it.
+	 * 7 = DE1XXXL, 128+ = Bengle. `null` until the connect-phase MMR sweep
+	 * has read it.
 	 */
 	get machineModel(): number | null {
 		const v = this.snapshot.de1MachineInfo[MmrRegister.MachineModel];

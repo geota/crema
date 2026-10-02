@@ -687,6 +687,17 @@ data class EventMachineStateChangedInner (
 	val substate: SubState
 )
 
+/// Generated type representing the anonymous struct variant `MachineErrorChanged` of the `Event` Rust enum
+@Serializable
+data class EventMachineErrorChangedInner (
+	/// Top-level machine state at the change.
+	val state: MachineState,
+	/// Substate at the change (the fault itself while `message` is set).
+	val substate: SubState,
+	/// Readable fault text, or `None` once the fault has cleared.
+	val message: String? = null
+)
+
 /// Generated type representing the anonymous struct variant `ShotPhaseChanged` of the `Event` Rust enum
 @Serializable
 data class EventShotPhaseChangedInner (
@@ -793,9 +804,14 @@ data class EventScaleReadingInner (
 /// Generated type representing the anonymous struct variant `WaterLevel` of the `Event` Rust enum
 @Serializable
 data class EventWaterLevelInner (
-	/// Current tank level, mm — includes the legacy +5 mm sensor correction.
+	/// Current tank water DEPTH, mm: the raw sensor reading plus the
+	/// +5 mm sensor offset (`de1_domain::water_tank_depth_mm`, applied
+	/// once, in core), slosh-smoothed. Pass it to `water_tank_ml` /
+	/// `water_tank_percent` as-is; never add the offset again.
 	val level: Float,
-	/// Refill threshold, mm; a refill is wanted at or below it.
+	/// The machine's refill threshold in RAW sensor mm, as on the wire; a
+	/// refill is wanted when the raw level is at or below it. Convert it
+	/// with `water_tank_depth_mm` before comparing it with `level`.
 	val refill_threshold: Float
 )
 
@@ -1027,12 +1043,15 @@ data class EventMmrValueInner (
 data class EventCalibrationInner (
 	/// Which sensor the calibration applies to.
 	val target: CalTarget,
-	/// Whether this is the current (in-use) or the factory calibration —
-	/// [`CalCommand::ReadCurrent`] or [`CalCommand::ReadFactory`].
+	/// The command the reply answers: [`CalCommand::ReadFactory`] is the
+	/// factory slot, anything else the current (in-use) one (de1app
+	/// `calibration_ble_received`).
 	val command: CalCommand,
-	/// The value the DE1's sensor reported at calibration time.
+	/// The `DE1ReportedVal` field — carries nothing on a value reply
+	/// (de1app, decaid and Decenza all ignore it); kept for diagnostics.
 	val de1_reported: Float,
-	/// The externally-measured true value the DE1 was calibrated against.
+	/// The machine's stored calibration value (`MeasuredVal`) — the one
+	/// every reference app reads.
 	val measured: Float
 )
 
@@ -1141,6 +1160,21 @@ sealed class Event {
 	@Serializable
 	@SerialName("MachineStateChanged")
 	data class MachineStateChanged(val content: EventMachineStateChangedInner): Event()
+	/// The machine fault the shells should surface changed — entering an
+	/// `Error*` substate (`message` = the readable copy from
+	/// [`SubState::error_message`]) or leaving it (`message: None`).
+	/// 
+	/// The core decides this rather than each shell mapping the substate,
+	/// because one fault is not trustworthy on sight: `ErrorNoAc` (217, "the
+	/// front power switch is off") is reported spuriously for a few seconds
+	/// while a DE1 wakes or heats. It is surfaced only on firmware ≥ 1337 and
+	/// only once the episode has persisted for 6 s, latched until the
+	/// substate leaves it (Decenza `98215217`, `b8d625ba`). Every other fault
+	/// is surfaced immediately. Edge-triggered: one event per change, never
+	/// one per notification — so a webhook keyed on it fires once per episode.
+	@Serializable
+	@SerialName("MachineErrorChanged")
+	data class MachineErrorChanged(val content: EventMachineErrorChangedInner): Event()
 	/// An espresso shot began.
 	@Serializable
 	@SerialName("ShotStarted")
@@ -1333,9 +1367,9 @@ sealed class Event {
 	@Serializable
 	@SerialName("MmrValue")
 	data class MmrValue(val content: EventMmrValueInner): Event()
-	/// A DE1 sensor calibration was read back from the `Calibration`
-	/// characteristic — the current (in-use) or factory calibration for one
-	/// sensor.
+	/// A DE1 sensor calibration value was read back from the `Calibration`
+	/// characteristic — only a reply with `WriteKey == 0`, never an echo of
+	/// our own read / write request (Decenza `7fed369d`).
 	@Serializable
 	@SerialName("Calibration")
 	data class Calibration(val content: EventCalibrationInner): Event()
@@ -3012,8 +3046,9 @@ enum class MmrRegister(val string: String) {
 	CpuBoardVersion("CpuBoardVersion"),
 	/// Machine model identifier — `0 = Unset / unknown`, `1 = DE1`,
 	/// `2 = DE1+`, `3 = DE1PRO`, `4 = DE1XL`, `5 = DE1CAFE`, `6 = DE1XXL`,
-	/// `7 = DE1XXXL`. The legacy app uses this to gate model-specific
-	/// settings (e.g. the cup-warmer surface on Bengle hardware).
+	/// `7 = DE1XXXL`, `128+` = Bengle ([`is_bengle_model`]). The legacy app
+	/// uses this to gate model-specific settings (e.g. the cup-warmer surface
+	/// on Bengle hardware).
 	@SerialName("MachineModel")
 	MachineModel("MachineModel"),
 	/// Firmware build number.

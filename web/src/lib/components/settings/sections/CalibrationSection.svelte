@@ -1,3 +1,19 @@
+<script lang="ts" module>
+	/**
+	 * Gate for the temperature / pressure "Reset to factory" buttons, which
+	 * send DE1 calibration command 2 (`ResetToFactory`). Hidden because the
+	 * command is unverified: Decent does not document it and no reference
+	 * app sends it (Decenza asserts it never does, decaid has no reset,
+	 * de1app's reset buttons are commented out). The core command, encoder,
+	 * bridge function and modal path below are kept intact — flip this to
+	 * `true` once Decent documents cmd 2 or it has been verified on hardware.
+	 *
+	 * The Flow row's reset is unaffected: it writes 1.000 to the MMR flow
+	 * multiplier, not command 2.
+	 */
+	export const SHOW_CALIBRATION_FACTORY_RESET = false;
+</script>
+
 <script lang="ts">
 	import WarningOctagonIcon from 'phosphor-svelte/lib/WarningOctagonIcon';
 	/**
@@ -369,7 +385,9 @@
 <StSectionHead
 	eyebrow="Diagnostics"
 	title="Calibration"
-	sub="The sensor calibration values the DE1 is using, and the factory baselines it shipped with. Apply a new calibration when an external instrument shows a sensor is off; Reset to factory restores the original."
+	sub={SHOW_CALIBRATION_FACTORY_RESET
+		? "The sensor calibration values the DE1 is using, and the factory baselines it shipped with. Apply a new calibration when an external instrument shows a sensor is off; Reset to factory restores the original."
+		: "The sensor calibration values the DE1 is using, and the factory baselines it shipped with. Apply a new calibration when an external instrument shows a sensor is off."}
 />
 
 <StGroup title="Sensor calibration">
@@ -399,14 +417,16 @@
 					>
 						Apply
 					</button>
-					<button
-						type="button"
-						class="st-btn st-btn-danger"
-						onclick={() => openReset(CalTarget.Temperature)}
-						disabled={!connected}
-					>
-						Reset to factory
-					</button>
+					{#if SHOW_CALIBRATION_FACTORY_RESET}
+						<button
+							type="button"
+							class="st-btn st-btn-danger"
+							onclick={() => openReset(CalTarget.Temperature)}
+							disabled={!connected}
+						>
+							Reset to factory
+						</button>
+					{/if}
 				</div>
 			</div>
 		{/snippet}
@@ -438,14 +458,16 @@
 					>
 						Apply
 					</button>
-					<button
-						type="button"
-						class="st-btn st-btn-danger"
-						onclick={() => openReset(CalTarget.Pressure)}
-						disabled={!connected}
-					>
-						Reset to factory
-					</button>
+					{#if SHOW_CALIBRATION_FACTORY_RESET}
+						<button
+							type="button"
+							class="st-btn st-btn-danger"
+							onclick={() => openReset(CalTarget.Pressure)}
+							disabled={!connected}
+						>
+							Reset to factory
+						</button>
+					{/if}
 				</div>
 			</div>
 		{/snippet}

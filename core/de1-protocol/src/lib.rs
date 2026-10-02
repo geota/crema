@@ -32,17 +32,22 @@ pub mod profile;
 pub mod shot_sample;
 pub mod state;
 
-pub use calibration::{CALIBRATION_LEN, CalCommand, CalTarget, Calibration};
+pub use calibration::{CALIBRATION_LEN, CalCommand, CalTarget, Calibration, REPLY_VALUE_KEY};
 pub use command::{ShotSettings, WaterLevels, requested_state};
 pub use error::ProtocolError;
 pub use firmware::{
     FIRMWARE_FRAME_DATA_LEN, FIRMWARE_FRAME_LEN, FIRST_ERROR_NONE, FIRST_ERROR_REQUEST,
     FW_MAP_REQUEST_LEN, FWMapRequest, VERSION_LEN, Version, VersionBlock, firmware_write_frame,
 };
-pub use mmr::{MMR_PACKET_LEN, MmrReadReply, MmrRegister, has_cup_warmer, machine_model_name};
+pub use mmr::{
+    MMR_PACKET_LEN, MmrReadReply, MmrRegister, has_cup_warmer, is_bengle_model, machine_model_name,
+};
 pub use profile::{
     EXTENSION_FRAME_INDEX_OFFSET, ExtensionFrame, FrameFlags, SHOT_FRAME_LEN, SHOT_HEADER_LEN,
     ShotFrame, ShotHeader, ShotTail, ack_frame_byte,
 };
 pub use shot_sample::{SHOT_SAMPLE_LEN, ShotSample};
-pub use state::{MachineState, STATE_INFO_LEN, StateInfo, SubState};
+pub use state::{
+    MachineState, SLEEP_IN_REFILL_MIN_FIRMWARE, STATE_INFO_LEN, StateInfo, SubState,
+    sleep_request_latches_in_refill,
+};

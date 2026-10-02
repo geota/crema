@@ -252,14 +252,16 @@ export interface UiSnapshot {
 	readonly eventLog: readonly LogLine[];
 
 	/**
-	 * The DE1 water-tank level in mm — the raw depth the tank sensor reports,
+	 * The DE1 water-tank DEPTH in mm — the raw sensor reading plus the 5 mm
+	 * sensor offset, which core applies once at decode (then slosh-smooths),
 	 * or `null` before the first `WaterLevel` notification. Convert to a tank
-	 * volume for display with {@link waterTankMl}.
+	 * volume for display with {@link waterTankMl}; never add the offset again.
 	 */
 	readonly waterLevel: number | null;
 	/**
-	 * The DE1 water-tank refill threshold in mm — a refill is wanted at or
-	 * below it. `null` before the first `WaterLevel` notification. Drives the
+	 * The DE1 water-tank refill threshold in RAW sensor mm (as on the wire —
+	 * NOT the same scale as {@link waterLevel}; see {@link waterRefillSoon}) —
+	 * a refill is wanted at or below it. `null` before the first `WaterLevel` notification. Drives the
 	 * "refill soon" cue (E2).
 	 */
 	readonly waterRefillThreshold: number | null;
@@ -622,9 +624,10 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 // distinguishes them here.
 
 /**
- * Convert a DE1 tank-level reading (mm, see {@link UiSnapshot.waterLevel})
- * to the tank's water volume in ml via the core's `water_tank_ml` helper
- * (`core/de1-domain/src/tank.rs`). Returns `null` for a missing reading;
+ * Convert a tank DEPTH (mm, see {@link UiSnapshot.waterLevel} — already
+ * offset-corrected) to the tank's water volume in ml via the core's
+ * `water_tank_ml` helper (`core/de1-domain/src/tank.rs`), which adds no
+ * offset of its own. Returns `null` for a missing reading;
  * the depth is clamped to the lookup table's range — a depth past the top
  * reads as the 2058 ml full ceiling, a negative depth (a sensor glitch) as
  * the 0 ml empty floor — matching the de1app / DSx behaviour.
@@ -635,7 +638,7 @@ export function waterTankMl(mm: number | null | undefined): number | null {
 }
 
 /**
- * Convert a DE1 water-level reading (sensor depth, mm) to a whole
+ * Convert a tank DEPTH (mm, {@link UiSnapshot.waterLevel}) to a whole
  * percentage of a typical full fill (the core's `water_tank_percent`,
  * clamped 0..=100). Returns `null` for a missing reading.
  */
@@ -645,12 +648,13 @@ export function waterTankPercent(mm: number | null | undefined): number | null {
 }
 
 /**
- * The tank's true water DEPTH (mm) for a raw sensor reading — the reading
- * plus the core's 5 mm sensor offset. The DE1's level sensor sits above the
- * water uptake point, so the raw value understates the depth; de1app
+ * The tank's true water DEPTH (mm) for a RAW sensor value — the value plus
+ * the core's 5 mm sensor offset. The DE1's level sensor sits above the water
+ * uptake point, so a raw value understates the depth; de1app
  * (`water_level_mm_correction`) and Decenza (`SENSOR_OFFSET`) both correct
- * for it, and this is the mm figure they display. Returns `null` for a
- * missing reading.
+ * for it. For raw values only — the refill threshold / refill point:
+ * {@link UiSnapshot.waterLevel} is already a depth. Returns `null` for a
+ * missing value.
  */
 export function waterTankDepthMm(mm: number | null | undefined): number | null {
 	if (mm == null || !Number.isFinite(mm)) return null;
@@ -677,13 +681,18 @@ const REFILL_SOON_MARGIN_MM = 5;
  * Whether the tank is low enough to warrant a "refill soon" cue — the level
  * is within {@link REFILL_SOON_MARGIN_MM} of (or already below) the DE1's
  * refill threshold. `false` when either reading is missing.
+ *
+ * `levelMm` is the event's depth (offset-corrected); `rawThresholdMm` is the
+ * machine's raw threshold, so it is converted to depth first — depth vs
+ * depth, the same comparison as Decenza's raw-vs-raw margin.
  */
 export function waterRefillSoon(
 	levelMm: number | null | undefined,
-	thresholdMm: number | null | undefined
+	rawThresholdMm: number | null | undefined
 ): boolean {
-	if (levelMm == null || thresholdMm == null) return false;
-	return levelMm <= thresholdMm + REFILL_SOON_MARGIN_MM;
+	const thresholdDepth = waterTankDepthMm(rawThresholdMm);
+	if (levelMm == null || thresholdDepth == null) return false;
+	return levelMm <= thresholdDepth + REFILL_SOON_MARGIN_MM;
 }
 
 /**
@@ -761,8 +770,6 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				stateName === 'Espresso' &&
 				!snapshot.shotInProgress &&
 				snapshot.completedShot === null;
-			// R5 — readable error text for an Error* substate, null when healthy.
-			const machineError = machineErrorText(substate);
 			// R6 — stamp when the machine first entered a resting state, so an
 			// idle-elapsed readout can count up from it. Only re-stamp on the
 			// transition *into* rest, not on every notification while resting.
@@ -772,12 +779,28 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				machineState,
 				machineStateName: stateName,
 				machineSubstate: substate,
-				machineError,
 				...(resting ? { shotInProgress: false } : null),
 				...(espressoEntering ? { shotInProgress: true } : null),
 				...(enteringRest ? { idleSince: performance.now() } : null),
 				...(resting ? null : { idleSince: null }),
 				eventLog: appendLog(snapshot.eventLog, `MachineState -> ${machineState}`)
+			};
+		}
+		case 'MachineErrorChanged': {
+			// R5 — the fault to surface, decided in core: every Error* substate
+			// immediately, except ErrorNoAc, which the DE1 reports spuriously
+			// while waking / heating and is held until it persists (firmware
+			// >= 1337, 6 s — Decenza 98215217 / b8d625ba). `null` = cleared.
+			const message = event.content.message ?? null;
+			return {
+				...snapshot,
+				machineError: message,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					message === null
+						? `Machine fault cleared (${event.content.substate})`
+						: `Machine fault: ${event.content.substate} — ${message}`
+				)
 			};
 		}
 		case 'ShotStarted':
@@ -1164,9 +1187,11 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				)
 			};
 		case 'Calibration': {
-			// R3 — a sensor calibration was read back. A ReadFactory reply fills
-			// the `factory` slot, a ReadCurrent reply the `current` slot; the
-			// other slot keeps whatever it already held.
+			// R3 — a sensor calibration was read back (core only surfaces value
+			// replies, WriteKey 0 — never echoes of our own requests). The value
+			// is `measured` (MeasuredVal), as de1app / decaid / Decenza read it.
+			// A ReadFactory reply fills the `factory` slot, any other the
+			// `current` slot; the other slot keeps whatever it already held.
 			const c = event.content;
 			const prior = snapshot.de1Calibration[c.target] ?? {
 				current: null,
@@ -1178,13 +1203,13 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				de1Calibration: {
 					...snapshot.de1Calibration,
 					[c.target]: {
-						current: isFactory ? prior.current : c.de1_reported,
-						factory: isFactory ? c.de1_reported : prior.factory
+						current: isFactory ? prior.current : c.measured,
+						factory: isFactory ? c.measured : prior.factory
 					}
 				},
 				eventLog: appendLog(
 					snapshot.eventLog,
-					`Calibration ${c.target} (${c.command}): ${c.de1_reported}`
+					`Calibration ${c.target} (${c.command}): ${c.measured}`
 				)
 			};
 		}
