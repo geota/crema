@@ -2143,8 +2143,9 @@ mod tests {
         assert_eq!(dot.connect_writes().len(), 12);
         // No LCD / battery / flow surface.
         assert!(!dot.capabilities().can_lcd);
-        // Weight decode end-to-end: 0x00B4 BE = 180 tenths = 18.0 g.
-        let packet = [0xA5, 0x5A, 0x01, 0, 0, 0, 0, 0, 0x00, 0xB4];
+        // Weight decode end-to-end: opcode 01, cmd 01, 4-byte payload whose
+        // bytes 8-9 are 0x00B4 BE = 180 tenths = 18.0 g, then the CRC.
+        let packet = [0xA5, 0x5A, 0x01, 0x01, 0x00, 0x04, 0, 0, 0x00, 0xB4, 0, 0];
         assert_eq!(dot.parse_weight(&packet), Some(18.0));
     }
 
