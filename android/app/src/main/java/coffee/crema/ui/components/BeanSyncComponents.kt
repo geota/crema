@@ -208,16 +208,22 @@ fun RoasterMergeBanner(
     }
 }
 
-/** "Duplicate of X" tag with an Un-merge action, on a row tagged as a merged duplicate. */
+/**
+ * "Duplicate of X" tag with an Un-merge action, on a row tagged as a merged
+ * duplicate. A FlowRow, so in a narrow card Un-merge drops under the tag
+ * instead of squeezing the canonical name into an ellipsis.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DuplicateOfLabel(canonicalName: String, onUnmerge: () -> Unit, modifier: Modifier = Modifier) {
-    Row(
+    FlowRow(
         modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        itemVerticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
-            Modifier.weight(1f, fill = false)
+            Modifier
                 .clip(RoundedCornerShape(999.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerHighest)
                 .padding(horizontal = 8.dp, vertical = 3.dp),
@@ -229,7 +235,7 @@ fun DuplicateOfLabel(canonicalName: String, onUnmerge: () -> Unit, modifier: Mod
                 "duplicate of $canonicalName",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }
@@ -252,7 +258,7 @@ fun AlsoDeleteOnVisualizer(checked: Boolean, onChange: (Boolean) -> Unit, what: 
         Checkbox(checked = checked, onCheckedChange = onChange)
         Column(Modifier.weight(1f)) {
             Text("Also delete on Visualizer", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-            Text("Removes the uploaded copy of this $what too.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Removes the uploaded copy of the $what too.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -283,4 +289,72 @@ fun DeleteWithVisualizerDialog(
         onDismiss = onDismiss,
         extra = if (remoteAvailable) ({ AlsoDeleteOnVisualizer(alsoRemote, { alsoRemote = it }, what) }) else null,
     )
+}
+
+/**
+ * The roaster delete confirm (web `RoasterDeleteSplit`): when bags are filed
+ * under the roaster, choose **Keep the bags** (detach — the default, like the
+ * web's primary click) or **Delete the bags too** (cascade); plus "Also delete
+ * on Visualizer" when [remoteAvailable] says the chosen scope has a synced copy.
+ */
+@Composable
+fun RoasterDeleteDialog(
+    roasterName: String,
+    linkedBagCount: Int,
+    remoteAvailable: (cascade: Boolean) -> Boolean,
+    onConfirm: (alsoOnVisualizer: Boolean, cascade: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var cascade by remember { mutableStateOf(false) }
+    var alsoRemote by remember { mutableStateOf(false) }
+    val bags = "$linkedBagCount bag${if (linkedBagCount == 1) "" else "s"}"
+    val remote = remoteAvailable(cascade)
+    CremaConfirmDialog(
+        title = "Delete roaster?",
+        body = when {
+            linkedBagCount == 0 -> "“$roasterName” will be removed. This can’t be undone."
+            cascade -> "“$roasterName” and its $bags will be removed. This can’t be undone."
+            else -> "“$roasterName” will be removed. Its $bags stay in your library, unlinked."
+        },
+        confirmLabel = "Delete",
+        icon = "trash",
+        danger = true,
+        onConfirm = { onConfirm(remote && alsoRemote, cascade && linkedBagCount > 0) },
+        onDismiss = onDismiss,
+        extra = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                if (linkedBagCount > 0) {
+                    DeleteScopeOption(
+                        selected = !cascade,
+                        title = "Keep the $bags",
+                        sub = "Shown as “No roaster”.",
+                        onClick = { cascade = false },
+                    )
+                    DeleteScopeOption(
+                        selected = cascade,
+                        title = "Delete the $bags too",
+                        sub = "Removes every bag filed under this roaster.",
+                        onClick = { cascade = true },
+                    )
+                }
+                if (remote) {
+                    AlsoDeleteOnVisualizer(alsoRemote, { alsoRemote = it }, if (cascade) "roaster and its bags" else "roaster")
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun DeleteScopeOption(selected: Boolean, title: String, sub: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.material3.RadioButton(selected = selected, onClick = onClick)
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }

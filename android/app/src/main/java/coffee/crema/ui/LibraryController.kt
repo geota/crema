@@ -1733,22 +1733,35 @@ class LibraryController(
     }
 
     /**
-     * Delete a roaster; detach its bags (clear their `roasterId`).
-     * [alsoOnVisualizer] then deletes the roaster's Visualizer copy (the bags
-     * stay — web "detach"). Persisted.
+     * Delete a roaster (web `RoasterDeleteSplit`): [cascade] = false detaches its
+     * bags (roaster cleared), true deletes them too. The core's
+     * `plan_roaster_delete` decides which bags go and the Visualizer ids;
+     * [alsoOnVisualizer] then deletes those remote copies (bags first, then the
+     * roaster). Persisted.
      */
-    fun deleteRoaster(id: String, alsoOnVisualizer: Boolean = false) {
-        val doomed = uiState().roasters.firstOrNull { it.id == id }
-        val now = System.currentTimeMillis()
-        updateUi { s ->
-            s.copy(
-                roasters = s.roasters.filterNot { it.id == id },
-                // Stamped like the web store, so the next sync PATCHes the detach.
-                beans = s.beans.map { if (it.roasterId == id) it.copy(roasterId = null, updatedAt = now) else it },
+    fun deleteRoaster(id: String, alsoOnVisualizer: Boolean = false, cascade: Boolean = false) {
+        val s = uiState()
+        val plan = runCatching {
+            coffee.crema.beans.planRoasterDelete(json, s.roasters, s.beans, id, cascade)
+        }.getOrNull() ?: return
+        val name = s.roasters.firstOrNull { it.id == id }?.name.orEmpty()
+        val after = coffee.crema.beans.applyRoasterDelete(
+            BeanLibrary(s.beans, s.roasters, s.activeBeanId), plan, System.currentTimeMillis(),
+        )
+        val activeGone = s.activeBeanId != null && after.activeBeanId == null
+        updateUi { st ->
+            st.copy(
+                roasters = after.roasters,
+                beans = after.beans,
+                activeBeanId = if (activeGone) after.beans.firstOrNull()?.id else st.activeBeanId,
             )
         }
+        // Cascaded bags leave no orphan photos.
+        if (plan.deletedBeanIds.isNotEmpty()) {
+            scope.launch(Dispatchers.IO) { plan.deletedBeanIds.forEach { BeanImageStore.delete(app, it) } }
+        }
         persistLibrary()
-        if (alsoOnVisualizer) doomed?.visualizerId?.let { visualizer.deleteRemote(emptyList(), it, label = doomed.name) }
+        if (alsoOnVisualizer) visualizer.deleteRemote(plan.remoteBeanIds, plan.remoteRoasterId, label = name)
     }
 
     /**

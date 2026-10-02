@@ -2362,8 +2362,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun updateRoaster(id: String, name: String, website: String?, city: String?, country: String?, notes: String) =
         library.updateRoaster(id, name, website, city, country, notes)
 
-    /** Delete a roaster; detach its bags. [alsoOnVisualizer] also deletes its Visualizer copy. Persisted. */
-    fun deleteRoaster(id: String, alsoOnVisualizer: Boolean = false) = library.deleteRoaster(id, alsoOnVisualizer)
+    /**
+     * Delete a roaster: detach its bags, or [cascade] = delete them too.
+     * [alsoOnVisualizer] also deletes the Visualizer copies. Persisted.
+     */
+    fun deleteRoaster(id: String, alsoOnVisualizer: Boolean = false, cascade: Boolean = false) =
+        library.deleteRoaster(id, alsoOnVisualizer, cascade)
+
+    /** Whether a roaster delete can also remove Visualizer copies (signed in, not free, something synced). */
+    fun canDeleteRoasterOnVisualizer(roaster: coffee.crema.core.Roaster, cascade: Boolean): Boolean =
+        _ui.value.visualizer.signedIn && _ui.value.visualizer.premium != false &&
+            coffee.crema.beans.roasterRemoteDeleteAvailable(roaster, _ui.value.beans, cascade)
 
     /** Merge [dupeId] into [canonicalId]: move its bags, tag it as a duplicate (web Roasters tab). Persisted. */
     fun mergeRoaster(canonicalId: String, dupeId: String) = library.mergeRoaster(canonicalId, dupeId)

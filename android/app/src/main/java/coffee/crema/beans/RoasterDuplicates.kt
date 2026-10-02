@@ -68,3 +68,41 @@ fun mergeSuggestions(
         MergeSuggestion(canonical, dupe, beans.count { it.roasterId == dupe.id })
     }
 }
+
+// ── Roaster delete (web RoasterDeleteSplit parity) ───────────────────────────
+
+/** The delete plan — detach or cascade + the Visualizer ids (core `plan_roaster_delete`); null = unknown roaster. */
+fun planRoasterDelete(json: Json, roasters: List<Roaster>, beans: List<Bean>, roasterId: String, cascade: Boolean): coffee.crema.core.RoasterDeletePlan? {
+    val payload = buildJsonObject {
+        put("roasters", json.encodeToJsonElement(ListSerializer(Roaster.serializer()), roasters))
+        put("beans", json.encodeToJsonElement(ListSerializer(Bean.serializer()), beans))
+        put("roasterId", roasterId)
+        put("cascade", cascade)
+    }
+    val out = coffee.crema.core.planRoasterDelete(payload.toString())
+    return if (out == "null") null else json.decodeFromString(coffee.crema.core.RoasterDeletePlan.serializer(), out)
+}
+
+/**
+ * Apply a roaster delete plan to the library: drop the roaster, delete the
+ * cascaded bags, detach the rest (roaster cleared, stamped so the next sync
+ * PATCHes it), and clear the active bag if it was deleted. Pure.
+ */
+fun applyRoasterDelete(library: BeanLibrary, plan: coffee.crema.core.RoasterDeletePlan, nowMs: Long): BeanLibrary {
+    val deleted = plan.deletedBeanIds.toSet()
+    val detached = plan.detachedBeanIds.toSet()
+    return library.copy(
+        roasters = library.roasters.filterNot { it.id == plan.roasterId },
+        beans = library.beans
+            .filterNot { it.id in deleted }
+            .map { if (it.id in detached) it.copy(roasterId = null, updatedAt = nowMs) else it },
+        activeBeanId = library.activeBeanId?.takeUnless { it in deleted },
+    )
+}
+
+/**
+ * Whether "also delete on Visualizer" has anything to remove: the roaster is
+ * synced, or (for a cascade) one of its bags is (web `remoteAvailable`).
+ */
+fun roasterRemoteDeleteAvailable(roaster: Roaster, beans: List<Bean>, cascade: Boolean): Boolean =
+    roaster.visualizerId != null || (cascade && beans.any { it.roasterId == roaster.id && it.visualizerId != null })

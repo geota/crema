@@ -412,11 +412,12 @@ fun BeansScreen(
                                 bagCountLabel = roasterBagCountLabel(ui.beans, roaster.id),
                                 duplicateOf = roaster.canonicalRoasterId?.let { id -> ui.roasters.firstOrNull { it.id == id }?.name ?: "a removed roaster" },
                                 onUnmerge = { vm.unmergeRoaster(roaster.id) },
-                                remoteDeleteAvailable = vm.canDeleteOnVisualizer(roaster.visualizerId),
+                                linkedBagCount = ui.beans.count { it.roasterId == roaster.id },
+                                remoteDeleteAvailable = { cascade -> vm.canDeleteRoasterOnVisualizer(roaster, cascade) },
                                 onOpen = { beansState.openShelf(roaster.id) },
                                 onEdit = { roasterEditing = roaster; roasterDialogOpen = true },
                                 onVisit = { vm.visitRoasterWebsite(roaster.website) },
-                                onDelete = { remote -> vm.deleteRoaster(roaster.id, remote) },
+                                onDelete = { remote, cascade -> vm.deleteRoaster(roaster.id, remote, cascade) },
                             )
                         }
                     }
@@ -698,11 +699,12 @@ private fun RoasterCard(
     /** The canonical roaster's name when this row is a merged duplicate (badge + Un-merge). */
     duplicateOf: String?,
     onUnmerge: () -> Unit,
-    remoteDeleteAvailable: Boolean,
+    linkedBagCount: Int,
+    remoteDeleteAvailable: (cascade: Boolean) -> Boolean,
     onOpen: () -> Unit,
     onEdit: () -> Unit,
     onVisit: () -> Unit,
-    onDelete: (alsoOnVisualizer: Boolean) -> Unit,
+    onDelete: (alsoOnVisualizer: Boolean, cascade: Boolean) -> Unit,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
     CremaCard(
@@ -766,12 +768,11 @@ private fun RoasterCard(
         }
     }
     if (confirmDelete) {
-        coffee.crema.ui.components.DeleteWithVisualizerDialog(
-            title = "Delete roaster?",
-            body = "“${roaster.name}” will be removed. Its bags keep their data but lose the roaster link. This can’t be undone.",
-            what = "roaster",
+        coffee.crema.ui.components.RoasterDeleteDialog(
+            roasterName = roaster.name,
+            linkedBagCount = linkedBagCount,
             remoteAvailable = remoteDeleteAvailable,
-            onConfirm = { remote -> onDelete(remote); confirmDelete = false },
+            onConfirm = { remote, cascade -> onDelete(remote, cascade); confirmDelete = false },
             onDismiss = { confirmDelete = false },
         )
     }

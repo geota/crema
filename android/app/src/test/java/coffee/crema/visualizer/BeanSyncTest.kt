@@ -383,6 +383,14 @@ class BeanSyncTest {
         s.deleteRemote(listOf("vb-1"), "vr-1", label = "Sey")
         runBlocking { job.children.toList().forEach { it.join() } }
         assertEquals(listOf("DELETE /coffee_bags/vb-1", "DELETE /roasters/vr-1"), requests.map { "${it.method} ${it.path}" })
+        // A cascade's remote ids: every synced bag first, then the roaster (web order).
+        requests.clear()
+        s.deleteRemote(listOf("vb-2", "vb-3"), "vr-2", label = "Onyx")
+        runBlocking { job.children.toList().forEach { it.join() } }
+        assertEquals(
+            listOf("DELETE /coffee_bags/vb-2", "DELETE /coffee_bags/vb-3", "DELETE /roasters/vr-2"),
+            requests.map { "${it.method} ${it.path}" },
+        )
         assertNull(runBlocking { store.load() }.log.firstOrNull { it.direction == "delete" }?.error)
     }
 }
