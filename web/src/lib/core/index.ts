@@ -23,7 +23,7 @@
 
 import type { CoreOutput, ScaleCapabilities, ScaleUuids, TimedSample } from './crema-core';
 import type { CalTarget, MmrRegister, FirmwareUpdateStatus } from './crema-core';
-import type { ShotQualityInput, ShotQualityReport } from './crema-core';
+import type { ShotQualityInput, ShotQualityReport, SawModelLoad } from './crema-core';
 
 /**
  * The web shell stores the user's weight pref as `'g' | 'oz'` (legacy
@@ -595,11 +595,15 @@ export interface CremaCore {
 	setVolumeStopWithScale(enabled: boolean): Promise<void>;
 	/**
 	 * The learned SAW drip model as a JSON blob — persisted by the shell
-	 * (localStorage) and re-seeded at startup via {@link setSawModelJson}.
+	 * (localStorage) and re-seeded at startup via {@link loadSawModelJson}.
 	 */
 	sawModelJson(): Promise<string>;
-	/** Seed the learned SAW drip model from a persisted JSON blob. */
-	setSawModelJson(json: string): Promise<void>;
+	/**
+	 * Seed the learned SAW drip model from its persisted blob (`null` when
+	 * nothing is stored). `Corrupt` means the blob did not parse: the model
+	 * started fresh and the caller must quarantine `content.raw`.
+	 */
+	loadSawModelJson(json: string | null): Promise<SawModelLoad>;
 	/**
 	 * Run the pure shot-quality analysis (the Decenza port —
 	 * `de1_domain::shot_quality::analyze_shot`) over a stored shot's
@@ -1106,8 +1110,8 @@ async function createCore(): Promise<CremaCore> {
 		async sawModelJson() {
 			return bridge.saw_model_json();
 		},
-		async setSawModelJson(json) {
-			bridge.set_saw_model_json(json);
+		async loadSawModelJson(json) {
+			return JSON.parse(bridge.load_saw_model_json(json)) as SawModelLoad;
 		},
 		async analyzeShotQuality(input) {
 			// The bridge returns `Result<String, String>`; wasm-bindgen

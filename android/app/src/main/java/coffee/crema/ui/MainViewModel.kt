@@ -2107,10 +2107,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             loadPrefs()
             // Seed the learned SAW drip model into the core (it survives
             // bridge.reset() in-core, so startup is the only seed point).
-            sawModelStore.load()?.let { blob ->
-                runCatching { bridge.setSawModelJson(blob) }
-                    .onFailure { appendLog("SAW model seed failed: ${it.message}") }
-            }
+            // A corrupt blob is quarantined, not lost (SawModelStore.seed).
+            runCatching { sawModelStore.seed(bridge::loadSawModelJson, ::appendLog) }
+                .onFailure { appendLog("SAW model seed failed: ${it.message}") }
             library.loadProfileMeta()
             library.loadCustomProfiles()
             // Seed the core's stop targets from the profile just restored.

@@ -53,6 +53,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
 // ---------------------------------------------------------------------------
 // Constants (each cites its Decenza source)
@@ -326,6 +327,36 @@ pub struct SawLearningModel {
     bootstrap_lag: BTreeMap<String, f64>,
 }
 
+/// What loading a persisted SAW model blob found — returned to the shell by
+/// [`SawLearningModel::load_json`] so it can tell "nothing stored yet" from
+/// "stored bytes did not parse".
+///
+/// Port of Decenza 95146a0c (#1808, `loadSawMap`,
+/// `settings_calibration.cpp:847-877` as of that commit): a blob that fails
+/// to parse used to be dropped and then overwritten by the next save, losing
+/// the only copy of bytes that, after a truncated write, are partly
+/// salvageable. Decenza now copies the raw blob to a quarantine key (newest
+/// capture wins), logs a warning and resets the store. Here persistence
+/// lives in the shells, so the core resets the model and hands back the raw
+/// text; the shell writes the quarantine copy and logs.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "content")]
+pub enum SawModelLoad {
+    /// No blob was stored (or it was empty) — the model starts fresh.
+    Absent,
+    /// The blob parsed and the model was restored from it.
+    Loaded,
+    /// The blob did not parse. The model starts fresh; the shell must keep
+    /// `raw` aside before its next save overwrites the store.
+    Corrupt {
+        /// The stored text exactly as the shell passed it in.
+        raw: String,
+        /// The parser's error message, for the shell's warning log.
+        error: String,
+    },
+}
+
 /// The pair key: `"{profile}::{scale}"` (`settings_calibration.cpp:593-599`,
 /// `sawPairKey`). The caller passes already-normalized scale labels.
 fn pair_key(profile: &str, scale: &str) -> String {
@@ -389,6 +420,29 @@ fn mean(values: impl Iterator<Item = f64>) -> f64 {
 }
 
 impl SawLearningModel {
+    /// Parse a persisted blob, distinguishing absent from corrupt. `None`, or
+    /// text that is empty or only whitespace, is [`SawModelLoad::Absent`];
+    /// text that does not parse yields a fresh model and
+    /// [`SawModelLoad::Corrupt`] carrying the raw text (Decenza 95146a0c
+    /// resets the store to `{}` the same way). Never panics — a corrupt
+    /// store must never take the shot path down.
+    #[must_use]
+    pub fn load_json(json: Option<&str>) -> (Self, SawModelLoad) {
+        let Some(raw) = json.filter(|j| !j.trim().is_empty()) else {
+            return (Self::default(), SawModelLoad::Absent);
+        };
+        match serde_json::from_str::<Self>(raw) {
+            Ok(model) => (model, SawModelLoad::Loaded),
+            Err(e) => (
+                Self::default(),
+                SawModelLoad::Corrupt {
+                    raw: raw.to_owned(),
+                    error: e.to_string(),
+                },
+            ),
+        }
+    }
+
     /// Feed one post-shot training sample for `(profile, scale)` — the port
     /// of `addSawLearningPoint` (`settings_calibration.cpp:436-483`) routed
     /// through the per-pair batch path (`addSawPerPairEntry`, `:770-899`);
@@ -1621,6 +1675,54 @@ mod tests {
     fn empty_json_deserializes_to_default() {
         let restored: SawLearningModel = serde_json::from_str("{}").unwrap();
         assert_eq!(restored, SawLearningModel::default());
+    }
+
+    #[test]
+    fn load_json_absent_when_nothing_stored() {
+        for json in [None, Some(""), Some("  \n")] {
+            let (model, outcome) = SawLearningModel::load_json(json);
+            assert_eq!(outcome, SawModelLoad::Absent);
+            assert_eq!(model, SawLearningModel::default());
+        }
+    }
+
+    #[test]
+    fn load_json_restores_a_valid_blob() {
+        let mut trained = SawLearningModel::default();
+        commit_identical_batch(&mut trained, "p", 2.0, 2.0, 0.0);
+        let blob = serde_json::to_string(&trained).unwrap();
+        let (model, outcome) = SawLearningModel::load_json(Some(&blob));
+        assert_eq!(outcome, SawModelLoad::Loaded);
+        assert_eq!(model, trained);
+    }
+
+    #[test]
+    fn load_json_corrupt_blob_yields_raw_text_and_a_fresh_model() {
+        // A truncated write — the case Decenza 95146a0c quarantines for.
+        let raw = r#"{"pairHistory":{"p::s":[{"drip":1.35,"#;
+        let (model, outcome) = SawLearningModel::load_json(Some(raw));
+        assert_eq!(model, SawLearningModel::default());
+        let SawModelLoad::Corrupt { raw: kept, error } = outcome else {
+            panic!("expected Corrupt, got {outcome:?}");
+        };
+        assert_eq!(kept, raw);
+        assert!(!error.is_empty());
+    }
+
+    #[test]
+    fn load_outcome_serializes_with_type_and_content_tags() {
+        let corrupt = SawModelLoad::Corrupt {
+            raw: "{".to_owned(),
+            error: "eof".to_owned(),
+        };
+        assert_eq!(
+            serde_json::to_string(&corrupt).unwrap(),
+            r#"{"type":"Corrupt","content":{"raw":"{","error":"eof"}}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&SawModelLoad::Absent).unwrap(),
+            r#"{"type":"Absent"}"#
+        );
     }
 
     #[test]
