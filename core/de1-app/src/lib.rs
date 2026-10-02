@@ -15,6 +15,8 @@ pub mod de1_uuids;
 pub mod error;
 pub mod event;
 pub mod firmware_info;
+#[cfg(test)]
+mod hds_sleep_tests;
 mod maintenance_run;
 
 pub use de1_uuids::{
@@ -51,6 +53,7 @@ use de1_protocol::{
 /// A 5-second margin is ~100× the typical real-DE1 round-trip and clears
 /// Web Bluetooth's worst-case back-pressure window.
 pub const PROFILE_UPLOAD_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+use de1_scale::decent_hds::HdsNegotiation;
 use de1_scale::{Scale, ScaleCapabilities, ScaleConfigUpdate, ScaleUuids, TimerCommand};
 #[cfg(test)]
 use de1_scale::{bookoo, decent_scale};
@@ -764,6 +767,10 @@ pub struct CremaCore {
     /// asserted, °C — re-written after a cold-maintenance cycle, whose 1 °C
     /// profile zeroed it.
     tank_temp_threshold_c: Option<u8>,
+    /// Half Decent Scale SoftSleep negotiation for a connected Decent Scale
+    /// (decaid `46e8c224`) — `None` for every other scale. A *device* link
+    /// like [`scale`](Self::scale), so it survives a DE1 [`reset`](Self::reset).
+    hds: Option<HdsNegotiation>,
 }
 
 /// In-flight state of one profile upload. Owned by
@@ -898,6 +905,7 @@ impl CremaCore {
             maintenance: None,
             descale: de1_domain::DescaleTracker::default(),
             tank_temp_threshold_c: None,
+            hds: None,
         }
     }
 
@@ -991,6 +999,11 @@ impl CremaCore {
         discovered_services: &[String],
     ) -> Option<String> {
         self.scale = Scale::identify(advertised_name, discovered_services);
+        self.hds = self
+            .scale
+            .as_ref()
+            .filter(|scale| scale.label() == "Decent Scale")
+            .map(|_| HdsNegotiation::new());
         // A newly connected scale has not yet been asked for its serial /
         // settings; re-arm the one-shot connect-time queries.
         self.scale_config_queried = false;
@@ -1022,6 +1035,7 @@ impl CremaCore {
     /// AND4 — and benefits every shell.)
     pub fn disconnect_scale(&mut self) {
         self.scale = None;
+        self.hds = None;
         self.flow = FlowEstimator::new(FlowAlgorithm::default());
         self.last_scale_weight = None;
         self.last_scale_estimate = None;
@@ -2404,8 +2418,19 @@ impl CremaCore {
     /// scale or the scale doesn't need a heartbeat
     /// ([`ScaleCapabilities::heartbeat_interval_ms`](de1_scale::ScaleCapabilities::heartbeat_interval_ms)
     /// is `None`).
+    ///
+    /// While a Half Decent Scale is in SoftSleep the heartbeat is withheld
+    /// (an empty output): the scale sleeps with its link kept and must not be
+    /// poked awake (decaid sends no keep-alive in SoftSleep).
     pub fn scale_heartbeat(&self) -> Result<CoreOutput, AppError> {
         let scale = Self::scale_for("scale_heartbeat", self.scale.as_ref())?;
+        if self
+            .hds
+            .as_ref()
+            .is_some_and(HdsNegotiation::is_soft_sleeping)
+        {
+            return Ok(CoreOutput::default());
+        }
         let writes = scale
             .heartbeat_command()
             .ok_or_else(|| Self::unsupported(scale, "scale_heartbeat", "no heartbeat command"))?;
@@ -2804,7 +2829,13 @@ impl CremaCore {
         let now = ms_to_duration(now_ms);
         self.clock = self.clock.max(now);
         let mut out = CoreOutput::default();
+        // A Half Decent Scale in SoftSleep stops streaming on purpose — its
+        // silence is not a dead link (decaid suspends its watchdog there).
         if self.scale.is_some()
+            && !self
+                .hds
+                .as_ref()
+                .is_some_and(HdsNegotiation::is_soft_sleeping)
             && !self.scale_stale_reported
             && let Some(last) = self.last_scale_weight
             && now.saturating_sub(last) >= SCALE_STALE_TIMEOUT
@@ -2925,6 +2956,7 @@ impl CremaCore {
         // (and its one-shot config-query latch) across; the scale's own drop
         // path ([`disconnect_scale`](Self::disconnect_scale)) still clears it.
         let scale = self.scale.take();
+        let hds = self.hds.take();
         let scale_config_queried = self.scale_config_queried;
         // The learned SAW drip model is persistent user data, not session
         // state — losing it on every DE1 reconnect would silently restart
@@ -2972,6 +3004,7 @@ impl CremaCore {
         self.read_only = read_only;
         self.brew_session = brew_session;
         self.scale = scale;
+        self.hds = hds;
         self.scale_config_queried = scale_config_queried;
         self.saw_model = saw_model;
         self.active_beverage_type = active_beverage_type;
@@ -3091,6 +3124,22 @@ impl CremaCore {
                 && let Some(scale) = self.scale.as_ref()
             {
                 let grams = matches!(self.weight_unit_pref, WeightUnit::Grams);
+                // Wake an HDS from SoftSleep on any entry that isn't a sleep:
+                // `0A 04 00`, then the display (decaid `_runWakeDisplay`).
+                // Idle's arm below sends the LCD-enable; other states get it
+                // here. The stale watchdog restarts from the wake.
+                if !matches!(info.state, MachineState::Sleep | MachineState::GoingToSleep)
+                    && let Some(wake) = self.hds.as_mut().and_then(HdsNegotiation::wake)
+                {
+                    Self::push_scale_write(out, wake.to_vec());
+                    self.last_scale_weight = Some(now);
+                    self.scale_stale_reported = false;
+                    if info.state != MachineState::Idle
+                        && let Some(writes) = scale.lcd_enable_command(grams)
+                    {
+                        Self::push_scale_writes(out, writes);
+                    }
+                }
                 match info.state {
                     // The LCD-enable bytes follow the user's chosen weight
                     // unit, cached on the core by the shell via
@@ -3106,6 +3155,18 @@ impl CremaCore {
                         // unit follows the shell's unit.
                         if grams && let Some(writes) = scale.set_unit_grams_command() {
                             Self::push_scale_writes(out, writes);
+                        }
+                    }
+                    // An HDS on firmware >= 3 goes to SoftSleep instead of
+                    // LCD-off / power-off: the link and subscription stay up,
+                    // so the DE1's wake needs no reconnect (decaid
+                    // `sleepDisplay`, `46e8c224`).
+                    MachineState::Sleep
+                        if let Some(writes) =
+                            self.hds.as_mut().and_then(HdsNegotiation::enter_sleep) =>
+                    {
+                        for write in writes {
+                            Self::push_scale_write(out, write.to_vec());
                         }
                     }
                     MachineState::Sleep => {
@@ -3282,6 +3343,13 @@ impl CremaCore {
             // The generic handler stops naming Decent — adding a future
             // "Bookoo emits firmware on connect" lands in the same shape.
             scale.absorb_unmatched_frame(data);
+            // Decent Scale: status / voltage replies drive the HDS SoftSleep
+            // negotiation (the voltage probe, then a wake once granted).
+            if let Some(hds) = self.hds.as_mut() {
+                for write in hds.on_frame(data) {
+                    Self::push_scale_write(out, write.to_vec());
+                }
+            }
             return;
         };
         // A fresh reading re-arms the lost-scale watchdog.

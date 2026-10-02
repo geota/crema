@@ -23,6 +23,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   (`replace=1`), once, a moment after you stop editing. Same trigger as
   Decent's own shot-upload plugin. Web and Android.
 
+- **A Half Decent Scale on firmware 3 or newer stays connected while the DE1
+  sleeps** — when the machine sleeps, Crema now puts such a scale into its
+  SoftSleep mode instead of switching its display off or powering it down,
+  and wakes it when the machine wakes, so there's no reconnect. The scale is
+  identified by its answer to a capability probe plus its firmware version
+  (decaid `f6c91efe`, `38f5c0a8`, `46e8c224`); older and original Decent
+  Scales keep the previous behaviour. Web, tablet and phone.
 - **Descale, clean and air purge work on a cold machine with older DE1
   firmware** — firmware below build 1356 silently ignores those requests
   while the machine is still heating. On such a machine (or one whose build

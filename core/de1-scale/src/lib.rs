@@ -22,6 +22,7 @@
 pub mod acaia;
 pub mod atomheart_eclair;
 pub mod bookoo;
+pub mod decent_hds;
 pub mod decent_scale;
 pub mod difluid;
 pub mod eureka_precisa;
