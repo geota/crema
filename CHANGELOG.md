@@ -20,6 +20,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Adaptive v3 built-in profile** — de1app's update to Adaptive. It exits
+  Pressurize at 7.7 bar (8.8 in v2) and limits extraction at 8.6 bar (9.5).
+  Adaptive v2 stays available.
 - Recipes have a Notes field for filter, water recipe and other setup details (issue #10 feedback)
 - **Your own brewing methods** (issue #10 feedback: "I only have an ORB this
   week — can I add it?") — "+ Add method…" in the log form, the recipe
@@ -161,6 +164,28 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   guided weight curve; they now survive backup and restore.
 
 - Guided brews let you choose the bean before you start (issue #10 feedback)
+- **Built-in profiles' preinfusion handling and stop-at-volume now match
+  de1app.** Basic pressure and flow profiles now tell the DE1 how many of
+  their leading steps are preinfusion, counting the pressure profiles'
+  "forced rise" steps, exactly as de1app works it out. 24 built-ins
+  (Default, Best overall pressure profile, Classic Italian, the lever and flow
+  profiles…) used to send 0. Stop-at-volume now counts only the water poured
+  after preinfusion, so it no longer stops a shot early. Basic profiles take
+  their volume and weight targets from the keys de1app uses, which corrects
+  stale 135 / 180 / 74 ml volume targets. Built-ins now carry their own
+  stop-at-weight target instead of a flat 36 g (for example Blooming Allongé
+  135 g, Filter 2.x 100 g). Every built-in's preinfusion count, volume and
+  weight target was checked against de1app's own calculation.
+- **Per-step weight exits work.** A step's weight target (A-Flow's Infuse:
+  2–4 g) used to be dropped when profiles were loaded, so A-Flow held its
+  Infuse step for up to 60 s. It is now kept, and with a scale connected
+  Crema moves the DE1 to the next step when the cup reaches that weight. It
+  allows one skip per step and re-sends the skip if the DE1 doesn't move on.
+  It never skips the last step while a stop-at-weight target is set.
+- **Imported `.tcl` profiles keep multi-word titles** — Visualizer's `.tcl`
+  downloads leave titles like `D-Flow / Q` unbraced, which failed to import or
+  scrambled the profile. Title, author and notes now read to the end of the
+  line. The dose is also read from de1app's `profile_grinder_dose_weight`.
 
 ### Security
 
