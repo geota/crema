@@ -761,7 +761,7 @@ export interface CremaCore {
 		nowMs: number
 	): Promise<CoreOutput>;
 	/**
-	 * The once-a-minute USB-charger check (de1app smart charging) —
+	 * The once-a-minute USB-charger check (Decenza `BatteryManager`) —
 	 * `batteryPercent` is the tablet's battery, `null` when unreadable.
 	 */
 	usbChargerTick(

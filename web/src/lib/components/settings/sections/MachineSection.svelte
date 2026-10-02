@@ -487,15 +487,16 @@
 		{/snippet}
 	</StRow>
 	<!--
-		Tablet charging from the DE1's USB port — de1app's smart_battery_charging.
+		Tablet charging from the DE1's USB port — Decenza BatteryManager's modes,
+		defaulting to Always on as decaid does.
 		The core decides from the tablet battery on connect and every minute
 		after (connect-sweep.ts); explicit disconnect always leaves it on.
 	-->
 	<StRow
 		title="Tablet charging"
-		sub="For a tablet powered from the DE1's USB port. Smart keeps the battery
-		between 55 and 65 % (de1app's default), High between 90 and 95 %; Always on
-		never switches the port off. Applied within a minute."
+		sub="For a tablet powered from the DE1's USB port. Always on (the default)
+		never switches the port off; Smart keeps the battery between 55 and 65 %,
+		High between 90 and 95 %. Applied within a minute."
 	>
 		{#snippet control()}
 			<StSegment

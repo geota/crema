@@ -398,7 +398,7 @@ export class CremaApp {
 				// Decenza `sendInitialSettings`): USB charger, the
 				// user-presence feature flag, fan threshold, heater tweaks,
 				// refill point, tank threshold, steam / hot water, steam
-				// flow, flush, eco. Also runs de1app's once-a-minute
+				// flow, flush, eco. Also runs the once-a-minute
 				// USB-charger check while ready.
 				this.sweep.onDe1State(de1State);
 			},
@@ -1013,10 +1013,10 @@ export class CremaApp {
 
 	/** Disconnect the DE1 and clear its readout fields. */
 	async disconnectDe1(): Promise<void> {
-		// Leave the DE1's USB port charging — de1app's `app_exit` ("always
-		// leave the app with the charger set to ON"), Decenza's disconnect
-		// path: smart charging may have switched it off, and nothing would
-		// switch it back on once Crema is gone.
+		// Leave the DE1's USB port charging (Decenza
+		// `BatteryManager::ensureChargerOn`): smart charging may have
+		// switched it off, and nothing would switch it back on once Crema is
+		// gone.
 		if (this.state.current.de1State === 'ready') {
 			try {
 				this.applyCoreOutput(await this.core.setUsbChargerOn(true));

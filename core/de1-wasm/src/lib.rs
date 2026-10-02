@@ -1821,9 +1821,9 @@ impl CremaBridge {
         json(self.core.connect_sweep_json(settings_json, now_ms as u64))
     }
 
-    /// The once-a-minute USB-charger check (de1app smart charging):
-    /// `mode` is the persisted `UsbChargingMode` spelling (`"smart"` /
-    /// `"smartHigh"` / `"alwaysOn"`); `battery_percent` is the tablet battery,
+    /// The once-a-minute USB-charger check (Decenza `BatteryManager`):
+    /// `mode` is the persisted `UsbChargingMode` spelling (`"alwaysOn"` /
+    /// `"smart"` / `"smartHigh"`; anything else is `"alwaysOn"`); `battery_percent` is the tablet battery,
     /// `undefined` when unreadable. Returns a `CoreOutput` JSON string.
     pub fn usb_charger_tick(&mut self, mode: &str, battery_percent: Option<u8>) -> String {
         json(self.core.usb_charger_tick(

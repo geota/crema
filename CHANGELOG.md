@@ -29,11 +29,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   heater's phase flow rates, the hot-water heater's idle temperature and the
   espresso warm-up timeout (de1app's heater tweaks and defaults), and the
   active profile's tank-temperature target, so they survive a DE1 power
-  cycle. New **Tablet charging** setting (Settings → Machine): for a tablet
-  powered from the DE1's USB port, Crema switches the port on and off to keep
-  the battery between 55 and 65 % (de1app's smart charging and default), or
-  90–95 %, or always on; it re-checks every minute and leaves charging on
-  when you disconnect. Web, tablet and phone.
+  cycle. New **Tablet charging** setting (Settings → Machine) for a tablet
+  powered from the DE1's USB port: it defaults to **Always on** (the port is
+  never switched off, as before; decaid's default). Opt in to **Smart**
+  (keeps the battery between 55 and 65 %) or **High** (90–95 %), Decenza's
+  smart-charging modes, and Crema switches the port on and off, re-checking
+  every minute and leaving charging on when you disconnect. Web, tablet and
+  phone.
 - **A Half Decent Scale on firmware 3 or newer stays connected while the DE1
   sleeps** — when the machine sleeps, Crema now puts such a scale into its
   SoftSleep mode instead of switching its display off or powering it down,

@@ -38,9 +38,17 @@ class ConnectSweepTest {
     }
 
     @Test
-    fun unknownChargingModesReadAsSmart() {
-        assertEquals(UsbChargingMode.Smart, usbChargingModeOf("?"))
+    fun unsetOrUnknownChargingModesReadAsAlwaysOn() {
+        assertEquals(UsbChargingMode.AlwaysOn, usbChargingModeOf("?"))
+        assertEquals(UsbChargingMode.AlwaysOn, usbChargingModeOf(""))
+        assertEquals(UsbChargingMode.AlwaysOn, usbChargingModeOf(null))
+        assertEquals(UsbChargingMode.Smart, usbChargingModeOf("smart"))
         assertEquals(UsbChargingMode.SmartHigh, usbChargingModeOf("smartHigh"))
+    }
+
+    @Test
+    fun tabletChargingDefaultsToAlwaysOn() {
+        assertEquals("alwaysOn", coffee.crema.settings.AppPrefs().usbChargingMode)
     }
 
     @Test

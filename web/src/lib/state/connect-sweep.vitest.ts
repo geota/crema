@@ -101,7 +101,7 @@ describe('connect sweep runner', () => {
 		const h = harness();
 		h.runner.onDe1State('ready');
 		await vi.advanceTimersByTimeAsync(USB_CHARGER_CHECK_INTERVAL_MS);
-		expect(h.ticks).toEqual([[UsbChargingMode.Smart, 42]]);
+		expect(h.ticks).toEqual([[UsbChargingMode.AlwaysOn, 42]]);
 		h.setSettings({ ...DEFAULT_SETTINGS, usbChargingMode: 'smartHigh' });
 		await vi.advanceTimersByTimeAsync(USB_CHARGER_CHECK_INTERVAL_MS);
 		expect(h.ticks.at(-1)).toEqual([UsbChargingMode.SmartHigh, 42]);

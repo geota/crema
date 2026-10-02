@@ -205,10 +205,10 @@ fun SettingsScreen(
                             CremaSettingsRow("Keep connected in the background", "Reconnects the machine even while the screen is off — so it's ready again after a power cut. Runs only while this device is charging. Default on for tablets, off for phones.") {
                                 CremaSwitch(ui.keepConnectedScreenOff, vm::setKeepConnectedScreenOff)
                             }
-                            // Tablet charging from the DE1's USB port (de1app smart_battery_charging):
+                            // Tablet charging from the DE1's USB port (Decenza BatteryManager modes; default Always on, as decaid):
                             // core decides from the tablet battery on connect and every minute after;
                             // an explicit disconnect always leaves it on.
-                            CremaSettingsRow("Tablet charging", "For a tablet powered from the DE1's USB port. Smart keeps the battery between 55 and 65 % (de1app's default), High between 90 and 95 %; Always on never switches the port off.") {
+                            CremaSettingsRow("Tablet charging", "For a tablet powered from the DE1's USB port. Always on (the default) never switches the port off; Smart keeps the battery between 55 and 65 %, High between 90 and 95 %.") {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("smart", "Smart"), SegOption("smartHigh", "High"), SegOption("alwaysOn", "Always on")),
                                     value = ui.usbChargingMode,

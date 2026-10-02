@@ -14,18 +14,21 @@ import kotlinx.coroutines.launch
  * The list of writes is core-owned (`CremaCore::connect_sweep`,
  * `de1_domain::connect_sweep` — de1app `later_new_de1_connection_setup` +
  * `set_heater_tweaks`, Decenza `sendInitialSettings`): this file only builds
- * the settings snapshot the core needs and drives de1app's once-a-minute
- * USB-charger check while the DE1 stays connected.
+ * the settings snapshot the core needs and drives the once-a-minute
+ * USB-charger check (Decenza `BatteryManager`) while the DE1 stays connected.
  */
 
-/** de1app `schedule_minute_task`: the charger decision is re-sent every 60 s. */
+/** The charger decision is re-sent every 60 s, even unchanged: the DE1
+ *  re-enables its USB port after 10 minutes, so an OFF must be reasserted
+ *  (Decenza `BatteryManager::applySmartCharging`). */
 const val USB_CHARGER_CHECK_INTERVAL_MS = 60_000L
 
-/** The persisted spelling of de1app's `smart_battery_charging` modes. */
-internal fun usbChargingModeOf(pref: String): UsbChargingMode = when (pref) {
+/** The persisted spelling of the Tablet charging modes (Decenza
+ *  `BatteryManager` Off / On / Night); unset or unknown is always on. */
+internal fun usbChargingModeOf(pref: String?): UsbChargingMode = when (pref) {
+    "smart" -> UsbChargingMode.Smart
     "smartHigh" -> UsbChargingMode.SmartHigh
-    "alwaysOn" -> UsbChargingMode.AlwaysOn
-    else -> UsbChargingMode.Smart
+    else -> UsbChargingMode.AlwaysOn
 }
 
 /**

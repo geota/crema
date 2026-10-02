@@ -157,10 +157,11 @@ impl CremaCore {
         }
     }
 
-    /// The once-a-minute USB-charger check (de1app `schedule_minute_task` →
-    /// `check_battery_charger`): re-decide from the tablet battery and re-send
-    /// the result, which also beats the DE1 turning its port back on after
-    /// ~10 minutes. Shells call it every
+    /// The once-a-minute USB-charger check (Decenza `BatteryManager`'s 60 s
+    /// `checkBattery`): re-decide from the tablet battery and re-send the
+    /// result even when unchanged, because the DE1 re-enables its USB port
+    /// on its own after 10 minutes, so an OFF must be reasserted every cycle
+    /// (Decenza `batterymanager.cpp` `applySmartCharging`). Shells call it every
     /// [`USB_CHARGER_CHECK_INTERVAL_MS`](de1_domain::USB_CHARGER_CHECK_INTERVAL_MS)
     /// while the DE1 is connected.
     ///
@@ -330,7 +331,20 @@ mod tests {
     }
 
     #[test]
-    fn usb_charger_follows_de1apps_smart_band_every_minute() {
+    fn default_settings_keep_the_charger_on() {
+        let mut core = CremaCore::new();
+        let s = ConnectSweepSettings {
+            battery_percent: Some(100),
+            ..ConnectSweepSettings::default()
+        };
+        let out = core.connect_sweep(&s, 0);
+        assert_eq!(mmr_writes(&out)[0], (MmrRegister::UsbChargerOn, 1));
+        let out = core.usb_charger_tick(UsbChargingMode::default(), Some(100));
+        assert_eq!(mmr_writes(&out), vec![(MmrRegister::UsbChargerOn, 1)]);
+    }
+
+    #[test]
+    fn usb_charger_follows_the_smart_band_every_minute() {
         let mut core = CremaCore::new();
         let mut s = snapshot();
         s.battery_percent = Some(70);

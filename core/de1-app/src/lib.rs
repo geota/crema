@@ -774,7 +774,8 @@ pub struct CremaCore {
     hds: Option<HdsNegotiation>,
     /// The USB smart-charging mode the last connect sweep asserted.
     usb_charging: de1_domain::UsbChargingMode,
-    /// de1app's `battery_discharging` latch for the smart-charging band.
+    /// The held "discharging" latch for the smart-charging band (Decenza
+    /// `BatteryManager::m_discharging`).
     usb_discharging: bool,
 }
 
@@ -911,7 +912,7 @@ impl CremaCore {
             descale: de1_domain::DescaleTracker::default(),
             tank_temp_threshold_c: None,
             hds: None,
-            usb_charging: de1_domain::UsbChargingMode::Smart,
+            usb_charging: de1_domain::UsbChargingMode::AlwaysOn,
             usb_discharging: false,
         }
     }

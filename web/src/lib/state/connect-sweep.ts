@@ -5,8 +5,8 @@
  * `de1_domain::connect_sweep` — de1app `later_new_de1_connection_setup` +
  * `set_heater_tweaks`, Decenza `sendInitialSettings`): this module only
  * builds the settings snapshot the core needs, runs the sweep once each time
- * the DE1 becomes ready, and drives de1app's once-a-minute USB-charger check
- * while it stays ready. Android's `ConnectSweep.kt` is the twin.
+ * the DE1 becomes ready, and drives the once-a-minute USB-charger check
+ * (Decenza `BatteryManager`) while it stays ready. Android's `ConnectSweep.kt` is the twin.
  */
 
 import type { CoreOutput, CremaCore } from '$lib/core';
@@ -14,7 +14,11 @@ import { type ConnectSweepSettings, UsbChargingMode } from '$lib/core/crema-core
 import type { Settings } from '$lib/settings/store.svelte';
 import { defaultRefillPointMm } from './ui-state.svelte';
 
-/** de1app `schedule_minute_task`: the charger decision is re-sent every 60 s. */
+/**
+ * The charger decision is re-sent every 60 s, even unchanged: the DE1
+ * re-enables its USB port after 10 minutes, so an OFF must be reasserted
+ * (Decenza `BatteryManager::applySmartCharging`).
+ */
 export const USB_CHARGER_CHECK_INTERVAL_MS = 60_000;
 
 const USB_MODES: Record<Settings['usbChargingMode'], UsbChargingMode> = {
@@ -47,7 +51,7 @@ export function buildConnectSweepSettings(
 		flushTempC: s.qcFlushTempC,
 		steamEco: s.steamEcoMode,
 		tankTempC: Number.isFinite(tankTempC) ? tankTempC : 0,
-		usbCharging: USB_MODES[s.usbChargingMode] ?? UsbChargingMode.Smart,
+		usbCharging: USB_MODES[s.usbChargingMode] ?? UsbChargingMode.AlwaysOn,
 		...(batteryPercent === null ? {} : { batteryPercent: Math.round(batteryPercent) })
 	};
 }
@@ -119,7 +123,7 @@ export class ConnectSweepRunner {
 
 	private async tick(): Promise<void> {
 		try {
-			const mode = USB_MODES[this.deps.settings().usbChargingMode] ?? UsbChargingMode.Smart;
+			const mode = USB_MODES[this.deps.settings().usbChargingMode] ?? UsbChargingMode.AlwaysOn;
 			this.deps.apply(await this.deps.core.usbChargerTick(mode, await this.deps.battery()));
 		} catch {
 			// Next minute retries.

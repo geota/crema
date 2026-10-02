@@ -10,7 +10,7 @@
 //!
 //! | write | register / characteristic | encoding | source |
 //! |---|---|---|---|
-//! | USB charger | MMR `0x803854` | 0/1 | de1app `check_battery_charger`, Decenza connect-setup |
+//! | USB charger | MMR `0x803854` | 0/1 | Decenza `BatteryManager` |
 //! | user-presence feature | MMR `0x803858` | bit 0 | crema / reaprime `enableUserPresenceFeature` |
 //! | fan threshold | MMR `0x803808` | °C | de1app, Decenza |
 //! | phase-1 flow | MMR `0x803810` | ml/s × 10 | `set_heater_tweaks` (default 2.0) |
@@ -25,21 +25,28 @@
 //! | flush timeout / temp | MMR `0x803848` / `0x803844` | × 10 | `set_heater_tweaks` / reaprime |
 //! | steam eco | re-sent `ShotSettings` | — | crema |
 //!
-//! **USB charging** is app-controlled exactly as de1app does it
-//! (`utils.tcl` `check_battery_charger`, run every minute, de1app default
-//! `smart_battery_charging 1`): with smart charging the DE1's USB port is
-//! switched ON at or below the bottom of a band and OFF at or above its top,
-//! holding the last decision in between; with it off the charger is always
-//! ON. An unreadable battery level counts as 100 % (de1app `battery_percent`).
-//! The DE1 turns the port back on by itself after ~10 minutes, which is why
-//! the decision is re-sent every minute ([`USB_CHARGER_CHECK_INTERVAL_MS`]),
-//! not once.
+//! **USB charging** is app-controlled. The three modes and their bands are
+//! Decenza's `BatteryManager` `ChargingMode` Off / On / Night
+//! (`batterymanager.h`): always on, 55–65 %, 90–95 %. In a band mode the
+//! DE1's USB port is switched ON at or below the bottom and OFF at or above
+//! the top, holding the last decision in between (Decenza's `m_discharging`
+//! latch). An unreadable battery level counts as 100 % (Decenza
+//! `readPlatformBatteryPercent`). The default is always on, as in decaid
+//! (`ChargingMode.disabled` → always charge, `charging_logic.dart` `decide`),
+//! which is also what Crema did before it touched the port at all.
+//!
+//! The decision is re-sent every minute ([`USB_CHARGER_CHECK_INTERVAL_MS`]),
+//! not once, even when it hasn't changed: the DE1 re-enables the USB port on
+//! its own after 10 minutes, so an OFF must be reasserted every cycle
+//! (Decenza `batterymanager.cpp` `applySmartCharging`: "The DE1's 10-minute
+//! auto-enable timeout means that if we want the port OFF we must actively
+//! reassert that every cycle").
 
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
 /// How often the shells re-run the USB-charger decision while connected
-/// (de1app `schedule_minute_task`: 60 s).
+/// (Decenza `BatteryManager`'s 60 s check timer).
 pub const USB_CHARGER_CHECK_INTERVAL_MS: u32 = 60_000;
 
 /// de1app's `set_heater_tweaks` defaults (`machine.tcl:286-300`), asserted
@@ -57,18 +64,20 @@ pub const DEFAULT_ESPRESSO_WARMUP_TIMEOUT_S: f32 = 1.0;
 /// `range_check_variable … 0 45`, Decenza `qBound(0, …, 45)`).
 pub const MAX_TANK_TEMP_C: f32 = 45.0;
 
-/// de1app's `smart_battery_charging` setting.
+/// The "Tablet charging" setting: Decenza's `BatteryManager::ChargingMode`.
+/// Defaults to [`AlwaysOn`](Self::AlwaysOn), as decaid does.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UsbChargingMode {
-    /// `1` (de1app default): keep the tablet between 55 % and 65 %.
-    #[default]
+    /// Decenza `On`: keep the tablet between 55 % and 65 %.
     Smart,
-    /// `2`: keep it between 90 % and 95 % (down to 15 % while the machine
-    /// sleeps).
+    /// Decenza `Night`: keep it between 90 % and 95 %; while the machine
+    /// sleeps the floor drops to 15 %.
     SmartHigh,
-    /// `0`: smart charging off — the DE1's USB port is always on.
+    /// Decenza `Off` (the default, as decaid's `ChargingMode.disabled`):
+    /// the DE1's USB port is always on.
+    #[default]
     AlwaysOn,
 }
 
@@ -77,17 +86,17 @@ impl UsbChargingMode {
     #[must_use]
     pub fn from_str_lenient(s: &str) -> Self {
         match s {
+            "smart" => Self::Smart,
             "smartHigh" => Self::SmartHigh,
-            "alwaysOn" => Self::AlwaysOn,
-            _ => Self::Smart,
+            _ => Self::AlwaysOn,
         }
     }
 }
 
-/// de1app `check_battery_charger` as a pure step: given the mode, the tablet
-/// battery (`None` = unreadable, counted as 100 %), whether the machine is
-/// asleep (de1app's "sleep / saver" context), and the held "discharging"
-/// latch, return `(charger_on, discharging)`.
+/// The charger decision (Decenza `BatteryManager::applySmartCharging`) as a
+/// pure step: given the mode, the tablet battery (`None` = unreadable,
+/// counted as 100 %), whether the machine is asleep, and the held
+/// "discharging" latch, return `(charger_on, discharging)`.
 #[must_use]
 pub fn usb_charger_decision(
     mode: UsbChargingMode,
@@ -174,7 +183,7 @@ impl Default for ConnectSweepSettings {
             phase_2_flow_ml_s: None,
             hot_water_idle_temp_c: None,
             espresso_warmup_timeout_s: None,
-            usb_charging: UsbChargingMode::Smart,
+            usb_charging: UsbChargingMode::AlwaysOn,
             battery_percent: None,
         }
     }
@@ -249,9 +258,25 @@ mod tests {
             UsbChargingMode::SmartHigh
         );
         assert_eq!(
-            UsbChargingMode::from_str_lenient("?"),
+            UsbChargingMode::from_str_lenient("smart"),
             UsbChargingMode::Smart
         );
+        // Unset / unknown is the default, always on.
+        assert_eq!(
+            UsbChargingMode::from_str_lenient(""),
+            UsbChargingMode::AlwaysOn
+        );
+        assert_eq!(
+            UsbChargingMode::from_str_lenient("?"),
+            UsbChargingMode::AlwaysOn
+        );
+        assert_eq!(UsbChargingMode::default(), UsbChargingMode::AlwaysOn);
+        assert_eq!(
+            ConnectSweepSettings::default().usb_charging,
+            UsbChargingMode::AlwaysOn
+        );
+        let unset: ConnectSweepSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(unset.usb_charging, UsbChargingMode::AlwaysOn);
         let s: ConnectSweepSettings =
             serde_json::from_str(r#"{"fanThresholdC":50,"usbCharging":"alwaysOn"}"#).unwrap();
         assert!((s.fan_threshold_c - 50.0).abs() < f32::EPSILON);

@@ -60,10 +60,10 @@ data class AppPrefs(
      *  default, so without this the fan runs near-constantly
      *  (geota/crema#31). */
     val fanThresholdC: Float = 55f,
-    /** Smart charging for the DE1's USB port — de1app's `smart_battery_charging`:
-     *  `"smart"` (55–65 %, de1app's default), `"smartHigh"` (90–95 %) or
-     *  `"alwaysOn"`. Asserted on connect and every minute after. */
-    val usbChargingMode: String = "smart",
+    /** Tablet charging from the DE1's USB port (Decenza `BatteryManager`
+     *  modes): `"alwaysOn"` (the default, as decaid), `"smart"` (55–65 %) or
+     *  `"smartHigh"` (90–95 %). Asserted on connect and every minute after. */
+    val usbChargingMode: String = "alwaysOn",
     /** Flush the group before each shot. */
     val preFlush: Boolean = false,
     /** Run a short group flush after steaming (app-level; distinct from the
@@ -266,7 +266,7 @@ fun AppPrefs.withCommonSettings(c: CommonSettings): AppPrefs = copy(
     steamEco = c.steamEco,
     steamTwoTap = c.steamTwoTap ?: false,
     fanThresholdC = c.fanThresholdC ?: 55f,
-    usbChargingMode = c.usbChargingMode ?: "smart",
+    usbChargingMode = c.usbChargingMode ?: "alwaysOn",
     preFlush = c.preFlush,
     steamPurge = c.steamPurge,
     weightUnit = c.weightUnit,

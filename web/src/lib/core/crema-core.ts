@@ -714,10 +714,10 @@ export interface CommonSettings {
 	 */
 	waterRefillPointMm?: number;
 	/**
-	 * Smart charging for the DE1's USB port (de1app
-	 * `smart_battery_charging`): `"smart"` (55–65 %, the default),
-	 * `"smartHigh"` (90–95 %) or `"alwaysOn"`. Asserted on connect and
-	 * every minute after. `None` means "unset", read as `"smart"`.
+	 * Tablet charging from the DE1's USB port (Decenza `BatteryManager`
+	 * modes): `"alwaysOn"` (the default, as decaid), `"smart"` (55–65 %)
+	 * or `"smartHigh"` (90–95 %). Asserted on connect and every minute
+	 * after. `None` means "unset", read as `"alwaysOn"`.
 	 */
 	usbChargingMode?: string;
 	/**
@@ -773,16 +773,22 @@ export interface CommonSettings {
 	qcFlushTempC: number;
 }
 
-/** de1app's `smart_battery_charging` setting. */
+/**
+ * The "Tablet charging" setting: Decenza's `BatteryManager::ChargingMode`.
+ * Defaults to [`AlwaysOn`](Self::AlwaysOn), as decaid does.
+ */
 export enum UsbChargingMode {
-	/** `1` (de1app default): keep the tablet between 55 % and 65 %. */
+	/** Decenza `On`: keep the tablet between 55 % and 65 %. */
 	Smart = "smart",
 	/**
-	 * `2`: keep it between 90 % and 95 % (down to 15 % while the machine
-	 * sleeps).
+	 * Decenza `Night`: keep it between 90 % and 95 %; while the machine
+	 * sleeps the floor drops to 15 %.
 	 */
 	SmartHigh = "smartHigh",
-	/** `0`: smart charging off — the DE1's USB port is always on. */
+	/**
+	 * Decenza `Off` (the default, as decaid's `ChargingMode.disabled`):
+	 * the DE1's USB port is always on.
+	 */
 	AlwaysOn = "alwaysOn",
 }
 

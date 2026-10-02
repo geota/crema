@@ -544,10 +544,11 @@ data class MainUiState(
     /** Fan-on temperature threshold, °C (MMR `FanThreshold`, 0..=60). Re-seeded
      *  on every connect (geota/crema#31). */
     val fanThresholdC: Float = 55f,
-    /** Smart charging for the DE1's USB port (`"smart"` / `"smartHigh"` /
-     *  `"alwaysOn"`, de1app `smart_battery_charging`). Persisted; asserted on
-     *  connect and every minute after by the core's USB-charger check. */
-    val usbChargingMode: String = "smart",
+    /** Tablet charging from the DE1's USB port (`"alwaysOn"`, the default as
+     *  in decaid / `"smart"` / `"smartHigh"`, Decenza `BatteryManager`'s
+     *  modes). Persisted; asserted on connect and every minute after by the
+     *  core's USB-charger check. */
+    val usbChargingMode: String = "alwaysOn",
     /** Persisted pre-shot flush / post-steam purge preferences (not yet consumed
      *  by the shot sequence — Settings rows carry the pill until then). */
     val preFlush: Boolean = false,
@@ -2927,10 +2928,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Disconnect the DE1 — delegate of [ConnectionController.disconnect]. */
     fun disconnect() {
-        // Leave the DE1's USB port charging — de1app's `app_exit` ("always leave
-        // the app with the charger set to ON"), Decenza's disconnect path: smart
-        // charging may have switched it off, and nothing would turn it back on
-        // once Crema is gone.
+        // Leave the DE1's USB port charging (Decenza
+        // `BatteryManager::ensureChargerOn`): smart charging may have switched
+        // it off, and nothing would turn it back on once Crema is gone.
         if (_ui.value.bleState == De1BleManager.State.READY) {
             routeWrite("USB charger on") { bridge.setUsbChargerOn(true) }
         }
@@ -3281,7 +3281,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  route through [routeWrite], a no-op when disconnected. */
     private fun seedMachineSettings() {
         // One core-owned list (`CremaCore::connect_sweep`, web runs the same):
-        // USB charger (de1app smart charging), the user-presence feature flag
+        // USB charger (Tablet charging setting), the user-presence feature flag
         // (FeatureFlags bit 0 — without it the DE1 never runs its own
         // inactivity sleep, see [keepAliveTick]), fan threshold, de1app's
         // heater tweaks (phase-1 / phase-2 flow, hot-water idle temp, espresso
@@ -3298,7 +3298,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** de1app's once-a-minute USB-charger check (smart charging) — see [ConnectSweepRunner]. */
+    /** The once-a-minute USB-charger check (Decenza `BatteryManager`) — see [ConnectSweepRunner]. */
     private fun usbChargerTick() {
         routeWrite("USB charger check") {
             bridge.usbChargerTick(_ui.value.usbChargingMode, batteryPercent()?.toUByte())

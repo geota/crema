@@ -107,10 +107,10 @@ pub struct CommonSettings {
     /// both push it at connect and default to 5 mm; `None` means "unset",
     /// read as `tank::DEFAULT_REFILL_POINT_MM`.
     pub water_refill_point_mm: Option<f32>,
-    /// Smart charging for the DE1's USB port (de1app
-    /// `smart_battery_charging`): `"smart"` (55–65 %, the default),
-    /// `"smartHigh"` (90–95 %) or `"alwaysOn"`. Asserted on connect and
-    /// every minute after. `None` means "unset", read as `"smart"`.
+    /// Tablet charging from the DE1's USB port (Decenza `BatteryManager`
+    /// modes): `"alwaysOn"` (the default, as decaid), `"smart"` (55–65 %)
+    /// or `"smartHigh"` (90–95 %). Asserted on connect and every minute
+    /// after. `None` means "unset", read as `"alwaysOn"`.
     pub usb_charging_mode: Option<String>,
     /// Enabled live-chart channel keys (Android's vocabulary:
     /// `pressure`/`flow`/`weight`/`headTemp`/`mixTemp`/`weightFlow`/`resistance`/
