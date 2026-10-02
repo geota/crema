@@ -714,6 +714,13 @@ export interface CommonSettings {
 	 */
 	waterRefillPointMm?: number;
 	/**
+	 * Smart charging for the DE1's USB port (de1app
+	 * `smart_battery_charging`): `"smart"` (55–65 %, the default),
+	 * `"smartHigh"` (90–95 %) or `"alwaysOn"`. Asserted on connect and
+	 * every minute after. `None` means "unset", read as `"smart"`.
+	 */
+	usbChargingMode?: string;
+	/**
 	 * Enabled live-chart channel keys (Android's vocabulary:
 	 * `pressure`/`flow`/`weight`/`headTemp`/`mixTemp`/`weightFlow`/`resistance`/
 	 * `dispensedVolume`). Web maps its eight `show*` booleans to/from this list
@@ -764,6 +771,63 @@ export interface CommonSettings {
 	qcFlushTimeS: number;
 	/** Quick-Controls group-flush temperature, °C. */
 	qcFlushTempC: number;
+}
+
+/** de1app's `smart_battery_charging` setting. */
+export enum UsbChargingMode {
+	/** `1` (de1app default): keep the tablet between 55 % and 65 %. */
+	Smart = "smart",
+	/**
+	 * `2`: keep it between 90 % and 95 % (down to 15 % while the machine
+	 * sleeps).
+	 */
+	SmartHigh = "smartHigh",
+	/** `0`: smart charging off — the DE1's USB port is always on. */
+	AlwaysOn = "alwaysOn",
+}
+
+/**
+ * The shell's snapshot of the user's settings for one connect sweep. Each
+ * shell builds it from its own settings store; the core turns it into the
+ * writes (see the module table).
+ */
+export interface ConnectSweepSettings {
+	/** Fan-on threshold, °C (clamped 0..=60). */
+	fanThresholdC: number;
+	/** Two-tap steam stop. */
+	steamTwoTap: boolean;
+	/** The machine's own refill point, raw sensor mm. */
+	refillPointMm: number;
+	/** Steam target, °C (0 = heater off). */
+	steamTempC: number;
+	/** Steam timeout, s. */
+	steamTimeoutS: number;
+	/** Hot-water temperature, °C. */
+	hotWaterTempC: number;
+	/** Hot-water volume, ml. */
+	hotWaterVolumeMl: number;
+	/** Steam flow, ml/s. */
+	steamFlowMlS: number;
+	/** Group-flush timeout, s. */
+	flushTimeoutS: number;
+	/** Group-flush temperature, °C. */
+	flushTempC: number;
+	/** Steam eco mode. */
+	steamEco: boolean;
+	/** The active profile's tank-temperature target, °C (0 = no preheat). */
+	tankTempC: number;
+	/** Steam-heater phase-1 (warm-up) flow, ml/s; `None` = de1app default. */
+	phase1FlowMlS?: number;
+	/** Steam-heater phase-2 (test) flow, ml/s; `None` = de1app default. */
+	phase2FlowMlS?: number;
+	/** Hot-water heater idle temperature, °C; `None` = de1app default. */
+	hotWaterIdleTempC?: number;
+	/** Espresso heater warm-up timeout, s; `None` = de1app default. */
+	espressoWarmupTimeoutS?: number;
+	/** Smart-charging mode for the DE1's USB port. */
+	usbCharging: UsbChargingMode;
+	/** The tablet's battery level, %; `None` when unreadable. */
+	batteryPercent?: number;
 }
 
 /**

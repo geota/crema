@@ -205,6 +205,16 @@ fun SettingsScreen(
                             CremaSettingsRow("Keep connected in the background", "Reconnects the machine even while the screen is off — so it's ready again after a power cut. Runs only while this device is charging. Default on for tablets, off for phones.") {
                                 CremaSwitch(ui.keepConnectedScreenOff, vm::setKeepConnectedScreenOff)
                             }
+                            // Tablet charging from the DE1's USB port (de1app smart_battery_charging):
+                            // core decides from the tablet battery on connect and every minute after;
+                            // an explicit disconnect always leaves it on.
+                            CremaSettingsRow("Tablet charging", "For a tablet powered from the DE1's USB port. Smart keeps the battery between 55 and 65 % (de1app's default), High between 90 and 95 %; Always on never switches the port off.") {
+                                CremaSegmentedButton(
+                                    options = listOf(SegOption("smart", "Smart"), SegOption("smartHigh", "High"), SegOption("alwaysOn", "Always on")),
+                                    value = ui.usbChargingMode,
+                                    onChange = vm::setUsbChargingMode,
+                                )
+                            }
                             // Fan threshold is REAL: written now + re-seeded on every
                             // connect (the DE1 forgets it across power cycles, #31).
                             // Commit goes through a confirm dialog — Decenza treats

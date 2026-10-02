@@ -18,6 +18,7 @@ pub mod firmware_info;
 #[cfg(test)]
 mod hds_sleep_tests;
 mod maintenance_run;
+mod sweep;
 
 pub use de1_uuids::{
     De1Uuids, de1_uuids, de1_uuids_json, de1_write_target_uuid, de1_write_target_uuid_by_name,
@@ -771,6 +772,10 @@ pub struct CremaCore {
     /// (decaid `46e8c224`) — `None` for every other scale. A *device* link
     /// like [`scale`](Self::scale), so it survives a DE1 [`reset`](Self::reset).
     hds: Option<HdsNegotiation>,
+    /// The USB smart-charging mode the last connect sweep asserted.
+    usb_charging: de1_domain::UsbChargingMode,
+    /// de1app's `battery_discharging` latch for the smart-charging band.
+    usb_discharging: bool,
 }
 
 /// In-flight state of one profile upload. Owned by
@@ -906,6 +911,8 @@ impl CremaCore {
             descale: de1_domain::DescaleTracker::default(),
             tank_temp_threshold_c: None,
             hds: None,
+            usb_charging: de1_domain::UsbChargingMode::Smart,
+            usb_discharging: false,
         }
     }
 

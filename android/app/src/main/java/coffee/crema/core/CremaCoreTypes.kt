@@ -631,6 +631,11 @@ data class CommonSettings (
 	/// both push it at connect and default to 5 mm; `None` means "unset",
 	/// read as `tank::DEFAULT_REFILL_POINT_MM`.
 	val waterRefillPointMm: Float? = null,
+	/// Smart charging for the DE1's USB port (de1app
+	/// `smart_battery_charging`): `"smart"` (55–65 %, the default),
+	/// `"smartHigh"` (90–95 %) or `"alwaysOn"`. Asserted on connect and
+	/// every minute after. `None` means "unset", read as `"smart"`.
+	val usbChargingMode: String? = null,
 	/// Enabled live-chart channel keys (Android's vocabulary:
 	/// `pressure`/`flow`/`weight`/`headTemp`/`mixTemp`/`weightFlow`/`resistance`/
 	/// `dispensedVolume`). Web maps its eight `show*` booleans to/from this list
@@ -676,6 +681,64 @@ data class CommonSettings (
 	val qcFlushTimeS: Float,
 	/// Quick-Controls group-flush temperature, °C.
 	val qcFlushTempC: Float
+)
+
+/// de1app's `smart_battery_charging` setting.
+@Serializable
+enum class UsbChargingMode(val string: String) {
+	/// `1` (de1app default): keep the tablet between 55 % and 65 %.
+	@SerialName("smart")
+	Smart("smart"),
+	/// `2`: keep it between 90 % and 95 % (down to 15 % while the machine
+	/// sleeps).
+	@SerialName("smartHigh")
+	SmartHigh("smartHigh"),
+	/// `0`: smart charging off — the DE1's USB port is always on.
+	@SerialName("alwaysOn")
+	AlwaysOn("alwaysOn"),
+}
+
+/// The shell's snapshot of the user's settings for one connect sweep. Each
+/// shell builds it from its own settings store; the core turns it into the
+/// writes (see the module table).
+@Serializable
+data class ConnectSweepSettings (
+	/// Fan-on threshold, °C (clamped 0..=60).
+	val fanThresholdC: Float,
+	/// Two-tap steam stop.
+	val steamTwoTap: Boolean,
+	/// The machine's own refill point, raw sensor mm.
+	val refillPointMm: Float,
+	/// Steam target, °C (0 = heater off).
+	val steamTempC: Float,
+	/// Steam timeout, s.
+	val steamTimeoutS: Float,
+	/// Hot-water temperature, °C.
+	val hotWaterTempC: Float,
+	/// Hot-water volume, ml.
+	val hotWaterVolumeMl: Float,
+	/// Steam flow, ml/s.
+	val steamFlowMlS: Float,
+	/// Group-flush timeout, s.
+	val flushTimeoutS: Float,
+	/// Group-flush temperature, °C.
+	val flushTempC: Float,
+	/// Steam eco mode.
+	val steamEco: Boolean,
+	/// The active profile's tank-temperature target, °C (0 = no preheat).
+	val tankTempC: Float,
+	/// Steam-heater phase-1 (warm-up) flow, ml/s; `None` = de1app default.
+	val phase1FlowMlS: Float? = null,
+	/// Steam-heater phase-2 (test) flow, ml/s; `None` = de1app default.
+	val phase2FlowMlS: Float? = null,
+	/// Hot-water heater idle temperature, °C; `None` = de1app default.
+	val hotWaterIdleTempC: Float? = null,
+	/// Espresso heater warm-up timeout, s; `None` = de1app default.
+	val espressoWarmupTimeoutS: Float? = null,
+	/// Smart-charging mode for the DE1's USB port.
+	val usbCharging: UsbChargingMode,
+	/// The tablet's battery level, %; `None` when unreadable.
+	val batteryPercent: UByte? = null
 )
 
 /// Generated type representing the anonymous struct variant `MachineStateChanged` of the `Event` Rust enum

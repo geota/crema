@@ -1968,6 +1968,26 @@ impl CremaBridge {
         self.emit(out)
     }
 
+    /// Run the DE1 connect sweep — every machine setting Crema owns a
+    /// preference for, re-asserted once the link is ready. `settings_json` is
+    /// a camelCase `ConnectSweepSettings`. Returns a `CoreOutput` JSON string.
+    pub fn connect_sweep(&self, settings_json: String, now_ms: u64) -> String {
+        let out = self.core().connect_sweep_json(&settings_json, now_ms);
+        self.emit(out)
+    }
+
+    /// The once-a-minute USB-charger check (de1app smart charging):
+    /// `mode` is the persisted `UsbChargingMode` spelling (`"smart"` /
+    /// `"smartHigh"` / `"alwaysOn"`); `battery_percent` is the tablet battery,
+    /// `None` when unreadable. Returns a `CoreOutput` JSON string.
+    pub fn usb_charger_tick(&self, mode: String, battery_percent: Option<u8>) -> String {
+        let out = self.core().usb_charger_tick(
+            de1_domain::UsbChargingMode::from_str_lenient(&mode),
+            battery_percent,
+        );
+        self.emit(out)
+    }
+
     /// Build a [`CoreOutput`] (JSON) whose command reads one DE1 memory-mapped
     /// register. The DE1 answers with a notification on the `De1MmrRead`
     /// characteristic, which decodes to an `MmrValue` event.

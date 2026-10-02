@@ -5,6 +5,9 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import android.content.Context
+import android.os.BatteryManager
+import coffee.crema.core.ConnectSweepSettings
 import coffee.crema.core.Command
 import coffee.crema.core.CoreOutput
 import coffee.crema.core.CremaBridge
@@ -541,6 +544,10 @@ data class MainUiState(
     /** Fan-on temperature threshold, °C (MMR `FanThreshold`, 0..=60). Re-seeded
      *  on every connect (geota/crema#31). */
     val fanThresholdC: Float = 55f,
+    /** Smart charging for the DE1's USB port (`"smart"` / `"smartHigh"` /
+     *  `"alwaysOn"`, de1app `smart_battery_charging`). Persisted; asserted on
+     *  connect and every minute after by the core's USB-charger check. */
+    val usbChargingMode: String = "smart",
     /** Persisted pre-shot flush / post-steam purge preferences (not yet consumed
      *  by the shot sequence — Settings rows carry the pill until then). */
     val preFlush: Boolean = false,
@@ -1973,7 +1980,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onScaleSessionClosed = { clearScaleSessionUi() },
         onDe1Ready = {
             readMachineInfo()
-            seedMachineSettings()
+            sweepRunner.onReady()
             // Re-assert the stop targets on every (re)connect. The core now
             // carries them across `reset()` itself, so this is belt-and-braces
             // — but it is the only thing standing between a GHC-started shot
@@ -1984,7 +1991,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // The DE1 no longer holds our profile — drop the upload-skip cache so
         // the next shot re-uploads (issue 11). Without this, a skip after a
         // reconnect would brew against a stale/absent profile.
-        onDe1Dropped = { lastUploadedFingerprint = null },
+        onDe1Dropped = {
+            lastUploadedFingerprint = null
+            sweepRunner.onDropped()
+        },
         pushRoster = { proxy.pushRoster() },
         refreshAdvertisement = { proxy.refreshAdvertisement() },
         heartbeatIntervalMs = { _ui.value.scaleCapabilities?.heartbeat_interval_ms?.toLong() },
@@ -2638,6 +2648,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             steamEco = p.steamEco,
             steamTwoTap = p.steamTwoTap,
             fanThresholdC = p.fanThresholdC,
+            usbChargingMode = p.usbChargingMode,
             preFlush = p.preFlush,
             steamPurge = p.steamPurge,
             chartChannels = p.chartChannels,
@@ -2671,17 +2682,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setAutoTare(p.autoTare) }
         runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
         runCatching { bridge.setVolumeStopWithScale(p.volumeStopWithScale) }
-        // Re-seed the restored machine-register prefs (no-ops when disconnected;
-        // the next connect's seedMachineSettings covers that case).
+        // Re-run the connect sweep with the restored prefs — machine registers
+        // plus the Quick-Controls steam / hot-water / flush params — so a
+        // restore takes effect without waiting for the next connect or QC edit
+        // (a no-op when disconnected or off-primary).
         seedMachineSettings()
-        // Push the restored Quick-Controls steam / hot-water / flush params to the
-        // machine too, so a restore takes effect without waiting for the next QC
-        // edit. Each routes through routeWrite → a no-op when disconnected or
-        // off-primary (the writes read the just-updated _ui state).
-        applySteamHotWater()
-        routeWrite("Set steam flow") { bridge.setSteamFlow(p.qcSteamFlowMlS) }
-        routeWrite("Set flush time") { bridge.setFlushTimeout((p.qcFlushTimeS * 1000f).toUInt()) }
-        routeWrite("Set flush temp") { bridge.setFlushTemp(p.qcFlushTempC) }
         persistPrefs()
     }
 
@@ -2921,7 +2926,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun connect() = connection.connect()
 
     /** Disconnect the DE1 — delegate of [ConnectionController.disconnect]. */
-    fun disconnect() = connection.disconnect()
+    fun disconnect() {
+        // Leave the DE1's USB port charging — de1app's `app_exit` ("always leave
+        // the app with the charger set to ON"), Decenza's disconnect path: smart
+        // charging may have switched it off, and nothing would turn it back on
+        // once Crema is gone.
+        if (_ui.value.bleState == De1BleManager.State.READY) {
+            routeWrite("USB charger on") { bridge.setUsbChargerOn(true) }
+        }
+        sweepRunner.onDropped()
+        connection.disconnect()
+    }
 
     /** A DE1 disconnect closed the session: stop the in-flight connect-time
      *  register sweep, drop the pending gated-start, and clear the live
@@ -3265,53 +3280,47 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  constant-fan report, geota/crema#31). Safe to call any time — the writes
      *  route through [routeWrite], a no-op when disconnected. */
     private fun seedMachineSettings() {
+        // One core-owned list (`CremaCore::connect_sweep`, web runs the same):
+        // USB charger (de1app smart charging), the user-presence feature flag
+        // (FeatureFlags bit 0 — without it the DE1 never runs its own
+        // inactivity sleep, see [keepAliveTick]), fan threshold, de1app's
+        // heater tweaks (phase-1 / phase-2 flow, hot-water idle temp, espresso
+        // warm-up timeout, two-tap steam stop), the machine's own refill point
+        // (geota/crema#47), the active profile's tank-temperature threshold,
+        // the Quick-Controls steam / hot-water packet, steam flow, flush
+        // time / temp, and steam eco last. de1app and Decenza re-send these on
+        // every connect; the DE1 forgets them across power cycles.
         val ui = _ui.value
-        val fan = ui.fanThresholdC.roundToInt().coerceIn(0, 60).toUByte()
-        routeWrite("Seed fan threshold") { bridge.setFanThreshold(fan) }
-        routeWrite("Seed steam two-tap stop") {
-            bridge.setSteamTwoTapStop(if (ui.steamTwoTap) 1u else 0u)
+        val tankTempC = ui.profiles.firstOrNull { it.id == ui.activeProfileId }?.tankTemperatureC ?: 0f
+        val settings = ui.connectSweepSettings(tankTempC, batteryPercent())
+        routeWrite("Connect sweep") {
+            bridge.connectSweep(json.encodeToString(ConnectSweepSettings.serializer(), settings), System.currentTimeMillis().toULong())
         }
-        // Enable the firmware's user-presence feature (FeatureFlags 0x803858
-        // bit 1) on every connect — the register that makes the DE1 act on the
-        // `UserPresent` pokes and sleep itself once they stop.
-        //
-        // Without it the DE1 never runs its own inactivity sleep, so nothing
-        // put the machine down when Crema was backgrounded or the user walked
-        // away: [keepAliveTick] correctly STOPS poking off-foreground and hands
-        // over to "the DE1's own timer" — a timer that was never armed. The
-        // heartbeats were a silent no-op too. The web shell has sent this since
-        // `6c8be97` (app.svelte.ts, de1State === 'ready'), which is why the
-        // symptom was Android-only; reaprime sends it from `onConnect`
-        // (`enableUserPresenceFeature()`, unified_de1.dart:526). de1app
-        // deliberately leaves it off (`#set_feature_flags 1`,
-        // bluetooth.tcl:2351) because it didn't want to own the poking — Crema
-        // does, gated on [MainUiState.suppressDe1Sleep].
-        routeWrite("Seed user-presence feature") { bridge.setFeatureFlags(1u) }
-        // The machine's OWN refill threshold (WaterLevels StartFillLevel).
-        // de1app and Decenza both write theirs at connect; Crema never did, so
-        // whatever value was last left in the firmware persisted — and a high
-        // one makes the DE1 blink for water and refuse to pour with a
-        // half-full tank while the app cheerfully reports ~50%
-        // (geota/crema#47). Raw sensor mm, no offset: the threshold shares the
-        // packet's units with the level it's compared against.
-        routeWrite("Seed refill point") { bridge.setRefillThreshold(ui.refillPointMm()) }
-        // Re-push the persisted Quick-Controls machine params too — steam
-        // temp/time + hot water (one cuuid_0B packet), steam flow, flush
-        // time/temp. The DE1 forgets these across power cycles just like the
-        // registers above; de1app and Decenza both re-send them at connect,
-        // and without this a power-cycled machine ran firmware defaults until
-        // the user next touched a QC dial.
-        applySteamHotWater()
-        routeWrite("Seed steam flow") { bridge.setSteamFlow(ui.qcSteamFlowMlS) }
-        routeWrite("Seed flush time") { bridge.setFlushTimeout((ui.qcFlushTimeS * 1000f).toUInt()) }
-        routeWrite("Seed flush temp") { bridge.setFlushTemp(ui.qcFlushTempC) }
-        // Eco last: it read-modify-writes the steam packet on top of the
-        // plain seed above. Only pushed when ON — eco-off IS the plain seed.
-        if (ui.steamEco) {
-            routeWrite("Seed steam eco") {
-                bridge.enableSteamEcoMode(true, System.currentTimeMillis().toULong())
-            }
+    }
+
+    /** de1app's once-a-minute USB-charger check (smart charging) — see [ConnectSweepRunner]. */
+    private fun usbChargerTick() {
+        routeWrite("USB charger check") {
+            bridge.usbChargerTick(_ui.value.usbChargingMode, batteryPercent()?.toUByte())
         }
+    }
+
+    /** The tablet battery, %, or null when the platform won't say. */
+    private fun batteryPercent(): Int? = runCatching {
+        val bm = getApplication<Application>().getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).takeIf { it in 0..100 }
+    }.getOrNull()
+
+    /** Runs [seedMachineSettings] on each ready and [usbChargerTick] every minute while ready. */
+    private val sweepRunner by lazy {
+        ConnectSweepRunner(viewModelScope, sweep = ::seedMachineSettings, tick = ::usbChargerTick)
+    }
+
+    /** Smart-charging mode for the DE1's USB port. Persisted; the next minute's check applies it. */
+    fun setUsbChargingMode(mode: String) {
+        _ui.update { it.copy(usbChargingMode = mode) }
+        persistPrefs()
+        usbChargerTick()
     }
 
     private fun readMachineInfo() {
@@ -3509,6 +3518,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         steamEco = _ui.value.steamEco,
         steamTwoTap = _ui.value.steamTwoTap,
         fanThresholdC = _ui.value.fanThresholdC,
+        usbChargingMode = _ui.value.usbChargingMode,
         preFlush = _ui.value.preFlush,
         steamPurge = _ui.value.steamPurge,
         chartChannels = _ui.value.chartChannels,
@@ -4108,6 +4118,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             steamEco = p.steamEco,
             steamTwoTap = p.steamTwoTap,
             fanThresholdC = p.fanThresholdC,
+            usbChargingMode = p.usbChargingMode,
             preFlush = p.preFlush,
             steamPurge = p.steamPurge,
             chartChannels = p.chartChannels,

@@ -65,6 +65,7 @@ import {
 	type UiSnapshot
 } from './ui-state.svelte';
 import { getActiveShotStore, type ActiveShotData } from './active-shot.svelte';
+import { ConnectSweepRunner, readBatteryPercent } from './connect-sweep';
 
 /**
  * Thrown by {@link CremaApp.startShot} when the user taps Coffee without an
@@ -294,6 +295,9 @@ export class CremaApp {
 	 */
 	private scaleHeartbeatId: ReturnType<typeof setInterval> | null = null;
 
+	/** The DE1 connect sweep + USB-charger minute check (`connect-sweep.ts`). */
+	private readonly sweep: ConnectSweepRunner;
+
 	/**
 	 * The Quick Sheet's `BrewParams` at shot start, stashed by the brew
 	 * dashboard via {@link setBrewParamsSnapshot} just before
@@ -328,6 +332,18 @@ export class CremaApp {
 		 */
 		private readonly runtime: AppRuntime | null = null
 	) {
+		this.sweep = new ConnectSweepRunner({
+			core,
+			settings: () => getSettingsStore().current,
+			tankTempC: async () => {
+				const profiles = getProfileStore();
+				await profiles.ensureLoaded();
+				const id = profiles.activeId;
+				return (id !== null ? profiles.get(id)?.tankTemperatureC : undefined) ?? 0;
+			},
+			battery: readBatteryPercent,
+			apply: (out) => this.applyCoreOutput(out)
+		});
 		this.de1 = new De1Manager(core, {
 			onCoreOutput: (output) => this.applyCoreOutput(output),
 			// A DE1 status line is both the live status and an event-log entry,
@@ -365,24 +381,6 @@ export class CremaApp {
 				}
 				if (de1State === 'ready') {
 					this.ensureLoadedMatches();
-					// Enable the firmware's user-presence feature
-					// unconditionally on every connect. With the bit set,
-					// the DE1 listens to the `UserPresent` register; whether
-					// Crema sends heartbeats is gated separately by the
-					// `suppressDe1Sleep` setting (the heartbeat loop in
-					// `createCremaApp`). Without sending the bit, the
-					// heartbeats Crema ships in commit `6c8be97` are a
-					// silent no-op on a fresh session.
-					// Matches reaprime's `enableUserPresenceFeature()` call
-					// in the connect path (unified_de1.dart:205). Legacy
-					// counterpart: `set_feature_flags` in
-					// `de1_comms.tcl:1202-1206`.
-					void this.core
-						.setFeatureFlags(1)
-						.then((out) => this.applyCoreOutput(out))
-						.catch(() => {
-							// Best-effort; the next connect retries.
-						});
 					// Fire one heartbeat at connect when the user has
 					// suppressDe1Sleep on, so the DE1's presence timer
 					// starts from a fresh "user just touched" state rather
@@ -391,48 +389,18 @@ export class CremaApp {
 					if (getSettingsStore().current.suppressDe1Sleep) {
 						void this.markUserPresent();
 					}
-					// Re-seed the machine settings Crema owns a preference
-					// for — the DE1 boots with firmware defaults and forgets
-					// these across power cycles; de1app and Decenza both
-					// re-send them on every connect (geota/crema#31, #34).
-					{
-						const s = getSettingsStore().current;
-						void this.applyFanThreshold(s.fanThresholdC).catch(() => {});
-						void this.applySteamTwoTapStop(s.steamTwoTapStop).catch(() => {});
-						// The machine's OWN refill threshold (the `WaterLevels`
-						// `StartFillLevel`): below it the DE1 blinks for water and
-						// refuses to pour, whatever the app shows. Nobody wrote it,
-						// so a stale value left in the firmware made the machine
-						// demand a refill on a half-full tank (geota/crema#47).
-						// de1app sends its `water_refill_point` from
-						// `later_new_de1_connection_setup` (bluetooth.tcl:2344);
-						// Decenza pushes `water/refillPoint`. Raw sensor mm — the
-						// threshold shares the packet's units with the level.
-						void this.applyRefillPoint(
-							s.waterRefillPointMm ?? defaultRefillPointMm()
-						).catch(() => {});
-						// The persisted Quick-Controls machine params: steam
-						// temp/time + hot water (one cuuid_0B packet), steam
-						// flow, flush time/temp. Without this a power-cycled
-						// machine ran firmware defaults until the user next
-						// touched a QC dial.
-						void this.setSteamHotwater({
-							steamTempC: s.qcSteamTempC,
-							steamTimeoutS: s.qcSteamTimeS,
-							hotWaterTempC: s.qcHotWaterTempC,
-							hotWaterVolumeMl: s.qcHotWaterVolumeMl
-						}).catch(() => {});
-						void this.setSteamFlow(s.qcSteamFlowMlS).catch(() => {});
-						void this.setFlushTimeoutS(s.qcFlushTimeS).catch(() => {});
-						void this.setFlushTemp(s.qcFlushTempC).catch(() => {});
-						// Eco last: it read-modify-writes the steam packet on
-						// top of the plain seed. Only pushed when ON — eco-off
-						// IS the plain seed above.
-						if (s.steamEcoMode) {
-							void this.applySteamEcoMode(true).catch(() => {});
-						}
-					}
 				}
+				// The connect sweep: every machine setting Crema owns a
+				// preference for, re-asserted because the DE1 forgets them
+				// across a power cycle. The list is core-owned
+				// (`CremaCore::connect_sweep` — de1app
+				// `later_new_de1_connection_setup` + `set_heater_tweaks`,
+				// Decenza `sendInitialSettings`): USB charger, the
+				// user-presence feature flag, fan threshold, heater tweaks,
+				// refill point, tank threshold, steam / hot water, steam
+				// flow, flush, eco. Also runs de1app's once-a-minute
+				// USB-charger check while ready.
+				this.sweep.onDe1State(de1State);
 			},
 			// The connection-diagnostics snapshot — fold it straight in.
 			onDiagnostics: (de1Diagnostics) => this.state.patch({ de1Diagnostics })
@@ -1045,6 +1013,18 @@ export class CremaApp {
 
 	/** Disconnect the DE1 and clear its readout fields. */
 	async disconnectDe1(): Promise<void> {
+		// Leave the DE1's USB port charging — de1app's `app_exit` ("always
+		// leave the app with the charger set to ON"), Decenza's disconnect
+		// path: smart charging may have switched it off, and nothing would
+		// switch it back on once Crema is gone.
+		if (this.state.current.de1State === 'ready') {
+			try {
+				this.applyCoreOutput(await this.core.setUsbChargerOn(true));
+			} catch {
+				// Best-effort: the DE1 re-enables its port within ~10 minutes.
+			}
+		}
+		this.sweep.stop();
 		await this.de1.disconnect();
 		// Drop the telemetry wall-clock anchor — the next connect must not
 		// integrate the (arbitrarily long) gap across the disconnect.

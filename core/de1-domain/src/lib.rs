@@ -59,6 +59,7 @@ pub mod builtin;
 /// Lenient number-or-string deserialization shared by the JSON importers.
 mod coerce;
 pub mod cold_maintenance;
+pub mod connect_sweep;
 pub mod crema_jsonl;
 pub mod crema_profile;
 pub mod decent_shot_record;
@@ -147,6 +148,9 @@ pub use cold_maintenance::{
     COLD_MAINTENANCE_MIN_FIRMWARE_BUILD, DESCALE_SCHEDULE, DESCALE_TOTAL_SECONDS, DescaleProgress,
     DescaleTracker, MaintenancePhase, cold_maintenance_profile, firmware_drops_cold_requests,
     is_machine_heating, is_maintenance_state, needs_cold_workaround,
+};
+pub use connect_sweep::{
+    ConnectSweepSettings, USB_CHARGER_CHECK_INTERVAL_MS, UsbChargingMode, usb_charger_decision,
 };
 pub use crema_jsonl::{
     BackupHeader, BackupImportPlan, CremaExportHeader, export_backup_jsonl_from_json, export_jsonl,

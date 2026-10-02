@@ -23,6 +23,17 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   (`replace=1`), once, a moment after you stop editing. Same trigger as
   Decent's own shot-upload plugin. Web and Android.
 
+- **Every machine setting Crema owns is re-applied on connect, from one list
+  both apps share** — besides the fan, refill point, two-tap steam stop,
+  steam / hot water and flush settings, the connect now also sets the steam
+  heater's phase flow rates, the hot-water heater's idle temperature and the
+  espresso warm-up timeout (de1app's heater tweaks and defaults), and the
+  active profile's tank-temperature target, so they survive a DE1 power
+  cycle. New **Tablet charging** setting (Settings → Machine): for a tablet
+  powered from the DE1's USB port, Crema switches the port on and off to keep
+  the battery between 55 and 65 % (de1app's smart charging and default), or
+  90–95 %, or always on; it re-checks every minute and leaves charging on
+  when you disconnect. Web, tablet and phone.
 - **A Half Decent Scale on firmware 3 or newer stays connected while the DE1
   sleeps** — when the machine sleeps, Crema now puts such a scale into its
   SoftSleep mode instead of switching its display off or powering it down,

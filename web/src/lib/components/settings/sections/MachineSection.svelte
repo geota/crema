@@ -42,6 +42,8 @@
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
+	import StSegment from '../StSegment.svelte';
+	import { parseUsbChargingMode } from '$lib/settings/store.svelte';
 	import StToggle from '../StToggle.svelte';
 	import StSelect from '../StSelect.svelte';
 	import StStepper from '../StStepper.svelte';
@@ -481,6 +483,29 @@
 				format={(v) => (v === 0 ? 'Always on' : `${v} °C`)}
 				label="Fan on above"
 				onCommit={commitFanThreshold}
+			/>
+		{/snippet}
+	</StRow>
+	<!--
+		Tablet charging from the DE1's USB port — de1app's smart_battery_charging.
+		The core decides from the tablet battery on connect and every minute
+		after (connect-sweep.ts); explicit disconnect always leaves it on.
+	-->
+	<StRow
+		title="Tablet charging"
+		sub="For a tablet powered from the DE1's USB port. Smart keeps the battery
+		between 55 and 65 % (de1app's default), High between 90 and 95 %; Always on
+		never switches the port off. Applied within a minute."
+	>
+		{#snippet control()}
+			<StSegment
+				value={prefs.usbChargingMode}
+				options={[
+					{ value: 'smart', label: 'Smart' },
+					{ value: 'smartHigh', label: 'High' },
+					{ value: 'alwaysOn', label: 'Always on' }
+				]}
+				onChange={(v) => settings.set('usbChargingMode', parseUsbChargingMode(v))}
 			/>
 		{/snippet}
 	</StRow>
