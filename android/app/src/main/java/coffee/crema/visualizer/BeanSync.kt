@@ -8,6 +8,7 @@ import coffee.crema.core.Roaster
 import coffee.crema.core.RoasterLinkPatch
 import coffee.crema.ui.UploadTargetId
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -18,6 +19,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
+import kotlinx.coroutines.async
+import kotlinx.coroutines.sync.withPermit
 import java.util.UUID
 
 /*
@@ -32,7 +35,8 @@ import java.util.UUID
  *   2. push local roasters per core `plan_roaster_push` (Premium-gated);
  *   2b. PATCH the catalogue link onto bound roasters whose remote row lacks it
  *      (core `plan_roaster_link_patches`);
- *   3. pull every remote bag → `bean_from_wire` → core `reconcile_beans` → apply;
+ *   3. pull every remote bag (the full detail for bags new here — list rows
+ *      are thin) → core `reconcile_beans` merges by key presence → apply;
  *   4. push bags per core `plan_bean_push` (unbound → POST, edited since the
  *      last sync → PATCH);
  *   5. stamp the sync time and the Premium flag.
@@ -59,7 +63,8 @@ interface BeanSyncCore {
     fun reconcileRoasters(payload: String): String
     fun reconcileBeans(payload: String): String
     fun roasterFromWire(wireJson: String, fallbackId: String, nowMs: Long): String
-    fun beanFromWire(wireJson: String, localRoasterId: String?, fallbackId: String, nowMs: Long): String
+    fun remoteIdsNeedingDetail(payload: String): String
+    fun remoteRoasterUnlinked(remoteJson: String): Boolean
     fun coffeeBagWriteRequest(beanJson: String, roasterRemoteId: String?): String
     fun roasterWriteRequest(roasterJson: String): String
     fun resolveRoasterCatalogueLink(payload: String): String?
@@ -75,8 +80,8 @@ interface BeanSyncCore {
         override fun reconcileBeans(payload: String) = coffee.crema.core.reconcileBeans(payload)
         override fun roasterFromWire(wireJson: String, fallbackId: String, nowMs: Long) =
             coffee.crema.core.roasterFromWire(wireJson, fallbackId, nowMs)
-        override fun beanFromWire(wireJson: String, localRoasterId: String?, fallbackId: String, nowMs: Long) =
-            coffee.crema.core.beanFromWire(wireJson, localRoasterId, fallbackId, nowMs)
+        override fun remoteIdsNeedingDetail(payload: String) = coffee.crema.core.remoteIdsNeedingDetail(payload)
+        override fun remoteRoasterUnlinked(remoteJson: String) = coffee.crema.core.remoteRoasterUnlinked(remoteJson)
         override fun coffeeBagWriteRequest(beanJson: String, roasterRemoteId: String?) =
             coffee.crema.core.coffeeBagWriteRequest(beanJson, roasterRemoteId)
         override fun roasterWriteRequest(roasterJson: String) = coffee.crema.core.roasterWriteRequest(roasterJson)
@@ -137,6 +142,8 @@ class BeanSyncRunner(
         /** Pull safety cap — the web's 50 pages of `items=100` (the spec max). */
         const val MAX_PAGES = 50
         const val PAGE_SIZE = 100
+        /** Concurrent `GET /…/{id}` detail fetches (list rows are thin). */
+        const val DETAIL_CONCURRENCY = 4
         const val PREMIUM_BANNER =
             "Premium required — beans + roasters disabled from push. Upgrade at visualizer.coffee/premium."
     }
@@ -248,7 +255,11 @@ class BeanSyncRunner(
 
             // 1) Pull remote roasters → reconcile (core) → apply.
             if (scope.pullRoasters) {
-                val remoteRoasters = pullPaged("/roasters")
+                // The list is thin (id + name): the full detail for roasters new to
+                // this device; bound ones merge the summary only.
+                val remoteRoasters = withDetails("/roasters", pullPaged("/roasters"), roasterList, roasters) { id, why ->
+                    entry("pull", "roaster", id, "Roaster details", why)
+                }
                 val roasterActions = json.parseToJsonElement(
                     core.reconcileRoasters(
                         buildJsonObject {
@@ -262,7 +273,8 @@ class BeanSyncRunner(
                     val wire = action["remote"] as? JsonObject ?: continue
                     val remoteId = wire.str("id") ?: continue
                     val name = wire.str("name").orEmpty()
-                    if (wire.str("canonical_roaster_id").isNullOrEmpty()) unlinked += remoteId
+                    // Only a row that CARRIES an empty link is known to be unlinked.
+                    if (core.remoteRoasterUnlinked(wire.toString())) unlinked += remoteId
                     when (val kind = action.str("kind")) {
                         "update", "bind" -> {
                             val localId = action.str("localId") ?: continue
@@ -374,21 +386,34 @@ class BeanSyncRunner(
 
             // 3) Pull remote bags → decode (core) → reconcile against the last-sync baseline (core) → apply.
             if (scope.pullBeans) {
-                val remoteBags = pullPaged("/coffee_bags")
-                val decoded = remoteBags.map { wire ->
-                    val localRoasterId = wire.str("roaster_id")?.let { remoteToLocal[it] }
-                    json.decodeFromString(
-                        Bean.serializer(),
-                        core.beanFromWire(wire.toString(), localRoasterId, mintBeanId(), now()),
-                    )
+                // The list is thin (id, name, roaster, catalogue link): the full detail
+                // for bags new to this device; bound bags merge the summary only.
+                val remoteBags = withDetails("/coffee_bags", pullPaged("/coffee_bags"), beanList, beans) { id, why ->
+                    entry("pull", "bean", id, "Bag details", why)
                 }
+                // RAW rows go to the core (key presence matters: an absent key never
+                // clears a local value); it decodes new bags and merges matched ones.
                 val beanActions = json.parseToJsonElement(
                     core.reconcileBeans(
                         buildJsonObject {
                             put("local", json.encodeToJsonElement(beanList, beans))
-                            put("remote", json.encodeToJsonElement(beanList, decoded))
+                            put(
+                                "remote",
+                                buildJsonArray {
+                                    remoteBags.forEach { wire ->
+                                        add(
+                                            buildJsonObject {
+                                                put("wire", wire)
+                                                wire.str("roaster_id")?.let { remoteToLocal[it] }?.let { put("localRoasterId", it) }
+                                                put("fallbackId", mintBeanId())
+                                            },
+                                        )
+                                    }
+                                },
+                            )
                             put("roasterNames", buildJsonObject { roasters.forEach { put(it.id, it.name) } })
                             lastSync?.let { put("lastSyncAt", it) }
+                            put("nowMs", now())
                         }.toString(),
                     ),
                 ) as JsonArray
@@ -457,6 +482,58 @@ class BeanSyncRunner(
     }
 
     /** `GET base?items=100&page=N` until the last page / an empty page / the cap. */
+    /**
+     * Swap each list row with no locally-bound counterpart (core
+     * `remote_ids_needing_detail`) for its `GET base/{id}` detail, at most
+     * [DETAIL_CONCURRENCY] at a time on the client's retry policy. A failed
+     * fetch keeps the summary row (the merge applies only what it carries),
+     * reports through [onFailure], and never fails the run.
+     */
+    private suspend fun <T> withDetails(
+        base: String,
+        rows: List<JsonObject>,
+        localSerializer: kotlinx.serialization.KSerializer<List<T>>,
+        local: List<T>,
+        onFailure: (id: String, why: String) -> Unit,
+    ): List<JsonObject> {
+        val wanted = json.decodeFromString(
+            ListSerializer(String.serializer()),
+            core.remoteIdsNeedingDetail(
+                buildJsonObject {
+                    put("local", json.encodeToJsonElement(localSerializer, local))
+                    put("remote", JsonArray(rows))
+                }.toString(),
+            ),
+        ).toSet()
+        if (wanted.isEmpty()) return rows
+        val gate = kotlinx.coroutines.sync.Semaphore(DETAIL_CONCURRENCY)
+        val failures = java.util.Collections.synchronizedList(mutableListOf<Pair<String, String>>())
+        val out = kotlinx.coroutines.coroutineScope {
+            rows.map { row ->
+                val id = row.str("id")
+                if (id == null || id !in wanted) {
+                    kotlinx.coroutines.CompletableDeferred(row)
+                } else {
+                    async {
+                        gate.withPermit {
+                            try {
+                                val detail = call("GET", "$base/$id", null) as? JsonObject
+                                if (detail?.str("id") == id) detail else row.also { failures += id to "unexpected detail body" }
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                failures += id to (e.message ?: e.javaClass.simpleName)
+                                row
+                            }
+                        }
+                    }
+                }
+            }.map { it.await() }
+        }
+        failures.forEach { (id, why) -> onFailure(id, why) }
+        return out
+    }
+
     private suspend fun pullPaged(base: String): List<JsonObject> {
         val out = mutableListOf<JsonObject>()
         var page = 1

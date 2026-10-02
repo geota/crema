@@ -73,6 +73,10 @@ class BeanSyncTest {
     // ── The fake Visualizer ──────────────────────────────────────────────────
     private var remoteRoasters = listOf<JsonObject>()
     private var remoteBags = listOf<JsonObject>()
+    /** `GET /…/{id}` bodies; default = the list row itself. */
+    private var bagDetails: List<JsonObject>? = null
+    private var failDetails = false
+    private val detailGets = mutableListOf<String>()
     private var writeStatus = HttpStatusCode.Created
     private var unauthorizedOnce = false
     private var nextId = 1
@@ -90,6 +94,17 @@ class BeanSyncTest {
         val (status, body) = when {
             method == "GET" && path == "/roasters" -> HttpStatusCode.OK to page(remoteRoasters)
             method == "GET" && path == "/coffee_bags" -> HttpStatusCode.OK to page(remoteBags)
+            method == "GET" && Regex("^/(roasters|coffee_bags)/[^/]+$").matches(path) -> {
+                detailGets += path
+                val id = path.substringAfterLast('/')
+                val rows = if (path.startsWith("/roasters")) remoteRoasters else (bagDetails ?: remoteBags)
+                val row = rows.firstOrNull { (it["id"] as? JsonPrimitive)?.contentOrNull == id }
+                when {
+                    failDetails -> HttpStatusCode.InternalServerError to "{}"
+                    row != null -> HttpStatusCode.OK to row.toString()
+                    else -> HttpStatusCode.NotFound to "{}"
+                }
+            }
             method == "POST" -> writeStatus to (if (writeStatus.value < 300) """{"id":"vz-${nextId++}"}""" else """{"error":"premium"}""")
             method == "PATCH" -> writeStatus to "{}"
             method == "DELETE" -> HttpStatusCode.NoContent to ""
@@ -429,13 +444,84 @@ class BeanSyncTest {
         val r0 = roaster("Onyx", vid = "vr-1")
         val picked = bean("Hambela", r0.id, vid = "vb-1").copy(canonicalRoasterId = "cat-onyx")
         library = BeanLibrary(beans = listOf(picked), roasters = listOf(r0))
-        remoteRoasters = listOf(buildJsonObject { put("id", "vr-1"); put("name", "Onyx") })
+        // A row that CARRIES an empty link (a thin row without the key says nothing).
+        remoteRoasters = listOf(
+            buildJsonObject { put("id", "vr-1"); put("name", "Onyx"); put("canonical_roaster_id", kotlinx.serialization.json.JsonNull) },
+        )
         remoteBags = listOf(buildJsonObject { put("id", "vb-1"); put("name", "Hambela"); put("roaster_id", "vr-1") })
         val r = run(premium = true, lastSync = Long.MAX_VALUE)
         assertTrue(r.ok)
         val patch = writes().first { it.method == "PATCH" && it.path == "/roasters/vr-1" }
         assertTrue(patch.body.contains("cat-onyx"))
         assertEquals("cat-onyx", library.roasters.single().catalogueRoasterId)
+    }
+
+    // ── A pull never blanks local data (thin list rows) ───────────────────────
+
+    @Test
+    fun `a bound bag keeps grams left, bag size and notes when pulled from a summary row`() {
+        val r0 = roaster("Onyx", vid = "vr-1").copy(updatedAt = 0)
+        val local = bean("Geometry", r0.id, vid = "vb-1", updatedAt = 0)
+            .copy(bagSize = 250f, remaining = 180f, notes = "juicy", roastedOn = "2026-09-20")
+        library = BeanLibrary(beans = listOf(local), roasters = listOf(r0))
+        remoteRoasters = listOf(buildJsonObject { put("id", "vr-1"); put("name", "Onyx") })
+        remoteBags = listOf(buildJsonObject { put("id", "vb-1"); put("name", "Geometry Natural"); put("roaster_id", "vr-1") })
+        val r = run(premium = true, lastSync = 1_000)
+        assertTrue(r.ok)
+        val after = library.beans.single()
+        assertEquals("Geometry Natural", after.name)
+        assertEquals(250f, after.bagSize)
+        assertEquals(180f, after.remaining)
+        assertEquals("juicy", after.notes)
+        assertEquals("2026-09-20", after.roastedOn)
+        assertTrue("bound rows merge the summary only: $detailGets", detailGets.isEmpty())
+        assertTrue(writes().isEmpty())
+    }
+
+    @Test
+    fun `a bag new to this device triggers exactly one detail GET`() {
+        remoteBags = listOf(buildJsonObject { put("id", "vb-9"); put("name", "Gesha") })
+        bagDetails = listOf(
+            buildJsonObject {
+                put("id", "vb-9"); put("name", "Gesha"); put("roast_date", "2026-09-01")
+                put("country", "Panama"); put("notes", "Floral")
+            },
+        )
+        run(premium = true)
+        assertEquals(listOf("/coffee_bags/vb-9"), detailGets)
+        val added = library.beans.single()
+        assertEquals("2026-09-01", added.roastedOn)
+        assertEquals("Panama", added.origin?.country)
+        assertEquals("Floral", added.notes)
+        // Linked now: the next sync fetches no detail.
+        clock += 60_000
+        rerun()
+        assertEquals(listOf("/coffee_bags/vb-9"), detailGets)
+    }
+
+    @Test
+    fun `a failed detail fetch falls back to the summary and does not abort the run`() {
+        failDetails = true
+        remoteRoasters = listOf(buildJsonObject { put("id", "vr-9"); put("name", "Remote roaster") })
+        remoteBags = listOf(buildJsonObject { put("id", "vb-9"); put("name", "Gesha") })
+        val r = run(premium = true)
+        assertTrue("run completes: ${r.error}", r.ok)
+        assertEquals("Gesha", library.beans.single().name)
+        assertEquals("Remote roaster", library.roasters.single().name)
+        assertTrue(r.log.any { it.name == "Bag details" && it.error != null })
+        assertTrue(r.log.any { it.name == "Roaster details" && it.error != null })
+    }
+
+    @Test
+    fun `a bound roaster keeps its website from a thin list row and is not link-PATCHed`() {
+        val r0 = roaster("Onyx", vid = "vr-1").copy(website = "https://onyx.coffee", catalogueRoasterId = "cr-1", updatedAt = 0)
+        library = BeanLibrary(roasters = listOf(r0))
+        remoteRoasters = listOf(buildJsonObject { put("id", "vr-1"); put("name", "Onyx Coffee Lab") })
+        run(premium = true, lastSync = 1_000)
+        val after = library.roasters.single()
+        assertEquals("Onyx Coffee Lab", after.name)
+        assertEquals("https://onyx.coffee", after.website)
+        assertTrue(writes().isEmpty())
     }
 
     // ── Pure shell helpers ───────────────────────────────────────────────────
@@ -536,19 +622,34 @@ private class FakeCore(private val json: Json) : BeanSyncCore {
     override fun reconcileBeans(payload: String): String {
         val p = json.parseToJsonElement(payload).jsonObject
         val local = json.decodeFromJsonElement(beans, p["local"]!!)
-        val remote = json.decodeFromJsonElement(beans, p["remote"]!!)
         val lastSync = (p["lastSyncAt"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+        val now = (p["nowMs"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0
         return buildJsonArray {
-            for (b in remote) {
-                val m = local.firstOrNull { (b.visualizerId != null && it.visualizerId == b.visualizerId) || it.id == b.id }
+            for (item in (p["remote"] as JsonArray).map { it.jsonObject }) {
+                val w = item["wire"]!!.jsonObject
+                val roasterId = item.s("localRoasterId")
+                val vid = w.s("id")
+                val m = local.firstOrNull { vid != null && it.visualizerId == vid }
                 if (m == null) {
+                    val b = newBean(w.s("name").orEmpty(), roasterId, null, w.s("roast_date"), now).copy(
+                        id = item.s("fallbackId")!!,
+                        visualizerId = vid,
+                        canonicalCoffeeBagId = w.s("canonical_coffee_bag_id"),
+                        notes = w.s("notes").orEmpty(),
+                        origin = coffee.crema.core.BeanOrigin(country = w.s("country")),
+                    )
                     add(buildJsonObject { put("kind", "add"); put("remote", json.encodeToJsonElement(Bean.serializer(), b)) })
                     continue
                 }
-                // Core rule: a bound local edited since the baseline is kept; else the
-                // remote applies over it, keeping the local id + stamps; no-op if equal.
-                if (m.visualizerId != null && m.visualizerId == b.visualizerId && lastSync != null && m.updatedAt > lastSync) continue
-                val merged = b.copy(id = m.id, createdAt = m.createdAt, updatedAt = m.updatedAt, tags = m.tags, imageRef = m.imageRef)
+                // Core rule: a bound local edited since the baseline is kept; else only
+                // the keys the row carries apply (absent keys never clear anything).
+                if (lastSync != null && m.updatedAt > lastSync) continue
+                var merged = m
+                if ("name" in w) merged = merged.copy(name = w.s("name").orEmpty())
+                if ("canonical_coffee_bag_id" in w) merged = merged.copy(canonicalCoffeeBagId = w.s("canonical_coffee_bag_id"))
+                if ("roaster_id" in w && roasterId != null) merged = merged.copy(roasterId = roasterId)
+                if ("notes" in w) merged = merged.copy(notes = w.s("notes").orEmpty())
+                if ("roast_date" in w) merged = merged.copy(roastedOn = w.s("roast_date"))
                 if (merged == m) continue
                 add(
                     buildJsonObject {
@@ -560,6 +661,18 @@ private class FakeCore(private val json: Json) : BeanSyncCore {
         }.toString()
     }
 
+    override fun remoteIdsNeedingDetail(payload: String): String {
+        val p = json.parseToJsonElement(payload).jsonObject
+        val bound = (p["local"] as JsonArray).mapNotNull { (it.jsonObject["visualizerId"] as? JsonPrimitive)?.contentOrNull }.toSet()
+        val ids = (p["remote"] as JsonArray).mapNotNull { it.jsonObject.s("id") }.filter { it !in bound }
+        return buildJsonArray { ids.forEach { add(JsonPrimitive(it)) } }.toString()
+    }
+
+    override fun remoteRoasterUnlinked(remoteJson: String): Boolean {
+        val o = json.parseToJsonElement(remoteJson).jsonObject
+        return "canonical_roaster_id" in o && o.s("canonical_roaster_id").isNullOrEmpty()
+    }
+
     override fun roasterFromWire(wireJson: String, fallbackId: String, nowMs: Long): String {
         val w = json.parseToJsonElement(wireJson).jsonObject
         val r = newRoaster(w.s("name").orEmpty(), nowMs).copy(
@@ -569,16 +682,6 @@ private class FakeCore(private val json: Json) : BeanSyncCore {
             catalogueRoasterId = w.s("canonical_roaster_id"),
         )
         return json.encodeToString(Roaster.serializer(), r)
-    }
-
-    override fun beanFromWire(wireJson: String, localRoasterId: String?, fallbackId: String, nowMs: Long): String {
-        val w = json.parseToJsonElement(wireJson).jsonObject
-        val b = newBean(w.s("name").orEmpty(), localRoasterId, null, null, nowMs).copy(
-            id = fallbackId,
-            visualizerId = w.s("id"),
-            canonicalCoffeeBagId = w.s("canonical_coffee_bag_id"),
-        )
-        return json.encodeToString(Bean.serializer(), b)
     }
 
     override fun coffeeBagWriteRequest(beanJson: String, roasterRemoteId: String?): String {
@@ -624,7 +727,11 @@ private class FakeCore(private val json: Json) : BeanSyncCore {
         val bound = l.copy(visualizerId = w.s("id") ?: l.visualizerId)
         val editedHere = lastSyncAt != null && l.updatedAt > lastSyncAt
         val out = if (refresh && !editedHere) {
-            bound.copy(name = w.s("name").orEmpty(), website = w.s("website"), catalogueRoasterId = w.s("canonical_roaster_id") ?: l.catalogueRoasterId)
+            bound.copy(
+                name = w.s("name") ?: l.name,
+                website = if ("website" in w) w.s("website") else l.website,
+                catalogueRoasterId = w.s("canonical_roaster_id")?.takeIf { it.isNotEmpty() } ?: l.catalogueRoasterId,
+            )
         } else if (!w.s("canonical_roaster_id").isNullOrEmpty() && l.catalogueRoasterId.isNullOrEmpty()) {
             bound.copy(catalogueRoasterId = w.s("canonical_roaster_id"))
         } else {
