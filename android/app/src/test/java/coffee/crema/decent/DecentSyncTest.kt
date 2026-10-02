@@ -10,6 +10,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
@@ -97,6 +98,48 @@ class DecentSyncTest {
     }
 
     @Test
+    fun `a burst of edits to an uploaded shot queues exactly one replace`() = runTest {
+        // shot-upload 435acabb: a shotUpdated re-POSTs with replace=1, rapid
+        // edits coalescing into one upload of the latest state.
+        val h = harness(listOf(shot("s1").copy(decentId = "d-1", notes = "first")))
+        assertTrue(h.sync.scheduleReplaceAfterEdit("s1"))
+        advanceTimeBy(500)
+        h.history["s1"] = h.history.getValue("s1").copy(notes = "latest")
+        h.sync.scheduleReplaceAfterEdit("s1")
+        h.sync.scheduleReplaceAfterEdit("s1")
+        runCurrent()
+        assertEquals(0, h.api.posts.size) // still debouncing
+        advanceUntilIdle()
+        assertEquals(listOf(true), h.api.posts.map { it.second })
+        assertEquals("""{"shot":"s1","sn":"6262"}""", h.api.posts.single().first)
+    }
+
+    @Test
+    fun `an edit replaces nothing for a never-uploaded shot or with auto-upload off`() = runTest {
+        val h = harness(listOf(shot("s1"), shot("s2").copy(decentId = "d-2")), initial = linked.copy(autoUpload = false))
+        assertFalse(h.sync.scheduleReplaceAfterEdit("s2"))
+        val on = harness(listOf(shot("s1")))
+        assertFalse(on.sync.scheduleReplaceAfterEdit("s1"))
+        advanceUntilIdle()
+        assertEquals(0, h.api.posts.size + on.api.posts.size)
+    }
+
+    @Test
+    fun `an edit during a running upload replaces after it`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val h = harness(listOf(shot("s1").copy(decentId = "d-1")))
+        h.api.answers += { gate.await(); DecentUploadResult("d-1") }
+        launch { h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = true, fullSamples = null) }
+        runCurrent()
+        assertTrue(h.sync.scheduleReplaceAfterEdit("s1"))
+        advanceTimeBy(DecentSync.EDIT_REPLACE_DEBOUNCE_MS + 1_000)
+        assertEquals(1, h.api.posts.size) // waits for the running one
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(listOf(true, true), h.api.posts.map { it.second })
+    }
+
+    @Test
     fun `the caller's replace flag goes through unchanged`() = runTest {
         val h = harness(listOf(shot("s1")))
         h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = true, fullSamples = null)
@@ -164,9 +207,9 @@ class DecentSyncTest {
     fun `an older shot uploaded with the live DE1 gets that machine stamped`() = runTest {
         val old = StoredShot(id = "old", completedAtMs = 1, durationMs = 30_000)
         val h = harness(listOf(old))
-        h.live = ShotMachine("6262", "v1.43", "DE1PRO")
+        h.live = ShotMachine("6262", "1352", "DE1PRO")
         h.sync.uploadNow(old, manual = true, replace = false, fullSamples = null)
-        assertEquals(Triple("old", "id-1", ShotMachine("6262", "v1.43", "DE1PRO")), h.stamped.single())
+        assertEquals(Triple("old", "id-1", ShotMachine("6262", "1352", "DE1PRO")), h.stamped.single())
     }
 
     @Test

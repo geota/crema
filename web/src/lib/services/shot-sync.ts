@@ -38,7 +38,12 @@ import { NotAuthenticatedError, ResponseDecodeError, VisualizerNotFoundError } f
 import {
 	API_BASE,
 	describeVisualizerError,
+	isRateLimited,
 	isRecoverable,
+	quotaLimit,
+	quotaNotice,
+	RATE_LIMIT_NOTICE,
+	retryDelayMs,
 	visualizerCall,
 	type VisualizerCallError,
 	type VisualizerCallOptions
@@ -49,6 +54,7 @@ import {
 	decodeResponse
 } from '../effect/schema/visualizer.ts';
 import { getBeanStore } from '$lib/bean/store.svelte';
+import { readSyncSettings } from '$lib/bean/visualizer-sync';
 import { effectiveGrindSetting } from '$lib/history';
 import { exportStoredShotAsV2Json } from '$lib/history/v2-export';
 import type { ShotPatchInputs, TimedSample } from '$lib/core';
@@ -263,14 +269,56 @@ function isAuthError(e: VisualizerCallError): boolean {
 	);
 }
 
-/** Auth / premium failures abort the unsynced-shots loop (no point retrying). */
+/**
+ * Auth / premium failures, the free-plan daily quota and the rate limit abort
+ * the unsynced-shots loop: every further POST would hit the same wall (and a
+ * backlog catch-up would also trip the 50 requests/min limit).
+ */
 function shouldAbortLoop(e: VisualizerCallError | ResponseDecodeError): boolean {
 	return (
 		e._tag === 'NotAuthenticatedError' ||
 		e._tag === 'TokenRefreshFailedError' ||
 		(e._tag === 'HttpStatusError' && e.status === 401) ||
-		e._tag === 'VisualizerPremiumGatedError'
+		e._tag === 'VisualizerPremiumGatedError' ||
+		quotaLimit(e) != null ||
+		isRateLimited(e)
 	);
+}
+
+/** Why an unsynced-shots pass stopped before the end of the backlog. */
+export type UnsyncedStop =
+	| { reason: 'quota'; limit: number }
+	| { reason: 'rate-limited' }
+	| { reason: 'auth' }
+	| { reason: 'premium' };
+
+/** The outcome of `ShotSync.uploadUnsyncedShots`. */
+export interface UnsyncedUploadResult {
+	uploaded: number;
+	/** Set when the pass stopped early; the rest stay unsynced for the next pass. */
+	stopped: UnsyncedStop | null;
+}
+
+function stopFor(e: VisualizerCallError | ResponseDecodeError): UnsyncedStop {
+	const limit = quotaLimit(e);
+	if (limit != null) return { reason: 'quota', limit };
+	if (isRateLimited(e)) return { reason: 'rate-limited' };
+	if (e._tag === 'VisualizerPremiumGatedError') return { reason: 'premium' };
+	return { reason: 'auth' };
+}
+
+/**
+ * The user notice for an unsynced-shots pass that stopped on the daily quota or
+ * the rate limit (null otherwise — auth / premium already surface elsewhere).
+ */
+export function describeUnsyncedStop(
+	result: UnsyncedUploadResult | null | undefined
+): { kind: 'info' | 'error'; message: string } | null {
+	const stop = result?.stopped;
+	if (!stop) return null;
+	if (stop.reason === 'quota') return { kind: 'info', message: quotaNotice(stop.limit) };
+	if (stop.reason === 'rate-limited') return { kind: 'info', message: RATE_LIMIT_NOTICE };
+	return null;
 }
 
 /**
@@ -409,7 +457,7 @@ export class ShotSync extends Context.Tag('crema/ShotSync')<
 			sinceMs: number,
 			opts?: PullOptions
 		) => Effect.Effect<{ pulled: number; truncated: boolean }, VisualizerCallError>;
-		readonly uploadUnsyncedShots: (history: HistoryStore) => Effect.Effect<void>;
+		readonly uploadUnsyncedShots: (history: HistoryStore) => Effect.Effect<UnsyncedUploadResult>;
 	}
 >() {}
 
@@ -535,9 +583,19 @@ export const ShotSyncLive = Layer.effect(
 				// Android's patchEditedShot sends the same precedence.
 				grinderSetting: patch.grinderSetting ?? patch.bean?.grinderSetting ?? undefined
 			};
-			const shotBody = JSON.parse(
-				wasmVisualizerShotPatchJson(JSON.stringify(inputs))
-			) as ShotUpdateRequest['shot'];
+			// Fitted to the account tier in core, off the bean-sync premium flag
+			// (refreshed on sign-in, daily at start, on Test, and by every
+			// bag/roaster write): a free account — or one whose tier isn't
+			// known yet (`premium: null`) — silently loses the
+			// premium-only fields (private_notes, the tasting scores incl.
+			// `flavor`, tag_list, coffee_bag_id …), and a body left with nothing
+			// the server applies comes back `undefined`: no request, no error.
+			const patchJson = wasmVisualizerShotPatchJson(
+				JSON.stringify(inputs),
+				readSyncSettings().premium ?? undefined
+			);
+			if (patchJson === undefined) return;
+			const shotBody = JSON.parse(patchJson) as ShotUpdateRequest['shot'];
 			const envelope: ShotUpdateRequest = { shot: shotBody };
 			yield* call(`/shots/${visualizerId}`, {
 				method: 'PATCH',
@@ -744,8 +802,10 @@ export const ShotSyncLive = Layer.effect(
 
 		/**
 		 * Upload every local shot that lacks a `visualizerId`. Recoverable
-		 * failures route to the persistent retry queue; auth / premium failures
-		 * abort the loop (continuing would just keep hammering the same wall).
+		 * failures route to the persistent retry queue; auth / premium failures,
+		 * the free-plan daily quota (422) and the rate limit (429) abort the loop
+		 * (continuing would just keep hammering the same wall). A quota stop
+		 * queues nothing: the rest stay unsynced, so the next pass picks them up.
 		 */
 		const uploadUnsyncedShots = Effect.fn('ShotSync.uploadUnsyncedShots')(function* (
 			history: HistoryStore
@@ -767,7 +827,10 @@ export const ShotSyncLive = Layer.effect(
 						entity: 'shot',
 						id: shot.id,
 						op: 'create',
-						error: describeVisualizerError(e)
+						error: describeVisualizerError(e),
+						// A rate-limited (429) shot waits out the limit window
+						// rather than being retried by the drain right after.
+						...(isRateLimited(e) ? { delayMs: retryDelayMs(e, 0) } : {})
 					});
 				}
 				appendSyncLog({
@@ -796,11 +859,15 @@ export const ShotSyncLive = Layer.effect(
 					Effect.map(() => Boolean(history.get(shot.id)?.visualizerId))
 				);
 
+			let uploaded = 0;
+			let stopped: UnsyncedStop | null = null;
+
 			/** Upload one shot; returns `true` when the loop should abort. */
 			const uploadOne = (shot: StoredShot): Effect.Effect<boolean> =>
 				uploadShot(shot).pipe(
 					Effect.flatMap(({ visualizerId }) =>
 						Effect.sync(() => {
+							uploaded += 1;
 							history.bindVisualizerId(shot.id, visualizerId);
 							appendSyncLog({
 								direction: 'push',
@@ -821,6 +888,7 @@ export const ShotSyncLive = Layer.effect(
 								selfHealBind(shot).pipe(
 									Effect.map((bound) => {
 										if (bound) {
+											uploaded += 1;
 											appendSyncLog({
 												direction: 'push',
 												entity: 'shot',
@@ -838,7 +906,9 @@ export const ShotSyncLive = Layer.effect(
 								)
 							: Effect.sync(() => {
 									skipOrQueue(shot, e);
-									return shouldAbortLoop(e);
+									const abort = shouldAbortLoop(e);
+									if (abort) stopped = stopFor(e);
+									return abort;
 								})
 					)
 				);
@@ -849,6 +919,7 @@ export const ShotSyncLive = Layer.effect(
 				while: (i) => i < list.length,
 				body: (i) => uploadOne(list[i]).pipe(Effect.map((aborted) => (aborted ? list.length : i + 1)))
 			});
+			return { uploaded, stopped } satisfies UnsyncedUploadResult;
 		});
 
 		/**

@@ -168,7 +168,7 @@ pub fn import_v2_json_shot(content: &str) -> Result<StoredShot, ImportError> {
         &raw.temperature.goal,
         &raw.pressure.goal,
         &raw.flow.goal,
-        &[],
+        &frames_from_state_change(&raw.state_change),
         // v2 puts the scale-derived channels under `totals.weight` and
         // `flow.by_weight`; `totals.water_dispensed` carries the pump
         // volume integral. All three are sample-aligned to `elapsed`.
@@ -326,6 +326,19 @@ fn duration_from_seconds(s: f32) -> Duration {
     Duration::from_secs_f32(s.max(0.0))
 }
 
+/// Profile frame indices from a v2 `state_change` series — the inverse of
+/// the exporter's 1-based `frame + 1` markers. Only a series that is
+/// entirely whole numbers in `1..=256` reads as frame markers; anything else
+/// (an older 0-based crema export, de1app's ±10000000 toggles, absent) yields
+/// no frames, so the samples keep frame 0 as before.
+fn frames_from_state_change(markers: &[f32]) -> Vec<f32> {
+    let is_marker = |m: &f32| m.fract() == 0.0 && (1.0..=256.0).contains(m);
+    if markers.is_empty() || !markers.iter().all(is_marker) {
+        return Vec::new();
+    }
+    markers.iter().map(|m| m - 1.0).collect()
+}
+
 /// Round + clamp a recorded frame-index float into the byte range the
 /// DE1's `frame_number` field uses. Legacy logs store the index as a
 /// float (the recorded sample's frame at that elapsed time), so the
@@ -464,6 +477,11 @@ struct V2ShotJson {
     /// scale was paired / a DE1 was streaming.
     #[serde(default)]
     totals: V2Totals,
+    /// Per-sample stage markers. Crema (and decaid ≥ 8427fb07) write the
+    /// profile frame + 1; other apps write their own markers (de1app
+    /// toggles ±10000000). See [`frames_from_state_change`].
+    #[serde(default, deserialize_with = "de_vec_f32")]
+    state_change: Vec<f32>,
     #[serde(default)]
     profile: Option<serde_json::Value>,
     #[serde(default)]
@@ -636,6 +654,21 @@ fn v2_profile(raw: &V2ShotJson) -> Option<Profile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn state_change_markers_read_back_as_frames() {
+        // Crema / decaid 1-based markers → frame indices.
+        assert_eq!(
+            frames_from_state_change(&[1.0, 1.0, 3.0]),
+            vec![0.0, 0.0, 2.0]
+        );
+        // A 0 means an older 0-based export: ambiguous, so no frames.
+        assert!(frames_from_state_change(&[0.0, 0.0, 2.0]).is_empty());
+        // de1app's ±10000000 toggles aren't frame markers.
+        assert!(frames_from_state_change(&[10_000_000.0, -10_000_000.0]).is_empty());
+        assert!(frames_from_state_change(&[1.5]).is_empty());
+        assert!(frames_from_state_change(&[]).is_empty());
+    }
 
     /// A miniature legacy `.shot` fixture covering every metadata field
     /// the importer maps, plus two parallel telemetry samples so the

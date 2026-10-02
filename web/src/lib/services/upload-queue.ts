@@ -34,7 +34,14 @@ import { Context, Effect, Layer, Ref, Schedule } from 'effect';
 import { ShotSync } from './shot-sync.ts';
 import { BeanSync } from './bean-sync.ts';
 import type { ResponseDecodeError } from '../effect/errors.ts';
-import { describeVisualizerError, isRecoverable, type VisualizerCallError } from './visualizer-call.ts';
+import {
+	describeVisualizerError,
+	isRateLimited,
+	isRecoverable,
+	quotaLimit,
+	retryDelayMs,
+	type VisualizerCallError
+} from './visualizer-call.ts';
 import {
 	dequeueEntry,
 	enqueueEntry,
@@ -135,12 +142,25 @@ export const UploadQueueLive = Layer.effect(
 					yield* dequeue(entry.entity, entry.id, entry.op);
 					out.succeeded += 1;
 				} else {
+					const e = result.left;
 					const made = entry.attempts + 1;
-					if (!isRecoverable(result.left) || made >= MAX_ATTEMPTS) {
+					if (quotaLimit(e) != null) {
+						// The free-plan daily cap: drop the entry (the shot stays
+						// unsynced, so the next unsynced pass re-offers it) and stop —
+						// every other create would hit the same cap.
+						yield* dequeue(entry.entity, entry.id, entry.op);
+						out.dropped += 1;
+						break;
+					}
+					if (!isRecoverable(e) || made >= MAX_ATTEMPTS) {
 						yield* dequeue(entry.entity, entry.id, entry.op);
 						out.dropped += 1;
 					} else {
-						yield* Effect.sync(() => persistRetry(entry, made, describeVisualizerError(result.left)));
+						yield* Effect.sync(() =>
+							persistRetry(entry, made, describeVisualizerError(e), retryDelayMs(e, made))
+						);
+						// Rate-limited: leave the rest for a later drain.
+						if (isRateLimited(e)) break;
 					}
 				}
 			}

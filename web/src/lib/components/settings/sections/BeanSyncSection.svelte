@@ -26,7 +26,8 @@
 	} from '$lib/visualizer';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
-	import type { PullOptions } from '$lib/services/shot-sync';
+	import { describeUnsyncedStop, type PullOptions } from '$lib/services/shot-sync';
+	import { toast } from '$lib/components/shared/toast.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StSegment from '../StSegment.svelte';
@@ -59,7 +60,10 @@
 		return api.shots.pullAndReconcile(history, sinceMs, opts);
 	}
 	async function svcUploadUnsynced(): Promise<void> {
-		await appCtx().services?.shots.uploadUnsynced(history);
+		const result = await appCtx().services?.shots.uploadUnsynced(history);
+		// The free-plan daily cap / rate limit stopped the pass — say why.
+		const notice = describeUnsyncedStop(result);
+		if (notice) toast[notice.kind](notice.message);
 	}
 	async function svcDrain(): Promise<void> {
 		await appCtx().services?.queue.drain();

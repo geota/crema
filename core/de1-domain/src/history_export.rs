@@ -159,8 +159,11 @@ fn build_v2_document(shot: &StoredShot, truncate_at_flow_end: bool) -> V2Documen
             t.dispensed_volume.unwrap_or(0.0),
         ));
         // The profile frame this sample was taken in — what Visualizer
-        // draws its step bars from (geota/crema#49).
-        state_change.push(u32::from(t.sample.frame_number));
+        // draws its step bars from (geota/crema#49) — as a 1-BASED marker:
+        // Visualizer's stage parser treats 0 as absent, so a 0-based index
+        // dropped the transition out of frame 0 (decaid 8427fb07, #545).
+        // `import_v2_json_shot` subtracts the 1 back.
+        state_change.push(u32::from(t.sample.frame_number) + 1);
     }
 
     // Chart-tail fidelity (geota/crema#64): the recorded samples freeze at the
@@ -781,12 +784,22 @@ mod tests {
         // state_change carries the per-sample profile frame index, aligned
         // with every other series, so Visualizer can draw step bars (#49).
         assert_eq!(v["state_change"].as_array().unwrap().len(), n);
-        // …and it carries the fixture's real frame indices (0 then 2), not a
+        // …and it carries the fixture's real frames (0 then 2), not a
         // constant. A present-but-unchanging series is the failure reaprime
         // hit exporting machine substates: the column was there, the step
-        // transitions were invisible.
-        assert_eq!(v["state_change"][0], 0);
-        assert_eq!(v["state_change"][1], 2);
+        // transitions were invisible. The markers are 1-based (frame + 1):
+        // Visualizer reads 0 as "absent" and would drop the 0 → 2 step
+        // (decaid 8427fb07).
+        assert_eq!(v["state_change"][0], 1);
+        assert_eq!(v["state_change"][1], 3);
+        assert!(
+            v["state_change"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|m| m.as_u64().unwrap() >= 1),
+            "no 0 marker ever rides the wire"
+        );
         // Meta basics survive verbatim.
         assert_eq!(v["meta"]["bean"]["brand"], "Banibeans");
         assert_eq!(v["meta"]["bean"]["type"], "Ethiopia Yirgacheffe");
@@ -1072,6 +1085,11 @@ mod tests {
             let av = a.dispensed_volume.unwrap_or(0.0);
             let bv = b.dispensed_volume.unwrap_or(0.0);
             assert!((av - bv).abs() < 1e-4, "dispensed_volume[{i}] drifted");
+            // The profile frame survives via the 1-based `state_change`.
+            assert_eq!(
+                a.sample.frame_number, b.sample.frame_number,
+                "frame_number[{i}] drifted"
+            );
             // Resistance signals re-derive at import time from
             // pressure / flow + scale_flow_weight, so they should match
             // the original within the sub-floor guard. When both inputs

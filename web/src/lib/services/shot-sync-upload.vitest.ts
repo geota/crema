@@ -47,10 +47,18 @@ vi.mock('$lib/visualizer/shot-sync-signatures', () => ({
 }));
 
 import { ShotSync, ShotSyncLive } from './shot-sync.ts';
+import { writeSyncSettings } from '$lib/bean/visualizer-sync';
+
+/** Seed the bean-sync premium flag the edit sync reads (`undefined` = never written → null). */
+const setPremium = (premium: boolean | null | undefined): void => {
+	localStorage.clear();
+	if (premium !== undefined) writeSyncSettings({ premium });
+};
 import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import { HttpStatusError } from '../effect/errors.ts';
 import type { StoredShot } from '$lib/history/model';
+import type { HistoryStore } from '$lib/history/store.svelte';
 import type { TokenSet } from '../visualizer/oauth.ts';
 
 function mkHttp(handler: (req: HttpRequest) => { ok: true; status?: number; json?: unknown } | { ok: false; status: number }) {
@@ -108,6 +116,7 @@ const postBody = (calls: HttpRequest[]) =>
 const patchCall = (calls: HttpRequest[]) => calls.find((c) => c.method === 'PATCH');
 
 beforeEach(() => {
+	localStorage.clear();
 	h.settings = { grinderModel: '' };
 	h.cfg = { includeProfile: true, includeNotes: true, privacy: 'unlisted' };
 	h.exportJson = JSON.stringify({ profile: { title: 'P' }, metadata: { notes: 'tasty' } });
@@ -145,7 +154,8 @@ describe('ShotSync.uploadShot — payload shaping', () => {
 });
 
 describe('ShotSync.uploadShot — post-upload PATCH', () => {
-	it('fires a follow-up PATCH carrying tag_list when the shot has tags', async () => {
+	it('fires a follow-up PATCH carrying tag_list when the shot has tags (premium)', async () => {
+		setPremium(true);
 		const { layer, calls } = mkHttp((req) =>
 			req.method === 'POST' ? { ok: true, json: { id: 'viz-1' } } : { ok: true, json: {} }
 		);
@@ -163,7 +173,16 @@ describe('ShotSync.uploadShot — post-upload PATCH', () => {
 		expect(patchCall(calls)).toBeUndefined();
 	});
 
+	it('skips the follow-up PATCH on a free account when tags are all it would carry', async () => {
+		setPremium(false);
+		const { layer, calls } = mkHttp(() => ({ ok: true, json: { id: 'viz-1' } }));
+		const exit = await run(ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(shot({ tags: ['espresso'] })))), layer);
+		expect(Exit.isSuccess(exit)).toBe(true);
+		expect(patchCall(calls)).toBeUndefined();
+	});
+
 	it('keeps the upload successful even when the follow-up PATCH fails (soft)', async () => {
+		setPremium(true);
 		const { layer, calls } = mkHttp((req) =>
 			req.method === 'POST' ? { ok: true, json: { id: 'viz-1' } } : { ok: false, status: 500 }
 		);
@@ -177,5 +196,51 @@ describe('ShotSync.uploadShot — post-upload PATCH', () => {
 		const { layer } = mkHttp(() => ({ ok: true, json: {} }));
 		const exit = await run(ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(shot()))), layer);
 		expect(Exit.isFailure(exit)).toBe(true);
+	});
+});
+
+describe('ShotSync.patchEditedShot — Premium-only fields by account tier', () => {
+	const PREMIUM_ONLY = ['private_notes', 'flavor', 'tag_list', 'coffee_bag_id', 'metadata', 'image'];
+	const edited = (over: Partial<StoredShot> = {}): StoredShot =>
+		({
+			id: 's1',
+			visualizerId: 'viz-1',
+			bean: null,
+			tags: ['crema'],
+			grinderModel: null,
+			metadata: { rating: 4, notes: 'juicy' },
+			...over
+		}) as unknown as StoredShot;
+	const historyOf = (s: StoredShot) => ({ all: [s] }) as unknown as HistoryStore;
+	const patchEdited = (s: StoredShot, layer: Layer.Layer<HttpClient>) =>
+		run(ShotSync.pipe(Effect.flatMap((sync) => sync.patchEditedShot(historyOf(s), s.id))), layer);
+	const bean = { name: 'Kenya AA', roasterName: 'Sey' } as unknown as StoredShot['bean'];
+
+	for (const premium of [false, null, undefined]) {
+		it(`a ${premium === false ? 'free' : 'not-yet-probed'} account sends no request for a rating/notes/tags-only edit`, async () => {
+			setPremium(premium);
+			const { layer, calls } = mkHttp(() => ({ ok: false, status: 400 }));
+			const exit = await patchEdited(edited(), layer);
+			expect(Exit.isSuccess(exit)).toBe(true);
+			expect(calls).toHaveLength(0);
+		});
+
+		it(`a ${premium === false ? 'free' : 'not-yet-probed'} account PATCHes the rest without the Premium-only fields`, async () => {
+			setPremium(premium);
+			const { layer, calls } = mkHttp(() => ({ ok: true, json: {} }));
+			const exit = await patchEdited(edited({ bean }), layer);
+			expect(Exit.isSuccess(exit)).toBe(true);
+			const body = (JSON.parse(patchCall(calls)!.body as string) as { shot: Record<string, unknown> }).shot;
+			for (const key of PREMIUM_ONLY) expect(body).not.toHaveProperty(key);
+			expect(body).toMatchObject({ bean_brand: 'Sey', bean_type: 'Kenya AA' });
+		});
+	}
+
+	it('a premium account still sends private_notes, flavor and tag_list', async () => {
+		setPremium(true);
+		const { layer, calls } = mkHttp(() => ({ ok: true, json: {} }));
+		await patchEdited(edited(), layer);
+		const body = (JSON.parse(patchCall(calls)!.body as string) as { shot: Record<string, unknown> }).shot;
+		expect(body).toMatchObject({ flavor: 12, private_notes: '<p>juicy</p>', tag_list: ['crema'] });
 	});
 });

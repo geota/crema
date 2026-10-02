@@ -154,6 +154,20 @@ export class BeanSync extends Context.Tag('crema/BeanSync')<
 		/** Fetch the signed-in user's `/me` profile (replaces `visualizer/account.ts`). */
 		readonly fetchAccount: Effect.Effect<VisualizerAccount, VisualizerCallError | ResponseDecodeError>;
 		/**
+		 * Re-run the premium probe (the same sentinel `POST /roasters` as
+		 * {@link testConnection}) and cache a conclusive result — the bean-sync
+		 * `premium` flag (`writeSyncSettings`, mirrored into the sync-config)
+		 * plus `premiumCheckedAt`. An inconclusive probe (`null`) or a signed-out
+		 * vault leaves the cache untouched. Runs on Visualizer sign-in. Never fails.
+		 */
+		readonly refreshPremium: Effect.Effect<boolean | null>;
+		/**
+		 * {@link refreshPremium} at most once per {@link PREMIUM_REFRESH_INTERVAL_MS}
+		 * (24 h, off `premiumCheckedAt`); otherwise a no-op returning the cached
+		 * flag. Runs at app start. Never fails.
+		 */
+		readonly refreshPremiumIfStale: Effect.Effect<boolean | null>;
+		/**
 		 * Verify the connection + probe the premium tier (replaces
 		 * `visualizer-sync.ts` `testConnection`): a read to catch auth errors, then
 		 * a sentinel `POST /roasters` whose status is the one authoritative premium
@@ -162,6 +176,9 @@ export class BeanSync extends Context.Tag('crema/BeanSync')<
 		readonly testConnection: Effect.Effect<ConnectionTestResult>;
 	}
 >() {}
+
+/** How often the app-start premium re-probe may run ({@link BeanSync.refreshPremiumIfStale}). */
+export const PREMIUM_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export const BeanSyncLive = Layer.effect(
 	BeanSync,
@@ -488,6 +505,15 @@ export const BeanSyncLive = Layer.effect(
 			return true;
 		});
 
+		/**
+		 * Cache a probe result into both stores (matches the old impl), stamping
+		 * `premiumCheckedAt` when it was conclusive.
+		 */
+		const storePremium = (premium: boolean | null): void => {
+			writeSyncSettings(premium === null ? { premium } : { premium, premiumCheckedAt: Date.now() });
+			updateSyncConfig({ premium });
+		};
+
 		const testConnection: Effect.Effect<ConnectionTestResult> = Effect.gen(function* () {
 			const tokens = yield* vault.getTokens;
 			if (tokens === null) return { ok: false, error: 'Sign in to Visualizer first.' };
@@ -495,9 +521,25 @@ export const BeanSyncLive = Layer.effect(
 			if (check._tag === 'Left') return { ok: false, error: describeVisualizerError(check.left) };
 			const premium = yield* probePremium;
 			// Mirror into both caches so every UI surface agrees (matches the old impl).
-			writeSyncSettings({ premium });
-			updateSyncConfig({ premium });
+			storePremium(premium);
 			return { ok: true, premium };
+		});
+
+		const refreshPremium: Effect.Effect<boolean | null> = Effect.gen(function* () {
+			const tokens = yield* vault.getTokens;
+			if (tokens === null) return null;
+			const premium = yield* probePremium;
+			// Inconclusive (network blip, 5xx…) keeps the cached flag: never let a
+			// transient failure downgrade a known tier.
+			if (premium !== null) storePremium(premium);
+			return premium;
+		});
+
+		const refreshPremiumIfStale: Effect.Effect<boolean | null> = Effect.suspend(() => {
+			const { premium, premiumCheckedAt } = readSyncSettings();
+			const fresh =
+				premiumCheckedAt !== null && Date.now() - premiumCheckedAt < PREMIUM_REFRESH_INTERVAL_MS;
+			return fresh ? Effect.succeed(premium) : refreshPremium;
 		});
 
 		return BeanSync.of({
@@ -507,6 +549,8 @@ export const BeanSyncLive = Layer.effect(
 			deleteRoaster,
 			runSync,
 			fetchAccount,
+			refreshPremium,
+			refreshPremiumIfStale,
 			testConnection
 		});
 	})

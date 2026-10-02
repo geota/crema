@@ -64,6 +64,16 @@ data class VisualizerState(
     /** Cached `/me` projection; refreshed on sign-in and on Settings open. */
     val account: VisualizerAccount? = null,
     /**
+     * Cached Visualizer Premium tier — the web's bean-sync `premium` flag:
+     * set by the sentinel roaster probe ([VisualizerClient.probePremium]) on
+     * sign-in, at app start (at most once per 24 h) and on Test. Null until
+     * probed (or after sign-out): the edit sync then treats the account as
+     * free and drops the Premium-only PATCH fields.
+     */
+    val premium: Boolean? = null,
+    /** Unix ms of the last conclusive [premium] probe, or null = never (gates the daily app-start re-probe). */
+    val premiumCheckedAt: Long? = null,
+    /**
      * Unified sync PREFERENCES — the shared core [VisualizerSyncPrefs] shape both
      * shells serialise identically, so a backup's `visualizerPrefs` line moves
      * between web and Android with no per-shell tag. Pre-unification builds stored

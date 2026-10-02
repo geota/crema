@@ -72,11 +72,18 @@ export interface VisualizerSyncSettings {
 	 * not yet probed. We cache so we don't re-probe on every sync.
 	 */
 	premium: boolean | null;
+	/**
+	 * Unix-ms of the last conclusive premium probe (`BeanSync.refreshPremium`
+	 * / `testConnection`), or `null` = never. Gates the app-start re-probe to
+	 * at most once per 24 h.
+	 */
+	premiumCheckedAt: number | null;
 }
 
 const DEFAULT_SYNC_SETTINGS: VisualizerSyncSettings = {
 	lastSyncAt: null,
-	premium: null
+	premium: null,
+	premiumCheckedAt: null
 };
 
 export function readSyncSettings(): VisualizerSyncSettings {
@@ -86,7 +93,8 @@ export function readSyncSettings(): VisualizerSyncSettings {
 	// at boot, but we may be called before that runs (or in tests).
 	return {
 		lastSyncAt: raw.lastSyncAt ?? null,
-		premium: raw.premium ?? null
+		premium: raw.premium ?? null,
+		premiumCheckedAt: raw.premiumCheckedAt ?? null
 	};
 }
 export function writeSyncSettings(next: Partial<VisualizerSyncSettings>): void {
@@ -281,6 +289,6 @@ export class VisualizerError extends Error {
  * Test or Sync will re-probe from scratch.
  */
 export function clearVisualizerPremiumCache(): void {
-	writeSyncSettings({ premium: null });
+	writeSyncSettings({ premium: null, premiumCheckedAt: null });
 	updateSyncConfig({ premium: null });
 }

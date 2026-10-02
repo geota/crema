@@ -551,12 +551,18 @@ pub fn volume_stop_arms(
 
 /// Assemble the Visualizer `PATCH /shots/{id}` body from a
 /// `ShotPatchInputs` JSON (rating→flavor rule, inline-bean block,
-/// key naming — one builder for both shells; review #42). Returns the
-/// inner body JSON; the caller wraps it in the `{ "shot": … }` envelope.
+/// key naming — one builder for both shells; review #42), fitted to the
+/// account tier: `premium` is the cached flag (`undefined`/`null` =
+/// unknown → treated as free, premium-only fields dropped). Returns the
+/// inner body JSON — the caller wraps it in the `{ "shot": … }` envelope —
+/// or `undefined` when the PATCH must be skipped (nothing left to apply).
 /// See `de1_domain::visualizer_shot_patch_json`.
 #[wasm_bindgen(js_name = visualizerShotPatchJson)]
-pub fn visualizer_shot_patch_json(inputs_json: &str) -> Result<String, String> {
-    de1_domain::visualizer_shot_patch_json(inputs_json)
+pub fn visualizer_shot_patch_json(
+    inputs_json: &str,
+    premium: Option<bool>,
+) -> Result<Option<String>, String> {
+    de1_domain::visualizer_shot_patch_json(inputs_json, premium)
 }
 
 /// The indices to KEEP when downsampling a shot's telemetry for storage
@@ -1044,6 +1050,27 @@ pub fn search_roasters(roasters_json: &str, query: &str) -> Result<String, Strin
 #[must_use]
 pub fn is_recoverable(tag: &str, status: Option<u32>) -> bool {
     de1_domain::is_recoverable(tag, status.and_then(|s| u16::try_from(s).ok()))
+}
+
+/// Visualizer's free-plan daily upload cap: the cap (e.g. `30`) when a reply
+/// with HTTP `status` and `body` is the quota 422, else `undefined`. See
+/// `de1_domain::visualizer_quota_limit`.
+#[wasm_bindgen(js_name = visualizerQuotaLimit)]
+#[must_use]
+pub fn visualizer_quota_limit(status: u32, body: &str) -> Option<u32> {
+    de1_domain::visualizer_quota_limit(u16::try_from(status).ok()?, body)
+}
+
+/// Delay (ms) before retry number `attempt` of a recoverable Visualizer
+/// failure with HTTP `status` (`undefined` for a transport failure) — longer
+/// for a 429. See `de1_domain::retry_backoff_ms`.
+#[wasm_bindgen(js_name = retryBackoffMs)]
+#[must_use]
+pub fn retry_backoff_ms(status: Option<u32>, attempt: u32) -> f64 {
+    #[allow(clippy::cast_precision_loss)]
+    let ms =
+        de1_domain::retry_backoff_ms(status.and_then(|s| u16::try_from(s).ok()), attempt) as f64;
+    ms
 }
 
 /// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` →

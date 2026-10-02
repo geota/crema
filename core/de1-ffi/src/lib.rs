@@ -719,12 +719,18 @@ pub fn volume_stop_arms(
 
 /// Assemble the Visualizer `PATCH /shots/{id}` body from a
 /// `ShotPatchInputs` JSON (rating→flavor rule, inline-bean block,
-/// key naming — one builder for both shells; review #42). Returns the
-/// inner body JSON; the caller wraps it in the `{ "shot": … }` envelope.
+/// key naming — one builder for both shells; review #42), fitted to the
+/// account tier: `premium` is the cached flag (null = unknown → treated as
+/// free, premium-only fields dropped). Returns the inner body JSON — the
+/// caller wraps it in the `{ "shot": … }` envelope — or null when the
+/// PATCH must be skipped (nothing left to apply).
 /// See [`de1_domain::visualizer_shot_patch_json`].
 #[uniffi::export]
-pub fn visualizer_shot_patch_json(inputs_json: String) -> Result<String, CremaError> {
-    de1_domain::visualizer_shot_patch_json(&inputs_json).map_err(CremaError::from)
+pub fn visualizer_shot_patch_json(
+    inputs_json: String,
+    premium: Option<bool>,
+) -> Result<Option<String>, CremaError> {
+    de1_domain::visualizer_shot_patch_json(&inputs_json, premium).map_err(CremaError::from)
 }
 
 /// The indices to KEEP when downsampling a shot's telemetry for storage
@@ -1018,6 +1024,22 @@ pub fn sub_state_error_message(name: String) -> Option<String> {
 #[uniffi::export]
 pub fn is_recoverable(tag: String, status: Option<u16>) -> bool {
     de1_domain::is_recoverable(&tag, status)
+}
+
+/// Visualizer's free-plan daily upload cap: the cap when a reply with HTTP
+/// `status` and `body` is the quota 422, else `None`. Mirrors the wasm
+/// `visualizerQuotaLimit`; see [`de1_domain::visualizer_quota_limit`].
+#[uniffi::export]
+pub fn visualizer_quota_limit(status: u16, body: String) -> Option<u32> {
+    de1_domain::visualizer_quota_limit(status, &body)
+}
+
+/// Delay (ms) before retry number `attempt` of a recoverable Visualizer
+/// failure with HTTP `status` (`None` for a transport failure). Mirrors the
+/// wasm `retryBackoffMs`; see [`de1_domain::retry_backoff_ms`].
+#[uniffi::export]
+pub fn retry_backoff_ms(status: Option<u16>, attempt: u32) -> u64 {
+    de1_domain::retry_backoff_ms(status, attempt)
 }
 
 /// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` → `"DE1"`),

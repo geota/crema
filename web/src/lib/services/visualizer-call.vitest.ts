@@ -18,6 +18,9 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import {
 	describeVisualizerError,
 	isRecoverable,
+	quotaLimit,
+	quotaNotice,
+	retryDelayMs,
 	visualizerCall,
 	type VisualizerCallError
 } from './visualizer-call.ts';
@@ -191,6 +194,8 @@ describe('isRecoverable — the canonical retry policy', () => {
 		['500', httpErr(500), true],
 		['503', httpErr(503), true],
 		['408', httpErr(408), true],
+		['429 (rate limit)', httpErr(429), true],
+		['422 (incl. the daily quota)', httpErr(422), false],
 		['0 (transport-blocked — canonical resolution)', httpErr(0), true],
 		['404', httpErr(404), false],
 		['402', httpErr(402), false],
@@ -206,6 +211,33 @@ describe('isRecoverable — the canonical retry policy', () => {
 			expect(isRecoverable(err)).toBe(expected);
 		});
 	}
+});
+
+describe('quotaLimit — the free-plan daily cap (visualizer 3e9ba33c)', () => {
+	// The exact body `POST /shots/upload` returns at the cap.
+	const QUOTA_BODY = JSON.stringify({
+		error:
+			"Could not save the provided file. You've reached your daily limit of 30 shots. Please consider upgrading to a premium account."
+	});
+	it('detects the quota 422 and reads its cap', () => {
+		expect(quotaLimit(new HttpStatusError({ status: 422, url: 'u', body: QUOTA_BODY }))).toBe(30);
+	});
+	it('ignores other 422s and other statuses', () => {
+		const badFile = JSON.stringify({ error: "Could not save the provided file. Profile file can't be blank" });
+		expect(quotaLimit(new HttpStatusError({ status: 422, url: 'u', body: badFile }))).toBeNull();
+		expect(quotaLimit(new HttpStatusError({ status: 422, url: 'u' }))).toBeNull();
+		expect(quotaLimit(new HttpStatusError({ status: 429, url: 'u', body: QUOTA_BODY }))).toBeNull();
+		expect(quotaLimit(new NetworkError({ cause: 'x', url: 'u' }))).toBeNull();
+	});
+	it('names the cap in the user notice', () => {
+		expect(quotaNotice(30)).toBe(
+			"Visualizer's free plan uploads up to 30 shots a day — the rest will upload tomorrow."
+		);
+	});
+	it('backs a 429 off by a minute and up', () => {
+		expect(retryDelayMs(new HttpStatusError({ status: 429, url: 'u' }), 0)).toBe(60_000);
+		expect(retryDelayMs(new HttpStatusError({ status: 503, url: 'u' }), 1)).toBe(2_000);
+	});
 });
 
 describe('describeVisualizerError', () => {

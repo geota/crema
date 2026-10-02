@@ -129,6 +129,12 @@ class LibraryController(
     private val setActiveProfile: (String) -> Unit,
     /** The VM's resetBrewParams — relay-aware; clears the QC override. */
     private val resetBrewParams: () -> Unit,
+    /**
+     * A stored shot's record-carried annotations (rating, notes, grind, bean)
+     * were edited — the Decent destination queues its debounced
+     * `replace=1` re-upload ([coffee.crema.decent.DecentSync.scheduleReplaceAfterEdit]).
+     */
+    private val onShotAnnotationsEdited: (shotId: String) -> Unit = {},
 ) {
 
     // ── Persistence (controller-owned stores) ────────────────────────────────
@@ -2013,6 +2019,7 @@ class LibraryController(
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
         schedulePatchEdited(id)
+        onShotAnnotationsEdited(id)
     }
 
     /**
@@ -2058,6 +2065,7 @@ class LibraryController(
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
         schedulePatchEdited(id)
+        onShotAnnotationsEdited(id)
     }
 
     /**
@@ -2119,6 +2127,7 @@ class LibraryController(
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
         schedulePatchEdited(id)
+        onShotAnnotationsEdited(id)
     }
 
     /** Debounced edit→Visualizer mirror: the notes field fires per keystroke

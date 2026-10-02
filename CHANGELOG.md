@@ -9,6 +9,20 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Visualizer edit sync no longer fails or loses edits on free accounts** —
+  Premium-only fields are skipped; Premium status is checked on sign-in,
+  daily, and on Test connection. Web and Android.
+- **Decent uploads send the DE1 firmware as its build number** — the
+  shot's `machine.firmwareVersion` is now just the CPU firmware build (e.g.
+  `1352`), the same value Decent's own app sends. Shots recorded earlier
+  with a longer label (`v1.43 build 1352`) are normalised when uploaded;
+  a label with no build number in it is left out. Web and Android.
+- **Editing an uploaded shot updates its Decent copy** — with Decent
+  auto-upload on, changing the rating, notes, grind or bean of a shot that is
+  already on your Decent account re-uploads it over the old copy
+  (`replace=1`), once, a moment after you stop editing. Same trigger as
+  Decent's own shot-upload plugin. Web and Android.
+
 - **Both flow readings now share the Flow card** (#92) — machine flow (ml/s)
   on the left, scale flow (g/s) on the right, so the two numbers being compared
   sit side by side. Dispensed water volume moved to the Weight card next to the
@@ -155,6 +169,39 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   expired login instead of a successful upload.
 
 ### Fixed
+
+- **Visualizer shows the first profile step** — the step markers Crema sends
+  with each shot (`state_change`) counted frames from 0, and Visualizer reads 0
+  as "no marker", so the step out of the first frame never showed. Markers now
+  count from 1, and importing a Crema v2 shot file reads the frames back.
+  Re-uploading a shot first uploaded by an older version makes a new copy on
+  Visualizer rather than updating the old one (Visualizer matches re-uploads by
+  their exact data).
+
+- **Visualizer notes no longer show HTML tags** — Visualizer switched shot
+  notes (bean, espresso, private) and coffee-bag notes to rich text in July.
+  Pulled notes came into Crema with `<p>` and `<br>` in them, and notes Crema
+  sent were stored as one run-on line. Crema now converts at the wire: rich
+  text becomes plain text (paragraphs, line breaks, lists and `&amp;`-style
+  characters kept) on pull, and plain text becomes paragraphs on push. Older
+  plain-text notes still read as they are.
+- **Visualizer's 30-shots-a-day free plan stops a backlog upload cleanly** —
+  when a free account reaches its daily cap, "Upload all", the Settings
+  catch-up and Sync now stop after the first refusal instead of trying every
+  remaining shot, and say "Visualizer's free plan uploads up to 30 shots a day
+  — the rest will upload tomorrow". The rest stay unsynced for the next pass.
+  Web and Android.
+- **Visualizer rate limiting is retried** — a "too many requests" reply (429)
+  now waits a minute (then longer) and retries, instead of failing the shot.
+  Web and Android.
+
+- **Beanconqueror brew times** — Beanconqueror stores a brew time as whole
+  seconds plus the sub-second remainder. Crema read the remainder as the whole
+  time on import (a 28.45 s brew came in as 0.45 s) and wrote the total into
+  the remainder on export (Beanconqueror showed about double). Both directions
+  now use seconds + remainder; a value of 1000 ms or more is still read as a
+  total. Brews imported before this fix keep their old (wrong) times — they
+  can't be told apart reliably, so re-import from Beanconqueror to correct them.
 
 - **Android backups keep brew details** — a backup made on Android dropped
   each brew's method, recipe name, water, temperature, next-time plan and

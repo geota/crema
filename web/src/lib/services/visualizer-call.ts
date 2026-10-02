@@ -37,7 +37,11 @@ import {
 	VisualizerNotFoundError,
 	VisualizerPremiumGatedError
 } from '../effect/errors.ts';
-import { isRecoverable as wasmIsRecoverable } from '$lib/wasm/de1_wasm';
+import {
+	isRecoverable as wasmIsRecoverable,
+	retryBackoffMs as wasmRetryBackoffMs,
+	visualizerQuotaLimit as wasmVisualizerQuotaLimit
+} from '$lib/wasm/de1_wasm';
 
 /** Visualizer API base. */
 export const API_BASE = 'https://visualizer.coffee/api';
@@ -119,8 +123,8 @@ export const visualizerCall = (
 
 /**
  * A `recoverable` failure is worth a time-based retry through the `UploadQueue`:
- * a transport failure, or a transient 5xx / 408 / aborted-or-blocked (status 0)
- * response. Auth / premium / not-found / decode failures need user action, not
+ * a transport failure, or a transient 5xx / 408 / 429 / aborted-or-blocked
+ * (status 0) response. Auth / premium / not-found / decode failures need user action, not
  * time, so they're terminal.
  *
  * The retry POLICY (which tags / statuses are recoverable) now lives in the
@@ -139,6 +143,41 @@ export const visualizerCall = (
 export function isRecoverable(e: VisualizerCallError | ResponseDecodeError): boolean {
 	return wasmIsRecoverable(e._tag, e._tag === 'HttpStatusError' ? e.status : undefined);
 }
+
+/**
+ * Visualizer's free-plan daily upload cap: the cap (e.g. 30) when `e` is the
+ * quota 422 `POST /shots/upload` returns at the limit, else `null`. The
+ * detection rule (status 422 + a body naming the "daily limit") lives in the
+ * core (`de1_domain::visualizer_quota_limit`) so both shells agree; every
+ * other 422 is an ordinary failure.
+ */
+export function quotaLimit(e: VisualizerCallError | ResponseDecodeError): number | null {
+	if (e._tag !== 'HttpStatusError') return null;
+	return wasmVisualizerQuotaLimit(e.status, e.body ?? '') ?? null;
+}
+
+/** Visualizer's rate limit (429) — recoverable, but stop hammering. */
+export function isRateLimited(e: VisualizerCallError | ResponseDecodeError): boolean {
+	return e._tag === 'HttpStatusError' && e.status === 429;
+}
+
+/**
+ * Delay before retry number `attempt` (attempts made so far) of a recoverable
+ * failure — a minute and up for a 429, seconds otherwise (core
+ * `retry_backoff_ms`).
+ */
+export function retryDelayMs(e: VisualizerCallError | ResponseDecodeError, attempt: number): number {
+	return wasmRetryBackoffMs(e._tag === 'HttpStatusError' ? e.status : undefined, attempt);
+}
+
+/** The user notice when the free-plan daily cap stops an upload pass. */
+export function quotaNotice(limit: number): string {
+	return `Visualizer's free plan uploads up to ${limit} shots a day — the rest will upload tomorrow.`;
+}
+
+/** The user notice when Visualizer's rate limit stops an upload pass. */
+export const RATE_LIMIT_NOTICE =
+	'Visualizer is limiting uploads right now — the rest will retry in a few minutes.';
 
 /**
  * Human-readable summary of a call failure for the sync log / console warn

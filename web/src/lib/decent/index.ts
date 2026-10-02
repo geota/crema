@@ -44,6 +44,7 @@ export {
 	pushShotToDecent,
 	reportDecentOutcome,
 	retryPendingDecentUploads,
+	scheduleDecentReplaceAfterEdit,
 	unsentDecentShots,
 	uploadAndReportDecent,
 	uploadShotToDecent,

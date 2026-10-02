@@ -147,7 +147,7 @@ pub use crema_profile::{
     default_segments_json, from_wire, to_wire,
 };
 pub use decent_shot_record::{
-    BREW_LOG_NOT_UPLOADABLE, decent_shot_record, decent_shot_record_json,
+    BREW_LOG_NOT_UPLOADABLE, decent_shot_record, decent_shot_record_json, firmware_build_number,
 };
 pub use decent_wire::{
     DecentLoginReply, DecentMachine, DecentMachinesReply, DecentUploadReply, decent_login_token,
@@ -201,7 +201,10 @@ pub use units::{
     WeightUnit, bar_to_psi, celsius_to_fahrenheit, fahrenheit_to_celsius, fl_oz_to_ml, grams_to_oz,
     ml_to_fl_oz, oz_to_grams, psi_to_bar,
 };
-pub use visualizer_error::{VisualizerCallError, is_recoverable};
+pub use visualizer_error::{
+    VISUALIZER_DEFAULT_DAILY_LIMIT, VisualizerCallError, is_recoverable, retry_backoff_ms,
+    visualizer_quota_limit,
+};
 pub use visualizer_sync::{
     BeanReconcileAction, LocalShotRef, ReconcileAction, RoasterReconcileAction, WireShot,
     reconcile_beans, reconcile_beans_json, reconcile_roasters, reconcile_roasters_json,
@@ -209,10 +212,11 @@ pub use visualizer_sync::{
     signature_for_shot,
 };
 pub use visualizer_wire::{
-    BagWire, RoasterWire, ShotPatchInputs, bean_from_wire, bean_from_wire_json, bean_to_wire,
-    bean_to_wire_json, rating_to_flavor, roast_level_from_wire, roast_level_to_wire,
-    roaster_from_wire, roaster_from_wire_json, roaster_to_wire, roaster_to_wire_json,
-    samples_from_visualizer_detail, samples_from_visualizer_detail_json, visualizer_shot_patch,
+    BagWire, RoasterWire, ShotPatchInputs, VISUALIZER_PREMIUM_SHOT_FIELDS, VISUALIZER_SHOT_FIELDS,
+    bean_from_wire, bean_from_wire_json, bean_to_wire, bean_to_wire_json, rating_to_flavor,
+    roast_level_from_wire, roast_level_to_wire, roaster_from_wire, roaster_from_wire_json,
+    roaster_to_wire, roaster_to_wire_json, samples_from_visualizer_detail,
+    samples_from_visualizer_detail_json, visualizer_shot_patch, visualizer_shot_patch_for_account,
     visualizer_shot_patch_json, wire_shot_from_detail, wire_shot_from_detail_json,
 };
 pub use volume::{LineFreqDetector, VolumeIntegrator};

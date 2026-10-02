@@ -848,11 +848,11 @@ pub fn crema_to_bc_main_json(
 
     let mut brews_json: Vec<serde_json::Value> = Vec::with_capacity(shots.len());
     for (i, shot) in shots.iter().enumerate() {
-        // Cap at u32::MAX ms (~49 days) — well within f64 mantissa
-        // precision; longer durations are theoretical.
-        #[allow(clippy::cast_precision_loss)]
-        let dur_ms = (shot.record.duration.as_millis().min(u128::from(u32::MAX))) as f64;
-        let dur_s = dur_ms / 1000.0;
+        // Cap at u32::MAX ms (~49 days); longer durations are theoretical.
+        // BC wants whole seconds + the sub-second remainder, not the total.
+        #[allow(clippy::cast_possible_truncation)]
+        let dur_ms = shot.record.duration.as_millis().min(u128::from(u32::MAX)) as u64;
+        let (dur_s, dur_rem_ms) = bc_brew_time_parts(dur_ms);
         let mut obj = serde_json::Map::new();
         // The Rust `StoredShot` doesn't carry an id (that's a
         // shell-side concept). Synthesise one from the recorded
@@ -892,7 +892,7 @@ pub fn crema_to_bc_main_json(
         obj.insert("brew_time".to_owned(), serde_json::Value::from(dur_s));
         obj.insert(
             "brew_time_milliseconds".to_owned(),
-            serde_json::Value::from(dur_ms),
+            serde_json::Value::from(dur_rem_ms),
         );
         obj.insert(
             "brew_beverage_quantity".to_owned(),
@@ -1308,7 +1308,7 @@ where
         };
 
         // Build the StoredShot. Telemetry stays empty for v1; the
-        // duration is taken from BC's brew_time + brew_time_milliseconds.
+        // duration is BC's brew_time (s) + brew_time_milliseconds (remainder).
         let duration_ms = brew_duration_ms(bc_brew);
         let record = ShotRecord {
             duration: Duration::from_millis(duration_ms),
@@ -1585,24 +1585,48 @@ fn is_espresso_type(prep_type: &str) -> bool {
     )
 }
 
+/// Total brew duration in ms from BC's `brew_time` + `brew_time_milliseconds`.
+///
+/// Beanconqueror stores the duration as whole seconds in `brew_time` plus
+/// the sub-second remainder (0–999) in `brew_time_milliseconds`
+/// (BC `brew.ts` `getFormattedTotalCoffeeBrewTime`: `utc(secs*1000)
+/// .add('milliseconds', brew_time_milliseconds)`; `timer.component.ts`
+/// sets it from `moment.milliseconds()`). So the total is
+/// `brew_time * 1000 + brew_time_milliseconds`.
+///
+/// Fallback: a `brew_time_milliseconds` of 1000 or more can't be a
+/// remainder; some BC code paths (and crema exports before this fix) wrote
+/// the TOTAL there, so treat it as the total in that case.
 fn brew_duration_ms(b: &BcBrew) -> u64 {
-    // Prefer the high-precision `brew_time_milliseconds` (ms float when
-    // BC writes it); else fall back to `brew_time` (seconds). Both are
-    // optional and may be 0; cap defensively.
-    let ms = if b.brew_time_milliseconds > 0.0 {
-        b.brew_time_milliseconds
-    } else if b.brew_time > 0.0 {
-        b.brew_time * 1000.0
+    let secs = if b.brew_time.is_finite() && b.brew_time > 0.0 {
+        b.brew_time
     } else {
         0.0
     };
-    if ms.is_finite() && ms >= 0.0 && ms < f64::from(u32::MAX) {
+    let rem = if b.brew_time_milliseconds.is_finite() && b.brew_time_milliseconds > 0.0 {
+        b.brew_time_milliseconds
+    } else {
+        0.0
+    };
+    let ms = if rem >= 1000.0 {
+        rem
+    } else {
+        secs * 1000.0 + rem
+    };
+    if ms >= 0.0 && ms < f64::from(u32::MAX) {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let v = ms.round() as u64;
         v
     } else {
         0
     }
+}
+
+/// Split a duration in ms into BC's `(brew_time, brew_time_milliseconds)`:
+/// whole seconds plus the 0–999 ms remainder. Inverse of
+/// [`brew_duration_ms`].
+fn bc_brew_time_parts(dur_ms: u64) -> (u64, u64) {
+    (dur_ms / 1000, dur_ms % 1000)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -2151,6 +2175,87 @@ mod tests {
         assert_eq!(
             plan.shots[0].stored_shot.record.duration,
             Duration::from_millis(28_000)
+        );
+    }
+
+    fn brew_duration_of(brew_fields: &str) -> Duration {
+        let json = format!(
+            r#"{{
+            "BEANS":[{{"config":{{"uuid":"b","unix_timestamp":0}},"name":"x","roaster":"r"}}],
+            "PREPARATION":[{{"config":{{"uuid":"p","unix_timestamp":0}},"name":"e","style_type":"ESPRESSO"}}],
+            "BREWS":[{{"config":{{"uuid":"s","unix_timestamp":0}},
+                      "bean":"b","method_of_preparation":"p"{brew_fields}}}]
+        }}"#
+        );
+        let plan = bc_to_crema(&parse_export(&json).unwrap(), 1, seq_id());
+        plan.shots[0].stored_shot.record.duration
+    }
+
+    #[test]
+    fn duration_adds_sub_second_remainder() {
+        // BC stores whole seconds + the 0–999 ms remainder (brew.ts
+        // getFormattedTotalCoffeeBrewTime). 28 s + 450 ms = 28.45 s, not 0.45 s.
+        assert_eq!(
+            brew_duration_of(r#","brew_time":28,"brew_time_milliseconds":450"#),
+            Duration::from_millis(28_450)
+        );
+        // Remainder alone (brew_time 0) is a sub-second brew.
+        assert_eq!(
+            brew_duration_of(r#","brew_time":0,"brew_time_milliseconds":999"#),
+            Duration::from_millis(999)
+        );
+    }
+
+    #[test]
+    fn duration_treats_ms_of_1000_or_more_as_total() {
+        // Fallback: a value that can't be a remainder is a total (BC's cut
+        // path and crema exports before the fix wrote totals here).
+        assert_eq!(
+            brew_duration_of(r#","brew_time":28.45,"brew_time_milliseconds":28450"#),
+            Duration::from_millis(28_450)
+        );
+        assert_eq!(
+            brew_duration_of(r#","brew_time_milliseconds":1000"#),
+            Duration::from_millis(1_000)
+        );
+    }
+
+    #[test]
+    fn duration_zero_when_absent_or_zero() {
+        assert_eq!(brew_duration_of(""), Duration::ZERO);
+        assert_eq!(
+            brew_duration_of(r#","brew_time":0,"brew_time_milliseconds":0"#),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn export_writes_seconds_plus_remainder_and_round_trips() {
+        use crate::Bean;
+        let bean = Bean::new("bean:b1".to_owned(), "Geisha".to_owned(), 1_700_000_000_000);
+        let shot = StoredShot::new(
+            1_700_000_000_000,
+            ShotRecord {
+                duration: Duration::from_millis(28_450),
+                samples: Vec::new(),
+            },
+        );
+        let json = crema_to_bc_main_json(
+            &[bean],
+            &[],
+            &[shot],
+            &[Some("bean:b1".to_owned())],
+            1_700_000_000_000,
+        );
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let brew = &v["BREWS"][0];
+        assert_eq!(brew["brew_time"], serde_json::json!(28));
+        assert_eq!(brew["brew_time_milliseconds"], serde_json::json!(450));
+        // Round-trip through the importer keeps the total.
+        let plan = bc_to_crema(&parse_export(&json).unwrap(), 1, seq_id());
+        assert_eq!(
+            plan.shots[0].stored_shot.record.duration,
+            Duration::from_millis(28_450)
         );
     }
 

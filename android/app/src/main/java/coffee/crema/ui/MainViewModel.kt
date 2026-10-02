@@ -1155,6 +1155,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         },
         setActiveProfile = { setActiveProfile(it) },
         resetBrewParams = { resetBrewParams() },
+        onShotAnnotationsEdited = { id -> decent.scheduleReplaceAfterEdit(id) },
     )
 
     // ── Guided brew sessions (issue #10) ─────────────────────────────────
@@ -2103,6 +2104,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             pushStopTargets()
             loadMaintenance()
             visualizer.load()
+            // Daily Visualizer Premium check (gates the edit sync's Premium-only fields).
+            visualizer.refreshPremiumIfStale()
             decent.load()
             sharing.start()
             drive.load()

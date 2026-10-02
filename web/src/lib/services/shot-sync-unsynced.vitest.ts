@@ -62,7 +62,8 @@ vi.mock('$lib/visualizer/sync-config', () => ({
 	readSyncConfig: () => ({ includeProfile: true, includeNotes: true, privacy: 'unlisted' })
 }));
 
-import { ShotSync, ShotSyncLive } from './shot-sync.ts';
+import { describeUnsyncedStop, ShotSync, ShotSyncLive, type UnsyncedUploadResult } from './shot-sync.ts';
+import { HttpStatusError } from '../effect/errors.ts';
 import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import type { StoredShot } from '$lib/history/model';
@@ -180,5 +181,70 @@ describe('ShotSync.uploadUnsyncedShots — EF1 self-heal on 2xx-no-id', () => {
 		expect(history.get('s1')?.visualizerId).toBeFalsy();
 		expect(h.enqueueEntry).not.toHaveBeenCalled();
 		expect(h.appendSyncLog.mock.calls.some(([e]) => e.direction === 'skip' && e.id === 's1')).toBe(true);
+	});
+});
+
+describe('ShotSync.uploadUnsyncedShots — free-plan daily quota (visualizer 3e9ba33c)', () => {
+	// The exact reply `POST /shots/upload` sends at the cap.
+	const QUOTA_BODY = JSON.stringify({
+		error:
+			"Could not save the provided file. You've reached your daily limit of 30 shots. Please consider upgrading to a premium account."
+	});
+
+	/** Every upload POST fails with `status` + `body`. */
+	function runFailing(history: HistoryStore, status: number, body: string) {
+		const posts: HttpRequest[] = [];
+		const layer = Layer.succeed(
+			HttpClient,
+			HttpClient.of({
+				request: (req) => {
+					posts.push(req);
+					return Effect.fail(new HttpStatusError({ status, url: req.url, body }));
+				}
+			})
+		);
+		const program = ShotSync.pipe(Effect.flatMap((s) => s.uploadUnsyncedShots(history)));
+		return Effect.runPromise(
+			Effect.provide(program, Layer.provide(ShotSyncLive, Layer.merge(layer, vault)))
+		).then((result: UnsyncedUploadResult) => ({ result, posts }));
+	}
+
+	const three = () => mkHistory([shot({ id: 's1' }), shot({ id: 's2' }), shot({ id: 's3' })]);
+
+	it('stops the backlog loop on the quota 422, queues nothing and keeps the rest unsynced', async () => {
+		const history = three();
+		const { result, posts } = await runFailing(history, 422, QUOTA_BODY);
+
+		// One POST, then the loop stopped — no hammering the cap with s2, s3.
+		expect(posts).toHaveLength(1);
+		expect(result).toEqual({ uploaded: 0, stopped: { reason: 'quota', limit: 30 } });
+		// Not queued for a timed retry; every shot stays eligible for the next pass.
+		expect(h.enqueueEntry).not.toHaveBeenCalled();
+		expect(history.all.every((s) => !s.visualizerId)).toBe(true);
+		// The user is told why.
+		expect(describeUnsyncedStop(result)).toEqual({
+			kind: 'info',
+			message: "Visualizer's free plan uploads up to 30 shots a day — the rest will upload tomorrow."
+		});
+	});
+
+	it('keeps going past an ordinary 422 (a bad file is not the quota)', async () => {
+		const history = three();
+		const bad = JSON.stringify({ error: "Could not save the provided file. Profile file can't be blank" });
+		const { result, posts } = await runFailing(history, 422, bad);
+		expect(posts).toHaveLength(3);
+		expect(result.stopped).toBeNull();
+		expect(describeUnsyncedStop(result)).toBeNull();
+	});
+
+	it('stops on a 429 and queues that shot for a delayed retry', async () => {
+		const history = three();
+		const { result, posts } = await runFailing(history, 429, '{"error":"Too many requests. Please try again later."}');
+		expect(posts).toHaveLength(1);
+		expect(result.stopped).toEqual({ reason: 'rate-limited' });
+		expect(h.enqueueEntry).toHaveBeenCalledTimes(1);
+		const [entry] = h.enqueueEntry.mock.calls[0];
+		expect(entry).toMatchObject({ entity: 'shot', id: 's1', op: 'create' });
+		expect(entry.delayMs).toBeGreaterThanOrEqual(60_000);
 	});
 });

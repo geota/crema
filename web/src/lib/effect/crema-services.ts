@@ -32,7 +32,12 @@ import { Effect, Fiber, Stream } from 'effect';
 import type { AppRuntime, AppServices } from './runtime.ts';
 import { runtimePromise } from './bridge.ts';
 import { TokenVault } from '../services/token-vault.ts';
-import { ShotSync, type PullOptions, type ShotPatch } from '../services/shot-sync.ts';
+import {
+	ShotSync,
+	type PullOptions,
+	type ShotPatch,
+	type UnsyncedUploadResult
+} from '../services/shot-sync.ts';
 import { BeanSync, type ConnectionTestResult, type VisualizerAccount } from '../services/bean-sync.ts';
 import { UploadQueue, type DrainResult, type EnqueueInput } from '../services/upload-queue.ts';
 import type { TokenSet } from '$lib/visualizer/oauth';
@@ -70,6 +75,11 @@ export interface CremaServices {
 		fetchAccount(): Promise<VisualizerAccount>;
 		/** Verify the connection + probe the premium tier. */
 		testConnection(): Promise<ConnectionTestResult>;
+		/**
+		 * Re-probe the premium tier if the cached flag is older than 24 h (or was
+		 * never probed); a no-op otherwise, and when signed out. App start.
+		 */
+		refreshPremiumIfStale(): Promise<boolean | null>;
 		/** Best-effort remote bag delete (a 404 is success). */
 		deleteBean(visualizerId: string): Promise<void>;
 		/** Best-effort remote roaster delete (a 404 is success). */
@@ -91,7 +101,7 @@ export interface CremaServices {
 		 * the Sync card all reach it) joins that run instead of uploading the
 		 * backlog twice.
 		 */
-		uploadUnsynced(history: HistoryStore): Promise<void>;
+		uploadUnsynced(history: HistoryStore): Promise<UnsyncedUploadResult>;
 		/**
 		 * Upload (or RE-upload) one shot by id — the History detail's manual
 		 * action. Skips the auto-upload gates, binds the returned id, logs,
@@ -123,7 +133,7 @@ export function createCremaServices(runtime: AppRuntime): CremaServices {
 	const run = <A, E, R extends AppServices>(eff: Effect.Effect<A, E, R>): Promise<A> =>
 		runtimePromise(runtime, eff);
 	/** The running Visualizer backlog upload, joined by concurrent callers. */
-	let unsyncedRun: Promise<void> | null = null;
+	let unsyncedRun: Promise<UnsyncedUploadResult> | null = null;
 
 	return {
 		tokens: {
@@ -149,6 +159,7 @@ export function createCremaServices(runtime: AppRuntime): CremaServices {
 		beans: {
 			fetchAccount: () => run(Effect.flatMap(BeanSync, (b) => b.fetchAccount)),
 			testConnection: () => run(Effect.flatMap(BeanSync, (b) => b.testConnection)),
+			refreshPremiumIfStale: () => run(Effect.flatMap(BeanSync, (b) => b.refreshPremiumIfStale)),
 			deleteBean: (visualizerId) => run(Effect.flatMap(BeanSync, (b) => b.deleteBean(visualizerId))),
 			deleteRoaster: (visualizerId) => run(Effect.flatMap(BeanSync, (b) => b.deleteRoaster(visualizerId))),
 			runSync: (library) => run(Effect.flatMap(BeanSync, (b) => b.runSync(library)))

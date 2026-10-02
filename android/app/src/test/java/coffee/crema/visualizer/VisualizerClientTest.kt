@@ -93,6 +93,50 @@ class VisualizerClientTest {
     }
 
     @Test
+    fun `the premium probe is the web's sentinel roaster write - 201 premium then deleted`() = runTest {
+        statuses += HttpStatusCode.Created
+        status = HttpStatusCode.NoContent
+        reply = """{"id":"r-sentinel"}"""
+        assertEquals(true, client.probePremium("tok", nowMs = 42))
+        val (post, delete) = requests.takeLast(2)
+        assertEquals(HttpMethod.Post, post.method)
+        assertEquals("$API_BASE/roasters", post.url.toString())
+        assertEquals(
+            json.parseToJsonElement("""{"roaster":{"name":"__crema_premium_probe_42","website":null,"canonical_roaster_id":null}}"""),
+            json.parseToJsonElement(bodies[bodies.size - 2]),
+        )
+        assertEquals(HttpMethod.Delete, delete.method)
+        assertEquals("$API_BASE/roasters/r-sentinel", delete.url.toString())
+    }
+
+    @Test
+    fun `the premium probe reads 402 or 403 as free and anything else as inconclusive`() = runTest {
+        reply = """{"error":"You must be a premium user to access this feature."}"""
+        status = HttpStatusCode.Forbidden
+        assertEquals(false, client.probePremium("tok"))
+        status = HttpStatusCode.PaymentRequired
+        assertEquals(false, client.probePremium("tok"))
+        assertTrue("no cleanup without a sentinel", requests.none { it.method == HttpMethod.Delete })
+        status = HttpStatusCode.UnprocessableEntity
+        assertNull(client.probePremium("tok"))
+        // A 401 propagates so withFreshToken can refresh and retry.
+        status = HttpStatusCode.Unauthorized
+        try {
+            client.probePremium("tok")
+            fail("expected Auth")
+        } catch (_: VisualizerError.Auth) {
+        }
+    }
+
+    @Test
+    fun `a failed sentinel cleanup still reports premium`() = runTest {
+        statuses += HttpStatusCode.Created
+        status = HttpStatusCode.InternalServerError
+        reply = """{"id":"r-sentinel"}"""
+        assertEquals(true, client.probePremium("tok"))
+    }
+
+    @Test
     fun `PATCH wraps the shot body in a shot envelope`() = runTest {
         status = HttpStatusCode.NoContent
         reply = ""
@@ -137,7 +181,11 @@ class VisualizerClientTest {
         status = HttpStatusCode.InternalServerError
         assertEquals(500, fails<VisualizerError.Http>().status)
         status = HttpStatusCode.UnprocessableEntity
-        assertEquals(422, fails<VisualizerError.Http>().status)
+        reply = """{"error":"You've reached your daily limit of 30 shots."}"""
+        val e = fails<VisualizerError.Http>()
+        assertEquals(422, e.status)
+        // The body rides along so the quota 422 can be told apart.
+        assertEquals(reply, e.body)
     }
 
     @Test

@@ -80,6 +80,8 @@ export interface EnqueueInput {
 	op: QueueEntry['op'];
 	visualizerId?: string;
 	error?: string;
+	/** Hold a FRESH entry back this long before its first retry (e.g. a 429). */
+	delayMs?: number;
 }
 
 /**
@@ -113,7 +115,7 @@ export function enqueueEntry(input: EnqueueInput): void {
 				attempts: 0,
 				lastError: input.error,
 				enqueuedAt: now,
-				nextAttemptAt: now
+				nextAttemptAt: now + Math.max(0, input.delayMs ?? 0)
 			}
 		];
 	}
@@ -131,8 +133,11 @@ export function dequeueEntry(
 	if (next.length !== state.entries.length) writeQueue({ entries: next });
 }
 
-/** Persist a failed entry's bumped attempt count + next-retry time. */
-export function persistRetry(entry: QueueEntry, made: number, error: string): void {
+/**
+ * Persist a failed entry's bumped attempt count + next-retry time. `delayMs`
+ * overrides the default {@link backoffMs} schedule (a 429 waits longer).
+ */
+export function persistRetry(entry: QueueEntry, made: number, error: string, delayMs?: number): void {
 	const state = readQueue();
 	const idx = state.entries.findIndex(sameEntry(entry.entity, entry.id, entry.op));
 	if (idx < 0) return; // dequeued meanwhile
@@ -142,7 +147,7 @@ export function persistRetry(entry: QueueEntry, made: number, error: string): vo
 			...state.entries[idx],
 			attempts: made,
 			lastError: error,
-			nextAttemptAt: Date.now() + backoffMs(made)
+			nextAttemptAt: Date.now() + (delayMs ?? backoffMs(made))
 		},
 		...state.entries.slice(idx + 1)
 	];

@@ -35,6 +35,7 @@ vi.mock('$lib/components/shared/toast.svelte', () => ({
 const {
 	describeDecentDrain,
 	retryPendingDecentUploads,
+	scheduleDecentReplaceAfterEdit,
 	unsentDecentShots,
 	uploadShotToDecent,
 	uploadUnsentDecentShots
@@ -117,7 +118,28 @@ describe('uploadShotToDecent gates', () => {
 			kind: 'uploaded',
 			url: 'https://decentespresso.com/shot/6262/77'
 		});
-		expect(shots.get('old')?.machine).toEqual({ serialNumber: '6262', firmwareVersion: 'v1.43 build 1352', model: 'DE1PRO' });
+		// The CPU build number alone, as decaid stamps it — not the Version label.
+		expect(shots.get('old')?.machine).toEqual({ serialNumber: '6262', firmwareVersion: '1352', model: 'DE1PRO' });
+	});
+	it('uploads machine.firmwareVersion as the build number, normalising a legacy label', async () => {
+		writeDecentAccount(linked);
+		const bodies: Array<{ machine: Record<string, unknown> }> = [];
+		const capture: FetchLike = async (_url, init) => {
+			bodies.push(JSON.parse(String(init?.body)));
+			return new Response('{"id":"77"}', { status: 200 });
+		};
+		shots.set('legacy', {
+			...shot('legacy', 30_000),
+			machine: { serialNumber: '6262', firmwareVersion: 'v1.43 build 1352', model: 'DE1PRO' }
+		});
+		expect(await uploadShotToDecent('legacy', { fetchFn: capture, appVersion: 't', manual: true })).toMatchObject({ kind: 'uploaded' });
+		expect(bodies.at(-1)?.machine).toEqual({ serialNumber: '6262', firmwareVersion: '1352', model: 'DE1PRO' });
+		shots.set('ble', {
+			...shot('ble', 30_000),
+			machine: { serialNumber: '6262', firmwareVersion: 'v1.0.142 (API 4)', model: 'DE1PRO' }
+		});
+		expect(await uploadShotToDecent('ble', { fetchFn: capture, appVersion: 't', manual: true })).toMatchObject({ kind: 'uploaded' });
+		expect(bodies.at(-1)?.machine).toEqual({ serialNumber: '6262', model: 'DE1PRO' });
 	});
 	it('never stamps the live serial onto a shot pulled from Visualizer', async () => {
 		writeDecentAccount(linked);
@@ -332,5 +354,47 @@ describe('network retry', () => {
 		expect(await retryPendingDecentUploads({ fetchFn: ok })).toMatchObject({ uploaded: 1 });
 		expect(shots.get('a')?.decentId).toBe('77');
 		expect(readDecentAccount().retryShotIds).toEqual([]);
+	});
+});
+
+describe('scheduleDecentReplaceAfterEdit (shot-upload 435acabb)', () => {
+	const urls: string[] = [];
+	const capture: FetchLike = async (input) => {
+		posts += 1;
+		urls.push(String(input));
+		return new Response('{"id":"77"}', { status: 200 });
+	};
+	const flush = async () => {
+		for (let i = 0; i < 20; i++) await Promise.resolve();
+	};
+	beforeEach(() => {
+		urls.length = 0;
+		vi.useFakeTimers();
+	});
+
+	it('a burst of edits to an uploaded shot queues exactly one replace upload', async () => {
+		writeDecentAccount(linked);
+		shots.set('a', { ...shots.get('a')!, decentId: '77' });
+		expect(scheduleDecentReplaceAfterEdit('a', { fetchFn: capture, appVersion: 't' })).toBe(true);
+		vi.advanceTimersByTime(500);
+		scheduleDecentReplaceAfterEdit('a', { fetchFn: capture, appVersion: 't' });
+		scheduleDecentReplaceAfterEdit('a', { fetchFn: capture, appVersion: 't' });
+		expect(posts).toBe(0); // debounced
+		await vi.advanceTimersByTimeAsync(1_500);
+		await flush();
+		expect(posts).toBe(1);
+		expect(urls[0]).toMatch(/\/support\/api\/shot_upload\?replace=1$/);
+	});
+
+	it('does nothing for a never-uploaded shot, with auto-upload off, or unlinked', async () => {
+		writeDecentAccount(linked);
+		expect(scheduleDecentReplaceAfterEdit('a', { fetchFn: capture })).toBe(false); // no decentId
+		shots.set('a', { ...shots.get('a')!, decentId: '77' });
+		writeDecentAccount({ ...linked, autoUpload: false });
+		expect(scheduleDecentReplaceAfterEdit('a', { fetchFn: capture })).toBe(false);
+		writeDecentAccount(DEFAULT_DECENT_ACCOUNT);
+		expect(scheduleDecentReplaceAfterEdit('a', { fetchFn: capture })).toBe(false);
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(posts).toBe(0);
 	});
 });

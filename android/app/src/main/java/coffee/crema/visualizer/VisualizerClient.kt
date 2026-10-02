@@ -17,10 +17,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import java.io.Closeable
 
 /*
@@ -59,8 +62,8 @@ sealed class VisualizerError(message: String) : Exception(message) {
     /** Transport failure or malformed body — worth retrying later. */
     class Network(message: String) : VisualizerError(message)
 
-    /** Any other non-2xx. */
-    class Http(val status: Int, message: String) : VisualizerError(message)
+    /** Any other non-2xx, with the reply body (the quota 422 is told apart by it). */
+    class Http(val status: Int, message: String, val body: String = "") : VisualizerError(message)
 }
 
 class VisualizerClient(
@@ -113,7 +116,7 @@ class VisualizerClient(
             status == 401 -> throw VisualizerError.Auth()
             status == 402 || status == 403 -> throw VisualizerError.PremiumGated()
             status == 404 -> throw VisualizerError.NotFound()
-            status !in 200..299 -> throw VisualizerError.Http(status, "Visualizer HTTP $status")
+            status !in 200..299 -> throw VisualizerError.Http(status, "Visualizer HTTP $status", text)
             text.isBlank() -> null
             else -> runCatching { json.parseToJsonElement(text) }
                 .getOrElse { throw VisualizerError.Network("Visualizer returned a malformed body") }
@@ -131,6 +134,51 @@ class VisualizerClient(
             public = str("public")?.toBoolean() ?: false,
             avatarUrl = str("avatar_url") ?: "",
         )
+    }
+
+    /**
+     * The account's Premium tier — a port of the web `BeanSync` probe
+     * (`probePremium`, run by its `testConnection`): `POST /api/roasters` with
+     * a sentinel name (roaster writes are Premium-gated), then delete it.
+     * 2xx → true, 402/403 → false, any other failure → null (inconclusive).
+     * A failed cleanup is non-fatal (the web's next full bean sync tidies the
+     * sentinel). A 401 still throws [VisualizerError.Auth] so the caller's
+     * token refresh can retry.
+     */
+    suspend fun probePremium(accessToken: String, nowMs: Long = System.currentTimeMillis()): Boolean? {
+        val created = try {
+            request(
+                "POST",
+                "/roasters",
+                accessToken,
+                buildJsonObject {
+                    put(
+                        "roaster",
+                        buildJsonObject {
+                            put("name", "$PREMIUM_PROBE_PREFIX$nowMs")
+                            put("website", JsonNull)
+                            put("canonical_roaster_id", JsonNull)
+                        },
+                    )
+                },
+            )
+        } catch (_: VisualizerError.PremiumGated) {
+            return false
+        } catch (e: VisualizerError) {
+            if (e is VisualizerError.Auth) throw e
+            return null
+        }
+        val id = (created as? JsonObject)?.get("id")?.jsonPrimitive?.contentOrNull
+        if (id != null) {
+            try {
+                request("DELETE", "/roasters/$id", accessToken)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Non-fatal: left for the next full bean sync to reconcile.
+            }
+        }
+        return true
     }
 
     /**
@@ -184,6 +232,9 @@ class VisualizerClient(
         )
     }
 }
+
+/** Name prefix of the sentinel roaster [VisualizerClient.probePremium] creates and deletes (the web's too). */
+internal const val PREMIUM_PROBE_PREFIX = "__crema_premium_probe_"
 
 /** What OkHttp sent for a JSON String body: `application/json; charset=utf-8`. */
 private val JSON_UTF8 = ContentType.Application.Json.withCharset(Charsets.UTF_8)

@@ -72,11 +72,28 @@ class VisualizerSync(
     private val onSignedIn: () -> Unit = {},
     /** The shot as history holds it now (null = deleted) — re-read before a backlog POST. */
     private val currentShot: (localId: String) -> StoredShot? = { null },
+    /** The core's quota / backoff policy (injected so JVM tests needn't load the native core). */
+    private val uploadPolicy: UploadPolicy = UploadPolicy.core(),
+    /**
+     * Core `visualizer_shot_patch_json(inputs, premium)`: the edit-sync PATCH
+     * body fitted to the account tier, or null = skip (injected so JVM tests
+     * needn't load the native core).
+     */
+    private val shotPatchBody: (inputsJson: String, premium: Boolean?) -> String? =
+        { inputs, premium -> visualizerShotPatchJson(inputs, premium) },
+    /** Wall clock (unix ms) — the daily Premium re-probe gate; tests pin it. */
+    private val now: () -> Long = System::currentTimeMillis,
+    /** The OAuth code → token exchange (injected so JVM tests can drive a sign-in). */
+    private val exchangeCode: suspend (code: String, verifier: String) -> TokenSet =
+        { code, verifier -> exchangeCodeForToken(clientId, code, verifier, json) },
 ) : UploadDestination {
 
-    private companion object {
+    internal companion object {
         /** Backstop on the pull walk — mirrors the web's maxPages default. */
         const val MAX_PULL_PAGES = 200
+
+        /** The app-start Premium re-probe runs at most this often (web `PREMIUM_REFRESH_INTERVAL_MS`). */
+        const val PREMIUM_REFRESH_INTERVAL_MS = 24L * 60 * 60 * 1000
     }
 
     /** What the Settings/History UI binds to. */
@@ -242,11 +259,12 @@ class VisualizerSync(
                     notify("Visualizer sign-in failed — state mismatch, try again")
                 else -> {
                     _state.update { it.copy(busy = true) }
-                    runCatchingCancellable { exchangeCodeForToken(clientId, code, verifier, json) }
+                    runCatchingCancellable { exchangeCode(code, verifier) }
                         .onSuccess { tokens ->
                             if (!persist { it.copy(tokens = tokens) }) notify("Couldn’t save the Visualizer login on this device")
                             val account = runCatchingCancellable { client.fetchAccount(tokens.accessToken) }.getOrNull()
                             persist { it.copy(account = account) }
+                            refreshPremium()
                             notify("Signed in to Visualizer${account?.let { a -> " as ${a.name}" }.orEmpty()}")
                             onSignedIn()
                         }
@@ -261,7 +279,8 @@ class VisualizerSync(
     fun signOut() {
         scope.launch {
             persisted.tokens?.accessToken?.let { revokeToken(clientId, it) }
-            persist { it.copy(tokens = null, account = null) }
+            // The tier is per-account: a later sign-in re-probes it.
+            persist { it.copy(tokens = null, account = null, premium = null, premiumCheckedAt = null) }
             notify("Signed out of Visualizer")
         }
     }
@@ -275,7 +294,32 @@ class VisualizerSync(
         }
     }
 
-    /** The Sharing card's "Test" — a `/me` round-trip with a visible verdict. */
+    /**
+     * Re-run the Premium probe ([VisualizerClient.probePremium], the web's
+     * sentinel roaster write) and cache a conclusive result with its time.
+     * Inconclusive / failed probes leave the cached value alone. Returns the
+     * probe result.
+     */
+    private suspend fun refreshPremium(): Boolean? {
+        val premium = runCatchingCancellable { withFreshToken { client.probePremium(it, now()) } }.getOrNull()
+            ?: return null
+        persist { it.copy(premium = premium, premiumCheckedAt = now()) }
+        return premium
+    }
+
+    /**
+     * App start: re-probe the Premium tier when signed in and the last
+     * conclusive probe is over 24 h old (or never happened); otherwise nothing.
+     */
+    fun refreshPremiumIfStale() {
+        val p = persisted
+        if (p.tokens == null) return
+        val checked = p.premiumCheckedAt
+        if (checked != null && now() - checked < PREMIUM_REFRESH_INTERVAL_MS) return
+        scope.launch { refreshPremium() }
+    }
+
+    /** The Sharing card's "Test" — a `/me` round-trip plus the Premium probe, with a visible verdict. */
     fun testConnection() {
         if (persisted.tokens == null) {
             notify("Not signed in to Visualizer")
@@ -286,7 +330,12 @@ class VisualizerSync(
             runCatchingCancellable { withFreshToken { client.fetchAccount(it) } }
                 .onSuccess { account ->
                     persist { it.copy(account = account) }
-                    notify("Visualizer connection OK — signed in as ${account.name}")
+                    val tier = when (refreshPremium()) {
+                        true -> " (Premium)"
+                        false -> " (free tier)"
+                        null -> ""
+                    }
+                    notify("Visualizer connection OK — signed in as ${account.name}$tier")
                 }
                 .onFailure { notify("Visualizer connection failed: ${it.message}") }
             _state.update { it.copy(busy = false) }
@@ -437,8 +486,9 @@ class VisualizerSync(
                     if (sink != null) sink(shot.id, UploadOutcome(UploadOutcomeKind.Uploaded)) else notify("Shot uploaded to Visualizer")
                 }
                 .onFailure { e ->
-                    if (sink != null) sink(shot.id, UploadOutcome(UploadOutcomeKind.Failed, e.message ?: "failed"))
-                    else notify("Visualizer upload failed: ${e.message}")
+                    val why = uploadPolicy.describe(e)
+                    if (sink != null) sink(shot.id, UploadOutcome(UploadOutcomeKind.Failed, why))
+                    else notify("Visualizer upload failed: $why")
                 }
         }
         return true
@@ -458,35 +508,41 @@ class VisualizerSync(
             val unsynced = unsent(shots)
             if (unsynced.isEmpty()) return DrainResult()
             _state.update { it.copy(busy = true) }
-            var ok = 0
-            var failed = 0
-            var skipped = 0
-            var stopped: String? = null
-            for (snapshot in unsynced) {
-                if (!claim(snapshot.id)) { skipped++; continue }
+            // Stops on the free-plan daily cap / a lasting 429 / a dead
+            // session (web `shouldAbortLoop`); the rest stay in the backlog.
+            val r = runUploadPass(
+                unsynced,
+                uploadPolicy,
+                onFailure = { snapshot, e ->
+                    if (e !is VisualizerError.Auth) logSync("skip", snapshot.id, snapshot.profileName ?: "Shot", uploadPolicy.describe(e))
+                },
+            ) { snapshot ->
+                if (!claim(snapshot.id)) return@runUploadPass false
                 try {
                     val shot = currentShot(snapshot.id) ?: snapshot
-                    if (shot.visualizerId != null) { skipped++; continue }
+                    if (shot.visualizerId != null) return@runUploadPass false
                     val id = uploadShotNow(shot)
-                    ok++
                     onShotSynced(shot.id, id)
-                } catch (c: CancellationException) {
-                    throw c
-                } catch (e: VisualizerError.Auth) {
-                    failed++
-                    stopped = "Visualizer session expired"
-                } catch (e: Exception) {
-                    failed++
-                    logSync("skip", snapshot.id, snapshot.profileName ?: "Shot", e.message)
+                    true
                 } finally {
                     release(snapshot.id)
                 }
-                if (stopped != null) break
             }
-            return DrainResult(ok, failed, skipped, stopped)
+            return DrainResult(r.uploaded, r.failed, r.skipped, r.stop?.notice)
         } finally {
             _state.update { it.copy(busy = false) }
             drainMutex.unlock()
+        }
+    }
+
+    /** One backlog upload with the History spinner on; stamps the id. Throws on failure. */
+    private suspend fun pushTracked(shot: StoredShot): Boolean {
+        _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shot.id) }
+        try {
+            onShotSynced(shot.id, uploadShotNow(shot))
+            return true
+        } finally {
+            _state.update { it.copy(uploadingShotIds = it.uploadingShotIds - shot.id) }
         }
     }
 
@@ -510,8 +566,10 @@ class VisualizerSync(
      * the core (`de1_domain::visualizer_shot_patch`, review #42) so both
      * shells emit an identical wire body. What stays here is the config:
      * notes gated on include-notes (an opt-out never leaks via an edit) and
-     * the effective privacy. No-op for never-uploaded shots; soft — a
-     * failure notifies but never blocks the local edit.
+     * the effective privacy, and the cached premium tier (Premium-only fields
+     * are dropped for a free / unknown account; nothing left = no request).
+     * No-op for never-uploaded shots; soft — a failure notifies but never
+     * blocks the local edit.
      */
     fun patchEditedShot(shot: StoredShot) {
         val vid = shot.visualizerId ?: return
@@ -535,12 +593,15 @@ class VisualizerSync(
             // (issue #16: a grind edit must reach the uploaded copy).
             grinderSetting = shot.effectiveGrindSetting,
         )
+        // Fitted to the account tier in core: a free account — or one whose tier
+        // isn't probed yet — silently loses the Premium-only fields
+        // (private_notes, the tasting scores incl. flavor, tag_list,
+        // coffee_bag_id …); null = nothing left the server would apply, so no
+        // request and no notice.
         val body = runCatchingCancellable {
-            json.decodeFromString(
-                JsonObject.serializer(),
-                visualizerShotPatchJson(json.encodeToString(ShotPatchInputs.serializer(), inputs)),
-            )
-        }.getOrElse { notify("Visualizer update failed: ${it.message}"); return }
+            shotPatchBody(json.encodeToString(ShotPatchInputs.serializer(), inputs), persisted.premium)
+                ?.let { json.decodeFromString(JsonObject.serializer(), it) }
+        }.getOrElse { notify("Visualizer update failed: ${it.message}"); return } ?: return
         scope.launch {
             runCatchingCancellable { withFreshToken { client.patchShot(it, vid, body) } }
                 .onFailure { notify("Visualizer update failed: ${it.message}") }
@@ -729,21 +790,17 @@ class VisualizerSync(
                     logSync("pull", "", "Pull failed", e.message)
                 }
             }
+            var stop: PassStop? = null
             if (directionPushes(direction)) {
                 val unsynced = shots.filter { it.visualizerId == null && !it.isBrewLog }
-                for (shot in unsynced) {
-                    _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shot.id) }
-                    runCatchingCancellable { uploadShotNow(shot) }
-                        .onSuccess { id ->
-                            pushed++
-                            onShotSynced(shot.id, id)
-                        }
-                        .onFailure { e ->
-                            failed = true
-                            logSync("skip", shot.id, shot.profileName ?: "Shot", e.message)
-                        }
-                    _state.update { it.copy(uploadingShotIds = it.uploadingShotIds - shot.id) }
-                }
+                val r = runUploadPass(
+                    unsynced,
+                    uploadPolicy,
+                    onFailure = { shot, e -> logSync("skip", shot.id, shot.profileName ?: "Shot", uploadPolicy.describe(e)) },
+                ) { shot -> pushTracked(shot) }
+                pushed = r.uploaded
+                if (r.failed > 0) failed = true
+                stop = r.stop
             }
             _state.update { it.copy(syncing = false) }
             notify(
@@ -752,7 +809,8 @@ class VisualizerSync(
                     if (directionPulls(direction)) append("$pulled pulled")
                     if (directionPulls(direction) && directionPushes(direction)) append(" · ")
                     if (directionPushes(direction)) append("$pushed pushed")
-                    if (failed) append(" · some steps failed (see log)")
+                    if (stop != null) append(" · ${stop.notice}")
+                    else if (failed) append(" · some steps failed (see log)")
                 },
             )
         }
@@ -783,23 +841,11 @@ class VisualizerSync(
         }
         _state.update { it.copy(busy = true) }
         scope.launch {
-            var ok = 0
-            var failed = 0
-            for (shot in unsynced) {
-                _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shot.id) }
-                runCatchingCancellable { uploadShotNow(shot) }
-                    .onSuccess { id ->
-                        ok++
-                        onShotSynced(shot.id, id)
-                    }
-                    .onFailure { failed++ }
-                _state.update { it.copy(uploadingShotIds = it.uploadingShotIds - shot.id) }
-            }
+            val r = runUploadPass(unsynced, uploadPolicy) { shot -> pushTracked(shot) }
             _state.update { it.copy(busy = false) }
-            notify(
-                if (failed == 0) "Uploaded $ok shot(s) to Visualizer"
-                else "Uploaded $ok shot(s); $failed failed",
-            )
+            val summary = if (r.failed == 0) "Uploaded ${r.uploaded} shot(s) to Visualizer"
+            else "Uploaded ${r.uploaded} shot(s); ${r.failed} failed"
+            notify(r.stop?.let { "$summary — ${it.notice}" } ?: summary)
         }
     }
 }
