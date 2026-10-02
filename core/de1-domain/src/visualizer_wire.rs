@@ -69,6 +69,10 @@ pub struct BagWire {
     /// The bag's roaster's Visualizer id.
     #[serde(default)]
     pub roaster_id: Option<String>,
+    /// Visualizer catalogue coffee-bag link (`canonical_coffee_bag_id`) —
+    /// present on the bag list summaries and the write request.
+    #[serde(default)]
+    pub canonical_coffee_bag_id: Option<String>,
     /// ISO `yyyy-mm-dd` roast date.
     #[serde(default)]
     pub roast_date: Option<String>,
@@ -150,7 +154,7 @@ pub struct RoasterWire {
     /// Logo / hero image URL.
     #[serde(default)]
     pub image_url: Option<String>,
-    /// Canonical-roaster pointer when this row was deduped.
+    /// Visualizer catalogue roaster link (`canonical_roaster_id`).
     #[serde(default)]
     pub canonical_roaster_id: Option<String>,
 }
@@ -232,6 +236,7 @@ pub fn bean_to_wire(bean: &Bean, roaster_remote_id: Option<&str>) -> BagWire {
         "crema_grinder_setting": bean.grinder_setting,
         "crema_beanconqueror_id": bean.beanconqueror_id,
         "crema_opened_on": bean.opened_on,
+        "crema_canonical_roaster_id": bean.canonical_roaster_id,
         "crema_updated_at": bean.updated_at,
     });
     // Round-trip the user's metadata blob too (lossless escape valve): spread
@@ -250,6 +255,7 @@ pub fn bean_to_wire(bean: &Bean, roaster_remote_id: Option<&str>) -> BagWire {
             bean.name.clone()
         },
         roaster_id: roaster_remote_id.map(str::to_owned),
+        canonical_coffee_bag_id: bean.canonical_coffee_bag_id.clone(),
         roast_date: bean.roasted_on.clone(),
         frozen_date: bean.frozen_on.clone(),
         defrosted_date: bean.defrosted_on.clone(),
@@ -310,6 +316,11 @@ pub fn bean_from_wire(
 
     let mut bean = Bean::new(id, wire.name.clone(), now_ms);
     bean.visualizer_id = wire.id.clone();
+    bean.canonical_coffee_bag_id = wire.canonical_coffee_bag_id.clone();
+    bean.canonical_roaster_id = crema
+        .get("crema_canonical_roaster_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     bean.roaster_id = local_roaster_id.map(str::to_owned);
     bean.roasted_on = wire.roast_date.clone();
     bean.frozen_on = wire.frozen_date.clone();
@@ -393,8 +404,10 @@ fn mix_from_value(v: &Value) -> Option<BeanMix> {
 // ── Roaster ⇄ wire ───────────────────────────────────────────────────────
 
 /// Encode a Crema [`Roaster`] → Visualizer's wire body. The Crema-only
-/// `city` field stays local (Visualizer doesn't model it). Mirrors
-/// `roasterToWire`.
+/// `city` field stays local (Visualizer doesn't model it), and so does the
+/// local dedup pointer ([`Roaster::canonical_roaster_id`], a `roaster:<uuid>`
+/// row id): the wire's `canonical_roaster_id` is the Visualizer catalogue
+/// link, [`Roaster::catalogue_roaster_id`]. Mirrors `roasterToWire`.
 #[must_use]
 pub fn roaster_to_wire(roaster: &Roaster) -> RoasterWire {
     RoasterWire {
@@ -402,7 +415,7 @@ pub fn roaster_to_wire(roaster: &Roaster) -> RoasterWire {
         name: roaster.name.clone(),
         website: roaster.website.clone(),
         image_url: roaster.image_url.clone(),
-        canonical_roaster_id: roaster.canonical_roaster_id.clone(),
+        canonical_roaster_id: roaster.catalogue_roaster_id.clone(),
     }
 }
 
@@ -416,7 +429,7 @@ pub fn roaster_from_wire(wire: &RoasterWire, fallback_id: &str, now_ms: i64) -> 
     roaster.visualizer_id = wire.id.clone();
     roaster.website = wire.website.clone();
     roaster.image_url = wire.image_url.clone();
-    roaster.canonical_roaster_id = wire.canonical_roaster_id.clone();
+    roaster.catalogue_roaster_id = wire.canonical_roaster_id.clone();
     roaster
 }
 
@@ -1599,7 +1612,7 @@ mod tests {
         roaster.visualizer_id = Some("rv-7".to_owned());
         roaster.website = Some("https://onyx.coffee".to_owned());
         roaster.image_url = Some("https://onyx.coffee/logo.png".to_owned());
-        roaster.canonical_roaster_id = Some("canon-3".to_owned());
+        roaster.catalogue_roaster_id = Some("canon-3".to_owned());
 
         let back = roaster_from_wire(&roaster_to_wire(&roaster), "fallback", 0);
         assert_eq!(back.name, "Onyx");
@@ -1609,7 +1622,58 @@ mod tests {
             back.image_url.as_deref(),
             Some("https://onyx.coffee/logo.png")
         );
-        assert_eq!(back.canonical_roaster_id.as_deref(), Some("canon-3"));
+        assert_eq!(back.catalogue_roaster_id.as_deref(), Some("canon-3"));
+        assert_eq!(back.canonical_roaster_id, None);
+    }
+
+    #[test]
+    fn roaster_local_dedup_pointer_never_reaches_the_wire() {
+        // The local dedup pointer is a `roaster:<uuid>` row id — sending it
+        // as Visualizer's catalogue link would be wrong (and not a UUID).
+        let mut roaster = Roaster::new("roaster-2".to_owned(), "Onyx".to_owned(), 0);
+        roaster.canonical_roaster_id = Some("roaster:other".to_owned());
+        assert_eq!(roaster_to_wire(&roaster).canonical_roaster_id, None);
+        roaster.catalogue_roaster_id = Some("cr-9".to_owned());
+        assert_eq!(
+            roaster_to_wire(&roaster).canonical_roaster_id.as_deref(),
+            Some("cr-9")
+        );
+    }
+
+    // ── catalogue links on the bag wire ────────────────────────────────
+
+    #[test]
+    fn bean_catalogue_links_round_trip() {
+        let mut bean = round_trip_bean();
+        bean.canonical_coffee_bag_id = Some("cb-1".to_owned());
+        bean.canonical_roaster_id = Some("cr-1".to_owned());
+        let wire = bean_to_wire(&bean, Some("rv-1"));
+        assert_eq!(wire.canonical_coffee_bag_id.as_deref(), Some("cb-1"));
+        let json = serde_json::to_value(&wire).unwrap();
+        assert_eq!(json["canonical_coffee_bag_id"], "cb-1");
+        assert_eq!(
+            json["metadata"]["crema"]["crema_canonical_roaster_id"],
+            "cr-1"
+        );
+        let back = bean_from_wire(&wire, None, "f", 0);
+        assert_eq!(back.canonical_coffee_bag_id.as_deref(), Some("cb-1"));
+        assert_eq!(back.canonical_roaster_id.as_deref(), Some("cr-1"));
+    }
+
+    #[test]
+    fn bean_without_catalogue_links_encodes_null_and_reads_the_list_summary() {
+        let wire = bean_to_wire(&round_trip_bean(), None);
+        assert_eq!(wire.canonical_coffee_bag_id, None);
+        // A bag-list summary (no `crema` block) carrying a link set on the
+        // Visualizer side is kept on pull.
+        let summary: BagWire = serde_json::from_value(serde_json::json!({
+            "id": "vb-1", "name": "Gesha", "roaster_id": "rv-1",
+            "canonical_coffee_bag_id": "cb-7"
+        }))
+        .unwrap();
+        let back = bean_from_wire(&summary, None, "f", 0);
+        assert_eq!(back.canonical_coffee_bag_id.as_deref(), Some("cb-7"));
+        assert_eq!(back.canonical_roaster_id, None);
     }
 
     // ── ISO datetime round-trip ────────────────────────────────────────

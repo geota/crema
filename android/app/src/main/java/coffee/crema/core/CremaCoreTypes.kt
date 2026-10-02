@@ -164,6 +164,18 @@ data class Bean (
 	val linkedProfileId: String? = null,
 	/// Visualizer `coffee_bag.id` once pushed.
 	val visualizerId: String? = null,
+	/// Visualizer **catalogue** coffee-bag id (`canonical_coffee_bag_id`) —
+	/// set when the user picked this bag from the Visualizer catalogue
+	/// search. Sent on the bag write so the remote bag links to the shared
+	/// catalogue entry; read back from the bag list on pull. `None` = not
+	/// linked. Defaults so older Bean JSON deserialises cleanly.
+	val canonicalCoffeeBagId: String? = null,
+	/// Visualizer **catalogue** roaster id (`canonical_roaster_id`) of the
+	/// picked catalogue bag's roaster. Round-trips through the bag's
+	/// `metadata.crema` block (the coffee-bag wire has no roaster-link
+	/// field) and seeds the roaster row's [`Roaster::catalogue_roaster_id`].
+	/// `None` = not linked. Defaults so older Bean JSON deserialises cleanly.
+	val canonicalRoasterId: String? = null,
 	/// Unix epoch ms when this bag was soft-deleted, or `None` when
 	/// active. Required for cross-device sync tombstone propagation:
 	/// on the next sync push, the remote row is DELETEd and the local
@@ -553,6 +565,72 @@ data class BrewStatInput (
 	val rating: UByte? = null,
 	/// The brew method; `None` = machine espresso.
 	val brewMethod: String? = null
+)
+
+/// The result of [`catalogue_autofill`].
+@Serializable
+data class CatalogueAutofill (
+	/// The bean with the picked catalogue entry applied.
+	val bean: Bean,
+	/// The catalogue roaster's name when the shell should put it in the
+	/// roaster field (resolving / creating the local roaster row is the
+	/// shell's job, as for a typed name); `None` = leave the roaster alone.
+	val roasterName: String? = null,
+	/// camelCase names of the fields that changed (`"name"`, `"roaster"`,
+	/// `"origin.country"`, `"roastLevel"`, `"tastingNotes"`, …) — for a
+	/// "filled N fields" hint. Excludes the catalogue-link ids.
+	val filled: List<String>
+)
+
+/// One `CanonicalCoffeeBagSummary` row, normalised for the shells: trimmed,
+/// blank → `None`, camelCase. Produced by [`parse_catalogue_coffee_bags`] and
+/// consumed by [`catalogue_autofill`].
+@Serializable
+data class CatalogueCoffeeBag (
+	/// Catalogue coffee-bag id (`canonical_coffee_bag_id` on a user bag).
+	val id: String,
+	/// Catalogue roaster id (`canonical_roaster_id` on a user roaster).
+	val canonicalRoasterId: String,
+	/// The catalogue roaster's name.
+	val roasterName: String,
+	/// Bag name.
+	val name: String,
+	/// Roaster product page.
+	val url: String? = null,
+	/// Free-text roast level (`"Light"`, `"Medium-Dark"`, …).
+	val roastLevel: String? = null,
+	/// Country of origin.
+	val country: String? = null,
+	/// Region within the country.
+	val region: String? = null,
+	/// Farmer / producer.
+	val farmer: String? = null,
+	/// Cultivar / variety.
+	val variety: String? = null,
+	/// Elevation, free text.
+	val elevation: String? = null,
+	/// Process, free text.
+	val processing: String? = null,
+	/// Harvest time, free text.
+	val harvestTime: String? = null,
+	/// Tasting notes, free text.
+	val tastingNotes: String? = null,
+	/// Secondary line for a result row — country and process joined by
+	/// `" · "` (`"Ethiopia · Washed"`), or `""` when neither is known.
+	val meta: String? = null
+)
+
+/// One page of catalogue search results.
+@Serializable
+data class CataloguePage (
+	/// The rows, in server order. Malformed rows are dropped.
+	val entries: List<CatalogueCoffeeBag>,
+	/// Total matches across all pages (`paging.count`; `0` when absent).
+	val count: UInt,
+	/// 1-based page number (`paging.page`; `1` when absent).
+	val page: UInt,
+	/// Total page count (`paging.pages`; `1` when absent).
+	val pages: UInt
 )
 
 /// The portable, cross-shell app-preferences subset. `#[serde(default)]` on the
@@ -2104,12 +2182,18 @@ data class Roaster (
 	val country: String? = null,
 	/// Free-form notes (private to the user — not pushed to Visualizer).
 	val notes: String,
-	/// Pointer to the canonical roaster id when this row was tagged as a
-	/// duplicate. `None` = this row is itself canonical (or has not been
-	/// deduped). Mirrors Visualizer's `RoasterDetail.canonical_roaster_id`
-	/// — round-trips directly. Beans pointing at a duplicate are typically
-	/// re-pointed at the canonical id on merge.
+	/// Pointer to the canonical **local** roaster row (`roaster:<uuid>`)
+	/// when this row was tagged as a duplicate in the roaster directory.
+	/// `None` = this row is itself canonical (or has not been deduped).
+	/// Local-only: Visualizer's `canonical_roaster_id` is a link into its
+	/// shared roaster catalogue, which lives in
+	/// [`Roaster::catalogue_roaster_id`] instead.
 	val canonicalRoasterId: String? = null,
+	/// Visualizer **catalogue** roaster id — the wire's
+	/// `RoasterDetail.canonical_roaster_id`. Set from a catalogue pick in the
+	/// bean form (or pulled from Visualizer) and sent on the roaster write.
+	/// `None` = not linked. Defaults so older JSON deserialises cleanly.
+	val catalogueRoasterId: String? = null,
 	/// Visualizer `roaster.id` once pushed.
 	val visualizerId: String? = null,
 	/// Unix epoch ms when this roaster was soft-deleted, or `None` when

@@ -520,6 +520,20 @@ pub struct Bean {
     pub linked_profile_id: Option<String>,
     /// Visualizer `coffee_bag.id` once pushed.
     pub visualizer_id: Option<String>,
+    /// Visualizer **catalogue** coffee-bag id (`canonical_coffee_bag_id`) —
+    /// set when the user picked this bag from the Visualizer catalogue
+    /// search. Sent on the bag write so the remote bag links to the shared
+    /// catalogue entry; read back from the bag list on pull. `None` = not
+    /// linked. Defaults so older Bean JSON deserialises cleanly.
+    #[serde(default)]
+    pub canonical_coffee_bag_id: Option<String>,
+    /// Visualizer **catalogue** roaster id (`canonical_roaster_id`) of the
+    /// picked catalogue bag's roaster. Round-trips through the bag's
+    /// `metadata.crema` block (the coffee-bag wire has no roaster-link
+    /// field) and seeds the roaster row's [`Roaster::catalogue_roaster_id`].
+    /// `None` = not linked. Defaults so older Bean JSON deserialises cleanly.
+    #[serde(default)]
+    pub canonical_roaster_id: Option<String>,
     /// Unix epoch ms when this bag was soft-deleted, or `None` when
     /// active. Required for cross-device sync tombstone propagation:
     /// on the next sync push, the remote row is DELETEd and the local
@@ -710,6 +724,8 @@ impl Bean {
             tags: Vec::new(),
             linked_profile_id: None,
             visualizer_id: None,
+            canonical_coffee_bag_id: None,
+            canonical_roaster_id: None,
             deleted_at: None,
             beanconqueror_id: None,
             image_ref: None,
@@ -809,13 +825,20 @@ pub struct Roaster {
     pub country: Option<String>,
     /// Free-form notes (private to the user — not pushed to Visualizer).
     pub notes: String,
-    /// Pointer to the canonical roaster id when this row was tagged as a
-    /// duplicate. `None` = this row is itself canonical (or has not been
-    /// deduped). Mirrors Visualizer's `RoasterDetail.canonical_roaster_id`
-    /// — round-trips directly. Beans pointing at a duplicate are typically
-    /// re-pointed at the canonical id on merge.
+    /// Pointer to the canonical **local** roaster row (`roaster:<uuid>`)
+    /// when this row was tagged as a duplicate in the roaster directory.
+    /// `None` = this row is itself canonical (or has not been deduped).
+    /// Local-only: Visualizer's `canonical_roaster_id` is a link into its
+    /// shared roaster catalogue, which lives in
+    /// [`Roaster::catalogue_roaster_id`] instead.
     #[serde(default)]
     pub canonical_roaster_id: Option<String>,
+    /// Visualizer **catalogue** roaster id — the wire's
+    /// `RoasterDetail.canonical_roaster_id`. Set from a catalogue pick in the
+    /// bean form (or pulled from Visualizer) and sent on the roaster write.
+    /// `None` = not linked. Defaults so older JSON deserialises cleanly.
+    #[serde(default)]
+    pub catalogue_roaster_id: Option<String>,
     /// Visualizer `roaster.id` once pushed.
     pub visualizer_id: Option<String>,
     /// Unix epoch ms when this roaster was soft-deleted, or `None` when
@@ -847,6 +870,7 @@ impl Roaster {
             country: None,
             notes: String::new(),
             canonical_roaster_id: None,
+            catalogue_roaster_id: None,
             visualizer_id: None,
             deleted_at: None,
             metadata: serde_json::Value::Null,
@@ -1259,6 +1283,25 @@ mod tests {
         assert!(!parsed.favourite);
         assert!(!parsed.decaf);
         assert_eq!(parsed.rating, 0);
+    }
+
+    #[test]
+    fn bean_catalogue_links_round_trip_and_default_when_absent() {
+        let mut bean = sample_bean();
+        bean.canonical_coffee_bag_id = Some("cb-1".to_owned());
+        bean.canonical_roaster_id = Some("cr-1".to_owned());
+        let json = serde_json::to_string(&bean).unwrap();
+        assert!(json.contains("\"canonicalCoffeeBagId\":\"cb-1\""));
+        assert!(json.contains("\"canonicalRoasterId\":\"cr-1\""));
+        assert_eq!(serde_json::from_str::<Bean>(&json).unwrap(), bean);
+        // Pre-catalogue records (no keys) still parse, unlinked.
+        let mut legacy: serde_json::Value = serde_json::to_value(sample_bean()).unwrap();
+        let obj = legacy.as_object_mut().unwrap();
+        obj.remove("canonicalCoffeeBagId");
+        obj.remove("canonicalRoasterId");
+        let parsed: Bean = serde_json::from_value(legacy).unwrap();
+        assert_eq!(parsed.canonical_coffee_bag_id, None);
+        assert_eq!(parsed.canonical_roaster_id, None);
     }
 
     #[test]
