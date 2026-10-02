@@ -157,6 +157,15 @@ const SCALE_SCAN: &[ScaleScanEntry] = &[
         label: "Solo Barista",
     },
     ScaleScanEntry {
+        // The Ti advertises its own 0x00DD service (distinctive, so a Ti is
+        // also recognised by service) and the short name "MB Ti", which
+        // carries neither "difluid" nor "microbalance" (Decenza e8577ff2,
+        // scalefactory "mb ti"). Ahead of "Microbalance" so a "Microbalance
+        // Ti" name doesn't fall through to the classic model.
+        prefixes: &["Microbalance Ti", "MB Ti"],
+        label: "Difluid Microbalance Ti",
+    },
+    ScaleScanEntry {
         prefixes: &["Microbalance"],
         label: "Difluid Microbalance",
     },
@@ -450,7 +459,12 @@ enum Inner {
     AtomheartEclair,
     EurekaPrecisa,
     SoloBarista,
-    Difluid,
+    /// The DiFluid Microbalance — `ti` selects the Microbalance Ti, which
+    /// speaks the same protocol on the same `AA01` characteristic but under
+    /// service `0x00DD` instead of `0x00EE` (Decenza e8577ff2).
+    Difluid {
+        ti: bool,
+    },
     /// The Smartchef has no BLE tare command. The variant carries a small
     /// stateful struct ([`SmartchefScale`]) that holds a software-tare
     /// offset (matches reaprime's `_weightAtTare`), applied to every
@@ -592,7 +606,8 @@ impl Scale {
             "Atomheart Eclair" => Inner::AtomheartEclair,
             "Eureka Precisa" => Inner::EurekaPrecisa,
             "Solo Barista" => Inner::SoloBarista,
-            "Difluid Microbalance" => Inner::Difluid,
+            "Difluid Microbalance" => Inner::Difluid { ti: false },
+            "Difluid Microbalance Ti" => Inner::Difluid { ti: true },
             "Smartchef" => Inner::Smartchef(SmartchefScale::new()),
             "Hiroia Jimmy" => Inner::HiroiaJimmy,
             "Varia Aku" => Inner::VariaAku,
@@ -618,7 +633,8 @@ impl Scale {
             Inner::AtomheartEclair => "Atomheart Eclair",
             Inner::EurekaPrecisa => "Eureka Precisa",
             Inner::SoloBarista => "Solo Barista",
-            Inner::Difluid => "Difluid Microbalance",
+            Inner::Difluid { ti: false } => "Difluid Microbalance",
+            Inner::Difluid { ti: true } => "Difluid Microbalance Ti",
             Inner::Smartchef(_) => "Smartchef",
             Inner::HiroiaJimmy => "Hiroia Jimmy",
             Inner::VariaAku => "Varia Aku",
@@ -682,8 +698,12 @@ impl Scale {
                 timemore::STATUS_UUID,
                 timemore::COMMAND_UUID,
             ),
-            Inner::Difluid => (
-                difluid::SERVICE_UUID,
+            Inner::Difluid { ti } => (
+                if *ti {
+                    difluid::SERVICE_UUID_TI
+                } else {
+                    difluid::SERVICE_UUID
+                },
                 difluid::NOTIFY_COMMAND_UUID,
                 difluid::NOTIFY_COMMAND_UUID,
             ),
@@ -833,7 +853,7 @@ impl Scale {
             | Inner::AtomheartEclair
             | Inner::EurekaPrecisa
             | Inner::SoloBarista
-            | Inner::Difluid
+            | Inner::Difluid { .. }
             | Inner::Smartchef(_)
             | Inner::HiroiaJimmy
             | Inner::VariaAku
@@ -860,7 +880,7 @@ impl Scale {
     #[must_use]
     pub fn connect_writes(&self) -> Vec<&'static [u8]> {
         match &self.inner {
-            Inner::Difluid => vec![
+            Inner::Difluid { .. } => vec![
                 &difluid::ENABLE_NOTIFICATIONS[..],
                 &difluid::SET_UNIT_GRAMS[..],
             ],
@@ -974,7 +994,7 @@ impl Scale {
             Inner::EurekaPrecisa | Inner::SoloBarista => {
                 Some(vec![&eureka_precisa::SET_UNIT_GRAMS])
             }
-            Inner::Difluid => Some(vec![&difluid::SET_UNIT_GRAMS]),
+            Inner::Difluid { .. } => Some(vec![&difluid::SET_UNIT_GRAMS]),
             _ => None,
         }
     }
@@ -1054,7 +1074,7 @@ impl Scale {
             // but the weight bytes themselves remain a valid gram reading —
             // only the on-device display unit lies. Queue the recovery and
             // keep parsing. Mirrors reaprime (`difluid_scale.dart:147-154`).
-            Inner::Difluid if difluid::is_grams_unit(data) == Some(false) => {
+            Inner::Difluid { .. } if difluid::is_grams_unit(data) == Some(false) => {
                 Some(UnitRecovery::Continue {
                     bytes: &difluid::SET_UNIT_GRAMS,
                 })
@@ -1083,7 +1103,7 @@ impl Scale {
             | Inner::Skale
             | Inner::EurekaPrecisa
             | Inner::SoloBarista
-            | Inner::Difluid
+            | Inner::Difluid { .. }
             | Inner::Smartchef(_)
             | Inner::VariaAku
             | Inner::Timemore => 380,
@@ -1105,7 +1125,7 @@ impl Scale {
             Inner::AcaiaGen1(decoder) | Inner::AcaiaPyxis(decoder) => decoder.push(data),
             Inner::AtomheartEclair => atomheart_eclair::parse_weight(data),
             Inner::EurekaPrecisa | Inner::SoloBarista => eureka_precisa::parse_weight(data),
-            Inner::Difluid => difluid::parse_weight(data),
+            Inner::Difluid { .. } => difluid::parse_weight(data),
             Inner::Smartchef(state) => {
                 // Smartchef firmware has no tare command; the user-visible
                 // weight is `raw - software_offset`. Record every raw reading
@@ -1216,7 +1236,7 @@ impl Scale {
             | Inner::AtomheartEclair
             | Inner::EurekaPrecisa
             | Inner::SoloBarista
-            | Inner::Difluid
+            | Inner::Difluid { .. }
             | Inner::Smartchef(_)
             | Inner::HiroiaJimmy
             | Inner::VariaAku
@@ -1443,7 +1463,7 @@ impl Scale {
             Inner::AcaiaGen1(_) | Inner::AcaiaPyxis(_) => acaia::TARE.to_vec(),
             Inner::AtomheartEclair => atomheart_eclair::TARE.to_vec(),
             Inner::EurekaPrecisa | Inner::SoloBarista => eureka_precisa::TARE.to_vec(),
-            Inner::Difluid => difluid::TARE.to_vec(),
+            Inner::Difluid { .. } => difluid::TARE.to_vec(),
             Inner::Smartchef(state) => {
                 // Smartchef firmware has no tare command — record the current
                 // raw reading as the new offset and return `None` so the shell
@@ -1496,7 +1516,7 @@ impl Scale {
                 Stop => eureka_precisa::TIMER_STOP.to_vec(),
                 Reset => eureka_precisa::TIMER_RESET.to_vec(),
             },
-            Inner::Difluid => match command {
+            Inner::Difluid { .. } => match command {
                 Start => difluid::TIMER_START.to_vec(),
                 Stop => difluid::TIMER_STOP.to_vec(),
                 Reset => difluid::TIMER_RESET.to_vec(),
@@ -1531,7 +1551,7 @@ impl Scale {
     /// (`difluid_scale.dart:147-154`). The shell fires the recovery from
     /// `CremaCore::on_notification`'s scale-weight path.
     pub fn is_difluid(&self) -> bool {
-        matches!(&self.inner, Inner::Difluid)
+        matches!(&self.inner, Inner::Difluid { .. })
     }
 
     /// Whether the connected scale is a Smartchef.
@@ -1738,6 +1758,49 @@ mod tests {
         let mut bookoo = Scale::from_label("Bookoo").unwrap();
         bookoo.absorb_command_notification(&[0x42, 75, 75]);
         assert_eq!(bookoo.last_battery_percent, None);
+    }
+
+    #[test]
+    fn difluid_ti_is_scanned_and_identified_by_name_and_service() {
+        // Decenza e8577ff2: the Ti advertises 0x00DD and "MB Ti".
+        let scan = Scale::scan_uuids();
+        assert!(scan.service_uuids.contains(&difluid::SERVICE_UUID_TI));
+        assert!(scan.service_uuids.contains(&difluid::SERVICE_UUID));
+        assert!(scan.name_prefixes.contains(&"MB Ti"));
+        for name in ["MB Ti 1234", "Microbalance Ti", "mb ti"] {
+            assert_eq!(
+                Scale::identify(name, &[]).unwrap().label(),
+                "Difluid Microbalance Ti",
+                "{name}"
+            );
+        }
+        // The classic name still maps to the classic model…
+        assert_eq!(
+            Scale::identify("Microbalance-X", &[]).unwrap().label(),
+            "Difluid Microbalance"
+        );
+        // …and the distinctive 0x00DD service corrects a classic-looking name.
+        let ti_service = ["000000DD-0000-1000-8000-00805F9B34FB".to_owned()];
+        assert_eq!(
+            Scale::identify("Microbalance-X", &ti_service)
+                .unwrap()
+                .label(),
+            "Difluid Microbalance Ti"
+        );
+        // Same characteristic and codec, Ti service.
+        let ti = Scale::from_label("Difluid Microbalance Ti").unwrap();
+        let uuids = ti.uuids();
+        assert_eq!(uuids.service, difluid::SERVICE_UUID_TI);
+        assert_eq!(uuids.weight_notify, difluid::NOTIFY_COMMAND_UUID);
+        assert_eq!(uuids.command_write, difluid::NOTIFY_COMMAND_UUID);
+        assert_eq!(ti.connect_writes().len(), 2);
+        assert_eq!(
+            Scale::from_label("Difluid Microbalance")
+                .unwrap()
+                .uuids()
+                .service,
+            difluid::SERVICE_UUID
+        );
     }
 
     #[test]
@@ -1959,7 +2022,8 @@ mod tests {
         let difluid = Scale::from_label("Difluid Microbalance").unwrap();
         // Byte [17] non-zero → display unit is off, but the weight bytes
         // are still in grams. Queue + keep parsing.
-        let mut packet = [0u8; 20];
+        let mut packet = [0u8; 19];
+        packet[..4].copy_from_slice(&[0xDF, 0xDF, 0x03, 0x00]);
         packet[17] = 0x01;
         match difluid.unit_recovery(&packet) {
             Some(UnitRecovery::Continue { bytes }) => {

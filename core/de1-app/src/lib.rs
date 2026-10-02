@@ -5592,8 +5592,9 @@ mod tests {
     fn a_difluid_non_grams_frame_triggers_an_auto_recovery_set_unit() {
         let mut core = CremaCore::new();
         core.connect_scale("Microbalance-X", &[]);
-        // 19-byte frame, byte [17] = 0x01 (non-grams unit).
+        // 19-byte DF DF 03 00 sensor frame, byte [17] = 0x01 (non-grams unit).
         let mut frame = [0u8; 19];
+        frame[..4].copy_from_slice(&[0xDF, 0xDF, 0x03, 0x00]);
         frame[17] = 0x01;
         let out = core.on_notification(Source::ScaleWeight, &frame, 1_000);
         let writes = scale_writes(&out);
@@ -5604,8 +5605,9 @@ mod tests {
     fn a_difluid_grams_frame_does_not_trigger_an_auto_recovery() {
         let mut core = CremaCore::new();
         core.connect_scale("Microbalance-X", &[]);
-        // 19-byte frame, byte [17] = 0x00 (grams unit).
-        let frame = [0u8; 19];
+        // 19-byte DF DF 03 00 sensor frame, byte [17] = 0x00 (grams unit).
+        let mut frame = [0u8; 19];
+        frame[..4].copy_from_slice(&[0xDF, 0xDF, 0x03, 0x00]);
         let out = core.on_notification(Source::ScaleWeight, &frame, 1_000);
         let writes = scale_writes(&out);
         assert!(!writes.contains(&difluid::SET_UNIT_GRAMS.as_slice()));
