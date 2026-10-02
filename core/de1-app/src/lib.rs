@@ -5130,10 +5130,11 @@ mod tests {
 
     /// A Bookoo weight packet for a signed weight in grams.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn bookoo_grams(g: f32) -> [u8; 10] {
+    fn bookoo_grams(g: f32) -> [u8; 20] {
         let mut p = bookoo_packet((g.abs() * 100.0).round() as u32);
         if g < 0.0 {
             p[6] = b'-';
+            p[19] = p[..19].iter().fold(0, |a, &b| a ^ b);
         }
         p
     }
