@@ -68,6 +68,18 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Android syncs beans and roasters with Visualizer** — Settings → Sharing →
+  Sync gains Beans and Roasters direction rows, and **Sync now** runs the bean
+  and roaster sync before the shots, as on the web: it pulls your Visualizer
+  coffee bags and roasters into the library (Visualizer wins when both sides
+  changed) and pushes new and edited ones back, with their catalogue links.
+  Pushing needs Visualizer Premium; on a free account the sync only pulls and
+  says so. Deleting a bag or roaster can also delete its Visualizer copy.
+- **Roaster duplicate merge on Android** — the Roasters tab suggests merging
+  roasters with the same name ("Sey looks like SEY"). Merging moves the bags
+  and tags the duplicate, which **Show dupes** brings back for an
+  **Un-merge**. Web and Android now share one implementation of the
+  duplicate detection, the merge and the bean-sync write bodies, in the core.
 - **Adaptive v3 built-in profile** — de1app's update to Adaptive. It exits
   Pressurize at 7.7 bar (8.8 in v2) and limits extraction at 8.6 bar (9.5).
   Adaptive v2 stays available.
