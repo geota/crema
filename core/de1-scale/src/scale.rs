@@ -1143,7 +1143,8 @@ impl Scale {
                     auto_stop: Some(packet.auto_stop),
                 });
             }
-            // Fall through to the weight-only path for any non-20-byte frame.
+            // Not a valid weight frame; the weight-only path below rejects
+            // it too.
         }
         // Pull a per-scale battery byte where the wire format carries one in
         // the same notification as weight. Computed before the weight decode
@@ -1756,8 +1757,11 @@ mod tests {
     #[test]
     fn parse_weight_dispatches_to_the_right_codec() {
         let mut bookoo = Scale::from_label("Bookoo").unwrap();
-        // Header 03 0b required since the review-#32 header gate.
-        let packet = [0x03, 0x0B, 0, 0, 0, 0, b'+', 0x00, 0x07, 0xD0];
+        // A full 20-byte frame: 03 0b header, '+' sign, 0x0007D0 = 20.00 g,
+        // trailing XOR.
+        let mut packet = [0u8; 20];
+        packet[..10].copy_from_slice(&[0x03, 0x0B, 0, 0, 0, 0, b'+', 0x00, 0x07, 0xD0]);
+        packet[19] = packet[..19].iter().fold(0, |a, &b| a ^ b);
         assert_eq!(bookoo.parse_weight(&packet), Some(20.0));
     }
 

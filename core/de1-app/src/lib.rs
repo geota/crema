@@ -4272,9 +4272,12 @@ mod tests {
     // The three `as u8` casts are a standard big-endian byte split — each
     // shifted byte is masked to 8 bits by the cast, which is the intent.
     #[allow(clippy::cast_possible_truncation)]
-    fn bookoo_packet(centigrams: u32) -> [u8; 10] {
-        [
-            // 03 0b weight header — required since the review-#32 gate.
+    fn bookoo_packet(centigrams: u32) -> [u8; 20] {
+        // A full 20-byte weight frame: 03 0b header (review #32), '+' sign,
+        // the 24-bit weight, zeroed settings, and the trailing XOR the
+        // parser verifies.
+        let mut packet = [0u8; 20];
+        packet[..10].copy_from_slice(&[
             0x03,
             0x0B,
             0,
@@ -4285,7 +4288,9 @@ mod tests {
             (centigrams >> 16) as u8,
             (centigrams >> 8) as u8,
             centigrams as u8,
-        ]
+        ]);
+        packet[19] = packet[..19].iter().fold(0, |a, &b| a ^ b);
+        packet
     }
 
     /// A minimal V60 recipe JSON for the guided-brew wiring tests:

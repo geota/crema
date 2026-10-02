@@ -323,9 +323,6 @@ pub const fn set_anti_mistouch(enabled: bool) -> [u8; 6] {
     command(0x10, enabled as u8, 0x00)
 }
 
-/// Minimum length of a weight notification needed to read the weight.
-const WEIGHT_PACKET_LEN: usize = 10;
-
 /// Full length of a Bookoo weight notification.
 const FULL_PACKET_LEN: usize = 20;
 
@@ -380,8 +377,19 @@ pub struct BookooPacket {
     /// mode here. Exposed as the raw mode id to match [`AutoStopMode`]. See the
     /// module docs.
     pub auto_stop: u8,
-    /// Whether the trailing checksum byte `[19]` matched the XOR of `[0..=18]`.
-    pub checksum_ok: bool,
+}
+
+/// Whether `data` is a structurally valid weight notification: exactly
+/// [`FULL_PACKET_LEN`] bytes, the `03 0b` header, an ASCII `'+'`/`'-'` sign
+/// byte at `[6]`, and a trailing XOR of `[0..=18]` at `[19]` — the gate decaid
+/// applies (`miniscale.dart` `_parseNotification`, 1330cb4f / 7e09a131).
+/// A short frame, a corrupt one, or one whose sign byte is anything else
+/// would otherwise inject a bogus weight into stop-at-weight.
+fn is_valid_weight_frame(data: &[u8]) -> bool {
+    data.len() == FULL_PACKET_LEN
+        && matches_weight_header(data)
+        && (data[6] == b'+' || data[6] == b'-')
+        && data[..FULL_PACKET_LEN - 1].iter().fold(0_u8, |a, &b| a ^ b) == data[FULL_PACKET_LEN - 1]
 }
 
 /// Decode a weight notification into grams.
@@ -390,15 +398,11 @@ pub struct BookooPacket {
 /// an ASCII sign byte (`'-'` marks a negative weight).
 ///
 /// Kept for callers that only need the weight; [`parse_packet`] decodes the
-/// whole notification.
+/// whole notification. Only a frame passing [`is_valid_weight_frame`] is
+/// decoded — the command channel's config replies are ALSO right-length with
+/// a valid XOR, so the `03 0b` header is part of the gate too (review #32).
 pub fn parse_weight(data: &[u8]) -> Option<f32> {
-    // Self-protecting (review #32): the command channel's config replies
-    // are ALSO right-length with a valid XOR — only the 03 0b header makes
-    // a frame a weight frame; don't rely on the caller's source routing.
-    if !matches_weight_header(data) {
-        return None;
-    }
-    if data.len() < WEIGHT_PACKET_LEN {
+    if !is_valid_weight_frame(data) {
         return None;
     }
     let raw = (u32::from(data[7]) << 16) | (u32::from(data[8]) << 8) | u32::from(data[9]);
@@ -422,16 +426,11 @@ pub fn matches_weight_header(bytes: &[u8]) -> bool {
 
 /// Decode a full 20-byte Bookoo weight notification.
 ///
-/// Returns `None` for anything that is not exactly [`FULL_PACKET_LEN`] bytes.
-/// The decode never fails on field content: a bad checksum is reported via
-/// [`BookooPacket::checksum_ok`] rather than rejecting the packet, so a caller
-/// can still surface the (possibly corrupt) reading and decide what to do.
+/// Returns `None` for anything that fails [`is_valid_weight_frame`] — wrong
+/// length, header, sign byte or checksum. (A bad checksum used to be
+/// reported in a `checksum_ok` field while the reading was still surfaced.)
 pub fn parse_packet(data: &[u8]) -> Option<BookooPacket> {
-    // Same header gate as parse_weight (review #32).
-    if !matches_weight_header(data) {
-        return None;
-    }
-    if data.len() != FULL_PACKET_LEN {
+    if !is_valid_weight_frame(data) {
         return None;
     }
 
@@ -454,9 +453,6 @@ pub fn parse_packet(data: &[u8]) -> Option<BookooPacket> {
     let standby_raw = (u16::from(data[14]) << 8) | u16::from(data[15]);
     let standby_minutes = u8::try_from(standby_raw / 10).unwrap_or(u8::MAX);
 
-    // The checksum byte [19] is an XOR of every preceding byte.
-    let checksum = data[..FULL_PACKET_LEN - 1].iter().fold(0_u8, |a, &b| a ^ b);
-
     Some(BookooPacket {
         weight_g,
         weight_indicator: data[6],
@@ -469,7 +465,6 @@ pub fn parse_packet(data: &[u8]) -> Option<BookooPacket> {
         volume: data[16],
         flow_smoothing: data[17] != 0,
         auto_stop: data[18],
-        checksum_ok: checksum == data[FULL_PACKET_LEN - 1],
     })
 }
 
@@ -617,23 +612,52 @@ mod tests {
         bytes.try_into().unwrap()
     }
 
+    /// A 20-byte weight frame for `bytes 0..=9` zero-padded, with the XOR.
+    fn weight_frame(head: [u8; 10]) -> [u8; 20] {
+        let mut f = [0u8; 20];
+        f[..10].copy_from_slice(&head);
+        f[19] = f[..19].iter().fold(0, |a, &b| a ^ b);
+        f
+    }
+
     #[test]
     fn decodes_a_big_endian_24bit_weight_to_grams() {
         // Bytes 7–9 = 0x0007D0 = 2000 -> 20.00 g; sign byte '+'. Header
-        // 03 0b — the parser now rejects headerless frames (review #32).
-        let packet = [0x03, 0x0B, 0, 0, 0, 0, b'+', 0x00, 0x07, 0xD0];
+        // 03 0b — the parser rejects headerless frames (review #32).
+        let packet = weight_frame([0x03, 0x0B, 0, 0, 0, 0, b'+', 0x00, 0x07, 0xD0]);
         assert_eq!(parse_weight(&packet), Some(20.0));
     }
 
     #[test]
     fn decodes_a_negative_weight() {
-        let packet = [0x03, 0x0B, 0, 0, 0, 0, b'-', 0x00, 0x07, 0xD0];
+        let packet = weight_frame([0x03, 0x0B, 0, 0, 0, 0, b'-', 0x00, 0x07, 0xD0]);
         assert_eq!(parse_weight(&packet), Some(-20.0));
     }
 
     #[test]
     fn rejects_a_short_packet() {
         assert_eq!(parse_weight(&[0; 9]), None);
+        // decaid 1330cb4f: the old 10-byte minimum accepted a truncated
+        // frame; only the full 20 bytes are a weight frame now.
+        assert_eq!(
+            parse_weight(&[0x03, 0x0B, 0, 0, 0, 0, b'+', 0x00, 0x07, 0xD0]),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_a_frame_with_a_bad_sign_byte_or_checksum() {
+        // decaid miniscale.dart: sign must be '+' (0x2B) or '-' (0x2D).
+        let mut bad_sign = hex20("030b000000012b00edc62b0000640096010000d1");
+        bad_sign[6] = 0x00;
+        bad_sign[19] = bad_sign[..19].iter().fold(0, |a, &b| a ^ b);
+        assert_eq!(parse_weight(&bad_sign), None);
+        assert_eq!(parse_packet(&bad_sign), None);
+        // A flipped weight byte with the old checksum is rejected outright.
+        let mut corrupt = hex20("030b000000012b00edc62b0000640096010000d1");
+        corrupt[8] ^= 0x40;
+        assert_eq!(parse_weight(&corrupt), None);
+        assert_eq!(parse_packet(&corrupt), None);
     }
 
     #[test]
@@ -653,7 +677,6 @@ mod tests {
         assert_eq!(p.timer_ms, 0);
         assert_eq!(p.weight_indicator, b'+');
         assert_eq!(p.flow_indicator, b'+');
-        assert!(p.checksum_ok);
     }
 
     #[test]
@@ -664,7 +687,6 @@ mod tests {
         assert!((p.weight_g - 608.70).abs() < 0.001, "weight {}", p.weight_g);
         assert_eq!(p.flow_raw, 0);
         assert_eq!(p.weight_indicator, b'+');
-        assert!(p.checksum_ok);
     }
 
     #[test]
@@ -677,7 +699,6 @@ mod tests {
         assert_eq!(p.weight_indicator, b'-');
         // parse_weight / weight_g still honour [6] for legacy compatibility.
         assert!((p.weight_g + 608.70).abs() < 0.001, "weight {}", p.weight_g);
-        assert!(p.checksum_ok);
     }
 
     #[test]
@@ -688,7 +709,6 @@ mod tests {
         assert!((p.weight_g - 492.60).abs() < 0.001, "weight {}", p.weight_g);
         assert_eq!(p.flow_raw, 0x312F);
         assert!((p.flow_g_per_s - 125.91).abs() < 0.001);
-        assert!(p.checksum_ok);
     }
 
     #[test]
@@ -699,7 +719,6 @@ mod tests {
         assert!((p.weight_g - 281.79).abs() < 0.001, "weight {}", p.weight_g);
         assert_eq!(p.flow_raw, 0xA426);
         assert_eq!(p.flow_indicator, b'+');
-        assert!(p.checksum_ok);
     }
 
     #[test]
@@ -714,7 +733,6 @@ mod tests {
         assert_eq!(p.volume, 1);
         assert!(!p.flow_smoothing);
         assert_eq!(p.auto_stop, 0);
-        assert!(p.checksum_ok);
     }
 
     #[test]
@@ -728,7 +746,6 @@ mod tests {
         assert_eq!(p.volume, 3);
         assert!(!p.flow_smoothing);
         assert_eq!(p.auto_stop, 1);
-        assert!(p.checksum_ok);
     }
 
     #[test]
@@ -738,7 +755,6 @@ mod tests {
         let p = parse_packet(&packet).expect("20-byte packet");
         assert_eq!(p.standby_minutes, 16);
         assert_eq!(p.volume, 3);
-        assert!(p.checksum_ok);
     }
 
     #[test]
@@ -752,7 +768,6 @@ mod tests {
         assert_eq!(p.volume, 3);
         assert!(p.flow_smoothing);
         assert_eq!(p.auto_stop, 1);
-        assert!(p.checksum_ok);
     }
 
     #[test]
@@ -763,7 +778,6 @@ mod tests {
         let p = parse_packet(&packet).expect("20-byte packet");
         assert_eq!(p.standby_minutes, 10);
         assert_eq!(p.volume, 0);
-        assert!(p.checksum_ok);
     }
 
     #[test]
@@ -955,13 +969,12 @@ mod tests {
     }
 
     #[test]
-    fn a_corrupt_checksum_is_reported_not_rejected() {
+    fn a_corrupt_checksum_is_rejected() {
         // Take a known-good packet and flip the checksum byte.
         let mut packet = hex20("030b000000012b0000002b0000640096010000fa");
+        assert!(parse_packet(&packet).is_some());
         packet[19] ^= 0xFF;
-        let p = parse_packet(&packet).expect("still a 20-byte packet");
-        assert!(!p.checksum_ok);
-        // The rest of the decode still works.
-        assert_eq!(p.weight_g, 0.0);
+        assert_eq!(parse_packet(&packet), None);
+        assert_eq!(parse_weight(&packet), None);
     }
 }
