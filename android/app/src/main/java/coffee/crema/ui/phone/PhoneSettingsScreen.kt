@@ -51,6 +51,7 @@ import coffee.crema.ui.screens.cupWarmerTempValue
 import coffee.crema.ui.screens.flowMultiplierValue
 import coffee.crema.ui.screens.ghcPresent
 import coffee.crema.ui.screens.ghcRequired
+import coffee.crema.ui.screens.STOLEN_SERIAL_NOTICE
 import coffee.crema.ui.screens.hasCupWarmerPlate
 import coffee.crema.ui.screens.firmwareLabel
 import coffee.crema.ui.screens.heaterVoltageLabel
@@ -396,7 +397,8 @@ private fun MachineSection(
     }
     SettingsGroup("Identity") {
         CremaSettingsRow("Model") { CremaMonoReadout(machineModelLabel(ui.de1MachineInfo), strong = true) }
-        CremaSettingsRow("Serial number") { CremaMonoReadout(serialLabel(ui.de1MachineInfo), strong = true) }
+        // Non-blocking notice when Decent lists this serial as stolen.
+        CremaSettingsRow("Serial number", if (ui.serialStolen) STOLEN_SERIAL_NOTICE else null) { CremaMonoReadout(serialLabel(ui.de1MachineInfo), strong = true) }
         CremaSettingsRow("CPU board") { CremaMonoReadout(cpuBoardLabel(ui.de1MachineInfo), strong = true) }
         CremaSettingsRow("Firmware") { CremaMonoReadout(firmwareLabel(ui.de1MachineInfo, ui.de1Firmware), strong = true) }
         CremaSettingsRow("Heater voltage", last = true) { CremaMonoReadout(heaterVoltageLabel(ui.de1MachineInfo), strong = true) }

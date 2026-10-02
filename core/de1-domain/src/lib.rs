@@ -84,6 +84,7 @@ pub mod shot;
 pub mod shot_quality;
 pub mod steam;
 pub mod step_weight;
+pub mod stolen_serials;
 pub mod stop;
 pub mod tank;
 pub mod units;
@@ -196,6 +197,10 @@ pub use steam::{
     SteamSample,
 };
 pub use step_weight::{SKIP_RETRY_AFTER, SKIP_RETRY_MAX, StepWeightExit};
+pub use stolen_serials::{
+    STOLEN_SERIALS_REFRESH_MS, STOLEN_SERIALS_URL, parse_stolen_serials, serial_on_stolen_list,
+    stolen_serials_list_is_valid, stolen_serials_refresh_due,
+};
 pub use stop::{
     AutoStop, STOP_WEIGHT_BEFORE, StopCapture, StopConfig, StopReason, StopTargets,
     sav_counts_volume, volume_stop_arms,

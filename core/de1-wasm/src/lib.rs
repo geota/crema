@@ -1073,9 +1073,44 @@ pub fn retry_backoff_ms(status: Option<u32>, attempt: u32) -> f64 {
     ms
 }
 
+/// Whether the DE1 with serial `serial` (MMR `SerialNumber`) is on Decent's
+/// stolen-machine list `list_json` (the published `stolen_serials.json`).
+/// `0` and a malformed list never match. See
+/// [`de1_domain::serial_on_stolen_list`].
+#[wasm_bindgen(js_name = serialOnStolenList)]
+#[must_use]
+pub fn serial_on_stolen_list(serial: u32, list_json: &str) -> bool {
+    de1_domain::serial_on_stolen_list(serial, list_json)
+}
+
+/// Whether a fetched body is a usable stolen-serial list (worth caching).
+#[wasm_bindgen(js_name = stolenSerialsListIsValid)]
+#[must_use]
+pub fn stolen_serials_list_is_valid(list_json: &str) -> bool {
+    de1_domain::stolen_serials_list_is_valid(list_json)
+}
+
+/// Whether the cached stolen-serial list is due a refetch (at most daily).
+/// `last_fetch_ms` is `undefined` when never fetched.
+#[wasm_bindgen(js_name = stolenSerialsRefreshDue)]
+#[must_use]
+pub fn stolen_serials_refresh_due(last_fetch_ms: Option<f64>, now_ms: f64) -> bool {
+    de1_domain::stolen_serials_refresh_due(
+        last_fetch_ms.map(f64_to_elapsed),
+        f64_to_elapsed(now_ms),
+    )
+}
+
+/// Where Decent publishes the stolen-serial list.
+#[wasm_bindgen(js_name = stolenSerialsUrl)]
+#[must_use]
+pub fn stolen_serials_url() -> String {
+    de1_domain::STOLEN_SERIALS_URL.to_owned()
+}
+
 /// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` →
-/// `"DE1"`, `4` → `"DE1XL"`). Values past the table are reported as
-/// `"model N"`. Mirrors [`de1_protocol::machine_model_name`].
+/// `"DE1"`, `4` → `"DE1XL"`, `128+` → `"Bengle"`). Other values are
+/// reported as `"model N"`. Mirrors [`de1_protocol::machine_model_name`].
 #[wasm_bindgen(js_name = machineModelName)]
 #[must_use]
 pub fn machine_model_name(raw: u32) -> String {

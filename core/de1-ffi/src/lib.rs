@@ -1070,6 +1070,32 @@ pub fn machine_model_name(raw: u32) -> String {
     de1_protocol::machine_model_name(raw)
 }
 
+/// Whether the DE1 with serial `serial` (MMR `SerialNumber`) is on Decent's
+/// stolen-machine list `list_json`. Mirrors the wasm `serialOnStolenList`; see
+/// [`de1_domain::serial_on_stolen_list`].
+#[uniffi::export]
+pub fn serial_on_stolen_list(serial: u32, list_json: String) -> bool {
+    de1_domain::serial_on_stolen_list(serial, &list_json)
+}
+
+/// Whether a fetched body is a usable stolen-serial list (worth caching).
+#[uniffi::export]
+pub fn stolen_serials_list_is_valid(list_json: String) -> bool {
+    de1_domain::stolen_serials_list_is_valid(&list_json)
+}
+
+/// Whether the cached stolen-serial list is due a refetch (at most daily).
+#[uniffi::export]
+pub fn stolen_serials_refresh_due(last_fetch_ms: Option<u64>, now_ms: u64) -> bool {
+    de1_domain::stolen_serials_refresh_due(last_fetch_ms, now_ms)
+}
+
+/// Where Decent publishes the stolen-serial list.
+#[uniffi::export]
+pub fn stolen_serials_url() -> String {
+    de1_domain::STOLEN_SERIALS_URL.to_owned()
+}
+
 /// Whether the DE1 with raw `MachineModel` value `raw` has the cup-warmer plate
 /// hardware. Mirrors the wasm `hasCupWarmer`; see [`de1_protocol::has_cup_warmer`].
 #[uniffi::export]

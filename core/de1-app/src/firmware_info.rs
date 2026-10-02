@@ -26,10 +26,12 @@ use typeshare::typeshare;
 /// per Crema release.
 ///
 /// Source: the legacy de1app's most recent firmware-release commit at the time
-/// this constant was last updated (`de1app:74cacdcd`, "DE1 firmware v1352").
-/// On the wire this is the value the DE1 returns for MMR register `0x800010`
-/// (`MmrRegister::FirmwareVersion`).
-pub const LATEST_KNOWN_FIRMWARE_BUILD: u16 = 1352;
+/// this constant was last updated (`de1app:25a66f66`, "DE1 firmware v1358":
+/// cold maintenance forwards requests through preheat; sleep and air-purge
+/// requests allowed in refill with no refill kit), also bundled by decaid
+/// (`a41182b4`). On the wire this is the value the DE1 returns for MMR
+/// register `0x800010` (`MmrRegister::FirmwareVersion`).
+pub const LATEST_KNOWN_FIRMWARE_BUILD: u16 = 1358;
 
 /// What the firmware-update check found.
 ///
@@ -88,6 +90,19 @@ pub fn compare(installed: Option<u16>) -> FirmwareUpdateStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_latest_known_build_is_1358() {
+        assert_eq!(LATEST_KNOWN_FIRMWARE_BUILD, 1358);
+        // A v1352 machine is now one release behind.
+        assert_eq!(
+            compare(Some(1352)),
+            FirmwareUpdateStatus::UpdateAvailable {
+                installed: 1352,
+                latest: 1358,
+            }
+        );
+    }
 
     #[test]
     fn unknown_when_no_build_observed() {

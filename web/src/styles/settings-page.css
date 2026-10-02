@@ -377,6 +377,14 @@
   font-style: italic;
   margin-top: 4px;
 }
+/* Decent stolen-machine list match — one quiet line, never a modal. */
+.st-machinecard-stolen {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--warning, #c7873b);
+  margin-top: 4px;
+}
 
 /* ───────────────────────────── Maintenance
    The three-across card grid was replaced by full-width `StMaintenanceRow`s;

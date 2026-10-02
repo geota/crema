@@ -40,6 +40,7 @@ import {
 	type ProfileFingerprintOverrides
 } from '$lib/profiles';
 import { readJson, writeJson } from '$lib/utils/storage';
+import { isSerialStolen } from '$lib/decent/stolen-serials';
 import { getSettingsStore } from '$lib/settings';
 import { toast } from '$lib/components/shared/toast.svelte';
 import { getMaintenanceStore } from '$lib/maintenance';
@@ -259,6 +260,14 @@ export class CremaApp {
 	 * nags twice.
 	 */
 	private waterLowWarned = false;
+
+	/**
+	 * Whether the connected DE1's serial is on Decent's stolen-machine list
+	 * (`$lib/decent/stolen-serials`) — drives a non-blocking one-line notice
+	 * in Settings → Machine. Checked when the serial is read; cleared on
+	 * disconnect. Never blocks anything.
+	 */
+	stolenSerial = $state(false);
 
 	/**
 	 * `performance.now()` of the most recent `ShotStarted` event, or `null`
@@ -639,6 +648,16 @@ export class CremaApp {
 					}
 				}
 			}
+			if (event.type === 'MmrValue' && event.content.register === MmrRegister.SerialNumber) {
+				// Decent's stolen-machine list: fetched at most daily, cached,
+				// failures silent — a missing list just means no notice.
+				const serial = event.content.value;
+				void isSerialStolen(serial).then((stolen) => {
+					if (this.state.current.de1MachineInfo[MmrRegister.SerialNumber] === serial) {
+						this.stolenSerial = stolen;
+					}
+				});
+			}
 			if (event.type === 'SawAutoZeroed') {
 				// The guard trusted the settled cup and re-tared in software —
 				// SAW keeps working on the net weight.
@@ -1004,6 +1023,7 @@ export class CremaApp {
 		this.lastTelemetryAtMs = null;
 		// Next connection's first low-water report warns afresh (#33).
 		this.waterLowWarned = false;
+		this.stolenSerial = false;
 		// The fingerprint cache (snapshot + localStorage) is wiped on
 		// an explicit disconnect: the DE1 may be powered off or the
 		// user may be moving to a different machine, so the cached

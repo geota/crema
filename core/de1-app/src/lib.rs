@@ -743,6 +743,12 @@ pub struct CremaCore {
     /// reading of the shot (Decenza `da2e5495` pre-shot zero correction;
     /// bounded to ±2 g and adopted only after an observed tare). `0.0` = none.
     pre_shot_zero_offset_g: f32,
+    /// The steam heater is held off for a maintenance cycle (de1app
+    /// `dd5ebda4`): set on entering Clean / Descale / AirPurge, cleared on
+    /// leaving, when the normal steam settings are re-sent. While set, every
+    /// outgoing `ShotSettings` write carries a 0 °C steam target without
+    /// touching the user's stored setting.
+    maintenance_steam_off: bool,
 }
 
 /// In-flight state of one profile upload. Owned by
@@ -871,6 +877,7 @@ impl CremaCore {
             tare_observed: false,
             last_raw_weight: None,
             pre_shot_zero_offset_g: 0.0,
+            maintenance_steam_off: false,
         }
     }
 
@@ -2041,6 +2048,11 @@ impl CremaCore {
         if eco {
             settings.steam_temp_c = self.steam_eco_temp;
         }
+        // Maintenance cycle: the steam heater is held off (de1app `dd5ebda4`)
+        // — wins over eco, and over a user edit made mid-cycle.
+        if self.maintenance_steam_off {
+            settings.steam_temp_c = 0.0;
+        }
         // Rebase the volume on the USER's dial before deciding the override:
         // the stored snapshot may hold the machine-echoed 250 ml sentinel,
         // and a scale-less rewrite from that would ask the DE1 for a quarter
@@ -2937,6 +2949,42 @@ impl CremaCore {
         self.gate_read_only(out)
     }
 
+    /// Turn the steam heater off for the length of a maintenance cycle (de1app
+    /// `dd5ebda4`, `update_de1_state`): on entering Clean / Descale /
+    /// AirPurge from any other state, re-send the steam / hot-water settings
+    /// with a 0 °C steam target (the persistent setting is untouched — the
+    /// override lives in [`steam_settings_for_eco`](Self::steam_settings_for_eco));
+    /// on leaving, re-send the normal settings so the wand returns to the
+    /// user's real target. Skipped when the core has no settings baseline yet
+    /// (nothing read, nothing set) — a write from defaults would clobber the
+    /// machine's other fields.
+    fn steam_off_for_maintenance(
+        &mut self,
+        prev: Option<MachineState>,
+        next: MachineState,
+        out: &mut CoreOutput,
+    ) {
+        let is_maintenance = |s: MachineState| {
+            matches!(
+                s,
+                MachineState::Clean | MachineState::Descale | MachineState::AirPurge
+            )
+        };
+        let entering = is_maintenance(next) && !prev.is_some_and(is_maintenance);
+        let leaving = !is_maintenance(next) && self.maintenance_steam_off;
+        if !(entering || leaving) || self.steam_hotwater_settings.is_none() {
+            return;
+        }
+        self.maintenance_steam_off = entering;
+        out.commands.push(Command::WriteCharacteristic {
+            target: WriteTarget::De1ShotSettings,
+            data: self
+                .steam_settings_for_eco(self.steam.is_eco_mode())
+                .encode()
+                .to_vec(),
+        });
+    }
+
     /// Emit [`Event::MachineErrorChanged`] when the fault the shells should
     /// surface changes. Every `Error*` substate is surfaced at once except
     /// `ErrorNoAc`, which needs firmware ≥ [`NO_AC_MIN_FIRMWARE`] *and* an
@@ -3036,6 +3084,7 @@ impl CremaCore {
                     _ => {}
                 }
             }
+            self.steam_off_for_maintenance(prev_state, info.state, out);
         }
         // `ErrorNoAc` episode clock — see [`update_machine_error`].
         if info.substate == SubState::ErrorNoAc {
@@ -3942,7 +3991,7 @@ impl CremaCore {
     /// [`steam_hotwater_settings`](Self::steam_hotwater_settings) and
     /// emits one [`Event::ShotSettingsRead`].
     fn handle_shot_settings_read(&mut self, data: &[u8], out: &mut CoreOutput) {
-        let settings = match ShotSettings::decode(data) {
+        let mut settings = match ShotSettings::decode(data) {
             Ok(s) => s,
             Err(e) => {
                 out.events.push(Event::DecodeError {
@@ -3951,6 +4000,15 @@ impl CremaCore {
                 return;
             }
         };
+        // A 0 °C steam target read back during a maintenance cycle is our own
+        // temporary override, not the user's setting — keep the real one, so
+        // neither the shells' snapshot nor the restore on exit adopts it.
+        if self.maintenance_steam_off
+            && settings.steam_temp_c == 0.0
+            && let Some(retained) = &self.steam_hotwater_settings
+        {
+            settings.steam_temp_c = retained.steam_temp_c;
+        }
         out.events.push(Event::ShotSettingsRead {
             steam_temp: settings.steam_temp_c,
             steam_timeout: settings.steam_timeout_s,
@@ -6209,6 +6267,95 @@ mod tests {
         )));
     }
 
+    /// The `ShotSettings` writes in an output, decoded.
+    fn shot_settings_writes(out: &CoreOutput) -> Vec<ShotSettings> {
+        out.commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1ShotSettings,
+                    data,
+                } => ShotSettings::decode(data).ok(),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_steam_heater_is_off_for_each_maintenance_cycle() {
+        for maintenance in [18u8, 10, 20] {
+            // Clean, Descale, AirPurge
+            let mut core = CremaCore::new();
+            let _ = core.set_steam_hotwater_settings(ShotSettings {
+                steam_temp_c: 155.0,
+                ..ShotSettings::default()
+            });
+            let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+            // Entering: one write with the steam target forced to 0.
+            let out = core.on_notification(Source::De1State, &[maintenance, 0], 1_000);
+            let writes = shot_settings_writes(&out);
+            assert_eq!(writes.len(), 1, "state {maintenance}");
+            assert_eq!(writes[0].steam_temp_c, 0.0);
+            // The other fields are the user's.
+            assert_eq!(writes[0].hot_water_temp_c, 85.0);
+            // A substate change inside the cycle writes nothing more.
+            let out = core.on_notification(Source::De1State, &[maintenance, 13], 2_000);
+            assert!(shot_settings_writes(&out).is_empty());
+            // Leaving: the user's steam target is restored.
+            let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
+            let writes = shot_settings_writes(&out);
+            assert_eq!(writes.len(), 1);
+            assert_eq!(writes[0].steam_temp_c, 155.0);
+        }
+    }
+
+    #[test]
+    fn maintenance_steam_off_survives_echoes_and_user_edits() {
+        let mut core = CremaCore::new();
+        let _ = core.set_steam_hotwater_settings(ShotSettings {
+            steam_temp_c: 150.0,
+            ..ShotSettings::default()
+        });
+        let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+        let _ = core.on_notification(Source::De1State, &[18, 0], 1_000);
+        // A read-back of our own 0 °C override is not adopted as the setting.
+        let echo = ShotSettings {
+            steam_temp_c: 0.0,
+            ..ShotSettings::default()
+        }
+        .encode();
+        let out = core.on_notification(Source::De1ShotSettings, &echo, 1_500);
+        assert!(out.events.iter().any(|e| matches!(
+            e,
+            Event::ShotSettingsRead { steam_temp, .. } if *steam_temp == 150.0
+        )));
+        // A user edit mid-cycle is stored but still written with steam off.
+        let out = core.set_steam_hotwater_settings(ShotSettings {
+            steam_temp_c: 160.0,
+            ..ShotSettings::default()
+        });
+        assert_eq!(shot_settings_writes(&out)[0].steam_temp_c, 0.0);
+        // Leaving restores the latest user target.
+        let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
+        assert_eq!(shot_settings_writes(&out)[0].steam_temp_c, 160.0);
+    }
+
+    #[test]
+    fn maintenance_without_a_settings_baseline_writes_nothing() {
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+        let out = core.on_notification(Source::De1State, &[18, 0], 1_000);
+        assert!(shot_settings_writes(&out).is_empty());
+        let out = core.on_notification(Source::De1State, &[2, 0], 2_000);
+        assert!(shot_settings_writes(&out).is_empty());
+        // And an ordinary flow (espresso) never touches the steam target.
+        let mut core = CremaCore::new();
+        let _ = core.set_steam_hotwater_settings(ShotSettings::default());
+        let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+        let out = core.on_notification(Source::De1State, &[4, 1], 1_000);
+        assert!(shot_settings_writes(&out).is_empty());
+    }
+
     /// A `ReadFromMMR` reply for the FirmwareVersion register (0x800010).
     fn firmware_build_packet(build: u32) -> [u8; de1_protocol::MMR_PACKET_LEN] {
         let mut packet = [0u8; de1_protocol::MMR_PACKET_LEN];
@@ -6361,15 +6508,15 @@ mod tests {
         let mut core = CremaCore::new();
         // Before any MMR read, the status check returns Unknown.
         assert_eq!(core.firmware_update_status(), FirmwareUpdateStatus::Unknown);
-        // Feed a ReadFromMMR reply for 0x800010 with value 1352.
+        // Feed a ReadFromMMR reply for 0x800010 with value 1358.
         let mut packet = [0u8; de1_protocol::MMR_PACKET_LEN];
         packet[1..4].copy_from_slice(&[0x80, 0x00, 0x10]);
-        packet[4..8].copy_from_slice(&1352u32.to_le_bytes());
+        packet[4..8].copy_from_slice(&1358u32.to_le_bytes());
         let _ = core.on_notification(Source::De1MmrRead, &packet, 0);
         // The cache is now populated and the status check finds UpToDate.
         assert_eq!(
             core.firmware_update_status(),
-            FirmwareUpdateStatus::UpToDate { installed: 1352 }
+            FirmwareUpdateStatus::UpToDate { installed: 1358 }
         );
     }
 

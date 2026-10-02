@@ -445,6 +445,9 @@ data class MainUiState(
      * fall back to "—".
      */
     val de1MachineInfo: Map<MmrRegister, UInt> = emptyMap(),
+    /** The connected DE1's serial is on Decent's stolen-machine list
+     *  ([coffee.crema.decent.StolenSerialsCheck]) — a one-line Settings notice. */
+    val serialStolen: Boolean = false,
     /**
      * The mains line frequency the core resolved (`50.0` / `60.0` Hz), or `0.0`
      * when the override is "auto-detect", or null before it is read. A pure
@@ -999,6 +1002,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Learned SAW drip-model persistence — an opaque core-owned JSON blob. */
     private val sawModelStore = SawModelStore(app)
+    private val stolenSerials = coffee.crema.decent.StolenSerialsCheck(
+        coffee.crema.decent.StolenSerialsFileStore(app),
+    )
 
     /** Maintenance-state persistence — a JSON file in filesDir. */
     private val maintenanceStore = MaintenanceStore(app, json)
@@ -2936,6 +2942,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // line frequency clear too (line freq is re-read on next connect).
             de1Firmware = null,
             de1MachineInfo = emptyMap(),
+            serialStolen = false,
             lineFreqHz = null,
             lineFreqOverride = 0f,
             profileUploading = false,
@@ -4371,6 +4378,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Start a steam-rinse cycle (Settings → Water → "Run now"). */
     fun startSteamRinse() = requestMachineState(MachineRequest.STEAM_RINSE)
 
+    /** Check the DE1's serial against Decent's stolen-machine list (fetched at
+     *  most daily, cached, failures silent) and raise the Settings notice. */
+    private fun checkStolenSerial(serial: UInt) {
+        viewModelScope.launch {
+            val stolen = stolenSerials.isStolen(serial)
+            _ui.update {
+                if (it.de1MachineInfo[MmrRegister.SerialNumber] == serial) it.copy(serialStolen = stolen) else it
+            }
+        }
+    }
+
     /** Set the Bengle cup-warmer plate temperature (0–80 °C) and re-read the
      *  register so the UI reflects what the machine accepted. */
     fun setCupWarmerTemp(tempC: Int) {
@@ -5387,6 +5405,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     de1MachineInfo = it.de1MachineInfo + (c.register to c.value),
                 ) }
                 appendLog("MMR ${c.register}: ${c.value}")
+                if (c.register == MmrRegister.SerialNumber) checkStolenSerial(c.value)
             }
             // Calibration replies (current / factory) have no settings row yet
             // (no calibration-write core method — read-only), so keep logging

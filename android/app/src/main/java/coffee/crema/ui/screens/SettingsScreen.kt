@@ -249,7 +249,8 @@ fun SettingsScreen(
                         }
                         SetGroup("Identity") {
                             CremaSettingsRow("Model") { CremaMonoReadout(machineModelLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
-                            CremaSettingsRow("Serial number") { CremaMonoReadout(serialLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
+                            // Non-blocking notice when Decent lists this serial as stolen.
+                            CremaSettingsRow("Serial number", if (ui.serialStolen) STOLEN_SERIAL_NOTICE else null) { CremaMonoReadout(serialLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
                             CremaSettingsRow("CPU board") { CremaMonoReadout(cpuBoardLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
                             CremaSettingsRow("Firmware") { CremaMonoReadout(firmwareLabel(ui.de1MachineInfo, ui.de1Firmware), color = MaterialTheme.colorScheme.onSurface) }
                             CremaSettingsRow("Heater voltage", last = true) { CremaMonoReadout(heaterVoltageLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
@@ -283,7 +284,7 @@ fun SettingsScreen(
                                 )
                             }
                         }
-                        // Cup warmer — Bengle hardware only (models 4–7, the web's
+                        // Cup warmer — Bengle hardware only (model >= 128, the web's
                         // hasCupWarmer gate); hidden entirely on other machines.
                         if (hasCupWarmerPlate(ui.de1MachineInfo)) {
                             SetGroup("Cup warmer") {
@@ -1815,7 +1816,10 @@ internal fun heaterVoltageLabel(info: Map<MmrRegister, UInt>): String =
 internal fun heaterVoltageValue(info: Map<MmrRegister, UInt>): String? =
     heaterVoltageVolts(info)?.takeIf { it > 0 }?.toString()
 
-/** Bengle cup-warmer plate present? Models 4–7 (core `has_cup_warmer`). */
+/** The one-line Settings notice for a DE1 on Decent's stolen-machine list. */
+internal const val STOLEN_SERIAL_NOTICE = "This DE1's serial is on Decent's stolen-machine list"
+
+/** Bengle cup-warmer plate present? Model >= 128 (core `has_cup_warmer`). */
 internal fun hasCupWarmerPlate(info: Map<MmrRegister, UInt>): Boolean =
     info[MmrRegister.MachineModel]?.let { hasCupWarmer(it) } ?: false
 

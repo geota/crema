@@ -37,6 +37,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **Adaptive v3 built-in profile** — de1app's update to Adaptive. It exits
   Pressurize at 7.7 bar (8.8 in v2) and limits extraction at 8.6 bar (9.5).
   Adaptive v2 stays available.
+- **Stolen-machine check** — when the connected DE1's serial is on the list
+  Decent publishes of machines stolen from customers or lost in transit,
+  Settings → Machine shows a one-line notice. Nothing is blocked. The list is
+  fetched at most once a day and cached; if it can't be fetched, nothing is
+  shown. Web, tablet and phone.
 - Recipes have a Notes field for filter, water recipe and other setup details (issue #10 feedback)
 - **Your own brewing methods** (issue #10 feedback: "I only have an ORB this
   week — can I add it?") — "+ Add method…" in the log form, the recipe
@@ -226,6 +231,17 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   its own settled re-tare. The scale's residual zero at first flow (up to 2 g,
   only after a tare was seen to land) is corrected for the whole shot, so the
   stop and the saved yield are no longer short by the drift.
+- **The firmware check knows DE1 firmware v1358** — the latest release (cold
+  maintenance, sleep and air-purge while out of water), so a v1352 machine is
+  now offered the update.
+- **The cup-warmer card is Bengle-only** — Bengle is machine model 128 and up
+  (de1app and decaid agree). Crema was gating it on models 4–7, which are the
+  DE1XL / CAFE / XXL / XXXL, so those machines were shown a cup-warmer control
+  for hardware they don't have and a real Bengle didn't get it. Bengle also
+  now shows its name in the machine model row.
+- **The steam heater turns off during Clean, Descale and Air purge** (de1app
+  parity) and back to your setting when the cycle ends; your saved steam
+  temperature is never changed.
 - **A DE1 that disconnects mid-shot stops the scale's timer** — the scale stays
   connected and used to keep counting.
 - **Android backups keep brew details** — a backup made on Android dropped
