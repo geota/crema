@@ -52,6 +52,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import coffee.crema.beans.BAG_PRESETS
 import coffee.crema.beans.BeanDraft
+import coffee.crema.beans.CatalogueFields
+import coffee.crema.beans.autofillFromCatalogue
+import coffee.crema.beans.catalogueFillStatus
+import coffee.crema.core.CatalogueCoffeeBag
 import coffee.crema.beans.applyBeanEdits
 import coffee.crema.beans.costText
 import coffee.crema.beans.isFrozen
@@ -62,6 +66,7 @@ import coffee.crema.ui.components.RoastPicker
 import coffee.crema.ui.components.rememberBeanPhotoPicker
 import coffee.crema.ui.components.roasterMark
 import coffee.crema.ui.components.roasterTone
+import coffee.crema.ui.components.CatalogueSearchField
 import coffee.crema.ui.components.CremaAnchoredPopup
 import coffee.crema.ui.components.CremaStarRating
 import coffee.crema.ui.components.CremaButton
@@ -149,6 +154,41 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var url by remember(bean.id) { mutableStateOf(bean.url ?: "") }
     var notes by remember(bean.id) { mutableStateOf(bean.notes ?: "") }
 
+    // Visualizer catalogue search (signed-in only; the catalogue GETs are open
+    // to free accounts). A pick runs the core autofill rule — empty fields only
+    // unless "replace" is ticked — and records the catalogue links on the bag.
+    val vizState by vm.visualizer.state.collectAsStateWithLifecycle()
+    var roastSet by remember(bean.id) { mutableStateOf(bean.roastLevel != null) }
+    var canonicalCoffeeBagId by remember(bean.id) { mutableStateOf(bean.canonicalCoffeeBagId) }
+    var canonicalRoasterId by remember(bean.id) { mutableStateOf(bean.canonicalRoasterId) }
+    var catalogueLabel by remember(bean.id) { mutableStateOf<String?>(null) }
+    var catalogueStatus by remember(bean.id) { mutableStateOf<String?>(null) }
+    val applyCatalogue: (CatalogueCoffeeBag, Boolean) -> Unit = { entry, replaceAll ->
+        val fields = CatalogueFields(
+            name = name, roaster = roaster, roast = roast.takeIf { roastSet },
+            country = country, region = region, farmer = farmer, variety = variety,
+            elevation = elevation, processing = processing, harvestTime = harvestTime,
+            tastingNotes = tastingNotes, url = url,
+            canonicalCoffeeBagId = canonicalCoffeeBagId, canonicalRoasterId = canonicalRoasterId,
+        )
+        runCatching { autofillFromCatalogue(fields, bean, entry, replaceAll) }
+            .onSuccess { (f, filled) ->
+                name = f.name; roaster = f.roaster
+                f.roast?.let { roast = it; roastSet = true }
+                country = f.country; region = f.region; farmer = f.farmer; variety = f.variety
+                elevation = f.elevation; processing = f.processing; harvestTime = f.harvestTime
+                tastingNotes = f.tastingNotes; url = f.url
+                canonicalCoffeeBagId = f.canonicalCoffeeBagId; canonicalRoasterId = f.canonicalRoasterId
+                catalogueLabel = listOf(entry.name, entry.roasterName).filter { it.isNotBlank() }.joinToString(" · ")
+                catalogueStatus = catalogueFillStatus(filled.size)
+            }
+            .onFailure { catalogueStatus = "Couldn't apply the catalogue entry." }
+    }
+    val unlinkCatalogue: () -> Unit = {
+        canonicalCoffeeBagId = null; canonicalRoasterId = null
+        catalogueLabel = null; catalogueStatus = null
+    }
+
     // Opened can't precede roasted (ISO yyyy-MM-dd sorts chronologically). Gates Save.
     val datesValid = roasted.isBlank() || opened.isBlank() || opened >= roasted
 
@@ -165,6 +205,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 linkedProfileId = linkedProfileId, rating = rating, qualityScore = qualityScore,
                 tastingNotes = tastingNotes, placeOfPurchase = placeOfPurchase, cost = cost,
                 url = url, notes = notes, tags = tags.toList(),
+                canonicalCoffeeBagId = canonicalCoffeeBagId, canonicalRoasterId = canonicalRoasterId,
             ))
         }
         if (active) {
@@ -236,6 +277,17 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(24.dp),
             ) {
                 BeBlock("01", "Identity", "The name and roaster this bag is filed under.") {
+                    if (vizState.signedIn) {
+                        BeRow("Visualizer catalogue", "Find this bag to fill in the details. Only empty fields are filled.", stack = true) {
+                            CatalogueSearchField(
+                                search = { q -> vm.visualizer.searchCatalogue(q) },
+                                onPick = applyCatalogue,
+                                linkedLabel = catalogueLabel ?: canonicalCoffeeBagId?.let { "Visualizer catalogue" },
+                                onUnlink = unlinkCatalogue,
+                                status = catalogueStatus,
+                            )
+                        }
+                    }
                     BeField("Name *", name) { name = it }
                     BeField("Roaster *", roaster) { roaster = it }
                     Eyebrow("Tags")
@@ -255,7 +307,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
 
                 BeBlock("02", "Roast & mix", "Roast level drives the freshness window.") {
                     BeRow("Roast level", "1 = light · 10 = dark", stack = true) {
-                        RoastPicker(roast) { roast = it }
+                        RoastPicker(roast) { roast = it; roastSet = true }
                     }
                     BeRow("Mix", "Single origin or blend.") {
                         CremaSegmentedButton(options = MIX_OPTIONS, value = mixSel, onChange = { mixSel = it })
