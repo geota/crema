@@ -99,6 +99,12 @@ pub struct ProfileSegment {
     pub volume_limit_ml: u16,
     /// Advanced max-flow-or-pressure limiter, or `None`.
     pub limiter: Option<Limiter>,
+    /// Per-step exit weight, grams (the wire [`ProfileStep::weight`]), or
+    /// `None`. App-side only — the DE1 frame has no weight field; de1-app's
+    /// `StepWeightExit` enforces it. Omitted from the JSON when `None`, so a
+    /// profile without step weights keeps its exact shape (and fingerprint).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f32>,
 }
 
 /// A profile in the shell's library — the working model behind a card and the
@@ -297,6 +303,7 @@ fn segment_from_step(step: &ProfileStep, index: usize) -> ProfileSegment {
         temp_sensor: step.temp_sensor,
         volume_limit_ml: step.volume_limit_ml,
         limiter: step.limiter,
+        weight: step.weight,
     }
 }
 
@@ -313,8 +320,7 @@ fn segment_to_step(seg: &ProfileSegment) -> ProfileStep {
         exit: seg.exit,
         volume_limit_ml: seg.volume_limit_ml,
         limiter: seg.limiter,
-        // The editor model has no per-step weight target yet (v2 JSON-only field).
-        weight: None,
+        weight: seg.weight,
     }
 }
 
@@ -445,6 +451,7 @@ pub fn default_segments() -> Vec<ProfileSegment> {
             temp_sensor: TempSensor::Coffee,
             volume_limit_ml: 0,
             limiter: None,
+            weight: None,
         },
         ProfileSegment {
             id: "s2".to_string(),
@@ -458,6 +465,7 @@ pub fn default_segments() -> Vec<ProfileSegment> {
             temp_sensor: TempSensor::Coffee,
             volume_limit_ml: 0,
             limiter: None,
+            weight: None,
         },
         ProfileSegment {
             id: "s3".to_string(),
@@ -471,6 +479,7 @@ pub fn default_segments() -> Vec<ProfileSegment> {
             temp_sensor: TempSensor::Coffee,
             volume_limit_ml: 0,
             limiter: None,
+            weight: None,
         },
         ProfileSegment {
             id: "s4".to_string(),
@@ -484,6 +493,7 @@ pub fn default_segments() -> Vec<ProfileSegment> {
             temp_sensor: TempSensor::Coffee,
             volume_limit_ml: 0,
             limiter: None,
+            weight: None,
         },
     ]
 }
@@ -673,6 +683,25 @@ mod tests {
         let original = wire_profile(vec![s, wire_step("pour", 9.0)]);
         let back = to_wire(&from_wire(&original));
         assert_eq!(back.steps, original.steps);
+    }
+
+    #[test]
+    fn step_weight_round_trips_through_the_segment() {
+        // A-Flow's Infuse `weight 3.6` must survive the library model, or the
+        // shells never hand it to the core (upload or activation).
+        let mut infuse = wire_step("infuse", 3.0);
+        infuse.weight = Some(3.6);
+        let original = wire_profile(vec![infuse, wire_step("pour", 9.0)]);
+        let cp = from_wire(&original);
+        assert_eq!(cp.segments[0].weight, Some(3.6));
+        assert_eq!(cp.segments[1].weight, None);
+        assert_eq!(to_wire(&cp).steps, original.steps);
+        // JSON: present only when set, so weightless segments keep their shape.
+        let v = serde_json::to_value(&cp).unwrap();
+        assert_eq!(v["segments"][0]["weight"], serde_json::json!(3.6_f32));
+        assert!(v["segments"][1].get("weight").is_none());
+        let back: CremaProfile = serde_json::from_value(v).unwrap();
+        assert_eq!(back.segments[0].weight, Some(3.6));
     }
 
     #[test]

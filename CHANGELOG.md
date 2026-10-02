@@ -181,7 +181,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   Infuse step for up to 60 s. It is now kept, and with a scale connected
   Crema moves the DE1 to the next step when the cup reaches that weight. It
   allows one skip per step and re-sends the skip if the DE1 doesn't move on.
-  It never skips the last step while a stop-at-weight target is set.
+  It never skips the last step while a stop-at-weight target is set. The
+  weights follow the profile you select, so they also work after a page
+  reload or app restart when the DE1 already holds the profile and Crema
+  skips the re-upload.
 - **Imported `.tcl` profiles keep multi-word titles** — Visualizer's `.tcl`
   downloads leave titles like `D-Flow / Q` unbraced, which failed to import or
   scrambled the profile. Title, author and notes now read to the end of the

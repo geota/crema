@@ -2543,14 +2543,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             bridge.setProfileTargetWeight(profileYield)
             bridge.setProfileVolumeLimit(volumeLimit)
             bridge.setShotTargetWeight(shotYield)
-            // The beverage type drives the core's ShotCompleted disposition
-            // (a cleaning run must never be recorded as a shot — review #40).
-            // Pushed alongside the stop targets — not only on profile upload —
-            // because activation can skip the upload (restore at startup, the
-            // shot-start refresh) and bridge.reset() on reconnect rebuilds the
-            // core.
-            bridge.setActiveBeverageType(active?.beverageType ?: "espresso")
         }.onFailure { appendLog("Push stop targets failed: ${it.message}") }
+        // The active profile itself: the core latches its beverage type (a
+        // cleaning run must never be recorded as a shot — review #40) and its
+        // per-step weight exits (issue 11). Pushed alongside the stop targets —
+        // on select, startup restore, every DE1 (re)connect and every shot
+        // start — not only on upload, because activation can skip the upload:
+        // after an app restart the DE1 still holds the profile and startShot
+        // skips it on the fingerprint match.
+        pushActiveProfile(
+            activeCremaJson = active?.id?.let { library.profileJson(it) },
+            toWire = ::cremaProfileToWire,
+            setActiveProfile = { bridge.setActiveProfile(it) },
+            log = { appendLog(it) },
+        )
         refreshStopTargetProjection()
     }
 
@@ -5491,6 +5497,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
          *  short enough that a mid-shot stall recovers within the pour. */
         const val SCALE_STALE_TEARDOWN_GRACE_MS = 5_000L
     }
+}
+
+/**
+ * Hand the active profile to the core (`setActiveProfile`, wire `Profile` JSON;
+ * null = none) so its beverage type and per-step weight exits follow the ACTIVE
+ * profile, not only the last upload (issue 11): [MainViewModel.startShot] skips
+ * the upload on a fingerprint match, and a restarted app's fresh core would
+ * otherwise never learn the step weights. [activeCremaJson] is the library's
+ * complete CremaProfile JSON; [toWire] is `cremaProfileToWire`. Top-level +
+ * `internal` so it's unit-testable without the native core.
+ */
+internal fun pushActiveProfile(
+    activeCremaJson: String?,
+    toWire: (String) -> String,
+    setActiveProfile: (String?) -> Unit,
+    log: (String) -> Unit = {},
+) {
+    // A profile the core can't convert clears the core's active profile
+    // (espresso, no weight exits) rather than leaving the previous one's.
+    val wire = activeCremaJson?.let { cremaJson ->
+        runCatching { toWire(cremaJson) }
+            .onFailure { log("Active profile conversion failed: ${it.message}") }
+            .getOrNull()
+    }
+    runCatching { setActiveProfile(wire) }
+        .onFailure { log("Push active profile failed: ${it.message}") }
 }
 
 /**

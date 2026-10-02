@@ -115,6 +115,12 @@ export interface ProfileSegment {
 	volumeLimitMl: number;
 	/** Advanced max-flow-or-pressure limiter, or null when unused. */
 	limiter: SegmentLimiter | null;
+	/**
+	 * Per-step exit weight, grams (wire `ProfileStep.weight`) — absent when the
+	 * step has none. App-side only: the core skips to the next step when the
+	 * scale reaches it (issue 11). Not editable yet; carried through as-is.
+	 */
+	weight?: number | null;
 }
 
 /**

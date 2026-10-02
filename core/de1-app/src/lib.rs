@@ -589,11 +589,14 @@ pub struct CremaCore {
     /// "active profile on the DE1" identity the brew page surfaces. `None`
     /// at cold start; cleared by [`reset`](Self::reset) on disconnect.
     last_active_profile_title: Option<String>,
-    /// Per-step weight exits of the profile on the DE1 (issue 11): sends
+    /// Per-step weight exits of the active profile (issue 11): sends
     /// `SkipToNext` when the projected weight reaches the current frame's
-    /// step `weight`. Latched from every completed profile upload; kept
-    /// across [`reset`](Self::reset) like the beverage type (a reconnect
-    /// doesn't change what the DE1 holds).
+    /// step `weight`. Follows the ACTIVE profile: set by
+    /// [`set_active_profile`](Self::set_active_profile) (every shell
+    /// activation, including the ones that skip the upload on a fingerprint
+    /// match) and by every completed profile upload. Kept across
+    /// [`reset`](Self::reset) like the beverage type (a reconnect doesn't
+    /// change what the DE1 holds).
     step_weight: StepWeightExit,
     /// The active profile's beverage type — drives the `SkipCleaning`
     /// disposition on [`Event::ShotCompleted`]. Latched from every
@@ -3522,6 +3525,33 @@ impl CremaCore {
         self.active_beverage_type = beverage_type;
     }
 
+    /// Tell the core which profile is active — the shell's one activation
+    /// input, called on every profile select, on the startup restore, and
+    /// whenever the active profile is edited. Latches what the core needs
+    /// from the profile even when the upload is skipped (the DE1 already
+    /// holds it — a fingerprint-cache hit after a page reload / app
+    /// restart):
+    /// - the beverage type (the `SkipCleaning` disposition), and
+    /// - the per-step weight exits ([`StepWeightExit`]).
+    ///
+    /// `None` (no active profile) clears both back to their defaults
+    /// (espresso, no weight exits). A completed upload latches the same
+    /// values, so activation and upload never disagree. The shot state of
+    /// the weight exits is kept, so a re-activation mid-shot can't re-send
+    /// a skip.
+    pub fn set_active_profile(&mut self, profile: Option<&Profile>) {
+        self.active_beverage_type = profile.map(|p| p.beverage_type).unwrap_or_default();
+        self.step_weight
+            .adopt_weights(profile.map(StepWeightExit::for_profile).unwrap_or_default());
+    }
+
+    /// The active profile's per-step weight targets, grams, by frame
+    /// (`None` = no weight exit) — what [`set_active_profile`]
+    /// (Self::set_active_profile) or the last upload latched.
+    pub fn active_step_weights(&self) -> &[Option<f32>] {
+        self.step_weight.weights()
+    }
+
     /// Decode and process a `HeaderWrite` notification — the DE1's reply
     /// to a one-shot Read of `cuuid_0F`, carrying the currently-loaded
     /// profile's 5-byte `ShotHeader`. Caches the value on
@@ -3604,7 +3634,7 @@ impl CremaCore {
             self.profile_upload = None;
             self.last_active_profile_title = Some(title.clone());
             self.active_beverage_type = beverage_type;
-            self.step_weight = step_weight;
+            self.step_weight.adopt_weights(step_weight);
             out.events.push(Event::ProfileUploadCompleted { title });
         }
     }
@@ -9321,6 +9351,29 @@ mod tests {
 
         /// Upload (and ack) a profile whose steps carry `weights`.
         fn core_with_profile(weights: &[Option<f32>]) -> CremaCore {
+            let profile = weights_profile(weights);
+            let mut core = CremaCore::new();
+            upload(&mut core, &profile);
+            core
+        }
+
+        /// Upload `profile` and ack every frame.
+        fn upload(core: &mut CremaCore, profile: &Profile) {
+            let out = core.upload_profile(profile, Duration::ZERO).unwrap();
+            for c in &out.commands {
+                if let Command::WriteCharacteristic {
+                    target: WriteTarget::De1ProfileFrame,
+                    data,
+                } = c
+                {
+                    core.on_notification(Source::De1FrameAck, data, 1);
+                }
+            }
+            assert_eq!(core.active_profile_title(), Some(profile.title.as_str()));
+        }
+
+        /// A profile whose steps carry `weights`.
+        fn weights_profile(weights: &[Option<f32>]) -> Profile {
             let steps = weights
                 .iter()
                 .enumerate()
@@ -9338,7 +9391,7 @@ mod tests {
                     weight: *w,
                 })
                 .collect();
-            let profile = Profile {
+            Profile {
                 id: String::new(),
                 title: "Weights".to_string(),
                 notes: String::new(),
@@ -9353,20 +9406,7 @@ mod tests {
                 beverage_type: BeverageType::Espresso,
                 tank_temperature: 0.0,
                 version: "2".to_string(),
-            };
-            let mut core = CremaCore::new();
-            let out = core.upload_profile(&profile, Duration::ZERO).unwrap();
-            for c in &out.commands {
-                if let Command::WriteCharacteristic {
-                    target: WriteTarget::De1ProfileFrame,
-                    data,
-                } = c
-                {
-                    core.on_notification(Source::De1FrameAck, data, 1);
-                }
             }
-            assert_eq!(core.active_profile_title(), Some("Weights"));
-            core
         }
 
         /// How many `SkipToNext` writes `out` carries.
@@ -9506,6 +9546,67 @@ mod tests {
             core.set_profile_target_weight(Some(36.0));
             pour_on_frame(&mut core, 1);
             assert_eq!(feed_weights(&mut core, 4.0, 0.0, 1_100, 1).len(), 1);
+        }
+
+        /// A fresh core (page reload / app restart) with a scale, whose
+        /// shell ACTIVATES `weights` without uploading — the fingerprint-skip
+        /// path: the DE1 already holds the profile.
+        fn activated_core(weights: &[Option<f32>]) -> CremaCore {
+            let mut core = CremaCore::new();
+            core.set_active_profile(Some(&weights_profile(weights)));
+            core.connect_scale("BOOKOO_SC", &[]);
+            core.set_auto_tare(false);
+            core
+        }
+
+        #[test]
+        fn activation_without_upload_drives_the_skip() {
+            let mut core = activated_core(&[None, Some(3.6), None]);
+            assert_eq!(core.active_profile_title(), None, "nothing uploaded");
+            pour_on_frame(&mut core, 1);
+            assert_eq!(feed_weights(&mut core, 4.0, 0.0, 1_100, 1).len(), 1);
+        }
+
+        #[test]
+        fn an_upload_after_activation_stays_consistent() {
+            let mut core = activated_core(&[None, Some(3.6), None]);
+            // The same profile uploads later (say the fingerprint changed):
+            // the weights are unchanged and still drive exactly one skip.
+            upload(&mut core, &weights_profile(&[None, Some(3.6), None]));
+            assert_eq!(core.active_step_weights(), &[None, Some(3.6), None]);
+            pour_on_frame(&mut core, 1);
+            assert_eq!(feed_weights(&mut core, 4.0, 0.0, 1_100, 1).len(), 1);
+            // Re-activating mid-shot (a Quick-Controls re-push) can't re-arm
+            // the frame already skipped.
+            core.set_active_profile(Some(&weights_profile(&[None, Some(3.6), None])));
+            assert!(feed_weights(&mut core, 4.2, 0.0, 1_200, 1).is_empty());
+        }
+
+        #[test]
+        fn a_new_activation_replaces_the_weights() {
+            let mut core = activated_core(&[None, Some(3.6), None]);
+            // Edited (or another profile selected): frame 1 has no weight
+            // now, frame 2 exits at 8 g.
+            core.set_active_profile(Some(&weights_profile(&[None, None, Some(8.0), None])));
+            pour_on_frame(&mut core, 1);
+            assert!(feed_weights(&mut core, 4.0, 0.0, 1_100, 1).is_empty());
+            core.on_notification(Source::De1ShotSample, &sample_packet(60, 2.0, 2), 1_250);
+            assert_eq!(feed_weights(&mut core, 9.0, 0.0, 1_300, 1).len(), 1);
+        }
+
+        #[test]
+        fn clearing_the_active_profile_removes_the_weights() {
+            let mut core = activated_core(&[None, Some(3.6), None]);
+            core.set_active_profile(Some(&Profile {
+                beverage_type: BeverageType::Cleaning,
+                ..weights_profile(&[None, Some(3.6), None])
+            }));
+            assert_eq!(core.active_beverage_type, BeverageType::Cleaning);
+            core.set_active_profile(None);
+            assert!(core.active_step_weights().iter().all(Option::is_none));
+            assert_eq!(core.active_beverage_type, BeverageType::Espresso);
+            pour_on_frame(&mut core, 1);
+            assert!(feed_weights(&mut core, 4.0, 0.0, 1_100, 1).is_empty());
         }
 
         #[test]

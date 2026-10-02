@@ -79,6 +79,20 @@ impl StepWeightExit {
         Self::new(profile.steps.iter().map(|s| s.weight).collect())
     }
 
+    /// Adopt `other`'s per-frame targets, keeping this shot's frame / skip
+    /// state. A re-activation mid-shot (the shell re-pushing the active
+    /// profile on a Quick-Controls change) must not forget a skip already
+    /// sent — that would send a second one and skip the next frame too.
+    pub fn adopt_weights(&mut self, other: StepWeightExit) {
+        self.weights = other.weights;
+    }
+
+    /// The per-frame weight targets, grams (`None` = no weight exit).
+    #[must_use]
+    pub fn weights(&self) -> &[Option<f32>] {
+        &self.weights
+    }
+
     /// Whether any step carries a weight exit.
     #[must_use]
     pub fn has_weight_exits(&self) -> bool {
@@ -259,6 +273,21 @@ mod tests {
         assert!(!a.on_weight(4.0, ms(2_000), true, false), "no frame yet");
         a.on_frame(1);
         assert!(a.on_weight(4.0, ms(2_100), true, false));
+    }
+
+    #[test]
+    fn adopting_weights_keeps_the_shot_state() {
+        let mut a = aflow_like();
+        a.on_frame(1);
+        assert!(a.on_weight(4.0, ms(1_000), true, false));
+        // Same profile re-activated mid-shot: no second skip for frame 1.
+        a.adopt_weights(aflow_like());
+        assert!(!a.on_weight(4.1, ms(1_100), true, false));
+        // A different profile's targets take effect from here.
+        a.adopt_weights(StepWeightExit::new(vec![None, None, Some(8.0)]));
+        assert_eq!(a.weights(), &[None, None, Some(8.0)]);
+        a.on_frame(2);
+        assert!(a.on_weight(8.0, ms(1_400), true, false));
     }
 
     #[test]
