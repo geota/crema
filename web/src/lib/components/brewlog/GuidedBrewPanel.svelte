@@ -12,6 +12,8 @@
 	 */
 	import BellIcon from 'phosphor-svelte/lib/BellIcon';
 	import BellSlashIcon from 'phosphor-svelte/lib/BellSlashIcon';
+	import CopyIcon from 'phosphor-svelte/lib/CopyIcon';
+	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
 	import PauseIcon from 'phosphor-svelte/lib/PauseIcon';
 	import PlayIcon from 'phosphor-svelte/lib/PlayIcon';
 	import { brewCueSoundOn, getSettingsStore } from '$lib/settings';
@@ -366,12 +368,19 @@
 						</select>
 					{/if}
 					<button
-						class="gb-ghost"
+						class="gb-pick-btn"
 						onclick={editRecipe}
 						title={selectedIsBuiltin
 							? 'Built-in recipes are read-only — edit your own copy'
-							: undefined}>{selectedIsBuiltin ? 'Duplicate to edit' : 'Edit recipe'}</button
+							: undefined}
 					>
+						{#if selectedIsBuiltin}
+							<CopyIcon size={14} aria-hidden="true" />
+						{:else}
+							<PencilSimpleIcon size={14} aria-hidden="true" />
+						{/if}
+						{selectedIsBuiltin ? 'Duplicate to edit' : 'Edit recipe'}
+					</button>
 				</div>
 			</div>
 			<!-- Bean, under the recipe picker (issue #10 feedback). -->
@@ -728,11 +737,13 @@
 		border-radius: var(--radius-md);
 		padding: 14px 16px;
 	}
+	/* Title block, then the picker row on its own line (as on Android), so a
+	   long recipe name never squeezes the controls and vice versa. */
 	.gb-recipe-head {
 		display: flex;
-		justify-content: space-between;
-		align-items: flex-start;
-		gap: 12px;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 10px;
 		margin-bottom: 10px;
 	}
 	.gb-recipe-name {
@@ -776,21 +787,52 @@
 		color: rgba(var(--tint-rgb), 0.55);
 		margin-top: 3px;
 	}
+	/* The recipe picker and its Edit / Duplicate companion: one control
+	   language — the Bean row's well (radius-sm, faint fill, hairline), the
+	   same height and type size — centred on one row, wrapping the button
+	   under the picker (left-aligned) when the card is narrow. */
 	.gb-recipe-actions {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: 8px;
-		flex: none;
+		min-width: 0;
 	}
-	.gb-select {
+	.gb-select,
+	.gb-pick-btn {
+		box-sizing: border-box;
+		height: 34px;
 		background: rgba(var(--tint-rgb), 0.04);
 		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		border-radius: var(--radius-sm);
 		color: var(--fg-1);
 		font-family: var(--font-sans);
-		font-size: 12px;
-		padding: 6px 8px;
+		font-size: 12.5px;
+		font-weight: 500;
 	}
+	.gb-select {
+		max-width: 100%;
+		min-width: 0;
+		padding: 0 8px;
+		text-overflow: ellipsis;
+	}
+	.gb-pick-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 0 12px;
+		white-space: nowrap;
+		cursor: pointer;
+	}
+	.gb-pick-btn :global(svg) {
+		flex: none;
+		color: rgba(var(--tint-rgb), 0.6);
+	}
+	.gb-select:hover,
+	.gb-pick-btn:hover {
+		border-color: var(--copper-400);
+	}
+
 	.gb-steps {
 		list-style: none;
 		margin: 0;

@@ -1,9 +1,12 @@
 package coffee.crema.ui
 
+import coffee.crema.brew.BREW_METHOD_STYLES
+import coffee.crema.brew.CUSTOM_METHOD_ICONS
 import coffee.crema.brew.CustomMethods
 import coffee.crema.brew.methodIcon
 import coffee.crema.brew.methodLabel
 import coffee.crema.brew.newRecipeFor
+import coffee.crema.brew.styleIcon
 import coffee.crema.brew.validateCustomMethodLabel
 import coffee.crema.core.BrewMethodStyle
 import coffee.crema.core.CustomBrewMethod
@@ -12,9 +15,12 @@ import coffee.crema.ui.brewlog.MethodEditRules
 import coffee.crema.ui.brewlog.MethodEditTarget
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
+import java.io.File
 
 /** The brewing-method dialog's pure rules + the label / icon resolution (issue #10 feedback). */
 class CustomMethodEditTest {
@@ -127,5 +133,45 @@ class CustomMethodEditTest {
         assertTrue(seenStyleCall)
         assertEquals("ORB recipe", r.name)
         assertEquals("custom:orb", r.method)
+    }
+
+    @Test fun theIconListHasNoDuplicatesAndMatchesTheWebOrder() {
+        val web = listOf("funnel", "coffee", "cylinder", "snowflake", "drop", "flask", "fire", "leaf")
+        assertEquals("no duplicates", CUSTOM_METHOD_ICONS.distinct(), CUSTOM_METHOD_ICONS)
+        assertEquals("same order as the web's METHOD_ICON_KEYS", web, CUSTOM_METHOD_ICONS)
+        BREW_METHOD_STYLES.forEach { assertTrue("${it.string}'s default is in the list", styleIcon(it) in CUSTOM_METHOD_ICONS) }
+    }
+
+    @Test fun theIconListMatchesTheWebSource() {
+        // Guards against the two lists drifting: read the web's own constant when the repo is whole.
+        val src = listOf("../../web/src/lib/brew/custom-methods.svelte.ts", "../web/src/lib/brew/custom-methods.svelte.ts")
+            .map(::File).firstOrNull { it.isFile }
+        assumeTrue("web source not checked out alongside", src != null)
+        val block = Regex("""METHOD_ICON_KEYS\s*=\s*\[([^\]]*)\]""").find(src!!.readText())!!.groupValues[1]
+        val web = Regex("""'([a-z]+)'""").findAll(block).map { it.groupValues[1] }.toList()
+        assertEquals(web, CUSTOM_METHOD_ICONS)
+    }
+
+    @Test fun theIconFollowsTheStyleUntilPickedAndSavesTheKey() {
+        val d = MethodEditRules.open(MethodEditTarget.LOG, "history", 1, core = seeds)
+        assertEquals("funnel", d.icon)
+        assertFalse(d.iconPicked)
+        val immersion = MethodEditRules.withStyle(d, BrewMethodStyle.Immersion, seeds)
+        assertEquals("the highlight moves with the style", "coffee", immersion.icon)
+        // Saving with no pick stores the style's key — what the web stores.
+        assertEquals("coffee", MethodEditRules.toMethod(immersion, "ORB", "custom:n", 1).icon)
+        val picked = MethodEditRules.withIcon(immersion, "leaf")
+        assertEquals("leaf", MethodEditRules.withStyle(picked, BrewMethodStyle.Cold, seeds).icon)
+        // Picking the style's own key is still a pick: it stays put on a style change.
+        val pickedFunnel = MethodEditRules.withIcon(d, "funnel")
+        assertEquals("funnel", MethodEditRules.withStyle(pickedFunnel, BrewMethodStyle.Cold, seeds).icon)
+    }
+
+    @Test fun editingAMethodWithoutAPickFollowsItsStyle() {
+        val d = MethodEditRules.edit(MethodEditTarget.MANAGE, "profiles", 2, orb, seeds)
+        assertEquals("funnel", d.icon)
+        assertEquals("snowflake", MethodEditRules.withStyle(d, BrewMethodStyle.Cold, seeds).icon)
+        val leafy = MethodEditRules.edit(MethodEditTarget.MANAGE, "profiles", 2, orb.copy(icon = "leaf"), seeds)
+        assertEquals("leaf", MethodEditRules.withStyle(leafy, BrewMethodStyle.Cold, seeds).icon)
     }
 }
