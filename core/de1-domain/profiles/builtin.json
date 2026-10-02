@@ -84,11 +84,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 2,
+    "preinfuse_step_count": 3,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
     "max_total_volume_ml": 36,
-    "target_weight": 36.0,
+    "target_weight": 35.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -821,10 +821,10 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 3,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0,
+    "max_total_volume_ml": 36,
     "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
@@ -1109,11 +1109,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 3,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0,
-    "target_weight": 60.0,
+    "max_total_volume_ml": 36,
+    "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -2280,11 +2280,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0,
-    "target_weight": 42.0,
+    "max_total_volume_ml": 36,
+    "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -2363,11 +2363,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0,
-    "target_weight": 42.0,
+    "max_total_volume_ml": 36,
+    "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -2459,11 +2459,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 3,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 135,
-    "target_weight": 135.0,
+    "max_total_volume_ml": 36,
+    "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -2536,11 +2536,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 135,
-    "target_weight": 135.0,
+    "max_total_volume_ml": 0,
+    "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -2613,11 +2613,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 135,
-    "target_weight": 135.0,
+    "max_total_volume_ml": 37,
+    "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -2703,11 +2703,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 3,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 135,
-    "target_weight": 135.0,
+    "max_total_volume_ml": 37,
+    "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -2763,11 +2763,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 74,
-    "target_weight": 1.0,
+    "max_total_volume_ml": 0,
+    "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -2960,11 +2960,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 74,
-    "target_weight": 1.0,
+    "max_total_volume_ml": 0,
+    "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -3037,11 +3037,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 3,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 74,
-    "target_weight": 1.0,
+    "max_total_volume_ml": 36,
+    "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -3230,10 +3230,10 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0,
+    "max_total_volume_ml": 36,
     "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
@@ -3398,11 +3398,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0,
-    "target_weight": 0.0,
+    "max_total_volume_ml": 36,
+    "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -3458,10 +3458,10 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 1,
+    "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0,
+    "max_total_volume_ml": 30,
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
@@ -4257,11 +4257,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 3,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 180,
-    "target_weight": 135.0,
+    "max_total_volume_ml": 36,
+    "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -4334,11 +4334,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 3,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 180,
-    "target_weight": 135.0,
+    "max_total_volume_ml": 36,
+    "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -4649,11 +4649,11 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 3,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 180,
-    "target_weight": 135.0,
+    "max_total_volume_ml": 36,
+    "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",
@@ -5978,10 +5978,10 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 4,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0,
+    "max_total_volume_ml": 36,
     "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
@@ -6038,7 +6038,7 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
     "max_total_volume_ml": 0,
@@ -6141,10 +6141,10 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 4,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0,
+    "max_total_volume_ml": 36,
     "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
@@ -6218,10 +6218,10 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 3,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0,
+    "max_total_volume_ml": 36,
     "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
@@ -6295,10 +6295,10 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 3,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0,
+    "max_total_volume_ml": 36,
     "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
@@ -6975,7 +6975,7 @@
         "weight": null
       }
     ],
-    "preinfuse_step_count": 0,
+    "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
     "max_total_volume_ml": 0,
@@ -9020,8 +9020,8 @@
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 180,
-    "target_weight": 135.0,
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
     "beverage_type": "espresso",

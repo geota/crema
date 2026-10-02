@@ -495,21 +495,21 @@ pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
     let title = dict.get("profile_title").unwrap_or("").to_string();
     let notes = dict.get("profile_notes").unwrap_or("").to_string();
 
-    let steps = match profile_type {
+    // A simple profile (`settings_2a` / `settings_2b`) is expanded into steps
+    // here, and the expansion also yields its preinfusion step count — the
+    // number of leading generated steps that are preinfusion (including the
+    // pressure profile's forced-rise steps), exactly as de1app's
+    // `pressure_to_advanced_list` / `flow_to_advanced_list` count them
+    // (`incr …_count_start` per preinfusion and forced-rise frame;
+    // de1app 13a30463). An advanced profile (`settings_2c`) carries its count
+    // explicitly in `final_desired_shot_volume_advanced_count_start`.
+    let advanced = profile_type == "settings_2c";
+    let (steps, count_start) = match profile_type {
         "settings_2b" => flow_to_advanced_list(&dict),
-        "settings_2c" => advanced_shot_to_steps(&dict)?,
+        "settings_2c" => (advanced_shot_to_steps(&dict)?, explicit_count_start(&dict)),
         // `settings_2a` and anything unrecognised: treat as simple pressure.
         _ => pressure_to_advanced_list(&dict),
     };
-
-    // An advanced Tcl profile records the preinfusion count directly; a
-    // converted simple profile sets it from its generated leading steps. The
-    // value is a small step count; clamp before the cast so it fits a u16.
-    #[allow(clippy::cast_possible_truncation)]
-    let count_start = dict
-        .get("final_desired_shot_volume_advanced_count_start")
-        .and_then(|s| s.trim().parse::<f32>().ok())
-        .map_or(0, |v| v.clamp(0.0, f32::from(u16::MAX)).round() as u16);
 
     // Legacy TCL profiles carry an `author` field; `beverage_type` is
     // typically absent (TCL is v1/v2 transitional, predates the field)
@@ -518,23 +518,62 @@ pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
     let author = dict.get("author").unwrap_or("").to_string();
     let tank_temperature = dict.get_f32("tank_temperature").unwrap_or(0.0);
 
+    let (target_weight, target_volume) = stop_targets(&dict, advanced);
+
+    let dose = dict.get_f32("grinder_dose_weight").unwrap_or(0.0);
+
     finish_profile(
         title,
         notes,
         steps,
         count_start,
-        dict.get_f32("final_desired_shot_weight_advanced")
-            .or_else(|| dict.get_f32("final_desired_shot_weight"))
-            .unwrap_or(0.0),
-        dict.get_f32("final_desired_shot_volume_advanced")
-            .or_else(|| dict.get_f32("final_desired_shot_volume"))
-            .unwrap_or(0.0),
-        dict.get_f32("grinder_dose_weight").unwrap_or(0.0),
+        target_weight,
+        target_volume,
+        dose,
         author,
         BeverageType::Espresso,
         tank_temperature,
         "2".to_string(),
     )
+}
+
+/// An advanced profile's explicit preinfusion count
+/// (`final_desired_shot_volume_advanced_count_start`), 0 when absent — de1app
+/// resets it to 0 on every profile load (`vars.tcl` `select_profile`), so a
+/// file that omits the key has no preinfusion steps. The value is a small step
+/// count; clamp before the cast so it fits a u16.
+fn explicit_count_start(dict: &TclDict) -> u16 {
+    #[allow(clippy::cast_possible_truncation)]
+    dict.get("final_desired_shot_volume_advanced_count_start")
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .map_or(0, |v| v.clamp(0.0, f32::from(u16::MAX)).round() as u16)
+}
+
+/// The profile's stop-at-weight and stop-at-volume targets, picked the way
+/// de1app picks them at shot start: an advanced profile uses the `_advanced`
+/// keys, a simple profile the plain ones (`de1_de1.tcl` `sav::on_espresso_start`,
+/// `device_scale.tcl` SAW target; `pressure_to_advanced_list` copies the plain
+/// values over the `_advanced` ones for a simple profile).
+///
+/// Load-time fallbacks, also de1app's (`profile.tcl` `read_profile`): an
+/// advanced profile with no `_advanced` weight uses the plain weight, and a
+/// profile with no plain volume uses its plain weight. An advanced profile
+/// with no `_advanced` volume falls back to the plain volume (de1app would
+/// keep whatever the previous profile left in its settings).
+fn stop_targets(dict: &TclDict, advanced: bool) -> (f32, f32) {
+    let weight_plain = dict.get_f32("final_desired_shot_weight");
+    let volume_plain = dict.get_f32("final_desired_shot_volume").or(weight_plain);
+    if advanced {
+        let weight = dict
+            .get_f32("final_desired_shot_weight_advanced")
+            .or(weight_plain);
+        let volume = dict
+            .get_f32("final_desired_shot_volume_advanced")
+            .or(volume_plain);
+        (weight.unwrap_or(0.0), volume.unwrap_or(0.0))
+    } else {
+        (weight_plain.unwrap_or(0.0), volume_plain.unwrap_or(0.0))
+    }
 }
 
 /// Parse a Tcl-dict advanced profile's pre-expanded `advanced_shot` list.
@@ -688,7 +727,13 @@ fn preinfusion_frame(
 
 /// Port of the legacy `pressure_to_advanced_list`: expand a simple **pressure**
 /// profile into an advanced step list.
-fn pressure_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
+///
+/// Also returns the preinfusion step count, counted as de1app counts it
+/// (`profile.tcl` `pressure_to_advanced_list`): one per preinfusion frame and
+/// one per "forced rise" frame (de1app 13a30463 — the rise fills headspace
+/// rather than pouring, so stop-at-volume must not count it). The hold and
+/// decline frames are pour.
+fn pressure_to_advanced_list(dict: &TclDict) -> (Vec<ProfileStep>, u16) {
     let (temps, first_len, second_len) = resolve_conversion(dict);
     let flow_rate = dict.get_f32("preinfusion_flow_rate").unwrap_or(4.0);
     let stop_pressure = dict.get_f32("preinfusion_stop_pressure").unwrap_or(0.0);
@@ -697,6 +742,7 @@ fn pressure_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
     let max_flow = max_value(dict, "maximum_flow", "maximum_flow_range_default");
 
     let mut steps = Vec::new();
+    let mut count: u16 = 0;
 
     if first_len > 0.0 {
         steps.push(preinfusion_frame(
@@ -706,6 +752,7 @@ fn pressure_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
             first_len,
             stop_pressure,
         ));
+        count += 1;
     }
     if second_len > 0.0 {
         steps.push(preinfusion_frame(
@@ -715,6 +762,7 @@ fn pressure_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
             second_len,
             stop_pressure,
         ));
+        count += 1;
     }
 
     // The hold (rise-and-hold) stage. A hold longer than 3 s is preceded by a
@@ -730,6 +778,7 @@ fn pressure_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
                 Transition::Fast,
                 None,
             ));
+            count += 1;
             hold_time -= 3.0;
         }
         steps.push(pressure_frame(
@@ -755,6 +804,7 @@ fn pressure_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
                 Transition::Fast,
                 None,
             ));
+            count += 1;
             decline_time -= 3.0;
         }
         steps.push(pressure_frame(
@@ -770,12 +820,16 @@ fn pressure_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
     if steps.is_empty() {
         steps.push(empty_frame());
     }
-    steps
+    (steps, count)
 }
 
 /// Port of the legacy `flow_to_advanced_list`: expand a simple **flow** profile
 /// into an advanced step list.
-fn flow_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
+///
+/// Also returns the preinfusion step count: one per preinfusion frame, as
+/// de1app's `flow_to_advanced_list` counts it (a flow profile has no
+/// forced-rise frame).
+fn flow_to_advanced_list(dict: &TclDict) -> (Vec<ProfileStep>, u16) {
     let (temps, first_len, second_len) = resolve_conversion(dict);
     let flow_rate = dict.get_f32("preinfusion_flow_rate").unwrap_or(4.0);
     let stop_pressure = dict.get_f32("preinfusion_stop_pressure").unwrap_or(0.0);
@@ -786,6 +840,7 @@ fn flow_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
     let max_pressure = max_value(dict, "maximum_pressure", "maximum_pressure_range_default");
 
     let mut steps = Vec::new();
+    let mut count: u16 = 0;
 
     if first_len > 0.0 {
         steps.push(preinfusion_frame(
@@ -795,6 +850,7 @@ fn flow_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
             first_len,
             stop_pressure,
         ));
+        count += 1;
     }
     if second_len > 0.0 {
         steps.push(preinfusion_frame(
@@ -804,6 +860,7 @@ fn flow_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
             second_len,
             stop_pressure,
         ));
+        count += 1;
     }
 
     // The legacy procedure gates *both* the hold and decline frames on
@@ -831,7 +888,7 @@ fn flow_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
     if steps.is_empty() {
         steps.push(empty_frame());
     }
-    steps
+    (steps, count)
 }
 
 /// Build a pressure-priority frame, optionally limited.
@@ -2045,5 +2102,219 @@ espresso_decline_time 20
         assert_eq!(decline.transition, Transition::Smooth);
         // It assembles cleanly.
         assert!(p.assemble().is_ok());
+        // de1app counts boost + preinfusion + BOTH forced rises (13a30463):
+        // 4. The count is a prefix length on the wire, so the DE1 also
+        // reports "rise and hold" (frame 3) as preinfusion — the same as
+        // de1app uploads for this profile.
+        assert_eq!(p.preinfuse_step_count, 4);
+        assert_eq!(p.assemble().unwrap().header.preinfuse_frame_count, 4);
+    }
+
+    // -- preinfusion count and stop targets (issue 10, de1app parity) ----
+
+    /// A minimal simple-profile body; `extra` appends/overrides keys.
+    fn simple_tcl(kind: &str, extra: &str) -> String {
+        format!(
+            "advanced_shot {{}}\nsettings_profile_type {kind}\nprofile_title x\nprofile_notes {{}}\n\
+             espresso_temperature_steps_enabled 0\nespresso_temperature 92.0\n\
+             espresso_pressure 9.0\npressure_end 6.0\npreinfusion_flow_rate 4.0\n\
+             preinfusion_stop_pressure 4.0\nflow_profile_hold 2.0\nflow_profile_decline 1.2\n{extra}"
+        )
+    }
+
+    #[test]
+    fn settings_2a_counts_preinfusion_and_the_forced_rise() {
+        // preinfusion + forced rise (hold > 3) are preinfusion; hold and
+        // decline are pour. de1app: count_start 1 -> 2 (13a30463).
+        let tcl = simple_tcl(
+            "settings_2a",
+            "preinfusion_time 20\nespresso_hold_time 10\nespresso_decline_time 30\n",
+        );
+        let p = import_legacy_tcl(&tcl).unwrap();
+        let names: Vec<&str> = p.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "preinfusion",
+                "forced rise without limit",
+                "rise and hold",
+                "decline"
+            ]
+        );
+        assert_eq!(p.preinfuse_step_count, 2);
+    }
+
+    #[test]
+    fn settings_2a_counts_the_decline_forced_rise_when_there_is_no_hold() {
+        // No hold: the decline gets its own forced rise, which counts too.
+        let tcl = simple_tcl(
+            "settings_2a",
+            "preinfusion_time 0\nespresso_hold_time 0\nespresso_decline_time 30\n",
+        );
+        let p = import_legacy_tcl(&tcl).unwrap();
+        let names: Vec<&str> = p.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["forced rise without limit", "decline"]);
+        assert_eq!(p.preinfuse_step_count, 1);
+    }
+
+    #[test]
+    fn settings_2a_short_hold_has_no_forced_rise_to_count() {
+        // A hold of 3 s or less gets no forced rise; nor does a decline of
+        // 3 s or less. Only the preinfusion counts.
+        let tcl = simple_tcl(
+            "settings_2a",
+            "preinfusion_time 8\nespresso_hold_time 3\nespresso_decline_time 3\n",
+        );
+        let p = import_legacy_tcl(&tcl).unwrap();
+        let names: Vec<&str> = p.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["preinfusion", "rise and hold", "decline"]);
+        assert_eq!(p.preinfuse_step_count, 1);
+    }
+
+    #[test]
+    fn settings_2a_temp_boost_counts_both_preinfusion_frames() {
+        let tcl = simple_tcl(
+            "settings_2a",
+            "espresso_temperature_steps_enabled 1\nespresso_temperature_0 94\n\
+             espresso_temperature_1 92\nespresso_temperature_2 92\nespresso_temperature_3 92\n\
+             preinfusion_time 20\nespresso_hold_time 0\nespresso_decline_time 30\n",
+        );
+        let p = import_legacy_tcl(&tcl).unwrap();
+        // boost, preinfusion, forced rise (decline-first), decline.
+        assert_eq!(p.steps.len(), 4);
+        assert_eq!(p.preinfuse_step_count, 3);
+    }
+
+    #[test]
+    fn settings_2a_blank_profile_counts_nothing() {
+        let tcl = simple_tcl(
+            "settings_2a",
+            "preinfusion_time 0\nespresso_hold_time 0\nespresso_decline_time 0\n",
+        );
+        let p = import_legacy_tcl(&tcl).unwrap();
+        assert_eq!(p.steps[0].name, "empty");
+        assert_eq!(p.preinfuse_step_count, 0);
+    }
+
+    #[test]
+    fn settings_2a_ignores_a_stale_count_in_the_file() {
+        // de1app recomputes a basic profile's count on load; a value left in
+        // the file (Steam only ships 1) does not survive.
+        let tcl = simple_tcl(
+            "settings_2a",
+            "preinfusion_time 20\nespresso_hold_time 10\nespresso_decline_time 30\n\
+             final_desired_shot_volume_advanced_count_start 1\n",
+        );
+        assert_eq!(import_legacy_tcl(&tcl).unwrap().preinfuse_step_count, 2);
+    }
+
+    #[test]
+    fn settings_2b_counts_its_preinfusion_frames() {
+        // A flow profile has no forced rise: only the preinfusion counts.
+        let tcl = simple_tcl(
+            "settings_2b",
+            "preinfusion_time 15\nespresso_hold_time 8\nespresso_decline_time 20\n",
+        );
+        let p = import_legacy_tcl(&tcl).unwrap();
+        assert_eq!(p.steps.len(), 3);
+        assert_eq!(p.preinfuse_step_count, 1);
+
+        let boosted = simple_tcl(
+            "settings_2b",
+            "espresso_temperature_steps_enabled 1\nespresso_temperature_0 94\n\
+             espresso_temperature_1 92\nespresso_temperature_2 92\nespresso_temperature_3 92\n\
+             preinfusion_time 15\nespresso_hold_time 8\nespresso_decline_time 20\n",
+        );
+        let p = import_legacy_tcl(&boosted).unwrap();
+        assert_eq!(p.steps.len(), 4);
+        assert_eq!(p.preinfuse_step_count, 2);
+    }
+
+    #[test]
+    fn settings_2b_without_preinfusion_counts_zero() {
+        let tcl = simple_tcl(
+            "settings_2b",
+            "preinfusion_time 0\nespresso_hold_time 8\nespresso_decline_time 20\n",
+        );
+        assert_eq!(import_legacy_tcl(&tcl).unwrap().preinfuse_step_count, 0);
+    }
+
+    /// A two-step advanced profile; `extra` appends keys.
+    fn advanced_tcl(extra: &str) -> String {
+        format!(
+            "advanced_shot {{{{name a pump flow flow 4 temperature 92 seconds 10}} \
+             {{name b pump pressure pressure 9 temperature 92 seconds 30}}}}\n\
+             settings_profile_type settings_2c\nprofile_title x\nprofile_notes {{}}\n{extra}"
+        )
+    }
+
+    #[test]
+    fn settings_2c_keeps_its_explicit_count() {
+        let p = import_legacy_tcl(&advanced_tcl(
+            "final_desired_shot_volume_advanced_count_start 1\n",
+        ))
+        .unwrap();
+        assert_eq!(p.preinfuse_step_count, 1);
+        // An explicit 0 stays 0 — not derived from the steps.
+        let p = import_legacy_tcl(&advanced_tcl(
+            "final_desired_shot_volume_advanced_count_start 0\n",
+        ))
+        .unwrap();
+        assert_eq!(p.preinfuse_step_count, 0);
+        // A missing key is 0 (de1app resets it on every load).
+        assert_eq!(
+            import_legacy_tcl(&advanced_tcl(""))
+                .unwrap()
+                .preinfuse_step_count,
+            0
+        );
+    }
+
+    #[test]
+    fn basic_profiles_take_the_plain_volume_and_weight() {
+        // de1app's SAV/SAW use final_desired_shot_volume / _weight for a basic
+        // profile; the `_advanced` values are leftovers (Gentle and sweet
+        // ships volume 36 / volume_advanced 135).
+        let keys = "preinfusion_time 20\nespresso_hold_time 10\nespresso_decline_time 30\n\
+                    final_desired_shot_volume 36\nfinal_desired_shot_volume_advanced 135\n\
+                    final_desired_shot_weight 38\nfinal_desired_shot_weight_advanced 135\n";
+        for kind in ["settings_2a", "settings_2b"] {
+            let p = import_legacy_tcl(&simple_tcl(kind, keys)).unwrap();
+            assert_eq!(p.max_total_volume_ml, 36, "{kind}");
+            assert_eq!(p.target_weight, 38.0, "{kind}");
+        }
+    }
+
+    #[test]
+    fn basic_profile_volume_zero_stays_zero() {
+        // Hybrid pour over espresso: volume 0, volume_advanced 74 -> no SAV.
+        let keys = "preinfusion_time 20\nespresso_hold_time 10\nespresso_decline_time 30\n\
+                    final_desired_shot_volume 0\nfinal_desired_shot_volume_advanced 74\n";
+        let p = import_legacy_tcl(&simple_tcl("settings_2b", keys)).unwrap();
+        assert_eq!(p.max_total_volume_ml, 0);
+    }
+
+    #[test]
+    fn a_missing_volume_falls_back_to_the_weight() {
+        // de1app read_profile: an old profile with no end volume gets its
+        // shot weight as the volume.
+        let keys = "preinfusion_time 20\nespresso_hold_time 10\nespresso_decline_time 30\n\
+                    final_desired_shot_weight 40\n";
+        let p = import_legacy_tcl(&simple_tcl("settings_2a", keys)).unwrap();
+        assert_eq!(p.max_total_volume_ml, 40);
+    }
+
+    #[test]
+    fn advanced_profiles_take_the_advanced_volume_and_weight() {
+        let p = import_legacy_tcl(&advanced_tcl(
+            "final_desired_shot_volume 42\nfinal_desired_shot_volume_advanced 100\n\
+             final_desired_shot_weight 42\nfinal_desired_shot_weight_advanced 100\n",
+        ))
+        .unwrap();
+        assert_eq!(p.max_total_volume_ml, 100);
+        assert_eq!(p.target_weight, 100.0);
+        // No `_advanced` weight: the plain weight (de1app read_profile).
+        let p = import_legacy_tcl(&advanced_tcl("final_desired_shot_weight 38\n")).unwrap();
+        assert_eq!(p.target_weight, 38.0);
     }
 }

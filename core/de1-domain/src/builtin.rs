@@ -152,6 +152,59 @@ mod tests {
         })
     }
 
+    /// The built-in with this title.
+    fn builtin(title: &str) -> &'static Profile {
+        builtin_profiles()
+            .iter()
+            .find(|p| p.title == title)
+            .unwrap_or_else(|| panic!("no built-in titled {title:?}"))
+    }
+
+    #[test]
+    fn builtin_preinfusion_counts_and_volumes_match_de1app() {
+        // (title, preinfuse_step_count, max_total_volume_ml), as de1app's own
+        // pressure_to_advanced_list / flow_to_advanced_list compute them
+        // (run under tclsh against de1app main; see
+        // .scratch/upstream-review-2026-10/builtin-diff.md).
+        let expected: &[(&str, u8, u16)] = &[
+            // settings_2a: preinfusion frames + forced rises.
+            ("Default", 4, 36),
+            ("Best overall pressure profile", 3, 36),
+            ("Classic Italian espresso", 3, 36),
+            ("Gentle and sweet", 3, 36),
+            ("Traditional lever machine", 3, 36),
+            ("Low pressure lever machine at 6 bar", 2, 36),
+            ("E61 espresso machine", 2, 0),
+            ("Steam only", 2, 30),
+            ("GHC/manual pressure control", 1, 0),
+            // settings_2b: preinfusion frames only.
+            ("Flow profile for straight espresso", 2, 36),
+            ("Hybrid pour over espresso", 1, 0),
+            ("Preinfuse then 45ml of water", 1, 36),
+            ("GHC/manual flow control", 0, 0),
+            // settings_2c: the TCL's explicit count, 0 included.
+            ("Londonium", 2, 0),
+            ("Cremina lever machine", 0, 0),
+            ("Espresso Forge Dark", 0, 0),
+            ("Filter 2.1", 0, 0),
+            ("Blooming Allongé", 0, 180),
+        ];
+        for &(title, count, volume) in expected {
+            let p = builtin(title);
+            assert_eq!(
+                p.preinfuse_step_count, count,
+                "{title}: preinfuse_step_count"
+            );
+            assert_eq!(p.max_total_volume_ml, volume, "{title}: volume");
+            // The count reaches the DE1 header unchanged.
+            assert_eq!(
+                p.assemble().unwrap().header.preinfuse_frame_count,
+                count,
+                "{title}: header"
+            );
+        }
+    }
+
     #[test]
     fn builtin_profiles_is_memoized() {
         // Two calls return the very same cached slice.

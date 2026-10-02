@@ -33,7 +33,7 @@ use de1_domain::{
     Estimate, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile, STOP_WEIGHT_BEFORE,
     ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StopCapture, StopConfig,
     StopReason, StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor, WeightSpikeGate,
-    WeightUnit, shot_disposition,
+    WeightUnit, sav_counts_volume, shot_disposition,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -2910,13 +2910,25 @@ impl CremaCore {
         // surfaces the detector's view alongside the override for
         // diagnostics.
         self.line_freq_detector.observe(sample.sample_time, now);
-        self.volume_integrator
-            .integrate(&sample, now, self.line_frequency_hz());
-        let dispensed_ml = self.volume_integrator.dispensed_ml();
+        //
+        // SAV compares POUR volume only (de1app parity): the sample counts
+        // toward it unless the DE1 reports the Espresso preinfusion substate
+        // (the profile's first `preinfuse_step_count` frames). The displayed
+        // `dispensed_volume` stays the total.
+        let counts_as_pour = self
+            .last_state
+            .is_none_or(|s| sav_counts_volume(s.state, s.substate));
+        self.volume_integrator.integrate_counting(
+            &sample,
+            now,
+            self.line_frequency_hz(),
+            counts_as_pour,
+        );
+        let pour_ml = self.volume_integrator.pour_ml();
         let reason = self
             .auto_stop
             .as_mut()
-            .and_then(|stop| stop.on_sample(&sample, now, dispensed_ml));
+            .and_then(|stop| stop.on_sample(&sample, now, pour_ml));
         self.push_stop(reason, now, out);
         self.enforce_pending_stop(now, out);
         self.report_stop_targets(out);
@@ -6252,6 +6264,70 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    /// A 19-byte `ShotSample` packet with the given `sample_time`, group
+    /// flow (ml/s) and frame number; every other field zeroed.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn sample_packet(sample_time: u16, flow: f32, frame: u8) -> [u8; 19] {
+        let mut p = [0u8; 19];
+        p[0..2].copy_from_slice(&sample_time.to_be_bytes());
+        p[4..6].copy_from_slice(&((flow * 4096.0) as u16).to_be_bytes());
+        p[17] = frame;
+        p
+    }
+
+    #[test]
+    fn stop_at_volume_counts_pour_volume_only() {
+        // de1app parity (issue 10): water dispensed while the DE1 reports
+        // the preinfusion substate never counts toward SAV.
+        let mut core = CremaCore::new();
+        core.set_profile_volume_limit(Some(10.0));
+        // Espresso / Preinfusion: the shot starts and SAV arms.
+        core.on_notification(Source::De1State, &[4, 4], 0);
+        let mut volume_stops = 0;
+        // 12 s of preinfusion at 4 ml/s: ~44 ml in total — well past the
+        // 10 ml target, yet no stop.
+        for i in 0..12u16 {
+            let t = u64::from(i) * 1_000 + 1_000;
+            let out =
+                core.on_notification(Source::De1ShotSample, &sample_packet(i * 120, 4.0, 0), t);
+            volume_stops += out
+                .events
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e,
+                        Event::StopTriggered {
+                            reason: StopReason::Volume
+                        }
+                    )
+                })
+                .count();
+        }
+        assert_eq!(volume_stops, 0, "preinfusion water must not trip SAV");
+        // Espresso / Pouring: now the pour counts.
+        core.on_notification(Source::De1State, &[4, 5], 12_500);
+        let mut stopped_at = None;
+        for i in 12..20u16 {
+            let t = u64::from(i) * 1_000 + 1_000;
+            let out =
+                core.on_notification(Source::De1ShotSample, &sample_packet(i * 120, 4.0, 2), t);
+            if out.events.iter().any(|e| {
+                matches!(
+                    e,
+                    Event::StopTriggered {
+                        reason: StopReason::Volume
+                    }
+                )
+            }) {
+                stopped_at = Some(t);
+                break;
+            }
+        }
+        // 4 ml per 1 s sample: 10 ml of pour is reached on the 3rd pouring
+        // sample (the first carries the 1 s since the last preinfusion one).
+        assert_eq!(stopped_at, Some(15_000));
     }
 
     /// Extract `ended_without_triggering_stop` from a `Completed` shot's

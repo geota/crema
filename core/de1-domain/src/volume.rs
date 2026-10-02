@@ -49,6 +49,9 @@ const PER_SAMPLE_MAX_ML: f32 = 1000.0;
 #[derive(Debug, Default, Clone)]
 pub struct VolumeIntegrator {
     dispensed_ml: f32,
+    /// The part of `dispensed_ml` that counts toward stop-at-volume — pour
+    /// only, preinfusion excluded (see [`integrate_counting`](Self::integrate_counting)).
+    pour_ml: f32,
     last_sample_time: Option<u16>,
     last_host_time: Option<Duration>,
 }
@@ -62,6 +65,13 @@ impl VolumeIntegrator {
     /// The volume dispensed so far, ml.
     pub fn dispensed_ml(&self) -> f32 {
         self.dispensed_ml
+    }
+
+    /// The **pour** volume so far, ml — what stop-at-volume compares against
+    /// its target. Equal to [`dispensed_ml`](Self::dispensed_ml) minus every
+    /// increment integrated with `counts_as_pour == false`.
+    pub fn pour_ml(&self) -> f32 {
+        self.pour_ml
     }
 
     /// Discard the running volume and the timing state. Call at the start
@@ -81,6 +91,19 @@ impl VolumeIntegrator {
     /// `sample_time` or `group_flow` — drop it rather than poison the
     /// running total).
     pub fn integrate(&mut self, sample: &ShotSample, now: Duration, line_freq_hz: Option<f32>) {
+        self.integrate_counting(sample, now, line_freq_hz, true);
+    }
+
+    /// [`integrate`](Self::integrate), also adding the increment to
+    /// [`pour_ml`](Self::pour_ml) when `counts_as_pour` — the caller decides
+    /// from the machine state ([`sav_counts_volume`](crate::sav_counts_volume)).
+    pub fn integrate_counting(
+        &mut self,
+        sample: &ShotSample,
+        now: Duration,
+        line_freq_hz: Option<f32>,
+        counts_as_pour: bool,
+    ) {
         let dt_s = self.dt_seconds(sample.sample_time, now, line_freq_hz);
         let raw = sample.group_flow * dt_s;
         let inc = if raw.is_finite() && (0.0..=PER_SAMPLE_MAX_ML).contains(&raw) {
@@ -89,6 +112,9 @@ impl VolumeIntegrator {
             0.0
         };
         self.dispensed_ml += inc;
+        if counts_as_pour {
+            self.pour_ml += inc;
+        }
         self.last_sample_time = Some(sample.sample_time);
         self.last_host_time = Some(now);
     }
@@ -307,6 +333,27 @@ mod tests {
             assert!(v.dispensed_ml() > 0.0);
             v.reset();
             assert_eq!(v.dispensed_ml(), 0.0);
+            assert_eq!(v.pour_ml(), 0.0);
+        }
+
+        #[test]
+        fn pour_volume_excludes_increments_not_counted_as_pour() {
+            // 60 Hz: 120 ticks = 1 s; 4 ml/s -> 4 ml per sample.
+            let mut v = VolumeIntegrator::new();
+            v.integrate_counting(&sample(0, 4.0), Duration::from_secs(0), Some(60.0), false);
+            v.integrate_counting(&sample(120, 4.0), Duration::from_secs(1), Some(60.0), false);
+            v.integrate_counting(&sample(240, 4.0), Duration::from_secs(2), Some(60.0), true);
+            v.integrate_counting(&sample(360, 4.0), Duration::from_secs(3), Some(60.0), true);
+            assert!((v.dispensed_ml() - 12.0).abs() < 1e-4);
+            assert!((v.pour_ml() - 8.0).abs() < 1e-4);
+        }
+
+        #[test]
+        fn plain_integrate_counts_everything_as_pour() {
+            let mut v = VolumeIntegrator::new();
+            v.integrate(&sample(0, 4.0), Duration::from_secs(0), Some(60.0));
+            v.integrate(&sample(120, 4.0), Duration::from_secs(1), Some(60.0));
+            assert_eq!(v.pour_ml(), v.dispensed_ml());
         }
     }
 
