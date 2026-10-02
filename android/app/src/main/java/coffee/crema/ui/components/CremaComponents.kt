@@ -85,6 +85,7 @@ import coffee.crema.ui.TelemetrySample
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
 import com.adamglin.phosphoricons.regular.ArrowCounterClockwise
+import com.adamglin.phosphoricons.regular.LockKey
 import com.adamglin.phosphoricons.regular.ArrowDown
 import com.adamglin.phosphoricons.regular.ArrowLeft
 import com.adamglin.phosphoricons.regular.ArrowUp
@@ -246,6 +247,7 @@ fun PhIcon(
         "cube" -> PhosphorIcons.Regular.Cube
         "house" -> PhosphorIcons.Regular.House
         "link" -> PhosphorIcons.Regular.Link
+        "lock-key" -> PhosphorIcons.Regular.LockKey
         "plugs-connected" -> PhosphorIcons.Regular.PlugsConnected
         "sign-in" -> PhosphorIcons.Regular.SignIn
         "sign-out" -> PhosphorIcons.Regular.SignOut
@@ -746,6 +748,8 @@ fun CremaConfirmDialog(
     danger: Boolean = false,
     icon: String? = null,
     requireTyped: String? = null,
+    /** Optional extra content under the body (e.g. an "also delete on Visualizer" option). */
+    extra: (@Composable () -> Unit)? = null,
 ) {
     var typed by remember { mutableStateOf("") }
     val confirmEnabled = requireTyped == null || typed.trim() == requireTyped
@@ -770,6 +774,7 @@ fun CremaConfirmDialog(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+                extra?.invoke()
             }
         },
         confirmButton = {
@@ -892,7 +897,7 @@ fun CremaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: 
 }
 
 // ── Segmented button (single-select) ────────────────────────────────────────
-data class SegOption(val id: String, val label: String)
+data class SegOption(val id: String, val label: String, val enabled: Boolean = true)
 
 @Composable
 fun CremaSegmentedButton(
@@ -927,7 +932,7 @@ fun CremaSegmentedButton(
     SingleChoiceSegmentedButtonRow(rowMod) {
         options.forEachIndexed { i, o ->
             SegmentedButton(
-                enabled = enabled,
+                enabled = enabled && o.enabled,
                 selected = value == o.id,
                 onClick = { onChange(o.id) },
                 shape = SegmentedButtonDefaults.itemShape(i, options.size),

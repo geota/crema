@@ -1,6 +1,8 @@
 package coffee.crema.ui.screens
 
 import coffee.crema.ui.maintenanceRunText
+import androidx.compose.ui.text.style.TextOverflow
+import coffee.crema.visualizer.entityLabel
 import coffee.crema.ui.fmt
 import coffee.crema.ui.relativeAgo
 import androidx.compose.foundation.background
@@ -708,6 +710,17 @@ fun SettingsScreen(
                                 val lastSyncLabel = vz.lastShotSyncAt?.let {
                                     coffee.crema.ui.relativeAgo(it)
                                 } ?: "never"
+                                coffee.crema.ui.components.BeanSyncDirectionRows(
+                                    beanCount = ui.beans.size,
+                                    roasterCount = ui.roasters.size,
+                                    lastSyncLabel = vz.beanLastSyncAt?.let { coffee.crema.ui.relativeAgo(it) } ?: "never",
+                                    beansDirection = vz.beansDirection,
+                                    roastersDirection = vz.roastersDirection,
+                                    premium = vz.premium,
+                                    onBeansDirection = vm.visualizer::setBeansDirection,
+                                    onRoastersDirection = vm.visualizer::setRoastersDirection,
+                                    stacked = false,
+                                )
                                 CremaSettingsRow(
                                     "Shots",
                                     "${ui.history.size} shot(s)" +
@@ -734,18 +747,19 @@ fun SettingsScreen(
                                 }
                                 CremaSettingsRow(
                                     "Sync now",
-                                    if (unsyncedCount == 0) "All ${ui.history.size} local shots are on Visualizer."
-                                    else "$unsyncedCount local shot(s) not uploaded yet.",
+                                    "One full sync across every enabled entity — beans and roasters, then shots." +
+                                        (if (unsyncedCount == 0) " All ${ui.history.size} local shots are on Visualizer."
+                                        else " $unsyncedCount local shot(s) not uploaded yet."),
                                 ) {
                                     CremaButton(
                                         onClick = { vm.visualizer.syncNow(ui.history) },
                                         variant = CremaButtonVariant.Outlined,
-                                        icon = if (vz.shotsDirection == "pull") "cloud-arrow-down" else "cloud-arrow-up",
-                                        enabled = vz.shotsDirection != "off" && !vz.busy && !vz.syncing,
+                                        icon = "arrows-clockwise",
+                                        enabled = (vz.shotsDirection != "off" || vz.beansDirection != "off" || vz.roastersDirection != "off") && !vz.busy && !vz.syncing,
                                         label = if (vz.syncing) "Syncing…" else "Sync now",
                                     )
                                 }
-                                CremaSettingsRow("Re-sync shots", "Re-pull everything from Visualizer, de-duplicated.", last = true) {
+                                CremaSettingsRow("Re-sync shots", "Re-pull everything from Visualizer, de-duplicated.", last = vz.premium != false) {
                                     CremaButton(
                                         onClick = { confirm.pendingResync = true },
                                         variant = CremaButtonVariant.Outlined,
@@ -753,6 +767,9 @@ fun SettingsScreen(
                                         enabled = !vz.busy && !vz.syncing,
                                         label = "Re-sync all",
                                     )
+                                }
+                                if (vz.premium == false) {
+                                    coffee.crema.ui.components.PremiumPushNotice(onUpgrade = { openUrl("https://visualizer.coffee/premium") })
                                 }
                             }
                             // Upload options — defaults applied to every upload (web's
@@ -1393,11 +1410,12 @@ private fun SyncLogRow(entry: coffee.crema.visualizer.SyncLogEntry, last: Boolea
                 tint = if (entry.error != null) Color(0xFFD26456) else MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                entry.name,
+                "${entry.entityLabel} · ${entry.name}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 "${entry.direction} · ${coffee.crema.ui.relativeAgo(entry.at)}",

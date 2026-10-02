@@ -20,6 +20,8 @@ class BeansViewState(
     filter: String = "all",
     roasterScopeId: String? = null,
     detailBeanId: String? = null,
+    showDuplicates: Boolean = false,
+    dismissedDuplicates: Set<String> = emptySet(),
 ) {
     var tab by mutableStateOf(tab)
     var filter by mutableStateOf(filter)
@@ -32,6 +34,12 @@ class BeansViewState(
      * host after a rotation across 840dp.
      */
     var detailBeanId by mutableStateOf(detailBeanId)
+
+    /** Roasters tab: include rows tagged as merged duplicates (web "Show dupes"; off by default). */
+    var showDuplicates by mutableStateOf(showDuplicates)
+
+    /** Dupe ids whose merge banner was answered "Keep separate" — hidden for the session. */
+    var dismissedDuplicates by mutableStateOf(dismissedDuplicates)
 
     /** Open [roasterId]'s shelf: the Bags tab scoped to it, unfiltered. */
     fun openShelf(roasterId: String) {
@@ -48,8 +56,19 @@ class BeansViewState(
 
     companion object {
         val Saver = listSaver<BeansViewState, String?>(
-            save = { listOf(it.tab, it.filter, it.roasterScopeId, it.detailBeanId) },
-            restore = { BeansViewState(it[0] ?: "bags", it[1] ?: "all", it[2], it.getOrNull(3)) },
+            save = {
+                listOf(
+                    it.tab, it.filter, it.roasterScopeId, it.detailBeanId,
+                    it.showDuplicates.toString(), it.dismissedDuplicates.joinToString("\n"),
+                )
+            },
+            restore = {
+                BeansViewState(
+                    it[0] ?: "bags", it[1] ?: "all", it[2], it.getOrNull(3),
+                    showDuplicates = it.getOrNull(4) == "true",
+                    dismissedDuplicates = it.getOrNull(5)?.split('\n')?.filter { s -> s.isNotEmpty() }?.toSet().orEmpty(),
+                )
+            },
         )
     }
 }

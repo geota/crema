@@ -1092,6 +1092,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onBackfillTelemetry = { localId, samples, durationMs -> library.backfillShotTelemetry(localId, samples, durationMs) },
         onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
         currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
+        beanLibrary = { _ui.value.let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
+        onBeansSynced = { result, beanIds, roasterIds -> library.applyBeanSync(result, beanIds, roasterIds) },
     )
 
     /**
@@ -2320,8 +2322,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Remove a bean's bag photo. Persisted. */
     fun clearBeanImage(beanId: String) = library.clearBeanImage(beanId)
 
-    /** Remove a bean bag; reselect the first remaining if it was active. */
-    fun deleteBean(id: String) = library.deleteBean(id)
+    /**
+     * Remove a bean bag; reselect the first remaining if it was active.
+     * [alsoOnVisualizer] mirrors the delete to its Visualizer copy (web
+     * "Delete here and on Visualizer").
+     */
+    fun deleteBean(id: String, alsoOnVisualizer: Boolean = false) = library.deleteBean(id, alsoOnVisualizer)
+
+    /** Whether a delete can also remove the row's Visualizer copy: signed in and the row is synced. */
+    fun canDeleteOnVisualizer(visualizerId: String?): Boolean =
+        visualizerId != null && _ui.value.visualizer.signedIn && _ui.value.visualizer.premium != false
 
     /** Duplicate a bag into a fresh row. Persisted. */
     fun duplicateBean(id: String) = library.duplicateBean(id)
@@ -2352,8 +2362,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun updateRoaster(id: String, name: String, website: String?, city: String?, country: String?, notes: String) =
         library.updateRoaster(id, name, website, city, country, notes)
 
-    /** Delete a roaster; detach its bags. Persisted. */
-    fun deleteRoaster(id: String) = library.deleteRoaster(id)
+    /** Delete a roaster; detach its bags. [alsoOnVisualizer] also deletes its Visualizer copy. Persisted. */
+    fun deleteRoaster(id: String, alsoOnVisualizer: Boolean = false) = library.deleteRoaster(id, alsoOnVisualizer)
+
+    /** Merge [dupeId] into [canonicalId]: move its bags, tag it as a duplicate (web Roasters tab). Persisted. */
+    fun mergeRoaster(canonicalId: String, dupeId: String) = library.mergeRoaster(canonicalId, dupeId)
+
+    /** Un-merge a tagged duplicate (clear its duplicate-of pointer). Persisted. */
+    fun unmergeRoaster(id: String) = library.unmergeRoaster(id)
+
+    /** Roaster merge suggestions for the Roasters tab (core rule); empty if the core call fails. */
+    fun roasterDuplicates(roasters: List<coffee.crema.core.Roaster>): List<coffee.crema.core.RoasterDuplicate> =
+        runCatching { coffee.crema.beans.detectRoasterDuplicates(json, roasters) }.getOrDefault(emptyList())
 
     /** Open a roaster's website in the browser (best-effort). */
     fun visitRoasterWebsite(url: String?) = library.visitRoasterWebsite(url)

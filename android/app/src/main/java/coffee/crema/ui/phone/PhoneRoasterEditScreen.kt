@@ -115,13 +115,12 @@ fun PhoneRoasterEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     }
 
     if (confirmDelete && editing != null) {
-        CremaConfirmDialog(
+        coffee.crema.ui.components.DeleteWithVisualizerDialog(
             title = "Delete roaster?",
             body = "“${editing.name}” will be removed. Its bags stay in your library, unlinked.",
-            confirmLabel = "Delete",
-            icon = "trash",
-            danger = true,
-            onConfirm = { vm.deleteRoaster(editing.id); confirmDelete = false; onBack() },
+            what = "roaster",
+            remoteAvailable = vm.canDeleteOnVisualizer(editing.visualizerId),
+            onConfirm = { remote -> vm.deleteRoaster(editing.id, remote); confirmDelete = false; onBack() },
             onDismiss = { confirmDelete = false },
         )
     }

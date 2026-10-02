@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.TextStyle
@@ -176,9 +177,13 @@ fun BeansScreen(
     val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, beanFilter, beanSort, beanSortDesc, ui.activeBeanId, scopeId)
     // Back from a roaster's shelf returns to the Roasters directory.
     BackHandler(enabled = scopeId != null && tab == "bags") { beansState.closeShelf() }
-    val visibleRoasters = ui.roasters
+    val visibleRoasters = coffee.crema.beans.directoryRoasters(ui.roasters, beansState.showDuplicates)
         .filter { roasterHits.matches(it.id) }
         .sortedByDescending { roasterHits.score(it.id) }
+    // Merge suggestions (core rule) — the Roasters tab's "X looks like Y" banners.
+    val duplicatePairs = remember(ui.roasters) { vm.roasterDuplicates(ui.roasters) }
+    val mergeSuggestions = coffee.crema.beans.mergeSuggestions(duplicatePairs, ui.roasters, ui.beans, beansState.dismissedDuplicates)
+    val hasTaggedDupes = ui.roasters.any { it.canonicalRoasterId != null }
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(
@@ -270,6 +275,18 @@ fun BeansScreen(
                 onChange = { tab = it },
                 modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
             )
+            // Roasters: "Show dupes" surfaces rows tagged as merged duplicates so
+            // they can be inspected / un-merged (web, only when any exist).
+            if (tab == "roasters" && hasTaggedDupes) {
+                Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 8.dp)) {
+                    CremaFilterChip(
+                        label = if (beansState.showDuplicates) "Hide dupes" else "Show dupes",
+                        selected = beansState.showDuplicates,
+                        icon = "link",
+                        onClick = { beansState.showDuplicates = !beansState.showDuplicates },
+                    )
+                }
+            }
             // Filter rail (Bags): STATUS group · full-height divider · ROAST group, sort
             // pinned right. IntrinsicSize.Min lets the divider stretch the row height
             // (PWA .bn-tabs-divider: align-self: stretch); group labels sit centered.
@@ -360,13 +377,14 @@ fun BeansScreen(
                                 onFreezeToggle = { if (bean.isFrozen) vm.defrostBean(bean.id) else vm.freezeBean(bean.id) },
                                 onArchiveToggle = { if (bean.archivedAt != null) vm.unarchiveBean(bean.id) else vm.archiveBean(bean.id) },
                                 onToggleFavourite = { vm.toggleBeanFavourite(bean.id) },
-                                onDelete = { vm.deleteBean(bean.id) },
+                                remoteDeleteAvailable = vm.canDeleteOnVisualizer(bean.visualizerId),
+                                onDelete = { remote -> vm.deleteBean(bean.id, remote) },
                             )
                         }
                     }
                 }
             } else {
-                if (visibleRoasters.isEmpty()) {
+                if (visibleRoasters.isEmpty() && mergeSuggestions.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CremaEmptyState(if (ui.roasters.isEmpty()) "No roasters yet — add one to group your bags." else "No roasters match your search.")
                     }
@@ -380,14 +398,25 @@ fun BeansScreen(
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
                     ) {
+                        // Merge banners span the grid, above the cards (web .bn-merge-banner).
+                        items(mergeSuggestions, key = { "merge:" + it.dupe.id }, span = { GridItemSpan(maxLineSpan) }) { s ->
+                            coffee.crema.ui.components.RoasterMergeBanner(
+                                suggestion = s,
+                                onKeepSeparate = { beansState.dismissedDuplicates = beansState.dismissedDuplicates + s.dupe.id },
+                                onMerge = { vm.mergeRoaster(s.canonical.id, s.dupe.id) },
+                            )
+                        }
                         items(visibleRoasters, key = { it.id }) { roaster ->
                             RoasterCard(
                                 roaster = roaster,
                                 bagCountLabel = roasterBagCountLabel(ui.beans, roaster.id),
+                                duplicateOf = roaster.canonicalRoasterId?.let { id -> ui.roasters.firstOrNull { it.id == id }?.name ?: "a removed roaster" },
+                                onUnmerge = { vm.unmergeRoaster(roaster.id) },
+                                remoteDeleteAvailable = vm.canDeleteOnVisualizer(roaster.visualizerId),
                                 onOpen = { beansState.openShelf(roaster.id) },
                                 onEdit = { roasterEditing = roaster; roasterDialogOpen = true },
                                 onVisit = { vm.visitRoasterWebsite(roaster.website) },
-                                onDelete = { vm.deleteRoaster(roaster.id) },
+                                onDelete = { remote -> vm.deleteRoaster(roaster.id, remote) },
                             )
                         }
                     }
@@ -421,7 +450,8 @@ fun BeansScreen(
                 onToggleArchived = {
                     if (bean.archivedAt != null) vm.unarchiveBean(bean.id) else vm.archiveBean(bean.id)
                 },
-                onDelete = { vm.deleteBean(bean.id) },
+                onDelete = { remote -> vm.deleteBean(bean.id, remote) },
+                remoteDeleteAvailable = vm.canDeleteOnVisualizer(bean.visualizerId),
                 onOpenShot = { sid ->
                     detailBeanId = null
                     vm.openShotInHistory(sid)
@@ -468,7 +498,8 @@ private fun BeanCard(
     onFreezeToggle: () -> Unit,
     onArchiveToggle: () -> Unit,
     onToggleFavourite: () -> Unit,
-    onDelete: () -> Unit,
+    remoteDeleteAvailable: Boolean,
+    onDelete: (alsoOnVisualizer: Boolean) -> Unit,
 ) {
     // Tile pill shows the finer 5-band display label (web roastBand5);
     // filters/freshness elsewhere stay on the canonical 3-band roastBand.
@@ -607,13 +638,12 @@ private fun BeanCard(
         }
     }
     if (confirmDelete) {
-        CremaConfirmDialog(
+        coffee.crema.ui.components.DeleteWithVisualizerDialog(
             title = "Delete bean?",
             body = "“${bean.name}” will be removed. This can’t be undone.",
-            confirmLabel = "Delete",
-            icon = "trash",
-            danger = true,
-            onConfirm = { onDelete(); confirmDelete = false },
+            what = "bag",
+            remoteAvailable = remoteDeleteAvailable,
+            onConfirm = { remote -> onDelete(remote); confirmDelete = false },
             onDismiss = { confirmDelete = false },
         )
     }
@@ -665,10 +695,14 @@ private fun BeanStat(modifier: Modifier = Modifier, leading: @Composable () -> U
 private fun RoasterCard(
     roaster: Roaster,
     bagCountLabel: String,
+    /** The canonical roaster's name when this row is a merged duplicate (badge + Un-merge). */
+    duplicateOf: String?,
+    onUnmerge: () -> Unit,
+    remoteDeleteAvailable: Boolean,
     onOpen: () -> Unit,
     onEdit: () -> Unit,
     onVisit: () -> Unit,
-    onDelete: () -> Unit,
+    onDelete: (alsoOnVisualizer: Boolean) -> Unit,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
     CremaCard(
@@ -719,6 +753,9 @@ private fun RoasterCard(
                             softWrap = false,
                         )
                     }
+                    duplicateOf?.let { name ->
+                        coffee.crema.ui.components.DuplicateOfLabel(name, onUnmerge, Modifier.padding(top = 4.dp))
+                    }
                 }
                 CremaOverflowMenu(items = buildList {
                     add(OverflowItem("pencil-simple", "Edit roaster", onEdit))
@@ -729,13 +766,12 @@ private fun RoasterCard(
         }
     }
     if (confirmDelete) {
-        CremaConfirmDialog(
+        coffee.crema.ui.components.DeleteWithVisualizerDialog(
             title = "Delete roaster?",
             body = "“${roaster.name}” will be removed. Its bags keep their data but lose the roaster link. This can’t be undone.",
-            confirmLabel = "Delete",
-            icon = "trash",
-            danger = true,
-            onConfirm = { onDelete(); confirmDelete = false },
+            what = "roaster",
+            remoteAvailable = remoteDeleteAvailable,
+            onConfirm = { remote -> onDelete(remote); confirmDelete = false },
             onDismiss = { confirmDelete = false },
         )
     }
