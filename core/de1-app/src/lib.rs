@@ -3954,15 +3954,19 @@ impl CremaCore {
         }
     }
 
-    /// Decode and process a `Calibration` reply — the DE1's answer to a
-    /// calibration read request issued by
-    /// [`read_calibration`](Self::read_calibration).
+    /// Decode and process a `Calibration` notification (`cuuid_12`).
     ///
-    /// Only a read reply (`ReadCurrent` / `ReadFactory`) is surfaced as an
-    /// [`Event::Calibration`]; a `Write` / `ResetToFactory` echo carries no
-    /// new information and is dropped.
+    /// The characteristic carries three kinds of traffic: echoes of our read
+    /// requests, echoes of our writes, and the machine's real stored value.
+    /// Only the last has `WriteKey == 0` ([`de1_protocol::REPLY_VALUE_KEY`];
+    /// de1app `calibration_ble_received`, decaid `isReturnedData`, Decenza
+    /// `7fed369d`), and only it is surfaced as an [`Event::Calibration`] —
+    /// an echo of our own write treated as a value would make a write the
+    /// firmware refused look like it succeeded. The value is in `measured`;
+    /// a `ReadFactory` reply is the factory slot, anything else the current
+    /// one (de1app's mapping).
     fn handle_calibration(data: &[u8], out: &mut CoreOutput) {
-        let cal = match Calibration::decode(data) {
+        let (cal, write_key) = match Calibration::decode_reply(data) {
             Ok(cal) => cal,
             Err(e) => {
                 out.events.push(Event::DecodeError {
@@ -3971,10 +3975,7 @@ impl CremaCore {
                 return;
             }
         };
-        if matches!(
-            cal.command,
-            de1_protocol::CalCommand::ReadCurrent | de1_protocol::CalCommand::ReadFactory
-        ) {
+        if write_key == de1_protocol::REPLY_VALUE_KEY {
             out.events.push(Event::Calibration {
                 target: cal.target,
                 command: cal.command,
@@ -6618,23 +6619,52 @@ mod tests {
     #[test]
     fn a_calibration_reply_emits_a_calibration_event() {
         let mut core = CremaCore::new();
-        // A ReadCurrent reply for the temperature sensor: DE1 reported 92.5.
-        let packet = Calibration {
+        // A ReadCurrent value reply (WriteKey 0) for the temperature sensor:
+        // stored value -0.75.
+        let mut packet = Calibration {
             command: de1_protocol::CalCommand::ReadCurrent,
             target: CalTarget::Temperature,
-            de1_reported: 92.5,
-            measured: 0.0,
+            de1_reported: 0.0,
+            measured: -0.75,
         }
         .encode();
+        packet[0..4].copy_from_slice(&de1_protocol::REPLY_VALUE_KEY.to_be_bytes());
         let out = core.on_notification(Source::De1Calibration, &packet, 0);
         assert!(out.events.iter().any(|e| matches!(
             e,
             Event::Calibration {
                 target: CalTarget::Temperature,
                 command: de1_protocol::CalCommand::ReadCurrent,
-                de1_reported,
+                measured,
                 ..
-            } if (*de1_reported - 92.5).abs() < 1e-3
+            } if (*measured + 0.75).abs() < 1e-3
+        )));
+    }
+
+    #[test]
+    fn calibration_request_echoes_never_surface_as_values() {
+        let mut core = CremaCore::new();
+        // Echoes of our own read requests (key 1) and writes (key 0xCAFEF00D)
+        // carry no value — including a write echo whose fields LOOK like one.
+        for packet in [
+            Calibration::read_request(CalTarget::Pressure).encode(),
+            Calibration::read_factory_request(CalTarget::Pressure).encode(),
+            Calibration::write(CalTarget::Pressure, 9.0, 9.4).encode(),
+            Calibration::reset_to_factory(CalTarget::Pressure).encode(),
+        ] {
+            let out = core.on_notification(Source::De1Calibration, &packet, 0);
+            assert!(out.events.is_empty(), "{packet:02x?}");
+        }
+        // A factory value reply is surfaced with its command intact.
+        let mut packet = Calibration::read_factory_request(CalTarget::Flow).encode();
+        packet[0..4].copy_from_slice(&[0, 0, 0, 0]);
+        let out = core.on_notification(Source::De1Calibration, &packet, 0);
+        assert!(out.events.iter().any(|e| matches!(
+            e,
+            Event::Calibration {
+                command: de1_protocol::CalCommand::ReadFactory,
+                ..
+            }
         )));
     }
 

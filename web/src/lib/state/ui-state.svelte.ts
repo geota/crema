@@ -1178,9 +1178,11 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				)
 			};
 		case 'Calibration': {
-			// R3 — a sensor calibration was read back. A ReadFactory reply fills
-			// the `factory` slot, a ReadCurrent reply the `current` slot; the
-			// other slot keeps whatever it already held.
+			// R3 — a sensor calibration was read back (core only surfaces value
+			// replies, WriteKey 0 — never echoes of our own requests). The value
+			// is `measured` (MeasuredVal), as de1app / decaid / Decenza read it.
+			// A ReadFactory reply fills the `factory` slot, any other the
+			// `current` slot; the other slot keeps whatever it already held.
 			const c = event.content;
 			const prior = snapshot.de1Calibration[c.target] ?? {
 				current: null,
@@ -1192,13 +1194,13 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				de1Calibration: {
 					...snapshot.de1Calibration,
 					[c.target]: {
-						current: isFactory ? prior.current : c.de1_reported,
-						factory: isFactory ? c.de1_reported : prior.factory
+						current: isFactory ? prior.current : c.measured,
+						factory: isFactory ? c.measured : prior.factory
 					}
 				},
 				eventLog: appendLog(
 					snapshot.eventLog,
-					`Calibration ${c.target} (${c.command}): ${c.de1_reported}`
+					`Calibration ${c.target} (${c.command}): ${c.measured}`
 				)
 			};
 		}

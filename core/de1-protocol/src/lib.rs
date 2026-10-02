@@ -32,7 +32,7 @@ pub mod profile;
 pub mod shot_sample;
 pub mod state;
 
-pub use calibration::{CALIBRATION_LEN, CalCommand, CalTarget, Calibration};
+pub use calibration::{CALIBRATION_LEN, CalCommand, CalTarget, Calibration, REPLY_VALUE_KEY};
 pub use command::{ShotSettings, WaterLevels, requested_state};
 pub use error::ProtocolError;
 pub use firmware::{

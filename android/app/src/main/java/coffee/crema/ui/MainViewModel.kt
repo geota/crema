@@ -5407,14 +5407,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("MMR ${c.register}: ${c.value}")
                 if (c.register == MmrRegister.SerialNumber) checkStolenSerial(c.value)
             }
-            // Calibration replies (current / factory) have no settings row yet
-            // (no calibration-write core method — read-only), so keep logging
-            // the decoded values rather than modelling a half-wired type.
+            // Calibration value replies (current / factory) have no settings row
+            // yet, so keep logging them. Core surfaces only WriteKey-0 replies,
+            // never echoes of our own requests; the stored value is `measured`.
             is Event.Calibration ->
                 appendLog(
                     "Calibration ${event.content.target} " +
-                        "(${event.content.command}): de1=${event.content.de1_reported} " +
-                        "measured=${event.content.measured}",
+                        "(${event.content.command}): ${event.content.measured}",
                 )
             // v1 stub never fires this in practice.
             is Event.FirmwareLockoutHit ->

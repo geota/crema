@@ -1279,21 +1279,28 @@ export type Event =
 	value: number;
 }}
 	/**
-	 * A DE1 sensor calibration was read back from the `Calibration`
-	 * characteristic — the current (in-use) or factory calibration for one
-	 * sensor.
+	 * A DE1 sensor calibration value was read back from the `Calibration`
+	 * characteristic — only a reply with `WriteKey == 0`, never an echo of
+	 * our own read / write request (Decenza `7fed369d`).
 	 */
 	| { type: "Calibration", content: {
 	/** Which sensor the calibration applies to. */
 	target: CalTarget;
 	/**
-	 * Whether this is the current (in-use) or the factory calibration —
-	 * [`CalCommand::ReadCurrent`] or [`CalCommand::ReadFactory`].
+	 * The command the reply answers: [`CalCommand::ReadFactory`] is the
+	 * factory slot, anything else the current (in-use) one (de1app
+	 * `calibration_ble_received`).
 	 */
 	command: CalCommand;
-	/** The value the DE1's sensor reported at calibration time. */
+	/**
+	 * The `DE1ReportedVal` field — carries nothing on a value reply
+	 * (de1app, decaid and Decenza all ignore it); kept for diagnostics.
+	 */
 	de1_reported: number;
-	/** The externally-measured true value the DE1 was calibrated against. */
+	/**
+	 * The machine's stored calibration value (`MeasuredVal`) — the one
+	 * every reference app reads.
+	 */
 	measured: number;
 }}
 	/**

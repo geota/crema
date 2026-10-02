@@ -242,6 +242,15 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **The steam heater turns off during Clean, Descale and Air purge** (de1app
   parity) and back to your setting when the cycle ends; your saved steam
   temperature is never changed.
+- **Calibration readouts only show the machine's stored values** — the DE1
+  echoes every calibration read and write back on the same channel, and Crema
+  used to read those echoes as values. Only real value replies (WriteKey 0) are
+  shown now, and the number shown is the stored value field every reference app
+  reads. Needs a check on a real machine.
+- **No false "First step skipped" on fast-filling profiles** — the shot
+  summary now confirms a frame's pressure / flow exit when one more sample's
+  worth of the observed rise reaches the threshold (Decenza parity), instead of
+  a fixed 0.1 margin; a flat or receding reading gets no allowance.
 - **A DE1 that disconnects mid-shot stops the scale's timer** — the scale stays
   connected and used to keep counting.
 - **Android backups keep brew details** — a backup made on Android dropped
