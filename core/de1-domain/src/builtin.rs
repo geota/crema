@@ -206,6 +206,30 @@ mod tests {
     }
 
     #[test]
+    fn builtin_step_weights_come_from_the_tcl() {
+        // A-Flow's Infuse exits on weight (issue 11); so does Filter 2.0's
+        // flat-flow step. Every other built-in step has none.
+        let expected: &[(&str, &str, f32)] = &[
+            ("A-Flow / default-dark", "Infuse", 2.0),
+            ("A-Flow / default-like-dflow", "Infuse", 4.0),
+            ("A-Flow / default-medium", "Infuse", 3.6),
+            ("A-Flow / default-very-dark", "Infuse", 2.0),
+            ("Filter 2.0", "flat flow", 150.0),
+        ];
+        for &(title, step, grams) in expected {
+            let p = builtin(title);
+            let s = p.steps.iter().find(|s| s.name == step).unwrap();
+            assert_eq!(s.weight, Some(grams), "{title} / {step}");
+        }
+        let with_weights = builtin_profiles()
+            .iter()
+            .flat_map(|p| p.steps.iter())
+            .filter(|s| s.weight.is_some())
+            .count();
+        assert_eq!(with_weights, expected.len());
+    }
+
+    #[test]
     fn builtin_profiles_is_memoized() {
         // Two calls return the very same cached slice.
         let first = builtin_profiles();

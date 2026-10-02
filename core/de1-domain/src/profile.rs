@@ -163,11 +163,12 @@ pub struct ProfileStep {
     pub volume_limit_ml: u16,
     /// Optional advanced max-flow-or-pressure limiter.
     pub limiter: Option<Limiter>,
-    /// Per-step target weight in grams (None = no per-step weight
-    /// target). Metadata only — the DE1 protocol has no per-step
-    /// weight-target field, so this never reaches `assemble`; it
-    /// round-trips through v2 JSON only. Mirrors reaprime's
-    /// `ProfileStep.weight` (nullable in v2).
+    /// Per-step exit weight in grams (None = no per-step weight
+    /// exit): leave the step once the cup holds this much. The DE1
+    /// protocol has no per-step weight field, so this never reaches
+    /// `assemble`; the app enforces it by sending `SkipToNext`
+    /// ([`StepWeightExit`](crate::StepWeightExit)). Mirrors reaprime's
+    /// `ProfileStep.weight` (nullable in v2) and de1app's step `weight`.
     ///
     /// `#[serde(default)]` so profiles serialized before this field
     /// existed still deserialize.

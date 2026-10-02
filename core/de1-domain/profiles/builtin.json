@@ -207,7 +207,7 @@
           "value": 1.0,
           "range": 0.6
         },
-        "weight": null
+        "weight": 2.0
       },
       {
         "name": "Pressure Up",
@@ -323,7 +323,7 @@
           "value": 1.0,
           "range": 0.6
         },
-        "weight": null
+        "weight": 4.0
       },
       {
         "name": "Pressure Up",
@@ -443,7 +443,7 @@
           "value": 1.0,
           "range": 0.6
         },
-        "weight": null
+        "weight": 3.6
       },
       {
         "name": "Pressure Up",
@@ -559,7 +559,7 @@
           "value": 1.0,
           "range": 0.6
         },
-        "weight": null
+        "weight": 2.0
       },
       {
         "name": "Pressure Up",
@@ -2076,7 +2076,7 @@
           "value": 3.0,
           "range": 0.6
         },
-        "weight": null
+        "weight": 150.0
       },
       {
         "name": "reset temperature",

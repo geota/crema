@@ -613,7 +613,12 @@ fn tcl_step_to_profile_step(step: &TclDict) -> Result<ProfileStep, ImportError> 
         _ => None,
     };
 
-    // Legacy TCL profiles have no per-step weight target — kept None.
+    // Per-step exit weight (grams). de1app writes `weight 0` on every step;
+    // 0 or absent means "no weight exit", so only a positive value is kept
+    // (e.g. A-Flow's `weight 3.6 name Infuse`). Enforced app-side by
+    // `StepWeightExit` — the DE1 frame has no weight field.
+    let weight = step.get_f32("weight").filter(|w| *w > 0.0);
+
     Ok(ProfileStep {
         name: step.get("name").unwrap_or("").to_string(),
         pump,
@@ -625,7 +630,7 @@ fn tcl_step_to_profile_step(step: &TclDict) -> Result<ProfileStep, ImportError> 
         exit,
         volume_limit_ml: clamp_volume(step.get_f32("volume").unwrap_or(0.0)),
         limiter,
-        weight: None,
+        weight,
     })
 }
 
@@ -2268,6 +2273,22 @@ espresso_decline_time 20
                 .preinfuse_step_count,
             0
         );
+    }
+
+    #[test]
+    fn tcl_step_weight_is_kept() {
+        // de1app writes `weight` on every step; a positive one is a step exit
+        // (A-Flow: `weight 3.6 name Infuse`), 0 is "none" (issue 11).
+        let tcl = "advanced_shot {{name Fill pump flow flow 8 seconds 25 weight 0.0} \
+                   {name Infuse pump pressure pressure 3 seconds 60 weight 3.6} \
+                   {name Pour pump flow flow 2 seconds 60}}\n\
+                   settings_profile_type settings_2c\nprofile_title x\nprofile_notes {}\n";
+        let p = import_legacy_tcl(tcl).unwrap();
+        let weights: Vec<Option<f32>> = p.steps.iter().map(|s| s.weight).collect();
+        assert_eq!(weights, [None, Some(3.6), None]);
+        // And it survives the v2 JSON round trip.
+        let back = import_v2_json(&export_v2_json(&p).unwrap()).unwrap();
+        assert_eq!(back.steps[1].weight, Some(3.6));
     }
 
     #[test]

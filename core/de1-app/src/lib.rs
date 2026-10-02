@@ -31,9 +31,9 @@ use de1_domain::saw_learning::SawLearningModel;
 use de1_domain::{
     AutoStop, BeverageType, BrewRecipe, BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase,
     Estimate, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile, STOP_WEIGHT_BEFORE,
-    ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StopCapture, StopConfig,
-    StopReason, StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor, WeightSpikeGate,
-    WeightUnit, sav_counts_volume, shot_disposition,
+    ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StepWeightExit, StopCapture,
+    StopConfig, StopReason, StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor,
+    WeightSpikeGate, WeightUnit, sav_counts_volume, shot_disposition,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -589,6 +589,12 @@ pub struct CremaCore {
     /// "active profile on the DE1" identity the brew page surfaces. `None`
     /// at cold start; cleared by [`reset`](Self::reset) on disconnect.
     last_active_profile_title: Option<String>,
+    /// Per-step weight exits of the profile on the DE1 (issue 11): sends
+    /// `SkipToNext` when the projected weight reaches the current frame's
+    /// step `weight`. Latched from every completed profile upload; kept
+    /// across [`reset`](Self::reset) like the beverage type (a reconnect
+    /// doesn't change what the DE1 holds).
+    step_weight: StepWeightExit,
     /// The active profile's beverage type — drives the `SkipCleaning`
     /// disposition on [`Event::ShotCompleted`]. Latched from every
     /// completed profile upload; the shell also pushes it explicitly via
@@ -714,6 +720,9 @@ struct ProfileUpload {
     /// [`active_beverage_type`](CremaCore::active_beverage_type) on
     /// success — it drives the `SkipCleaning` shot disposition.
     beverage_type: BeverageType,
+    /// The uploaded profile's step-weight arbiter; latched into
+    /// [`step_weight`](CremaCore::step_weight) on success.
+    step_weight: StepWeightExit,
     /// The full sequence of `FrameToWrite` bytes the orchestrator expects,
     /// in upload order: `[0, 1, …, frame_count-1, 32+ext0, 32+ext1, …,
     /// frame_count]`. The header is not acked separately.
@@ -777,6 +786,7 @@ impl CremaCore {
             scale_config_queried: false,
             profile_upload: None,
             last_active_profile_title: None,
+            step_weight: StepWeightExit::default(),
             active_beverage_type: BeverageType::default(),
             last_profile_header: None,
             volume_integrator: VolumeIntegrator::new(),
@@ -2763,6 +2773,7 @@ impl CremaCore {
         // holds — a reconnect doesn't change the loaded profile, and losing
         // it would mis-record the next cleaning run as a shot.
         let active_beverage_type = self.active_beverage_type;
+        let step_weight = std::mem::take(&mut self.step_weight);
         // The stop targets and their switches are USER INTENT — the active
         // recipe's yield, the Quick-Controls override, the volume cap, the
         // max-time guard, and the three behaviour toggles. A DE1 dropping and
@@ -2803,6 +2814,7 @@ impl CremaCore {
         self.scale_config_queried = scale_config_queried;
         self.saw_model = saw_model;
         self.active_beverage_type = active_beverage_type;
+        self.step_weight = step_weight;
         self.stop_on_weight = stop_on_weight;
         self.auto_tare = auto_tare;
         self.volume_stop_with_scale = volume_stop_with_scale;
@@ -3160,6 +3172,7 @@ impl CremaCore {
         self.push_stop(reason, now, out);
         self.enforce_pending_stop(now, out);
         self.report_stop_targets(out);
+        self.check_step_weight_exit(estimate, now, out);
         // Hot-water-by-weight: stop the pour at the user's volume (1 ml ≈
         // 1 g), projected one sensor-lag beat ahead so it lands ON target
         // rather than past it (reaprime HotWaterSequencer's projection).
@@ -3462,6 +3475,7 @@ impl CremaCore {
         self.profile_upload = Some(ProfileUpload {
             title: profile.title.clone(),
             beverage_type: profile.beverage_type,
+            step_weight: StepWeightExit::for_profile(profile),
             expected_acks,
             next_idx: 0,
             last_progress: now,
@@ -3586,9 +3600,11 @@ impl CremaCore {
             // Tail ack matched — the upload is complete.
             let title = std::mem::take(&mut upload.title);
             let beverage_type = upload.beverage_type;
+            let step_weight = std::mem::take(&mut upload.step_weight);
             self.profile_upload = None;
             self.last_active_profile_title = Some(title.clone());
             self.active_beverage_type = beverage_type;
+            self.step_weight = step_weight;
             out.events.push(Event::ProfileUploadCompleted { title });
         }
     }
@@ -3816,6 +3832,8 @@ impl CremaCore {
                 // Re-arm the "did the app stop this shot" latch — see the
                 // field doc.
                 self.stop_triggered_this_shot = false;
+                // Fresh shot → every step's weight exit re-arms.
+                self.step_weight.reset_shot();
                 // Auto-tare the connected scale so the cup starts from zero,
                 // mirroring the legacy app's tare-at-shot-start behaviour —
                 // gated on the latched user preference (default true). The
@@ -3853,7 +3871,10 @@ impl CremaCore {
                 self.arm_auto_stop_if_flowing(phase, now);
                 out.events.push(Event::ShotPhaseChanged { phase });
             }
-            ShotEvent::FrameChanged(frame) => out.events.push(Event::ShotFrameChanged { frame }),
+            ShotEvent::FrameChanged(frame) => {
+                self.step_weight.on_frame(frame);
+                out.events.push(Event::ShotFrameChanged { frame });
+            }
             ShotEvent::Completed(record) => {
                 self.shot_started = None;
                 self.flow_started = None;
@@ -4059,6 +4080,33 @@ impl CremaCore {
             .as_ref()
             .map_or(DEFAULT_SCALE_LAG, Scale::sensor_lag);
         StopConfig::with_legacy_lead(STOP_WEIGHT_BEFORE, scale_lag, FlowAlgorithm::TheilSen)
+    }
+
+    /// Per-step weight exits (issue 11, decaid c89cd451): while the pour is
+    /// flowing and no stop is owed, project the weight one SAW look-ahead
+    /// ahead (the same legacy lead as stop-at-weight) and let
+    /// [`StepWeightExit`] decide whether to command `SkipToNext` — once per
+    /// frame, re-sent while the DE1 stays on the frame, never with no scale,
+    /// and never on the last frame while a SAW target is armed.
+    fn check_step_weight_exit(&mut self, estimate: Estimate, now: Duration, out: &mut CoreOutput) {
+        if self.shot_started.is_none() || self.flow_started.is_none() || self.pending_stop.is_some()
+        {
+            return;
+        }
+        let projected =
+            estimate.weight + estimate.flow.max(0.0) * self.stop_config().weight_lead.as_secs_f32();
+        let saw_armed = self
+            .effective_stop_targets()
+            .is_some_and(|t| t.weight.is_some());
+        if self
+            .step_weight
+            .on_weight(projected, now, self.scale.is_some(), saw_armed)
+        {
+            out.commands.push(Command::WriteCharacteristic {
+                target: WriteTarget::De1RequestedState,
+                data: vec![requested_state(MachineState::SkipToNext)],
+            });
+        }
     }
 
     /// Push a [`StopReason`], when one occurred, as a [`Event::StopTriggered`]
@@ -9263,6 +9311,212 @@ mod tests {
                     .iter()
                     .any(|e| matches!(e, Event::DecodeError { .. }))
             );
+        }
+    }
+
+    /// Per-step weight exits (issue 11): the arbiter wired into the core.
+    mod step_weight_exit {
+        use super::*;
+        use de1_domain::{BeverageType, Profile, ProfileStep, Pump, TempSensor, Transition};
+
+        /// Upload (and ack) a profile whose steps carry `weights`.
+        fn core_with_profile(weights: &[Option<f32>]) -> CremaCore {
+            let steps = weights
+                .iter()
+                .enumerate()
+                .map(|(i, w)| ProfileStep {
+                    name: format!("s{i}"),
+                    pump: Pump::Pressure,
+                    target: 9.0,
+                    temperature_c: 92.0,
+                    temp_sensor: TempSensor::Coffee,
+                    transition: Transition::Fast,
+                    duration_seconds: 60.0,
+                    exit: None,
+                    volume_limit_ml: 0,
+                    limiter: None,
+                    weight: *w,
+                })
+                .collect();
+            let profile = Profile {
+                id: String::new(),
+                title: "Weights".to_string(),
+                notes: String::new(),
+                steps,
+                preinfuse_step_count: 0,
+                minimum_pressure: 0.0,
+                maximum_flow: 0.0,
+                max_total_volume_ml: 0,
+                target_weight: 0.0,
+                dose: 0.0,
+                author: String::new(),
+                beverage_type: BeverageType::Espresso,
+                tank_temperature: 0.0,
+                version: "2".to_string(),
+            };
+            let mut core = CremaCore::new();
+            let out = core.upload_profile(&profile, Duration::ZERO).unwrap();
+            for c in &out.commands {
+                if let Command::WriteCharacteristic {
+                    target: WriteTarget::De1ProfileFrame,
+                    data,
+                } = c
+                {
+                    core.on_notification(Source::De1FrameAck, data, 1);
+                }
+            }
+            assert_eq!(core.active_profile_title(), Some("Weights"));
+            core
+        }
+
+        /// How many `SkipToNext` writes `out` carries.
+        fn skips(out: &CoreOutput) -> usize {
+            out.commands
+                .iter()
+                .filter(|c| {
+                    matches!(c, Command::WriteCharacteristic {
+                        target: WriteTarget::De1RequestedState,
+                        data,
+                    } if data.as_slice() == [requested_state(MachineState::SkipToNext)])
+                })
+                .count()
+        }
+
+        /// Start a pouring shot and put the DE1 on `frame`.
+        fn pour_on_frame(core: &mut CremaCore, frame: u8) {
+            core.on_notification(Source::De1State, &[4, 5], 1_000);
+            core.on_notification(Source::De1ShotSample, &sample_packet(0, 2.0, frame), 1_050);
+        }
+
+        /// Feed `n` scale readings 100 ms apart from `t0` ms, rising `step_g`
+        /// per reading from `from_g`; returns the times (ms) a SkipToNext
+        /// write was sent.
+        fn feed_weights(
+            core: &mut CremaCore,
+            from_g: f32,
+            step_g: f32,
+            t0: u64,
+            n: u32,
+        ) -> Vec<u64> {
+            let mut sent = Vec::new();
+            for i in 0..n {
+                #[allow(clippy::cast_precision_loss)]
+                let g = from_g + step_g * i as f32;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let cg = (g * 100.0) as u32;
+                let t = t0 + u64::from(i) * 100;
+                let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(cg), t);
+                for _ in 0..skips(&out) {
+                    sent.push(t);
+                }
+            }
+            sent
+        }
+
+        fn scale_core(weights: &[Option<f32>]) -> CremaCore {
+            let mut core = core_with_profile(weights);
+            core.connect_scale("BOOKOO_SC", &[]);
+            core.set_auto_tare(false);
+            core
+        }
+
+        #[test]
+        fn no_skip_without_a_scale() {
+            let mut core = core_with_profile(&[None, Some(3.6), None]);
+            pour_on_frame(&mut core, 1);
+            let mut sent = 0;
+            for i in 1..30u16 {
+                let out = core.on_notification(
+                    Source::De1ShotSample,
+                    &sample_packet(i * 30, 4.0, 1),
+                    1_050 + u64::from(i) * 250,
+                );
+                sent += skips(&out);
+            }
+            assert_eq!(sent, 0);
+        }
+
+        #[test]
+        fn a_single_skip_per_frame() {
+            let mut core = scale_core(&[None, Some(3.6), None]);
+            pour_on_frame(&mut core, 1);
+            // 0 -> 1.9 g at 1 g/s: the projection stays under 3.6 g.
+            assert!(feed_weights(&mut core, 0.0, 0.1, 1_100, 20).is_empty());
+            // Rising from 2.0 g: the first skip once the projection crosses
+            // 3.6 g …
+            let mut t = 3_100;
+            let mut g = 2.0;
+            while feed_weights(&mut core, g, 0.0, t, 1).is_empty() {
+                assert!(g < 5.0, "never skipped");
+                t += 100;
+                g += 0.1;
+            }
+            // … then readings over target that arrive before the DE1 reports
+            // the next frame (inside the 600 ms retry window) send nothing.
+            assert!(feed_weights(&mut core, g, 0.1, t + 100, 5).is_empty());
+        }
+
+        #[test]
+        fn no_skip_after_the_de1_leaves_the_frame() {
+            let mut core = scale_core(&[None, Some(3.6), None]);
+            pour_on_frame(&mut core, 1);
+            assert_eq!(feed_weights(&mut core, 4.0, 0.0, 1_100, 1).len(), 1);
+            // The DE1 moves to frame 2 (no weight): nothing more, however
+            // long the readings keep coming.
+            core.on_notification(Source::De1ShotSample, &sample_packet(60, 2.0, 2), 1_250);
+            assert!(feed_weights(&mut core, 4.0, 0.2, 1_300, 30).is_empty());
+        }
+
+        #[test]
+        fn retries_while_the_de1_stays_on_the_frame() {
+            let mut core = scale_core(&[None, Some(3.6), None]);
+            pour_on_frame(&mut core, 1);
+            // Over target for 2 s and the DE1 never leaves frame 1: the
+            // first skip, then a retry every ~600 ms.
+            let sent = feed_weights(&mut core, 4.0, 0.0, 1_100, 20);
+            assert!(sent.len() >= 3, "first skip + retries, got {sent:?}");
+            assert!(sent.windows(2).all(|w| w[1] - w[0] >= 600), "{sent:?}");
+            // Once it moves on, the retries stop.
+            core.on_notification(Source::De1ShotSample, &sample_packet(90, 2.0, 2), 3_150);
+            assert!(feed_weights(&mut core, 4.0, 0.0, 3_200, 20).is_empty());
+        }
+
+        #[test]
+        fn last_frame_weight_yields_to_an_armed_saw() {
+            // SAW armed at 30 g: a 5 g weight on the LAST step must not end
+            // the shot early; SAW owns the stop.
+            let mut core = scale_core(&[None, Some(5.0)]);
+            core.set_profile_target_weight(Some(30.0));
+            pour_on_frame(&mut core, 1);
+            assert!(feed_weights(&mut core, 0.0, 0.2, 1_100, 50).is_empty());
+        }
+
+        #[test]
+        fn last_frame_weight_ends_the_shot_without_saw() {
+            // No SAW target: the last-step weight skips (ends the shot), as
+            // decaid does.
+            let mut core = scale_core(&[None, Some(5.0)]);
+            pour_on_frame(&mut core, 1);
+            assert_eq!(feed_weights(&mut core, 6.0, 0.0, 1_100, 1).len(), 1);
+        }
+
+        #[test]
+        fn an_earlier_step_weight_skips_alongside_saw() {
+            let mut core = scale_core(&[None, Some(3.6), None]);
+            core.set_profile_target_weight(Some(36.0));
+            pour_on_frame(&mut core, 1);
+            assert_eq!(feed_weights(&mut core, 4.0, 0.0, 1_100, 1).len(), 1);
+        }
+
+        #[test]
+        fn step_weights_survive_a_reset() {
+            // A DE1 reconnect resets the core, but the DE1 still holds the
+            // profile (and the shell may skip the re-upload).
+            let mut core = scale_core(&[None, Some(3.6), None]);
+            core.reset();
+            core.set_auto_tare(false);
+            pour_on_frame(&mut core, 1);
+            assert_eq!(feed_weights(&mut core, 4.0, 0.0, 1_100, 1).len(), 1);
         }
     }
 }
