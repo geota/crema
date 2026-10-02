@@ -1010,19 +1010,44 @@ pub fn merge_pulled_roaster(
     local_json: &str,
     remote_json: &str,
     refresh: bool,
-    now_ms: f64,
+    last_sync_at: Option<f64>,
 ) -> Result<String, String> {
-    de1_domain::merge_pulled_roaster_json(local_json, remote_json, refresh, f64_to_ms(now_ms))
+    de1_domain::merge_pulled_roaster_json(
+        local_json,
+        remote_json,
+        refresh,
+        last_sync_at.map(f64_to_ms),
+    )
 }
 
-/// The bean push leg's work list (`BeanPushItem[]` JSON). See
-/// `de1_domain::plan_bean_push`.
+/// The bean push leg's work list (`BeanPushItem[]` JSON) from
+/// `{"beans", "lastSyncAt"?, "skipIds"?}`. See `de1_domain::plan_bean_push`.
 ///
 /// # Errors
 /// The JSON error string when `beans_json` can't be deserialised.
 #[wasm_bindgen(js_name = planBeanPush)]
-pub fn plan_bean_push(beans_json: &str, last_sync_at: Option<f64>) -> Result<String, String> {
-    de1_domain::plan_bean_push_json(beans_json, last_sync_at.map(f64_to_ms))
+pub fn plan_bean_push(payload: &str) -> Result<String, String> {
+    de1_domain::plan_bean_push_json(payload)
+}
+
+/// The roaster push leg's work list (`RoasterPushItem[]` JSON) from
+/// `{"roasters", "lastSyncAt"?, "skipIds"?}`. See `de1_domain::plan_roaster_push`.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+#[wasm_bindgen(js_name = planRoasterPush)]
+pub fn plan_roaster_push(payload: &str) -> Result<String, String> {
+    de1_domain::plan_roaster_push_json(payload)
+}
+
+/// Which bean-sync legs run for the beans / roasters directions
+/// (`BeanSyncScope` JSON). See `de1_domain::bean_sync_scope`.
+///
+/// # Errors
+/// Only if serialisation fails.
+#[wasm_bindgen(js_name = beanSyncScope)]
+pub fn bean_sync_scope(beans_direction: &str, roasters_direction: &str) -> Result<String, String> {
+    de1_domain::bean_sync_scope_json(beans_direction, roasters_direction)
 }
 
 /// The catalogue link-PATCH leg's work list. `payload` is

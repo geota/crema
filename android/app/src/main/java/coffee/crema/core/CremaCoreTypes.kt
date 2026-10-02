@@ -211,6 +211,23 @@ data class BeanPushItem (
 	val create: Boolean
 )
 
+/// Which legs a bean / roaster sync runs, from the two direction settings
+/// (`"off" | "backup" | "pull" | "two-way"`): `backup` pushes only, `pull`
+/// pulls only (never writes remote), `two-way` does both, `off` (or anything
+/// unknown) neither. The Premium gate on writes is separate (a free account
+/// downshifts the push legs at run time).
+@Serializable
+data class BeanSyncScope (
+	/// Apply remote bags locally.
+	val pullBeans: Boolean,
+	/// Write local bags to Visualizer.
+	val pushBeans: Boolean,
+	/// Apply remote roasters locally.
+	val pullRoasters: Boolean,
+	/// Write local roasters to Visualizer.
+	val pushRoasters: Boolean
+)
+
 /// Summary metrics over a (filter/range-scoped) set of brews — the
 /// History stat strip once non-espresso rows exist. `None` = "no data"
 /// (render as "—").
@@ -2370,6 +2387,16 @@ data class RoasterMergePlan (
 	val dupeId: String,
 	/// The bags filed under the dupe, in library order.
 	val beanIds: List<String>
+)
+
+/// One local roaster the push leg writes.
+@Serializable
+data class RoasterPushItem (
+	/// The local roaster id.
+	val localId: String,
+	/// `true` = never pushed → `POST`; `false` = bound and edited since the
+	/// last sync → `PATCH`.
+	val create: Boolean
 )
 
 /// What a connected scale can do, beyond reporting a bare weight.

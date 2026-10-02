@@ -1269,21 +1269,48 @@ pub fn merge_pulled_roaster(
     local_json: String,
     remote_json: String,
     refresh: bool,
-    now_unix_ms: i64,
+    last_sync_at: Option<i64>,
 ) -> Result<String, CremaError> {
-    de1_domain::merge_pulled_roaster_json(&local_json, &remote_json, refresh, now_unix_ms)
+    de1_domain::merge_pulled_roaster_json(&local_json, &remote_json, refresh, last_sync_at)
         .map_err(crema_err)
 }
 
-/// The bean push leg's work list (`BeanPushItem[]` JSON). Mirrors the wasm
-/// `planBeanPush`; see [`de1_domain::plan_bean_push_json`].
+/// The bean push leg's work list (`BeanPushItem[]` JSON) from
+/// `{"beans", "lastSyncAt"?, "skipIds"?}`. Mirrors the wasm `planBeanPush`; see [`de1_domain::plan_bean_push_json`].
 ///
 /// # Errors
 ///
 /// Returns a [`CremaError`] when `beans_json` can't be deserialised.
 #[uniffi::export]
-pub fn plan_bean_push(beans_json: String, last_sync_at: Option<i64>) -> Result<String, CremaError> {
-    de1_domain::plan_bean_push_json(&beans_json, last_sync_at).map_err(crema_err)
+pub fn plan_bean_push(payload: String) -> Result<String, CremaError> {
+    de1_domain::plan_bean_push_json(&payload).map_err(crema_err)
+}
+
+/// The roaster push leg's work list (`RoasterPushItem[]` JSON) from
+/// `{"roasters", "lastSyncAt"?, "skipIds"?}`. Mirrors the wasm
+/// `planRoasterPush`; see [`de1_domain::plan_roaster_push_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] on malformed input.
+#[uniffi::export]
+pub fn plan_roaster_push(payload: String) -> Result<String, CremaError> {
+    de1_domain::plan_roaster_push_json(&payload).map_err(crema_err)
+}
+
+/// Which bean-sync legs run for the beans / roasters directions
+/// (`BeanSyncScope` JSON). Mirrors the wasm `beanSyncScope`; see
+/// [`de1_domain::bean_sync_scope`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] only if serialisation fails.
+#[uniffi::export]
+pub fn bean_sync_scope(
+    beans_direction: String,
+    roasters_direction: String,
+) -> Result<String, CremaError> {
+    de1_domain::bean_sync_scope_json(&beans_direction, &roasters_direction).map_err(crema_err)
 }
 
 /// The catalogue link-PATCH leg's work list (`RoasterLinkPatch[]` JSON).
@@ -3319,7 +3346,7 @@ mod tests {
             r#"{"canonicalId":"roaster:a","dupeId":"roaster:c","beanIds":[]}"#
         );
         assert_eq!(
-            plan_bean_push(format!("[{FAKE_BEAN}]"), None).unwrap(),
+            plan_bean_push(format!(r#"{{"beans":[{FAKE_BEAN}]}}"#)).unwrap(),
             r#"[{"localId":"bean:test","create":true}]"#
         );
         assert!(detect_roaster_duplicates("nope".to_owned()).is_err());

@@ -245,6 +245,24 @@ export interface BeanPushItem {
 }
 
 /**
+ * Which legs a bean / roaster sync runs, from the two direction settings
+ * (`"off" | "backup" | "pull" | "two-way"`): `backup` pushes only, `pull`
+ * pulls only (never writes remote), `two-way` does both, `off` (or anything
+ * unknown) neither. The Premium gate on writes is separate (a free account
+ * downshifts the push legs at run time).
+ */
+export interface BeanSyncScope {
+	/** Apply remote bags locally. */
+	pullBeans: boolean;
+	/** Write local bags to Visualizer. */
+	pushBeans: boolean;
+	/** Apply remote roasters locally. */
+	pullRoasters: boolean;
+	/** Write local roasters to Visualizer. */
+	pushRoasters: boolean;
+}
+
+/**
  * Summary metrics over a (filter/range-scoped) set of brews — the
  * History stat strip once non-espresso rows exist. `None` = "no data"
  * (render as "—").
@@ -2427,6 +2445,17 @@ export interface RoasterMergePlan {
 	dupeId: string;
 	/** The bags filed under the dupe, in library order. */
 	beanIds: string[];
+}
+
+/** One local roaster the push leg writes. */
+export interface RoasterPushItem {
+	/** The local roaster id. */
+	localId: string;
+	/**
+	 * `true` = never pushed → `POST`; `false` = bound and edited since the
+	 * last sync → `PATCH`.
+	 */
+	create: boolean;
 }
 
 /**

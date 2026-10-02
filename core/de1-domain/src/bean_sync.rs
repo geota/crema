@@ -118,30 +118,34 @@ pub fn resolve_roaster_catalogue_link(roaster: &Roaster, beans: &[Bean]) -> Opti
 
 // ── Pull merge ────────────────────────────────────────────────────────────
 
-/// Fold a reconciled remote roaster into its local row, stamping
-/// `updated_at = now_ms`.
+/// Fold a reconciled remote roaster into its local row.
 ///
 /// - `refresh = true` (a [`crate::RoasterReconcileAction::Update`]: the local
 ///   is already bound) → take the remote `name` / `website` / `image_url`;
 ///   the remote catalogue link wins, a remote with none keeps the local one.
+///   Unless the local was **edited since the last sync** (`updated_at >
+///   last_sync_at`): then its fields are kept so the push leg sends the edit
+///   (Visualizer roaster rows carry no edit time to weigh it against).
 /// - `refresh = false` (a `Bind`) → only the binding, plus the remote's
 ///   catalogue link when the local has none.
 ///
-/// Either way the local duplicate-of pointer (`canonical_roaster_id`) is
-/// never touched by a pull. A remote without an id leaves `visualizer_id`
-/// alone.
+/// `updated_at` is never touched: a pull is not a local edit, so it must not
+/// look like one to the next push leg. The local duplicate-of pointer
+/// (`canonical_roaster_id`) is never touched by a pull either. A remote
+/// without an id leaves `visualizer_id` alone.
 #[must_use]
 pub fn merge_pulled_roaster(
     local: &Roaster,
     remote: &RoasterWire,
     refresh: bool,
-    now_ms: i64,
+    last_sync_at: Option<i64>,
 ) -> Roaster {
     let mut out = local.clone();
     if let Some(id) = &remote.id {
         out.visualizer_id = Some(id.clone());
     }
-    if refresh {
+    let edited_here = last_sync_at.is_some_and(|ls| local.updated_at > ls);
+    if refresh && !edited_here {
         out.name.clone_from(&remote.name);
         out.website.clone_from(&remote.website);
         out.image_url.clone_from(&remote.image_url);
@@ -154,8 +158,51 @@ pub fn merge_pulled_roaster(
     {
         out.catalogue_roaster_id = Some(link.clone());
     }
-    out.updated_at = now_ms;
     out
+}
+
+// ── Direction gating ──────────────────────────────────────────────────────
+
+/// Which legs a bean / roaster sync runs, from the two direction settings
+/// (`"off" | "backup" | "pull" | "two-way"`): `backup` pushes only, `pull`
+/// pulls only (never writes remote), `two-way` does both, `off` (or anything
+/// unknown) neither. The Premium gate on writes is separate (a free account
+/// downshifts the push legs at run time).
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BeanSyncScope {
+    /// Apply remote bags locally.
+    pub pull_beans: bool,
+    /// Write local bags to Visualizer.
+    pub push_beans: bool,
+    /// Apply remote roasters locally.
+    pub pull_roasters: bool,
+    /// Write local roasters to Visualizer.
+    pub push_roasters: bool,
+}
+
+/// Whether a sync direction pulls (`pull` / `two-way`).
+#[must_use]
+pub fn sync_direction_pulls(direction: &str) -> bool {
+    matches!(direction, "pull" | "two-way")
+}
+
+/// Whether a sync direction pushes (`backup` / `two-way`).
+#[must_use]
+pub fn sync_direction_pushes(direction: &str) -> bool {
+    matches!(direction, "backup" | "two-way")
+}
+
+/// The legs to run for the beans and roasters directions.
+#[must_use]
+pub fn bean_sync_scope(beans_direction: &str, roasters_direction: &str) -> BeanSyncScope {
+    BeanSyncScope {
+        pull_beans: sync_direction_pulls(beans_direction),
+        push_beans: sync_direction_pushes(beans_direction),
+        pull_roasters: sync_direction_pulls(roasters_direction),
+        push_roasters: sync_direction_pushes(roasters_direction),
+    }
 }
 
 // ── Push planning ─────────────────────────────────────────────────────────
@@ -174,28 +221,62 @@ pub struct BeanPushItem {
 
 /// The bean push leg's work list, in library order: every bag with no
 /// `visualizer_id` (create), plus every bound bag whose `updated_at` is newer
-/// than `last_sync_at` (update; `None` = never synced = 0). Deleted rows are
-/// skipped. Mirrors step 4 of the web `runSync`.
+/// than `last_sync_at` (update; `None` = never synced = 0). Deleted rows and
+/// `skip_ids` (rows this run just applied from the pull — they already match
+/// the remote) are skipped. Mirrors step 4 of the web `runSync`.
 #[must_use]
-pub fn plan_bean_push(beans: &[Bean], last_sync_at: Option<i64>) -> Vec<BeanPushItem> {
+pub fn plan_bean_push(
+    beans: &[Bean],
+    last_sync_at: Option<i64>,
+    skip_ids: &[String],
+) -> Vec<BeanPushItem> {
     let last = last_sync_at.unwrap_or(0);
+    let skip: HashSet<&str> = skip_ids.iter().map(String::as_str).collect();
     beans
         .iter()
-        .filter(|b| b.deleted_at.is_none())
+        .filter(|b| b.deleted_at.is_none() && !skip.contains(b.id.as_str()))
         .filter_map(|b| {
-            if b.visualizer_id.is_none() {
-                Some(BeanPushItem {
-                    local_id: b.id.clone(),
-                    create: true,
-                })
-            } else if b.updated_at > last {
-                Some(BeanPushItem {
-                    local_id: b.id.clone(),
-                    create: false,
-                })
-            } else {
-                None
-            }
+            let create = b.visualizer_id.is_none();
+            (create || b.updated_at > last).then(|| BeanPushItem {
+                local_id: b.id.clone(),
+                create,
+            })
+        })
+        .collect()
+}
+
+/// One local roaster the push leg writes.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoasterPushItem {
+    /// The local roaster id.
+    pub local_id: String,
+    /// `true` = never pushed → `POST`; `false` = bound and edited since the
+    /// last sync → `PATCH`.
+    pub create: bool,
+}
+
+/// The roaster push leg's work list — the same rule as [`plan_bean_push`]:
+/// unbound → create, bound and edited since `last_sync_at` → update, minus
+/// deleted rows and `skip_ids` (rows this run just pulled).
+#[must_use]
+pub fn plan_roaster_push(
+    roasters: &[Roaster],
+    last_sync_at: Option<i64>,
+    skip_ids: &[String],
+) -> Vec<RoasterPushItem> {
+    let last = last_sync_at.unwrap_or(0);
+    let skip: HashSet<&str> = skip_ids.iter().map(String::as_str).collect();
+    roasters
+        .iter()
+        .filter(|r| r.deleted_at.is_none() && !skip.contains(r.id.as_str()))
+        .filter_map(|r| {
+            let create = r.visualizer_id.is_none();
+            (create || r.updated_at > last).then(|| RoasterPushItem {
+                local_id: r.id.clone(),
+                create,
+            })
         })
         .collect()
 }
@@ -451,7 +532,7 @@ pub fn resolve_roaster_catalogue_link_json(payload: &str) -> Result<Option<Strin
 }
 
 /// JSON-bridged [`merge_pulled_roaster`]. Input: a `Roaster` JSON + a
-/// `RoasterWire` JSON. Output: the merged `Roaster` JSON.
+/// `RoasterWire` JSON + the last-sync baseline. Output: the merged `Roaster`.
 ///
 /// # Errors
 /// The JSON error string on malformed input.
@@ -459,21 +540,72 @@ pub fn merge_pulled_roaster_json(
     local_json: &str,
     remote_json: &str,
     refresh: bool,
-    now_ms: i64,
+    last_sync_at: Option<i64>,
 ) -> Result<String, String> {
     let local: Roaster = parse(local_json)?;
     let remote: RoasterWire = parse(remote_json)?;
-    emit(&merge_pulled_roaster(&local, &remote, refresh, now_ms))
+    emit(&merge_pulled_roaster(
+        &local,
+        &remote,
+        refresh,
+        last_sync_at,
+    ))
 }
 
-/// JSON-bridged [`plan_bean_push`]. Input: a `Bean[]` JSON. Output: a
+/// JSON-bridged [`bean_sync_scope`]: the two direction strings → a
+/// `BeanSyncScope` JSON.
+///
+/// # Errors
+/// Never in practice (serialising a plain struct).
+pub fn bean_sync_scope_json(
+    beans_direction: &str,
+    roasters_direction: &str,
+) -> Result<String, String> {
+    emit(&bean_sync_scope(beans_direction, roasters_direction))
+}
+
+/// JSON-bridged [`plan_roaster_push`]. Input:
+/// `{"roasters": Roaster[], "lastSyncAt"?: number, "skipIds"?: string[]}`.
+/// Output: a `RoasterPushItem[]` JSON.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+pub fn plan_roaster_push_json(payload: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct In {
+        roasters: Vec<Roaster>,
+        #[serde(default)]
+        last_sync_at: Option<i64>,
+        #[serde(default)]
+        skip_ids: Vec<String>,
+    }
+    let inp: In = parse(payload)?;
+    emit(&plan_roaster_push(
+        &inp.roasters,
+        inp.last_sync_at,
+        &inp.skip_ids,
+    ))
+}
+
+/// JSON-bridged [`plan_bean_push`]. Input:
+/// `{"beans": Bean[], "lastSyncAt"?: number, "skipIds"?: string[]}`. Output: a
 /// `BeanPushItem[]` JSON.
 ///
 /// # Errors
-/// The JSON error string on a malformed `beans_json`.
-pub fn plan_bean_push_json(beans_json: &str, last_sync_at: Option<i64>) -> Result<String, String> {
-    let beans: Vec<Bean> = parse(beans_json)?;
-    emit(&plan_bean_push(&beans, last_sync_at))
+/// The JSON error string on malformed input.
+pub fn plan_bean_push_json(payload: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct In {
+        beans: Vec<Bean>,
+        #[serde(default)]
+        last_sync_at: Option<i64>,
+        #[serde(default)]
+        skip_ids: Vec<String>,
+    }
+    let inp: In = parse(payload)?;
+    emit(&plan_bean_push(&inp.beans, inp.last_sync_at, &inp.skip_ids))
 }
 
 /// JSON-bridged [`plan_roaster_link_patches`]. Input:
@@ -663,20 +795,21 @@ mod tests {
             image_url: None,
             canonical_roaster_id: None,
         };
-        let out = merge_pulled_roaster(&local, &wire, true, 99);
+        let out = merge_pulled_roaster(&local, &wire, true, Some(1_000));
         assert_eq!(out.name, "Sey Coffee");
         assert_eq!(out.website.as_deref(), Some("https://sey.coffee"));
         assert_eq!(out.visualizer_id.as_deref(), Some("vz-1"));
         assert_eq!(out.catalogue_roaster_id.as_deref(), Some("cat-local"));
         assert_eq!(out.canonical_roaster_id.as_deref(), Some("roaster:0"));
         assert_eq!(out.city.as_deref(), Some("Brooklyn"));
-        assert_eq!(out.updated_at, 99);
+        // A pull never moves the edit stamp.
+        assert_eq!(out.updated_at, 1);
 
         let linked = RoasterWire {
             canonical_roaster_id: Some("cat-remote".into()),
             ..wire
         };
-        let out = merge_pulled_roaster(&local, &linked, true, 99);
+        let out = merge_pulled_roaster(&local, &linked, true, Some(1_000));
         assert_eq!(out.catalogue_roaster_id.as_deref(), Some("cat-remote"));
     }
 
@@ -690,7 +823,7 @@ mod tests {
             image_url: None,
             canonical_roaster_id: Some("cat-remote".into()),
         };
-        let out = merge_pulled_roaster(&local, &wire, false, 7);
+        let out = merge_pulled_roaster(&local, &wire, false, Some(1_000));
         assert_eq!(out.name, "sey");
         assert_eq!(out.website, None);
         assert_eq!(out.visualizer_id.as_deref(), Some("vz-1"));
@@ -698,7 +831,7 @@ mod tests {
 
         let mut linked = local.clone();
         linked.catalogue_roaster_id = Some("cat-local".into());
-        let out = merge_pulled_roaster(&linked, &wire, false, 7);
+        let out = merge_pulled_roaster(&linked, &wire, false, Some(1_000));
         assert_eq!(out.catalogue_roaster_id.as_deref(), Some("cat-local"));
     }
 
@@ -716,7 +849,7 @@ mod tests {
         let mut gone = bean("bean:gone", None);
         gone.deleted_at = Some(1);
         let beans = vec![fresh, clean, dirty, gone];
-        let plan = plan_bean_push(&beans, Some(200));
+        let plan = plan_bean_push(&beans, Some(200), &[]);
         assert_eq!(
             plan,
             vec![
@@ -731,7 +864,12 @@ mod tests {
             ]
         );
         // Never synced: every bound bag is dirty.
-        assert_eq!(plan_bean_push(&beans, None).len(), 3);
+        assert_eq!(plan_bean_push(&beans, None, &[]).len(), 3);
+        // Rows this run just pulled are not echoed back.
+        assert_eq!(
+            plan_bean_push(&beans, None, &["bean:dirty".into()]).len(),
+            2
+        );
     }
 
     #[test]
@@ -765,6 +903,145 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_dirty_bound_roaster_keeps_its_edit_through_a_refresh() {
+        let mut local = roaster("roaster:1", "Sey (renamed here)", 1);
+        local.visualizer_id = Some("vz-1".into());
+        local.updated_at = 2_000;
+        let wire = RoasterWire {
+            id: Some("vz-1".into()),
+            name: "Sey".into(),
+            website: Some("https://sey.coffee".into()),
+            image_url: None,
+            canonical_roaster_id: Some("cat-1".into()),
+        };
+        let kept = merge_pulled_roaster(&local, &wire, true, Some(1_000));
+        assert_eq!(kept.name, "Sey (renamed here)");
+        assert_eq!(kept.website, None);
+        assert_eq!(kept.catalogue_roaster_id.as_deref(), Some("cat-1"));
+        assert_eq!(kept.updated_at, 2_000);
+        // Not edited since the baseline → the remote fields win.
+        let taken = merge_pulled_roaster(&local, &wire, true, Some(3_000));
+        assert_eq!(taken.name, "Sey");
+    }
+
+    #[test]
+    fn direction_scope_is_exact_for_every_direction() {
+        for (dir, pull, push) in [
+            ("off", false, false),
+            ("backup", false, true),
+            ("pull", true, false),
+            ("two-way", true, true),
+            ("bogus", false, false),
+        ] {
+            let s = bean_sync_scope(dir, dir);
+            assert_eq!((s.pull_beans, s.push_beans), (pull, push), "{dir}");
+            assert_eq!((s.pull_roasters, s.push_roasters), (pull, push), "{dir}");
+        }
+        let mixed = bean_sync_scope("pull", "two-way");
+        assert!(!mixed.push_beans && mixed.push_roasters && mixed.pull_roasters);
+    }
+
+    #[test]
+    fn roaster_push_mirrors_the_bean_rule() {
+        let fresh = roaster("roaster:new", "New", 1);
+        let mut clean = roaster("roaster:clean", "Clean", 100);
+        clean.visualizer_id = Some("vz-c".into());
+        let mut dirty = roaster("roaster:dirty", "Dirty", 300);
+        dirty.visualizer_id = Some("vz-d".into());
+        let mut gone = roaster("roaster:gone", "Gone", 1);
+        gone.deleted_at = Some(1);
+        let rs = vec![fresh, clean, dirty, gone];
+        let plan = plan_roaster_push(&rs, Some(200), &[]);
+        assert_eq!(
+            plan,
+            vec![
+                RoasterPushItem {
+                    local_id: "roaster:new".into(),
+                    create: true
+                },
+                RoasterPushItem {
+                    local_id: "roaster:dirty".into(),
+                    create: false
+                },
+            ]
+        );
+        assert_eq!(
+            plan_roaster_push(&rs, Some(200), &["roaster:dirty".into()]).len(),
+            1
+        );
+        let j = json!({"roasters": rs, "lastSyncAt": 200}).to_string();
+        assert!(
+            plan_roaster_push_json(&j)
+                .unwrap()
+                .contains("roaster:dirty")
+        );
+    }
+
+    /// The cross-run contract both shells rely on: pull → apply → the next
+    /// run's plan writes nothing; a local edit after the pull writes once.
+    #[test]
+    fn pull_then_sync_writes_nothing_and_a_later_edit_writes_once() {
+        use crate::visualizer_sync::{BeanReconcileAction, reconcile_beans};
+        let run1_end = 5_000;
+        // Run 1 pulls a remote bag + roaster (Add): decoded with "now" stamps.
+        let mut pulled = bean("bean:p", None);
+        pulled.visualizer_id = Some("vb-1".into());
+        pulled.updated_at = 4_000;
+        let mut pulled_r = roaster("roaster:p", "Onyx", 4_000);
+        pulled_r.visualizer_id = Some("vr-1".into());
+        // In run 1 the push leg skips what it just pulled.
+        assert!(plan_bean_push(std::slice::from_ref(&pulled), None, &["bean:p".into()]).is_empty());
+        assert!(
+            plan_roaster_push(std::slice::from_ref(&pulled_r), None, &["roaster:p".into()])
+                .is_empty()
+        );
+
+        // Run 2 (baseline = run 1's end): the same remote again.
+        let mut decoded = pulled.clone();
+        decoded.id = "bean:fallback".into();
+        decoded.updated_at = 9_000; // decode fallback = run 2's "now"
+        let actions = reconcile_beans(
+            std::slice::from_ref(&pulled),
+            &[decoded.clone()],
+            &HashMap::new(),
+            Some(run1_end),
+        );
+        assert!(actions.is_empty(), "{actions:?}");
+        let wire = RoasterWire {
+            id: Some("vr-1".into()),
+            name: "Onyx".into(),
+            ..RoasterWire::default()
+        };
+        let merged = merge_pulled_roaster(&pulled_r, &wire, true, Some(run1_end));
+        assert_eq!(merged, pulled_r);
+        assert!(plan_bean_push(std::slice::from_ref(&pulled), Some(run1_end), &[]).is_empty());
+        assert!(plan_roaster_push(std::slice::from_ref(&merged), Some(run1_end), &[]).is_empty());
+
+        // A genuine local edit after the pull → kept by the pull, pushed once.
+        let mut edited = pulled.clone();
+        edited.name = "Renamed".into();
+        edited.updated_at = 6_000;
+        let actions = reconcile_beans(
+            std::slice::from_ref(&edited),
+            &[decoded],
+            &HashMap::new(),
+            Some(run1_end),
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, BeanReconcileAction::Replace { .. }))
+        );
+        assert_eq!(plan_bean_push(&[edited], Some(run1_end), &[]).len(), 1);
+        let mut edited_r = merged;
+        edited_r.name = "Onyx Lab".into();
+        edited_r.updated_at = 6_000;
+        let kept = merge_pulled_roaster(&edited_r, &wire, true, Some(run1_end));
+        assert_eq!(kept.name, "Onyx Lab");
+        assert_eq!(plan_roaster_push(&[kept], Some(run1_end), &[]).len(), 1);
     }
 
     // ── duplicates ────────────────────────────────────────────────────
@@ -891,10 +1168,15 @@ mod tests {
 
         let bj = serde_json::to_string(&beans).unwrap();
         assert_eq!(
-            plan_bean_push_json(&bj, None).unwrap(),
+            plan_bean_push_json(&json!({"beans": beans}).to_string()).unwrap(),
             r#"[{"localId":"bean:a","create":true}]"#
         );
-        assert!(plan_bean_push_json("nope", None).is_err());
+        let _ = bj;
+        assert!(plan_bean_push_json("nope").is_err());
+        assert_eq!(
+            bean_sync_scope_json("pull", "backup").unwrap(),
+            r#"{"pullBeans":true,"pushBeans":false,"pullRoasters":false,"pushRoasters":true}"#
+        );
         let bag = coffee_bag_write_request_json(&serde_json::to_string(&beans[0]).unwrap(), None)
             .unwrap();
         assert!(bag.starts_with(r#"{"coffee_bag":"#));
