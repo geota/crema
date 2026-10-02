@@ -35,11 +35,13 @@ const BUILTIN_JSON: &str = include_str!("../profiles/builtin.json");
 static BUILTIN: OnceLock<Vec<Profile>> = OnceLock::new();
 
 /// The number of built-in profiles Crema ships — every standard de1app
-/// profile.
+/// profile (88), plus "Adaptive v2", which de1app main replaced with
+/// "Adaptive v3" in the same file (`best_practice.tcl`, de1app 1a61f9b4);
+/// Crema keeps both, as decaid (78bebb54) and Decenza (add46044) do.
 ///
 /// Equal to [`builtin_profiles`]`.len()`; the `builtin_profiles_ships_the_full_corpus`
 /// test pins the two together.
-pub const BUILTIN_PROFILE_COUNT: usize = 88;
+pub const BUILTIN_PROFILE_COUNT: usize = 89;
 
 /// Every standard DE1 profile, as a built-in Crema [`Profile`].
 ///
@@ -76,7 +78,8 @@ mod tests {
 
     #[test]
     fn builtin_profiles_ships_the_full_corpus() {
-        // All 88 vendored de1app standard profiles must be present.
+        // All 88 de1app standard profiles (Adaptive v3 among them) plus the
+        // kept Adaptive v2.
         assert_eq!(builtin_profiles().len(), BUILTIN_PROFILE_COUNT);
     }
 
@@ -150,6 +153,102 @@ mod tests {
                 b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
             }
         })
+    }
+
+    /// The built-in with this title.
+    fn builtin(title: &str) -> &'static Profile {
+        builtin_profiles()
+            .iter()
+            .find(|p| p.title == title)
+            .unwrap_or_else(|| panic!("no built-in titled {title:?}"))
+    }
+
+    #[test]
+    fn builtin_preinfusion_counts_and_volumes_match_de1app() {
+        // (title, preinfuse_step_count, max_total_volume_ml), as de1app's own
+        // pressure_to_advanced_list / flow_to_advanced_list compute them
+        // (run under tclsh against de1app main; see
+        // .scratch/upstream-review-2026-10/builtin-diff.md).
+        let expected: &[(&str, u8, u16)] = &[
+            // settings_2a: preinfusion frames + forced rises.
+            ("Default", 4, 36),
+            ("Best overall pressure profile", 3, 36),
+            ("Classic Italian espresso", 3, 36),
+            ("Gentle and sweet", 3, 36),
+            ("Traditional lever machine", 3, 36),
+            ("Low pressure lever machine at 6 bar", 2, 36),
+            ("E61 espresso machine", 2, 0),
+            ("Steam only", 2, 30),
+            ("GHC/manual pressure control", 1, 0),
+            // settings_2b: preinfusion frames only.
+            ("Flow profile for straight espresso", 2, 36),
+            ("Hybrid pour over espresso", 1, 0),
+            ("Preinfuse then 45ml of water", 1, 36),
+            ("GHC/manual flow control", 0, 0),
+            // settings_2c: the TCL's explicit count, 0 included.
+            ("Londonium", 2, 0),
+            ("Cremina lever machine", 0, 0),
+            ("Espresso Forge Dark", 0, 0),
+            ("Filter 2.1", 0, 0),
+            ("Blooming Allongé", 0, 180),
+        ];
+        for &(title, count, volume) in expected {
+            let p = builtin(title);
+            assert_eq!(
+                p.preinfuse_step_count, count,
+                "{title}: preinfuse_step_count"
+            );
+            assert_eq!(p.max_total_volume_ml, volume, "{title}: volume");
+            // The count reaches the DE1 header unchanged.
+            assert_eq!(
+                p.assemble().unwrap().header.preinfuse_frame_count,
+                count,
+                "{title}: header"
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_step_weights_come_from_the_tcl() {
+        // A-Flow's Infuse exits on weight (issue 11); so does Filter 2.0's
+        // flat-flow step. Every other built-in step has none.
+        let expected: &[(&str, &str, f32)] = &[
+            ("A-Flow / default-dark", "Infuse", 2.0),
+            ("A-Flow / default-like-dflow", "Infuse", 4.0),
+            ("A-Flow / default-medium", "Infuse", 3.6),
+            ("A-Flow / default-very-dark", "Infuse", 2.0),
+            ("Filter 2.0", "flat flow", 150.0),
+        ];
+        for &(title, step, grams) in expected {
+            let p = builtin(title);
+            let s = p.steps.iter().find(|s| s.name == step).unwrap();
+            assert_eq!(s.weight, Some(grams), "{title} / {step}");
+        }
+        let with_weights = builtin_profiles()
+            .iter()
+            .flat_map(|p| p.steps.iter())
+            .filter(|s| s.weight.is_some())
+            .count();
+        assert_eq!(with_weights, expected.len());
+    }
+
+    #[test]
+    fn adaptive_v3_ships_alongside_v2() {
+        // de1app 1a61f9b4: Pressurize exits at 7.7 bar (v2: 8.8) and the
+        // extraction limiter is 8.6 bar (v2: 9.5); otherwise the same frames.
+        let v2 = builtin("Adaptive v2");
+        let v3 = builtin("Adaptive v3");
+        assert_ne!(v2.id, v3.id);
+        assert_eq!(v3.steps.len(), v2.steps.len());
+        let pressurize = |p: &Profile| p.steps[4].exit.unwrap().threshold;
+        assert_eq!(pressurize(v2), 8.8);
+        assert_eq!(pressurize(v3), 7.7);
+        for i in [5, 6] {
+            assert_eq!(v2.steps[i].limiter.unwrap().value, 9.5);
+            assert_eq!(v3.steps[i].limiter.unwrap().value, 8.6);
+        }
+        assert_eq!(v3.preinfuse_step_count, 3);
+        assert_eq!(v3.max_total_volume_ml, 36);
     }
 
     #[test]

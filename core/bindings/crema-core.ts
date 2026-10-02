@@ -1028,8 +1028,8 @@ export type Event =
 	 * cleaning run. Classified at the core boundary
 	 * ([`de1_domain::shot_disposition`]) from the duration, the final
 	 * weight, and the active profile's beverage type (latched from
-	 * profile uploads / [`set_active_beverage_type`]
-	 * (crate::CremaCore::set_active_beverage_type)). `serde(default)`
+	 * profile uploads / [`set_active_profile`]
+	 * (crate::CremaCore::set_active_profile)). `serde(default)`
 	 * (= `Record`) so a version-skewed consumer parsing an older
 	 * core's event stream still decodes.
 	 */

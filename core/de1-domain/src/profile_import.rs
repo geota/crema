@@ -466,7 +466,7 @@ fn step_to_v2(step: &ProfileStep) -> V2StepOut {
 /// - [`ImportError::NoSteps`] if the resulting profile has no steps.
 /// - [`ImportError::TooManySteps`] if it has more than 32.
 pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
-    let dict = TclDict::parse(tcl)?;
+    let dict = TclDict::parse_profile(tcl)?;
 
     // A Visualizer export of a shot that was uploaded *without* its profile is a
     // dict of blank fields (`advanced_shot {}`, `espresso_pressure {}`, …) — only
@@ -495,21 +495,21 @@ pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
     let title = dict.get("profile_title").unwrap_or("").to_string();
     let notes = dict.get("profile_notes").unwrap_or("").to_string();
 
-    let steps = match profile_type {
+    // A simple profile (`settings_2a` / `settings_2b`) is expanded into steps
+    // here, and the expansion also yields its preinfusion step count — the
+    // number of leading generated steps that are preinfusion (including the
+    // pressure profile's forced-rise steps), exactly as de1app's
+    // `pressure_to_advanced_list` / `flow_to_advanced_list` count them
+    // (`incr …_count_start` per preinfusion and forced-rise frame;
+    // de1app 13a30463). An advanced profile (`settings_2c`) carries its count
+    // explicitly in `final_desired_shot_volume_advanced_count_start`.
+    let advanced = profile_type == "settings_2c";
+    let (steps, count_start) = match profile_type {
         "settings_2b" => flow_to_advanced_list(&dict),
-        "settings_2c" => advanced_shot_to_steps(&dict)?,
+        "settings_2c" => (advanced_shot_to_steps(&dict)?, explicit_count_start(&dict)),
         // `settings_2a` and anything unrecognised: treat as simple pressure.
         _ => pressure_to_advanced_list(&dict),
     };
-
-    // An advanced Tcl profile records the preinfusion count directly; a
-    // converted simple profile sets it from its generated leading steps. The
-    // value is a small step count; clamp before the cast so it fits a u16.
-    #[allow(clippy::cast_possible_truncation)]
-    let count_start = dict
-        .get("final_desired_shot_volume_advanced_count_start")
-        .and_then(|s| s.trim().parse::<f32>().ok())
-        .map_or(0, |v| v.clamp(0.0, f32::from(u16::MAX)).round() as u16);
 
     // Legacy TCL profiles carry an `author` field; `beverage_type` is
     // typically absent (TCL is v1/v2 transitional, predates the field)
@@ -518,23 +518,70 @@ pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
     let author = dict.get("author").unwrap_or("").to_string();
     let tank_temperature = dict.get_f32("tank_temperature").unwrap_or(0.0);
 
+    let (target_weight, target_volume) = stop_targets(&dict, advanced);
+
+    // de1app's per-profile dose is `profile_grinder_dose_weight` (a
+    // `profile_vars` key, written by the Streamline skin); a few files carry
+    // the older `grinder_dose_weight`. The first positive one wins; 0 means
+    // "not set".
+    let dose = ["profile_grinder_dose_weight", "grinder_dose_weight"]
+        .iter()
+        .filter_map(|k| dict.get_f32(k))
+        .find(|d| *d > 0.0)
+        .unwrap_or(0.0);
+
     finish_profile(
         title,
         notes,
         steps,
         count_start,
-        dict.get_f32("final_desired_shot_weight_advanced")
-            .or_else(|| dict.get_f32("final_desired_shot_weight"))
-            .unwrap_or(0.0),
-        dict.get_f32("final_desired_shot_volume_advanced")
-            .or_else(|| dict.get_f32("final_desired_shot_volume"))
-            .unwrap_or(0.0),
-        dict.get_f32("grinder_dose_weight").unwrap_or(0.0),
+        target_weight,
+        target_volume,
+        dose,
         author,
         BeverageType::Espresso,
         tank_temperature,
         "2".to_string(),
     )
+}
+
+/// An advanced profile's explicit preinfusion count
+/// (`final_desired_shot_volume_advanced_count_start`), 0 when absent — de1app
+/// resets it to 0 on every profile load (`vars.tcl` `select_profile`), so a
+/// file that omits the key has no preinfusion steps. The value is a small step
+/// count; clamp before the cast so it fits a u16.
+fn explicit_count_start(dict: &TclDict) -> u16 {
+    #[allow(clippy::cast_possible_truncation)]
+    dict.get("final_desired_shot_volume_advanced_count_start")
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .map_or(0, |v| v.clamp(0.0, f32::from(u16::MAX)).round() as u16)
+}
+
+/// The profile's stop-at-weight and stop-at-volume targets, picked the way
+/// de1app picks them at shot start: an advanced profile uses the `_advanced`
+/// keys, a simple profile the plain ones (`de1_de1.tcl` `sav::on_espresso_start`,
+/// `device_scale.tcl` SAW target; `pressure_to_advanced_list` copies the plain
+/// values over the `_advanced` ones for a simple profile).
+///
+/// Load-time fallbacks, also de1app's (`profile.tcl` `read_profile`): an
+/// advanced profile with no `_advanced` weight uses the plain weight, and a
+/// profile with no plain volume uses its plain weight. An advanced profile
+/// with no `_advanced` volume falls back to the plain volume (de1app would
+/// keep whatever the previous profile left in its settings).
+fn stop_targets(dict: &TclDict, advanced: bool) -> (f32, f32) {
+    let weight_plain = dict.get_f32("final_desired_shot_weight");
+    let volume_plain = dict.get_f32("final_desired_shot_volume").or(weight_plain);
+    if advanced {
+        let weight = dict
+            .get_f32("final_desired_shot_weight_advanced")
+            .or(weight_plain);
+        let volume = dict
+            .get_f32("final_desired_shot_volume_advanced")
+            .or(volume_plain);
+        (weight.unwrap_or(0.0), volume.unwrap_or(0.0))
+    } else {
+        (weight_plain.unwrap_or(0.0), volume_plain.unwrap_or(0.0))
+    }
 }
 
 /// Parse a Tcl-dict advanced profile's pre-expanded `advanced_shot` list.
@@ -574,7 +621,12 @@ fn tcl_step_to_profile_step(step: &TclDict) -> Result<ProfileStep, ImportError> 
         _ => None,
     };
 
-    // Legacy TCL profiles have no per-step weight target — kept None.
+    // Per-step exit weight (grams). de1app writes `weight 0` on every step;
+    // 0 or absent means "no weight exit", so only a positive value is kept
+    // (e.g. A-Flow's `weight 3.6 name Infuse`). Enforced app-side by
+    // `StepWeightExit` — the DE1 frame has no weight field.
+    let weight = step.get_f32("weight").filter(|w| *w > 0.0);
+
     Ok(ProfileStep {
         name: step.get("name").unwrap_or("").to_string(),
         pump,
@@ -586,7 +638,7 @@ fn tcl_step_to_profile_step(step: &TclDict) -> Result<ProfileStep, ImportError> 
         exit,
         volume_limit_ml: clamp_volume(step.get_f32("volume").unwrap_or(0.0)),
         limiter,
-        weight: None,
+        weight,
     })
 }
 
@@ -688,7 +740,13 @@ fn preinfusion_frame(
 
 /// Port of the legacy `pressure_to_advanced_list`: expand a simple **pressure**
 /// profile into an advanced step list.
-fn pressure_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
+///
+/// Also returns the preinfusion step count, counted as de1app counts it
+/// (`profile.tcl` `pressure_to_advanced_list`): one per preinfusion frame and
+/// one per "forced rise" frame (de1app 13a30463 — the rise fills headspace
+/// rather than pouring, so stop-at-volume must not count it). The hold and
+/// decline frames are pour.
+fn pressure_to_advanced_list(dict: &TclDict) -> (Vec<ProfileStep>, u16) {
     let (temps, first_len, second_len) = resolve_conversion(dict);
     let flow_rate = dict.get_f32("preinfusion_flow_rate").unwrap_or(4.0);
     let stop_pressure = dict.get_f32("preinfusion_stop_pressure").unwrap_or(0.0);
@@ -697,6 +755,7 @@ fn pressure_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
     let max_flow = max_value(dict, "maximum_flow", "maximum_flow_range_default");
 
     let mut steps = Vec::new();
+    let mut count: u16 = 0;
 
     if first_len > 0.0 {
         steps.push(preinfusion_frame(
@@ -706,6 +765,7 @@ fn pressure_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
             first_len,
             stop_pressure,
         ));
+        count += 1;
     }
     if second_len > 0.0 {
         steps.push(preinfusion_frame(
@@ -715,6 +775,7 @@ fn pressure_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
             second_len,
             stop_pressure,
         ));
+        count += 1;
     }
 
     // The hold (rise-and-hold) stage. A hold longer than 3 s is preceded by a
@@ -730,6 +791,7 @@ fn pressure_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
                 Transition::Fast,
                 None,
             ));
+            count += 1;
             hold_time -= 3.0;
         }
         steps.push(pressure_frame(
@@ -755,6 +817,7 @@ fn pressure_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
                 Transition::Fast,
                 None,
             ));
+            count += 1;
             decline_time -= 3.0;
         }
         steps.push(pressure_frame(
@@ -770,12 +833,16 @@ fn pressure_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
     if steps.is_empty() {
         steps.push(empty_frame());
     }
-    steps
+    (steps, count)
 }
 
 /// Port of the legacy `flow_to_advanced_list`: expand a simple **flow** profile
 /// into an advanced step list.
-fn flow_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
+///
+/// Also returns the preinfusion step count: one per preinfusion frame, as
+/// de1app's `flow_to_advanced_list` counts it (a flow profile has no
+/// forced-rise frame).
+fn flow_to_advanced_list(dict: &TclDict) -> (Vec<ProfileStep>, u16) {
     let (temps, first_len, second_len) = resolve_conversion(dict);
     let flow_rate = dict.get_f32("preinfusion_flow_rate").unwrap_or(4.0);
     let stop_pressure = dict.get_f32("preinfusion_stop_pressure").unwrap_or(0.0);
@@ -786,6 +853,7 @@ fn flow_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
     let max_pressure = max_value(dict, "maximum_pressure", "maximum_pressure_range_default");
 
     let mut steps = Vec::new();
+    let mut count: u16 = 0;
 
     if first_len > 0.0 {
         steps.push(preinfusion_frame(
@@ -795,6 +863,7 @@ fn flow_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
             first_len,
             stop_pressure,
         ));
+        count += 1;
     }
     if second_len > 0.0 {
         steps.push(preinfusion_frame(
@@ -804,6 +873,7 @@ fn flow_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
             second_len,
             stop_pressure,
         ));
+        count += 1;
     }
 
     // The legacy procedure gates *both* the hold and decline frames on
@@ -831,7 +901,7 @@ fn flow_to_advanced_list(dict: &TclDict) -> Vec<ProfileStep> {
     if steps.is_empty() {
         steps.push(empty_frame());
     }
-    steps
+    (steps, count)
 }
 
 /// Build a pressure-priority frame, optionally limited.
@@ -1149,8 +1219,25 @@ pub(crate) struct TclDict {
 impl TclDict {
     /// Parse a Tcl dictionary from its textual form.
     pub(crate) fn parse(text: &str) -> Result<Self, ImportError> {
-        let words = tcl_words(text)?;
-        if words.len() % 2 != 0 {
+        Self::from_words(tcl_words(text, &[])?)
+    }
+
+    /// Parse a top-level `.tcl` **profile** file. The same as [`parse`](Self::parse),
+    /// except that an unbraced, unquoted value of a prose key ([`PROSE_KEYS`]:
+    /// title, author, notes) runs to the end of its line.
+    ///
+    /// Visualizer's `.tcl` export braces a multi-word value only when it
+    /// matches `/\w\s\w/`, so a title like `D-Flow / Q` is written bare and a
+    /// plain word split misreads it (`D-Flow` plus a stray `/` → `Q` pair, or
+    /// an odd word count). de1app itself braces every multi-word value. Port of
+    /// Decenza e56d371a (`De1AppTcl::isFreeTextKey`): only the prose keys
+    /// read the whole line; every other bare value stays one word.
+    pub(crate) fn parse_profile(text: &str) -> Result<Self, ImportError> {
+        Self::from_words(tcl_words(text, PROSE_KEYS)?)
+    }
+
+    fn from_words(words: Vec<String>) -> Result<Self, ImportError> {
+        if !words.len().is_multiple_of(2) {
             return Err(ImportError::Tcl(
                 "dictionary has an odd number of words".to_string(),
             ));
@@ -1165,7 +1252,10 @@ impl TclDict {
 
     /// Parse a Tcl list whose every element is itself a dictionary.
     pub(crate) fn parse_list_of_dicts(text: &str) -> Result<Vec<TclDict>, ImportError> {
-        tcl_words(text)?.iter().map(|w| TclDict::parse(w)).collect()
+        tcl_words(text, &[])?
+            .iter()
+            .map(|w| TclDict::parse(w))
+            .collect()
     }
 
     /// The value for `key`, or `None` if absent. The last write wins, matching
@@ -1191,14 +1281,49 @@ impl TclDict {
     }
 }
 
+/// The free-text keys of a `.tcl` profile whose bare value runs to the end of
+/// the line — see [`TclDict::parse_profile`]. Enum-like keys
+/// (`beverage_type`, …) are deliberately absent: for those, one word is the
+/// right recovery.
+const PROSE_KEYS: &[&str] = &["profile_title", "author", "profile_notes"];
+
 /// Split Tcl text into words: whitespace-separated, with `{...}` runs treated
 /// as a single word with the outermost braces removed. Nested braces are
 /// tracked so a step dictionary stays intact.
-fn tcl_words(text: &str) -> Result<Vec<String>, ImportError> {
-    let mut words = Vec::new();
+///
+/// When the word just read sits in key position (an even word index) and is
+/// one of `prose_keys`, and its value starts on the same line and is neither
+/// braced nor quoted, the value is the rest of that line (trimmed).
+fn tcl_words(text: &str, prose_keys: &[&str]) -> Result<Vec<String>, ImportError> {
+    let mut words: Vec<String> = Vec::new();
     let mut chars = text.chars().peekable();
 
     loop {
+        // A prose key's bare value: the rest of the line.
+        if words.len() % 2 == 1
+            && words
+                .last()
+                .is_some_and(|k| prose_keys.contains(&k.as_str()))
+        {
+            while chars.peek().is_some_and(|c| *c == ' ' || *c == '\t') {
+                chars.next();
+            }
+            // Braced / quoted values, and a value that starts on a later line,
+            // take the normal word path below.
+            if !matches!(chars.peek(), None | Some('{' | '"' | '\n' | '\r')) {
+                let mut line = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c == '\n' {
+                        break;
+                    }
+                    line.push(c);
+                    chars.next();
+                }
+                words.push(line.trim_end().to_string());
+                continue;
+            }
+        }
+
         // Skip inter-word whitespace.
         while chars.peek().is_some_and(|c| c.is_whitespace()) {
             chars.next();
@@ -1687,34 +1812,34 @@ mod tests {
 
     #[test]
     fn tcl_words_splits_bare_words() {
-        assert_eq!(tcl_words("a b c").unwrap(), ["a", "b", "c"]);
+        assert_eq!(tcl_words("a b c", &[]).unwrap(), ["a", "b", "c"]);
     }
 
     #[test]
     fn tcl_words_keeps_a_braced_run_as_one_word() {
         assert_eq!(
-            tcl_words("name {rise and hold} pump pressure").unwrap(),
+            tcl_words("name {rise and hold} pump pressure", &[]).unwrap(),
             ["name", "rise and hold", "pump", "pressure"]
         );
     }
 
     #[test]
     fn tcl_words_handles_nested_braces() {
-        let words = tcl_words("list {{a 1} {b 2}}").unwrap();
+        let words = tcl_words("list {{a 1} {b 2}}", &[]).unwrap();
         assert_eq!(words, ["list", "{a 1} {b 2}"]);
     }
 
     #[test]
     fn tcl_words_handles_quoted_runs() {
         assert_eq!(
-            tcl_words(r#"popup "" name x"#).unwrap(),
+            tcl_words(r#"popup "" name x"#, &[]).unwrap(),
             ["popup", "", "name", "x"]
         );
     }
 
     #[test]
     fn tcl_words_rejects_unbalanced_braces() {
-        assert!(matches!(tcl_words("a {b c"), Err(ImportError::Tcl(_))));
+        assert!(matches!(tcl_words("a {b c", &[]), Err(ImportError::Tcl(_))));
     }
 
     #[test]
@@ -2045,5 +2170,319 @@ espresso_decline_time 20
         assert_eq!(decline.transition, Transition::Smooth);
         // It assembles cleanly.
         assert!(p.assemble().is_ok());
+        // de1app counts boost + preinfusion + BOTH forced rises (13a30463):
+        // 4. The count is a prefix length on the wire, so the DE1 also
+        // reports "rise and hold" (frame 3) as preinfusion — the same as
+        // de1app uploads for this profile.
+        assert_eq!(p.preinfuse_step_count, 4);
+        assert_eq!(p.assemble().unwrap().header.preinfuse_frame_count, 4);
+    }
+
+    // -- preinfusion count and stop targets (issue 10, de1app parity) ----
+
+    /// A minimal simple-profile body; `extra` appends/overrides keys.
+    fn simple_tcl(kind: &str, extra: &str) -> String {
+        format!(
+            "advanced_shot {{}}\nsettings_profile_type {kind}\nprofile_title x\nprofile_notes {{}}\n\
+             espresso_temperature_steps_enabled 0\nespresso_temperature 92.0\n\
+             espresso_pressure 9.0\npressure_end 6.0\npreinfusion_flow_rate 4.0\n\
+             preinfusion_stop_pressure 4.0\nflow_profile_hold 2.0\nflow_profile_decline 1.2\n{extra}"
+        )
+    }
+
+    #[test]
+    fn settings_2a_counts_preinfusion_and_the_forced_rise() {
+        // preinfusion + forced rise (hold > 3) are preinfusion; hold and
+        // decline are pour. de1app: count_start 1 -> 2 (13a30463).
+        let tcl = simple_tcl(
+            "settings_2a",
+            "preinfusion_time 20\nespresso_hold_time 10\nespresso_decline_time 30\n",
+        );
+        let p = import_legacy_tcl(&tcl).unwrap();
+        let names: Vec<&str> = p.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "preinfusion",
+                "forced rise without limit",
+                "rise and hold",
+                "decline"
+            ]
+        );
+        assert_eq!(p.preinfuse_step_count, 2);
+    }
+
+    #[test]
+    fn settings_2a_counts_the_decline_forced_rise_when_there_is_no_hold() {
+        // No hold: the decline gets its own forced rise, which counts too.
+        let tcl = simple_tcl(
+            "settings_2a",
+            "preinfusion_time 0\nespresso_hold_time 0\nespresso_decline_time 30\n",
+        );
+        let p = import_legacy_tcl(&tcl).unwrap();
+        let names: Vec<&str> = p.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["forced rise without limit", "decline"]);
+        assert_eq!(p.preinfuse_step_count, 1);
+    }
+
+    #[test]
+    fn settings_2a_short_hold_has_no_forced_rise_to_count() {
+        // A hold of 3 s or less gets no forced rise; nor does a decline of
+        // 3 s or less. Only the preinfusion counts.
+        let tcl = simple_tcl(
+            "settings_2a",
+            "preinfusion_time 8\nespresso_hold_time 3\nespresso_decline_time 3\n",
+        );
+        let p = import_legacy_tcl(&tcl).unwrap();
+        let names: Vec<&str> = p.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["preinfusion", "rise and hold", "decline"]);
+        assert_eq!(p.preinfuse_step_count, 1);
+    }
+
+    #[test]
+    fn settings_2a_temp_boost_counts_both_preinfusion_frames() {
+        let tcl = simple_tcl(
+            "settings_2a",
+            "espresso_temperature_steps_enabled 1\nespresso_temperature_0 94\n\
+             espresso_temperature_1 92\nespresso_temperature_2 92\nespresso_temperature_3 92\n\
+             preinfusion_time 20\nespresso_hold_time 0\nespresso_decline_time 30\n",
+        );
+        let p = import_legacy_tcl(&tcl).unwrap();
+        // boost, preinfusion, forced rise (decline-first), decline.
+        assert_eq!(p.steps.len(), 4);
+        assert_eq!(p.preinfuse_step_count, 3);
+    }
+
+    #[test]
+    fn settings_2a_blank_profile_counts_nothing() {
+        let tcl = simple_tcl(
+            "settings_2a",
+            "preinfusion_time 0\nespresso_hold_time 0\nespresso_decline_time 0\n",
+        );
+        let p = import_legacy_tcl(&tcl).unwrap();
+        assert_eq!(p.steps[0].name, "empty");
+        assert_eq!(p.preinfuse_step_count, 0);
+    }
+
+    #[test]
+    fn settings_2a_ignores_a_stale_count_in_the_file() {
+        // de1app recomputes a basic profile's count on load; a value left in
+        // the file (Steam only ships 1) does not survive.
+        let tcl = simple_tcl(
+            "settings_2a",
+            "preinfusion_time 20\nespresso_hold_time 10\nespresso_decline_time 30\n\
+             final_desired_shot_volume_advanced_count_start 1\n",
+        );
+        assert_eq!(import_legacy_tcl(&tcl).unwrap().preinfuse_step_count, 2);
+    }
+
+    #[test]
+    fn settings_2b_counts_its_preinfusion_frames() {
+        // A flow profile has no forced rise: only the preinfusion counts.
+        let tcl = simple_tcl(
+            "settings_2b",
+            "preinfusion_time 15\nespresso_hold_time 8\nespresso_decline_time 20\n",
+        );
+        let p = import_legacy_tcl(&tcl).unwrap();
+        assert_eq!(p.steps.len(), 3);
+        assert_eq!(p.preinfuse_step_count, 1);
+
+        let boosted = simple_tcl(
+            "settings_2b",
+            "espresso_temperature_steps_enabled 1\nespresso_temperature_0 94\n\
+             espresso_temperature_1 92\nespresso_temperature_2 92\nespresso_temperature_3 92\n\
+             preinfusion_time 15\nespresso_hold_time 8\nespresso_decline_time 20\n",
+        );
+        let p = import_legacy_tcl(&boosted).unwrap();
+        assert_eq!(p.steps.len(), 4);
+        assert_eq!(p.preinfuse_step_count, 2);
+    }
+
+    #[test]
+    fn settings_2b_without_preinfusion_counts_zero() {
+        let tcl = simple_tcl(
+            "settings_2b",
+            "preinfusion_time 0\nespresso_hold_time 8\nespresso_decline_time 20\n",
+        );
+        assert_eq!(import_legacy_tcl(&tcl).unwrap().preinfuse_step_count, 0);
+    }
+
+    /// A two-step advanced profile; `extra` appends keys.
+    fn advanced_tcl(extra: &str) -> String {
+        format!(
+            "advanced_shot {{{{name a pump flow flow 4 temperature 92 seconds 10}} \
+             {{name b pump pressure pressure 9 temperature 92 seconds 30}}}}\n\
+             settings_profile_type settings_2c\nprofile_title x\nprofile_notes {{}}\n{extra}"
+        )
+    }
+
+    #[test]
+    fn settings_2c_keeps_its_explicit_count() {
+        let p = import_legacy_tcl(&advanced_tcl(
+            "final_desired_shot_volume_advanced_count_start 1\n",
+        ))
+        .unwrap();
+        assert_eq!(p.preinfuse_step_count, 1);
+        // An explicit 0 stays 0 — not derived from the steps.
+        let p = import_legacy_tcl(&advanced_tcl(
+            "final_desired_shot_volume_advanced_count_start 0\n",
+        ))
+        .unwrap();
+        assert_eq!(p.preinfuse_step_count, 0);
+        // A missing key is 0 (de1app resets it on every load).
+        assert_eq!(
+            import_legacy_tcl(&advanced_tcl(""))
+                .unwrap()
+                .preinfuse_step_count,
+            0
+        );
+    }
+
+    // -- Visualizer-style .tcl (issue 12, Decenza e56d371a) ----------------
+
+    /// A `.tcl` as Visualizer's renderer writes it: multi-word values whose
+    /// spaces sit beside non-word characters are NOT braced (`D-Flow / Q`).
+    const VISUALIZER_TCL: &str = "advanced_shot {{name Filling temperature 84.00 sensor coffee pump pressure transition fast pressure 6.00 flow 8.00 seconds 25.00 volume 60.0 exit_if 1 exit_type pressure_over exit_pressure_over 3.00 exit_pressure_under 0.00 exit_flow_over 0.00 exit_flow_under 0.00 max_flow_or_pressure 0.00 max_flow_or_pressure_range 0.6 weight 0.00} {name Pouring temperature 94.00 sensor coffee pump flow transition fast pressure 4.80 flow 2.00 seconds 127.00 volume 0.0 exit_if 0 exit_type pressure_over exit_pressure_over 11.00 exit_pressure_under 0.00 exit_flow_over 6.00 exit_flow_under 0.00 max_flow_or_pressure 0.00 max_flow_or_pressure_range 0.6 weight 0.00}}
+author Damian Brakel - Decent
+beverage_type espresso
+final_desired_shot_volume_advanced_count_start 1
+final_desired_shot_weight_advanced 36.0
+profile_grinder_dose_weight 18.5
+profile_notes Grind finer for more body. Downloaded from Visualizer
+profile_title D-Flow / Q
+settings_profile_type settings_2c
+";
+
+    #[test]
+    fn visualizer_tcl_with_an_unbraced_title_imports_whole() {
+        let p = import_legacy_tcl(VISUALIZER_TCL).unwrap();
+        assert_eq!(p.title, "D-Flow / Q");
+        assert_eq!(p.author, "Damian Brakel - Decent");
+        assert_eq!(
+            p.notes,
+            "Grind finer for more body. Downloaded from Visualizer"
+        );
+        // Nothing else is thrown off by the prose lines.
+        assert_eq!(p.steps.len(), 2);
+        assert_eq!(p.steps[1].name, "Pouring");
+        assert_eq!(p.preinfuse_step_count, 1);
+        assert_eq!(p.target_weight, 36.0);
+        assert_eq!(p.beverage_type, BeverageType::Espresso);
+        // `profile_grinder_dose_weight` is de1app's dose key.
+        assert_eq!(p.dose, 18.5);
+    }
+
+    #[test]
+    fn a_plain_word_split_misreads_the_visualizer_tcl() {
+        // What the unbraced title used to do: the plain dictionary parse
+        // either errors (odd word count) or shifts every pair after it.
+        let plain = TclDict::parse(VISUALIZER_TCL);
+        assert!(plain.map_or(true, |d| d.get("profile_title") != Some("D-Flow / Q")));
+    }
+
+    #[test]
+    fn a_hash_in_an_unbraced_title_is_not_a_comment() {
+        // Decenza e56d371a's review: `#` has no comment meaning in a profile.
+        let tcl = "profile_title Blend #3\nadvanced_shot {{name a pump flow flow 2 seconds 30}}\n\
+                   settings_profile_type settings_2c\n";
+        assert_eq!(import_legacy_tcl(tcl).unwrap().title, "Blend #3");
+    }
+
+    #[test]
+    fn braced_and_quoted_prose_values_are_unchanged() {
+        let tcl = "profile_title {Adaptive v3}\nauthor \"Decent Espresso\"\n\
+                   profile_notes {line one\nline two}\n\
+                   advanced_shot {{name a pump flow flow 2 seconds 30}}\n\
+                   settings_profile_type settings_2c\n";
+        let p = import_legacy_tcl(tcl).unwrap();
+        assert_eq!(p.title, "Adaptive v3");
+        assert_eq!(p.author, "Decent Espresso");
+        assert_eq!(p.notes, "line one\nline two");
+    }
+
+    #[test]
+    fn enum_keys_still_take_one_word() {
+        // Only title/author/notes read the whole line: an enum written bare
+        // keeps first-word semantics (the rest of its line is more words).
+        let words = tcl_words("beverage_type espresso\nprofile_title A B\n", PROSE_KEYS).unwrap();
+        assert_eq!(words, ["beverage_type", "espresso", "profile_title", "A B"]);
+    }
+
+    #[test]
+    fn grinder_dose_weight_still_reads_and_zero_means_unset() {
+        let base = "advanced_shot {{name a pump flow flow 2 seconds 30}}\n\
+                    settings_profile_type settings_2c\nprofile_title x\n";
+        let old = format!("{base}grinder_dose_weight 17\n");
+        assert_eq!(import_legacy_tcl(&old).unwrap().dose, 17.0);
+        // Streamline writes profile_grinder_dose_weight 0 when unset: the
+        // older key still wins then.
+        let both = format!("{base}profile_grinder_dose_weight 0\ngrinder_dose_weight 17\n");
+        assert_eq!(import_legacy_tcl(&both).unwrap().dose, 17.0);
+        let new = format!("{base}profile_grinder_dose_weight 19\ngrinder_dose_weight 0\n");
+        assert_eq!(import_legacy_tcl(&new).unwrap().dose, 19.0);
+    }
+
+    #[test]
+    fn tcl_step_weight_is_kept() {
+        // de1app writes `weight` on every step; a positive one is a step exit
+        // (A-Flow: `weight 3.6 name Infuse`), 0 is "none" (issue 11).
+        let tcl = "advanced_shot {{name Fill pump flow flow 8 seconds 25 weight 0.0} \
+                   {name Infuse pump pressure pressure 3 seconds 60 weight 3.6} \
+                   {name Pour pump flow flow 2 seconds 60}}\n\
+                   settings_profile_type settings_2c\nprofile_title x\nprofile_notes {}\n";
+        let p = import_legacy_tcl(tcl).unwrap();
+        let weights: Vec<Option<f32>> = p.steps.iter().map(|s| s.weight).collect();
+        assert_eq!(weights, [None, Some(3.6), None]);
+        // And it survives the v2 JSON round trip.
+        let back = import_v2_json(&export_v2_json(&p).unwrap()).unwrap();
+        assert_eq!(back.steps[1].weight, Some(3.6));
+    }
+
+    #[test]
+    fn basic_profiles_take_the_plain_volume_and_weight() {
+        // de1app's SAV/SAW use final_desired_shot_volume / _weight for a basic
+        // profile; the `_advanced` values are leftovers (Gentle and sweet
+        // ships volume 36 / volume_advanced 135).
+        let keys = "preinfusion_time 20\nespresso_hold_time 10\nespresso_decline_time 30\n\
+                    final_desired_shot_volume 36\nfinal_desired_shot_volume_advanced 135\n\
+                    final_desired_shot_weight 38\nfinal_desired_shot_weight_advanced 135\n";
+        for kind in ["settings_2a", "settings_2b"] {
+            let p = import_legacy_tcl(&simple_tcl(kind, keys)).unwrap();
+            assert_eq!(p.max_total_volume_ml, 36, "{kind}");
+            assert_eq!(p.target_weight, 38.0, "{kind}");
+        }
+    }
+
+    #[test]
+    fn basic_profile_volume_zero_stays_zero() {
+        // Hybrid pour over espresso: volume 0, volume_advanced 74 -> no SAV.
+        let keys = "preinfusion_time 20\nespresso_hold_time 10\nespresso_decline_time 30\n\
+                    final_desired_shot_volume 0\nfinal_desired_shot_volume_advanced 74\n";
+        let p = import_legacy_tcl(&simple_tcl("settings_2b", keys)).unwrap();
+        assert_eq!(p.max_total_volume_ml, 0);
+    }
+
+    #[test]
+    fn a_missing_volume_falls_back_to_the_weight() {
+        // de1app read_profile: an old profile with no end volume gets its
+        // shot weight as the volume.
+        let keys = "preinfusion_time 20\nespresso_hold_time 10\nespresso_decline_time 30\n\
+                    final_desired_shot_weight 40\n";
+        let p = import_legacy_tcl(&simple_tcl("settings_2a", keys)).unwrap();
+        assert_eq!(p.max_total_volume_ml, 40);
+    }
+
+    #[test]
+    fn advanced_profiles_take_the_advanced_volume_and_weight() {
+        let p = import_legacy_tcl(&advanced_tcl(
+            "final_desired_shot_volume 42\nfinal_desired_shot_volume_advanced 100\n\
+             final_desired_shot_weight 42\nfinal_desired_shot_weight_advanced 100\n",
+        ))
+        .unwrap();
+        assert_eq!(p.max_total_volume_ml, 100);
+        assert_eq!(p.target_weight, 100.0);
+        // No `_advanced` weight: the plain weight (de1app read_profile).
+        let p = import_legacy_tcl(&advanced_tcl("final_desired_shot_weight 38\n")).unwrap();
+        assert_eq!(p.target_weight, 38.0);
     }
 }

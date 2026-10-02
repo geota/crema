@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use de1_protocol::ShotSample;
+use de1_protocol::{MachineState, ShotSample, SubState};
 use typeshare::typeshare;
 
 use crate::flow::{FlowAlgorithm, FlowEstimator};
@@ -118,6 +118,25 @@ pub fn volume_stop_arms(
     volume_stop_with_scale: bool,
 ) -> bool {
     !(scale_connected && weight_target_set) || volume_stop_with_scale
+}
+
+/// Whether water dispensed in this machine state counts toward stop-at-volume.
+///
+/// SAV counts **pour** volume only, as de1app does (`de1_de1.tcl`
+/// `update_de1_shotvalue`: an Espresso sample adds to `preinfusion_volume` in
+/// the preinfusion substate and to `pour_volume` in the pouring substate, and
+/// `sav::check_for_sav` compares `pour_volume` alone). The DE1 reports the
+/// profile's first `preinfuse_step_count` frames as the preinfusion substate —
+/// for a basic pressure profile that includes the forced-rise frames — so the
+/// water that fills the headspace never trips SAV early. Espresso's other
+/// substates (heating, stabilising, ending) count toward neither. Outside
+/// Espresso (de1app also tracks HotWater) every sample counts.
+#[must_use]
+pub fn sav_counts_volume(state: MachineState, substate: SubState) -> bool {
+    match state {
+        MachineState::Espresso => substate == SubState::Pouring,
+        _ => true,
+    }
 }
 
 /// Why [`AutoStop`] decided to end the shot.
@@ -296,15 +315,16 @@ impl AutoStop {
 
     /// Feed a telemetry sample. The volume integration lives outside
     /// AutoStop now ([`VolumeIntegrator`](crate::VolumeIntegrator) on the
-    /// orchestrator) — `dispensed_ml` carries the current running volume,
-    /// so AutoStop only does the SAV comparison without re-integrating.
-    /// Returns [`StopReason::Volume`] the first time `dispensed_ml`
-    /// reaches the SAV target.
+    /// orchestrator) — `pour_ml` carries the running **pour** volume
+    /// ([`VolumeIntegrator::pour_ml`](crate::VolumeIntegrator::pour_ml),
+    /// preinfusion excluded per [`sav_counts_volume`]), so AutoStop only does
+    /// the SAV comparison without re-integrating. Returns
+    /// [`StopReason::Volume`] the first time `pour_ml` reaches the SAV target.
     pub fn on_sample(
         &mut self,
         _sample: &ShotSample,
         now: Duration,
-        dispensed_ml: f32,
+        pour_ml: f32,
     ) -> Option<StopReason> {
         if self.triggered {
             return None;
@@ -318,7 +338,7 @@ impl AutoStop {
         if !self.is_armed(now) {
             return None;
         }
-        if dispensed_ml >= target {
+        if pour_ml >= target {
             self.triggered = true;
             return Some(StopReason::Volume);
         }
@@ -614,5 +634,44 @@ mod tests {
         assert!(volume_stop_arms(true, true, true));
         // Scale WITHOUT a weight target keeps volume armed (review #29).
         assert!(volume_stop_arms(true, false, false));
+    }
+
+    #[test]
+    fn sav_counts_espresso_pour_only() {
+        // de1app: preinfusion substate -> preinfusion_volume, pouring ->
+        // pour_volume; SAV compares pour_volume.
+        assert!(!sav_counts_volume(
+            MachineState::Espresso,
+            SubState::Preinfusion
+        ));
+        assert!(sav_counts_volume(MachineState::Espresso, SubState::Pouring));
+        // Pre-flow and ending substates count toward neither.
+        for sub in [
+            SubState::Heating,
+            SubState::FinalHeating,
+            SubState::Stabilising,
+            SubState::Ending,
+        ] {
+            assert!(!sav_counts_volume(MachineState::Espresso, sub), "{sub:?}");
+        }
+        // Outside Espresso (hot water) every sample counts.
+        assert!(sav_counts_volume(MachineState::HotWater, SubState::Pouring));
+    }
+
+    #[test]
+    fn sav_compares_the_pour_volume_it_is_given() {
+        let targets = StopTargets {
+            weight: None,
+            volume: Some(36.0),
+            max_time: None,
+        };
+        let mut stop = AutoStop::new(targets, immediate_config(), Duration::ZERO);
+        let s = sample_with_flow(4.0);
+        // 50 ml dispensed in total, but only 20 ml of it pour: no stop.
+        assert_eq!(stop.on_sample(&s, ms(1_000), 20.0), None);
+        assert_eq!(
+            stop.on_sample(&s, ms(2_000), 36.0),
+            Some(StopReason::Volume)
+        );
     }
 }

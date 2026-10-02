@@ -33,5 +33,12 @@ uuid = { version = "1", features = ["v7"] }
 name = "gen-builtin-ids"
 path = "src/bin/gen_builtin_ids.rs"
 
+[[bin]]
+# Regenerates `profiles/builtin.json` from de1app's `*.tcl` profiles via
+# `import_legacy_tcl`, preserving every built-in's ID (matched by title).
+# See `profiles/README.md`.
+name = "gen-builtin-profiles"
+path = "src/bin/gen_builtin_profiles.rs"
+
 [lints]
 workspace = true

@@ -82,6 +82,7 @@ pub mod settings_import;
 pub mod shot;
 pub mod shot_quality;
 pub mod steam;
+pub mod step_weight;
 pub mod stop;
 pub mod tank;
 pub mod units;
@@ -189,9 +190,10 @@ pub use steam::{
     MAX_STEAM_SAMPLES, STEAM_ECO_DELAY, SteamClogReason, SteamEvent, SteamMonitor, SteamRecord,
     SteamSample,
 };
+pub use step_weight::{SKIP_RETRY_AFTER, SKIP_RETRY_MAX, StepWeightExit};
 pub use stop::{
     AutoStop, STOP_WEIGHT_BEFORE, StopCapture, StopConfig, StopReason, StopTargets,
-    volume_stop_arms,
+    sav_counts_volume, volume_stop_arms,
 };
 pub use tank::{
     DEFAULT_REFILL_POINT_MM, SENSOR_OFFSET_MM, TANK_FULL_ML, TANK_MM_TO_ML, water_tank_depth_mm,

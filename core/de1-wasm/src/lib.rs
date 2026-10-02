@@ -1905,19 +1905,22 @@ impl CremaBridge {
         Ok(())
     }
 
-    /// Tell the core the active profile's beverage type (lowercase wire
-    /// spelling — `"espresso"`, `"cleaning"`, …) so `Event::ShotCompleted`
-    /// carries the right disposition (`SkipCleaning` for a cleaning run).
-    /// Lenient: unknown values read as espresso, matching the domain's
-    /// import posture for this metadata field. Also latched automatically
-    /// by every completed profile upload — call this on activations that
-    /// skip the upload (restore at startup, already-loaded cache hit).
-    #[wasm_bindgen(js_name = setActiveBeverageType)]
-    pub fn set_active_beverage_type(&mut self, beverage_type: &str) {
-        self.core
-            .set_active_beverage_type(de1_domain::BeverageType::from_str_lenient(
-                &beverage_type.to_lowercase(),
-            ));
+    /// Tell the core which profile is active (`profile_json` = the wire
+    /// `Profile` JSON, the same shape `upload_profile` takes; `undefined` =
+    /// no active profile). Latches the beverage type (the `SkipCleaning`
+    /// disposition) and the per-step weight exits, so they follow the
+    /// active profile even when the upload is skipped (restore at startup,
+    /// fingerprint-cache hit). Call on every activation and on an edit of
+    /// the active profile. Also latched by every completed upload. Errors
+    /// (and changes nothing) on a JSON parse failure.
+    #[wasm_bindgen(js_name = setActiveProfile)]
+    pub fn set_active_profile(&mut self, profile_json: Option<String>) -> Result<(), String> {
+        let profile: Option<Profile> = profile_json
+            .map(|j| serde_json::from_str(&j))
+            .transpose()
+            .map_err(|e| format!("profile JSON parse failed: {e}"))?;
+        self.core.set_active_profile(profile.as_ref());
+        Ok(())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command fires a beep on the

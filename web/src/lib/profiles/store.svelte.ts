@@ -30,6 +30,7 @@ import { refreshStopTargetsProjection } from '$lib/state/ui-state.svelte';
 import { readJson, writeJson } from '$lib/utils/storage';
 import {
 	builtinCremaProfiles,
+	toCoreProfile,
 	type CremaProfile
 } from './model';
 
@@ -243,17 +244,25 @@ export class ProfileStore {
 			await core.setWeightTargetDisabled(true);
 			await core.setProfileTargetWeight(undefined);
 			await core.setProfileVolumeLimit(undefined);
-			await core.setActiveBeverageType('espresso');
+			await core.setActiveProfile(undefined);
 			await refreshStopTargetsProjection(core);
 			return;
 		}
 		const p = this.get(id);
 		if (!p) return;
-		// The beverage type drives the core's `ShotCompleted` disposition
-		// (a cleaning run must never be recorded as a shot). Pushed on every
-		// activation — not only on upload — because activation can skip the
-		// upload entirely (fingerprint-cache hit, restore at startup).
-		await core.setActiveBeverageType(p.beverageType);
+		// The core latches the beverage type (a cleaning run must never be
+		// recorded as a shot) and the per-step weight exits (issue 11) from
+		// the active profile. Pushed on every activation — not only on
+		// upload — because activation can skip the upload entirely: after a
+		// page reload the DE1 still holds the profile and `syncActiveProfile`
+		// / `ensureLoadedMatches` skip it on the fingerprint match.
+		// A profile the core can't convert must not block the stop targets
+		// below — fall back to "no active profile" (espresso, no exits).
+		try {
+			await core.setActiveProfile(JSON.stringify(toCoreProfile(p)));
+		} catch {
+			await core.setActiveProfile(undefined);
+		}
 		// The per-shot weight-target dot follows the profile's intent on
 		// load: a profile with `yieldOut > 0` engages the target (dot ON,
 		// `disabled = false`); a profile with `yieldOut === 0` disables it
