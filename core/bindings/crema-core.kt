@@ -201,6 +201,33 @@ data class Bean (
 	val updatedAt: Long
 )
 
+/// One local bag the push leg writes.
+@Serializable
+data class BeanPushItem (
+	/// The local bean id.
+	val localId: String,
+	/// `true` = never pushed (no `visualizer_id`) → `POST`; `false` = bound
+	/// and edited since the last sync → `PATCH`.
+	val create: Boolean
+)
+
+/// Which legs a bean / roaster sync runs, from the two direction settings
+/// (`"off" | "backup" | "pull" | "two-way"`): `backup` pushes only, `pull`
+/// pulls only (never writes remote), `two-way` does both, `off` (or anything
+/// unknown) neither. The Premium gate on writes is separate (a free account
+/// downshifts the push legs at run time).
+@Serializable
+data class BeanSyncScope (
+	/// Apply remote bags locally.
+	val pullBeans: Boolean,
+	/// Write local bags to Visualizer.
+	val pushBeans: Boolean,
+	/// Apply remote roasters locally.
+	val pullRoasters: Boolean,
+	/// Write local roasters to Visualizer.
+	val pushRoasters: Boolean
+)
+
 /// Summary metrics over a (filter/range-scoped) set of brews — the
 /// History stat strip once non-espresso rows exist. `None` = "no data"
 /// (render as "—").
@@ -2308,6 +2335,68 @@ data class Roaster (
 	val createdAt: Long,
 	/// Unix epoch ms.
 	val updatedAt: Long
+)
+
+/// What deleting a roaster does (web `RoasterDeleteSplit` + the store's
+/// `deleteRoaster` / `deleteRoasterAndBeans`). A **detach** keeps the linked
+/// bags and clears their roaster; a **cascade** deletes them too. The remote
+/// ids are what an "also delete on Visualizer" sends: every deleted bag's
+/// Visualizer id (bags first, then the roaster — the web order).
+@Serializable
+data class RoasterDeletePlan (
+	/// The roaster being deleted.
+	val roasterId: String,
+	/// Bags deleted with it (cascade only), in library order.
+	val deletedBeanIds: List<String>,
+	/// Bags kept but detached (`roaster_id` cleared) — detach only.
+	val detachedBeanIds: List<String>,
+	/// Visualizer ids of the deleted bags that were synced.
+	val remoteBeanIds: List<String>,
+	/// The roaster's own Visualizer id, if it was synced.
+	val remoteRoasterId: String? = null
+)
+
+/// A probable duplicate pair in the roaster directory: `dupe_id` looks like
+/// `canonical_id` (same normalised name).
+@Serializable
+data class RoasterDuplicate (
+	/// The row to keep — the most recently updated of the group.
+	val canonicalId: String,
+	/// The row to fold into it.
+	val dupeId: String
+)
+
+/// A bound roaster whose remote row lacks the catalogue link Crema knows.
+@Serializable
+data class RoasterLinkPatch (
+	/// The local roaster id.
+	val localId: String,
+	/// The catalogue roaster id to send (`canonical_roaster_id`).
+	val catalogueRoasterId: String
+)
+
+/// What merging `dupe_id` into `canonical_id` does: re-point `bean_ids` at
+/// the canonical roaster, then tag the dupe (`canonical_roaster_id =
+/// canonical_id`). The dupe row is kept, so the merge can be undone by
+/// clearing that pointer (un-merge); the bags stay on the canonical roaster.
+@Serializable
+data class RoasterMergePlan (
+	/// The roaster that keeps the bags.
+	val canonicalId: String,
+	/// The roaster tagged as a duplicate.
+	val dupeId: String,
+	/// The bags filed under the dupe, in library order.
+	val beanIds: List<String>
+)
+
+/// One local roaster the push leg writes.
+@Serializable
+data class RoasterPushItem (
+	/// The local roaster id.
+	val localId: String,
+	/// `true` = never pushed → `POST`; `false` = bound and edited since the
+	/// last sync → `PATCH`.
+	val create: Boolean
 )
 
 /// What a connected scale can do, beyond reporting a bare weight.

@@ -1607,8 +1607,13 @@ class LibraryController(
         notify("Loaded “${profile.name}” — linked to ${bean.name}")
     }
 
-    /** Remove a bean bag; reselect the first remaining if it was active. Persisted. */
-    fun deleteBean(id: String) {
+    /**
+     * Remove a bean bag; reselect the first remaining if it was active.
+     * [alsoOnVisualizer] then deletes its Visualizer copy (best-effort; the id
+     * is captured before the local row goes). Persisted.
+     */
+    fun deleteBean(id: String, alsoOnVisualizer: Boolean = false) {
+        val doomed = uiState().beans.firstOrNull { it.id == id }
         val remaining = uiState().beans.filterNot { it.id == id }
         val wasActive = uiState().activeBeanId == id
         updateUi { it.copy(
@@ -1617,6 +1622,24 @@ class LibraryController(
         ) }
         // Drop the bag's photo too, so a deleted bean leaves no orphan blob.
         scope.launch(Dispatchers.IO) { BeanImageStore.delete(app, id) }
+        persistLibrary()
+        if (alsoOnVisualizer) doomed?.visualizerId?.let { visualizer.deleteRemote(listOf(it), label = doomed.name) }
+    }
+
+    /**
+     * Merge a finished Visualizer bean sync back into the library
+     * ([coffee.crema.visualizer.mergeSyncedRows]): touched rows replace their
+     * current versions, pulled additions are prepended, rows deleted mid-run
+     * stay deleted. Persisted.
+     */
+    fun applyBeanSync(result: coffee.crema.visualizer.BeanSyncResult, snapshotBeanIds: Set<String>, snapshotRoasterIds: Set<String>) {
+        if (result.beans.isEmpty() && result.roasters.isEmpty()) return
+        updateUi { st ->
+            st.copy(
+                beans = coffee.crema.visualizer.mergeSyncedRows(st.beans, result.beans, snapshotBeanIds) { it.id },
+                roasters = coffee.crema.visualizer.mergeSyncedRows(st.roasters, result.roasters, snapshotRoasterIds) { it.id },
+            )
+        }
         persistLibrary()
     }
 
@@ -1709,13 +1732,68 @@ class LibraryController(
         persistLibrary()
     }
 
-    /** Delete a roaster; detach its bags (clear their `roasterId`). Persisted. */
-    fun deleteRoaster(id: String) {
-        updateUi { s ->
-            s.copy(
-                roasters = s.roasters.filterNot { it.id == id },
-                beans = s.beans.map { if (it.roasterId == id) it.copy(roasterId = null) else it },
+    /**
+     * Delete a roaster (web `RoasterDeleteSplit`): [cascade] = false detaches its
+     * bags (roaster cleared), true deletes them too. The core's
+     * `plan_roaster_delete` decides which bags go and the Visualizer ids;
+     * [alsoOnVisualizer] then deletes those remote copies (bags first, then the
+     * roaster). Persisted.
+     */
+    fun deleteRoaster(id: String, alsoOnVisualizer: Boolean = false, cascade: Boolean = false) {
+        val s = uiState()
+        val plan = runCatching {
+            coffee.crema.beans.planRoasterDelete(json, s.roasters, s.beans, id, cascade)
+        }.getOrNull() ?: return
+        val name = s.roasters.firstOrNull { it.id == id }?.name.orEmpty()
+        val after = coffee.crema.beans.applyRoasterDelete(
+            BeanLibrary(s.beans, s.roasters, s.activeBeanId), plan, System.currentTimeMillis(),
+        )
+        val activeGone = s.activeBeanId != null && after.activeBeanId == null
+        updateUi { st ->
+            st.copy(
+                roasters = after.roasters,
+                beans = after.beans,
+                activeBeanId = if (activeGone) after.beans.firstOrNull()?.id else st.activeBeanId,
             )
+        }
+        // Cascaded bags leave no orphan photos.
+        if (plan.deletedBeanIds.isNotEmpty()) {
+            scope.launch(Dispatchers.IO) { plan.deletedBeanIds.forEach { BeanImageStore.delete(app, it) } }
+        }
+        persistLibrary()
+        if (alsoOnVisualizer) visualizer.deleteRemote(plan.remoteBeanIds, plan.remoteRoasterId, label = name)
+    }
+
+    /**
+     * Merge roaster [dupeId] into [canonicalId] (web Roasters tab): the core's
+     * `plan_roaster_merge` lists the dupe's bags, which move to the canonical
+     * roaster; the dupe is kept but tagged (`canonicalRoasterId`), so it hides
+     * from the directory and can be un-merged. The moved bags are stamped, so
+     * the next Visualizer sync PATCHes their new roaster. Persisted.
+     */
+    fun mergeRoaster(canonicalId: String, dupeId: String) {
+        val s = uiState()
+        val plan = runCatching {
+            coffee.crema.beans.planRoasterMerge(json, s.roasters, s.beans, canonicalId, dupeId)
+        }.getOrNull() ?: return
+        val moving = plan.beanIds.toSet()
+        val now = System.currentTimeMillis()
+        updateUi { st ->
+            st.copy(
+                beans = st.beans.map { if (it.id in moving) it.copy(roasterId = plan.canonicalId, updatedAt = now) else it },
+                roasters = st.roasters.map { if (it.id == plan.dupeId) it.copy(canonicalRoasterId = plan.canonicalId, updatedAt = now) else it },
+            )
+        }
+        persistLibrary()
+        val names = s.roasters.associate { it.id to it.name }
+        notify("Merged “${names[dupeId]}” into “${names[canonicalId]}” — ${moving.size} bag(s) moved")
+    }
+
+    /** Un-merge a tagged duplicate: clear its duplicate-of pointer (its bags stay where they are). Persisted. */
+    fun unmergeRoaster(id: String) {
+        val now = System.currentTimeMillis()
+        updateUi { st ->
+            st.copy(roasters = st.roasters.map { if (it.id == id) it.copy(canonicalRoasterId = null, updatedAt = now) else it })
         }
         persistLibrary()
     }

@@ -67,7 +67,10 @@ fun BeanDetailSheet(
     onSetActive: () -> Unit,
     onToggleFavourite: () -> Unit,
     onToggleArchived: () -> Unit,
-    onDelete: () -> Unit,
+    /** Delete the bag; the flag = also delete its Visualizer copy. */
+    onDelete: (alsoOnVisualizer: Boolean) -> Unit,
+    /** Whether the delete confirm offers "Also delete on Visualizer". */
+    remoteDeleteAvailable: Boolean = false,
     /** Open one of this bag's shots in History; null = rows not tappable. */
     onOpenShot: ((String) -> Unit)? = null,
     /** Open History filtered to this bag ("See all N shots"); null = hidden. */
@@ -194,13 +197,12 @@ fun BeanDetailSheet(
     }
 
     if (confirmDelete) {
-        CremaConfirmDialog(
+        coffee.crema.ui.components.DeleteWithVisualizerDialog(
             title = "Delete bean?",
             body = "“${bean.name}” will be removed. This can’t be undone.",
-            confirmLabel = "Delete",
-            icon = "trash",
-            danger = true,
-            onConfirm = { confirmDelete = false; onDelete(); onDismiss() },
+            what = "bag",
+            remoteAvailable = remoteDeleteAvailable,
+            onConfirm = { remote -> confirmDelete = false; onDelete(remote); onDismiss() },
             onDismiss = { confirmDelete = false },
         )
     }

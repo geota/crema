@@ -46,11 +46,11 @@ import kotlinx.serialization.json.jsonObject
  * intents. Everything here is self-contained over [VisualizerStore] +
  * [VisualizerClient].
  *
- * v1 scope = push ("backup" direction): sign in (PKCE via the system
- * browser), `/me` account, per-shot + bulk upload with the same wire bytes
- * as the web (core `export_v2_json_shot` over the FFI + the
- * `metadata.crema{localId, signature}` escape valve). Pull/reconcile and
- * bean/roaster sync stay web-only for now (documented backlog).
+ * Scope: sign in (PKCE via the system browser), `/me` account, per-shot +
+ * bulk upload with the same wire bytes as the web (core `export_v2_json_shot`
+ * over the FFI + the `metadata.crema{localId, signature}` escape valve), shot
+ * pull/reconcile, and the bean / roaster sync ([BeanSyncRunner], the web
+ * `BeanSync.runSync`) run first by "Sync now", as on the web.
  */
 class VisualizerSync(
     private val store: VisualizerStore,
@@ -92,6 +92,19 @@ class VisualizerSync(
     /** The OAuth code → token exchange (injected so JVM tests can drive a sign-in). */
     private val exchangeCode: suspend (code: String, verifier: String) -> TokenSet =
         { code, verifier -> exchangeCodeForToken(clientId, code, verifier, json) },
+    /** The refresh-token grant (injected so JVM tests can drive the 401 → refresh → retry). */
+    private val refreshTokens: suspend (refreshToken: String) -> TokenSet =
+        { refresh -> refreshAccessToken(clientId, refresh, json) },
+    /** The bean library as it stands now — the bean sync's starting snapshot. */
+    private val beanLibrary: () -> coffee.crema.beans.BeanLibrary = { coffee.crema.beans.BeanLibrary() },
+    /**
+     * Merge a finished bean sync back into the library: the rows it touched
+     * ([BeanSyncResult.beans] / [BeanSyncResult.roasters]) and the ids the run
+     * started from (see [mergeSyncedRows]).
+     */
+    private val onBeansSynced: (result: BeanSyncResult, snapshotBeanIds: Set<String>, snapshotRoasterIds: Set<String>) -> Unit = { _, _, _ -> },
+    /** The core's bean-sync surface (injected so JVM tests needn't load the native core). */
+    private val beanSyncCore: BeanSyncCore = BeanSyncCore.Native,
 ) : UploadDestination {
 
     internal companion object {
@@ -115,6 +128,13 @@ class VisualizerSync(
         val lastShotSyncAt: Long? = null,
         /** Shots sync direction: `"off" | "backup" | "pull" | "two-way"`. */
         val shotsDirection: String = "backup",
+        /** Beans / roasters sync directions (same four values; the push side needs Premium). */
+        val beansDirection: String = "two-way",
+        val roastersDirection: String = "two-way",
+        /** Cached Premium tier: false = free (bag / roaster writes locked), null = not probed. */
+        val premium: Boolean? = null,
+        /** Unix ms of the last completed bean / roaster sync, or null. */
+        val beanLastSyncAt: Long? = null,
         /** Recent sync activity (capped 20, newest first). */
         val log: List<SyncLogEntry> = emptyList(),
         /** True while a sign-in exchange or bulk upload runs. */
@@ -191,6 +211,10 @@ class VisualizerSync(
                 includeNotes = p.prefs.includeNotes,
                 lastShotSyncAt = p.lastShotSyncAt,
                 shotsDirection = p.prefs.shotsDirection,
+                beansDirection = p.prefs.beansDirection,
+                roastersDirection = p.prefs.roastersDirection,
+                premium = p.premium,
+                beanLastSyncAt = p.beanLastSyncAt,
                 log = p.log,
             )
         }
@@ -352,6 +376,21 @@ class VisualizerSync(
 
     fun setAutoSync(enabled: Boolean) = scope.launch { setAutoUploadNow(enabled) }
     fun setShotsDirection(direction: String) = scope.launch { persist { it.copy(prefs = it.prefs.copy(shotsDirection = direction)) } }
+
+    /**
+     * Beans / roasters direction. On a free account (cached `premium == false`)
+     * the pushing modes are refused — the web greys them out the same way;
+     * Off / Pull stay pickable.
+     */
+    fun setBeansDirection(direction: String) {
+        if (persisted.premium == false && directionPushes(direction)) return
+        scope.launch { persist { it.copy(prefs = it.prefs.copy(beansDirection = direction)) } }
+    }
+
+    fun setRoastersDirection(direction: String) {
+        if (persisted.premium == false && directionPushes(direction)) return
+        scope.launch { persist { it.copy(prefs = it.prefs.copy(roastersDirection = direction)) } }
+    }
     fun setPrivacy(privacy: String) = scope.launch { persist { it.copy(prefs = it.prefs.copy(privacy = privacy)) } }
     fun setIncludeProfile(enabled: Boolean) = scope.launch { persist { it.copy(prefs = it.prefs.copy(includeProfile = enabled)) } }
     fun setIncludeNotes(enabled: Boolean) = scope.launch { persist { it.copy(prefs = it.prefs.copy(includeNotes = enabled)) } }
@@ -403,7 +442,7 @@ class VisualizerSync(
             persist { it.copy(tokens = null) }
             return null
         }
-        return runCatchingCancellable { refreshAccessToken(clientId, refresh, json) }
+        return runCatchingCancellable { refreshTokens(refresh) }
             .onSuccess { fresh -> persist { it.copy(tokens = fresh) } }
             .getOrElse {
                 persist { it.copy(tokens = null) }
@@ -777,26 +816,117 @@ class VisualizerSync(
         return pulled
     }
 
+    // ── Bean / roaster sync (web BeanSync.runSync) ────────────────────────────
+
+    /** True while a bean / roaster run is in flight (one at a time). */
+    private val beanSyncMutex = Mutex()
+
     /**
-     * "Sync now": pull-then-push per the shots direction (web BeanSyncSection
-     * order). The pull cursor advances ONLY on a successful pull — never on a
-     * push. Soft per-step: a failure logs + notifies, the other step still runs.
+     * One bean / roaster sync over the current library: [BeanSyncRunner] with
+     * every request on the token-refreshing client, then the touched rows merged
+     * back ([onBeansSynced]), the Premium flag + sync time cached, and the run's
+     * first ten activity lines mirrored into the shared sync log (the web
+     * `BeanSyncSection` does the same). Returns null when another run holds the lock.
      */
-    fun syncNow(shots: List<StoredShot>) {
+    internal suspend fun runBeanSync(): BeanSyncResult? {
+        if (!beanSyncMutex.tryLock()) return null
+        try {
+            if (persisted.tokens == null) return BeanSyncResult(error = "Sign in to Visualizer first.")
+            val snapshot = beanLibrary()
+            val runner = BeanSyncRunner(
+                core = beanSyncCore,
+                json = json,
+                call = { method, path, body -> withFreshToken { client.request(method, path, it, body) } },
+                now = now,
+            )
+            val result = runner.run(
+                snapshot.beans,
+                snapshot.roasters,
+                BeanSyncSettings(
+                    lastSyncAt = persisted.beanLastSyncAt,
+                    premium = persisted.premium,
+                    beansDirection = persisted.prefs.beansDirection,
+                    roastersDirection = persisted.prefs.roastersDirection,
+                ),
+            )
+            onBeansSynced(result, snapshot.beans.mapTo(HashSet()) { it.id }, snapshot.roasters.mapTo(HashSet()) { it.id })
+            val failure = result.error?.takeIf { !result.ok }?.let {
+                SyncLogEntry(direction = "pull", entity = "bean", id = "", name = "Bean sync", at = now(), error = it)
+            }
+            persist { st ->
+                st.copy(
+                    premium = result.premium,
+                    beanLastSyncAt = result.lastSyncAt ?: st.beanLastSyncAt,
+                    log = (listOfNotNull(failure) + result.log.take(10) + st.log).take(20),
+                )
+            }
+            return result
+        } finally {
+            beanSyncMutex.unlock()
+        }
+    }
+
+    /**
+     * Best-effort Visualizer DELETEs after a local delete the user asked to
+     * mirror ("Also delete on Visualizer"), bags before their roaster (web
+     * `bestEffortRemoteDelete`). Skipped on a free account (the endpoints are
+     * Premium-only) or when signed out; a 404 counts as already gone; failures
+     * only log — the local delete already happened.
+     */
+    fun deleteRemote(beanVisualizerIds: List<String>, roasterVisualizerId: String? = null, label: String = "") {
+        if (persisted.premium == false || persisted.tokens == null) return
+        if (beanVisualizerIds.isEmpty() && roasterVisualizerId == null) return
+        scope.launch {
+            val targets = beanVisualizerIds.map { "bean" to "/coffee_bags/$it" } +
+                listOfNotNull(roasterVisualizerId?.let { "roaster" to "/roasters/$it" })
+            for ((entity, path) in targets) {
+                val id = path.substringAfterLast('/')
+                val err = runCatchingCancellable { withFreshToken { client.request("DELETE", path, it) } }
+                    .fold(onSuccess = { null }, onFailure = { e -> if (e is VisualizerError.NotFound) null else (e.message ?: "delete failed") })
+                val entry = SyncLogEntry(direction = "delete", entity = entity, id = id, name = label.ifBlank { entity }, at = now(), error = err)
+                persist { it.copy(log = (listOf(entry) + it.log).take(20)) }
+            }
+        }
+    }
+
+    /**
+     * "Sync now" (web BeanSyncSection order): beans + roasters first when
+     * either direction is on (one bidirectional run, as on the web), then the
+     * shot pull and push per the shots direction. The shot pull cursor
+     * advances ONLY on a successful pull — never on a push. Soft per-step: a
+     * failure logs + notifies, the other steps still run.
+     */
+    fun syncNow(shots: List<StoredShot>, includeBeans: Boolean = true) {
         if (persisted.tokens == null) {
             notify("Sign in to Visualizer first (Settings → Sharing)")
             return
         }
         val direction = persisted.prefs.shotsDirection
-        if (direction == "off") {
-            notify("Shot sync is off — pick a direction first")
+        val beansOn = includeBeans &&
+            (persisted.prefs.beansDirection != "off" || persisted.prefs.roastersDirection != "off")
+        if (direction == "off" && !beansOn) {
+            notify("Sync is off — pick a direction first")
             return
         }
         _state.update { it.copy(syncing = true) }
         scope.launch {
+            val parts = mutableListOf<String>()
+            var failed = false
+            if (beansOn) {
+                runCatchingCancellable { runBeanSync() }
+                    .onSuccess { r ->
+                        if (r != null) {
+                            parts += "beans ${r.pulled} pulled · ${r.pushed} pushed" + if (r.premiumLocked) " (read-only, free tier)" else ""
+                            if (!r.ok) failed = true
+                        }
+                    }
+                    .onFailure { e ->
+                        failed = true
+                        logBeanFailure(e.message)
+                    }
+            }
             var pulled = 0
             var pushed = 0
-            var failed = false
             if (directionPulls(direction)) {
                 runCatchingCancellable {
                     val since = persisted.shotPullCursor ?: 0L
@@ -820,18 +950,29 @@ class VisualizerSync(
                 if (r.failed > 0) failed = true
                 stop = r.stop
             }
+            if (direction != "off") {
+                parts += buildString {
+                    append("shots ")
+                    if (directionPulls(direction)) append("$pulled pulled")
+                    if (directionPulls(direction) && directionPushes(direction)) append(" · ")
+                    if (directionPushes(direction)) append("$pushed pushed")
+                }
+            }
             _state.update { it.copy(syncing = false) }
             notify(
                 buildString {
                     append("Visualizer sync: ")
-                    if (directionPulls(direction)) append("$pulled pulled")
-                    if (directionPulls(direction) && directionPushes(direction)) append(" · ")
-                    if (directionPushes(direction)) append("$pushed pushed")
+                    append(parts.joinToString(" · "))
                     if (stop != null) append(" · ${stop.notice}")
                     else if (failed) append(" · some steps failed (see log)")
                 },
             )
         }
+    }
+
+    private suspend fun logBeanFailure(error: String?) {
+        val entry = SyncLogEntry(direction = "pull", entity = "bean", id = "", name = "Bean sync", at = now(), error = error ?: "failed")
+        persist { it.copy(log = (listOf(entry) + it.log).take(20)) }
     }
 
     /**
@@ -842,7 +983,8 @@ class VisualizerSync(
     fun resyncAllShots(shots: List<StoredShot>) {
         scope.launch {
             persist { it.copy(shotPullCursor = null) }
-            syncNow(shots)
+            // Shots only — the web's "Re-sync shots" never touches beans.
+            syncNow(shots, includeBeans = false)
         }
     }
 

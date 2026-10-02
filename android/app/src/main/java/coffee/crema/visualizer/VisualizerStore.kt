@@ -52,6 +52,14 @@ data class SyncLogEntry(
     val error: String? = null,
 )
 
+/** The activity log's entity tag (web ActivityLog `entityLabel`). */
+val SyncLogEntry.entityLabel: String
+    get() = when (entity) {
+        "bean" -> "Bag"
+        "roaster" -> "Roaster"
+        else -> "Shot"
+    }
+
 /** Everything Visualizer-related the shell persists. */
 @Serializable
 data class VisualizerState(
@@ -83,6 +91,12 @@ data class VisualizerState(
     val prefs: VisualizerSyncPrefs = DEFAULT_VISUALIZER_SYNC_PREFS,
     /** Unix ms of the last successful shot push, or null. */
     val lastShotSyncAt: Long? = null,
+    /**
+     * Unix ms of the last completed bean / roaster sync (web bean-sync
+     * `lastSyncAt`), or null = never. Bound bags edited after it are PATCHed
+     * by the next run.
+     */
+    val beanLastSyncAt: Long? = null,
     /**
      * Incremental pull cursor (unix ms); null pulls everything. Advanced ONLY
      * by a successful pull — never by a push (the web learned this the hard

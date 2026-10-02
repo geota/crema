@@ -44,6 +44,7 @@
 		type Bean,
 		type Roaster, activateBean } from '$lib/bean';
 	import { searchBeans, searchRoasters } from '$lib/bean/search';
+	import { detectRoasterDuplicates, planRoasterMerge } from '$lib/bean/roaster-duplicates';
 	import BeanTile from '$lib/components/beans/BeanTile.svelte';
 	import RoasterCard from '$lib/components/beans/RoasterCard.svelte';
 	import BeanDrawer from '$lib/components/beans/BeanDrawer.svelte';
@@ -520,39 +521,27 @@
 			: rows;
 	});
 
-	// Detect probable duplicates by normalized roaster name (case-insensitive,
-	// stripped of common stopwords). Two-pass:
+	// Detect probable duplicates by normalized roaster name (trimmed,
+	// case-insensitive) — the rule lives in the core
+	// (`de1_domain::detect_roaster_duplicates`, shared with Android):
 	//   (a) "wired" dupes — rows whose `canonicalRoasterId` already points
 	//       at another row. Surfaced as a "duplicate of X" badge inline on
 	//       the card; not surfaced in the merge banner since the user has
 	//       already merged them.
 	//   (b) "candidate" dupes — rows that share a normalised name with
 	//       another row and have NOT been wired yet. These drive the
-	//       merge banner; pick the **most-recently-updated** as canonical
+	//       merge banner; the **most-recently-updated** row is canonical
 	//       (per spec) so a fresh edit wins.
 	const dupes = $derived.by(() => {
-		const norm = (s: string) => s.toLowerCase().trim();
-		const buckets = new Map<string, typeof allRoasters>();
-		for (const r of allRoasters) {
-			// Already-merged rows are tracked separately; skip them here so
-			// the banner only ever surfaces fresh candidates.
-			if (r.canonicalRoasterId) continue;
-			const key = norm(r.name);
-			if (!key) continue;
-			const arr = buckets.get(key) ?? [];
-			arr.push(r);
-			buckets.set(key, arr);
-		}
+		const byId = new Map(allRoasters.map((r) => [r.id, r]));
 		const result: {
 			canonical: (typeof allRoasters)[number];
 			dupe: (typeof allRoasters)[number];
 		}[] = [];
-		for (const arr of buckets.values()) {
-			if (arr.length < 2) continue;
-			// Canonical = most-recently-updated row (spec §6).
-			const sorted = [...arr].sort((a, b) => b.updatedAt - a.updatedAt);
-			const [canonical, ...rest] = sorted;
-			for (const dupe of rest) result.push({ canonical, dupe });
+		for (const d of detectRoasterDuplicates(allRoasters)) {
+			const canonical = byId.get(d.canonicalId);
+			const dupe = byId.get(d.dupeId);
+			if (canonical && dupe) result.push({ canonical, dupe });
 		}
 		return result;
 	});
@@ -693,7 +682,10 @@
 		canonical: (typeof allRoasters)[number],
 		dupe: (typeof allRoasters)[number]
 	): Promise<void> {
-		const moveCount = allBeans.filter((b) => b.roasterId === dupe.id).length;
+		// The bookkeeping (which bags move) is the core's `plan_roaster_merge`.
+		const plan = planRoasterMerge(allRoasters, allBeans, canonical.id, dupe.id);
+		if (!plan) return;
+		const moveCount = plan.beanIds.length;
 		if (
 			!(await confirmDialog({
 				message: `Move ${moveCount} bag(s) from "${dupe.name}" to "${canonical.name}" and tag "${dupe.name}" as a duplicate of "${canonical.name}"?`,
@@ -701,10 +693,8 @@
 			}))
 		)
 			return;
-		for (const b of allBeans) {
-			if (b.roasterId === dupe.id) {
-				library.updateBean(b.id, { roasterId: canonical.id });
-			}
+		for (const id of plan.beanIds) {
+			library.updateBean(id, { roasterId: canonical.id });
 		}
 		// Tag rather than delete — keeps Visualizer's `canonical_roaster_id`
 		// pointer alive and lets the user un-merge later.

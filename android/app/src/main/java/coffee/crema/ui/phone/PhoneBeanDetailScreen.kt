@@ -148,13 +148,12 @@ fun PhoneBeanDetailScreen(
     }
 
     if (confirmDelete) {
-        CremaConfirmDialog(
+        coffee.crema.ui.components.DeleteWithVisualizerDialog(
             title = "Delete bag?",
             body = "“${bean.name}” will be removed from your library. This can’t be undone.",
-            confirmLabel = "Delete",
-            icon = "trash",
-            danger = true,
-            onConfirm = { confirmDelete = false; vm.deleteBean(bean.id); onBack() },
+            what = "bag",
+            remoteAvailable = vm.canDeleteOnVisualizer(bean.visualizerId),
+            onConfirm = { remote -> confirmDelete = false; vm.deleteBean(bean.id, remote); onBack() },
             onDismiss = { confirmDelete = false },
         )
     }

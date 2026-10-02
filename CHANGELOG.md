@@ -68,6 +68,19 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Android syncs beans and roasters with Visualizer** — Settings → Sharing →
+  Sync gains Beans and Roasters direction rows, and **Sync now** runs the bean
+  and roaster sync before the shots, as on the web: it pulls your Visualizer
+  coffee bags and roasters into the library (Visualizer wins when both sides
+  changed) and pushes new and edited ones back, with their catalogue links.
+  Pushing needs Visualizer Premium; on a free account the sync only pulls and
+  says so. Deleting a bag or roaster can also delete its Visualizer copy,
+  and deleting a roaster can take its bags with it (as on the web).
+- **Roaster duplicate merge on Android** — the Roasters tab suggests merging
+  roasters with the same name ("Sey looks like SEY"). Merging moves the bags
+  and tags the duplicate, which **Show dupes** brings back for an
+  **Un-merge**. Web and Android now share one implementation of the
+  duplicate detection, the merge and the bean-sync write bodies, in the core.
 - **Adaptive v3 built-in profile** — de1app's update to Adaptive. It exits
   Pressurize at 7.7 bar (8.8 in v2) and limits extraction at 8.6 bar (9.5).
   Adaptive v2 stays available.
@@ -223,6 +236,20 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Bean and roaster sync now follows the direction you picked** — a
+  Beans or Roasters direction of **Pull** no longer writes to Visualizer on a
+  Premium account, and **Backup** no longer pulls; Off, Backup, Pull and
+  Two-way now each do exactly what they say. Web and Android.
+- **Syncing beans no longer pushes every bag back to Visualizer** — a bag or
+  roaster pulled from Visualizer kept a fresh "edited" time, so the next
+  sync on a Premium account sent all of them back. A pull now keeps the
+  bag's own edit time, so only bags and roasters you actually changed are
+  sent, and a change you made here since the last sync is no longer
+  overwritten by the Visualizer copy. Edited roasters are now sent too.
+  Pulling from Visualizer also no longer clears a bag's local details —
+  grams left, bag size, notes, origin, roast date, a roaster's website —
+  because Visualizer's bag and roaster lists only carry names and links, and
+  new bags and roasters now pick up their full details. Web and Android.
 - **Visualizer shows the first profile step** — the step markers Crema sends
   with each shot (`state_change`) counted frames from 0, and Visualizer reads 0
   as "no marker", so the step out of the first frame never showed. Markers now

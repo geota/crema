@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import coffee.crema.visualizer.entityLabel
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -855,6 +856,17 @@ private fun SharingSection(
             val lastSyncLabel = vz.lastShotSyncAt?.let {
                 coffee.crema.ui.relativeAgo(it)
             } ?: "never"
+            coffee.crema.ui.components.BeanSyncDirectionRows(
+                beanCount = ui.beans.size,
+                roasterCount = ui.roasters.size,
+                lastSyncLabel = vz.beanLastSyncAt?.let { coffee.crema.ui.relativeAgo(it) } ?: "never",
+                beansDirection = vz.beansDirection,
+                roastersDirection = vz.roastersDirection,
+                premium = vz.premium,
+                onBeansDirection = vm.visualizer::setBeansDirection,
+                onRoastersDirection = vm.visualizer::setRoastersDirection,
+                stacked = true,
+            )
             CremaSettingsRow("Shots", "${ui.history.size} shot(s)" + (if (unsyncedCount > 0) " · $unsyncedCount unsynced" else "") + ". Last sync: $lastSyncLabel.", stacked = true) {
                 CremaSegmentedButton(
                     options = listOf(SegOption("off", "Off"), SegOption("backup", "Push"), SegOption("pull", "Pull"), SegOption("two-way", "Both")),
@@ -871,18 +883,21 @@ private fun SharingSection(
             }
             CremaSettingsRow(
                 "Sync now",
-                if (unsyncedCount == 0) "All ${ui.history.size} local shots are on Visualizer." else "$unsyncedCount local shot(s) not uploaded yet.",
+                "Beans, roasters, then shots." + (if (unsyncedCount == 0) " All ${ui.history.size} local shots are on Visualizer." else " $unsyncedCount local shot(s) not uploaded yet."),
             ) {
                 CremaButton(
                     onClick = { vm.visualizer.syncNow(ui.history) },
                     variant = CremaButtonVariant.Outlined,
-                    icon = if (vz.shotsDirection == "pull") "cloud-arrow-down" else "cloud-arrow-up",
-                    enabled = vz.shotsDirection != "off" && !vz.busy && !vz.syncing,
+                    icon = "arrows-clockwise",
+                    enabled = (vz.shotsDirection != "off" || vz.beansDirection != "off" || vz.roastersDirection != "off") && !vz.busy && !vz.syncing,
                     label = if (vz.syncing) "Syncing…" else "Sync",
                 )
             }
-            CremaSettingsRow("Re-sync shots", "Re-pull everything from Visualizer, de-duplicated.", last = true) {
+            CremaSettingsRow("Re-sync shots", "Re-pull everything from Visualizer, de-duplicated.", last = vz.premium != false) {
                 CremaButton(onClick = onResync, variant = CremaButtonVariant.Outlined, icon = "clock-counter-clockwise", enabled = !vz.busy && !vz.syncing, label = "Re-sync")
+            }
+            if (vz.premium == false) {
+                coffee.crema.ui.components.PremiumPushNotice(onUpgrade = { openUrl("https://visualizer.coffee/premium") })
             }
         }
         SettingsGroup("Upload options") {
@@ -922,7 +937,7 @@ private fun SharingSection(
                         )
                         Column(Modifier.weight(1f)) {
                             Text(
-                                "${entry.destination.displayName} · ${entry.name}",
+                                "${entry.destination.displayName} · ${entry.entityLabel} · ${entry.name}",
                                 style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
                             entry.error?.let {

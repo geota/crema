@@ -141,10 +141,14 @@ fun PhoneBeansScreen(
     // Back from a roaster's shelf returns to the Roasters directory it came
     // from, rather than leaving the Beans screen.
     BackHandler(enabled = scopeId != null && tab == "bags") { beansState.closeShelf() }
-    val visibleRoasters = ui.roasters
+    val visibleRoasters = coffee.crema.beans.directoryRoasters(ui.roasters, beansState.showDuplicates)
         .filter { roasterHits.matches(it.id) }
         .sortedBy { it.name.lowercase() }
         .let { if (roasterHits.active) it.sortedByDescending { r -> roasterHits.score(r.id) } else it }
+    // Merge suggestions (core rule) — the Roasters tab's "X looks like Y" banners.
+    val duplicatePairs = remember(ui.roasters) { vm.roasterDuplicates(ui.roasters) }
+    val mergeSuggestions = coffee.crema.beans.mergeSuggestions(duplicatePairs, ui.roasters, ui.beans, beansState.dismissedDuplicates)
+    val hasTaggedDupes = ui.roasters.any { it.canonicalRoasterId != null }
 
     Scaffold(
         topBar = {
@@ -254,10 +258,30 @@ fun PhoneBeansScreen(
                         }
                     }
                 } else {
+                    if (hasTaggedDupes) {
+                        item(key = "show-dupes") {
+                            // Surfaces rows tagged as merged duplicates (web "Show dupes").
+                            CremaFilterChip(
+                                label = if (beansState.showDuplicates) "Hide dupes" else "Show dupes",
+                                selected = beansState.showDuplicates,
+                                icon = "link",
+                                onClick = { beansState.showDuplicates = !beansState.showDuplicates },
+                            )
+                        }
+                    }
+                    items(mergeSuggestions, key = { "merge:" + it.dupe.id }) { s ->
+                        coffee.crema.ui.components.RoasterMergeBanner(
+                            suggestion = s,
+                            onKeepSeparate = { beansState.dismissedDuplicates = beansState.dismissedDuplicates + s.dupe.id },
+                            onMerge = { vm.mergeRoaster(s.canonical.id, s.dupe.id) },
+                        )
+                    }
                     items(visibleRoasters, key = { it.id }) { roaster ->
                         PhoneRoasterRow(
                             roaster = roaster,
                             bagCountLabel = roasterBagCountLabel(ui.beans, roaster.id),
+                            duplicateOf = roaster.canonicalRoasterId?.let { id -> ui.roasters.firstOrNull { it.id == id }?.name ?: "a removed roaster" },
+                            onUnmerge = { vm.unmergeRoaster(roaster.id) },
                             onClick = { beansState.openShelf(roaster.id) },
                             onEdit = { vm.startEditRoaster(roaster.id); onNav("roaster-edit") },
                         )
@@ -312,13 +336,12 @@ fun PhoneBeansScreen(
     }
 
     confirmDelete?.let { b ->
-        CremaConfirmDialog(
+        coffee.crema.ui.components.DeleteWithVisualizerDialog(
             title = "Delete bag?",
             body = "“${b.name}” will be removed from your library. This can’t be undone.",
-            confirmLabel = "Delete",
-            icon = "trash",
-            danger = true,
-            onConfirm = { vm.deleteBean(b.id); confirmDelete = null },
+            what = "bag",
+            remoteAvailable = vm.canDeleteOnVisualizer(b.visualizerId),
+            onConfirm = { remote -> vm.deleteBean(b.id, remote); confirmDelete = null },
             onDismiss = { confirmDelete = null },
         )
     }
@@ -589,7 +612,14 @@ private fun NeutralPill(text: String) {
 // Tap → the roaster's shelf on the Bags tab, archived bags included (#86);
 // the trailing pencil edits.
 @Composable
-private fun PhoneRoasterRow(roaster: Roaster, bagCountLabel: String, onClick: () -> Unit, onEdit: () -> Unit) {
+private fun PhoneRoasterRow(
+    roaster: Roaster,
+    bagCountLabel: String,
+    duplicateOf: String?,
+    onUnmerge: () -> Unit,
+    onClick: () -> Unit,
+    onEdit: () -> Unit,
+) {
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(16.dp),
@@ -618,6 +648,9 @@ private fun PhoneRoasterRow(roaster: Roaster, bagCountLabel: String, onClick: ()
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
+                duplicateOf?.let { name ->
+                    coffee.crema.ui.components.DuplicateOfLabel(name, onUnmerge, Modifier.padding(top = 4.dp))
+                }
             }
             IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
                 PhIcon(

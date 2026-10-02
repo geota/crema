@@ -233,6 +233,35 @@ export interface Bean {
 	updatedAt: number;
 }
 
+/** One local bag the push leg writes. */
+export interface BeanPushItem {
+	/** The local bean id. */
+	localId: string;
+	/**
+	 * `true` = never pushed (no `visualizer_id`) → `POST`; `false` = bound
+	 * and edited since the last sync → `PATCH`.
+	 */
+	create: boolean;
+}
+
+/**
+ * Which legs a bean / roaster sync runs, from the two direction settings
+ * (`"off" | "backup" | "pull" | "two-way"`): `backup` pushes only, `pull`
+ * pulls only (never writes remote), `two-way` does both, `off` (or anything
+ * unknown) neither. The Premium gate on writes is separate (a free account
+ * downshifts the push legs at run time).
+ */
+export interface BeanSyncScope {
+	/** Apply remote bags locally. */
+	pullBeans: boolean;
+	/** Write local bags to Visualizer. */
+	pushBeans: boolean;
+	/** Apply remote roasters locally. */
+	pullRoasters: boolean;
+	/** Write local roasters to Visualizer. */
+	pushRoasters: boolean;
+}
+
 /**
  * Summary metrics over a (filter/range-scoped) set of brews — the
  * History stat strip once non-espresso rows exist. `None` = "no data"
@@ -2362,6 +2391,71 @@ export interface Roaster {
 	createdAt: number;
 	/** Unix epoch ms. */
 	updatedAt: number;
+}
+
+/**
+ * What deleting a roaster does (web `RoasterDeleteSplit` + the store's
+ * `deleteRoaster` / `deleteRoasterAndBeans`). A **detach** keeps the linked
+ * bags and clears their roaster; a **cascade** deletes them too. The remote
+ * ids are what an "also delete on Visualizer" sends: every deleted bag's
+ * Visualizer id (bags first, then the roaster — the web order).
+ */
+export interface RoasterDeletePlan {
+	/** The roaster being deleted. */
+	roasterId: string;
+	/** Bags deleted with it (cascade only), in library order. */
+	deletedBeanIds: string[];
+	/** Bags kept but detached (`roaster_id` cleared) — detach only. */
+	detachedBeanIds: string[];
+	/** Visualizer ids of the deleted bags that were synced. */
+	remoteBeanIds: string[];
+	/** The roaster's own Visualizer id, if it was synced. */
+	remoteRoasterId?: string;
+}
+
+/**
+ * A probable duplicate pair in the roaster directory: `dupe_id` looks like
+ * `canonical_id` (same normalised name).
+ */
+export interface RoasterDuplicate {
+	/** The row to keep — the most recently updated of the group. */
+	canonicalId: string;
+	/** The row to fold into it. */
+	dupeId: string;
+}
+
+/** A bound roaster whose remote row lacks the catalogue link Crema knows. */
+export interface RoasterLinkPatch {
+	/** The local roaster id. */
+	localId: string;
+	/** The catalogue roaster id to send (`canonical_roaster_id`). */
+	catalogueRoasterId: string;
+}
+
+/**
+ * What merging `dupe_id` into `canonical_id` does: re-point `bean_ids` at
+ * the canonical roaster, then tag the dupe (`canonical_roaster_id =
+ * canonical_id`). The dupe row is kept, so the merge can be undone by
+ * clearing that pointer (un-merge); the bags stay on the canonical roaster.
+ */
+export interface RoasterMergePlan {
+	/** The roaster that keeps the bags. */
+	canonicalId: string;
+	/** The roaster tagged as a duplicate. */
+	dupeId: string;
+	/** The bags filed under the dupe, in library order. */
+	beanIds: string[];
+}
+
+/** One local roaster the push leg writes. */
+export interface RoasterPushItem {
+	/** The local roaster id. */
+	localId: string;
+	/**
+	 * `true` = never pushed → `POST`; `false` = bound and edited since the
+	 * last sync → `PATCH`.
+	 */
+	create: boolean;
 }
 
 /**

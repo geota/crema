@@ -965,6 +965,155 @@ pub fn catalogue_autofill(
     de1_domain::catalogue_autofill_json(bean_json, entry_json, roaster_set, replace_all)
 }
 
+/// The `{"coffee_bag": {...}}` write body for a `Bean` JSON (catalogue link
+/// omitted when empty). See `de1_domain::coffee_bag_write_request`.
+///
+/// # Errors
+/// The JSON error string when `bean_json` can't be deserialised.
+#[wasm_bindgen(js_name = coffeeBagWriteRequest)]
+pub fn coffee_bag_write_request(
+    bean_json: &str,
+    roaster_remote_id: Option<String>,
+) -> Result<String, String> {
+    de1_domain::coffee_bag_write_request_json(bean_json, roaster_remote_id.as_deref())
+}
+
+/// The `{"roaster": {...}}` write body for a `Roaster` JSON (catalogue link
+/// omitted when empty; the local duplicate pointer never sent). See
+/// `de1_domain::roaster_write_request`.
+///
+/// # Errors
+/// The JSON error string when `roaster_json` can't be deserialised.
+#[wasm_bindgen(js_name = roasterWriteRequest)]
+pub fn roaster_write_request(roaster_json: &str) -> Result<String, String> {
+    de1_domain::roaster_write_request_json(roaster_json)
+}
+
+/// A roaster's catalogue link for a write. `payload` is
+/// `{"roaster": Roaster, "beans": Bean[]}`. See
+/// `de1_domain::resolve_roaster_catalogue_link`.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+#[wasm_bindgen(js_name = resolveRoasterCatalogueLink)]
+pub fn resolve_roaster_catalogue_link(payload: &str) -> Result<Option<String>, String> {
+    de1_domain::resolve_roaster_catalogue_link_json(payload)
+}
+
+/// Fold a reconciled remote roaster into the local row. See
+/// `de1_domain::merge_pulled_roaster`.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+#[wasm_bindgen(js_name = mergePulledRoaster)]
+pub fn merge_pulled_roaster(
+    local_json: &str,
+    remote_json: &str,
+    refresh: bool,
+    last_sync_at: Option<f64>,
+) -> Result<String, String> {
+    de1_domain::merge_pulled_roaster_json(
+        local_json,
+        remote_json,
+        refresh,
+        last_sync_at.map(f64_to_ms),
+    )
+}
+
+/// The bean push leg's work list (`BeanPushItem[]` JSON) from
+/// `{"beans", "lastSyncAt"?, "skipIds"?}`. See `de1_domain::plan_bean_push`.
+///
+/// # Errors
+/// The JSON error string when `beans_json` can't be deserialised.
+#[wasm_bindgen(js_name = planBeanPush)]
+pub fn plan_bean_push(payload: &str) -> Result<String, String> {
+    de1_domain::plan_bean_push_json(payload)
+}
+
+/// The roaster push leg's work list (`RoasterPushItem[]` JSON) from
+/// `{"roasters", "lastSyncAt"?, "skipIds"?}`. See `de1_domain::plan_roaster_push`.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+#[wasm_bindgen(js_name = planRoasterPush)]
+pub fn plan_roaster_push(payload: &str) -> Result<String, String> {
+    de1_domain::plan_roaster_push_json(payload)
+}
+
+/// The pulled remote ids with no locally-bound row — the ones whose full
+/// detail the shell fetches (`{"local", "remote"}` JSON → `string[]`). See
+/// `de1_domain::remote_ids_needing_detail`.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+#[wasm_bindgen(js_name = remoteIdsNeedingDetail)]
+pub fn remote_ids_needing_detail(payload: &str) -> Result<String, String> {
+    de1_domain::remote_ids_needing_detail_json(payload)
+}
+
+/// Whether a pulled roaster row is KNOWN to have no catalogue link. See
+/// `de1_domain::remote_roaster_unlinked`.
+///
+/// # Errors
+/// The JSON error string when `remote_json` isn't JSON.
+#[wasm_bindgen(js_name = remoteRoasterUnlinked)]
+pub fn remote_roaster_unlinked(remote_json: &str) -> Result<bool, String> {
+    de1_domain::remote_roaster_unlinked_json(remote_json)
+}
+
+/// Which bean-sync legs run for the beans / roasters directions
+/// (`BeanSyncScope` JSON). See `de1_domain::bean_sync_scope`.
+///
+/// # Errors
+/// Only if serialisation fails.
+#[wasm_bindgen(js_name = beanSyncScope)]
+pub fn bean_sync_scope(beans_direction: &str, roasters_direction: &str) -> Result<String, String> {
+    de1_domain::bean_sync_scope_json(beans_direction, roasters_direction)
+}
+
+/// The catalogue link-PATCH leg's work list. `payload` is
+/// `{"roasters", "beans", "unlinkedRemoteIds"}`. See
+/// `de1_domain::plan_roaster_link_patches`.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+#[wasm_bindgen(js_name = planRoasterLinkPatches)]
+pub fn plan_roaster_link_patches(payload: &str) -> Result<String, String> {
+    de1_domain::plan_roaster_link_patches_json(payload)
+}
+
+/// Roaster merge suggestions (`RoasterDuplicate[]` JSON). See
+/// `de1_domain::detect_roaster_duplicates`.
+///
+/// # Errors
+/// The JSON error string when `roasters_json` can't be deserialised.
+#[wasm_bindgen(js_name = detectRoasterDuplicates)]
+pub fn detect_roaster_duplicates(roasters_json: &str) -> Result<String, String> {
+    de1_domain::detect_roaster_duplicates_json(roasters_json)
+}
+
+/// Plan a roaster delete (`RoasterDeletePlan` JSON, or `null`). `payload` is
+/// `{"roasters", "beans", "roasterId", "cascade"}`. See
+/// `de1_domain::plan_roaster_delete`.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+#[wasm_bindgen(js_name = planRoasterDelete)]
+pub fn plan_roaster_delete(payload: &str) -> Result<String, String> {
+    de1_domain::plan_roaster_delete_json(payload)
+}
+
+/// Plan a roaster merge (`RoasterMergePlan` JSON, or `null`). `payload` is
+/// `{"roasters", "beans", "canonicalId", "dupeId"}`. See
+/// `de1_domain::plan_roaster_merge`.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+#[wasm_bindgen(js_name = planRoasterMerge)]
+pub fn plan_roaster_merge(payload: &str) -> Result<String, String> {
+    de1_domain::plan_roaster_merge_json(payload)
+}
+
 /// Crema's 1..10 roast level → Visualizer's free-text band, or `None`. See
 /// `de1_domain::roast_level_to_wire`.
 #[wasm_bindgen(js_name = roastLevelToWire)]

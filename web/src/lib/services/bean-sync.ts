@@ -40,24 +40,37 @@ import {
 import type { Bean, Roaster } from '$lib/bean';
 import type { BeanLibraryStore } from '$lib/bean/store.svelte';
 import {
-	bagBodyToWriteRequest,
 	beanFromWire,
-	beanToWire,
+	coffeeBagWriteRequest,
 	readSyncSettings,
-	roasterBodyToWriteRequest,
 	roasterFromWire,
-	roasterToWire,
+	roasterWriteRequest,
 	writeSyncSettings,
 	type SyncLogEntry,
 	type SyncResult
 } from '$lib/bean/visualizer-sync';
 import {
+	beanSyncScope as wasmBeanSyncScope,
+	mergePulledRoaster as wasmMergePulledRoaster,
+	planBeanPush as wasmPlanBeanPush,
+	planRoasterPush as wasmPlanRoasterPush,
+	remoteIdsNeedingDetail as wasmRemoteIdsNeedingDetail,
+	remoteRoasterUnlinked as wasmRemoteRoasterUnlinked,
+	planRoasterLinkPatches as wasmPlanRoasterLinkPatches,
 	reconcileBeans as wasmReconcileBeans,
-	reconcileRoasters as wasmReconcileRoasters
+	reconcileRoasters as wasmReconcileRoasters,
+	resolveRoasterCatalogueLink as wasmResolveRoasterCatalogueLink
 } from '$lib/wasm/de1_wasm';
-import { updateSyncConfig } from '$lib/visualizer/sync-config';
+import type {
+	BeanPushItem,
+	BeanSyncScope,
+	RoasterLinkPatch,
+	RoasterPushItem
+} from '$lib/core/crema-core';
+import { readSyncConfig, updateSyncConfig } from '$lib/visualizer/sync-config';
 import type { components } from '$lib/visualizer/openapi';
 import { CATALOGUE_PAGE_SIZE, parseCataloguePage, type CataloguePage } from '$lib/bean/catalogue';
+import { mintBeanId } from '$lib/bean/model';
 
 /** Crema-side projection of the Visualizer `/me` response (camel-cased). */
 export interface VisualizerAccount {
@@ -104,18 +117,91 @@ function reconcileRoasters(local: Roaster[], remote: RoasterWire[]): RoasterReco
 	) as RoasterReconcileAction[];
 }
 
-/** Reconcile decoded remote beans against the local library (CORE4). The
- *  `roasterNames` map (local roaster id → name) lets the kernel fold the
- *  roaster name into each bean's signature, exactly as the TS did via
- *  `library.getRoaster(id)?.name`. */
+/** One pulled bag for the core kernel: the RAW remote JSON (key presence
+ *  matters — an absent key never clears a local value), its roaster resolved
+ *  to a local id, and a minted fallback id for a brand-new bag. */
+type PulledBag = { wire: unknown; localRoasterId: string | null; fallbackId: string };
+
+/** Reconcile RAW pulled bags against the local library (core
+ *  `reconcile_pulled_bags`): a matched local takes only the keys the remote row
+ *  carries; a new bag is decoded in full. The `roasterNames` map lets the
+ *  kernel fold the roaster name into each bean's signature. */
 function reconcileBeans(
 	local: Bean[],
-	remote: Bean[],
-	roasterNames: Record<string, string>
+	remote: PulledBag[],
+	roasterNames: Record<string, string>,
+	lastSyncAt: number | null
 ): BeanReconcileAction[] {
 	return JSON.parse(
-		wasmReconcileBeans(JSON.stringify({ local, remote, roasterNames }))
+		wasmReconcileBeans(
+			JSON.stringify({ local, remote, roasterNames, lastSyncAt, nowMs: Date.now() })
+		)
 	) as BeanReconcileAction[];
+}
+
+/** The pulled remote ids with no locally-bound row (core `remote_ids_needing_detail`). */
+function remoteIdsNeedingDetail(local: { visualizerId?: string | null }[], remote: unknown[]): string[] {
+	return JSON.parse(wasmRemoteIdsNeedingDetail(JSON.stringify({ local, remote }))) as string[];
+}
+
+/** Concurrent `GET /…/{id}` detail fetches (list rows are thin). */
+export const DETAIL_FETCH_CONCURRENCY = 4;
+
+/** Fold a reconciled remote roaster into its local row (core `merge_pulled_roaster`):
+ *  `refresh` = an `update` (take the remote fields), else a `bind`. */
+function mergePulledRoaster(
+	local: Roaster,
+	remote: RoasterWire,
+	refresh: boolean,
+	lastSyncAt: number | null
+): Roaster {
+	return JSON.parse(
+		wasmMergePulledRoaster(
+			JSON.stringify(local),
+			JSON.stringify(remote),
+			refresh,
+			lastSyncAt ?? undefined
+		)
+	) as Roaster;
+}
+
+/** A roaster's catalogue link for a write (core `resolve_roaster_catalogue_link`). */
+function resolveRoasterCatalogueLink(roaster: Roaster, beans: Bean[]): string | null {
+	return wasmResolveRoasterCatalogueLink(JSON.stringify({ roaster, beans })) ?? null;
+}
+
+/** The bean push leg's work list (core `plan_bean_push`), minus `skipIds`. */
+function planBeanPush(beans: Bean[], lastSyncAt: number | null, skipIds: string[]): BeanPushItem[] {
+	return JSON.parse(
+		wasmPlanBeanPush(JSON.stringify({ beans, lastSyncAt, skipIds }))
+	) as BeanPushItem[];
+}
+
+/** The roaster push leg's work list (core `plan_roaster_push`), minus `skipIds`. */
+function planRoasterPush(
+	roasters: Roaster[],
+	lastSyncAt: number | null,
+	skipIds: string[]
+): RoasterPushItem[] {
+	return JSON.parse(
+		wasmPlanRoasterPush(JSON.stringify({ roasters, lastSyncAt, skipIds }))
+	) as RoasterPushItem[];
+}
+
+/** Which legs run for the beans / roasters directions (core `bean_sync_scope`). */
+export function beanSyncScope(beansDirection: string, roastersDirection: string): BeanSyncScope {
+	return JSON.parse(wasmBeanSyncScope(beansDirection, roastersDirection)) as BeanSyncScope;
+}
+
+/** The catalogue link-PATCH leg's work list (core `plan_roaster_link_patches`). */
+function planRoasterLinkPatches(
+	roasters: Roaster[],
+	beans: Bean[],
+	unlinkedRemoteIds: string[]
+): RoasterLinkPatch[] {
+	return JSON.parse(
+		wasmPlanRoasterLinkPatches(JSON.stringify({ roasters, beans, unlinkedRemoteIds }))
+	) as RoasterLinkPatch[];
 }
 
 export class BeanSync extends Context.Tag('crema/BeanSync')<
@@ -214,7 +300,7 @@ export const BeanSyncLive = Layer.effect(
 			bean: Bean,
 			remoteRoasterId: string | null
 		) {
-			const body = bagBodyToWriteRequest(beanToWire(bean, remoteRoasterId));
+			const body = coffeeBagWriteRequest(bean, remoteRoasterId);
 			if (bean.visualizerId) {
 				// Update — keeps the existing remote id (the PATCH body has no id we read).
 				yield* call(`/coffee_bags/${bean.visualizerId}`, { method: 'PATCH', body });
@@ -232,7 +318,7 @@ export const BeanSyncLive = Layer.effect(
 		});
 
 		const uploadRoaster = Effect.fn('BeanSync.uploadRoaster')(function* (roaster: Roaster) {
-			const body = roasterBodyToWriteRequest(roasterToWire(roaster));
+			const body = roasterWriteRequest(roaster);
 			if (roaster.visualizerId) {
 				yield* call(`/roasters/${roaster.visualizerId}`, { method: 'PATCH', body });
 				return { visualizerId: roaster.visualizerId };
@@ -288,6 +374,43 @@ export const BeanSyncLive = Layer.effect(
 				return out;
 			});
 
+		/**
+		 * Swap each list row whose id is in `ids` for its `GET {base}/{id}`
+		 * detail (at most {@link DETAIL_FETCH_CONCURRENCY} at a time, the client's
+		 * retry policy per call). A failed fetch keeps the summary row — the
+		 * merge then only applies what it carries — and is reported, never
+		 * failing the run.
+		 */
+		const withDetails = <T extends { id?: string }>(base: string, rows: T[], ids: string[]) =>
+			Effect.gen(function* () {
+				const wanted = new Set(ids);
+				const failures: { id: string; error: string }[] = [];
+				const out = yield* Effect.forEach(
+					rows,
+					(row) =>
+						row.id && wanted.has(row.id)
+							? Effect.either(call(`${base}/${row.id}`)).pipe(
+									Effect.map((res) => {
+										const detail = res._tag === 'Right' ? (res.right as T | null) : null;
+										if (detail && typeof detail === 'object' && detail.id === row.id) {
+											return detail;
+										}
+										failures.push({
+											id: row.id as string,
+											error:
+												res._tag === 'Left'
+													? describeVisualizerError(res.left)
+													: 'unexpected detail body'
+										});
+										return row;
+									})
+								)
+							: Effect.succeed(row),
+					{ concurrency: DETAIL_FETCH_CONCURRENCY }
+				);
+				return { rows: out, failures };
+			});
+
 		const runSync = Effect.fn('BeanSync.runSync')(function* (library: BeanLibraryStore) {
 			const settings = readSyncSettings();
 			const log: SyncLogEntry[] = [];
@@ -314,63 +437,90 @@ export const BeanSyncLive = Layer.effect(
 			 * under it that was picked from the catalogue.
 			 */
 			const withCatalogueLink = (roaster: Roaster): Roaster => {
-				if (roaster.catalogueRoasterId) return roaster;
-				const fromBean = library.beans.find(
-					(b) => b.roasterId === roaster.id && b.canonicalRoasterId && b.deletedAt == null
-				)?.canonicalRoasterId;
-				return fromBean ? { ...roaster, catalogueRoasterId: fromBean } : roaster;
+				const link = resolveRoasterCatalogueLink(roaster, library.beans);
+				return link && link !== roaster.catalogueRoasterId
+					? { ...roaster, catalogueRoasterId: link }
+					: roaster;
 			};
 
+			// Which legs run (core `bean_sync_scope`): `backup` pushes only, `pull`
+			// pulls only and never writes remote, `two-way` both, `off` neither.
+			const syncConfig = readSyncConfig();
+			const scope = beanSyncScope(syncConfig.direction.beans, syncConfig.direction.roasters);
+			const lastSyncAt = settings.lastSyncAt;
+
 			const program = Effect.gen(function* () {
-				// 1) Pull remote roasters → reconcile in the core kernel (CORE4),
-				//    apply the action list shell-side (store mutations + the
-				//    remote→local id map subsequent bag decode reads).
-				const remoteRoasters = (yield* pullPaged<RoasterListResponse['data'][number]>(
-					'/roasters'
-				)) as RoasterWire[];
+				// Rows this run took from the remote (added roasters, every applied
+				// bag) — they already match it, so the push legs skip them (core
+				// `plan_*_push` `skipIds`).
+				const pulledRoasterIds: string[] = [];
+				const pulledBeanIds: string[] = [];
+				// Remote → local roaster ids for the bag decode. Seeded from the
+				// already-bound roasters so a beans-only pull still files bags.
 				const remoteRoasterIdToLocal = new Map<string, string>();
+				for (const r of library.roasters) {
+					if (r.visualizerId) remoteRoasterIdToLocal.set(r.visualizerId, r.id);
+				}
 				// Bound roasters whose remote row has no catalogue link yet — the
 				// link-PATCH leg (2b) fills them in when Crema has one.
 				const remoteUnlinked = new Set<string>();
-				for (const action of reconcileRoasters(library.roasters, remoteRoasters)) {
-					const wire = action.remote;
-					// The kernel only emits actions for remotes that carry an id.
-					const remoteId = wire.id as string;
-					if (!wire.canonical_roaster_id) remoteUnlinked.add(remoteId);
-					if (action.kind === 'update') {
-						// `canonical_roaster_id` is Visualizer's CATALOGUE link — it lands
-						// on `catalogueRoasterId`; the local dedup pointer
-						// (`canonicalRoasterId`) is never overwritten by a pull. A remote
-						// with no link keeps the local one (pushed by leg 2b).
-						const local = library.getRoaster(action.localId);
-						library.updateRoaster(action.localId, {
-							name: wire.name,
-							website: wire.website ?? null,
-							imageUrl: wire.image_url ?? null,
-							catalogueRoasterId: wire.canonical_roaster_id ?? local?.catalogueRoasterId ?? null,
-							visualizerId: remoteId
-						});
-						remoteRoasterIdToLocal.set(remoteId, action.localId);
-					} else if (action.kind === 'bind') {
-						const local = library.getRoaster(action.localId);
-						library.updateRoaster(action.localId, {
-							visualizerId: remoteId,
-							...(wire.canonical_roaster_id && !local?.catalogueRoasterId
-								? { catalogueRoasterId: wire.canonical_roaster_id }
-								: {})
-						});
-						remoteRoasterIdToLocal.set(remoteId, action.localId);
-						log.push({ direction: 'pull', kind: 'roaster', id: action.localId, name: wire.name, at: Date.now() });
-					} else {
-						const fresh = roasterFromWire(wire);
-						library.upsertRoaster(fresh);
-						remoteRoasterIdToLocal.set(remoteId, fresh.id);
-						result.pulled += 1;
-						log.push({ direction: 'pull', kind: 'roaster', id: fresh.id, name: wire.name, at: Date.now() });
+
+				// 1) Pull remote roasters → reconcile in the core kernel (CORE4),
+				//    apply the action list shell-side.
+				if (scope.pullRoasters) {
+					const summaries = (yield* pullPaged<RoasterListResponse['data'][number]>(
+						'/roasters'
+					)) as RoasterWire[];
+					// The list is thin (id + name): fetch the full detail for roasters
+					// new to this device; bound ones merge the summary only.
+					const { rows: remoteRoasters, failures } = yield* withDetails(
+						'/roasters',
+						summaries,
+						remoteIdsNeedingDetail(library.roasters, summaries)
+					);
+					for (const f of failures) {
+						log.push({ direction: 'pull', kind: 'roaster', id: f.id, name: 'Roaster details', at: Date.now(), error: f.error });
+					}
+					for (const action of reconcileRoasters(library.roasters, remoteRoasters)) {
+						const wire = action.remote;
+						// The kernel only emits actions for remotes that carry an id.
+						const remoteId = wire.id as string;
+						// Only a row that CARRIES an empty link is known to be unlinked.
+						if (wasmRemoteRoasterUnlinked(JSON.stringify(wire))) remoteUnlinked.add(remoteId);
+						if (action.kind === 'update' || action.kind === 'bind') {
+							// The merge lives in the core (`merge_pulled_roaster`): an
+							// `update` takes the remote fields unless the local was edited
+							// since the last sync, a `bind` only the binding; `updatedAt` is
+							// kept (a pull is not a local edit). `canonical_roaster_id` is
+							// Visualizer's CATALOGUE link (→ `catalogueRoasterId`); the local
+							// dedup pointer (`canonicalRoasterId`) is never touched by a pull.
+							const local = library.getRoaster(action.localId);
+							if (local) {
+								library.replaceRoaster(
+									mergePulledRoaster(local, wire, action.kind === 'update', lastSyncAt)
+								);
+							}
+							// Not added to `pulledRoasterIds`: a bound row the merge left
+							// alone isn't dirty (the push plan skips it anyway), and one
+							// edited here since the last sync kept its edit — that must push.
+							remoteRoasterIdToLocal.set(remoteId, action.localId);
+							// A refresh of an already-bound row is silent; a new binding logs.
+							if (action.kind === 'bind') {
+								log.push({ direction: 'pull', kind: 'roaster', id: action.localId, name: wire.name, at: Date.now() });
+							}
+						} else {
+							const fresh = roasterFromWire(wire);
+							library.replaceRoaster(fresh);
+							remoteRoasterIdToLocal.set(remoteId, fresh.id);
+							pulledRoasterIds.push(fresh.id);
+							result.pulled += 1;
+							log.push({ direction: 'pull', kind: 'roaster', id: fresh.id, name: wire.name, at: Date.now() });
+						}
 					}
 				}
 
-				// 2) Push local roasters with no visualizer id (premium-gated).
+				// 2) Push local roasters (premium-gated): unbound → POST, bound and
+				//    edited since the last sync → PATCH (core `plan_roaster_push`).
 				let premiumLocked = settings.premium === false;
 				let premiumBannerLogged = settings.premium === false;
 				const logPremiumBannerOnce = () => {
@@ -386,129 +536,141 @@ export const BeanSyncLive = Layer.effect(
 							'Premium required — beans + roasters disabled from push. Upgrade at visualizer.coffee/premium.'
 					});
 				};
-				for (const local of library.roasters) {
-					if (local.visualizerId) continue;
-					if (premiumLocked) {
-						result.skipped += 1;
-						log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
-						continue;
-					}
-					// EF2: route the push through the `uploadRoaster` service method
-					// rather than re-implementing the POST wire inline. `local` has no
-					// `visualizerId` here (filtered above), so `uploadRoaster` POSTs the
-					// same `roasterBodyToWriteRequest(roasterToWire(local))` body and
-					// returns the bound id.
-					const res = yield* Effect.either(uploadRoaster(withCatalogueLink(local)));
-					if (res._tag === 'Right') {
-						library.updateRoaster(local.id, { visualizerId: res.right.visualizerId });
-						remoteRoasterIdToLocal.set(res.right.visualizerId, local.id);
-						result.pushed += 1;
-						writeSyncSettings({ premium: true });
-						log.push({ direction: 'push', kind: 'roaster', id: local.id, name: local.name, at: Date.now() });
-					} else if (res.left._tag === 'VisualizerPremiumGatedError') {
-						premiumLocked = true;
-						writeSyncSettings({ premium: false });
-						logPremiumBannerOnce();
-						log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
-					} else {
-						result.error = describeVisualizerError(res.left);
-						log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: result.error });
-					}
-				}
-
-				// 2b) Link already-synced roasters to the catalogue: a bound roaster
-				//     whose remote row has no `canonical_roaster_id` but which Crema
-				//     knows a catalogue id for (its own, or one of its beans' picks)
-				//     gets a roaster PATCH carrying the link. Premium-gated like every
-				//     roaster write; a failure only logs.
-				for (const local of library.roasters) {
-					if (premiumLocked) break;
-					if (!local.visualizerId || !remoteUnlinked.has(local.visualizerId)) continue;
-					const linked = withCatalogueLink(local);
-					if (!linked.catalogueRoasterId) continue;
-					const res = yield* Effect.either(uploadRoaster(linked));
-					if (res._tag === 'Right') {
-						if (!local.catalogueRoasterId) {
-							library.updateRoaster(local.id, { catalogueRoasterId: linked.catalogueRoasterId });
+				const pushedRoasterIds = new Set<string>();
+				if (scope.pushRoasters) {
+					for (const item of planRoasterPush(library.roasters, lastSyncAt, pulledRoasterIds)) {
+						const local = library.getRoaster(item.localId);
+						if (!local) continue;
+						if (premiumLocked) {
+							if (item.create) {
+								result.skipped += 1;
+								log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
+							}
+							continue;
 						}
-						result.pushed += 1;
-						log.push({ direction: 'push', kind: 'roaster', id: local.id, name: local.name, at: Date.now() });
-					} else {
-						if (res.left._tag === 'VisualizerPremiumGatedError') {
-							premiumLocked = true;
-							writeSyncSettings({ premium: false });
-							logPremiumBannerOnce();
-						}
-						log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.left) });
-					}
-				}
-
-				// 3) Pull remote bags → decode (beanFromWire) → reconcile in the
-				//    core kernel (CORE4), apply the action list shell-side.
-				const remoteBags = (yield* pullPaged<CoffeeBagListResponse['data'][number]>(
-					'/coffee_bags'
-				)) as BagWire[];
-				const decodedBags = remoteBags.map((wire) =>
-					beanFromWire(wire, (rid) => (rid ? (remoteRoasterIdToLocal.get(rid) ?? null) : null))
-				);
-				// Local roaster id → name, so the kernel folds the roaster name into
-				// each bean's signature (matching the TS `library.getRoaster(id)?.name`).
-				const roasterNames: Record<string, string> = {};
-				for (const r of library.roasters) roasterNames[r.id] = r.name;
-				for (const action of reconcileBeans(library.beans, decodedBags, roasterNames)) {
-					const decoded = action.remote;
-					if (action.kind === 'replace') {
-						library.replaceBean({ ...decoded, id: action.localId });
-						log.push({ direction: 'pull', kind: 'bean', id: action.localId, name: decoded.name, at: Date.now() });
-					} else {
-						library.upsertBean(decoded);
-						result.pulled += 1;
-						log.push({ direction: 'pull', kind: 'bean', id: decoded.id, name: decoded.name, at: Date.now() });
-					}
-				}
-
-				// 4) Push local bags: insert (no visualizerId) + update (updatedAt > lastSync).
-				const lastSync = settings.lastSyncAt ?? 0;
-				for (const local of library.beans) {
-					if (premiumLocked) {
-						if (!local.visualizerId) {
-							result.skipped += 1;
-							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
-						}
-						continue;
-					}
-					const remoteRoasterId = local.roasterId
-						? (library.getRoaster(local.roasterId)?.visualizerId ?? null)
-						: null;
-					// EF2: both legs route through `uploadBean` rather than re-implementing
-					// the POST/PATCH wire. `uploadBean` builds the identical
-					// `bagBodyToWriteRequest(beanToWire(local, remoteRoasterId))` body and
-					// PATCHes (id present) or POSTs (id absent) by inspecting the bean.
-					if (!local.visualizerId) {
-						const res = yield* Effect.either(uploadBean(local, remoteRoasterId));
+						// EF2: the push routes through `uploadRoaster` (POST without an id,
+						// PATCH with one), carrying the resolved catalogue link.
+						const res = yield* Effect.either(uploadRoaster(withCatalogueLink(local)));
 						if (res._tag === 'Right') {
-							library.updateBean(local.id, { visualizerId: res.right.visualizerId });
+							if (item.create) {
+								library.updateRoaster(local.id, { visualizerId: res.right.visualizerId });
+								remoteRoasterIdToLocal.set(res.right.visualizerId, local.id);
+							}
+							pushedRoasterIds.add(local.id);
 							result.pushed += 1;
-							log.push({ direction: 'push', kind: 'bean', id: local.id, name: local.name, at: Date.now() });
+							writeSyncSettings({ premium: true });
+							log.push({ direction: 'push', kind: 'roaster', id: local.id, name: local.name, at: Date.now() });
 						} else if (res.left._tag === 'VisualizerPremiumGatedError') {
 							premiumLocked = true;
 							writeSyncSettings({ premium: false });
 							logPremiumBannerOnce();
-							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
+							log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
 						} else {
-							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.left) });
+							result.error = describeVisualizerError(res.left);
+							log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: result.error });
 						}
-					} else if (local.updatedAt > lastSync) {
-						const res = yield* Effect.either(uploadBean(local, remoteRoasterId));
+					}
+
+					// 2b) Link already-synced roasters to the catalogue: a bound roaster
+					//     whose remote row has no `canonical_roaster_id` but which Crema
+					//     knows a catalogue id for gets a roaster PATCH carrying the link.
+					for (const patch of planRoasterLinkPatches(library.roasters, library.beans, [
+						...remoteUnlinked
+					])) {
+						if (premiumLocked) break;
+						if (pushedRoasterIds.has(patch.localId)) continue;
+						const local = library.getRoaster(patch.localId);
+						if (!local) continue;
+						const linked = { ...local, catalogueRoasterId: patch.catalogueRoasterId };
+						const res = yield* Effect.either(uploadRoaster(linked));
 						if (res._tag === 'Right') {
+							if (!local.catalogueRoasterId) {
+								// Keeps `updatedAt`: the link now matches the remote.
+								library.replaceRoaster(linked);
+							}
 							result.pushed += 1;
-							log.push({ direction: 'push', kind: 'bean', id: local.id, name: local.name, at: Date.now() });
+							log.push({ direction: 'push', kind: 'roaster', id: local.id, name: local.name, at: Date.now() });
 						} else {
 							if (res.left._tag === 'VisualizerPremiumGatedError') {
 								premiumLocked = true;
 								writeSyncSettings({ premium: false });
 								logPremiumBannerOnce();
 							}
+							log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.left) });
+						}
+					}
+				}
+
+				// 3) Pull remote bags → reconcile the RAW rows in the core kernel
+				//    against the last-sync baseline, apply shell-side.
+				if (scope.pullBeans) {
+					const summaries = (yield* pullPaged<CoffeeBagListResponse['data'][number]>(
+						'/coffee_bags'
+					)) as BagWire[];
+					// The list is thin (id, name, roaster, catalogue link): fetch the
+					// full detail for bags new to this device; bound bags merge the
+					// summary only (no remote edit time to justify a refetch).
+					const { rows: remoteBags, failures } = yield* withDetails(
+						'/coffee_bags',
+						summaries,
+						remoteIdsNeedingDetail(library.beans, summaries)
+					);
+					for (const f of failures) {
+						log.push({ direction: 'pull', kind: 'bean', id: f.id, name: 'Bag details', at: Date.now(), error: f.error });
+					}
+					const pulledBags: PulledBag[] = remoteBags.map((wire) => ({
+						wire,
+						localRoasterId: wire.roaster_id ? (remoteRoasterIdToLocal.get(wire.roaster_id) ?? null) : null,
+						fallbackId: mintBeanId()
+					}));
+					const roasterNames: Record<string, string> = {};
+					for (const r of library.roasters) roasterNames[r.id] = r.name;
+					for (const action of reconcileBeans(library.beans, pulledBags, roasterNames, lastSyncAt)) {
+						const decoded = action.remote;
+						// Stored as the core hands it back — a replace keeps the local
+						// id + `updatedAt`, so the pull doesn't read as a local edit.
+						library.replaceBean(decoded);
+						if (action.kind === 'replace') {
+							pulledBeanIds.push(action.localId);
+							log.push({ direction: 'pull', kind: 'bean', id: action.localId, name: decoded.name, at: Date.now() });
+						} else {
+							pulledBeanIds.push(decoded.id);
+							result.pulled += 1;
+							log.push({ direction: 'pull', kind: 'bean', id: decoded.id, name: decoded.name, at: Date.now() });
+						}
+					}
+				}
+
+				// 4) Push local bags (premium-gated): the core's `plan_bean_push`
+				//    (unbound → create, edited since the last sync → update), minus
+				//    what step 3 just pulled.
+				if (scope.pushBeans) {
+					for (const item of planBeanPush(library.beans, lastSyncAt, pulledBeanIds)) {
+						const local = library.getBean(item.localId);
+						if (!local) continue;
+						if (premiumLocked) {
+							if (item.create) {
+								result.skipped += 1;
+								log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
+							}
+							continue;
+						}
+						const remoteRoasterId = local.roasterId
+							? (library.getRoaster(local.roasterId)?.visualizerId ?? null)
+							: null;
+						// EF2: `uploadBean` builds `coffeeBagWriteRequest(local, remoteRoasterId)`
+						// and PATCHes (id present) or POSTs (id absent).
+						const res = yield* Effect.either(uploadBean(local, remoteRoasterId));
+						if (res._tag === 'Right') {
+							if (item.create) library.updateBean(local.id, { visualizerId: res.right.visualizerId });
+							result.pushed += 1;
+							log.push({ direction: 'push', kind: 'bean', id: local.id, name: local.name, at: Date.now() });
+						} else if (res.left._tag === 'VisualizerPremiumGatedError') {
+							premiumLocked = true;
+							writeSyncSettings({ premium: false });
+							logPremiumBannerOnce();
+							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: item.create ? 'premium required' : describeVisualizerError(res.left) });
+						} else {
 							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.left) });
 						}
 					}

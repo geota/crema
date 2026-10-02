@@ -481,11 +481,34 @@ export class BeanLibraryStore {
 	// ── Visualizer sync helpers ──────────────────────────────────────
 
 	/**
-	 * Replace a bean's record with one pulled from Visualizer — used by the
-	 * sync path's "remote wins" merge.
+	 * Store a bean record exactly as the sync produced it (insert or replace by
+	 * id) — WITHOUT re-stamping `updatedAt`. A pull is not a local edit: the
+	 * core's reconcile hands back the stamp the row must keep, and a fresh one
+	 * here would make the next sync push every pulled bag straight back.
 	 */
 	replaceBean(bean: Bean): void {
-		this.upsertBean(bean);
+		const idx = this.envelope.beans.findIndex((b) => b.id === bean.id);
+		const beans =
+			idx >= 0
+				? [...this.envelope.beans.slice(0, idx), bean, ...this.envelope.beans.slice(idx + 1)]
+				: [bean, ...this.envelope.beans];
+		this.envelope = { ...this.envelope, beans };
+		this.persist();
+	}
+
+	/** The roaster counterpart of {@link replaceBean}: stored as given, `updatedAt` untouched. */
+	replaceRoaster(roaster: Roaster): void {
+		const idx = this.envelope.roasters.findIndex((r) => r.id === roaster.id);
+		const roasters =
+			idx >= 0
+				? [
+						...this.envelope.roasters.slice(0, idx),
+						roaster,
+						...this.envelope.roasters.slice(idx + 1)
+					]
+				: [roaster, ...this.envelope.roasters];
+		this.envelope = { ...this.envelope, roasters };
+		this.persist();
 	}
 }
 
