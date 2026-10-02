@@ -120,6 +120,81 @@ pub fn water_tank_percent(sensor_mm: f32) -> u8 {
     pct
 }
 
+/// Time constant of the tank-level low-pass filter, seconds.
+///
+/// Under the pump the DE1's tank sloshes: Decenza measured the level sensor
+/// swinging 5.5 mm → 33.5 mm inside four seconds (about a third of the tank,
+/// ~780 ml), which fired false — and repeated — "water low" warnings. The
+/// slosh differs from a real change in *frequency*, not amplitude (a refill or
+/// a drawdown is slow, a slosh is a second or two), so the fix is a filter, not
+/// a bigger threshold. Decenza `7d291524` (`de1device.h`
+/// `WATER_LEVEL_SMOOTHING_ALPHA = 0.08` at the observed ~4 Hz sample rate) is a
+/// ~3 s time constant; this filter is the same EMA expressed in time, so it
+/// keeps that constant even when the notification cadence varies.
+pub const TANK_LEVEL_SMOOTHING_TAU_S: f32 = 3.0;
+
+/// Exponential moving average over the DE1's tank-level readings (Decenza
+/// `7d291524`): seeded from the first sample — so a connect never shows the
+/// tank filling from empty — and [`reset`](Self::reset) on disconnect, so a
+/// reconnect re-seeds instead of ramping from the old session's average.
+///
+/// The smoothed value feeds everything downstream (the readout, the tank
+/// colour band, the low-water warning); the cost is that a genuine step (the
+/// tank lifted out) reads ~3 s late, which nothing about a water tank depends
+/// on.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TankLevelSmoother {
+    /// `(smoothed level, timestamp of the last sample in ms)`; `None` until
+    /// the first finite sample.
+    state: Option<(f32, u64)>,
+}
+
+impl TankLevelSmoother {
+    /// An unseeded filter.
+    #[must_use]
+    pub const fn new() -> TankLevelSmoother {
+        TankLevelSmoother { state: None }
+    }
+
+    /// Fold one reading taken at `now_ms` into the average and return the
+    /// smoothed level. The first finite reading seeds the filter and comes
+    /// back unchanged. A non-finite reading is ignored (the previous average
+    /// is returned, or the reading itself before the filter is seeded).
+    ///
+    /// The per-sample weight is `1 − e^(−Δt/τ)`: at Decenza's ~4 Hz that is
+    /// their 0.08, and a long gap (a stalled stream) approaches 1, so a level
+    /// that changed while nothing was reported is adopted rather than ramped.
+    pub fn update(&mut self, level: f32, now_ms: u64) -> f32 {
+        if !level.is_finite() {
+            return self.state.map_or(level, |(avg, _)| avg);
+        }
+        let Some((avg, last_ms)) = self.state else {
+            self.state = Some((level, now_ms));
+            return level;
+        };
+        // A clock that steps backwards contributes nothing rather than a
+        // negative weight. The gap is at most a few hours in practice, well
+        // inside f32's exact-integer range once converted to seconds.
+        #[allow(clippy::cast_precision_loss)]
+        let dt_s = now_ms.saturating_sub(last_ms) as f32 / 1000.0;
+        let alpha = 1.0 - (-dt_s / TANK_LEVEL_SMOOTHING_TAU_S).exp();
+        let next = avg + alpha * (level - avg);
+        self.state = Some((next, now_ms));
+        next
+    }
+
+    /// Forget the average — the next reading re-seeds it.
+    pub fn reset(&mut self) {
+        self.state = None;
+    }
+
+    /// The current smoothed level, or `None` before the first reading.
+    #[must_use]
+    pub fn level(&self) -> Option<f32> {
+        self.state.map(|(avg, _)| avg)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +257,70 @@ mod tests {
         assert_eq!(water_tank_percent(67.0), 100);
         assert_eq!(water_tank_percent(1000.0), 100);
         assert_eq!(water_tank_percent(f32::NAN), 0);
+    }
+
+    #[test]
+    fn smoother_seeds_from_the_first_reading() {
+        let mut f = TankLevelSmoother::new();
+        assert_eq!(f.level(), None);
+        // No ramp from zero on connect.
+        assert_eq!(f.update(30.0, 1_000), 30.0);
+        assert_eq!(f.level(), Some(30.0));
+    }
+
+    #[test]
+    fn smoother_matches_decenzas_alpha_at_four_hertz() {
+        // Decenza's EMA weight is 0.08 per sample at ~4 Hz; the time-based
+        // weight over a 250 ms step is 1 - e^(-0.25/3) ≈ 0.080.
+        let mut f = TankLevelSmoother::new();
+        f.update(0.0, 0);
+        let next = f.update(100.0, 250);
+        assert!((next - 8.0).abs() < 0.05, "got {next}");
+    }
+
+    #[test]
+    fn smoother_rejects_pump_slosh() {
+        // The field trace: the sensor swings between ~5.5 mm and ~33.5 mm
+        // twice a second while the pump runs, around a true ~20 mm level.
+        let mut f = TankLevelSmoother::new();
+        f.update(20.0, 0);
+        let mut lo = f32::MAX;
+        let mut hi = f32::MIN;
+        for i in 1..=40u64 {
+            let raw = if i % 2 == 0 { 33.5 } else { 5.5 };
+            let v = f.update(raw, i * 250);
+            if i > 8 {
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+        // A 28 mm raw swing is attenuated to a couple of mm.
+        assert!(hi - lo < 3.0, "smoothed swing {lo}..{hi}");
+        assert!((lo - 19.5).abs() < 2.5 && (hi - 19.5).abs() < 2.5);
+    }
+
+    #[test]
+    fn smoother_still_follows_a_refill_within_seconds() {
+        let mut f = TankLevelSmoother::new();
+        f.update(5.0, 0);
+        let mut v = 0.0;
+        for i in 1..=40u64 {
+            v = f.update(35.0, i * 250); // 10 s at 4 Hz
+        }
+        // After ~3.3 time constants the average has closed >95 % of the step.
+        assert!(v > 33.5, "got {v}");
+    }
+
+    #[test]
+    fn smoother_reset_reseeds_and_ignores_non_finite() {
+        let mut f = TankLevelSmoother::new();
+        f.update(10.0, 0);
+        assert_eq!(f.update(f32::NAN, 250), 10.0);
+        f.reset();
+        assert_eq!(f.level(), None);
+        assert_eq!(f.update(40.0, 500), 40.0);
+        // A long gap adopts the new level almost entirely.
+        let v = f.update(10.0, 500 + 60_000);
+        assert!((v - 10.0).abs() < 0.01, "got {v}");
     }
 }

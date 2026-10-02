@@ -32,12 +32,12 @@ use de1_domain::{
     AutoStop, BeverageType, BrewRecipe, BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase,
     Estimate, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile, STOP_WEIGHT_BEFORE,
     ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StepWeightExit, StopCapture,
-    StopConfig, StopReason, StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor,
-    WeightSpikeGate, WeightUnit, sav_counts_volume, shot_disposition,
+    StopConfig, StopReason, StopTargets, TankLevelSmoother, VolumeIntegrator, WaterEvent,
+    WaterMonitor, WeightSpikeGate, WeightUnit, sav_counts_volume, shot_disposition,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
-    ShotHeader, ShotSample, ShotSettings, StateInfo, Version, WaterLevels, mmr, profile,
+    ShotHeader, ShotSample, ShotSettings, StateInfo, SubState, Version, WaterLevels, mmr, profile,
     requested_state,
 };
 
@@ -64,6 +64,16 @@ const DEFAULT_SCALE_LAG: Duration = Duration::from_millis(380);
 /// Millimetres added to the DE1's reported tank level — the legacy
 /// `water_level_mm_correction` (`machine.tcl`).
 const WATER_LEVEL_MM_CORRECTION: f32 = 5.0;
+/// How long an `ErrorNoAc` (217) episode must persist before it is surfaced
+/// as a fault. The DE1 reports it spuriously for "about three seconds" while
+/// waking or heating (Decenza #1893, firmware v1363); a snapshot cannot tell
+/// that from an open front switch, so duration is the only discriminator.
+/// 6 s is Decenza's figure (`b8d625ba`, `m_noAcSettleTimer`): that episode
+/// plus margin — their own estimate, not a de1app constant.
+const NO_AC_SETTLE: Duration = Duration::from_secs(6);
+/// Below this firmware build `ErrorNoAc` is not trusted at all — de1app's own
+/// gate, ported by Decenza `98215217` (`firmwareBuildNumber() >= 1337`).
+const NO_AC_MIN_FIRMWARE: u32 = 1337;
 /// How long the scale may go without reporting weight before it is considered
 /// stale — the legacy app warns after roughly one second of silence.
 const SCALE_STALE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -686,6 +696,26 @@ pub struct CremaCore {
     /// this field with the real upload-phase state machine.
     #[cfg(test)]
     firmware_lock_override: bool,
+    /// Low-pass over the tank level (Decenza `7d291524`): the pump sloshes
+    /// the reading by ~a third of the tank, which fired false low-water
+    /// warnings. Every `Event::WaterLevel` carries the smoothed value, so
+    /// both shells' readouts and low-water toasts inherit it. Re-seeded on
+    /// [`reset`](Self::reset) and [`de1_link_lost`](Self::de1_link_lost).
+    tank_level: TankLevelSmoother,
+    /// The DE1's firmware build (MMR `FirmwareVersion`), cached from the
+    /// connect-time read for firmware-gated behaviour (the `ErrorNoAc`
+    /// gate). Kept here as well as in the capture identity-keeper because
+    /// a read-only mirror does not record captures.
+    de1_firmware_build: Option<u32>,
+    /// When the current `ErrorNoAc` episode began; `None` outside one.
+    no_ac_since: Option<Duration>,
+    /// The fault last surfaced via [`Event::MachineErrorChanged`] (`None` =
+    /// healthy), so the event is edge-triggered.
+    reported_machine_error: Option<SubState>,
+    /// Latched once the scale's timer was stopped for a DE1 link drop
+    /// (Decenza `29878266`), so an outage sends one stop, not one per
+    /// teardown path. Re-armed at the next shot start.
+    scale_timer_stopped_for_drop: bool,
 }
 
 /// In-flight state of one profile upload. Owned by
@@ -803,6 +833,11 @@ impl CremaCore {
             read_only: false,
             #[cfg(test)]
             firmware_lock_override: false,
+            tank_level: TankLevelSmoother::new(),
+            de1_firmware_build: None,
+            no_ac_since: None,
+            reported_machine_error: None,
+            scale_timer_stopped_for_drop: false,
         }
     }
 
@@ -2660,7 +2695,7 @@ impl CremaCore {
             Source::De1ShotSample => self.handle_sample(data, now, &mut out),
             Source::ScaleWeight => self.handle_scale_weight(data, now, &mut out),
             Source::ScaleCommand => self.handle_scale_command(data, &mut out),
-            Source::De1WaterLevels => self.handle_water_levels(data, &mut out),
+            Source::De1WaterLevels => self.handle_water_levels(data, now_ms, &mut out),
             Source::De1Version => self.handle_version(data, &mut out),
             Source::De1MmrRead => self.handle_mmr_read(data, &mut out),
             Source::De1Calibration => Self::handle_calibration(data, &mut out),
@@ -2673,6 +2708,10 @@ impl CremaCore {
                 }
             }
         }
+        // Any notification advances the clock the `ErrorNoAc` settle runs on
+        // (the tank level streams ~2-4 Hz even at idle), and a late firmware
+        // read can be what makes an already-settled episode trustworthy.
+        self.update_machine_error(now, &mut out);
         self.gate_read_only(out)
     }
 
@@ -2704,6 +2743,7 @@ impl CremaCore {
                 reason: ProfileUploadFailure::AckTimeout { awaiting },
             });
         }
+        self.update_machine_error(now, &mut out);
         // Backstop for the post-stop drip settle (#64): guarantees a deferred
         // completion finalizes on the [`POST_SHOT_SETTLE_MAX`] deadline even if
         // the scale stream stalls (the tick is the shells' periodic watchdog).
@@ -2748,11 +2788,44 @@ impl CremaCore {
         self.capture.clear();
     }
 
+    /// The DE1's BLE link dropped unexpectedly (the shells' auto-reconnect is
+    /// about to start) — the session state is kept so a reconnect can resume
+    /// a running shot, but the scale's on-device timer is stopped if it was
+    /// running (Decenza `29878266`: the scale is a separate link and kept
+    /// counting with no machine behind it). Gated, like every other stop
+    /// site, on the timer actually running — a drop from Idle or Sleep sends
+    /// nothing, so a timer the user started by hand on the scale is left
+    /// alone — and latched to one stop per outage. The tank-level filter is
+    /// re-seeded on reconnect (Decenza resets it on disconnect).
+    pub fn de1_link_lost(&mut self) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        self.stop_scale_timer_for_link_loss(&mut out);
+        self.tank_level.reset();
+        self.gate_read_only(out)
+    }
+
+    /// Push one scale-timer stop when the DE1 link goes away mid-flow — see
+    /// [`de1_link_lost`](Self::de1_link_lost). `flow_started` is exactly the
+    /// window in which the core has started the scale's timer.
+    fn stop_scale_timer_for_link_loss(&mut self, out: &mut CoreOutput) {
+        if self.flow_started.is_some() && !self.scale_timer_stopped_for_drop {
+            self.scale_timer_stopped_for_drop = true;
+            Self::push_timer_command(&self.scale, TimerCommand::Stop, out);
+        }
+    }
+
     /// Discard all session state — e.g. on disconnect. The connected scale and
     /// armed auto-stop targets are cleared too, and the capture rolling
     /// buffer is wiped (a fresh [`CaptureRecorder`] is part of
     /// [`CremaCore::new`]).
-    pub fn reset(&mut self) {
+    ///
+    /// Returns the one output a teardown can carry: a stop for the scale's
+    /// timer when the DE1 went away mid-shot (Decenza `29878266`) — the
+    /// scale link usually survives a DE1 drop, and without it the on-scale
+    /// clock keeps counting. Empty otherwise.
+    pub fn reset(&mut self) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        self.stop_scale_timer_for_link_loss(&mut out);
         // `read_only` is a device-role config (this core is a secondary mirror),
         // not session/shot state — it must survive a reset, else a reconnect
         // (the BLE manager resets the core on every disconnect) would turn the
@@ -2826,6 +2899,44 @@ impl CremaCore {
         self.shot_target_weight = shot_target_weight;
         self.profile_volume_limit = profile_volume_limit;
         self.max_shot_duration = max_shot_duration;
+        self.gate_read_only(out)
+    }
+
+    /// Emit [`Event::MachineErrorChanged`] when the fault the shells should
+    /// surface changes. Every `Error*` substate is surfaced at once except
+    /// `ErrorNoAc`, which needs firmware ≥ [`NO_AC_MIN_FIRMWARE`] *and* an
+    /// episode that has lasted [`NO_AC_SETTLE`] (Decenza `98215217`,
+    /// `b8d625ba`): the DE1 reports it for a few seconds on every wake /
+    /// warm-up with the switch plainly on. Once surfaced it stays latched
+    /// for the rest of the episode. Runs after every notification and tick,
+    /// so the settle resolves without a dedicated timer.
+    fn update_machine_error(&mut self, now: Duration, out: &mut CoreOutput) {
+        let Some(info) = self.last_state else {
+            return;
+        };
+        let surfaced = if info.substate == SubState::ErrorNoAc {
+            let settled = self
+                .no_ac_since
+                .is_some_and(|since| now.saturating_sub(since) >= NO_AC_SETTLE);
+            let trusted = self
+                .de1_firmware_build
+                .is_some_and(|build| build >= NO_AC_MIN_FIRMWARE);
+            (settled && trusted).then_some(SubState::ErrorNoAc)
+        } else if info.substate.is_error() {
+            Some(info.substate)
+        } else {
+            None
+        };
+        if surfaced != self.reported_machine_error {
+            self.reported_machine_error = surfaced;
+            out.events.push(Event::MachineErrorChanged {
+                state: info.state,
+                substate: info.substate,
+                message: surfaced
+                    .and_then(SubState::error_message)
+                    .map(str::to_owned),
+            });
+        }
     }
 
     /// Decode and process a `StateInfo` notification.
@@ -2890,6 +3001,12 @@ impl CremaCore {
                     _ => {}
                 }
             }
+        }
+        // `ErrorNoAc` episode clock — see [`update_machine_error`].
+        if info.substate == SubState::ErrorNoAc {
+            self.no_ac_since.get_or_insert(now);
+        } else {
+            self.no_ac_since = None;
         }
         for event in self.monitor.on_state_info(info, now) {
             self.map_shot_event(event, now, out);
@@ -3339,11 +3456,14 @@ impl CremaCore {
     }
 
     /// Decode and process a `WaterLevels` notification, applying the legacy
-    /// +5 mm sensor correction to the reported tank level.
-    fn handle_water_levels(&self, data: &[u8], out: &mut CoreOutput) {
+    /// +5 mm sensor correction to the reported tank level and the ~3 s
+    /// slosh filter ([`TankLevelSmoother`], Decenza `7d291524`).
+    fn handle_water_levels(&mut self, data: &[u8], now_ms: u64, out: &mut CoreOutput) {
         match WaterLevels::decode(data) {
             Ok(levels) => out.events.push(Event::WaterLevel {
-                level: levels.current_mm + WATER_LEVEL_MM_CORRECTION,
+                level: self
+                    .tank_level
+                    .update(levels.current_mm + WATER_LEVEL_MM_CORRECTION, now_ms),
                 refill_threshold: levels.refill_threshold_mm,
             }),
             Err(e) => out.events.push(Event::DecodeError {
@@ -3670,6 +3790,11 @@ impl CremaCore {
             // recovered on demand from the recorder's identity-keeper —
             // see `CaptureRecorder::meta_snapshot` / `firmware_build` —
             // so this arm just emits the typed value for shell consumers.
+            // The firmware build is also cached for the firmware-gated
+            // `ErrorNoAc` filter (see `de1_firmware_build`).
+            if register == MmrRegister::FirmwareVersion {
+                self.de1_firmware_build = Some(value);
+            }
             out.events.push(Event::MmrValue { register, value });
         }
     }
@@ -3867,6 +3992,7 @@ impl CremaCore {
                 self.stop_triggered_this_shot = false;
                 // Fresh shot → every step's weight exit re-arms.
                 self.step_weight.reset_shot();
+                self.scale_timer_stopped_for_drop = false;
                 // Auto-tare the connected scale so the cup starts from zero,
                 // mirroring the legacy app's tare-at-shot-start behaviour —
                 // gated on the latched user preference (default true). The
@@ -5773,6 +5899,153 @@ mod tests {
                 value: 1352,
             }
         )));
+    }
+
+    /// A `ReadFromMMR` reply for the FirmwareVersion register (0x800010).
+    fn firmware_build_packet(build: u32) -> [u8; de1_protocol::MMR_PACKET_LEN] {
+        let mut packet = [0u8; de1_protocol::MMR_PACKET_LEN];
+        packet[1..4].copy_from_slice(&[0x80, 0x00, 0x10]);
+        packet[4..8].copy_from_slice(&build.to_le_bytes());
+        packet
+    }
+
+    fn water_level(out: &CoreOutput) -> Option<f32> {
+        out.events.iter().find_map(|e| match e {
+            Event::WaterLevel { level, .. } => Some(*level),
+            _ => None,
+        })
+    }
+
+    fn machine_error_events(out: &CoreOutput) -> Vec<Option<String>> {
+        out.events
+            .iter()
+            .filter_map(|e| match e {
+                Event::MachineErrorChanged { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_water_level_is_smoothed_against_pump_slosh() {
+        let mut core = CremaCore::new();
+        // First reading seeds the filter: 20 mm raw → 25 mm with the offset.
+        let out = core.on_notification(Source::De1WaterLevels, &[20, 0, 5, 0], 0);
+        assert_eq!(water_level(&out), Some(25.0));
+        // A 28 mm slosh spike 250 ms later moves the reported level ~8 %.
+        let out = core.on_notification(Source::De1WaterLevels, &[48, 0, 5, 0], 250);
+        let level = water_level(&out).unwrap();
+        assert!((level - 27.24).abs() < 0.1, "got {level}");
+        // A link drop re-seeds: the next reading is taken as-is.
+        let _ = core.de1_link_lost();
+        let out = core.on_notification(Source::De1WaterLevels, &[10, 0, 5, 0], 500);
+        assert_eq!(water_level(&out), Some(15.0));
+    }
+
+    #[test]
+    fn a_brief_no_ac_blip_is_never_surfaced() {
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(Source::De1MmrRead, &firmware_build_packet(1363), 0);
+        let _ = core.on_notification(Source::De1State, &[2, 1], 0); // Idle / Heating
+        // Error_NoAc for ~3 s while heating, then back to Heating.
+        let out = core.on_notification(Source::De1State, &[2, 217], 1_000);
+        assert!(machine_error_events(&out).is_empty());
+        let out = core.on_tick(3_500);
+        assert!(machine_error_events(&out).is_empty());
+        let out = core.on_notification(Source::De1State, &[2, 1], 4_000);
+        assert!(machine_error_events(&out).is_empty());
+        // Nothing late either.
+        assert!(machine_error_events(&core.on_tick(20_000)).is_empty());
+    }
+
+    #[test]
+    fn a_persistent_no_ac_is_surfaced_once_and_cleared() {
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(Source::De1MmrRead, &firmware_build_packet(1352), 0);
+        let _ = core.on_notification(Source::De1State, &[2, 217], 1_000);
+        assert!(machine_error_events(&core.on_tick(6_999)).is_empty());
+        // Past the 6 s settle — surfaced exactly once (the webhook edge).
+        let out = core.on_notification(Source::De1WaterLevels, &[20, 0, 5, 0], 7_000);
+        let errors = machine_error_events(&out);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].as_deref().unwrap().contains("power switch"));
+        assert!(machine_error_events(&core.on_tick(8_000)).is_empty());
+        // The switch goes back on: one clearing edge.
+        let out = core.on_notification(Source::De1State, &[2, 0], 9_000);
+        assert_eq!(machine_error_events(&out), vec![None]);
+    }
+
+    #[test]
+    fn no_ac_is_ignored_on_old_or_unknown_firmware() {
+        for fw in [None, Some(1336)] {
+            let mut core = CremaCore::new();
+            if let Some(build) = fw {
+                let _ = core.on_notification(Source::De1MmrRead, &firmware_build_packet(build), 0);
+            }
+            let _ = core.on_notification(Source::De1State, &[2, 217], 0);
+            assert!(machine_error_events(&core.on_tick(60_000)).is_empty());
+        }
+    }
+
+    #[test]
+    fn no_ac_waits_for_a_late_firmware_read() {
+        // The firmware build can land after the settle has already elapsed.
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(Source::De1State, &[2, 217], 0);
+        assert!(machine_error_events(&core.on_tick(10_000)).is_empty());
+        let out = core.on_notification(Source::De1MmrRead, &firmware_build_packet(1340), 10_500);
+        assert_eq!(machine_error_events(&out).len(), 1);
+    }
+
+    #[test]
+    fn other_faults_are_surfaced_immediately() {
+        let mut core = CremaCore::new();
+        let out = core.on_notification(Source::De1State, &[11, 204], 0); // ErrorTSensor
+        let errors = machine_error_events(&out);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].is_some());
+        // A healthy state change on its own emits nothing.
+        let mut core = CremaCore::new();
+        let out = core.on_notification(Source::De1State, &[2, 0], 0);
+        assert!(machine_error_events(&out).is_empty());
+    }
+
+    #[test]
+    fn a_mid_shot_disconnect_stops_the_scale_timer_once() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let _ = core.on_notification(Source::De1State, &[4, 1], 0); // Espresso / Heating
+        let out = core.on_notification(Source::De1State, &[4, 4], 2_000); // Preinfusion
+        assert!(scale_writes(&out).contains(&bookoo::TIMER_START.as_slice()));
+        // The link drops: one stop, and only one across both teardown paths.
+        let out = core.de1_link_lost();
+        assert_eq!(scale_writes(&out), vec![bookoo::TIMER_STOP.as_slice()]);
+        assert!(scale_writes(&core.de1_link_lost()).is_empty());
+        assert!(scale_writes(&core.reset()).is_empty());
+    }
+
+    #[test]
+    fn reset_mid_shot_stops_the_scale_timer() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let _ = core.on_notification(Source::De1State, &[4, 1], 0);
+        let _ = core.on_notification(Source::De1State, &[4, 5], 2_000); // Pouring
+        let out = core.reset();
+        assert_eq!(scale_writes(&out), vec![bookoo::TIMER_STOP.as_slice()]);
+        // The scale link survived the reset.
+        assert!(core.scale.is_some());
+    }
+
+    #[test]
+    fn a_disconnect_while_idle_sends_no_scale_stop() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let _ = core.on_notification(Source::De1State, &[2, 0], 0);
+        assert!(scale_writes(&core.de1_link_lost()).is_empty());
+        assert!(scale_writes(&core.reset()).is_empty());
+        // Preheat only (the core has not started the timer yet): nothing.
+        let _ = core.on_notification(Source::De1State, &[4, 1], 1_000);
+        assert!(scale_writes(&core.de1_link_lost()).is_empty());
     }
 
     #[test]

@@ -761,8 +761,6 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				stateName === 'Espresso' &&
 				!snapshot.shotInProgress &&
 				snapshot.completedShot === null;
-			// R5 — readable error text for an Error* substate, null when healthy.
-			const machineError = machineErrorText(substate);
 			// R6 — stamp when the machine first entered a resting state, so an
 			// idle-elapsed readout can count up from it. Only re-stamp on the
 			// transition *into* rest, not on every notification while resting.
@@ -772,12 +770,28 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				machineState,
 				machineStateName: stateName,
 				machineSubstate: substate,
-				machineError,
 				...(resting ? { shotInProgress: false } : null),
 				...(espressoEntering ? { shotInProgress: true } : null),
 				...(enteringRest ? { idleSince: performance.now() } : null),
 				...(resting ? null : { idleSince: null }),
 				eventLog: appendLog(snapshot.eventLog, `MachineState -> ${machineState}`)
+			};
+		}
+		case 'MachineErrorChanged': {
+			// R5 — the fault to surface, decided in core: every Error* substate
+			// immediately, except ErrorNoAc, which the DE1 reports spuriously
+			// while waking / heating and is held until it persists (firmware
+			// >= 1337, 6 s — Decenza 98215217 / b8d625ba). `null` = cleared.
+			const message = event.content.message ?? null;
+			return {
+				...snapshot,
+				machineError: message,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					message === null
+						? `Machine fault cleared (${event.content.substate})`
+						: `Machine fault: ${event.content.substate} — ${message}`
+				)
 			};
 		}
 		case 'ShotStarted':

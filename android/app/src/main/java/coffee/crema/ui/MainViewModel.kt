@@ -58,7 +58,6 @@ import coffee.crema.core.ShotQualityReport
 import coffee.crema.core.SteamHotWaterSettings
 import coffee.crema.core.StopReason
 import coffee.crema.core.profileFingerprint
-import coffee.crema.core.subStateErrorMessage
 import coffee.crema.profiles.BrewDefaults
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.brewDefaultsJson
@@ -395,9 +394,8 @@ data class MainUiState(
     val machineStateName: MachineState? = null,
     /** Raw machine-substate name (e.g. `"Pouring"`), or null. */
     val machineSubstate: String? = null,
-    /** Human-readable message when the current substate is an *error* (e.g.
-     *  `"No water — refill the tank"`), else null. Sourced from core
-     *  `subStateErrorMessage` so it matches the web shell's copy verbatim. */
+    /** Human-readable message for the machine fault core says to surface
+     *  (`Event.MachineErrorChanged`), else null — the same copy as web. */
     val machineError: String? = null,
     /** Latest tank level, mm (`Event.WaterLevel`), or null before the first report. */
     val waterLevelMm: Float? = null,
@@ -2017,9 +2015,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // skipped those quits. The exclusions are the ones that must never
             // be cut off mid-way — the same set the screensaver refuses to
             // interrupt — plus an already-asleep machine (nothing to do).
+            // ...and never a sleep the firmware would latch in Refill and
+            // honour right after the next refill (firmware < 1357).
             val sleepable = !machineBusyForSaver(s) &&
                 s.machineStateName != MachineState.Sleep &&
-                s.machineStateName != MachineState.GoingToSleep
+                s.machineStateName != MachineState.GoingToSleep &&
+                !sleepLatchesInRefill(s)
             val primary = s.proxyRole != "secondary"
             // Logcat, not appendLog: the in-app event log dies with the task.
             if (s.sleepOnQuit && sleepable && primary) {
@@ -4267,12 +4268,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
 
     /** Show the saver; when coupled, also put the DE1 to sleep (only from a
-     *  known-Idle machine — de1app's start_sleep gate). */
+     *  known-Idle machine — de1app's start_sleep gate — and never into the
+     *  firmware's Refill sleep latch, see [sleepLatchesInRefill]). */
     private fun showSaver() {
         _ui.update { it.copy(saverVisible = true) }
         if (_ui.value.sleepMachineWithSaver &&
             ble.state.value == De1BleManager.State.READY &&
-            _ui.value.machineStateName == MachineState.Idle
+            _ui.value.machineStateName == MachineState.Idle &&
+            !sleepLatchesInRefill(_ui.value)
         ) {
             sleep()
         }
@@ -4900,15 +4903,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         machineState = "${c.state.string} / ${c.substate.string}",
                         machineStateName = c.state,
                         machineSubstate = c.substate.string,
-                        // Readable error copy for an error substate (null otherwise),
-                        // from core so it matches web. Healthy substates clear it.
-                        machineError = subStateErrorMessage(c.substate.string),
                         modeStartedAtMs = started,
                         modeElapsedMs = if (started == null) 0L else prev.modeElapsedMs,
                     )
                 }
                 updateModeTicker()
                 appendLog("MachineState -> ${c.state.string} / ${c.substate.string}")
+            }
+            is Event.MachineErrorChanged -> {
+                // The fault to surface, decided in core so web and Android agree:
+                // every Error* substate at once, except ErrorNoAc, which the DE1
+                // reports spuriously while waking / heating and core holds until
+                // it persists (firmware >= 1337, 6 s — Decenza 98215217 /
+                // b8d625ba). A null message clears it.
+                val c = event.content
+                _ui.update { it.copy(machineError = c.message) }
+                appendLog(
+                    if (c.message == null) "Machine fault cleared (${c.substate.string})"
+                    else "Machine fault: ${c.substate.string} — ${c.message}",
+                )
             }
             is Event.ShotStarted -> {
                 // Entering a shot: flip the resting↔extracting flag and zero the
@@ -5580,6 +5593,29 @@ internal fun shouldRaiseSaver(
 ): Boolean {
     if (prev == null || !next.isAsleep() || prev.isAsleep()) return false
     return !appAskedForSleep()
+}
+
+/**
+ * Whether an AUTOMATIC sleep request (screensaver coupling, sleep-on-quit)
+ * would be latched by the DE1 and fire right after the user refills the tank
+ * instead of sleeping the machine now — firmware < 1357 (or unknown) in
+ * Refill, or any Bengle in Refill (decaid 7a0b0c28 / f8cd9553). The rule
+ * lives in core ([coffee.crema.core.sleepRequestLatchesInRefill]); [latches]
+ * is injectable so the wiring is testable on the JVM without the native lib.
+ */
+internal fun sleepLatchesInRefill(
+    s: MainUiState,
+    latches: (String, String, UInt?, UInt?) -> Boolean = { state, sub, fw, model ->
+        coffee.crema.core.sleepRequestLatchesInRefill(state, sub, fw, model)
+    },
+): Boolean {
+    val state = s.machineStateName ?: return false
+    return latches(
+        state.string,
+        s.machineSubstate ?: "",
+        s.de1MachineInfo[MmrRegister.FirmwareVersion],
+        s.de1MachineInfo[MmrRegister.MachineModel],
+    )
 }
 
 internal fun buildSteamHotWaterSettings(

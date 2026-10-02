@@ -1615,9 +1615,17 @@ impl CremaBridge {
         json(self.core.brew_session_cancel())
     }
 
-    /// Discard all session state — e.g. on disconnect.
-    pub fn reset(&mut self) {
-        self.core.reset();
+    /// Discard all session state — e.g. on disconnect. Returns the teardown's
+    /// `CoreOutput` JSON: a scale-timer stop when the DE1 went away mid-shot.
+    pub fn reset(&mut self) -> String {
+        json(self.core.reset())
+    }
+
+    /// The DE1 link dropped unexpectedly (auto-reconnect starting). Keeps the
+    /// session, stops the scale's timer if a shot had it running. See
+    /// [`CremaCore::de1_link_lost`].
+    pub fn de1_link_lost(&mut self) -> String {
+        json(self.core.de1_link_lost())
     }
 
     /// Slice the rolling BLE-capture buffer to JSONL covering

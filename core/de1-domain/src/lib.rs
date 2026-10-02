@@ -196,8 +196,8 @@ pub use stop::{
     sav_counts_volume, volume_stop_arms,
 };
 pub use tank::{
-    DEFAULT_REFILL_POINT_MM, SENSOR_OFFSET_MM, TANK_FULL_ML, TANK_MM_TO_ML, water_tank_depth_mm,
-    water_tank_ml, water_tank_percent,
+    DEFAULT_REFILL_POINT_MM, SENSOR_OFFSET_MM, TANK_FULL_ML, TANK_LEVEL_SMOOTHING_TAU_S,
+    TANK_MM_TO_ML, TankLevelSmoother, water_tank_depth_mm, water_tank_ml, water_tank_percent,
 };
 pub use units::{
     WeightUnit, bar_to_psi, celsius_to_fahrenheit, fahrenheit_to_celsius, fl_oz_to_ml, grams_to_oz,

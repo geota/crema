@@ -376,6 +376,40 @@ impl StateInfo {
     }
 }
 
+/// First DE1 firmware build that honours a sleep request while the machine
+/// is in Refill (DE1Firmware `CTopTouchSM::S_Refill`, commit `eb21a1d`).
+/// Older builds ignore the request but keep it **latched**, then honour it the
+/// moment the machine leaves Refill — i.e. right after the user refills the
+/// tank (decaid `7a0b0c28`, `_kSleepOnRefillMinFwBuild`).
+pub const SLEEP_IN_REFILL_MIN_FIRMWARE: u32 = 1357;
+
+/// Whether an *automatic* sleep request (screensaver, sleep-on-quit) sent now
+/// would be latched by the firmware and fire after the next refill instead of
+/// putting the machine to sleep — so the caller should skip it.
+///
+/// True when the machine is in Refill (the top-level state or the substate)
+/// and either the firmware build is unknown or below
+/// [`SLEEP_IN_REFILL_MIN_FIRMWARE`], or the machine is a Bengle (`model ≥ 128`)
+/// — decaid `f8cd9553` restricts sleep-from-refill to classic DE1 hardware
+/// because Bengle's refill behaviour differs. Outside Refill it is always
+/// false. An unknown build counts as old, matching decaid (`tryParse ?? 0`).
+#[must_use]
+pub fn sleep_request_latches_in_refill(
+    state: MachineState,
+    substate: SubState,
+    firmware_build: Option<u32>,
+    machine_model: Option<u32>,
+) -> bool {
+    let in_refill = state == MachineState::Refill || substate == SubState::Refill;
+    if !in_refill {
+        return false;
+    }
+    if machine_model.is_some_and(crate::mmr::is_bengle_model) {
+        return true;
+    }
+    firmware_build.is_none_or(|build| build < SLEEP_IN_REFILL_MIN_FIRMWARE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,6 +525,68 @@ mod tests {
                     got: 1,
                 })
             );
+        }
+    }
+
+    mod sleep_in_refill {
+        use super::*;
+
+        #[test]
+        fn outside_refill_never_latches() {
+            assert!(!sleep_request_latches_in_refill(
+                MachineState::Idle,
+                SubState::Ready,
+                None,
+                None
+            ));
+            assert!(!sleep_request_latches_in_refill(
+                MachineState::Idle,
+                SubState::Ready,
+                Some(1300),
+                Some(1)
+            ));
+        }
+
+        #[test]
+        fn refill_on_old_or_unknown_firmware_latches() {
+            for (state, sub) in [
+                (MachineState::Refill, SubState::Ready),
+                (MachineState::Idle, SubState::Refill),
+            ] {
+                assert!(sleep_request_latches_in_refill(
+                    state,
+                    sub,
+                    Some(1356),
+                    Some(1)
+                ));
+                assert!(sleep_request_latches_in_refill(state, sub, None, Some(1)));
+            }
+        }
+
+        #[test]
+        fn refill_on_1357_or_newer_does_not_latch() {
+            assert!(!sleep_request_latches_in_refill(
+                MachineState::Refill,
+                SubState::Refill,
+                Some(1357),
+                Some(2)
+            ));
+            assert!(!sleep_request_latches_in_refill(
+                MachineState::Idle,
+                SubState::Refill,
+                Some(1358),
+                None
+            ));
+        }
+
+        #[test]
+        fn bengle_never_sleeps_from_refill() {
+            assert!(sleep_request_latches_in_refill(
+                MachineState::Refill,
+                SubState::Refill,
+                Some(1400),
+                Some(128)
+            ));
         }
     }
 }

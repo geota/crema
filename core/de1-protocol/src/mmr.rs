@@ -72,6 +72,16 @@ pub fn machine_model_name(raw: u32) -> String {
     format!("model {raw}")
 }
 
+/// Whether a raw `MachineModel` MMR value is Bengle hardware: model **128 and
+/// above**. A range, not one value, so later Bengle variants need no app
+/// change — de1app `is_bengle_model_value` (`de1_de1.tcl:825-828`) and decaid
+/// `isBengleModelValue` (`de1.models.dart:386`) both use exactly this rule.
+/// Models `1..=7` (DE1 … DE1XXXL) are all classic DE1 hardware.
+#[must_use]
+pub const fn is_bengle_model(raw: u32) -> bool {
+    raw >= 128
+}
+
 /// Whether the connected DE1 has the Bengle cup-warmer plate hardware —
 /// a capability gate the shell uses to show / hide the cup-warmer card.
 /// Today the gate is `MachineModel ∈ {DE1XL, DE1CAFE, DE1XXL, DE1XXXL}`

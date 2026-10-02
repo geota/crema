@@ -539,13 +539,13 @@ export class CremaApp {
 			// transition into an `Error*` substate after the fold below.
 			const priorMachineError = this.state.current.machineError;
 			this.state.applyEvent(event);
-			if (event.type === 'MachineStateChanged') {
+			if (event.type === 'MachineErrorChanged') {
 				const nextMachineError = this.state.current.machineError;
 				if (nextMachineError !== null && nextMachineError !== priorMachineError) {
-					// Edge-triggered: only the entry into an error substate
-					// fires. A persistent error that re-asserts the same
-					// substate does not re-fire; the user does not want a
-					// per-notification flood.
+					// Edge-triggered: only the entry into an error fires — the
+					// core emits one event per change, and holds the spurious
+					// ErrorNoAc blip back entirely, so a heating machine never
+					// pages anyone. A persistent error does not re-fire.
 					this.fireWebhook('machineError', {
 						errorText: nextMachineError,
 						machineState: event.content.state,

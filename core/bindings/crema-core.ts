@@ -785,6 +785,28 @@ export type Event =
 	/** New substate within `state`. */
 	substate: SubState;
 }}
+	/**
+	 * The machine fault the shells should surface changed — entering an
+	 * `Error*` substate (`message` = the readable copy from
+	 * [`SubState::error_message`]) or leaving it (`message: None`).
+	 * 
+	 * The core decides this rather than each shell mapping the substate,
+	 * because one fault is not trustworthy on sight: `ErrorNoAc` (217, "the
+	 * front power switch is off") is reported spuriously for a few seconds
+	 * while a DE1 wakes or heats. It is surfaced only on firmware ≥ 1337 and
+	 * only once the episode has persisted for 6 s, latched until the
+	 * substate leaves it (Decenza `98215217`, `b8d625ba`). Every other fault
+	 * is surfaced immediately. Edge-triggered: one event per change, never
+	 * one per notification — so a webhook keyed on it fires once per episode.
+	 */
+	| { type: "MachineErrorChanged", content: {
+	/** Top-level machine state at the change. */
+	state: MachineState;
+	/** Substate at the change (the fault itself while `message` is set). */
+	substate: SubState;
+	/** Readable fault text, or `None` once the fault has cleared. */
+	message?: string;
+}}
 	/** An espresso shot began. */
 	| { type: "ShotStarted", content?: undefined }
 	/** The shot moved to a new phase. */

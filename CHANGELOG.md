@@ -206,6 +206,20 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   total. Brews imported before this fix keep their old (wrong) times — they
   can't be told apart reliably, so re-import from Beanconqueror to correct them.
 
+- **No more false "water low" warnings while the pump runs** — the tank
+  sloshes by about a third of its depth under the pump; the level is now
+  smoothed over ~3 s in core (Decenza parity), so the readout and the low-water
+  warning follow the real level. Web, tablet and phone.
+- **No surprise sleep right after a refill** (Android) — on DE1 firmware older
+  than 1357, a sleep requested while the machine is asking for water is held by
+  the firmware and fires the moment the tank is refilled. The screensaver and
+  sleep-on-quit no longer send it in that state.
+- **No "front power switch is off" flash while the machine heats** — the DE1
+  briefly reports that fault on every wake and warm-up. Crema now shows it only
+  on firmware 1337+ and only once it has lasted 6 s (Decenza parity), so the
+  `machineError` webhook no longer fires on a heating machine.
+- **A DE1 that disconnects mid-shot stops the scale's timer** — the scale stays
+  connected and used to keep counting.
 - **Android backups keep brew details** — a backup made on Android dropped
   each brew's method, recipe name, water, temperature, next-time plan and
   guided weight curve; they now survive backup and restore.
