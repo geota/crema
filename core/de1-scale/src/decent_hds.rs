@@ -16,13 +16,12 @@
 //! churn) every time the DE1 slept. Scales without it keep crema's existing
 //! LCD-off (`0A 00`, link retained) and opt-in power-off.
 //!
-//! The firmware major is decoded here from byte 5 of the `0x0A` reply (BCD,
-//! decaid `DecentHdsFirmwareVersion.fromBcd`: both nibbles ≤ 9, major ≤ 30 so
-//! an original scale's marker such as `0xFE` never reads as a version).
-//! **Dependency:** PR #111 (`fix/upstream-scales`, not on this branch) adds
-//! the full `decent_scale::HdsFirmwareVersion` decoder; once it lands,
-//! [`hds_firmware_major`] should delegate to it. Until then this gate is
-//! deliberately conservative — no decoded major, no SoftSleep.
+//! The firmware major comes from the `0x0A` reply via
+//! [`HdsFirmwareVersion::from_bcd`] (decaid `DecentHdsFirmwareVersion.fromBcd`:
+//! both nibbles ≤ 9, major ≤ 30, so an original scale's marker such as `0xFE`
+//! never reads as a version). No decoded major, no SoftSleep.
+
+use crate::decent_scale::HdsFirmwareVersion;
 
 /// Every Decent Scale frame opens with this byte.
 const HEADER: u8 = 0x03;
@@ -51,13 +50,7 @@ pub fn hds_firmware_major(frame: &[u8]) -> Option<u8> {
     if frame.len() != FRAME_LEN || frame[0] != HEADER || frame[1] != STATUS_OPCODE {
         return None;
     }
-    let tens = frame[5] >> 4;
-    let units = frame[5] & 0x0F;
-    if tens > 9 || units > 9 {
-        return None;
-    }
-    let major = tens * 10 + units;
-    (major <= 30).then_some(major)
+    HdsFirmwareVersion::from_bcd(frame[5], frame[6]).map(|v| v.major)
 }
 
 /// Whether `frame` is the 7-byte answer to [`VOLTAGE_PROBE`].
