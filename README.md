@@ -75,7 +75,7 @@ Everything below ships in the web app and the Android app (tablet and phone) unl
 - **Shot history**: full telemetry for every shot, filters by profile, method and bean, multi-shot overlay comparison, and community v2 `.shot.json` import/export.
 - **Bean and roaster library**: bags, roast and open dates, freshness, grams remaining, photos, and a roaster's shelf of bags. Retroactively rebind a shot to a bag (the shot keeps a snapshot).
 - **Roaster duplicate merge**: Crema spots roasters with the same name and offers to merge them. The bags move to one roaster, and the duplicate is tagged rather than deleted, so you can un-merge it later.
-- **Beanconqueror import and export** (web): import beans, roasters and brews from a Beanconqueror export; export the bean library as a Beanconqueror ZIP.
+- **Beanconqueror import and export**: import beans, roasters and brews from a Beanconqueror export; export the bean library as a Beanconqueror ZIP.
 - **Visualizer catalogue search** in the bean form: pick a coffee and Crema fills the empty fields.
 
 **Machine and scales**
@@ -264,7 +264,7 @@ The Android app is a full native client of the same core, not a remote. It uses 
 Most features ship to web, tablet and phone together; the [changelog](CHANGELOG.md) says which shells each change reaches. Where they differ today:
 
 - **Android only**: a background connection that keeps the DE1 link and reconnect loop alive with the screen off (opt-in, and only while the device is charging); multi-device mirroring, where one device owns the Bluetooth link and relays it to others on the LAN; and an on-demand update check against GitHub releases.
-- **Web only**: Beanconqueror import/export, and webhooks.
+- **Web only**: webhooks.
 
 ## Contributing
 
