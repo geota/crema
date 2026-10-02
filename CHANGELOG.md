@@ -218,6 +218,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   briefly reports that fault on every wake and warm-up. Crema now shows it only
   on firmware 1337+ and only once it has lasted 6 s (Decenza parity), so the
   `machineError` webhook no longer fires on a heating machine.
+- **The shot-start auto-tare waits for a still scale** — taring a load cell
+  that is still ringing (cup just put down, GHC just pressed) baked the wobble
+  in as the zero, and stop-at-weight then stopped grams late. The tare now
+  fires once the last four readings sit within 1 g (Decenza parity), with the
+  old tare-at-first-flow as the fallback; a cup put down during preheat gets
+  its own settled re-tare. The scale's residual zero at first flow (up to 2 g,
+  only after a tare was seen to land) is corrected for the whole shot, so the
+  stop and the saved yield are no longer short by the drift.
 - **A DE1 that disconnects mid-shot stops the scale's timer** — the scale stays
   connected and used to keep counting.
 - **Android backups keep brew details** — a backup made on Android dropped

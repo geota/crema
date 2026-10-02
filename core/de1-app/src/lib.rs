@@ -29,11 +29,12 @@ use std::time::Duration;
 
 use de1_domain::saw_learning::SawLearningModel;
 use de1_domain::{
-    AutoStop, BeverageType, BrewRecipe, BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase,
-    Estimate, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile, STOP_WEIGHT_BEFORE,
-    ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StepWeightExit, StopCapture,
-    StopConfig, StopReason, StopTargets, TankLevelSmoother, VolumeIntegrator, WaterEvent,
-    WaterMonitor, WeightSpikeGate, WeightUnit, sav_counts_volume, shot_disposition,
+    AUTO_TARE_HOLDOFF_MS, AUTO_TARE_THRESHOLD_G, AutoStop, BeverageType, BrewRecipe,
+    BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase, Estimate, FlowAlgorithm, FlowEstimator,
+    LineFreqDetector, Profile, STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor, ShotPhase, SteamEvent,
+    SteamMonitor, StepWeightExit, StopCapture, StopConfig, StopReason, StopTargets,
+    TankLevelSmoother, TareSettleWindow, VolumeIntegrator, WaterEvent, WaterMonitor,
+    WeightSpikeGate, WeightUnit, pre_shot_zero_offset, sav_counts_volume, shot_disposition,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -463,8 +464,10 @@ pub struct CremaCore {
     /// via Crema or the DE1's on-machine touch (GHC) — the gating event is
     /// the same.
     auto_tare: bool,
-    /// Tare-settling gate. `Some(t)` from the auto-tare at shot start (where
-    /// `t` is when the tare command was sent) until the hardware tare lands;
+    /// Tare-settling gate. `Some(t)` from an auto-tare (sent once the
+    /// pre-flow reading settled, or at first flow as the fallback — see
+    /// [`auto_tare_pending`](Self::auto_tare_pending); `t` is when the tare
+    /// command was sent) until the hardware tare lands;
     /// `None` otherwise. While set, [`handle_scale_weight`](Self::handle_scale_weight)
     /// reports weight as zero so the pre-tare pan/cup weight never reaches the
     /// live chart or the recorded shot. Cleared on the first near-zero reading
@@ -716,6 +719,30 @@ pub struct CremaCore {
     /// (Decenza `29878266`), so an outage sends one stop, not one per
     /// teardown path. Re-armed at the next shot start.
     scale_timer_stopped_for_drop: bool,
+    /// The shot-start auto-tare is armed but waiting for a settled reading
+    /// (Decenza `da2e5495`): set at `ShotEvent::Started` when auto-tare is
+    /// on, cleared when the tare fires — on the first settled pre-flow
+    /// window, or at first flow as a fallback so a scale that never settles
+    /// still gets the tare it always got. While set, readings report zero
+    /// exactly as under [`tare_gate`](Self::tare_gate).
+    auto_tare_pending: bool,
+    /// The last [`de1_domain::AUTO_TARE_SETTLE_SAMPLES`] raw pre-flow
+    /// readings, for the settle test.
+    auto_tare_window: TareSettleWindow,
+    /// When this shot's last auto-tare was sent, for the
+    /// [`AUTO_TARE_HOLDOFF_MS`] spacing.
+    last_auto_tare: Option<Duration>,
+    /// Whether the last tare was *observed* to land (a near-zero reading
+    /// cleared [`tare_gate`](Self::tare_gate), not its timeout) — the
+    /// precondition for adopting the pre-shot zero.
+    tare_observed: bool,
+    /// The most recent raw scale reading this shot, grams — what the
+    /// pre-shot zero is captured from at first flow.
+    last_raw_weight: Option<f32>,
+    /// The scale's residual zero at first flow, grams, subtracted from every
+    /// reading of the shot (Decenza `da2e5495` pre-shot zero correction;
+    /// bounded to ±2 g and adopted only after an observed tare). `0.0` = none.
+    pre_shot_zero_offset_g: f32,
 }
 
 /// In-flight state of one profile upload. Owned by
@@ -838,6 +865,12 @@ impl CremaCore {
             no_ac_since: None,
             reported_machine_error: None,
             scale_timer_stopped_for_drop: false,
+            auto_tare_pending: false,
+            auto_tare_window: TareSettleWindow::new(),
+            last_auto_tare: None,
+            tare_observed: false,
+            last_raw_weight: None,
+            pre_shot_zero_offset_g: 0.0,
         }
     }
 
@@ -2205,6 +2238,8 @@ impl CremaCore {
     /// supports tare. Shared by [`tare_scale`](Self::tare_scale) and the
     /// automatic tare at shot start.
     fn push_tare_command(&mut self, out: &mut CoreOutput) {
+        // Any tare moves the zero — a captured pre-shot offset no longer applies.
+        self.pre_shot_zero_offset_g = 0.0;
         if let Some(scale) = &mut self.scale
             && let Some(data) = scale.tare()
         {
@@ -3166,6 +3201,20 @@ impl CremaCore {
         // fire the one-shot serial / settings queries so the anti-mistouch
         // state and active mode are fetched as soon as the scale is reporting.
         self.push_connect_queries_once(out);
+        // Pre-flow auto-tare, settle-gated (Decenza `da2e5495`) — see
+        // [`evaluate_auto_tare`](Self::evaluate_auto_tare). While the
+        // shot-start tare waits for a still reading, and on the reading that
+        // fires a tare, report zero exactly as the tare gate below does.
+        if self.shot_started.is_some() && self.flow_started.is_none() {
+            let fired = self.evaluate_auto_tare(reading.weight_g, now, out);
+            if fired || self.auto_tare_pending {
+                self.push_suppressed_reading(&reading, out);
+                return;
+            }
+        }
+        if self.shot_started.is_some() {
+            self.last_raw_weight = Some(reading.weight_g);
+        }
         // Tare-settling gate. After the auto-tare fired at shot start, the
         // scale keeps reporting the pre-tare pan/cup weight for the ~50–500 ms
         // until the hardware tare physically lands; recording that would
@@ -3182,51 +3231,39 @@ impl CremaCore {
             // de1app's confirmation window is 1 s; allow a touch more before
             // giving up and resuming so a failed tare never zeroes forever.
             const TARE_SETTLE_TIMEOUT: Duration = Duration::from_millis(1500);
-            if reading.weight_g.abs() <= TARE_SETTLE_G
-                || now.saturating_sub(tare_sent) >= TARE_SETTLE_TIMEOUT
-            {
+            let landed = reading.weight_g.abs() <= TARE_SETTLE_G;
+            if landed || now.saturating_sub(tare_sent) >= TARE_SETTLE_TIMEOUT {
                 // Tare landed (or we gave up): start the post-tare series clean
                 // and let this (~zero) reading flow through normally below.
+                // Only an OBSERVED landing qualifies the pre-shot zero capture.
                 self.tare_gate = None;
+                self.tare_observed = landed;
                 self.flow.reset();
                 // The baseline legitimately stepped to ~0 — don't let the
                 // spike gate read the drop as a corrupt jump.
                 self.weight_gate.reset();
             } else {
                 // Still pre-tare — report zero so neither the live chart nor the
-                // recorded shot shows the pan/cup weight. The device's own
-                // passthrough channels ride through unchanged; skip the flow
-                // estimator, shot metrics, and auto-stop so nothing is polluted.
-                self.last_scale_estimate = Some(Estimate {
-                    weight: 0.0,
-                    flow: 0.0,
-                });
-                out.events.push(Event::ScaleReading {
-                    weight: 0.0,
-                    flow: 0.0,
-                    device_flow: reading.flow_g_per_s,
-                    device_timer: reading.timer_ms,
-                    device_volume: reading.volume,
-                    device_standby: reading.standby_minutes,
-                    device_battery: reading.battery_percent,
-                    device_flow_smoothing: reading.flow_smoothing,
-                    device_auto_stop: reading.auto_stop,
-                });
+                // recorded shot shows the pan/cup weight.
+                self.push_suppressed_reading(&reading, out);
                 return;
             }
         }
+        // The pre-shot zero correction (Decenza `da2e5495`): `0.0` except
+        // during a shot whose post-tare zero had crept by ≤ 2 g at first flow.
+        let raw_g = reading.weight_g - self.pre_shot_zero_offset_g;
         // Untared-cup guard: net the reading against the latched software
         // zero (usually 0), or hold the pipeline while a heavy early reading
         // settles — see [`untared_guard`](Self::untared_guard).
-        let Some(net_weight) = self.untared_guard(reading.weight_g, now, out) else {
+        let Some(net_weight) = self.untared_guard(raw_g, now, out) else {
             // Mid-settle: show the raw reading (the user should see the cup
             // land) but keep the estimator / metrics / auto-stop out of it.
             self.last_scale_estimate = Some(Estimate {
-                weight: reading.weight_g,
+                weight: raw_g,
                 flow: 0.0,
             });
             out.events.push(Event::ScaleReading {
-                weight: reading.weight_g,
+                weight: raw_g,
                 flow: 0.0,
                 device_flow: reading.flow_g_per_s,
                 device_timer: reading.timer_ms,
@@ -3311,6 +3348,75 @@ impl CremaCore {
         // A deferred completion locks on this fresh reading once the drip has
         // settled (geota/crema#64) — the scale's stream is the primary driver.
         self.maybe_finalize_post_shot_settle(now, out);
+    }
+
+    /// Report a scale reading as zero weight — the pre-tare suppression shared
+    /// by the tare gate and the pending settle-gated auto-tare. The device's
+    /// own passthrough channels ride through unchanged; the flow estimator,
+    /// shot metrics and auto-stop are skipped so nothing is polluted.
+    fn push_suppressed_reading(&mut self, reading: &de1_scale::ScaleReading, out: &mut CoreOutput) {
+        self.last_scale_estimate = Some(Estimate {
+            weight: 0.0,
+            flow: 0.0,
+        });
+        out.events.push(Event::ScaleReading {
+            weight: 0.0,
+            flow: 0.0,
+            device_flow: reading.flow_g_per_s,
+            device_timer: reading.timer_ms,
+            device_volume: reading.volume,
+            device_standby: reading.standby_minutes,
+            device_battery: reading.battery_percent,
+            device_flow_smoothing: reading.flow_smoothing,
+            device_auto_stop: reading.auto_stop,
+        });
+    }
+
+    /// The pre-flow auto-tare (Decenza `da2e5495`, `onScaleWeightSample`),
+    /// fed every raw reading between shot start and first flow. Two tares can
+    /// fire, both only on a *settled* window (the last four readings within
+    /// 1.0 g — [`TareSettleWindow`]) and at least [`AUTO_TARE_HOLDOFF_MS`]
+    /// apart:
+    ///
+    ///  - the shot-start tare, while [`auto_tare_pending`](Self::auto_tare_pending);
+    ///  - a re-tare when a cup is put down during preheat — a reading above
+    ///    [`AUTO_TARE_THRESHOLD_G`] after the shot-start tare landed.
+    ///
+    /// Returns whether a tare fired on this reading.
+    fn evaluate_auto_tare(&mut self, raw_g: f32, now: Duration, out: &mut CoreOutput) -> bool {
+        if !self.auto_tare {
+            return false;
+        }
+        self.auto_tare_window.push(raw_g);
+        let cup_placed_late = !self.auto_tare_pending
+            && self.tare_gate.is_none()
+            && self.last_auto_tare.is_some()
+            && raw_g > AUTO_TARE_THRESHOLD_G;
+        if !(self.auto_tare_pending || cup_placed_late) || !self.auto_tare_window.is_settled() {
+            return false;
+        }
+        let holdoff = Duration::from_millis(AUTO_TARE_HOLDOFF_MS);
+        if self
+            .last_auto_tare
+            .is_some_and(|at| now.saturating_sub(at) < holdoff)
+        {
+            return false;
+        }
+        self.fire_auto_tare(now, out);
+        true
+    }
+
+    /// Send an auto-tare and open the tare-settling gate so the pre-tare
+    /// weight is suppressed until the hardware tare lands (see `tare_gate`).
+    /// The tare write is a no-op without a capable scale.
+    fn fire_auto_tare(&mut self, now: Duration, out: &mut CoreOutput) {
+        self.auto_tare_pending = false;
+        // The tare itself moves the reading.
+        self.auto_tare_window.reset();
+        self.last_auto_tare = Some(now);
+        self.tare_observed = false;
+        self.push_tare_command(out);
+        self.tare_gate = Some(now);
     }
 
     /// The untared-cup guard (Decenza `weightprocessor.cpp:242-253`, evolved
@@ -3889,6 +3995,8 @@ impl CremaCore {
         let (peak_pressure, peak_temp, peak_weight, final_weight) = self
             .shot_metrics
             .drain(stop_capture.as_ref().map(|c| c.weight_g));
+        // The pre-shot zero correction belongs to the shot just finalized.
+        self.pre_shot_zero_offset_g = 0.0;
         out.events.push(Event::ShotCompleted {
             duration: duration_ms,
             sample_count,
@@ -3996,15 +4104,18 @@ impl CremaCore {
                 // Auto-tare the connected scale so the cup starts from zero,
                 // mirroring the legacy app's tare-at-shot-start behaviour —
                 // gated on the latched user preference (default true). The
-                // tare write is a no-op when no scale is connected, so the
-                // explicit scale check inside `push_tare_command` carries.
-                if self.auto_tare {
-                    self.push_tare_command(out);
-                    // Open the tare-settling gate so the pre-tare pan/cup weight
-                    // is suppressed until the hardware tare lands — see
-                    // `tare_gate` and `handle_scale_weight`.
-                    self.tare_gate = Some(now);
-                }
+                // tare itself waits for a settled reading (Decenza
+                // `da2e5495`): taring a load cell that is still ringing from
+                // the cup going down / the GHC being pressed bakes the
+                // transient in as the zero. See `auto_tare_pending` and
+                // `handle_scale_weight`; first flow is the fallback.
+                self.tare_gate = None;
+                self.auto_tare_pending = self.auto_tare;
+                self.auto_tare_window.reset();
+                self.last_auto_tare = None;
+                self.tare_observed = false;
+                self.last_raw_weight = None;
+                self.pre_shot_zero_offset_g = 0.0;
                 // Reset the scale's built-in timer so any residual from a
                 // prior shot clears — but do NOT start it yet: the start
                 // waits for first flow below, so the on-scale timer matches
@@ -4022,6 +4133,19 @@ impl CremaCore {
                     && matches!(phase, ShotPhase::Preinfusion | ShotPhase::Pouring)
                 {
                     self.flow_started = Some(now);
+                    // Zero held? Capture the residual post-tare zero the scale
+                    // had when flow started and correct every reading of the
+                    // shot by it (Decenza `da2e5495`; ±2 g, observed tare only).
+                    self.pre_shot_zero_offset_g = pre_shot_zero_offset(
+                        self.tare_observed && self.tare_gate.is_none(),
+                        self.last_raw_weight,
+                    );
+                    // Fallback: a scale that never settled during preheat (or
+                    // never reported) still gets its shot-start tare now.
+                    if self.auto_tare_pending {
+                        self.fire_auto_tare(now, out);
+                    }
+                    self.auto_tare_window.reset();
                     // Pump on: start the scale's built-in timer from the same
                     // anchor the inbuilt clock uses (fires once per shot —
                     // `flow_started` latches).
@@ -4073,6 +4197,7 @@ impl CremaCore {
                 self.auto_stop = None;
                 // Close any tare gate that never saw its confirmation reading.
                 self.tare_gate = None;
+                self.auto_tare_pending = false;
                 // Stop the scale's built-in timer alongside the auto-stop.
                 Self::push_timer_command(&self.scale, TimerCommand::Stop, out);
                 // `record.duration` is the domain `Duration`; narrow to the
@@ -4940,6 +5065,189 @@ mod tests {
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(500), 1_500);
         let w = scale_reading_weight(&out).expect("a reading");
         assert!((w - 5.0).abs() < 0.5, "post-tare weight recorded (got {w})");
+    }
+
+    /// A Bookoo weight packet for a signed weight in grams.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn bookoo_grams(g: f32) -> [u8; 10] {
+        let mut p = bookoo_packet((g.abs() * 100.0).round() as u32);
+        if g < 0.0 {
+            p[6] = b'-';
+        }
+        p
+    }
+
+    fn tare_writes(out: &CoreOutput) -> usize {
+        scale_writes(out)
+            .iter()
+            .filter(|w| **w == bookoo::TARE.as_slice())
+            .count()
+    }
+
+    /// Enter Espresso / Heating (preheat, no flow yet) with a Bookoo paired.
+    fn preheating_core() -> CremaCore {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        let out = core.on_notification(Source::De1State, &[4, 1], 1_000);
+        assert!(out.events.contains(&Event::ShotStarted));
+        assert_eq!(
+            tare_writes(&out),
+            0,
+            "the shot-start tare waits for a settled reading"
+        );
+        core
+    }
+
+    #[test]
+    fn the_shot_start_tare_waits_for_a_ringing_cell_to_settle() {
+        let mut core = preheating_core();
+        // Decenza's field trace: the cell swings -6.8 → +8.3 g around a 250 g cup.
+        let mut t = 1_100;
+        for g in [243.2, 258.3, 247.9, 254.1, 244.0, 256.5] {
+            let out = core.on_notification(Source::ScaleWeight, &bookoo_grams(g), t);
+            assert_eq!(tare_writes(&out), 0, "no tare on a moving reading ({g} g)");
+            assert_eq!(
+                scale_reading_weight(&out),
+                Some(0.0),
+                "cup weight stays hidden"
+            );
+            t += 100;
+        }
+        // The ringing dies: four readings within 1 g — the tare fires on the fourth.
+        let mut fired = 0;
+        for g in [250.4, 250.2, 250.6, 250.3] {
+            let out = core.on_notification(Source::ScaleWeight, &bookoo_grams(g), t);
+            fired += tare_writes(&out);
+            assert_eq!(scale_reading_weight(&out), Some(0.0));
+            t += 100;
+        }
+        assert_eq!(fired, 1);
+        // The tare lands; nothing else fires.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_grams(0.0), t);
+        assert_eq!(tare_writes(&out), 0);
+        assert_eq!(scale_reading_weight(&out), Some(0.0));
+    }
+
+    #[test]
+    fn a_drifting_reading_never_settles_and_the_tare_falls_back_to_first_flow() {
+        let mut core = preheating_core();
+        let mut t = 1_100;
+        for i in 0..12u16 {
+            // 0.47 g/sample — inside the band per step, outside it per window.
+            let out = core.on_notification(
+                Source::ScaleWeight,
+                &bookoo_grams(200.0 - 0.47 * f32::from(i)),
+                t,
+            );
+            assert_eq!(tare_writes(&out), 0);
+            t += 100;
+        }
+        // First flow: the tare the shot always got, now as the fallback.
+        let out = core.on_notification(Source::De1State, &[4, 4], t);
+        assert_eq!(tare_writes(&out), 1);
+    }
+
+    #[test]
+    fn a_cup_put_down_during_preheat_is_re_tared_once_settled() {
+        let mut core = preheating_core();
+        let mut t = 1_100;
+        // Empty platform: settles at ~0, the shot-start tare fires and lands.
+        let mut fired = 0;
+        for _ in 0..4 {
+            fired += tare_writes(&core.on_notification(Source::ScaleWeight, &bookoo_grams(0.0), t));
+            t += 100;
+        }
+        assert_eq!(fired, 1);
+        core.on_notification(Source::ScaleWeight, &bookoo_grams(0.0), t);
+        t += 1_000;
+        // A 180 g cup goes down and rings, then settles: one re-tare.
+        let mut fired = 0;
+        for g in [172.0, 186.0, 179.0, 180.2, 180.1, 180.3, 180.2, 180.2] {
+            fired += tare_writes(&core.on_notification(Source::ScaleWeight, &bookoo_grams(g), t));
+            t += 100;
+        }
+        assert_eq!(fired, 1, "the late cup gets exactly one settled tare");
+    }
+
+    #[test]
+    fn the_pre_shot_zero_drift_is_corrected_for_the_whole_shot() {
+        let mut core = preheating_core();
+        let mut t = 1_100;
+        for _ in 0..4 {
+            core.on_notification(Source::ScaleWeight, &bookoo_grams(0.0), t);
+            t += 100;
+        }
+        // Tare observed to land, then the zero creeps to -0.4 g during preheat.
+        for g in [0.0, -0.1, -0.2, -0.3, -0.4] {
+            core.on_notification(Source::ScaleWeight, &bookoo_grams(g), t);
+            t += 100;
+        }
+        core.on_notification(Source::De1State, &[4, 4], t); // first flow
+        assert!((core.pre_shot_zero_offset_g + 0.4).abs() < 1e-4);
+        // A steady raw 10.0 g reads as 10.4 g — the true yield.
+        let mut w = None;
+        for _ in 0..40 {
+            t += 100;
+            w = scale_reading_weight(&core.on_notification(
+                Source::ScaleWeight,
+                &bookoo_grams(10.0),
+                t,
+            ));
+        }
+        let w = w.unwrap();
+        assert!((w - 10.4).abs() < 0.2, "corrected weight (got {w})");
+        // The next shot starts from a clean zero.
+        core.on_notification(Source::De1State, &[2, 0], t + 100);
+        core.on_notification(Source::De1State, &[4, 1], t + 10_000);
+        assert_eq!(core.pre_shot_zero_offset_g, 0.0);
+    }
+
+    #[test]
+    fn no_zero_correction_without_an_observed_tare_or_beyond_two_grams() {
+        // Beyond the bound: an untared cup, never an "offset".
+        let mut core = preheating_core();
+        let mut t = 1_100;
+        for _ in 0..4 {
+            core.on_notification(Source::ScaleWeight, &bookoo_grams(0.0), t);
+            t += 100;
+        }
+        core.on_notification(Source::ScaleWeight, &bookoo_grams(0.0), t);
+        t += 100;
+        core.on_notification(Source::ScaleWeight, &bookoo_grams(-2.5), t);
+        core.on_notification(Source::De1State, &[4, 4], t + 100);
+        assert_eq!(core.pre_shot_zero_offset_g, 0.0);
+
+        // The tare gate timed out instead of seeing the zero: not observed.
+        let mut core = preheating_core();
+        let mut t = 1_100;
+        for _ in 0..4 {
+            core.on_notification(Source::ScaleWeight, &bookoo_grams(1.5), t);
+            t += 100;
+        }
+        // Stuck at 1.5 g past the 1.5 s gate timeout.
+        core.on_notification(Source::ScaleWeight, &bookoo_grams(1.5), t + 1_600);
+        core.on_notification(Source::De1State, &[4, 4], t + 1_700);
+        assert_eq!(core.pre_shot_zero_offset_g, 0.0);
+    }
+
+    #[test]
+    fn no_settle_gated_tare_when_auto_tare_is_off() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC", &[]);
+        core.set_auto_tare(false);
+        core.on_notification(Source::De1State, &[4, 1], 1_000);
+        let mut t = 1_100;
+        for _ in 0..6 {
+            let out = core.on_notification(Source::ScaleWeight, &bookoo_grams(250.0), t);
+            assert_eq!(tare_writes(&out), 0);
+            // Not suppressed either: auto-tare off means the raw weight shows.
+            assert!(scale_reading_weight(&out).unwrap() > 100.0);
+            t += 100;
+        }
+        assert_eq!(
+            tare_writes(&core.on_notification(Source::De1State, &[4, 4], t)),
+            0
+        );
     }
 
     #[test]

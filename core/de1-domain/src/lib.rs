@@ -45,6 +45,7 @@
 //!   UniFFI bridges.
 
 pub mod app_settings;
+pub mod auto_tare;
 pub mod bean;
 pub mod bean_coerce;
 pub mod bean_search;
@@ -93,6 +94,10 @@ pub mod volume;
 pub mod water;
 pub mod weight_gate;
 
+pub use auto_tare::{
+    AUTO_TARE_HOLDOFF_MS, AUTO_TARE_SETTLE_BAND_G, AUTO_TARE_SETTLE_SAMPLES, AUTO_TARE_THRESHOLD_G,
+    MAX_PRE_SHOT_ZERO_OFFSET_G, TareSettleWindow, pre_shot_zero_offset,
+};
 pub use bean::{
     BREWS_REMAINING_WINDOW, Bean, BeanMix, BeanOrigin, BeanRoastType, DEFAULT_DOSE_PER_BREW_G,
     RoastBand, RoastFreshness, Roaster, ShotBean, brews_remaining_estimate, credit_remaining,
