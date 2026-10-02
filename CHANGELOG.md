@@ -23,6 +23,7 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   (`replace=1`), once, a moment after you stop editing. Same trigger as
   Decent's own shot-upload plugin. Web and Android.
 
+- Calibration's 'Reset to factory' is hidden until the DE1 command is verified
 - **Both flow readings now share the Flow card** (#92) — machine flow (ml/s)
   on the left, scale flow (g/s) on the right, so the two numbers being compared
   sit side by side. Dispensed water volume moved to the Weight card next to the
