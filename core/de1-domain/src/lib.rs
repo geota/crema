@@ -123,12 +123,14 @@ pub use bean_sync::{
     BeanPushItem, BeanSyncScope, RoasterDeletePlan, RoasterDuplicate, RoasterLinkPatch,
     RoasterMergePlan, RoasterPushItem, bean_sync_scope, bean_sync_scope_json,
     coffee_bag_write_request, coffee_bag_write_request_json, detect_roaster_duplicates,
-    detect_roaster_duplicates_json, merge_pulled_roaster, merge_pulled_roaster_json,
-    plan_bean_push, plan_bean_push_json, plan_roaster_delete, plan_roaster_delete_json,
-    plan_roaster_link_patches, plan_roaster_link_patches_json, plan_roaster_merge,
-    plan_roaster_merge_json, plan_roaster_push, plan_roaster_push_json,
-    resolve_roaster_catalogue_link, resolve_roaster_catalogue_link_json, roaster_write_request,
-    roaster_write_request_json, sync_direction_pulls, sync_direction_pushes,
+    detect_roaster_duplicates_json, merge_pulled_bag, merge_pulled_roaster,
+    merge_pulled_roaster_json, plan_bean_push, plan_bean_push_json, plan_roaster_delete,
+    plan_roaster_delete_json, plan_roaster_link_patches, plan_roaster_link_patches_json,
+    plan_roaster_merge, plan_roaster_merge_json, plan_roaster_push, plan_roaster_push_json,
+    remote_ids_needing_detail, remote_ids_needing_detail_json, remote_roaster_unlinked,
+    remote_roaster_unlinked_json, resolve_roaster_catalogue_link,
+    resolve_roaster_catalogue_link_json, roaster_write_request, roaster_write_request_json,
+    sync_direction_pulls, sync_direction_pushes,
 };
 pub use beanconqueror::{
     ImportDiagnostics, ImportPlan, ImportedShot, crema_to_bc_main_json,
@@ -251,10 +253,10 @@ pub use visualizer_error::{
     visualizer_quota_limit,
 };
 pub use visualizer_sync::{
-    BeanReconcileAction, LocalShotRef, ReconcileAction, RoasterReconcileAction, WireShot,
-    reconcile_beans, reconcile_beans_json, reconcile_roasters, reconcile_roasters_json,
-    reconcile_shots, reconcile_shots_json, signature_for_bean, signature_for_roaster,
-    signature_for_shot,
+    BeanReconcileAction, LocalShotRef, PulledBag, ReconcileAction, RoasterReconcileAction,
+    WireShot, reconcile_beans, reconcile_beans_json, reconcile_pulled_bags, reconcile_roasters,
+    reconcile_roasters_json, reconcile_shots, reconcile_shots_json, signature_for_bean,
+    signature_for_roaster, signature_for_shot,
 };
 pub use visualizer_wire::{
     BagWire, RoasterWire, ShotPatchInputs, VISUALIZER_PREMIUM_SHOT_FIELDS, VISUALIZER_SHOT_FIELDS,

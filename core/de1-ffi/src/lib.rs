@@ -1298,6 +1298,31 @@ pub fn plan_roaster_push(payload: String) -> Result<String, CremaError> {
     de1_domain::plan_roaster_push_json(&payload).map_err(crema_err)
 }
 
+/// The pulled remote ids with no locally-bound row — the ones whose full
+/// detail the shell fetches (`{"local", "remote"}` JSON → `string[]`). Mirrors
+/// the wasm `remoteIdsNeedingDetail`; see
+/// [`de1_domain::remote_ids_needing_detail_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] on malformed input.
+#[uniffi::export]
+pub fn remote_ids_needing_detail(payload: String) -> Result<String, CremaError> {
+    de1_domain::remote_ids_needing_detail_json(&payload).map_err(crema_err)
+}
+
+/// Whether a pulled roaster row is KNOWN to have no catalogue link (key
+/// present and empty). Mirrors the wasm `remoteRoasterUnlinked`; see
+/// [`de1_domain::remote_roaster_unlinked`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when `remote_json` isn't JSON.
+#[uniffi::export]
+pub fn remote_roaster_unlinked(remote_json: String) -> Result<bool, CremaError> {
+    de1_domain::remote_roaster_unlinked_json(&remote_json).map_err(crema_err)
+}
+
 /// Which bean-sync legs run for the beans / roasters directions
 /// (`BeanSyncScope` JSON). Mirrors the wasm `beanSyncScope`; see
 /// [`de1_domain::bean_sync_scope`].

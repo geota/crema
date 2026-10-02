@@ -54,6 +54,8 @@ import {
 	mergePulledRoaster as wasmMergePulledRoaster,
 	planBeanPush as wasmPlanBeanPush,
 	planRoasterPush as wasmPlanRoasterPush,
+	remoteIdsNeedingDetail as wasmRemoteIdsNeedingDetail,
+	remoteRoasterUnlinked as wasmRemoteRoasterUnlinked,
 	planRoasterLinkPatches as wasmPlanRoasterLinkPatches,
 	reconcileBeans as wasmReconcileBeans,
 	reconcileRoasters as wasmReconcileRoasters,
@@ -68,6 +70,7 @@ import type {
 import { readSyncConfig, updateSyncConfig } from '$lib/visualizer/sync-config';
 import type { components } from '$lib/visualizer/openapi';
 import { CATALOGUE_PAGE_SIZE, parseCataloguePage, type CataloguePage } from '$lib/bean/catalogue';
+import { mintBeanId } from '$lib/bean/model';
 
 /** Crema-side projection of the Visualizer `/me` response (camel-cased). */
 export interface VisualizerAccount {
@@ -114,20 +117,35 @@ function reconcileRoasters(local: Roaster[], remote: RoasterWire[]): RoasterReco
 	) as RoasterReconcileAction[];
 }
 
-/** Reconcile decoded remote beans against the local library (CORE4). The
- *  `roasterNames` map (local roaster id → name) lets the kernel fold the
- *  roaster name into each bean's signature, exactly as the TS did via
- *  `library.getRoaster(id)?.name`. */
+/** One pulled bag for the core kernel: the RAW remote JSON (key presence
+ *  matters — an absent key never clears a local value), its roaster resolved
+ *  to a local id, and a minted fallback id for a brand-new bag. */
+type PulledBag = { wire: unknown; localRoasterId: string | null; fallbackId: string };
+
+/** Reconcile RAW pulled bags against the local library (core
+ *  `reconcile_pulled_bags`): a matched local takes only the keys the remote row
+ *  carries; a new bag is decoded in full. The `roasterNames` map lets the
+ *  kernel fold the roaster name into each bean's signature. */
 function reconcileBeans(
 	local: Bean[],
-	remote: Bean[],
+	remote: PulledBag[],
 	roasterNames: Record<string, string>,
 	lastSyncAt: number | null
 ): BeanReconcileAction[] {
 	return JSON.parse(
-		wasmReconcileBeans(JSON.stringify({ local, remote, roasterNames, lastSyncAt }))
+		wasmReconcileBeans(
+			JSON.stringify({ local, remote, roasterNames, lastSyncAt, nowMs: Date.now() })
+		)
 	) as BeanReconcileAction[];
 }
+
+/** The pulled remote ids with no locally-bound row (core `remote_ids_needing_detail`). */
+function remoteIdsNeedingDetail(local: { visualizerId?: string | null }[], remote: unknown[]): string[] {
+	return JSON.parse(wasmRemoteIdsNeedingDetail(JSON.stringify({ local, remote }))) as string[];
+}
+
+/** Concurrent `GET /…/{id}` detail fetches (list rows are thin). */
+export const DETAIL_FETCH_CONCURRENCY = 4;
 
 /** Fold a reconciled remote roaster into its local row (core `merge_pulled_roaster`):
  *  `refresh` = an `update` (take the remote fields), else a `bind`. */
@@ -356,6 +374,43 @@ export const BeanSyncLive = Layer.effect(
 				return out;
 			});
 
+		/**
+		 * Swap each list row whose id is in `ids` for its `GET {base}/{id}`
+		 * detail (at most {@link DETAIL_FETCH_CONCURRENCY} at a time, the client's
+		 * retry policy per call). A failed fetch keeps the summary row — the
+		 * merge then only applies what it carries — and is reported, never
+		 * failing the run.
+		 */
+		const withDetails = <T extends { id?: string }>(base: string, rows: T[], ids: string[]) =>
+			Effect.gen(function* () {
+				const wanted = new Set(ids);
+				const failures: { id: string; error: string }[] = [];
+				const out = yield* Effect.forEach(
+					rows,
+					(row) =>
+						row.id && wanted.has(row.id)
+							? Effect.either(call(`${base}/${row.id}`)).pipe(
+									Effect.map((res) => {
+										const detail = res._tag === 'Right' ? (res.right as T | null) : null;
+										if (detail && typeof detail === 'object' && detail.id === row.id) {
+											return detail;
+										}
+										failures.push({
+											id: row.id as string,
+											error:
+												res._tag === 'Left'
+													? describeVisualizerError(res.left)
+													: 'unexpected detail body'
+										});
+										return row;
+									})
+								)
+							: Effect.succeed(row),
+					{ concurrency: DETAIL_FETCH_CONCURRENCY }
+				);
+				return { rows: out, failures };
+			});
+
 		const runSync = Effect.fn('BeanSync.runSync')(function* (library: BeanLibraryStore) {
 			const settings = readSyncSettings();
 			const log: SyncLogEntry[] = [];
@@ -413,14 +468,25 @@ export const BeanSyncLive = Layer.effect(
 				// 1) Pull remote roasters → reconcile in the core kernel (CORE4),
 				//    apply the action list shell-side.
 				if (scope.pullRoasters) {
-					const remoteRoasters = (yield* pullPaged<RoasterListResponse['data'][number]>(
+					const summaries = (yield* pullPaged<RoasterListResponse['data'][number]>(
 						'/roasters'
 					)) as RoasterWire[];
+					// The list is thin (id + name): fetch the full detail for roasters
+					// new to this device; bound ones merge the summary only.
+					const { rows: remoteRoasters, failures } = yield* withDetails(
+						'/roasters',
+						summaries,
+						remoteIdsNeedingDetail(library.roasters, summaries)
+					);
+					for (const f of failures) {
+						log.push({ direction: 'pull', kind: 'roaster', id: f.id, name: 'Roaster details', at: Date.now(), error: f.error });
+					}
 					for (const action of reconcileRoasters(library.roasters, remoteRoasters)) {
 						const wire = action.remote;
 						// The kernel only emits actions for remotes that carry an id.
 						const remoteId = wire.id as string;
-						if (!wire.canonical_roaster_id) remoteUnlinked.add(remoteId);
+						// Only a row that CARRIES an empty link is known to be unlinked.
+						if (wasmRemoteRoasterUnlinked(JSON.stringify(wire))) remoteUnlinked.add(remoteId);
 						if (action.kind === 'update' || action.kind === 'bind') {
 							// The merge lives in the core (`merge_pulled_roaster`): an
 							// `update` takes the remote fields unless the local was edited
@@ -535,18 +601,31 @@ export const BeanSyncLive = Layer.effect(
 					}
 				}
 
-				// 3) Pull remote bags → decode (beanFromWire) → reconcile in the
-				//    core kernel against the last-sync baseline, apply shell-side.
+				// 3) Pull remote bags → reconcile the RAW rows in the core kernel
+				//    against the last-sync baseline, apply shell-side.
 				if (scope.pullBeans) {
-					const remoteBags = (yield* pullPaged<CoffeeBagListResponse['data'][number]>(
+					const summaries = (yield* pullPaged<CoffeeBagListResponse['data'][number]>(
 						'/coffee_bags'
 					)) as BagWire[];
-					const decodedBags = remoteBags.map((wire) =>
-						beanFromWire(wire, (rid) => (rid ? (remoteRoasterIdToLocal.get(rid) ?? null) : null))
+					// The list is thin (id, name, roaster, catalogue link): fetch the
+					// full detail for bags new to this device; bound bags merge the
+					// summary only (no remote edit time to justify a refetch).
+					const { rows: remoteBags, failures } = yield* withDetails(
+						'/coffee_bags',
+						summaries,
+						remoteIdsNeedingDetail(library.beans, summaries)
 					);
+					for (const f of failures) {
+						log.push({ direction: 'pull', kind: 'bean', id: f.id, name: 'Bag details', at: Date.now(), error: f.error });
+					}
+					const pulledBags: PulledBag[] = remoteBags.map((wire) => ({
+						wire,
+						localRoasterId: wire.roaster_id ? (remoteRoasterIdToLocal.get(wire.roaster_id) ?? null) : null,
+						fallbackId: mintBeanId()
+					}));
 					const roasterNames: Record<string, string> = {};
 					for (const r of library.roasters) roasterNames[r.id] = r.name;
-					for (const action of reconcileBeans(library.beans, decodedBags, roasterNames, lastSyncAt)) {
+					for (const action of reconcileBeans(library.beans, pulledBags, roasterNames, lastSyncAt)) {
 						const decoded = action.remote;
 						// Stored as the core hands it back — a replace keeps the local
 						// id + `updatedAt`, so the pull doesn't read as a local edit.

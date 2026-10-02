@@ -31,7 +31,9 @@
 //!   Visualizer" removes.
 
 use crate::bean::{Bean, Roaster};
-use crate::visualizer_wire::{RoasterWire, bean_to_wire};
+#[cfg(test)]
+use crate::visualizer_wire::RoasterWire;
+use crate::visualizer_wire::bean_to_wire;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
@@ -117,48 +119,181 @@ pub fn resolve_roaster_catalogue_link(roaster: &Roaster, beans: &[Bean]) -> Opti
 }
 
 // ── Pull merge ────────────────────────────────────────────────────────────
+//
+// Visualizer's LIST endpoints are thin: `GET /coffee_bags` rows carry only
+// `id`, `name`, `roaster_id`, `canonical_coffee_bag_id`; `GET /roasters` rows
+// only `id` and `name`. A pull therefore merges by KEY PRESENCE in the raw
+// remote JSON: an absent key never touches the local value, a key present as
+// `null` clears it. Crema-only fields are never touched by a pull at all.
 
-/// Fold a reconciled remote roaster into its local row.
+/// A key in a remote JSON object: `None` = absent, `Some(None)` = present as
+/// `null` (or a non-string), `Some(Some(s))` = present with a string.
+fn field<'a>(obj: &'a Map<String, Value>, key: &str) -> Option<Option<&'a str>> {
+    obj.get(key).map(Value::as_str)
+}
+
+/// Apply an optional string key onto `target` when present.
+fn take_opt(obj: &Map<String, Value>, key: &str, target: &mut Option<String>) {
+    if let Some(v) = field(obj, key) {
+        *target = v.map(str::to_owned);
+    }
+}
+
+/// Apply a string key onto a required-string `target` when present (`null` → "").
+fn take_str(obj: &Map<String, Value>, key: &str, target: &mut String) {
+    if let Some(v) = field(obj, key) {
+        *target = v.unwrap_or_default().to_owned();
+    }
+}
+
+/// Fold a pulled Visualizer bag (the RAW summary or detail JSON) into its
+/// local row. Only keys the payload carries overwrite local values; an absent
+/// key leaves the local value alone, a present `null` clears it.
+///
+/// Remote-owned (Visualizer-modelled) keys: `name`, `roaster_id` (as
+/// `local_roaster_id`, the shell's resolution of the remote id — an unknown
+/// remote roaster keeps the local link), `canonical_coffee_bag_id`,
+/// `roast_date`, `roast_level`, the origin keys, `quality_score`,
+/// `tasting_notes`, `place_of_purchase`, `url`, `notes` (HTML → plain) and the
+/// user's visible `metadata`. Everything else — bag size, grams left, cost,
+/// tags, photo, linked profile, roast type, mix, decaf, rating, favourite,
+/// grinder, frozen / defrosted / opened dates, archived state, the catalogue
+/// roaster pick, ids and timestamps — is Crema's and is never touched.
+#[must_use]
+pub fn merge_pulled_bag(local: &Bean, remote: &Value, local_roaster_id: Option<&str>) -> Bean {
+    let mut out = local.clone();
+    let Some(obj) = remote.as_object() else {
+        return out;
+    };
+    if let Some(Some(id)) = field(obj, "id") {
+        out.visualizer_id = Some(id.to_owned());
+    }
+    if let Some(Some(name)) = field(obj, "name")
+        && !name.is_empty()
+    {
+        out.name = name.to_owned();
+    }
+    match field(obj, "roaster_id") {
+        Some(None) => out.roaster_id = None,
+        Some(Some(_)) => {
+            if let Some(local_id) = local_roaster_id {
+                out.roaster_id = Some(local_id.to_owned());
+            }
+        }
+        None => {}
+    }
+    take_opt(
+        obj,
+        "canonical_coffee_bag_id",
+        &mut out.canonical_coffee_bag_id,
+    );
+    take_opt(obj, "roast_date", &mut out.roasted_on);
+    if let Some(level) = field(obj, "roast_level") {
+        out.roast_level = crate::visualizer_wire::roast_level_from_wire(level);
+    }
+    take_opt(obj, "country", &mut out.origin.country);
+    take_opt(obj, "region", &mut out.origin.region);
+    take_opt(obj, "farm", &mut out.origin.farm);
+    take_opt(obj, "farmer", &mut out.origin.farmer);
+    take_opt(obj, "variety", &mut out.origin.variety);
+    take_opt(obj, "elevation", &mut out.origin.elevation);
+    take_opt(obj, "processing", &mut out.origin.processing);
+    take_opt(obj, "harvest_time", &mut out.origin.harvest_time);
+    take_str(obj, "quality_score", &mut out.quality_score);
+    take_str(obj, "tasting_notes", &mut out.tasting_notes);
+    take_opt(obj, "place_of_purchase", &mut out.place_of_purchase);
+    take_opt(obj, "url", &mut out.url);
+    if let Some(notes) = field(obj, "notes") {
+        out.notes = notes
+            .map(crate::visualizer_wire::html_to_plain)
+            .unwrap_or_default();
+    }
+    if let Some(meta) = obj.get("metadata") {
+        // The visible blob only; the `crema` block (Crema-only fields) is ignored.
+        let mut visible = match meta {
+            Value::Object(m) => m.clone(),
+            _ => Map::new(),
+        };
+        visible.remove("crema");
+        out.metadata = Value::Object(visible);
+    }
+    out
+}
+
+/// Fold a reconciled remote roaster (the RAW summary or detail JSON) into its
+/// local row, by key presence like [`merge_pulled_bag`].
 ///
 /// - `refresh = true` (a [`crate::RoasterReconcileAction::Update`]: the local
-///   is already bound) → take the remote `name` / `website` / `image_url`;
-///   the remote catalogue link wins, a remote with none keeps the local one.
+///   is already bound) → take the remote `name` / `website` / `image_url` when
+///   present; a non-empty remote catalogue link wins, none keeps the local one.
 ///   Unless the local was **edited since the last sync** (`updated_at >
-///   last_sync_at`): then its fields are kept so the push leg sends the edit
-///   (Visualizer roaster rows carry no edit time to weigh it against).
+///   last_sync_at`): then its fields are kept so the push leg sends the edit.
 /// - `refresh = false` (a `Bind`) → only the binding, plus the remote's
 ///   catalogue link when the local has none.
 ///
-/// `updated_at` is never touched: a pull is not a local edit, so it must not
-/// look like one to the next push leg. The local duplicate-of pointer
-/// (`canonical_roaster_id`) is never touched by a pull either. A remote
-/// without an id leaves `visualizer_id` alone.
+/// `updated_at` is never touched (a pull is not a local edit), nor are the
+/// Crema-only `city` / `country` / `notes` or the local duplicate-of pointer.
 #[must_use]
 pub fn merge_pulled_roaster(
     local: &Roaster,
-    remote: &RoasterWire,
+    remote: &Value,
     refresh: bool,
     last_sync_at: Option<i64>,
 ) -> Roaster {
     let mut out = local.clone();
-    if let Some(id) = &remote.id {
-        out.visualizer_id = Some(id.clone());
+    let Some(obj) = remote.as_object() else {
+        return out;
+    };
+    if let Some(Some(id)) = field(obj, "id") {
+        out.visualizer_id = Some(id.to_owned());
     }
+    let link = field(obj, "canonical_roaster_id")
+        .flatten()
+        .filter(|l| !l.is_empty());
     let edited_here = last_sync_at.is_some_and(|ls| local.updated_at > ls);
     if refresh && !edited_here {
-        out.name.clone_from(&remote.name);
-        out.website.clone_from(&remote.website);
-        out.image_url.clone_from(&remote.image_url);
-        if remote.canonical_roaster_id.is_some() {
-            out.catalogue_roaster_id
-                .clone_from(&remote.canonical_roaster_id);
+        if let Some(Some(name)) = field(obj, "name")
+            && !name.is_empty()
+        {
+            out.name = name.to_owned();
         }
-    } else if let Some(link) = non_empty(remote.canonical_roaster_id.as_ref())
+        take_opt(obj, "website", &mut out.website);
+        take_opt(obj, "image_url", &mut out.image_url);
+        if let Some(l) = link {
+            out.catalogue_roaster_id = Some(l.to_owned());
+        }
+    } else if let Some(l) = link
         && non_empty(local.catalogue_roaster_id.as_ref()).is_none()
     {
-        out.catalogue_roaster_id = Some(link.clone());
+        out.catalogue_roaster_id = Some(l.to_owned());
     }
     out
+}
+
+/// Whether a pulled roaster row is KNOWN to have no catalogue link: the key
+/// is present and empty / `null`. A thin list row (key absent) says nothing,
+/// so the catalogue link-PATCH leg must not fire for it.
+#[must_use]
+pub fn remote_roaster_unlinked(remote: &Value) -> bool {
+    remote
+        .as_object()
+        .and_then(|o| field(o, "canonical_roaster_id"))
+        .is_some_and(|v| v.is_none_or(str::is_empty))
+}
+
+/// The remote ids in a pull with no locally-bound row — the ones whose full
+/// `GET /…/{id}` detail the shell fetches (list rows are thin). Bound rows
+/// merge the summary only: there's no remote edit time to tell when a
+/// website-side edit would justify a refetch.
+#[must_use]
+pub fn remote_ids_needing_detail(bound_ids: &[Option<String>], remote: &[Value]) -> Vec<String> {
+    let bound: HashSet<&str> = bound_ids.iter().flatten().map(String::as_str).collect();
+    remote
+        .iter()
+        .filter_map(|r| r.get("id").and_then(Value::as_str))
+        .filter(|id| !bound.contains(id))
+        .map(str::to_owned)
+        .collect()
 }
 
 // ── Direction gating ──────────────────────────────────────────────────────
@@ -543,13 +678,49 @@ pub fn merge_pulled_roaster_json(
     last_sync_at: Option<i64>,
 ) -> Result<String, String> {
     let local: Roaster = parse(local_json)?;
-    let remote: RoasterWire = parse(remote_json)?;
+    let remote: Value = parse(remote_json)?;
     emit(&merge_pulled_roaster(
         &local,
         &remote,
         refresh,
         last_sync_at,
     ))
+}
+
+/// JSON-bridged [`remote_ids_needing_detail`] for bags or roasters. Input:
+/// `{"local": (Bean | Roaster)[], "remote": <list rows>[]}` (only each local's
+/// `visualizerId` is read). Output: a `string[]` JSON.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+pub fn remote_ids_needing_detail_json(payload: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct In {
+        #[serde(default)]
+        local: Vec<Value>,
+        #[serde(default)]
+        remote: Vec<Value>,
+    }
+    let inp: In = parse(payload)?;
+    let bound: Vec<Option<String>> = inp
+        .local
+        .iter()
+        .map(|l| {
+            l.get("visualizerId")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect();
+    emit(&remote_ids_needing_detail(&bound, &inp.remote))
+}
+
+/// JSON-bridged [`remote_roaster_unlinked`].
+///
+/// # Errors
+/// The JSON error string on a malformed `remote_json`.
+pub fn remote_roaster_unlinked_json(remote_json: &str) -> Result<bool, String> {
+    let remote: Value = parse(remote_json)?;
+    Ok(remote_roaster_unlinked(&remote))
 }
 
 /// JSON-bridged [`bean_sync_scope`]: the two direction strings → a
@@ -699,6 +870,10 @@ pub fn plan_roaster_delete_json(payload: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    fn wv(w: &RoasterWire) -> Value {
+        serde_json::to_value(w).unwrap()
+    }
+
     fn roaster(id: &str, name: &str, updated_at: i64) -> Roaster {
         let mut r = Roaster::new(id.into(), name.into(), 0);
         r.updated_at = updated_at;
@@ -795,7 +970,7 @@ mod tests {
             image_url: None,
             canonical_roaster_id: None,
         };
-        let out = merge_pulled_roaster(&local, &wire, true, Some(1_000));
+        let out = merge_pulled_roaster(&local, &wv(&wire), true, Some(1_000));
         assert_eq!(out.name, "Sey Coffee");
         assert_eq!(out.website.as_deref(), Some("https://sey.coffee"));
         assert_eq!(out.visualizer_id.as_deref(), Some("vz-1"));
@@ -809,7 +984,7 @@ mod tests {
             canonical_roaster_id: Some("cat-remote".into()),
             ..wire
         };
-        let out = merge_pulled_roaster(&local, &linked, true, Some(1_000));
+        let out = merge_pulled_roaster(&local, &wv(&linked), true, Some(1_000));
         assert_eq!(out.catalogue_roaster_id.as_deref(), Some("cat-remote"));
     }
 
@@ -823,7 +998,7 @@ mod tests {
             image_url: None,
             canonical_roaster_id: Some("cat-remote".into()),
         };
-        let out = merge_pulled_roaster(&local, &wire, false, Some(1_000));
+        let out = merge_pulled_roaster(&local, &wv(&wire), false, Some(1_000));
         assert_eq!(out.name, "sey");
         assert_eq!(out.website, None);
         assert_eq!(out.visualizer_id.as_deref(), Some("vz-1"));
@@ -831,7 +1006,7 @@ mod tests {
 
         let mut linked = local.clone();
         linked.catalogue_roaster_id = Some("cat-local".into());
-        let out = merge_pulled_roaster(&linked, &wire, false, Some(1_000));
+        let out = merge_pulled_roaster(&linked, &wv(&wire), false, Some(1_000));
         assert_eq!(out.catalogue_roaster_id.as_deref(), Some("cat-local"));
     }
 
@@ -917,13 +1092,13 @@ mod tests {
             image_url: None,
             canonical_roaster_id: Some("cat-1".into()),
         };
-        let kept = merge_pulled_roaster(&local, &wire, true, Some(1_000));
+        let kept = merge_pulled_roaster(&local, &wv(&wire), true, Some(1_000));
         assert_eq!(kept.name, "Sey (renamed here)");
         assert_eq!(kept.website, None);
         assert_eq!(kept.catalogue_roaster_id.as_deref(), Some("cat-1"));
         assert_eq!(kept.updated_at, 2_000);
         // Not edited since the baseline → the remote fields win.
-        let taken = merge_pulled_roaster(&local, &wire, true, Some(3_000));
+        let taken = merge_pulled_roaster(&local, &wv(&wire), true, Some(3_000));
         assert_eq!(taken.name, "Sey");
     }
 
@@ -1015,7 +1190,7 @@ mod tests {
             name: "Onyx".into(),
             ..RoasterWire::default()
         };
-        let merged = merge_pulled_roaster(&pulled_r, &wire, true, Some(run1_end));
+        let merged = merge_pulled_roaster(&pulled_r, &wv(&wire), true, Some(run1_end));
         assert_eq!(merged, pulled_r);
         assert!(plan_bean_push(std::slice::from_ref(&pulled), Some(run1_end), &[]).is_empty());
         assert!(plan_roaster_push(std::slice::from_ref(&merged), Some(run1_end), &[]).is_empty());
@@ -1039,9 +1214,60 @@ mod tests {
         let mut edited_r = merged;
         edited_r.name = "Onyx Lab".into();
         edited_r.updated_at = 6_000;
-        let kept = merge_pulled_roaster(&edited_r, &wire, true, Some(run1_end));
+        let kept = merge_pulled_roaster(&edited_r, &wv(&wire), true, Some(run1_end));
         assert_eq!(kept.name, "Onyx Lab");
         assert_eq!(plan_roaster_push(&[kept], Some(run1_end), &[]).len(), 1);
+    }
+
+    #[test]
+    fn a_thin_roaster_row_never_blanks_the_website_or_logo() {
+        let mut local = roaster("roaster:1", "Sey", 1);
+        local.visualizer_id = Some("vz-1".into());
+        local.website = Some("https://sey.coffee".into());
+        local.image_url = Some("https://sey.coffee/logo.png".into());
+        local.catalogue_roaster_id = Some("cat-1".into());
+        local.city = Some("Brooklyn".into());
+        // `GET /roasters` summary: id + name only.
+        let row = json!({ "id": "vz-1", "name": "Sey Coffee" });
+        let out = merge_pulled_roaster(&local, &row, true, Some(10));
+        assert_eq!(out.name, "Sey Coffee");
+        assert_eq!(out.website.as_deref(), Some("https://sey.coffee"));
+        assert_eq!(
+            out.image_url.as_deref(),
+            Some("https://sey.coffee/logo.png")
+        );
+        assert_eq!(out.catalogue_roaster_id.as_deref(), Some("cat-1"));
+        assert_eq!(out.city.as_deref(), Some("Brooklyn"));
+        // A detail with an explicit null clears just that field.
+        let detail = json!({ "id": "vz-1", "name": "Sey Coffee", "website": null });
+        assert_eq!(
+            merge_pulled_roaster(&local, &detail, true, Some(10)).website,
+            None
+        );
+        // A summary says nothing about the catalogue link; a detail with null does.
+        assert!(!remote_roaster_unlinked(&row));
+        assert!(remote_roaster_unlinked(
+            &json!({ "id": "vz-1", "canonical_roaster_id": null })
+        ));
+        assert!(!remote_roaster_unlinked(
+            &json!({ "id": "vz-1", "canonical_roaster_id": "c" })
+        ));
+    }
+
+    #[test]
+    fn only_rows_new_to_this_device_need_a_detail_fetch() {
+        let rows = vec![
+            json!({ "id": "vb-1" }),
+            json!({ "id": "vb-2" }),
+            json!({ "name": "no id" }),
+        ];
+        let bound = vec![Some("vb-1".to_owned()), None];
+        assert_eq!(remote_ids_needing_detail(&bound, &rows), vec!["vb-2"]);
+        let payload = json!({ "local": [{ "visualizerId": "vb-2" }], "remote": rows }).to_string();
+        assert_eq!(
+            remote_ids_needing_detail_json(&payload).unwrap(),
+            r#"["vb-1"]"#
+        );
     }
 
     // ── duplicates ────────────────────────────────────────────────────

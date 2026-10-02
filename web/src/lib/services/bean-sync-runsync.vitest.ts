@@ -41,6 +41,9 @@ beforeAll(async () => {
 	await initTestWasm();
 });
 
+/** A list GET (`/api/roasters?items=…`), not a `/roasters/{id}` detail. */
+const isList = (url: string, base: string) => new URL(url).pathname === `/api${base}`;
+
 type Reply = { ok: true; json?: unknown } | { ok: false; status: number };
 
 function mkHttp(handler: (method: string, url: string) => Reply) {
@@ -141,7 +144,7 @@ function run(library: BeanLibraryStore, http: Layer.Layer<HttpClient>, token: To
 }
 
 const noBags = (method: string, url: string): Reply =>
-	method === 'GET' && url.includes('/coffee_bags') ? { ok: true, json: { data: [], paging: { pages: 1 } } } : { ok: true, json: { data: [], paging: { pages: 1 } } };
+	method === 'GET' && isList(url, '/coffee_bags') ? { ok: true, json: { data: [], paging: { pages: 1 } } } : { ok: true, json: { data: [], paging: { pages: 1 } } };
 
 beforeEach(() => {
 	localStorage.clear();
@@ -151,7 +154,7 @@ describe('BeanSync.runSync — pull', () => {
 	it('pulls a new remote roaster into the local library', async () => {
 		const lib = mkLibrary();
 		const { layer } = mkHttp((method, url) => {
-			if (method === 'GET' && url.includes('/roasters'))
+			if (method === 'GET' && isList(url, '/roasters'))
 				return { ok: true, json: { data: [{ id: 'r1', name: 'Acme' }], paging: { pages: 1 } } };
 			return noBags(method, url);
 		});
@@ -164,7 +167,7 @@ describe('BeanSync.runSync — pull', () => {
 	it('pulls a new remote bag into the local library', async () => {
 		const lib = mkLibrary();
 		const { layer } = mkHttp((method, url) => {
-			if (method === 'GET' && url.includes('/coffee_bags'))
+			if (method === 'GET' && isList(url, '/coffee_bags'))
 				return { ok: true, json: { data: [{ id: 'b1', name: 'Yirg' }], paging: { pages: 1 } } };
 			return { ok: true, json: { data: [], paging: { pages: 1 } } };
 		});
@@ -177,7 +180,7 @@ describe('BeanSync.runSync — pull', () => {
 		const local = { ...blankRoaster('Acme'), visualizerId: null };
 		const lib = mkLibrary({ roasters: [local] });
 		const { layer } = mkHttp((method, url) => {
-			if (method === 'GET' && url.includes('/roasters'))
+			if (method === 'GET' && isList(url, '/roasters'))
 				return { ok: true, json: { data: [{ id: 'r1', name: 'Acme' }], paging: { pages: 1 } } };
 			return { ok: true, json: { data: [], paging: { pages: 1 } } };
 		});
@@ -261,7 +264,7 @@ describe('BeanSync.runSync — Visualizer catalogue links', () => {
 		const roaster = { ...blankRoaster('Onyx'), visualizerId: 'vr-1', catalogueRoasterId: 'cr-1' };
 		const lib = mkLibrary({ roasters: [roaster] });
 		const { layer, calls } = mkHttp((method, url) => {
-			if (method === 'GET' && url.includes('/roasters'))
+			if (method === 'GET' && isList(url, '/roasters'))
 				return { ok: true, json: { data: [{ id: 'vr-1', name: 'Onyx' }], paging: { pages: 1 } } };
 			return { ok: true, json: { data: [], paging: { pages: 1 } } };
 		});
@@ -276,7 +279,7 @@ describe('BeanSync.runSync — Visualizer catalogue links', () => {
 		const roaster = { ...blankRoaster('Onyx'), visualizerId: 'vr-1', catalogueRoasterId: 'cr-1' };
 		const lib = mkLibrary({ roasters: [roaster] });
 		const { layer, calls } = mkHttp((method, url) => {
-			if (method === 'GET' && url.includes('/roasters'))
+			if (method === 'GET' && isList(url, '/roasters'))
 				return { ok: true, json: { data: [{ id: 'vr-1', name: 'Onyx' }], paging: { pages: 1 } } };
 			return { ok: true, json: { data: [], paging: { pages: 1 } } };
 		});
@@ -292,12 +295,12 @@ describe('BeanSync.runSync — Visualizer catalogue links', () => {
 		};
 		const lib = mkLibrary({ roasters: [roaster] });
 		const { layer } = mkHttp((method, url) => {
-			if (method === 'GET' && url.includes('/roasters'))
+			if (method === 'GET' && isList(url, '/roasters'))
 				return {
 					ok: true,
 					json: { data: [{ id: 'vr-1', name: 'Onyx', canonical_roaster_id: 'cr-5' }], paging: { pages: 1 } }
 				};
-			if (method === 'GET' && url.includes('/coffee_bags'))
+			if (method === 'GET' && isList(url, '/coffee_bags'))
 				return {
 					ok: true,
 					json: {
@@ -318,20 +321,41 @@ describe('BeanSync.runSync — Visualizer catalogue links', () => {
  * A small stateful fake Visualizer: GETs list what was written, POST mints
  * ids, PATCH rewrites the row. Records every write.
  */
-function mkVisualizer(seed: { roasters?: Record<string, unknown>[]; bags?: Record<string, unknown>[] } = {}) {
+function mkVisualizer(
+	seed: {
+		roasters?: Record<string, unknown>[];
+		bags?: Record<string, unknown>[];
+		/** Full `GET /…/{id}` bodies (default: the list row itself). */
+		bagDetails?: Record<string, unknown>[];
+		roasterDetails?: Record<string, unknown>[];
+		failDetail?: boolean;
+	} = {}
+) {
 	const roasters = [...(seed.roasters ?? [])];
 	const bags = [...(seed.bags ?? [])];
+	const bagDetails = seed.bagDetails ?? bags;
+	const roasterDetails = seed.roasterDetails ?? roasters;
+	const failDetail = seed.failDetail ?? false;
+	const detailGets: string[] = [];
 	let next = 1;
 	const page = (data: unknown[]) => ({ ok: true as const, json: { data, paging: { pages: 1 } } });
 	const http = mkHttp((method, url) => {
 		const path = new URL(url).pathname.replace(/^\/api/, '');
 		if (method === 'GET' && path === '/roasters') return page(roasters);
 		if (method === 'GET' && path === '/coffee_bags') return page(bags);
+		const detail = /^\/(roasters|coffee_bags)\/([^/]+)$/.exec(path);
+		if (method === 'GET' && detail) {
+			detailGets.push(path);
+			if (failDetail) return { ok: false, status: 500 };
+			const rows = detail[1] === 'roasters' ? roasterDetails : bagDetails;
+			const row = rows.find((r) => r.id === detail[2]);
+			return row ? { ok: true, json: row } : { ok: false, status: 404 };
+		}
 		if (method === 'POST') return { ok: true, json: { id: `v-${next++}` } };
 		return { ok: true, json: {} };
 	});
 	const writes = () => http.calls.filter((c) => c.method !== 'GET');
-	return { ...http, writes };
+	return { ...http, writes, detailGets };
 }
 
 describe('BeanSync.runSync — no echo after a pull (issue: fresh pulled timestamps)', () => {
@@ -443,5 +467,94 @@ describe('BeanSync.runSync — direction gates the legs', () => {
 		expect(s.viz.writes().map((w) => `${w.method} ${new URL(w.url).pathname}`)).toEqual([
 			'POST /api/coffee_bags'
 		]);
+	});
+});
+
+describe('BeanSync.runSync — a pull never blanks local data (thin list rows)', () => {
+	const premium = () =>
+		localStorage.setItem('crema.beans.sync.v1', JSON.stringify({ lastSyncAt: 0, premium: true }));
+
+	it('a bound bag keeps grams left, bag size and notes when pulled from a summary row', async () => {
+		premium();
+		const roaster = { ...blankRoaster('Onyx'), visualizerId: 'vr-1', updatedAt: 0 };
+		const bean: Bean = {
+			...blankBean('bean:1'),
+			name: 'Geometry',
+			roasterId: roaster.id,
+			visualizerId: 'vb-1',
+			bagSize: 250,
+			remaining: 180,
+			notes: 'juicy',
+			roastedOn: '2026-09-20',
+			origin: { ...blankBean('x').origin, country: 'Ethiopia' },
+			updatedAt: 0
+		};
+		const lib = mkLibrary({ roasters: [roaster], beans: [bean] });
+		const viz = mkVisualizer({
+			roasters: [{ id: 'vr-1', name: 'Onyx' }],
+			bags: [{ id: 'vb-1', name: 'Geometry Natural', roaster_id: 'vr-1' }]
+		});
+		await run(lib, viz.layer);
+		const after = lib.beans.find((b) => b.id === 'bean:1')!;
+		expect(after.name).toBe('Geometry Natural');
+		expect(after.bagSize).toBe(250);
+		expect(after.remaining).toBe(180);
+		expect(after.notes).toBe('juicy');
+		expect(after.roastedOn).toBe('2026-09-20');
+		expect(after.origin.country).toBe('Ethiopia');
+		expect(viz.detailGets).toEqual([]);
+		expect(viz.writes()).toHaveLength(0);
+	});
+
+	it('a bag new to this device triggers exactly one detail GET and takes its full details', async () => {
+		premium();
+		const lib = mkLibrary();
+		const viz = mkVisualizer({
+			bags: [{ id: 'vb-9', name: 'Gesha' }],
+			bagDetails: [
+				{ id: 'vb-9', name: 'Gesha', roast_date: '2026-09-01', country: 'Panama', notes: '<p>Floral</p>' }
+			]
+		});
+		await run(lib, viz.layer);
+		expect(viz.detailGets).toEqual(['/coffee_bags/vb-9']);
+		const added = lib.beans.find((b) => b.visualizerId === 'vb-9')!;
+		expect(added.roastedOn).toBe('2026-09-01');
+		expect(added.origin.country).toBe('Panama');
+		expect(added.notes).toBe('Floral');
+		// Linked now: the next sync merges the summary only, no more detail GETs.
+		await run(lib, viz.layer);
+		expect(viz.detailGets).toEqual(['/coffee_bags/vb-9']);
+	});
+
+	it('a failed detail fetch falls back to the summary, logs, and does not abort the run', async () => {
+		premium();
+		const lib = mkLibrary();
+		const viz = mkVisualizer({
+			roasters: [{ id: 'vr-9', name: 'Remote roaster' }],
+			bags: [{ id: 'vb-9', name: 'Gesha' }],
+			failDetail: true
+		});
+		const r = await run(lib, viz.layer);
+		expect(r.ok).toBe(true);
+		expect(lib.beans.find((b) => b.visualizerId === 'vb-9')?.name).toBe('Gesha');
+		expect(lib.roasters.find((x) => x.visualizerId === 'vr-9')?.name).toBe('Remote roaster');
+		expect(r.log.some((e) => e.name === 'Bag details' && e.error)).toBe(true);
+	});
+
+	it('a bound roaster keeps its website from a thin list row and is not link-PATCHed', async () => {
+		premium();
+		const roaster = {
+			...blankRoaster('Onyx'),
+			visualizerId: 'vr-1',
+			website: 'https://onyx.coffee',
+			catalogueRoasterId: 'cr-1',
+			updatedAt: 0
+		};
+		const lib = mkLibrary({ roasters: [roaster] });
+		const viz = mkVisualizer({ roasters: [{ id: 'vr-1', name: 'Onyx Coffee Lab' }] });
+		await run(lib, viz.layer);
+		expect(lib.roasters[0].name).toBe('Onyx Coffee Lab');
+		expect(lib.roasters[0].website).toBe('https://onyx.coffee');
+		expect(viz.writes()).toHaveLength(0);
 	});
 });

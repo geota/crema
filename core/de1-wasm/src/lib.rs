@@ -1040,6 +1040,27 @@ pub fn plan_roaster_push(payload: &str) -> Result<String, String> {
     de1_domain::plan_roaster_push_json(payload)
 }
 
+/// The pulled remote ids with no locally-bound row — the ones whose full
+/// detail the shell fetches (`{"local", "remote"}` JSON → `string[]`). See
+/// `de1_domain::remote_ids_needing_detail`.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+#[wasm_bindgen(js_name = remoteIdsNeedingDetail)]
+pub fn remote_ids_needing_detail(payload: &str) -> Result<String, String> {
+    de1_domain::remote_ids_needing_detail_json(payload)
+}
+
+/// Whether a pulled roaster row is KNOWN to have no catalogue link. See
+/// `de1_domain::remote_roaster_unlinked`.
+///
+/// # Errors
+/// The JSON error string when `remote_json` isn't JSON.
+#[wasm_bindgen(js_name = remoteRoasterUnlinked)]
+pub fn remote_roaster_unlinked(remote_json: &str) -> Result<bool, String> {
+    de1_domain::remote_roaster_unlinked_json(remote_json)
+}
+
 /// Which bean-sync legs run for the beans / roasters directions
 /// (`BeanSyncScope` JSON). See `de1_domain::bean_sync_scope`.
 ///
