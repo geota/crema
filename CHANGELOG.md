@@ -9,13 +9,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **Visualizer edit sync works on free accounts** — Visualizer now takes
-  private notes, the tasting scores (Crema's rating rides as `flavor`), tags
-  and the coffee-bag link on a shot edit only from Premium accounts, and
-  rejects an edit that carries nothing else. Crema checks your account's tier
-  when it loads your Visualizer account and, on a free account (or before the
-  tier is known), quietly leaves those fields out — or skips the update when
-  nothing else changed. Premium accounts sync as before. Web and Android.
+- **Visualizer edit sync no longer fails or loses edits on free accounts** —
+  Premium-only fields are skipped; Premium status is checked on sign-in,
+  daily, and on Test connection. Web and Android.
 - **Decent uploads send the DE1 firmware as its build number** — the
   shot's `machine.firmwareVersion` is now just the CPU firmware build (e.g.
   `1352`), the same value Decent's own app sends. Shots recorded earlier

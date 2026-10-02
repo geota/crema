@@ -75,6 +75,11 @@ export interface CremaServices {
 		fetchAccount(): Promise<VisualizerAccount>;
 		/** Verify the connection + probe the premium tier. */
 		testConnection(): Promise<ConnectionTestResult>;
+		/**
+		 * Re-probe the premium tier if the cached flag is older than 24 h (or was
+		 * never probed); a no-op otherwise, and when signed out. App start.
+		 */
+		refreshPremiumIfStale(): Promise<boolean | null>;
 		/** Best-effort remote bag delete (a 404 is success). */
 		deleteBean(visualizerId: string): Promise<void>;
 		/** Best-effort remote roaster delete (a 404 is success). */
@@ -154,6 +159,7 @@ export function createCremaServices(runtime: AppRuntime): CremaServices {
 		beans: {
 			fetchAccount: () => run(Effect.flatMap(BeanSync, (b) => b.fetchAccount)),
 			testConnection: () => run(Effect.flatMap(BeanSync, (b) => b.testConnection)),
+			refreshPremiumIfStale: () => run(Effect.flatMap(BeanSync, (b) => b.refreshPremiumIfStale)),
 			deleteBean: (visualizerId) => run(Effect.flatMap(BeanSync, (b) => b.deleteBean(visualizerId))),
 			deleteRoaster: (visualizerId) => run(Effect.flatMap(BeanSync, (b) => b.deleteRoaster(visualizerId))),
 			runSync: (library) => run(Effect.flatMap(BeanSync, (b) => b.runSync(library)))

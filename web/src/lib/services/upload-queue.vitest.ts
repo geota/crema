@@ -76,6 +76,7 @@ function fakeBeanSync(over: {
 			runSync: die('runSync') as never,
 			fetchAccount: Effect.die('unused: fetchAccount') as never,
 			refreshPremium: Effect.die('unused: refreshPremium') as never,
+			refreshPremiumIfStale: Effect.die('unused: refreshPremiumIfStale') as never,
 			testConnection: Effect.die('unused: testConnection') as never
 		})
 	);

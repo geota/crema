@@ -17,10 +17,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import java.io.Closeable
 
 /*
@@ -134,28 +137,48 @@ class VisualizerClient(
     }
 
     /**
-     * The account's premium tier, read without side effects: `/me` has no
-     * premium field (API 1.17.2: id, name, public, avatar_url), so this sends
-     * `PATCH /api/coffee_bags/<nil uuid>` — Visualizer's `check_premium!` (the
-     * controller's first before_action) answers 403 for a free account, and a
-     * premium one gets 404 (no such bag); nothing is ever written. True /
-     * false for those; null when inconclusive. Auth / transport failures
-     * throw like every other call (the caller's token refresh handles 401).
+     * The account's Premium tier — a port of the web `BeanSync` probe
+     * (`probePremium`, run by its `testConnection`): `POST /api/roasters` with
+     * a sentinel name (roaster writes are Premium-gated), then delete it.
+     * 2xx → true, 402/403 → false, any other failure → null (inconclusive).
+     * A failed cleanup is non-fatal (the web's next full bean sync tidies the
+     * sentinel). A 401 still throws [VisualizerError.Auth] so the caller's
+     * token refresh can retry.
      */
-    suspend fun probePremium(accessToken: String): Boolean? = try {
-        request(
-            "PATCH",
-            "/coffee_bags/$PREMIUM_PROBE_ID",
-            accessToken,
-            kotlinx.serialization.json.buildJsonObject { put("coffee_bag", kotlinx.serialization.json.buildJsonObject {}) },
-        )
-        null
-    } catch (_: VisualizerError.NotFound) {
-        true
-    } catch (_: VisualizerError.PremiumGated) {
-        false
-    } catch (_: VisualizerError.Http) {
-        null
+    suspend fun probePremium(accessToken: String, nowMs: Long = System.currentTimeMillis()): Boolean? {
+        val created = try {
+            request(
+                "POST",
+                "/roasters",
+                accessToken,
+                buildJsonObject {
+                    put(
+                        "roaster",
+                        buildJsonObject {
+                            put("name", "$PREMIUM_PROBE_PREFIX$nowMs")
+                            put("website", JsonNull)
+                            put("canonical_roaster_id", JsonNull)
+                        },
+                    )
+                },
+            )
+        } catch (_: VisualizerError.PremiumGated) {
+            return false
+        } catch (e: VisualizerError) {
+            if (e is VisualizerError.Auth) throw e
+            return null
+        }
+        val id = (created as? JsonObject)?.get("id")?.jsonPrimitive?.contentOrNull
+        if (id != null) {
+            try {
+                request("DELETE", "/roasters/$id", accessToken)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Non-fatal: left for the next full bean sync to reconcile.
+            }
+        }
+        return true
     }
 
     /**
@@ -210,8 +233,8 @@ class VisualizerClient(
     }
 }
 
-/** The nil UUID — no coffee bag has it, so [VisualizerClient.probePremium] never edits one. */
-internal const val PREMIUM_PROBE_ID = "00000000-0000-0000-0000-000000000000"
+/** Name prefix of the sentinel roaster [VisualizerClient.probePremium] creates and deletes (the web's too). */
+internal const val PREMIUM_PROBE_PREFIX = "__crema_premium_probe_"
 
 /** What OkHttp sent for a JSON String body: `application/json; charset=utf-8`. */
 private val JSON_UTF8 = ContentType.Application.Json.withCharset(Charsets.UTF_8)

@@ -81,11 +81,19 @@ class VisualizerSync(
      */
     private val shotPatchBody: (inputsJson: String, premium: Boolean?) -> String? =
         { inputs, premium -> visualizerShotPatchJson(inputs, premium) },
+    /** Wall clock (unix ms) — the daily Premium re-probe gate; tests pin it. */
+    private val now: () -> Long = System::currentTimeMillis,
+    /** The OAuth code → token exchange (injected so JVM tests can drive a sign-in). */
+    private val exchangeCode: suspend (code: String, verifier: String) -> TokenSet =
+        { code, verifier -> exchangeCodeForToken(clientId, code, verifier, json) },
 ) : UploadDestination {
 
-    private companion object {
+    internal companion object {
         /** Backstop on the pull walk — mirrors the web's maxPages default. */
         const val MAX_PULL_PAGES = 200
+
+        /** The app-start Premium re-probe runs at most this often (web `PREMIUM_REFRESH_INTERVAL_MS`). */
+        const val PREMIUM_REFRESH_INTERVAL_MS = 24L * 60 * 60 * 1000
     }
 
     /** What the Settings/History UI binds to. */
@@ -251,7 +259,7 @@ class VisualizerSync(
                     notify("Visualizer sign-in failed — state mismatch, try again")
                 else -> {
                     _state.update { it.copy(busy = true) }
-                    runCatchingCancellable { exchangeCodeForToken(clientId, code, verifier, json) }
+                    runCatchingCancellable { exchangeCode(code, verifier) }
                         .onSuccess { tokens ->
                             if (!persist { it.copy(tokens = tokens) }) notify("Couldn’t save the Visualizer login on this device")
                             val account = runCatchingCancellable { client.fetchAccount(tokens.accessToken) }.getOrNull()
@@ -272,33 +280,46 @@ class VisualizerSync(
         scope.launch {
             persisted.tokens?.accessToken?.let { revokeToken(clientId, it) }
             // The tier is per-account: a later sign-in re-probes it.
-            persist { it.copy(tokens = null, account = null, premium = null) }
+            persist { it.copy(tokens = null, account = null, premium = null, premiumCheckedAt = null) }
             notify("Signed out of Visualizer")
         }
     }
 
-    /** Re-fetch `/me` and the premium tier (Settings open). Silent on failure — the cache stands. */
+    /** Re-fetch `/me` (Settings open). Silent on failure — the cache stands. */
     fun refreshAccount() {
         if (persisted.tokens == null) return
         scope.launch {
             runCatchingCancellable { withFreshToken { client.fetchAccount(it) } }
-                .onSuccess { account ->
-                    persist { it.copy(account = account) }
-                    refreshPremium()
-                }
+                .onSuccess { account -> persist { it.copy(account = account) } }
         }
     }
 
     /**
-     * Re-probe the premium tier ([VisualizerClient.probePremium]) into the
-     * cache. Inconclusive / failed probes leave the cached value alone.
+     * Re-run the Premium probe ([VisualizerClient.probePremium], the web's
+     * sentinel roaster write) and cache a conclusive result with its time.
+     * Inconclusive / failed probes leave the cached value alone. Returns the
+     * probe result.
      */
-    private suspend fun refreshPremium() {
-        val premium = runCatchingCancellable { withFreshToken { client.probePremium(it) } }.getOrNull() ?: return
-        persist { it.copy(premium = premium) }
+    private suspend fun refreshPremium(): Boolean? {
+        val premium = runCatchingCancellable { withFreshToken { client.probePremium(it, now()) } }.getOrNull()
+            ?: return null
+        persist { it.copy(premium = premium, premiumCheckedAt = now()) }
+        return premium
     }
 
-    /** The Sharing card's "Test" — a `/me` round-trip with a visible verdict. */
+    /**
+     * App start: re-probe the Premium tier when signed in and the last
+     * conclusive probe is over 24 h old (or never happened); otherwise nothing.
+     */
+    fun refreshPremiumIfStale() {
+        val p = persisted
+        if (p.tokens == null) return
+        val checked = p.premiumCheckedAt
+        if (checked != null && now() - checked < PREMIUM_REFRESH_INTERVAL_MS) return
+        scope.launch { refreshPremium() }
+    }
+
+    /** The Sharing card's "Test" — a `/me` round-trip plus the Premium probe, with a visible verdict. */
     fun testConnection() {
         if (persisted.tokens == null) {
             notify("Not signed in to Visualizer")
@@ -309,8 +330,12 @@ class VisualizerSync(
             runCatchingCancellable { withFreshToken { client.fetchAccount(it) } }
                 .onSuccess { account ->
                     persist { it.copy(account = account) }
-                    refreshPremium()
-                    notify("Visualizer connection OK — signed in as ${account.name}")
+                    val tier = when (refreshPremium()) {
+                        true -> " (Premium)"
+                        false -> " (free tier)"
+                        null -> ""
+                    }
+                    notify("Visualizer connection OK — signed in as ${account.name}$tier")
                 }
                 .onFailure { notify("Visualizer connection failed: ${it.message}") }
             _state.update { it.copy(busy = false) }

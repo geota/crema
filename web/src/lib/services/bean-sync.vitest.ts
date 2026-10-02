@@ -12,7 +12,7 @@
 
 import { Cause, Effect, Exit, Layer } from 'effect';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { BeanSync, BeanSyncLive } from './bean-sync.ts';
+import { BeanSync, BeanSyncLive, PREMIUM_REFRESH_INTERVAL_MS } from './bean-sync.ts';
 import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import { HttpStatusError } from '../effect/errors.ts';
@@ -20,6 +20,8 @@ import { blankBean, blankRoaster } from '$lib/bean';
 import type { TokenSet } from '../visualizer/oauth.ts';
 import { initTestWasm } from '$lib/testing/test-init';
 import { readSyncConfig } from '$lib/visualizer/sync-config';
+import { readSyncSettings, writeSyncSettings } from '$lib/bean/visualizer-sync';
+import { completeVisualizerSignIn } from './visualizer-sign-in.ts';
 
 // `uploadBean` / `uploadRoaster` build their bodies through the wasm-backed
 // `beanToWire` / `roasterToWire` (CORE1), so init the bundle first.
@@ -158,25 +160,13 @@ describe('BeanSync.fetchAccount', () => {
 		expect(out).toEqual({ id: 'u1', name: 'Ada', public: true, avatarUrl: 'http://x/a.png' });
 	});
 
-	it('refreshes the cached premium flag off a no-op PATCH probe (404 premium, 403 free)', async () => {
-		localStorage.clear();
-		const me = { id: 'u1', name: 'Ada', public: true, avatar_url: 'http://x/a.png' };
-		for (const [status, want] of [
-			[404, true],
-			[403, false]
-		] as const) {
-			const { layer, calls } = mkHttp((req) => (req.method === 'PATCH' ? { ok: false, status } : { ok: true, json: me }));
-			await run(BeanSync.pipe(Effect.flatMap((b) => b.fetchAccount)), layer);
-			const probe = calls.find((c) => c.method === 'PATCH')!;
-			expect(probe.url).toContain('/coffee_bags/00000000-0000-0000-0000-000000000000');
-			expect(readSyncConfig().premium).toBe(want);
-			expect(JSON.parse(localStorage.getItem('crema.beans.sync.v1') ?? '{}').premium).toBe(want);
-		}
-		// Inconclusive (any other status) leaves the cache as it was.
-		const { layer } = mkHttp((req) => (req.method === 'PATCH' ? { ok: false, status: 422 } : { ok: true, json: me }));
-		const out = await run(BeanSync.pipe(Effect.flatMap((b) => b.fetchAccount)), layer);
-		expect(out.name).toBe('Ada');
-		expect(readSyncConfig().premium).toBe(false);
+	it('is just the /me read — no premium probe rides on it', async () => {
+		const { layer, calls } = mkHttp(() => ({
+			ok: true,
+			json: { id: 'u1', name: 'Ada', public: true, avatar_url: 'http://x/a.png' }
+		}));
+		await run(BeanSync.pipe(Effect.flatMap((b) => b.fetchAccount)), layer);
+		expect(calls.map((c) => `${c.method ?? 'GET'} ${new URL(c.url).pathname}`)).toEqual(['GET /api/me']);
 	});
 
 	it('fails ResponseDecodeError on a malformed /me', async () => {
@@ -212,5 +202,120 @@ describe('BeanSync.testConnection', () => {
 			ok: boolean;
 		};
 		expect(out.ok).toBe(false);
+	});
+});
+
+describe('BeanSync premium refresh (the bean-sync flag the edit sync reads)', () => {
+	beforeEach(() => localStorage.clear());
+
+	/** The sentinel roaster probe: POST /roasters answers `status`; GET / DELETE succeed. */
+	const probeHttp = (status: number) =>
+		mkHttp((req) => {
+			if (req.method === 'POST') return status < 300 ? { ok: true, status, json: { id: 'sentinel' } } : { ok: false, status };
+			return { ok: true, json: { data: [], paging: { pages: 1 } } };
+		});
+	const roasterPosts = (calls: HttpRequest[]) =>
+		calls.filter((c) => c.method === 'POST' && new URL(c.url).pathname === '/api/roasters');
+	const runRefresh = (http: Layer.Layer<HttpClient>, which: 'refreshPremium' | 'refreshPremiumIfStale') =>
+		run(BeanSync.pipe(Effect.flatMap((b) => b[which])), http);
+
+	it('refreshPremium runs the sentinel POST /roasters probe and caches premium + the probe time', async () => {
+		const { layer, calls } = probeHttp(201);
+		const before = Date.now();
+		expect(await runRefresh(layer, 'refreshPremium')).toBe(true);
+		expect(roasterPosts(calls)).toHaveLength(1);
+		expect(calls.some((c) => c.method === 'DELETE' && c.url.endsWith('/roasters/sentinel'))).toBe(true);
+		expect(calls.some((c) => c.url.includes('/coffee_bags/'))).toBe(false);
+		const s = readSyncSettings();
+		expect(s.premium).toBe(true);
+		expect(s.premiumCheckedAt).toBeGreaterThanOrEqual(before);
+		expect(readSyncConfig().premium).toBe(true);
+	});
+
+	it('refreshPremium caches free on a premium-gated (403) sentinel', async () => {
+		const { layer } = probeHttp(403);
+		expect(await runRefresh(layer, 'refreshPremium')).toBe(false);
+		expect(readSyncSettings().premium).toBe(false);
+	});
+
+	it('an inconclusive probe keeps the cached flag and its timestamp', async () => {
+		writeSyncSettings({ premium: true, premiumCheckedAt: 5 });
+		const { layer } = probeHttp(500);
+		expect(await runRefresh(layer, 'refreshPremium')).toBeNull();
+		expect(readSyncSettings()).toMatchObject({ premium: true, premiumCheckedAt: 5 });
+	});
+
+	it('refreshPremiumIfStale (app start) skips the probe within 24 h of the last one', async () => {
+		writeSyncSettings({ premium: false, premiumCheckedAt: Date.now() - 60 * 60 * 1000 });
+		const { layer, calls } = probeHttp(201);
+		expect(await runRefresh(layer, 'refreshPremiumIfStale')).toBe(false);
+		expect(calls).toHaveLength(0);
+		expect(readSyncSettings().premium).toBe(false);
+	});
+
+	it('refreshPremiumIfStale probes when the last check is over 24 h old, or never happened', async () => {
+		writeSyncSettings({ premium: false, premiumCheckedAt: Date.now() - PREMIUM_REFRESH_INTERVAL_MS - 1 });
+		const stale = probeHttp(201);
+		expect(await runRefresh(stale.layer, 'refreshPremiumIfStale')).toBe(true);
+		expect(roasterPosts(stale.calls)).toHaveLength(1);
+		expect(Date.now() - readSyncSettings().premiumCheckedAt!).toBeLessThan(PREMIUM_REFRESH_INTERVAL_MS);
+
+		localStorage.clear();
+		const never = probeHttp(403);
+		expect(await runRefresh(never.layer, 'refreshPremiumIfStale')).toBe(false);
+		expect(roasterPosts(never.calls)).toHaveLength(1);
+	});
+
+	it('does nothing while signed out', async () => {
+		const signedOut = Layer.succeed(TokenVault, TokenVault.of({
+			getTokens: Effect.succeed(null),
+			storeTokens: () => Effect.void,
+			clearTokens: Effect.void,
+			withFreshToken: (() => Effect.die('signed out')) as never,
+			changes: undefined as never
+		}));
+		const { layer, calls } = probeHttp(201);
+		const out = await Effect.runPromise(
+			Effect.provide(
+				BeanSync.pipe(Effect.flatMap((b) => b.refreshPremiumIfStale)),
+				Layer.provide(BeanSyncLive, Layer.merge(layer, signedOut))
+			)
+		);
+		expect(out).toBeNull();
+		expect(calls).toHaveLength(0);
+	});
+
+	it('Test connection re-probes and stamps the probe time', async () => {
+		writeSyncSettings({ premium: true, premiumCheckedAt: Date.now() - 1000 });
+		const { layer, calls } = probeHttp(403);
+		const out = await run(BeanSync.pipe(Effect.flatMap((b) => b.testConnection)), layer);
+		expect(out).toEqual({ ok: true, premium: false });
+		expect(roasterPosts(calls)).toHaveLength(1);
+		expect(readSyncSettings().premium).toBe(false);
+		expect(Date.now() - readSyncSettings().premiumCheckedAt!).toBeLessThan(1000);
+	});
+
+	it('sign-in stores the tokens, then refreshes the flag with the sentinel probe', async () => {
+		const order: string[] = [];
+		const recordingVault = Layer.succeed(TokenVault, TokenVault.of({
+			getTokens: Effect.sync(() => {
+				order.push('getTokens');
+				return aToken;
+			}),
+			storeTokens: () => Effect.sync(() => void order.push('storeTokens')),
+			clearTokens: Effect.void,
+			withFreshToken: ((req: (t: string) => Effect.Effect<unknown, unknown>) => req('tok')) as never,
+			changes: undefined as never
+		}));
+		const { layer, calls } = probeHttp(201);
+		await Effect.runPromise(
+			Effect.provide(
+				completeVisualizerSignIn(aToken),
+				Layer.merge(recordingVault, Layer.provide(BeanSyncLive, Layer.merge(layer, recordingVault)))
+			)
+		);
+		expect(order[0]).toBe('storeTokens');
+		expect(roasterPosts(calls)).toHaveLength(1);
+		expect(readSyncSettings().premium).toBe(true);
 	});
 });

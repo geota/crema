@@ -14,8 +14,9 @@
 	 *      double-checks `state` against the value stashed in `sessionStorage`,
 	 *      then POSTs to `/oauth/token` with the `code_verifier` (PKCE) via the
 	 *      HttpClient service. Run on a dedicated short-lived runtime.
-	 *   3. Persist the returned token set and bounce to the page the user
-	 *      came from (defaults to `/settings`).
+	 *   3. Persist the returned token set, refresh the cached Visualizer
+	 *      Premium flag (`completeVisualizerSignIn`), and bounce to the page
+	 *      the user came from (defaults to `/settings`).
 	 *
 	 * Three failure modes worth handling explicitly:
 	 *   - The user denied access (`?error=access_denied`) — show a
@@ -34,6 +35,8 @@
 	import { OAuth, OAuthLive } from '$lib/services/oauth';
 	import { HttpClientLive } from '$lib/services/http-client';
 	import { TokenVault, TokenVaultLive } from '$lib/services/token-vault';
+	import { BeanSyncLive } from '$lib/services/bean-sync';
+	import { completeVisualizerSignIn } from '$lib/services/visualizer-sign-in';
 	import { markVisualizerJustConnected, takeReturnPath } from '$lib/visualizer';
 
 	type Status =
@@ -81,9 +84,13 @@
 		// (this page runs at redirect time before the shell has mounted). It
 		// carries OAuth (-> HttpClient) for the exchange AND TokenVault for
 		// persistence: TokenVault.storeTokens writes the shared localStorage key,
-		// so the shell's TokenVault reads it fresh on the next navigation.
+		// so the shell's TokenVault reads it fresh on the next navigation. BeanSync
+		// runs the post-sign-in Premium probe (its flag lives in localStorage too).
 		const base = Layer.provide(OAuthLive, HttpClientLive);
-		const runtime = ManagedRuntime.make(Layer.merge(base, Layer.provide(TokenVaultLive, base)));
+		const vault = Layer.provide(TokenVaultLive, base);
+		const runtime = ManagedRuntime.make(
+			Layer.mergeAll(base, vault, Layer.provide(BeanSyncLive, Layer.merge(HttpClientLive, vault)))
+		);
 		try {
 			// 2. No code at all — likely a refresh after the dance already completed.
 			if (!code || !state) {
@@ -103,7 +110,7 @@
 			);
 			if (Exit.isFailure(exit)) throw Cause.squash(exit.cause);
 			const tokens = exit.value;
-			await runtime.runPromise(Effect.flatMap(TokenVault, (v) => v.storeTokens(tokens)));
+			await runtime.runPromise(completeVisualizerSignIn(tokens));
 			// Settings offers the catch-up upload once, on arrival.
 			markVisualizerJustConnected();
 			const returnTo = takeReturnPath('/settings');

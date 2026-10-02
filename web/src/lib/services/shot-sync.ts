@@ -54,6 +54,7 @@ import {
 	decodeResponse
 } from '../effect/schema/visualizer.ts';
 import { getBeanStore } from '$lib/bean/store.svelte';
+import { readSyncSettings } from '$lib/bean/visualizer-sync';
 import { effectiveGrindSetting } from '$lib/history';
 import { exportStoredShotAsV2Json } from '$lib/history/v2-export';
 import type { ShotPatchInputs, TimedSample } from '$lib/core';
@@ -582,14 +583,16 @@ export const ShotSyncLive = Layer.effect(
 				// Android's patchEditedShot sends the same precedence.
 				grinderSetting: patch.grinderSetting ?? patch.bean?.grinderSetting ?? undefined
 			};
-			// Fitted to the account tier in core: a free account — or one whose
-			// tier isn't probed yet (`premium: null`) — silently loses the
+			// Fitted to the account tier in core, off the bean-sync premium flag
+			// (refreshed on sign-in, daily at start, on Test, and by every
+			// bag/roaster write): a free account — or one whose tier isn't
+			// known yet (`premium: null`) — silently loses the
 			// premium-only fields (private_notes, the tasting scores incl.
 			// `flavor`, tag_list, coffee_bag_id …), and a body left with nothing
 			// the server applies comes back `undefined`: no request, no error.
 			const patchJson = wasmVisualizerShotPatchJson(
 				JSON.stringify(inputs),
-				readSyncConfig().premium ?? undefined
+				readSyncSettings().premium ?? undefined
 			);
 			if (patchJson === undefined) return;
 			const shotBody = JSON.parse(patchJson) as ShotUpdateRequest['shot'];

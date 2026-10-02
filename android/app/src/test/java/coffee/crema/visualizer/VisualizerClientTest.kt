@@ -93,21 +93,47 @@ class VisualizerClientTest {
     }
 
     @Test
-    fun `the premium probe is a no-op PATCH of the nil coffee bag - 404 premium, 403 free`() = runTest {
-        status = HttpStatusCode.NotFound
-        reply = """{"error":"Coffee bag not found"}"""
-        assertEquals(true, client.probePremium("tok"))
-        val r = last()
-        assertEquals(HttpMethod.Patch, r.method)
-        assertEquals("$API_BASE/coffee_bags/00000000-0000-0000-0000-000000000000", r.url.toString())
-        assertEquals("""{"coffee_bag":{}}""", bodies.last())
-        status = HttpStatusCode.Forbidden
+    fun `the premium probe is the web's sentinel roaster write - 201 premium then deleted`() = runTest {
+        statuses += HttpStatusCode.Created
+        status = HttpStatusCode.NoContent
+        reply = """{"id":"r-sentinel"}"""
+        assertEquals(true, client.probePremium("tok", nowMs = 42))
+        val (post, delete) = requests.takeLast(2)
+        assertEquals(HttpMethod.Post, post.method)
+        assertEquals("$API_BASE/roasters", post.url.toString())
+        assertEquals(
+            json.parseToJsonElement("""{"roaster":{"name":"__crema_premium_probe_42","website":null,"canonical_roaster_id":null}}"""),
+            json.parseToJsonElement(bodies[bodies.size - 2]),
+        )
+        assertEquals(HttpMethod.Delete, delete.method)
+        assertEquals("$API_BASE/roasters/r-sentinel", delete.url.toString())
+    }
+
+    @Test
+    fun `the premium probe reads 402 or 403 as free and anything else as inconclusive`() = runTest {
         reply = """{"error":"You must be a premium user to access this feature."}"""
+        status = HttpStatusCode.Forbidden
         assertEquals(false, client.probePremium("tok"))
-        // Anything else is inconclusive (the cache keeps its value).
+        status = HttpStatusCode.PaymentRequired
+        assertEquals(false, client.probePremium("tok"))
+        assertTrue("no cleanup without a sentinel", requests.none { it.method == HttpMethod.Delete })
         status = HttpStatusCode.UnprocessableEntity
-        reply = """{"error":"nope"}"""
         assertNull(client.probePremium("tok"))
+        // A 401 propagates so withFreshToken can refresh and retry.
+        status = HttpStatusCode.Unauthorized
+        try {
+            client.probePremium("tok")
+            fail("expected Auth")
+        } catch (_: VisualizerError.Auth) {
+        }
+    }
+
+    @Test
+    fun `a failed sentinel cleanup still reports premium`() = runTest {
+        statuses += HttpStatusCode.Created
+        status = HttpStatusCode.InternalServerError
+        reply = """{"id":"r-sentinel"}"""
+        assertEquals(true, client.probePremium("tok"))
     }
 
     @Test

@@ -47,6 +47,13 @@ vi.mock('$lib/visualizer/shot-sync-signatures', () => ({
 }));
 
 import { ShotSync, ShotSyncLive } from './shot-sync.ts';
+import { writeSyncSettings } from '$lib/bean/visualizer-sync';
+
+/** Seed the bean-sync premium flag the edit sync reads (`undefined` = never written → null). */
+const setPremium = (premium: boolean | null | undefined): void => {
+	localStorage.clear();
+	if (premium !== undefined) writeSyncSettings({ premium });
+};
 import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import { HttpStatusError } from '../effect/errors.ts';
@@ -109,6 +116,7 @@ const postBody = (calls: HttpRequest[]) =>
 const patchCall = (calls: HttpRequest[]) => calls.find((c) => c.method === 'PATCH');
 
 beforeEach(() => {
+	localStorage.clear();
 	h.settings = { grinderModel: '' };
 	h.cfg = { includeProfile: true, includeNotes: true, privacy: 'unlisted' };
 	h.exportJson = JSON.stringify({ profile: { title: 'P' }, metadata: { notes: 'tasty' } });
@@ -147,7 +155,7 @@ describe('ShotSync.uploadShot — payload shaping', () => {
 
 describe('ShotSync.uploadShot — post-upload PATCH', () => {
 	it('fires a follow-up PATCH carrying tag_list when the shot has tags (premium)', async () => {
-		h.cfg.premium = true;
+		setPremium(true);
 		const { layer, calls } = mkHttp((req) =>
 			req.method === 'POST' ? { ok: true, json: { id: 'viz-1' } } : { ok: true, json: {} }
 		);
@@ -166,7 +174,7 @@ describe('ShotSync.uploadShot — post-upload PATCH', () => {
 	});
 
 	it('skips the follow-up PATCH on a free account when tags are all it would carry', async () => {
-		h.cfg.premium = false;
+		setPremium(false);
 		const { layer, calls } = mkHttp(() => ({ ok: true, json: { id: 'viz-1' } }));
 		const exit = await run(ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(shot({ tags: ['espresso'] })))), layer);
 		expect(Exit.isSuccess(exit)).toBe(true);
@@ -174,7 +182,7 @@ describe('ShotSync.uploadShot — post-upload PATCH', () => {
 	});
 
 	it('keeps the upload successful even when the follow-up PATCH fails (soft)', async () => {
-		h.cfg.premium = true;
+		setPremium(true);
 		const { layer, calls } = mkHttp((req) =>
 			req.method === 'POST' ? { ok: true, json: { id: 'viz-1' } } : { ok: false, status: 500 }
 		);
@@ -210,7 +218,7 @@ describe('ShotSync.patchEditedShot — Premium-only fields by account tier', () 
 
 	for (const premium of [false, null, undefined]) {
 		it(`a ${premium === false ? 'free' : 'not-yet-probed'} account sends no request for a rating/notes/tags-only edit`, async () => {
-			h.cfg.premium = premium;
+			setPremium(premium);
 			const { layer, calls } = mkHttp(() => ({ ok: false, status: 400 }));
 			const exit = await patchEdited(edited(), layer);
 			expect(Exit.isSuccess(exit)).toBe(true);
@@ -218,7 +226,7 @@ describe('ShotSync.patchEditedShot — Premium-only fields by account tier', () 
 		});
 
 		it(`a ${premium === false ? 'free' : 'not-yet-probed'} account PATCHes the rest without the Premium-only fields`, async () => {
-			h.cfg.premium = premium;
+			setPremium(premium);
 			const { layer, calls } = mkHttp(() => ({ ok: true, json: {} }));
 			const exit = await patchEdited(edited({ bean }), layer);
 			expect(Exit.isSuccess(exit)).toBe(true);
@@ -229,7 +237,7 @@ describe('ShotSync.patchEditedShot — Premium-only fields by account tier', () 
 	}
 
 	it('a premium account still sends private_notes, flavor and tag_list', async () => {
-		h.cfg.premium = true;
+		setPremium(true);
 		const { layer, calls } = mkHttp(() => ({ ok: true, json: {} }));
 		await patchEdited(edited(), layer);
 		const body = (JSON.parse(patchCall(calls)!.body as string) as { shot: Record<string, unknown> }).shot;

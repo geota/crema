@@ -36,6 +36,7 @@ function harness(tokens: TokenSet | null = aToken) {
 		clearTokens: vi.fn(),
 		fetchAccount: vi.fn(),
 		testConnection: vi.fn(),
+		refreshPremiumIfStale: vi.fn(),
 		deleteBean: vi.fn(),
 		deleteRoaster: vi.fn(),
 		runSync: vi.fn(),
@@ -64,6 +65,10 @@ function harness(tokens: TokenSet | null = aToken) {
 		testConnection: Effect.sync(() => {
 			spy.testConnection();
 			return { ok: true, premium: true };
+		}),
+		refreshPremiumIfStale: Effect.sync(() => {
+			spy.refreshPremiumIfStale();
+			return true;
 		}),
 		deleteBean: (id: string) => Effect.sync(() => spy.deleteBean(id)),
 		deleteRoaster: (id: string) => Effect.sync(() => spy.deleteRoaster(id)),
@@ -121,6 +126,12 @@ describe('createCremaServices — beans (no method transposition)', () => {
 		await services.beans.testConnection();
 		expect(spy.fetchAccount).toHaveBeenCalledTimes(1);
 		expect(spy.testConnection).toHaveBeenCalledTimes(1);
+	});
+	it('refreshPremiumIfStale (the app-start Premium check) hits BeanSync.refreshPremiumIfStale', async () => {
+		const { services, spy } = harness();
+		expect(await services.beans.refreshPremiumIfStale()).toBe(true);
+		expect(spy.refreshPremiumIfStale).toHaveBeenCalledTimes(1);
+		expect(spy.testConnection).not.toHaveBeenCalled();
 	});
 });
 

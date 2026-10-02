@@ -75,6 +75,10 @@
 		// and publish it via context (D-04): components call `services.*` instead
 		// of crossing the Effect boundary by hand.
 		services = createCremaServices(runtime);
+		// Keep the cached Visualizer Premium flag (it gates the edit sync's
+		// Premium-only PATCH fields) fresh: re-probe at most once per 24 h.
+		// Fire-and-forget; a no-op when signed out, and it never rejects.
+		void services.beans.refreshPremiumIfStale();
 		// Best-effort drain on reconnect / tab-refocus. Fire-and-forget (not
 		// awaited); `drain` is offline-guarded + single-flight, so a spurious
 		// trigger is cheap.
