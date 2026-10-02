@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Visualizer API",
-    "version": "1.8.2",
-    "description": "REST API for Visualizer.\n\nSupports:\n- Shot retrieval and upload\n- Shot updates/deletes\n- Roaster CRUD (premium)\n- Coffee bag CRUD (premium)\n\nAuthentication\n\nThe Visualizer API supports the following authentication methods:\n\n- HTTP Basic Authentication (`email` + `password`)\n  Acceptable for personal use cases, such as private scripts, local tooling, or internal automations.\n\n- OAuth 2.0 Authorization Code Flow\n  Recommended for public applications, distributed integrations, and any workflow exposed to other users.\n\nOAuth scopes\n\n- `read` — read-only access\n- `upload` — permission to upload shots only\n- `write` — full write access\n\nScope behavior\n\n- `upload` is a constrained, lower-risk write scope intended for ingestion-only clients.\n- `write` is required for broader mutating operations (for example, update/delete and other write endpoints).\n\nSecurity recommendation\n\n- For public or user-facing integrations, OAuth should be used instead of Basic Auth.\n- This avoids collecting user passwords outside Visualizer and reduces credential exposure risk.\n\nRate limits\n\n- All API requests are limited to 50 requests per minute per client IP.\n- All API requests are also limited to 200 requests per 10 minutes per client IP.\n- Authenticated API requests are additionally limited to 200 requests per 10 minutes per user.\n- When a limit is exceeded, the API returns `429 Too Many Requests` with a JSON error payload.\n\nNotes:\n- Some read endpoints are public (`/shots`, `/shots/{id}`, `/shots/shared`)\n- Write endpoints require authenticated users and write scope (OAuth)\n- Roaster/Coffee Bag writes also require premium access\n",
+    "version": "1.17.2",
+    "description": "REST API for Visualizer.\n\nSupports:\n- Shot retrieval and upload\n- Shot updates/deletes\n- Roaster CRUD (premium)\n- Coffee bag CRUD (premium)\n- Canonical roaster and coffee bag search\n\nAuthentication\n\nThe Visualizer API supports the following authentication methods:\n\n- HTTP Basic Authentication (`email` + `password`)\n  Acceptable for personal use cases, such as private scripts, local tooling, or internal automations.\n\n- OAuth 2.0 Authorization Code Flow\n  Recommended for public applications, distributed integrations, and any workflow exposed to other users.\n\nOAuth scopes\n\n- `read` — read-only access\n- `upload` — permission to upload shots only\n- `write` — full write access\n\nScope behavior\n\n- `upload` is a constrained, lower-risk write scope intended for ingestion-only clients.\n- `write` is required for broader mutating operations (for example, update/delete and other write endpoints).\n\nSecurity recommendation\n\n- For public or user-facing integrations, OAuth should be used instead of Basic Auth.\n- This avoids collecting user passwords outside Visualizer and reduces credential exposure risk.\n\nRate limits\n\n- All API requests are limited to 50 requests per minute per client IP.\n- All API requests are also limited to 200 requests per 10 minutes per client IP.\n- Authenticated API requests are additionally limited to 200 requests per 10 minutes per user.\n- When a limit is exceeded, the API returns `429 Too Many Requests` with a JSON error payload.\n\nNotes:\n- Some read endpoints are public (`/shots`, `/shots/{id}`, `/shots/shared`)\n- Write endpoints require authenticated users and write scope (OAuth)\n- Roaster/Coffee Bag writes also require premium access\n- Non-premium users have a best-effort limit of 30 new shot records in a rolling 24-hour period, counted by upload/creation time rather than brew time. Requests at the limit return 422; concurrent uploads may exceed it. Updating existing shots does not count toward it.\n",
     "contact": {
       "email": "miha@visualizer.coffee"
     }
@@ -30,6 +30,9 @@
     },
     {
       "name": "Coffee Bags"
+    },
+    {
+      "name": "Canonical"
     }
   ],
   "paths": {
@@ -77,7 +80,7 @@
         ],
         "summary": "List shots",
         "operationId": "listShots",
-        "description": "Returns shots sorted by start time (default) or `updated_at`.\n\nBehavior differs by auth state:\n- Unauthenticated: only public shots\n- Authenticated: own shots\n",
+        "description": "Returns shots sorted by start time (default) or `updated_at`.\n\nBehavior differs by auth state:\n- Unauthenticated: only public shots\n- Authenticated: own shots\n\n`updated_after` applies only to authenticated requests and must be a Unix timestamp in seconds.\n",
         "parameters": [
           {
             "$ref": "#/components/parameters/Page"
@@ -87,6 +90,12 @@
           },
           {
             "$ref": "#/components/parameters/ShotSort"
+          },
+          {
+            "$ref": "#/components/parameters/UpdatedAfter"
+          },
+          {
+            "$ref": "#/components/parameters/ShotTags"
           }
         ],
         "responses": {
@@ -101,7 +110,7 @@
             }
           },
           "422": {
-            "description": "Invalid pagination/sort.",
+            "description": "Invalid pagination/sort/updated_after.",
             "content": {
               "application/json": {
                 "schema": {
@@ -294,6 +303,7 @@
           "Shots"
         ],
         "summary": "Update shot",
+        "description": "Updates are atomic. Failed validation leaves the shot and its tags unchanged. Assigned coffee bags must belong to the shot's owner; invalid assignments return 422.",
         "operationId": "updateShot",
         "security": [
           {
@@ -322,6 +332,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ShotDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing, empty, or unauthorized update parameters.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -515,7 +535,7 @@
             }
           },
           "422": {
-            "description": "Shot has no profile.",
+            "description": "Shot has no profile, including manually logged shots without telemetry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1117,23 +1137,34 @@
         }
       }
     },
-    "/roasters/{roaster_id}/coffee_bags": {
+    "/canonical_roasters": {
       "get": {
         "tags": [
-          "Coffee Bags"
+          "Canonical"
         ],
-        "summary": "Legacy nested coffee bag index",
-        "description": "Deprecated alias that redirects to `/coffee_bags?roaster_id={roaster_id}`.",
-        "operationId": "legacyNestedCoffeeBagsIndex",
-        "deprecated": true,
+        "summary": "Search canonical roasters",
+        "operationId": "listCanonicalRoasters",
         "parameters": [
           {
-            "$ref": "#/components/parameters/RoasterId"
+            "$ref": "#/components/parameters/SearchQuery"
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/Items"
           }
         ],
         "responses": {
-          "301": {
-            "description": "Permanent redirect to root coffee bag index."
+          "200": {
+            "description": "Paginated canonical roaster summaries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanonicalRoasterListResponse"
+                }
+              }
+            }
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
@@ -1141,26 +1172,37 @@
         }
       }
     },
-    "/roasters/{roaster_id}/coffee_bags/{id}": {
+    "/canonical_coffee_bags": {
       "get": {
         "tags": [
-          "Coffee Bags"
+          "Canonical"
         ],
-        "summary": "Legacy nested coffee bag show",
-        "description": "Deprecated alias that redirects to `/coffee_bags/{id}`.",
-        "operationId": "legacyNestedCoffeeBagShow",
-        "deprecated": true,
+        "summary": "Search canonical coffee bags",
+        "operationId": "listCanonicalCoffeeBags",
         "parameters": [
           {
-            "$ref": "#/components/parameters/RoasterId"
+            "$ref": "#/components/parameters/SearchQuery"
           },
           {
-            "$ref": "#/components/parameters/CoffeeBagId"
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/Items"
+          },
+          {
+            "$ref": "#/components/parameters/CanonicalRoasterFilter"
           }
         ],
         "responses": {
-          "301": {
-            "description": "Permanent redirect to root coffee bag show."
+          "200": {
+            "description": "Paginated canonical coffee bag summaries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanonicalCoffeeBagListResponse"
+                }
+              }
+            }
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
@@ -1227,6 +1269,15 @@
         },
         "description": "Items per page (default 10, max 100)."
       },
+      "SearchQuery": {
+        "name": "q",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Search query. Blank queries return no results."
+      },
       "ShotSort": {
         "name": "sort",
         "in": "query",
@@ -1237,6 +1288,32 @@
           ]
         },
         "description": "Set to `updated_at` for updated-time sorting. Omit for start-time sorting."
+      },
+      "UpdatedAfter": {
+        "name": "updated_after",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "description": "Return authenticated user's shots updated after this Unix timestamp in seconds. Ignored for unauthenticated requests."
+      },
+      "ShotTags": {
+        "name": "tags",
+        "in": "query",
+        "style": "form",
+        "explode": false,
+        "schema": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "example": [
+          "basket",
+          "high-speed"
+        ],
+        "description": "Return shots containing every comma-separated tag slug."
       },
       "ShotId": {
         "name": "id",
@@ -1342,6 +1419,16 @@
           "format": "uuid"
         },
         "description": "Filter coffee bags by roaster ID."
+      },
+      "CanonicalRoasterFilter": {
+        "name": "canonical_roaster_id",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Filter canonical coffee bags by canonical roaster ID."
       }
     },
     "schemas": {
@@ -1449,7 +1536,8 @@
         "type": "object",
         "required": [
           "data",
-          "paging"
+          "paging",
+          "user_id"
         ],
         "properties": {
           "data": {
@@ -1460,6 +1548,12 @@
           },
           "paging": {
             "$ref": "#/components/schemas/Paging"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "Authenticated user whose shots are listed. Null for unauthenticated public feed."
           }
         }
       },
@@ -1537,6 +1631,7 @@
           },
           "espresso_notes": {
             "type": "string",
+            "description": "Sanitized HTML.",
             "nullable": true
           },
           "roast_level": {
@@ -1545,10 +1640,12 @@
           },
           "bean_notes": {
             "type": "string",
+            "description": "Sanitized HTML.",
             "nullable": true
           },
           "private_notes": {
             "type": "string",
+            "description": "Owner-only sanitized HTML.",
             "nullable": true
           },
           "barista": {
@@ -1969,6 +2066,9 @@
           "espresso_temperature_goal": {
             "$ref": "#/components/schemas/ShotSeries"
           },
+          "espresso_temperature_mix_goal": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
           "espresso_temperature_mix": {
             "$ref": "#/components/schemas/ShotSeries"
           },
@@ -2118,10 +2218,12 @@
               },
               "espresso_notes": {
                 "type": "string",
+                "description": "Plain text.",
                 "nullable": true
               },
               "bean_notes": {
                 "type": "string",
+                "description": "Plain text.",
                 "nullable": true
               },
               "barista": {
@@ -2159,6 +2261,7 @@
               },
               "private_notes": {
                 "type": "string",
+                "description": "Owner-only plain text.",
                 "nullable": true
               },
               "profile_url": {
@@ -2189,6 +2292,9 @@
             "$ref": "#/components/schemas/ShotSeries"
           },
           "goal": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "mix_goal": {
             "$ref": "#/components/schemas/ShotSeries"
           }
         }
@@ -2348,6 +2454,7 @@
       },
       "ShotUpdateRequest": {
         "type": "object",
+        "description": "Wrap editable fields in the `shot` object. Tags and other premium fields require a premium account.",
         "required": [
           "shot"
         ],
@@ -2368,8 +2475,19 @@
                 "type": "string",
                 "nullable": true
               },
+              "bean_notes": {
+                "type": "string",
+                "description": "Sanitized HTML.",
+                "nullable": true
+              },
+              "espresso_notes": {
+                "type": "string",
+                "description": "Sanitized HTML.",
+                "nullable": true
+              },
               "private_notes": {
                 "type": "string",
+                "description": "Premium-only sanitized HTML.",
                 "nullable": true
               },
               "fragrance": {
@@ -2432,6 +2550,7 @@
               },
               "tag_list": {
                 "type": "array",
+                "description": "Premium-only tag names. Send an empty array to remove all tags.",
                 "items": {
                   "type": "string"
                 }
@@ -2442,6 +2561,14 @@
                 "nullable": true
               }
             }
+          }
+        },
+        "example": {
+          "shot": {
+            "tag_list": [
+              "22g Decent",
+              "high-speed"
+            ]
           }
         }
       },
@@ -2498,6 +2625,11 @@
             "format": "uri",
             "nullable": true
           },
+          "canonical_roaster_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
           "image_url": {
             "type": "string",
             "format": "uri",
@@ -2542,6 +2674,15 @@
             "type": "string",
             "format": "uuid"
           },
+          "roaster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "canonical_coffee_bag_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
           "name": {
             "type": "string"
           }
@@ -2558,6 +2699,143 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/CoffeeBagSummary"
+            }
+          },
+          "paging": {
+            "$ref": "#/components/schemas/Paging"
+          }
+        }
+      },
+      "CanonicalRoasterSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "website": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "country": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "CanonicalRoasterListResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "paging"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CanonicalRoasterSummary"
+            }
+          },
+          "paging": {
+            "$ref": "#/components/schemas/Paging"
+          }
+        }
+      },
+      "CanonicalCoffeeBagSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "canonical_roaster_id",
+          "canonical_roaster_name",
+          "name",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "canonical_roaster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "canonical_roaster_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "roast_level": {
+            "type": "string",
+            "nullable": true
+          },
+          "country": {
+            "type": "string",
+            "nullable": true
+          },
+          "region": {
+            "type": "string",
+            "nullable": true
+          },
+          "farmer": {
+            "type": "string",
+            "nullable": true
+          },
+          "variety": {
+            "type": "string",
+            "nullable": true
+          },
+          "elevation": {
+            "type": "string",
+            "nullable": true
+          },
+          "processing": {
+            "type": "string",
+            "nullable": true
+          },
+          "harvest_time": {
+            "type": "string",
+            "nullable": true
+          },
+          "tasting_notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CanonicalCoffeeBagListResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "paging"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CanonicalCoffeeBagSummary"
             }
           },
           "paging": {
@@ -2649,6 +2927,7 @@
           },
           "notes": {
             "type": "string",
+            "description": "Sanitized HTML.",
             "nullable": true
           },
           "archived_at": {
@@ -2760,6 +3039,7 @@
               },
               "notes": {
                 "type": "string",
+                "description": "Sanitized HTML.",
                 "nullable": true
               },
               "metadata": {

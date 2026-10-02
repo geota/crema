@@ -35,6 +35,8 @@ export interface paths {
          *     Behavior differs by auth state:
          *     - Unauthenticated: only public shots
          *     - Authenticated: own shots
+         *
+         *     `updated_after` applies only to authenticated requests and must be a Unix timestamp in seconds.
          */
         get: operations["listShots"];
         put?: never;
@@ -111,7 +113,10 @@ export interface paths {
         delete: operations["deleteShot"];
         options?: never;
         head?: never;
-        /** Update shot */
+        /**
+         * Update shot
+         * @description Updates are atomic. Failed validation leaves the shot and its tags unchanged. Assigned coffee bags must belong to the shot's owner; invalid assignments return 422.
+         */
         patch: operations["updateShot"];
         trace?: never;
     };
@@ -227,19 +232,15 @@ export interface paths {
         patch: operations["updateCoffeeBag"];
         trace?: never;
     };
-    "/roasters/{roaster_id}/coffee_bags": {
+    "/canonical_roasters": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * Legacy nested coffee bag index
-         * @deprecated
-         * @description Deprecated alias that redirects to `/coffee_bags?roaster_id={roaster_id}`.
-         */
-        get: operations["legacyNestedCoffeeBagsIndex"];
+        /** Search canonical roasters */
+        get: operations["listCanonicalRoasters"];
         put?: never;
         post?: never;
         delete?: never;
@@ -248,19 +249,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/roasters/{roaster_id}/coffee_bags/{id}": {
+    "/canonical_coffee_bags": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * Legacy nested coffee bag show
-         * @deprecated
-         * @description Deprecated alias that redirects to `/coffee_bags/{id}`.
-         */
-        get: operations["legacyNestedCoffeeBagShow"];
+        /** Search canonical coffee bags */
+        get: operations["listCanonicalCoffeeBags"];
         put?: never;
         post?: never;
         delete?: never;
@@ -320,6 +317,11 @@ export interface components {
         ShotListResponse: {
             data: components["schemas"]["ShotSummary"][];
             paging: components["schemas"]["Paging"];
+            /**
+             * Format: uuid
+             * @description Authenticated user whose shots are listed. Null for unauthenticated public feed.
+             */
+            user_id: string | null;
         };
         /** @description Flexible shot payload. Keys vary by `format` and integration source. */
         ShotDetail: components["schemas"]["DefaultShotDetail"] | components["schemas"]["BeanconquerorShotDetail"];
@@ -376,9 +378,12 @@ export interface components {
             bean_brand?: string | null;
             bean_type?: string | null;
             roast_date?: string | null;
+            /** @description Sanitized HTML. */
             espresso_notes?: string | null;
             roast_level?: string | null;
+            /** @description Sanitized HTML. */
             bean_notes?: string | null;
+            /** @description Owner-only sanitized HTML. */
             private_notes?: string | null;
             barista?: string | null;
             fragrance?: number | null;
@@ -513,6 +518,7 @@ export interface components {
             espresso_pressure_goal?: components["schemas"]["ShotSeries"];
             espresso_flow_goal?: components["schemas"]["ShotSeries"];
             espresso_temperature_goal?: components["schemas"]["ShotSeries"];
+            espresso_temperature_mix_goal?: components["schemas"]["ShotSeries"];
             espresso_temperature_mix?: components["schemas"]["ShotSeries"];
             espresso_temperature_basket?: components["schemas"]["ShotSeries"];
             espresso_water_dispensed?: components["schemas"]["ShotSeries"];
@@ -563,7 +569,9 @@ export interface components {
                 bitterness?: number | null;
                 sweetness?: number | null;
                 mouthfeel?: number | null;
+                /** @description Plain text. */
                 espresso_notes?: string | null;
+                /** @description Plain text. */
                 bean_notes?: string | null;
                 barista?: string | null;
                 metadata?: components["schemas"]["ShotMetadata"] | null;
@@ -575,6 +583,7 @@ export interface components {
                 /** Format: date-time */
                 start_time?: string;
                 user_name?: string;
+                /** @description Owner-only plain text. */
                 private_notes?: string | null;
                 /** Format: uri */
                 profile_url?: string;
@@ -588,6 +597,7 @@ export interface components {
             by_weight?: components["schemas"]["ShotSeries"];
             by_weight_raw?: components["schemas"]["ShotSeries"];
             goal?: components["schemas"]["ShotSeries"];
+            mix_goal?: components["schemas"]["ShotSeries"];
         };
         DecentTemperaturePayload: {
             basket?: components["schemas"]["ShotSeries"];
@@ -643,11 +653,27 @@ export interface components {
                 tube?: number;
             };
         };
+        /**
+         * @description Wrap editable fields in the `shot` object. Tags and other premium fields require a premium account.
+         * @example {
+         *       "shot": {
+         *         "tag_list": [
+         *           "22g Decent",
+         *           "high-speed"
+         *         ]
+         *       }
+         *     }
+         */
         ShotUpdateRequest: {
             shot: {
                 profile_title?: string | null;
                 barista?: string | null;
                 bean_weight?: string | null;
+                /** @description Sanitized HTML. */
+                bean_notes?: string | null;
+                /** @description Sanitized HTML. */
+                espresso_notes?: string | null;
+                /** @description Premium-only sanitized HTML. */
                 private_notes?: string | null;
                 fragrance?: number | null;
                 aroma?: number | null;
@@ -661,6 +687,7 @@ export interface components {
                 canonical_coffee_bag_id?: string | null;
                 /** Format: uuid */
                 coffee_bag_id?: string | null;
+                /** @description Premium-only tag names. Send an empty array to remove all tags. */
                 tag_list?: string[];
                 metadata?: {
                     [key: string]: unknown;
@@ -684,6 +711,8 @@ export interface components {
             name: string;
             /** Format: uri */
             website?: string | null;
+            /** Format: uuid */
+            canonical_roaster_id?: string | null;
             /** Format: uri */
             image_url?: string | null;
         };
@@ -699,10 +728,53 @@ export interface components {
         CoffeeBagSummary: {
             /** Format: uuid */
             id: string;
+            /** Format: uuid */
+            roaster_id?: string;
+            /** Format: uuid */
+            canonical_coffee_bag_id?: string | null;
             name: string;
         };
         CoffeeBagListResponse: {
             data: components["schemas"]["CoffeeBagSummary"][];
+            paging: components["schemas"]["Paging"];
+        };
+        CanonicalRoasterSummary: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: uri */
+            website?: string | null;
+            country?: string | null;
+        };
+        CanonicalRoasterListResponse: {
+            data: components["schemas"]["CanonicalRoasterSummary"][];
+            paging: components["schemas"]["Paging"];
+        };
+        CanonicalCoffeeBagSummary: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            canonical_roaster_id: string;
+            canonical_roaster_name: string;
+            name: string;
+            /** Format: uri */
+            url?: string | null;
+            roast_level?: string | null;
+            country?: string | null;
+            region?: string | null;
+            farmer?: string | null;
+            variety?: string | null;
+            elevation?: string | null;
+            processing?: string | null;
+            harvest_time?: string | null;
+            tasting_notes?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CanonicalCoffeeBagListResponse: {
+            data: components["schemas"]["CanonicalCoffeeBagSummary"][];
             paging: components["schemas"]["Paging"];
         };
         CoffeeBagDetail: {
@@ -729,6 +801,7 @@ export interface components {
             place_of_purchase?: string | null;
             /** Format: uri */
             url?: string | null;
+            /** @description Sanitized HTML. */
             notes?: string | null;
             /** Format: date-time */
             archived_at?: string | null;
@@ -765,6 +838,7 @@ export interface components {
                 place_of_purchase?: string | null;
                 /** Format: uri */
                 url?: string | null;
+                /** @description Sanitized HTML. */
                 notes?: string | null;
                 metadata?: {
                     [key: string]: unknown;
@@ -793,8 +867,20 @@ export interface components {
         Page: number;
         /** @description Items per page (default 10, max 100). */
         Items: number;
+        /** @description Search query. Blank queries return no results. */
+        SearchQuery: string;
         /** @description Set to `updated_at` for updated-time sorting. Omit for start-time sorting. */
         ShotSort: "updated_at";
+        /** @description Return authenticated user's shots updated after this Unix timestamp in seconds. Ignored for unauthenticated requests. */
+        UpdatedAfter: number;
+        /**
+         * @description Return shots containing every comma-separated tag slug.
+         * @example [
+         *       "basket",
+         *       "high-speed"
+         *     ]
+         */
+        ShotTags: string[];
         ShotId: string;
         RoasterId: string;
         CoffeeBagId: string;
@@ -810,6 +896,8 @@ export interface components {
         WithData: string | boolean;
         /** @description Filter coffee bags by roaster ID. */
         RoasterFilter: string;
+        /** @description Filter canonical coffee bags by canonical roaster ID. */
+        CanonicalRoasterFilter: string;
     };
     requestBodies: never;
     headers: never;
@@ -854,6 +942,16 @@ export interface operations {
                 items?: components["parameters"]["Items"];
                 /** @description Set to `updated_at` for updated-time sorting. Omit for start-time sorting. */
                 sort?: components["parameters"]["ShotSort"];
+                /** @description Return authenticated user's shots updated after this Unix timestamp in seconds. Ignored for unauthenticated requests. */
+                updated_after?: components["parameters"]["UpdatedAfter"];
+                /**
+                 * @description Return shots containing every comma-separated tag slug.
+                 * @example [
+                 *       "basket",
+                 *       "high-speed"
+                 *     ]
+                 */
+                tags?: components["parameters"]["ShotTags"];
             };
             header?: never;
             path?: never;
@@ -870,7 +968,7 @@ export interface operations {
                     "application/json": components["schemas"]["ShotListResponse"];
                 };
             };
-            /** @description Invalid pagination/sort. */
+            /** @description Invalid pagination/sort/updated_after. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -1080,6 +1178,15 @@ export interface operations {
                     "application/json": components["schemas"]["ShotDetail"];
                 };
             };
+            /** @description Missing, empty, or unauthorized update parameters. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description Authentication required. */
             401: {
                 headers: {
@@ -1188,7 +1295,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Shot has no profile. */
+            /** @description Shot has no profile, including manually logged shots without telemetry. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -1664,45 +1771,60 @@ export interface operations {
             429: components["responses"]["RateLimited"];
         };
     };
-    legacyNestedCoffeeBagsIndex: {
+    listCanonicalRoasters: {
         parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                roaster_id: components["parameters"]["RoasterId"];
+            query?: {
+                /** @description Search query. Blank queries return no results. */
+                q?: components["parameters"]["SearchQuery"];
+                /** @description 1-based page number (default 1). */
+                page?: components["parameters"]["Page"];
+                /** @description Items per page (default 10, max 100). */
+                items?: components["parameters"]["Items"];
             };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Permanent redirect to root coffee bag index. */
-            301: {
+            /** @description Paginated canonical roaster summaries. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["CanonicalRoasterListResponse"];
+                };
             };
             429: components["responses"]["RateLimited"];
         };
     };
-    legacyNestedCoffeeBagShow: {
+    listCanonicalCoffeeBags: {
         parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                roaster_id: components["parameters"]["RoasterId"];
-                id: components["parameters"]["CoffeeBagId"];
+            query?: {
+                /** @description Search query. Blank queries return no results. */
+                q?: components["parameters"]["SearchQuery"];
+                /** @description 1-based page number (default 1). */
+                page?: components["parameters"]["Page"];
+                /** @description Items per page (default 10, max 100). */
+                items?: components["parameters"]["Items"];
+                /** @description Filter canonical coffee bags by canonical roaster ID. */
+                canonical_roaster_id?: components["parameters"]["CanonicalRoasterFilter"];
             };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Permanent redirect to root coffee bag show. */
-            301: {
+            /** @description Paginated canonical coffee bag summaries. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["CanonicalCoffeeBagListResponse"];
+                };
             };
             429: components["responses"]["RateLimited"];
         };
