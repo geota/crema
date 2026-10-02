@@ -214,7 +214,10 @@ class ProxyTransport(
         service: UUID,
         characteristic: UUID,
         data: ByteArray,
+        withoutResponse: Boolean,
     ) {
+        // The proxy frame carries no write type; the far side's own transport
+        // picks it (M1 is a read-only mirror anyway).
         val id = nextId.getAndIncrement()
         val reply = request(id) {
             Frame.Write(id, device.address, service.toString(), characteristic.toString(), Hex.encode(data))

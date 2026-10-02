@@ -52,13 +52,27 @@ pub const HEARTBEAT: [u8; 7] = [0xEF, 0xDD, 0x00, 0x02, 0x00, 0x02, 0x00];
 pub const HEARTBEAT_INTERVAL_MS: u64 = 3_000;
 
 /// Number of metadata bytes in a frame: `EF DD <type> <length> <event_type>`.
+/// A whole frame is `METADATA_LEN + length` bytes.
 const METADATA_LEN: usize = 5;
 /// Minimum bytes needed before a frame's metadata can be read.
 const MIN_MESSAGE_LEN: usize = 6;
-/// Sanity cap on the receive buffer. A complete Acaia frame is at most ~75
-/// bytes (5 metadata + a 64-byte max payload + a little slack), so a buffer
-/// that grows past this is a hostile or desynced stream that will never
-/// assemble a frame — it is dropped rather than retained unboundedly.
+/// Largest declared payload length accepted. A larger length byte is a
+/// corrupt or desynced header: both references resync by two bytes past it
+/// rather than wait for (or skip by) a length they have just rejected
+/// (Decenza `MAX_ACAIA_PAYLOAD_LEN`, `acaiascale.cpp:420-440`; decaid
+/// `_maxPayloadLength`). de1app uses the same 64-byte ceiling.
+const MAX_PAYLOAD_LEN: usize = 64;
+/// Bytes in a weight body: 24-bit LE value, one unused byte, the decimal
+/// exponent, the sign.
+const WEIGHT_BODY_LEN: usize = 6;
+/// Event 5: the weight body follows the metadata directly.
+const EVENT_WEIGHT: u8 = 5;
+/// Event 11: a heartbeat reply. Byte 7 selects its body — `5` weight, `7`
+/// timer, `8` button — and only a weight body follows at byte 8.
+const EVENT_HEARTBEAT: u8 = 11;
+/// Sanity cap on the receive buffer. With [`MAX_PAYLOAD_LEN`] bounding a
+/// frame at 69 bytes, a buffer past this is a hostile stream — it is dropped
+/// rather than retained unboundedly.
 const MAX_BUFFER_LEN: usize = 256;
 
 /// Stateful decoder for the Acaia framed protocol.
@@ -67,34 +81,28 @@ const MAX_BUFFER_LEN: usize = 256;
 /// [`push`](Self::push); it returns `Some(grams)` once a complete weight frame
 /// has been assembled.
 ///
+/// Each frame is bounded by its declared length: a notification often
+/// carries several frames back to back (a weight frame with a settings frame
+/// behind it, say), so the decoder consumes exactly one frame at a time and
+/// keeps the rest — partial trailing frame included — for the next pass.
+/// Clearing the whole buffer after a weight frame, as this decoder used to,
+/// dropped whatever followed (Decenza 8cab2f78, `acaiascale.cpp:363-373`;
+/// decaid 07fdec67 / 1330cb4f: `_buffer.sublist(frameLength)`).
+///
+/// Only weight-bearing frames are decoded as weight: event 5, or event 11
+/// whose selector byte is 5. Crema's 3 s heartbeat makes the scale answer
+/// with event-11 frames constantly, and a timer- or button-bodied one read as
+/// weight fed spikes into stop-at-weight (decaid issue #509: a shot stopped
+/// on a projected 356 g against a 36.5 g target; `AI_BLE_NOTES.md`
+/// "selector 5 = weight, 7 = timer").
+///
 /// The decoder also tracks the most recently observed battery percentage from
-/// `msgType == 8` notifications (the same channel that carries weight); see
-/// [`battery_percent`](Self::battery_percent). Reaprime parses this field
-/// (`acaia_scale.dart:355-357`); legacy de1app drops it on the floor.
+/// `msgType == 8` (settings) frames, on the same channel that carries weight;
+/// see [`battery_percent`](Self::battery_percent).
 #[derive(Debug, Default)]
 pub struct AcaiaDecoder {
     buffer: Vec<u8>,
     battery_percent: Option<u8>,
-}
-
-/// Outcome of scanning the receive buffer for a message.
-enum Scan {
-    /// No `EF DD` header found — the buffer holds no message.
-    NoMessage,
-    /// A header was found but more bytes are needed before it can be decoded.
-    NeedMoreData,
-    /// A weight message's metadata was found.
-    Weight {
-        event_type: u8,
-        msg_start: usize,
-        length: usize,
-    },
-    /// A `msgType == 8` battery message was found at `msg_start`; the battery
-    /// byte sits at `msg_start + 4` (the `event_type` slot — reaprime's
-    /// `acaia_scale.dart:355-357` reads `_commandBuffer[4]` here, then advances
-    /// past the message). Crema mirrors that behaviour: skip past the message
-    /// and surface the byte on the decoder state.
-    Battery { msg_start: usize, length: usize },
 }
 
 impl AcaiaDecoder {
@@ -104,21 +112,19 @@ impl AcaiaDecoder {
     }
 
     /// The most recently observed battery percentage from a `msgType == 8`
-    /// notification (`0..=100`), or `None` if no such notification has yet
-    /// been seen. Reaprime decodes the same field (`acaia_scale.dart:355-357`);
-    /// legacy de1app drops it on the floor.
+    /// settings frame (`0..=100`), or `None` if no such frame has yet been
+    /// seen.
     #[must_use]
     pub fn battery_percent(&self) -> Option<u8> {
         self.battery_percent
     }
 
     /// Feed one BLE notification. Returns `Some(grams)` when a complete weight
-    /// frame has been decoded, otherwise `None` (more data may be needed).
+    /// frame has been decoded — the last one, if the notification completed
+    /// several — otherwise `None` (more data may be needed).
     ///
-    /// As a side-effect, a `msgType == 8` battery notification updates
-    /// [`battery_percent`](Self::battery_percent) and is consumed (returning
-    /// `None`) — the caller can read the latest battery on every weight
-    /// notification.
+    /// As a side-effect, a `msgType == 8` settings frame updates
+    /// [`battery_percent`](Self::battery_percent).
     pub fn push(&mut self, data: &[u8]) -> Option<f32> {
         self.buffer.extend_from_slice(data);
         // A buffer past the sanity cap is a hostile or desynced stream that
@@ -127,122 +133,80 @@ impl AcaiaDecoder {
             self.buffer.clear();
             return None;
         }
-        // Walk the buffer: a single notification may carry a battery message
-        // *and* a weight message, so we keep scanning after consuming a
-        // non-weight (battery) frame. Stop as soon as a weight frame
-        // decodes, or when no more messages can be processed.
+        let mut weight = None;
         loop {
-            if self.buffer.len() < MIN_MESSAGE_LEN {
-                return None;
-            }
-            match scan(&self.buffer) {
-                Scan::NeedMoreData => return None,
-                Scan::NoMessage => {
-                    // A lone trailing 0xEF may be the first half of an
-                    // EF DD header split at the notification boundary —
-                    // keep it so the next weight frame isn't dropped
-                    // (review #32).
-                    if self.buffer.last() == Some(&0xEF) {
-                        let keep_from = self.buffer.len() - 1;
-                        self.buffer.drain(..keep_from);
-                    } else {
-                        self.buffer.clear();
-                    }
-                    return None;
-                }
-                Scan::Weight {
-                    event_type,
-                    msg_start,
-                    length,
-                } => {
-                    if msg_start + METADATA_LEN + length > self.buffer.len() {
-                        // Frame not fully buffered yet — wait for the next notification.
-                        return None;
-                    }
-                    // Payload sits after the metadata; event type 11 has 3 extra bytes.
-                    let payload_offset =
-                        msg_start + METADATA_LEN + if event_type == 11 { 3 } else { 0 };
-                    let grams = decode_weight(&self.buffer, payload_offset);
+            let Some(start) = self.buffer.windows(2).position(|w| w == [0xEF, 0xDD]) else {
+                // No header in flight. A lone trailing 0xEF may be the first
+                // half of an EF DD header split at the notification boundary
+                // — keep it so the next frame isn't dropped (review #32).
+                if self.buffer.last() == Some(&0xEF) {
+                    let keep_from = self.buffer.len() - 1;
+                    self.buffer.drain(..keep_from);
+                } else {
                     self.buffer.clear();
-                    return grams;
                 }
-                Scan::Battery { msg_start, length } => {
-                    // Reaprime reads `_commandBuffer[4]` as the battery byte
-                    // (the `event_type` slot inside the metadata) and advances
-                    // past the full message — `_metadataLen + length` bytes
-                    // (`acaia_scale.dart:355-357, 367-372`).
-                    if self.buffer.len() < msg_start + METADATA_LEN {
-                        // Not even the metadata is fully buffered — wait.
-                        return None;
-                    }
-                    // Mask the charging bit + clamp to a percentage (Decenza
-                    // acaiascale.cpp:352-357 does `& 0x7F` and range-checks).
-                    // NOTE the byte OFFSET is disputed: reaprime (followed
-                    // here) reads metadata byte [4]; Decenza reads payload
-                    // byte [5] and calls [4] "unknown" — hardware-verify, see
-                    // .scratch/decenza-review/HARDWARE-VERIFY-FIXES.md.
-                    self.battery_percent = Some((self.buffer[msg_start + 4] & 0x7F).min(100));
-                    let claimed_end = msg_start + METADATA_LEN + length;
-                    let consume_end = claimed_end.min(self.buffer.len());
-                    self.buffer.drain(..consume_end);
-                    // Continue: there may be a weight frame after this.
-                }
+                return weight;
+            };
+            self.buffer.drain(..start);
+            if self.buffer.len() < MIN_MESSAGE_LEN {
+                return weight;
             }
+            let length = usize::from(self.buffer[3]);
+            if length > MAX_PAYLOAD_LEN {
+                // Resync past this header, not by the rejected length.
+                self.buffer.drain(..2);
+                continue;
+            }
+            let frame_len = METADATA_LEN + length;
+            if self.buffer.len() < frame_len {
+                // Frame not fully buffered yet — wait for the next notification.
+                return weight;
+            }
+            let frame: Vec<u8> = self.buffer.drain(..frame_len).collect();
+            if let Some(grams) = self.decode_frame(&frame) {
+                weight = Some(grams);
+            }
+        }
+    }
+
+    /// Decode one complete frame. Every read is bounded by `frame`, never by
+    /// the buffer behind it: a frame whose length byte is too short for the
+    /// body it claims must not borrow its neighbour's bytes as weight.
+    fn decode_frame(&mut self, frame: &[u8]) -> Option<f32> {
+        let msg_type = frame[2];
+        let event_type = frame[4];
+        match msg_type {
+            12 if event_type == EVENT_WEIGHT => decode_weight(frame, METADATA_LEN),
+            12 if event_type == EVENT_HEARTBEAT && frame.get(7) == Some(&EVENT_WEIGHT) => {
+                decode_weight(frame, METADATA_LEN + 3)
+            }
+            8 => {
+                // Settings frame: byte 4 is the battery, the top bit a
+                // charging flag (Decenza `acaiascale.cpp:466-497` after
+                // #1670, decaid `_processFrame`, pyacaia `payload[1] & 0x7F`
+                // all read byte 4). A value above 100 means the byte isn't a
+                // battery on this model — ignored, as both references do.
+                let battery = frame[4] & 0x7F;
+                if battery <= 100 {
+                    self.battery_percent = Some(battery);
+                }
+                None
+            }
+            _ => None,
         }
     }
 }
 
-/// Scan a buffer for the first weight or battery message, skipping unknown
-/// non-weight messages.
-fn scan(buf: &[u8]) -> Scan {
-    let mut i = 0;
-    while i + 1 < buf.len() {
-        if buf[i] == 0xEF && buf[i + 1] == 0xDD {
-            if buf.len() - i < MIN_MESSAGE_LEN {
-                return Scan::NeedMoreData;
-            }
-            let msg_type = buf[i + 2];
-            let length = buf[i + 3] as usize;
-            let event_type = buf[i + 4];
-            if msg_type == 12 && (event_type == 5 || event_type == 11) && length <= 64 {
-                return Scan::Weight {
-                    event_type,
-                    msg_start: i,
-                    length,
-                };
-            }
-            // msgType == 8: battery notification. Reaprime reads
-            // `_commandBuffer[4]` (the event_type slot) as the battery byte
-            // and advances past the message — see `acaia_scale.dart:355-357`.
-            if msg_type == 8 && length <= 64 {
-                return Scan::Battery {
-                    msg_start: i,
-                    length,
-                };
-            }
-            // Not a weight or battery message — skip the whole message and
-            // keep scanning.
-            i += METADATA_LEN + length;
-            continue;
-        }
-        i += 1;
-    }
-    Scan::NoMessage
-}
-
-/// Decode the weight payload at `payload_offset`. Returns `None` if the payload
-/// is too short (mirroring the legacy parser, which silently ignores it).
-fn decode_weight(buf: &[u8], payload_offset: usize) -> Option<f32> {
-    let payload = buf.get(payload_offset..)?;
-    if payload.len() < 6 {
-        return None;
-    }
+/// Decode the weight body at `offset` within one `frame`. Returns `None` if
+/// the frame ends before the six-byte body does (mirroring the references,
+/// which silently ignore it).
+fn decode_weight(frame: &[u8], offset: usize) -> Option<f32> {
+    let body = frame.get(offset..offset + WEIGHT_BODY_LEN)?;
     // Weight is a little-endian 24-bit value; byte 4 is the decimal exponent.
-    let value =
-        (u32::from(payload[2]) << 16) | (u32::from(payload[1]) << 8) | u32::from(payload[0]);
-    let unit = payload[4];
+    let value = (u32::from(body[2]) << 16) | (u32::from(body[1]) << 8) | u32::from(body[0]);
+    let unit = body[4];
     let grams = value as f32 / 10f32.powi(i32::from(unit));
-    Some(if payload[5] > 1 { -grams } else { grams })
+    Some(if body[5] > 1 { -grams } else { grams })
 }
 
 #[cfg(test)]
@@ -323,6 +287,139 @@ mod tests {
         combined.extend_from_slice(&weight);
         assert_eq!(d.push(&combined), Some(18.0));
         assert_eq!(d.battery_percent(), Some(91));
+    }
+
+    /// decaid's captured weight frame (`acaia_scale_test.dart`
+    /// `_realWeightFrame`): event 5, 0x06DF = 1759, exponent 1 → 175.9 g.
+    const REAL_WEIGHT_FRAME: [u8; 17] = [
+        0xEF, 0xDD, 0x0C, 0x0C, 0x05, 0xDF, 0x06, 0x00, 0x00, 0x01, 0x00, 0x07, 0x00, 0x00, 0x02,
+        0xF3, 0x0D,
+    ];
+    /// decaid's captured settings frame (`_realSettingsFrame`): battery
+    /// 0x5D = 93 %.
+    const REAL_SETTINGS_FRAME: [u8; 14] = [
+        0xEF, 0xDD, 0x08, 0x09, 0x5D, 0x02, 0x02, 0x01, 0x00, 0x01, 0x01, 0x00, 0x0D, 0x60,
+    ];
+    const WEIGHT_BODY: [u8; 6] = [0xDF, 0x06, 0x00, 0x00, 0x01, 0x00];
+
+    /// decaid's `_frame` builder: `EF DD <cmd> <len> <payload> <even> <odd>`.
+    fn frame(command: u8, payload: &[u8]) -> Vec<u8> {
+        let mut body = vec![u8::try_from(payload.len() + 1).unwrap()];
+        body.extend_from_slice(payload);
+        let (mut even, mut odd) = (0u8, 0u8);
+        for (i, b) in body.iter().enumerate() {
+            if i % 2 == 0 {
+                even = even.wrapping_add(*b);
+            } else {
+                odd = odd.wrapping_add(*b);
+            }
+        }
+        let mut out = vec![0xEF, 0xDD, command];
+        out.extend(body);
+        out.extend([even, odd]);
+        out
+    }
+
+    fn event_frame(event: u8, payload: &[u8]) -> Vec<u8> {
+        let mut p = vec![event];
+        p.extend_from_slice(payload);
+        frame(0x0C, &p)
+    }
+
+    fn heartbeat_weight_frame() -> Vec<u8> {
+        let mut p = vec![0, 0, 5];
+        p.extend_from_slice(&WEIGHT_BODY);
+        event_frame(11, &p)
+    }
+
+    fn heartbeat_timer_frame() -> Vec<u8> {
+        event_frame(11, &[0, 0, 7, 0x01, 0x1E, 0x05])
+    }
+
+    fn heartbeat_button_frame() -> Vec<u8> {
+        event_frame(11, &[0, 0, 8, 0])
+    }
+
+    #[test]
+    fn decodes_captured_weight_and_settings_frames() {
+        let mut d = AcaiaDecoder::new();
+        assert_eq!(d.push(&REAL_WEIGHT_FRAME), Some(175.9));
+        assert_eq!(d.push(&REAL_SETTINGS_FRAME), None);
+        assert_eq!(d.battery_percent(), Some(93));
+    }
+
+    #[test]
+    fn heartbeat_frames_yield_weight_only_for_selector_5() {
+        let mut d = AcaiaDecoder::new();
+        assert_eq!(d.push(&heartbeat_weight_frame()), Some(175.9));
+        // A timer body (01 1E 05 …) used to decode as weight — the spike
+        // decaid #509 stopped a shot on. A button body is not weight either.
+        assert_eq!(d.push(&heartbeat_timer_frame()), None);
+        assert_eq!(d.push(&heartbeat_button_frame()), None);
+        assert!(d.buffer.is_empty());
+    }
+
+    #[test]
+    fn coalesced_frames_are_each_decoded_and_nothing_is_dropped() {
+        // weight | timer | settings | weight in one notification, then a
+        // partial weight frame split across the next two.
+        let mut d = AcaiaDecoder::new();
+        let second = {
+            let mut p = vec![5];
+            p.extend_from_slice(&[0xA4, 0x01, 0x00, 0x00, 0x01, 0x00]);
+            frame(0x0C, &p)
+        };
+        let mut combined = REAL_WEIGHT_FRAME.to_vec();
+        combined.extend(heartbeat_timer_frame());
+        combined.extend(frame(0x08, &[61, 0]));
+        combined.extend(&second);
+        // The last weight in the notification wins; the timer frame between
+        // them contributes nothing.
+        assert_eq!(d.push(&combined), Some(42.0));
+        assert_eq!(d.battery_percent(), Some(61));
+        assert!(d.buffer.is_empty());
+        // A weight frame followed by the first half of the next: the first
+        // decodes, the tail is kept and completed by the next notification.
+        let mut split = REAL_WEIGHT_FRAME.to_vec();
+        split.extend(&second[..7]);
+        assert_eq!(d.push(&split), Some(175.9));
+        assert_eq!(d.push(&second[7..]), Some(42.0));
+    }
+
+    #[test]
+    fn a_frame_too_short_for_its_body_does_not_read_its_neighbour() {
+        // decaid "rejected frames": a weight event whose declared length
+        // ends inside the body. Followed by a real frame whose bytes must
+        // not be borrowed as weight.
+        let mut d = AcaiaDecoder::new();
+        let mut stream = vec![0xEF, 0xDD, 0x0C, 0x02, 0x05, 0xAA, 0xBB];
+        stream.extend(heartbeat_timer_frame());
+        assert_eq!(d.push(&stream), None);
+        // And the stream is still in step: a good frame decodes next.
+        assert_eq!(d.push(&REAL_WEIGHT_FRAME), Some(175.9));
+    }
+
+    #[test]
+    fn an_oversized_length_resyncs_by_two_bytes() {
+        // A corrupt length byte (> 64) must not park the buffer or skip a
+        // real frame that starts inside the bogus "payload".
+        let mut d = AcaiaDecoder::new();
+        let mut stream = vec![0xEF, 0xDD, 0x0C, 0xFF, 0x05, 0x00];
+        stream.extend(REAL_WEIGHT_FRAME);
+        assert_eq!(d.push(&stream), Some(175.9));
+    }
+
+    #[test]
+    fn an_out_of_range_battery_byte_is_ignored() {
+        let mut d = AcaiaDecoder::new();
+        d.push(&frame(0x08, &[0x5D, 0]));
+        assert_eq!(d.battery_percent(), Some(93));
+        // 0x80 is the charging bit: 0xDD & 0x7F = 93 again.
+        d.push(&frame(0x08, &[0xDD, 0]));
+        assert_eq!(d.battery_percent(), Some(93));
+        // 0x7F = 127: not a battery byte, keep the last good value.
+        d.push(&frame(0x08, &[0x7F, 0]));
+        assert_eq!(d.battery_percent(), Some(93));
     }
 
     #[test]

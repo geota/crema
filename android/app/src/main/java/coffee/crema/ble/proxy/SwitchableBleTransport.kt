@@ -66,7 +66,8 @@ class SwitchableBleTransport(initial: BleTransport) : BleTransport {
         service: UUID,
         characteristic: UUID,
         data: ByteArray,
-    ) = current.write(device, service, characteristic, data)
+        withoutResponse: Boolean,
+    ) = current.write(device, service, characteristic, data, withoutResponse)
 
     override suspend fun read(
         device: BleTransport.DeviceHandle,

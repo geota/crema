@@ -3275,9 +3275,12 @@ impl CremaCore {
     /// channel — is silently dropped (it is not a decode failure, just traffic
     /// the core does not model).
     fn handle_scale_command(&mut self, data: &[u8], out: &mut CoreOutput) {
-        let Some(scale) = &self.scale else {
+        let Some(scale) = &mut self.scale else {
             return;
         };
+        // State-only frames (the Eclair's battery) ride the next weight
+        // reading; they produce no event of their own.
+        scale.absorb_command_notification(data);
         let Some(response) = scale.parse_command_response(data) else {
             return;
         };
@@ -4269,9 +4272,12 @@ mod tests {
     // The three `as u8` casts are a standard big-endian byte split — each
     // shifted byte is masked to 8 bits by the cast, which is the intent.
     #[allow(clippy::cast_possible_truncation)]
-    fn bookoo_packet(centigrams: u32) -> [u8; 10] {
-        [
-            // 03 0b weight header — required since the review-#32 gate.
+    fn bookoo_packet(centigrams: u32) -> [u8; 20] {
+        // A full 20-byte weight frame: 03 0b header (review #32), '+' sign,
+        // the 24-bit weight, zeroed settings, and the trailing XOR the
+        // parser verifies.
+        let mut packet = [0u8; 20];
+        packet[..10].copy_from_slice(&[
             0x03,
             0x0B,
             0,
@@ -4282,7 +4288,9 @@ mod tests {
             (centigrams >> 16) as u8,
             (centigrams >> 8) as u8,
             centigrams as u8,
-        ]
+        ]);
+        packet[19] = packet[..19].iter().fold(0, |a, &b| a ^ b);
+        packet
     }
 
     /// A minimal V60 recipe JSON for the guided-brew wiring tests:
@@ -4806,6 +4814,23 @@ mod tests {
         let frame = hex("030c008d534e32343030643636613839653701ce");
         let out = core.on_notification(Source::ScaleCommand, &frame, 1_000);
         assert!(out.events.is_empty());
+    }
+
+    #[test]
+    fn an_eclair_battery_frame_on_the_command_channel_rides_the_next_weight() {
+        let mut core = CremaCore::new();
+        core.connect_scale("ECLAIR-1", &[]);
+        // `'B' 75 75` (decaid d6994ea0) — no event of its own.
+        let out = core.on_notification(Source::ScaleCommand, &[0x42, 75, 75], 1_000);
+        assert!(out.events.is_empty());
+        let mut frame = [b'W', 0xDC, 0x05, 0, 0, 0, 0, 0, 0, 0]; // 1500 mg
+        frame[9] = frame[1..9].iter().fold(0u8, |a, &b| a ^ b);
+        let out = core.on_notification(Source::ScaleWeight, &frame, 1_100);
+        let battery = out.events.iter().find_map(|e| match e {
+            Event::ScaleReading { device_battery, .. } => Some(*device_battery),
+            _ => None,
+        });
+        assert_eq!(battery, Some(Some(75)));
     }
 
     #[test]
@@ -5567,8 +5592,9 @@ mod tests {
     fn a_difluid_non_grams_frame_triggers_an_auto_recovery_set_unit() {
         let mut core = CremaCore::new();
         core.connect_scale("Microbalance-X", &[]);
-        // 19-byte frame, byte [17] = 0x01 (non-grams unit).
+        // 19-byte DF DF 03 00 sensor frame, byte [17] = 0x01 (non-grams unit).
         let mut frame = [0u8; 19];
+        frame[..4].copy_from_slice(&[0xDF, 0xDF, 0x03, 0x00]);
         frame[17] = 0x01;
         let out = core.on_notification(Source::ScaleWeight, &frame, 1_000);
         let writes = scale_writes(&out);
@@ -5579,8 +5605,9 @@ mod tests {
     fn a_difluid_grams_frame_does_not_trigger_an_auto_recovery() {
         let mut core = CremaCore::new();
         core.connect_scale("Microbalance-X", &[]);
-        // 19-byte frame, byte [17] = 0x00 (grams unit).
-        let frame = [0u8; 19];
+        // 19-byte DF DF 03 00 sensor frame, byte [17] = 0x00 (grams unit).
+        let mut frame = [0u8; 19];
+        frame[..4].copy_from_slice(&[0xDF, 0xDF, 0x03, 0x00]);
         let out = core.on_notification(Source::ScaleWeight, &frame, 1_000);
         let writes = scale_writes(&out);
         assert!(!writes.contains(&difluid::SET_UNIT_GRAMS.as_slice()));

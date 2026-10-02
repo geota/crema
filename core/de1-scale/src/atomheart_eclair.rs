@@ -1,4 +1,8 @@
 //! Atomheart Eclair BLE codec (`scale_type` `atomheart_eclair`).
+//!
+//! Weight arrives on [`NOTIFY_UUID`] as an exact 10-byte `'W'` frame;
+//! commands go to [`COMMAND_UUID`], which also notifies the battery as a
+//! `'B'` frame (see [`parse_battery`]).
 
 // Raw integer weight fields are decoded into `f32` grams; precision loss past
 // 2^23 is inherent to representing a wire reading as the codec's `f32` weight,
@@ -7,28 +11,28 @@
 
 use std::time::Duration;
 
-/// GATT service UUID.
+/// GATT service UUID — de1app's hardware-tested set
+/// (`de1plus/machine.tcl:92-94`).
 ///
-/// **PR G — adopted reaprime's UUID.** Legacy de1app declares
-/// `B905EAEA-2E63-0E04-7582-7913F10D8F81` (`de1plus/machine.tcl:93`);
-/// reaprime declares `b905eaea-6c7e-4f73-b43d-2cdfcab29570`
-/// (`reaprime/lib/src/models/device/impl/atomheart/atomheart_scale.dart:19`).
-/// Both share the same first 32 bits (`b905eaea`) so vendor identity is
-/// consistent — one is wrong on the lower 96 bits. Per PR G's "defer to
-/// reaprime when the two disagree and reaprime isn't provably buggy" rule,
-/// Crema adopts reaprime's UUID. Open question: needs sniffer verification
-/// against a real Eclair.
-pub const SERVICE_UUID: &str = "b905eaea-6c7e-4f73-b43d-2cdfcab29570";
-/// Characteristic the scale notifies weight on.
-///
-/// Reaprime's data characteristic, paired with the reaprime SERVICE_UUID
-/// above (`atomheart_scale.dart:21`): `b905eaeb-6c7e-4f73-b43d-2cdfcab29570`.
-pub const NOTIFY_UUID: &str = "b905eaeb-6c7e-4f73-b43d-2cdfcab29570";
-/// Characteristic commands are written to.
-///
-/// Reaprime's command characteristic, paired with the reaprime SERVICE_UUID
-/// above (`atomheart_scale.dart:23`): `b905eaec-6c7e-4f73-b43d-2cdfcab29570`.
-pub const COMMAND_UUID: &str = "b905eaec-6c7e-4f73-b43d-2cdfcab29570";
+/// Crema used to carry reaprime's `b905eaea-6c7e-4f73-b43d-2cdfcab29570`
+/// set (PR G's "defer to reaprime when the two disagree" rule), which shares
+/// only the first 32 bits with de1app's. reaprime/decaid has since dropped
+/// that set for de1app's — "use the current Eclair GATT" (decaid 5544ff39,
+/// `atomheart_scale.dart:18-23`, with a scan-filter test that the old service
+/// is gone) — so the old set is dropped here too, entirely (user decision,
+/// 2026-10-01). With it the Eclair most likely never connected.
+pub const SERVICE_UUID: &str = "b905eaea-2e63-0e04-7582-7913f10d8f81";
+/// Characteristic the scale notifies weight on (de1app
+/// `cuuid_atomheart_eclair`).
+pub const NOTIFY_UUID: &str = "ad736c5f-bbc9-1f96-d304-cb5d5f41e160";
+/// Characteristic commands are written to (de1app
+/// `cuuid_atomheart_eclair_cmd`). It also notifies the battery frame — decaid
+/// subscribes to it for battery and treats a failed subscription as
+/// non-fatal (`_registerConfigNotifications`, d6994ea0).
+pub const COMMAND_UUID: &str = "4f9a45ba-8e1b-4e07-e157-0814d393b968";
+
+/// Length of a weight frame: `'W'`, weight i32 LE, timer u32 LE, XOR.
+const WEIGHT_FRAME_LEN: usize = 10;
 
 // Commands are an ASCII-mnemonic scheme, one letter + `01 01`: 'T'are,
 // 'S'tart, 'E'nd, 'R'eset — per Decenza `atomhearteclairscale.cpp:247-262`,
@@ -49,9 +53,9 @@ pub const TIMER_RESET: [u8; 3] = [0x52, 0x01, 0x01];
 
 /// Decode a weight notification into grams.
 ///
-/// Byte 0 must be `'W'`. Bytes 1–4 are a signed little-endian 32-bit value in
-/// milligrams; byte 9 is an XOR checksum over bytes 1–8 — a frame that fails
-/// the checksum is rejected.
+/// The frame must be exactly 10 bytes and byte 0 must be `'W'`. Bytes 1–4
+/// are a signed little-endian 32-bit value in milligrams; byte 9 is an XOR
+/// checksum over bytes 1–8 — a frame that fails the checksum is rejected.
 pub fn parse_weight(data: &[u8]) -> Option<f32> {
     if !valid_frame(data) {
         return None;
@@ -84,12 +88,38 @@ pub fn parse_timer(data: &[u8]) -> Option<Duration> {
 /// Header + length + XOR-checksum gate shared by every Atomheart frame
 /// channel. Centralises the validation so weight + timer decoders can't
 /// drift in what they consider a usable frame.
+///
+/// The length is exact, as in de1app's parser and decaid 57bc5793: a 9-byte
+/// `57 00 … 00` let the last timer byte double as the checksum and
+/// validated as a zero weight, and a longer frame isn't this shape.
 fn valid_frame(data: &[u8]) -> bool {
-    if data.len() < 10 || data[0] != b'W' {
+    if data.len() != WEIGHT_FRAME_LEN || data[0] != b'W' {
         return false;
     }
-    let checksum = data[1..9].iter().fold(0u8, |acc, &b| acc ^ b);
-    checksum == data[9]
+    xor_of_body(data) == data[WEIGHT_FRAME_LEN - 1]
+}
+
+/// XOR of every byte between the header and the trailing checksum.
+fn xor_of_body(data: &[u8]) -> u8 {
+    data[1..data.len() - 1].iter().fold(0u8, |acc, &b| acc ^ b)
+}
+
+/// Decode a battery notification from the command characteristic into a
+/// percentage.
+///
+/// `'B' <level> <xor>` — 3 bytes on current firmware, or the legacy 5-byte
+/// `'B' <level> <x> <y> <xor>` — where the XOR covers every byte between the
+/// header and the checksum (decaid `parseBatteryFrame`, d6994ea0). A level
+/// above 100 is rejected.
+#[must_use]
+pub fn parse_battery(data: &[u8]) -> Option<u8> {
+    if !matches!(data.len(), 3 | 5) || data[0] != b'B' {
+        return None;
+    }
+    if xor_of_body(data) != data[data.len() - 1] {
+        return None;
+    }
+    (data[1] <= 100).then_some(data[1])
 }
 
 #[cfg(test)]
@@ -130,8 +160,49 @@ mod tests {
 
     #[test]
     fn rejects_a_short_packet() {
-        // One byte short of the 10-byte minimum, header and checksum aside.
+        // decaid 57bc5793: `57 00 … 00` (9 bytes) XOR-validates if the last
+        // timer byte is read as the checksum — it must not decode as 0 g.
         assert_eq!(parse_weight(&[b'W', 0, 0, 0, 0, 0, 0, 0, 0]), None);
+    }
+
+    #[test]
+    fn rejects_an_over_long_packet() {
+        // A valid frame with a trailing extra byte is not a weight frame.
+        let mut long = frame().to_vec();
+        long.push(0);
+        assert_eq!(parse_weight(&long), None);
+        assert_eq!(parse_timer(&long), None);
+    }
+
+    #[test]
+    fn uses_de1apps_gatt_uuids_only() {
+        // de1app machine.tcl:92-94 (decaid 5544ff39 switched to the same).
+        assert_eq!(SERVICE_UUID, "b905eaea-2e63-0e04-7582-7913f10d8f81");
+        assert_eq!(NOTIFY_UUID, "ad736c5f-bbc9-1f96-d304-cb5d5f41e160");
+        assert_eq!(COMMAND_UUID, "4f9a45ba-8e1b-4e07-e157-0814d393b968");
+        for uuid in [SERVICE_UUID, NOTIFY_UUID, COMMAND_UUID] {
+            assert!(!uuid.contains("6c7e-4f73"), "old reaprime set: {uuid}");
+        }
+    }
+
+    #[test]
+    fn decodes_battery_frames() {
+        // decaid "publishes canonical battery notifications": 42 4B 4B.
+        assert_eq!(parse_battery(&[0x42, 75, 75]), Some(75));
+        // "accepts the legacy five-byte battery frame": 63, A5, 5A + XOR.
+        assert_eq!(
+            parse_battery(&[0x42, 63, 0xA5, 0x5A, 63 ^ 0xA5 ^ 0x5A]),
+            Some(63)
+        );
+        // "rejects malformed and out-of-range battery frames".
+        assert_eq!(parse_battery(&[0x42, 0, 0]), Some(0));
+        assert_eq!(parse_battery(&[0x42, 75, 0]), None);
+        assert_eq!(parse_battery(&[0x42, 101, 101]), None);
+        assert_eq!(parse_battery(&[0x42, 0xFF, 0xFF]), None);
+        assert_eq!(parse_battery(&[0x42, 75]), None);
+        assert_eq!(parse_battery(&[0x42, 75, 0, 75]), None);
+        // A weight frame is not a battery frame.
+        assert_eq!(parse_battery(&frame()), None);
     }
 
     #[test]

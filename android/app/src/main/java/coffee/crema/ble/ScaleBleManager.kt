@@ -19,6 +19,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.merge
@@ -189,6 +190,13 @@ class ScaleBleManager(
      *  forwarded as [NotificationSource.SCALE_BUTTON]. */
     private var buttonNotifyUuid: UUID? = null
 
+    /** The core's `command_write_no_response` for the connected scale: write
+     *  commands unacknowledged (Skale, gen-1 Acaia, Timemore). An
+     *  acknowledged write such a scale never answers stalls the GATT queue
+     *  until the link drops (Decenza b0c25e3e). */
+    @Volatile
+    private var commandWriteNoResponse: Boolean = false
+
     /** The advertised name of the connected scale, kept so a reconnect can
      *  re-identify the codec via [CremaBridge.connectScale]. */
     private var advertisedName: String? = null
@@ -278,6 +286,7 @@ class ScaleBleManager(
                 serviceUuid = null
                 weightNotifyUuid = null
                 commandUuid = null
+                commandWriteNoResponse = false
                 buttonNotifyUuid = null
                 bridge.disconnectScale()
                 _state.value = State.DISCONNECTED
@@ -339,6 +348,7 @@ class ScaleBleManager(
         serviceUuid = service
         weightNotifyUuid = weight
         commandUuid = command
+        commandWriteNoResponse = coreUuids.command_write_no_response
 
         // The core now knows the scale's codec; let the owner read its
         // capabilities and render capability-gated config UI.
@@ -356,10 +366,17 @@ class ScaleBleManager(
         // notification ordering is preserved (see BleTransport.observe's contract).
         observeJob?.cancel() // a reconnect re-subscribes on the same handle
         var notifications = if (coreUuids.command_notifies && command != weight) {
-            merge(
-                transport.observe(device, service, weight),
-                transport.observe(device, service, command),
-            )
+            var commandStream = transport.observe(device, service, command)
+            if (coreUuids.command_notify_optional) {
+                // Best-effort (the Eclair: battery only, as decaid does) — a
+                // failed subscribe costs the battery readout, not the session.
+                commandStream = commandStream.catch { e ->
+                    if (e is CancellationException) throw e
+                    Log.w(TAG, "Optional scale command notifications unavailable", e)
+                    onStatus("Scale command notifications unavailable — battery level not shown")
+                }
+            }
+            merge(transport.observe(device, service, weight), commandStream)
         } else {
             transport.observe(device, service, weight)
         }
@@ -395,6 +412,7 @@ class ScaleBleManager(
         serviceUuid = null
         weightNotifyUuid = null
         commandUuid = null
+        commandWriteNoResponse = false
         // Reset the core's scale slice so a vanished scale leaves no stale
         // weight and a reconnect starts clean (AND4). The De1 manager resets
         // the whole core on its disconnect; this is the scale-only equivalent.
@@ -504,8 +522,11 @@ class ScaleBleManager(
         characteristic: UUID,
         data: ByteArray,
     ) {
+        val noResponse = commandWriteNoResponse
         val first = try {
-            withTimeout(WRITE_TIMEOUT_MS) { transport.write(d, service, characteristic, data) }
+            withTimeout(WRITE_TIMEOUT_MS) {
+                transport.write(d, service, characteristic, data, withoutResponse = noResponse)
+            }
             return
         } catch (t: TimeoutCancellationException) {
             t
@@ -521,7 +542,9 @@ class ScaleBleManager(
         }
         Log.i(TAG, "Scale write failed (${first.message}) — one retry in ${WRITE_RETRY_DELAY_MS}ms")
         delay(WRITE_RETRY_DELAY_MS)
-        withTimeout(WRITE_TIMEOUT_MS) { transport.write(d, service, characteristic, data) }
+        withTimeout(WRITE_TIMEOUT_MS) {
+            transport.write(d, service, characteristic, data, withoutResponse = noResponse)
+        }
     }
 
     /** External dead-link verdict (the core's stale watchdog with no recovery

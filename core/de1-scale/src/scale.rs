@@ -35,12 +35,21 @@ pub struct ScaleUuids {
     pub command_write: &'static str,
     /// Whether `command_write` ALSO delivers notifications, so the shell should
     /// subscribe to it (beyond `weight_notify`). True only for a scale whose
-    /// command characteristic pushes data back — today just the Bookoo (`ff12`,
-    /// its serial / settings frames). False for a write-only command
+    /// command characteristic pushes data back — the Bookoo (`ff12`, its
+    /// serial / settings frames) and the Atomheart Eclair (its battery frame).
+    /// False for a write-only command
     /// characteristic: enabling notifications on one (e.g. the Decent's `36f5`)
     /// fails at the GATT layer and crashes the connect, so the shell must skip
     /// it. Capability-driven — the core, which owns the protocol, decides.
     pub command_notifies: bool,
+    /// Whether a failed subscription to `command_write` should be tolerated
+    /// (logged, connect carries on) rather than failing the connect. True for
+    /// the Atomheart Eclair, whose command-channel notifications carry only
+    /// the battery — decaid subscribes best-effort ("battery updates
+    /// disabled", `atomheart_scale.dart` `_registerConfigNotifications`).
+    /// False for the Bookoo, whose settings UI depends on its responses.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub command_notify_optional: bool,
     /// A third characteristic that notifies on-scale button presses — today
     /// only the Skale II's `EF82` (de1app subscribes and logs it,
     /// `bluetooth.tcl:221`; Decenza emits `buttonPressed`). `None` for every
@@ -48,11 +57,17 @@ pub struct ScaleUuids {
     /// as `Source::ScaleButton`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub button_notify: Option<&'static str>,
-    /// Whether `command_write` must be written WITHOUT response. True only
-    /// for the gen-1/IPS Acaia — its command characteristic rejects
-    /// with-response writes (Decenza acaiascale.cpp:279-295 "IPS and Pyxis
-    /// require different write types"). Every other scale (incl. Pyxis)
-    /// accepts the shells' default with-response write.
+    /// Whether `command_write` must be written WITHOUT response:
+    /// - the gen-1/IPS Acaia — its command characteristic rejects
+    ///   with-response writes (Decenza acaiascale.cpp:279-295 "IPS and Pyxis
+    ///   require different write types");
+    /// - the Timemore Dot (Decenza `timemorescale.cpp:165`);
+    /// - the Skale II — it leaves acknowledged writes unanswered, and on
+    ///   Android an unanswered request stalls every later GATT op until the
+    ///   link drops mid-pour (Decenza b0c25e3e / #1965; decaid
+    ///   `skale2_scale.dart:207-211` writes every command without response).
+    ///
+    /// Every other scale (incl. Pyxis) takes the shells' default write.
     #[cfg_attr(feature = "serde", serde(default))]
     pub command_write_no_response: bool,
 }
@@ -140,6 +155,15 @@ const SCALE_SCAN: &[ScaleScanEntry] = &[
         // (Decenza scalefactory.cpp:254-257).
         prefixes: &["LSJ-001", "Solo Barista"],
         label: "Solo Barista",
+    },
+    ScaleScanEntry {
+        // The Ti advertises its own 0x00DD service (distinctive, so a Ti is
+        // also recognised by service) and the short name "MB Ti", which
+        // carries neither "difluid" nor "microbalance" (Decenza e8577ff2,
+        // scalefactory "mb ti"). Ahead of "Microbalance" so a "Microbalance
+        // Ti" name doesn't fall through to the classic model.
+        prefixes: &["Microbalance Ti", "MB Ti"],
+        label: "Difluid Microbalance Ti",
     },
     ScaleScanEntry {
         prefixes: &["Microbalance"],
@@ -424,10 +448,8 @@ pub struct Scale {
 #[derive(Debug)]
 enum Inner {
     /// The Decent Scale carries a small stateful struct ([`DecentScale`])
-    /// that tracks the rolling tare counter and the observed firmware
-    /// version — both fields the codec layer needs to issue the correct
-    /// bytes (a tare with the next counter, or a power-off only when the
-    /// firmware supports it).
+    /// that tracks the rolling tare counter (each tare must carry a fresh
+    /// counter byte) and the observed firmware version (diagnostic).
     Decent(DecentScale),
     Skale,
     Felicita,
@@ -437,7 +459,12 @@ enum Inner {
     AtomheartEclair,
     EurekaPrecisa,
     SoloBarista,
-    Difluid,
+    /// The DiFluid Microbalance — `ti` selects the Microbalance Ti, which
+    /// speaks the same protocol on the same `AA01` characteristic but under
+    /// service `0x00DD` instead of `0x00EE` (Decenza e8577ff2).
+    Difluid {
+        ti: bool,
+    },
     /// The Smartchef has no BLE tare command. The variant carries a small
     /// stateful struct ([`SmartchefScale`]) that holds a software-tare
     /// offset (matches reaprime's `_weightAtTare`), applied to every
@@ -579,7 +606,8 @@ impl Scale {
             "Atomheart Eclair" => Inner::AtomheartEclair,
             "Eureka Precisa" => Inner::EurekaPrecisa,
             "Solo Barista" => Inner::SoloBarista,
-            "Difluid Microbalance" => Inner::Difluid,
+            "Difluid Microbalance" => Inner::Difluid { ti: false },
+            "Difluid Microbalance Ti" => Inner::Difluid { ti: true },
             "Smartchef" => Inner::Smartchef(SmartchefScale::new()),
             "Hiroia Jimmy" => Inner::HiroiaJimmy,
             "Varia Aku" => Inner::VariaAku,
@@ -605,7 +633,8 @@ impl Scale {
             Inner::AtomheartEclair => "Atomheart Eclair",
             Inner::EurekaPrecisa => "Eureka Precisa",
             Inner::SoloBarista => "Solo Barista",
-            Inner::Difluid => "Difluid Microbalance",
+            Inner::Difluid { ti: false } => "Difluid Microbalance",
+            Inner::Difluid { ti: true } => "Difluid Microbalance Ti",
             Inner::Smartchef(_) => "Smartchef",
             Inner::HiroiaJimmy => "Hiroia Jimmy",
             Inner::VariaAku => "Varia Aku",
@@ -621,7 +650,8 @@ impl Scale {
         // write-only (or the same characteristic as `weight_notify`), and its
         // command-channel notifications — even if the hardware sends any — are
         // never decoded, so the shell must not subscribe to it.
-        let command_notifies = matches!(&self.inner, Inner::Bookoo);
+        let command_notifies = matches!(&self.inner, Inner::Bookoo | Inner::AtomheartEclair);
+        let command_notify_optional = matches!(&self.inner, Inner::AtomheartEclair);
         let (service, weight_notify, command_write) = match &self.inner {
             Inner::Decent(_) => (
                 decent_scale::SERVICE_UUID,
@@ -668,8 +698,12 @@ impl Scale {
                 timemore::STATUS_UUID,
                 timemore::COMMAND_UUID,
             ),
-            Inner::Difluid => (
-                difluid::SERVICE_UUID,
+            Inner::Difluid { ti } => (
+                if *ti {
+                    difluid::SERVICE_UUID_TI
+                } else {
+                    difluid::SERVICE_UUID
+                },
                 difluid::NOTIFY_COMMAND_UUID,
                 difluid::NOTIFY_COMMAND_UUID,
             ),
@@ -695,16 +729,18 @@ impl Scale {
             Inner::Skale => Some(skale::BUTTON_NOTIFY_UUID),
             _ => None,
         };
-        // Gen-1/IPS Acaia commands must be written WITHOUT response
-        // (Decenza acaiascale.cpp:279-295); Pyxis + everything else take the
-        // default with-response write.
-        let command_write_no_response =
-            matches!(&self.inner, Inner::AcaiaGen1(_) | Inner::Timemore);
+        // Gen-1/IPS Acaia, Timemore and Skale commands go WITHOUT response
+        // (see the field doc); Pyxis + everything else take the default write.
+        let command_write_no_response = matches!(
+            &self.inner,
+            Inner::AcaiaGen1(_) | Inner::Timemore | Inner::Skale
+        );
         ScaleUuids {
             service,
             weight_notify,
             command_write,
             command_notifies,
+            command_notify_optional,
             button_notify,
             command_write_no_response,
         }
@@ -817,7 +853,7 @@ impl Scale {
             | Inner::AtomheartEclair
             | Inner::EurekaPrecisa
             | Inner::SoloBarista
-            | Inner::Difluid
+            | Inner::Difluid { .. }
             | Inner::Smartchef(_)
             | Inner::HiroiaJimmy
             | Inner::VariaAku
@@ -844,7 +880,7 @@ impl Scale {
     #[must_use]
     pub fn connect_writes(&self) -> Vec<&'static [u8]> {
         match &self.inner {
-            Inner::Difluid => vec![
+            Inner::Difluid { .. } => vec![
                 &difluid::ENABLE_NOTIFICATIONS[..],
                 &difluid::SET_UNIT_GRAMS[..],
             ],
@@ -958,7 +994,7 @@ impl Scale {
             Inner::EurekaPrecisa | Inner::SoloBarista => {
                 Some(vec![&eureka_precisa::SET_UNIT_GRAMS])
             }
-            Inner::Difluid => Some(vec![&difluid::SET_UNIT_GRAMS]),
+            Inner::Difluid { .. } => Some(vec![&difluid::SET_UNIT_GRAMS]),
             _ => None,
         }
     }
@@ -1038,7 +1074,7 @@ impl Scale {
             // but the weight bytes themselves remain a valid gram reading —
             // only the on-device display unit lies. Queue the recovery and
             // keep parsing. Mirrors reaprime (`difluid_scale.dart:147-154`).
-            Inner::Difluid if difluid::is_grams_unit(data) == Some(false) => {
+            Inner::Difluid { .. } if difluid::is_grams_unit(data) == Some(false) => {
                 Some(UnitRecovery::Continue {
                     bytes: &difluid::SET_UNIT_GRAMS,
                 })
@@ -1067,7 +1103,7 @@ impl Scale {
             | Inner::Skale
             | Inner::EurekaPrecisa
             | Inner::SoloBarista
-            | Inner::Difluid
+            | Inner::Difluid { .. }
             | Inner::Smartchef(_)
             | Inner::VariaAku
             | Inner::Timemore => 380,
@@ -1082,14 +1118,14 @@ impl Scale {
     /// if the bytes are not (yet) a complete weight reading.
     pub fn parse_weight(&mut self, data: &[u8]) -> Option<f32> {
         match &mut self.inner {
-            Inner::Decent(_) => decent_scale::parse_weight(data),
+            Inner::Decent(state) => state.parse_weight_frame(data).map(|f| f.weight_g),
             Inner::Skale => skale::parse_weight(data),
             Inner::Felicita => felicita::parse_weight(data),
             Inner::Bookoo => bookoo::parse_weight(data),
             Inner::AcaiaGen1(decoder) | Inner::AcaiaPyxis(decoder) => decoder.push(data),
             Inner::AtomheartEclair => atomheart_eclair::parse_weight(data),
             Inner::EurekaPrecisa | Inner::SoloBarista => eureka_precisa::parse_weight(data),
-            Inner::Difluid => difluid::parse_weight(data),
+            Inner::Difluid { .. } => difluid::parse_weight(data),
             Inner::Smartchef(state) => {
                 // Smartchef firmware has no tare command; the user-visible
                 // weight is `raw - software_offset`. Record every raw reading
@@ -1127,7 +1163,8 @@ impl Scale {
                     auto_stop: Some(packet.auto_stop),
                 });
             }
-            // Fall through to the weight-only path for any non-20-byte frame.
+            // Not a valid weight frame; the weight-only path below rejects
+            // it too.
         }
         // Pull a per-scale battery byte where the wire format carries one in
         // the same notification as weight. Computed before the weight decode
@@ -1199,11 +1236,27 @@ impl Scale {
             | Inner::AtomheartEclair
             | Inner::EurekaPrecisa
             | Inner::SoloBarista
-            | Inner::Difluid
+            | Inner::Difluid { .. }
             | Inner::Smartchef(_)
             | Inner::HiroiaJimmy
             | Inner::VariaAku
             | Inner::Timemore => None,
+        }
+    }
+
+    /// Absorb a notification from the scale's *command* characteristic into
+    /// the scale's own state — today the Atomheart Eclair's battery frame
+    /// ([`atomheart_eclair::parse_battery`]), carried forward onto every later
+    /// weight reading like the Varia AKU's (decaid re-attaches its
+    /// `_batteryLevel` to every snapshot the same way). A no-op for every
+    /// other scale and for any frame that isn't recognised. Called on every
+    /// command-channel notification, alongside
+    /// [`parse_command_response`](Self::parse_command_response).
+    pub fn absorb_command_notification(&mut self, data: &[u8]) {
+        if matches!(self.inner, Inner::AtomheartEclair)
+            && let Some(percent) = atomheart_eclair::parse_battery(data)
+        {
+            self.last_battery_percent = Some(percent);
         }
     }
 
@@ -1247,12 +1300,10 @@ impl Scale {
     ///
     /// [`parse_reading`]: Self::parse_reading
     pub fn absorb_unmatched_frame(&mut self, data: &[u8]) {
-        if matches!(self.inner, Inner::Decent(_))
-            && let Some(decent_scale::CommandResponse::LcdAck {
-                firmware_version, ..
-            }) = decent_scale::parse_command_response(data)
+        if let Inner::Decent(state) = &mut self.inner
+            && let Some(response) = decent_scale::parse_command_response(data)
         {
-            self.record_decent_scale_firmware_version(firmware_version);
+            state.absorb_command_response(response);
         }
     }
 
@@ -1405,14 +1456,14 @@ impl Scale {
     /// bytes the shell should write to [`ScaleUuids::command_write`].
     pub fn tare(&mut self) -> Option<Vec<u8>> {
         Some(match &mut self.inner {
-            Inner::Decent(_) => decent_scale::TARE.to_vec(),
+            Inner::Decent(state) => state.next_tare().to_vec(),
             Inner::Skale => vec![skale::CMD_TARE],
             Inner::Felicita => vec![felicita::TARE],
             Inner::Bookoo => bookoo::TARE.to_vec(),
             Inner::AcaiaGen1(_) | Inner::AcaiaPyxis(_) => acaia::TARE.to_vec(),
             Inner::AtomheartEclair => atomheart_eclair::TARE.to_vec(),
             Inner::EurekaPrecisa | Inner::SoloBarista => eureka_precisa::TARE.to_vec(),
-            Inner::Difluid => difluid::TARE.to_vec(),
+            Inner::Difluid { .. } => difluid::TARE.to_vec(),
             Inner::Smartchef(state) => {
                 // Smartchef firmware has no tare command — record the current
                 // raw reading as the new offset and return `None` so the shell
@@ -1465,7 +1516,7 @@ impl Scale {
                 Stop => eureka_precisa::TIMER_STOP.to_vec(),
                 Reset => eureka_precisa::TIMER_RESET.to_vec(),
             },
-            Inner::Difluid => match command {
+            Inner::Difluid { .. } => match command {
                 Start => difluid::TIMER_START.to_vec(),
                 Stop => difluid::TIMER_STOP.to_vec(),
                 Reset => difluid::TIMER_RESET.to_vec(),
@@ -1500,7 +1551,7 @@ impl Scale {
     /// (`difluid_scale.dart:147-154`). The shell fires the recovery from
     /// `CremaCore::on_notification`'s scale-weight path.
     pub fn is_difluid(&self) -> bool {
-        matches!(&self.inner, Inner::Difluid)
+        matches!(&self.inner, Inner::Difluid { .. })
     }
 
     /// Whether the connected scale is a Smartchef.
@@ -1617,6 +1668,142 @@ mod tests {
     }
 
     #[test]
+    fn write_without_response_table() {
+        // Decenza b0c25e3e (Skale), acaiascale.cpp:279-295 (gen-1 Acaia),
+        // timemorescale.cpp:165 (Timemore). Everything else writes with response.
+        let no_response = ["Acaia", "Timemore Dot", "Skale II"];
+        for entry in SCALE_SCAN {
+            let scale = Scale::from_label(entry.label).unwrap();
+            assert_eq!(
+                scale.uuids().command_write_no_response,
+                no_response.contains(&entry.label),
+                "{}",
+                entry.label
+            );
+        }
+    }
+
+    #[test]
+    fn eclair_scan_and_identify_use_only_the_de1app_service() {
+        // decaid 5544ff39 "Eclair scan filter uses the current service UUID".
+        let scan = Scale::scan_uuids();
+        assert!(
+            scan.service_uuids
+                .contains(&"b905eaea-2e63-0e04-7582-7913f10d8f81")
+        );
+        assert!(
+            !scan
+                .service_uuids
+                .iter()
+                .any(|u| u.contains("6c7e-4f73-b43d-2cdfcab29570")),
+            "the old reaprime Eclair set must be gone"
+        );
+        // The new service is distinctive: it identifies an Eclair whose name
+        // doesn't match (upper-case, as Android reports it), and the old one
+        // identifies nothing.
+        let new = ["B905EAEA-2E63-0E04-7582-7913F10D8F81".to_owned()];
+        assert_eq!(
+            Scale::identify("Unknown", &new).unwrap().label(),
+            "Atomheart Eclair"
+        );
+        let old = ["b905eaea-6c7e-4f73-b43d-2cdfcab29570".to_owned()];
+        assert!(Scale::identify("Unknown", &old).is_none());
+        assert_eq!(
+            Scale::identify("ECLAIR-123", &[]).unwrap().label(),
+            "Atomheart Eclair"
+        );
+    }
+
+    #[test]
+    fn eclair_subscribes_to_its_command_channel_best_effort() {
+        let eclair = Scale::from_label("Atomheart Eclair").unwrap().uuids();
+        assert_eq!(eclair.weight_notify, crate::atomheart_eclair::NOTIFY_UUID);
+        assert_eq!(eclair.command_write, crate::atomheart_eclair::COMMAND_UUID);
+        assert!(eclair.command_notifies);
+        assert!(eclair.command_notify_optional);
+        // The Bookoo's command subscription stays mandatory.
+        let bookoo = Scale::from_label("Bookoo").unwrap().uuids();
+        assert!(bookoo.command_notifies);
+        assert!(!bookoo.command_notify_optional);
+        // Write-only command characteristics are not subscribed at all.
+        let decent = Scale::from_label("Decent Scale").unwrap().uuids();
+        assert!(!decent.command_notifies);
+        assert!(!decent.command_notify_optional);
+    }
+
+    #[test]
+    fn eclair_battery_from_the_command_channel_rides_later_weights() {
+        let mut eclair = Scale::from_label("Atomheart Eclair").unwrap();
+        let weight = |mg: i32| {
+            let b = mg.to_le_bytes();
+            let mut f = [b'W', b[0], b[1], b[2], b[3], 0, 0, 0, 0, 0];
+            f[9] = f[1..9].iter().fold(0u8, |a, &x| a ^ x);
+            f
+        };
+        assert_eq!(
+            eclair.parse_reading(&weight(1000)).unwrap().battery_percent,
+            None
+        );
+        eclair.absorb_command_notification(&[0x42, 75, 75]);
+        let reading = eclair.parse_reading(&weight(1500)).unwrap();
+        assert_eq!(reading.weight_g, 1.5);
+        assert_eq!(reading.battery_percent, Some(75));
+        // A corrupt battery frame keeps the last good level (decaid).
+        eclair.absorb_command_notification(&[0x42, 60, 0]);
+        assert_eq!(
+            eclair.parse_reading(&weight(2000)).unwrap().battery_percent,
+            Some(75)
+        );
+        // Other scales ignore command-channel frames here.
+        let mut bookoo = Scale::from_label("Bookoo").unwrap();
+        bookoo.absorb_command_notification(&[0x42, 75, 75]);
+        assert_eq!(bookoo.last_battery_percent, None);
+    }
+
+    #[test]
+    fn difluid_ti_is_scanned_and_identified_by_name_and_service() {
+        // Decenza e8577ff2: the Ti advertises 0x00DD and "MB Ti".
+        let scan = Scale::scan_uuids();
+        assert!(scan.service_uuids.contains(&difluid::SERVICE_UUID_TI));
+        assert!(scan.service_uuids.contains(&difluid::SERVICE_UUID));
+        assert!(scan.name_prefixes.contains(&"MB Ti"));
+        for name in ["MB Ti 1234", "Microbalance Ti", "mb ti"] {
+            assert_eq!(
+                Scale::identify(name, &[]).unwrap().label(),
+                "Difluid Microbalance Ti",
+                "{name}"
+            );
+        }
+        // The classic name still maps to the classic model…
+        assert_eq!(
+            Scale::identify("Microbalance-X", &[]).unwrap().label(),
+            "Difluid Microbalance"
+        );
+        // …and the distinctive 0x00DD service corrects a classic-looking name.
+        let ti_service = ["000000DD-0000-1000-8000-00805F9B34FB".to_owned()];
+        assert_eq!(
+            Scale::identify("Microbalance-X", &ti_service)
+                .unwrap()
+                .label(),
+            "Difluid Microbalance Ti"
+        );
+        // Same characteristic and codec, Ti service.
+        let ti = Scale::from_label("Difluid Microbalance Ti").unwrap();
+        let uuids = ti.uuids();
+        assert_eq!(uuids.service, difluid::SERVICE_UUID_TI);
+        assert_eq!(uuids.weight_notify, difluid::NOTIFY_COMMAND_UUID);
+        assert_eq!(uuids.command_write, difluid::NOTIFY_COMMAND_UUID);
+        assert_eq!(ti.connect_writes().len(), 2);
+        assert_eq!(
+            Scale::from_label("Difluid Microbalance")
+                .unwrap()
+                .uuids()
+                .service,
+            difluid::SERVICE_UUID
+        );
+    }
+
+    #[test]
     fn label_round_trips_through_from_label() {
         for name in [
             "BOOKOO_SC1",
@@ -1633,8 +1820,11 @@ mod tests {
     #[test]
     fn parse_weight_dispatches_to_the_right_codec() {
         let mut bookoo = Scale::from_label("Bookoo").unwrap();
-        // Header 03 0b required since the review-#32 header gate.
-        let packet = [0x03, 0x0B, 0, 0, 0, 0, b'+', 0x00, 0x07, 0xD0];
+        // A full 20-byte frame: 03 0b header, '+' sign, 0x0007D0 = 20.00 g,
+        // trailing XOR.
+        let mut packet = [0u8; 20];
+        packet[..10].copy_from_slice(&[0x03, 0x0B, 0, 0, 0, 0, b'+', 0x00, 0x07, 0xD0]);
+        packet[19] = packet[..19].iter().fold(0, |a, &b| a ^ b);
         assert_eq!(bookoo.parse_weight(&packet), Some(20.0));
     }
 
@@ -1753,14 +1943,25 @@ mod tests {
     }
 
     #[test]
-    fn decent_tare_is_the_constant_decenza_frame() {
-        // Aligned with Decenza (fixed counter 0x01, byte 5 = 0x00) — every
-        // tare sends the identical frame.
+    fn decent_tare_rolls_its_counter_per_tare() {
+        // decaid scale.dart:551-556 / de1app tare_counter_incr: each tare
+        // carries a fresh counter byte, so the scale can't dedupe it.
         let mut decent = Scale::from_label("Decent Scale").unwrap();
         let first = decent.tare().unwrap();
         let second = decent.tare().unwrap();
-        assert_eq!(first, decent_scale::TARE.to_vec());
-        assert_eq!(second, first);
+        assert_eq!(first, decent_scale::tare(0).to_vec());
+        assert_eq!(second, decent_scale::tare(1).to_vec());
+    }
+
+    #[test]
+    fn decent_v12_frame_decodes_and_records_the_firmware() {
+        let mut decent = Scale::from_label("Decent Scale").unwrap();
+        let frame = [0x03, 0xCE, 0x01, 0xF4, 0x01, 0x02, 0x03, 0x00, 0x00, 0x38];
+        assert_eq!(decent.parse_weight(&frame), Some(50.0));
+        assert_eq!(
+            decent.decent_scale_firmware_version(),
+            Some(DecentScaleFirmwareVersion::V1_2)
+        );
     }
 
     #[test]
@@ -1821,7 +2022,8 @@ mod tests {
         let difluid = Scale::from_label("Difluid Microbalance").unwrap();
         // Byte [17] non-zero → display unit is off, but the weight bytes
         // are still in grams. Queue + keep parsing.
-        let mut packet = [0u8; 20];
+        let mut packet = [0u8; 19];
+        packet[..4].copy_from_slice(&[0xDF, 0xDF, 0x03, 0x00]);
         packet[17] = 0x01;
         match difluid.unit_recovery(&packet) {
             Some(UnitRecovery::Continue { bytes }) => {
@@ -2005,8 +2207,9 @@ mod tests {
         assert_eq!(dot.connect_writes().len(), 12);
         // No LCD / battery / flow surface.
         assert!(!dot.capabilities().can_lcd);
-        // Weight decode end-to-end: 0x00B4 BE = 180 tenths = 18.0 g.
-        let packet = [0xA5, 0x5A, 0x01, 0, 0, 0, 0, 0, 0x00, 0xB4];
+        // Weight decode end-to-end: opcode 01, cmd 01, 4-byte payload whose
+        // bytes 8-9 are 0x00B4 BE = 180 tenths = 18.0 g, then the CRC.
+        let packet = [0xA5, 0x5A, 0x01, 0x01, 0x00, 0x04, 0, 0, 0x00, 0xB4, 0, 0];
         assert_eq!(dot.parse_weight(&packet), Some(18.0));
     }
 

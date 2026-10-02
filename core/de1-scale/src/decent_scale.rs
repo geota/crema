@@ -2,6 +2,20 @@
 //!
 //! Weight notifications arrive on [`READ_NOTIFY_UUID`]; commands are written to
 //! [`WRITE_UUID`].
+//!
+//! Weight arrives in one of two exact frame shapes, told apart by length
+//! alone (a notification carries exactly one frame):
+//!
+//! - **7 bytes** — `03 <CE|CA> <weight i16 BE> <b4> <b5> <xor>`, the
+//!   original v1.0/v1.1 firmware and the Half Decent Scale (HDS).
+//! - **10 bytes** — the original scale's v1.2 firmware: the same header and
+//!   weight, then `minutes seconds tenths` of the scale's timer, two unused
+//!   bytes, and the XOR moved to byte 9 (de1app
+//!   `decent_scale_weight_read_spec_v12`, `binary.tcl:350-364`; Decenza
+//!   `decentscaleprotocol.h` `V12WeightFrameLength`, #1919; decaid
+//!   `parseDecentWeightFrame`). Checking byte 6 of a 10-byte frame — the old
+//!   rule here — dropped every v1.2 weight frame, so the scale showed no
+//!   weight at all.
 
 /// GATT service UUID.
 pub const SERVICE_UUID: &str = "0000fff0-0000-1000-8000-00805f9b34fb";
@@ -10,33 +24,71 @@ pub const READ_NOTIFY_UUID: &str = "0000fff4-0000-1000-8000-00805f9b34fb";
 /// Characteristic commands are written to.
 pub const WRITE_UUID: &str = "000036f5-0000-1000-8000-00805f9b34fb";
 
-/// Minimum length of a weight notification.
-const WEIGHT_PACKET_LEN: usize = 7;
+/// Length of a standard frame — every command, the `0x0A` reply, and the
+/// v1.0/v1.1/HDS weight notification.
+const STANDARD_FRAME_LEN: usize = 7;
 
-/// Decode a weight notification into grams.
+/// Length of the original scale's v1.2 timestamped weight notification.
+const V12_WEIGHT_FRAME_LEN: usize = 10;
+
+/// Every frame opens with this header byte.
+const PACKET_HEADER: u8 = 0x03;
+
+/// XOR of every byte of `frame` except the last.
+fn xor_of_body(frame: &[u8]) -> u8 {
+    frame[..frame.len() - 1].iter().fold(0u8, |acc, &b| acc ^ b)
+}
+
+/// One decoded weight notification.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WeightFrame {
+    /// Weight, grams.
+    pub weight_g: f32,
+    /// The scale's own timer, milliseconds — `Some` only for the v1.2
+    /// 10-byte frame, whose bytes 4-6 carry `minutes seconds tenths`
+    /// (decaid `parseDecentWeightFrame`: `(m*600 + s*10 + t) * 100`).
+    /// Its presence is also proof of v1.2 firmware.
+    pub timestamp_ms: Option<u32>,
+}
+
+/// Decode a weight notification, keeping the frame shape.
 ///
-/// Returns `None` if `data` is not a weight packet — the Decent Scale also
-/// sends button, tare-acknowledgement and info packets on the same
-/// characteristic, distinguished by the type byte.
-pub fn parse_weight(data: &[u8]) -> Option<f32> {
-    if data.len() < WEIGHT_PACKET_LEN {
-        return None;
-    }
+/// Returns `None` if `data` is not a complete weight packet — the Decent
+/// Scale also sends button, tare-acknowledgement and info packets on the
+/// same characteristic, distinguished by the type byte. Only an exact 7- or
+/// 10-byte frame is decoded; any other length is ignored for weight.
+pub fn parse_weight_frame(data: &[u8]) -> Option<WeightFrame> {
+    let timestamped = match data.len() {
+        STANDARD_FRAME_LEN => false,
+        V12_WEIGHT_FRAME_LEN => true,
+        _ => return None,
+    };
     // Byte 1 is the packet type; 0xCE and 0xCA carry weight.
-    if data[1] != 0xCE && data[1] != 0xCA {
+    if data[0] != PACKET_HEADER || (data[1] != 0xCE && data[1] != 0xCA) {
         return None;
     }
-    // The packet carries a trailing XOR of the first six bytes — the same
-    // checksum the outgoing `command` builder produces. Verify it before
-    // trusting the value: a corrupted frame whose type byte still reads as
-    // weight must not inject a spurious spike into stop-at-weight
-    // (review #32).
-    if data.len() >= 7 && data[..6].iter().fold(0u8, |a, &b| a ^ b) != data[6] {
+    // The packet carries a trailing XOR of every byte before it — byte 6 of
+    // a 7-byte frame, byte 9 of a 10-byte frame. Verify it before trusting
+    // the value: a corrupted frame whose type byte still reads as weight
+    // must not inject a spurious spike into stop-at-weight (review #32).
+    if xor_of_body(data) != data[data.len() - 1] {
         return None;
     }
-    // Weight is a big-endian signed 16-bit value in units of 0.1 g.
+    // Weight is a big-endian signed 16-bit value in units of 0.1 g, at bytes
+    // 2-3 in both shapes.
     let raw = i16::from_be_bytes([data[2], data[3]]);
-    Some(f32::from(raw) / 10.0)
+    let timestamp_ms = timestamped
+        .then(|| (u32::from(data[4]) * 600 + u32::from(data[5]) * 10 + u32::from(data[6])) * 100);
+    Some(WeightFrame {
+        weight_g: f32::from(raw) / 10.0,
+        timestamp_ms,
+    })
+}
+
+/// Decode a weight notification into grams — [`parse_weight_frame`]
+/// without the frame shape.
+pub fn parse_weight(data: &[u8]) -> Option<f32> {
+    parse_weight_frame(data).map(|frame| frame.weight_g)
 }
 
 /// Build a 7-byte command — `03 <cmd> <payload…> <xor>` — with the XOR
@@ -47,15 +99,22 @@ fn command(cmd: u8, payload: [u8; 4]) -> [u8; 7] {
     packet
 }
 
-/// Command: tare the scale — the constant frame Decenza sends
-/// (`decentscale.cpp:372-374`): counter byte fixed at `0x01`, byte 5 `0x00`
-/// (byte 5 also matches the official HDS API doc's `030F000000000C`
-/// example). Replaced 2026-07-07 (see the local review notes): the previous
-/// de1app-derived variant rolled the counter from 253 AND set byte 5 to
-/// `0x01` — if bench testing ever shows the HDS deduping repeated tares on
-/// the fixed counter, resurrect the rolling counter from de1app
-/// `bluetooth.tcl:1230-1235`.
-pub const TARE: [u8; 7] = [0x03, 0x0F, 0x01, 0x00, 0x00, 0x00, 0x0D];
+/// Command: tare the scale, carrying `counter` in byte 2.
+///
+/// The counter must change from one logical tare to the next: the scale
+/// treats a repeat of the last counter as the same request, so a fixed
+/// counter can see every tare after the first deduplicated. de1app rolls it
+/// (`tare_counter_incr`, `bluetooth.tcl:1259-1279`) and decaid does the same
+/// (`scale.dart:551-556`: `_tareCounter` from 0, `& 0xFF`). Byte 5 is
+/// `0x00` as in decaid and the official HDS API doc's `030F000000000C`
+/// example (de1app sets it to `0x01`). [`DecentScale::next_tare`] owns the
+/// counter; a retry of the same tare must resend the same frame rather than
+/// call it again. (This replaces the fixed-counter frame Crema copied from
+/// Decenza `decentscale.cpp:372-374` on 2026-07-07.)
+#[must_use]
+pub fn tare(counter: u8) -> [u8; 7] {
+    command(0x0F, [counter, 0x00, 0x00, 0x00])
+}
 
 /// Command: start the scale's timer.
 pub fn timer_start() -> [u8; 7] {
@@ -124,10 +183,12 @@ pub const HEARTBEAT: [u8; 7] = [0x03, 0x0A, 0x03, 0xFF, 0xFF, 0x00, 0x0A];
 /// shell schedules the heartbeat clock; the core is sans-IO.
 pub const HEARTBEAT_INTERVAL_MS: u64 = 2_000;
 
-/// The Decent Scale's firmware version, as observed at runtime.
+/// The original Decent Scale's firmware version, as observed at runtime.
 ///
 /// Parsed from the `0x0A` LCD / heartbeat reply (see
-/// [`parse_command_response`]) and surfaced diagnostically — the core no
+/// [`parse_command_response`]), or inferred as v1.2 from a timestamped
+/// 10-byte weight frame (see [`parse_weight_frame`]), and surfaced
+/// diagnostically — the core no
 /// longer gates any behaviour on the version, but the value is still
 /// useful as a connection-info field and for future telemetry. Older
 /// firmware versions silently no-op on commands they don't understand.
@@ -156,27 +217,67 @@ pub enum DecentScaleFirmwareVersion {
 }
 
 impl DecentScaleFirmwareVersion {
-    /// Map a raw firmware-version byte (`data6` of a `0x0A` reply, per
-    /// `de1plus/bluetooth.tcl:2740`) to a [`DecentScaleFirmwareVersion`].
+    /// Map the original scale's firmware marker (byte index 5 of a `0x0A`
+    /// reply) to a [`DecentScaleFirmwareVersion`].
     ///
-    /// The legacy app stores the raw byte and uses it diagnostically only;
-    /// here it's bucketed into the three variants the core actually gates
-    /// behaviour on. Unrecognised bytes fall back to [`Self::Unknown`] so
-    /// the conservative double-send and no-power-off defaults apply.
+    /// The marker table is `0xFE` → v1.0, `0x02` → v1.1, `0x03` → v1.2 —
+    /// decaid `profile.dart` `_originalFirmwareVersions` (d5e2c482, from
+    /// the public `pydecentscale` client). The previous `0x10`/`0x11`/
+    /// `0x12..` table here matched no reference. Any other byte is
+    /// [`Self::Unknown`] — including every HDS reply, whose byte 5 is the
+    /// BCD major of [`HdsFirmwareVersion`] instead.
     #[must_use]
     pub const fn from_raw_byte(byte: u8) -> Self {
         match byte {
-            0x10 => Self::V1_0,
-            0x11 => Self::V1_1,
-            // v1.2 and any later released firmware all carry the v1.2-era
-            // behaviour (power-off works, writes don't need duplicating);
-            // bucket them together so a future v1.3 / v2.0 firmware
-            // doesn't fall through to Unknown.
-            0x12..=0xFE => Self::V1_2,
-            // 0x00 / 0xFF are reserved sentinel-ish values the firmware
-            // never sets — fall through to Unknown.
+            0xFE => Self::V1_0,
+            0x02 => Self::V1_1,
+            0x03 => Self::V1_2,
             _ => Self::Unknown,
         }
+    }
+}
+
+/// The Half Decent Scale's firmware version, decoded from bytes 5-6 of the
+/// `0x0A` reply: byte 5 is the BCD-packed major (`00..=99`), byte 6 is
+/// `(minor << 4) | patch` — openscale `include/ble.h:730-731`, decoded the
+/// same way by Decenza (`decodeHdsFirmwareVersion`) and decaid
+/// (`DecentHdsFirmwareVersion.fromBcd`). Wire `03 1E` is `3.1.14`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct HdsFirmwareVersion {
+    /// Major version.
+    pub major: u8,
+    /// Minor version (one nibble).
+    pub minor: u8,
+    /// Patch version (one nibble).
+    pub patch: u8,
+}
+
+impl HdsFirmwareVersion {
+    /// Decode the BCD pair. `None` when byte 5 is not valid BCD or the major
+    /// exceeds 30 — decaid's guard against reading an original scale's
+    /// marker (e.g. `0xFE`) as an HDS version.
+    #[must_use]
+    pub const fn from_bcd(packed_major: u8, packed_minor_patch: u8) -> Option<Self> {
+        let tens = packed_major >> 4;
+        let units = packed_major & 0x0F;
+        if tens > 9 || units > 9 {
+            return None;
+        }
+        let major = tens * 10 + units;
+        if major > 30 {
+            return None;
+        }
+        Some(Self {
+            major,
+            minor: packed_minor_patch >> 4,
+            patch: packed_minor_patch & 0x0F,
+        })
+    }
+}
+
+impl std::fmt::Display for HdsFirmwareVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
     }
 }
 
@@ -207,10 +308,15 @@ pub enum CommandResponse {
         /// app clamps to 100 and stores `scale_usb_powered`. Returned
         /// here raw so callers can preserve that signal.
         battery_raw: u8,
-        /// Firmware-version sentinel byte (legacy `data6`), bucketed into
-        /// the three variants the core gates on. See
+        /// Byte 5 read as the original scale's firmware marker. See
         /// [`DecentScaleFirmwareVersion::from_raw_byte`].
         firmware_version: DecentScaleFirmwareVersion,
+        /// Bytes 5-6 read as an HDS firmware triple, when they are valid
+        /// BCD. The reply itself does not say which scale sent it (decaid
+        /// only trusts HDS identity after a `0x22` voltage probe), so both
+        /// readings are returned: an original v1.1/v1.2 marker (`0x02` /
+        /// `0x03`) also decodes as an HDS major of 2 / 3.
+        hds_firmware: Option<HdsFirmwareVersion>,
     },
 }
 
@@ -228,16 +334,18 @@ pub enum CommandResponse {
 /// 3. Else drop the notification (button presses, tare acks, etc.).
 #[must_use]
 pub fn parse_command_response(data: &[u8]) -> Option<CommandResponse> {
-    // The Decent Scale's 0x0A reply is a 7-byte frame; anything shorter
-    // can't carry the firmware-version byte we want.
-    if data.len() < WEIGHT_PACKET_LEN {
+    // The Decent Scale's 0x0A reply is exactly one 7-byte frame (decaid
+    // `parseDecentStatusFrame`; Decenza `notifiedFrameLengthExact`). A
+    // 10-byte frame of this type has no known layout, so it is not guessed
+    // at.
+    if data.len() != STANDARD_FRAME_LEN {
         return None;
     }
     // Byte [0] is always 0x03 (the same `command` header byte every
     // builder emits); byte [1] is the command id. 0x0A is the LCD /
     // heartbeat command, and that's the only response shape we model
     // here today.
-    if data[0] != 0x03 || data[1] != 0x0A {
+    if data[0] != PACKET_HEADER || data[1] != 0x0A {
         return None;
     }
     // Battery is byte index 4, firmware-version byte index 5. de1app's field
@@ -248,22 +356,29 @@ pub fn parse_command_response(data: &[u8]) -> Option<CommandResponse> {
     Some(CommandResponse::LcdAck {
         battery_raw: data[4],
         firmware_version: DecentScaleFirmwareVersion::from_raw_byte(data[5]),
+        hds_firmware: HdsFirmwareVersion::from_bcd(data[5], data[6]),
     })
 }
 
 /// Decent-Scale-specific state the [`crate::Scale`] wrapper carries.
 ///
 /// Parallels the Bookoo's [`crate::ScaleCapabilities`]: a small struct that
-/// holds runtime fields ([`firmware_version`](Self::record_firmware_version))
-/// and exposes capability-check helpers so the [`crate::Scale`] wrapper
-/// stays plain dispatch. (It also carried the legacy rolling tare counter
-/// until the [`TARE`] frame was aligned with Decenza's constant one.)
+/// holds runtime fields (the rolling tare counter, the observed firmware)
+/// so the [`crate::Scale`] wrapper stays plain dispatch.
 #[derive(Debug, Clone)]
 pub struct DecentScale {
     /// Firmware version, if known. Set by
     /// [`record_firmware_version`](Self::record_firmware_version) once the
-    /// shell forwards the first `0x0A` reply; surfaced diagnostically only.
+    /// shell forwards the first `0x0A` reply, or by
+    /// [`parse_weight_frame`](Self::parse_weight_frame) on the first
+    /// timestamped (v1.2) weight frame; surfaced diagnostically only.
     firmware_version: Option<DecentScaleFirmwareVersion>,
+    /// The HDS firmware triple from the last `0x0A` reply that decoded as
+    /// one. Diagnostic only — see [`CommandResponse::LcdAck::hds_firmware`].
+    hds_firmware: Option<HdsFirmwareVersion>,
+    /// Counter byte for the next [`tare`] frame — starts at 0 and wraps,
+    /// like decaid's `_tareCounter`.
+    tare_counter: u8,
 }
 
 impl DecentScale {
@@ -272,6 +387,50 @@ impl DecentScale {
     pub fn new() -> Self {
         Self {
             firmware_version: None,
+            hds_firmware: None,
+            tare_counter: 0,
+        }
+    }
+
+    /// The frame for the next logical tare, advancing the rolling counter.
+    /// Call once per tare request; a retry of that request resends the
+    /// returned frame.
+    pub fn next_tare(&mut self) -> [u8; 7] {
+        let frame = tare(self.tare_counter);
+        self.tare_counter = self.tare_counter.wrapping_add(1);
+        frame
+    }
+
+    /// Decode a weight notification ([`parse_weight_frame`]) and note the
+    /// v1.2 firmware a timestamped frame proves (decaid
+    /// `DecentScaleProfile.fromEvidence`: a timestamped frame → `1.2`).
+    pub fn parse_weight_frame(&mut self, data: &[u8]) -> Option<WeightFrame> {
+        let frame = parse_weight_frame(data)?;
+        if frame.timestamp_ms.is_some() {
+            self.firmware_version = Some(DecentScaleFirmwareVersion::V1_2);
+        }
+        Some(frame)
+    }
+
+    /// Absorb a `0x0A` reply (see [`parse_command_response`]): record its
+    /// firmware readings. A marker that doesn't decode never overwrites a
+    /// version already proven by a timestamped weight frame.
+    pub fn absorb_command_response(&mut self, response: CommandResponse) {
+        match response {
+            CommandResponse::LcdAck {
+                firmware_version,
+                hds_firmware,
+                ..
+            } => {
+                if firmware_version != DecentScaleFirmwareVersion::Unknown
+                    || self.firmware_version.is_none()
+                {
+                    self.firmware_version = Some(firmware_version);
+                }
+                if hds_firmware.is_some() {
+                    self.hds_firmware = hds_firmware;
+                }
+            }
         }
     }
 
@@ -279,6 +438,12 @@ impl DecentScale {
     /// [`parse_command_response`]).
     pub fn record_firmware_version(&mut self, version: DecentScaleFirmwareVersion) {
         self.firmware_version = Some(version);
+    }
+
+    /// The HDS firmware triple, if a `0x0A` reply carried one.
+    #[must_use]
+    pub fn hds_firmware(&self) -> Option<HdsFirmwareVersion> {
+        self.hds_firmware
     }
 
     /// The firmware version, if observed.
@@ -330,9 +495,116 @@ mod tests {
         assert_eq!(parse_weight(&[0x03, 0xCE]), None);
     }
 
+    /// decaid's v1.2 fixture (`decent_scale_profile_test.dart`, "parses
+    /// original v1.2 timestamped weight frames"): 50.0 g at 1 min 2.3 s,
+    /// XOR `0x38` in byte 9.
+    const V12_FRAME: [u8; 10] = [0x03, 0xCE, 0x01, 0xF4, 0x01, 0x02, 0x03, 0x00, 0x00, 0x38];
+
     #[test]
-    fn tare_bytes_are_pinned() {
-        assert_eq!(TARE, [0x03, 0x0F, 0x01, 0x00, 0x00, 0x00, 0x0D]);
+    fn decodes_a_v12_ten_byte_timestamped_frame() {
+        assert_eq!(
+            parse_weight_frame(&V12_FRAME),
+            Some(WeightFrame {
+                weight_g: 50.0,
+                timestamp_ms: Some(62_300),
+            })
+        );
+        // The old rule — XOR of bytes 0-5 against byte 6 — fails on this
+        // frame, which is why every v1.2 weight frame used to be dropped.
+        assert_ne!(V12_FRAME[..6].iter().fold(0u8, |a, &b| a ^ b), V12_FRAME[6]);
+        // A 7-byte frame carries no timestamp.
+        assert_eq!(
+            parse_weight_frame(&[0x03, 0xCE, 0x01, 0xF4, 0x00, 0x00, 0x38]),
+            Some(WeightFrame {
+                weight_g: 50.0,
+                timestamp_ms: None,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_a_corrupt_v12_frame() {
+        // decaid "rejects corrupt capability evidence checksums".
+        assert_eq!(
+            parse_weight(&[0x03, 0xCE, 0x00, 0x64, 0, 0, 0, 0, 0, 0]),
+            None
+        );
+        let mut corrupt = V12_FRAME;
+        corrupt[3] ^= 0x10;
+        assert_eq!(parse_weight(&corrupt), None);
+    }
+
+    #[test]
+    fn decodes_weight_only_from_exact_seven_or_ten_byte_frames() {
+        // decaid "weight frames require a verified command and complete
+        // length": both types, both lengths, -10.0 g.
+        for wtype in [0xCE, 0xCA] {
+            for len in [7usize, 10] {
+                let mut frame = vec![0x03, wtype, 0xFF, 0x9C];
+                frame.resize(len - 1, 0);
+                frame.push(xor_of_body(&[frame.clone(), vec![0]].concat()));
+                assert_eq!(parse_weight(&frame), Some(-10.0), "{wtype:#x} len {len}");
+            }
+        }
+        // Any other length is ignored — even with a trailing XOR that would
+        // validate — as is a wrong header byte.
+        for len in [6usize, 8, 9, 11, 12] {
+            let mut frame = vec![0x03, 0xCE, 0x00, 0x64];
+            frame.resize(len - 1, 0);
+            frame.push(xor_of_body(&[frame.clone(), vec![0]].concat()));
+            assert_eq!(parse_weight(&frame), None, "len {len}");
+        }
+        assert_eq!(parse_weight(&[0x04, 0xCE, 0x00, 0x64, 0, 0, 0xAE]), None);
+    }
+
+    #[test]
+    fn a_timestamped_frame_proves_v12_firmware() {
+        let mut state = DecentScale::new();
+        assert_eq!(state.firmware_version(), None);
+        state.parse_weight_frame(&[0x03, 0xCE, 0x01, 0xF4, 0x00, 0x00, 0x38]);
+        assert_eq!(state.firmware_version(), None);
+        assert_eq!(
+            state.parse_weight_frame(&V12_FRAME).map(|f| f.weight_g),
+            Some(50.0)
+        );
+        assert_eq!(
+            state.firmware_version(),
+            Some(DecentScaleFirmwareVersion::V1_2)
+        );
+        // A later reply whose marker is unknown does not erase that proof.
+        state.absorb_command_response(
+            parse_command_response(&[0x03, 0x0A, 0x01, 0x01, 0x50, 0xAA, 0x00]).unwrap(),
+        );
+        assert_eq!(
+            state.firmware_version(),
+            Some(DecentScaleFirmwareVersion::V1_2)
+        );
+    }
+
+    #[test]
+    fn tare_counter_rolls_once_per_logical_tare() {
+        // decaid scale.dart:551-556: counter from 0, `& 0xFF`, frame
+        // `03 0F <counter> 00 00 00 <xor>`.
+        let mut state = DecentScale::new();
+        assert_eq!(
+            state.next_tare(),
+            [0x03, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x0C]
+        );
+        assert_eq!(
+            state.next_tare(),
+            [0x03, 0x0F, 0x01, 0x00, 0x00, 0x00, 0x0D]
+        );
+        assert_eq!(
+            state.next_tare(),
+            [0x03, 0x0F, 0x02, 0x00, 0x00, 0x00, 0x0E]
+        );
+        for _ in 3..=255 {
+            state.next_tare();
+        }
+        // After 0xFF the counter wraps to 0.
+        assert_eq!(state.next_tare(), tare(0x00));
+        // The first frame is the official HDS API doc's `030F000000000C`.
+        assert_eq!(tare(0), [0x03, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x0C]);
     }
 
     #[test]
@@ -409,42 +681,68 @@ mod tests {
     }
 
     #[test]
-    fn tare_is_decenzas_constant_frame_with_a_valid_checksum() {
-        // Pinned to Decenza `decentscale.cpp:372-374` (`03 0F 01 00 00 00`
-        // + XOR): the constant must agree with the generic frame builder.
-        assert_eq!(TARE, command(0x0F, [0x01, 0x00, 0x00, 0x00]));
+    fn firmware_marker_table_matches_decaid() {
+        // decaid profile.dart `_originalFirmwareVersions` (d5e2c482).
+        use DecentScaleFirmwareVersion::{Unknown, V1_0, V1_1, V1_2};
+        assert_eq!(DecentScaleFirmwareVersion::from_raw_byte(0xFE), V1_0);
+        assert_eq!(DecentScaleFirmwareVersion::from_raw_byte(0x02), V1_1);
+        assert_eq!(DecentScaleFirmwareVersion::from_raw_byte(0x03), V1_2);
+        // The old 0x10/0x11/0x12 table matched no reference.
+        for byte in [0x00, 0x01, 0x10, 0x11, 0x12, 0x20, 0xFF] {
+            assert_eq!(DecentScaleFirmwareVersion::from_raw_byte(byte), Unknown);
+        }
     }
 
     #[test]
-    fn firmware_version_from_raw_byte_buckets_correctly() {
-        use DecentScaleFirmwareVersion::{Unknown, V1_0, V1_1, V1_2};
-        assert_eq!(DecentScaleFirmwareVersion::from_raw_byte(0x10), V1_0);
-        assert_eq!(DecentScaleFirmwareVersion::from_raw_byte(0x11), V1_1);
-        assert_eq!(DecentScaleFirmwareVersion::from_raw_byte(0x12), V1_2);
-        // Any later released firmware buckets into v1.2 behaviour.
-        assert_eq!(DecentScaleFirmwareVersion::from_raw_byte(0x13), V1_2);
-        assert_eq!(DecentScaleFirmwareVersion::from_raw_byte(0x20), V1_2);
-        // Sentinels fall back to Unknown.
-        assert_eq!(DecentScaleFirmwareVersion::from_raw_byte(0x00), Unknown);
-        assert_eq!(DecentScaleFirmwareVersion::from_raw_byte(0xFF), Unknown);
+    fn hds_firmware_decodes_bcd_major_and_nibble_minor_patch() {
+        // decaid "decodes packed HDS firmware minor and patch nibbles" and
+        // Decenza's `FW: 3.0.9` → `03 09` example.
+        let v = |a, b| HdsFirmwareVersion::from_bcd(a, b).map(|v| v.to_string());
+        assert_eq!(v(0x03, 0x1E).as_deref(), Some("3.1.14"));
+        assert_eq!(v(0x02, 0x1D).as_deref(), Some("2.1.13"));
+        assert_eq!(v(0x03, 0x09).as_deref(), Some("3.0.9"));
+        assert_eq!(v(0x02, 0x58).as_deref(), Some("2.5.8"));
+        // Not BCD, or a major above 30: not an HDS version.
+        assert_eq!(v(0xA1, 0x00), None);
+        assert_eq!(v(0x1F, 0x1D), None);
+        assert_eq!(v(0xFE, 0x00), None);
+        assert_eq!(v(0x31, 0x00), None);
     }
 
     #[test]
     fn parse_command_response_decodes_a_0x0a_lcd_ack() {
-        // A 7-byte 0x0A reply with battery = 78% and firmware sentinel = 0x12
-        // (v1.2). Byte [4] is the battery, byte [5] the firmware version (the
-        // references' `data5` / `data6`), byte [6] the XOR checksum.
-        let frame = [0x03, 0x0A, 0x01, 0x01, 0x4E, 0x12, 0x6C];
-        let response = parse_command_response(&frame).expect("0x0A reply");
-        match response {
-            CommandResponse::LcdAck {
-                battery_raw,
-                firmware_version,
-            } => {
-                assert_eq!(battery_raw, 0x4E);
-                assert_eq!(firmware_version, DecentScaleFirmwareVersion::V1_2);
-            }
-        }
+        // A 7-byte 0x0A reply with battery = 78% and marker 0x03 (v1.2).
+        // Byte [4] is the battery, byte [5] the firmware marker (the
+        // references' `data5` / `data6`).
+        let frame = [0x03, 0x0A, 0x01, 0x01, 0x4E, 0x03, 0x4E];
+        assert_eq!(
+            parse_command_response(&frame),
+            Some(CommandResponse::LcdAck {
+                battery_raw: 0x4E,
+                firmware_version: DecentScaleFirmwareVersion::V1_2,
+                hds_firmware: HdsFirmwareVersion::from_bcd(0x03, 0x4E),
+            })
+        );
+        // decaid's modern-HDS status fixture: 80 %, firmware 2.5.8.
+        let hds = parse_command_response(&[0x03, 0x0A, 0x00, 0x00, 80, 0x02, 0x58]);
+        let Some(CommandResponse::LcdAck {
+            battery_raw,
+            hds_firmware,
+            ..
+        }) = hds
+        else {
+            panic!("0x0A reply");
+        };
+        assert_eq!(battery_raw, 80);
+        assert_eq!(
+            hds_firmware.map(|v| v.to_string()).as_deref(),
+            Some("2.5.8")
+        );
+        // Exactly seven bytes: a 10-byte 0x0A frame has no known layout.
+        assert_eq!(
+            parse_command_response(&[0x03, 0x0A, 0, 0, 80, 0x02, 0x58, 0, 0, 0]),
+            None
+        );
     }
 
     #[test]

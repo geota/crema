@@ -149,15 +149,15 @@ fn replay(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 // `Event::ScaleReading` now carries the Bookoo's native flow
                 // and timer (`device_flow_g_per_s` / `device_timer_ms`). This
-                // extra decode is kept only to surface the raw indicator bytes
-                // and checksum status, which the event does not expose.
+                // extra decode is kept only to surface the raw indicator bytes,
+                // which the event does not expose. A frame the codec rejects
+                // (bad length, sign byte or checksum) is flagged.
                 if source == Source::ScaleWeight
                     && let Some(p) = bookoo::parse_packet(&data)
                 {
-                    let csum = if p.checksum_ok { "" } else { " CHECKSUM-BAD" };
                     println!(
                         "[{:>10} ms] BookooPacket {{ weight: {:.2} g, flow: {:.2} g/s \
-                         (raw {}), timer: {} ms, w_ind: {:#04x}, f_ind: {:#04x} }}{csum}",
+                         (raw {}), timer: {} ms, w_ind: {:#04x}, f_ind: {:#04x} }}",
                         entry.t,
                         p.weight_g,
                         p.flow_g_per_s,
@@ -166,6 +166,8 @@ fn replay(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
                         p.weight_indicator,
                         p.flow_indicator,
                     );
+                } else if source == Source::ScaleWeight {
+                    println!("[{:>10} ms] BookooPacket REJECTED {data:02x?}", entry.t);
                 }
                 // Mirror the `de1-ffi` bridge: feed the raw bytes straight to
                 // `CremaCore::on_notification` with the capture's timestamp.

@@ -77,7 +77,8 @@ class TappingBleTransport(
         service: UUID,
         characteristic: UUID,
         data: ByteArray,
-    ) = delegate.write(device, service, characteristic, data)
+        withoutResponse: Boolean,
+    ) = delegate.write(device, service, characteristic, data, withoutResponse)
 
     override suspend fun read(
         device: BleTransport.DeviceHandle,
