@@ -20,6 +20,7 @@ const UUIDS = (over: Partial<ScaleUuids> = {}) =>
 		weight_notify: 'wn',
 		command_write: 'cw',
 		command_notifies: true,
+		command_notify_optional: false,
 		...over
 	}) as ScaleUuids;
 
@@ -146,6 +147,36 @@ describe('scaleConnectProgram — failure attribution', () => {
 		const exit = await run(mkDeps(device));
 		expect(failStep(exit)).toBe('GATT connect');
 		expect(device.startNotifications).not.toHaveBeenCalled();
+	});
+
+	it('fails "command subscription" when a mandatory command subscribe rejects', async () => {
+		// The Bookoo: its settings UI depends on the command channel.
+		const device = mkDevice({
+			startNotifications: vi.fn((_svc: string, chr: string) =>
+				chr === 'cw' ? Promise.reject(new Error('nope')) : Promise.resolve()
+			)
+		});
+		const exit = await run(mkDeps(device));
+		expect(failStep(exit)).toBe('command subscription');
+	});
+
+	it('tolerates a failed optional command subscribe (the Eclair battery channel)', async () => {
+		const core = mkCore({
+			scaleUuids: vi.fn(() => Promise.resolve(UUIDS({ command_notify_optional: true })))
+		});
+		const device = mkDevice({
+			startNotifications: vi.fn((_svc: string, chr: string) =>
+				chr === 'cw' ? Promise.reject(new Error('no notify')) : Promise.resolve()
+			)
+		});
+		const deps = mkDeps(device, core);
+		const exit = await run(deps);
+		expect(Exit.isSuccess(exit)).toBe(true);
+		expect(device.startNotifications).toHaveBeenCalledTimes(2);
+		expect(deps.onStatus).toHaveBeenCalledWith(
+			'Scale command notifications unavailable — battery level not shown'
+		);
+		expect(deps.onScaleIdentified).toHaveBeenCalledWith('BOOKOO_SC');
 	});
 
 	it('fails "weight subscription" when the weight subscribe rejects', async () => {

@@ -19,6 +19,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.merge
@@ -356,10 +357,17 @@ class ScaleBleManager(
         // notification ordering is preserved (see BleTransport.observe's contract).
         observeJob?.cancel() // a reconnect re-subscribes on the same handle
         var notifications = if (coreUuids.command_notifies && command != weight) {
-            merge(
-                transport.observe(device, service, weight),
-                transport.observe(device, service, command),
-            )
+            var commandStream = transport.observe(device, service, command)
+            if (coreUuids.command_notify_optional) {
+                // Best-effort (the Eclair: battery only, as decaid does) — a
+                // failed subscribe costs the battery readout, not the session.
+                commandStream = commandStream.catch { e ->
+                    if (e is CancellationException) throw e
+                    Log.w(TAG, "Optional scale command notifications unavailable", e)
+                    onStatus("Scale command notifications unavailable — battery level not shown")
+                }
+            }
+            merge(transport.observe(device, service, weight), commandStream)
         } else {
             transport.observe(device, service, weight)
         }

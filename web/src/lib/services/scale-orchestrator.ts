@@ -90,9 +90,23 @@ export const scaleConnectProgram = (d: ScaleConnectDeps): Effect.Effect<void, Sc
 			uuids.command_notifies &&
 			uuids.command_write.toLowerCase() !== uuids.weight_notify.toLowerCase()
 		) {
-			yield* fatal('command subscription', () =>
-				d.device.startNotifications(uuids.service, uuids.command_write)
-			);
+			if (uuids.command_notify_optional) {
+				// Best-effort (the Eclair: battery only, as decaid does) — a
+				// failed subscribe costs the battery readout, not the connect.
+				const subscribed = yield* Effect.promise(() =>
+					d.device.startNotifications(uuids.service, uuids.command_write).then(
+						() => true,
+						() => false
+					)
+				);
+				if (!subscribed) {
+					d.onStatus('Scale command notifications unavailable — battery level not shown');
+				}
+			} else {
+				yield* fatal('command subscription', () =>
+					d.device.startNotifications(uuids.service, uuids.command_write)
+				);
+			}
 		}
 		// A third stream for scales with an on-scale button characteristic
 		// (Skale II EF82) — de1app subscribes to it too (bluetooth.tcl:221).

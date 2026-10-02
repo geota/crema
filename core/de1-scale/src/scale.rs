@@ -35,12 +35,21 @@ pub struct ScaleUuids {
     pub command_write: &'static str,
     /// Whether `command_write` ALSO delivers notifications, so the shell should
     /// subscribe to it (beyond `weight_notify`). True only for a scale whose
-    /// command characteristic pushes data back — today just the Bookoo (`ff12`,
-    /// its serial / settings frames). False for a write-only command
+    /// command characteristic pushes data back — the Bookoo (`ff12`, its
+    /// serial / settings frames) and the Atomheart Eclair (its battery frame).
+    /// False for a write-only command
     /// characteristic: enabling notifications on one (e.g. the Decent's `36f5`)
     /// fails at the GATT layer and crashes the connect, so the shell must skip
     /// it. Capability-driven — the core, which owns the protocol, decides.
     pub command_notifies: bool,
+    /// Whether a failed subscription to `command_write` should be tolerated
+    /// (logged, connect carries on) rather than failing the connect. True for
+    /// the Atomheart Eclair, whose command-channel notifications carry only
+    /// the battery — decaid subscribes best-effort ("battery updates
+    /// disabled", `atomheart_scale.dart` `_registerConfigNotifications`).
+    /// False for the Bookoo, whose settings UI depends on its responses.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub command_notify_optional: bool,
     /// A third characteristic that notifies on-scale button presses — today
     /// only the Skale II's `EF82` (de1app subscribes and logs it,
     /// `bluetooth.tcl:221`; Decenza emits `buttonPressed`). `None` for every
@@ -619,7 +628,8 @@ impl Scale {
         // write-only (or the same characteristic as `weight_notify`), and its
         // command-channel notifications — even if the hardware sends any — are
         // never decoded, so the shell must not subscribe to it.
-        let command_notifies = matches!(&self.inner, Inner::Bookoo);
+        let command_notifies = matches!(&self.inner, Inner::Bookoo | Inner::AtomheartEclair);
+        let command_notify_optional = matches!(&self.inner, Inner::AtomheartEclair);
         let (service, weight_notify, command_write) = match &self.inner {
             Inner::Decent(_) => (
                 decent_scale::SERVICE_UUID,
@@ -703,6 +713,7 @@ impl Scale {
             weight_notify,
             command_write,
             command_notifies,
+            command_notify_optional,
             button_notify,
             command_write_no_response,
         }
@@ -1205,6 +1216,22 @@ impl Scale {
         }
     }
 
+    /// Absorb a notification from the scale's *command* characteristic into
+    /// the scale's own state — today the Atomheart Eclair's battery frame
+    /// ([`atomheart_eclair::parse_battery`]), carried forward onto every later
+    /// weight reading like the Varia AKU's (decaid re-attaches its
+    /// `_batteryLevel` to every snapshot the same way). A no-op for every
+    /// other scale and for any frame that isn't recognised. Called on every
+    /// command-channel notification, alongside
+    /// [`parse_command_response`](Self::parse_command_response).
+    pub fn absorb_command_notification(&mut self, data: &[u8]) {
+        if matches!(self.inner, Inner::AtomheartEclair)
+            && let Some(percent) = atomheart_eclair::parse_battery(data)
+        {
+            self.last_battery_percent = Some(percent);
+        }
+    }
+
     /// Decode a notification from the *Decent Scale's* read characteristic
     /// into a [`decent_scale::CommandResponse`].
     ///
@@ -1610,6 +1637,83 @@ mod tests {
         for uuid in &scan.service_uuids {
             assert_eq!(uuid.len(), 36, "service uuid {uuid:?} should be 128-bit");
         }
+    }
+
+    #[test]
+    fn eclair_scan_and_identify_use_only_the_de1app_service() {
+        // decaid 5544ff39 "Eclair scan filter uses the current service UUID".
+        let scan = Scale::scan_uuids();
+        assert!(
+            scan.service_uuids
+                .contains(&"b905eaea-2e63-0e04-7582-7913f10d8f81")
+        );
+        assert!(
+            !scan
+                .service_uuids
+                .iter()
+                .any(|u| u.contains("6c7e-4f73-b43d-2cdfcab29570")),
+            "the old reaprime Eclair set must be gone"
+        );
+        // The new service is distinctive: it identifies an Eclair whose name
+        // doesn't match (upper-case, as Android reports it), and the old one
+        // identifies nothing.
+        let new = ["B905EAEA-2E63-0E04-7582-7913F10D8F81".to_owned()];
+        assert_eq!(
+            Scale::identify("Unknown", &new).unwrap().label(),
+            "Atomheart Eclair"
+        );
+        let old = ["b905eaea-6c7e-4f73-b43d-2cdfcab29570".to_owned()];
+        assert!(Scale::identify("Unknown", &old).is_none());
+        assert_eq!(
+            Scale::identify("ECLAIR-123", &[]).unwrap().label(),
+            "Atomheart Eclair"
+        );
+    }
+
+    #[test]
+    fn eclair_subscribes_to_its_command_channel_best_effort() {
+        let eclair = Scale::from_label("Atomheart Eclair").unwrap().uuids();
+        assert_eq!(eclair.weight_notify, crate::atomheart_eclair::NOTIFY_UUID);
+        assert_eq!(eclair.command_write, crate::atomheart_eclair::COMMAND_UUID);
+        assert!(eclair.command_notifies);
+        assert!(eclair.command_notify_optional);
+        // The Bookoo's command subscription stays mandatory.
+        let bookoo = Scale::from_label("Bookoo").unwrap().uuids();
+        assert!(bookoo.command_notifies);
+        assert!(!bookoo.command_notify_optional);
+        // Write-only command characteristics are not subscribed at all.
+        let decent = Scale::from_label("Decent Scale").unwrap().uuids();
+        assert!(!decent.command_notifies);
+        assert!(!decent.command_notify_optional);
+    }
+
+    #[test]
+    fn eclair_battery_from_the_command_channel_rides_later_weights() {
+        let mut eclair = Scale::from_label("Atomheart Eclair").unwrap();
+        let weight = |mg: i32| {
+            let b = mg.to_le_bytes();
+            let mut f = [b'W', b[0], b[1], b[2], b[3], 0, 0, 0, 0, 0];
+            f[9] = f[1..9].iter().fold(0u8, |a, &x| a ^ x);
+            f
+        };
+        assert_eq!(
+            eclair.parse_reading(&weight(1000)).unwrap().battery_percent,
+            None
+        );
+        eclair.absorb_command_notification(&[0x42, 75, 75]);
+        let reading = eclair.parse_reading(&weight(1500)).unwrap();
+        assert_eq!(reading.weight_g, 1.5);
+        assert_eq!(reading.battery_percent, Some(75));
+        // A corrupt battery frame keeps the last good level (decaid).
+        eclair.absorb_command_notification(&[0x42, 60, 0]);
+        assert_eq!(
+            eclair.parse_reading(&weight(2000)).unwrap().battery_percent,
+            Some(75)
+        );
+        // Other scales ignore command-channel frames here.
+        let mut bookoo = Scale::from_label("Bookoo").unwrap();
+        bookoo.absorb_command_notification(&[0x42, 75, 75]);
+        assert_eq!(bookoo.last_battery_percent, None);
     }
 
     #[test]

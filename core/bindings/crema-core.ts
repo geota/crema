@@ -2244,13 +2244,23 @@ export interface ScaleUuids {
 	/**
 	 * Whether `command_write` ALSO delivers notifications, so the shell should
 	 * subscribe to it (beyond `weight_notify`). True only for a scale whose
-	 * command characteristic pushes data back — today just the Bookoo (`ff12`,
-	 * its serial / settings frames). False for a write-only command
+	 * command characteristic pushes data back — the Bookoo (`ff12`, its
+	 * serial / settings frames) and the Atomheart Eclair (its battery frame).
+	 * False for a write-only command
 	 * characteristic: enabling notifications on one (e.g. the Decent's `36f5`)
 	 * fails at the GATT layer and crashes the connect, so the shell must skip
 	 * it. Capability-driven — the core, which owns the protocol, decides.
 	 */
 	command_notifies: boolean;
+	/**
+	 * Whether a failed subscription to `command_write` should be tolerated
+	 * (logged, connect carries on) rather than failing the connect. True for
+	 * the Atomheart Eclair, whose command-channel notifications carry only
+	 * the battery — decaid subscribes best-effort ("battery updates
+	 * disabled", `atomheart_scale.dart` `_registerConfigNotifications`).
+	 * False for the Bookoo, whose settings UI depends on its responses.
+	 */
+	command_notify_optional: boolean;
 	/**
 	 * A third characteristic that notifies on-scale button presses — today
 	 * only the Skale II's `EF82` (de1app subscribes and logs it,

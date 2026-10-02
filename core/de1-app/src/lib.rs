@@ -3275,9 +3275,12 @@ impl CremaCore {
     /// channel — is silently dropped (it is not a decode failure, just traffic
     /// the core does not model).
     fn handle_scale_command(&mut self, data: &[u8], out: &mut CoreOutput) {
-        let Some(scale) = &self.scale else {
+        let Some(scale) = &mut self.scale else {
             return;
         };
+        // State-only frames (the Eclair's battery) ride the next weight
+        // reading; they produce no event of their own.
+        scale.absorb_command_notification(data);
         let Some(response) = scale.parse_command_response(data) else {
             return;
         };
@@ -4806,6 +4809,23 @@ mod tests {
         let frame = hex("030c008d534e32343030643636613839653701ce");
         let out = core.on_notification(Source::ScaleCommand, &frame, 1_000);
         assert!(out.events.is_empty());
+    }
+
+    #[test]
+    fn an_eclair_battery_frame_on_the_command_channel_rides_the_next_weight() {
+        let mut core = CremaCore::new();
+        core.connect_scale("ECLAIR-1", &[]);
+        // `'B' 75 75` (decaid d6994ea0) — no event of its own.
+        let out = core.on_notification(Source::ScaleCommand, &[0x42, 75, 75], 1_000);
+        assert!(out.events.is_empty());
+        let mut frame = [b'W', 0xDC, 0x05, 0, 0, 0, 0, 0, 0, 0]; // 1500 mg
+        frame[9] = frame[1..9].iter().fold(0u8, |a, &b| a ^ b);
+        let out = core.on_notification(Source::ScaleWeight, &frame, 1_100);
+        let battery = out.events.iter().find_map(|e| match e {
+            Event::ScaleReading { device_battery, .. } => Some(*device_battery),
+            _ => None,
+        });
+        assert_eq!(battery, Some(Some(75)));
     }
 
     #[test]
