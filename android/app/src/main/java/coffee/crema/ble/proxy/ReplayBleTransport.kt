@@ -97,6 +97,7 @@ class ReplayBleTransport(
         service: UUID,
         characteristic: UUID,
         data: ByteArray,
+        withoutResponse: Boolean,
     ) {
         // A replay has no machine to write to — accept and drop.
     }

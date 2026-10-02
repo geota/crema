@@ -177,12 +177,18 @@ interface BleTransport {
      * Write [data] to the [characteristic] of [service] on [device]. Suspends
      * until the write completes; throws on failure. Used for scale tare /
      * timer commands.
+     *
+     * [withoutResponse] forces an unacknowledged write (ATT Write Command) —
+     * set from the core's `ScaleUuids.command_write_no_response` for scales
+     * that leave acknowledged writes unanswered (Skale, gen-1 Acaia,
+     * Timemore). `false` keeps the stack's default write type.
      */
     suspend fun write(
         device: DeviceHandle,
         service: UUID,
         characteristic: UUID,
         data: ByteArray,
+        withoutResponse: Boolean = false,
     )
 
     /**
@@ -230,3 +236,20 @@ interface BleTransport {
         }
     }
 }
+
+/** The write type a [BleTransport.write] asks the stack for. */
+enum class BleWriteType {
+    /** The stack's default, chosen from the characteristic's properties. */
+    DEFAULT,
+
+    /** An unacknowledged ATT Write Command. */
+    WITHOUT_RESPONSE,
+}
+
+/**
+ * The write type for a write the caller flagged [withoutResponse] — the
+ * single mapping every radio transport applies, kept free of the BLE
+ * library's types so a JVM test pins it.
+ */
+internal fun writeTypeFor(withoutResponse: Boolean): BleWriteType =
+    if (withoutResponse) BleWriteType.WITHOUT_RESPONSE else BleWriteType.DEFAULT

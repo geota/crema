@@ -57,11 +57,17 @@ pub struct ScaleUuids {
     /// as `Source::ScaleButton`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub button_notify: Option<&'static str>,
-    /// Whether `command_write` must be written WITHOUT response. True only
-    /// for the gen-1/IPS Acaia — its command characteristic rejects
-    /// with-response writes (Decenza acaiascale.cpp:279-295 "IPS and Pyxis
-    /// require different write types"). Every other scale (incl. Pyxis)
-    /// accepts the shells' default with-response write.
+    /// Whether `command_write` must be written WITHOUT response:
+    /// - the gen-1/IPS Acaia — its command characteristic rejects
+    ///   with-response writes (Decenza acaiascale.cpp:279-295 "IPS and Pyxis
+    ///   require different write types");
+    /// - the Timemore Dot (Decenza `timemorescale.cpp:165`);
+    /// - the Skale II — it leaves acknowledged writes unanswered, and on
+    ///   Android an unanswered request stalls every later GATT op until the
+    ///   link drops mid-pour (Decenza b0c25e3e / #1965; decaid
+    ///   `skale2_scale.dart:207-211` writes every command without response).
+    ///
+    /// Every other scale (incl. Pyxis) takes the shells' default write.
     #[cfg_attr(feature = "serde", serde(default))]
     pub command_write_no_response: bool,
 }
@@ -703,11 +709,12 @@ impl Scale {
             Inner::Skale => Some(skale::BUTTON_NOTIFY_UUID),
             _ => None,
         };
-        // Gen-1/IPS Acaia commands must be written WITHOUT response
-        // (Decenza acaiascale.cpp:279-295); Pyxis + everything else take the
-        // default with-response write.
-        let command_write_no_response =
-            matches!(&self.inner, Inner::AcaiaGen1(_) | Inner::Timemore);
+        // Gen-1/IPS Acaia, Timemore and Skale commands go WITHOUT response
+        // (see the field doc); Pyxis + everything else take the default write.
+        let command_write_no_response = matches!(
+            &self.inner,
+            Inner::AcaiaGen1(_) | Inner::Timemore | Inner::Skale
+        );
         ScaleUuids {
             service,
             weight_notify,
@@ -1636,6 +1643,22 @@ mod tests {
         assert!(scan.service_uuids.contains(&crate::bookoo::SERVICE_UUID));
         for uuid in &scan.service_uuids {
             assert_eq!(uuid.len(), 36, "service uuid {uuid:?} should be 128-bit");
+        }
+    }
+
+    #[test]
+    fn write_without_response_table() {
+        // Decenza b0c25e3e (Skale), acaiascale.cpp:279-295 (gen-1 Acaia),
+        // timemorescale.cpp:165 (Timemore). Everything else writes with response.
+        let no_response = ["Acaia", "Timemore Dot", "Skale II"];
+        for entry in SCALE_SCAN {
+            let scale = Scale::from_label(entry.label).unwrap();
+            assert_eq!(
+                scale.uuids().command_write_no_response,
+                no_response.contains(&entry.label),
+                "{}",
+                entry.label
+            );
         }
     }
 

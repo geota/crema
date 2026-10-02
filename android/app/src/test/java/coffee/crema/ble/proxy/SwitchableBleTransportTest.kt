@@ -31,7 +31,16 @@ class SwitchableBleTransportTest {
             MutableStateFlow(BleTransport.ConnState.CONNECTED).asStateFlow()
         override fun observe(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID) =
             emptyFlow<BleTransport.Notification>()
-        override suspend fun write(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID, data: ByteArray) {}
+        val writes = mutableListOf<Boolean>()
+        override suspend fun write(
+            device: BleTransport.DeviceHandle,
+            service: UUID,
+            characteristic: UUID,
+            data: ByteArray,
+            withoutResponse: Boolean,
+        ) {
+            writes += withoutResponse
+        }
         override suspend fun read(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID): ByteArray =
             tag.toByteArray()
 
@@ -54,5 +63,17 @@ class SwitchableBleTransportTest {
         assertEquals("B", switchable.scan { true }.first().name)
         assertContentEquals("B".toByteArray(), switchable.read(handle, service, char))
         assertEquals(b, switchable.delegate)
+    }
+
+    @Test
+    fun `passes the write type through to the delegate`() = runBlocking {
+        val a = TaggedTransport("A")
+        val handle = TaggedTransport.Handle("x")
+        val switchable = SwitchableBleTransport(a)
+
+        switchable.write(handle, service, char, byteArrayOf(0x10), withoutResponse = true)
+        switchable.write(handle, service, char, byteArrayOf(0x10))
+
+        assertEquals(listOf(true, false), a.writes)
     }
 }

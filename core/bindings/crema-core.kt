@@ -2197,11 +2197,17 @@ data class ScaleUuids (
 	/// other scale. The shell subscribes when present and forwards the bytes
 	/// as `Source::ScaleButton`.
 	val button_notify: String? = null,
-	/// Whether `command_write` must be written WITHOUT response. True only
-	/// for the gen-1/IPS Acaia — its command characteristic rejects
+	/// Whether `command_write` must be written WITHOUT response:
+	/// - the gen-1/IPS Acaia — its command characteristic rejects
 	/// with-response writes (Decenza acaiascale.cpp:279-295 "IPS and Pyxis
-	/// require different write types"). Every other scale (incl. Pyxis)
-	/// accepts the shells' default with-response write.
+	/// require different write types");
+	/// - the Timemore Dot (Decenza `timemorescale.cpp:165`);
+	/// - the Skale II — it leaves acknowledged writes unanswered, and on
+	/// Android an unanswered request stalls every later GATT op until the
+	/// link drops mid-pour (Decenza b0c25e3e / #1965; decaid
+	/// `skale2_scale.dart:207-211` writes every command without response).
+	/// 
+	/// Every other scale (incl. Pyxis) takes the shells' default write.
 	val command_write_no_response: Boolean
 )
 

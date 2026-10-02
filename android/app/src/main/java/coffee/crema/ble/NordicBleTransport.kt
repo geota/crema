@@ -37,6 +37,7 @@ import no.nordicsemi.kotlin.ble.client.android.Peripheral
 import no.nordicsemi.kotlin.ble.client.android.native
 import no.nordicsemi.kotlin.ble.core.ConnectionState
 import no.nordicsemi.kotlin.ble.core.Manager
+import no.nordicsemi.kotlin.ble.core.WriteType
 import no.nordicsemi.kotlin.ble.core.exception.BluetoothUnavailableException
 import no.nordicsemi.kotlin.ble.environment.android.NativeAndroidEnvironment
 import java.util.UUID
@@ -485,6 +486,7 @@ class NordicBleTransport(context: Context) : BleTransport {
         service: UUID,
         characteristic: UUID,
         data: ByteArray,
+        withoutResponse: Boolean,
     ) {
         val handle = device as NordicDeviceHandle
         val peripheral = peripherals[handle]
@@ -500,10 +502,15 @@ class NordicBleTransport(context: Context) : BleTransport {
             ?.firstOrNull { it.uuid == charUuid }
             ?: error("Characteristic $characteristic not found in service $service")
 
-        // Default write type: Nordic picks WITH_RESPONSE / WITHOUT_RESPONSE
-        // from the characteristic's declared properties, matching the legacy
-        // WRITE_TYPE_DEFAULT behaviour.
-        remote.write(data)
+        // A flagged write goes WITHOUT_RESPONSE: an acknowledged write the
+        // scale never answers stalls every later GATT request until the link
+        // drops (Skale, Decenza b0c25e3e). Otherwise keep the default write
+        // type — Nordic picks it from the characteristic's declared
+        // properties, matching the legacy WRITE_TYPE_DEFAULT behaviour.
+        when (writeTypeFor(withoutResponse)) {
+            BleWriteType.DEFAULT -> remote.write(data)
+            BleWriteType.WITHOUT_RESPONSE -> remote.write(data, WriteType.WITHOUT_RESPONSE)
+        }
     }
 
     // ---- Read -------------------------------------------------------------
@@ -592,3 +599,4 @@ class NordicBleTransport(context: Context) : BleTransport {
         }
     }
 }
+
