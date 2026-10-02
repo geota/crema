@@ -31,7 +31,7 @@ use capture::{CaptureRecorder, slice_to_jsonl};
 
 use std::time::Duration;
 
-use de1_domain::saw_learning::SawLearningModel;
+use de1_domain::saw_learning::{SawLearningModel, SawModelLoad};
 use de1_domain::{
     AUTO_TARE_HOLDOFF_MS, AUTO_TARE_THRESHOLD_G, AutoStop, BeverageType, BrewRecipe,
     BrewSessionEvent, BrewSessionMonitor, BrewSessionPhase, Estimate, FlowAlgorithm, FlowEstimator,
@@ -544,7 +544,7 @@ pub struct CremaCore {
     /// The learned SAW drip model (Decenza SAW learning): per-(profile,
     /// scale) post-stop drip history that sharpens the weight-stop
     /// threshold shot over shot. Persistent user data — the shell seeds it
-    /// at startup ([`set_saw_model_json`](Self::set_saw_model_json)) and
+    /// at startup ([`load_saw_model_json`](Self::load_saw_model_json)) and
     /// saves it after each shot; it survives [`reset`](Self::reset) like
     /// the scale registration.
     saw_model: SawLearningModel,
@@ -1161,18 +1161,22 @@ impl CremaCore {
 
     /// The learned SAW drip model as a JSON blob — the shell persists it
     /// beside its other stores and re-seeds it at startup via
-    /// [`set_saw_model_json`](Self::set_saw_model_json).
+    /// [`load_saw_model_json`](Self::load_saw_model_json).
     pub fn saw_model_json(&self) -> String {
         serde_json::to_string(&self.saw_model).unwrap_or_else(|_| "{}".to_owned())
     }
 
-    /// Seed the learned SAW drip model from a persisted JSON blob. A blob
-    /// that fails to parse is ignored (the model stays as-is) — a corrupt
-    /// store must never take the shot path down.
-    pub fn set_saw_model_json(&mut self, json: &str) {
-        if let Ok(model) = serde_json::from_str::<SawLearningModel>(json) {
-            self.saw_model = model;
-        }
+    /// Seed the learned SAW drip model from its persisted blob (`None` when
+    /// the shell has nothing stored) and report what was found. A blob that
+    /// fails to parse starts the model fresh and comes back as
+    /// [`SawModelLoad::Corrupt`] carrying the raw text, so the shell can
+    /// quarantine it before the next save overwrites the store (Decenza
+    /// 95146a0c) — see [`SawLearningModel::load_json`]. Never fails: a
+    /// corrupt store must never take the shot path down.
+    pub fn load_saw_model_json(&mut self, json: Option<&str>) -> SawModelLoad {
+        let (model, outcome) = SawLearningModel::load_json(json);
+        self.saw_model = model;
+        outcome
     }
 
     /// The target weight currently in effect for SAW. Priority:
@@ -7260,6 +7264,23 @@ mod tests {
     fn query_scale_settings_emits_nothing_without_a_scale() {
         let core = CremaCore::new();
         assert!(core.query_scale_settings().commands.is_empty());
+    }
+
+    #[test]
+    fn a_corrupt_saw_blob_resets_the_model_and_returns_the_raw_text() {
+        let mut core = CremaCore::new();
+        // A valid blob loads…
+        let valid = core.saw_model_json();
+        assert_eq!(core.load_saw_model_json(Some(&valid)), SawModelLoad::Loaded);
+        // …nothing stored is Absent, not Corrupt…
+        assert_eq!(core.load_saw_model_json(None), SawModelLoad::Absent);
+        // …and a truncated one comes back verbatim with a fresh model.
+        let outcome = core.load_saw_model_json(Some(r#"{"pairHistory":{"#));
+        assert!(matches!(
+            outcome,
+            SawModelLoad::Corrupt { ref raw, .. } if raw == r#"{"pairHistory":{"#
+        ));
+        assert_eq!(core.saw_model_json(), valid);
     }
 
     #[test]

@@ -41,6 +41,7 @@ import {
 } from '$lib/profiles';
 import { readJson, writeJson } from '$lib/utils/storage';
 import { isSerialStolen } from '$lib/decent/stolen-serials';
+import { SAW_MODEL_KEY, seedSawModel } from './saw-model-store';
 import { getSettingsStore } from '$lib/settings';
 import { toast } from '$lib/components/shared/toast.svelte';
 import { getMaintenanceStore } from '$lib/maintenance';
@@ -186,13 +187,6 @@ const WATER_WARN_REARM_ML = 55;
  * the machine still has the bytes we last sent.
  */
 const LAST_FINGERPRINT_KEY = 'crema.profile-sync.lastFingerprint.v1';
-
-/**
- * localStorage key for the core's learned SAW drip model — an opaque
- * core-owned JSON blob (`de1_domain::saw_learning`), seeded at boot and
- * saved after every completed shot.
- */
-const SAW_MODEL_KEY = 'crema.saw-model.v1';
 
 /**
  * The DE1 top-level states whose group flow counts toward the water-filter /
@@ -2347,11 +2341,9 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 		void core.setMaxShotDuration(s.maxShotDurationS > 0 ? s.maxShotDurationS : undefined);
 	}
 	// Seed the learned SAW drip model (core-owned opaque blob) from its
-	// persisted store; saved back after every completed shot.
-	{
-		const blob = readJson<string | null>(SAW_MODEL_KEY, null);
-		if (blob) void core.setSawModelJson(blob);
-	}
+	// persisted store; saved back after every completed shot. A corrupt
+	// blob is quarantined, not lost (see `saw-model-store.ts`).
+	void seedSawModel(core).catch(() => undefined);
 	// Install the user-presence heartbeat — every user touch / keystroke
 	// (debounced to once per minute) writes `UserPresent = 1` to the DE1,
 	// resetting its "user has gone away" timer. The actual MMR write is

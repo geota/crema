@@ -3351,6 +3351,44 @@ enum class Pump(val string: String) {
 	Flow("flow"),
 }
 
+/// Generated type representing the anonymous struct variant `Corrupt` of the `SawModelLoad` Rust enum
+@Serializable
+data class SawModelLoadCorruptInner (
+	/// The stored text exactly as the shell passed it in.
+	val raw: String,
+	/// The parser's error message, for the shell's warning log.
+	val error: String
+)
+
+/// What loading a persisted SAW model blob found — returned to the shell by
+/// [`SawLearningModel::load_json`] so it can tell "nothing stored yet" from
+/// "stored bytes did not parse".
+/// 
+/// Port of Decenza 95146a0c (#1808, `loadSawMap`,
+/// `settings_calibration.cpp:847-877` as of that commit): a blob that fails
+/// to parse used to be dropped and then overwritten by the next save, losing
+/// the only copy of bytes that, after a truncated write, are partly
+/// salvageable. Decenza now copies the raw blob to a quarantine key (newest
+/// capture wins), logs a warning and resets the store. Here persistence
+/// lives in the shells, so the core resets the model and hands back the raw
+/// text; the shell writes the quarantine copy and logs.
+@Serializable
+sealed class SawModelLoad {
+	/// No blob was stored (or it was empty) — the model starts fresh.
+	@Serializable
+	@SerialName("Absent")
+	object Absent: SawModelLoad()
+	/// The blob parsed and the model was restored from it.
+	@Serializable
+	@SerialName("Loaded")
+	object Loaded: SawModelLoad()
+	/// The blob did not parse. The model starts fresh; the shell must keep
+	/// `raw` aside before its next save overwrites the store.
+	@Serializable
+	@SerialName("Corrupt")
+	data class Corrupt(val content: SawModelLoadCorruptInner): SawModelLoad()
+}
+
 /// What the shell should do with a just-completed shot — decided at the
 /// core boundary so both shells classify identically (previously each
 /// re-implemented the aborted rule and the cleaning-profile lookup).

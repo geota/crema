@@ -1887,16 +1887,21 @@ impl CremaBridge {
 
     /// The learned SAW drip model as a JSON blob — the shell persists it
     /// (a private file / localStorage) and re-seeds it at startup via
-    /// [`set_saw_model_json`](Self::set_saw_model_json). See
+    /// [`load_saw_model_json`](Self::load_saw_model_json). See
     /// `de1_domain::saw_learning`.
     pub fn saw_model_json(&self) -> String {
         self.core().saw_model_json()
     }
 
-    /// Seed the learned SAW drip model from a persisted JSON blob.
-    /// A corrupt blob is ignored.
-    pub fn set_saw_model_json(&self, json: String) {
-        self.core().set_saw_model_json(&json);
+    /// Seed the learned SAW drip model from its persisted blob (`None` when
+    /// nothing is stored) and return a JSON `SawModelLoad` —
+    /// `{"type":"Absent"}`, `{"type":"Loaded"}` or
+    /// `{"type":"Corrupt","content":{"raw":…,"error":…}}`. On `Corrupt`
+    /// the model starts fresh and the shell must quarantine `raw` before its
+    /// next save (Decenza 95146a0c). See `de1_domain::saw_learning`.
+    pub fn load_saw_model_json(&self, json: Option<String>) -> String {
+        let outcome = self.core().load_saw_model_json(json.as_deref());
+        serde_json::to_string(&outcome).unwrap_or_else(|_| r#"{"type":"Absent"}"#.to_owned())
     }
 
     /// Run the pure shot-quality analysis (Decenza port — see

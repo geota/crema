@@ -347,6 +347,18 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   DiFluid Microbalance also no longer drops weight readings that arrive
   together.
 
+- **Stop-at-weight learning now remembers a real shot's drip and flow;
+  corrupted learning data is kept aside instead of silently reset** — each
+  batch of three shots used to store the median drip and the median flow
+  separately, usually from two different shots, so the remembered pair
+  described no shot that happened. It now stores the shot whose stop lag is
+  the batch's median. This is a correctness fix, not an accuracy upgrade:
+  Decenza, which made the same change, measured about 1% difference. A
+  learning file that no longer reads is now copied aside (web:
+  `crema.saw-model.v1.corrupt` in local storage; Android:
+  `sawModel.corrupt.json`) with a warning in the log, and learning starts
+  fresh, instead of being overwritten by the next shot.
+
 ### Security
 
 - **Credentials wrapped at rest (web)** — the Visualizer OAuth tokens and the
