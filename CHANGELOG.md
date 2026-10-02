@@ -156,6 +156,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Visualizer shows the first profile step** — the step markers Crema sends
+  with each shot (`state_change`) counted frames from 0, and Visualizer reads 0
+  as "no marker", so the step out of the first frame never showed. Markers now
+  count from 1, and importing a Crema v2 shot file reads the frames back.
+  Re-uploading a shot first uploaded by an older version makes a new copy on
+  Visualizer rather than updating the old one (Visualizer matches re-uploads by
+  their exact data).
+
 - **Visualizer notes no longer show HTML tags** — Visualizer switched shot
   notes (bean, espresso, private) and coffee-bag notes to rich text in July.
   Pulled notes came into Crema with `<p>` and `<br>` in them, and notes Crema
