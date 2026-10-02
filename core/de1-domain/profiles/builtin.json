@@ -5575,6 +5575,139 @@
     "version": "2"
   },
   {
+    "id": "01a0fae1-0868-75e4-ac7a-636c91405656",
+    "title": "Adaptive v3",
+    "notes": "This profile aims to unite the best practices in espresso extraction that we have learned so far with the Decent. It unites Brakel's Londonium, Rao's Blooming and Gagné's Adaptive profiles. The flow rate during extraction will automatically adjust itself from the flow rate actually happening during the Pressurize step and then gently increase it from there.  A 15g dose is typical.  Aim for a flow rate around 1.5 ml/s at the Pressurize step. 15g in, 33g out, in 32 seconds is a typical recipe for a medium roast.  Grind fine enough to keep dripping during preinfusion to around 4g. If you have a bluetooth scale, you can keep track of how much dripping into the cup there is before the ramp stage.  4 grams of total dripping, within 1 gram, seems to give the best tasting results. Try adusting your grind and dose to get that amount of dripping, and see if you like how it tastes.",
+    "steps": [
+      {
+        "name": "Prefill",
+        "pump": "flow",
+        "target": 8.0,
+        "temperature_c": 93.0,
+        "temp_sensor": "coffee",
+        "transition": "fast",
+        "duration_seconds": 5.0,
+        "exit": null,
+        "volume_limit_ml": 100,
+        "limiter": null,
+        "weight": null
+      },
+      {
+        "name": "Fill",
+        "pump": "flow",
+        "target": 8.0,
+        "temperature_c": 93.0,
+        "temp_sensor": "coffee",
+        "transition": "fast",
+        "duration_seconds": 12.0,
+        "exit": {
+          "metric": "pressure",
+          "compare": "over",
+          "threshold": 3.0
+        },
+        "volume_limit_ml": 100,
+        "limiter": null,
+        "weight": null
+      },
+      {
+        "name": "Compressing",
+        "pump": "pressure",
+        "target": 3.0,
+        "temperature_c": 88.0,
+        "temp_sensor": "coffee",
+        "transition": "fast",
+        "duration_seconds": 12.0,
+        "exit": {
+          "metric": "flow",
+          "compare": "under",
+          "threshold": 3.0
+        },
+        "volume_limit_ml": 100,
+        "limiter": null,
+        "weight": null
+      },
+      {
+        "name": "Dripping",
+        "pump": "pressure",
+        "target": 0.1,
+        "temperature_c": 88.0,
+        "temp_sensor": "coffee",
+        "transition": "fast",
+        "duration_seconds": 6.0,
+        "exit": null,
+        "volume_limit_ml": 0,
+        "limiter": null,
+        "weight": null
+      },
+      {
+        "name": "Pressurize",
+        "pump": "pressure",
+        "target": 11.0,
+        "temperature_c": 88.0,
+        "temp_sensor": "coffee",
+        "transition": "smooth",
+        "duration_seconds": 6.0,
+        "exit": {
+          "metric": "pressure",
+          "compare": "over",
+          "threshold": 7.7
+        },
+        "volume_limit_ml": 100,
+        "limiter": {
+          "value": 3.5,
+          "range": 0.6
+        },
+        "weight": null
+      },
+      {
+        "name": "Extraction start",
+        "pump": "flow",
+        "target": 1.5,
+        "temperature_c": 88.0,
+        "temp_sensor": "coffee",
+        "transition": "fast",
+        "duration_seconds": 0.0,
+        "exit": {
+          "metric": "pressure",
+          "compare": "over",
+          "threshold": 0.0
+        },
+        "volume_limit_ml": 0,
+        "limiter": {
+          "value": 8.6,
+          "range": 0.6
+        },
+        "weight": null
+      },
+      {
+        "name": "Extraction",
+        "pump": "flow",
+        "target": 3.5,
+        "temperature_c": 88.0,
+        "temp_sensor": "coffee",
+        "transition": "smooth",
+        "duration_seconds": 60.0,
+        "exit": null,
+        "volume_limit_ml": 100,
+        "limiter": {
+          "value": 8.6,
+          "range": 0.6
+        },
+        "weight": null
+      }
+    ],
+    "preinfuse_step_count": 3,
+    "minimum_pressure": 0.0,
+    "maximum_flow": 0.0,
+    "max_total_volume_ml": 36,
+    "target_weight": 36.0,
+    "dose": 0.0,
+    "author": "Decent",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
+  },
+  {
     "id": "019e5fb5-63b5-7333-a2ac-380be7eeee3f",
     "title": "Best practice (light roast)",
     "notes": "This profile aims to unite the best practices in espresso extraction that we have learned so far with the Decent. It unites Brakel's Londonium, Rao's Blooming and Gagné's Adaptive profiles. Your grind should be coarser for light roasts, aiming for a flow rate around 2.5 ml/s at peak pressure. 18g in, 50g out, in 60 seconds is a typical recipe.   Grind fine enough to keep dripping during preinfusion to around 8g.",

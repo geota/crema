@@ -35,11 +35,13 @@ const BUILTIN_JSON: &str = include_str!("../profiles/builtin.json");
 static BUILTIN: OnceLock<Vec<Profile>> = OnceLock::new();
 
 /// The number of built-in profiles Crema ships — every standard de1app
-/// profile.
+/// profile (88), plus "Adaptive v2", which de1app main replaced with
+/// "Adaptive v3" in the same file (`best_practice.tcl`, de1app 1a61f9b4);
+/// Crema keeps both, as decaid (78bebb54) and Decenza (add46044) do.
 ///
 /// Equal to [`builtin_profiles`]`.len()`; the `builtin_profiles_ships_the_full_corpus`
 /// test pins the two together.
-pub const BUILTIN_PROFILE_COUNT: usize = 88;
+pub const BUILTIN_PROFILE_COUNT: usize = 89;
 
 /// Every standard DE1 profile, as a built-in Crema [`Profile`].
 ///
@@ -76,7 +78,8 @@ mod tests {
 
     #[test]
     fn builtin_profiles_ships_the_full_corpus() {
-        // All 88 vendored de1app standard profiles must be present.
+        // All 88 de1app standard profiles (Adaptive v3 among them) plus the
+        // kept Adaptive v2.
         assert_eq!(builtin_profiles().len(), BUILTIN_PROFILE_COUNT);
     }
 
@@ -227,6 +230,25 @@ mod tests {
             .filter(|s| s.weight.is_some())
             .count();
         assert_eq!(with_weights, expected.len());
+    }
+
+    #[test]
+    fn adaptive_v3_ships_alongside_v2() {
+        // de1app 1a61f9b4: Pressurize exits at 7.7 bar (v2: 8.8) and the
+        // extraction limiter is 8.6 bar (v2: 9.5); otherwise the same frames.
+        let v2 = builtin("Adaptive v2");
+        let v3 = builtin("Adaptive v3");
+        assert_ne!(v2.id, v3.id);
+        assert_eq!(v3.steps.len(), v2.steps.len());
+        let pressurize = |p: &Profile| p.steps[4].exit.unwrap().threshold;
+        assert_eq!(pressurize(v2), 8.8);
+        assert_eq!(pressurize(v3), 7.7);
+        for i in [5, 6] {
+            assert_eq!(v2.steps[i].limiter.unwrap().value, 9.5);
+            assert_eq!(v3.steps[i].limiter.unwrap().value, 8.6);
+        }
+        assert_eq!(v3.preinfuse_step_count, 3);
+        assert_eq!(v3.max_total_volume_ml, 36);
     }
 
     #[test]

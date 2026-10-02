@@ -466,7 +466,7 @@ fn step_to_v2(step: &ProfileStep) -> V2StepOut {
 /// - [`ImportError::NoSteps`] if the resulting profile has no steps.
 /// - [`ImportError::TooManySteps`] if it has more than 32.
 pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
-    let dict = TclDict::parse(tcl)?;
+    let dict = TclDict::parse_profile(tcl)?;
 
     // A Visualizer export of a shot that was uploaded *without* its profile is a
     // dict of blank fields (`advanced_shot {}`, `espresso_pressure {}`, …) — only
@@ -520,7 +520,15 @@ pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
 
     let (target_weight, target_volume) = stop_targets(&dict, advanced);
 
-    let dose = dict.get_f32("grinder_dose_weight").unwrap_or(0.0);
+    // de1app's per-profile dose is `profile_grinder_dose_weight` (a
+    // `profile_vars` key, written by the Streamline skin); a few files carry
+    // the older `grinder_dose_weight`. The first positive one wins; 0 means
+    // "not set".
+    let dose = ["profile_grinder_dose_weight", "grinder_dose_weight"]
+        .iter()
+        .filter_map(|k| dict.get_f32(k))
+        .find(|d| *d > 0.0)
+        .unwrap_or(0.0);
 
     finish_profile(
         title,
@@ -1211,8 +1219,25 @@ pub(crate) struct TclDict {
 impl TclDict {
     /// Parse a Tcl dictionary from its textual form.
     pub(crate) fn parse(text: &str) -> Result<Self, ImportError> {
-        let words = tcl_words(text)?;
-        if words.len() % 2 != 0 {
+        Self::from_words(tcl_words(text, &[])?)
+    }
+
+    /// Parse a top-level `.tcl` **profile** file. The same as [`parse`](Self::parse),
+    /// except that an unbraced, unquoted value of a prose key ([`PROSE_KEYS`]:
+    /// title, author, notes) runs to the end of its line.
+    ///
+    /// Visualizer's `.tcl` export braces a multi-word value only when it
+    /// matches `/\w\s\w/`, so a title like `D-Flow / Q` is written bare and a
+    /// plain word split misreads it (`D-Flow` plus a stray `/` → `Q` pair, or
+    /// an odd word count). de1app itself braces every multi-word value. Port of
+    /// Decenza e56d371a (`De1AppTcl::isFreeTextKey`): only the prose keys
+    /// read the whole line; every other bare value stays one word.
+    pub(crate) fn parse_profile(text: &str) -> Result<Self, ImportError> {
+        Self::from_words(tcl_words(text, PROSE_KEYS)?)
+    }
+
+    fn from_words(words: Vec<String>) -> Result<Self, ImportError> {
+        if !words.len().is_multiple_of(2) {
             return Err(ImportError::Tcl(
                 "dictionary has an odd number of words".to_string(),
             ));
@@ -1227,7 +1252,10 @@ impl TclDict {
 
     /// Parse a Tcl list whose every element is itself a dictionary.
     pub(crate) fn parse_list_of_dicts(text: &str) -> Result<Vec<TclDict>, ImportError> {
-        tcl_words(text)?.iter().map(|w| TclDict::parse(w)).collect()
+        tcl_words(text, &[])?
+            .iter()
+            .map(|w| TclDict::parse(w))
+            .collect()
     }
 
     /// The value for `key`, or `None` if absent. The last write wins, matching
@@ -1253,14 +1281,49 @@ impl TclDict {
     }
 }
 
+/// The free-text keys of a `.tcl` profile whose bare value runs to the end of
+/// the line — see [`TclDict::parse_profile`]. Enum-like keys
+/// (`beverage_type`, …) are deliberately absent: for those, one word is the
+/// right recovery.
+const PROSE_KEYS: &[&str] = &["profile_title", "author", "profile_notes"];
+
 /// Split Tcl text into words: whitespace-separated, with `{...}` runs treated
 /// as a single word with the outermost braces removed. Nested braces are
 /// tracked so a step dictionary stays intact.
-fn tcl_words(text: &str) -> Result<Vec<String>, ImportError> {
-    let mut words = Vec::new();
+///
+/// When the word just read sits in key position (an even word index) and is
+/// one of `prose_keys`, and its value starts on the same line and is neither
+/// braced nor quoted, the value is the rest of that line (trimmed).
+fn tcl_words(text: &str, prose_keys: &[&str]) -> Result<Vec<String>, ImportError> {
+    let mut words: Vec<String> = Vec::new();
     let mut chars = text.chars().peekable();
 
     loop {
+        // A prose key's bare value: the rest of the line.
+        if words.len() % 2 == 1
+            && words
+                .last()
+                .is_some_and(|k| prose_keys.contains(&k.as_str()))
+        {
+            while chars.peek().is_some_and(|c| *c == ' ' || *c == '\t') {
+                chars.next();
+            }
+            // Braced / quoted values, and a value that starts on a later line,
+            // take the normal word path below.
+            if !matches!(chars.peek(), None | Some('{' | '"' | '\n' | '\r')) {
+                let mut line = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c == '\n' {
+                        break;
+                    }
+                    line.push(c);
+                    chars.next();
+                }
+                words.push(line.trim_end().to_string());
+                continue;
+            }
+        }
+
         // Skip inter-word whitespace.
         while chars.peek().is_some_and(|c| c.is_whitespace()) {
             chars.next();
@@ -1749,34 +1812,34 @@ mod tests {
 
     #[test]
     fn tcl_words_splits_bare_words() {
-        assert_eq!(tcl_words("a b c").unwrap(), ["a", "b", "c"]);
+        assert_eq!(tcl_words("a b c", &[]).unwrap(), ["a", "b", "c"]);
     }
 
     #[test]
     fn tcl_words_keeps_a_braced_run_as_one_word() {
         assert_eq!(
-            tcl_words("name {rise and hold} pump pressure").unwrap(),
+            tcl_words("name {rise and hold} pump pressure", &[]).unwrap(),
             ["name", "rise and hold", "pump", "pressure"]
         );
     }
 
     #[test]
     fn tcl_words_handles_nested_braces() {
-        let words = tcl_words("list {{a 1} {b 2}}").unwrap();
+        let words = tcl_words("list {{a 1} {b 2}}", &[]).unwrap();
         assert_eq!(words, ["list", "{a 1} {b 2}"]);
     }
 
     #[test]
     fn tcl_words_handles_quoted_runs() {
         assert_eq!(
-            tcl_words(r#"popup "" name x"#).unwrap(),
+            tcl_words(r#"popup "" name x"#, &[]).unwrap(),
             ["popup", "", "name", "x"]
         );
     }
 
     #[test]
     fn tcl_words_rejects_unbalanced_braces() {
-        assert!(matches!(tcl_words("a {b c"), Err(ImportError::Tcl(_))));
+        assert!(matches!(tcl_words("a {b c", &[]), Err(ImportError::Tcl(_))));
     }
 
     #[test]
@@ -2273,6 +2336,90 @@ espresso_decline_time 20
                 .preinfuse_step_count,
             0
         );
+    }
+
+    // -- Visualizer-style .tcl (issue 12, Decenza e56d371a) ----------------
+
+    /// A `.tcl` as Visualizer's renderer writes it: multi-word values whose
+    /// spaces sit beside non-word characters are NOT braced (`D-Flow / Q`).
+    const VISUALIZER_TCL: &str = "advanced_shot {{name Filling temperature 84.00 sensor coffee pump pressure transition fast pressure 6.00 flow 8.00 seconds 25.00 volume 60.0 exit_if 1 exit_type pressure_over exit_pressure_over 3.00 exit_pressure_under 0.00 exit_flow_over 0.00 exit_flow_under 0.00 max_flow_or_pressure 0.00 max_flow_or_pressure_range 0.6 weight 0.00} {name Pouring temperature 94.00 sensor coffee pump flow transition fast pressure 4.80 flow 2.00 seconds 127.00 volume 0.0 exit_if 0 exit_type pressure_over exit_pressure_over 11.00 exit_pressure_under 0.00 exit_flow_over 6.00 exit_flow_under 0.00 max_flow_or_pressure 0.00 max_flow_or_pressure_range 0.6 weight 0.00}}
+author Damian Brakel - Decent
+beverage_type espresso
+final_desired_shot_volume_advanced_count_start 1
+final_desired_shot_weight_advanced 36.0
+profile_grinder_dose_weight 18.5
+profile_notes Grind finer for more body. Downloaded from Visualizer
+profile_title D-Flow / Q
+settings_profile_type settings_2c
+";
+
+    #[test]
+    fn visualizer_tcl_with_an_unbraced_title_imports_whole() {
+        let p = import_legacy_tcl(VISUALIZER_TCL).unwrap();
+        assert_eq!(p.title, "D-Flow / Q");
+        assert_eq!(p.author, "Damian Brakel - Decent");
+        assert_eq!(
+            p.notes,
+            "Grind finer for more body. Downloaded from Visualizer"
+        );
+        // Nothing else is thrown off by the prose lines.
+        assert_eq!(p.steps.len(), 2);
+        assert_eq!(p.steps[1].name, "Pouring");
+        assert_eq!(p.preinfuse_step_count, 1);
+        assert_eq!(p.target_weight, 36.0);
+        assert_eq!(p.beverage_type, BeverageType::Espresso);
+        // `profile_grinder_dose_weight` is de1app's dose key.
+        assert_eq!(p.dose, 18.5);
+    }
+
+    #[test]
+    fn a_plain_word_split_misreads_the_visualizer_tcl() {
+        // What the unbraced title used to do: the plain dictionary parse
+        // either errors (odd word count) or shifts every pair after it.
+        let plain = TclDict::parse(VISUALIZER_TCL);
+        assert!(plain.map_or(true, |d| d.get("profile_title") != Some("D-Flow / Q")));
+    }
+
+    #[test]
+    fn a_hash_in_an_unbraced_title_is_not_a_comment() {
+        // Decenza e56d371a's review: `#` has no comment meaning in a profile.
+        let tcl = "profile_title Blend #3\nadvanced_shot {{name a pump flow flow 2 seconds 30}}\n\
+                   settings_profile_type settings_2c\n";
+        assert_eq!(import_legacy_tcl(tcl).unwrap().title, "Blend #3");
+    }
+
+    #[test]
+    fn braced_and_quoted_prose_values_are_unchanged() {
+        let tcl = "profile_title {Adaptive v3}\nauthor \"Decent Espresso\"\n\
+                   profile_notes {line one\nline two}\n\
+                   advanced_shot {{name a pump flow flow 2 seconds 30}}\n\
+                   settings_profile_type settings_2c\n";
+        let p = import_legacy_tcl(tcl).unwrap();
+        assert_eq!(p.title, "Adaptive v3");
+        assert_eq!(p.author, "Decent Espresso");
+        assert_eq!(p.notes, "line one\nline two");
+    }
+
+    #[test]
+    fn enum_keys_still_take_one_word() {
+        // Only title/author/notes read the whole line: an enum written bare
+        // keeps first-word semantics (the rest of its line is more words).
+        let words = tcl_words("beverage_type espresso\nprofile_title A B\n", PROSE_KEYS).unwrap();
+        assert_eq!(words, ["beverage_type", "espresso", "profile_title", "A B"]);
+    }
+
+    #[test]
+    fn grinder_dose_weight_still_reads_and_zero_means_unset() {
+        let base = "advanced_shot {{name a pump flow flow 2 seconds 30}}\n\
+                    settings_profile_type settings_2c\nprofile_title x\n";
+        let old = format!("{base}grinder_dose_weight 17\n");
+        assert_eq!(import_legacy_tcl(&old).unwrap().dose, 17.0);
+        // Streamline writes profile_grinder_dose_weight 0 when unset: the
+        // older key still wins then.
+        let both = format!("{base}profile_grinder_dose_weight 0\ngrinder_dose_weight 17\n");
+        assert_eq!(import_legacy_tcl(&both).unwrap().dose, 17.0);
+        let new = format!("{base}profile_grinder_dose_weight 19\ngrinder_dose_weight 0\n");
+        assert_eq!(import_legacy_tcl(&new).unwrap().dose, 19.0);
     }
 
     #[test]

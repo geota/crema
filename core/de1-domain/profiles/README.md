@@ -7,9 +7,11 @@ Crema `Profile`s by the [`builtin`](../src/builtin.rs) module.
 
 The profiles are the 88 standard espresso/tea/cleaning profiles shipped by the
 **de1app** project — the original Decent Espresso DE1 tablet application
-(`de1plus/profiles/`). Each upstream `*.tcl` file was converted once via
-`de1_domain::import_legacy_tcl`, then all the resulting `Profile`s were
-serialized into `builtin.json`. The upstream `.tcl` files are *not* vendored as
+(`de1plus/profiles/`) — plus "Adaptive v2", which de1app replaced with
+"Adaptive v3" in the same file (so it comes from `best_practice.tcl` as of
+before de1app 1a61f9b4). Each upstream `*.tcl` file is converted via
+`de1_domain::import_legacy_tcl`, and the resulting `Profile`s are serialized
+into `builtin.json` (see Regenerating). The upstream `.tcl` files are *not* vendored as
 shipped data; `builtin.json` is the only embedded data file. (Two upstream `.tcl`
 profiles are retained under `tests/fixtures/` purely as legacy-import parser test
 inputs — see [`THIRD-PARTY-NOTICES.md`](../../../THIRD-PARTY-NOTICES.md).)
