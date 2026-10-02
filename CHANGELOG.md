@@ -9,6 +9,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Visualizer API spec updated to v1.17.2** (from v1.8.2) for the catalogue
+  endpoints. A roaster's local "duplicate of" tag now stays on the device
+  instead of being sent as Visualizer's catalogue link.
 - **Visualizer edit sync no longer fails or loses edits on free accounts** —
   Premium-only fields are skipped; Premium status is checked on sign-in,
   daily, and on Test connection. Web and Android.
@@ -43,6 +46,17 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   Settings → Machine shows a one-line notice. Nothing is blocked. The list is
   fetched at most once a day and cached; if it can't be fetched, nothing is
   shown. Web, tablet and phone.
+- **Search the Visualizer catalogue from the bean form** — with a Visualizer
+  account linked (free or Premium), the add/edit bean form has a "Visualizer
+  catalogue" search. Type a roaster or bag name; pick a result to fill in the
+  name, roaster, origin, process, variety, elevation, roast level, tasting
+  notes and product link. Only empty fields are filled unless you tick
+  "Replace fields I've already filled". The bag remembers which catalogue
+  entry it came from. Web and Android.
+- **Synced bags link to the Visualizer catalogue** — on Premium accounts, bean
+  sync now sends the catalogue link with a coffee bag and its roaster, and
+  pulls back links made on visualizer.coffee. A bag Crema never linked no
+  longer clears a link set on the website. Web (Android has no bean sync yet).
 - Recipes have a Notes field for filter, water recipe and other setup details (issue #10 feedback)
 - **Your own brewing methods** (issue #10 feedback: "I only have an ORB this
   week — can I add it?") — "+ Add method…" in the log form, the recipe
