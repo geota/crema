@@ -246,7 +246,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   bag's own edit time, so only bags and roasters you actually changed are
   sent, and a change you made here since the last sync is no longer
   overwritten by the Visualizer copy. Edited roasters are now sent too.
-  Web and Android.
+  Pulling from Visualizer also no longer clears a bag's local details —
+  grams left, bag size, notes, origin, roast date, a roaster's website —
+  because Visualizer's bag and roaster lists only carry names and links, and
+  new bags and roasters now pick up their full details. Web and Android.
 - **Visualizer shows the first profile step** — the step markers Crema sends
   with each shot (`state_change`) counted frames from 0, and Visualizer reads 0
   as "no marker", so the step out of the first frame never showed. Markers now
