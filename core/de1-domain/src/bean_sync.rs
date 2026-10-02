@@ -26,6 +26,9 @@
 //!   push legs write.
 //! - [`detect_roaster_duplicates`] / [`plan_roaster_merge`] — the Roasters
 //!   tab's merge suggestions and the merge bookkeeping.
+//! - [`plan_roaster_delete`] — which bags a roaster delete detaches or
+//!   deletes (cascade), and the Visualizer ids an "also delete on
+//!   Visualizer" removes.
 
 use crate::bean::{Bean, Roaster};
 use crate::visualizer_wire::{RoasterWire, bean_to_wire};
@@ -338,6 +341,66 @@ pub fn plan_roaster_merge(
     })
 }
 
+// ── Roaster delete ────────────────────────────────────────────────────────
+
+/// What deleting a roaster does (web `RoasterDeleteSplit` + the store's
+/// `deleteRoaster` / `deleteRoasterAndBeans`). A **detach** keeps the linked
+/// bags and clears their roaster; a **cascade** deletes them too. The remote
+/// ids are what an "also delete on Visualizer" sends: every deleted bag's
+/// Visualizer id (bags first, then the roaster — the web order).
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoasterDeletePlan {
+    /// The roaster being deleted.
+    pub roaster_id: String,
+    /// Bags deleted with it (cascade only), in library order.
+    pub deleted_bean_ids: Vec<String>,
+    /// Bags kept but detached (`roaster_id` cleared) — detach only.
+    pub detached_bean_ids: Vec<String>,
+    /// Visualizer ids of the deleted bags that were synced.
+    pub remote_bean_ids: Vec<String>,
+    /// The roaster's own Visualizer id, if it was synced.
+    pub remote_roaster_id: Option<String>,
+}
+
+/// Plan a roaster delete, or `None` when the roaster isn't in `roasters`.
+/// `cascade` = also delete every bag filed under it.
+#[must_use]
+pub fn plan_roaster_delete(
+    roasters: &[Roaster],
+    beans: &[Bean],
+    roaster_id: &str,
+    cascade: bool,
+) -> Option<RoasterDeletePlan> {
+    let roaster = roasters.iter().find(|r| r.id == roaster_id)?;
+    let linked: Vec<&Bean> = beans
+        .iter()
+        .filter(|b| b.roaster_id.as_deref() == Some(roaster_id))
+        .collect();
+    let ids = |v: &[&Bean]| v.iter().map(|b| b.id.clone()).collect::<Vec<_>>();
+    let (deleted, detached) = if cascade {
+        (ids(&linked), Vec::new())
+    } else {
+        (Vec::new(), ids(&linked))
+    };
+    let remote_bean_ids = if cascade {
+        linked
+            .iter()
+            .filter_map(|b| non_empty(b.visualizer_id.as_ref()).cloned())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Some(RoasterDeletePlan {
+        roaster_id: roaster_id.to_owned(),
+        deleted_bean_ids: deleted,
+        detached_bean_ids: detached,
+        remote_bean_ids,
+        remote_roaster_id: non_empty(roaster.visualizer_id.as_ref()).cloned(),
+    })
+}
+
 // ── JSON facades (wasm + UniFFI) ──────────────────────────────────────────
 
 fn parse<T: for<'de> Deserialize<'de>>(s: &str) -> Result<T, String> {
@@ -469,6 +532,32 @@ pub fn plan_roaster_merge_json(payload: &str) -> Result<String, String> {
         &inp.beans,
         &inp.canonical_id,
         &inp.dupe_id,
+    ))
+}
+
+/// JSON-bridged [`plan_roaster_delete`]. Input:
+/// `{"roasters": Roaster[], "beans": Bean[], "roasterId", "cascade"}`.
+/// Output: a `RoasterDeletePlan` JSON, or `null` when the roaster is unknown.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+pub fn plan_roaster_delete_json(payload: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct In {
+        roasters: Vec<Roaster>,
+        #[serde(default)]
+        beans: Vec<Bean>,
+        roaster_id: String,
+        #[serde(default)]
+        cascade: bool,
+    }
+    let inp: In = parse(payload)?;
+    emit(&plan_roaster_delete(
+        &inp.roasters,
+        &inp.beans,
+        &inp.roaster_id,
+        inp.cascade,
     ))
 }
 
@@ -739,6 +828,37 @@ mod tests {
         let mut chained = roasters.clone();
         chained[0].canonical_roaster_id = Some("roaster:0".into());
         assert!(plan_roaster_merge(&chained, &beans, "roaster:1", "roaster:2").is_none());
+    }
+
+    // ── roaster delete ────────────────────────────────────────────────
+
+    #[test]
+    fn roaster_delete_detach_keeps_bags_cascade_takes_them_and_their_remote_ids() {
+        let mut r = roaster("roaster:1", "Sey", 1);
+        r.visualizer_id = Some("vz-r".into());
+        let mut synced = bean("bean:a", Some("roaster:1"));
+        synced.visualizer_id = Some("vz-a".into());
+        let local_only = bean("bean:b", Some("roaster:1"));
+        let other = bean("bean:c", Some("roaster:2"));
+        let roasters = vec![r, roaster("roaster:2", "Onyx", 1)];
+        let beans = vec![synced, local_only, other];
+
+        let detach = plan_roaster_delete(&roasters, &beans, "roaster:1", false).unwrap();
+        assert_eq!(detach.detached_bean_ids, vec!["bean:a", "bean:b"]);
+        assert!(detach.deleted_bean_ids.is_empty());
+        assert!(detach.remote_bean_ids.is_empty());
+        assert_eq!(detach.remote_roaster_id.as_deref(), Some("vz-r"));
+
+        let cascade = plan_roaster_delete(&roasters, &beans, "roaster:1", true).unwrap();
+        assert_eq!(cascade.deleted_bean_ids, vec!["bean:a", "bean:b"]);
+        assert!(cascade.detached_bean_ids.is_empty());
+        assert_eq!(cascade.remote_bean_ids, vec!["vz-a"]);
+
+        let unsynced = plan_roaster_delete(&roasters, &beans, "roaster:2", true).unwrap();
+        assert_eq!(unsynced.remote_roaster_id, None);
+        assert!(plan_roaster_delete(&roasters, &beans, "roaster:9", true).is_none());
+        let none = json!({"roasters": [], "roasterId": "x", "cascade": true}).to_string();
+        assert_eq!(plan_roaster_delete_json(&none).unwrap(), "null");
     }
 
     // ── JSON facades ──────────────────────────────────────────────────

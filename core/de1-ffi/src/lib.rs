@@ -1309,6 +1309,18 @@ pub fn detect_roaster_duplicates(roasters_json: String) -> Result<String, CremaE
     de1_domain::detect_roaster_duplicates_json(&roasters_json).map_err(crema_err)
 }
 
+/// Plan a roaster delete (`RoasterDeletePlan` JSON, or `null`): detach or
+/// cascade, plus the Visualizer ids to delete. Mirrors the wasm
+/// `planRoasterDelete`; see [`de1_domain::plan_roaster_delete_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] on malformed input.
+#[uniffi::export]
+pub fn plan_roaster_delete(payload: String) -> Result<String, CremaError> {
+    de1_domain::plan_roaster_delete_json(&payload).map_err(crema_err)
+}
+
 /// Plan a roaster merge (`RoasterMergePlan` JSON, or `null`). Mirrors the
 /// wasm `planRoasterMerge`; see [`de1_domain::plan_roaster_merge_json`].
 ///

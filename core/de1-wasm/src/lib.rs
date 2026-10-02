@@ -1046,6 +1046,17 @@ pub fn detect_roaster_duplicates(roasters_json: &str) -> Result<String, String> 
     de1_domain::detect_roaster_duplicates_json(roasters_json)
 }
 
+/// Plan a roaster delete (`RoasterDeletePlan` JSON, or `null`). `payload` is
+/// `{"roasters", "beans", "roasterId", "cascade"}`. See
+/// `de1_domain::plan_roaster_delete`.
+///
+/// # Errors
+/// The JSON error string on malformed input.
+#[wasm_bindgen(js_name = planRoasterDelete)]
+pub fn plan_roaster_delete(payload: &str) -> Result<String, String> {
+    de1_domain::plan_roaster_delete_json(payload)
+}
+
 /// Plan a roaster merge (`RoasterMergePlan` JSON, or `null`). `payload` is
 /// `{"roasters", "beans", "canonicalId", "dupeId"}`. See
 /// `de1_domain::plan_roaster_merge`.

@@ -2320,6 +2320,25 @@ data class Roaster (
 	val updatedAt: Long
 )
 
+/// What deleting a roaster does (web `RoasterDeleteSplit` + the store's
+/// `deleteRoaster` / `deleteRoasterAndBeans`). A **detach** keeps the linked
+/// bags and clears their roaster; a **cascade** deletes them too. The remote
+/// ids are what an "also delete on Visualizer" sends: every deleted bag's
+/// Visualizer id (bags first, then the roaster — the web order).
+@Serializable
+data class RoasterDeletePlan (
+	/// The roaster being deleted.
+	val roasterId: String,
+	/// Bags deleted with it (cascade only), in library order.
+	val deletedBeanIds: List<String>,
+	/// Bags kept but detached (`roaster_id` cleared) — detach only.
+	val detachedBeanIds: List<String>,
+	/// Visualizer ids of the deleted bags that were synced.
+	val remoteBeanIds: List<String>,
+	/// The roaster's own Visualizer id, if it was synced.
+	val remoteRoasterId: String? = null
+)
+
 /// A probable duplicate pair in the roaster directory: `dupe_id` looks like
 /// `canonical_id` (same normalised name).
 @Serializable

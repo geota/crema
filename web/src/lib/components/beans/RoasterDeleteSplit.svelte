@@ -16,6 +16,7 @@
 	 * the bags-before-roaster order) live in that helper.
 	 */
 	import { getBeanStore } from '$lib/bean';
+	import { planRoasterDelete } from '$lib/bean/roaster-delete';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { bestEffortRemoteDelete } from '$lib/visualizer';
 	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
@@ -60,9 +61,12 @@
 			: `Delete "${roasterName}" from this device? Linked bags are kept and detached.`;
 		if (!(await confirmDialog({ message: msg, confirmLabel: 'Delete', danger: true }))) return;
 		// Detach deletes only the roaster remotely; bags are kept (detached).
-		const roasterVizId = remote ? (library.getRoaster(roasterId)?.visualizerId ?? null) : null;
+		// The plan (core `plan_roaster_delete`) is taken BEFORE the local delete.
+		const plan = planRoasterDelete(library.roasters, library.beans, roasterId, false);
 		library.deleteRoaster(roasterId);
-		if (remote) void bestEffortRemoteDelete(appCtx().services, [], roasterVizId);
+		if (remote && plan) {
+			void bestEffortRemoteDelete(appCtx().services, plan.remoteBeanIds, plan.remoteRoasterId ?? null);
+		}
 		onDeleted?.();
 	}
 	async function cascade(remote: boolean): Promise<void> {
@@ -70,16 +74,14 @@
 			? `Delete "${roasterName}" and its ${beansLabel}, here and on Visualizer? This cannot be undone.`
 			: `Delete "${roasterName}" and its ${beansLabel} from this device? This cannot be undone.`;
 		if (!(await confirmDialog({ message: msg, confirmLabel: 'Delete', danger: true }))) return;
-		// Capture the roaster + every linked bag's remote id BEFORE the cascade
-		// removes the rows, then delete locally and fire the remote DELETEs.
-		const roasterVizId = remote ? (library.getRoaster(roasterId)?.visualizerId ?? null) : null;
-		const beanVizIds = remote
-			? library.beans
-					.filter((b) => b.roasterId === roasterId && !!b.visualizerId)
-					.map((b) => b.visualizerId as string)
-			: [];
+		// Plan (core `plan_roaster_delete`) BEFORE the cascade removes the rows:
+		// the roaster's + every synced linked bag's remote id. Then delete
+		// locally and fire the remote DELETEs.
+		const plan = planRoasterDelete(library.roasters, library.beans, roasterId, true);
 		library.deleteRoasterAndBeans(roasterId);
-		if (remote) void bestEffortRemoteDelete(appCtx().services, beanVizIds, roasterVizId);
+		if (remote && plan) {
+			void bestEffortRemoteDelete(appCtx().services, plan.remoteBeanIds, plan.remoteRoasterId ?? null);
+		}
 		onDeleted?.();
 	}
 

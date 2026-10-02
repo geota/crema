@@ -43,3 +43,20 @@ describe('planRoasterMerge', () => {
 		expect(planRoasterMerge([keep, dupe], [bag], keep.id, keep.id)).toBeNull();
 	});
 });
+
+describe('planRoasterDelete', () => {
+	it('detach keeps bags; cascade deletes them and lists their Visualizer ids', async () => {
+		const { planRoasterDelete } = await import('./roaster-delete.ts');
+		const r = { ...roaster('Sey', 1), visualizerId: 'vz-r' };
+		const synced = { ...blankBean('bean:a'), roasterId: r.id, visualizerId: 'vz-a' };
+		const local = { ...blankBean('bean:b'), roasterId: r.id };
+		const detach = planRoasterDelete([r], [synced, local], r.id, false);
+		expect(detach?.detachedBeanIds).toEqual(['bean:a', 'bean:b']);
+		expect(detach?.remoteBeanIds).toEqual([]);
+		expect(detach?.remoteRoasterId).toBe('vz-r');
+		const cascade = planRoasterDelete([r], [synced, local], r.id, true);
+		expect(cascade?.deletedBeanIds).toEqual(['bean:a', 'bean:b']);
+		expect(cascade?.remoteBeanIds).toEqual(['vz-a']);
+		expect(planRoasterDelete([r], [], 'roaster:none', true)).toBeNull();
+	});
+});

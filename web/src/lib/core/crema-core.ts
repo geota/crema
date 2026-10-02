@@ -2376,6 +2376,26 @@ export interface Roaster {
 }
 
 /**
+ * What deleting a roaster does (web `RoasterDeleteSplit` + the store's
+ * `deleteRoaster` / `deleteRoasterAndBeans`). A **detach** keeps the linked
+ * bags and clears their roaster; a **cascade** deletes them too. The remote
+ * ids are what an "also delete on Visualizer" sends: every deleted bag's
+ * Visualizer id (bags first, then the roaster — the web order).
+ */
+export interface RoasterDeletePlan {
+	/** The roaster being deleted. */
+	roasterId: string;
+	/** Bags deleted with it (cascade only), in library order. */
+	deletedBeanIds: string[];
+	/** Bags kept but detached (`roaster_id` cleared) — detach only. */
+	detachedBeanIds: string[];
+	/** Visualizer ids of the deleted bags that were synced. */
+	remoteBeanIds: string[];
+	/** The roaster's own Visualizer id, if it was synced. */
+	remoteRoasterId?: string;
+}
+
+/**
  * A probable duplicate pair in the roaster directory: `dupe_id` looks like
  * `canonical_id` (same normalised name).
  */
