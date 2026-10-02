@@ -52,7 +52,7 @@ export class MachineReadout {
 	}
 
 	/**
-	 * DE1's human-readable firmware label (e.g. `"v1.43 build 1352"`),
+	 * DE1's human-readable firmware label (e.g. `"v1.0.142 (API 4)"`),
 	 * decoded from the `Version` characteristic. `null` until the DE1
 	 * connects.
 	 */

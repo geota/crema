@@ -82,7 +82,9 @@ export function liveMachineIdentity(): ShotMachine | null {
 	const m = getMachineReadout();
 	const serial = m.serialNumber;
 	if (serial == null) return null;
-	const firmware = m.firmwareString ?? (m.firmwareBuild != null ? String(m.firmwareBuild) : null);
+	// decaid's `machine.firmwareVersion` is the CPU build number alone (`"1352"`),
+	// not the `Version` label; 0 = not reported yet, so omitted.
+	const firmware = m.firmwareBuild ? String(m.firmwareBuild) : null;
 	const model = decentModelName(m.machineModel);
 	return {
 		serialNumber: String(serial),

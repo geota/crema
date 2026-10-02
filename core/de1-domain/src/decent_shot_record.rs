@@ -173,10 +173,18 @@ pub fn decent_shot_record(shot: &StoredShot, machine: &ShotMachine, app_version:
         "serialNumber",
         Some(machine.serial_number.as_str()),
     );
+    // decaid sends the DE1's CPU build number alone (`"1352"`); older
+    // Crema rows stored a longer label, normalised here so every upload
+    // agrees. No build number recoverable → the key is omitted, as decaid
+    // omits an unknown firmware.
     put_str(
         &mut machine_out,
         "firmwareVersion",
-        machine.firmware_version.as_deref(),
+        machine
+            .firmware_version
+            .as_deref()
+            .and_then(firmware_build_number)
+            .as_deref(),
     );
     put_str(&mut machine_out, "model", machine.model.as_deref());
 
@@ -239,6 +247,43 @@ pub fn decent_shot_record_json(
     let machine: ShotMachine = serde_json::from_str(machine_json).map_err(|e| e.to_string())?;
     serde_json::to_string(&decent_shot_record(&shot, &machine, app_version))
         .map_err(|e| e.to_string())
+}
+
+/// The DE1 CPU firmware build number (MMR `0x800010`) in `label`, as the
+/// decimal string decaid uploads as `machine.firmwareVersion` (`"1352"`).
+///
+/// Accepts the shapes Crema has stored over time:
+/// - a bare build number (`"1352"`, surrounding whitespace ignored, leading
+///   zeros dropped);
+/// - a label carrying `build <n>` (`"v1.43 build 1352"`, case-insensitive).
+///
+/// Anything else — blank, `"0"` (a build the DE1 has not reported), or the
+/// BLE `Version` label (`"v1.0.142 (API 4)"`), which carries no CPU build
+/// number — is `None`: unknown, so the upload omits the key rather than
+/// guessing.
+#[must_use]
+pub fn firmware_build_number(label: &str) -> Option<String> {
+    let positive = |digits: &str| -> Option<String> {
+        if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        let n: u64 = digits.parse().ok()?;
+        (n > 0).then(|| n.to_string())
+    };
+    let label = label.trim();
+    if let Some(n) = positive(label) {
+        return Some(n);
+    }
+    let lower = label.to_ascii_lowercase();
+    let mut words = lower.split_whitespace();
+    while let Some(word) = words.next() {
+        if word == "build" {
+            let next = words.next()?;
+            let digits: String = next.chars().take_while(char::is_ascii_digit).collect();
+            return positive(&digits);
+        }
+    }
+    None
 }
 
 /// The error [`decent_shot_record_json`] returns for a Brew Log row.
@@ -473,7 +518,7 @@ mod tests {
         );
         assert_eq!(
             rec["machine"],
-            json!({ "serialNumber": "6262", "firmwareVersion": "v1.43 build 1352", "model": "DE1PRO" })
+            json!({ "serialNumber": "6262", "firmwareVersion": "1352", "model": "DE1PRO" })
         );
         // Start = completion − duration, JS `toISOString()` shape.
         assert_eq!(rec["timestamp"], "2026-09-24T14:10:00.000Z");
@@ -647,6 +692,55 @@ mod tests {
             json!({ "version": "2", "title": "Blooming Espresso", "steps": [] })
         );
         assert_eq!(rec["machine"], json!({ "serialNumber": "1" }));
+    }
+
+    #[test]
+    fn firmware_build_number_extracts_the_cpu_build() {
+        for (label, want) in [
+            ("1352", Some("1352")),
+            (" 1293 ", Some("1293")),
+            ("01352", Some("1352")),
+            ("v1.43 build 1352", Some("1352")),
+            ("V1.43 BUILD 1352", Some("1352")),
+            ("build 1400,", Some("1400")),
+            ("", None),
+            ("   ", None),
+            ("0", None),
+            ("v1.43 build 0", None),
+            ("v1.43 build", None),
+            ("v1.43 build abc", None),
+            ("v1.0.142 (API 4)", None),
+            ("v1.0.10 (API 4) + FW v1.0.142 (API 4)", None),
+            ("-1352", None),
+            ("1352.0", None),
+        ] {
+            assert_eq!(firmware_build_number(label).as_deref(), want, "{label:?}");
+        }
+    }
+
+    #[test]
+    fn uploads_the_build_number_for_legacy_and_current_firmware_labels() {
+        let with_fw = |fw: Option<&str>| ShotMachine {
+            firmware_version: fw.map(str::to_owned),
+            ..machine()
+        };
+        for (fw, want) in [
+            (Some("1352"), Some("1352")),
+            (Some("v1.43 build 1352"), Some("1352")),
+            (Some("v1.0.142 (API 4)"), None),
+            (Some("0"), None),
+            (None, None),
+        ] {
+            let rec = decent_shot_record(&shot(), &with_fw(fw), "x");
+            assert_eq!(
+                rec["machine"]
+                    .get("firmwareVersion")
+                    .and_then(Value::as_str),
+                want,
+                "{fw:?}"
+            );
+            assert_eq!(rec["machine"]["serialNumber"], "6262");
+        }
     }
 
     #[test]

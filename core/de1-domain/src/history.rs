@@ -433,7 +433,11 @@ pub struct StoredShot {
 pub struct ShotMachine {
     /// The DE1's serial number (MMR `SerialNumber`), as text.
     pub serial_number: String,
-    /// Human firmware label (e.g. `"v1.43 build 1352"`), if known.
+    /// The DE1 CPU firmware build number (MMR `0x800010`) as text, e.g.
+    /// `"1352"` — what decaid stores and uploads. Older rows may carry a
+    /// longer label (`"v1.43 build 1352"`, or the BLE `"v1.0.142 (API 4)"`);
+    /// the Decent upload normalises via
+    /// [`firmware_build_number`](crate::firmware_build_number).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub firmware_version: Option<String>,
     /// Human model name (e.g. `"DE1PRO"`, see `machine_model_name`), if known.

@@ -43,7 +43,7 @@ class DecentShotRecordTest {
 
     @Test
     fun `sends the upload wire of the shot, with the grinder model and yield target`() {
-        decentShotRecordJson(core, json, shot, ShotMachine("6262", "v1.43", "DE1PRO"), "0.0.7", grinderModel = "Niche Zero")
+        decentShotRecordJson(core, json, shot, ShotMachine("6262", "1352", "DE1PRO"), "0.0.7", grinderModel = "Niche Zero")
         val wire = json.parseToJsonElement(core.lastShotJson!!).jsonObject
         assertEquals("shot:0192", wire["id"]!!.jsonPrimitive.content)
         assertEquals("Niche Zero", wire["grinderModel"]!!.jsonPrimitive.content)
@@ -56,7 +56,7 @@ class DecentShotRecordTest {
         assertEquals("null", wire["visualizerId"].toString())
         assertNull(wire["decentId"])
         val machine = json.decodeFromString(ShotMachine.serializer(), core.lastMachineJson!!)
-        assertEquals(ShotMachine("6262", "v1.43", "DE1PRO"), machine)
+        assertEquals(ShotMachine("6262", "1352", "DE1PRO"), machine)
     }
 
     @Test

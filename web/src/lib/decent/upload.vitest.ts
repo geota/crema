@@ -118,7 +118,28 @@ describe('uploadShotToDecent gates', () => {
 			kind: 'uploaded',
 			url: 'https://decentespresso.com/shot/6262/77'
 		});
-		expect(shots.get('old')?.machine).toEqual({ serialNumber: '6262', firmwareVersion: 'v1.43 build 1352', model: 'DE1PRO' });
+		// The CPU build number alone, as decaid stamps it — not the Version label.
+		expect(shots.get('old')?.machine).toEqual({ serialNumber: '6262', firmwareVersion: '1352', model: 'DE1PRO' });
+	});
+	it('uploads machine.firmwareVersion as the build number, normalising a legacy label', async () => {
+		writeDecentAccount(linked);
+		const bodies: Array<{ machine: Record<string, unknown> }> = [];
+		const capture: FetchLike = async (_url, init) => {
+			bodies.push(JSON.parse(String(init?.body)));
+			return new Response('{"id":"77"}', { status: 200 });
+		};
+		shots.set('legacy', {
+			...shot('legacy', 30_000),
+			machine: { serialNumber: '6262', firmwareVersion: 'v1.43 build 1352', model: 'DE1PRO' }
+		});
+		expect(await uploadShotToDecent('legacy', { fetchFn: capture, appVersion: 't', manual: true })).toMatchObject({ kind: 'uploaded' });
+		expect(bodies.at(-1)?.machine).toEqual({ serialNumber: '6262', firmwareVersion: '1352', model: 'DE1PRO' });
+		shots.set('ble', {
+			...shot('ble', 30_000),
+			machine: { serialNumber: '6262', firmwareVersion: 'v1.0.142 (API 4)', model: 'DE1PRO' }
+		});
+		expect(await uploadShotToDecent('ble', { fetchFn: capture, appVersion: 't', manual: true })).toMatchObject({ kind: 'uploaded' });
+		expect(bodies.at(-1)?.machine).toEqual({ serialNumber: '6262', model: 'DE1PRO' });
 	});
 	it('never stamps the live serial onto a shot pulled from Visualizer', async () => {
 		writeDecentAccount(linked);

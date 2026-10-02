@@ -207,9 +207,9 @@ class DecentSyncTest {
     fun `an older shot uploaded with the live DE1 gets that machine stamped`() = runTest {
         val old = StoredShot(id = "old", completedAtMs = 1, durationMs = 30_000)
         val h = harness(listOf(old))
-        h.live = ShotMachine("6262", "v1.43", "DE1PRO")
+        h.live = ShotMachine("6262", "1352", "DE1PRO")
         h.sync.uploadNow(old, manual = true, replace = false, fullSamples = null)
-        assertEquals(Triple("old", "id-1", ShotMachine("6262", "v1.43", "DE1PRO")), h.stamped.single())
+        assertEquals(Triple("old", "id-1", ShotMachine("6262", "1352", "DE1PRO")), h.stamped.single())
     }
 
     @Test

@@ -146,7 +146,7 @@ class SharingController(
 
     /**
      * The connected DE1's identity (#84): serial from the connect-time MMR
-     * sweep, the decoded firmware string, the model name. Null until the
+     * sweep, the CPU firmware build number, the model name. Null until the
      * serial has been read.
      */
     fun liveMachine(): ShotMachine? {
@@ -155,7 +155,9 @@ class SharingController(
         val info = ui.de1MachineInfo
         return ShotMachine(
             serialNumber = serial,
-            firmwareVersion = ui.de1Firmware ?: info[MmrRegister.FirmwareVersion]?.toString(),
+            // decaid's `machine.firmwareVersion` is the CPU build number alone
+            // ("1352"), not the Version label; 0 = not reported yet → omitted.
+            firmwareVersion = info[MmrRegister.FirmwareVersion]?.takeIf { it != 0u }?.toString(),
             model = modelName(info[MmrRegister.MachineModel]),
         )
     }

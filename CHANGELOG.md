@@ -9,6 +9,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Decent uploads send the DE1 firmware as its build number** — the
+  shot's `machine.firmwareVersion` is now just the CPU firmware build (e.g.
+  `1352`), the same value Decent's own app sends. Shots recorded earlier
+  with a longer label (`v1.43 build 1352`) are normalised when uploaded;
+  a label with no build number in it is left out. Web and Android.
 - **Editing an uploaded shot updates its Decent copy** — with Decent
   auto-upload on, changing the rating, notes, grind or bean of a shot that is
   already on your Decent account re-uploads it over the old copy

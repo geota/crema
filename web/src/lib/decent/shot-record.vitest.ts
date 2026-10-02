@@ -45,7 +45,7 @@ const shot: StoredShot = {
 	decentId: null
 };
 
-const machine = { serialNumber: '6262', firmwareVersion: 'v1.43 build 1352', model: 'DE1PRO' };
+const machine = { serialNumber: '6262', firmwareVersion: '1352', model: 'DE1PRO' };
 
 describe('decentShotRecord', () => {
 	it('hands the persisted row to core and returns the ShotRecord JSON', () => {
@@ -55,6 +55,13 @@ describe('decentShotRecord', () => {
 		expect(rec.machine).toEqual(machine);
 		expect(rec.measurements).toHaveLength(3);
 		expect(rec.workflow.name).toBe('Blooming Espresso');
+	});
+
+	it('normalises a legacy firmware label to the build number decaid sends', () => {
+		const legacy = { ...machine, firmwareVersion: 'v1.43 build 1352' };
+		expect(JSON.parse(decentShotRecord(shot, legacy, 'x')).machine).toEqual(machine);
+		const ble = { ...machine, firmwareVersion: 'v1.0.142 (API 4)' };
+		expect(JSON.parse(decentShotRecord(shot, ble, 'x')).machine).toEqual({ serialNumber: '6262', model: 'DE1PRO' });
 	});
 
 	it('uses full-resolution samples in place of the stored series when given', () => {
