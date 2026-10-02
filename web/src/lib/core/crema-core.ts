@@ -714,6 +714,13 @@ export interface CommonSettings {
 	 */
 	waterRefillPointMm?: number;
 	/**
+	 * Tablet charging from the DE1's USB port (Decenza `BatteryManager`
+	 * modes): `"alwaysOn"` (the default, as decaid), `"smart"` (55–65 %)
+	 * or `"smartHigh"` (90–95 %). Asserted on connect and every minute
+	 * after. `None` means "unset", read as `"alwaysOn"`.
+	 */
+	usbChargingMode?: string;
+	/**
 	 * Enabled live-chart channel keys (Android's vocabulary:
 	 * `pressure`/`flow`/`weight`/`headTemp`/`mixTemp`/`weightFlow`/`resistance`/
 	 * `dispensedVolume`). Web maps its eight `show*` booleans to/from this list
@@ -767,6 +774,69 @@ export interface CommonSettings {
 }
 
 /**
+ * The "Tablet charging" setting: Decenza's `BatteryManager::ChargingMode`.
+ * Defaults to [`AlwaysOn`](Self::AlwaysOn), as decaid does.
+ */
+export enum UsbChargingMode {
+	/** Decenza `On`: keep the tablet between 55 % and 65 %. */
+	Smart = "smart",
+	/**
+	 * Decenza `Night`: keep it between 90 % and 95 %; while the machine
+	 * sleeps the floor drops to 15 %.
+	 */
+	SmartHigh = "smartHigh",
+	/**
+	 * Decenza `Off` (the default, as decaid's `ChargingMode.disabled`):
+	 * the DE1's USB port is always on.
+	 */
+	AlwaysOn = "alwaysOn",
+}
+
+/**
+ * The shell's snapshot of the user's settings for one connect sweep. Each
+ * shell builds it from its own settings store; the core turns it into the
+ * writes (see the module table).
+ */
+export interface ConnectSweepSettings {
+	/** Fan-on threshold, °C (clamped 0..=60). */
+	fanThresholdC: number;
+	/** Two-tap steam stop. */
+	steamTwoTap: boolean;
+	/** The machine's own refill point, raw sensor mm. */
+	refillPointMm: number;
+	/** Steam target, °C (0 = heater off). */
+	steamTempC: number;
+	/** Steam timeout, s. */
+	steamTimeoutS: number;
+	/** Hot-water temperature, °C. */
+	hotWaterTempC: number;
+	/** Hot-water volume, ml. */
+	hotWaterVolumeMl: number;
+	/** Steam flow, ml/s. */
+	steamFlowMlS: number;
+	/** Group-flush timeout, s. */
+	flushTimeoutS: number;
+	/** Group-flush temperature, °C. */
+	flushTempC: number;
+	/** Steam eco mode. */
+	steamEco: boolean;
+	/** The active profile's tank-temperature target, °C (0 = no preheat). */
+	tankTempC: number;
+	/** Steam-heater phase-1 (warm-up) flow, ml/s; `None` = de1app default. */
+	phase1FlowMlS?: number;
+	/** Steam-heater phase-2 (test) flow, ml/s; `None` = de1app default. */
+	phase2FlowMlS?: number;
+	/** Hot-water heater idle temperature, °C; `None` = de1app default. */
+	hotWaterIdleTempC?: number;
+	/** Espresso heater warm-up timeout, s; `None` = de1app default. */
+	espressoWarmupTimeoutS?: number;
+	/** Smart-charging mode for the DE1's USB port. */
+	usbCharging: UsbChargingMode;
+	/** The tablet's battery level, %; `None` when unreadable. */
+	batteryPercent?: number;
+}
+
+/**
  * Something the core observed that the UI may want to react to.
  * 
  * Serialized adjacently tagged — a JSON event reads `{"type":"ShotStarted"}`
@@ -806,6 +876,39 @@ export type Event =
 	substate: SubState;
 	/** Readable fault text, or `None` once the fault has cleared. */
 	message?: string;
+}}
+	/**
+	 * A maintenance cycle (Descale / Clean / AirPurge) the core is
+	 * following moved on — see [`MaintenancePhase`]. Edge-triggered: one
+	 * event per change of phase, step, cycle, or whole second remaining.
+	 * 
+	 * The descale fields come from the DE1's fixed 720 s step schedule
+	 * (Decenza `b1ceab8c`, [`de1_domain::DESCALE_SCHEDULE`]); they are `0`
+	 * for Clean / AirPurge and outside a descale step.
+	 * 
+	 * `cold_workaround` is `true` when the core loaded the 1 °C maintenance
+	 * profile because old firmware (< 1356, or unknown) drops a cold
+	 * request. The DE1 then holds that profile, not the user's: the shell
+	 * must forget any "already loaded" profile cache, and on `Finished` /
+	 * `Cancelled` re-upload its active profile.
+	 */
+	| { type: "MaintenanceProgress", content: {
+	/** The maintenance state being run. */
+	state: MachineState;
+	/** Where the cycle stands. */
+	phase: MaintenancePhase;
+	/** Descale step, 1-based (`1..=step_count`); `0` when not in a step. */
+	step_index: number;
+	/** Number of descale steps (5); `0` for Clean / AirPurge. */
+	step_count: number;
+	/** Descale fraction done, `0.0..=0.999` (`1.0` only on `Finished`). */
+	progress: number;
+	/** Whole seconds left in the descale cycle. */
+	seconds_remaining: number;
+	/** Descale pass, from 1 (`0` when not descaling). */
+	cycle: number;
+	/** The 1 °C cold-maintenance profile was loaded for this cycle. */
+	cold_workaround: boolean;
 }}
 	/** An espresso shot began. */
 	| { type: "ShotStarted", content?: undefined }
@@ -3093,6 +3196,29 @@ export enum MachineState {
 	AirPurge = "AirPurge",
 	/** Scheduled-wake idle; firmware v1293 and later only. */
 	SchedIdle = "SchedIdle",
+}
+
+/**
+ * Where a maintenance cycle the core is following stands — carried by
+ * `Event::MaintenanceProgress`.
+ */
+export enum MaintenancePhase {
+	/**
+	 * Old firmware, machine heating: the 1 °C profile is loaded and the
+	 * request is held until the machine reports it has left preheat.
+	 */
+	WaitingForPreheat = "WaitingForPreheat",
+	/**
+	 * The held request has been sent; waiting for the machine to enter the
+	 * state.
+	 */
+	Requested = "Requested",
+	/** The machine is in the maintenance state. */
+	Running = "Running",
+	/** The machine left the maintenance state. */
+	Finished = "Finished",
+	/** Cancelled by the user, by another state request, or by a DE1 link drop. */
+	Cancelled = "Cancelled",
 }
 
 /**

@@ -631,6 +631,11 @@ data class CommonSettings (
 	/// both push it at connect and default to 5 mm; `None` means "unset",
 	/// read as `tank::DEFAULT_REFILL_POINT_MM`.
 	val waterRefillPointMm: Float? = null,
+	/// Tablet charging from the DE1's USB port (Decenza `BatteryManager`
+	/// modes): `"alwaysOn"` (the default, as decaid), `"smart"` (55–65 %)
+	/// or `"smartHigh"` (90–95 %). Asserted on connect and every minute
+	/// after. `None` means "unset", read as `"alwaysOn"`.
+	val usbChargingMode: String? = null,
 	/// Enabled live-chart channel keys (Android's vocabulary:
 	/// `pressure`/`flow`/`weight`/`headTemp`/`mixTemp`/`weightFlow`/`resistance`/
 	/// `dispensedVolume`). Web maps its eight `show*` booleans to/from this list
@@ -678,6 +683,66 @@ data class CommonSettings (
 	val qcFlushTempC: Float
 )
 
+/// The "Tablet charging" setting: Decenza's `BatteryManager::ChargingMode`.
+/// Defaults to [`AlwaysOn`](Self::AlwaysOn), as decaid does.
+@Serializable
+enum class UsbChargingMode(val string: String) {
+	/// Decenza `On`: keep the tablet between 55 % and 65 %.
+	@SerialName("smart")
+	Smart("smart"),
+	/// Decenza `Night`: keep it between 90 % and 95 %; while the machine
+	/// sleeps the floor drops to 15 %.
+	@SerialName("smartHigh")
+	SmartHigh("smartHigh"),
+	/// Decenza `Off` (the default, as decaid's `ChargingMode.disabled`):
+	/// the DE1's USB port is always on.
+	@SerialName("alwaysOn")
+	AlwaysOn("alwaysOn"),
+}
+
+/// The shell's snapshot of the user's settings for one connect sweep. Each
+/// shell builds it from its own settings store; the core turns it into the
+/// writes (see the module table).
+@Serializable
+data class ConnectSweepSettings (
+	/// Fan-on threshold, °C (clamped 0..=60).
+	val fanThresholdC: Float,
+	/// Two-tap steam stop.
+	val steamTwoTap: Boolean,
+	/// The machine's own refill point, raw sensor mm.
+	val refillPointMm: Float,
+	/// Steam target, °C (0 = heater off).
+	val steamTempC: Float,
+	/// Steam timeout, s.
+	val steamTimeoutS: Float,
+	/// Hot-water temperature, °C.
+	val hotWaterTempC: Float,
+	/// Hot-water volume, ml.
+	val hotWaterVolumeMl: Float,
+	/// Steam flow, ml/s.
+	val steamFlowMlS: Float,
+	/// Group-flush timeout, s.
+	val flushTimeoutS: Float,
+	/// Group-flush temperature, °C.
+	val flushTempC: Float,
+	/// Steam eco mode.
+	val steamEco: Boolean,
+	/// The active profile's tank-temperature target, °C (0 = no preheat).
+	val tankTempC: Float,
+	/// Steam-heater phase-1 (warm-up) flow, ml/s; `None` = de1app default.
+	val phase1FlowMlS: Float? = null,
+	/// Steam-heater phase-2 (test) flow, ml/s; `None` = de1app default.
+	val phase2FlowMlS: Float? = null,
+	/// Hot-water heater idle temperature, °C; `None` = de1app default.
+	val hotWaterIdleTempC: Float? = null,
+	/// Espresso heater warm-up timeout, s; `None` = de1app default.
+	val espressoWarmupTimeoutS: Float? = null,
+	/// Smart-charging mode for the DE1's USB port.
+	val usbCharging: UsbChargingMode,
+	/// The tablet's battery level, %; `None` when unreadable.
+	val batteryPercent: UByte? = null
+)
+
 /// Generated type representing the anonymous struct variant `MachineStateChanged` of the `Event` Rust enum
 @Serializable
 data class EventMachineStateChangedInner (
@@ -696,6 +761,27 @@ data class EventMachineErrorChangedInner (
 	val substate: SubState,
 	/// Readable fault text, or `None` once the fault has cleared.
 	val message: String? = null
+)
+
+/// Generated type representing the anonymous struct variant `MaintenanceProgress` of the `Event` Rust enum
+@Serializable
+data class EventMaintenanceProgressInner (
+	/// The maintenance state being run.
+	val state: MachineState,
+	/// Where the cycle stands.
+	val phase: MaintenancePhase,
+	/// Descale step, 1-based (`1..=step_count`); `0` when not in a step.
+	val step_index: UByte,
+	/// Number of descale steps (5); `0` for Clean / AirPurge.
+	val step_count: UByte,
+	/// Descale fraction done, `0.0..=0.999` (`1.0` only on `Finished`).
+	val progress: Float,
+	/// Whole seconds left in the descale cycle.
+	val seconds_remaining: UInt,
+	/// Descale pass, from 1 (`0` when not descaling).
+	val cycle: UByte,
+	/// The 1 °C cold-maintenance profile was loaded for this cycle.
+	val cold_workaround: Boolean
 )
 
 /// Generated type representing the anonymous struct variant `ShotPhaseChanged` of the `Event` Rust enum
@@ -1175,6 +1261,22 @@ sealed class Event {
 	@Serializable
 	@SerialName("MachineErrorChanged")
 	data class MachineErrorChanged(val content: EventMachineErrorChangedInner): Event()
+	/// A maintenance cycle (Descale / Clean / AirPurge) the core is
+	/// following moved on — see [`MaintenancePhase`]. Edge-triggered: one
+	/// event per change of phase, step, cycle, or whole second remaining.
+	/// 
+	/// The descale fields come from the DE1's fixed 720 s step schedule
+	/// (Decenza `b1ceab8c`, [`de1_domain::DESCALE_SCHEDULE`]); they are `0`
+	/// for Clean / AirPurge and outside a descale step.
+	/// 
+	/// `cold_workaround` is `true` when the core loaded the 1 °C maintenance
+	/// profile because old firmware (< 1356, or unknown) drops a cold
+	/// request. The DE1 then holds that profile, not the user's: the shell
+	/// must forget any "already loaded" profile cache, and on `Finished` /
+	/// `Cancelled` re-upload its active profile.
+	@Serializable
+	@SerialName("MaintenanceProgress")
+	data class MaintenanceProgress(val content: EventMaintenanceProgressInner): Event()
 	/// An espresso shot began.
 	@Serializable
 	@SerialName("ShotStarted")
@@ -3030,6 +3132,29 @@ enum class MachineState(val string: String) {
 	/// Scheduled-wake idle; firmware v1293 and later only.
 	@SerialName("SchedIdle")
 	SchedIdle("SchedIdle"),
+}
+
+/// Where a maintenance cycle the core is following stands — carried by
+/// `Event::MaintenanceProgress`.
+@Serializable
+enum class MaintenancePhase(val string: String) {
+	/// Old firmware, machine heating: the 1 °C profile is loaded and the
+	/// request is held until the machine reports it has left preheat.
+	@SerialName("WaitingForPreheat")
+	WaitingForPreheat("WaitingForPreheat"),
+	/// The held request has been sent; waiting for the machine to enter the
+	/// state.
+	@SerialName("Requested")
+	Requested("Requested"),
+	/// The machine is in the maintenance state.
+	@SerialName("Running")
+	Running("Running"),
+	/// The machine left the maintenance state.
+	@SerialName("Finished")
+	Finished("Finished"),
+	/// Cancelled by the user, by another state request, or by a DE1 link drop.
+	@SerialName("Cancelled")
+	Cancelled("Cancelled"),
 }
 
 /// Known MMR register addresses.

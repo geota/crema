@@ -1803,8 +1803,33 @@ impl CremaBridge {
 
     /// Build a [`CoreOutput`] (JSON) whose command asks the DE1 to enter
     /// `state`.
-    pub fn request_machine_state(&self, state: MachineRequest) -> String {
+    pub fn request_machine_state(&mut self, state: MachineRequest) -> String {
         json(self.core.request_machine_state(state.into()))
+    }
+
+    /// Cancel the maintenance cycle the core is following (a Descale / Clean
+    /// / AirPurge held for preheat on old firmware, or one running) — see
+    /// `CremaCore::cancel_maintenance`. Returns a `CoreOutput` JSON string.
+    pub fn cancel_maintenance(&mut self) -> String {
+        json(self.core.cancel_maintenance())
+    }
+
+    /// Run the DE1 connect sweep — every machine setting Crema owns a
+    /// preference for, re-asserted once the link is ready. `settings_json` is
+    /// a camelCase `ConnectSweepSettings`. Returns a `CoreOutput` JSON string.
+    pub fn connect_sweep(&mut self, settings_json: &str, now_ms: f64) -> String {
+        json(self.core.connect_sweep_json(settings_json, now_ms as u64))
+    }
+
+    /// The once-a-minute USB-charger check (Decenza `BatteryManager`):
+    /// `mode` is the persisted `UsbChargingMode` spelling (`"alwaysOn"` /
+    /// `"smart"` / `"smartHigh"`; anything else is `"alwaysOn"`); `battery_percent` is the tablet battery,
+    /// `undefined` when unreadable. Returns a `CoreOutput` JSON string.
+    pub fn usb_charger_tick(&mut self, mode: &str, battery_percent: Option<u8>) -> String {
+        json(self.core.usb_charger_tick(
+            de1_domain::UsbChargingMode::from_str_lenient(mode),
+            battery_percent,
+        ))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads one DE1 memory-mapped
@@ -2559,7 +2584,7 @@ mod tests {
 
     #[test]
     fn request_machine_state_produces_a_write_command() {
-        let bridge = CremaBridge::new();
+        let mut bridge = CremaBridge::new();
         let json = bridge.request_machine_state(MachineRequest::Idle);
         assert!(json.contains("\"commands\""));
         assert!(json.contains("WriteCharacteristic"));

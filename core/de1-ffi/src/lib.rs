@@ -1956,7 +1956,36 @@ impl CremaBridge {
     /// Build a [`CoreOutput`] (JSON) whose command asks the DE1 to enter
     /// `state`.
     pub fn request_machine_state(&self, state: MachineRequest) -> String {
-        self.emit(self.core().request_machine_state(state.into()))
+        let out = self.core().request_machine_state(state.into());
+        self.emit(out)
+    }
+
+    /// Cancel the maintenance cycle the core is following (a Descale / Clean
+    /// / AirPurge held for preheat on old firmware, or one running) — see
+    /// `CremaCore::cancel_maintenance`. Returns a `CoreOutput` JSON string.
+    pub fn cancel_maintenance(&self) -> String {
+        let out = self.core().cancel_maintenance();
+        self.emit(out)
+    }
+
+    /// Run the DE1 connect sweep — every machine setting Crema owns a
+    /// preference for, re-asserted once the link is ready. `settings_json` is
+    /// a camelCase `ConnectSweepSettings`. Returns a `CoreOutput` JSON string.
+    pub fn connect_sweep(&self, settings_json: String, now_ms: u64) -> String {
+        let out = self.core().connect_sweep_json(&settings_json, now_ms);
+        self.emit(out)
+    }
+
+    /// The once-a-minute USB-charger check (Decenza `BatteryManager`):
+    /// `mode` is the persisted `UsbChargingMode` spelling (`"alwaysOn"` /
+    /// `"smart"` / `"smartHigh"`; anything else is `"alwaysOn"`); `battery_percent` is the tablet battery,
+    /// `None` when unreadable. Returns a `CoreOutput` JSON string.
+    pub fn usb_charger_tick(&self, mode: String, battery_percent: Option<u8>) -> String {
+        let out = self.core().usb_charger_tick(
+            de1_domain::UsbChargingMode::from_str_lenient(&mode),
+            battery_percent,
+        );
+        self.emit(out)
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads one DE1 memory-mapped

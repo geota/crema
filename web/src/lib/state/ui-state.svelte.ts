@@ -429,6 +429,14 @@ export interface UiSnapshot {
 	 * non-error substate. The deferred UI surfaces it as an error banner.
 	 */
 	readonly machineError: string | null;
+	/**
+	 * The maintenance cycle (Descale / Clean / AirPurge) the core is
+	 * following, from `Event::MaintenanceProgress` — held for preheat on old
+	 * firmware, requested, or running (with the descale countdown). `null`
+	 * when none is, including once it finishes or is cancelled. Drives the
+	 * progress line + Cancel on Settings → Water.
+	 */
+	readonly maintenance: MaintenanceView | null;
 
 	// ---- Idle / session timers — READ side of doc 11 (R6) ----------------
 	//
@@ -476,6 +484,9 @@ export interface UiSnapshot {
  * bitmask — the eventual diagnostics screen (deferred) decodes each field for
  * display. A `Partial` because registers fill in one reply at a time.
  */
+/** The payload of a core `MaintenanceProgress` event. */
+export type MaintenanceView = Extract<Event, { type: 'MaintenanceProgress' }>['content'];
+
 export type De1MachineInfo = Partial<Record<MmrRegister, number>>;
 
 /**
@@ -611,6 +622,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	de1Calibration: EMPTY_DE1_CALIBRATION,
 	de1ShotSettings: null,
 	machineError: null,
+	maintenance: null,
 	idleSince: null,
 	replay: null
 };
@@ -784,6 +796,22 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				...(enteringRest ? { idleSince: performance.now() } : null),
 				...(resting ? null : { idleSince: null }),
 				eventLog: appendLog(snapshot.eventLog, `MachineState -> ${machineState}`)
+			};
+		}
+		case 'MaintenanceProgress': {
+			const m = event.content;
+			const terminal = m.phase === 'Finished' || m.phase === 'Cancelled';
+			// Log the phase changes, not every countdown second.
+			const phaseChanged = snapshot.maintenance?.phase !== m.phase;
+			return {
+				...snapshot,
+				maintenance: terminal ? null : m,
+				eventLog: phaseChanged
+					? appendLog(
+							snapshot.eventLog,
+							`Maintenance ${m.state}: ${m.phase}${m.cold_workaround ? ' (cold-start workaround)' : ''}`
+						)
+					: snapshot.eventLog
 			};
 		}
 		case 'MachineErrorChanged': {

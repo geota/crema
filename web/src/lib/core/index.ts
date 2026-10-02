@@ -744,6 +744,30 @@ export interface CremaCore {
 	 * buttons; the shell exposes them for completeness.
 	 */
 	requestMachineState(state: import('./crema-core').MachineState): Promise<CoreOutput>;
+	/**
+	 * Cancel the maintenance cycle the core is following — a Descale /
+	 * Clean / AirPurge held for preheat on old DE1 firmware (< 1356 or
+	 * unknown), or one running (asks the machine for Idle). Empty when
+	 * nothing is followed. Progress arrives as `MaintenanceProgress` events.
+	 */
+	cancelMaintenance(): Promise<CoreOutput>;
+	/**
+	 * Run the DE1 connect sweep: every machine setting Crema owns a
+	 * preference for (USB charger, fan, heater tweaks, refill point, tank
+	 * threshold, steam / hot water, flush, eco) as one core-built write list.
+	 */
+	connectSweep(
+		settings: import('./crema-core').ConnectSweepSettings,
+		nowMs: number
+	): Promise<CoreOutput>;
+	/**
+	 * The once-a-minute USB-charger check (Decenza `BatteryManager`) —
+	 * `batteryPercent` is the tablet's battery, `null` when unreadable.
+	 */
+	usbChargerTick(
+		mode: import('./crema-core').UsbChargingMode,
+		batteryPercent: number | null
+	): Promise<CoreOutput>;
 	/** Tell the firmware whether the user is present (distinct from feature flags). */
 	setUserPresent(present: boolean): Promise<CoreOutput>;
 	/** Set the firmware feature-flag bitmask (distinct from user-present). */
@@ -1258,6 +1282,19 @@ async function createCore(): Promise<CremaCore> {
 				throw new Error(`Machine state ${state} is not requestable from the host`);
 			}
 			return parseOutput(bridge.request_machine_state(req));
+		},
+		async cancelMaintenance() {
+			return parseOutput(bridge.cancel_maintenance());
+		},
+		async connectSweep(settings, nowMs) {
+			return parseOutput(bridge.connect_sweep(JSON.stringify(settings), nowMs));
+		},
+		async usbChargerTick(mode, batteryPercent) {
+			const pct =
+				batteryPercent === null || !Number.isFinite(batteryPercent)
+					? undefined
+					: Math.max(0, Math.min(100, Math.round(batteryPercent)));
+			return parseOutput(bridge.usb_charger_tick(mode, pct));
 		},
 		async setUserPresent(present) {
 			return parseOutput(bridge.set_user_present(present));

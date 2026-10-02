@@ -71,6 +71,15 @@ export type SharingPrivacy = 'public' | 'unlisted' | 'private';
  * a trivial spread, and a new field added in a later version defaults cleanly
  * via {@link DEFAULT_SETTINGS}.
  */
+/** The persisted spellings of the Tablet charging modes (Decenza
+ * `BatteryManager` Off / On / Night). */
+export type UsbChargingModePref = 'smart' | 'smartHigh' | 'alwaysOn';
+
+/** Read a persisted / backed-up mode; unset or unknown is `'alwaysOn'`. */
+export function parseUsbChargingMode(raw: string | null | undefined): UsbChargingModePref {
+	return raw === 'smart' || raw === 'smartHigh' ? raw : 'alwaysOn';
+}
+
 export interface Settings {
 	// ── Display & units ──────────────────────────────────────────────────
 	/** Light/dark theme — drives `data-theme` on `<html>`. */
@@ -203,6 +212,14 @@ export interface Settings {
 	 * runs near-constantly under Crema (geota/crema#31).
 	 */
 	fanThresholdC: number;
+	/**
+	 * Tablet charging from the DE1's USB port (Decenza `BatteryManager`
+	 * modes): `'alwaysOn'` never switches the port off (the default, as
+	 * decaid), `'smart'` keeps the tablet between 55 % and 65 %,
+	 * `'smartHigh'` between 90 % and 95 %. Asserted on connect and every
+	 * minute after (the core decides from the tablet battery).
+	 */
+	usbChargingMode: UsbChargingModePref;
 
 	// ── Equipment ────────────────────────────────────────────────────────
 	/**
@@ -355,6 +372,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	suppressDe1Sleep: true,
 	steamTwoTapStop: false,
 	fanThresholdC: 55,
+	usbChargingMode: 'alwaysOn',
 
 	grinderModel: '',
 
@@ -454,6 +472,7 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		steamEco: s.steamEcoMode,
 		steamTwoTap: s.steamTwoTapStop,
 		fanThresholdC: s.fanThresholdC,
+		usbChargingMode: s.usbChargingMode,
 		preFlush: s.groupFlushBeforeShot,
 		steamPurge: s.autoPurgeAfterSteam,
 		weightUnit: s.weightUnit,
@@ -507,6 +526,7 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		requireScale: c.requireScale ?? false,
 		steamTwoTapStop: c.steamTwoTap ?? false,
 		fanThresholdC: c.fanThresholdC ?? 55,
+		usbChargingMode: parseUsbChargingMode(c.usbChargingMode),
 		groupFlushBeforeShot: c.preFlush,
 		autoPurgeAfterSteam: c.steamPurge,
 		weightUnit: c.weightUnit as WeightUnit,

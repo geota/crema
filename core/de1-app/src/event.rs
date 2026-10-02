@@ -2,8 +2,8 @@
 //! and [`Command`]s the core emits, and the [`CoreOutput`] envelope.
 
 use de1_domain::{
-    BrewCue, BrewSessionSummary, ShotDisposition, ShotPhase, SteamClogReason, StopReason,
-    WaterSessionKind,
+    BrewCue, BrewSessionSummary, MaintenancePhase, ShotDisposition, ShotPhase, SteamClogReason,
+    StopReason, WaterSessionKind,
 };
 use de1_protocol::{CalCommand, CalTarget, MachineState, MmrRegister, SubState};
 use serde::{Deserialize, Serialize};
@@ -114,6 +114,37 @@ pub enum Event {
         substate: SubState,
         /// Readable fault text, or `None` once the fault has cleared.
         message: Option<String>,
+    },
+    /// A maintenance cycle (Descale / Clean / AirPurge) the core is
+    /// following moved on — see [`MaintenancePhase`]. Edge-triggered: one
+    /// event per change of phase, step, cycle, or whole second remaining.
+    ///
+    /// The descale fields come from the DE1's fixed 720 s step schedule
+    /// (Decenza `b1ceab8c`, [`de1_domain::DESCALE_SCHEDULE`]); they are `0`
+    /// for Clean / AirPurge and outside a descale step.
+    ///
+    /// `cold_workaround` is `true` when the core loaded the 1 °C maintenance
+    /// profile because old firmware (< 1356, or unknown) drops a cold
+    /// request. The DE1 then holds that profile, not the user's: the shell
+    /// must forget any "already loaded" profile cache, and on `Finished` /
+    /// `Cancelled` re-upload its active profile.
+    MaintenanceProgress {
+        /// The maintenance state being run.
+        state: MachineState,
+        /// Where the cycle stands.
+        phase: MaintenancePhase,
+        /// Descale step, 1-based (`1..=step_count`); `0` when not in a step.
+        step_index: u8,
+        /// Number of descale steps (5); `0` for Clean / AirPurge.
+        step_count: u8,
+        /// Descale fraction done, `0.0..=0.999` (`1.0` only on `Finished`).
+        progress: f32,
+        /// Whole seconds left in the descale cycle.
+        seconds_remaining: u32,
+        /// Descale pass, from 1 (`0` when not descaling).
+        cycle: u8,
+        /// The 1 °C cold-maintenance profile was loaded for this cycle.
+        cold_workaround: bool,
     },
     /// An espresso shot began.
     ShotStarted,

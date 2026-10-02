@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.maintenanceRunText
 import coffee.crema.ui.fmt
 import coffee.crema.ui.relativeAgo
 import androidx.activity.compose.BackHandler
@@ -356,6 +357,16 @@ private fun MachineSection(
         CremaSettingsRow("Keep connected in the background", "Reconnects the machine even while the screen is off — so it's ready again after a power cut. Runs only while this device is charging. Default on for tablets, off for phones.") {
             CremaSwitch(ui.keepConnectedScreenOff, vm::setKeepConnectedScreenOff)
         }
+        // Tablet charging from the DE1's USB port (Decenza BatteryManager modes; default Always on, as decaid):
+        // core decides from the tablet battery on connect and every minute after;
+        // an explicit disconnect always leaves it on.
+        CremaSettingsRow("Tablet charging", "For a tablet powered from the DE1's USB port. Always on (the default) never switches the port off; Smart keeps the battery between 55 and 65 %, High between 90 and 95 %.", stacked = true) {
+            CremaSegmentedButton(
+                options = listOf(SegOption("smart", "Smart"), SegOption("smartHigh", "High"), SegOption("alwaysOn", "Always on")),
+                value = ui.usbChargingMode,
+                onChange = vm::setUsbChargingMode,
+            )
+        }
         // Fan threshold is REAL: written now + re-seeded on every connect (the
         // DE1 forgets it across power cycles, #31). Commit goes through a
         // confirm dialog — an expert setting, Decenza-style.
@@ -619,6 +630,14 @@ private fun WaterSection(
         val machineIdle = ui.machineState?.startsWith("Idle") == true
         val cycleReady = connected && machineIdle
         val cycleSub = if (connected && !machineIdle) " Machine must be idle." else ""
+        // A cycle core is following (held for preheat on old firmware,
+        // starting, or running with the descale countdown) — with Cancel.
+        ui.maintenanceRun?.let { run ->
+            val (runTitle, runSub) = maintenanceRunText(run)
+            CremaSettingsRow(runTitle, runSub) {
+                CremaButton(onClick = { vm.cancelMaintenance() }, variant = CremaButtonVariant.Outlined, icon = "x", label = "Cancel")
+            }
+        }
         CremaSettingsRow("Descale", "Run the DE1's descale cycle.$cycleSub", needsConnection = !connected) {
             CremaButton(onClick = { onRunCycle("descale") }, variant = CremaButtonVariant.Outlined, enabled = cycleReady, icon = "play", label = "Run")
         }

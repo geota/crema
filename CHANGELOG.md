@@ -23,6 +23,36 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   (`replace=1`), once, a moment after you stop editing. Same trigger as
   Decent's own shot-upload plugin. Web and Android.
 
+- **Every machine setting Crema owns is re-applied on connect, from one list
+  both apps share** — besides the fan, refill point, two-tap steam stop,
+  steam / hot water and flush settings, the connect now also sets the steam
+  heater's phase flow rates, the hot-water heater's idle temperature and the
+  espresso warm-up timeout (de1app's heater tweaks and defaults), and the
+  active profile's tank-temperature target, so they survive a DE1 power
+  cycle. New **Tablet charging** setting (Settings → Machine) for a tablet
+  powered from the DE1's USB port: it defaults to **Always on** (the port is
+  never switched off, as before; decaid's default). Opt in to **Smart**
+  (keeps the battery between 55 and 65 %) or **High** (90–95 %), Decenza's
+  smart-charging modes, and Crema switches the port on and off, re-checking
+  every minute and leaving charging on when you disconnect. Web, tablet and
+  phone.
+- **A Half Decent Scale on firmware 3 or newer stays connected while the DE1
+  sleeps** — when the machine sleeps, Crema now puts such a scale into its
+  SoftSleep mode instead of switching its display off or powering it down,
+  and wakes it when the machine wakes, so there's no reconnect. The scale is
+  identified by its answer to a capability probe plus its firmware version
+  (decaid `f6c91efe`, `38f5c0a8`, `46e8c224`); older and original Decent
+  Scales keep the previous behaviour. Web, tablet and phone.
+- **Descale, clean and air purge work on a cold machine with older DE1
+  firmware** — firmware below build 1356 silently ignores those requests
+  while the machine is still heating. On such a machine (or one whose build
+  hasn't been read) Crema now loads a one-step 1 °C profile, waits for the
+  machine to report it has stopped heating, then sends the request, and puts
+  your profile back afterwards (Decenza `b1ceab8c`, de1app, decaid). Firmware
+  1356 and newer get the plain request as before. Settings → Water shows the
+  running cycle with a Cancel button; a descale reads its real progress from
+  the DE1's fixed 12-minute step schedule ("42% · Step 4 of 5 · 7 min 0 s
+  left"). Web, tablet and phone.
 - Calibration's 'Reset to factory' is hidden until the DE1 command is verified
 - **Both flow readings now share the Flow card** (#92) — machine flow (ml/s)
   on the left, scale flow (g/s) on the right, so the two numbers being compared

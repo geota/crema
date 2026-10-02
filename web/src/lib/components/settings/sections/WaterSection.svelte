@@ -205,6 +205,48 @@
 				: undefined
 	);
 	const runDisabled = $derived(!connected || !machineIdle);
+
+	// ── Running cycle ───────────────────────────────────────────────────
+	//
+	// The core follows a Descale / Clean / AirPurge from request to exit and
+	// reports it as `snapshot.maintenance` (null when none). On old DE1
+	// firmware (< 1356, or unknown) a cold request is held behind a 1 °C
+	// profile until preheat ends — "Waiting for the machine to stop heating".
+	// A descale carries the firmware's fixed 720 s step schedule.
+
+	const maint = $derived(snapshot.maintenance);
+	const MAINT_NAMES: Record<string, string> = {
+		Descale: 'Descale',
+		Clean: 'Clean cycle',
+		AirPurge: 'Air purge'
+	};
+	const maintTitle = $derived(maint ? (MAINT_NAMES[maint.state] ?? maint.state) : '');
+	/** e.g. `42% · Step 4 of 5 · 7 min 0 s left` — Decenza's descale readout. */
+	const maintSub = $derived.by(() => {
+		if (!maint) return '';
+		if (maint.phase === 'WaitingForPreheat') {
+			return 'Waiting for the machine to stop heating (older firmware workaround)…';
+		}
+		if (maint.phase === 'Requested') return 'Starting…';
+		if (maint.step_count > 0 && maint.step_index > 0) {
+			const pct = Math.floor(maint.progress * 100);
+			const min = Math.floor(maint.seconds_remaining / 60);
+			const sec = maint.seconds_remaining % 60;
+			const cycle = maint.cycle > 1 ? ` · pass ${maint.cycle}` : '';
+			return `${pct}% · Step ${maint.step_index} of ${maint.step_count} · ${min} min ${sec} s left${cycle}`;
+		}
+		return 'Running…';
+	});
+	let cancellingMaint = $state(false);
+	async function cancelMaint(): Promise<void> {
+		if (!app || cancellingMaint) return;
+		cancellingMaint = true;
+		try {
+			await app.cancelMaintenance();
+		} finally {
+			cancellingMaint = false;
+		}
+	}
 </script>
 
 <svelte:window onkeydown={onModalKeydown} />
@@ -283,6 +325,20 @@
 	StMaintenanceRow's doc for why that went.
 -->
 <StGroup title="Maintenance">
+	{#if maint}
+		<StRow title={maintTitle} sub={maintSub}>
+			{#snippet control()}
+				<button
+					type="button"
+					class="st-btn st-btn-secondary"
+					onclick={cancelMaint}
+					disabled={cancellingMaint}
+				>
+					Cancel
+				</button>
+			{/snippet}
+		</StRow>
+	{/if}
 	<StMaintenanceRow
 		icon="wind"
 		title="Steam rinse"
