@@ -18,8 +18,8 @@
 //! - live prediction math: `src/machine/weightprocessor.cpp:587-615`
 //!
 //! Tier layout (`settings_calibration.cpp` QSettings keys → fields here):
-//! 1. per-pair committed history (`saw/perProfileHistory`) — batch medians,
-//!    trimmed to [`MAX_PAIR_HISTORY`];
+//! 1. per-pair committed history (`saw/perProfileHistory`) — one entry per
+//!    batch, trimmed to [`MAX_PAIR_HISTORY`];
 //! 2. per-pair pending batch (`saw/perProfileBatch`) — raw samples, commits
 //!    at [`BATCH_SIZE`];
 //! 3. global pool (`saw/learningHistory`) — committed medians mirrored flat,
@@ -30,6 +30,15 @@
 //! Keys are `"{profile}::{scale}"` (`settings_calibration.cpp:593-599`). The
 //! caller passes already-normalized scale labels — the port carries no
 //! normalization table.
+//!
+//! Batch commits follow Decenza 0b438420 (#1860): a committed entry's
+//! (drip, flow) is one real shot's — the shot whose lag is closest to the
+//! batch's median per-shot lag — not two independent medians that, with a
+//! batch of three, usually came from different shots. The overshoot stays an
+//! independent median (it gates the auto-reset and is never divided). No
+//! schema change: entries committed before the fix age out under the
+//! [`MAX_PAIR_HISTORY`] trim. Decenza measured it at about 1% MAE — it is a
+//! correctness fix, not an accuracy upgrade.
 //!
 //! Deviations from Decenza (both deliberate):
 //! - [`weighted_drip_prediction`] returns `Option<f64>` where Decenza returns
@@ -340,6 +349,34 @@ fn median(values: &[f64]) -> f64 {
     }
 }
 
+/// One usable batch shot: its implied lag beside the pair it came from
+/// (Decenza's `BatchLag`, `settings_calibration.cpp:1094`).
+#[derive(Debug, Clone, Copy)]
+struct BatchLag {
+    lag: f64,
+    drip: f64,
+    flow: f64,
+}
+
+/// The batch shot whose lag is closest to the median of the usable lags
+/// (`settings_calibration.cpp:1155-1170` as of Decenza 0b438420). Closest
+/// rather than equal because [`median`] averages the middle two on an even
+/// count and no shot owns that value. Ties keep the **first** shot in batch
+/// order — Decenza's strict `dev < bestDev` scan. `None` when no shot had a
+/// usable flow.
+fn closest_to_median_lag(lag_of: &[BatchLag]) -> Option<BatchLag> {
+    let lags: Vec<f64> = lag_of.iter().map(|l| l.lag).collect();
+    let lag_median = median(&lags);
+    let mut best: Option<(f64, BatchLag)> = None;
+    for &l in lag_of {
+        let dev = (l.lag - lag_median).abs();
+        if best.is_none_or(|(best_dev, _)| dev < best_dev) {
+            best = Some((dev, l));
+        }
+    }
+    best.map(|(_, l)| l)
+}
+
 /// Arithmetic mean without a lossy length cast (counts in f64); empty → 0.0.
 fn mean(values: impl Iterator<Item = f64>) -> f64 {
     let mut sum = 0.0;
@@ -430,13 +467,18 @@ impl SawLearningModel {
     /// Commit a full pending batch — the tail of `addSawPerPairEntry`
     /// (`settings_calibration.cpp:796-899`). Steps:
     ///
-    /// 1. element-wise medians of drip/flow/overshoot over the raws
-    ///    (`:796-816`); `median_lag = median_drip/median_flow` when
-    ///    `median_flow > 0.5`, else 0 (`:817`);
-    /// 2. dispersion gate: per-raw `lag_i = drip_i/flow_i` (flows > 0.5
-    ///    only); any `|lag_i − median_lag| > 1.5 s` drops the whole batch —
-    ///    pending cleared, nothing committed (`:819-837`; IQR gating is not
-    ///    used because 3 values are too few);
+    /// 1. per-shot `lag_i = drip_i/flow_i` for flows > 0.5 only; the batch
+    ///    median lag is the median of those lags, and the committed
+    ///    (drip, flow) is the shot closest to it — ties keep the first shot
+    ///    in batch order; `median_lag` is re-read off that shot. No usable
+    ///    lag → the batch is dropped. The overshoot median stays
+    ///    independent (it is never divided). Ported from Decenza 0b438420
+    ///    (#1860), `settings_calibration.cpp:1091-1170`; before it, drip and
+    ///    flow were independent medians whose pair usually came from
+    ///    different shots and implied a lag no shot had;
+    /// 2. dispersion gate: any `|lag_i − median_lag| > 1.5 s` drops the whole
+    ///    batch — pending cleared, nothing committed (`:1172-1190`; IQR
+    ///    gating is not used because 3 values are too few);
     /// 3. per-pair auto-reset: median overshoot < −6 g AND the pair's last
     ///    committed median overshoot < −6 g → wipe the pair's history first,
     ///    so the new median becomes the sole baseline (`:839-854` — two
@@ -456,35 +498,49 @@ impl SawLearningModel {
             return;
         };
 
-        let drips: Vec<f64> = batch.iter().map(|e| e.drip).collect();
-        let flows: Vec<f64> = batch.iter().map(|e| e.flow).collect();
+        // Each usable shot's lag carried beside the (drip, flow) it came
+        // from, so the flow filter and the ratio are derived in one place
+        // (`settings_calibration.cpp:1091-1105` as of Decenza 0b438420).
         let overshoots: Vec<f64> = batch.iter().map(|e| e.overshoot).collect();
-        let lags: Vec<f64> = batch
+        let lag_of: Vec<BatchLag> = batch
             .iter()
             .filter(|e| e.flow > FLOW_VALIDITY_G_PER_S)
-            .map(|e| e.drip / e.flow)
+            .map(|e| BatchLag {
+                lag: e.drip / e.flow,
+                drip: e.drip,
+                flow: e.flow,
+            })
             .collect();
 
-        let median_drip = median(&drips);
-        let median_flow = median(&flows);
+        // The overshoot median stays independent: it gates the auto-reset
+        // below and is never paired with a drip or flow to form a lag
+        // (`settings_calibration.cpp:1113`, `:1200`).
         let median_overshoot = median(&overshoots);
-        let median_lag = if median_flow > FLOW_VALIDITY_G_PER_S {
-            median_drip / median_flow
-        } else {
-            0.0
-        };
 
-        // Dispersion gate (`settings_calibration.cpp:819-837`).
-        if lags
+        // No usable lag → nothing honest to commit; drop the batch like any
+        // other implausible one (`settings_calibration.cpp:1122-1128`).
+        // Unreachable from a live shot below 0.5 g/s in Decenza, but a
+        // blob can carry such a batch.
+        let Some(chosen) = closest_to_median_lag(&lag_of) else {
+            return;
+        };
+        // Re-read off the chosen shot, so the gate and the stored pair
+        // describe the same real shot even on an even usable-lag count
+        // (`settings_calibration.cpp:1155-1170`).
+        let median_lag = chosen.lag;
+
+        // Dispersion gate against the true median lag
+        // (`settings_calibration.cpp:1172-1184`).
+        if lag_of
             .iter()
-            .any(|lag| (lag - median_lag).abs() > BATCH_MAX_DEVIATION_S)
+            .any(|l| (l.lag - median_lag).abs() > BATCH_MAX_DEVIATION_S)
         {
             return;
         }
 
         let median_entry = SawEntry {
-            drip: median_drip,
-            flow: median_flow,
+            drip: chosen.drip,
+            flow: chosen.flow,
             overshoot: median_overshoot,
             scale: scale.to_owned(),
             profile: profile.to_owned(),
@@ -991,8 +1047,11 @@ mod tests {
     }
 
     #[test]
-    fn batch_commits_elementwise_medians_at_three() {
+    fn batch_commits_the_median_lag_shot_at_three() {
         let mut model = SawLearningModel::default();
+        // Lags 1.000, 1.091, 1.222 s → the median-lag shot is the second,
+        // (2.4 g, 2.2 g/s). Independent medians would have stored
+        // (2.2, 2.0), a pair no shot produced.
         model.add_learning_point("p", "s", 2.0, 2.0, 0.5, 1);
         model.add_learning_point("p", "s", 2.4, 2.2, 0.3, 2);
         model.add_learning_point("p", "s", 2.2, 1.8, 0.7, 3);
@@ -1000,8 +1059,10 @@ mod tests {
         let history = &model.pair_history["p::s"];
         assert_eq!(history.len(), 1);
         let committed = &history[0];
-        assert_close(committed.drip, 2.2);
-        assert_close(committed.flow, 2.0);
+        assert_close(committed.drip, 2.4);
+        assert_close(committed.flow, 2.2);
+        // Overshoot is the batch's own median (0.5), not the chosen shot's
+        // (0.3).
         assert_close(committed.overshoot, 0.5);
         assert_eq!(committed.batch_size, Some(3));
         assert_eq!(committed.ts, 3);
@@ -1010,6 +1071,103 @@ mod tests {
         assert_eq!(model.global_pool.len(), 1);
         assert_eq!(model.global_pool[0], *committed);
         assert!(!model.pending_batch.contains_key("p::s"));
+    }
+
+    #[test]
+    fn committed_pair_is_a_real_shot_not_independent_medians() {
+        // The worked example. Lags 1.5, 0.667, 1.5 s → median lag 1.5 s.
+        // Independent medians would store (2.0 g, 2.0 g/s): drip from the
+        // second shot, flow from the third, lag 1.0 s — no shot had it.
+        let mut model = SawLearningModel::default();
+        add(&mut model, "p", 1.5, 1.0, 0.0);
+        add(&mut model, "p", 2.0, 3.0, 0.0);
+        add(&mut model, "p", 3.0, 2.0, 0.0);
+
+        let committed = &model.pair_history["p::s"][0];
+        // Shots one and three both sit exactly on the median lag; the first
+        // in batch order wins (Decenza's strict `dev < bestDev`).
+        assert_close(committed.drip, 1.5);
+        assert_close(committed.flow, 1.0);
+        assert!(!(committed.drip == 2.0 && committed.flow == 2.0));
+        // The bootstrap and every reader now divide a lag a shot had.
+        assert_close(committed.drip / committed.flow, 1.5);
+    }
+
+    #[test]
+    fn even_usable_lag_count_ties_keep_the_first_shot() {
+        // A pending batch carried in a blob can hold more than BATCH_SIZE −
+        // 1 entries (Decenza's import path, 0b438420 test
+        // `evenLagCountStillCommitsOneShotsPair`). Lags 0.4 / 0.8 / 1.0 /
+        // 1.2 → median 0.9, owned by no shot; 0.8 and 1.0 tie at 0.1 and
+        // the first met (0.8 → (1.00, 1.25)) is committed.
+        let mut model = SawLearningModel::default();
+        model.pending_batch.insert(
+            "p::s".to_owned(),
+            vec![
+                median_entry("p", "s", 0.60, 1.50, 0.0),
+                median_entry("p", "s", 1.00, 1.25, 0.0),
+                median_entry("p", "s", 1.40, 1.40, 0.0),
+            ],
+        );
+        add(&mut model, "p", 1.20, 1.00, 0.0);
+
+        let history = &model.pair_history["p::s"];
+        assert_eq!(history.len(), 1);
+        assert_close(history[0].drip, 1.00);
+        assert_close(history[0].flow, 1.25);
+    }
+
+    #[test]
+    fn shots_below_flow_validity_take_no_part_in_the_choice() {
+        // The low-flow shot forms no lag, so the usable lags are 0.8 and
+        // 1.2 (median 1.0, a tie) and the first usable shot is committed —
+        // never the low-flow one, even though its drip is the median drip.
+        let mut model = SawLearningModel::default();
+        add(&mut model, "p", 1.6, 2.0, 0.0); // lag 0.8
+        add(&mut model, "p", 0.2, 0.4, 0.0); // flow ≤ 0.5: no lag
+        add(&mut model, "p", 2.4, 2.0, 0.0); // lag 1.2
+
+        let history = &model.pair_history["p::s"];
+        assert_eq!(history.len(), 1);
+        assert_close(history[0].drip, 1.6);
+        assert_close(history[0].flow, 2.0);
+        assert_eq!(history[0].batch_size, Some(3));
+    }
+
+    #[test]
+    fn dispersion_gate_measures_against_the_true_median_lag() {
+        // Decenza 0b438420's fixture. Lags 0.400 / 1.111 / 2.500 s. The old
+        // reference, median drip 1.0 over median flow 1.44 = 0.694 s, puts
+        // shot C 1.806 s away and drops the batch. Against the true median
+        // lag of 1.111 s the worst deviation is 1.389 s and it commits.
+        let mut model = SawLearningModel::default();
+        add(&mut model, "p", 0.6, 1.50, 0.0);
+        add(&mut model, "p", 1.0, 0.90, 0.0);
+        add(&mut model, "p", 3.6, 1.44, 0.0);
+
+        let history = &model.pair_history["p::s"];
+        assert_eq!(history.len(), 1);
+        assert_close(history[0].drip, 1.0);
+        assert_close(history[0].flow, 0.90);
+    }
+
+    #[test]
+    fn overshoot_stays_an_independent_median_and_drives_auto_reset() {
+        // Chosen shot (median lag) carries overshoot −1, but the batch's
+        // overshoot median is −7 — that median is what is stored and what
+        // the auto-reset reads.
+        let mut model = SawLearningModel::default();
+        for _ in 0..2 {
+            add(&mut model, "p", 2.0, 2.0, -7.0); // lag 1.0
+            add(&mut model, "p", 2.2, 2.0, -1.0); // lag 1.1 (median)
+            add(&mut model, "p", 2.4, 2.0, -8.0); // lag 1.2
+        }
+        let history = &model.pair_history["p::s"];
+        // Two consecutive medians < −6 g → the second wiped the first.
+        assert_eq!(history.len(), 1);
+        assert_close(history[0].drip, 2.2);
+        assert_close(history[0].overshoot, -7.0);
+        assert_eq!(model.global_pool.len(), 2);
     }
 
     #[test]
@@ -1025,13 +1183,15 @@ mod tests {
     }
 
     #[test]
-    fn low_flow_batch_commits_with_zero_median_lag() {
-        // Flows ≤ 0.5 g/s form no lags, and median_lag falls back to 0 —
-        // nothing to disperse, so the batch commits.
+    fn batch_with_no_usable_flow_is_dropped() {
+        // Every flow ≤ 0.5 g/s → no lag, nothing honest to commit. This
+        // used to commit the independent medians with a lag of 0; Decenza
+        // 0b438420 drops it like any other implausible batch.
         let mut model = SawLearningModel::default();
         commit_identical_batch(&mut model, "p", 1.0, 0.3, 0.0);
-        assert_eq!(model.pair_history["p::s"].len(), 1);
-        assert_close(model.pair_history["p::s"][0].drip, 1.0);
+        assert!(model.pair_history.is_empty());
+        assert!(model.global_pool.is_empty());
+        assert!(!model.pending_batch.contains_key("p::s"));
     }
 
     #[test]
