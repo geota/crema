@@ -424,10 +424,8 @@ pub struct Scale {
 #[derive(Debug)]
 enum Inner {
     /// The Decent Scale carries a small stateful struct ([`DecentScale`])
-    /// that tracks the rolling tare counter and the observed firmware
-    /// version — both fields the codec layer needs to issue the correct
-    /// bytes (a tare with the next counter, or a power-off only when the
-    /// firmware supports it).
+    /// that tracks the rolling tare counter (each tare must carry a fresh
+    /// counter byte) and the observed firmware version (diagnostic).
     Decent(DecentScale),
     Skale,
     Felicita,
@@ -1082,7 +1080,7 @@ impl Scale {
     /// if the bytes are not (yet) a complete weight reading.
     pub fn parse_weight(&mut self, data: &[u8]) -> Option<f32> {
         match &mut self.inner {
-            Inner::Decent(_) => decent_scale::parse_weight(data),
+            Inner::Decent(state) => state.parse_weight_frame(data).map(|f| f.weight_g),
             Inner::Skale => skale::parse_weight(data),
             Inner::Felicita => felicita::parse_weight(data),
             Inner::Bookoo => bookoo::parse_weight(data),
@@ -1247,12 +1245,10 @@ impl Scale {
     ///
     /// [`parse_reading`]: Self::parse_reading
     pub fn absorb_unmatched_frame(&mut self, data: &[u8]) {
-        if matches!(self.inner, Inner::Decent(_))
-            && let Some(decent_scale::CommandResponse::LcdAck {
-                firmware_version, ..
-            }) = decent_scale::parse_command_response(data)
+        if let Inner::Decent(state) = &mut self.inner
+            && let Some(response) = decent_scale::parse_command_response(data)
         {
-            self.record_decent_scale_firmware_version(firmware_version);
+            state.absorb_command_response(response);
         }
     }
 
@@ -1405,7 +1401,7 @@ impl Scale {
     /// bytes the shell should write to [`ScaleUuids::command_write`].
     pub fn tare(&mut self) -> Option<Vec<u8>> {
         Some(match &mut self.inner {
-            Inner::Decent(_) => decent_scale::TARE.to_vec(),
+            Inner::Decent(state) => state.next_tare().to_vec(),
             Inner::Skale => vec![skale::CMD_TARE],
             Inner::Felicita => vec![felicita::TARE],
             Inner::Bookoo => bookoo::TARE.to_vec(),
@@ -1753,14 +1749,25 @@ mod tests {
     }
 
     #[test]
-    fn decent_tare_is_the_constant_decenza_frame() {
-        // Aligned with Decenza (fixed counter 0x01, byte 5 = 0x00) — every
-        // tare sends the identical frame.
+    fn decent_tare_rolls_its_counter_per_tare() {
+        // decaid scale.dart:551-556 / de1app tare_counter_incr: each tare
+        // carries a fresh counter byte, so the scale can't dedupe it.
         let mut decent = Scale::from_label("Decent Scale").unwrap();
         let first = decent.tare().unwrap();
         let second = decent.tare().unwrap();
-        assert_eq!(first, decent_scale::TARE.to_vec());
-        assert_eq!(second, first);
+        assert_eq!(first, decent_scale::tare(0).to_vec());
+        assert_eq!(second, decent_scale::tare(1).to_vec());
+    }
+
+    #[test]
+    fn decent_v12_frame_decodes_and_records_the_firmware() {
+        let mut decent = Scale::from_label("Decent Scale").unwrap();
+        let frame = [0x03, 0xCE, 0x01, 0xF4, 0x01, 0x02, 0x03, 0x00, 0x00, 0x38];
+        assert_eq!(decent.parse_weight(&frame), Some(50.0));
+        assert_eq!(
+            decent.decent_scale_firmware_version(),
+            Some(DecentScaleFirmwareVersion::V1_2)
+        );
     }
 
     #[test]
