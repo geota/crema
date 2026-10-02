@@ -937,6 +937,34 @@ pub fn roaster_from_wire(
     de1_domain::roaster_from_wire_json(wire_json, &fallback_id, f64_to_ms(now_ms))
 }
 
+/// Parse a Visualizer `GET /canonical_coffee_bags` response body → a
+/// `CataloguePage` JSON (normalised rows + paging). See
+/// `de1_domain::parse_catalogue_coffee_bags`.
+///
+/// # Errors
+/// The JSON error string when `body_json` isn't JSON.
+#[wasm_bindgen(js_name = parseCatalogueCoffeeBags)]
+pub fn parse_catalogue_coffee_bags(body_json: &str) -> Result<String, String> {
+    de1_domain::parse_catalogue_coffee_bags_json(body_json)
+}
+
+/// Apply a picked catalogue row (`CatalogueCoffeeBag` JSON) onto a `Bean`
+/// JSON → a `CatalogueAutofill` JSON. Fills only empty fields unless
+/// `replace_all`; `roaster_set` says whether the form's roaster input already
+/// holds a value. See `de1_domain::catalogue_autofill`.
+///
+/// # Errors
+/// The JSON error string on a malformed input.
+#[wasm_bindgen(js_name = catalogueAutofill)]
+pub fn catalogue_autofill(
+    bean_json: &str,
+    entry_json: &str,
+    roaster_set: bool,
+    replace_all: bool,
+) -> Result<String, String> {
+    de1_domain::catalogue_autofill_json(bean_json, entry_json, roaster_set, replace_all)
+}
+
 /// Crema's 1..10 roast level → Visualizer's free-text band, or `None`. See
 /// `de1_domain::roast_level_to_wire`.
 #[wasm_bindgen(js_name = roastLevelToWire)]

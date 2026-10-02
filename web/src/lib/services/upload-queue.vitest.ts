@@ -71,6 +71,7 @@ function fakeBeanSync(over: {
 		BeanSync.of({
 			uploadBean: die('uploadBean') as never,
 			uploadRoaster: die('uploadRoaster') as never,
+			searchCatalogue: die('searchCatalogue') as never,
 			deleteBean: (over.deleteBean ?? die('deleteBean')) as never,
 			deleteRoaster: (over.deleteRoaster ?? die('deleteRoaster')) as never,
 			runSync: die('runSync') as never,

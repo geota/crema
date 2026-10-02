@@ -51,6 +51,10 @@
 	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
 	import StToggle from '$lib/components/settings/StToggle.svelte';
 	import RoasterAutocomplete from './RoasterAutocomplete.svelte';
+	import CatalogueSearch from './CatalogueSearch.svelte';
+	import { autofillFromCatalogue, type CatalogueCoffeeBag } from '$lib/bean/catalogue';
+	import { getCremaAppContext } from '$lib/shell/app-context';
+	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
 	import TagInput from '$lib/components/profiles/TagInput.svelte';
 	import RoastSlider from './RoastSlider.svelte';
 	import { getSettingsStore } from '$lib/settings';
@@ -209,6 +213,85 @@
 		return library.ensureRoaster(trimmed);
 	}
 
+	// ── Visualizer catalogue search (linked accounts only) ─────────────
+	// The catalogue GETs are open to free accounts, so the gate is just "a
+	// Visualizer account is linked". Picking a row runs the core autofill rule
+	// (`de1_domain::catalogue_autofill`): empty fields only unless the user
+	// ticks "replace", and the catalogue links are always recorded so bean
+	// sync can link the remote bag / roaster (Premium writes, as today).
+	const appCtx = getCremaAppContext();
+	const viz = useVisualizerConnection();
+	/** The picked entry's display label (session-only — the bean stores ids). */
+	let pickedLabel = $state<string | null>(null);
+	/** Catalogue roaster name of the last pick — gates linking the roaster row. */
+	let pickedRoasterName = $state<string | null>(null);
+	let catalogueStatus = $state<string | null>(null);
+	const catalogueLinkLabel = $derived(
+		current.canonicalCoffeeBagId ? (pickedLabel ?? 'Visualizer catalogue') : null
+	);
+
+	async function searchCatalogue(query: string) {
+		const services = appCtx().services;
+		if (!services) throw new Error('Visualizer is not available.');
+		return services.beans.searchCatalogue(query);
+	}
+
+	/** Record the catalogue roaster id on the roaster row when it IS the
+	 *  picked entry's roaster and has no link yet. */
+	function linkRoasterToCatalogue(r: Roaster | null): void {
+		const catalogueId = current.canonicalRoasterId;
+		if (!r || !catalogueId || r.catalogueRoasterId || !pickedRoasterName) return;
+		if (r.name.trim().toLowerCase() !== pickedRoasterName.trim().toLowerCase()) return;
+		library.updateRoaster(r.id, { catalogueRoasterId: catalogueId });
+	}
+
+	function applyCatalogue(entry: CatalogueCoffeeBag, replaceAll: boolean): void {
+		const result = autofillFromCatalogue(current, entry, {
+			roasterSet: roasterName.trim() !== '',
+			replaceAll
+		});
+		const next = result.bean;
+		patch({
+			name: next.name,
+			origin: next.origin,
+			roastLevel: next.roastLevel,
+			tastingNotes: next.tastingNotes,
+			url: next.url,
+			canonicalCoffeeBagId: next.canonicalCoffeeBagId ?? null,
+			canonicalRoasterId: next.canonicalRoasterId ?? null
+		});
+		pickedLabel = [entry.name, entry.roasterName].filter(Boolean).join(' · ');
+		pickedRoasterName = entry.roasterName || null;
+		if (result.roasterName) {
+			roasterName = result.roasterName;
+			const existing = library.findRoasterByName(result.roasterName) ?? null;
+			if (existing) {
+				resolvedRoaster = existing;
+				if (live) patch({ roasterId: existing.id });
+			} else if (live) {
+				const created = resolveRoasterOrCreate(result.roasterName);
+				resolvedRoaster = created;
+				if (created) patch({ roasterId: created.id });
+			} else {
+				// New bag: the roaster row is created at Save, like a typed name.
+				resolvedRoaster = null;
+			}
+		}
+		linkRoasterToCatalogue(resolvedRoaster);
+		const n = result.filled.length;
+		catalogueStatus =
+			n === 0
+				? 'Linked — every field was already filled.'
+				: `Filled ${n} field${n === 1 ? '' : 's'} from the catalogue.`;
+	}
+
+	function unlinkCatalogue(): void {
+		patch({ canonicalCoffeeBagId: null, canonicalRoasterId: null });
+		pickedLabel = null;
+		pickedRoasterName = null;
+		catalogueStatus = null;
+	}
+
 	// ── Validation ────────────────────────────────────────────────────
 	let attempted = $state(false);
 	let nameInputEl = $state<HTMLInputElement | null>(null);
@@ -285,6 +368,7 @@
 				return;
 			}
 			const roaster = resolveRoasterOrCreate(roasterName);
+			linkRoasterToCatalogue(roaster);
 			const remaining =
 				draftRecord.remaining > 0 ? draftRecord.remaining : draftRecord.bagSize;
 			const persisted: Bean = {
@@ -485,6 +569,25 @@
 					</div>
 				</header>
 				<div class="be-block-body">
+					{#if viz.connected}
+						<div class="be-frow">
+							<div class="be-frow-l">
+								<div class="be-frow-label">Visualizer catalogue</div>
+								<div class="be-frow-sub">
+									Find this bag to fill in the details. Only empty fields are filled.
+								</div>
+							</div>
+							<div class="be-frow-r">
+								<CatalogueSearch
+									search={searchCatalogue}
+									onPick={applyCatalogue}
+									linkedLabel={catalogueLinkLabel}
+									onUnlink={unlinkCatalogue}
+									status={catalogueStatus}
+								/>
+							</div>
+						</div>
+					{/if}
 					<div class="be-frow">
 						<div class="be-frow-l">
 							<div class="be-frow-label">Name <span class="be-req">*</span></div>

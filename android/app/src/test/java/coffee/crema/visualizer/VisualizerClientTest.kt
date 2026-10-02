@@ -71,6 +71,18 @@ class VisualizerClientTest {
     }
 
     @Test
+    fun `the catalogue search GETs canonical_coffee_bags with an encoded q and items`() = runTest {
+        reply = """{"data":[],"paging":{"count":0,"page":1,"limit":10,"pages":1}}"""
+        val body = client.searchCanonicalCoffeeBags("tok", "onyx & co")
+        assertEquals(HttpMethod.Get, last().method)
+        assertEquals("/api/canonical_coffee_bags", last().url.encodedPath)
+        assertEquals("onyx & co", last().url.parameters["q"])
+        assertEquals("10", last().url.parameters["items"])
+        assertEquals("Bearer tok", last().headers[HttpHeaders.Authorization])
+        assertEquals("1", body!!.jsonObject["paging"]!!.jsonObject["page"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun `GET shots carries the paging query`() = runTest {
         reply = """{"data":[{"id":"s1","clock":"100","updated_at":"200"}],"paging":{"pages":3}}"""
         val (shots, pages) = client.listShots("tok", page = 2, items = 50)

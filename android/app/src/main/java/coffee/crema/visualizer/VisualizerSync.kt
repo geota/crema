@@ -1,6 +1,8 @@
 package coffee.crema.visualizer
 
+import coffee.crema.core.CataloguePage
 import coffee.crema.core.ShotPatchInputs
+import coffee.crema.core.parseCatalogueCoffeeBags
 import coffee.crema.runCatchingCancellable
 import coffee.crema.core.exportV2JsonShot
 import coffee.crema.core.exportV2JsonShotFull
@@ -26,6 +28,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -83,6 +86,9 @@ class VisualizerSync(
         { inputs, premium -> visualizerShotPatchJson(inputs, premium) },
     /** Wall clock (unix ms) — the daily Premium re-probe gate; tests pin it. */
     private val now: () -> Long = System::currentTimeMillis,
+    /** Core `parse_catalogue_coffee_bags`: raw catalogue body → [CataloguePage] (injected so JVM tests needn't load the native core). */
+    private val parseCatalogue: (bodyJson: String) -> CataloguePage =
+        { body -> json.decodeFromString(CataloguePage.serializer(), parseCatalogueCoffeeBags(body)) },
     /** The OAuth code → token exchange (injected so JVM tests can drive a sign-in). */
     private val exchangeCode: suspend (code: String, verifier: String) -> TokenSet =
         { code, verifier -> exchangeCodeForToken(clientId, code, verifier, json) },
@@ -357,6 +363,18 @@ class VisualizerSync(
     private suspend fun logSync(direction: String, id: String, name: String, error: String? = null) {
         val entry = SyncLogEntry(direction = direction, entity = "shot", id = id, name = name, at = System.currentTimeMillis(), error = error)
         persist { it.copy(log = (listOf(entry) + it.log).take(20)) }
+    }
+
+    // ── Catalogue search ─────────────────────────────────────────────────────
+
+    /**
+     * Search the Visualizer canonical catalogue (`GET /canonical_coffee_bags`)
+     * for the bean form — open to free accounts, so only a session is needed.
+     * Throws [VisualizerError] (incl. [VisualizerError.Auth] when signed out).
+     */
+    suspend fun searchCatalogue(query: String): CataloguePage {
+        val body = withFreshToken { client.searchCanonicalCoffeeBags(it, query) }
+        return parseCatalogue(json.encodeToString(JsonElement.serializer(), body ?: JsonNull))
     }
 
     // ── Token freshness (web TokenVault.withFreshToken semantics) ───────────

@@ -47,6 +47,10 @@ data class BeanDraft(
     val url: String,
     val notes: String,
     val tags: List<String>,
+    /** Visualizer catalogue coffee-bag link (set by a catalogue pick; null = unlinked). */
+    val canonicalCoffeeBagId: String? = null,
+    /** Visualizer catalogue roaster link of the picked entry (null = unlinked). */
+    val canonicalRoasterId: String? = null,
 )
 
 /**
@@ -102,6 +106,8 @@ fun applyBeanEdits(b: Bean, draft: BeanDraft): Bean = b.copy(
     url = draft.url.ifBlank { null },
     notes = draft.notes,
     tags = draft.tags.toList().ifEmpty { null },
+    canonicalCoffeeBagId = draft.canonicalCoffeeBagId,
+    canonicalRoasterId = draft.canonicalRoasterId,
 )
 
 /**

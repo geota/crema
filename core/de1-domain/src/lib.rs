@@ -38,6 +38,9 @@
 //!   [`signature_for_roaster`]) and the [`reconcile_shots`] action
 //!   planner, ported from the web shell's `shot-sync-signatures.ts`
 //!   so every shell shares one algorithm.
+//! - [`visualizer_catalogue`] — the Visualizer canonical-catalogue search
+//!   response parser and the pick → bean autofill rule
+//!   ([`catalogue_autofill`]) behind the bean form's catalogue search.
 //! - [`ids`] — [`new_profile_id`], the one canonical profile-ID minter
 //!   (UUID v7, RFC 9562). Built-in IDs are pre-generated into
 //!   `profiles/builtin.json` by the `gen-builtin-ids` binary in this
@@ -90,6 +93,7 @@ pub mod stolen_serials;
 pub mod stop;
 pub mod tank;
 pub mod units;
+pub mod visualizer_catalogue;
 pub mod visualizer_error;
 pub mod visualizer_sync;
 pub mod visualizer_wire;
@@ -222,6 +226,10 @@ pub use tank::{
 pub use units::{
     WeightUnit, bar_to_psi, celsius_to_fahrenheit, fahrenheit_to_celsius, fl_oz_to_ml, grams_to_oz,
     ml_to_fl_oz, oz_to_grams, psi_to_bar,
+};
+pub use visualizer_catalogue::{
+    CatalogueAutofill, CatalogueCoffeeBag, CataloguePage, catalogue_autofill,
+    catalogue_autofill_json, parse_catalogue_coffee_bags, parse_catalogue_coffee_bags_json,
 };
 pub use visualizer_error::{
     VISUALIZER_DEFAULT_DAILY_LIMIT, VisualizerCallError, is_recoverable, retry_backoff_ms,

@@ -131,6 +131,42 @@ describe('BeanSync.uploadRoaster', () => {
 	});
 });
 
+describe('BeanSync.searchCatalogue', () => {
+	it('GETs /canonical_coffee_bags with q + items and parses the page in core', async () => {
+		const { layer, calls } = mkHttp(() => ({
+			ok: true,
+			json: {
+				data: [
+					{
+						id: 'cb-1',
+						canonical_roaster_id: 'cr-1',
+						canonical_roaster_name: 'Onyx',
+						name: 'Hambela',
+						country: 'Ethiopia',
+						processing: 'Washed',
+						created_at: 'x',
+						updated_at: 'x'
+					}
+				],
+				paging: { count: 1, page: 1, limit: 10, pages: 1 }
+			}
+		}));
+		const page = await run(
+			BeanSync.pipe(Effect.flatMap((b) => b.searchCatalogue('onyx hambela'))),
+			layer
+		);
+		expect(calls[0].method ?? 'GET').toBe('GET');
+		expect(calls[0].url).toContain('/canonical_coffee_bags?q=onyx+hambela&items=10');
+		expect(page.entries[0]).toMatchObject({ name: 'Hambela', roasterName: 'Onyx', meta: 'Ethiopia · Washed' });
+	});
+
+	it('surfaces HTTP failures as the Visualizer error taxonomy', async () => {
+		const { layer } = mkHttp(() => ({ ok: false, status: 500 }));
+		const tag = await failTag(BeanSync.pipe(Effect.flatMap((b) => b.searchCatalogue('x'))), layer);
+		expect(tag).toBe('HttpStatusError');
+	});
+});
+
 describe('BeanSync delete', () => {
 	it('treats a 404 on deleteBean as success', async () => {
 		const { layer } = mkHttp(() => ({ ok: false, status: 404 }));

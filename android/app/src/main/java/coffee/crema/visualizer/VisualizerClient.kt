@@ -182,6 +182,16 @@ class VisualizerClient(
     }
 
     /**
+     * `GET /api/canonical_coffee_bags?q=…&items=…` — the Visualizer catalogue
+     * search (open to free and Premium accounts). Returns the raw body; the
+     * core parses it (`parse_catalogue_coffee_bags`).
+     */
+    suspend fun searchCanonicalCoffeeBags(accessToken: String, query: String, items: Int = CATALOGUE_PAGE_SIZE): JsonElement? {
+        val q = java.net.URLEncoder.encode(query, Charsets.UTF_8.name())
+        return request("GET", "/canonical_coffee_bags?q=$q&items=$items", accessToken)
+    }
+
+    /**
      * `POST /api/shots/upload` with the community-v2 payload. Returns the new
      * Visualizer shot id.
      */
@@ -235,6 +245,9 @@ class VisualizerClient(
 
 /** Name prefix of the sentinel roaster [VisualizerClient.probePremium] creates and deletes (the web's too). */
 internal const val PREMIUM_PROBE_PREFIX = "__crema_premium_probe_"
+
+/** Rows per catalogue search (web `CATALOGUE_PAGE_SIZE`). */
+const val CATALOGUE_PAGE_SIZE = 10
 
 /** What OkHttp sent for a JSON String body: `application/json; charset=utf-8`. */
 private val JSON_UTF8 = ContentType.Application.Json.withCharset(Charsets.UTF_8)

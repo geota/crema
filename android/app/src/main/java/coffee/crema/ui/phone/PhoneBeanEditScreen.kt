@@ -22,6 +22,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import coffee.crema.beans.BAG_PRESETS
 import coffee.crema.beans.BeanDraft
+import coffee.crema.beans.CatalogueFields
+import coffee.crema.beans.autofillFromCatalogue
+import coffee.crema.beans.catalogueFillStatus
+import coffee.crema.core.CatalogueCoffeeBag
 import coffee.crema.beans.applyBeanEdits
 import coffee.crema.beans.costText
 import coffee.crema.beans.isFrozen
@@ -96,6 +100,41 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var url by remember(bean.id) { mutableStateOf(bean.url ?: "") }
     var notes by remember(bean.id) { mutableStateOf(bean.notes ?: "") }
 
+    // Visualizer catalogue search (signed-in only; the catalogue GETs are open
+    // to free accounts). A pick runs the core autofill rule — empty fields only
+    // unless "replace" is ticked — and records the catalogue links on the bag.
+    val vizState by vm.visualizer.state.collectAsStateWithLifecycle()
+    var roastSet by remember(bean.id) { mutableStateOf(bean.roastLevel != null) }
+    var canonicalCoffeeBagId by remember(bean.id) { mutableStateOf(bean.canonicalCoffeeBagId) }
+    var canonicalRoasterId by remember(bean.id) { mutableStateOf(bean.canonicalRoasterId) }
+    var catalogueLabel by remember(bean.id) { mutableStateOf<String?>(null) }
+    var catalogueStatus by remember(bean.id) { mutableStateOf<String?>(null) }
+    val applyCatalogue: (CatalogueCoffeeBag, Boolean) -> Unit = { entry, replaceAll ->
+        val fields = CatalogueFields(
+            name = name, roaster = roaster, roast = roast.takeIf { roastSet },
+            country = country, region = region, farmer = farmer, variety = variety,
+            elevation = elevation, processing = processing, harvestTime = harvestTime,
+            tastingNotes = tastingNotes, url = url,
+            canonicalCoffeeBagId = canonicalCoffeeBagId, canonicalRoasterId = canonicalRoasterId,
+        )
+        runCatching { autofillFromCatalogue(fields, bean, entry, replaceAll) }
+            .onSuccess { (f, filled) ->
+                name = f.name; roaster = f.roaster
+                f.roast?.let { roast = it; roastSet = true }
+                country = f.country; region = f.region; farmer = f.farmer; variety = f.variety
+                elevation = f.elevation; processing = f.processing; harvestTime = f.harvestTime
+                tastingNotes = f.tastingNotes; url = f.url
+                canonicalCoffeeBagId = f.canonicalCoffeeBagId; canonicalRoasterId = f.canonicalRoasterId
+                catalogueLabel = listOf(entry.name, entry.roasterName).filter { it.isNotBlank() }.joinToString(" · ")
+                catalogueStatus = catalogueFillStatus(filled.size)
+            }
+            .onFailure { catalogueStatus = "Couldn't apply the catalogue entry." }
+    }
+    val unlinkCatalogue: () -> Unit = {
+        canonicalCoffeeBagId = null; canonicalRoasterId = null
+        catalogueLabel = null; catalogueStatus = null
+    }
+
     // Bag photo capture (Phase C) — launchers + the action bottom sheet.
     val photoPicker = rememberBeanPhotoPicker(
         beanId = bean.id,
@@ -119,6 +158,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 linkedProfileId = linkedProfileId, rating = rating, qualityScore = qualityScore,
                 tastingNotes = tastingNotes, placeOfPurchase = placeOfPurchase, cost = cost,
                 url = url, notes = notes, tags = tags.toList(),
+                canonicalCoffeeBagId = canonicalCoffeeBagId, canonicalRoasterId = canonicalRoasterId,
             ))
         }
         if (active) {
@@ -154,6 +194,18 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
 
             // 01 · Identity
             NumberedGroup("01", "Identity") {
+                if (vizState.signedIn) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Visualizer catalogue", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        CatalogueSearchField(
+                            search = { q -> vm.visualizer.searchCatalogue(q) },
+                            onPick = applyCatalogue,
+                            linkedLabel = catalogueLabel ?: canonicalCoffeeBagId?.let { "Visualizer catalogue" },
+                            onUnlink = unlinkCatalogue,
+                            status = catalogueStatus,
+                        )
+                    }
+                }
                 Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     // Tap the avatar to take / pick / remove a bag photo.
                     Box(
@@ -195,7 +247,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    RoastPicker(value = roast, onChange = { roast = it })
+                    RoastPicker(value = roast, onChange = { roast = it; roastSet = true })
                 }
                 EdRow("Mix") {
                     CremaSegmentedButton(

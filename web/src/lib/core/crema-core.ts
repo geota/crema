@@ -187,6 +187,22 @@ export interface Bean {
 	/** Visualizer `coffee_bag.id` once pushed. */
 	visualizerId?: string;
 	/**
+	 * Visualizer **catalogue** coffee-bag id (`canonical_coffee_bag_id`) —
+	 * set when the user picked this bag from the Visualizer catalogue
+	 * search. Sent on the bag write so the remote bag links to the shared
+	 * catalogue entry; read back from the bag list on pull. `None` = not
+	 * linked. Defaults so older Bean JSON deserialises cleanly.
+	 */
+	canonicalCoffeeBagId?: string;
+	/**
+	 * Visualizer **catalogue** roaster id (`canonical_roaster_id`) of the
+	 * picked catalogue bag's roaster. Round-trips through the bag's
+	 * `metadata.crema` block (the coffee-bag wire has no roaster-link
+	 * field) and seeds the roaster row's [`Roaster::catalogue_roaster_id`].
+	 * `None` = not linked. Defaults so older Bean JSON deserialises cleanly.
+	 */
+	canonicalRoasterId?: string;
+	/**
 	 * Unix epoch ms when this bag was soft-deleted, or `None` when
 	 * active. Required for cross-device sync tombstone propagation:
 	 * on the next sync push, the remote row is DELETEd and the local
@@ -618,6 +634,77 @@ export interface BrewStatInput {
 	rating?: number;
 	/** The brew method; `None` = machine espresso. */
 	brewMethod?: string;
+}
+
+/** The result of [`catalogue_autofill`]. */
+export interface CatalogueAutofill {
+	/** The bean with the picked catalogue entry applied. */
+	bean: Bean;
+	/**
+	 * The catalogue roaster's name when the shell should put it in the
+	 * roaster field (resolving / creating the local roaster row is the
+	 * shell's job, as for a typed name); `None` = leave the roaster alone.
+	 */
+	roasterName?: string;
+	/**
+	 * camelCase names of the fields that changed (`"name"`, `"roaster"`,
+	 * `"origin.country"`, `"roastLevel"`, `"tastingNotes"`, …) — for a
+	 * "filled N fields" hint. Excludes the catalogue-link ids.
+	 */
+	filled: string[];
+}
+
+/**
+ * One `CanonicalCoffeeBagSummary` row, normalised for the shells: trimmed,
+ * blank → `None`, camelCase. Produced by [`parse_catalogue_coffee_bags`] and
+ * consumed by [`catalogue_autofill`].
+ */
+export interface CatalogueCoffeeBag {
+	/** Catalogue coffee-bag id (`canonical_coffee_bag_id` on a user bag). */
+	id: string;
+	/** Catalogue roaster id (`canonical_roaster_id` on a user roaster). */
+	canonicalRoasterId: string;
+	/** The catalogue roaster's name. */
+	roasterName: string;
+	/** Bag name. */
+	name: string;
+	/** Roaster product page. */
+	url?: string;
+	/** Free-text roast level (`"Light"`, `"Medium-Dark"`, …). */
+	roastLevel?: string;
+	/** Country of origin. */
+	country?: string;
+	/** Region within the country. */
+	region?: string;
+	/** Farmer / producer. */
+	farmer?: string;
+	/** Cultivar / variety. */
+	variety?: string;
+	/** Elevation, free text. */
+	elevation?: string;
+	/** Process, free text. */
+	processing?: string;
+	/** Harvest time, free text. */
+	harvestTime?: string;
+	/** Tasting notes, free text. */
+	tastingNotes?: string;
+	/**
+	 * Secondary line for a result row — country and process joined by
+	 * `" · "` (`"Ethiopia · Washed"`), or `""` when neither is known.
+	 */
+	meta?: string;
+}
+
+/** One page of catalogue search results. */
+export interface CataloguePage {
+	/** The rows, in server order. Malformed rows are dropped. */
+	entries: CatalogueCoffeeBag[];
+	/** Total matches across all pages (`paging.count`; `0` when absent). */
+	count: number;
+	/** 1-based page number (`paging.page`; `1` when absent). */
+	page: number;
+	/** Total page count (`paging.pages`; `1` when absent). */
+	pages: number;
 }
 
 /**
@@ -2246,13 +2333,21 @@ export interface Roaster {
 	/** Free-form notes (private to the user — not pushed to Visualizer). */
 	notes: string;
 	/**
-	 * Pointer to the canonical roaster id when this row was tagged as a
-	 * duplicate. `None` = this row is itself canonical (or has not been
-	 * deduped). Mirrors Visualizer's `RoasterDetail.canonical_roaster_id`
-	 * — round-trips directly. Beans pointing at a duplicate are typically
-	 * re-pointed at the canonical id on merge.
+	 * Pointer to the canonical **local** roaster row (`roaster:<uuid>`)
+	 * when this row was tagged as a duplicate in the roaster directory.
+	 * `None` = this row is itself canonical (or has not been deduped).
+	 * Local-only: Visualizer's `canonical_roaster_id` is a link into its
+	 * shared roaster catalogue, which lives in
+	 * [`Roaster::catalogue_roaster_id`] instead.
 	 */
 	canonicalRoasterId?: string;
+	/**
+	 * Visualizer **catalogue** roaster id — the wire's
+	 * `RoasterDetail.canonical_roaster_id`. Set from a catalogue pick in the
+	 * bean form (or pulled from Visualizer) and sent on the roaster write.
+	 * `None` = not linked. Defaults so older JSON deserialises cleanly.
+	 */
+	catalogueRoasterId?: string;
 	/** Visualizer `roaster.id` once pushed. */
 	visualizerId?: string;
 	/**

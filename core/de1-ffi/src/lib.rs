@@ -1181,6 +1181,36 @@ pub fn roaster_from_wire(
     de1_domain::roaster_from_wire_json(&wire_json, &fallback_id, now_unix_ms).map_err(crema_err)
 }
 
+/// Parse a Visualizer `GET /canonical_coffee_bags` response body → a
+/// `CataloguePage` JSON. Mirrors the wasm `parseCatalogueCoffeeBags`; see
+/// [`de1_domain::parse_catalogue_coffee_bags_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when `body_json` isn't JSON.
+#[uniffi::export]
+pub fn parse_catalogue_coffee_bags(body_json: String) -> Result<String, CremaError> {
+    de1_domain::parse_catalogue_coffee_bags_json(&body_json).map_err(crema_err)
+}
+
+/// Apply a picked catalogue row (`CatalogueCoffeeBag` JSON) onto a `Bean`
+/// JSON → a `CatalogueAutofill` JSON. Mirrors the wasm `catalogueAutofill`;
+/// see [`de1_domain::catalogue_autofill_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] on a malformed input.
+#[uniffi::export]
+pub fn catalogue_autofill(
+    bean_json: String,
+    entry_json: String,
+    roaster_set: bool,
+    replace_all: bool,
+) -> Result<String, CremaError> {
+    de1_domain::catalogue_autofill_json(&bean_json, &entry_json, roaster_set, replace_all)
+        .map_err(crema_err)
+}
+
 /// Crema's 1..10 roast level → Visualizer's free-text band label (e.g. `"light"`),
 /// or `None` when the level is unset. Mirrors the wasm `roastLevelToWire`; see
 /// [`de1_domain::roast_level_to_wire`].
@@ -3114,6 +3144,28 @@ mod tests {
         "bagSize":340.0,"remaining":300.0,"qualityScore":"","tastingNotes":"Cocoa, cherry",
         "rating":0,"notes":"","favourite":false,"grinder":"Niche","grinderSetting":"18",
         "metadata":{},"createdAt":1779238864574,"updatedAt":1779325264574}"#;
+
+    #[test]
+    fn catalogue_search_and_autofill_bridge_round_trip() {
+        let body = r#"{"data":[{"id":"cb-1","canonical_roaster_id":"cr-1",
+            "canonical_roaster_name":"Onyx","name":"Hambela","country":"Ethiopia",
+            "processing":"Washed","roast_level":"Light","created_at":"x","updated_at":"x"}],
+            "paging":{"count":1,"page":1,"limit":10,"pages":1}}"#;
+        let page: serde_json::Value =
+            serde_json::from_str(&parse_catalogue_coffee_bags(body.to_owned()).unwrap()).unwrap();
+        let entry = page["entries"][0].to_string();
+        assert_eq!(page["entries"][0]["meta"], "Ethiopia · Washed");
+        let out = catalogue_autofill(FAKE_BEAN.to_owned(), entry, true, false).unwrap();
+        let r: serde_json::Value = serde_json::from_str(&out).unwrap();
+        // Typed fields survive; the empty region-less origin gains nothing it
+        // already had; links are set.
+        assert_eq!(r["bean"]["name"], "Monarch");
+        assert_eq!(r["bean"]["origin"]["country"], "Colombia");
+        assert_eq!(r["bean"]["canonicalCoffeeBagId"], "cb-1");
+        assert_eq!(r["bean"]["canonicalRoasterId"], "cr-1");
+        assert!(r["roasterName"].is_null());
+        assert!(parse_catalogue_coffee_bags("nope".to_owned()).is_err());
+    }
 
     #[test]
     fn bean_wire_round_trip_preserves_roast_level_and_date() {

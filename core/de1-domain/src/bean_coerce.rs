@@ -154,6 +154,12 @@ pub fn coerce_bean(raw: &Value, now_ms: i64) -> Option<Bean> {
     if let Some(v) = str_field(obj, "visualizerId") {
         bean.visualizer_id = Some(v);
     }
+    if let Some(v) = str_field(obj, "canonicalCoffeeBagId") {
+        bean.canonical_coffee_bag_id = Some(v);
+    }
+    if let Some(v) = str_field(obj, "canonicalRoasterId") {
+        bean.canonical_roaster_id = Some(v);
+    }
     if let Some(v) = str_field(obj, "beanconquerorId") {
         bean.beanconqueror_id = Some(v);
     }
@@ -206,6 +212,9 @@ pub fn coerce_roaster(raw: &Value, now_ms: i64) -> Option<Roaster> {
     }
     if let Some(v) = str_field(obj, "canonicalRoasterId") {
         roaster.canonical_roaster_id = Some(v);
+    }
+    if let Some(v) = str_field(obj, "catalogueRoasterId") {
+        roaster.catalogue_roaster_id = Some(v);
     }
     if let Some(v) = str_field(obj, "visualizerId") {
         roaster.visualizer_id = Some(v);
@@ -368,6 +377,27 @@ mod tests {
         assert_eq!(roaster.visualizer_id.as_deref(), Some("rv-1"));
         assert_eq!(roaster.notes, "");
         assert_eq!(roaster.metadata, serde_json::json!({}));
+    }
+
+    #[test]
+    fn reads_catalogue_links_and_skips_wrong_types() {
+        let bean = coerce_bean(
+            &serde_json::json!({
+                "id": "b1", "name": "House",
+                "canonicalCoffeeBagId": "cb-1", "canonicalRoasterId": 42
+            }),
+            0,
+        )
+        .unwrap();
+        assert_eq!(bean.canonical_coffee_bag_id.as_deref(), Some("cb-1"));
+        assert_eq!(bean.canonical_roaster_id, None);
+        let roaster = coerce_roaster(
+            &serde_json::json!({ "id": "r1", "name": "Onyx", "catalogueRoasterId": "cr-1" }),
+            0,
+        )
+        .unwrap();
+        assert_eq!(roaster.catalogue_roaster_id.as_deref(), Some("cr-1"));
+        assert_eq!(roaster.canonical_roaster_id, None);
     }
 
     // ── JSON facades ───────────────────────────────────────────────────

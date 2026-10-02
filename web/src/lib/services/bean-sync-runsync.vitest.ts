@@ -44,13 +44,13 @@ beforeAll(async () => {
 type Reply = { ok: true; json?: unknown } | { ok: false; status: number };
 
 function mkHttp(handler: (method: string, url: string) => Reply) {
-	const calls: { method: string; url: string }[] = [];
+	const calls: { method: string; url: string; body?: unknown }[] = [];
 	const layer = Layer.succeed(
 		HttpClient,
 		HttpClient.of({
 			request: (req: HttpRequest) => {
 				const method = req.method ?? 'GET';
-				calls.push({ method, url: req.url });
+				calls.push({ method, url: req.url, body: req.body ? JSON.parse(req.body) : undefined });
 				const r = handler(method, req.url);
 				if (!r.ok) return Effect.fail(new HttpStatusError({ status: r.status, url: req.url }));
 				return Effect.succeed(
@@ -218,5 +218,92 @@ describe('BeanSync.runSync — guards', () => {
 		expect(result.ok).toBe(false);
 		expect(result.error).toMatch(/sign in/i);
 		expect(calls).toHaveLength(0);
+	});
+});
+
+describe('BeanSync.runSync — Visualizer catalogue links', () => {
+	const premium = () =>
+		localStorage.setItem('crema.beans.sync.v1', JSON.stringify({ lastSyncAt: 0, premium: true }));
+
+	it('sends canonical_coffee_bag_id on the bag POST and the bean-derived roaster link on the roaster POST', async () => {
+		premium();
+		const roaster = { ...blankRoaster('Onyx'), visualizerId: null };
+		const bean: Bean = {
+			...blankBean('bean:1'),
+			name: 'Hambela',
+			roasterId: roaster.id,
+			canonicalCoffeeBagId: 'cb-1',
+			canonicalRoasterId: 'cr-1'
+		};
+		const lib = mkLibrary({ roasters: [roaster], beans: [bean] });
+		const { layer, calls } = mkHttp((method, url) => {
+			if (method === 'POST' && url.includes('/roasters')) return { ok: true, json: { id: 'vr-1' } };
+			if (method === 'POST' && url.includes('/coffee_bags')) return { ok: true, json: { id: 'vb-1' } };
+			return { ok: true, json: { data: [], paging: { pages: 1 } } };
+		});
+		await run(lib, layer);
+		const rPost = calls.find((c) => c.method === 'POST' && c.url.endsWith('/roasters'));
+		expect((rPost?.body as { roaster: Record<string, unknown> }).roaster.canonical_roaster_id).toBe('cr-1');
+		const bPost = calls.find((c) => c.method === 'POST' && c.url.endsWith('/coffee_bags'));
+		const bag = (bPost?.body as { coffee_bag: Record<string, unknown> }).coffee_bag;
+		expect(bag.canonical_coffee_bag_id).toBe('cb-1');
+		expect(bag.roaster_id).toBe('vr-1');
+	});
+
+	it('PATCHes the catalogue link onto an already-synced, unlinked roaster (premium only)', async () => {
+		premium();
+		const roaster = { ...blankRoaster('Onyx'), visualizerId: 'vr-1', catalogueRoasterId: 'cr-1' };
+		const lib = mkLibrary({ roasters: [roaster] });
+		const { layer, calls } = mkHttp((method, url) => {
+			if (method === 'GET' && url.includes('/roasters'))
+				return { ok: true, json: { data: [{ id: 'vr-1', name: 'Onyx' }], paging: { pages: 1 } } };
+			return { ok: true, json: { data: [], paging: { pages: 1 } } };
+		});
+		await run(lib, layer);
+		const patch = calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/roasters/vr-1'));
+		expect((patch?.body as { roaster: Record<string, unknown> }).roaster.canonical_roaster_id).toBe('cr-1');
+		expect(lib.roasters[0].catalogueRoasterId).toBe('cr-1');
+	});
+
+	it('never writes the link on a free account', async () => {
+		localStorage.setItem('crema.beans.sync.v1', JSON.stringify({ lastSyncAt: 0, premium: false }));
+		const roaster = { ...blankRoaster('Onyx'), visualizerId: 'vr-1', catalogueRoasterId: 'cr-1' };
+		const lib = mkLibrary({ roasters: [roaster] });
+		const { layer, calls } = mkHttp((method, url) => {
+			if (method === 'GET' && url.includes('/roasters'))
+				return { ok: true, json: { data: [{ id: 'vr-1', name: 'Onyx' }], paging: { pages: 1 } } };
+			return { ok: true, json: { data: [], paging: { pages: 1 } } };
+		});
+		await run(lib, layer);
+		expect(calls.every((c) => c.method === 'GET')).toBe(true);
+	});
+
+	it('pulls canonical_roaster_id as the catalogue link without touching the local dedup pointer', async () => {
+		const roaster = {
+			...blankRoaster('Onyx'),
+			visualizerId: 'vr-1',
+			canonicalRoasterId: 'roaster:other'
+		};
+		const lib = mkLibrary({ roasters: [roaster] });
+		const { layer } = mkHttp((method, url) => {
+			if (method === 'GET' && url.includes('/roasters'))
+				return {
+					ok: true,
+					json: { data: [{ id: 'vr-1', name: 'Onyx', canonical_roaster_id: 'cr-5' }], paging: { pages: 1 } }
+				};
+			if (method === 'GET' && url.includes('/coffee_bags'))
+				return {
+					ok: true,
+					json: {
+						data: [{ id: 'vb-1', name: 'Hambela', roaster_id: 'vr-1', canonical_coffee_bag_id: 'cb-5' }],
+						paging: { pages: 1 }
+					}
+				};
+			return { ok: true, json: { data: [], paging: { pages: 1 } } };
+		});
+		await run(lib, layer);
+		expect(lib.roasters[0].catalogueRoasterId).toBe('cr-5');
+		expect(lib.roasters[0].canonicalRoasterId).toBe('roaster:other');
+		expect(lib.beans.find((b) => b.visualizerId === 'vb-1')?.canonicalCoffeeBagId).toBe('cb-5');
 	});
 });

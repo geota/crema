@@ -17,6 +17,8 @@ import {
 	beanToWire,
 	roastLevelFromWire,
 	roastLevelToWire,
+	bagBodyToWriteRequest,
+	roasterBodyToWriteRequest,
 	roasterFromWire,
 	roasterToWire
 } from './visualizer-sync.ts';
@@ -108,7 +110,7 @@ describe('roaster wire round-trip', () => {
 		roaster.visualizerId = 'rv-7';
 		roaster.website = 'https://onyx.coffee';
 		roaster.imageUrl = 'https://onyx.coffee/logo.png';
-		roaster.canonicalRoasterId = 'canon-3';
+		roaster.catalogueRoasterId = 'canon-3';
 
 		const back = roasterFromWire(roasterToWire(roaster));
 
@@ -116,6 +118,49 @@ describe('roaster wire round-trip', () => {
 		expect(back.visualizerId).toBe('rv-7');
 		expect(back.website).toBe('https://onyx.coffee');
 		expect(back.imageUrl).toBe('https://onyx.coffee/logo.png');
-		expect(back.canonicalRoasterId).toBe('canon-3');
+		expect(back.catalogueRoasterId).toBe('canon-3');
+		expect(back.canonicalRoasterId).toBeNull();
+	});
+
+	it('keeps the local dedup pointer off the wire', () => {
+		const roaster = blankRoaster('Onyx');
+		roaster.canonicalRoasterId = 'roaster:other';
+		expect(roasterToWire(roaster).canonical_roaster_id).toBeNull();
+	});
+});
+
+describe('catalogue links in the write payloads', () => {
+	it('sends canonical_coffee_bag_id and the roaster link when the bean has them', () => {
+		const bean = blankBean('bean:1');
+		bean.name = 'Hambela';
+		bean.canonicalCoffeeBagId = 'cb-1';
+		bean.canonicalRoasterId = 'cr-1';
+		const body = bagBodyToWriteRequest(beanToWire(bean, 'rv-1'));
+		expect(body.coffee_bag.canonical_coffee_bag_id).toBe('cb-1');
+		expect(body.coffee_bag.roaster_id).toBe('rv-1');
+		const back = beanFromWire(beanToWire(bean, 'rv-1'), () => null);
+		expect(back.canonicalCoffeeBagId).toBe('cb-1');
+		expect(back.canonicalRoasterId).toBe('cr-1');
+
+		const roaster = blankRoaster('Onyx');
+		roaster.catalogueRoasterId = 'cr-1';
+		expect(roasterBodyToWriteRequest(roasterToWire(roaster)).roaster.canonical_roaster_id).toBe(
+			'cr-1'
+		);
+	});
+
+	it('omits the link keys for an unlinked bag / roaster so a PATCH never unlinks', () => {
+		const body = bagBodyToWriteRequest(beanToWire(blankBean('bean:2'), null));
+		expect('canonical_coffee_bag_id' in body.coffee_bag).toBe(false);
+		const rbody = roasterBodyToWriteRequest(roasterToWire(blankRoaster('Sey')));
+		expect('canonical_roaster_id' in rbody.roaster).toBe(false);
+	});
+
+	it('keeps a link set on Visualizer when pulling a bag-list summary', () => {
+		const back = beanFromWire(
+			{ id: 'vb-1', name: 'Gesha', roaster_id: null, canonical_coffee_bag_id: 'cb-7' },
+			() => null
+		);
+		expect(back.canonicalCoffeeBagId).toBe('cb-7');
 	});
 });

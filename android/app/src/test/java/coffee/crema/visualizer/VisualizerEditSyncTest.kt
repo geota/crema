@@ -111,7 +111,10 @@ class VisualizerEditSyncTest {
         shotPatchBody = fakeCore,
         now = { clock },
         exchangeCode = { _, _ -> TokenSet("tok", "rt", expiresAt = System.currentTimeMillis() + 3_600_000) },
+        parseCatalogue = { body -> catalogueBodies += body; coffee.crema.core.CataloguePage(emptyList(), 0u, 1u, 1u) },
     )
+
+    private val catalogueBodies = mutableListOf<String>()
 
     private fun seed(premium: Boolean?, checkedAt: Long? = null, signedIn: Boolean = true) = runBlocking {
         store.save(
@@ -148,6 +151,26 @@ class VisualizerEditSyncTest {
     fun tearDown() {
         client.close()
         dir.deleteRecursively()
+    }
+
+    @Test
+    fun `the catalogue search works on a free account and hands the raw body to the core parser`() {
+        seed(premium = false)
+        val s = sync().also { runBlocking { it.load() } }
+        val page = runBlocking { s.searchCatalogue("hambela") }
+        assertTrue(page.entries.isEmpty())
+        assertEquals(listOf("GET /api/canonical_coffee_bags"), requests.map { it.first })
+        assertEquals(listOf("{}"), catalogueBodies)
+        assertEquals(0, probes())
+    }
+
+    @Test
+    fun `the catalogue search needs a session`() {
+        seed(premium = null, signedIn = false)
+        val s = sync().also { runBlocking { it.load() } }
+        val err = runCatching { runBlocking { s.searchCatalogue("hambela") } }.exceptionOrNull()
+        assertTrue("signed out → Auth: $err", err is VisualizerError.Auth)
+        assertTrue(requests.isEmpty())
     }
 
     @Test
