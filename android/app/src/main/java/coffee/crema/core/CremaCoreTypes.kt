@@ -698,6 +698,27 @@ data class EventMachineErrorChangedInner (
 	val message: String? = null
 )
 
+/// Generated type representing the anonymous struct variant `MaintenanceProgress` of the `Event` Rust enum
+@Serializable
+data class EventMaintenanceProgressInner (
+	/// The maintenance state being run.
+	val state: MachineState,
+	/// Where the cycle stands.
+	val phase: MaintenancePhase,
+	/// Descale step, 1-based (`1..=step_count`); `0` when not in a step.
+	val step_index: UByte,
+	/// Number of descale steps (5); `0` for Clean / AirPurge.
+	val step_count: UByte,
+	/// Descale fraction done, `0.0..=0.999` (`1.0` only on `Finished`).
+	val progress: Float,
+	/// Whole seconds left in the descale cycle.
+	val seconds_remaining: UInt,
+	/// Descale pass, from 1 (`0` when not descaling).
+	val cycle: UByte,
+	/// The 1 °C cold-maintenance profile was loaded for this cycle.
+	val cold_workaround: Boolean
+)
+
 /// Generated type representing the anonymous struct variant `ShotPhaseChanged` of the `Event` Rust enum
 @Serializable
 data class EventShotPhaseChangedInner (
@@ -1175,6 +1196,22 @@ sealed class Event {
 	@Serializable
 	@SerialName("MachineErrorChanged")
 	data class MachineErrorChanged(val content: EventMachineErrorChangedInner): Event()
+	/// A maintenance cycle (Descale / Clean / AirPurge) the core is
+	/// following moved on — see [`MaintenancePhase`]. Edge-triggered: one
+	/// event per change of phase, step, cycle, or whole second remaining.
+	/// 
+	/// The descale fields come from the DE1's fixed 720 s step schedule
+	/// (Decenza `b1ceab8c`, [`de1_domain::DESCALE_SCHEDULE`]); they are `0`
+	/// for Clean / AirPurge and outside a descale step.
+	/// 
+	/// `cold_workaround` is `true` when the core loaded the 1 °C maintenance
+	/// profile because old firmware (< 1356, or unknown) drops a cold
+	/// request. The DE1 then holds that profile, not the user's: the shell
+	/// must forget any "already loaded" profile cache, and on `Finished` /
+	/// `Cancelled` re-upload its active profile.
+	@Serializable
+	@SerialName("MaintenanceProgress")
+	data class MaintenanceProgress(val content: EventMaintenanceProgressInner): Event()
 	/// An espresso shot began.
 	@Serializable
 	@SerialName("ShotStarted")
@@ -3030,6 +3067,29 @@ enum class MachineState(val string: String) {
 	/// Scheduled-wake idle; firmware v1293 and later only.
 	@SerialName("SchedIdle")
 	SchedIdle("SchedIdle"),
+}
+
+/// Where a maintenance cycle the core is following stands — carried by
+/// `Event::MaintenanceProgress`.
+@Serializable
+enum class MaintenancePhase(val string: String) {
+	/// Old firmware, machine heating: the 1 °C profile is loaded and the
+	/// request is held until the machine reports it has left preheat.
+	@SerialName("WaitingForPreheat")
+	WaitingForPreheat("WaitingForPreheat"),
+	/// The held request has been sent; waiting for the machine to enter the
+	/// state.
+	@SerialName("Requested")
+	Requested("Requested"),
+	/// The machine is in the maintenance state.
+	@SerialName("Running")
+	Running("Running"),
+	/// The machine left the maintenance state.
+	@SerialName("Finished")
+	Finished("Finished"),
+	/// Cancelled by the user, by another state request, or by a DE1 link drop.
+	@SerialName("Cancelled")
+	Cancelled("Cancelled"),
 }
 
 /// Known MMR register addresses.

@@ -15,6 +15,7 @@ pub mod de1_uuids;
 pub mod error;
 pub mod event;
 pub mod firmware_info;
+mod maintenance_run;
 
 pub use de1_uuids::{
     De1Uuids, de1_uuids, de1_uuids_json, de1_write_target_uuid, de1_write_target_uuid_by_name,
@@ -747,6 +748,22 @@ pub struct CremaCore {
     /// outgoing `ShotSettings` write carries a 0 °C steam target without
     /// touching the user's stored setting.
     maintenance_steam_off: bool,
+    /// The DE1's raw MMR `GhcInfo` word, cached from the connect-time read —
+    /// the cold-maintenance gate needs to know whether a GHC is fitted.
+    de1_ghc_info: Option<u32>,
+    /// The latest timestamp the shell has handed the core (notification or
+    /// tick) — the clock for work started from a call that carries none
+    /// (the cold-maintenance profile upload inside `request_machine_state`).
+    clock: Duration,
+    /// The maintenance cycle the core is following — see
+    /// [`maintenance_run`](crate::maintenance_run).
+    maintenance: Option<maintenance_run::MaintenanceRun>,
+    /// Descale step schedule tracker (Decenza `b1ceab8c`).
+    descale: de1_domain::DescaleTracker,
+    /// The tank-temperature threshold the shell's connect sweep last
+    /// asserted, °C — re-written after a cold-maintenance cycle, whose 1 °C
+    /// profile zeroed it.
+    tank_temp_threshold_c: Option<u8>,
 }
 
 /// In-flight state of one profile upload. Owned by
@@ -876,6 +893,11 @@ impl CremaCore {
             last_raw_weight: None,
             pre_shot_zero_offset_g: 0.0,
             maintenance_steam_off: false,
+            de1_ghc_info: None,
+            clock: Duration::ZERO,
+            maintenance: None,
+            descale: de1_domain::DescaleTracker::default(),
+            tank_temp_threshold_c: None,
         }
     }
 
@@ -1219,14 +1241,24 @@ impl CremaCore {
     /// known to be Idle — the firmware accepts flow-state requests reliably
     /// only from Idle. Plain Idle / Sleep requests stay a single write.
     ///
+    /// Maintenance requests (Descale / Clean / AirPurge) on firmware that
+    /// drops them while cold (< 1356, or unknown) go through the
+    /// cold-maintenance workaround instead of a plain write — see
+    /// [`maintenance_run`](crate::maintenance_run). Any request also
+    /// supersedes a maintenance request still held for preheat.
+    ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits one
     /// [`Event::FirmwareLockoutHit`] and no command.
-    pub fn request_machine_state(&self, state: MachineState) -> CoreOutput {
+    pub fn request_machine_state(&mut self, state: MachineState) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("request_machine_state") {
             return out;
         }
         let mut out = CoreOutput::default();
+        self.supersede_held_maintenance(&mut out);
+        if self.begin_cold_maintenance(state, &mut out) {
+            return out;
+        }
         let starting_flow = matches!(
             state,
             MachineState::Espresso
@@ -2734,6 +2766,7 @@ impl CremaCore {
             self.capture.record(source, data, now_ms);
         }
         let now = ms_to_duration(now_ms);
+        self.clock = self.clock.max(now);
         let mut out = CoreOutput::default();
         match source {
             Source::De1State => self.handle_state(data, now, &mut out),
@@ -2757,6 +2790,9 @@ impl CremaCore {
         // (the tank level streams ~2-4 Hz even at idle), and a late firmware
         // read can be what makes an already-settled episode trustworthy.
         self.update_machine_error(now, &mut out);
+        // Descale progress advances between substate boundaries that can be
+        // seven minutes apart; the tank level's steady stream drives it.
+        self.update_maintenance(now, &mut out);
         self.gate_read_only(out)
     }
 
@@ -2766,6 +2802,7 @@ impl CremaCore {
     /// eco-mode transition.
     pub fn on_tick(&mut self, now_ms: u64) -> CoreOutput {
         let now = ms_to_duration(now_ms);
+        self.clock = self.clock.max(now);
         let mut out = CoreOutput::default();
         if self.scale.is_some()
             && !self.scale_stale_reported
@@ -2789,6 +2826,7 @@ impl CremaCore {
             });
         }
         self.update_machine_error(now, &mut out);
+        self.update_maintenance(now, &mut out);
         // Backstop for the post-stop drip settle (#64): guarantees a deferred
         // completion finalizes on the [`POST_SHOT_SETTLE_MAX`] deadline even if
         // the scale stream stalls (the tick is the shells' periodic watchdog).
@@ -2846,6 +2884,7 @@ impl CremaCore {
         let mut out = CoreOutput::default();
         self.stop_scale_timer_for_link_loss(&mut out);
         self.tank_level.reset();
+        self.abandon_maintenance(&mut out);
         self.gate_read_only(out)
     }
 
@@ -2871,6 +2910,7 @@ impl CremaCore {
     pub fn reset(&mut self) -> CoreOutput {
         let mut out = CoreOutput::default();
         self.stop_scale_timer_for_link_loss(&mut out);
+        self.abandon_maintenance(&mut out);
         // `read_only` is a device-role config (this core is a secondary mirror),
         // not session/shot state — it must survive a reset, else a reconnect
         // (the BLE manager resets the core on every disconnect) would turn the
@@ -3032,8 +3072,11 @@ impl CremaCore {
             }
         };
         if self.last_state != Some(info) {
-            let prev_state = self.last_state.map(|s| s.state);
+            let prev_info = self.last_state;
+            let prev_state = prev_info.map(|s| s.state);
             self.last_state = Some(info);
+            self.descale.on_state(prev_info, info, now);
+            self.advance_maintenance(info, now, out);
             out.events.push(Event::MachineStateChanged {
                 state: info.state,
                 substate: info.substate,
@@ -3951,6 +3994,9 @@ impl CremaCore {
             // `ErrorNoAc` filter (see `de1_firmware_build`).
             if register == MmrRegister::FirmwareVersion {
                 self.de1_firmware_build = Some(value);
+            }
+            if register == MmrRegister::GhcInfo {
+                self.de1_ghc_info = Some(value);
             }
             out.events.push(Event::MmrValue { register, value });
         }
@@ -6723,7 +6769,7 @@ mod tests {
 
     #[test]
     fn request_machine_state_emits_a_write_command() {
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
         let out = core.request_machine_state(MachineState::Idle);
         assert!(matches!(
             out.commands.first(),
@@ -7514,7 +7560,7 @@ mod tests {
 
     #[test]
     fn idle_and_sleep_requests_stay_a_single_write() {
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
         assert_eq!(
             core.request_machine_state(MachineState::Idle)
                 .commands

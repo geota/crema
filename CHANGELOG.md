@@ -23,6 +23,16 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   (`replace=1`), once, a moment after you stop editing. Same trigger as
   Decent's own shot-upload plugin. Web and Android.
 
+- **Descale, clean and air purge work on a cold machine with older DE1
+  firmware** — firmware below build 1356 silently ignores those requests
+  while the machine is still heating. On such a machine (or one whose build
+  hasn't been read) Crema now loads a one-step 1 °C profile, waits for the
+  machine to report it has stopped heating, then sends the request, and puts
+  your profile back afterwards (Decenza `b1ceab8c`, de1app, decaid). Firmware
+  1356 and newer get the plain request as before. Settings → Water shows the
+  running cycle with a Cancel button; a descale reads its real progress from
+  the DE1's fixed 12-minute step schedule ("42% · Step 4 of 5 · 7 min 0 s
+  left"). Web, tablet and phone.
 - Calibration's 'Reset to factory' is hidden until the DE1 command is verified
 - **Both flow readings now share the Flow card** (#92) — machine flow (ml/s)
   on the left, scale flow (g/s) on the right, so the two numbers being compared

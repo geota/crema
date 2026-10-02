@@ -1803,8 +1803,15 @@ impl CremaBridge {
 
     /// Build a [`CoreOutput`] (JSON) whose command asks the DE1 to enter
     /// `state`.
-    pub fn request_machine_state(&self, state: MachineRequest) -> String {
+    pub fn request_machine_state(&mut self, state: MachineRequest) -> String {
         json(self.core.request_machine_state(state.into()))
+    }
+
+    /// Cancel the maintenance cycle the core is following (a Descale / Clean
+    /// / AirPurge held for preheat on old firmware, or one running) — see
+    /// `CremaCore::cancel_maintenance`. Returns a `CoreOutput` JSON string.
+    pub fn cancel_maintenance(&mut self) -> String {
+        json(self.core.cancel_maintenance())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads one DE1 memory-mapped
@@ -2559,7 +2566,7 @@ mod tests {
 
     #[test]
     fn request_machine_state_produces_a_write_command() {
-        let bridge = CremaBridge::new();
+        let mut bridge = CremaBridge::new();
         let json = bridge.request_machine_state(MachineRequest::Idle);
         assert!(json.contains("\"commands\""));
         assert!(json.contains("WriteCharacteristic"));

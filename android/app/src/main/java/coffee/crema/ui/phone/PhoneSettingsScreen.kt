@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.maintenanceRunText
 import coffee.crema.ui.fmt
 import coffee.crema.ui.relativeAgo
 import androidx.activity.compose.BackHandler
@@ -619,6 +620,14 @@ private fun WaterSection(
         val machineIdle = ui.machineState?.startsWith("Idle") == true
         val cycleReady = connected && machineIdle
         val cycleSub = if (connected && !machineIdle) " Machine must be idle." else ""
+        // A cycle core is following (held for preheat on old firmware,
+        // starting, or running with the descale countdown) — with Cancel.
+        ui.maintenanceRun?.let { run ->
+            val (runTitle, runSub) = maintenanceRunText(run)
+            CremaSettingsRow(runTitle, runSub) {
+                CremaButton(onClick = { vm.cancelMaintenance() }, variant = CremaButtonVariant.Outlined, icon = "x", label = "Cancel")
+            }
+        }
         CremaSettingsRow("Descale", "Run the DE1's descale cycle.$cycleSub", needsConnection = !connected) {
             CremaButton(onClick = { onRunCycle("descale") }, variant = CremaButtonVariant.Outlined, enabled = cycleReady, icon = "play", label = "Run")
         }

@@ -9,6 +9,8 @@ import coffee.crema.core.Command
 import coffee.crema.core.CoreOutput
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
+import coffee.crema.core.EventMaintenanceProgressInner
+import coffee.crema.core.MaintenancePhase
 import coffee.crema.core.newShotId
 import coffee.crema.core.MachineRequest
 import coffee.crema.core.WaterSessionKind
@@ -407,6 +409,11 @@ data class MainUiState(
     /** Human-readable message for the machine fault core says to surface
      *  (`Event.MachineErrorChanged`), else null — the same copy as web. */
     val machineError: String? = null,
+    /** The maintenance cycle (Descale / Clean / AirPurge) core is following
+     *  (`Event.MaintenanceProgress`) — held for preheat on old firmware,
+     *  requested, or running with the descale countdown; null when none is
+     *  (including once it finishes or is cancelled). Web: `snapshot.maintenance`. */
+    val maintenanceRun: EventMaintenanceProgressInner? = null,
     /** Latest tank DEPTH, mm (`Event.WaterLevel.level` — raw + core's 5 mm
      *  sensor offset, smoothed), or null before the first report. */
     val waterLevelMm: Float? = null,
@@ -2994,6 +3001,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         when (method) {
             "machineState" -> requestMachineState(MachineRequest.valueOf(args))
             "startShot" -> startShot()
+            "cancelMaintenance" -> cancelMaintenance()
             "tareScale" -> tareScale()
             // Config-authority verbs: the primary changes its (single-owner) config
             // and `persistPrefs`/`setActiveBean` push the result back to mirrors.
@@ -3602,6 +3610,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Start a cleaning cycle (Settings → Water → "Run now"). */
     fun startClean() = requestMachineState(MachineRequest.CLEAN)
+
+    /**
+     * Cancel the maintenance cycle core is following (Settings → Water's
+     * Cancel): drops a Descale / Clean held for preheat on old firmware, or
+     * asks a running one to stop. Progress arrives as `MaintenanceProgress`.
+     */
+    fun cancelMaintenance() {
+        if (relayIfSecondary("cancelMaintenance")) return
+        val raw = runCatching { bridge.cancelMaintenance() }.getOrElse {
+            appendLog("cancelMaintenance failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+    }
+
+    /**
+     * Put the active profile back on the DE1 without starting a shot — after a
+     * cold-maintenance cycle left core's 1 °C profile loaded (Decenza re-uploads
+     * on leaving its descale page). Skipped with no active profile or no link.
+     */
+    private fun reuploadActiveProfile() {
+        if (_ui.value.bleState != De1BleManager.State.READY) return
+        val cremaJson = _ui.value.activeProfileId?.let { library.profileJson(it) } ?: return
+        viewModelScope.launch(coreDispatcher) {
+            val wireJson = runCatching { cremaProfileToWire(cremaJson) }.getOrElse { return@launch }
+            val raw = runCatching {
+                bridge.uploadProfile(wireJson, System.currentTimeMillis().toULong())
+            }.getOrElse {
+                appendLog("Re-upload after maintenance failed: ${it.message}")
+                return@launch
+            }
+            pendingUploadFingerprint = runCatching { profileFingerprint(cremaJson, null) }.getOrNull()
+            _ui.update { it.copy(profileUploading = true, profileUploadProgress = null) }
+            onCoreOutputJson(raw)
+        }
+    }
 
     /** Enable/disable auto-tare at shot start (Quick Controls). Optimistic. Persisted. */
     fun setAutoTare(enabled: Boolean) {
@@ -4938,6 +4982,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 updateModeTicker()
                 appendLog("MachineState -> ${c.state.string} / ${c.substate.string}")
+            }
+            is Event.MaintenanceProgress -> {
+                val c = event.content
+                val terminal = c.phase == MaintenancePhase.Finished || c.phase == MaintenancePhase.Cancelled
+                val phaseChanged = _ui.value.maintenanceRun?.phase != c.phase
+                _ui.update { it.copy(maintenanceRun = if (terminal) null else c) }
+                if (phaseChanged) {
+                    appendLog(
+                        "Maintenance ${c.state.string}: ${c.phase}" +
+                            if (c.cold_workaround) " (cold-start workaround)" else "",
+                    )
+                }
+                if (c.cold_workaround) {
+                    // The DE1 holds core's 1 °C profile now, not ours: the
+                    // skip-upload cache is stale, and the real profile goes
+                    // back once the cycle ends.
+                    lastUploadedFingerprint = null
+                    if (terminal) reuploadActiveProfile()
+                }
             }
             is Event.MachineErrorChanged -> {
                 // The fault to surface, decided in core so web and Android agree:

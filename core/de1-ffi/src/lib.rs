@@ -1956,7 +1956,16 @@ impl CremaBridge {
     /// Build a [`CoreOutput`] (JSON) whose command asks the DE1 to enter
     /// `state`.
     pub fn request_machine_state(&self, state: MachineRequest) -> String {
-        self.emit(self.core().request_machine_state(state.into()))
+        let out = self.core().request_machine_state(state.into());
+        self.emit(out)
+    }
+
+    /// Cancel the maintenance cycle the core is following (a Descale / Clean
+    /// / AirPurge held for preheat on old firmware, or one running) — see
+    /// `CremaCore::cancel_maintenance`. Returns a `CoreOutput` JSON string.
+    pub fn cancel_maintenance(&self) -> String {
+        let out = self.core().cancel_maintenance();
+        self.emit(out)
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads one DE1 memory-mapped

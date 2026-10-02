@@ -58,6 +58,7 @@ pub mod brew_session;
 pub mod builtin;
 /// Lenient number-or-string deserialization shared by the JSON importers.
 mod coerce;
+pub mod cold_maintenance;
 pub mod crema_jsonl;
 pub mod crema_profile;
 pub mod decent_shot_record;
@@ -142,6 +143,11 @@ pub use brew_session::{
     BrewSessionPhase, BrewSessionSummary, MAX_BREW_SAMPLES, START_ON_POUR_THRESHOLD_G,
 };
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
+pub use cold_maintenance::{
+    COLD_MAINTENANCE_MIN_FIRMWARE_BUILD, DESCALE_SCHEDULE, DESCALE_TOTAL_SECONDS, DescaleProgress,
+    DescaleTracker, MaintenancePhase, cold_maintenance_profile, firmware_drops_cold_requests,
+    is_machine_heating, is_maintenance_state, needs_cold_workaround,
+};
 pub use crema_jsonl::{
     BackupHeader, BackupImportPlan, CremaExportHeader, export_backup_jsonl_from_json, export_jsonl,
     export_jsonl_from_json, import_backup_jsonl_to_plan_json, import_jsonl_to_plan_json,

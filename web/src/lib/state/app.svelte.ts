@@ -703,6 +703,9 @@ export class CremaApp {
 					getActiveShotStore().set(this.buildLiveActiveShot());
 				}
 			}
+			if (event.type === 'MaintenanceProgress' && event.content.cold_workaround) {
+				this.onColdMaintenanceProgress(event.content.phase);
+			}
 			if (event.type === 'ProfileUploadCompleted') {
 				// Hand the completion to the `ProfileSync` service (T-21): it
 				// stamps the download-guard clock (opening the BC 9788201734
@@ -1013,6 +1016,31 @@ export class CremaApp {
 	async connectDe1(): Promise<void> {
 		this.state.patch({ ...CLEARED_DE1_READOUT });
 		await this.de1.connect();
+	}
+
+	/**
+	 * Cancel the maintenance cycle the core is following (Settings → Water's
+	 * Cancel) — drops a request held for preheat on old firmware, or asks a
+	 * running cycle to stop.
+	 */
+	async cancelMaintenance(): Promise<void> {
+		this.applyCoreOutput(await this.core.cancelMaintenance());
+	}
+
+	/**
+	 * The core loaded its 1 °C cold-maintenance profile (old firmware, cold
+	 * machine): the DE1 no longer holds the user's profile, so forget the
+	 * "already loaded" fingerprint at once, and put the active profile back
+	 * when the cycle ends (Decenza re-uploads it on leaving its descale page).
+	 */
+	private onColdMaintenanceProgress(phase: string): void {
+		if (this.state.current.activeProfileFingerprint !== null) {
+			writeJson(LAST_FINGERPRINT_KEY, null);
+			this.state.patch({ activeProfileFingerprint: null });
+		}
+		if (phase === 'Finished' || phase === 'Cancelled') {
+			if (this.state.current.de1State === 'ready') this.ensureLoadedMatches();
+		}
 	}
 
 	/** Disconnect the DE1 and clear its readout fields. */
