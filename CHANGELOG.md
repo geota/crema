@@ -156,6 +156,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Beanconqueror brew times** — Beanconqueror stores a brew time as whole
+  seconds plus the sub-second remainder. Crema read the remainder as the whole
+  time on import (a 28.45 s brew came in as 0.45 s) and wrote the total into
+  the remainder on export (Beanconqueror showed about double). Both directions
+  now use seconds + remainder; a value of 1000 ms or more is still read as a
+  total. Brews imported before this fix keep their old (wrong) times — they
+  can't be told apart reliably, so re-import from Beanconqueror to correct them.
+
 - **Android backups keep brew details** — a backup made on Android dropped
   each brew's method, recipe name, water, temperature, next-time plan and
   guided weight curve; they now survive backup and restore.
