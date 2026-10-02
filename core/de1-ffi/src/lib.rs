@@ -1455,28 +1455,30 @@ pub fn core_version() -> String {
     CORE_VERSION.to_owned()
 }
 
-/// Convert a raw DE1 water-tank reading (mm of sensor depth) to the tank's
-/// water volume in ml. Pure helper — does no machine I/O. Mirrors the wasm
+/// Convert a water-tank DEPTH (mm — `Event::WaterLevel.level`, already
+/// offset-corrected in core) to the tank's water volume in ml. Pure helper —
+/// does no machine I/O. Mirrors the wasm
 /// `water_tank_ml` so every shell consumes the same tank-geometry
 /// calibration (see [`de1_domain::water_tank_ml`]).
 #[uniffi::export]
 #[must_use]
-pub fn water_tank_ml(mm: f32) -> u16 {
-    de1_domain::water_tank_ml(mm)
+pub fn water_tank_ml(depth_mm: f32) -> u16 {
+    de1_domain::water_tank_ml(depth_mm)
 }
 
-/// Convert a raw DE1 water-tank reading (mm) to a whole percentage of a
-/// typical full fill, clamped `0..=100`. Pure helper — see
+/// Convert a water-tank DEPTH (mm — `Event::WaterLevel.level`) to a whole
+/// percentage of a typical full fill, clamped `0..=100`. Pure helper — see
 /// [`de1_domain::water_tank_percent`].
 #[uniffi::export]
 #[must_use]
-pub fn water_tank_percent(mm: f32) -> u8 {
-    de1_domain::water_tank_percent(mm)
+pub fn water_tank_percent(depth_mm: f32) -> u8 {
+    de1_domain::water_tank_percent(depth_mm)
 }
 
-/// The true water depth (mm) for a raw DE1 sensor reading — the reading plus
-/// the 5 mm sensor offset every app in the ecosystem applies. Pure helper —
-/// see [`de1_domain::water_tank_depth_mm`].
+/// The true water depth (mm) for a RAW DE1 sensor value — the value plus
+/// the 5 mm sensor offset every app in the ecosystem applies. For raw values
+/// only (the refill threshold / refill point): `Event::WaterLevel.level` is
+/// already a depth. Pure helper — see [`de1_domain::water_tank_depth_mm`].
 #[uniffi::export]
 #[must_use]
 pub fn water_tank_depth_mm(sensor_mm: f32) -> f32 {

@@ -211,6 +211,7 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   total. Brews imported before this fix keep their old (wrong) times — they
   can't be told apart reliably, so re-import from Beanconqueror to correct them.
 
+- **Water tank readouts no longer read ~5 mm (~135 ml) high** — the sensor offset was being added twice; tank ml, %, depth and the "refill soon" cue now match de1app and Decenza. Web, tablet and phone.
 - **No more false "water low" warnings while the pump runs** — the tank
   sloshes by about a third of its depth under the pump; the level is now
   smoothed over ~3 s in core (Decenza parity), so the readout and the low-water

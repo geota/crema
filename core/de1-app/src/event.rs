@@ -214,9 +214,14 @@ pub enum Event {
     },
     /// The DE1 reported its water-tank level.
     WaterLevel {
-        /// Current tank level, mm — includes the legacy +5 mm sensor correction.
+        /// Current tank water DEPTH, mm: the raw sensor reading plus the
+        /// +5 mm sensor offset (`de1_domain::water_tank_depth_mm`, applied
+        /// once, in core), slosh-smoothed. Pass it to `water_tank_ml` /
+        /// `water_tank_percent` as-is; never add the offset again.
         level: f32,
-        /// Refill threshold, mm; a refill is wanted at or below it.
+        /// The machine's refill threshold in RAW sensor mm, as on the wire; a
+        /// refill is wanted when the raw level is at or below it. Convert it
+        /// with `water_tank_depth_mm` before comparing it with `level`.
         refill_threshold: f32,
     },
     /// Auto-stop decided the shot should end. The accompanying [`Command`]

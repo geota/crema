@@ -58,6 +58,7 @@ import coffee.crema.ui.REFILL_POINT_MAX_MM
 import coffee.crema.ui.REFILL_POINT_MIN_MM
 import coffee.crema.ui.formatTankLevel
 import coffee.crema.ui.refillPointMm
+import coffee.crema.ui.refillThresholdDepthMm
 import coffee.crema.ui.tankDepthMm
 import coffee.crema.ui.waterWarnThresholdMl
 import coffee.crema.ui.components.CopyDiagnosticsRow
@@ -393,17 +394,20 @@ fun SettingsScreen(
                             // "Water tank". It used to hardcode raw sensor mm,
                             // which is why Settings showed "17 mm" while the Brew
                             // footer showed "49 %" for the same tank
-                            // (geota/crema#47). The depth (raw + core's 5 mm
-                            // sensor offset) rides the detail line: it's the
-                            // number de1app and Decenza show, and the unit the
-                            // refill point below is dialled in.
+                            // (geota/crema#47). The depth (the event level —
+                            // core already added the 5 mm sensor offset) rides
+                            // the detail line: it's the number de1app and
+                            // Decenza show. The machine's refill threshold is
+                            // raw sensor mm (the unit the dial below uses), so
+                            // it is converted to depth before it's shown next
+                            // to the level.
                             val tank = formatTankLevel(mm, ui.waterLevelUnit, ui.volumeUnit)
                             val depth = ui.tankDepthMm()
                             CremaSettingsRow(
                                 "Water tank",
                                 when {
                                     mm == null -> "Connect the DE1 to read the tank level."
-                                    low -> "Low — refill soon. ${depth?.toInt()} mm deep, machine refills at ${ui.refillPointMm().toInt()} mm."
+                                    low -> "Low — refill soon. ${depth?.toInt()} mm deep, machine refills below ${ui.refillThresholdDepthMm()?.toInt()} mm."
                                     else -> "Tank level looks good — ${depth?.toInt()} mm deep."
                                 },
                             ) {

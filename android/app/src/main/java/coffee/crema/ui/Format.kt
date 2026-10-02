@@ -99,7 +99,8 @@ fun convertVolume(ml: Float?, unit: String): Measurement {
     else Measurement(fmt("%.0f", ml), "ml")
 }
 
-/** Water-tank readout — the DE1's sensor depth (mm) rendered per the
+/** Water-tank readout — the tank depth (mm, `Event.WaterLevel.level`, which
+ *  already includes core's 5 mm sensor offset) rendered per the
  *  Settings → Display "Water tank" style: the tank volume in the chosen
  *  volume unit, or a percent of a typical full fill. Conversion happens in
  *  core (`water_tank_ml` / `water_tank_percent`) so every shell shares the

@@ -252,14 +252,16 @@ export interface UiSnapshot {
 	readonly eventLog: readonly LogLine[];
 
 	/**
-	 * The DE1 water-tank level in mm — the raw depth the tank sensor reports,
+	 * The DE1 water-tank DEPTH in mm — the raw sensor reading plus the 5 mm
+	 * sensor offset, which core applies once at decode (then slosh-smooths),
 	 * or `null` before the first `WaterLevel` notification. Convert to a tank
-	 * volume for display with {@link waterTankMl}.
+	 * volume for display with {@link waterTankMl}; never add the offset again.
 	 */
 	readonly waterLevel: number | null;
 	/**
-	 * The DE1 water-tank refill threshold in mm — a refill is wanted at or
-	 * below it. `null` before the first `WaterLevel` notification. Drives the
+	 * The DE1 water-tank refill threshold in RAW sensor mm (as on the wire —
+	 * NOT the same scale as {@link waterLevel}; see {@link waterRefillSoon}) —
+	 * a refill is wanted at or below it. `null` before the first `WaterLevel` notification. Drives the
 	 * "refill soon" cue (E2).
 	 */
 	readonly waterRefillThreshold: number | null;
@@ -622,9 +624,10 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 // distinguishes them here.
 
 /**
- * Convert a DE1 tank-level reading (mm, see {@link UiSnapshot.waterLevel})
- * to the tank's water volume in ml via the core's `water_tank_ml` helper
- * (`core/de1-domain/src/tank.rs`). Returns `null` for a missing reading;
+ * Convert a tank DEPTH (mm, see {@link UiSnapshot.waterLevel} — already
+ * offset-corrected) to the tank's water volume in ml via the core's
+ * `water_tank_ml` helper (`core/de1-domain/src/tank.rs`), which adds no
+ * offset of its own. Returns `null` for a missing reading;
  * the depth is clamped to the lookup table's range — a depth past the top
  * reads as the 2058 ml full ceiling, a negative depth (a sensor glitch) as
  * the 0 ml empty floor — matching the de1app / DSx behaviour.
@@ -635,7 +638,7 @@ export function waterTankMl(mm: number | null | undefined): number | null {
 }
 
 /**
- * Convert a DE1 water-level reading (sensor depth, mm) to a whole
+ * Convert a tank DEPTH (mm, {@link UiSnapshot.waterLevel}) to a whole
  * percentage of a typical full fill (the core's `water_tank_percent`,
  * clamped 0..=100). Returns `null` for a missing reading.
  */
@@ -645,12 +648,13 @@ export function waterTankPercent(mm: number | null | undefined): number | null {
 }
 
 /**
- * The tank's true water DEPTH (mm) for a raw sensor reading — the reading
- * plus the core's 5 mm sensor offset. The DE1's level sensor sits above the
- * water uptake point, so the raw value understates the depth; de1app
+ * The tank's true water DEPTH (mm) for a RAW sensor value — the value plus
+ * the core's 5 mm sensor offset. The DE1's level sensor sits above the water
+ * uptake point, so a raw value understates the depth; de1app
  * (`water_level_mm_correction`) and Decenza (`SENSOR_OFFSET`) both correct
- * for it, and this is the mm figure they display. Returns `null` for a
- * missing reading.
+ * for it. For raw values only — the refill threshold / refill point:
+ * {@link UiSnapshot.waterLevel} is already a depth. Returns `null` for a
+ * missing value.
  */
 export function waterTankDepthMm(mm: number | null | undefined): number | null {
 	if (mm == null || !Number.isFinite(mm)) return null;
@@ -677,13 +681,18 @@ const REFILL_SOON_MARGIN_MM = 5;
  * Whether the tank is low enough to warrant a "refill soon" cue — the level
  * is within {@link REFILL_SOON_MARGIN_MM} of (or already below) the DE1's
  * refill threshold. `false` when either reading is missing.
+ *
+ * `levelMm` is the event's depth (offset-corrected); `rawThresholdMm` is the
+ * machine's raw threshold, so it is converted to depth first — depth vs
+ * depth, the same comparison as Decenza's raw-vs-raw margin.
  */
 export function waterRefillSoon(
 	levelMm: number | null | undefined,
-	thresholdMm: number | null | undefined
+	rawThresholdMm: number | null | undefined
 ): boolean {
-	if (levelMm == null || thresholdMm == null) return false;
-	return levelMm <= thresholdMm + REFILL_SOON_MARGIN_MM;
+	const thresholdDepth = waterTankDepthMm(rawThresholdMm);
+	if (levelMm == null || thresholdDepth == null) return false;
+	return levelMm <= thresholdDepth + REFILL_SOON_MARGIN_MM;
 }
 
 /**

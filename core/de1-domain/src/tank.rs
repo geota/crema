@@ -7,6 +7,28 @@
 //! de1app's `water_tank_level_to_milliliters` (`de1plus/vars.tcl`),
 //! identical to the DSx skin's, ported verbatim — every shell consumes the
 //! same calibration here instead of carrying its own copy.
+//!
+//! # Units: raw sensor mm vs tank depth mm
+//!
+//! Two millimetre scales exist and must never be mixed:
+//!
+//! - **Raw sensor mm** — what the `WaterLevels` packet carries, for both the
+//!   current level and the refill threshold (`StartFillLevel`). The refill
+//!   point Crema writes back to the machine ([`DEFAULT_REFILL_POINT_MM`], the
+//!   "Refill at" dial) is raw too.
+//! - **Depth mm** — raw + [`SENSOR_OFFSET_MM`], the true water depth that
+//!   de1app (`::de1(water_level)`) and Decenza (`m_waterLevelMm`) display.
+//!
+//! The offset is added in exactly ONE place: [`water_tank_depth_mm`], which
+//! `de1-app` calls when it decodes a `WaterLevels` notification. So
+//! `Event::WaterLevel.level` is already a (smoothed) depth, and
+//! [`water_tank_ml`] / [`water_tank_percent`] take that depth as-is — never
+//! pass them a raw reading, and never run the event level through
+//! [`water_tank_depth_mm`] again. `Event::WaterLevel.refill_threshold` stays
+//! raw (it is the machine's own setting, echoed back); to compare it with the
+//! level, convert it with [`water_tank_depth_mm`] first, so the comparison is
+//! depth vs depth — the same rule as Decenza's `WaterLevelItem.qml`
+//! (`waterLevelMm - sensorOffset - refillPoint`, i.e. raw vs raw).
 
 /// The DE1 tank-level → water-volume lookup table.
 ///
@@ -30,16 +52,19 @@ pub const TANK_MM_TO_ML: [u16; 68] = [
 /// omit it, so every tank readout here sat ~5 mm / ~135 ml below what the
 /// same tank showed in de1app or Decenza (geota/crema#47).
 ///
-/// Applied only on the *display / volume* path. The wire value stays raw:
-/// the `WaterLevels` packet's refill threshold is in raw sensor mm too, so
-/// comparing a level against it — or writing one back — must happen in raw
-/// units.
+/// Added once, by [`water_tank_depth_mm`] — see the module docs for the
+/// raw-vs-depth rule. The wire values (level and refill threshold) stay raw.
 pub const SENSOR_OFFSET_MM: f32 = 5.0;
 
-/// The true water depth (mm) for a raw sensor reading — the reading plus
+/// The true water depth (mm) for a RAW sensor reading — the reading plus
 /// [`SENSOR_OFFSET_MM`], floored at 0. This is the number to *show* the
 /// user, and what de1app's `::de1(water_level)` and Decenza's
 /// `m_waterLevelMm` both hold.
+///
+/// The single place the offset is applied. `de1-app` runs every
+/// `WaterLevels` reading through it, so `Event::WaterLevel.level` is already
+/// a depth — only use this on values that are still raw, such as the
+/// event's `refill_threshold` or the refill point the user dials.
 pub fn water_tank_depth_mm(sensor_mm: f32) -> f32 {
     if !sensor_mm.is_finite() {
         return 0.0;
@@ -47,17 +72,17 @@ pub fn water_tank_depth_mm(sensor_mm: f32) -> f32 {
     (sensor_mm + SENSOR_OFFSET_MM).max(0.0)
 }
 
-/// Convert a DE1 tank-level reading (raw mm of sensor depth) to the tank's
-/// water volume in ml via [`TANK_MM_TO_ML`], applying
-/// [`SENSOR_OFFSET_MM`] first.
+/// Convert a tank water DEPTH (mm — `Event::WaterLevel.level`, i.e. the raw
+/// reading already corrected by [`water_tank_depth_mm`]) to the tank's water
+/// volume in ml via [`TANK_MM_TO_ML`]. Adds no offset.
 ///
 /// The depth is clamped to the table's range — a depth past the top reads
 /// as the 2058 ml full ceiling, a negative depth (a sensor glitch) as the
 /// 0 ml empty floor — matching the de1app / DSx behaviour. The mm reading
 /// is truncated to an integer index (the DE1 reports sub-millimetre noise
 /// at idle that would otherwise jitter the readout).
-pub fn water_tank_ml(sensor_mm: f32) -> u16 {
-    let mm = water_tank_depth_mm(sensor_mm);
+pub fn water_tank_ml(depth_mm: f32) -> u16 {
+    let mm = depth_mm;
     if !mm.is_finite() {
         return 0;
     }
@@ -108,11 +133,11 @@ pub const TANK_FULL_ML: u16 = 1104;
 /// behaves the same in all of them.
 pub const DEFAULT_REFILL_POINT_MM: f32 = 5.0;
 
-/// Convert a DE1 tank-level reading (raw mm of sensor depth) to a whole
+/// Convert a tank water DEPTH (mm, as for [`water_tank_ml`]) to a whole
 /// percentage of a typical full fill ([`TANK_FULL_ML`]), clamped to
-/// `0..=100`.
-pub fn water_tank_percent(sensor_mm: f32) -> u8 {
-    let ml = f32::from(water_tank_ml(sensor_mm));
+/// `0..=100`. Adds no offset.
+pub fn water_tank_percent(depth_mm: f32) -> u8 {
+    let ml = f32::from(water_tank_ml(depth_mm));
     let pct = (ml / f32::from(TANK_FULL_ML) * 100.0).round();
     // `water_tank_ml` is finite and >= 0, so only the top needs clamping.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -141,7 +166,9 @@ pub const TANK_LEVEL_SMOOTHING_TAU_S: f32 = 3.0;
 /// The smoothed value feeds everything downstream (the readout, the tank
 /// colour band, the low-water warning); the cost is that a genuine step (the
 /// tank lifted out) reads ~3 s late, which nothing about a water tank depends
-/// on.
+/// on. `de1-app` feeds it depths (after [`water_tank_depth_mm`]), as Decenza
+/// does; the offset is a constant, so smoothing before or after it is the
+/// same — what matters is that it is added once.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct TankLevelSmoother {
     /// `(smoothed level, timestamp of the last sample in ms)`; `None` until
@@ -200,41 +227,83 @@ mod tests {
     use super::*;
 
     #[test]
-    fn applies_the_sensor_offset_like_the_rest_of_the_ecosystem() {
-        // The raw reading is not the water depth: de1app and Decenza both add
-        // 5 mm before showing or converting it (geota/crema#47).
-        assert_eq!(water_tank_depth_mm(0.0), 5.0);
-        assert_eq!(water_tank_depth_mm(17.0), 22.0);
+    fn the_offset_is_applied_exactly_once_from_raw_to_ml() {
+        // Raw sensor 17 mm (geota/crema#47's screenshot) → 22 mm of depth →
+        // 592 ml, the same figure de1app and Decenza show for that tank.
+        let depth = water_tank_depth_mm(17.0);
+        assert_eq!(depth, 22.0);
+        assert_eq!(water_tank_ml(depth), 592);
+        assert_eq!(water_tank_ml(depth), TANK_MM_TO_ML[22]);
+        // 592 / 1104 = 54 %. The double-offset bug showed 27 mm → 704 ml
+        // → 64 % for this same reading.
+        assert_eq!(water_tank_percent(depth), 54);
+        // The conversions themselves add nothing: depth in, table out.
+        assert_eq!(water_tank_ml(0.0), 0);
+        assert_eq!(water_tank_ml(5.0), TANK_MM_TO_ML[5]);
         // A raw 0 tank still holds ~124 ml above the uptake point.
-        assert_eq!(water_tank_ml(0.0), TANK_MM_TO_ML[5]);
-        // The reading from geota/crema#47's screenshot: 17 mm raw → 22 mm
-        // depth → the same 592 ml de1app and Decenza show for that tank.
-        assert_eq!(water_tank_ml(17.0), 592);
+        assert_eq!(water_tank_depth_mm(0.0), 5.0);
+        assert_eq!(water_tank_ml(water_tank_depth_mm(0.0)), 124);
+    }
+
+    #[test]
+    fn matches_decenza_for_every_raw_reading() {
+        // Decenza `de1device.cpp::parseWaterLevel`: depth = raw + 5,
+        // ml = mmToMl[trunc(depth)] (its table is ours up to index 65),
+        // percent = ml / 1104 clamped to 100.
+        for raw in 0..=60u8 {
+            let raw_mm = f32::from(raw) + 0.4;
+            let index = usize::from(raw) + 5;
+            let ml = water_tank_ml(water_tank_depth_mm(raw_mm));
+            assert_eq!(ml, TANK_MM_TO_ML[index], "raw {raw_mm}");
+            let pct = (f32::from(ml) / 1104.0 * 100.0).min(100.0).round();
+            assert_eq!(
+                f32::from(water_tank_percent(water_tank_depth_mm(raw_mm))),
+                pct
+            );
+        }
+    }
+
+    #[test]
+    fn refill_comparisons_stay_in_one_unit() {
+        // The machine's refill threshold is raw; the event level is a depth.
+        // Converting the threshold with the same function puts both on the
+        // depth scale, so a tank sitting exactly at the threshold compares
+        // equal — no 5 mm skew either way.
+        let raw_level = DEFAULT_REFILL_POINT_MM;
+        let level_depth = water_tank_depth_mm(raw_level);
+        let threshold_depth = water_tank_depth_mm(DEFAULT_REFILL_POINT_MM);
+        assert_eq!(level_depth, threshold_depth);
+        // Equivalent to Decenza's raw-vs-raw margin.
+        assert_eq!(
+            level_depth - threshold_depth,
+            (level_depth - SENSOR_OFFSET_MM) - DEFAULT_REFILL_POINT_MM
+        );
     }
 
     #[test]
     fn matches_legacy_endpoints() {
-        // The clamped ends: a raw reading past the table's top (67 mm of
-        // depth) reads as the full ceiling.
-        assert_eq!(water_tank_ml(62.0), 2058);
+        // The clamped ends: a depth at or past the table's top (67 mm) reads
+        // as the full ceiling.
         assert_eq!(water_tank_ml(67.0), 2058);
+        assert_eq!(water_tank_ml(water_tank_depth_mm(62.0)), 2058);
+        assert_eq!(water_tank_ml(66.0), 2022);
     }
 
     #[test]
     fn clamps_out_of_range() {
         // A glitch below the sensor's zero still has offset headroom…
-        assert_eq!(water_tank_ml(-1.0), TANK_MM_TO_ML[4]);
+        assert_eq!(water_tank_depth_mm(-1.0), 4.0);
         // …but never reads below the empty floor.
         assert_eq!(water_tank_depth_mm(-10.0), 0.0);
-        assert_eq!(water_tank_ml(-10.0), 0);
+        assert_eq!(water_tank_ml(-1.0), 0);
         assert_eq!(water_tank_ml(1000.0), 2058);
     }
 
     #[test]
     fn truncates_sub_millimetre_noise() {
-        // 5.7 mm raw → 10.7 mm depth, truncated to the table at index 10.
-        assert_eq!(water_tank_ml(5.7), TANK_MM_TO_ML[10]);
-        assert_eq!(water_tank_ml(5.0), TANK_MM_TO_ML[10]);
+        // 10.7 mm of depth truncates to the table at index 10.
+        assert_eq!(water_tank_ml(10.7), TANK_MM_TO_ML[10]);
+        assert_eq!(water_tank_ml(water_tank_depth_mm(5.7)), TANK_MM_TO_ML[10]);
     }
 
     #[test]
@@ -246,13 +315,13 @@ mod tests {
 
     #[test]
     fn percent_of_full_point() {
-        // Raw 0 is 5 mm of depth — ~124 ml, not empty.
-        assert_eq!(water_tank_percent(0.0), 11);
-        // 31 mm raw → 36 mm depth → 985 ml → 89 % of the 1104 ml full point.
-        assert_eq!(water_tank_percent(31.0), 89);
-        // The de1app full point itself: 40 mm of DEPTH → 1104 ml → exactly
-        // 100 %, reached at 35 mm raw.
-        assert_eq!(water_tank_percent(35.0), 100);
+        // 5 mm of depth (a raw 0) — 124 ml, not empty.
+        assert_eq!(water_tank_percent(5.0), 11);
+        // 36 mm depth → 985 ml → 89 % of the 1104 ml full point.
+        assert_eq!(water_tank_percent(36.0), 89);
+        // The de1app full point itself: 40 mm of depth → 1104 ml → 100 %.
+        assert_eq!(water_tank_percent(40.0), 100);
+        assert_eq!(water_tank_percent(39.0), 97);
         // Overfilled past the full point (table ceiling 2058 ml) — clamped.
         assert_eq!(water_tank_percent(67.0), 100);
         assert_eq!(water_tank_percent(1000.0), 100);

@@ -35,6 +35,7 @@ use de1_domain::{
     SteamMonitor, StepWeightExit, StopCapture, StopConfig, StopReason, StopTargets,
     TankLevelSmoother, TareSettleWindow, VolumeIntegrator, WaterEvent, WaterMonitor,
     WeightSpikeGate, WeightUnit, pre_shot_zero_offset, sav_counts_volume, shot_disposition,
+    water_tank_depth_mm,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -62,9 +63,6 @@ pub use de1_scale::Scale as ScaleId;
 /// Scale sensor lag assumed when no scale is connected — a representative
 /// value across the supported scales (380 ms, the legacy default).
 const DEFAULT_SCALE_LAG: Duration = Duration::from_millis(380);
-/// Millimetres added to the DE1's reported tank level — the legacy
-/// `water_level_mm_correction` (`machine.tcl`).
-const WATER_LEVEL_MM_CORRECTION: f32 = 5.0;
 /// How long an `ErrorNoAc` (217) episode must persist before it is surfaced
 /// as a fault. The DE1 reports it spuriously for "about three seconds" while
 /// waking or heating (Decenza #1893, firmware v1363); a snapshot cannot tell
@@ -3610,15 +3608,19 @@ impl CremaCore {
         out.events.push(event);
     }
 
-    /// Decode and process a `WaterLevels` notification, applying the legacy
-    /// +5 mm sensor correction to the reported tank level and the ~3 s
-    /// slosh filter ([`TankLevelSmoother`], Decenza `7d291524`).
+    /// Decode and process a `WaterLevels` notification: the raw level is
+    /// converted to a tank depth by [`water_tank_depth_mm`] — the ONE place
+    /// the +5 mm sensor offset is applied (de1app
+    /// `water_level_mm_correction`, Decenza `SENSOR_OFFSET`) — then run
+    /// through the ~3 s slosh filter ([`TankLevelSmoother`], Decenza
+    /// `7d291524`). The refill threshold is passed through raw; see the
+    /// `de1_domain::tank` module docs for the units rule.
     fn handle_water_levels(&mut self, data: &[u8], now_ms: u64, out: &mut CoreOutput) {
         match WaterLevels::decode(data) {
             Ok(levels) => out.events.push(Event::WaterLevel {
                 level: self
                     .tank_level
-                    .update(levels.current_mm + WATER_LEVEL_MM_CORRECTION, now_ms),
+                    .update(water_tank_depth_mm(levels.current_mm), now_ms),
                 refill_threshold: levels.refill_threshold_mm,
             }),
             Err(e) => out.events.push(Event::DecodeError {
@@ -6205,6 +6207,36 @@ mod tests {
             level: 105.0,
             refill_threshold: 70.0,
         }));
+    }
+
+    #[test]
+    fn the_tank_offset_reaches_the_readout_exactly_once() {
+        // Raw 17 mm on the wire (geota/crema#47) → 22 mm of depth on the
+        // event → 592 ml / 54 % through the shells' conversions — the numbers
+        // de1app and Decenza show. The double-offset bug read 27 mm / 704 ml.
+        let mut core = CremaCore::new();
+        let out = core.on_notification(Source::De1WaterLevels, &[17, 0, 5, 0], 0);
+        let (level, threshold) = out
+            .events
+            .iter()
+            .find_map(|e| match e {
+                Event::WaterLevel {
+                    level,
+                    refill_threshold,
+                } => Some((*level, *refill_threshold)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(level, 22.0);
+        assert_eq!(de1_domain::water_tank_ml(level), 592);
+        assert_eq!(de1_domain::water_tank_percent(level), 54);
+        // The threshold stays raw on the event…
+        assert_eq!(threshold, 5.0);
+        // …and the shells' refill comparison converts it to depth first: a
+        // raw level AT the raw threshold compares equal, not 5 mm apart.
+        let mut core = CremaCore::new();
+        let out = core.on_notification(Source::De1WaterLevels, &[5, 0, 5, 0], 0);
+        assert_eq!(water_level(&out), Some(water_tank_depth_mm(threshold)));
     }
 
     #[test]

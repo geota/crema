@@ -267,10 +267,18 @@ fun MainUiState.waterWarnThresholdMl(): Float = waterWarnMl ?: WATER_WARN_DEFAUL
  */
 fun MainUiState.refillPointMm(): Float = waterRefillPointMm ?: coffee.crema.core.defaultRefillPointMm()
 
-/** The tank's true water depth (mm) — the raw sensor reading plus core's 5 mm
- *  sensor offset, the number de1app and Decenza both display. Null until the
- *  first report. */
-fun MainUiState.tankDepthMm(): Float? = waterLevelMm?.let { coffee.crema.core.waterTankDepthMm(it) }
+/** The tank's true water depth (mm), the number de1app and Decenza both
+ *  display. `Event.WaterLevel.level` already IS this depth (core adds the 5 mm
+ *  sensor offset once, at decode), so this is the level as-is — never run it
+ *  through `waterTankDepthMm` again (that double offset read ~135 ml high).
+ *  Null until the first report. */
+fun MainUiState.tankDepthMm(): Float? = waterLevelMm
+
+/** The DE1's reported refill threshold (RAW sensor mm on the wire) converted
+ *  to depth mm via core's `waterTankDepthMm`, so it compares and reads in the
+ *  same unit as [tankDepthMm]. Null before the first report. */
+fun MainUiState.refillThresholdDepthMm(): Float? =
+    waterRefillThresholdMm?.let { coffee.crema.core.waterTankDepthMm(it) }
 
 /**
  * Battery percentage at or below which the one-per-connection "charge your
@@ -293,8 +301,10 @@ const val AUTO_UPDATE_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
  * reconciling the former phone 20 mm vs tablet 5 mm constants (issue 29).
  */
 fun MainUiState.refillSoon(): Boolean {
-    val level = waterLevelMm ?: return false
-    val threshold = waterRefillThresholdMm ?: return false
+    // Depth vs depth: the level is offset-corrected, the threshold is raw on
+    // the wire, so it goes through [refillThresholdDepthMm] first.
+    val level = tankDepthMm() ?: return false
+    val threshold = refillThresholdDepthMm() ?: return false
     return level <= threshold + REFILL_SOON_MARGIN_MM
 }
 
@@ -397,9 +407,10 @@ data class MainUiState(
     /** Human-readable message for the machine fault core says to surface
      *  (`Event.MachineErrorChanged`), else null — the same copy as web. */
     val machineError: String? = null,
-    /** Latest tank level, mm (`Event.WaterLevel`), or null before the first report. */
+    /** Latest tank DEPTH, mm (`Event.WaterLevel.level` — raw + core's 5 mm
+     *  sensor offset, smoothed), or null before the first report. */
     val waterLevelMm: Float? = null,
-    /** The DE1's own refill threshold, mm — reported alongside the level in the
+    /** The DE1's own refill threshold, RAW sensor mm — reported alongside the level in the
      *  same `Event.WaterLevel` packet (null before the first report / while
      *  disconnected). The shell defers to this live machine value for the
      *  "refill soon" cue rather than a hardcoded constant, matching the web
@@ -5105,6 +5116,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val s = _ui.value
                 val warnMl = s.waterWarnThresholdMl()
                 if (warnMl > 0f) {
+                    // The event level is already a depth (offset applied in
+                    // core) — the ml conversion takes it as-is.
                     val ml = coffee.crema.core.waterTankMl(event.content.level).toFloat()
                     if (!waterLowWarned && ml <= warnMl) {
                         waterLowWarned = true

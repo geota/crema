@@ -36,6 +36,7 @@ import coffee.crema.ui.REFILL_POINT_MAX_MM
 import coffee.crema.ui.REFILL_POINT_MIN_MM
 import coffee.crema.ui.formatTankLevel
 import coffee.crema.ui.refillPointMm
+import coffee.crema.ui.refillThresholdDepthMm
 import coffee.crema.ui.tankDepthMm
 import coffee.crema.ui.waterWarnThresholdMl
 import coffee.crema.ui.formatTemp
@@ -567,7 +568,7 @@ private fun WaterSection(
             "Water tank",
             when {
                 mm == null -> "Connect the DE1 to read the tank level."
-                low -> "Low — refill soon. ${depth?.toInt()} mm deep, machine refills at ${ui.refillPointMm().toInt()} mm."
+                low -> "Low — refill soon. ${depth?.toInt()} mm deep, machine refills below ${ui.refillThresholdDepthMm()?.toInt()} mm."
                 else -> "Tank level looks good — ${depth?.toInt()} mm deep."
             },
         ) {
