@@ -59,8 +59,8 @@ sealed class VisualizerError(message: String) : Exception(message) {
     /** Transport failure or malformed body — worth retrying later. */
     class Network(message: String) : VisualizerError(message)
 
-    /** Any other non-2xx. */
-    class Http(val status: Int, message: String) : VisualizerError(message)
+    /** Any other non-2xx, with the reply body (the quota 422 is told apart by it). */
+    class Http(val status: Int, message: String, val body: String = "") : VisualizerError(message)
 }
 
 class VisualizerClient(
@@ -113,7 +113,7 @@ class VisualizerClient(
             status == 401 -> throw VisualizerError.Auth()
             status == 402 || status == 403 -> throw VisualizerError.PremiumGated()
             status == 404 -> throw VisualizerError.NotFound()
-            status !in 200..299 -> throw VisualizerError.Http(status, "Visualizer HTTP $status")
+            status !in 200..299 -> throw VisualizerError.Http(status, "Visualizer HTTP $status", text)
             text.isBlank() -> null
             else -> runCatching { json.parseToJsonElement(text) }
                 .getOrElse { throw VisualizerError.Network("Visualizer returned a malformed body") }

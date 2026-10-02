@@ -41,6 +41,13 @@ import type {
 	VisualizerPremiumGatedError
 } from '$lib/effect/errors';
 import { ShotSync } from '$lib/services/shot-sync';
+import {
+	isRateLimited,
+	isRecoverable as isRecoverableCallError,
+	quotaLimit,
+	quotaNotice,
+	retryDelayMs
+} from '$lib/services/visualizer-call';
 import { UploadQueue } from '$lib/services/upload-queue';
 import { getHistoryStore } from './store.svelte';
 import { isBrewLog } from './model';
@@ -381,21 +388,13 @@ type ShotPushError =
 	| ResponseDecodeError;
 
 /**
- * Whether a `ShotSync.uploadShot` failure is worth a time-based retry:
- * transport / 5xx / 408 are recoverable; auth / premium / not-found / decode
- * need user action. Matches `UploadQueue`'s own classifier — same recoverable
- * set, now switched on the REAL tagged error rather than the old squashed
- * boundary shape.
+ * Whether a `ShotSync.uploadShot` failure is worth a time-based retry — the
+ * shared core policy (`de1_domain::VisualizerCallError::is_recoverable`):
+ * transport / 5xx / 408 / 429 are recoverable; auth / premium / not-found /
+ * decode (and the free-plan daily quota 422) need user action or a new day.
  */
 function isRecoverable(e: ShotPushError): boolean {
-	switch (e._tag) {
-		case 'NetworkError':
-			return true;
-		case 'HttpStatusError':
-			return e.status === 0 || e.status === 408 || (e.status >= 500 && e.status < 600);
-		default:
-			return false;
-	}
+	return isRecoverableCallError(e);
 }
 
 /** Human-readable one-liner for the sync-log entry / queued retry. */
@@ -489,9 +488,13 @@ export function pushShotToVisualizer(
 							entity: 'shot',
 							id: shotId,
 							op: 'create',
-							error: describePushError(e)
+							error: describePushError(e),
+							...(isRateLimited(e) ? { delayMs: retryDelayMs(e, 0) } : {})
 						});
 					}
+					// The free-plan daily cap: not queued (the shot stays unsynced,
+					// so the next backlog pass uploads it) — say so plainly.
+					const limit = quotaLimit(e);
 					appendSyncLog({
 						direction: 'skip',
 						entity: 'shot',
@@ -505,7 +508,9 @@ export function pushShotToVisualizer(
 					reportUploadOutcome(
 						shotId,
 						'Visualizer',
-						queued ? { kind: 'queued' } : { kind: 'failed', message: describePushError(e) }
+						queued
+							? { kind: 'queued' }
+							: { kind: 'failed', message: limit != null ? quotaNotice(limit) : describePushError(e) }
 					);
 				})
 			)

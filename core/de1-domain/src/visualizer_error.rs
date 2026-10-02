@@ -62,18 +62,89 @@ impl VisualizerCallError {
 
     /// Whether the failure is worth a time-based retry through the upload
     /// queue: a transport failure ([`Self::Network`]), or a transient
-    /// `5xx` / `408` / transport-blocked (`status 0`) HTTP response. Auth /
-    /// premium / not-found / decode failures need user action, not time, so
-    /// they are terminal. Mirrors `isRecoverable`.
+    /// `5xx` / `408` / `429` / transport-blocked (`status 0`) HTTP response.
+    /// Auth / premium / not-found / decode failures need user action, not
+    /// time, so they are terminal. Mirrors `isRecoverable`.
+    ///
+    /// `429` is Visualizer's rate limit (50 requests/min and 200 per 10 min
+    /// per IP, 200 per 10 min per user — `openapi.yaml` "Rate limits"): it
+    /// clears with time, so it is retried, with the longer
+    /// [`retry_backoff_ms`] delay.
     #[must_use]
     pub fn is_recoverable(&self) -> bool {
         match self {
             Self::Network => true,
             Self::HttpStatus(status) => {
-                *status == 0 || *status == 408 || (*status >= 500 && *status < 600)
+                *status == 0
+                    || *status == 408
+                    || *status == RATE_LIMITED
+                    || (*status >= 500 && *status < 600)
             }
             _ => false,
         }
+    }
+}
+
+/// HTTP 429 Too Many Requests — Visualizer's rate limit.
+const RATE_LIMITED: u16 = 429;
+
+/// Visualizer's free-plan daily cap on new shots when the reply doesn't name
+/// one (`Shot::DAILY_LIMIT`, 30 since visualizer 3e9ba33c, 2026-09-19).
+pub const VISUALIZER_DEFAULT_DAILY_LIMIT: u32 = 30;
+
+/// Detect Visualizer's free-plan daily upload cap and return the cap.
+///
+/// A free account may create at most `Shot::DAILY_LIMIT` new shots per
+/// rolling 24 h. At the cap, `POST /shots/upload` fails the `daily_limit`
+/// validation and replies **422** with
+/// `{"error":"Could not save the provided file. You've reached your daily
+/// limit of 30 shots. Please consider upgrading to a premium account."}`
+/// (visualizer `Shot#daily_limit` + `Api::ShotsController#upload`).
+///
+/// Rule: `status == 422` and the body's `error` string (or the raw body when
+/// it isn't JSON) contains `daily limit`, ASCII case-insensitive. Every other
+/// 422 (an unparseable file, a bad field) is NOT the quota. Returns the cap
+/// parsed from `daily limit of N`, else [`VISUALIZER_DEFAULT_DAILY_LIMIT`];
+/// `None` when this isn't the quota reply.
+#[must_use]
+pub fn visualizer_quota_limit(status: u16, body: &str) -> Option<u32> {
+    if status != 422 {
+        return None;
+    }
+    let message = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
+        .unwrap_or_else(|| body.to_owned())
+        .to_ascii_lowercase();
+    let at = message.find("daily limit")?;
+    let limit = message[at + "daily limit".len()..]
+        .trim_start()
+        .strip_prefix("of")
+        .map(str::trim_start)
+        .and_then(|rest| {
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse::<u32>().ok()
+        })
+        .filter(|n| *n > 0)
+        .unwrap_or(VISUALIZER_DEFAULT_DAILY_LIMIT);
+    Some(limit)
+}
+
+/// Delay before retry number `attempt` (attempts made so far, 0-based) of a
+/// recoverable failure with HTTP `status` (`None` for a transport failure).
+///
+/// - `429`: Visualizer's limits are per minute / per 10 minutes and the reply
+///   carries no `Retry-After`, so wait a full minute and double from there:
+///   60 s, 120 s, 240 s, … capped at 10 min.
+/// - Everything else: 1 s × 2^attempt, capped at 60 s (the queue's existing
+///   schedule).
+#[must_use]
+pub fn retry_backoff_ms(status: Option<u16>, attempt: u32) -> u64 {
+    let factor = 1u64 << attempt.min(16);
+    if status == Some(RATE_LIMITED) {
+        (60_000 * factor).min(600_000)
+    } else {
+        (1_000 * factor).min(60_000)
     }
 }
 
@@ -104,8 +175,13 @@ mod tests {
     }
 
     #[test]
+    fn rate_limited_is_recoverable() {
+        assert!(is_recoverable("HttpStatusError", Some(429)));
+    }
+
+    #[test]
     fn terminal_http_is_not_recoverable() {
-        for status in [404u16, 402, 401, 400, 200, 301, 499] {
+        for status in [404u16, 402, 401, 400, 422, 200, 301, 499] {
             assert!(!is_recoverable("HttpStatusError", Some(status)), "{status}");
         }
     }
@@ -153,5 +229,55 @@ mod tests {
             VisualizerCallError::from_tag("whatever", None),
             VisualizerCallError::ResponseDecode
         );
+    }
+
+    /// The exact reply visualizer `Api::ShotsController#upload` sends at the
+    /// free-plan cap (`Shot#daily_limit`, 3e9ba33c).
+    const QUOTA_BODY: &str = r#"{"error":"Could not save the provided file. You've reached your daily limit of 30 shots. Please consider upgrading to a premium account."}"#;
+
+    #[test]
+    fn quota_422_is_detected_with_its_limit() {
+        assert_eq!(visualizer_quota_limit(422, QUOTA_BODY), Some(30));
+        // The pre-3e9ba33c cap (50) parses too.
+        let old = QUOTA_BODY.replace("30", "50");
+        assert_eq!(visualizer_quota_limit(422, &old), Some(50));
+        // A non-JSON body carrying the message still counts; no number → 30.
+        assert_eq!(
+            visualizer_quota_limit(422, "You've reached your Daily Limit."),
+            Some(VISUALIZER_DEFAULT_DAILY_LIMIT)
+        );
+    }
+
+    #[test]
+    fn other_422s_and_statuses_are_not_quota() {
+        let bad_file =
+            r#"{"error":"Could not save the provided file. Profile file can't be blank"}"#;
+        assert_eq!(visualizer_quota_limit(422, bad_file), None);
+        assert_eq!(
+            visualizer_quota_limit(422, r#"{"error":"Request must be JSON."}"#),
+            None
+        );
+        assert_eq!(visualizer_quota_limit(422, ""), None);
+        // Same text on another status is not the quota reply.
+        assert_eq!(visualizer_quota_limit(400, QUOTA_BODY), None);
+        assert_eq!(visualizer_quota_limit(429, QUOTA_BODY), None);
+    }
+
+    #[test]
+    fn quota_422_is_terminal_not_retried() {
+        // The quota must stop the loop, not be retried every few seconds.
+        assert!(!is_recoverable("HttpStatusError", Some(422)));
+    }
+
+    #[test]
+    fn backoff_schedules() {
+        assert_eq!(retry_backoff_ms(None, 0), 1_000);
+        assert_eq!(retry_backoff_ms(Some(503), 1), 2_000);
+        assert_eq!(retry_backoff_ms(Some(503), 3), 8_000);
+        assert_eq!(retry_backoff_ms(Some(503), 10), 60_000);
+        assert_eq!(retry_backoff_ms(Some(429), 0), 60_000);
+        assert_eq!(retry_backoff_ms(Some(429), 1), 120_000);
+        assert_eq!(retry_backoff_ms(Some(429), 4), 600_000);
+        assert_eq!(retry_backoff_ms(Some(429), 40), 600_000);
     }
 }

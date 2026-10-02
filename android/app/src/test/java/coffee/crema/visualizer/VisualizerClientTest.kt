@@ -137,7 +137,11 @@ class VisualizerClientTest {
         status = HttpStatusCode.InternalServerError
         assertEquals(500, fails<VisualizerError.Http>().status)
         status = HttpStatusCode.UnprocessableEntity
-        assertEquals(422, fails<VisualizerError.Http>().status)
+        reply = """{"error":"You've reached your daily limit of 30 shots."}"""
+        val e = fails<VisualizerError.Http>()
+        assertEquals(422, e.status)
+        // The body rides along so the quota 422 can be told apart.
+        assertEquals(reply, e.body)
     }
 
     @Test

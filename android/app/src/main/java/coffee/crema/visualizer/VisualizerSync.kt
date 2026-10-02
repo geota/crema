@@ -72,6 +72,8 @@ class VisualizerSync(
     private val onSignedIn: () -> Unit = {},
     /** The shot as history holds it now (null = deleted) — re-read before a backlog POST. */
     private val currentShot: (localId: String) -> StoredShot? = { null },
+    /** The core's quota / backoff policy (injected so JVM tests needn't load the native core). */
+    private val uploadPolicy: UploadPolicy = UploadPolicy.core(),
 ) : UploadDestination {
 
     private companion object {
@@ -437,8 +439,9 @@ class VisualizerSync(
                     if (sink != null) sink(shot.id, UploadOutcome(UploadOutcomeKind.Uploaded)) else notify("Shot uploaded to Visualizer")
                 }
                 .onFailure { e ->
-                    if (sink != null) sink(shot.id, UploadOutcome(UploadOutcomeKind.Failed, e.message ?: "failed"))
-                    else notify("Visualizer upload failed: ${e.message}")
+                    val why = uploadPolicy.describe(e)
+                    if (sink != null) sink(shot.id, UploadOutcome(UploadOutcomeKind.Failed, why))
+                    else notify("Visualizer upload failed: $why")
                 }
         }
         return true
@@ -458,35 +461,41 @@ class VisualizerSync(
             val unsynced = unsent(shots)
             if (unsynced.isEmpty()) return DrainResult()
             _state.update { it.copy(busy = true) }
-            var ok = 0
-            var failed = 0
-            var skipped = 0
-            var stopped: String? = null
-            for (snapshot in unsynced) {
-                if (!claim(snapshot.id)) { skipped++; continue }
+            // Stops on the free-plan daily cap / a lasting 429 / a dead
+            // session (web `shouldAbortLoop`); the rest stay in the backlog.
+            val r = runUploadPass(
+                unsynced,
+                uploadPolicy,
+                onFailure = { snapshot, e ->
+                    if (e !is VisualizerError.Auth) logSync("skip", snapshot.id, snapshot.profileName ?: "Shot", uploadPolicy.describe(e))
+                },
+            ) { snapshot ->
+                if (!claim(snapshot.id)) return@runUploadPass false
                 try {
                     val shot = currentShot(snapshot.id) ?: snapshot
-                    if (shot.visualizerId != null) { skipped++; continue }
+                    if (shot.visualizerId != null) return@runUploadPass false
                     val id = uploadShotNow(shot)
-                    ok++
                     onShotSynced(shot.id, id)
-                } catch (c: CancellationException) {
-                    throw c
-                } catch (e: VisualizerError.Auth) {
-                    failed++
-                    stopped = "Visualizer session expired"
-                } catch (e: Exception) {
-                    failed++
-                    logSync("skip", snapshot.id, snapshot.profileName ?: "Shot", e.message)
+                    true
                 } finally {
                     release(snapshot.id)
                 }
-                if (stopped != null) break
             }
-            return DrainResult(ok, failed, skipped, stopped)
+            return DrainResult(r.uploaded, r.failed, r.skipped, r.stop?.notice)
         } finally {
             _state.update { it.copy(busy = false) }
             drainMutex.unlock()
+        }
+    }
+
+    /** One backlog upload with the History spinner on; stamps the id. Throws on failure. */
+    private suspend fun pushTracked(shot: StoredShot): Boolean {
+        _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shot.id) }
+        try {
+            onShotSynced(shot.id, uploadShotNow(shot))
+            return true
+        } finally {
+            _state.update { it.copy(uploadingShotIds = it.uploadingShotIds - shot.id) }
         }
     }
 
@@ -729,21 +738,17 @@ class VisualizerSync(
                     logSync("pull", "", "Pull failed", e.message)
                 }
             }
+            var stop: PassStop? = null
             if (directionPushes(direction)) {
                 val unsynced = shots.filter { it.visualizerId == null && !it.isBrewLog }
-                for (shot in unsynced) {
-                    _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shot.id) }
-                    runCatchingCancellable { uploadShotNow(shot) }
-                        .onSuccess { id ->
-                            pushed++
-                            onShotSynced(shot.id, id)
-                        }
-                        .onFailure { e ->
-                            failed = true
-                            logSync("skip", shot.id, shot.profileName ?: "Shot", e.message)
-                        }
-                    _state.update { it.copy(uploadingShotIds = it.uploadingShotIds - shot.id) }
-                }
+                val r = runUploadPass(
+                    unsynced,
+                    uploadPolicy,
+                    onFailure = { shot, e -> logSync("skip", shot.id, shot.profileName ?: "Shot", uploadPolicy.describe(e)) },
+                ) { shot -> pushTracked(shot) }
+                pushed = r.uploaded
+                if (r.failed > 0) failed = true
+                stop = r.stop
             }
             _state.update { it.copy(syncing = false) }
             notify(
@@ -752,7 +757,8 @@ class VisualizerSync(
                     if (directionPulls(direction)) append("$pulled pulled")
                     if (directionPulls(direction) && directionPushes(direction)) append(" · ")
                     if (directionPushes(direction)) append("$pushed pushed")
-                    if (failed) append(" · some steps failed (see log)")
+                    if (stop != null) append(" · ${stop.notice}")
+                    else if (failed) append(" · some steps failed (see log)")
                 },
             )
         }
@@ -783,23 +789,11 @@ class VisualizerSync(
         }
         _state.update { it.copy(busy = true) }
         scope.launch {
-            var ok = 0
-            var failed = 0
-            for (shot in unsynced) {
-                _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shot.id) }
-                runCatchingCancellable { uploadShotNow(shot) }
-                    .onSuccess { id ->
-                        ok++
-                        onShotSynced(shot.id, id)
-                    }
-                    .onFailure { failed++ }
-                _state.update { it.copy(uploadingShotIds = it.uploadingShotIds - shot.id) }
-            }
+            val r = runUploadPass(unsynced, uploadPolicy) { shot -> pushTracked(shot) }
             _state.update { it.copy(busy = false) }
-            notify(
-                if (failed == 0) "Uploaded $ok shot(s) to Visualizer"
-                else "Uploaded $ok shot(s); $failed failed",
-            )
+            val summary = if (r.failed == 0) "Uploaded ${r.uploaded} shot(s) to Visualizer"
+            else "Uploaded ${r.uploaded} shot(s); ${r.failed} failed"
+            notify(r.stop?.let { "$summary — ${it.notice}" } ?: summary)
         }
     }
 }

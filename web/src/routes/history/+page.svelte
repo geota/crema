@@ -67,6 +67,7 @@
 	import { appendSyncLog, directionPushes, readSyncConfig } from '$lib/visualizer';
 	import { readQueue } from '$lib/services/queue-store';
 	import { toast } from '$lib/components/shared/toast.svelte';
+	import { describeUnsyncedStop } from '$lib/services/shot-sync';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	const store = getHistoryStore();
@@ -461,8 +462,10 @@
 				// bind + sync-log each unsynced shot, routing recoverable failures to
 				// the retry queue; then drain whatever it enqueued. Single-flight, so a
 				// Settings catch-up already running is joined, not repeated.
-				await api.shots.uploadUnsynced(store);
+				const result = await api.shots.uploadUnsynced(store);
 				await api.queue.drain();
+				const notice = describeUnsyncedStop(result);
+				if (notice) toast[notice.kind](notice.message);
 			}
 			if (decentUnsentIds.size > 0) {
 				// Shares one drain lock with the Settings catch-up.

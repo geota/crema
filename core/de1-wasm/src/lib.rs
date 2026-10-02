@@ -1046,6 +1046,27 @@ pub fn is_recoverable(tag: &str, status: Option<u32>) -> bool {
     de1_domain::is_recoverable(tag, status.and_then(|s| u16::try_from(s).ok()))
 }
 
+/// Visualizer's free-plan daily upload cap: the cap (e.g. `30`) when a reply
+/// with HTTP `status` and `body` is the quota 422, else `undefined`. See
+/// `de1_domain::visualizer_quota_limit`.
+#[wasm_bindgen(js_name = visualizerQuotaLimit)]
+#[must_use]
+pub fn visualizer_quota_limit(status: u32, body: &str) -> Option<u32> {
+    de1_domain::visualizer_quota_limit(u16::try_from(status).ok()?, body)
+}
+
+/// Delay (ms) before retry number `attempt` of a recoverable Visualizer
+/// failure with HTTP `status` (`undefined` for a transport failure) — longer
+/// for a 429. See `de1_domain::retry_backoff_ms`.
+#[wasm_bindgen(js_name = retryBackoffMs)]
+#[must_use]
+pub fn retry_backoff_ms(status: Option<u32>, attempt: u32) -> f64 {
+    #[allow(clippy::cast_precision_loss)]
+    let ms =
+        de1_domain::retry_backoff_ms(status.and_then(|s| u16::try_from(s).ok()), attempt) as f64;
+    ms
+}
+
 /// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` →
 /// `"DE1"`, `4` → `"DE1XL"`). Values past the table are reported as
 /// `"model N"`. Mirrors [`de1_protocol::machine_model_name`].

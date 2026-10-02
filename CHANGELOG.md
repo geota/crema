@@ -156,6 +156,23 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Visualizer notes no longer show HTML tags** — Visualizer switched shot
+  notes (bean, espresso, private) and coffee-bag notes to rich text in July.
+  Pulled notes came into Crema with `<p>` and `<br>` in them, and notes Crema
+  sent were stored as one run-on line. Crema now converts at the wire: rich
+  text becomes plain text (paragraphs, line breaks, lists and `&amp;`-style
+  characters kept) on pull, and plain text becomes paragraphs on push. Older
+  plain-text notes still read as they are.
+- **Visualizer's 30-shots-a-day free plan stops a backlog upload cleanly** —
+  when a free account reaches its daily cap, "Upload all", the Settings
+  catch-up and Sync now stop after the first refusal instead of trying every
+  remaining shot, and say "Visualizer's free plan uploads up to 30 shots a day
+  — the rest will upload tomorrow". The rest stay unsynced for the next pass.
+  Web and Android.
+- **Visualizer rate limiting is retried** — a "too many requests" reply (429)
+  now waits a minute (then longer) and retries, instead of failing the shot.
+  Web and Android.
+
 - **Beanconqueror brew times** — Beanconqueror stores a brew time as whole
   seconds plus the sub-second remainder. Crema read the remainder as the whole
   time on import (a 28.45 s brew came in as 0.45 s) and wrote the total into

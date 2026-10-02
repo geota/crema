@@ -266,7 +266,8 @@ pub fn bean_to_wire(bean: &Bean, roaster_remote_id: Option<&str>) -> BagWire {
         tasting_notes: non_empty(&bean.tasting_notes),
         place_of_purchase: bean.place_of_purchase.clone(),
         url: bean.url.clone(),
-        notes: non_empty(&bean.notes),
+        // Coffee-bag notes are rich text (HTML) since visualizer d4ba57d3.
+        notes: non_empty(&bean.notes).map(|n| plain_to_html(&n)),
         archived_at: bean.archived_at.map(format_iso_datetime_ms),
         updated_at: None,
         metadata: Some(Value::Object(meta)),
@@ -350,7 +351,7 @@ pub fn bean_from_wire(
         .map_or(0, |n| n as u8);
     bean.place_of_purchase = wire.place_of_purchase.clone();
     bean.url = wire.url.clone();
-    bean.notes = wire.notes.clone().unwrap_or_default();
+    bean.notes = wire.notes.as_deref().map(html_to_plain).unwrap_or_default();
     bean.favourite = crema.get("crema_favourite") == Some(&Value::Bool(true));
     bean.archived_at = wire.archived_at.as_deref().and_then(parse_iso_datetime_ms);
     bean.grinder = crema
@@ -457,11 +458,14 @@ pub fn wire_shot_from_detail(
         .and_then(js_number_finite)
         .map(|n| n as f32);
 
+    // Notes are sanitized HTML since visualizer d4ba57d3 (the Beanconqueror
+    // variant serialises plain text); `html_to_plain` handles both.
     let espresso_notes = detail
         .get("private_notes")
         .and_then(value_as_string)
         .or_else(|| bc_get("private_notes").and_then(value_as_string))
-        .or_else(|| detail.get("espresso_notes").and_then(value_as_string));
+        .or_else(|| detail.get("espresso_notes").and_then(value_as_string))
+        .map(|n| html_to_plain(&n));
 
     // Crema rating is 0..5; the wire's cupping slots are 0..15. The PATCH
     // writes `flavor = rating * 3`, so the pull does the inverse: prefer
@@ -504,7 +508,9 @@ pub fn wire_shot_from_detail(
         bean_type: bean_field("bean_type"),
         roast_date: bean_field("roast_date"),
         roast_level: bean_field("roast_level"),
-        bean_notes: bean_field("bean_notes"),
+        bean_notes: bean_field("bean_notes")
+            .map(|n| html_to_plain(&n))
+            .filter(|n| !n.is_empty()),
         grinder_model: bean_field("grinder_model"),
         grinder_setting: bean_field("grinder_setting"),
     };
@@ -936,7 +942,11 @@ pub fn visualizer_shot_patch(inputs: &ShotPatchInputs) -> Value {
     put_trimmed("bean_brand", &inputs.bean_brand);
     put_trimmed("bean_type", &inputs.bean_type);
     put_trimmed("roast_date", &inputs.roast_date);
-    put_trimmed("bean_notes", &inputs.bean_notes);
+    // `bean_notes` / `private_notes` are rich text since visualizer d4ba57d3.
+    put_trimmed(
+        "bean_notes",
+        &inputs.bean_notes.as_deref().map(plain_to_html),
+    );
     put_trimmed("grinder_setting", &inputs.grinder_setting);
     put_trimmed("grinder_model", &inputs.grinder_model);
     if let Some(level) = roast_level_to_wire(inputs.roast_level) {
@@ -949,7 +959,10 @@ pub fn visualizer_shot_patch(inputs: &ShotPatchInputs) -> Value {
         );
     }
     if let Some(notes) = &inputs.notes {
-        body.insert("private_notes".to_owned(), Value::String(notes.clone()));
+        body.insert(
+            "private_notes".to_owned(),
+            Value::String(plain_to_html(notes)),
+        );
     }
     if let Some(bag) = &inputs.coffee_bag_id {
         body.insert("coffee_bag_id".to_owned(), Value::String(bag.clone()));
@@ -980,6 +993,386 @@ pub fn visualizer_shot_patch(inputs: &ShotPatchInputs) -> Value {
 pub fn visualizer_shot_patch_json(inputs_json: &str) -> Result<String, String> {
     let inputs: ShotPatchInputs = serde_json::from_str(inputs_json).map_err(|e| e.to_string())?;
     serde_json::to_string(&visualizer_shot_patch(&inputs)).map_err(|e| e.to_string())
+}
+
+// ── Rich-text notes (Visualizer ≥ d4ba57d3) ───────────────────────────────
+//
+// Since visualizer d4ba57d3 (2026-07-31, API 1.16.0) the shot notes
+// (`bean_notes`, `espresso_notes`, `private_notes`) and the coffee-bag
+// `notes` are ActionText rich text: `GET` returns sanitized HTML and
+// `PATCH`/`POST` take HTML (run through `RichTextSanitizer.sanitize`, which
+// keeps the Rails safe-list tags and drops scripts/media). Crema keeps
+// notes as plain text, so it converts at the wire: [`html_to_plain`] on
+// every pull, [`plain_to_html`] on every push.
+
+/// Plain text → the HTML Visualizer stores, byte-for-byte what visualizer's
+/// own `RichTextSanitizer.from_plain_text` produces: HTML-escape, split into
+/// paragraphs on blank lines (`\n{2,}`), wrap each in `<p>…</p>` and turn the
+/// remaining single newlines into `<br>`. E.g. `"First <line>\nSecond\n\nNext"`
+/// → `"<p>First &lt;line&gt;<br>Second</p><p>Next</p>"`.
+///
+/// Normalises first so the round trip through [`html_to_plain`] is stable:
+/// CRLF/CR → LF, the whole text trimmed, whitespace-only paragraphs dropped.
+/// An empty / whitespace-only input yields `""` (a PATCH with `""` clears
+/// the remote notes).
+#[must_use]
+pub fn plain_to_html(plain: &str) -> String {
+    let text = plain.replace("\r\n", "\n").replace('\r', "\n");
+    let mut out = String::new();
+    let mut para = String::new();
+    let flush = |para: &mut String, out: &mut String| {
+        let p = para.trim_matches('\n');
+        if !p.trim().is_empty() {
+            out.push_str("<p>");
+            out.push_str(&escape_html(p).replace('\n', "<br>"));
+            out.push_str("</p>");
+        }
+        para.clear();
+    };
+    for line in text.trim().split('\n') {
+        if line.trim().is_empty() {
+            // A blank (or whitespace-only) line ends the paragraph.
+            flush(&mut para, &mut out);
+        } else {
+            if !para.is_empty() {
+                para.push('\n');
+            }
+            para.push_str(line);
+        }
+    }
+    flush(&mut para, &mut out);
+    out
+}
+
+/// HTML-escape like Ruby's `ERB::Util.html_escape` (`& < > " '`).
+fn escape_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Visualizer's sanitized HTML notes → plain text.
+///
+/// Keeps the structure a plain-text note can carry: paragraphs and block
+/// elements (`p`, `div`, headings, `blockquote`, `pre`, `ul`/`ol`, `hr`) end
+/// with a blank line, `<br>` is a newline, list items become `- item` /
+/// `1. item` lines, `<pre>` keeps its newlines. Every other tag (`strong`,
+/// `em`, `a`, `span`, …) is dropped and its text kept; `script` / `style`
+/// content is dropped. Entities are decoded (`&amp; &lt; &gt; &quot;
+/// &apos; &#39; &nbsp;` and other common named ones, plus numeric
+/// `&#NNN;` / `&#xHH;`); an unknown entity is left as written.
+///
+/// Old plain-text replies (pre-d4ba57d3, cached rows, or the Beanconqueror
+/// format, which still serialises plain text) pass through: a string with
+/// no tag is only entity-decoded and trimmed. (Visualizer's sanitizer also
+/// returns tagless text for a note PATCHed as bare text, but escapes `&`/`<`
+/// in it — hence the decode.)
+///
+/// Inverse of [`plain_to_html`]: `html_to_plain(plain_to_html(p))` is `p`
+/// for any normalised `p` (trimmed, LF line ends, no whitespace-only
+/// paragraphs, no runs of 3+ newlines).
+#[must_use]
+pub fn html_to_plain(html: &str) -> String {
+    if !looks_like_html(html) {
+        return decode_entities(html).trim().to_owned();
+    }
+    let mut w = PlainWriter::default();
+    let bytes = html.as_bytes();
+    let mut i = 0;
+    let mut text_start = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let Some((tag, end)) = parse_tag(html, i) else {
+            i += 1;
+            continue;
+        };
+        w.text(&html[text_start..i]);
+        i = end;
+        match tag {
+            Tag::Comment => {}
+            Tag::Element { name, closing } => {
+                if !closing && (name == "script" || name == "style") {
+                    // Skip to the matching close tag (defensive — the
+                    // sanitizer already strips these).
+                    let close = format!("</{name}");
+                    let rest = html[i..].to_ascii_lowercase();
+                    i = rest.find(&close).map_or(html.len(), |at| {
+                        html[i + at..]
+                            .find('>')
+                            .map_or(html.len(), |gt| i + at + gt + 1)
+                    });
+                } else {
+                    w.tag(&name, closing);
+                }
+            }
+        }
+        text_start = i;
+    }
+    w.text(&html[text_start..]);
+    w.finish()
+}
+
+/// Whether `s` contains at least one HTML tag (`<name`, `</name`, `<!--`).
+fn looks_like_html(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.windows(2)
+        .any(|w| w[0] == b'<' && (w[1].is_ascii_alphabetic() || w[1] == b'/' || w[1] == b'!'))
+        && (0..b.len()).any(|i| b[i] == b'<' && parse_tag(s, i).is_some())
+}
+
+enum Tag {
+    Comment,
+    Element { name: String, closing: bool },
+}
+
+/// Parse the tag starting at `s[at] == '<'`; returns it and the index just
+/// past its `>`. Quoted attribute values may contain `>`.
+fn parse_tag(s: &str, at: usize) -> Option<(Tag, usize)> {
+    let rest = &s[at..];
+    if let Some(body) = rest.strip_prefix("<!--") {
+        let end = body.find("-->").map_or(s.len(), |e| at + 4 + e + 3);
+        return Some((Tag::Comment, end));
+    }
+    let b = rest.as_bytes();
+    let mut j = 1;
+    let closing = b.get(j) == Some(&b'/');
+    if closing {
+        j += 1;
+    }
+    let name_start = j;
+    while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'-') {
+        j += 1;
+    }
+    if j == name_start || !b[name_start].is_ascii_alphabetic() {
+        return None;
+    }
+    let name = rest[name_start..j].to_ascii_lowercase();
+    let mut quote: Option<u8> = None;
+    while j < b.len() {
+        match (quote, b[j]) {
+            (None, b'>') => return Some((Tag::Element { name, closing }, at + j + 1)),
+            (None, q @ (b'"' | b'\'')) => quote = Some(q),
+            (Some(q), c) if c == q => quote = None,
+            (None, b'<') => return None, // a stray `<`, not a tag
+            _ => {}
+        }
+        j += 1;
+    }
+    None
+}
+
+/// Accumulates plain text from the tag stream.
+#[derive(Default)]
+struct PlainWriter {
+    out: String,
+    /// Open lists: `None` = `ul`, `Some(n)` = `ol` with the next number.
+    lists: Vec<Option<u32>>,
+    /// Inside `<pre>` (keep raw newlines).
+    pre: usize,
+}
+
+impl PlainWriter {
+    fn text(&mut self, raw: &str) {
+        if raw.is_empty() {
+            return;
+        }
+        let decoded = decode_entities(raw);
+        if self.pre > 0 {
+            self.out.push_str(&decoded);
+            return;
+        }
+        // Outside <pre>, a raw newline is markup whitespace (Kramdown emits
+        // `<br />\n`, `<ul>\n  <li>`): drop whitespace-only runs that hold a
+        // newline, and turn any other newline into a space.
+        if decoded.contains('\n') && decoded.trim().is_empty() {
+            return;
+        }
+        let mut t = decoded.as_str();
+        if t.starts_with(['\n', '\r']) || (self.at_line_start() && t.trim_start() != t) {
+            let trimmed = t.trim_start();
+            if t[..t.len() - trimmed.len()].contains('\n') {
+                t = trimmed;
+            }
+        }
+        let tail = t.trim_end();
+        if t[tail.len()..].contains('\n') {
+            t = tail;
+        }
+        self.out
+            .push_str(&t.replace("\r\n", " ").replace(['\n', '\r'], " "));
+    }
+
+    fn at_line_start(&self) -> bool {
+        self.out.is_empty() || self.out.ends_with('\n')
+    }
+
+    fn newline(&mut self) {
+        if !self.out.is_empty() && !self.out.ends_with('\n') {
+            self.out.push('\n');
+        }
+    }
+
+    fn paragraph_break(&mut self) {
+        if self.out.is_empty() {
+            return;
+        }
+        self.newline();
+        if !self.out.ends_with("\n\n") {
+            self.out.push('\n');
+        }
+    }
+
+    fn tag(&mut self, name: &str, closing: bool) {
+        match name {
+            "br" => self.out.push('\n'),
+            "hr" => self.paragraph_break(),
+            "p" | "div" | "blockquote" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "figure"
+            | "figcaption" | "table" | "dl" => self.paragraph_break(),
+            "pre" => {
+                self.paragraph_break();
+                if closing {
+                    self.pre = self.pre.saturating_sub(1);
+                } else {
+                    self.pre += 1;
+                }
+            }
+            "ul" | "ol" => {
+                if closing {
+                    self.lists.pop();
+                    if self.lists.is_empty() {
+                        self.paragraph_break();
+                    } else {
+                        self.newline();
+                    }
+                } else {
+                    if self.lists.is_empty() {
+                        self.paragraph_break();
+                    } else {
+                        self.newline();
+                    }
+                    self.lists.push((name == "ol").then_some(1));
+                }
+            }
+            "li" if !closing => {
+                self.newline();
+                let depth = self.lists.len().saturating_sub(1);
+                self.out.push_str(&"  ".repeat(depth));
+                match self.lists.last_mut() {
+                    Some(Some(n)) => {
+                        self.out.push_str(&format!("{n}. "));
+                        *n += 1;
+                    }
+                    _ => self.out.push_str("- "),
+                }
+            }
+            "li" | "tr" | "dt" | "dd" => self.newline(),
+            _ => {}
+        }
+    }
+
+    fn finish(self) -> String {
+        // Trim trailing spaces on each line, collapse 3+ newlines to a blank
+        // line, trim the whole.
+        let mut out = String::with_capacity(self.out.len());
+        let mut newlines = 0;
+        for line in self.out.split('\n') {
+            let line = line.trim_end();
+            if line.is_empty() {
+                newlines += 1;
+                continue;
+            }
+            if !out.is_empty() {
+                out.push_str(if newlines >= 2 { "\n\n" } else { "\n" });
+            }
+            out.push_str(line);
+            newlines = 1;
+        }
+        out
+    }
+}
+
+/// Decode HTML character references. Unknown named entities stay verbatim.
+fn decode_entities(s: &str) -> String {
+    if !s.contains('&') {
+        return s.to_owned();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp + 1..];
+        let decoded = after.find(';').filter(|&semi| semi <= 10).and_then(|semi| {
+            let name = &after[..semi];
+            let c = if let Some(num) = name.strip_prefix('#') {
+                let code = if let Some(hex) = num.strip_prefix(['x', 'X']) {
+                    u32::from_str_radix(hex, 16).ok()
+                } else {
+                    num.parse::<u32>().ok()
+                };
+                code.and_then(char::from_u32).map(String::from)
+            } else {
+                named_entity(name).map(str::to_owned)
+            };
+            c.map(|c| (c, semi))
+        });
+        match decoded {
+            Some((c, semi)) => {
+                out.push_str(&c);
+                rest = &after[semi + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The named entities Visualizer's serializer (Nokogiri) emits (`amp lt gt
+/// quot nbsp`) plus common typographic ones a pasted note may carry. A
+/// non-breaking space becomes a plain space (it's what a plain-text note
+/// means by it).
+fn named_entity(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "amp" => "&",
+        "lt" => "<",
+        "gt" => ">",
+        "quot" => "\"",
+        "apos" => "'",
+        "nbsp" => " ",
+        "ndash" => "\u{2013}",
+        "mdash" => "\u{2014}",
+        "hellip" => "\u{2026}",
+        "lsquo" => "\u{2018}",
+        "rsquo" => "\u{2019}",
+        "ldquo" => "\u{201C}",
+        "rdquo" => "\u{201D}",
+        "deg" => "\u{00B0}",
+        "middot" => "\u{00B7}",
+        "times" => "\u{00D7}",
+        "copy" => "\u{00A9}",
+        "reg" => "\u{00AE}",
+        "trade" => "\u{2122}",
+        "bull" => "\u{2022}",
+        "frac12" => "\u{00BD}",
+        "frac14" => "\u{00BC}",
+        "frac34" => "\u{00BE}",
+        _ => return None,
+    })
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -1402,7 +1795,7 @@ mod tests {
             grinder_setting: Some("14".to_owned()),
         });
         assert_eq!(body["flavor"], 12);
-        assert_eq!(body["private_notes"], "syrupy");
+        assert_eq!(body["private_notes"], "<p>syrupy</p>");
         assert_eq!(body["privacy"], "unlisted");
         assert_eq!(body["grinder_model"], "Niche Zero");
         assert_eq!(body["coffee_bag_id"], "bag-1");
@@ -1411,7 +1804,7 @@ mod tests {
         assert_eq!(body["bean_type"], "Kenya AA");
         assert_eq!(body["roast_date"], "2026-06-17");
         assert_eq!(body["roast_level"], "Medium-Light");
-        assert_eq!(body["bean_notes"], "washed");
+        assert_eq!(body["bean_notes"], "<p>washed</p>");
         assert_eq!(body["grinder_setting"], "14");
     }
 
@@ -1441,5 +1834,160 @@ mod tests {
         assert_eq!(v["flavor"], 15);
         assert_eq!(v["privacy"], "private");
         assert!(visualizer_shot_patch_json("not json").is_err());
+    }
+
+    // ── Rich-text notes ─────────────────────────────────────────────────
+
+    #[test]
+    fn plain_to_html_matches_visualizer_from_plain_text() {
+        // visualizer test/models/rich_text_sanitizer_test.rb
+        // "converts plain text into paragraphs and line breaks".
+        assert_eq!(
+            plain_to_html("First <line>\nSecond line\n\nNext paragraph"),
+            "<p>First &lt;line&gt;<br>Second line</p><p>Next paragraph</p>"
+        );
+        assert_eq!(
+            plain_to_html("a & b \"q\" it's"),
+            "<p>a &amp; b &quot;q&quot; it&#39;s</p>"
+        );
+        assert_eq!(plain_to_html(""), "");
+        assert_eq!(plain_to_html("  \n \n"), "");
+        assert_eq!(
+            plain_to_html("a\r\nb\r\n\r\n\r\nc"),
+            "<p>a<br>b</p><p>c</p>"
+        );
+    }
+
+    #[test]
+    fn html_to_plain_reads_visualizer_shapes() {
+        // Shapes from the visualizer d4ba57d3 tests and RichTextSanitizer.
+        assert_eq!(html_to_plain("<p><strong>Sweet</strong></p>"), "Sweet");
+        assert_eq!(html_to_plain("<p><em>Floral</em></p>"), "Floral");
+        assert_eq!(
+            html_to_plain("<p>First &lt;line&gt;<br>Second line</p><p>Next paragraph</p>"),
+            "First <line>\nSecond line\n\nNext paragraph"
+        );
+        // Kramdown (GFM) output for a Markdown list + code block, with its
+        // inter-tag newlines and `<br />`.
+        let kramdown = "<ul>\n  <li>Chocolate</li>\n  <li>Floral</li>\n</ul>\n\n<p>line one<br />\nline two</p>\n<pre data-language=\"ruby\"><code class=\"language-ruby\">puts :coffee\nputs :tea\n</code></pre>\n";
+        assert_eq!(
+            html_to_plain(kramdown),
+            "- Chocolate\n- Floral\n\nline one\nline two\n\nputs :coffee\nputs :tea"
+        );
+        assert_eq!(
+            html_to_plain("<ol><li>one</li><li>two</li></ol>"),
+            "1. one\n2. two"
+        );
+        // Links keep their text; attributes with `>` inside quotes are skipped.
+        assert_eq!(
+            html_to_plain(
+                r#"<p>See <a href="https://x.y/?a>b" title='t'>this</a> &amp; that&nbsp;now</p>"#
+            ),
+            "See this & that now"
+        );
+        // Numeric + typographic entities.
+        assert_eq!(
+            html_to_plain("<p>93&#176;C &#x2014; caf&eacute; &hellip;</p>"),
+            "93°C — caf&eacute; …"
+        );
+        // Script / style content and comments are dropped.
+        assert_eq!(
+            html_to_plain("<p>ok<script>alert(1)</script><!-- c --></p>"),
+            "ok"
+        );
+        // Trix-style div wrapper + empty paragraphs collapse.
+        assert_eq!(
+            html_to_plain(
+                "<div class=\"trix-content\"><div>a</div><div><br></div><div>b</div></div>"
+            ),
+            "a\n\nb"
+        );
+    }
+
+    #[test]
+    fn html_to_plain_passes_old_plain_text_through() {
+        // Pre-d4ba57d3 / cached / Beanconqueror-format replies are plain.
+        assert_eq!(html_to_plain("tasty"), "tasty");
+        assert_eq!(
+            html_to_plain("  line 1\nline 2\n\npara  "),
+            "line 1\nline 2\n\npara"
+        );
+        assert_eq!(
+            html_to_plain("ratio 1:2 <3 and x<y"),
+            "ratio 1:2 <3 and x<y"
+        );
+        assert_eq!(html_to_plain("AT&T fine"), "AT&T fine");
+        // Visualizer returns tagless-but-escaped text for a note PATCHed bare.
+        assert_eq!(html_to_plain("a &amp; b"), "a & b");
+        assert_eq!(html_to_plain(""), "");
+    }
+
+    #[test]
+    fn notes_round_trip_plain_html_plain() {
+        for plain in [
+            "tasty",
+            "First <line>\nSecond line\n\nNext paragraph",
+            "a & b \"q\" it's <b>not bold</b>",
+            "line\n  indented next",
+            "- not a list\n1. still text",
+            "93°C, 1:2.2 — café",
+            "x\n\ny\n\nz",
+        ] {
+            let html = plain_to_html(plain);
+            let back = html_to_plain(&html);
+            assert_eq!(back, plain, "html was {html}");
+            // And stable from there on.
+            assert_eq!(plain_to_html(&back), html);
+        }
+        // Un-normalised input lands on its normal form and stays there.
+        let once = html_to_plain(&plain_to_html("a\r\n\r\n\r\n\r\nb  \n"));
+        assert_eq!(once, "a\n\nb");
+        assert_eq!(html_to_plain(&plain_to_html(&once)), once);
+    }
+
+    #[test]
+    fn pull_converts_html_notes_to_plain() {
+        let detail = serde_json::json!({
+            "private_notes": "<p>Sweet<br>syrupy</p><p>long finish</p>",
+            "bean_notes": "<p><strong>Chocolate</strong> &amp; cherry</p>",
+            "bean_brand": "Onyx"
+        });
+        let w = wire_shot_from_detail("v1", 1, 2, &detail);
+        assert_eq!(w.notes.as_deref(), Some("Sweet\nsyrupy\n\nlong finish"));
+        assert_eq!(
+            w.bean.and_then(|b| b.bean_notes).as_deref(),
+            Some("Chocolate & cherry")
+        );
+    }
+
+    #[test]
+    fn push_sends_html_notes() {
+        let body = visualizer_shot_patch(&ShotPatchInputs {
+            notes: Some("Sweet\n\nlong & clean".to_owned()),
+            bean_notes: Some("washed <natural>".to_owned()),
+            ..ShotPatchInputs::default()
+        });
+        assert_eq!(body["private_notes"], "<p>Sweet</p><p>long &amp; clean</p>");
+        assert_eq!(body["bean_notes"], "<p>washed &lt;natural&gt;</p>");
+    }
+
+    #[test]
+    fn bag_notes_round_trip_as_html() {
+        let mut bean = round_trip_bean();
+        bean.notes = "Floral\nbright\n\nbuy again".to_owned();
+        let wire = bean_to_wire(&bean, None);
+        assert_eq!(
+            wire.notes.as_deref(),
+            Some("<p>Floral<br>bright</p><p>buy again</p>")
+        );
+        let back = bean_from_wire(&wire, None, "bean:fallback", 1);
+        assert_eq!(back.notes, bean.notes);
+        // A bag still holding pre-d4ba57d3 plain notes reads unchanged.
+        let mut old = wire.clone();
+        old.notes = Some("plain old".to_owned());
+        assert_eq!(
+            bean_from_wire(&old, None, "bean:fallback", 1).notes,
+            "plain old"
+        );
     }
 }

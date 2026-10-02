@@ -47,6 +47,7 @@
 	import CatchUpRow from './CatchUpRow.svelte';
 	import DecentAccountCard from './DecentAccountCard.svelte';
 	import { toast } from '$lib/components/shared/toast.svelte';
+	import { describeUnsyncedStop } from '$lib/services/shot-sync';
 	import { type SharingPrivacy } from '$lib/settings';
 	import {
 		backupFileName,
@@ -159,8 +160,10 @@
 			if (offer.destination === 'Visualizer') {
 				const api = appCtx().services;
 				if (api) {
-					await api.shots.uploadUnsynced(history);
+					const result = await api.shots.uploadUnsynced(history);
 					await api.queue.drain();
+					const notice = describeUnsyncedStop(result);
+					if (notice) toast[notice.kind](notice.message);
 				}
 			} else {
 				const result = await uploadUnsentDecentShots({

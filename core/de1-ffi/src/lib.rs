@@ -1020,6 +1020,22 @@ pub fn is_recoverable(tag: String, status: Option<u16>) -> bool {
     de1_domain::is_recoverable(&tag, status)
 }
 
+/// Visualizer's free-plan daily upload cap: the cap when a reply with HTTP
+/// `status` and `body` is the quota 422, else `None`. Mirrors the wasm
+/// `visualizerQuotaLimit`; see [`de1_domain::visualizer_quota_limit`].
+#[uniffi::export]
+pub fn visualizer_quota_limit(status: u16, body: String) -> Option<u32> {
+    de1_domain::visualizer_quota_limit(status, &body)
+}
+
+/// Delay (ms) before retry number `attempt` of a recoverable Visualizer
+/// failure with HTTP `status` (`None` for a transport failure). Mirrors the
+/// wasm `retryBackoffMs`; see [`de1_domain::retry_backoff_ms`].
+#[uniffi::export]
+pub fn retry_backoff_ms(status: Option<u16>, attempt: u32) -> u64 {
+    de1_domain::retry_backoff_ms(status, attempt)
+}
+
 /// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` → `"DE1"`),
 /// falling back to `"model N"`. Mirrors the wasm `machineModelName`; see
 /// [`de1_protocol::machine_model_name`].
