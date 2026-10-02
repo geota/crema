@@ -26,23 +26,14 @@ Crema is not a clean-room implementation. It draws liberally on existing open-so
 ## Screenshots
 
 <div align="center">
-<img src=".github/screenshots/brew.png" width="400" alt="Live brew dashboard replaying a recorded DE1 shot" />
-<img src=".github/screenshots/history.png" width="400" alt="Shot history with telemetry and shot-quality verdict" />
+<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/01-brew-dashboard.png" width="200" alt="Live brew dashboard" />
+<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/02-profiles.png" width="200" alt="Profile library" />
+<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/03-history.png" width="200" alt="Shot history" />
+<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/04-beans.png" width="200" alt="Bean library" />
 <br/>
-<img src=".github/screenshots/brew-log.png" width="400" alt="Guided V60 brew in History: planned vs poured weight" />
-<img src=".github/screenshots/profiles.png" width="400" alt="Profile library" />
-<br/>
-<img src=".github/screenshots/beans.png" width="400" alt="Bean library" />
-<img src=".github/screenshots/maintenance.png" width="400" alt="Water and maintenance settings" />
-<br/>
-<sub><b>Web app</b>: live brew dashboard · shot history · Brew Log (planned vs poured) · profiles · beans · maintenance</sub>
+<sub><b>Android phone</b> — live brew dashboard · profile library · shot history · bean library</sub>
 <br/><br/>
-<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/01-brew-dashboard.png" width="160" alt="Android phone: brew dashboard" />
-<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/02-profiles.png" width="160" alt="Android phone: profiles" />
-<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/03-history.png" width="160" alt="Android phone: history" />
-<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/04-beans.png" width="160" alt="Android phone: beans" />
-<br/>
-<sub><b>Android phone</b> · <b>10&Prime; tablet:</b>
+<sub><b>10&Prime; tablet:</b>
 <a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/01-brew-dashboard.png">Brew</a> ·
 <a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/02-profiles.png">Profiles</a> ·
 <a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/03-history.png">History</a> ·
