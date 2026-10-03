@@ -317,12 +317,17 @@ fun BeansScreen(
                 // The one-row rail (5 Status + 3 Roast chips + sort) needs ~1170dp of
                 // screen. 7" and phone landscape (~950dp) already get this rail layout,
                 // so below that it scrolls rather than clipping Dark and the sort away.
-                val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1200
+                // With the Include-archived and tag chips (#124) the groups can
+                // outgrow even a 10" landscape row, so the chips scroll inside
+                // their own weighted lane and the sort stays pinned right at
+                // every width (a fixed row squeezed the last chip vertically).
                 val filterScroll = rememberScrollState()
                 Row(
-                    Modifier.fillMaxWidth().height(IntrinsicSize.Min)
-                        .then(if (narrowBar) Modifier.horizontalScroll(filterScroll) else Modifier)
-                        .padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+                    Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                Row(
+                    Modifier.weight(1f).height(IntrinsicSize.Min).horizontalScroll(filterScroll),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -360,9 +365,8 @@ fun BeansScreen(
                     if (beansState.hasFilters) {
                         CremaFilterChip(label = "Clear", selected = false, icon = "x", onClick = { beansState.clearFilters() })
                     }
-                    // weight(1f) can't live inside a horizontalScroll; at narrow the
-                    // sort just trails the chips (reachable by scrolling).
-                    if (narrowBar) Spacer(Modifier.width(12.dp)) else Spacer(Modifier.weight(1f))
+                }
+                    Spacer(Modifier.width(12.dp))
                     CremaSortControl(
                         keys = listOf(
                             SortKey("freshest", "Freshest", "clock"),
