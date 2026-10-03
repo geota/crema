@@ -40,6 +40,11 @@ import coffee.crema.core.SearchField
 import coffee.crema.core.SearchHit
 import coffee.crema.ui.BeansViewState
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.beansListKey
+import coffee.crema.ui.rememberListBool
+import coffee.crema.ui.rememberListMemoryState
+import coffee.crema.ui.rememberListString
+import coffee.crema.ui.roastersListKey
 import coffee.crema.ui.rememberBeansViewState
 import coffee.crema.ui.freshnessColor
 import coffee.crema.ui.components.*
@@ -76,10 +81,14 @@ fun PhoneBeansScreen(
     // either way. Roaster scope (#86): tapping a roaster row shows its shelf on
     // the Bags tab, archived bags included. Cleared by its chip or by Back.
     var tab by beansState::tab
-    var query by remember { mutableStateOf("") }
+    // Search + sort live in the hoisted ListMemory (issue #123), shared with
+    // the tablet: the detail / editor round trips and a host swap keep them.
+    // The bag facets stay in BeansViewState (#124, with its saved-filter
+    // migration), which is hoisted the same way.
+    var query by rememberListString("beans/query", "")
     var roasterScopeId by beansState::roasterScopeId
-    var sort by remember { mutableStateOf("freshest") }
-    var sortDesc by remember { mutableStateOf(false) }
+    var sort by rememberListString("beans/sort", "freshest")
+    var sortDesc by rememberListBool("beans/sortDesc", false)
     var menuFor by remember { mutableStateOf<Bean?>(null) }
     var confirmDelete by remember { mutableStateOf<Bean?>(null) }
     var exportSheet by remember { mutableStateOf(false) }
@@ -235,7 +244,21 @@ fun PhoneBeansScreen(
                     },
                 )
             }
+            // The scroll position per tab + filter (issue #123) — kept in
+            // ListMemory so the detail swap above, the editors and a host swap
+            // return to the same bag. Row 0 is the search field.
+            val listState = if (tab == "bags") {
+                rememberListMemoryState(beansListKey(facets, sort, sortDesc), sortedBeans.size) { k ->
+                    sortedBeans.indexOfFirst { it.id == k }.takeIf { it >= 0 }?.plus(1)
+                }
+            } else {
+                val lead = 1 + (if (hasTaggedDupes) 1 else 0) + mergeSuggestions.size
+                rememberListMemoryState(roastersListKey(beansState.showDuplicates), visibleRoasters.size) { k ->
+                    visibleRoasters.indexOfFirst { it.id == k }.takeIf { it >= 0 }?.plus(lead)
+                }
+            }
             LazyColumn(
+                state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(start = CremaEdge, end = CremaEdge, top = 8.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),

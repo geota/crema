@@ -48,6 +48,11 @@ import coffee.crema.ui.brewlog.BrewSessionCanvas
 import coffee.crema.ui.brewlog.BrewSparkChart
 import coffee.crema.ui.phone.components.CremaNewFab
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.historyListKey
+import coffee.crema.ui.rememberListBool
+import coffee.crema.ui.rememberListMemoryState
+import coffee.crema.ui.rememberListOptString
+import coffee.crema.ui.rememberListString
 import coffee.crema.ui.convertPressure
 import coffee.crema.ui.convertTemp
 import coffee.crema.ui.convertWeight
@@ -91,20 +96,23 @@ fun PhoneHistoryScreen(
     onConnect: (String) -> Unit,
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
-    // Saveable: the pushed Log-brew route ("Log again") keeps this entry on the
-    // back stack, and Cancel should land back on the brew's detail.
-    var detailId by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
-    var query by remember { mutableStateOf("") }
-    var searchOpen by remember { mutableStateOf(false) }
-    var profileFilter by remember { mutableStateOf<String?>(null) }
+    // The open detail, the search and every filter / sort live in the hoisted
+    // ListMemory (issue #123; saveable): the pushed Log-brew route ("Log
+    // again") keeps this entry on the back stack and Cancel should land back on
+    // the brew's detail, and a tab switch or host swap must not reset the log.
+    // The filters are shared with the tablet's History.
+    var detailId by rememberListOptString("history/detail")
+    var query by rememberListString("history/query", "")
+    var searchOpen by rememberListBool("history/searchOpen", false)
+    var profileFilter by rememberListOptString("history/profile")
     // Bean filter — scope the log to one bag (bean-workflow-unify §B).
-    var beanFilter by remember { mutableStateOf<String?>(null) }
-    var range by remember { mutableStateOf("all") }
-    var sort by remember { mutableStateOf("date") }
-    var sortDesc by remember { mutableStateOf(true) } // newest / highest first
+    var beanFilter by rememberListOptString("history/bean")
+    var range by rememberListString("history/range", "all")
+    var sort by rememberListString("history/sort", "date")
+    var sortDesc by rememberListBool("history/sortDesc", true) // newest / highest first
     var exportSheet by remember { mutableStateOf(false) }
     // Brew Log (issue #10): the method filter + the Log-brew form.
-    var methodFilter by remember { mutableStateOf<String?>(null) }
+    var methodFilter by rememberListOptString("history/method")
     // The form itself is the pushed `log-brew` route over a VM-held draft
     // (it survives rotation and the phone↔tablet swap).
     val openLogBrew: (StoredShot?) -> Unit = { prefill ->
@@ -373,7 +381,26 @@ fun PhoneHistoryScreen(
             }
             // Day-grouped shot list (headers only under the date sort —
             // rating/name orders interleave days, so groups would repeat).
+            // Its scroll position per filter (issue #123) lives in ListMemory,
+            // so the detail / compare swaps above and the Log-brew route come
+            // back to the same shot. The row keys mirror the items below.
+            val rowKeys = remember(filtered, sort, ui.saveMethodPrompt != null, startOfDay) {
+                buildList {
+                    if (ui.saveMethodPrompt != null) add("save-method-prompt")
+                    var day: String? = null
+                    filtered.forEach { shot ->
+                        val d = dayLabel(shot.completedAtMs, startOfDay, dayMs)
+                        if (d != day && sort == "date") { day = d; add("day-$d-${shot.id}") }
+                        add(shot.id)
+                    }
+                }
+            }
+            val listState = rememberListMemoryState(
+                historyListKey(range, profileFilter, beanFilter, methodFilter, sort, sortDesc),
+                filtered.size,
+            ) { k -> rowKeys.indexOf(k).takeIf { it >= 0 } }
             LazyColumn(
+                state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(start = CremaEdge, end = CremaEdge, top = 4.dp, bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),

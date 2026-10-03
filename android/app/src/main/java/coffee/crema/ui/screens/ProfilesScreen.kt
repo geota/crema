@@ -67,6 +67,11 @@ import coffee.crema.profiles.effectiveProfileFilter
 import coffee.crema.profiles.filterAndSortProfiles
 import coffee.crema.profiles.profileChipCounts
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.profilesListKey
+import coffee.crema.ui.rememberListBool
+import coffee.crema.ui.rememberListOptString
+import coffee.crema.ui.rememberListString
+import coffee.crema.ui.rememberGridMemoryState
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaIconButton
@@ -106,12 +111,14 @@ fun ProfilesScreen(
     val ui by vm.ui.collectAsStateWithLifecycle()
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
-    var query by remember { mutableStateOf("") }
-    // Two axes (#124): status (all / pinned / hidden) and roast compose.
-    var filter by remember { mutableStateOf("all") }
-    var roastFilter by remember { mutableStateOf<String?>(null) }
-    var sort by remember { mutableStateOf("name") }
-    var sortDesc by remember { mutableStateOf(false) }
+    // Search, both facet axes (#124: status all / pinned / hidden, and roast)
+    // and sort live in the hoisted ListMemory (issue #123), shared by both
+    // shells: the profile / recipe editors and a host swap keep them.
+    var query by rememberListString("profiles/query", "")
+    var filter by rememberListString("profiles/filter", "all")
+    var roastFilter by rememberListOptString("profiles/roast")
+    var sort by rememberListString("profiles/sort", "name")
+    var sortDesc by rememberListBool("profiles/sortDesc", false)
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importProfiles(uri)
     }
@@ -130,7 +137,7 @@ fun ProfilesScreen(
     // ── Brew recipes — the guided-brew library section (issue #10). A
     // separate section, not rows in the machine grid: loading a profile
     // uploads it to the DE1; a recipe never touches the machine.
-    var showHiddenRecipes by remember { mutableStateOf(false) }
+    var showHiddenRecipes by rememberListBool("profiles/showHiddenRecipes", false)
     val hiddenRecipeCount = ui.builtinRecipes.count { it.id in ui.hiddenBuiltinRecipes }
     val recipes = visibleBrewRecipes(
         ui.brewRecipes,
@@ -248,7 +255,17 @@ fun ProfilesScreen(
                     onToggleDirection = { sortDesc = !sortDesc },
                 )
             }
+            // Scroll position per facet + sort (issue #123), kept in ListMemory
+            // across the profile editor route and a host swap.
+            val gridState = rememberGridMemoryState(
+                profilesListKey(effectiveFilter, roastFilter, sort, sortDesc, showHiddenRecipes),
+                sorted.size + recipes.size,
+            ) { k ->
+                sorted.indexOfFirst { it.id == k }.takeIf { it >= 0 }
+                    ?: recipes.indexOfFirst { it.id == k }.takeIf { it >= 0 && effectiveFilter != "hidden" }?.plus(sorted.size + 2)
+            }
             LazyVerticalGrid(
+                state = gridState,
                 // Adaptive so a narrow 7" tablet drops to 2 columns (wider cards →
                 // the "Load on Brew" button keeps its label) while the 10" keeps 3.
                 columns = GridCells.Adaptive(minSize = 320.dp),

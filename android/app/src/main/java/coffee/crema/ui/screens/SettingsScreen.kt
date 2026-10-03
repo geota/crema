@@ -53,6 +53,7 @@ import coffee.crema.core.MmrRegister
 import coffee.crema.core.hasCupWarmer
 import coffee.crema.core.machineModelName
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.rememberScrollMemoryState
 import coffee.crema.ui.QcSteam
 import coffee.crema.ui.TANK_FULL_ML_UI
 import coffee.crema.ui.WATER_WARN_DEFAULT_ML
@@ -169,7 +170,10 @@ fun SettingsScreen(
 
             // ── Content pane ─────────────────────────────────────────────────
             Column(
-                Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()).widthIn(max = 880.dp).padding(start = 32.dp, top = 28.dp, end = 32.dp, bottom = 40.dp),
+                // One scroll position per section (issue #123): switching
+                // sections no longer carries one page's offset into the next,
+                // and each comes back where it was.
+                Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollMemoryState("settings/pane/$active")).widthIn(max = 880.dp).padding(start = 32.dp, top = 28.dp, end = 32.dp, bottom = 40.dp),
                 verticalArrangement = Arrangement.spacedBy(24.dp),
             ) {
                 when (active) {

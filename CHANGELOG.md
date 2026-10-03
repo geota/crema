@@ -247,6 +247,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   **Hidden** built-ins can be filtered by roast (and on web by beverage and
   tag) and searched. Android now shows tag chips on Beans too. Web, Android
   phone and tablet, with the filtering in the shared core.
+- **Coming back to a list keeps your place** (#123) — closing a bean,
+  shot or profile, backing out of an editor, switching tabs or filters, or
+  rotating between the phone and tablet layouts no longer jumps the list
+  back to the top or resets its filters, search and sort. Beans (every tab
+  and filter combination, Include archived included), Roasters, History, Profiles and brew
+  recipes, and Settings each return to the same item, even if it moved;
+  if you archived or deleted it from its detail, you land next to where it
+  was. Web and Android (phone and tablet).
 - **Bean and roaster sync now follows the direction you picked** — a
   Beans or Roasters direction of **Pull** no longer writes to Visualizer on a
   Premium account, and **Backup** no longer pulls; Off, Backup, Pull and

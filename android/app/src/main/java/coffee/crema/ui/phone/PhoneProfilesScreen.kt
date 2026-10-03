@@ -24,6 +24,11 @@ import coffee.crema.profiles.effectiveProfileFilter
 import coffee.crema.profiles.filterAndSortProfiles
 import coffee.crema.profiles.profileChipCounts
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.profilesListKey
+import coffee.crema.ui.rememberListBool
+import coffee.crema.ui.rememberListOptString
+import coffee.crema.ui.rememberListString
+import coffee.crema.ui.rememberListMemoryState
 import coffee.crema.ui.convertTemp
 import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
@@ -51,12 +56,14 @@ fun PhoneProfilesScreen(
     onConnect: (String) -> Unit,
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
-    var query by remember { mutableStateOf("") }
-    // Two axes (#124): status (all / pinned / hidden) and roast compose.
-    var filter by remember { mutableStateOf("all") }
-    var roastFilter by remember { mutableStateOf<String?>(null) }
-    var sort by remember { mutableStateOf("name") }
-    var sortDesc by remember { mutableStateOf(false) }
+    // Search, both facet axes (#124: status all / pinned / hidden, and roast)
+    // and sort live in the hoisted ListMemory (issue #123), shared by both
+    // shells: the profile / recipe editors and a host swap keep them.
+    var query by rememberListString("profiles/query", "")
+    var filter by rememberListString("profiles/filter", "all")
+    var roastFilter by rememberListOptString("profiles/roast")
+    var sort by rememberListString("profiles/sort", "name")
+    var sortDesc by rememberListBool("profiles/sortDesc", false)
     var menuFor by remember { mutableStateOf<CremaProfile?>(null) }
     var confirmDelete by remember { mutableStateOf<CremaProfile?>(null) }
 
@@ -77,7 +84,7 @@ fun PhoneProfilesScreen(
 
     // Brew recipes — the guided-brew library section (issue #10); authored
     // here, run from the Scale screen's Brew tab.
-    var showHiddenRecipes by remember { mutableStateOf(false) }
+    var showHiddenRecipes by rememberListBool("profiles/showHiddenRecipes", false)
     val hiddenRecipeCount = ui.builtinRecipes.count { it.id in ui.hiddenBuiltinRecipes }
     val recipes = visibleBrewRecipes(
         ui.brewRecipes,
@@ -148,7 +155,20 @@ fun PhoneProfilesScreen(
                     )
                 },
             )
+            // Scroll position per facet + sort (issue #123), kept in ListMemory
+            // across the profile / recipe editor routes and a host swap. Rows:
+            // search, the profiles (or the empty note), then the recipes after
+            // their header + "Your methods".
+            val recipeLead = 1 + maxOf(sorted.size, 1) + 2
+            val listState = rememberListMemoryState(
+                profilesListKey(effectiveFilter, roastFilter, sort, sortDesc, showHiddenRecipes),
+                sorted.size + recipes.size,
+            ) { k ->
+                sorted.indexOfFirst { it.id == k }.takeIf { it >= 0 }?.plus(1)
+                    ?: recipes.indexOfFirst { it.id == k }.takeIf { it >= 0 && effectiveFilter != "hidden" }?.plus(recipeLead)
+            }
             LazyColumn(
+                state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(start = CremaEdge, end = CremaEdge, top = 8.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),

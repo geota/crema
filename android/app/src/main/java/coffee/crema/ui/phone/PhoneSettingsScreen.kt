@@ -30,6 +30,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.rememberScrollMemoryState
 import coffee.crema.ui.QcSteam
 import coffee.crema.ui.TANK_FULL_ML_UI
 import coffee.crema.ui.WATER_WARN_DEFAULT_ML
@@ -137,7 +138,9 @@ fun PhoneSettingsScreen(
                 Modifier
                     .padding(inner)
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
+                    // Per-section scroll (issue #123): a sub-page opened from
+                    // here (Advanced → Debug) comes back where it was.
+                    .verticalScroll(rememberScrollMemoryState("settings/section/$current"))
                     .padding(bottom = 24.dp),
             ) {
                 // Phone settings render in the dense row layout; the tablet keeps
@@ -205,7 +208,9 @@ fun PhoneSettingsScreen(
             Modifier
                 .padding(inner)
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
+                // The section list keeps its place across a section round trip
+                // (it leaves composition while a section is open) — issue #123.
+                .verticalScroll(rememberScrollMemoryState("settings/sections"))
                 .padding(horizontal = CremaEdge)
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),

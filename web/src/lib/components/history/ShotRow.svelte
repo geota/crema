@@ -145,6 +145,7 @@
 
 <button
 	class="hi-row"
+	data-scroll-key={shot.id}
 	class:is-active={active && !selectable}
 	class:is-selected={selectable && selected}
 	class:is-selectmode={selectable}

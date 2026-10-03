@@ -60,6 +60,8 @@
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
 	import { toast } from '$lib/components/shared/toast.svelte';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
+	import { recallView } from '$lib/state/view-memory';
+	import { persistView, useScrollMemory } from '$lib/state/use-view-memory.svelte';
 
 	const library = getBeanStore();
 	const history = getHistoryStore();
@@ -437,6 +439,69 @@
 	// so the directory shows one row per real roastery; flip on to inspect
 	// or un-merge a row that was tagged via `canonicalRoasterId`.
 	let showDuplicates = $state(false);
+
+	// ── Keep this view across round trips (#123) ───────────────────────
+	// The filters / search / sort come back after the bag or roaster editor,
+	// another page, or a reload; the scroll position comes back per tab +
+	// filter, to the same bag even if the list changed meanwhile. (The tab
+	// and roaster shelf already live in the URL.)
+	{
+		const saved = recallView<{
+			status: StatusFilter;
+			includeArchived: boolean;
+			roast: RoastFilter | null;
+			q: string;
+			selectedTags: string[];
+			sortField: SortField;
+			sortDir: SortDir;
+			roasterSortField: RoasterSortField;
+			roasterSortDir: SortDir;
+			roasterRegion: string;
+			showDuplicates: boolean;
+		}>('beans', {
+			status: 'all',
+			includeArchived: false,
+			roast: null,
+			q: '',
+			selectedTags: [],
+			sortField: 'recent',
+			sortDir: 'desc',
+			roasterSortField: 'beans',
+			roasterSortDir: 'desc',
+			roasterRegion: 'all',
+			showDuplicates: false
+		});
+		status = saved.status;
+		includeArchived = saved.includeArchived;
+		roast = saved.roast;
+		q = saved.q;
+		selectedTags = saved.selectedTags;
+		sortField = saved.sortField;
+		sortDir = saved.sortDir;
+		roasterSortField = saved.roasterSortField;
+		roasterSortDir = saved.roasterSortDir;
+		roasterRegion = saved.roasterRegion;
+		showDuplicates = saved.showDuplicates;
+	}
+	persistView('beans', () => ({
+		status,
+		includeArchived,
+		roast,
+		q,
+		selectedTags,
+		sortField,
+		sortDir,
+		roasterSortField,
+		roasterSortDir,
+		roasterRegion,
+		showDuplicates
+	}));
+	useScrollMemory({
+		key: () =>
+			tab === 'roasters'
+				? `beans/roasters|${roasterSortField}-${roasterSortDir}|${roasterRegion}|${showDuplicates}`
+				: `beans/bags|${scopeId ?? ''}|${status}|${includeArchived}|${roast ?? ''}|${[...selectedTags].sort().join(',')}|${sortField}-${sortDir}`
+	});
 
 	const roasterRegionOptions = $derived.by(() => {
 		const set = new Set<string>();

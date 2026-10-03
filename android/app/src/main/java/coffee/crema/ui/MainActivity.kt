@@ -380,6 +380,11 @@ class MainActivity : ComponentActivity() {
                 var currentRoute by rememberSaveable { mutableStateOf("brew") }
                 val onRouteChange: (String) -> Unit = { currentRoute = it }
                 val beansState = rememberBeansViewState()
+                // Every list's scroll position + search / sort / filter state
+                // (issue #123), hoisted above both hosts like the route and
+                // BeansViewState so a detail, an editor, a tab switch or a host
+                // swap never drops your place.
+                val listMemory = rememberListMemory()
                 // An open Brew Log form (issue #10) is a pushed route on the
                 // phone and a sheet on its owning tab on the tablet; the draft is
                 // VM-held, so the incoming host just needs the right route.
@@ -400,6 +405,10 @@ class MainActivity : ComponentActivity() {
                     methodEditOwner = methodEdit?.ownerTab,
                 ) ?: "brew"
                 val routeOwners = NavRestore.owners(logBrewOwner, recipeEditOwner, methodEdit?.ownerTab, methodEdit?.parentRoute)
+                CompositionLocalProvider(
+                    LocalListMemory provides listMemory,
+                    LocalListShell provides if (isCompact) "phone" else "tablet",
+                ) {
                 if (isCompact) {
                     PhoneNavHost(
                         vm = viewModel,
@@ -502,6 +511,7 @@ class MainActivity : ComponentActivity() {
                         onHandOff = { id -> viewModel.offerHandoff(id); showDevices = false },
                         onDismiss = { showDevices = false },
                     )
+                }
                 }
                 }
                 SnackbarHost(

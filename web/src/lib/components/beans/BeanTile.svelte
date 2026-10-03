@@ -129,6 +129,7 @@
 
 <LibraryCardShell
 	cardKind="bean"
+	scrollKey={bean.id}
 	favourite={bean.favourite}
 	onFavouriteClick={onFavClick}
 	{onCardClick}
