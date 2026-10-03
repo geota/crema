@@ -46,6 +46,9 @@ private class JsonMemo<T>(private val encode: (List<T>) -> String) {
 }
 
 private val beansMemo = JsonMemo<Bean> { searchJson.encodeToString(ListSerializer(Bean.serializer()), it) }
+/** The memoised `Bean[]` JSON — shared with the facet filter ([filterBeanFacets]). */
+internal fun libraryBeansJson(beans: List<Bean>): String = beansMemo.of(beans)
+
 private val roastersMemo = JsonMemo<Roaster> { searchJson.encodeToString(ListSerializer(Roaster.serializer()), it) }
 
 /**
@@ -63,6 +66,9 @@ class SearchResults private constructor(
 
     /** This row's match, or null. */
     fun hit(id: String): SearchHit? = byId[id]
+
+    /** The matched ids for the core facet filter, or null when no query is running. */
+    fun matchedIds(): List<String>? = if (active) byId.keys.toList() else null
 
     /**
      * Relevance of [id], or `-1f` when it did not match. Sorting on the score
