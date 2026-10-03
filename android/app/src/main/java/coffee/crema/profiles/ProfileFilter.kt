@@ -10,45 +10,58 @@ import coffee.crema.pinActiveThenFavourite
  */
 
 /**
- * The facet actually in effect. The Hidden facet draws only the archived built-ins;
- * once nothing is hidden (e.g. the last one was just restored) it falls back to
- * "all" so the grid never strands on an empty hidden view. Both shells also key
- * their selected filter chip off this (not the raw `filter`).
+ * The status actually in effect. The Hidden status draws only the archived
+ * built-ins; once nothing is hidden (e.g. the last one was just restored) it
+ * falls back to "all" so the grid never strands on an empty hidden view. Both
+ * shells also key their selected status chip off this (not the raw `status`).
  */
-fun effectiveProfileFilter(filter: String, hiddenProfileIds: Set<String>): String =
-    if (filter == "hidden" && hiddenProfileIds.isEmpty()) "all" else filter
+fun effectiveProfileFilter(status: String, hiddenProfileIds: Set<String>): String =
+    if (status == "hidden" && hiddenProfileIds.isEmpty()) "all" else status
+
+/** Search over name / tags / notes / author / roast (blank = all). */
+private fun CremaProfile.matchesQuery(query: String): Boolean =
+    query.isBlank() ||
+        name.contains(query, ignoreCase = true) ||
+        tags.any { it.contains(query, ignoreCase = true) } ||
+        notes.contains(query, ignoreCase = true) ||
+        author.contains(query, ignoreCase = true) ||
+        (roast?.contains(query, ignoreCase = true) == true)
+
+/** Status axis: Hidden draws only archived built-ins; every other status excludes them. */
+private fun CremaProfile.matchesStatus(status: String, hiddenProfileIds: Set<String>): Boolean {
+    val isHidden = id in hiddenProfileIds
+    return when (status) {
+        "hidden" -> isHidden
+        "pinned" -> !isHidden && pinned
+        else -> !isHidden
+    }
+}
+
+private fun CremaProfile.matchesRoast(roast: String?): Boolean =
+    roast == null || this.roast?.equals(roast, ignoreCase = true) == true
 
 /**
- * The profile library after search + facet filter + sort. [filter] is the raw
- * facet (all / pinned / hidden / light / medium / dark) — the Hidden→All fallback
- * is applied internally via [effectiveProfileFilter]. [sort] is name (default) /
- * roast / pinned; [sortDesc] reverses the ascending base.
+ * The profile library after search + status + roast + sort (geota/crema#124:
+ * two independent axes, so Hidden + Light is "hidden light-roast profiles";
+ * they used to share one single-select facet, and browsing Hidden dropped the
+ * roast filter). [status] is the raw status (all / pinned / hidden) — the
+ * Hidden→All fallback is applied internally via [effectiveProfileFilter];
+ * [roast] is light / medium / dark or null. [sort] is name (default) / roast /
+ * pinned; [sortDesc] reverses the ascending base.
  */
 fun filterAndSortProfiles(
     profiles: List<CremaProfile>,
     hiddenProfileIds: Set<String>,
     query: String,
-    filter: String,
+    status: String,
+    roast: String?,
     sort: String,
     sortDesc: Boolean,
     activeId: String?,
 ): List<CremaProfile> {
-    val effectiveFilter = effectiveProfileFilter(filter, hiddenProfileIds)
+    val effectiveStatus = effectiveProfileFilter(status, hiddenProfileIds)
     val filtered = profiles.filter { p ->
-        val isHidden = p.id in hiddenProfileIds
-        (query.isBlank() ||
-            p.name.contains(query, ignoreCase = true) ||
-            p.tags.any { it.contains(query, ignoreCase = true) } ||
-            p.notes.contains(query, ignoreCase = true) ||
-            p.author.contains(query, ignoreCase = true) ||
-            (p.roast?.contains(query, ignoreCase = true) == true)) &&
-            when (effectiveFilter) {
-                // Hidden draws only archived built-ins; every other facet excludes them.
-                "hidden" -> isHidden
-                "pinned" -> !isHidden && p.pinned
-                "all" -> !isHidden
-                else -> !isHidden && p.roast?.equals(effectiveFilter, ignoreCase = true) == true
-            }
+        p.matchesQuery(query) && p.matchesStatus(effectiveStatus, hiddenProfileIds) && p.matchesRoast(roast)
     }
     val roastOrder = mapOf("light" to 0, "medium" to 1, "dark" to 2)
     val asc = when (sort) {
@@ -60,6 +73,29 @@ fun filterAndSortProfiles(
     // Loaded profile to the top, then pinned favourites, then the rest; [sort]
     // above is the within-group order. Shared with beans + the Brew pickers.
     return sorted.pinActiveThenFavourite({ it.id == activeId }, { it.pinned })
+}
+
+/**
+ * Faceted chip counts keyed by chip id: each status chip (all / pinned /
+ * hidden) counts given the roast + search, each roast chip (light / medium /
+ * dark) given the status + search — so a badge always equals what tapping its
+ * chip would show.
+ */
+fun profileChipCounts(
+    profiles: List<CremaProfile>,
+    hiddenProfileIds: Set<String>,
+    query: String,
+    status: String,
+    roast: String?,
+): Map<String, Int> {
+    val searched = profiles.filter { it.matchesQuery(query) }
+    val effectiveStatus = effectiveProfileFilter(status, hiddenProfileIds)
+    val inRoast = searched.filter { it.matchesRoast(roast) }
+    val inStatus = searched.filter { it.matchesStatus(effectiveStatus, hiddenProfileIds) }
+    return buildMap {
+        listOf("all", "pinned", "hidden").forEach { s -> put(s, inRoast.count { it.matchesStatus(s, hiddenProfileIds) }) }
+        listOf("light", "medium", "dark").forEach { r -> put(r, inStatus.count { it.matchesRoast(r) }) }
+    }
 }
 
 /**

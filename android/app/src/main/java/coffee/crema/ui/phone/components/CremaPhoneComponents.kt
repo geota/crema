@@ -232,6 +232,19 @@ fun CremaFilterChipRow(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
     trailing: (@Composable () -> Unit)? = null,
+) = CremaFilterChipRow(chips, isSelected = { it == selected }, onSelect, modifier, trailing)
+
+/**
+ * Multi-axis variant: [isSelected] decides per chip, so several groups
+ * (status, roast, tags…) can each have their own selection in one row.
+ */
+@Composable
+fun CremaFilterChipRow(
+    chips: List<FilterChipSpec>,
+    isSelected: (String) -> Boolean,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
@@ -243,7 +256,7 @@ fun CremaFilterChipRow(
         chips.forEach { c ->
             CremaPhoneChip(
                 label = c.label,
-                selected = selected == c.id,
+                selected = isSelected(c.id),
                 count = c.count,
                 icon = c.icon,
                 onClick = { onSelect(c.id) },

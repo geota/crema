@@ -57,11 +57,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coffee.crema.beans.beanFilterCounts
+import coffee.crema.beans.chipCounts
+import coffee.crema.beans.filterBeanFacets
+import coffee.crema.beans.includeArchivedApplies
+import coffee.crema.beans.sortFilteredBeans
 import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.beans.daysOffRoast
 import coffee.crema.beans.explanatory
-import coffee.crema.beans.filterAndSortBeans
 import coffee.crema.beans.forField
 import coffee.crema.beans.isFrozen
 import coffee.crema.beans.roastBand
@@ -140,7 +142,6 @@ fun BeansScreen(
     var roasterDialogOpen by remember { mutableStateOf(false) }
     var roasterEditing by remember { mutableStateOf<Roaster?>(null) }
     var query by remember { mutableStateOf("") }
-    var beanFilter by beansState::filter
     // Roaster scope (#86): set by tapping a roaster card; the Bags tab then
     // shows that roaster's shelf, archived bags included. Cleared by its chip
     // or by Back.
@@ -174,7 +175,11 @@ fun BeansScreen(
     // (its card kebab) while scoped must not leave an empty, chip-less list.
     val scopeRoaster = roasterScopeId?.let { id -> ui.roasters.firstOrNull { it.id == id } }
     val scopeId = scopeRoaster?.id
-    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, beanFilter, beanSort, beanSortDesc, ui.activeBeanId, scopeId)
+    // Facets + chip counts from the core (#124): status, include-archived,
+    // roast, tags, the shelf scope and the search compose.
+    val facets = beansState.facets(scopeId)
+    val facetResult = filterBeanFacets(ui.beans, facets, beanHits)
+    val sortedBeans = sortFilteredBeans(ui.beans, facetResult.ids, beanHits, beanSort, beanSortDesc, ui.activeBeanId)
     // Back from a roaster's shelf returns to the Roasters directory.
     BackHandler(enabled = scopeId != null && tab == "bags") { beansState.closeShelf() }
     val visibleRoasters = coffee.crema.beans.directoryRoasters(ui.roasters, beansState.showDuplicates)
@@ -312,28 +317,56 @@ fun BeansScreen(
                 // The one-row rail (5 Status + 3 Roast chips + sort) needs ~1170dp of
                 // screen. 7" and phone landscape (~950dp) already get this rail layout,
                 // so below that it scrolls rather than clipping Dark and the sort away.
-                val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1200
+                // With the Include-archived and tag chips (#124) the groups can
+                // outgrow even a 10" landscape row, so the chips scroll inside
+                // their own weighted lane and the sort stays pinned right at
+                // every width (a fixed row squeezed the last chip vertically).
                 val filterScroll = rememberScrollState()
                 Row(
-                    Modifier.fillMaxWidth().height(IntrinsicSize.Min)
-                        .then(if (narrowBar) Modifier.horizontalScroll(filterScroll) else Modifier)
-                        .padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+                    Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                Row(
+                    Modifier.weight(1f).height(IntrinsicSize.Min).horizontalScroll(filterScroll),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    val counts = beanFilterCounts(ui.beans, scopeId)
+                    // Status and Roast are independent groups (#124): Archived +
+                    // Light means archived light roasts. Counts are faceted —
+                    // each is what the list holds if that chip is picked.
+                    val counts = facetResult.chipCounts()
                     CremaFilterGroupLabel("Status")
                     listOf("all" to "All", "active" to "Active", "favourite" to "Favourite", "frozen" to "Frozen", "archived" to "Archived").forEach { (id, label) ->
-                        CremaFilterChip(label = label, selected = beanFilter == id, count = counts[id] ?: 0, onClick = { beanFilter = id })
+                        CremaFilterChip(label = label, selected = beansState.status == id, count = counts[id] ?: 0, onClick = { beansState.selectStatus(id) })
+                    }
+                    // "Include archived" — archived bags, dimmed, alongside the
+                    // rest (off by default; only where it changes the list).
+                    if (includeArchivedApplies(facets) && (beansState.includeArchived || facetResult.statusCounts.archived > 0u)) {
+                        CremaFilterChip(
+                            label = "Include archived",
+                            selected = beansState.includeArchived,
+                            icon = "archive",
+                            count = if (beansState.includeArchived) null else facetResult.archivedHidden.toInt(),
+                            onClick = { beansState.toggleIncludeArchived() },
+                        )
                     }
                     CremaFilterDivider()
                     CremaFilterGroupLabel("Roast")
                     listOf("light" to "Light", "medium" to "Medium", "dark" to "Dark").forEach { (id, label) ->
-                        CremaFilterChip(label = label, selected = beanFilter == id, count = counts[id] ?: 0, onClick = { beanFilter = id })
+                        CremaFilterChip(label = label, selected = beansState.roast == id, count = counts[id] ?: 0, onClick = { beansState.selectRoast(id) })
                     }
-                    // weight(1f) can't live inside a horizontalScroll; at narrow the
-                    // sort just trails the chips (reachable by scrolling).
-                    if (narrowBar) Spacer(Modifier.width(12.dp)) else Spacer(Modifier.weight(1f))
+                    if (facetResult.tagCounts.isNotEmpty()) {
+                        CremaFilterDivider()
+                        CremaFilterGroupLabel("Tags")
+                        facetResult.tagCounts.forEach { t ->
+                            CremaFilterChip(label = t.tag, selected = t.tag in beansState.tags, count = t.count.toInt(), onClick = { beansState.toggleTag(t.tag) })
+                        }
+                    }
+                    if (beansState.hasFilters) {
+                        CremaFilterChip(label = "Clear", selected = false, icon = "x", onClick = { beansState.clearFilters() })
+                    }
+                }
+                    Spacer(Modifier.width(12.dp))
                     CremaSortControl(
                         keys = listOf(
                             SortKey("freshest", "Freshest", "clock"),

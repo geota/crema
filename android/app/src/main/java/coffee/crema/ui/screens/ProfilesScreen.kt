@@ -65,6 +65,7 @@ import coffee.crema.ble.ScaleBleManager
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.effectiveProfileFilter
 import coffee.crema.profiles.filterAndSortProfiles
+import coffee.crema.profiles.profileChipCounts
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
@@ -106,7 +107,9 @@ fun ProfilesScreen(
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
     var query by remember { mutableStateOf("") }
+    // Two axes (#124): status (all / pinned / hidden) and roast compose.
     var filter by remember { mutableStateOf("all") }
+    var roastFilter by remember { mutableStateOf<String?>(null) }
     var sort by remember { mutableStateOf("name") }
     var sortDesc by remember { mutableStateOf(false) }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -121,7 +124,8 @@ fun ProfilesScreen(
     // Hidden facet falls back to All when nothing is archived; both the chips and
     // the grid key off effectiveFilter (issue 28).
     val effectiveFilter = effectiveProfileFilter(filter, ui.hiddenProfileIds)
-    val sorted = filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, sort, sortDesc, ui.activeProfileId)
+    val sorted = filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter, sort, sortDesc, ui.activeProfileId)
+    val chipCounts = profileChipCounts(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter)
 
     // ── Brew recipes — the guided-brew library section (issue #10). A
     // separate section, not rows in the machine grid: loading a profile
@@ -207,21 +211,29 @@ fun ProfilesScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val visible = ui.profiles.filter { it.id !in ui.hiddenProfileIds }
-                    val chips = buildList {
+                    // Status (All / Pinned / Hidden) and Roast are independent
+                    // axes (#124) — Hidden + Light is hidden light-roast
+                    // profiles — with faceted counts.
+                    val statuses = buildList {
                         add("all" to "All"); add("pinned" to "Pinned")
-                        add("light" to "Light"); add("medium" to "Medium"); add("dark" to "Dark")
-                        // Hidden facet only appears once there's something archived.
+                        // Hidden status only appears once there's something archived.
                         if (ui.hiddenProfileIds.isNotEmpty()) add("hidden" to "Hidden")
                     }
-                    chips.forEach { (id, label) ->
-                        val count = when (id) {
-                            "all" -> visible.size
-                            "pinned" -> visible.count { it.pinned }
-                            "hidden" -> ui.hiddenProfileIds.size
-                            else -> visible.count { it.roast?.equals(id, ignoreCase = true) == true }
-                        }
-                        CremaFilterChip(label = label, selected = effectiveFilter == id, count = count, onClick = { filter = id })
+                    statuses.forEach { (id, label) ->
+                        CremaFilterChip(
+                            label = label,
+                            selected = effectiveFilter == id,
+                            count = chipCounts[id] ?: 0,
+                            onClick = { filter = if (filter == id && id != "all") "all" else id },
+                        )
+                    }
+                    listOf("light" to "Light", "medium" to "Medium", "dark" to "Dark").forEach { (id, label) ->
+                        CremaFilterChip(
+                            label = label,
+                            selected = roastFilter == id,
+                            count = chipCounts[id] ?: 0,
+                            onClick = { roastFilter = if (roastFilter == id) null else id },
+                        )
                     }
                 }
                 CremaSortControl(

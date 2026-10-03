@@ -1,61 +1,105 @@
 package coffee.crema.beans
 
 import coffee.crema.core.Bean
-import coffee.crema.core.Roaster
+import coffee.crema.core.BeanFilterQuery
+import coffee.crema.core.BeanFilterResult
+import coffee.crema.core.BeanRoastCounts
+import coffee.crema.core.BeanStatusCounts
+import coffee.crema.core.BeanStatusFilter
+import coffee.crema.core.filterBeans as coreFilterBeans
 import coffee.crema.pinActiveThenFavourite
+import kotlinx.serialization.json.Json
 
 /*
- * Bean-library filter + sort — the search predicate, facet filter, sort, and
- * filter-chip counts that the tablet (BeansScreen) and phone (PhoneBeansScreen)
- * share. Pure functions over the in-memory library so both shells produce
- * identical results (issue 28).
+ * Bean-library filter + sort — what the tablet (BeansScreen) and phone
+ * (PhoneBeansScreen) share.
+ *
+ * The FACETS — status (archived is one more status, geota/crema#124), "include
+ * archived", roast band, tags, the roaster scope and the search's matches — and
+ * every chip's count run in the core (`de1_domain::bean_filter`, via the FFI),
+ * the same function the web PWA calls, so the three lists and their badges
+ * agree. Before #124 this file held one single-select facet: picking Archived
+ * dropped the roast chip and every roast chip silently hid archived bags, so
+ * the archive could be sorted but never filtered.
+ *
+ * The SORT stays here (the shells offer their own keys), over the core's ids.
  */
 
+/** Wire codec for the facet FFI round-trip. */
+private val filterJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
 /**
- * The bean library after search + facet filter + sort, then grouped with the
- * loaded ([activeId]) bean pinned to the top and favourites above the rest (via
- * [pinActiveThenFavourite]) — [sort] becomes the WITHIN-group order.
+ * The filter rail's selections — independent axes that compose.
  *
- * [filter] is one of all / active / favourite / frozen / archived / light /
- * medium / dark; [sort] is freshest (default) / name / roast / rating /
- * remaining. Archived bags are hidden from every facet EXCEPT "archived" — the
- * dedicated chip is the only place they surface (web semantics).
- *
- * [hits] is the core search result for the current query ([searchBeans]).
- * While it is active, relevance becomes the primary order and the
- * loaded/favourite pinning is suspended: a search is a question, and the
- * answer is the best match, not whichever bag happens to be loaded. Callers
- * that have no query pass [SearchResults.INACTIVE].
+ * [status] is all / active / frozen / favourite / archived; [roast] is light /
+ * medium / dark or null; [tags] must all be on the bag; [includeArchived] mixes
+ * archived bags (dimmed) into All / Favourite; [roasterId] is the #86 shelf.
  */
-fun filterAndSortBeans(
+data class BeanFacets(
+    val status: String = "all",
+    val includeArchived: Boolean = false,
+    val roast: String? = null,
+    val tags: Set<String> = emptySet(),
+    val roasterId: String? = null,
+)
+
+/** [BeanFacets] + the current search as the core's [BeanFilterQuery]. */
+fun BeanFacets.toCoreQuery(hits: SearchResults): BeanFilterQuery = BeanFilterQuery(
+    status = BeanStatusFilter.entries.firstOrNull { it.string == status } ?: BeanStatusFilter.All,
+    includeArchived = includeArchived,
+    roast = roast,
+    tags = tags.toList(),
+    roasterId = roasterId,
+    matchIds = hits.matchedIds(),
+)
+
+/** An empty result: no rows, zero counts. */
+private fun emptyFilterResult(ids: List<String> = emptyList()) = BeanFilterResult(
+    ids = ids,
+    statusCounts = BeanStatusCounts(0u, 0u, 0u, 0u, 0u),
+    roastCounts = BeanRoastCounts(0u, 0u, 0u),
+    tagCounts = emptyList(),
+    archivedHidden = 0u,
+    showingArchived = false,
+)
+
+/**
+ * Run the core facet filter. [core] is the FFI call (`(beansJson, queryJson) →
+ * resultJson`), injectable so the plumbing is testable on the JVM, where the
+ * native library is not loaded. A failing call degrades to the unfiltered
+ * library with zero counts — a filter must never make the beans vanish.
+ */
+fun filterBeanFacets(
     beans: List<Bean>,
-    roasters: List<Roaster>,
+    facets: BeanFacets,
     hits: SearchResults,
-    filter: String,
+    core: (String, String) -> String = { b, q -> coreFilterBeans(b, q) },
+): BeanFilterResult {
+    if (beans.isEmpty()) return emptyFilterResult()
+    return runCatching {
+        val query = filterJson.encodeToString(BeanFilterQuery.serializer(), facets.toCoreQuery(hits))
+        filterJson.decodeFromString(BeanFilterResult.serializer(), core(libraryBeansJson(beans), query))
+    }.getOrElse { emptyFilterResult(beans.map { it.id }) }
+}
+
+/**
+ * The bags the core kept ([ids]), sorted: [sort] is freshest (default) / name /
+ * roast / rating / remaining, [sortDesc] reverses it. While [hits] is active,
+ * relevance becomes the primary order and the loaded/favourite pinning is
+ * suspended (a search is a question; the answer is the best match). Otherwise
+ * the loaded ([activeId]) bean is pinned to the top and favourites above the
+ * rest (via [pinActiveThenFavourite]) — [sort] is the WITHIN-group order.
+ */
+fun sortFilteredBeans(
+    beans: List<Bean>,
+    ids: List<String>,
+    hits: SearchResults,
     sort: String,
     sortDesc: Boolean,
     activeId: String?,
-    roasterId: String? = null,
 ): List<Bean> {
-    // Roaster scope (geota/crema#86): tapping a roaster shows that roaster's
-    // shelf — only its bags, and "All" / "Favourite" include the archived ones.
-    // Archiving keeps the working list clean, but a roaster's shelf is the one
-    // place you expect to see every bag you ever bought from them.
-    val inScope = roasterId != null
-    val visible = scopeBeans(beans, roasterId).filter { b ->
-        val matchesFilter = when (filter) {
-            "archived" -> b.archivedAt != null
-            "active" -> b.archivedAt == null && !b.isFrozen
-            "favourite" -> (inScope || b.archivedAt == null) && b.favourite == true
-            "frozen" -> b.archivedAt == null && b.isFrozen
-            "light", "medium", "dark" ->
-                b.archivedAt == null && roastBand(b.roastLevel?.toInt())?.equals(filter, ignoreCase = true) == true
-            else -> inScope || b.archivedAt == null // "All" excludes archived (unless scoped)
-        }
-        // Facets still apply while searching — the query narrows what the chips
-        // already selected, it does not replace them.
-        hits.matches(b.id) && matchesFilter
-    }
+    val keep = ids.toHashSet()
+    val visible = beans.filter { it.id in keep }
     val asc = when (sort) {
         "name" -> visible.sortedBy { it.name.lowercase() }
         "roast" -> visible.sortedBy { it.roastLevel?.toInt() ?: Int.MAX_VALUE }
@@ -72,9 +116,29 @@ fun filterAndSortBeans(
     return sorted.pinActiveThenFavourite({ it.id == activeId }, { it.favourite == true })
 }
 
-/** The bags in a roaster scope — all bags when [roasterId] is null. */
-fun scopeBeans(beans: List<Bean>, roasterId: String?): List<Bean> =
-    if (roasterId == null) beans else beans.filter { it.roasterId == roasterId }
+/**
+ * Chip counts keyed by chip id (all / active / favourite / frozen / archived /
+ * light / medium / dark), from the same core result as the list — so a badge
+ * always equals what tapping its chip shows, given the other selections.
+ */
+fun BeanFilterResult.chipCounts(): Map<String, Int> = mapOf(
+    "all" to statusCounts.all.toInt(),
+    "active" to statusCounts.active.toInt(),
+    "favourite" to statusCounts.favourite.toInt(),
+    "frozen" to statusCounts.frozen.toInt(),
+    "archived" to statusCounts.archived.toInt(),
+    "light" to roastCounts.light.toInt(),
+    "medium" to roastCounts.medium.toInt(),
+    "dark" to roastCounts.dark.toInt(),
+)
+
+/**
+ * Whether the "Include archived" chip changes anything for [facets]: only
+ * under All / Favourite (Archived is already archived-only, Active / Frozen
+ * never include them) and outside a roaster shelf (which always does).
+ */
+fun includeArchivedApplies(facets: BeanFacets): Boolean =
+    facets.roasterId == null && (facets.status == "all" || facets.status == "favourite")
 
 /** "N bags · M archived" — the roaster-card bag count, archived hinted (#86). */
 fun roasterBagCountLabel(beans: List<Bean>, roasterId: String): String {
@@ -86,34 +150,8 @@ fun roasterBagCountLabel(beans: List<Bean>, roasterId: String): String {
 
 /**
  * Brew-PICKER order: the same active→favourite→rest grouping as the library
- * [filterAndSortBeans] (both via [pinActiveThenFavourite]), but over a list the
+ * [sortFilteredBeans] (both via [pinActiveThenFavourite]), but over a list the
  * caller already filtered (non-archived) — within-group order is store order.
  */
 fun rankBeansForPicker(beans: List<Bean>, activeId: String?): List<Bean> =
     beans.pinActiveThenFavourite({ it.id == activeId }, { it.favourite == true })
-
-/**
- * Count for each filter chip, keyed by facet id. Every status/roast facet counts
- * only NON-archived bags (their predicates exclude archived), and "archived"
- * counts the archived ones. This is the single source that settled the phone
- * "All" badge (was `beans.size`, incl. archived) drifting from the tablet's
- * non-archived count while both lists already hid archived bags (issue 28).
- */
-fun beanFilterCounts(beans: List<Bean>, roasterId: String? = null): Map<String, Int> {
-    val scoped = scopeBeans(beans, roasterId)
-    val nonArchived = scoped.filter { it.archivedAt == null }
-    // Inside a roaster scope "All" / "Favourite" really are all (see
-    // [filterAndSortBeans]); the counts follow the same rule so the badges
-    // cannot disagree with the list.
-    val allish = if (roasterId != null) scoped else nonArchived
-    return mapOf(
-        "all" to allish.size,
-        "active" to nonArchived.count { !it.isFrozen },
-        "favourite" to allish.count { it.favourite == true },
-        "frozen" to nonArchived.count { it.isFrozen },
-        "archived" to scoped.count { it.archivedAt != null },
-        "light" to nonArchived.count { roastBand(it.roastLevel?.toInt()).equals("light", ignoreCase = true) },
-        "medium" to nonArchived.count { roastBand(it.roastLevel?.toInt()).equals("medium", ignoreCase = true) },
-        "dark" to nonArchived.count { roastBand(it.roastLevel?.toInt()).equals("dark", ignoreCase = true) },
-    )
-}

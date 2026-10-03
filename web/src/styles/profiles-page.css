@@ -108,6 +108,9 @@
   border-radius: var(--radius-pill);
   transition: all var(--dur-1) var(--ease);
   position: relative;
+  /* A multi-word pill ("Include archived") stays one line; the rail scrolls. */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .pp-tag:hover { color: var(--fg-1); }
 .pp-tag.is-active {

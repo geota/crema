@@ -992,6 +992,21 @@ pub fn search_beans(
     de1_domain::search_beans_json(&beans_json, &roasters_json, &query).map_err(crema_err)
 }
 
+/// The bean library's facet filter + chip counts (geota/crema#124): status
+/// (archived is one more status), "include archived", roast band, tags,
+/// roaster scope and the search's matched ids, all composed. `beans_json` is
+/// a `Bean[]`, `query_json` a `BeanFilterQuery`; returns a `BeanFilterResult`
+/// JSON object. Mirrors the wasm `filterBeans`; see
+/// [`de1_domain::filter_beans`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the beans or the query can't be deserialised.
+#[uniffi::export]
+pub fn filter_beans(beans_json: String, query_json: String) -> Result<String, CremaError> {
+    de1_domain::filter_beans_json(&beans_json, &query_json).map_err(crema_err)
+}
+
 /// The roaster-directory half of [`search_beans`] — same contract, over
 /// name / city / country / notes / website. Mirrors the wasm `searchRoasters`;
 /// see [`de1_domain::search_roasters`].
@@ -3375,6 +3390,19 @@ mod tests {
             r#"[{"localId":"bean:test","create":true}]"#
         );
         assert!(detect_roaster_duplicates("nope".to_owned()).is_err());
+    }
+
+    #[test]
+    fn filter_beans_bridges_the_query_and_result() {
+        let out = filter_beans(
+            format!("[{FAKE_BEAN}]"),
+            r#"{"status":"archived"}"#.to_owned(),
+        )
+        .unwrap();
+        assert!(out.contains(r#""ids":[]"#), "{out}");
+        let all = filter_beans(format!("[{FAKE_BEAN}]"), "{}".to_owned()).unwrap();
+        assert!(all.contains(r#""ids":["bean:test"]"#), "{all}");
+        assert!(filter_beans("nope".to_owned(), "{}".to_owned()).is_err());
     }
 
     #[test]

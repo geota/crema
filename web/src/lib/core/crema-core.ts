@@ -233,6 +233,97 @@ export interface Bean {
 	updatedAt: number;
 }
 
+/** The lifecycle subset a library list shows — the Status chip group. */
+export enum BeanStatusFilter {
+	/** Every bag (archived ones only with `include_archived`). */
+	All = "all",
+	/** In use: not frozen, not archived. */
+	Active = "active",
+	/** In the freezer (frozen, not defrosted) and not archived. */
+	Frozen = "frozen",
+	/** Favourited bags (archived ones only with `include_archived`). */
+	Favourite = "favourite",
+	/** Archived bags only — composes with every other facet like any status. */
+	Archived = "archived",
+}
+
+/**
+ * The selections on the filter rail. Every field is an independent axis;
+ * the result is the bags that pass all of them.
+ */
+export interface BeanFilterQuery {
+	/** The Status chip. */
+	status: BeanStatusFilter;
+	/**
+	 * Also show archived bags under "All" / "Favourite" (dimmed). Ignored
+	 * for "Archived" (already archived-only) and implied by `roaster_id`.
+	 */
+	includeArchived: boolean;
+	/**
+	 * Roast band — `"light"` / `"medium"` / `"dark"` (canonical
+	 * [`roast_band`] thresholds), or `None` for no roast filter. A bag with
+	 * no roast level matches no band.
+	 */
+	roast?: string;
+	/** Tags the bag must carry — all of them. */
+	tags: string[];
+	/** Roaster scope (#86): only this roaster's bags, archived included. */
+	roasterId?: string;
+	/**
+	 * Ids the search matched, or `None` when no query is running. An empty
+	 * list means a query that matched nothing.
+	 */
+	matchIds?: string[];
+}
+
+/** Per-status chip counts, each given the other selections. */
+export interface BeanStatusCounts {
+	all: number;
+	active: number;
+	frozen: number;
+	favourite: number;
+	archived: number;
+}
+
+/** Per-band roast chip counts, each given the other selections. */
+export interface BeanRoastCounts {
+	light: number;
+	medium: number;
+	dark: number;
+}
+
+/** One tag chip: the tag and how many bags the list would hold with it added. */
+export interface BeanTagCount {
+	tag: string;
+	count: number;
+}
+
+/** The filtered library plus every chip's count. */
+export interface BeanFilterResult {
+	/** The bags that pass every facet, in input order (the shell sorts). */
+	ids: string[];
+	statusCounts: BeanStatusCounts;
+	roastCounts: BeanRoastCounts;
+	/**
+	 * Every tag in the (scoped) library, most-used first then by name — a
+	 * stable order so chips don't jump while filtering — each with its count
+	 * given the other selections. Selected tags are always listed.
+	 */
+	tagCounts: BeanTagCount[];
+	/**
+	 * Archived bags that pass every other facet but are hidden because
+	 * "include archived" is off — the count for that toggle. 0 when the
+	 * toggle has no effect (archived already shown, or an Active / Frozen
+	 * status that never includes them).
+	 */
+	archivedHidden: number;
+	/**
+	 * Whether archived bags are currently part of the list: "Archived"
+	 * status, "include archived", or a roaster scope.
+	 */
+	showingArchived: boolean;
+}
+
 /** One local bag the push leg writes. */
 export interface BeanPushItem {
 	/** The local bean id. */

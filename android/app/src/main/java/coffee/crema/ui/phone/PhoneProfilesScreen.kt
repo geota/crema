@@ -22,6 +22,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.effectiveProfileFilter
 import coffee.crema.profiles.filterAndSortProfiles
+import coffee.crema.profiles.profileChipCounts
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.convertTemp
 import coffee.crema.ui.convertWeight
@@ -51,7 +52,9 @@ fun PhoneProfilesScreen(
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
+    // Two axes (#124): status (all / pinned / hidden) and roast compose.
     var filter by remember { mutableStateOf("all") }
+    var roastFilter by remember { mutableStateOf<String?>(null) }
     var sort by remember { mutableStateOf("name") }
     var sortDesc by remember { mutableStateOf(false) }
     var menuFor by remember { mutableStateOf<CremaProfile?>(null) }
@@ -69,7 +72,8 @@ fun PhoneProfilesScreen(
     // Same facet model as the tablet: Hidden appears only when something is
     // archived, and falls back to All once the last one is restored (issue 28).
     val effectiveFilter = effectiveProfileFilter(filter, ui.hiddenProfileIds)
-    val sorted = filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, sort, sortDesc, ui.activeProfileId)
+    val sorted = filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter, sort, sortDesc, ui.activeProfileId)
+    val chipCounts = profileChipCounts(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter)
 
     // Brew recipes — the guided-brew library section (issue #10); authored
     // here, run from the Scale screen's Brew tab.
@@ -112,18 +116,24 @@ fun PhoneProfilesScreen(
         containerColor = MaterialTheme.colorScheme.background,
     ) { inner ->
         Column(Modifier.padding(inner).fillMaxSize()) {
-            val visible = ui.profiles.filter { it.id !in ui.hiddenProfileIds }
+            // Status (All / Pinned / Hidden) and Roast are independent axes
+            // (#124) — Hidden + Light is hidden light-roast profiles — with
+            // faceted counts (what tapping each chip would show).
+            val roasts = setOf("light", "medium", "dark")
             CremaFilterChipRow(
                 chips = buildList {
-                    add(FilterChipSpec("all", "All", visible.size))
-                    add(FilterChipSpec("pinned", "Pinned", visible.count { it.pinned }, icon = "star"))
-                    add(FilterChipSpec("light", "Light", visible.count { it.roast.equals("light", true) }))
-                    add(FilterChipSpec("medium", "Medium", visible.count { it.roast.equals("medium", true) }))
-                    add(FilterChipSpec("dark", "Dark", visible.count { it.roast.equals("dark", true) }))
-                    if (ui.hiddenProfileIds.isNotEmpty()) add(FilterChipSpec("hidden", "Hidden", ui.hiddenProfileIds.size))
+                    add(FilterChipSpec("all", "All", chipCounts["all"]))
+                    add(FilterChipSpec("pinned", "Pinned", chipCounts["pinned"], icon = "star"))
+                    if (ui.hiddenProfileIds.isNotEmpty()) add(FilterChipSpec("hidden", "Hidden", chipCounts["hidden"]))
+                    add(FilterChipSpec("light", "Light", chipCounts["light"]))
+                    add(FilterChipSpec("medium", "Medium", chipCounts["medium"]))
+                    add(FilterChipSpec("dark", "Dark", chipCounts["dark"]))
                 },
-                selected = effectiveFilter,
-                onSelect = { filter = it },
+                isSelected = { id -> if (id in roasts) roastFilter == id else effectiveFilter == id },
+                onSelect = { id ->
+                    if (id in roasts) roastFilter = if (roastFilter == id) null else id
+                    else filter = if (filter == id && id != "all") "all" else id
+                },
                 trailing = {
                     CremaSortControl(
                         keys = listOf(

@@ -22,10 +22,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coffee.crema.beans.beanFilterCounts
+import coffee.crema.beans.chipCounts
+import coffee.crema.beans.filterBeanFacets
+import coffee.crema.beans.includeArchivedApplies
+import coffee.crema.beans.sortFilteredBeans
 import coffee.crema.beans.beanDaysOffRoast
 import coffee.crema.beans.explanatory
-import coffee.crema.beans.filterAndSortBeans
 import coffee.crema.beans.forField
 import coffee.crema.beans.isFrozen
 import coffee.crema.beans.roastBand
@@ -75,7 +77,6 @@ fun PhoneBeansScreen(
     // the Bags tab, archived bags included. Cleared by its chip or by Back.
     var tab by beansState::tab
     var query by remember { mutableStateOf("") }
-    var filter by beansState::filter
     var roasterScopeId by beansState::roasterScopeId
     var sort by remember { mutableStateOf("freshest") }
     var sortDesc by remember { mutableStateOf(false) }
@@ -137,7 +138,11 @@ fun PhoneBeansScreen(
     // while scoped must not leave an empty, chip-less list behind.
     val scopeRoaster = roasterScopeId?.let { id -> ui.roasters.firstOrNull { it.id == id } }
     val scopeId = scopeRoaster?.id
-    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, beanHits, filter, sort, sortDesc, ui.activeBeanId, scopeId)
+    // Facets + chip counts from the core (#124): status, include-archived,
+    // roast, tags, the shelf scope and the search compose.
+    val facets = beansState.facets(scopeId)
+    val facetResult = filterBeanFacets(ui.beans, facets, beanHits)
+    val sortedBeans = sortFilteredBeans(ui.beans, facetResult.ids, beanHits, sort, sortDesc, ui.activeBeanId)
     // Back from a roaster's shelf returns to the Roasters directory it came
     // from, rather than leaving the Beans screen.
     BackHandler(enabled = scopeId != null && tab == "bags") { beansState.closeShelf() }
@@ -189,20 +194,30 @@ fun PhoneBeansScreen(
                         )
                     }
                 }
-                val counts = beanFilterCounts(ui.beans, scopeId)
+                // Status, roast and tag chips are independent axes (#124):
+                // Archived + Light means archived light roasts. Ids carry a
+                // group prefix; counts are faceted (what tapping shows).
+                val counts = facetResult.chipCounts()
                 CremaFilterChipRow(
                     chips = buildList {
-                        add(FilterChipSpec("all", "All", counts["all"] ?: 0))
-                        add(FilterChipSpec("active", "Active", counts["active"] ?: 0))
-                        add(FilterChipSpec("favourite", "Favourite", counts["favourite"] ?: 0, icon = "star"))
-                        add(FilterChipSpec("frozen", "Frozen", counts["frozen"] ?: 0))
-                        add(FilterChipSpec("archived", "Archived", counts["archived"] ?: 0))
-                        add(FilterChipSpec("light", "Light", counts["light"] ?: 0))
-                        add(FilterChipSpec("medium", "Medium", counts["medium"] ?: 0))
-                        add(FilterChipSpec("dark", "Dark", counts["dark"] ?: 0))
+                        add(FilterChipSpec("s:all", "All", counts["all"] ?: 0))
+                        add(FilterChipSpec("s:active", "Active", counts["active"] ?: 0))
+                        add(FilterChipSpec("s:favourite", "Favourite", counts["favourite"] ?: 0, icon = "star"))
+                        add(FilterChipSpec("s:frozen", "Frozen", counts["frozen"] ?: 0))
+                        add(FilterChipSpec("s:archived", "Archived", counts["archived"] ?: 0))
+                        // Archived bags, dimmed, alongside the rest — off by
+                        // default; only where it changes the list.
+                        if (includeArchivedApplies(facets) && (beansState.includeArchived || facetResult.statusCounts.archived > 0u)) {
+                            add(FilterChipSpec("x:include-archived", "Include archived", if (beansState.includeArchived) null else facetResult.archivedHidden.toInt(), icon = "archive"))
+                        }
+                        add(FilterChipSpec("r:light", "Light", counts["light"] ?: 0))
+                        add(FilterChipSpec("r:medium", "Medium", counts["medium"] ?: 0))
+                        add(FilterChipSpec("r:dark", "Dark", counts["dark"] ?: 0))
+                        facetResult.tagCounts.forEach { t -> add(FilterChipSpec("t:${t.tag}", t.tag, t.count.toInt())) }
+                        if (beansState.hasFilters) add(FilterChipSpec("x:clear", "Clear", icon = "x"))
                     },
-                    selected = filter,
-                    onSelect = { filter = it },
+                    isSelected = { id -> beansState.isChipSelected(id) },
+                    onSelect = { id -> beansState.onChip(id) },
                     trailing = {
                         CremaSortControl(
                             keys = listOf(

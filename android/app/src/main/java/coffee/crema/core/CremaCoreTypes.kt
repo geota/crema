@@ -201,6 +201,94 @@ data class Bean (
 	val updatedAt: Long
 )
 
+/// The lifecycle subset a library list shows — the Status chip group.
+@Serializable
+enum class BeanStatusFilter(val string: String) {
+	/// Every bag (archived ones only with `include_archived`).
+	@SerialName("all")
+	All("all"),
+	/// In use: not frozen, not archived.
+	@SerialName("active")
+	Active("active"),
+	/// In the freezer (frozen, not defrosted) and not archived.
+	@SerialName("frozen")
+	Frozen("frozen"),
+	/// Favourited bags (archived ones only with `include_archived`).
+	@SerialName("favourite")
+	Favourite("favourite"),
+	/// Archived bags only — composes with every other facet like any status.
+	@SerialName("archived")
+	Archived("archived"),
+}
+
+/// The selections on the filter rail. Every field is an independent axis;
+/// the result is the bags that pass all of them.
+@Serializable
+data class BeanFilterQuery (
+	/// The Status chip.
+	val status: BeanStatusFilter,
+	/// Also show archived bags under "All" / "Favourite" (dimmed). Ignored
+	/// for "Archived" (already archived-only) and implied by `roaster_id`.
+	val includeArchived: Boolean,
+	/// Roast band — `"light"` / `"medium"` / `"dark"` (canonical
+	/// [`roast_band`] thresholds), or `None` for no roast filter. A bag with
+	/// no roast level matches no band.
+	val roast: String? = null,
+	/// Tags the bag must carry — all of them.
+	val tags: List<String>,
+	/// Roaster scope (#86): only this roaster's bags, archived included.
+	val roasterId: String? = null,
+	/// Ids the search matched, or `None` when no query is running. An empty
+	/// list means a query that matched nothing.
+	val matchIds: List<String>? = null
+)
+
+/// Per-status chip counts, each given the other selections.
+@Serializable
+data class BeanStatusCounts (
+	val all: UInt,
+	val active: UInt,
+	val frozen: UInt,
+	val favourite: UInt,
+	val archived: UInt
+)
+
+/// Per-band roast chip counts, each given the other selections.
+@Serializable
+data class BeanRoastCounts (
+	val light: UInt,
+	val medium: UInt,
+	val dark: UInt
+)
+
+/// One tag chip: the tag and how many bags the list would hold with it added.
+@Serializable
+data class BeanTagCount (
+	val tag: String,
+	val count: UInt
+)
+
+/// The filtered library plus every chip's count.
+@Serializable
+data class BeanFilterResult (
+	/// The bags that pass every facet, in input order (the shell sorts).
+	val ids: List<String>,
+	val statusCounts: BeanStatusCounts,
+	val roastCounts: BeanRoastCounts,
+	/// Every tag in the (scoped) library, most-used first then by name — a
+	/// stable order so chips don't jump while filtering — each with its count
+	/// given the other selections. Selected tags are always listed.
+	val tagCounts: List<BeanTagCount>,
+	/// Archived bags that pass every other facet but are hidden because
+	/// "include archived" is off — the count for that toggle. 0 when the
+	/// toggle has no effect (archived already shown, or an Active / Frozen
+	/// status that never includes them).
+	val archivedHidden: UInt,
+	/// Whether archived bags are currently part of the list: "Archived"
+	/// status, "include archived", or a roaster scope.
+	val showingArchived: Boolean
+)
+
 /// One local bag the push leg writes.
 @Serializable
 data class BeanPushItem (

@@ -44,6 +44,7 @@
 		type Bean,
 		type Roaster, activateBean } from '$lib/bean';
 	import { searchBeans, searchRoasters } from '$lib/bean/search';
+	import { filterBeans, type BeanStatusFilter } from '$lib/bean/filter';
 	import { detectRoasterDuplicates, planRoasterMerge } from '$lib/bean/roaster-duplicates';
 	import BeanTile from '$lib/components/beans/BeanTile.svelte';
 	import RoasterCard from '$lib/components/beans/RoasterCard.svelte';
@@ -123,6 +124,15 @@
 
 	let status = $state<StatusFilter>('all');
 	/**
+	 * "Include archived" (#124): show archived bags — dimmed, as on a
+	 * roaster's shelf — alongside the rest under All / Favourite, with every
+	 * other filter still applying. Off by default, so the working list looks
+	 * exactly as before until the user opts in. The Archived status chip
+	 * remains the archived-only view, and composes with roast / tags / search
+	 * like any other status.
+	 */
+	let includeArchived = $state(false);
+	/**
 	 * Roaster scope (geota/crema#86). Set by clicking a roaster in the
 	 * Roasters directory: the Bags tab then shows only that roaster's bags,
 	 * and — unlike the unscoped list — "All" includes the archived ones.
@@ -164,37 +174,6 @@
 
 	const drawerBean = $derived(drawerBeanId ? library.getBean(drawerBeanId) : null);
 
-	function matchesStatus(b: Bean, f: StatusFilter, includeArchived = false): boolean {
-		const state = bagState(b);
-		switch (f) {
-			// "All" and "Favourite" exclude archived bags (Android parity):
-			// archiving exists to keep the working list clean, and the
-			// Archived chip stays the dedicated view for finished bags.
-			// Inside a roaster scope (`includeArchived`) they show everything —
-			// see `roasterScopeId`.
-			case 'all':
-				return includeArchived || state !== 'archived';
-			case 'active':
-				return state === 'active';
-			case 'frozen':
-				return state === 'frozen';
-			case 'archived':
-				return state === 'archived';
-			case 'favourite':
-				return b.favourite && (includeArchived || state !== 'archived');
-			default:
-				return includeArchived || state !== 'archived';
-		}
-	}
-
-	function matchesRoast(b: Bean, f: RoastFilter | null): boolean {
-		if (f === null) return true; // no roast filter active
-		if (b.roastLevel == null) return false;
-		if (f === 'light') return b.roastLevel <= 4;
-		if (f === 'medium') return b.roastLevel >= 5 && b.roastLevel <= 7;
-		return b.roastLevel >= 8;
-	}
-
 	// Search runs in the core (issue 62): typo-tolerant, weighted across every
 	// recorded field, and identical on Android. The old inline `includes`
 	// chain covered nine fields and no typos.
@@ -206,27 +185,31 @@
 	// link or a roaster deleted while scoped would otherwise filter the list
 	// down to nothing with no pill left to clear it.
 	const scopeId = $derived(scopeRoaster?.id ?? null);
-	// Bags inside the roaster scope (all bags when unscoped). The list and
-	// the status and roast chip counts read from this so they cannot
-	// disagree.
-	const scopedBeans = $derived(
-		scopeId ? allBeans.filter((b) => b.roasterId === scopeId) : allBeans
-	);
 
+	// The facets run in the core too (geota/crema#124, `de1_domain::
+	// bean_filter`, shared with both Android layouts). Status — where
+	// "Archived" is one more status, not a separate mode — "include
+	// archived", roast, tags, the roaster scope and the search are
+	// independent axes that compose, and every chip count is "how many bags
+	// if I picked this, given the rest". Facets still apply while searching:
+	// the query narrows what the chips already selected, it does not replace
+	// them.
+	const facetResult = $derived(
+		filterBeans(
+			allBeans,
+			{
+				status: status as BeanStatusFilter,
+				includeArchived,
+				roast,
+				tags: selectedTags,
+				roasterId: scopeId
+			},
+			bagHits
+		)
+	);
 	const filtered = $derived.by(() => {
-		const inScope = scopeId != null;
-		return scopedBeans.filter((b) => {
-			if (!matchesStatus(b, status, inScope)) return false;
-			if (!matchesRoast(b, roast)) return false;
-			if (selectedTags.length > 0) {
-				for (const t of selectedTags) {
-					if (!b.tags.includes(t)) return false;
-				}
-			}
-			// Facets still apply while searching — the query narrows what the
-			// chips already selected, it does not replace them.
-			return !bagHits.active || bagHits.byId.has(b.id);
-		});
+		const keep = new Set(facetResult.ids);
+		return allBeans.filter((b) => keep.has(b.id));
 	});
 
 	const sorted = $derived.by(() => {
@@ -282,45 +265,24 @@
 		return pinActiveThenFavourite(arr, library.activeBeanId, (b) => b.favourite);
 	});
 
-	const counts = $derived.by(() => {
-		const c = { all: 0, active: 0, frozen: 0, archived: 0, favourite: 0 };
-		const inScope = scopeId != null;
-		for (const b of scopedBeans) {
-			// Keep the badges in lockstep with `matchesStatus`: archived
-			// bags count only under their own chip — except inside a
-			// roaster scope, where "All" really is all.
-			const s = bagState(b);
-			if (inScope || s !== 'archived') c.all += 1;
-			if (s === 'active') c.active += 1;
-			if (s === 'frozen') c.frozen += 1;
-			if (s === 'archived') c.archived += 1;
-			if (b.favourite && (inScope || s !== 'archived')) c.favourite += 1;
-		}
-		return c;
-	});
+	// Chip counts, from the same core call as the list so they cannot
+	// disagree with it.
+	const counts = $derived(facetResult.statusCounts);
+	const roastCounts = $derived(facetResult.roastCounts);
+	const tagFacets = $derived(facetResult.tagCounts);
 
-	// Per-band bag counts for the Roast filter pills. Mirrors the `/profiles`
-	// pattern (Light: N / Medium: N / Dark: N badges) and keeps the count in
-	// lockstep with `matchesRoast` so the displayed numbers cannot disagree
-	// with the actual filter result.
-	const roastCounts = $derived.by(() => {
-		const c: Record<RoastFilter, number> = { light: 0, medium: 0, dark: 0 };
-		for (const b of scopedBeans) {
-			if (matchesRoast(b, 'light')) c.light += 1;
-			else if (matchesRoast(b, 'medium')) c.medium += 1;
-			else if (matchesRoast(b, 'dark')) c.dark += 1;
-		}
-		return c;
-	});
-
-	const tagFacets = $derived.by(() => {
-		const m = new Map<string, number>();
+	// Library-wide totals for the header line and the Bags tab badge — what
+	// the shelf holds, independent of the chips (archived bags count in the
+	// tab only inside a roaster scope, as before).
+	const totals = $derived.by(() => {
+		const t = { all: 0, active: 0, frozen: 0, archived: 0 };
 		for (const b of allBeans) {
-			for (const t of b.tags) m.set(t, (m.get(t) ?? 0) + 1);
+			if (scopeId && b.roasterId !== scopeId) continue;
+			const s = bagState(b);
+			if (scopeId || s !== 'archived') t.all += 1;
+			t[s] += 1;
 		}
-		return [...m.entries()]
-			.map(([tag, count]) => ({ tag, count }))
-			.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+		return t;
 	});
 
 	/**
@@ -360,6 +322,22 @@
 				icon: s.icon,
 				count: counts[s.f as keyof typeof counts],
 				selected: status === s.f
+			});
+		}
+		// The include-archived toggle only shows where it changes the list:
+		// not under Archived (already archived-only), Active / Frozen (never
+		// archived), or a roaster's shelf (always includes them). Its badge is
+		// how many archived bags it would add, given the other filters.
+		if ((status === 'all' || status === 'favourite') && !scopeId && (includeArchived || counts.archived > 0)) {
+			items.push({
+				id: 'x:include-archived',
+				label: 'Include archived',
+				icon: includeArchived ? 'ph-fill ph-eye' : 'ph ph-eye-slash',
+				count: includeArchived ? undefined : facetResult.archivedHidden,
+				selected: includeArchived,
+				title: includeArchived
+					? 'Hide archived bags again'
+					: 'Show archived bags (dimmed) alongside the rest — every filter still applies'
 			});
 		}
 		items.push({ id: '__div1', divider: true });
@@ -406,6 +384,8 @@
 			roast = roast === next ? null : next;
 		} else if (id.startsWith('t:')) {
 			toggleSelectedTag(id.slice(2));
+		} else if (id === 'x:include-archived') {
+			includeArchived = !includeArchived;
 		}
 	}
 
@@ -439,7 +419,7 @@
 	const statusLine = $derived(
 		allBeans.length === 0
 			? 'No beans yet — add your first bag to start tracking.'
-			: `${counts.active} active · ${counts.frozen} frozen · ${counts.archived} archived · ${allRoasters.length} roasters`
+			: `${totals.active} active · ${totals.frozen} frozen · ${totals.archived} archived · ${allRoasters.length} roasters`
 	);
 
 	// ── Roaster directory rows ─────────────────────────────────────────
@@ -571,6 +551,7 @@
 	}
 	function clearFilters(): void {
 		status = 'all';
+		includeArchived = false;
 		roast = null;
 		selectedTags = [];
 	}
@@ -889,7 +870,7 @@
 			>
 				<CoffeeBeanIcon weight="duotone" aria-hidden="true" />
 				<span>Bags</span>
-				<span class="bn-tab-count">{counts.all}</span>
+				<span class="bn-tab-count">{totals.all}</span>
 			</button>
 			<button
 				class="bn-tab"
@@ -921,7 +902,7 @@
 			<div class="bn-tabs-filters">
 				<FilterPills pills={bagsFilterPills} onclick={onBagPillClick} />
 			</div>
-			{#if status !== 'all' || roast !== null || selectedTags.length > 0}
+			{#if status !== 'all' || includeArchived || roast !== null || selectedTags.length > 0}
 				<button class="bn-chip-clear" onclick={clearFilters}>
 					<XIcon aria-hidden="true" /> Clear
 				</button>

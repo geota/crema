@@ -51,6 +51,13 @@
 	import { ProfileCard } from '$lib/components/profiles';
 	import SortPill from '$lib/components/shared/SortPill.svelte';
 	import FilterPills from '$lib/components/shared/FilterPills.svelte';
+	import {
+		filterProfiles,
+		profileFacetCount,
+		profileStatusCounts,
+		type ProfileFilterInput,
+		type ProfileStatus
+	} from '$lib/profiles/library-filter';
 	import { downloadBlob, filenameStamp } from '$lib/utils/download';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 	import CustomMethodDialog from '$lib/components/brewlog/CustomMethodDialog.svelte';
@@ -84,8 +91,23 @@
 	// ── Filter / sort state ──────────────────────────────────────────────
 	/** The search query. */
 	let q = $state('');
-	/** The active tag filter: `all`, `pinned`, a roast, or `t:<custom tag>`. */
-	let tag = $state('all');
+	/**
+	 * The filter rail is two independent axes (#124): `status` picks the
+	 * subset (All / Pinned / Hidden built-ins) and `facet` narrows it (a
+	 * roast, `b:<beverage>` or `t:<custom tag>`, or null). Hidden used to
+	 * share one single-select value with the facets, so browsing the hidden
+	 * built-ins dropped the roast / beverage / tag filter.
+	 */
+	let status = $state<ProfileStatus>('all');
+	let facet = $state<string | null>(null);
+	/** The inputs every filter + count reads. */
+	const filterInput = $derived<ProfileFilterInput>({
+		visible: profiles,
+		hidden: store.hiddenBuiltinProfiles,
+		status,
+		facet,
+		query: q
+	});
 	/** The active sort key. */
 	type SortKey = 'recent' | 'name' | 'dose' | 'roast' | 'beverage' | 'author';
 	type SortDir = 'asc' | 'desc';
@@ -125,7 +147,7 @@
 		(['light', 'medium', 'dark'] as const).map((id) => ({
 			id,
 			label: id[0].toUpperCase() + id.slice(1),
-			count: profiles.filter((p) => p.roast === id).length
+			count: profileFacetCount(filterInput, id)
 		}))
 	);
 
@@ -135,36 +157,44 @@
 	 * `BEVERAGE_TYPES` constant for deterministic UI.
 	 */
 	const beverageFacets = $derived(
-		BEVERAGE_TYPES.map((bt) => ({
+		BEVERAGE_TYPES.filter((bt) =>
+			// A chip per beverage the library holds (visible or hidden), so
+			// chips don't vanish while filtering; the count is faceted.
+			[...profiles, ...store.hiddenBuiltinProfiles].some((p) => p.beverageType === bt)
+		).map((bt) => ({
 			id: `b:${bt}`,
 			label: bt.charAt(0).toUpperCase() + bt.slice(1),
-			count: profiles.filter((p) => p.beverageType === bt).length
-		})).filter((f) => f.count > 0)
+			count: profileFacetCount(filterInput, `b:${bt}`)
+		}))
 	);
 
 	/** Custom tag facets — derived from the library so new tags appear here. */
 	const customTags = $derived.by(() => {
-		const counts = new Map<string, number>();
-		for (const p of profiles) {
-			for (const t of p.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+		// Library-wide frequency orders the chips (stable while filtering);
+		// the badge is the faceted count.
+		const freq = new Map<string, number>();
+		for (const p of [...profiles, ...store.hiddenBuiltinProfiles]) {
+			for (const t of p.tags) freq.set(t, (freq.get(t) ?? 0) + 1);
 		}
-		return [...counts.entries()]
-			.map(([tag, count]) => ({
+		return [...freq.entries()]
+			.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+			.map(([tag]) => ({
 				id: `t:${tag}`,
 				// Display label is title-cased so a stored tag like `tea` reads
 				// consistently next to `Built-in` in the facet strip; the filter
 				// still keys on the raw tag string via `id`.
 				label: tag.charAt(0).toUpperCase() + tag.slice(1),
-				count
-			}))
-			.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+				count: profileFacetCount(filterInput, `t:${tag}`)
+			}));
 	});
 
 	/** The pinned count, for the header sub-line. */
 	const pinnedCount = $derived(profiles.filter((p) => p.pinned).length);
 
-	/** Whether the "Hidden" filter is the active facet. */
-	const showingHidden = $derived(tag === 'hidden');
+	/** Whether the "Hidden" status is active. */
+	const showingHidden = $derived(status === 'hidden');
+	/** Status chip counts — given the facet and the search. */
+	const statusCounts = $derived(profileStatusCounts(filterInput));
 
 	/**
 	 * The flat pill list passed to `FilterPills`. Built from the same
@@ -189,16 +219,16 @@
 			{
 				id: 'all',
 				label: 'All',
-				count: profiles.length,
-				selected: tag === 'all'
+				count: statusCounts.all,
+				selected: status === 'all'
 			},
 			{
 				id: 'pinned',
 				label: 'Pinned',
 				icon: 'ph-fill ph-star',
 				iconStyle: 'font-size:11px;color:var(--copper-400)',
-				count: pinnedCount,
-				selected: tag === 'pinned'
+				count: statusCounts.pinned,
+				selected: status === 'pinned'
 			}
 		];
 		if (store.hiddenBuiltinCount > 0) {
@@ -207,8 +237,8 @@
 				label: 'Hidden',
 				icon: 'ph ph-eye-slash',
 				iconStyle: 'font-size:11px',
-				count: store.hiddenBuiltinCount,
-				selected: tag === 'hidden',
+				count: statusCounts.hidden,
+				selected: status === 'hidden',
 				title: "Show built-in profiles you've hidden — click their eye icon to restore"
 			});
 		}
@@ -219,7 +249,7 @@
 				id: r.id,
 				label: r.label,
 				count: r.count,
-				selected: tag === r.id
+				selected: facet === r.id
 			});
 		}
 		if (beverageFacets.length > 0) {
@@ -230,7 +260,7 @@
 					id: b.id,
 					label: b.label,
 					count: b.count,
-					selected: tag === b.id
+					selected: facet === b.id
 				});
 			}
 		}
@@ -242,7 +272,7 @@
 					id: t.id,
 					label: t.label,
 					count: t.count,
-					selected: tag === t.id,
+					selected: facet === t.id,
 					custom: true
 				});
 			}
@@ -252,28 +282,9 @@
 
 	/** The filtered + sorted profile list the grid renders. */
 	const filtered = $derived.by(() => {
-		const query = q.trim().toLowerCase();
-		// The Hidden facet draws from a different list — hidden built-ins
-		// don't appear in `profiles` (which is `store.all`). Switch
-		// sources before applying search / sort.
-		const source = showingHidden ? store.hiddenBuiltinProfiles : profiles;
-		let r = source.filter((p) => {
-			// Tag facet — only the search/roast/custom-tag filters apply
-			// once `source` is in hand; `pinned` and `hidden` are
-			// list-level so they're already accounted for.
-			if (['light', 'medium', 'dark'].includes(tag) && p.roast !== tag) return false;
-			if (tag.startsWith('t:') && !p.tags.includes(tag.slice(2))) return false;
-			if (tag.startsWith('b:') && p.beverageType !== tag.slice(2)) return false;
-			if (tag === 'pinned' && !p.pinned) return false;
-			// Search.
-			if (query === '') return true;
-			return (
-				p.name.toLowerCase().includes(query) ||
-				p.notes.toLowerCase().includes(query) ||
-				p.tags.some((t) => t.toLowerCase().includes(query)) ||
-				p.author.toLowerCase().includes(query)
-			);
-		});
+		// Status + facet + search compose (#124); the Hidden status draws
+		// from the hidden built-ins, which `store.all` leaves out.
+		let r = filterProfiles(filterInput);
 		// Two-tier sort: unset values always sink to the end (regardless
 		// of direction), then the active key's comparator decides among
 		// the set values. Stable tiebreak on name for every key.
@@ -412,10 +423,10 @@
 		if (showingHidden && profile.source === 'builtin') {
 			store.unhideBuiltin(id);
 			// When the user empties the hide-set, the "Hidden" filter
-			// pill disappears — and a stale `tag === 'hidden'` would
+			// pill disappears — and a stale `status === 'hidden'` would
 			// leave them staring at an empty grid. Jump back to All so
 			// the just-restored profile is visible in context.
-			if (store.hiddenBuiltinCount === 0) tag = 'all';
+			if (store.hiddenBuiltinCount === 0) status = 'all';
 			return;
 		}
 		if (profile.source === 'builtin') {
@@ -792,11 +803,14 @@
 		<FilterPills
 			pills={filterPills}
 			onclick={(id) => {
-				// Re-clicking the active pill deselects → reset to the
-				// `all` catch-all. `all` itself is already the "no filter"
-				// state, so leave it pinned on re-click rather than
-				// flipping to a weirder unset value.
-				tag = tag === id && id !== 'all' ? 'all' : id;
+				// Two axes (#124). Status pills: re-clicking the active one
+				// resets to the `all` catch-all (which stays pinned). Facet
+				// pills: re-clicking the active one clears the facet.
+				if (id === 'all' || id === 'pinned' || id === 'hidden') {
+					status = status === id && id !== 'all' ? 'all' : id;
+				} else {
+					facet = facet === id ? null : id;
+				}
 			}}
 		/>
 		<div class="pp-sort">

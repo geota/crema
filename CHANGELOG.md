@@ -236,6 +236,17 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Archived beans can be filtered** ([#124](https://github.com/geota/crema/issues/124))
+  — Archived is now one more status that combines with the roast, tag and
+  roaster filters, the search and the sort, instead of a separate view where
+  only sorting worked. A new **Include archived** chip shows archived bags,
+  dimmed, alongside the rest under All or Favourite; it is off by default, so
+  the list looks the same until you turn it on. Every chip count now reflects
+  the other filters you picked, and the roast bands are the same on web and
+  Android (a level-4 bag is Medium on both). Profiles get the same fix: the
+  **Hidden** built-ins can be filtered by roast (and on web by beverage and
+  tag) and searched. Android now shows tag chips on Beans too. Web, Android
+  phone and tablet, with the filtering in the shared core.
 - **Bean and roaster sync now follows the direction you picked** — a
   Beans or Roasters direction of **Pull** no longer writes to Visualizer on a
   Premium account, and **Backup** no longer pulls; Off, Backup, Pull and
