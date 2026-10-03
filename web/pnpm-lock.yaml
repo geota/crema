@@ -8,9 +8,6 @@ overrides:
   undici: ^7.28.0
   js-yaml: ^4.3.2
   cookie: ^0.7.0
-  devalue: ^5.9.3
-  serialize-javascript: ^7.1.2
-  brace-expansion@2: ^2.1.7
 
 importers:
 

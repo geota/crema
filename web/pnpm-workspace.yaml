@@ -8,6 +8,3 @@ overrides:
   undici: '^7.28.0' # <7.28.0 advisories, via jsdom (test dep)
   js-yaml: '^4.3.2' # <4.3.2 advisories, via @redocly/openapi-core (codegen)
   cookie: '^0.7.0' # <0.7.0 advisory, via @sveltejs/kit
-  devalue: '^5.9.3' # <=5.9.2 advisories, via @sveltejs/kit
-  serialize-javascript: '^7.1.2' # 7.1.1 advisory, via @rollup/plugin-terser (workbox-build)
-  brace-expansion@2: '^2.1.7' # 2.x <2.1.7 advisories, via minimatch@5 (openapi-typescript, workbox-build)
