@@ -1214,6 +1214,16 @@ pub fn search_beans(beans_json: &str, roasters_json: &str, query: &str) -> Resul
     de1_domain::search_beans_json(beans_json, roasters_json, query)
 }
 
+/// The bean library's facet filter + chip counts (geota/crema#124): status
+/// (archived is one more status), "include archived", roast band, tags,
+/// roaster scope and the search's matched ids, all composed. `beans_json` is
+/// a `Bean[]`, `query_json` a `BeanFilterQuery`; returns a `BeanFilterResult`.
+/// See `de1_domain::filter_beans`.
+#[wasm_bindgen(js_name = filterBeans)]
+pub fn filter_beans(beans_json: &str, query_json: &str) -> Result<String, String> {
+    de1_domain::filter_beans_json(beans_json, query_json)
+}
+
 /// The roaster-directory half of [`search_beans`] — same contract, over
 /// name / city / country / notes / website. See `de1_domain::search_roasters`.
 #[wasm_bindgen(js_name = searchRoasters)]

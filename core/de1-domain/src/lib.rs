@@ -54,6 +54,7 @@ pub mod app_settings;
 pub mod auto_tare;
 pub mod bean;
 pub mod bean_coerce;
+pub mod bean_filter;
 pub mod bean_search;
 pub mod bean_sync;
 pub mod beanconqueror;
@@ -115,6 +116,10 @@ pub use bean::{
     days_off_roast, debit_remaining, resettle_remaining, roast_band, roast_band5, roast_freshness,
 };
 pub use bean_coerce::{coerce_bean, coerce_bean_json, coerce_roaster, coerce_roaster_json};
+pub use bean_filter::{
+    BeanFilterQuery, BeanFilterResult, BeanRoastCounts, BeanStatusCounts, BeanStatusFilter,
+    BeanTagCount, filter_beans, filter_beans_json,
+};
 pub use bean_search::{
     FieldHit, SearchField, SearchHit, SearchSegment, search_beans, search_beans_json,
     search_roasters, search_roasters_json,
