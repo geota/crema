@@ -278,6 +278,21 @@ class MainActivity : ComponentActivity() {
                         else viewModel.consumeDiscardToast()
                     }
                 }
+                // An unreadable store file was kept aside at load: say so once, with
+                // a "Share" action for the kept-aside copies.
+                LaunchedEffect(ui.keptAsideNotice) {
+                    val msg = ui.keptAsideNotice ?: return@LaunchedEffect
+                    snackbarScope.launch {
+                        val result = snackbarHostState.showSnackbar(
+                            message = msg,
+                            actionLabel = "Share",
+                            withDismissAction = true,
+                            duration = SnackbarDuration.Indefinite,
+                        )
+                        if (result == SnackbarResult.ActionPerformed) viewModel.shareKeptAside()
+                        else viewModel.consumeKeptAsideNotice()
+                    }
+                }
                 // "Keep screen on" (Settings → Display): hold FLAG_KEEP_SCREEN_ON
                 // the whole time Crema is in the foreground so the display never
                 // dims mid-use (the flag only applies while this window is visible).

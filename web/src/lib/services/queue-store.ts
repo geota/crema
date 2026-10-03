@@ -17,7 +17,7 @@
  * is synchronous so reactive components can derive a pip without the runtime.
  */
 
-import { readJson, writeJson } from '../utils/storage.ts';
+import { isJsonObject, readJson, writeJson } from '../utils/storage.ts';
 
 /** localStorage key for the upload queue. */
 const QUEUE_KEY = 'crema.visualizer.uploadQueue.v1';
@@ -54,7 +54,10 @@ interface QueueState {
  * `visualizer/upload-queue.ts`; see queue-store.test.ts).
  */
 export function readQueue(): QueueState {
-	const raw = readJson<QueueState | null>(QUEUE_KEY, null);
+	const raw = readJson<QueueState | null>(QUEUE_KEY, null, {
+		what: 'upload queue',
+		valid: (v) => isJsonObject(v) && Array.isArray(v.entries)
+	});
 	if (!raw || !Array.isArray(raw.entries)) return { entries: [] };
 	return raw;
 }

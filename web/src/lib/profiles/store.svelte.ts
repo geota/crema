@@ -27,7 +27,7 @@ import { SvelteSet } from 'svelte/reactivity';
 
 import { loadCore } from '$lib/core';
 import { refreshStopTargetsProjection } from '$lib/state/ui-state.svelte';
-import { readJson, writeJson } from '$lib/utils/storage';
+import { isIdOrNull, isJsonObject, readJson, writeJson } from '$lib/utils/storage';
 import {
 	builtinCremaProfiles,
 	toCoreProfile,
@@ -91,10 +91,10 @@ export class ProfileStore {
 	/** The built-in profiles, adapted from the core. Empty until loaded. */
 	private builtins = $state.raw<CremaProfile[]>([]);
 	/** The user's custom profiles, from localStorage. */
-	private custom = $state.raw<CremaProfile[]>(stripLegacyIdPrefix(readJson<CremaProfile[]>(CUSTOM_KEY, [])));
+	private custom = $state.raw<CremaProfile[]>(stripLegacyIdPrefix(readJson<CremaProfile[]>(CUSTOM_KEY, [], { what: 'custom profiles', valid: Array.isArray })));
 	/** Per-built-in user overrides (pin / last-used). */
 	private overrides = $state.raw<Record<string, BuiltinOverride>>(
-		readJson<Record<string, BuiltinOverride>>(OVERRIDES_KEY, {})
+		readJson<Record<string, BuiltinOverride>>(OVERRIDES_KEY, {}, { what: 'profile settings', valid: isJsonObject })
 	);
 	/**
 	 * The set of built-in ids the user has hidden from the library.
@@ -104,10 +104,10 @@ export class ProfileStore {
 	 * and stay reactive — no per-toggle full-set allocation.
 	 */
 	private hiddenBuiltins = new SvelteSet<string>(
-		readJson<string[]>(HIDDEN_BUILTINS_KEY, [])
+		readJson<string[]>(HIDDEN_BUILTINS_KEY, [], { what: 'hidden profiles list', valid: Array.isArray })
 	);
 	/** The id of the profile marked active on the Brew dashboard. */
-	activeId = $state<string | null>(stripLegacyIdPrefixOnId(readJson<string | null>(ACTIVE_KEY, null)));
+	activeId = $state<string | null>(stripLegacyIdPrefixOnId(readJson<string | null>(ACTIVE_KEY, null, { valid: isIdOrNull })));
 	/**
 	 * Optional hook fired from {@link setActive} after the activeId
 	 * mutation, passing the resolved {@link CremaProfile} (or `null` if

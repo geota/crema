@@ -236,6 +236,17 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A crash or power loss mid-save can no longer wipe your data** — on
+  Android, shot history, beans, profiles, recipes and settings are written to
+  a temporary file and swapped in atomically, with the previous version kept
+  as a backup (each browser value is already replaced atomically).
+  A file (or browser-stored value) that can't be read is no longer replaced
+  with an empty one: it is kept aside (`<name>.corrupt-<time>` on Android,
+  `<key>.corrupt` on the web), the Android backup is used when there is one, and a
+  one-time notice says what couldn't be read, with Share (Android) or
+  Save copy (web) for the damaged data. A browser storage quota error is
+  reported instead of silently not saving. Web and Android.
+
 - **Archived beans can be filtered** ([#124](https://github.com/geota/crema/issues/124))
   — Archived is now one more status that combines with the roast, tag and
   roaster filters, the search and the sort, instead of a separate view where

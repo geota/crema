@@ -5,6 +5,8 @@ import coffee.crema.core.Compare
 import coffee.crema.core.ExitMetric
 import coffee.crema.core.Pump
 import coffee.crema.core.Transition
+import coffee.crema.persist.loadStore
+import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -55,11 +57,8 @@ class CustomProfileStore(private val context: Context, private val json: Json) {
      * object ready for the thin-model decode (display) or `cremaProfileToWire`.
      */
     suspend fun load(): List<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            file.takeIf { it.exists() }?.readText()
-                ?.let { json.decodeFromString(CustomProfileLibrary.serializer(), it) }
-                ?.profiles?.map { it.toString() }
-        }.getOrNull() ?: emptyList()
+        loadStore(file, "custom profiles") { json.decodeFromString(CustomProfileLibrary.serializer(), it) }
+            .valueOrNull()?.profiles?.map { it.toString() } ?: emptyList()
     }
 
     /** Persist the custom profiles (full-JSON strings in; best-effort). */
@@ -69,9 +68,7 @@ class CustomProfileStore(private val context: Context, private val json: Json) {
                 val objs = profiles.mapNotNull {
                     runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull()
                 }
-                file.writeText(
-                    json.encodeToString(CustomProfileLibrary.serializer(), CustomProfileLibrary(objs)),
-                )
+                saveStore(file, json.encodeToString(CustomProfileLibrary.serializer(), CustomProfileLibrary(objs)))
             }
         }
     }

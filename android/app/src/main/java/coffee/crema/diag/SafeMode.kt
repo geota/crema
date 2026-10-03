@@ -1,6 +1,7 @@
 package coffee.crema.diag
 
 import android.content.Context
+import coffee.crema.persist.SafeFile
 import coffee.crema.settings.SettingsStore
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -36,7 +37,7 @@ object SafeMode {
         if (bootEvaluated) return wasStalled
         val f = marker(ctx)
         wasStalled = f.exists()
-        runCatching { f.writeText(System.currentTimeMillis().toString()) }
+        runCatching { SafeFile.write(f, System.currentTimeMillis().toString(), keepBackup = false) }
         bootEvaluated = true
         return wasStalled
     }

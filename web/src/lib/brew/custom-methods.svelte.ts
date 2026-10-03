@@ -130,7 +130,10 @@ export class CustomMethodStore {
 	private methods = $state<CustomBrewMethod[]>([]);
 
 	constructor() {
-		this.methods = readJson<CustomBrewMethod[]>(METHODS_KEY, []);
+		this.methods = readJson<CustomBrewMethod[]>(METHODS_KEY, [], {
+			what: 'custom brew methods',
+			valid: Array.isArray
+		});
 	}
 
 	/** Live methods, oldest first (the order they join the pickers in). */

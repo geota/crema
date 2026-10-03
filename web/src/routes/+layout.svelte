@@ -24,6 +24,7 @@
 	import { toast } from '$lib/components/shared/toast.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import { describeError } from '$lib/utils/error';
+	import { installStorageNotices } from '$lib/shell/storage-notices';
 	import { setCremaAppContext, type CoreLoadState } from '$lib/shell/app-context';
 	import { createAppRuntime, type AppRuntime } from '$lib/effect/runtime';
 	import { createCremaServices, type CremaServices } from '$lib/effect/crema-services';
@@ -55,8 +56,11 @@
 	// scope so `onDestroy` can detach them.
 	let onOnline: (() => void) | null = null;
 	let onVisibility: (() => void) | null = null;
+	// Unreadable stores kept aside / failed saves -> toasts (see storage-notices).
+	let stopStorageNotices: (() => void) | null = null;
 
 	onMount(async () => {
+		stopStorageNotices = installStorageNotices();
 		// Web Bluetooth is Chromium-only. The app still loads on Firefox / Safari /
 		// iOS — history, beans, profiles and Visualizer sync all work without a
 		// machine — but connecting to a DE1 or scale won't, so warn once on launch.
@@ -138,6 +142,7 @@
 	// Tear the runtime's fibers + finalizers down when the shell unmounts
 	// (also fires on HMR), so a dev reload doesn't leak runtimes or listeners.
 	onDestroy(() => {
+		stopStorageNotices?.();
 		if (onOnline) window.removeEventListener('online', onOnline);
 		if (onVisibility) document.removeEventListener('visibilitychange', onVisibility);
 		void runtime?.dispose();

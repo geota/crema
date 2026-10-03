@@ -18,7 +18,7 @@
  * {@link getBeanLibraryStore} or the legacy alias {@link getBeanStore}.
  */
 
-import { readJson, writeJson } from '$lib/utils/storage';
+import { isIdOrNull, isJsonObject, readJson, writeJson } from '$lib/utils/storage';
 import { credit_remaining, debit_remaining, resettle_remaining } from '$lib/wasm/de1_wasm';
 import {
 	type Bean,
@@ -67,15 +67,20 @@ interface LibraryEnvelope {
 	roasters: Roaster[];
 }
 
-function readLibrary(): LibraryEnvelope {
-	const raw = readJson<unknown>(LIBRARY_KEY, null);
-	if (
-		raw &&
-		typeof raw === 'object' &&
+function isLibraryEnvelope(raw: unknown): raw is LibraryEnvelope {
+	return (
+		isJsonObject(raw) &&
 		'schemaVersion' in raw &&
-		Array.isArray((raw as LibraryEnvelope).beans) &&
-		Array.isArray((raw as LibraryEnvelope).roasters)
-	) {
+		Array.isArray(raw.beans) &&
+		Array.isArray(raw.roasters)
+	);
+}
+
+function readLibrary(): LibraryEnvelope {
+	// A stored value that isn't an envelope is kept aside (not silently read
+	// as an empty library and overwritten by the next save).
+	const raw = readJson<unknown>(LIBRARY_KEY, null, { what: 'bean library', valid: isLibraryEnvelope });
+	if (raw !== null && isLibraryEnvelope(raw)) {
 		const env = raw as LibraryEnvelope;
 		const beans = dedupById(
 			env.beans.map(coerceBean).filter((b): b is Bean => b !== null)
@@ -106,7 +111,7 @@ function readLibrary(): LibraryEnvelope {
 export class BeanLibraryStore {
 	private envelope = $state.raw<LibraryEnvelope>(readLibrary());
 	private activeId = $state.raw<string | null>(
-		readJson<string | null>(ACTIVE_KEY, null)
+		readJson<string | null>(ACTIVE_KEY, null, { valid: isIdOrNull })
 	);
 
 	// ── Reads ────────────────────────────────────────────────────────

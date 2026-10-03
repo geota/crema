@@ -2,6 +2,8 @@ package coffee.crema.decent
 
 import android.content.Context
 import android.util.Log
+import coffee.crema.persist.SafeFile
+import coffee.crema.persist.loadStore
 import coffee.crema.security.DeviceSecretBox
 import coffee.crema.security.SecretBox
 import coffee.crema.visualizer.SyncLogEntry
@@ -99,12 +101,9 @@ class DecentStore(
     private val file get() = File(context.filesDir, FILE_NAME)
 
     override suspend fun load(): DecentState = withContext(Dispatchers.IO) {
-        val raw = try {
-            file.takeIf { it.exists() }?.readText()?.let { json.decodeFromString(DecentState.serializer(), it) }
-        } catch (e: Exception) {
-            Log.w(TAG, "decent.json unreadable; starting signed out", e)
-            null
-        } ?: return@withContext DecentState()
+        // Unreadable: kept aside + reported (see [loadStore]); starts signed out.
+        val raw = loadStore(file, "Decent sign-in") { json.decodeFromString(DecentState.serializer(), it) }
+            .valueOrNull() ?: return@withContext DecentState()
         val (state, resave) = raw.openedWith(box)
         if (resave) write(state)
         state
@@ -113,7 +112,7 @@ class DecentStore(
     override suspend fun save(state: DecentState): Boolean = withContext(Dispatchers.IO) { write(state) }
 
     private fun write(state: DecentState): Boolean = try {
-        file.writeText(json.encodeToString(DecentState.serializer(), state.sealedWith(box)))
+        SafeFile.write(file, json.encodeToString(DecentState.serializer(), state.sealedWith(box)))
         true
     } catch (e: Exception) {
         // Includes a keystore failure while sealing: never fall back to plaintext.

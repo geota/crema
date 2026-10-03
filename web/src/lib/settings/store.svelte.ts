@@ -23,7 +23,7 @@ import {
 	defaultBrewCueSound,
 	defaultBrewDefaults
 } from '$lib/wasm/de1_wasm';
-import { readJson, writeJson } from '$lib/utils/storage';
+import { isJsonObject, readJson, writeJson } from '$lib/utils/storage';
 import { readSyncConfig } from '$lib/visualizer/sync-config';
 import type { CommonSettings } from '$lib/core/crema-core';
 
@@ -586,7 +586,10 @@ export function brewCueHapticsOn(s: Pick<Settings, 'brewCueHaptics'>): boolean {
  * rewritten nested on the next persist.
  */
 function loadSettings(): Settings {
-	const stored = readJson<Record<string, unknown> | null>(SETTINGS_KEY, null);
+	const stored = readJson<Record<string, unknown> | null>(SETTINGS_KEY, null, {
+		what: 'settings',
+		valid: isJsonObject
+	});
 	if (stored && typeof stored === 'object' && stored.common) {
 		const platform: Partial<Settings> = {};
 		for (const k of PLATFORM_KEYS) {

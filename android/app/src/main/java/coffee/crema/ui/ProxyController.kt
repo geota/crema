@@ -19,6 +19,7 @@ import coffee.crema.ble.proxy.SwitchableBleTransport
 import coffee.crema.ble.proxy.TappingBleTransport
 import coffee.crema.ble.De1Uuids
 import coffee.crema.core.MachineRequest
+import coffee.crema.persist.SafeFile
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.PairedDevice
 import java.io.File
@@ -168,7 +169,7 @@ class ProxyController(
     val deviceId: String = run {
         val f = File(app.filesDir, "deviceId")
         runCatching { f.takeIf { it.exists() }?.readText()?.trim()?.ifBlank { null } }.getOrNull()
-            ?: UUID.randomUUID().toString().also { runCatching { f.writeText(it) } }
+            ?: UUID.randomUUID().toString().also { runCatching { SafeFile.write(f, it, keepBackup = false) } }
     }
 
     /** Construction-time proxy-config snapshot — read `prefs.json` ONCE

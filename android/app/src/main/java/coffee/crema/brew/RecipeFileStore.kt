@@ -2,6 +2,8 @@ package coffee.crema.brew
 
 import android.content.Context
 import coffee.crema.core.BrewRecipe
+import coffee.crema.persist.loadStore
+import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -34,15 +36,13 @@ class RecipeFileStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
     suspend fun load(): Envelope = withContext(Dispatchers.IO) {
-        runCatching {
-            file.takeIf { it.exists() }?.readText()
-                ?.let { json.decodeFromString(Envelope.serializer(), it) }
-        }.getOrNull() ?: Envelope()
+        loadStore(file, "brew recipes") { json.decodeFromString(Envelope.serializer(), it) }
+            .valueOrNull() ?: Envelope()
     }
 
     suspend fun save(envelope: Envelope) {
         withContext(Dispatchers.IO) {
-            runCatching { file.writeText(json.encodeToString(Envelope.serializer(), envelope)) }
+            saveStore(file, json.encodeToString(Envelope.serializer(), envelope))
         }
     }
 

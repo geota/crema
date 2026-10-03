@@ -10,6 +10,8 @@ import coffee.crema.core.ShotStatInput
 import coffee.crema.core.brewHistoryStats as coreBrewHistoryStats
 import coffee.crema.core.downsampleIndices
 import coffee.crema.core.historyStats as coreHistoryStats
+import coffee.crema.persist.loadStore
+import coffee.crema.persist.saveStore
 import coffee.crema.ui.TelemetrySample
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -409,18 +411,18 @@ fun downsampleBrewSeries(
 class HistoryStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
+    /** The stored shots, or empty when absent. An unreadable file is kept aside
+     *  and reported (see [loadStore]) rather than silently loaded as empty. */
     suspend fun load(): List<StoredShot> = withContext(Dispatchers.IO) {
-        runCatching {
-            file.takeIf { it.exists() }?.readText()
-                ?.let { json.decodeFromString(ListSerializer(StoredShot.serializer()), it) }
-        }.getOrNull() ?: emptyList()
+        loadStore(file, "shot history") {
+            json.decodeFromString(ListSerializer(StoredShot.serializer()), it)
+        }.valueOrNull() ?: emptyList()
     }
 
     suspend fun save(shots: List<StoredShot>) {
         withContext(Dispatchers.IO) {
-            runCatching {
-                file.writeText(json.encodeToString(ListSerializer(StoredShot.serializer()), shots))
-            }
+            runCatching { json.encodeToString(ListSerializer(StoredShot.serializer()), shots) }
+                .onSuccess { saveStore(file, it) }
         }
     }
 

@@ -2,6 +2,8 @@ package coffee.crema.drive
 
 import android.content.Context
 import android.util.Log
+import coffee.crema.persist.SafeFile
+import coffee.crema.persist.loadStore
 import coffee.crema.security.DeviceSecretBox
 import coffee.crema.security.SecretBox
 import kotlinx.coroutines.Dispatchers
@@ -79,11 +81,9 @@ class DriveStore(
     private val file get() = File(context.filesDir, FILE_NAME)
 
     suspend fun load(): DriveState = withContext(Dispatchers.IO) {
-        val raw = runCatching {
-            file.takeIf { it.exists() }?.readText()
-                ?.let { json.decodeFromString(DriveState.serializer(), it) }
-        }.onFailure { Log.w(TAG, "drive.json unreadable; starting signed out", it) }
-            .getOrNull() ?: return@withContext DriveState()
+        // Unreadable: kept aside + reported (see [loadStore]); starts signed out.
+        val raw = loadStore(file, "Google Drive sign-in") { json.decodeFromString(DriveState.serializer(), it) }
+            .valueOrNull() ?: return@withContext DriveState()
         val (state, resave) = raw.openedWith(box)
         if (resave) write(state)
         state
@@ -93,7 +93,7 @@ class DriveStore(
     suspend fun save(state: DriveState): Boolean = withContext(Dispatchers.IO) { write(state) }
 
     private fun write(state: DriveState): Boolean = try {
-        file.writeText(json.encodeToString(DriveState.serializer(), state.sealedWith(box)))
+        SafeFile.write(file, json.encodeToString(DriveState.serializer(), state.sealedWith(box)))
         true
     } catch (e: Exception) {
         // Includes a keystore failure while sealing: never fall back to plaintext.

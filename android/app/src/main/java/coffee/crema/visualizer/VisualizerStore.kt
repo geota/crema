@@ -2,6 +2,8 @@ package coffee.crema.visualizer
 
 import android.content.Context
 import android.util.Log
+import coffee.crema.persist.SafeFile
+import coffee.crema.persist.loadStore
 import coffee.crema.security.DeviceSecretBox
 import coffee.crema.security.SecretBox
 import coffee.crema.core.VisualizerSyncPrefs
@@ -161,8 +163,8 @@ class VisualizerStore(
     private val file get() = File(context.filesDir, FILE_NAME)
 
     suspend fun load(): VisualizerState = withContext(Dispatchers.IO) {
-        val raw = runCatching {
-            val text = file.takeIf { it.exists() }?.readText() ?: return@runCatching null
+        // Unreadable: kept aside + reported (see [loadStore]); starts signed out.
+        val raw = loadStore(file, "Visualizer settings") { text ->
             val state = json.decodeFromString(VisualizerState.serializer(), text)
             // Migrate a pre-unification file (flat `autoSync`/`privacy`/… fields and
             // no `prefs` object) forward into the shared [VisualizerSyncPrefs] shape.
@@ -172,8 +174,7 @@ class VisualizerStore(
             } else {
                 state
             }
-        }.onFailure { Log.w(TAG, "visualizer.json unreadable; starting signed out", it) }
-            .getOrNull() ?: return@withContext VisualizerState()
+        }.valueOrNull() ?: return@withContext VisualizerState()
         val (state, resave) = raw.openedWith(box)
         if (resave) write(state)
         state
@@ -200,7 +201,7 @@ class VisualizerStore(
     suspend fun save(state: VisualizerState): Boolean = withContext(Dispatchers.IO) { write(state) }
 
     private fun write(state: VisualizerState): Boolean = try {
-        file.writeText(json.encodeToString(VisualizerState.serializer(), state.sealedWith(box)))
+        SafeFile.write(file, json.encodeToString(VisualizerState.serializer(), state.sealedWith(box)))
         true
     } catch (e: Exception) {
         // Includes a keystore failure while sealing: never fall back to plaintext.

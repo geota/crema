@@ -2,6 +2,7 @@ package coffee.crema.settings
 
 import android.content.Context
 import coffee.crema.core.SawModelLoad
+import coffee.crema.persist.SafeFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -28,12 +29,15 @@ class SawModelStore(private val dir: File) {
     private val quarantine get() = File(dir, QUARANTINE_FILE_NAME)
 
     suspend fun load(): String? = withContext(Dispatchers.IO) {
-        runCatching { file.takeIf { it.exists() }?.readText() }.getOrNull()
+        // The backup stands in when a crash landed between the save's two renames.
+        runCatching {
+            (file.takeIf { it.exists() } ?: SafeFile.backupOf(file).takeIf { it.exists() })?.readText()
+        }.getOrNull()
     }
 
     suspend fun save(json: String) {
         withContext(Dispatchers.IO) {
-            runCatching { file.writeText(json) }
+            runCatching { SafeFile.write(file, json) }
         }
     }
 
@@ -49,7 +53,7 @@ class SawModelStore(private val dir: File) {
             val error = outcome.content.error
             val kept = withContext(Dispatchers.IO) {
                 runCatching {
-                    quarantine.writeText(raw)
+                    SafeFile.write(quarantine, raw, keepBackup = false)
                     file.delete()
                 }.isSuccess
             }
