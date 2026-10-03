@@ -115,10 +115,10 @@ object SafeFile {
             }
         }
 
-        // The previous good version (crash between the two renames, or the
-        // target went bad), then a temp file that was fully written but never
-        // renamed (it only counts if it decodes).
-        for (candidate in listOf(bak, tmp)) {
+        // A temp file that was fully written and synced but never renamed (a
+        // crash between the two renames: it is the newest save, and only counts
+        // if it decodes), then the previous good version.
+        for (candidate in listOf(tmp, bak)) {
             val r = attempt(candidate) ?: continue
             val value = r.getOrNull()
             if (value != null) {

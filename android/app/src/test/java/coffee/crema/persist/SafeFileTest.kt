@@ -86,6 +86,17 @@ class SafeFileTest {
     }
 
     @Test
+    fun crashBetweenTheTwoRenamesPrefersTheCompleteNewerTemp() {
+        SafeFile.write(target(), "[1,2]")
+        // Process died after target → .bak, with the new save fully synced in .tmp.
+        target().renameTo(SafeFile.backupOf(target()))
+        File(tmp.root, "shots.json.tmp").writeText("[1,2,3]")
+        val outcome = SafeFile.load(target(), decode = ::decodeList)
+        assertEquals(SafeLoad.Loaded(listOf(1, 2, 3), recoveredFrom = "shots.json.tmp"), outcome)
+        assertEquals("[1,2,3]", target().readText())
+    }
+
+    @Test
     fun corruptTargetFallsBackToTheBackup() {
         SafeFile.write(target(), "[7]")
         SafeFile.write(target(), "[7,8]")
