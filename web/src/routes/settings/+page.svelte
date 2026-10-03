@@ -44,6 +44,8 @@
 	import AboutSection from '$lib/components/settings/sections/AboutSection.svelte';
 
 	import { INITIAL_SNAPSHOT } from '$lib/state';
+	import { recallView } from '$lib/state/view-memory';
+	import { persistView, useScrollMemory } from '$lib/state/use-view-memory.svelte';
 
 	const ctx = getCremaAppContext();
 	/** The shared orchestrator, or `null` while the wasm core loads. */
@@ -81,6 +83,14 @@
 		return (SECTION_IDS.includes(h) ? h : 'machine') as (typeof SECTIONS)[number]['id'];
 	}
 	let active = $state<(typeof SECTIONS)[number]['id']>(hashSection());
+	// Without a deep-link hash, come back to the section you left (#123), each
+	// at its own scroll position.
+	if (typeof window !== 'undefined' && !window.location.hash) {
+		const saved = recallView<{ active: string }>('settings', { active: 'machine' }).active;
+		if (SECTION_IDS.includes(saved)) active = saved as (typeof SECTIONS)[number]['id'];
+	}
+	persistView('settings', () => ({ active }));
+	useScrollMemory({ key: () => `settings/${active}`, pixelOnly: true });
 	// React to in-page hash changes (e.g. the user pasting `/settings#water`
 	// while already on the Settings route) — the navigation API doesn't
 	// remount the page when only the fragment changes.

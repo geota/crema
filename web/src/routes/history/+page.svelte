@@ -70,6 +70,8 @@
 	import { toast } from '$lib/components/shared/toast.svelte';
 	import { describeUnsyncedStop } from '$lib/services/shot-sync';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
+	import { recallView } from '$lib/state/view-memory';
+	import { persistView, useScrollMemory } from '$lib/state/use-view-memory.svelte';
 
 	const store = getHistoryStore();
 	const appCtx = getCremaAppContext();
@@ -562,6 +564,65 @@
 	let range = $state<'30d' | 'all'>('all');
 	/** The selected shot's id. */
 	let selectedId = $state<string | null>(null);
+
+	// ── Keep this view across round trips (#123) ─────────────────────────
+	// Search, filters, sort and the selected shot come back after leaving for
+	// another page (Load on Brew, a bean's drawer, the sidebar) or a reload;
+	// the deep links (`?bean=` / `?shot=`, read in onMount) still win. The
+	// shot list keeps its scroll per filter — to the same shot even if rows
+	// were added or deleted — and the page keeps its own scroll (the stacked
+	// narrow layout puts the detail below the list).
+	{
+		const saved = recallView<{
+			sortField: SortField;
+			sortDir: SortDir;
+			q: string;
+			filterProfile: string;
+			filterBean: string;
+			filterMethod: string;
+			selectedTags: string[];
+			range: '30d' | 'all';
+			selectedId: string | null;
+		}>('history', {
+			sortField: 'completedAt',
+			sortDir: 'desc',
+			q: '',
+			filterProfile: 'all',
+			filterBean: 'all',
+			filterMethod: 'all',
+			selectedTags: [],
+			range: 'all',
+			selectedId: null
+		});
+		sortField = saved.sortField;
+		sortDir = saved.sortDir;
+		q = saved.q;
+		filterProfile = saved.filterProfile;
+		filterBean = saved.filterBean;
+		filterMethod = saved.filterMethod;
+		selectedTags = saved.selectedTags;
+		range = saved.range;
+		selectedId = saved.selectedId;
+	}
+	persistView('history', () => ({
+		sortField,
+		sortDir,
+		q,
+		filterProfile,
+		filterBean,
+		filterMethod,
+		selectedTags,
+		range,
+		selectedId
+	}));
+	/** The shot list's scroller (`.hi-list`), bound once the list renders. */
+	let listEl = $state<HTMLElement>();
+	useScrollMemory({
+		key: () =>
+			`history/list|${filterProfile}|${filterBean}|${filterMethod}|${selectedTags.join(',')}|${range}|${sortField}-${sortDir}`,
+		container: () => listEl
+	});
+	useScrollMemory({ key: () => 'history/page', pixelOnly: true });
 
 	/** Milliseconds in a day — shared by the range filter and the stats. */
 	const dayMs = 24 * 60 * 60 * 1000;
@@ -1189,7 +1250,7 @@
 
 		<!-- Split pane: list + detail -->
 		<div class="hi-split">
-			<div class="hi-list">
+			<div class="hi-list" bind:this={listEl}>
 				{#each filtered as s (s.id)}
 					{@const pip = pipFor(s)}
 					<ShotRow

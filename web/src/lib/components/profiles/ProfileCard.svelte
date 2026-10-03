@@ -105,7 +105,7 @@
 	const removeIsDanger = $derived(!hidden);
 </script>
 
-<div class="pp-card" class:is-active={active}>
+<div class="pp-card" class:is-active={active} data-scroll-key={profile.id}>
 	<div class="pp-card-head">
 		{#if active}
 			<div class="pp-card-active">Active</div>

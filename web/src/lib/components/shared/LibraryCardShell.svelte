@@ -54,7 +54,8 @@
 		isActive = false,
 		isArchived = false,
 		isFrozen = false,
-		minHeight = 220
+		minHeight = 220,
+		scrollKey
 	}: {
 		avatar: Snippet;
 		head: Snippet;
@@ -77,6 +78,11 @@
 		isFrozen?: boolean;
 		/** Tile min-height — sets the baseline so a row of cards aligns. */
 		minHeight?: number;
+		/**
+		 * Stable item id for scroll memory (`$lib/state/scroll-memory`): a
+		 * list restores to this card, not just to a pixel offset (#123).
+		 */
+		scrollKey?: string;
 	} = $props();
 
 	function onKey(e: KeyboardEvent): void {
@@ -98,6 +104,7 @@
 	class:is-archived={isArchived}
 	class:is-frozen={isFrozen}
 	data-kind={cardKind}
+	data-scroll-key={scrollKey}
 	style="--lcs-min-h: {minHeight}px"
 	role="button"
 	tabindex="0"

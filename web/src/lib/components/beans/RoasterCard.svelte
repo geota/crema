@@ -86,6 +86,7 @@
 
 <LibraryCardShell
 	cardKind="roaster"
+	scrollKey={roaster.id}
 	favourite={null}
 	{onCardClick}
 	ariaLabel={`Open ${roaster.name}`}

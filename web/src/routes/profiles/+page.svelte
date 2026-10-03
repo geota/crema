@@ -66,6 +66,8 @@
 		METHOD_STYLES,
 		getCustomMethodStore
 	} from '$lib/brew/custom-methods.svelte';
+	import { recallView } from '$lib/state/view-memory';
+	import { persistView, useScrollMemory } from '$lib/state/use-view-memory.svelte';
 
 	const store = getProfileStore();
 	const ctx = getCremaAppContext();
@@ -593,6 +595,41 @@
 		if (hiddenRecipeCount === 0) showHiddenRecipes = false;
 	});
 
+	// ── Keep this view across round trips (#123) ─────────────────────────
+	// The profile editor returns with a fresh navigation, which used to land
+	// on an unfiltered library scrolled to the top. Search / facet / sort come
+	// back from the view memory, and the scroll position per status + facet +
+	// sort —
+	// to the same card, even when the edit added (a duplicate) or removed one.
+	{
+		const saved = recallView<{
+			q: string;
+			status: ProfileStatus;
+			facet: string | null;
+			sort: SortKey;
+			sortDir: SortDir;
+			showHiddenRecipes: boolean;
+		}>('profiles', {
+			q: '',
+			status: 'all',
+			facet: null,
+			sort: 'recent',
+			sortDir: 'desc',
+			showHiddenRecipes: false
+		});
+		q = saved.q;
+		// Both #124 axes: the status subset and the roast / beverage / tag facet.
+		status = (['all', 'pinned', 'hidden'] as const).includes(saved.status) ? saved.status : 'all';
+		facet = saved.facet;
+		sort = saved.sort;
+		sortDir = saved.sortDir;
+		showHiddenRecipes = saved.showHiddenRecipes;
+	}
+	persistView('profiles', () => ({ q, status, facet, sort, sortDir, showHiddenRecipes }));
+	useScrollMemory({
+		key: () => `profiles|${status}|${facet ?? ''}|${sort}-${sortDir}|${showHiddenRecipes}`
+	});
+
 	/**
 	 * The library — the user's recipes plus the credited built-ins (hidden
 	 * ones only when revealed), grouped by method in label order: within a
@@ -935,7 +972,7 @@
 								{@const builtin = isBuiltinRecipe(r.id)}
 								{@const hidden = builtin && recipeStore.isHidden(r.id)}
 								{@const estimate = recipeEstimateLabel(r)}
-								<div class="pp-recipe-card" class:is-hidden={hidden}>
+								<div class="pp-recipe-card" class:is-hidden={hidden} data-scroll-key={r.id}>
 									<div class="pp-recipe-top">
 										<span class="pp-recipe-badges">
 											{#if builtin}
