@@ -83,6 +83,11 @@ import coffee.crema.ui.brewlog.BrewLogOwner
 import coffee.crema.ui.brewlog.LogBrewSheet
 import coffee.crema.ui.brewlog.MethodMarkTile
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.historyListKey
+import coffee.crema.ui.rememberListBool
+import coffee.crema.ui.rememberListMemoryState
+import coffee.crema.ui.rememberListOptString
+import coffee.crema.ui.rememberListString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -163,21 +168,24 @@ fun HistoryScreen(
     val ui by vm.ui.collectAsStateWithLifecycle()
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
-    var selectedId by remember { mutableStateOf<String?>(null) }
-    var query by remember { mutableStateOf("") }
-    var range by remember { mutableStateOf("all") }
+    // Selection, search and every filter / sort live in the hoisted ListMemory
+    // (issue #123): leaving for another tab or an editor, and a host swap, keep
+    // them. The filters are shared with the phone's History.
+    var selectedId by rememberListOptString("history/selected")
+    var query by rememberListString("history/query", "")
+    var range by rememberListString("history/range", "all")
     // Web history: per-profile filter pills ahead of the range chips.
-    var profileFilter by remember { mutableStateOf<String?>(null) }
+    var profileFilter by rememberListOptString("history/profile")
     // Bean filter — scope the log to one bag (bean-workflow-unify §B).
-    var beanFilter by remember { mutableStateOf<String?>(null) }
+    var beanFilter by rememberListOptString("history/bean")
     // Brew Log method filter (issue #10) — rendered only once a second
     // method exists in history, so espresso-only users never see it.
-    var methodFilter by remember { mutableStateOf<String?>(null) }
+    var methodFilter by rememberListOptString("history/method")
     // The Log-brew sheet — the Brew Log's manual-entry door. Its draft is
     // VM-held ([MainViewModel.logBrew]) so a rotation across 840dp hands it to
     // the phone's pushed route intact; this tab shows it when it owns it.
-    var sort by remember { mutableStateOf("date") }
-    var sortDesc by remember { mutableStateOf(true) } // newest / highest first
+    var sort by rememberListString("history/sort", "date")
+    var sortDesc by rememberListBool("history/sortDesc", true) // newest / highest first
     // Compare: select 2–5 shots → overlay their curves in a modal (HistoryCompareHooks).
     val sel = rememberCompareSelection()
     // Shots missing from at least one enabled destination — the "Upload N" catch-up.
@@ -489,7 +497,14 @@ fun HistoryScreen(
                     Modifier.weight(1f).fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
+                    // Scroll position per filter (issue #123), kept in ListMemory.
+                    val lead = if (ui.saveMethodPrompt != null) 1 else 0
+                    val listState = rememberListMemoryState(
+                        historyListKey(range, profileFilter, beanFilter, methodFilter, sort, sortDesc),
+                        shots.size,
+                    ) { k -> shots.indexOfFirst { it.id == k }.takeIf { it >= 0 }?.plus(lead) }
                     LazyColumn(
+                        state = listState,
                         // Narrow 7" tablet: a slimmer shot list leaves the detail
                         // panel (7-metric row + chart) a usable width; 10" keeps 480.
                         modifier = Modifier

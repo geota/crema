@@ -77,6 +77,11 @@ import coffee.crema.core.Roaster
 import coffee.crema.core.SearchField
 import coffee.crema.core.SearchHit
 import coffee.crema.ui.BeansViewState
+import coffee.crema.ui.beansListKey
+import coffee.crema.ui.rememberGridMemoryState
+import coffee.crema.ui.rememberListBool
+import coffee.crema.ui.rememberListString
+import coffee.crema.ui.roastersListKey
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.rememberBeansViewState
 import coffee.crema.ui.beans.linkedProfileNameFor
@@ -141,13 +146,17 @@ fun BeansScreen(
     var tab by beansState::tab
     var roasterDialogOpen by remember { mutableStateOf(false) }
     var roasterEditing by remember { mutableStateOf<Roaster?>(null) }
-    var query by remember { mutableStateOf("") }
+    // Search + sort live in the hoisted ListMemory (issue #123), shared with
+    // the phone: the detail / editor round trips and a host swap keep them.
+    // The bag facets stay in BeansViewState (#124, with its saved-filter
+    // migration), which is hoisted the same way.
+    var query by rememberListString("beans/query", "")
     // Roaster scope (#86): set by tapping a roaster card; the Bags tab then
     // shows that roaster's shelf, archived bags included. Cleared by its chip
     // or by Back.
     var roasterScopeId by beansState::roasterScopeId
-    var beanSort by remember { mutableStateOf("freshest") }
-    var beanSortDesc by remember { mutableStateOf(false) }
+    var beanSort by rememberListString("beans/sort", "freshest")
+    var beanSortDesc by rememberListBool("beans/sortDesc", false)
     // The bag whose read-only detail is open (issue 61). Held as an id, not a
     // Bean, so the sheet re-renders live as the bag is favourited/archived
     // from inside it.
@@ -388,7 +397,13 @@ fun BeansScreen(
                         CremaEmptyState(if (ui.beans.isEmpty()) "No beans yet — add a bag to get started." else "No beans match your search or filters.")
                     }
                 } else {
+                    // Scroll position per filter (issue #123), kept in ListMemory
+                    // across the editor round trip, the tab switch and a host swap.
+                    val gridState = rememberGridMemoryState(beansListKey(facets, beanSort, beanSortDesc), sortedBeans.size) { k ->
+                        sortedBeans.indexOfFirst { it.id == k }.takeIf { it >= 0 }
+                    }
                     LazyVerticalGrid(
+                        state = gridState,
                         // Adaptive: 2 columns on a narrow 7" tablet (wider cards →
                         // "Set active" keeps its label), 3 on the 10".
                         columns = GridCells.Adaptive(minSize = 320.dp),
@@ -422,7 +437,11 @@ fun BeansScreen(
                         CremaEmptyState(if (ui.roasters.isEmpty()) "No roasters yet — add one to group your bags." else "No roasters match your search.")
                     }
                 } else {
+                    val gridState = rememberGridMemoryState(roastersListKey(beansState.showDuplicates), visibleRoasters.size) { k ->
+                        visibleRoasters.indexOfFirst { it.id == k }.takeIf { it >= 0 }?.plus(mergeSuggestions.size)
+                    }
                     LazyVerticalGrid(
+                        state = gridState,
                         // Adaptive: 2 columns on a narrow 7" tablet (wider cards →
                         // "Set active" keeps its label), 3 on the 10".
                         columns = GridCells.Adaptive(minSize = 320.dp),
