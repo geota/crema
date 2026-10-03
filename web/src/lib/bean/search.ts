@@ -75,6 +75,15 @@ const beansJson = memoJson<Bean>();
 const roastersJson = memoJson<Roaster>();
 
 /**
+ * The memoised `Bean[]` JSON — shared with `$lib/bean/filter` so the facet
+ * filter and the search serialise the library once between edits, not once
+ * each.
+ */
+export function libraryBeansJson(beans: readonly Bean[]): string {
+	return beansJson(beans);
+}
+
+/**
  * Rank `beans` against `query`. Roasters are passed so a bag can match on its
  * roastery's name. A blank query returns {@link noSearch} — the caller keeps
  * its own ordering rather than being handed an arbitrary one.
