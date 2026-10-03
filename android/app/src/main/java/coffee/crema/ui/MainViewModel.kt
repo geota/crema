@@ -1,6 +1,7 @@
 package coffee.crema.ui
 
 import android.app.Application
+import android.content.Intent
 import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -41,6 +42,8 @@ import coffee.crema.maintenance.MaintenanceStore
 import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_DT_S
 import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_ML
 import coffee.crema.maintenance.defaultMaintenanceState
+import coffee.crema.persist.KeptAside
+import coffee.crema.persist.KeptAsideNotices
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.ConfigSnapshot
 import coffee.crema.settings.PairedDevice
@@ -70,6 +73,7 @@ import coffee.crema.core.MachineState
 import coffee.crema.profiles.overrideBrewParamsJson
 import coffee.crema.profiles.profileIdOf
 import coffee.crema.profiles.SegmentEdit
+import java.io.File
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
@@ -496,6 +500,10 @@ data class MainUiState(
     /** Non-null while an aborted-shot discard can be undone — the message
      *  MainActivity shows in an action snackbar ("Undo"). */
     val discardToastMessage: String? = null,
+    /** Non-null when a store file was unreadable at load and was kept aside
+     *  ("Couldn't read your shot history; …") — MainActivity shows it once in an
+     *  action snackbar whose "Share" sends the kept-aside copies. */
+    val keptAsideNotice: String? = null,
     /**
      * Built-in profiles from the core (`builtinCremaProfiles()`), loaded once at
      * startup. The Brew header picker chooses from these until the profile
@@ -2036,6 +2044,59 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         },
     )
+
+    /** Every store file reported unreadable this process (see [KeptAsideNotices]). */
+    private var keptAside: List<KeptAside> = emptyList()
+
+    init {
+        // Unreadable store files: the stores move them aside as they load and
+        // report here; tell the user once instead of showing silently-empty data.
+        viewModelScope.launch {
+            KeptAsideNotices.pending.collect { pending ->
+                if (pending.isEmpty()) return@collect
+                keptAside = keptAside + KeptAsideNotices.drain()
+                val msg = KeptAsideNotices.message(keptAside)
+                appendLog(msg)
+                _ui.update { it.copy(keptAsideNotice = msg) }
+            }
+        }
+    }
+
+    /** The kept-aside snackbar was dismissed or timed out. */
+    fun consumeKeptAsideNotice() {
+        _ui.update { it.copy(keptAsideNotice = null) }
+    }
+
+    /** Share the kept-aside copies (the snackbar's "Share") through the system
+     *  share sheet, e.g. to attach to a bug report or recover by hand. */
+    fun shareKeptAside() {
+        consumeKeptAsideNotice()
+        val files = keptAside.mapNotNull { it.keptAt }.filter { it.isFile }
+        if (files.isEmpty()) return
+        runCatching {
+            // FileProvider only serves cacheDir/kept-aside/; copy, never move.
+            val dir = File(getApplication<Application>().cacheDir, "kept-aside").apply { mkdirs() }
+            val authority = "${coffee.crema.BuildConfig.APPLICATION_ID}.fileprovider"
+            val uris = ArrayList(
+                files.map { f ->
+                    val copy = f.copyTo(File(dir, f.name), overwrite = true)
+                    FileProvider.getUriForFile(getApplication(), authority, copy)
+                },
+            )
+            val send = if (uris.size == 1) {
+                Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris[0])
+            } else {
+                Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+            }.apply {
+                type = "application/octet-stream"
+                putExtra(Intent.EXTRA_SUBJECT, "Crema: unreadable data files")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val chooser = Intent.createChooser(send, "Share damaged files")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            getApplication<Application>().startActivity(chooser)
+        }.onFailure { notifyUser("Couldn't share the damaged files: ${it.message}") }
+    }
 
     init {
         // Sleep-on-quit (see [QuitSleep]): swiping the task from recents is

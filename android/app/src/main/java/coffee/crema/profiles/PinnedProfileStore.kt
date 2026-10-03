@@ -1,6 +1,8 @@
 package coffee.crema.profiles
 
 import android.content.Context
+import coffee.crema.persist.loadStore
+import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -31,20 +33,14 @@ class PinnedProfileStore(private val context: Context, private val json: Json) {
 
     /** Load the pinned ids, or an empty set if absent / unreadable. */
     suspend fun load(): Set<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            file.takeIf { it.exists() }?.readText()
-                ?.let { json.decodeFromString(PinnedProfiles.serializer(), it) }?.ids?.toSet()
-        }.getOrNull() ?: emptySet()
+        loadStore(file, "pinned profiles list") { json.decodeFromString(PinnedProfiles.serializer(), it) }
+            .valueOrNull()?.ids?.toSet() ?: emptySet()
     }
 
     /** Persist the pinned ids (best-effort). */
     suspend fun save(ids: Set<String>) {
         withContext(Dispatchers.IO) {
-            runCatching {
-                file.writeText(
-                    json.encodeToString(PinnedProfiles.serializer(), PinnedProfiles(ids.toList())),
-                )
-            }
+            saveStore(file, json.encodeToString(PinnedProfiles.serializer(), PinnedProfiles(ids.toList())))
         }
     }
 

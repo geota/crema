@@ -1,6 +1,7 @@
 package coffee.crema.beans
 
 import android.content.Context
+import coffee.crema.persist.SafeFile
 import java.io.File
 
 /**
@@ -42,11 +43,10 @@ object BeanImageStore {
     fun exists(context: Context, beanId: String): Boolean =
         beanImageFile(context, beanId).let { it.isFile && it.length() > 0L }
 
-    /** Persist a bean's photo bytes, creating the dir + overwriting any previous. */
+    /** Persist a bean's photo bytes, creating the dir + atomically replacing any
+     *  previous one (a kill mid-write never leaves a half photo). */
     fun put(context: Context, beanId: String, bytes: ByteArray) {
-        val f = beanImageFile(context, beanId)
-        f.parentFile?.mkdirs()
-        f.writeBytes(bytes)
+        SafeFile.writeBytes(beanImageFile(context, beanId), bytes)
     }
 
     /** Drop a bean's photo, if any. */

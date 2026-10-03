@@ -3,4 +3,6 @@
      cacheDir/bean-capture/, then the VM copies it into filesDir/bean-images/. -->
 <paths>
     <cache-path name="bean-capture" path="bean-capture/" />
+    <!-- Copies of unreadable store files the user chose to share (MainViewModel.shareKeptAside). -->
+    <cache-path name="kept-aside" path="kept-aside/" />
 </paths>

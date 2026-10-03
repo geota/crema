@@ -2,6 +2,8 @@ package coffee.crema.maintenance
 
 import android.content.Context
 import coffee.crema.core.MaintenanceState
+import coffee.crema.persist.loadStore
+import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -65,18 +67,17 @@ fun defaultMaintenanceState(nowMs: Long): MaintenanceState = MaintenanceState(
 class MaintenanceStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
-    /** Load the persisted state, or [defaultMaintenanceState] if absent / unreadable / stale. */
+    /** Load the persisted state, or [defaultMaintenanceState] if absent. An
+     *  unreadable file is kept aside and reported (see [loadStore]). */
     suspend fun load(): MaintenanceState = withContext(Dispatchers.IO) {
-        runCatching {
-            file.takeIf { it.exists() }?.readText()
-                ?.let { json.decodeFromString(MaintenanceState.serializer(), it) }
-        }.getOrNull() ?: defaultMaintenanceState(System.currentTimeMillis())
+        loadStore(file, "maintenance log") { json.decodeFromString(MaintenanceState.serializer(), it) }
+            .valueOrNull() ?: defaultMaintenanceState(System.currentTimeMillis())
     }
 
-    /** Persist the maintenance state (best-effort; failures are swallowed). */
+    /** Persist the maintenance state atomically (best-effort; a failure is logged). */
     suspend fun save(state: MaintenanceState) {
         withContext(Dispatchers.IO) {
-            runCatching { file.writeText(json.encodeToString(MaintenanceState.serializer(), state)) }
+            saveStore(file, json.encodeToString(MaintenanceState.serializer(), state))
         }
     }
 

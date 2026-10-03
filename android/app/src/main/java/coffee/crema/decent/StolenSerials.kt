@@ -2,6 +2,8 @@ package coffee.crema.decent
 
 import android.content.Context
 import coffee.crema.net.HttpClients
+import coffee.crema.persist.loadStore
+import coffee.crema.persist.saveStore
 import coffee.crema.runCatchingCancellable
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
@@ -44,14 +46,13 @@ class StolenSerialsFileStore(private val context: Context) : StolenSerialsCacheS
     private val file get() = File(context.filesDir, "stolenSerials.json")
 
     override suspend fun read(): StolenSerialsCache? = withContext(Dispatchers.IO) {
-        runCatching {
-            file.takeIf { it.exists() }?.readText()?.let { Json.decodeFromString<StolenSerialsCache>(it) }
-        }.getOrNull()
+        // A rebuildable cache: an unreadable file is kept aside silently and refetched.
+        loadStore(file, what = null) { Json.decodeFromString<StolenSerialsCache>(it) }.valueOrNull()
     }
 
     override suspend fun write(cache: StolenSerialsCache) {
         withContext(Dispatchers.IO) {
-            runCatching { file.writeText(Json.encodeToString(StolenSerialsCache.serializer(), cache)) }
+            saveStore(file, Json.encodeToString(StolenSerialsCache.serializer(), cache), keepBackup = false)
         }
     }
 }

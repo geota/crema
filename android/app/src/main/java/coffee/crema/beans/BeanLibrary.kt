@@ -4,6 +4,8 @@ import android.content.Context
 import coffee.crema.core.Bean
 import coffee.crema.core.BeanOrigin
 import coffee.crema.core.Roaster
+import coffee.crema.persist.loadStore
+import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -35,18 +37,17 @@ data class BeanLibrary(
 class LibraryStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
-    /** Load the library, or an empty one if absent / unreadable / stale. */
+    /** Load the library, or an empty one if absent. An unreadable file is kept
+     *  aside and reported (see [loadStore]). */
     suspend fun load(): BeanLibrary = withContext(Dispatchers.IO) {
-        runCatching {
-            file.takeIf { it.exists() }?.readText()
-                ?.let { json.decodeFromString(BeanLibrary.serializer(), it) }
-        }.getOrNull() ?: BeanLibrary()
+        loadStore(file, "bean library") { json.decodeFromString(BeanLibrary.serializer(), it) }
+            .valueOrNull() ?: BeanLibrary()
     }
 
-    /** Persist the library (best-effort; failures are swallowed). */
+    /** Persist the library atomically (best-effort; a failure is logged). */
     suspend fun save(library: BeanLibrary) {
         withContext(Dispatchers.IO) {
-            runCatching { file.writeText(json.encodeToString(BeanLibrary.serializer(), library)) }
+            saveStore(file, json.encodeToString(BeanLibrary.serializer(), library))
         }
     }
 

@@ -2,6 +2,8 @@ package coffee.crema.settings
 
 import android.content.Context
 import coffee.crema.core.CommonSettings
+import coffee.crema.persist.loadStore
+import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -449,8 +451,7 @@ class SettingsStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
     suspend fun load(): AppPrefs = withContext(Dispatchers.IO) {
-        runCatching {
-            val text = file.takeIf { it.exists() }?.readText() ?: return@runCatching null
+        loadStore(file, "settings") { text ->
             if (json.parseToJsonElement(text).jsonObject["common"] != null) {
                 json.decodeFromString(PersistedPrefs.serializer(), text).toAppPrefs()
             } else {
@@ -458,12 +459,13 @@ class SettingsStore(private val context: Context, private val json: Json) {
                 // save() rewrites it in the nested `common` shape.
                 json.decodeFromString(AppPrefs.serializer(), text)
             }
-        }.getOrNull() ?: AppPrefs()
+        }.valueOrNull() ?: AppPrefs()
     }
 
     suspend fun save(prefs: AppPrefs) {
         withContext(Dispatchers.IO) {
-            runCatching { file.writeText(json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted())) }
+            runCatching { json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted()) }
+                .onSuccess { saveStore(file, it) }
         }
     }
 
