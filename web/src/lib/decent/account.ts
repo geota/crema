@@ -23,7 +23,7 @@
  * device means changing the Decent password.
  */
 
-import { readJson, writeJson } from '$lib/utils/storage';
+import { isJsonObject, readJson, writeJson } from '$lib/utils/storage';
 import { isWrapped, secretBox } from '$lib/security/secret-box';
 import type { DecentCredentials } from './api';
 
@@ -98,7 +98,10 @@ let migration: Promise<void> = Promise.resolve();
 
 /** Read the persisted state; missing fields fall back to the default. */
 export function readDecentAccount(): DecentAccountState {
-	const raw = readJson<Partial<DecentAccountState> | null>(ACCOUNT_KEY, null);
+	const raw = readJson<Partial<DecentAccountState> | null>(ACCOUNT_KEY, null, {
+		what: 'Decent sign-in',
+		valid: isJsonObject
+	});
 	if (!raw || typeof raw !== 'object') return DEFAULT_DECENT_ACCOUNT;
 	const state: DecentAccountState = {
 		...DEFAULT_DECENT_ACCOUNT,

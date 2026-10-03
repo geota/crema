@@ -33,7 +33,7 @@
  */
 
 import type { MaintenanceState, MaintenanceReadout } from '$lib/core/crema-core';
-import { readJson, writeJson } from '$lib/utils/storage';
+import { isJsonObject, readJson, writeJson } from '$lib/utils/storage';
 import { maintenanceReadout as wasmMaintenanceReadout } from '$lib/wasm/de1_wasm';
 
 /** localStorage key for the maintenance counters ({@link MaintenanceState}). */
@@ -102,7 +102,10 @@ interface MaintenanceStateV1 {
  * suitable for spreading over {@link defaultState}.
  */
 function loadPersisted(): Partial<MaintenanceState> {
-	const v2 = readJson<Partial<MaintenanceState> | null>(MAINTENANCE_KEY, null);
+	const v2 = readJson<Partial<MaintenanceState> | null>(MAINTENANCE_KEY, null, {
+		what: 'maintenance log',
+		valid: isJsonObject
+	});
 	if (v2 != null) return v2;
 	// Fallback: migrate the old key. Same fields except `backflush*` → `clean*`.
 	const v1 = readJson<MaintenanceStateV1 | null>(MAINTENANCE_KEY_V1, null);

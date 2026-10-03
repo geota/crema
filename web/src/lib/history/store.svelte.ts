@@ -148,6 +148,16 @@ export interface ShotCompletion {
 	grindSetting?: number | null;
 }
 
+/** A shot's telemetry series couldn't be written to IndexedDB (quota, most
+ *  likely): say so instead of silently keeping it in memory only. */
+let lastSeriesToastAt = -Infinity;
+function seriesSaveFailed(): void {
+	// One toast per burst (an import of many shots fails shot by shot).
+	if (Date.now() - lastSeriesToastAt < 5000) return;
+	lastSeriesToastAt = Date.now();
+	toast.error('Could not save this shot\u2019s telemetry — storage may be full.');
+}
+
 /** The reactive shot-history library. One instance per app — {@link getHistoryStore}. */
 export class HistoryStore {
 	/** The recorded shots, newest first. Loaded from localStorage. */
@@ -216,7 +226,7 @@ export class HistoryStore {
 			...s,
 			record: { ...s.record, samples: [] }
 		}));
-		if (writeJsonChecked(HISTORY_KEY, stripped)) return;
+		if (writeJsonChecked(HISTORY_KEY, stripped, false)) return;
 		// Quota hit even without series — evict the oldest 10% and retry.
 		const keep = Math.max(1, Math.floor(this.shots.length * 0.9));
 		const dropped = this.shots.length - keep;
@@ -225,7 +235,7 @@ export class HistoryStore {
 			...s,
 			record: { ...s.record, samples: [] }
 		}));
-		if (writeJsonChecked(HISTORY_KEY, retry)) {
+		if (writeJsonChecked(HISTORY_KEY, retry, false)) {
 			toast.error(
 				`Shot storage was full — dropped the ${dropped} oldest shot${dropped === 1 ? '' : 's'} to keep saving.`
 			);
@@ -303,9 +313,7 @@ export class HistoryStore {
 		this.persist();
 		// The series row rides IndexedDB (review #27) — fire-and-forget
 		// with a surface, like the capture store.
-		void putSeries(record.id, samples).catch(() => {
-			toast.error('Could not save this shot\u2019s telemetry — storage may be full.');
-		});
+		void putSeries(record.id, samples).catch(seriesSaveFailed);
 		return record;
 	}
 
@@ -580,7 +588,7 @@ export class HistoryStore {
 			},
 			...this.shots.slice(idx + 1)
 		];
-		void putSeries(id, [...samples]).catch(() => {});
+		void putSeries(id, [...samples]).catch(seriesSaveFailed);
 		this.persist();
 	}
 
@@ -639,7 +647,7 @@ export class HistoryStore {
 		};
 		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
 		this.persist();
-		void putSeries(record.id, record.record.samples).catch(() => {});
+		void putSeries(record.id, record.record.samples).catch(seriesSaveFailed);
 		return record;
 	}
 
@@ -984,7 +992,7 @@ function coerceShotBean(raw: unknown): ShotBean | null {
  * keys leave the rows in their "never synced, never deleted" default).
  */
 function loadShots(): StoredShot[] {
-	const raw = readJson<unknown[]>(HISTORY_KEY, []);
+	const raw = readJson<unknown[]>(HISTORY_KEY, [], { what: 'shot history', valid: Array.isArray });
 	if (!Array.isArray(raw)) return [];
 	const out: StoredShot[] = [];
 	for (const item of raw) {
