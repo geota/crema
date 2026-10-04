@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -19,7 +18,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,32 +26,32 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.beans.CatalogueSearchController
-import coffee.crema.beans.subline
-import coffee.crema.core.CatalogueCoffeeBag
-import coffee.crema.core.CataloguePage
 
 /**
- * The bean editors' "Search Visualizer catalogue" field (web `CatalogueSearch`
- * parity): the app search pill, debounced through [CatalogueSearchController],
- * with the results inline beneath it (name + roaster · country · process).
- * Picking a row hands it to [onPick] with the "replace filled fields" choice;
- * the editor applies the core autofill rule (empty fields only unless
- * replacing). [linkedLabel] shows the current catalogue link with an unlink ✕.
+ * The bean and roaster editors' "Search Visualizer catalogue" field (web
+ * `CatalogueSearch` parity): the app search pill, debounced through
+ * [CatalogueSearchController], with the results inline beneath it ([title] +
+ * [subline]: roaster · country · process for a bag, country for a roaster).
+ * Picking a row hands it to [onPick]; the editor runs the clash check (fill
+ * empty fields at once, or ask "Keep mine" / "Use catalogue"). [linkedLabel]
+ * shows the current catalogue link with an unlink ✕.
  */
 @Composable
-fun CatalogueSearchField(
-    search: suspend (String) -> CataloguePage,
-    onPick: (CatalogueCoffeeBag, replaceAll: Boolean) -> Unit,
+fun <T> CatalogueSearchField(
+    search: suspend (String) -> List<T>,
+    onPick: (T) -> Unit,
+    title: (T) -> String,
+    subline: (T) -> String,
     linkedLabel: String?,
     onUnlink: () -> Unit,
     status: String?,
     modifier: Modifier = Modifier,
+    placeholder: String = "Search Visualizer catalogue",
 ) {
     val scope = rememberCoroutineScope()
     val controller = remember { CatalogueSearchController(scope, search) }
     val st by controller.state.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
-    var replaceAll by rememberSaveable { mutableStateOf(false) }
 
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -63,7 +61,7 @@ fun CatalogueSearchField(
                     query = it
                     controller.setQuery(it)
                 },
-                placeholder = "Search Visualizer catalogue",
+                placeholder = placeholder,
                 modifier = Modifier.weight(1f),
             )
             if (st.loading) {
@@ -79,15 +77,15 @@ fun CatalogueSearchField(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
                             .clickable {
-                                onPick(entry, replaceAll)
+                                onPick(entry)
                                 query = ""
                                 controller.clear()
                             }
                             .padding(horizontal = 12.dp, vertical = 9.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
-                        Text(entry.name, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                        val sub = entry.subline()
+                        Text(title(entry), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                        val sub = subline(entry)
                         if (sub.isNotEmpty()) {
                             Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -109,19 +107,6 @@ fun CatalogueSearchField(
             }
         }
 
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(
-                Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable { replaceAll = !replaceAll },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Checkbox(checked = replaceAll, onCheckedChange = { replaceAll = it })
-                Text("Replace fields I've already filled", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
         if (linkedLabel != null) {
             Surface(
                 shape = RoundedCornerShape(999.dp),

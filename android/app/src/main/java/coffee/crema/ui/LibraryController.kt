@@ -1513,14 +1513,39 @@ class LibraryController(
      * Apply edits to an existing bean (the editor's Save). Resolves the roaster
      * by name (find-or-create), stamps `updatedAt`, and persists.
      */
-    fun updateBean(id: String, roasterName: String, transform: (Bean) -> Bean) {
+    fun updateBean(
+        id: String,
+        roasterName: String,
+        roasterPick: coffee.crema.core.CataloguePickRoaster? = null,
+        transform: (Bean) -> Bean,
+    ) {
         val s = uiState()
         // Resolve from the library, or from a new-bean draft (the "Add bean" →
         // full-editor Save path — the bean isn't in [beans] yet).
         val existing = s.beans.firstOrNull { it.id == id } ?: s.draftBean?.takeIf { it.id == id } ?: return
         val isNew = s.beans.none { it.id == id }
         val now = System.currentTimeMillis()
-        val (roasterId, roasters) = resolveRoaster(roasterName, s.roasters, now)
+        // A catalogue pick's roaster (the editor only passes it while the
+        // roaster input still names it): write the updated existing row, or
+        // create the seeded one, and file the bag under it. Otherwise resolve
+        // the typed name (find-or-create) as before.
+        val (roasterId, roasters) = if (roasterPick != null) {
+            val row = coffee.crema.beans.pickedRoasterRow(roasterPick) { name -> newRoaster(name, now) }
+            val current = s.roasters.firstOrNull { it.id == row.id }
+            if (current == null) {
+                // A seed is created; a matched row that vanished since → by name.
+                if (roasterPick.isNew) row.id to (s.roasters + row) else resolveRoaster(roasterName, s.roasters, now)
+            } else {
+                // Only the catalogue fields; anything else edited since stays.
+                val merged = current.copy(
+                    name = row.name, website = row.website, country = row.country,
+                    catalogueRoasterId = row.catalogueRoasterId, updatedAt = now,
+                )
+                row.id to s.roasters.map { if (it.id == row.id) merged else it }
+            }
+        } else {
+            resolveRoaster(roasterName, s.roasters, now)
+        }
         // The shell owns the full field mapping (the core Bean already models
         // every field); we only resolve the roaster + stamp updatedAt here.
         val updated = transform(existing).copy(roasterId = roasterId, updatedAt = now)
@@ -1700,7 +1725,7 @@ class LibraryController(
     }
 
     /** Add a roaster to the directory. Persisted. */
-    fun addRoaster(name: String, website: String?, city: String?, country: String?, notes: String) {
+    fun addRoaster(name: String, website: String?, city: String?, country: String?, notes: String, catalogueRoasterId: String? = null) {
         if (name.isBlank()) return
         val now = System.currentTimeMillis()
         val r = newRoaster(name.trim(), now).copy(
@@ -1708,13 +1733,26 @@ class LibraryController(
             city = city?.takeIf { it.isNotBlank() },
             country = country?.takeIf { it.isNotBlank() },
             notes = notes,
+            catalogueRoasterId = catalogueRoasterId?.takeIf { it.isNotBlank() },
         )
         updateUi { it.copy(roasters = it.roasters + r) }
         persistLibrary()
     }
 
-    /** Update a roaster's editable fields. Persisted. */
-    fun updateRoaster(id: String, name: String, website: String?, city: String?, country: String?, notes: String) {
+    /**
+     * Update a roaster's editable fields. Persisted. [catalogueRoasterId] is the
+     * Visualizer catalogue link the editor holds (set by a catalogue pick,
+     * cleared by unlink); the duplicate-of pointer is never touched.
+     */
+    fun updateRoaster(
+        id: String,
+        name: String,
+        website: String?,
+        city: String?,
+        country: String?,
+        notes: String,
+        catalogueRoasterId: String?,
+    ) {
         if (name.isBlank()) return
         val now = System.currentTimeMillis()
         updateUi { it.copy(
@@ -1725,6 +1763,7 @@ class LibraryController(
                     city = city?.takeIf { c -> c.isNotBlank() },
                     country = country?.takeIf { c -> c.isNotBlank() },
                     notes = notes,
+                    catalogueRoasterId = catalogueRoasterId?.takeIf { c -> c.isNotBlank() },
                     updatedAt = now,
                 ) else it
             },

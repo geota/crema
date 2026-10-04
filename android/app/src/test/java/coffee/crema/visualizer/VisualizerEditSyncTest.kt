@@ -112,6 +112,13 @@ class VisualizerEditSyncTest {
         now = { clock },
         exchangeCode = { _, _ -> TokenSet("tok", "rt", expiresAt = System.currentTimeMillis() + 3_600_000) },
         parseCatalogue = { body -> catalogueBodies += body; coffee.crema.core.CataloguePage(emptyList(), 0u, 1u, 1u) },
+        parseCatalogueRoasterPage = { body ->
+            catalogueBodies += body
+            coffee.crema.core.CatalogueRoasterPage(
+                listOf(coffee.crema.core.CatalogueRoaster(id = "cr-1", name = "Onyx", website = "https://onyx", country = "USA")),
+                1u, 1u, 1u,
+            )
+        },
     )
 
     private val catalogueBodies = mutableListOf<String>()
@@ -162,6 +169,24 @@ class VisualizerEditSyncTest {
         assertEquals(listOf("GET /api/canonical_coffee_bags"), requests.map { it.first })
         assertEquals(listOf("{}"), catalogueBodies)
         assertEquals(0, probes())
+    }
+
+    @Test
+    fun `the roaster catalogue search and lookup GET canonical_roasters and match by id`() {
+        seed(premium = false)
+        val s = sync().also { runBlocking { it.load() } }
+        val page = runBlocking { s.searchCatalogueRoasters("onyx") }
+        assertEquals("Onyx", page.entries.single().name)
+        assertEquals("https://onyx", runBlocking { s.lookupCatalogueRoaster("cr-1", "Onyx") }?.website)
+        assertEquals(null, runBlocking { s.lookupCatalogueRoaster("cr-9", "Onyx") })
+        assertEquals(List(3) { "GET /api/canonical_roasters" }, requests.map { it.first })
+    }
+
+    @Test
+    fun `the roaster lookup swallows failures`() {
+        seed(premium = null, signedIn = false)
+        val s = sync().also { runBlocking { it.load() } }
+        assertEquals(null, runBlocking { s.lookupCatalogueRoaster("cr-1", "Onyx") })
     }
 
     @Test

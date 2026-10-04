@@ -736,7 +736,10 @@ fun CremaSlider(
 // for free; we just theme it + bake in the danger/Cancel pair). Caller owns
 // visibility: render inside `if (showConfirm) { … }`, clear the flag in both
 // onConfirm and onDismiss. Pass `requireTyped` for the nuclear "Erase all data"
-// case → the confirm stays disabled until the user types the exact word.
+// case → the confirm stays disabled until the user types the exact word. Pass
+// `onCancel` when the second button is an answer of its own, distinct from
+// dismissing (back / tap outside) — e.g. the catalogue clash prompt's "Use
+// catalogue" vs dismiss = apply nothing.
 @Composable
 fun CremaConfirmDialog(
     title: String,
@@ -750,6 +753,8 @@ fun CremaConfirmDialog(
     requireTyped: String? = null,
     /** Optional extra content under the body (e.g. an "also delete on Visualizer" option). */
     extra: (@Composable () -> Unit)? = null,
+    /** The second button's action; defaults to [onDismiss]. */
+    onCancel: () -> Unit = onDismiss,
 ) {
     var typed by remember { mutableStateOf("") }
     val confirmEnabled = requireTyped == null || typed.trim() == requireTyped
@@ -784,7 +789,7 @@ fun CremaConfirmDialog(
         // warm copper/rose confirm — the danger action should be the only tinted one.
         dismissButton = {
             TextButton(
-                onClick = onDismiss,
+                onClick = onCancel,
                 colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
             ) { Text(cancelLabel, style = MaterialTheme.typography.labelLarge) }
         },

@@ -192,6 +192,16 @@ class VisualizerClient(
     }
 
     /**
+     * `GET /api/canonical_roasters?q=…&items=…` — the catalogue's roasters (open
+     * to every account). Returns the raw body; the core parses it
+     * (`parse_catalogue_roasters`).
+     */
+    suspend fun searchCanonicalRoasters(accessToken: String, query: String, items: Int = CATALOGUE_PAGE_SIZE): JsonElement? {
+        val q = java.net.URLEncoder.encode(query, Charsets.UTF_8.name())
+        return request("GET", "/canonical_roasters?q=$q&items=$items", accessToken)
+    }
+
+    /**
      * `POST /api/shots/upload` with the community-v2 payload. Returns the new
      * Visualizer shot id.
      */
