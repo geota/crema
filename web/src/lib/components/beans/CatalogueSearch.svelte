@@ -1,40 +1,48 @@
-<script lang="ts">
+<script lang="ts" generics="T extends { id: string; name: string }">
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import CircleNotchIcon from 'phosphor-svelte/lib/CircleNotchIcon';
 	import LinkIcon from 'phosphor-svelte/lib/LinkIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
-	 * `CatalogueSearch` — the bean form's "Search Visualizer catalogue" field.
+	 * `CatalogueSearch` — the bean and roaster forms' "Visualizer catalogue"
+	 * field.
 	 *
 	 * An inline typeahead (same input + popover look as
-	 * {@link RoasterAutocomplete}) over Visualizer's canonical coffee-bag
-	 * catalogue. Typing is debounced through {@link createCatalogueSearch};
-	 * each result shows the bag name, its roaster and — when the catalogue has
-	 * them — country and process. Picking a row hands it to `onPick` with the
-	 * "replace filled fields" choice; the parent applies the core autofill rule
-	 * (empty fields only unless replacing).
+	 * {@link RoasterAutocomplete}) over Visualizer's canonical catalogue —
+	 * coffee bags on the bean form, roasters on the roaster form. Typing is
+	 * debounced through {@link createCatalogueSearch}; each result shows the
+	 * name and a `subline` (roaster · country · process for a bag, country for
+	 * a roaster). Picking a row hands it to `onPick`; the parent runs the clash
+	 * check (fill empty fields at once, or ask "Keep mine" / "Use catalogue").
 	 *
 	 * Keyboard: ↓ / ↑ move the active row, Enter picks, Esc closes.
 	 */
 	import { onDestroy } from 'svelte';
-	import {
-		createCatalogueSearch,
-		type CatalogueCoffeeBag,
-		type CataloguePage,
-		type CatalogueSearchState
-	} from '$lib/bean/catalogue';
+	import { createCatalogueSearch, type CatalogueSearchState } from '$lib/bean/catalogue';
 
 	let {
 		search,
 		onPick,
+		subline,
+		placeholder = 'Roaster or bag name',
+		listId = 'catalogue-search-results',
 		linkedLabel = null,
+		linkedTitle = 'Synced bags link to this Visualizer catalogue entry',
 		onUnlink,
 		status = null
 	}: {
-		/** Run one catalogue search (the `beans.searchCatalogue` bridge). */
-		search: (query: string) => Promise<CataloguePage>;
-		/** A row was picked; `replaceAll` = overwrite fields the user filled. */
-		onPick: (entry: CatalogueCoffeeBag, replaceAll: boolean) => void;
+		/** Run one catalogue search (a `beans.searchCatalogue*` bridge). */
+		search: (query: string) => Promise<{ entries: T[] }>;
+		/** A row was picked. */
+		onPick: (entry: T) => void;
+		/** A result row's secondary line. */
+		subline: (entry: T) => string;
+		/** Input placeholder. */
+		placeholder?: string;
+		/** DOM id of the results listbox. */
+		listId?: string;
+		/** Tooltip on the link chip. */
+		linkedTitle?: string;
 		/** The catalogue entry this bean is linked to (shown as a chip), if any. */
 		linkedLabel?: string | null;
 		/** Clear the catalogue link. */
@@ -46,11 +54,10 @@
 	let query = $state('');
 	let focused = $state(false);
 	let activeIdx = $state(0);
-	let replaceAll = $state(false);
-	let st = $state<CatalogueSearchState>({ query: '', loading: false, results: [], error: null });
+	let st = $state<CatalogueSearchState<T>>({ query: '', loading: false, results: [], error: null });
 	let inputEl = $state<HTMLInputElement | null>(null);
 
-	const controller = createCatalogueSearch({
+	const controller = createCatalogueSearch<T>({
 		search: (q) => search(q),
 		onState: (next) => {
 			st = next;
@@ -60,10 +67,9 @@
 	onDestroy(() => controller.dispose());
 
 	const showPopover = $derived(focused && st.query.length >= 2);
-	const listId = 'catalogue-search-results';
 
-	function pick(entry: CatalogueCoffeeBag): void {
-		onPick(entry, replaceAll);
+	function pick(entry: T): void {
+		onPick(entry);
 		query = '';
 		controller.clear();
 		focused = false;
@@ -91,10 +97,6 @@
 			}
 		}
 	}
-
-	function subline(e: CatalogueCoffeeBag): string {
-		return [e.roasterName, e.meta].filter((s) => s && s.trim()).join(' · ');
-	}
 </script>
 
 <div class="cs-wrap">
@@ -104,7 +106,7 @@
 			bind:this={inputEl}
 			class="cs-input"
 			type="search"
-			placeholder="Roaster or bag name"
+			{placeholder}
 			aria-label="Search Visualizer catalogue"
 			role="combobox"
 			aria-expanded={showPopover}
@@ -155,23 +157,24 @@
 		</ul>
 	{/if}
 
-	<div class="cs-foot">
-		<label class="cs-check">
-			<input type="checkbox" bind:checked={replaceAll} />
-			<span>Replace fields I've already filled</span>
-		</label>
-		{#if linkedLabel}
-			<span class="cs-linked" title="Synced bags link to this Visualizer catalogue entry">
+	{#if linkedLabel}
+		<div class="cs-foot">
+			<span class="cs-linked" title={linkedTitle}>
 				<LinkIcon aria-hidden="true" />
 				<span class="cs-linked-name">{linkedLabel}</span>
 				{#if onUnlink}
-					<button type="button" class="cs-unlink" onclick={onUnlink} aria-label="Unlink catalogue entry">
+					<button
+						type="button"
+						class="cs-unlink"
+						onclick={onUnlink}
+						aria-label="Unlink catalogue entry"
+					>
 						<XIcon aria-hidden="true" />
 					</button>
 				{/if}
 			</span>
-		{/if}
-	</div>
+		</div>
+	{/if}
 	{#if status}
 		<div class="cs-status" role="status">{status}</div>
 	{/if}
@@ -284,22 +287,8 @@
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		justify-content: space-between;
 		gap: 8px;
 		margin-top: 8px;
-	}
-	.cs-check {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		font-family: var(--font-sans);
-		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.6);
-		cursor: pointer;
-	}
-	.cs-check input {
-		accent-color: var(--copper-400);
-		margin: 0;
 	}
 	.cs-linked {
 		display: inline-flex;
