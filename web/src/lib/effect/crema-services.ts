@@ -45,7 +45,7 @@ import type { SyncResult } from '$lib/bean/visualizer-sync';
 import type { HistoryStore } from '$lib/history/store.svelte';
 import { pushShotToVisualizer } from '$lib/history/shot-persistence.ts';
 import type { BeanLibraryStore } from '$lib/bean/store.svelte';
-import type { CataloguePage } from '$lib/bean/catalogue';
+import type { CataloguePage, CatalogueRoasterPage } from '$lib/bean/catalogue';
 import { describeVisualizerError } from '../services/visualizer-call.ts';
 
 /**
@@ -87,6 +87,11 @@ export interface CremaServices {
 		 * Rejects with an `Error` whose message is the human-readable failure.
 		 */
 		searchCatalogue(query: string): Promise<CataloguePage>;
+		/**
+		 * Search the catalogue's roasters (`GET /canonical_roasters`). Rejects
+		 * with an `Error` whose message is the human-readable failure.
+		 */
+		searchCatalogueRoasters(query: string): Promise<CatalogueRoasterPage>;
 		/** Best-effort remote bag delete (a 404 is success). */
 		deleteBean(visualizerId: string): Promise<void>;
 		/** Best-effort remote roaster delete (a 404 is success). */
@@ -170,6 +175,12 @@ export function createCremaServices(runtime: AppRuntime): CremaServices {
 			searchCatalogue: (query) =>
 				run(
 					Effect.flatMap(BeanSync, (b) => b.searchCatalogue(query)).pipe(
+						Effect.mapError((e) => new Error(describeVisualizerError(e)))
+					)
+				),
+			searchCatalogueRoasters: (query) =>
+				run(
+					Effect.flatMap(BeanSync, (b) => b.searchCatalogueRoasters(query)).pipe(
 						Effect.mapError((e) => new Error(describeVisualizerError(e)))
 					)
 				),

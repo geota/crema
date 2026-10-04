@@ -1226,6 +1226,98 @@ pub fn catalogue_autofill(
         .map_err(crema_err)
 }
 
+/// Every clash a catalogue bag pick would raise → a `CatalogueField[]` JSON.
+/// Mirrors the wasm `catalogueClashes`; see
+/// [`de1_domain::catalogue_clashes_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] on a malformed input.
+#[uniffi::export]
+pub fn catalogue_clashes(
+    bean_json: String,
+    entry_json: String,
+    roaster_input: String,
+    roasters_json: String,
+    fetched_json: String,
+) -> Result<String, CremaError> {
+    de1_domain::catalogue_clashes_json(
+        &bean_json,
+        &entry_json,
+        &roaster_input,
+        &roasters_json,
+        &fetched_json,
+    )
+    .map_err(crema_err)
+}
+
+/// Apply a catalogue bag pick → a `CataloguePick` JSON. Mirrors the wasm
+/// `cataloguePick`; see [`de1_domain::catalogue_pick_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] on a malformed input.
+#[uniffi::export]
+pub fn catalogue_pick(
+    bean_json: String,
+    entry_json: String,
+    roaster_input: String,
+    roasters_json: String,
+    fetched_json: String,
+    replace_all: bool,
+) -> Result<String, CremaError> {
+    de1_domain::catalogue_pick_json(
+        &bean_json,
+        &entry_json,
+        &roaster_input,
+        &roasters_json,
+        &fetched_json,
+        replace_all,
+    )
+    .map_err(crema_err)
+}
+
+/// Parse a Visualizer `GET /canonical_roasters` body → a
+/// `CatalogueRoasterPage` JSON. Mirrors the wasm `parseCatalogueRoasters`.
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when `body_json` isn't JSON.
+#[uniffi::export]
+pub fn parse_catalogue_roasters(body_json: String) -> Result<String, CremaError> {
+    de1_domain::parse_catalogue_roasters_json(&body_json).map_err(crema_err)
+}
+
+/// Roaster-form clashes for a picked catalogue roaster → a
+/// `CatalogueField[]` JSON. Mirrors the wasm `catalogueRoasterClashes`.
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] on a malformed input.
+#[uniffi::export]
+pub fn catalogue_roaster_clashes(
+    roaster_json: String,
+    entry_json: String,
+) -> Result<String, CremaError> {
+    de1_domain::catalogue_roaster_clashes_json(&roaster_json, &entry_json).map_err(crema_err)
+}
+
+/// Apply a picked catalogue roaster onto a `Roaster` JSON → a
+/// `CatalogueRoasterAutofill` JSON. Mirrors the wasm `catalogueRoasterAutofill`.
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] on a malformed input.
+#[uniffi::export]
+pub fn catalogue_roaster_autofill(
+    roaster_json: String,
+    entry_json: String,
+    replace_all: bool,
+) -> Result<String, CremaError> {
+    de1_domain::catalogue_roaster_autofill_json(&roaster_json, &entry_json, replace_all)
+        .map_err(crema_err)
+}
+
 // ── Bean / roaster sync + roaster duplicates (shared with the web) ──────
 //
 // The pure halves of the Visualizer bean sync and the roaster directory's
@@ -3343,7 +3435,7 @@ mod tests {
             serde_json::from_str(&parse_catalogue_coffee_bags(body.to_owned()).unwrap()).unwrap();
         let entry = page["entries"][0].to_string();
         assert_eq!(page["entries"][0]["meta"], "Ethiopia · Washed");
-        let out = catalogue_autofill(FAKE_BEAN.to_owned(), entry, true, false).unwrap();
+        let out = catalogue_autofill(FAKE_BEAN.to_owned(), entry.clone(), true, false).unwrap();
         let r: serde_json::Value = serde_json::from_str(&out).unwrap();
         // Typed fields survive; the empty region-less origin gains nothing it
         // already had; links are set.
@@ -3353,6 +3445,51 @@ mod tests {
         assert_eq!(r["bean"]["canonicalRoasterId"], "cr-1");
         assert!(r["roasterName"].is_null());
         assert!(parse_catalogue_coffee_bags("nope".to_owned()).is_err());
+        // Clash list + pick (Monarch's typed Colombia vs the catalogue's Ethiopia).
+        let clashes = catalogue_clashes(
+            FAKE_BEAN.to_owned(),
+            entry.clone(),
+            String::new(),
+            "[]".to_owned(),
+            "null".to_owned(),
+        )
+        .unwrap();
+        assert!(clashes.contains("\"country\""), "{clashes}");
+        let pick: serde_json::Value = serde_json::from_str(
+            &catalogue_pick(
+                FAKE_BEAN.to_owned(),
+                entry,
+                String::new(),
+                "[]".to_owned(),
+                String::new(),
+                true,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(pick["bean"]["origin"]["country"], "Ethiopia");
+        assert_eq!(pick["roaster"]["isNew"], true);
+        assert_eq!(pick["roaster"]["roaster"]["catalogueRoasterId"], "cr-1");
+        let rpage: serde_json::Value = serde_json::from_str(
+            &parse_catalogue_roasters(
+                r#"{"data":[{"id":"cr-1","name":"Onyx","country":"USA"}]}"#.to_owned(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let rentry = rpage["entries"][0].to_string();
+        let local = r#"{"id":"roaster:1","name":"","website":null,"country":"Canada","notes":"",
+            "visualizerId":null,"metadata":{},"createdAt":0,"updatedAt":0}"#;
+        assert_eq!(
+            catalogue_roaster_clashes(local.to_owned(), rentry.clone()).unwrap(),
+            r#"["roasterCountry"]"#
+        );
+        let a: serde_json::Value = serde_json::from_str(
+            &catalogue_roaster_autofill(local.to_owned(), rentry, false).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(a["roaster"]["name"], "Onyx");
+        assert_eq!(a["roaster"]["catalogueRoasterId"], "cr-1");
     }
 
     #[test]

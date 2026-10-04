@@ -167,6 +167,29 @@ describe('BeanSync.searchCatalogue', () => {
 	});
 });
 
+describe('BeanSync.searchCatalogueRoasters', () => {
+	it('GETs /canonical_roasters with q + items and parses the page in core', async () => {
+		const { layer, calls } = mkHttp(() => ({
+			ok: true,
+			json: {
+				data: [{ id: 'cr-1', name: 'Onyx Coffee Lab', website: 'https://onyx', country: 'USA' }],
+				paging: { count: 1, page: 1, limit: 10, pages: 1 }
+			}
+		}));
+		const page = await run(
+			BeanSync.pipe(Effect.flatMap((b) => b.searchCatalogueRoasters('onyx coffee'))),
+			layer
+		);
+		expect(calls[0].url).toContain('/canonical_roasters?q=onyx+coffee&items=10');
+		expect(page.entries[0]).toEqual({
+			id: 'cr-1',
+			name: 'Onyx Coffee Lab',
+			website: 'https://onyx',
+			country: 'USA'
+		});
+	});
+});
+
 describe('BeanSync delete', () => {
 	it('treats a 404 on deleteBean as success', async () => {
 		const { layer } = mkHttp(() => ({ ok: false, status: 404 }));

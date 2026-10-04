@@ -11,6 +11,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coffee.crema.beans.CatalogueClashGate
+import coffee.crema.beans.ROASTER_FORM_FIELD_LABELS
+import coffee.crema.beans.RoasterFields
+import coffee.crema.beans.catalogueFillStatus
+import coffee.crema.beans.draftRoaster
+import coffee.crema.beans.offerRoasterPick
+import coffee.crema.beans.subline
+import coffee.crema.core.CatalogueRoaster
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.CremaEdge
@@ -35,6 +43,31 @@ fun PhoneRoasterEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var notes by remember(editing?.id) { mutableStateOf(editing?.notes ?: "") }
     var confirmDelete by remember { mutableStateOf(false) }
 
+    // Visualizer catalogue search (signed-in only): a pick fills empty fields at
+    // once; a clash asks "Keep mine" / "Use catalogue" (dismiss = nothing). It
+    // links the catalogue roaster (`catalogueRoasterId`) — never the local
+    // duplicate-of pointer.
+    val vizState by vm.visualizer.state.collectAsStateWithLifecycle()
+    var catalogueRoasterId by remember(editing?.id) { mutableStateOf(editing?.catalogueRoasterId) }
+    var catalogueLabel by remember(editing?.id) { mutableStateOf<String?>(null) }
+    var catalogueStatus by remember(editing?.id) { mutableStateOf<String?>(null) }
+    val clashGate = remember { CatalogueClashGate() }
+    val fields = { RoasterFields(name, website, city, country, notes, catalogueRoasterId) }
+    val applyCatalogue: (CatalogueRoaster) -> Unit = { entry ->
+        offerRoasterPick(
+            gate = clashGate,
+            fields = fields,
+            base = editing ?: draftRoaster(),
+            entry = entry,
+            onApplied = { f, n ->
+                name = f.name; website = f.website; country = f.country; catalogueRoasterId = f.catalogueRoasterId
+                catalogueLabel = entry.name
+                catalogueStatus = catalogueFillStatus(n)
+            },
+            onError = { catalogueStatus = "Couldn't apply the catalogue entry." },
+        )
+    }
+
     Scaffold(
         topBar = {
             CremaPhoneBackBarWithSave(
@@ -43,8 +76,8 @@ fun PhoneRoasterEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 saveEnabled = name.isNotBlank(),
                 onCancel = onBack,
                 onSave = {
-                    if (editing == null) vm.addRoaster(name, website, city, country, notes)
-                    else vm.updateRoaster(editing.id, name, website, city, country, notes)
+                    if (editing == null) vm.addRoaster(name, website, city, country, notes, catalogueRoasterId)
+                    else vm.updateRoaster(editing.id, name, website, city, country, notes, catalogueRoasterId)
                     onBack()
                 },
             )
@@ -61,6 +94,28 @@ fun PhoneRoasterEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Spacer(Modifier.height(2.dp))
+            if (vizState.signedIn) {
+                Eyebrow("Visualizer catalogue")
+                Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.medium) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "Find this roaster to fill in the details. You're asked before anything you typed is replaced.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        CatalogueSearchField(
+                            search = { q -> vm.visualizer.searchCatalogueRoasters(q).entries },
+                            onPick = applyCatalogue,
+                            title = { it.name },
+                            subline = { it.subline() },
+                            linkedLabel = catalogueLabel ?: catalogueRoasterId?.let { "Visualizer catalogue" },
+                            onUnlink = { catalogueRoasterId = null; catalogueLabel = null; catalogueStatus = null },
+                            status = catalogueStatus,
+                        )
+                        CatalogueClashDialog(clashGate, ROASTER_FORM_FIELD_LABELS)
+                    }
+                }
+            }
             Eyebrow("Identity")
             Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.medium) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {

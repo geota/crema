@@ -69,7 +69,13 @@ import type {
 } from '$lib/core/crema-core';
 import { readSyncConfig, updateSyncConfig } from '$lib/visualizer/sync-config';
 import type { components } from '$lib/visualizer/openapi';
-import { CATALOGUE_PAGE_SIZE, parseCataloguePage, type CataloguePage } from '$lib/bean/catalogue';
+import {
+	CATALOGUE_PAGE_SIZE,
+	parseCataloguePage,
+	parseCatalogueRoasterPage,
+	type CataloguePage,
+	type CatalogueRoasterPage
+} from '$lib/bean/catalogue';
 import { mintBeanId } from '$lib/bean/model';
 
 /** Crema-side projection of the Visualizer `/me` response (camel-cased). */
@@ -247,6 +253,15 @@ export class BeanSync extends Context.Tag('crema/BeanSync')<
 		readonly searchCatalogue: (
 			query: string
 		) => Effect.Effect<CataloguePage, VisualizerCallError>;
+		/**
+		 * Search the catalogue's roasters — `GET /canonical_roasters?q=…&items=…`
+		 * (open to every account). Backs the roaster form's search and the
+		 * bag pick's roaster lookup (website / country). Parsed by the core
+		 * (`de1_domain::parse_catalogue_roasters`).
+		 */
+		readonly searchCatalogueRoasters: (
+			query: string
+		) => Effect.Effect<CatalogueRoasterPage, VisualizerCallError>;
 		/** Fetch the signed-in user's `/me` profile (replaces `visualizer/account.ts`). */
 		readonly fetchAccount: Effect.Effect<VisualizerAccount, VisualizerCallError | ResponseDecodeError>;
 		/**
@@ -338,6 +353,14 @@ export const BeanSyncLive = Layer.effect(
 			const params = new URLSearchParams({ q: query, items: String(CATALOGUE_PAGE_SIZE) });
 			const raw = yield* call(`/canonical_coffee_bags?${params.toString()}`);
 			return parseCataloguePage(raw);
+		});
+
+		const searchCatalogueRoasters = Effect.fn('BeanSync.searchCatalogueRoasters')(function* (
+			query: string
+		) {
+			const params = new URLSearchParams({ q: query, items: String(CATALOGUE_PAGE_SIZE) });
+			const raw = yield* call(`/canonical_roasters?${params.toString()}`);
+			return parseCatalogueRoasterPage(raw);
 		});
 
 		const deleteBean = Effect.fn('BeanSync.deleteBean')(function* (visualizerId: string) {
@@ -779,6 +802,7 @@ export const BeanSyncLive = Layer.effect(
 			uploadBean,
 			uploadRoaster,
 			searchCatalogue,
+			searchCatalogueRoasters,
 			deleteBean,
 			deleteRoaster,
 			runSync,

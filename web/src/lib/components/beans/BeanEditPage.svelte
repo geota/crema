@@ -52,7 +52,15 @@
 	import StToggle from '$lib/components/settings/StToggle.svelte';
 	import RoasterAutocomplete from './RoasterAutocomplete.svelte';
 	import CatalogueSearch from './CatalogueSearch.svelte';
-	import { autofillFromCatalogue, type CatalogueCoffeeBag } from '$lib/bean/catalogue';
+	import {
+		catalogueFillStatus,
+		pickedRoasterRow,
+		runCataloguePick,
+		type CatalogueCoffeeBag,
+		type CataloguePickInput,
+		type CataloguePickRoaster,
+		type CatalogueRoaster
+	} from '$lib/bean/catalogue';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
 	import TagInput from '$lib/components/profiles/TagInput.svelte';
@@ -215,17 +223,22 @@
 
 	// ── Visualizer catalogue search (linked accounts only) ─────────────
 	// The catalogue GETs are open to free accounts, so the gate is just "a
-	// Visualizer account is linked". Picking a row runs the core autofill rule
-	// (`de1_domain::catalogue_autofill`): empty fields only unless the user
-	// ticks "replace", and the catalogue links are always recorded so bean
-	// sync can link the remote bag / roaster (Premium writes, as today).
+	// Visualizer account is linked". Picking a row looks up the bag's catalogue
+	// roaster (website / country), asks the core for the clash list and — only
+	// when a filled field would change — asks "Keep mine" / "Use catalogue"
+	// (dismiss = apply nothing). The core then applies the bag fields and
+	// resolves the roaster: an existing row linked to / named like the
+	// catalogue roaster, or a new one seeded with the catalogue's fields. The
+	// catalogue links are always recorded so bean sync can link the remote bag
+	// / roaster (Premium writes, as today).
 	const appCtx = getCremaAppContext();
 	const viz = useVisualizerConnection();
 	/** The picked entry's display label (session-only — the bean stores ids). */
 	let pickedLabel = $state<string | null>(null);
-	/** Catalogue roaster name of the last pick — gates linking the roaster row. */
-	let pickedRoasterName = $state<string | null>(null);
 	let catalogueStatus = $state<string | null>(null);
+	/** New bag only: the picked roaster, written at Save (as a typed name is)
+	 *  if the roaster input still names it. */
+	let pendingRoaster = $state<CataloguePickRoaster | null>(null);
 	const catalogueLinkLabel = $derived(
 		current.canonicalCoffeeBagId ? (pickedLabel ?? 'Visualizer catalogue') : null
 	);
@@ -236,20 +249,42 @@
 		return services.beans.searchCatalogue(query);
 	}
 
-	/** Record the catalogue roaster id on the roaster row when it IS the
-	 *  picked entry's roaster and has no link yet. */
-	function linkRoasterToCatalogue(r: Roaster | null): void {
-		const catalogueId = current.canonicalRoasterId;
-		if (!r || !catalogueId || r.catalogueRoasterId || !pickedRoasterName) return;
-		if (r.name.trim().toLowerCase() !== pickedRoasterName.trim().toLowerCase()) return;
-		library.updateRoaster(r.id, { catalogueRoasterId: catalogueId });
+	function catalogueSubline(e: CatalogueCoffeeBag): string {
+		return [e.roasterName, e.meta].filter((s) => s && s.trim()).join(' · ');
 	}
 
-	function applyCatalogue(entry: CatalogueCoffeeBag, replaceAll: boolean): void {
-		const result = autofillFromCatalogue(current, entry, {
-			roasterSet: roasterName.trim() !== '',
-			replaceAll
+	/** The bag's catalogue roaster record (one `GET /canonical_roasters?q=`
+	 *  by name, matched on id), or `null` — a failed lookup never blocks the
+	 *  pick; the roaster then gets name + link only. */
+	async function fetchCatalogueRoaster(entry: CatalogueCoffeeBag): Promise<CatalogueRoaster | null> {
+		const services = appCtx().services;
+		if (!services || !entry.canonicalRoasterId || !entry.roasterName.trim()) return null;
+		try {
+			const page = await services.beans.searchCatalogueRoasters(entry.roasterName);
+			return page.entries.find((r) => r.id === entry.canonicalRoasterId) ?? null;
+		} catch {
+			return null;
+		}
+	}
+
+	async function applyCatalogue(entry: CatalogueCoffeeBag): Promise<void> {
+		const prevStatus = catalogueStatus;
+		if (entry.canonicalRoasterId) catalogueStatus = 'Looking up the roaster…';
+		const fetched = await fetchCatalogueRoaster(entry);
+		catalogueStatus = prevStatus;
+		const input = (): CataloguePickInput => ({
+			bean: current,
+			entry,
+			roasterInput: roasterName,
+			roasters: library.roasters,
+			fetched
 		});
+		const result = await runCataloguePick(input);
+		if (result === null) {
+			// Dismissed — apply nothing; the form and links stay as they were.
+			catalogueStatus = prevStatus;
+			return;
+		}
 		const next = result.bean;
 		patch({
 			name: next.name,
@@ -261,34 +296,57 @@
 			canonicalRoasterId: next.canonicalRoasterId ?? null
 		});
 		pickedLabel = [entry.name, entry.roasterName].filter(Boolean).join(' · ');
-		pickedRoasterName = entry.roasterName || null;
-		if (result.roasterName) {
-			roasterName = result.roasterName;
-			const existing = library.findRoasterByName(result.roasterName) ?? null;
-			if (existing) {
-				resolvedRoaster = existing;
-				if (live) patch({ roasterId: existing.id });
-			} else if (live) {
-				const created = resolveRoasterOrCreate(result.roasterName);
-				resolvedRoaster = created;
-				if (created) patch({ roasterId: created.id });
-			} else {
-				// New bag: the roaster row is created at Save, like a typed name.
-				resolvedRoaster = null;
-			}
+		if (result.roaster) applyPickedRoaster(result.roaster);
+		catalogueStatus = catalogueFillStatus(
+			result.filled.length + (result.roaster?.filled.length ?? 0)
+		);
+	}
+
+	/** Write a picked roaster: create the seeded row, or patch the catalogue
+	 *  fields onto the existing one. */
+	function writePickedRoaster(picked: CataloguePickRoaster): Roaster {
+		const row = pickedRoasterRow(picked);
+		if (picked.isNew) {
+			library.upsertRoaster(row);
+		} else {
+			library.updateRoaster(row.id, {
+				name: row.name,
+				website: row.website ?? null,
+				country: row.country ?? null,
+				catalogueRoasterId: row.catalogueRoasterId ?? null
+			});
 		}
-		linkRoasterToCatalogue(resolvedRoaster);
-		const n = result.filled.length;
-		catalogueStatus =
-			n === 0
-				? 'Linked — every field was already filled.'
-				: `Filled ${n} field${n === 1 ? '' : 's'} from the catalogue.`;
+		return library.getRoaster(row.id) ?? row;
+	}
+
+	/** File the bag under the pick's roaster: written now in edit mode; for a
+	 *  new bag, held until Save. */
+	function applyPickedRoaster(picked: CataloguePickRoaster): void {
+		roasterName = picked.name;
+		if (live) {
+			const row = writePickedRoaster(picked);
+			resolvedRoaster = row;
+			patch({ roasterId: row.id });
+		} else {
+			pendingRoaster = picked;
+			resolvedRoaster = picked.isNew ? null : (library.getRoaster(picked.roaster.id) ?? null);
+		}
+	}
+
+	/** New bag, at Save: write the held roaster pick if the input still names
+	 *  it; `null` = resolve the typed name as usual. */
+	function commitPendingRoaster(): Roaster | null {
+		const picked = pendingRoaster;
+		pendingRoaster = null;
+		if (!picked || picked.name.trim().toLowerCase() !== roasterName.trim().toLowerCase()) {
+			return null;
+		}
+		return writePickedRoaster(picked);
 	}
 
 	function unlinkCatalogue(): void {
 		patch({ canonicalCoffeeBagId: null, canonicalRoasterId: null });
 		pickedLabel = null;
-		pickedRoasterName = null;
 		catalogueStatus = null;
 	}
 
@@ -367,8 +425,7 @@
 				roastedDateInputEl?.focus();
 				return;
 			}
-			const roaster = resolveRoasterOrCreate(roasterName);
-			linkRoasterToCatalogue(roaster);
+			const roaster = commitPendingRoaster() ?? resolveRoasterOrCreate(roasterName);
 			const remaining =
 				draftRecord.remaining > 0 ? draftRecord.remaining : draftRecord.bagSize;
 			const persisted: Bean = {
@@ -574,12 +631,14 @@
 							<div class="be-frow-l">
 								<div class="be-frow-label">Visualizer catalogue</div>
 								<div class="be-frow-sub">
-									Find this bag to fill in the details. Only empty fields are filled.
+									Find this bag to fill in the details. You're asked before anything
+									you typed is replaced.
 								</div>
 							</div>
 							<div class="be-frow-r">
 								<CatalogueSearch
 									search={searchCatalogue}
+									subline={catalogueSubline}
 									onPick={applyCatalogue}
 									linkedLabel={catalogueLinkLabel}
 									onUnlink={unlinkCatalogue}

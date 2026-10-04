@@ -9,11 +9,16 @@
  * `aria-modal` + Escape / scrim cancel), so a call site only swaps
  * `if (confirm(msg))` → `if (await confirmDialog({ message: msg }))`.
  *
- * One dialog at a time (modal). If a second is requested while one is open the
- * first resolves as cancelled, so its awaiter never hangs.
+ * `await choiceDialog({ message, primaryLabel, secondaryLabel })` is the
+ * three-way sibling: `'primary'` / `'secondary'` for the two buttons, `null`
+ * when dismissed (Escape / scrim) — for a question where "neither" must stay
+ * distinct from the second answer (e.g. the catalogue clash prompt: Keep mine
+ * / Use catalogue / dismiss = apply nothing).
  *
- * (Focus-trap / focus-restore is the deferred half of FD4 — this matches the
- * existing `MainsConfirmModal`, which also doesn't trap focus yet.)
+ * One dialog at a time (modal). If a second is requested while one is open the
+ * first resolves as cancelled, so its awaiter never hangs. The host traps Tab
+ * inside the panel, focuses the primary button (or the input) on open and
+ * restores focus to the opener on close.
  */
 
 /** Shared options for a confirm or prompt dialog. */
@@ -44,9 +49,25 @@ export interface PromptOptions extends ConfirmOptions {
 	initialValue?: string;
 }
 
+/** A two-answer dialog where dismissing is a third, separate outcome. */
+export interface ChoiceOptions {
+	/** Optional bold heading above the message. */
+	title?: string;
+	/** The body text. */
+	message: string;
+	/** The default / safe answer — the filled button, focused on open. */
+	primaryLabel: string;
+	/** The other answer — the outlined button. */
+	secondaryLabel: string;
+}
+
+/** Which {@link choiceDialog} button was pressed. */
+export type DialogChoice = 'primary' | 'secondary';
+
 /** The currently-open dialog, or `null`. Read by {@link ConfirmDialog}. */
 export interface ActiveDialog {
-	readonly kind: 'confirm' | 'prompt';
+	readonly kind: 'confirm' | 'prompt' | 'choice';
+	/** For a choice: `confirmLabel` = primary, `cancelLabel` = secondary. */
 	readonly options: ConfirmOptions & Partial<PromptOptions>;
 	readonly resolve: (value: boolean | string | null) => void;
 }
@@ -63,7 +84,7 @@ function preempt(): void {
 	const prior = active;
 	if (prior) {
 		active = null;
-		prior.resolve(prior.kind === 'prompt' ? null : false);
+		prior.resolve(prior.kind === 'confirm' ? false : null);
 	}
 }
 
@@ -89,6 +110,26 @@ export function promptDialog(options: PromptOptions): Promise<string | null> {
 			kind: 'prompt',
 			options,
 			resolve: (v) => resolve(typeof v === 'string' ? v : null)
+		};
+	});
+}
+
+/**
+ * Show a two-answer dialog. Resolves `'primary'` / `'secondary'` for the
+ * buttons, or `null` when dismissed (Escape / scrim click).
+ */
+export function choiceDialog(options: ChoiceOptions): Promise<DialogChoice | null> {
+	preempt();
+	return new Promise<DialogChoice | null>((resolve) => {
+		active = {
+			kind: 'choice',
+			options: {
+				title: options.title,
+				message: options.message,
+				confirmLabel: options.primaryLabel,
+				cancelLabel: options.secondaryLabel
+			},
+			resolve: (v) => resolve(v === 'primary' || v === 'secondary' ? v : null)
 		};
 	});
 }

@@ -58,7 +58,7 @@ class CatalogueAutofillTest {
     @Test
     fun `typing is debounced into one search for the final trimmed query`() = runTest {
         val seen = mutableListOf<String>()
-        val c = CatalogueSearchController(backgroundScope, { q -> seen += q; page(q) })
+        val c = CatalogueSearchController(backgroundScope, { q -> seen += q; page(q).entries })
         c.setQuery("on")
         advanceTimeBy(100)
         c.setQuery("ony")
@@ -78,18 +78,18 @@ class CatalogueAutofillTest {
     @Test
     fun `queries under the minimum are never sent`() = runTest {
         val seen = mutableListOf<String>()
-        val c = CatalogueSearchController(backgroundScope, { q -> seen += q; page(q) })
+        val c = CatalogueSearchController(backgroundScope, { q -> seen += q; page(q).entries })
         c.setQuery(" o ")
         advanceTimeBy(1_000)
         runCurrent()
         assertTrue(seen.isEmpty())
-        assertEquals(CatalogueSearchController.State(query = "o"), c.state.value)
+        assertEquals(CatalogueSearchController.State<CatalogueCoffeeBag>(query = "o"), c.state.value)
     }
 
     @Test
     fun `a slow earlier search never overwrites a newer one`() = runTest {
         val slow = CompletableDeferred<CataloguePage>()
-        val c = CatalogueSearchController(backgroundScope, { q -> if (q == "slow") slow.await() else page(q) })
+        val c = CatalogueSearchController(backgroundScope, { q -> if (q == "slow") slow.await().entries else page(q).entries })
         c.setQuery("slow")
         advanceTimeBy(301)
         runCurrent()
@@ -103,14 +103,14 @@ class CatalogueAutofillTest {
 
     @Test
     fun `a failure surfaces its message and clear resets`() = runTest {
-        val c = CatalogueSearchController(backgroundScope, { throw IllegalStateException("Visualizer HTTP 500") })
+        val c = CatalogueSearchController<CatalogueCoffeeBag>(backgroundScope, { throw IllegalStateException("Visualizer HTTP 500") })
         c.setQuery("onyx")
         advanceTimeBy(301)
         runCurrent()
         assertEquals("Visualizer HTTP 500", c.state.value.error)
         assertTrue(c.state.value.results.isEmpty())
         c.clear()
-        assertEquals(CatalogueSearchController.State(), c.state.value)
+        assertEquals(CatalogueSearchController.State<CatalogueCoffeeBag>(), c.state.value)
     }
 
     @Test

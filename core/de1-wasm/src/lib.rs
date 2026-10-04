@@ -965,6 +965,91 @@ pub fn catalogue_autofill(
     de1_domain::catalogue_autofill_json(bean_json, entry_json, roaster_set, replace_all)
 }
 
+/// Every clash a catalogue bag pick would raise → a `CatalogueField[]` JSON
+/// (bag fields, the roaster input, the matched roaster's fields; form order).
+/// `roasters_json` is the local `Roaster[]`; `fetched_json` the catalogue
+/// roaster record (`CatalogueRoaster`) or `"null"`. See
+/// `de1_domain::catalogue_clashes`.
+///
+/// # Errors
+/// The JSON error string on a malformed input.
+#[wasm_bindgen(js_name = catalogueClashes)]
+pub fn catalogue_clashes(
+    bean_json: &str,
+    entry_json: &str,
+    roaster_input: &str,
+    roasters_json: &str,
+    fetched_json: &str,
+) -> Result<String, String> {
+    de1_domain::catalogue_clashes_json(
+        bean_json,
+        entry_json,
+        roaster_input,
+        roasters_json,
+        fetched_json,
+    )
+}
+
+/// Apply a catalogue bag pick (bag fields + the roaster to file it under) →
+/// a `CataloguePick` JSON. Inputs as `catalogueClashes` plus `replace_all`
+/// (the clash dialog's "Use catalogue"). See `de1_domain::catalogue_pick`.
+///
+/// # Errors
+/// The JSON error string on a malformed input.
+#[wasm_bindgen(js_name = cataloguePick)]
+pub fn catalogue_pick(
+    bean_json: &str,
+    entry_json: &str,
+    roaster_input: &str,
+    roasters_json: &str,
+    fetched_json: &str,
+    replace_all: bool,
+) -> Result<String, String> {
+    de1_domain::catalogue_pick_json(
+        bean_json,
+        entry_json,
+        roaster_input,
+        roasters_json,
+        fetched_json,
+        replace_all,
+    )
+}
+
+/// Parse a Visualizer `GET /canonical_roasters` response body → a
+/// `CatalogueRoasterPage` JSON. See `de1_domain::parse_catalogue_roasters`.
+///
+/// # Errors
+/// The JSON error string when `body_json` isn't JSON.
+#[wasm_bindgen(js_name = parseCatalogueRoasters)]
+pub fn parse_catalogue_roasters(body_json: &str) -> Result<String, String> {
+    de1_domain::parse_catalogue_roasters_json(body_json)
+}
+
+/// The roaster-form clashes for a picked catalogue roaster → a
+/// `CatalogueField[]` JSON. See `de1_domain::catalogue_roaster_clashes`.
+///
+/// # Errors
+/// The JSON error string on a malformed input.
+#[wasm_bindgen(js_name = catalogueRoasterClashes)]
+pub fn catalogue_roaster_clashes(roaster_json: &str, entry_json: &str) -> Result<String, String> {
+    de1_domain::catalogue_roaster_clashes_json(roaster_json, entry_json)
+}
+
+/// Apply a picked catalogue roaster onto a `Roaster` JSON → a
+/// `CatalogueRoasterAutofill` JSON (empty fields only unless `replace_all`;
+/// the catalogue link always set). See `de1_domain::catalogue_roaster_autofill`.
+///
+/// # Errors
+/// The JSON error string on a malformed input.
+#[wasm_bindgen(js_name = catalogueRoasterAutofill)]
+pub fn catalogue_roaster_autofill(
+    roaster_json: &str,
+    entry_json: &str,
+    replace_all: bool,
+) -> Result<String, String> {
+    de1_domain::catalogue_roaster_autofill_json(roaster_json, entry_json, replace_all)
+}
+
 /// The `{"coffee_bag": {...}}` write body for a `Bean` JSON (catalogue link
 /// omitted when empty). See `de1_domain::coffee_bag_write_request`.
 ///

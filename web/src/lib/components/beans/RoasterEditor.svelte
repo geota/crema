@@ -10,6 +10,7 @@
 	 *
 	 *   ┌─ topbar: ← Beans · eyebrow · title · Cancel / Save ─────┐
 	 *   ├─ centered single-column form (max-width 720)            │
+	 *   │   • Visualizer catalogue search (linked accounts only)  │
 	 *   │   • Name (required)                                    │
 	 *   │   • Website (URL — http(s) only)                       │
 	 *   │   • Logo URL + 32×32 preview                            │
@@ -39,6 +40,14 @@
 	import { getBeanStore, roasterMarkTone, type Roaster } from '$lib/bean';
 	import RoasterDeleteSplit from './RoasterDeleteSplit.svelte';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
+	import CatalogueSearch from './CatalogueSearch.svelte';
+	import {
+		catalogueFillStatus,
+		runCatalogueRoasterPick,
+		type CatalogueRoaster
+	} from '$lib/bean/catalogue';
+	import { getCremaAppContext } from '$lib/shell/app-context';
+	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
 
 	let {
 		roaster,
@@ -68,6 +77,44 @@
 		} else {
 			draftRecord = { ...draftRecord, ...p };
 		}
+	}
+
+	// ── Visualizer catalogue search (linked accounts only) ─────────────
+	// Same flow as the bean form: a pick fills empty fields at once; when a
+	// filled field would change, "Keep mine" / "Use catalogue" decides
+	// (dismiss = apply nothing). The pick sets `catalogueRoasterId` — never
+	// `canonicalRoasterId`, the local duplicate-of pointer.
+	const appCtx = getCremaAppContext();
+	const viz = useVisualizerConnection();
+	let pickedLabel = $state<string | null>(null);
+	let catalogueStatus = $state<string | null>(null);
+	const catalogueLinkLabel = $derived(
+		current.catalogueRoasterId ? (pickedLabel ?? 'Visualizer catalogue') : null
+	);
+
+	async function searchCatalogueRoasters(query: string) {
+		const services = appCtx().services;
+		if (!services) throw new Error('Visualizer is not available.');
+		return services.beans.searchCatalogueRoasters(query);
+	}
+
+	async function applyCatalogueRoaster(entry: CatalogueRoaster): Promise<void> {
+		const r = await runCatalogueRoasterPick(() => current, entry);
+		if (r === null) return; // dismissed — nothing changes
+		patch({
+			name: r.roaster.name,
+			website: r.roaster.website ?? null,
+			country: r.roaster.country ?? null,
+			catalogueRoasterId: r.roaster.catalogueRoasterId ?? null
+		});
+		pickedLabel = entry.name;
+		catalogueStatus = catalogueFillStatus(r.filled.length);
+	}
+
+	function unlinkCatalogueRoaster(): void {
+		patch({ catalogueRoasterId: null });
+		pickedLabel = null;
+		catalogueStatus = null;
 	}
 
 	// ── Validation ────────────────────────────────────────────────────
@@ -211,6 +258,30 @@
 
 		<!-- Form -->
 		<section class="rd-form">
+			{#if viz.connected}
+				<div class="rd-frow">
+					<div class="rd-frow-l">
+						<div class="rd-frow-label">Visualizer catalogue</div>
+						<div class="rd-frow-sub">
+							Find this roaster to fill in the details. You're asked before anything you
+							typed is replaced.
+						</div>
+					</div>
+					<div class="rd-frow-r">
+						<CatalogueSearch
+							search={searchCatalogueRoasters}
+							subline={(r) => r.country ?? ''}
+							onPick={applyCatalogueRoaster}
+							placeholder="Roaster name"
+							listId="catalogue-roaster-results"
+							linkedLabel={catalogueLinkLabel}
+							linkedTitle="Synced roasters link to this Visualizer catalogue roaster"
+							onUnlink={unlinkCatalogueRoaster}
+							status={catalogueStatus}
+						/>
+					</div>
+				</div>
+			{/if}
 			<!-- Name -->
 			<div class="rd-frow">
 				<div class="rd-frow-l">

@@ -828,6 +828,183 @@ export interface CataloguePage {
 }
 
 /**
+ * One roastery — a record in the roaster directory. Sparse on
+ * purpose, mirroring Visualizer's `RoasterDetail` (which is itself
+ * minimal: id + name + website + image). Beanconqueror has no
+ * first-class roaster entity — its `bean.roaster` is free text; the
+ * shell promotes unique strings into [`Roaster`] rows on import.
+ */
+export interface Roaster {
+	/** Stable id — `"roaster:<uuid>"`. */
+	id: string;
+	/** Roastery name. **Required.** */
+	name: string;
+	/** Roastery website / store URL. */
+	website?: string;
+	/**
+	 * Logo / hero image URL. Mirrors Visualizer's `RoasterDetail.image_url`
+	 * — round-trips losslessly on sync. Renders as a small thumbnail in
+	 * the roaster card and the editor's preview slot.
+	 */
+	imageUrl?: string;
+	/**
+	 * City — e.g. `"Portland"`. Crema-only; rides in `metadata.crema.city`
+	 * on Visualizer round-trip so the wire format stays lossless.
+	 */
+	city?: string;
+	/** Country / state / region — free text. Crema-only. */
+	country?: string;
+	/** Free-form notes (private to the user — not pushed to Visualizer). */
+	notes: string;
+	/**
+	 * Pointer to the canonical **local** roaster row (`roaster:<uuid>`)
+	 * when this row was tagged as a duplicate in the roaster directory.
+	 * `None` = this row is itself canonical (or has not been deduped).
+	 * Local-only: Visualizer's `canonical_roaster_id` is a link into its
+	 * shared roaster catalogue, which lives in
+	 * [`Roaster::catalogue_roaster_id`] instead.
+	 */
+	canonicalRoasterId?: string;
+	/**
+	 * Visualizer **catalogue** roaster id — the wire's
+	 * `RoasterDetail.canonical_roaster_id`. Set from a catalogue pick in the
+	 * bean form (or pulled from Visualizer) and sent on the roaster write.
+	 * `None` = not linked. Defaults so older JSON deserialises cleanly.
+	 */
+	catalogueRoasterId?: string;
+	/** Visualizer `roaster.id` once pushed. */
+	visualizerId?: string;
+	/**
+	 * Unix epoch ms when this roaster was soft-deleted, or `None` when
+	 * active. See [`Bean::deleted_at`] for the rationale. Defaults to
+	 * `None` so older JSON deserialises cleanly.
+	 */
+	deletedAt?: number;
+	/** Open JSON metadata — escape valve symmetric with [`Bean::metadata`]. */
+	metadata: unknown;
+	/** Unix epoch ms. */
+	createdAt: number;
+	/** Unix epoch ms. */
+	updatedAt: number;
+}
+
+/**
+ * A form field a catalogue pick can fill — the ids a clash list is made of.
+ * Both shells map them to their own human labels ("Roast level",
+ * "Roaster website", …). Declaration order is form order: clash lists come
+ * out sorted by it.
+ * 
+ * `Roaster*` are fields of the local **roaster row** (the roaster form's
+ * name / website / country, or — in a bag pick — the matched roaster's);
+ * [`CatalogueField::Roaster`] is the bag form's roaster *input* (which
+ * roaster the bag is filed under).
+ */
+export enum CatalogueField {
+	/** Bag name. */
+	Name = "name",
+	/** The bag form's roaster input. */
+	Roaster = "roaster",
+	/** Origin country. */
+	Country = "country",
+	/** Origin region. */
+	Region = "region",
+	/** Farmer / producer. */
+	Farmer = "farmer",
+	/** Cultivar / variety. */
+	Variety = "variety",
+	/** Elevation. */
+	Elevation = "elevation",
+	/** Process. */
+	Processing = "processing",
+	/** Harvest time. */
+	HarvestTime = "harvestTime",
+	/** Roast level (compared after mapping the catalogue band to 1..10). */
+	RoastLevel = "roastLevel",
+	/** Tasting notes. */
+	TastingNotes = "tastingNotes",
+	/** The bag's buy-again URL. */
+	Url = "url",
+	/** The roaster row's name. */
+	RoasterName = "roasterName",
+	/** The roaster row's website. */
+	RoasterWebsite = "roasterWebsite",
+	/** The roaster row's country / location. */
+	RoasterCountry = "roasterCountry",
+}
+
+/** What a bag pick does to the bag's roaster — see [`catalogue_pick`]. */
+export interface CataloguePickRoaster {
+	/** The roaster name to show in the roaster input. */
+	name: string;
+	/**
+	 * `false`: `roaster` is an existing local row (matched by catalogue link
+	 * or name) with the catalogue fields applied — save it and file the bag
+	 * under it. `true`: no local match — `roaster` is a seed (blank `id`,
+	 * zero timestamps) carrying the catalogue name / website / country and
+	 * link, for the shell to create (at Save, for a new bag).
+	 */
+	isNew: boolean;
+	/** The updated existing row, or the seed. */
+	roaster: Roaster;
+	/** Roaster-row fields that changed / were seeded. */
+	filled: CatalogueField[];
+}
+
+/** The result of [`catalogue_pick`]. */
+export interface CataloguePick {
+	/**
+	 * The bean with the bag fields + catalogue links applied (`roaster_id`
+	 * untouched — the shell files it under [`CataloguePick::roaster`]).
+	 */
+	bean: Bean;
+	/**
+	 * camelCase names of the bag fields that changed, as
+	 * [`CatalogueAutofill::filled`] (`"roaster"` when the input changes).
+	 */
+	filled: string[];
+	/**
+	 * The roaster to file the bag under, or `None` = leave the bag's roaster
+	 * alone (the catalogue names none, or the user kept a different one).
+	 */
+	roaster?: CataloguePickRoaster;
+}
+
+/**
+ * One `CanonicalRoasterSummary` row (`GET /canonical_roasters`), trimmed,
+ * blank → `None`.
+ */
+export interface CatalogueRoaster {
+	/** Catalogue roaster id (`catalogue_roaster_id` on a local roaster). */
+	id: string;
+	/** Roaster name. */
+	name: string;
+	/** Roaster website. */
+	website?: string;
+	/** Country. */
+	country?: string;
+}
+
+/** The result of [`catalogue_roaster_autofill`]. */
+export interface CatalogueRoasterAutofill {
+	/** The roaster with the pick applied (`catalogue_roaster_id` set). */
+	roaster: Roaster;
+	/** The fields that changed (excludes the link id). */
+	filled: CatalogueField[];
+}
+
+/** One page of catalogue roaster search results. */
+export interface CatalogueRoasterPage {
+	/** The rows, in server order. Malformed rows are dropped. */
+	entries: CatalogueRoaster[];
+	/** Total matches across all pages (`paging.count`; `0` when absent). */
+	count: number;
+	/** 1-based page number (`paging.page`; `1` when absent). */
+	page: number;
+	/** Total page count (`paging.pages`; `1` when absent). */
+	pages: number;
+}
+
+/**
  * The portable, cross-shell app-preferences subset. `#[serde(default)]` on the
  * whole struct (via [`Default`]) so a partial blob — an older backup, or one
  * shell omitting a field it shares — fills gaps from the canonical defaults
@@ -2421,67 +2598,6 @@ export interface ReplayMeta {
 	bean?: ReplayMetaBean;
 	/** Equipment-level grinder model at shot start. */
 	grinderModel?: string;
-}
-
-/**
- * One roastery — a record in the roaster directory. Sparse on
- * purpose, mirroring Visualizer's `RoasterDetail` (which is itself
- * minimal: id + name + website + image). Beanconqueror has no
- * first-class roaster entity — its `bean.roaster` is free text; the
- * shell promotes unique strings into [`Roaster`] rows on import.
- */
-export interface Roaster {
-	/** Stable id — `"roaster:<uuid>"`. */
-	id: string;
-	/** Roastery name. **Required.** */
-	name: string;
-	/** Roastery website / store URL. */
-	website?: string;
-	/**
-	 * Logo / hero image URL. Mirrors Visualizer's `RoasterDetail.image_url`
-	 * — round-trips losslessly on sync. Renders as a small thumbnail in
-	 * the roaster card and the editor's preview slot.
-	 */
-	imageUrl?: string;
-	/**
-	 * City — e.g. `"Portland"`. Crema-only; rides in `metadata.crema.city`
-	 * on Visualizer round-trip so the wire format stays lossless.
-	 */
-	city?: string;
-	/** Country / state / region — free text. Crema-only. */
-	country?: string;
-	/** Free-form notes (private to the user — not pushed to Visualizer). */
-	notes: string;
-	/**
-	 * Pointer to the canonical **local** roaster row (`roaster:<uuid>`)
-	 * when this row was tagged as a duplicate in the roaster directory.
-	 * `None` = this row is itself canonical (or has not been deduped).
-	 * Local-only: Visualizer's `canonical_roaster_id` is a link into its
-	 * shared roaster catalogue, which lives in
-	 * [`Roaster::catalogue_roaster_id`] instead.
-	 */
-	canonicalRoasterId?: string;
-	/**
-	 * Visualizer **catalogue** roaster id — the wire's
-	 * `RoasterDetail.canonical_roaster_id`. Set from a catalogue pick in the
-	 * bean form (or pulled from Visualizer) and sent on the roaster write.
-	 * `None` = not linked. Defaults so older JSON deserialises cleanly.
-	 */
-	catalogueRoasterId?: string;
-	/** Visualizer `roaster.id` once pushed. */
-	visualizerId?: string;
-	/**
-	 * Unix epoch ms when this roaster was soft-deleted, or `None` when
-	 * active. See [`Bean::deleted_at`] for the rationale. Defaults to
-	 * `None` so older JSON deserialises cleanly.
-	 */
-	deletedAt?: number;
-	/** Open JSON metadata — escape valve symmetric with [`Bean::metadata`]. */
-	metadata: unknown;
-	/** Unix epoch ms. */
-	createdAt: number;
-	/** Unix epoch ms. */
-	updatedAt: number;
 }
 
 /**

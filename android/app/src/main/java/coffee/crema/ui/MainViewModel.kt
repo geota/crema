@@ -2371,8 +2371,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun startNewBean() = library.startNewBean()
 
     /** Apply edits to a bean (the editor's Save; find-or-create the roaster). */
-    fun updateBean(id: String, roasterName: String, transform: (Bean) -> Bean) =
-        library.updateBean(id, roasterName, transform)
+    fun updateBean(
+        id: String,
+        roasterName: String,
+        roasterPick: coffee.crema.core.CataloguePickRoaster? = null,
+        transform: (Bean) -> Bean,
+    ) = library.updateBean(id, roasterName, roasterPick, transform)
 
     /** A FileProvider Uri for the camera to write a bag photo into. */
     fun newCameraOutputUri(beanId: String): Uri? = library.newCameraOutputUri(beanId)
@@ -2416,12 +2420,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun startEditRoaster(id: String?) = library.startEditRoaster(id)
 
     /** Add a roaster to the directory. Persisted. */
-    fun addRoaster(name: String, website: String?, city: String?, country: String?, notes: String) =
-        library.addRoaster(name, website, city, country, notes)
+    fun addRoaster(name: String, website: String?, city: String?, country: String?, notes: String, catalogueRoasterId: String? = null) =
+        library.addRoaster(name, website, city, country, notes, catalogueRoasterId)
 
-    /** Update a roaster's editable fields. Persisted. */
-    fun updateRoaster(id: String, name: String, website: String?, city: String?, country: String?, notes: String) =
-        library.updateRoaster(id, name, website, city, country, notes)
+    /** Update a roaster's editable fields + catalogue link. Persisted. */
+    fun updateRoaster(id: String, name: String, website: String?, city: String?, country: String?, notes: String, catalogueRoasterId: String?) =
+        library.updateRoaster(id, name, website, city, country, notes, catalogueRoasterId)
 
     /**
      * Delete a roaster: detach its bags, or [cascade] = delete them too.

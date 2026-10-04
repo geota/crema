@@ -3,6 +3,8 @@ package coffee.crema.visualizer
 import coffee.crema.core.CataloguePage
 import coffee.crema.core.ShotPatchInputs
 import coffee.crema.core.parseCatalogueCoffeeBags
+import coffee.crema.core.parseCatalogueRoasters
+import coffee.crema.core.CatalogueRoasterPage
 import coffee.crema.runCatchingCancellable
 import coffee.crema.core.exportV2JsonShot
 import coffee.crema.core.exportV2JsonShotFull
@@ -89,6 +91,9 @@ class VisualizerSync(
     /** Core `parse_catalogue_coffee_bags`: raw catalogue body → [CataloguePage] (injected so JVM tests needn't load the native core). */
     private val parseCatalogue: (bodyJson: String) -> CataloguePage =
         { body -> json.decodeFromString(CataloguePage.serializer(), parseCatalogueCoffeeBags(body)) },
+    /** Core `parse_catalogue_roasters`: raw body → [CatalogueRoasterPage] (injected for JVM tests). */
+    private val parseCatalogueRoasterPage: (bodyJson: String) -> CatalogueRoasterPage =
+        { body -> json.decodeFromString(CatalogueRoasterPage.serializer(), parseCatalogueRoasters(body)) },
     /** The OAuth code → token exchange (injected so JVM tests can drive a sign-in). */
     private val exchangeCode: suspend (code: String, verifier: String) -> TokenSet =
         { code, verifier -> exchangeCodeForToken(clientId, code, verifier, json) },
@@ -414,6 +419,32 @@ class VisualizerSync(
     suspend fun searchCatalogue(query: String): CataloguePage {
         val body = withFreshToken { client.searchCanonicalCoffeeBags(it, query) }
         return parseCatalogue(json.encodeToString(JsonElement.serializer(), body ?: JsonNull))
+    }
+
+    /**
+     * Search the catalogue's roasters (`GET /canonical_roasters`) — the roaster
+     * form's search and a bag pick's roaster lookup (website / country). Open to
+     * free accounts. Throws [VisualizerError] (incl. [VisualizerError.Auth]).
+     */
+    suspend fun searchCatalogueRoasters(query: String): CatalogueRoasterPage {
+        val body = withFreshToken { client.searchCanonicalRoasters(it, query) }
+        return parseCatalogueRoasterPage(json.encodeToString(JsonElement.serializer(), body ?: JsonNull))
+    }
+
+    /**
+     * The catalogue record of a bag's roaster — one roaster search by [name],
+     * matched on [catalogueRoasterId]; null when it isn't found or the lookup
+     * fails (a bag pick never blocks on it: the roaster gets name + link only).
+     */
+    suspend fun lookupCatalogueRoaster(catalogueRoasterId: String, name: String): coffee.crema.core.CatalogueRoaster? {
+        if (catalogueRoasterId.isBlank() || name.isBlank()) return null
+        return try {
+            searchCatalogueRoasters(name).entries.firstOrNull { it.id == catalogueRoasterId }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
     }
 
     // ── Token freshness (web TokenVault.withFreshToken semantics) ───────────

@@ -57,7 +57,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coffee.crema.beans.CatalogueClashGate
+import coffee.crema.beans.ROASTER_FORM_FIELD_LABELS
+import coffee.crema.beans.RoasterFields
+import coffee.crema.beans.catalogueFillStatus
 import coffee.crema.beans.chipCounts
+import coffee.crema.beans.draftRoaster
+import coffee.crema.beans.offerRoasterPick
+import coffee.crema.beans.subline
+import coffee.crema.core.CatalogueRoaster
+import coffee.crema.ui.components.CatalogueClashDialog
+import coffee.crema.ui.components.CatalogueSearchField
+import androidx.compose.foundation.verticalScroll
 import coffee.crema.beans.filterBeanFacets
 import coffee.crema.beans.includeArchivedApplies
 import coffee.crema.beans.sortFilteredBeans
@@ -524,12 +535,14 @@ fun BeansScreen(
     coffee.crema.ui.brewlog.LogBrewSheet(vm, owner = coffee.crema.ui.brewlog.BrewLogOwner.BEANS)
 
     if (roasterDialogOpen) {
+        val vizState by vm.visualizer.state.collectAsStateWithLifecycle()
         RoasterDialog(
             initial = roasterEditing,
-            onSave = { name, website, city, country, notes ->
+            searchCatalogue = if (vizState.signedIn) { q -> vm.visualizer.searchCatalogueRoasters(q).entries } else null,
+            onSave = { f ->
                 val editing = roasterEditing
-                if (editing == null) vm.addRoaster(name, website, city, country, notes)
-                else vm.updateRoaster(editing.id, name, website, city, country, notes)
+                if (editing == null) vm.addRoaster(f.name, f.website, f.city, f.country, f.notes, f.catalogueRoasterId)
+                else vm.updateRoaster(editing.id, f.name, f.website, f.city, f.country, f.notes, f.catalogueRoasterId)
             },
             onDismiss = { roasterDialogOpen = false },
         )
@@ -833,7 +846,9 @@ private fun RoasterCard(
 @Composable
 private fun RoasterDialog(
     initial: Roaster?,
-    onSave: (name: String, website: String, city: String, country: String, notes: String) -> Unit,
+    /** The catalogue roaster search, or null when no Visualizer account is linked. */
+    searchCatalogue: (suspend (String) -> List<CatalogueRoaster>)?,
+    onSave: (RoasterFields) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf(initial?.name ?: "") }
@@ -841,6 +856,25 @@ private fun RoasterDialog(
     var city by remember { mutableStateOf(initial?.city ?: "") }
     var country by remember { mutableStateOf(initial?.country ?: "") }
     var notes by remember { mutableStateOf(initial?.notes ?: "") }
+    var catalogueRoasterId by remember { mutableStateOf(initial?.catalogueRoasterId) }
+    var catalogueLabel by remember { mutableStateOf<String?>(null) }
+    var catalogueStatus by remember { mutableStateOf<String?>(null) }
+    val clashGate = remember { CatalogueClashGate() }
+    val fields = { RoasterFields(name, website, city, country, notes, catalogueRoasterId) }
+    val applyCatalogue: (CatalogueRoaster) -> Unit = { entry ->
+        offerRoasterPick(
+            gate = clashGate,
+            fields = fields,
+            base = initial ?: draftRoaster(),
+            entry = entry,
+            onApplied = { f, n ->
+                name = f.name; website = f.website; country = f.country; catalogueRoasterId = f.catalogueRoasterId
+                catalogueLabel = entry.name
+                catalogueStatus = catalogueFillStatus(n)
+            },
+            onError = { catalogueStatus = "Couldn't apply the catalogue entry." },
+        )
+    }
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(16.dp),
@@ -850,12 +884,28 @@ private fun RoasterDialog(
             shadowElevation = 12.dp,
             modifier = Modifier.widthIn(max = 460.dp),
         ) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
                 Text(
                     if (initial == null) "Add roaster" else "Edit roaster",
                     style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
+                if (searchCatalogue != null) {
+                    CatalogueSearchField(
+                        search = searchCatalogue,
+                        onPick = applyCatalogue,
+                        title = { it.name },
+                        subline = { it.subline() },
+                        linkedLabel = catalogueLabel ?: catalogueRoasterId?.let { "Visualizer catalogue" },
+                        onUnlink = { catalogueRoasterId = null; catalogueLabel = null; catalogueStatus = null },
+                        status = catalogueStatus,
+                        placeholder = "Search Visualizer catalogue roasters",
+                    )
+                    CatalogueClashDialog(clashGate, ROASTER_FORM_FIELD_LABELS)
+                }
                 CremaTextField(name, { name = it }, "Name", placeholder = "e.g. Onyx Coffee Lab")
                 CremaTextField(website, { website = it }, "Website", placeholder = "https://…")
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -867,7 +917,7 @@ private fun RoasterDialog(
                     Spacer(Modifier.weight(1f))
                     CremaButton(onClick = onDismiss, variant = CremaButtonVariant.Text, label = "Cancel")
                     CremaButton(
-                        onClick = { onSave(name, website, city, country, notes); onDismiss() },
+                        onClick = { onSave(fields()); onDismiss() },
                         enabled = name.isNotBlank(),
                         label = if (initial == null) "Add roaster" else "Save",
                     )

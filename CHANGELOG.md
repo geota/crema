@@ -9,6 +9,20 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **The Visualizer catalogue asks before it replaces what you typed** — the
+  "Replace fields I've already filled" checkbox is gone. Picking a catalogue
+  bag fills every empty field at once; when a field you filled has a
+  different catalogue value, a dialog ("Some fields are already filled in")
+  names those fields and offers **Keep mine** (fill only the empty fields) or
+  **Use catalogue** (replace them too; a catalogue blank never erases).
+  Dismissing it changes nothing. Differences in case or spacing don't count.
+  The roaster form now has the same catalogue search (roasters by name, with
+  country), filling name, website and country and linking the catalogue
+  roaster. Picking a bag also files it under the right roaster: one already
+  linked to that catalogue roaster, else one with the same name (ignoring
+  case, spacing and punctuation), else a new roaster with the catalogue's
+  name, website and country. That roaster's differing fields are listed in
+  the same dialog. Web, phone and tablet.
 - **Visualizer API spec updated to v1.17.2** (from v1.8.2) for the catalogue
   endpoints. A roaster's local "duplicate of" tag now stays on the device
   instead of being sent as Visualizer's catalogue link.
