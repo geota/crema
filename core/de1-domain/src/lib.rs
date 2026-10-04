@@ -42,8 +42,10 @@
 //!   (write envelopes, catalogue-link resolution, push planning) and the
 //!   roaster duplicate detection + merge plan, shared by every shell.
 //! - [`visualizer_catalogue`] — the Visualizer canonical-catalogue search
-//!   response parser and the pick → bean autofill rule
-//!   ([`catalogue_autofill`]) behind the bean form's catalogue search.
+//!   response parsers, the pick → bean / roaster autofill rules
+//!   ([`catalogue_pick`], [`catalogue_roaster_autofill`]) and the clash lists
+//!   ([`catalogue_clashes`]) behind the bean and roaster forms' catalogue
+//!   search.
 //! - [`ids`] — [`new_profile_id`], the one canonical profile-ID minter
 //!   (UUID v7, RFC 9562). Built-in IDs are pre-generated into
 //!   `profiles/builtin.json` by the `gen-builtin-ids` binary in this
@@ -250,8 +252,13 @@ pub use units::{
     ml_to_fl_oz, oz_to_grams, psi_to_bar,
 };
 pub use visualizer_catalogue::{
-    CatalogueAutofill, CatalogueCoffeeBag, CataloguePage, catalogue_autofill,
-    catalogue_autofill_json, parse_catalogue_coffee_bags, parse_catalogue_coffee_bags_json,
+    CatalogueAutofill, CatalogueCoffeeBag, CatalogueField, CataloguePage, CataloguePick,
+    CataloguePickRoaster, CatalogueRoaster, CatalogueRoasterAutofill, CatalogueRoasterPage,
+    catalogue_autofill, catalogue_autofill_json, catalogue_clashes, catalogue_clashes_json,
+    catalogue_pick, catalogue_pick_json, catalogue_roaster_autofill,
+    catalogue_roaster_autofill_json, catalogue_roaster_clashes, catalogue_roaster_clashes_json,
+    find_catalogue_roaster, parse_catalogue_coffee_bags, parse_catalogue_coffee_bags_json,
+    parse_catalogue_roasters, parse_catalogue_roasters_json, roaster_match_key,
 };
 pub use visualizer_error::{
     VISUALIZER_DEFAULT_DAILY_LIMIT, VisualizerCallError, is_recoverable, retry_backoff_ms,
