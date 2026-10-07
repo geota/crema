@@ -1,0 +1,147 @@
+# Security lockfile fixes — patches advisories in TRANSITIVE web dependencies,
+# which Dependabot's security updates can't do on this pnpm 11 repo (they fail
+# with `security_update_not_possible`; its weekly version updates are separate
+# and unchanged). Daily, it runs scripts/fix-transitive-advisories.mjs, which
+# moves only the vulnerable packages in web/pnpm-lock.yaml (adding a commented
+# override to web/pnpm-workspace.yaml only when a parent pins one) and never
+# takes a version younger than pnpm's minimumReleaseAge. Any change goes to ONE
+# rolling PR from the `security/transitive-fixes` branch, force-pushed each run.
+#
+# TOKEN — a GitHub App, not a personal token:
+#   PRs opened with the default GITHUB_TOKEN don't trigger other workflows, so
+#   `ci` and `pr-title` would not run on them. Each run instead mints a
+#   short-lived (≤1 h) installation token for the repo's security bot app,
+#   down-scoped to Contents + Pull requests write on this repository only.
+#   Needs the repository variable SECURITY_APP_CLIENT_ID and the secret
+#   SECURITY_APP_PRIVATE_KEY. Rulesets keep the app off `main` and `v*` tags,
+#   so everything it does arrives as a PR. The token exists only in the steps
+#   that push and open / update / close the PR; the install + fix step runs
+#   with --ignore-scripts and never sees it.
+
+name: security-lockfile
+
+on:
+  schedule:
+    - cron: '23 5 * * *' # daily, 05:23 UTC
+  workflow_dispatch: {}
+
+concurrency:
+  group: security-lockfile
+  cancel-in-progress: false
+
+# The default GITHUB_TOKEN only checks out; all writes use the app token.
+permissions:
+  contents: read
+
+jobs:
+  fix:
+    name: fix transitive advisories
+    runs-on: ubuntu-latest
+    env:
+      BRANCH: security/transitive-fixes
+      TITLE: 'fix(deps): patch vulnerable transitive web dependencies'
+    steps:
+      # Token hygiene: this job holds a write token (and maybe the PAT). The
+      # checkout persists no credentials, the fix step installs with
+      # --ignore-scripts and sees no token, and the token is handed only to the
+      # push / PR steps below. Actions are pinned to commit SHAs for the same
+      # reason.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: web/package.json
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      # Exit 0 = lockfile changed, 2 = nothing to do, anything else fails the job.
+      - name: Fix transitive advisories
+        id: fix
+        working-directory: web
+        run: |
+          set +e
+          node ../scripts/fix-transitive-advisories.mjs > "$RUNNER_TEMP/summary.md"
+          code=$?
+          set -e
+          tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/summary.md"
+          case "$code" in
+            0) echo "changed=true" >> "$GITHUB_OUTPUT" ;;
+            2) echo "changed=false" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$code" ;;
+          esac
+
+      # Minted only after the install + fix step, so no package script ran with
+      # it around; revoked automatically when the job ends.
+      - name: Mint the security bot token
+        id: app
+        if: steps.fix.outputs.changed == 'true' || steps.fix.outputs.changed == 'false'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.SECURITY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SECURITY_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Push branch and open / update the PR
+        if: steps.fix.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          bot_id="$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git config core.hooksPath /dev/null # no repo hooks while the token is around
+          git switch -C "$BRANCH"
+          git add web/pnpm-lock.yaml web/pnpm-workspace.yaml
+          git commit -m "$TITLE" -m "Automated by .github/workflows/security-lockfile.yml (scripts/fix-transitive-advisories.mjs)."
+
+          # Force-push only when the fix differs from what the PR already holds,
+          # so an unchanged daily run doesn't re-trigger CI.
+          if git fetch --quiet origin "$BRANCH" 2>/dev/null \
+            && [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse 'FETCH_HEAD^{tree}')" ] \
+            && [ "$(git rev-parse HEAD^)" = "$(git rev-parse FETCH_HEAD^)" ]; then
+            echo "Branch $BRANCH already holds this fix."
+          else
+            git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
+          fi
+
+          {
+            cat "$RUNNER_TEMP/summary.md"
+            cat <<'EOF'
+
+          ---
+          Opened by `.github/workflows/security-lockfile.yml` (`scripts/fix-transitive-advisories.mjs`). The branch is force-pushed by each daily run, so this PR always holds the current fix for `main`.
+          EOF
+          } > "$RUNNER_TEMP/body.md"
+
+          pr="$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md"
+          fi
+
+      # Nothing left to fix on main (the PR was merged, or main moved past it):
+      # close a leftover rolling PR rather than leave a stale lockfile around.
+      - name: Close a stale PR
+        if: steps.fix.outputs.changed == 'false'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          pr="$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$pr" ]; then
+            gh pr close "$pr" --delete-branch --comment "No transitive web advisory needs a lockfile fix on main any more; closing."
+          fi
