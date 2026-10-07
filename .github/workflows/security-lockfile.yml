@@ -7,15 +7,16 @@
 # takes a version younger than pnpm's minimumReleaseAge. Any change goes to ONE
 # rolling PR from the `security/transitive-fixes` branch, force-pushed each run.
 #
-# TOKEN — please set this up once:
+# TOKEN — a GitHub App, not a personal token:
 #   PRs opened with the default GITHUB_TOKEN don't trigger other workflows, so
-#   `ci` and `pr-title` would not run on them. Create a fine-grained personal
-#   access token limited to this repository with Contents: read/write and
-#   Pull requests: read/write, and add it as the repository secret
-#   SECURITY_PR_TOKEN (Settings → Secrets and variables → Actions). Without it
-#   the job falls back to github.token, which needs Settings → Actions →
-#   General → "Allow GitHub Actions to create and approve pull requests", and
-#   the PR body asks you to close and reopen the PR to run CI.
+#   `ci` and `pr-title` would not run on them. Each run instead mints a
+#   short-lived (≤1 h) installation token for the repo's security bot app,
+#   down-scoped to Contents + Pull requests write on this repository only.
+#   Needs the repository variable SECURITY_APP_ID and the secret
+#   SECURITY_APP_PRIVATE_KEY. Rulesets keep the app off `main` and `v*` tags,
+#   so everything it does arrives as a PR. The token exists only in the steps
+#   that push and open / update / close the PR; the install + fix step runs
+#   with --ignore-scripts and never sees it.
 
 name: security-lockfile
 
@@ -28,9 +29,9 @@ concurrency:
   group: security-lockfile
   cancel-in-progress: false
 
+# The default GITHUB_TOKEN only checks out; all writes use the app token.
 permissions:
-  contents: write # push the security/transitive-fixes branch
-  pull-requests: write # open / update the rolling PR
+  contents: read
 
 jobs:
   fix:
@@ -79,15 +80,29 @@ jobs:
             *) exit "$code" ;;
           esac
 
+      # Minted only after the install + fix step, so no package script ran with
+      # it around; revoked automatically when the job ends.
+      - name: Mint the security bot token
+        id: app
+        if: steps.fix.outputs.changed == 'true' || steps.fix.outputs.changed == 'false'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.SECURITY_APP_ID }}
+          private-key: ${{ secrets.SECURITY_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Push branch and open / update the PR
         if: steps.fix.outputs.changed == 'true'
         env:
-          # The PAT (when set) makes the push and the PR trigger CI.
-          GH_TOKEN: ${{ secrets.SECURITY_PR_TOKEN || github.token }}
-          HAS_PAT: ${{ secrets.SECURITY_PR_TOKEN != '' }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          bot_id="$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
           git config core.hooksPath /dev/null # no repo hooks while the token is around
           git switch -C "$BRANCH"
           git add web/pnpm-lock.yaml web/pnpm-workspace.yaml
@@ -110,14 +125,6 @@ jobs:
           ---
           Opened by `.github/workflows/security-lockfile.yml` (`scripts/fix-transitive-advisories.mjs`). The branch is force-pushed by each daily run, so this PR always holds the current fix for `main`.
           EOF
-            if [ "$HAS_PAT" != 'true' ]; then
-              cat <<'EOF'
-
-          > [!NOTE]
-          > Opened with the default `GITHUB_TOKEN`, so CI has not run on this PR: **close and reopen to run CI**.
-          > To have CI run automatically, add a fine-grained PAT (this repository only; Contents and Pull requests: read/write) as the `SECURITY_PR_TOKEN` repository secret.
-          EOF
-            fi
           } > "$RUNNER_TEMP/body.md"
 
           pr="$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
@@ -132,7 +139,7 @@ jobs:
       - name: Close a stale PR
         if: steps.fix.outputs.changed == 'false'
         env:
-          GH_TOKEN: ${{ secrets.SECURITY_PR_TOKEN || github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           pr="$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
           if [ -n "$pr" ]; then
