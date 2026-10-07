@@ -124,3 +124,56 @@ fun ReconnectTimelineList(modifier: Modifier = Modifier) {
         }
     }
 }
+
+/**
+ * The one-time offer after a device is first remembered: "Reconnect
+ * automatically when it's nearby?" — "Set up" opens the system's association
+ * dialog (filtered to that device), "Not now" never asks again for it.
+ */
+@Composable
+fun CompanionOfferDialog(device: String, onSetUp: () -> Unit, onNotNow: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onNotNow,
+        title = { Text("Reconnect automatically when it's nearby?") },
+        text = {
+            Text(
+                "Android asks you to confirm the $device once. After that, Crema reconnects as soon as " +
+                    "it's back in range — even while Crema is in the background — without searching for it. " +
+                    "You can turn this off in Settings.",
+            )
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = onSetUp) { Text("Set up") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onNotNow) { Text("Not now") } },
+    )
+}
+
+/**
+ * Settings row for a device's companion association: its state and a way to
+ * set it up or remove it. Hidden by the caller when the platform lacks
+ * companion-device support; disabled until the device is remembered.
+ */
+@Composable
+fun CompanionSettingsRow(
+    device: String,
+    associated: Boolean,
+    remembered: Boolean,
+    onSetUp: () -> Unit,
+    onRemove: () -> Unit,
+    last: Boolean = false,
+) {
+    CremaSettingsRow(
+        "Reconnect when nearby",
+        when {
+            associated -> "On — Android tells Crema when the $device is back in range, and Crema reconnects right away."
+            remembered -> "Off — set up once and Crema reconnects as soon as the $device is back in range, even in the background."
+            else -> "Connect the $device once first."
+        },
+        last = last,
+    ) {
+        if (associated) {
+            CremaButton(onClick = onRemove, variant = CremaButtonVariant.Text, danger = true, label = "Remove")
+        } else {
+            CremaButton(onClick = onSetUp, variant = CremaButtonVariant.Outlined, enabled = remembered, label = "Set up")
+        }
+    }
+}

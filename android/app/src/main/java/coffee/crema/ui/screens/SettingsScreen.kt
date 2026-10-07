@@ -65,6 +65,7 @@ import coffee.crema.ui.refillPointMm
 import coffee.crema.ui.refillThresholdDepthMm
 import coffee.crema.ui.tankDepthMm
 import coffee.crema.ui.waterWarnThresholdMl
+import coffee.crema.ui.components.CompanionSettingsRow
 import coffee.crema.ui.components.CopyDiagnosticsRow
 import coffee.crema.ui.components.ReconnectTimelineList
 import coffee.crema.ui.components.ReconnectingNotice
@@ -198,6 +199,18 @@ fun SettingsScreen(
                         if (!connected && ui.de1Reconnecting) {
                             ReconnectingNotice("DE1", onRetry = { vm.retryReconnectNow(true) })
                         }
+                        if (ui.companionSupported) {
+                            SetGroup("Reconnect") {
+                                CompanionSettingsRow(
+                                    device = "DE1",
+                                    associated = ui.de1Companion,
+                                    remembered = ui.rememberedDe1Address != null,
+                                    onSetUp = { vm.startCompanionSetup(coffee.crema.ble.companion.CompanionDevice.DE1) },
+                                    onRemove = { vm.removeCompanion(coffee.crema.ble.companion.CompanionDevice.DE1) },
+                                    last = true,
+                                )
+                            }
+                        }
                         SetGroup("Connection") {
                             CremaSettingsRow("Telemetry rate", "How often the chart samples live data.", notImplemented = true) { CremaSettingsSelect("50 Hz") }
                             // Keep-awake is REAL: a 60 s UserPresent (MMR 0x803858)
@@ -295,6 +308,15 @@ fun SettingsScreen(
                                 if (scaleConnected) CremaStatusDot(true)
                                 else if (ui.scaleReconnecting) RetryNowPill(onRetry = { vm.retryReconnectNow(false) })
                                 else CremaButton(onClick = { onConnect("scale") }, variant = CremaButtonVariant.Outlined, label = "Pair")
+                            }
+                            if (ui.companionSupported) {
+                                CompanionSettingsRow(
+                                    device = "scale",
+                                    associated = ui.scaleCompanion,
+                                    remembered = ui.rememberedScaleAddress != null,
+                                    onSetUp = { vm.startCompanionSetup(coffee.crema.ble.companion.CompanionDevice.SCALE) },
+                                    onRemove = { vm.removeCompanion(coffee.crema.ble.companion.CompanionDevice.SCALE) },
+                                )
                             }
                             CremaSettingsRow("Grinder", "No grinder support yet.") { CremaStatusDot(false) }
                             // Equipment-level grinder model (web `grinderModel`): free

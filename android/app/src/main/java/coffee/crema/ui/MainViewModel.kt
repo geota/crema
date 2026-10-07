@@ -466,6 +466,19 @@ data class MainUiState(
     val de1Reconnecting: Boolean = false,
     /** The scale twin of [de1Reconnecting]. */
     val scaleReconnecting: Boolean = false,
+    // ── Companion-device presence (Android CDM) ──────────────────────────────
+    /** The platform supports companion-device association (else the option is hidden). */
+    val companionSupported: Boolean = false,
+    /** The remembered DE1 has a companion association ("Reconnect when nearby" is on). */
+    val de1Companion: Boolean = false,
+    /** The remembered scale has a companion association. */
+    val scaleCompanion: Boolean = false,
+    /** Show the one-time "Reconnect automatically when it's nearby?" offer for this device. */
+    val companionOffer: coffee.crema.ble.companion.CompanionDevice? = null,
+    /** The activity should launch the system association dialog for this device. */
+    val companionRequest: coffee.crema.ble.companion.CompanionDevice? = null,
+    /** Addresses whose offer was declined (persisted; never re-offered). */
+    val companionDeclined: List<String> = emptyList(),
     /**
      * Raw MMR register values the DE1 reported, keyed by [MmrRegister]. Folded
      * from each `Event.MmrValue`; values are the **raw** 32-bit words — the UI
@@ -1983,6 +1996,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * output and command routing are VM concerns); the controller owns their
      * connection lifecycle. Whole-app reactions stay here as callbacks.
      */
+    /** Companion-device associations + presence (Android CDM; optional per
+     *  device, user-approved via the system dialog). */
+    private val companion = coffee.crema.ble.companion.CompanionCoordinator(
+        coffee.crema.ble.companion.AndroidCompanionGateway(app),
+        coffee.crema.ble.companion.CompanionPresence.presence,
+    )
+
     private val connection: ConnectionController = ConnectionController(
         app = app,
         scope = viewModelScope,
@@ -2052,6 +2072,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         },
         isAppForeground = { appInForeground },
         timeline = coffee.crema.diag.ReconnectTimelines.recorder,
+        companion = companion,
+        presenceEvents = coffee.crema.ble.companion.CompanionPresence.events,
+        onDeviceRemembered = { device, address -> offerCompanion(device, address) },
     )
 
     /** Every store file reported unreadable this process (see [KeptAsideNotices]). */
@@ -2072,6 +2095,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Each finished reconnect episode → one compact line in the event log
         // (and so the diagnostics ring buffer).
         coffee.crema.diag.ReconnectTimelines.recorder.onFinished = { appendLog(it.compactLine()) }
+        // A companion device appeared: the keep-alive may start now, even from
+        // the background (the CDM exemption) — its own gates still apply. The
+        // reconnect kick itself is the connection controller's.
+        viewModelScope.launch {
+            coffee.crema.ble.companion.CompanionPresence.events.collect { e ->
+                if (e.present) bgConnection.onCompanionPresence()
+            }
+        }
     }
 
     /** The kept-aside snackbar was dismissed or timed out. */
@@ -3671,6 +3702,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         de1Address = connection.state.value.rememberedDe1Address,
         scaleAddress = connection.state.value.rememberedScaleAddress,
         scaleName = connection.state.value.rememberedScaleName,
+        de1CompanionId = companionIdFor(connection.state.value.rememberedDe1Address),
+        scaleCompanionId = companionIdFor(connection.state.value.rememberedScaleAddress),
+        companionDeclined = _ui.value.companionDeclined,
         proxyRole = _ui.value.proxyRole,
         proxyPrimaryHost = _ui.value.proxyPrimaryHost,
         proxyPrimaryPort = _ui.value.proxyPrimaryPort,
@@ -3808,10 +3842,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Per-device "Auto-connect" toggle for the DE1 — delegate of
      *  [ConnectionController.setDe1AutoConnect]. */
-    fun setDe1AutoConnect(on: Boolean) = connection.setDe1AutoConnect(on)
+    fun setDe1AutoConnect(on: Boolean) {
+        // Forgetting the DE1 also drops its companion association.
+        if (!on) connection.state.value.rememberedDe1Address?.let { if (companion.isAssociated(it)) companion.remove(it) }
+        connection.setDe1AutoConnect(on)
+        if (!on) refreshCompanion()
+    }
 
     /** Per-device "Auto-connect" toggle for the scale (the scale-side twin). */
-    fun setScaleAutoConnect(on: Boolean) = connection.setScaleAutoConnect(on)
+    fun setScaleAutoConnect(on: Boolean) {
+        if (!on) connection.state.value.rememberedScaleAddress?.let { if (companion.isAssociated(it)) companion.remove(it) }
+        connection.setScaleAutoConnect(on)
+        if (!on) refreshCompanion()
+    }
 
     /**
      * Enable/disable steam eco mode (Quick Controls). Returns a `CoreOutput` (an
@@ -4273,6 +4316,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             proxyPrimaryPort = p.proxyPrimaryPort,
             replayPrimary = p.replayPrimary,
             pairedDevices = p.pairedDevices,
+            companionDeclined = p.companionDeclined,
         ) }
         // Prime the background keep-alive with the resolved setting (#65).
         bgConnection.setEnabled(p.keepConnectedScreenOff ?: isTablet)
@@ -4288,6 +4332,93 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Hydrate the remembered addresses, arm each manager's reconnect loop,
         // and cold-start auto-connect to each remembered device.
         connection.hydrateRemembered(p.de1Address, p.scaleAddress, p.scaleName)
+        // Companion associations: the system's list is the truth (a removal in
+        // system settings wins over the stored id); restart presence observation.
+        refreshCompanion()
+    }
+
+    // ── Companion-device presence (Android CDM) ──────────────────────────────
+
+    /** The stored association id for a remembered address (see [coffee.crema.settings.COMPANION_ID_UNKNOWN]). */
+    private fun companionIdFor(address: String?): Int? {
+        if (address == null || !companion.isAssociated(address)) return null
+        return companion.associationId(address) ?: coffee.crema.settings.COMPANION_ID_UNKNOWN
+    }
+
+    /** Re-read the associations, restart presence observation, mirror into the UI. */
+    fun refreshCompanion() {
+        val cs = connection.state.value
+        val before = companion.associated.value
+        runCatching { companion.refresh(listOf(cs.rememberedDe1Address, cs.rememberedScaleAddress)) }
+        val associatedAny = companion.associated.value.isNotEmpty()
+        _ui.update {
+            it.copy(
+                companionSupported = companion.isSupported,
+                de1Companion = companion.isAssociated(cs.rememberedDe1Address),
+                scaleCompanion = companion.isAssociated(cs.rememberedScaleAddress),
+            )
+        }
+        // The CDM background-FGS-start exemption applies once an association exists.
+        bgConnection.setBackgroundStartAllowed(associatedAny)
+        if (companion.associated.value != before) persistPrefs()
+    }
+
+    /** A device was just remembered: offer "Reconnect when nearby" once. */
+    private fun offerCompanion(device: coffee.crema.ble.companion.CompanionDevice, address: String) {
+        if (!companion.isSupported || companion.isAssociated(address)) return
+        val a = coffee.crema.ble.companion.normalizeAddress(address)
+        if (a in _ui.value.companionDeclined) return
+        _ui.update { it.copy(companionOffer = device) }
+    }
+
+    /** "Set up" (the offer, or Settings): the activity launches the system dialog. */
+    fun startCompanionSetup(device: coffee.crema.ble.companion.CompanionDevice) {
+        _ui.update { it.copy(companionOffer = null, companionRequest = device) }
+    }
+
+    /** The remembered address to associate for [device], or null. */
+    fun companionTargetAddress(device: coffee.crema.ble.companion.CompanionDevice): String? {
+        val cs = connection.state.value
+        return when (device) {
+            coffee.crema.ble.companion.CompanionDevice.DE1 -> cs.rememberedDe1Address
+            coffee.crema.ble.companion.CompanionDevice.SCALE -> cs.rememberedScaleAddress
+        }
+    }
+
+    /** The system dialog created the association. */
+    fun onCompanionAssociated(device: coffee.crema.ble.companion.CompanionDevice, address: String, id: Int?) {
+        val observing = companion.onAssociated(address, id)
+        _ui.update { it.copy(companionRequest = null) }
+        refreshCompanion()
+        val name = if (device == coffee.crema.ble.companion.CompanionDevice.DE1) "the DE1" else "the scale"
+        notifyUser(
+            if (observing) "Crema will reconnect to $name as soon as it's nearby"
+            else "Associated $name, but Android wouldn't watch for it — reconnecting as before",
+        )
+    }
+
+    /** The association didn't happen (cancelled, not found, unsupported): fall back silently. */
+    fun onCompanionSetupEnded(reason: String?) {
+        _ui.update { it.copy(companionRequest = null) }
+        reason?.let { appendLog("Companion setup: $it") }
+    }
+
+    /** "Not now" on the offer — remembered, never offered again for this device. */
+    fun declineCompanionOffer(device: coffee.crema.ble.companion.CompanionDevice) {
+        val address = companionTargetAddress(device)?.let { coffee.crema.ble.companion.normalizeAddress(it) }
+        _ui.update {
+            it.copy(
+                companionOffer = null,
+                companionDeclined = if (address == null) it.companionDeclined else (it.companionDeclined + address).distinct(),
+            )
+        }
+        persistPrefs()
+    }
+
+    /** Settings → "Remove": stop watching for the device and drop the association. */
+    fun removeCompanion(device: coffee.crema.ble.companion.CompanionDevice) {
+        companionTargetAddress(device)?.let { companion.remove(it) }
+        refreshCompanion()
     }
 
     /** Equipment-level grinder model (free text). Persisted; rides Visualizer
@@ -4403,6 +4534,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // foreground scan isn't throttled). Debounced per device, a no-op
             // for READY / mid-handshake / user-disconnected devices.
             connection.kickReconnect(coffee.crema.ble.ReconnectTrigger.FOREGROUND)
+            // An association removed in system settings shows up here.
+            if (prefsLoaded) refreshCompanion()
         }
     }
 

@@ -36,6 +36,7 @@ class BackgroundConnectionController(private val context: Context) {
     private var de1Active = false
     private var brewSessionActive = false
     private var foreground = true
+    private var backgroundStartAllowed = false
     private var plugged = isPluggedIn(context)
     private var running = false
 
@@ -96,12 +97,27 @@ class BackgroundConnectionController(private val context: Context) {
         if (foreground != value) { foreground = value; reconcile() }
     }
 
+    /**
+     * A companion-device association exists (and the manifest declares
+     * `REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND`): Android
+     * then exempts the app from the Android 12 background-FGS-start ban, so
+     * the keep-alive may start from the background too — still only when its
+     * own gates (setting / brew session, DE1 active, charging) hold.
+     */
+    fun setBackgroundStartAllowed(value: Boolean) {
+        if (backgroundStartAllowed != value) { backgroundStartAllowed = value; reconcile() }
+    }
+
+    /** A companion device appeared: start the keep-alive now if it is wanted. */
+    fun onCompanionPresence() = reconcile()
+
     private fun reconcile() {
         val desired = ((enabled && de1Active) || brewSessionActive) && plugged
         when {
-            // Foreground-only start (Android 12+ background-start restriction);
+            // Foreground-only start (Android 12+ background-start restriction) —
+            // unless a companion association grants the background exemption;
             // in the target case the app is foreground on its screensaver.
-            desired && !running && foreground -> startService()
+            desired && !running && (foreground || backgroundStartAllowed) -> startService()
             !desired && running -> stopService()
         }
     }

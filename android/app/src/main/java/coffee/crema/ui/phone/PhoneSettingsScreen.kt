@@ -154,7 +154,7 @@ fun PhoneSettingsScreen(
                     val primaryName = ui.mirroringPrimaryName
                     when (current) {
                         "machine" -> MachineSection(vm, ui.let { it }, connected, onConnect, secondary, primaryName)
-                        "peripherals" -> PeripheralsSection(vm, scaleConnected, ui.scaleName, ui.grinderModel, onConnect, onOpenScale = { onNav("scale") }, scaleReconnecting = ui.scaleReconnecting)
+                        "peripherals" -> PeripheralsSection(vm, scaleConnected, ui.scaleName, ui.grinderModel, onConnect, onOpenScale = { onNav("scale") }, scaleReconnecting = ui.scaleReconnecting, ui = ui)
                         "brew" -> BrewDefaultsSection(vm, ui.let { it })
                         "water" -> WaterSection(
                             vm, ui.let { it }, connected,
@@ -351,6 +351,18 @@ private fun MachineSection(
             ReconnectingNotice("DE1", onRetry = { vm.retryReconnectNow(true) }, modifier = Modifier.padding(top = 8.dp))
         }
     }
+    if (ui.companionSupported) {
+        SettingsGroup("Reconnect") {
+            CompanionSettingsRow(
+                device = "DE1",
+                associated = ui.de1Companion,
+                remembered = ui.rememberedDe1Address != null,
+                onSetUp = { vm.startCompanionSetup(coffee.crema.ble.companion.CompanionDevice.DE1) },
+                onRemove = { vm.removeCompanion(coffee.crema.ble.companion.CompanionDevice.DE1) },
+                last = true,
+            )
+        }
+    }
     SettingsGroup("Connection") {
         CremaSettingsRow("Telemetry rate", "How often the chart samples live data.", notImplemented = true) { CremaSettingsSelect("50 Hz") }
         CremaSettingsRow("Keep DE1 awake while Crema is open", "Re-arms the DE1's sleep timer every minute while Crema is on screen. In the background the pokes stop, so the machine falls back to its own ~30 min sleep timer.") {
@@ -461,6 +473,7 @@ private fun PeripheralsSection(
     onConnect: (String) -> Unit,
     onOpenScale: () -> Unit,
     scaleReconnecting: Boolean = false,
+    ui: coffee.crema.ui.MainUiState? = null,
 ) {
     SettingsGroup("Connected devices") {
         CremaSettingsRow(
@@ -480,6 +493,18 @@ private fun PeripheralsSection(
                     CremaButton(onClick = { onConnect("scale") }, variant = CremaButtonVariant.Outlined, icon = "bluetooth", label = "Pair")
                 }
             }
+        }
+    }
+    if (ui != null && ui.companionSupported) {
+        SettingsGroup("Reconnect") {
+            CompanionSettingsRow(
+                device = "scale",
+                associated = ui.scaleCompanion,
+                remembered = ui.rememberedScaleAddress != null,
+                onSetUp = { vm.startCompanionSetup(coffee.crema.ble.companion.CompanionDevice.SCALE) },
+                onRemove = { vm.removeCompanion(coffee.crema.ble.companion.CompanionDevice.SCALE) },
+                last = true,
+            )
         }
     }
     SettingsGroup("Grinder") {
