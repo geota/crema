@@ -82,6 +82,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Reconnect timeline in diagnostics** — Settings → Advanced lists the last
+  20 reconnects of the DE1 and the scale: what started each one (a dropped
+  link, coming back to the app, Bluetooth turned on, launch, Retry now), how
+  long it took to be ready, and how long each step took (waiting, scanning,
+  connecting, finding services, subscribing, the post-connect reads or
+  profile sync). Each one is also a line in the event log, and on Android in
+  Copy diagnostics. Web, tablet and phone.
+
 - **Android syncs beans and roasters with Visualizer** — Settings → Sharing →
   Sync gains Beans and Roasters direction rows, and **Sync now** runs the bean
   and roaster sync before the shots, as on the web: it pulls your Visualizer
@@ -249,6 +257,18 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   expired login instead of a successful upload.
 
 ### Fixed
+
+- **Coming back to Crema reconnects at once** — returning to the app (or
+  unlocking the phone onto it, or the browser tab coming back into view)
+  now retries a dropped DE1 or scale immediately and restarts the fast
+  retries, instead of waiting out the up-to-60-second quiet retry. A device
+  you disconnected yourself stays disconnected. While a device is
+  reconnecting, the Devices panel and Settings say so and offer **Retry
+  now**. On Android the DE1 now really does look for the machine's
+  advertisement before reconnecting (a short scan filtered to its address,
+  which also works with the screen off), and the scan-free reconnect by
+  address works again when Bluetooth comes back on: both were being
+  silently skipped. Web, tablet and phone.
 
 - **A crash or power loss mid-save can no longer wipe your data** — on
   Android, shot history, beans, profiles, recipes and settings are written to
