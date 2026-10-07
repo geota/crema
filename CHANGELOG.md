@@ -82,6 +82,25 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Android: "Reconnect when nearby"** — after Crema first connects to a DE1
+  or scale it offers, once, to let Android watch for that device (a one-time
+  system confirmation filtered to that device). When it comes back into
+  range Android tells Crema, which reconnects at once by address, even in the
+  background, and may start the keep-alive service then (still only when
+  "Keep connected in the background" is on and the device is charging).
+  While the device is away Crema stops trying until Android reports it back
+  (with one check every 30 minutes as a safety net). Turn it on, see its
+  state or remove it in Settings → Machine (DE1) and the scale section.
+  "Not now" is remembered. If the app has been closed completely, Crema
+  reconnects when you next open it. Phone and tablet, Android 12 and later
+  on devices with companion-device support.
+- **Android: cheaper background reconnects** — once the quick retries after a
+  drop are used up, Crema now hands the device to Android's own background
+  connection (it connects the moment the device advertises, with no scanning
+  by Crema) instead of scanning for it every minute. If that fails (the
+  "GATT 133" some Bluetooth chips report), Crema goes back to scanning with
+  the quick retries. Coming back to the app, Retry now and Bluetooth on still
+  take the fast path straight away.
 - **Reconnect timeline in diagnostics** — Settings → Advanced lists the last
   20 reconnects of the DE1 and the scale: what started each one (a dropped
   link, coming back to the app, Bluetooth turned on, launch, Retry now), how
