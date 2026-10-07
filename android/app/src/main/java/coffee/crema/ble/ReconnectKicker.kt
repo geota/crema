@@ -1,6 +1,9 @@
 package coffee.crema.ble
 
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -127,6 +130,29 @@ class ReconnectKicker(
     internal suspend fun awaitKickOrTimeout(waitMs: Long): ReconnectTrigger? {
         enter(Phase.WAITING)
         return withTimeoutOrNull(waitMs) { kicks.receive() }
+    }
+
+    /** What [raceKick] ended with. */
+    internal sealed interface Race<out T> {
+        data class Done<T>(val value: T) : Race<T>
+        data class Kicked(val trigger: ReconnectTrigger) : Race<Nothing>
+    }
+
+    /**
+     * Run [block] — a long-lived pending connect — in the WAITING phase, so a
+     * kick (foreground, "Retry now", presence) cancels it and wins: the caller
+     * then takes the fast path instead. A failure in [block] propagates.
+     */
+    internal suspend fun <T> raceKick(block: suspend () -> T): Race<T> {
+        enter(Phase.WAITING)
+        return coroutineScope {
+            val work = async { block() }
+            val kick = async { kicks.receive() }
+            select {
+                work.onAwait { kick.cancel(); Race.Done(it) }
+                kick.onAwait { work.cancel(); Race.Kicked(it) }
+            }
+        }
     }
 
     companion object {

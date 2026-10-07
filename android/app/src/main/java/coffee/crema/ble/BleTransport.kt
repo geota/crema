@@ -133,6 +133,23 @@ interface BleTransport {
         onLinkUp()
     }
 
+    /** Whether [connectWhenAvailable] is implemented (a real radio). */
+    val supportsPendingConnect: Boolean get() = false
+
+    /**
+     * A long-lived PENDING connect: hand the device to the OS's background
+     * connection (Android `autoConnect = true` — the controller's accept list,
+     * no app scanning, not subject to the background scan throttle) and suspend
+     * until it connects, then discover services like [connect]. Re-resolves a
+     * fresh handle by address first (never a stale GATT client). Cancelling the
+     * caller withdraws the pending connect. Throws on failure — e.g. the GATT
+     * 133 a cheap stack reports — so the caller can fall back to
+     * scan-then-connect. Only call when [supportsPendingConnect].
+     */
+    suspend fun connectWhenAvailable(device: DeviceHandle, onLinkUp: () -> Unit) {
+        throw UnsupportedOperationException("pending connect not supported by this transport")
+    }
+
     /** Disconnect [device] and release its GATT resources. Idempotent. */
     suspend fun disconnect(device: DeviceHandle)
 

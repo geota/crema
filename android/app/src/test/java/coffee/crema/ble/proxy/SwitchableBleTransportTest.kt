@@ -50,6 +50,12 @@ class SwitchableBleTransportTest {
             advertWaits += timeoutMs
             return false
         }
+        override val supportsPendingConnect: Boolean get() = tag == "A"
+        val pendingConnects = mutableListOf<String>()
+        override suspend fun connectWhenAvailable(device: BleTransport.DeviceHandle, onLinkUp: () -> Unit) {
+            pendingConnects += device.address
+            onLinkUp()
+        }
         val linkUps = mutableListOf<String>()
         override suspend fun connect(device: BleTransport.DeviceHandle, onLinkUp: () -> Unit) {
             linkUps += "before-discovery"
@@ -110,5 +116,20 @@ class SwitchableBleTransportTest {
         switchable.connect(handle) { seen += "link-up" }
         assertEquals(listOf("link-up"), seen)
         assertEquals(listOf("before-discovery", "after-discovery"), a.linkUps)
+    }
+
+    @Test
+    fun `forwards the pending (autoConnect) connect to the delegate`() = runBlocking {
+        val a = TaggedTransport("A")
+        val b = TaggedTransport("B")
+        val switchable = SwitchableBleTransport(a)
+        val handle = TaggedTransport.Handle("x", "AA:BB")
+        assertEquals(true, switchable.supportsPendingConnect)
+        var linked = false
+        switchable.connectWhenAvailable(handle) { linked = true }
+        assertEquals(listOf("AA:BB"), a.pendingConnects)
+        assertEquals(true, linked)
+        switchable.setDelegate(b)
+        assertEquals(false, switchable.supportsPendingConnect)
     }
 }

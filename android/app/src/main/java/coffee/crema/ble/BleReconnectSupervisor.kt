@@ -57,6 +57,14 @@ internal suspend fun reconnectingSession(
     timeline: ReconnectTimelineRecorder? = null,
     /** The owner marks [ReconnectPhase.POST_CONNECT] after READY (DE1 seed reads). */
     expectPostConnect: Boolean = false,
+    /** The lurk tier's behaviour, re-read every round (see [LurkPolicy]). */
+    lurkPolicy: () -> LurkPolicy = { LurkPolicy.SCAN_INTERVAL },
+    /**
+     * A long-lived pending connect + discovery + subscribe (the
+     * [LurkPolicy.PENDING_CONNECT] round). Null = not available; the lurk
+     * then falls back to [LurkPolicy.SCAN_INTERVAL].
+     */
+    establishPending: (suspend () -> Unit)? = null,
 ) {
     var attempt = 0
     var everConnected = false
@@ -66,20 +74,47 @@ internal suspend fun reconnectingSession(
     // timeline to whoever cancelled (disconnect() closes it as CANCELLED; a
     // replacement's own trigger supersedes it).
     var endedOnItsOwn = false
+    // The next attempt is a pending connect rather than a scan / direct one.
+    var pendingNext = false
     try {
         while (true) {
-            kicker.enter(ReconnectKicker.Phase.ATTEMPTING)
-            timeline?.attemptStarted(label)
-            val connected = try {
-                establish(!everConnected)
-                true
-            } catch (c: CancellationException) {
-                throw c // never swallow cancellation (disconnect / onCleared)
-            } catch (e: Exception) {
-                Log.w(logTag, "$label connect failed", e)
-                status("$label connection failed: ${e.message}")
-                timeline?.attemptFailed(label, e.message)
-                false
+            var kickedDuringPending: ReconnectTrigger? = null
+            var pendingFailed = false
+            val connected = if (pendingNext) {
+                pendingNext = false
+                timeline?.attemptStarted(label)
+                timeline?.mark(label, ReconnectPhase.PENDING)
+                try {
+                    when (val r = kicker.raceKick { establishPending!!() }) {
+                        is ReconnectKicker.Race.Done -> true
+                        is ReconnectKicker.Race.Kicked -> {
+                            kickedDuringPending = r.trigger
+                            false
+                        }
+                    }
+                } catch (c: CancellationException) {
+                    throw c
+                } catch (e: Exception) {
+                    Log.w(logTag, "$label pending connect failed", e)
+                    status("$label background reconnect failed (${e.message}) — scanning instead")
+                    timeline?.attemptFailed(label, e.message)
+                    pendingFailed = true
+                    false
+                }
+            } else {
+                kicker.enter(ReconnectKicker.Phase.ATTEMPTING)
+                timeline?.attemptStarted(label)
+                try {
+                    establish(!everConnected)
+                    true
+                } catch (c: CancellationException) {
+                    throw c // never swallow cancellation (disconnect / onCleared)
+                } catch (e: Exception) {
+                    Log.w(logTag, "$label connect failed", e)
+                    status("$label connection failed: ${e.message}")
+                    timeline?.attemptFailed(label, e.message)
+                    false
+                }
             }
 
             if (connected) {
@@ -109,46 +144,77 @@ internal suspend fun reconnectingSession(
                 }
             }
 
+            // A kick withdrew the pending connect: take the fast path now.
+            if (kickedDuringPending != null) {
+                attempt = 0
+                lurking = false
+                timeline?.begin(label, kickedDuringPending)
+                status("Retrying $label now (${kickedDuringPending.label})…")
+                continue
+            }
+
             // A kick that landed while the attempt above was running couldn't
             // start a second, concurrent attempt — it asked for the fast burst
-            // back instead.
-            if (kicker.takeResetRequest() != null) {
+            // back instead. A failed pending connect (GATT 133, or a stack that
+            // can't autoConnect a device it hasn't seen lately) does the same:
+            // fall back to scan-then-connect with the normal backoff.
+            if (kicker.takeResetRequest() != null || pendingFailed) {
                 attempt = 0
                 lurking = false
             }
 
-            // Clamped so days of slow retries can't overflow the counter
-            // (Decenza clamps its ladder counter the same way).
-            attempt = (attempt + 1).coerceAtMost(MAX_RECONNECT_ATTEMPTS + 1)
-            val waitMs = if (attempt > MAX_RECONNECT_ATTEMPTS) {
-                // The fast burst is exhausted — drop to a persistent slow tier
-                // instead of stranding an armed device (de1app retries forever;
-                // Decenza's ladders end in a 60 s / 5 min forever-tier). The
-                // device coming back in range / powering on reconnects without
-                // a user tap; a user disconnect or auto-reconnect OFF still
-                // exits above. Announced once — the quiet retries don't spam
-                // the status line every cycle.
-                if (!lurking) {
-                    lurking = true
-                    status("$label not found — retrying quietly in the background")
+            // The wait before the next attempt (a block, so a kick can `break`).
+            run wait@{
+                // Clamped so days of slow retries can't overflow the counter
+                // (Decenza clamps its ladder counter the same way).
+                attempt = (attempt + 1).coerceAtMost(MAX_RECONNECT_ATTEMPTS + 1)
+                var idleRound = false
+                val waitMs = if (attempt > MAX_RECONNECT_ATTEMPTS) {
+                    // The fast burst is exhausted — drop to a persistent slow tier
+                    // instead of stranding an armed device (de1app retries forever;
+                    // Decenza's ladders end in a 60 s / 5 min forever-tier). The
+                    // device coming back in range / powering on reconnects without
+                    // a user tap; a user disconnect or auto-reconnect OFF still
+                    // exits above. Announced once — the quiet retries don't spam
+                    // the status line every cycle.
+                    if (!lurking) {
+                        lurking = true
+                        status("$label not found — retrying quietly in the background")
+                    }
+                    when (lurkPolicy()) {
+                        LurkPolicy.PENDING_CONNECT -> if (establishPending != null) {
+                            pendingNext = true
+                            null
+                        } else {
+                            LURK_INTERVAL_MS
+                        }
+                        LurkPolicy.IDLE_UNTIL_KICK -> {
+                            idleRound = true
+                            IDLE_SAFETY_MS
+                        }
+                        LurkPolicy.SCAN_INTERVAL -> LURK_INTERVAL_MS
+                    }
+                } else {
+                    status("Reconnecting to $label (attempt $attempt of $MAX_RECONNECT_ATTEMPTS)…")
+                    backoffMs(attempt)
                 }
-                LURK_INTERVAL_MS
-            } else {
-                status("Reconnecting to $label (attempt $attempt of $MAX_RECONNECT_ATTEMPTS)…")
-                backoffMs(attempt)
-            }
-            onConnecting()
-            timeline?.mark(label, ReconnectPhase.BACKOFF)
-            // The wait is interruptible: a kick (the app coming back to the
-            // foreground, "Retry now", Bluetooth on, presence) ends it early and
-            // resets the ladder to the fast burst — attempt now, then 500 ms,
-            // 1 s, … rather than resuming a 60 s lurk.
-            val kickedBy = kicker.awaitKickOrTimeout(waitMs)
-            if (kickedBy != null) {
-                attempt = 0
-                lurking = false
-                timeline?.begin(label, kickedBy)
-                status("Retrying $label now (${kickedBy.label})…")
+                onConnecting()
+                if (waitMs == null) return@wait // a pending connect: no wait, it IS the wait
+                timeline?.mark(label, if (idleRound) ReconnectPhase.IDLE else ReconnectPhase.BACKOFF)
+                // The wait is interruptible: a kick (the app coming back to the
+                // foreground, "Retry now", Bluetooth on, presence) ends it early
+                // and resets the ladder to the fast burst — attempt now, then
+                // 500 ms, 1 s, … rather than resuming a 60 s lurk.
+                val kickedBy = kicker.awaitKickOrTimeout(waitMs)
+                if (kickedBy != null) {
+                    attempt = 0
+                    lurking = false
+                    timeline?.begin(label, kickedBy)
+                    status("Retrying $label now (${kickedBy.label})…")
+                }
+                // Otherwise the wait elapsed — including the idle tier's safety
+                // interval: one scan-then-connect then, in case the presence
+                // signal is misbehaving (it must never strand the device).
             }
         }
     } finally {

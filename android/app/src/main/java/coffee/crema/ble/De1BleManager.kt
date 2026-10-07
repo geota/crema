@@ -151,6 +151,16 @@ class De1BleManager(
      *  user ended must stay ended (no foreground / presence kick revives it). */
     val isUserDisconnected: Boolean get() = userInitiated
 
+    /**
+     * The lurk tier's policy, re-read every round — the owner wires it to the
+     * companion-device presence (idle while the DE1 is away). Default: a
+     * pending (autoConnect) connect where the transport supports one.
+     */
+    @Volatile
+    var lurkPolicy: () -> LurkPolicy = {
+        if (transport.supportsPendingConnect) LurkPolicy.PENDING_CONNECT else LurkPolicy.SCAN_INTERVAL
+    }
+
     /** Advertisement misses in a row on reconnect — see [establish]. */
     private var consecutiveAdvertMisses = 0
 
@@ -236,6 +246,12 @@ class De1BleManager(
             kicker = kicker,
             timeline = timeline,
             expectPostConnect = true,
+            lurkPolicy = { lurkPolicy() },
+            establishPending = if (transport.supportsPendingConnect) {
+                { establishPending(device) }
+            } else {
+                null
+            },
             establish = { firstConnect -> establish(device, firstConnect = firstConnect) },
             awaitDrop = {
                 transport.connectionState(device).first {
@@ -331,6 +347,29 @@ class De1BleManager(
             _state.value = State.DISCOVERING
             timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.DISCOVER)
         }
+        afterLinked(device)
+    }
+
+    /**
+     * The lurk tier's background reconnect: one long-lived pending connect
+     * ([BleTransport.connectWhenAvailable] — the OS connects as soon as the DE1
+     * advertises, no app scanning), then the same subscribe as [establish].
+     * Throws on failure (GATT 133 …) so the supervisor falls back to
+     * scan-then-connect.
+     */
+    private suspend fun establishPending(device: BleTransport.DeviceHandle) {
+        _state.value = State.CONNECTING
+        consecutiveWriteFailures = 0
+        onStatus("Waiting for the DE1 to come back…")
+        transport.connectWhenAvailable(device) {
+            _state.value = State.DISCOVERING
+            timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.DISCOVER)
+        }
+        afterLinked(device)
+    }
+
+    /** Linked + discovered: join the recording and (re)subscribe. */
+    private fun afterLinked(device: BleTransport.DeviceHandle) {
         _state.value = State.DISCOVERING
         onStatus("Connected — discovering services…")
         // Join the shared session recording ONCE per session (not per reconnect),

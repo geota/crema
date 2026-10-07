@@ -51,6 +51,12 @@ enum class ReconnectPhase(val label: String) {
     /** Waiting out the backoff (or the slow lurk interval) before an attempt. */
     BACKOFF("backoff"),
 
+    /** Idling while companion presence reports the device away (no scanning). */
+    IDLE("idle"),
+
+    /** A long-lived pending (autoConnect) connect, waiting for the device. */
+    PENDING("pending"),
+
     /** Scanning / awaiting the device's advertisement. */
     SCAN("scan"),
 
