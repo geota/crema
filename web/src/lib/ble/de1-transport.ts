@@ -22,7 +22,8 @@
  * shape explicit and future-extensible.
  */
 
-import type { BleNotification, ConnState, NotificationSink } from './transport';
+import type { BleNotification, ConnState, KickResult, NotificationSink } from './transport';
+import type { ReconnectTrigger } from './reconnect-timeline';
 
 /**
  * The transport-agnostic interface every concrete DE1 link satisfies.
@@ -118,6 +119,16 @@ export interface De1Transport {
 
 	/** Idempotently disconnect and suppress auto-reconnect. */
 	disconnect(): void;
+
+	/**
+	 * Cut a pending auto-reconnect wait short and attempt now (the tab came
+	 * back into view, "Retry now"). Optional — a transport with no reconnect
+	 * loop omits it.
+	 */
+	kick?(trigger: ReconnectTrigger): KickResult;
+
+	/** Record this device's reconnect episodes under `label`. Optional. */
+	setReconnectTimeline?(label: string, expectPostConnect?: boolean): void;
 }
 
 // Re-export the shared types so callers that import the transport

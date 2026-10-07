@@ -56,6 +56,11 @@
  * map this onto their own state enums and the UI's enabled rules.
  */
 import type { De1Transport } from './de1-transport';
+import {
+	reconnectTimelines,
+	type ReconnectTimelineRecorder,
+	type ReconnectTrigger
+} from './reconnect-timeline';
 
 export type ConnState =
 	| 'disconnected'
@@ -104,6 +109,36 @@ const RECONNECT_MAX_ATTEMPTS = 8;
  * the same value.
  */
 const RECONNECT_LURK_DELAY_MS = 60_000;
+
+/**
+ * Kicks closer together than this collapse into one (rapid tab switches, a
+ * `visibilitychange` and a `pageshow` for the same return, a "Retry now" tap
+ * right after). Android's `ReconnectKicker` uses the same window.
+ */
+export const KICK_DEBOUNCE_MS = 1_500;
+
+/** What {@link BleDevice.kick} did. */
+export type KickResult =
+	/** The backoff / lurk wait was cut short; an attempt starts now. */
+	| 'kicked'
+	/** An attempt is already running; the fast burst resets when it ends. */
+	| 'reset-pending'
+	| 'ignored-connected'
+	| 'ignored-idle'
+	| 'debounced';
+
+/** Exported for tests: the reconnect ladder's wait before `attempt` (1-based). */
+export function reconnectDelayMs(attempt: number): number {
+	return attempt > RECONNECT_MAX_ATTEMPTS
+		? RECONNECT_LURK_DELAY_MS
+		: Math.min(RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1), RECONNECT_MAX_DELAY_MS);
+}
+
+/** Exported for tests. */
+export const RECONNECT_LADDER = {
+	maxAttempts: RECONNECT_MAX_ATTEMPTS,
+	lurkDelayMs: RECONNECT_LURK_DELAY_MS
+} as const;
 
 /**
  * A strictly-serial async operation queue.
@@ -205,6 +240,24 @@ export class BleDevice implements De1Transport {
 	/** `true` while the auto-reconnect backoff loop is running. */
 	private reconnecting = false;
 
+	/** Aborts the reconnect loop's current backoff / lurk wait — see {@link kick}. */
+	private waitAbort: AbortController | null = null;
+
+	/** The trigger of the kick that aborted {@link waitAbort}. */
+	private kickTrigger: ReconnectTrigger | null = null;
+
+	/** A kick that landed mid-attempt: reset the burst when the attempt ends. */
+	private resetRequested = false;
+
+	/** `performance.now()` of the last accepted kick, for the debounce. */
+	private lastKickAtMs: number | null = null;
+
+	/** The reconnect-timeline key ("DE1" / "Scale"); null = don't record. */
+	private timelineLabel: string | null = null;
+
+	/** Whether the owner marks `post-connect` after READY (the DE1's profile sync). */
+	private timelineExpectsPostConnect = false;
+
 	/**
 	 * The bound `characteristicvaluechanged` handler — one per device.
 	 *
@@ -265,7 +318,11 @@ export class BleDevice implements De1Transport {
 
 	constructor(
 		/** The underlying Web Bluetooth device. */
-		readonly device: BluetoothDevice
+		readonly device: BluetoothDevice,
+		/** Where reconnect episodes are recorded (the app-wide recorder by default). */
+		private readonly timeline: ReconnectTimelineRecorder = reconnectTimelines,
+		/** Monotonic clock for the kick debounce. */
+		private readonly nowMs: () => number = () => performance.now()
 	) {
 		device.addEventListener('gattserverdisconnected', this.onGattDisconnected);
 	}
@@ -327,6 +384,43 @@ export class BleDevice implements De1Transport {
 	 */
 	onReconnected(listener: () => void): void {
 		this.onReconnectedListeners.add(listener);
+	}
+
+	/**
+	 * Record this device's reconnect episodes under `label` ("DE1" / "Scale").
+	 * `expectPostConnect`: the owner marks `post-connect` once its after-READY
+	 * work (the DE1's profile sync) is done.
+	 */
+	setReconnectTimeline(label: string, expectPostConnect = false): void {
+		this.timelineLabel = label;
+		this.timelineExpectsPostConnect = expectPostConnect;
+	}
+
+	/**
+	 * Attempt a reconnect NOW — the tab came back into view, or the user
+	 * tapped "Retry now". Cuts the backoff / 60 s lurk wait short and resets
+	 * the ladder to the fast burst. Rules (pinned by `transport.vitest.ts`):
+	 * a no-op while connected or after a deliberate {@link disconnect};
+	 * debounced; and never a second concurrent attempt — a kick mid-attempt
+	 * only asks for the burst to restart when that attempt ends.
+	 */
+	kick(trigger: ReconnectTrigger): KickResult {
+		if (this.userDisconnected) return 'ignored-idle';
+		if (!this.reconnecting) {
+			return this.connectionState === 'connected' ? 'ignored-connected' : 'ignored-idle';
+		}
+		const now = this.nowMs();
+		if (this.lastKickAtMs !== null && now - this.lastKickAtMs < KICK_DEBOUNCE_MS) {
+			return 'debounced';
+		}
+		this.lastKickAtMs = now;
+		if (this.waitAbort !== null) {
+			this.kickTrigger = trigger;
+			this.waitAbort.abort();
+			return 'kicked';
+		}
+		this.resetRequested = true;
+		return 'reset-pending';
 	}
 
 	/**
@@ -540,7 +634,12 @@ export class BleDevice implements De1Transport {
 	 */
 	disconnect(): void {
 		this.userDisconnected = true;
+		if (this.reconnecting && this.timelineLabel !== null) {
+			this.timeline.end(this.timelineLabel, 'cancelled');
+		}
 		this.reconnecting = false;
+		// End a pending backoff wait now rather than leaving a timer to fire.
+		this.waitAbort?.abort();
 		const gatt = this.device.gatt;
 		if (gatt !== undefined && gatt.connected) {
 			gatt.disconnect();
@@ -570,25 +669,50 @@ export class BleDevice implements De1Transport {
 	 */
 	private async runReconnectLoop(): Promise<void> {
 		this.reconnecting = true;
+		const label = this.timelineLabel;
+		if (label !== null) this.timeline.begin(label, 'drop');
 		// Clamped so days of slow retries can't grow the counter without bound.
 		let attempt = 0;
+		// Whether this outage has been announced (attempt 1 tells the core
+		// the link was lost) — a kick before the first backoff ends must not
+		// skip that.
+		let announced = false;
 		while (true) {
 			// A deliberate disconnect during the wait aborts the loop.
 			if (this.userDisconnected) {
 				this.reconnecting = false;
 				return;
 			}
+			// A kick that landed while the previous attempt ran couldn't start a
+			// second attempt — it asked for the fast burst back instead.
+			if (this.resetRequested) {
+				this.resetRequested = false;
+				attempt = 0;
+			}
 			attempt = Math.min(attempt + 1, RECONNECT_MAX_ATTEMPTS + 1);
-			const lurking = attempt > RECONNECT_MAX_ATTEMPTS;
-			const delay = lurking
-				? RECONNECT_LURK_DELAY_MS
-				: Math.min(RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1), RECONNECT_MAX_DELAY_MS);
-			await sleep(delay);
+			let lurking = attempt > RECONNECT_MAX_ATTEMPTS;
+			if (label !== null) this.timeline.mark(label, 'backoff');
+			// The wait is interruptible: a kick (the tab coming back into view,
+			// "Retry now") ends it early — attempt now, then 500 ms, 1 s, … —
+			// instead of sitting out a lurk timer Chrome throttles in hidden tabs.
+			const kickedBy = await this.waitOrKick(reconnectDelayMs(attempt));
 			if (this.userDisconnected) {
 				this.reconnecting = false;
 				return;
 			}
-			if (!lurking) this.notifyReconnectAttempt(attempt);
+			if (kickedBy !== null) {
+				attempt = 0;
+				lurking = true; // a kicked attempt isn't a numbered burst step
+				if (label !== null) this.timeline.begin(label, kickedBy);
+			}
+			if (!lurking) {
+				this.notifyReconnectAttempt(attempt);
+				announced = true;
+			} else if (!announced) {
+				this.notifyReconnectAttempt(1);
+				announced = true;
+			}
+			if (label !== null) this.timeline.attemptStarted(label);
 			try {
 				await this.reconnectAndReplay();
 				// A user disconnect landed WHILE this attempt was in flight —
@@ -601,16 +725,42 @@ export class BleDevice implements De1Transport {
 				}
 				// Recovered.
 				this.reconnecting = false;
+				this.resetRequested = false;
 				this.connectionState = 'connected';
+				if (label !== null) this.timeline.ready(label, this.timelineExpectsPostConnect);
 				this.notifyStateChanged();
 				this.notifyReconnected();
 				return;
-			} catch {
+			} catch (error) {
 				// This attempt failed — fall through to the next iteration.
 				// A `userDisconnected` flip between attempts is caught at the
 				// top of the loop.
+				if (label !== null) {
+					this.timeline.attemptFailed(
+						label,
+						error instanceof Error ? error.message : String(error)
+					);
+				}
 			}
 		}
+	}
+
+	/**
+	 * Wait `ms`, or less if {@link kick} cuts it short. Resolves with the
+	 * kick's trigger, or `null` when the wait simply elapsed.
+	 */
+	private async waitOrKick(ms: number): Promise<ReconnectTrigger | null> {
+		const abort = new AbortController();
+		this.waitAbort = abort;
+		this.kickTrigger = null;
+		try {
+			await abortableSleep(ms, abort.signal);
+		} finally {
+			this.waitAbort = null;
+		}
+		const trigger = abort.signal.aborted ? this.kickTrigger : null;
+		this.kickTrigger = null;
+		return trigger;
 	}
 
 	/**
@@ -622,9 +772,14 @@ export class BleDevice implements De1Transport {
 	 * a write that a manager issued before noticing the drop.
 	 */
 	private async reconnectAndReplay(): Promise<void> {
+		const label = this.timelineLabel;
+		if (label !== null) this.timeline.mark(label, 'gatt');
 		await this.connectGattRaw();
 		// The cached characteristics belong to the dead GATT session.
 		this.characteristics.clear();
+		// Web Bluetooth discovers services lazily, so resolving + subscribing
+		// below is one span.
+		if (label !== null) this.timeline.mark(label, 'subscribe');
 		// Replay subscriptions in their recorded order; each is one queued step
 		// so they never overlap.
 		for (const sub of this.subscriptions.values()) {
@@ -651,9 +806,24 @@ export class BleDevice implements De1Transport {
 	}
 }
 
-/** Resolve after `ms` milliseconds — the reconnect loop's backoff wait. */
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Resolve after `ms` milliseconds, or as soon as `signal` aborts — the
+ * reconnect loop's interruptible backoff wait. Never rejects.
+ */
+export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+	return new Promise((resolve) => {
+		if (signal.aborted) {
+			resolve();
+			return;
+		}
+		const timer = setTimeout(done, ms);
+		function done(): void {
+			clearTimeout(timer);
+			signal.removeEventListener('abort', done);
+			resolve();
+		}
+		signal.addEventListener('abort', done, { once: true });
+	});
 }
 
 /** `true` when the running browser exposes the Web Bluetooth API. */

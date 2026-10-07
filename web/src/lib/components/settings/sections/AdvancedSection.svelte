@@ -38,12 +38,24 @@
 	import MainsConfirmModal from '../MainsConfirmModal.svelte';
 	import { onMount } from 'svelte';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
+	import { compactLine, reconnectTimelines, type ReconnectTimeline } from '$lib/ble';
 
 	/** The shared orchestrator, or `null` while the wasm core is still loading. */
 	let { app, snapshot }: { app: CremaApp | null; snapshot: UiSnapshot } = $props();
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
+
+	// ---- Reconnect timelines ----------------------------------------------
+	// The last reconnects (newest first): what started each one and where the
+	// time went. Lives outside the reactive snapshot (it's diagnostics), so
+	// subscribe while this section is mounted.
+	let reconnects = $state<readonly ReconnectTimeline[]>([]);
+	$effect(() => reconnectTimelines.subscribe((list) => (reconnects = list)));
+
+	function clockTime(wallMs: number): string {
+		return new Date(wallMs).toLocaleTimeString(undefined, { hour12: false });
+	}
 
 	// ---- Live line-frequency the core reports ----------------------------
 	//
@@ -365,6 +377,26 @@
 	</StRow>
 </StGroup>
 
+<StGroup
+	title="Reconnects"
+	sub={`The last ${reconnectTimelines.capacity} reconnects — what started each one and how long every step took.`}
+>
+	<div class="rc-list">
+		{#if reconnects.length === 0}
+			<div class="rc-empty">No reconnects yet.</div>
+		{:else}
+			{#each reconnects as t (t.id)}
+				<div
+					class="rc-line"
+					class:is-bad={t.outcome !== 'READY' && t.outcome !== 'in progress'}
+				>
+					{clockTime(t.startedWallMs)}  {compactLine(t)}
+				</div>
+			{/each}
+		{/if}
+	</div>
+</StGroup>
+
 <StGroup title="Diagnostics">
 	<StRow
 		title="Show debug / event-log panel"
@@ -636,6 +668,31 @@
 {/if}
 
 <style>
+	/* ── Reconnect timelines ─────────────────────────────────────────────── */
+	.rc-list {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		padding: 12px 16px;
+		max-height: 240px;
+		overflow-y: auto;
+	}
+	.rc-line {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		line-height: 1.45;
+		color: var(--fg-2);
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+	.rc-line.is-bad {
+		color: var(--danger);
+	}
+	.rc-empty {
+		font-size: 12px;
+		color: var(--fg-3);
+	}
+
 	/* ── Capture-replay developer control ──────────────────────────────────
 	   The file picker is a native <input type="file"> hidden inside a <label>
 	   styled as an StButton, so it matches the settings kit; the visible

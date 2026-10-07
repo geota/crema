@@ -27,7 +27,14 @@ import { MachineState, MmrRegister } from '$lib/core/crema-core';
 import type { BrewRecipe } from '$lib/core/crema-core';
 import { getGuidedBrewStore } from '$lib/brew/session.svelte';
 import { playBrewCue } from '$lib/brew/cues';
-import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
+import {
+	De1Manager,
+	EMPTY_DE1_DIAGNOSTICS,
+	ScaleManager,
+	compactLine,
+	reconnectTimelines,
+	type ReconnectTrigger
+} from '$lib/ble';
 import { getBeanStore, getBeanLibraryStore } from '$lib/bean';
 import { getHistoryStore, snapshotFromBean, extractCremaExtras } from '$lib/history';
 import { commitShotCompletion } from '$lib/history/shot-persistence';
@@ -467,6 +474,8 @@ export class CremaApp {
 		// listeners are wired at the shell (`+layout.svelte`), which owns the
 		// runtime's lifetime. No-op when there's no runtime (unsupported browser).
 		void this.runtime?.runPromise(Effect.flatMap(UploadQueue, (q) => q.armLifecycle));
+		// Each finished reconnect episode → one compact line in the event log.
+		reconnectTimelines.onFinished = (t) => this.state.log(compactLine(t));
 	}
 
 	/**
@@ -1037,6 +1046,31 @@ export class CremaApp {
 			...CLEARED_DE1_READOUT,
 			activeProfileFingerprint: null
 		});
+	}
+
+	// ---- Reconnect kicks --------------------------------------------------
+
+	/**
+	 * Reconnect NOW — the tab came back into view (`visibilitychange` /
+	 * `pageshow`). For each device whose auto-reconnect loop is waiting out a
+	 * backoff or the 60 s lurk (which Chrome throttles in a hidden tab), the
+	 * wait is cut short and the ladder resets to the fast burst. A no-op for a
+	 * connected device, one the user disconnected, or no device at all;
+	 * debounced per device.
+	 */
+	kickReconnect(trigger: ReconnectTrigger): void {
+		const de1 = this.de1.kick(trigger);
+		const scale = this.scale.kick(trigger);
+		if (de1 === 'kicked') this.state.log(`DE1: reconnecting now (${trigger})`);
+		if (scale === 'kicked') this.state.log(`Scale: reconnecting now (${trigger})`);
+	}
+
+	/** "Retry now" on a reconnecting device. */
+	retryReconnect(device: 'de1' | 'scale'): void {
+		const result = (device === 'de1' ? this.de1 : this.scale).kick('user-retry');
+		if (result === 'kicked') {
+			this.state.log(`${device === 'de1' ? 'DE1' : 'Scale'}: reconnecting now (user-retry)`);
+		}
 	}
 
 	// ---- Scale actions ----------------------------------------------------
@@ -1642,45 +1676,56 @@ export class CremaApp {
 	 */
 	private ensureLoadedMatches(): void {
 		void (async () => {
-			const profiles = getProfileStore();
-			await profiles.ensureLoaded();
-			const id = profiles.activeId;
-			if (id === null) {
-				this.state.log(
-					'No active profile to sync — select one on Profiles; subsequent connects will auto-push it.'
-				);
-				return;
-			}
-			const profile = profiles.get(id);
-			if (!profile) {
-				this.state.log(
-					`Active profile id "${id}" not found in store — sync skipped.`
-				);
-				return;
-			}
-			// Compute the connect-time fingerprint with no QC overrides —
-			// the user hasn't dialed anything yet, so the "current intent"
-			// is just the profile's own defaults. The shot-start path
-			// (below) reuses the same hash with the user's QC overrides
-			// merged in.
-			const desired = profileFingerprint(profile, {});
-			if (this.state.current.activeProfileFingerprint === desired) {
-				this.state.log(
-					`DE1 already has "${profile.name}" loaded (fingerprint match) — sync skipped.`
-				);
-				return;
-			}
-			this.state.log(`Sync on connect: ${profile.name}`);
 			try {
-				await this.syncActiveProfile(profile, {});
-			} catch (e) {
-				// `syncActiveProfile` already logs failure detail through
-				// the `ProfileUploadFailed` event fold; swallow the
-				// rejection so it doesn't bubble out of this fire-and-
-				// forget caller.
-				void e;
+				await this.syncProfileOnConnect();
+			} finally {
+				// The post-connect profile sync is the last step of a DE1
+				// reconnect's timeline (a no-op with no open episode).
+				reconnectTimelines.postConnectDone('DE1');
 			}
 		})();
+	}
+
+	/** The body of {@link ensureLoadedMatches}: push the active profile unless the DE1 already holds it. */
+	private async syncProfileOnConnect(): Promise<void> {
+		const profiles = getProfileStore();
+		await profiles.ensureLoaded();
+		const id = profiles.activeId;
+		if (id === null) {
+			this.state.log(
+				'No active profile to sync — select one on Profiles; subsequent connects will auto-push it.'
+			);
+			return;
+		}
+		const profile = profiles.get(id);
+		if (!profile) {
+			this.state.log(
+				`Active profile id "${id}" not found in store — sync skipped.`
+			);
+			return;
+		}
+		// Compute the connect-time fingerprint with no QC overrides —
+		// the user hasn't dialed anything yet, so the "current intent"
+		// is just the profile's own defaults. The shot-start path
+		// (below) reuses the same hash with the user's QC overrides
+		// merged in.
+		const desired = profileFingerprint(profile, {});
+		if (this.state.current.activeProfileFingerprint === desired) {
+			this.state.log(
+				`DE1 already has "${profile.name}" loaded (fingerprint match) — sync skipped.`
+			);
+			return;
+		}
+		this.state.log(`Sync on connect: ${profile.name}`);
+		try {
+			await this.syncActiveProfile(profile, {});
+		} catch (e) {
+			// `syncActiveProfile` already logs failure detail through
+			// the `ProfileUploadFailed` event fold; swallow the
+			// rejection so it doesn't bubble out of this fire-and-
+			// forget caller.
+			void e;
+		}
 	}
 
 	/**

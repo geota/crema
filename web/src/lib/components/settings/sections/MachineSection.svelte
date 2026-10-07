@@ -366,6 +366,15 @@
 			</div>
 		</div>
 		<div class="st-machinecard-info-actions">
+			{#if de1State === 'reconnecting'}
+				<!-- Cut the auto-reconnect's backoff / lurk wait short. -->
+				<StButton
+					label="Retry now"
+					icon="arrows-clockwise"
+					variant="primary"
+					onClick={() => app?.retryReconnect('de1')}
+				/>
+			{/if}
 			{#if connected}
 				<StButton
 					label="Disconnect"
@@ -720,6 +729,12 @@
 {/if}
 
 <style>
+	/* Retry now + Connect / Disconnect side by side, wrapping when narrow. */
+	.st-machinecard-info-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+	}
 	/* Diagnostics value cells — sized to match the Selected-device hint
 	   line (the user's reference "best style"): small, mono, faint. The
 	   row's title is still the prominent thing; the value reads as data.
