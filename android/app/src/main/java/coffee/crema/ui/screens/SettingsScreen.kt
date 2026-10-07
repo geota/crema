@@ -66,6 +66,9 @@ import coffee.crema.ui.refillThresholdDepthMm
 import coffee.crema.ui.tankDepthMm
 import coffee.crema.ui.waterWarnThresholdMl
 import coffee.crema.ui.components.CopyDiagnosticsRow
+import coffee.crema.ui.components.ReconnectTimelineList
+import coffee.crema.ui.components.ReconnectingNotice
+import coffee.crema.ui.components.RetryNowPill
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaCard
@@ -192,6 +195,9 @@ fun SettingsScreen(
                             onConnect = { onConnect("machine") },
                             onUpdateFirmware = null,
                         )
+                        if (!connected && ui.de1Reconnecting) {
+                            ReconnectingNotice("DE1", onRetry = { vm.retryReconnectNow(true) })
+                        }
                         SetGroup("Connection") {
                             CremaSettingsRow("Telemetry rate", "How often the chart samples live data.", notImplemented = true) { CremaSettingsSelect("50 Hz") }
                             // Keep-awake is REAL: a 60 s UserPresent (MMR 0x803858)
@@ -285,8 +291,9 @@ fun SettingsScreen(
                             CremaSettingsRow("Notifications received", last = true) { CremaMonoReadout(if (connected) "—" else "0", color = MaterialTheme.colorScheme.onSurface) }
                         }
                         SetGroup("Peripherals") {
-                            CremaSettingsRow("Scale", if (scaleConnected) (ui.scaleName ?: "Connected") else "Not paired") {
+                            CremaSettingsRow("Scale", if (scaleConnected) (ui.scaleName ?: "Connected") else if (ui.scaleReconnecting) "Reconnecting…" else "Not paired") {
                                 if (scaleConnected) CremaStatusDot(true)
+                                else if (ui.scaleReconnecting) RetryNowPill(onRetry = { vm.retryReconnectNow(false) })
                                 else CremaButton(onClick = { onConnect("scale") }, variant = CremaButtonVariant.Outlined, label = "Pair")
                             }
                             CremaSettingsRow("Grinder", "No grinder support yet.") { CremaStatusDot(false) }
@@ -1024,6 +1031,7 @@ fun SettingsScreen(
                             }
                             CopyDiagnosticsRow(last = true)
                         }
+                        SetGroup("Reconnects") { ReconnectTimelineList() }
                         // Live, no-restart picker (issue 13) — the same one the phone
                         // uses: Mirror from a primary on the LAN, then Stop / Take over.
                         // The tablet lives by the machine, so it's exactly the device

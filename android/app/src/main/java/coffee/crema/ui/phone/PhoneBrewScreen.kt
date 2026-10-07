@@ -247,6 +247,7 @@ fun PhoneBrewScreen(
             onStopMirroring = { vm.switchToNormal(); devicesOpen = false },
             onTakeOver = { vm.requestHandoff(); devicesOpen = false },
             onHandOff = { id -> vm.offerHandoff(id); devicesOpen = false },
+            onRetry = vm::retryReconnectNow,
             onDismiss = { devicesOpen = false },
         )
     }
