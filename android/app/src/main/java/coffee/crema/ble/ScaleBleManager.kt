@@ -101,6 +101,8 @@ class ScaleBleManager(
      * connect query returns the firmware / serial.
      */
     private val onScaleIdentified: (advertisedName: String) -> Unit = {},
+    /** Per-episode reconnect timelines (Settings → Advanced, diagnostics). */
+    private val timeline: ReconnectTimelineRecorder? = null,
 ) {
     enum class State { IDLE, SCANNING, CONNECTING, DISCOVERING, SUBSCRIBING, READY, DISCONNECTED }
 
@@ -217,6 +219,23 @@ class ScaleBleManager(
     /** The connect-and-reconnect supervisor loop; cancelled on [disconnect]. */
     private var sessionJob: Job? = null
 
+    /** Bumped by every [connect] so a replaced session's late `finally`
+     *  teardown can't clear its successor's state (see [De1BleManager]). */
+    @Volatile
+    private var sessionGen = 0
+
+    /** Interrupts the session's backoff / lurk wait — see [kickReconnect]. */
+    private val kicker = ReconnectKicker(nowMs = SystemClock::elapsedRealtime)
+
+    /** Where the reconnect supervisor is (IDLE = no session). */
+    val reconnectPhase: ReconnectKicker.Phase get() = kicker.phase
+
+    /** [reconnectPhase], observable. */
+    val reconnectPhaseFlow: StateFlow<ReconnectKicker.Phase> get() = kicker.phaseFlow
+
+    /** True after a user [disconnect] until the next [connect]. */
+    val isUserDisconnected: Boolean get() = userInitiated
+
     // ---- Connect ----------------------------------------------------------
 
     /**
@@ -245,7 +264,14 @@ class ScaleBleManager(
         // One supervisor coroutine owns connect → (drop → reconnect)*; a
         // user-initiated disconnect() cancels it.
         sessionJob?.cancel()
-        sessionJob = scope.launch { session(device, advertisedName) }
+        val gen = ++sessionGen
+        sessionJob = scope.launch { session(device, advertisedName, gen) }
+    }
+
+    /** Attempt a reconnect NOW — the scale twin of [De1BleManager.kickReconnect]. */
+    fun kickReconnect(trigger: ReconnectTrigger): ReconnectKicker.Result {
+        if (userInitiated || !autoReconnectEnabled) return ReconnectKicker.Result.IGNORED_IDLE
+        return kicker.kick(trigger)
     }
 
     /**
@@ -255,13 +281,15 @@ class ScaleBleManager(
      * handle (re-identifying the codec each time), up to the shared
      * [reconnectingSession] cap.
      */
-    private suspend fun session(device: BleTransport.DeviceHandle, advertisedName: String) {
+    private suspend fun session(device: BleTransport.DeviceHandle, advertisedName: String, gen: Int) {
         reconnectingSession(
             label = "Scale",
             logTag = TAG,
             status = onStatus,
             isUserInitiated = { userInitiated },
             isAutoReconnectEnabled = { autoReconnectEnabled },
+            kicker = kicker,
+            timeline = timeline,
             establish = { firstConnect ->
                 establish(device, advertisedName, firstConnect = firstConnect)
             },
@@ -276,6 +304,8 @@ class ScaleBleManager(
             },
             onConnecting = { _state.value = State.CONNECTING },
             teardown = {
+                // A replaced session must not tear down its successor's state.
+                if (gen != sessionGen) return@reconnectingSession
                 // Clear the scale slice so a vanished scale leaves no stale weight
                 // (the DE1 manager resets the whole core on its own teardown).
                 if (recording) {
@@ -304,8 +334,13 @@ class ScaleBleManager(
         _state.value = State.CONNECTING
         consecutiveWriteFailures = 0 // fresh link, fresh dead-link budget
         onStatus(if (firstConnect) "Connecting to scale…" else "Reconnecting to scale…")
-        // BleTransport.connect suspends until connected AND services discovered.
-        transport.connect(device)
+        timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.GATT_CONNECT)
+        // BleTransport.connect suspends until connected AND services discovered;
+        // onLinkUp splits the GATT connect from discovery for the timeline.
+        transport.connect(device) {
+            _state.value = State.DISCOVERING
+            timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.DISCOVER)
+        }
         _state.value = State.DISCOVERING
         onStatus("Scale connected — discovering services…")
 
@@ -356,6 +391,7 @@ class ScaleBleManager(
 
         _state.value = State.SUBSCRIBING
         onStatus("Subscribing to scale weight…")
+        timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.SUBSCRIBE)
         // Observe the weight-notify characteristic, plus the command
         // characteristic ONLY when the core says it also notifies — the Bookoo's
         // ff12 pushes serial / settings responses (→ SCALE_COMMAND, see
@@ -394,6 +430,7 @@ class ScaleBleManager(
         // Mark intentional BEFORE cancelling so the session loop knows not to
         // reconnect.
         userInitiated = true
+        timeline?.end(TIMELINE_DEVICE, ReconnectOutcome.CANCELLED)
         sessionJob?.cancel()
         sessionJob = null
         val d = device
@@ -646,6 +683,9 @@ class ScaleBleManager(
 
     companion object {
         private const val TAG = "ScaleBleManager"
+
+        /** The reconnect-timeline device key — matches the supervisor label. */
+        const val TIMELINE_DEVICE = "Scale"
 
         /** Ceiling on one GATT write before it counts as a dead-link signal —
          *  Decenza uses the same 5 s write timeout. */

@@ -2,7 +2,6 @@ package coffee.crema.ble
 
 import android.util.Log
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
 
 /**
  * The shared connect → (drop → reconnect)* supervisor for the BLE device
@@ -35,6 +34,11 @@ import kotlinx.coroutines.delay
  *
  * Status lines are templated from [label] ("DE1" / "Scale") so the two devices
  * read consistently; [logTag] tags the connect-failure warning.
+ *
+ * The backoff / lurk waits are interruptible through [kicker] (see
+ * [ReconnectKicker]): a kick resets the ladder to the fast burst and attempts
+ * immediately — the "came back to the app, reconnect now" path. [timeline]
+ * records each reconnect episode (see [ReconnectTimelineRecorder]).
  */
 internal suspend fun reconnectingSession(
     label: String,
@@ -47,12 +51,25 @@ internal suspend fun reconnectingSession(
     onConnected: () -> Unit,
     onConnecting: () -> Unit,
     teardown: () -> Unit,
+    /** Lets the owner interrupt a backoff / lurk wait ("attempt now"). */
+    kicker: ReconnectKicker = ReconnectKicker(nowMs = { System.nanoTime() / 1_000_000 }),
+    /** Optional per-episode timeline recording, keyed by [label]. */
+    timeline: ReconnectTimelineRecorder? = null,
+    /** The owner marks [ReconnectPhase.POST_CONNECT] after READY (DE1 seed reads). */
+    expectPostConnect: Boolean = false,
 ) {
     var attempt = 0
     var everConnected = false
     var lurking = false
+    // Set only when the loop ends on its own (auto-reconnect off). A cancel —
+    // the user's disconnect() or a replacement connect() — leaves the open
+    // timeline to whoever cancelled (disconnect() closes it as CANCELLED; a
+    // replacement's own trigger supersedes it).
+    var endedOnItsOwn = false
     try {
         while (true) {
+            kicker.enter(ReconnectKicker.Phase.ATTEMPTING)
+            timeline?.attemptStarted(label)
             val connected = try {
                 establish(!everConnected)
                 true
@@ -61,6 +78,7 @@ internal suspend fun reconnectingSession(
             } catch (e: Exception) {
                 Log.w(logTag, "$label connect failed", e)
                 status("$label connection failed: ${e.message}")
+                timeline?.attemptFailed(label, e.message)
                 false
             }
 
@@ -68,6 +86,8 @@ internal suspend fun reconnectingSession(
                 everConnected = true
                 attempt = 0
                 lurking = false
+                kicker.enter(ReconnectKicker.Phase.CONNECTED)
+                timeline?.ready(label, expectPostConnect)
                 onConnected()
                 // Suspend until the link drops. The caller's StateFlow.first()
                 // checks the current value first, so a drop during the tiny
@@ -76,18 +96,31 @@ internal suspend fun reconnectingSession(
                 if (isUserInitiated()) return
                 if (!isAutoReconnectEnabled()) {
                     status("$label disconnected")
+                    endedOnItsOwn = true
                     break
                 }
+                timeline?.begin(label, ReconnectTrigger.DROP)
                 status("$label connection lost — reconnecting…")
             } else {
                 if (isUserInitiated()) return
-                if (!isAutoReconnectEnabled()) break
+                if (!isAutoReconnectEnabled()) {
+                    endedOnItsOwn = true
+                    break
+                }
+            }
+
+            // A kick that landed while the attempt above was running couldn't
+            // start a second, concurrent attempt — it asked for the fast burst
+            // back instead.
+            if (kicker.takeResetRequest() != null) {
+                attempt = 0
+                lurking = false
             }
 
             // Clamped so days of slow retries can't overflow the counter
             // (Decenza clamps its ladder counter the same way).
             attempt = (attempt + 1).coerceAtMost(MAX_RECONNECT_ATTEMPTS + 1)
-            if (attempt > MAX_RECONNECT_ATTEMPTS) {
+            val waitMs = if (attempt > MAX_RECONNECT_ATTEMPTS) {
                 // The fast burst is exhausted — drop to a persistent slow tier
                 // instead of stranding an armed device (de1app retries forever;
                 // Decenza's ladders end in a 60 s / 5 min forever-tier). The
@@ -99,32 +132,45 @@ internal suspend fun reconnectingSession(
                     lurking = true
                     status("$label not found — retrying quietly in the background")
                 }
-                onConnecting()
-                delay(LURK_INTERVAL_MS)
+                LURK_INTERVAL_MS
             } else {
-                onConnecting()
                 status("Reconnecting to $label (attempt $attempt of $MAX_RECONNECT_ATTEMPTS)…")
-                delay(backoffMs(attempt))
+                backoffMs(attempt)
+            }
+            onConnecting()
+            timeline?.mark(label, ReconnectPhase.BACKOFF)
+            // The wait is interruptible: a kick (the app coming back to the
+            // foreground, "Retry now", Bluetooth on, presence) ends it early and
+            // resets the ladder to the fast burst — attempt now, then 500 ms,
+            // 1 s, … rather than resuming a 60 s lurk.
+            val kickedBy = kicker.awaitKickOrTimeout(waitMs)
+            if (kickedBy != null) {
+                attempt = 0
+                lurking = false
+                timeline?.begin(label, kickedBy)
+                status("Retrying $label now (${kickedBy.label})…")
             }
         }
     } finally {
+        kicker.enter(ReconnectKicker.Phase.IDLE)
+        if (endedOnItsOwn) timeline?.end(label, ReconnectOutcome.ABANDONED)
         if (!isUserInitiated()) teardown()
     }
 }
 
 /** Fast-burst reconnect attempts after an unexpected drop (~web's 8), before
  *  the persistent slow tier takes over. */
-private const val MAX_RECONNECT_ATTEMPTS = 8
+internal const val MAX_RECONNECT_ATTEMPTS = 8
 
 /** Cadence of the persistent slow tier — Decenza's scale ladder ends in the
  *  same 60 s forever-tier (its DE1 uses 5 min; a single shared value keeps
  *  this supervisor device-agnostic, and a pending direct connect between
  *  tries is cheap — it's the same background-scan mechanism as autoConnect). */
-private const val LURK_INTERVAL_MS = 60_000L
+internal const val LURK_INTERVAL_MS = 60_000L
 
 /**
  * Exponential backoff: 500 ms doubling, capped at 30 s (mirrors the web).
  * [ReconnectingClientLink] keeps its own tighter 5 s cap, intentionally.
  */
-private fun backoffMs(attempt: Int): Long =
+internal fun backoffMs(attempt: Int): Long =
     (500L shl (attempt - 1).coerceIn(0, 10)).coerceAtMost(30_000L)
