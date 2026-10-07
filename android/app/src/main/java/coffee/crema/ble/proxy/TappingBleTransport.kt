@@ -44,9 +44,11 @@ class TappingBleTransport(
     override fun scan(matches: (name: String) -> Boolean): Flow<BleTransport.ScanMatch> =
         delegate.scan(matches).onEach { handles[it.device.address] = it.device }
 
-    override suspend fun connect(device: BleTransport.DeviceHandle) {
+    override suspend fun connect(device: BleTransport.DeviceHandle) = connect(device) {}
+
+    override suspend fun connect(device: BleTransport.DeviceHandle, onLinkUp: () -> Unit) {
         handles[device.address] = device
-        delegate.connect(device)
+        delegate.connect(device, onLinkUp)
         // Forward this device's connection-state changes to the hub once. The
         // StateFlow replays its current value, so the hub immediately learns the
         // post-connect state.
@@ -58,6 +60,14 @@ class TappingBleTransport(
     }
 
     override suspend fun disconnect(device: BleTransport.DeviceHandle) = delegate.disconnect(device)
+
+    // Forward the optional methods (see SwitchableBleTransport): the defaults
+    // would silently disable the real radio's behaviour while hosting.
+    override fun resolveByAddress(address: String, name: String?): BleTransport.DeviceHandle? =
+        delegate.resolveByAddress(address, name)?.also { handles[it.address] = it }
+
+    override suspend fun awaitAdvertisement(device: BleTransport.DeviceHandle, timeoutMs: Long): Boolean =
+        delegate.awaitAdvertisement(device, timeoutMs)
 
     override fun connectionState(device: BleTransport.DeviceHandle): StateFlow<BleTransport.ConnState> =
         delegate.connectionState(device)
