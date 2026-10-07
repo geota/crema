@@ -12,7 +12,7 @@
 #   `ci` and `pr-title` would not run on them. Each run instead mints a
 #   short-lived (≤1 h) installation token for the repo's security bot app,
 #   down-scoped to Contents + Pull requests write on this repository only.
-#   Needs the repository variable SECURITY_APP_ID and the secret
+#   Needs the repository variable SECURITY_APP_CLIENT_ID and the secret
 #   SECURITY_APP_PRIVATE_KEY. Rulesets keep the app off `main` and `v*` tags,
 #   so everything it does arrives as a PR. The token exists only in the steps
 #   that push and open / update / close the PR; the install + fix step runs
@@ -87,7 +87,7 @@ jobs:
         if: steps.fix.outputs.changed == 'true' || steps.fix.outputs.changed == 'false'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ vars.SECURITY_APP_ID }}
+          client-id: ${{ vars.SECURITY_APP_CLIENT_ID }}
           private-key: ${{ secrets.SECURITY_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
