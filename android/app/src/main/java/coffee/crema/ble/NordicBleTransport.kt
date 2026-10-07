@@ -3,11 +3,14 @@ package coffee.crema.ble
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.BufferOverflow
@@ -21,6 +24,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.dropWhile
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.launchIn
@@ -327,24 +331,7 @@ class NordicBleTransport(context: Context) : BleTransport {
         val handle = device as NordicDeviceHandle
         val peripheral = peripherals[handle]
             ?: error("connect() for an unknown device handle ${handle.address}")
-        val stateFlow = states.getOrPut(handle) {
-            MutableStateFlow(BleTransport.ConnState.DISCONNECTED)
-        }
-
-        // Mirror the Nordic ConnectionState into the coarse ConnState flow for as
-        // long as this transport lives. Cancel any prior mirror for this handle first
-        // so repeated connect()s (every reconnect attempt) don't stack duplicate
-        // collectors all racing to write the same state (issue 10).
-        stateMirrorJobs.remove(handle)?.cancel()
-        stateMirrorJobs[handle] = peripheral.state
-            .onEach { stateFlow.value = it.toConnState() }
-            .launchIn(scope)
-
-        stateFlow.value = BleTransport.ConnState.CONNECTING
-        // Seed the advert-probe's quiet-window clock: a link with no
-        // notifications yet measures its silence from the connect, not from
-        // epoch (which would make it instantly probe-eligible).
-        lastNotifyAtMs[handle] = SystemClock.elapsedRealtime()
+        prepareConnect(handle, peripheral)
         // Direct connection; Nordic applies its own connect timeout + retries,
         // closing the GATT client between attempts. Cheap/older BLE stacks (e.g. an
         // Allwinner combo chip on a budget tablet) routinely storm GATT_ERROR(133)
@@ -362,11 +349,86 @@ class NordicBleTransport(context: Context) : BleTransport {
         )
         // Linked; service discovery follows (timed separately by the caller).
         onLinkUp()
+        awaitServices(handle, peripheral)
+    }
 
-        // Wait for service discovery to reach a terminal state before
-        // returning, so the caller can observe()/write() characteristics
-        // immediately after. services() is a StateFlow that emits Unknown,
-        // then Discovering, then Discovered (or Failed).
+    override val supportsPendingConnect: Boolean get() = true
+
+    /**
+     * The long-lived background connect (see [BleTransport.connectWhenAvailable]):
+     * Android's `autoConnect = true`, which parks the address in the
+     * controller's accept list and connects whenever the device advertises —
+     * no app-side scanning, so neither the screen-off scan block nor the
+     * scan-start budget applies, and it waits indefinitely at ~zero cost.
+     *
+     * Chosen over a long address-filtered scan because a scan would still need
+     * a separate direct connect afterwards (and a slot in the 5-starts-per-30 s
+     * scan budget), while the pending connect IS the connect. Its known weak
+     * spot — autoConnect to a device the stack hasn't seen since Bluetooth last
+     * restarted, or a cheap stack answering with GATT 133 — surfaces as a
+     * thrown failure here, and the supervisor falls back to scan-then-connect.
+     */
+    override suspend fun connectWhenAvailable(device: BleTransport.DeviceHandle, onLinkUp: () -> Unit) {
+        val handle = device as NordicDeviceHandle
+        // A FRESH peripheral from the address each time — never a stale handle.
+        val peripheral = runCatching { centralManager.getPeripheralById(handle.address) }.getOrNull()
+            ?: peripherals[handle]
+            ?: error("connectWhenAvailable() could not resolve ${handle.address}")
+        peripherals[handle] = peripheral
+        prepareConnect(handle, peripheral)
+        try {
+            centralManager.connect(
+                peripheral = peripheral,
+                options = CentralManager.ConnectionOptions.AutoConnect(),
+            )
+            // Whether connect() returns once the request is queued or once
+            // linked, wait for the link itself: skip any stale state from the
+            // previous drop, then take the first Connected or a failure.
+            val end = peripheral.state
+                .dropWhile { it !is ConnectionState.Connecting && it !is ConnectionState.Connected }
+                .first {
+                    it is ConnectionState.Connected ||
+                        (it is ConnectionState.Disconnected && it.toConnState() == BleTransport.ConnState.FAILED)
+                }
+            if (end !is ConnectionState.Connected) error("pending connect failed: ${(end as ConnectionState.Disconnected).reason}")
+        } catch (c: CancellationException) {
+            // Withdraw the pending connect (closes the GATT client) — a kick
+            // or the foreground fast path is taking over.
+            withContext(NonCancellable) { runCatching { peripheral.disconnect() } }
+            states[handle]?.value = BleTransport.ConnState.DISCONNECTED
+            throw c
+        }
+        onLinkUp()
+        awaitServices(handle, peripheral)
+    }
+
+    /** Mirror the peripheral's state and seed the per-connect bookkeeping. */
+    private fun prepareConnect(handle: NordicDeviceHandle, peripheral: Peripheral) {
+        val stateFlow = states.getOrPut(handle) {
+            MutableStateFlow(BleTransport.ConnState.DISCONNECTED)
+        }
+        // Mirror the Nordic ConnectionState into the coarse ConnState flow for as
+        // long as this transport lives. Cancel any prior mirror for this handle first
+        // so repeated connect()s (every reconnect attempt) don't stack duplicate
+        // collectors all racing to write the same state (issue 10).
+        stateMirrorJobs.remove(handle)?.cancel()
+        stateMirrorJobs[handle] = peripheral.state
+            .onEach { stateFlow.value = it.toConnState() }
+            .launchIn(scope)
+
+        stateFlow.value = BleTransport.ConnState.CONNECTING
+        // Seed the advert-probe's quiet-window clock: a link with no
+        // notifications yet measures its silence from the connect, not from
+        // epoch (which would make it instantly probe-eligible).
+        lastNotifyAtMs[handle] = SystemClock.elapsedRealtime()
+    }
+
+    /**
+     * Wait for service discovery to reach a terminal state, so the caller can
+     * observe()/write() characteristics immediately after. services() is a
+     * StateFlow that emits Unknown, then Discovering, then Discovered (or Failed).
+     */
+    private suspend fun awaitServices(handle: NordicDeviceHandle, peripheral: Peripheral) {
         when (
             val resolved = peripheral.services()
                 .first { it is RemoteServices.Discovered || it is RemoteServices.Failed }

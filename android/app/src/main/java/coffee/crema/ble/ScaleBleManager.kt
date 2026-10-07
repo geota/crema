@@ -236,6 +236,12 @@ class ScaleBleManager(
     /** True after a user [disconnect] until the next [connect]. */
     val isUserDisconnected: Boolean get() = userInitiated
 
+    /** The lurk tier's policy — see [De1BleManager.lurkPolicy]. */
+    @Volatile
+    var lurkPolicy: () -> LurkPolicy = {
+        if (transport.supportsPendingConnect) LurkPolicy.PENDING_CONNECT else LurkPolicy.SCAN_INTERVAL
+    }
+
     // ---- Connect ----------------------------------------------------------
 
     /**
@@ -290,6 +296,12 @@ class ScaleBleManager(
             isAutoReconnectEnabled = { autoReconnectEnabled },
             kicker = kicker,
             timeline = timeline,
+            lurkPolicy = { lurkPolicy() },
+            establishPending = if (transport.supportsPendingConnect) {
+                { establish(device, advertisedName, firstConnect = false, pending = true) }
+            } else {
+                null
+            },
             establish = { firstConnect ->
                 establish(device, advertisedName, firstConnect = firstConnect)
             },
@@ -330,17 +342,20 @@ class ScaleBleManager(
         device: BleTransport.DeviceHandle,
         advertisedName: String,
         firstConnect: Boolean,
+        /** A long-lived pending (autoConnect) connect instead of a direct one. */
+        pending: Boolean = false,
     ) {
         _state.value = State.CONNECTING
         consecutiveWriteFailures = 0 // fresh link, fresh dead-link budget
         onStatus(if (firstConnect) "Connecting to scale…" else "Reconnecting to scale…")
-        timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.GATT_CONNECT)
+        if (!pending) timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.GATT_CONNECT)
         // BleTransport.connect suspends until connected AND services discovered;
         // onLinkUp splits the GATT connect from discovery for the timeline.
-        transport.connect(device) {
+        val onLinkUp: () -> Unit = {
             _state.value = State.DISCOVERING
             timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.DISCOVER)
         }
+        if (pending) transport.connectWhenAvailable(device, onLinkUp) else transport.connect(device, onLinkUp)
         _state.value = State.DISCOVERING
         onStatus("Scale connected — discovering services…")
 

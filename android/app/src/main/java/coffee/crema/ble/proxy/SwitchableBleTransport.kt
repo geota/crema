@@ -63,6 +63,11 @@ class SwitchableBleTransport(initial: BleTransport) : BleTransport {
     override suspend fun awaitAdvertisement(device: BleTransport.DeviceHandle, timeoutMs: Long): Boolean =
         current.awaitAdvertisement(device, timeoutMs)
 
+    override val supportsPendingConnect: Boolean get() = current.supportsPendingConnect
+
+    override suspend fun connectWhenAvailable(device: BleTransport.DeviceHandle, onLinkUp: () -> Unit) =
+        current.connectWhenAvailable(device, onLinkUp)
+
     override suspend fun disconnect(device: BleTransport.DeviceHandle) = current.disconnect(device)
 
     override fun connectionState(device: BleTransport.DeviceHandle): StateFlow<BleTransport.ConnState> =

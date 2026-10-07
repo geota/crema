@@ -69,6 +69,18 @@ class TappingBleTransport(
     override suspend fun awaitAdvertisement(device: BleTransport.DeviceHandle, timeoutMs: Long): Boolean =
         delegate.awaitAdvertisement(device, timeoutMs)
 
+    override val supportsPendingConnect: Boolean get() = delegate.supportsPendingConnect
+
+    override suspend fun connectWhenAvailable(device: BleTransport.DeviceHandle, onLinkUp: () -> Unit) {
+        handles[device.address] = device
+        delegate.connectWhenAvailable(device, onLinkUp)
+        if (connTapped.add(device.address)) {
+            delegate.connectionState(device)
+                .onEach { hub.onConnState(device.address, it.name) }
+                .launchIn(scope)
+        }
+    }
+
     override fun connectionState(device: BleTransport.DeviceHandle): StateFlow<BleTransport.ConnState> =
         delegate.connectionState(device)
 
