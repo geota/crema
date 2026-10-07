@@ -50,6 +50,19 @@ class SwitchableBleTransport(initial: BleTransport) : BleTransport {
 
     override suspend fun connect(device: BleTransport.DeviceHandle) = current.connect(device)
 
+    // Every OPTIONAL method must be forwarded too: an un-overridden default
+    // here silently replaces the delegate's real behaviour. resolveByAddress
+    // and awaitAdvertisement were missing, so the DE1's scan-before-reconnect
+    // (#65) and the scan-free direct connects never reached the radio.
+    override suspend fun connect(device: BleTransport.DeviceHandle, onLinkUp: () -> Unit) =
+        current.connect(device, onLinkUp)
+
+    override fun resolveByAddress(address: String, name: String?): BleTransport.DeviceHandle? =
+        current.resolveByAddress(address, name)
+
+    override suspend fun awaitAdvertisement(device: BleTransport.DeviceHandle, timeoutMs: Long): Boolean =
+        current.awaitAdvertisement(device, timeoutMs)
+
     override suspend fun disconnect(device: BleTransport.DeviceHandle) = current.disconnect(device)
 
     override fun connectionState(device: BleTransport.DeviceHandle): StateFlow<BleTransport.ConnState> =

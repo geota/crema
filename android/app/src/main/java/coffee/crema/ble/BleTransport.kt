@@ -122,6 +122,17 @@ interface BleTransport {
      */
     suspend fun connect(device: DeviceHandle)
 
+    /**
+     * [connect], calling [onLinkUp] the moment the link is up and BEFORE
+     * service discovery — so a reconnect timeline can tell the GATT connect
+     * apart from discovery. The default (no radio underneath: replay / LAN
+     * proxy) calls it after [connect] returns.
+     */
+    suspend fun connect(device: DeviceHandle, onLinkUp: () -> Unit) {
+        connect(device)
+        onLinkUp()
+    }
+
     /** Disconnect [device] and release its GATT resources. Idempotent. */
     suspend fun disconnect(device: DeviceHandle)
 

@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
@@ -287,10 +288,20 @@ class NordicBleTransport(context: Context) : BleTransport {
     /**
      * Wait (up to [timeoutMs]) for the device to re-advertise, matched by
      * address, then refresh its cached [Peripheral] to the one the scan just saw.
-     * Subscribing to [rawScan] starts the shared radio scan (it stops again when
-     * this drops out). On RECONNECT this primes Android's stack with the device's
-     * current advertisement so the following direct [connect] succeeds against a
+     * On RECONNECT this primes Android's stack with the device's current
+     * advertisement so the following direct [connect] succeeds against a
      * power-cycled peer instead of 133-storming a stale handle (geota/crema#65).
+     *
+     * Two scans race, first sighting wins:
+     *  - a DEDICATED scan filtered on the device's address. Android blocks only
+     *    UNFILTERED scans while the screen is off, so this one keeps working in
+     *    the background; and being freshly started it is never the
+     *    30-minute-old shared scan Android has quietly downgraded to
+     *    opportunistic (results only when another app scans).
+     *  - the shared unfiltered [rawScan], the original path — the safety net if a
+     *    stack's hardware address filter misses the peer (some match the
+     *    filter's address TYPE strictly, and a DE1's nRF module advertises a
+     *    random static address).
      */
     override suspend fun awaitAdvertisement(
         device: BleTransport.DeviceHandle,
@@ -298,7 +309,11 @@ class NordicBleTransport(context: Context) : BleTransport {
     ): Boolean {
         val handle = device as NordicDeviceHandle
         return withTimeoutOrNull(timeoutMs) {
-            val result = rawScan.first { it.peripheral.address == handle.address }
+            val filtered = centralManager.scan { Address(handle.address) }
+                // A failed filtered scan (Bluetooth off, a stack that rejects the
+                // filter) just completes; the merged unfiltered scan keeps going.
+                .catch { Log.w(TAG, "address-filtered scan for ${handle.address} failed: ${it.message}") }
+            val result = merge(filtered, rawScan).first { it.peripheral.address == handle.address }
             // Refresh the cached peripheral so connect() targets the current GATT.
             peripherals[handle] = result.peripheral
             Log.i(TAG, "${handle.address} re-advertised — reconnecting")
@@ -306,7 +321,9 @@ class NordicBleTransport(context: Context) : BleTransport {
         } ?: false
     }
 
-    override suspend fun connect(device: BleTransport.DeviceHandle) {
+    override suspend fun connect(device: BleTransport.DeviceHandle) = connect(device) {}
+
+    override suspend fun connect(device: BleTransport.DeviceHandle, onLinkUp: () -> Unit) {
         val handle = device as NordicDeviceHandle
         val peripheral = peripherals[handle]
             ?: error("connect() for an unknown device handle ${handle.address}")
@@ -343,6 +360,8 @@ class NordicBleTransport(context: Context) : BleTransport {
                 retryDelay = 2.seconds,
             ),
         )
+        // Linked; service discovery follows (timed separately by the caller).
+        onLinkUp()
 
         // Wait for service discovery to reach a terminal state before
         // returning, so the caller can observe()/write() characteristics

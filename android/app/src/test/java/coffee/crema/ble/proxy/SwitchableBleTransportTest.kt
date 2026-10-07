@@ -43,6 +43,19 @@ class SwitchableBleTransportTest {
         }
         override suspend fun read(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID): ByteArray =
             tag.toByteArray()
+        override fun resolveByAddress(address: String, name: String?): BleTransport.DeviceHandle =
+            Handle("$tag:$address", address)
+        val advertWaits = mutableListOf<Long>()
+        override suspend fun awaitAdvertisement(device: BleTransport.DeviceHandle, timeoutMs: Long): Boolean {
+            advertWaits += timeoutMs
+            return false
+        }
+        val linkUps = mutableListOf<String>()
+        override suspend fun connect(device: BleTransport.DeviceHandle, onLinkUp: () -> Unit) {
+            linkUps += "before-discovery"
+            onLinkUp()
+            linkUps += "after-discovery"
+        }
 
         class Handle(override val name: String, override val address: String = name) : BleTransport.DeviceHandle
     }
@@ -75,5 +88,27 @@ class SwitchableBleTransportTest {
         switchable.write(handle, service, char, byteArrayOf(0x10))
 
         assertEquals(listOf(true, false), a.writes)
+    }
+
+    /**
+     * Regression: the optional methods used to fall through to the interface
+     * defaults (resolveByAddress → null, awaitAdvertisement → true at once), so
+     * through this facade the DE1 never actually scanned before a reconnect and
+     * every "direct connect by address" quietly fell back to a scan.
+     */
+    @Test
+    fun `forwards the optional reconnect methods to the delegate`() = runBlocking {
+        val a = TaggedTransport("A")
+        val switchable = SwitchableBleTransport(a)
+        val handle = TaggedTransport.Handle("x")
+
+        assertEquals("A:AA:BB", switchable.resolveByAddress("AA:BB", "DE1")?.name)
+        assertEquals(false, switchable.awaitAdvertisement(handle, 12_000))
+        assertEquals(listOf(12_000L), a.advertWaits)
+
+        val seen = mutableListOf<String>()
+        switchable.connect(handle) { seen += "link-up" }
+        assertEquals(listOf("link-up"), seen)
+        assertEquals(listOf("before-discovery", "after-discovery"), a.linkUps)
     }
 }
