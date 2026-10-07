@@ -208,7 +208,21 @@ data class AppPrefs(
      *  remembered peer skips the "Allow this device?" prompt on reconnect; absence
      *  ⟺ re-prompt. Host-side only — never pushed to mirrors (not in [ConfigSnapshot]). */
     val pairedDevices: List<PairedDevice> = emptyList(),
+    // ── Companion-device association (Android CDM, optional per device) ──────
+    /** The remembered DE1's companion association id, or null when it has none.
+     *  [COMPANION_ID_UNKNOWN] = associated on API 31–32, where the platform keeps
+     *  no id (the address is the key). The system's list stays the source of
+     *  truth: a removal in system settings clears this on the next refresh. */
+    val de1CompanionId: Int? = null,
+    /** The remembered scale's companion association id (same rules). */
+    val scaleCompanionId: Int? = null,
+    /** Device addresses whose "Reconnect when nearby" offer was declined —
+     *  never offered again (Settings still offers it). */
+    val companionDeclined: List<String> = emptyList(),
 )
+
+/** A companion association that exists but has no platform id (API 31–32). */
+const val COMPANION_ID_UNKNOWN = -1
 
 /** Map the portable subset of [AppPrefs] → the shared cross-shell [CommonSettings].
  *  Android's field names + chart-channel vocabulary ARE the canonical shape, so
@@ -329,6 +343,9 @@ private data class PersistedPrefs(
     val proxyPrimaryPort: Int = 0,
     val replayPrimary: Boolean = false,
     val pairedDevices: List<PairedDevice> = emptyList(),
+    val de1CompanionId: Int? = null,
+    val scaleCompanionId: Int? = null,
+    val companionDeclined: List<String> = emptyList(),
 )
 
 private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
@@ -353,6 +370,9 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     proxyPrimaryPort = proxyPrimaryPort,
     replayPrimary = replayPrimary,
     pairedDevices = pairedDevices,
+    de1CompanionId = de1CompanionId,
+    scaleCompanionId = scaleCompanionId,
+    companionDeclined = companionDeclined,
 )
 
 private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSettings(common).copy(
@@ -376,6 +396,9 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     proxyPrimaryPort = proxyPrimaryPort,
     replayPrimary = replayPrimary,
     pairedDevices = pairedDevices,
+    de1CompanionId = de1CompanionId,
+    scaleCompanionId = scaleCompanionId,
+    companionDeclined = companionDeclined,
 )
 
 /**

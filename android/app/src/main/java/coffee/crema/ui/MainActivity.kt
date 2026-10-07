@@ -126,6 +126,13 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
 
+    /** The system "associate this device" dialog ("Reconnect when nearby"). */
+    private val companionAssociator = CompanionAssociator(
+        activity = this,
+        onAssociated = { device, address, id -> viewModel.onCompanionAssociated(device, address, id) },
+        onEnded = { reason -> viewModel.onCompanionSetupEnded(reason) },
+    )
+
     /** Android-12 BLE runtime permissions. */
     private val blePermissions = arrayOf(
         Manifest.permission.BLUETOOTH_SCAN,
@@ -223,6 +230,13 @@ class MainActivity : ComponentActivity() {
                 SafeMode.bootStable(this@MainActivity)
             }
             val ui by viewModel.ui.collectAsStateWithLifecycle()
+            // "Reconnect when nearby": launch the system association dialog.
+            LaunchedEffect(ui.companionRequest) {
+                val device = ui.companionRequest ?: return@LaunchedEffect
+                val address = viewModel.companionTargetAddress(device)
+                if (address == null) viewModel.onCompanionSetupEnded("no remembered device")
+                else companionAssociator.associate(device, address)
+            }
             // Theme mode is a persisted app pref (Settings → Display).
             val darkTheme = when (ui.themeMode) {
                 "light" -> false
@@ -230,6 +244,13 @@ class MainActivity : ComponentActivity() {
                 else -> isSystemInDarkTheme()
             }
             CremaTheme(darkTheme = darkTheme, forceDark = false) {
+                ui.companionOffer?.let { device ->
+                    coffee.crema.ui.components.CompanionOfferDialog(
+                        device = if (device == coffee.crema.ble.companion.CompanionDevice.DE1) "DE1" else "scale",
+                        onSetUp = { viewModel.startCompanionSetup(device) },
+                        onNotNow = { viewModel.declineCompanionOffer(device) },
+                    )
+                }
                 val machineConnected = ui.bleState == De1BleManager.State.READY
                 val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
                 val onRailConnect: (String) -> Unit = { which ->

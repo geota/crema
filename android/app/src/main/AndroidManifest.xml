@@ -35,6 +35,22 @@
     <!-- Guided-brew cue vibration (issue #10): a normal permission, no prompt. -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- Companion-device presence (optional, user-approved per device): the
+         system watches for an associated DE1 / scale and binds
+         CremaCompanionService when it comes into range, so Crema reconnects
+         without scanning. OBSERVE_..._PRESENCE is required for
+         startObservingDevicePresence; START_FOREGROUND_SERVICES_FROM_BACKGROUND
+         lets the keep-alive service start on a presence event (the platform's
+         documented CDM exemption from the Android 12 background-FGS-start
+         ban; preferred over the broader RUN_IN_BACKGROUND). All are normal
+         permissions and only take effect for an associated device. -->
+    <uses-permission android:name="android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+    <!-- Not required: without the feature the companion option is hidden. -->
+    <uses-feature
+        android:name="android.software.companion_device_setup"
+        android:required="false" />
+
     <!-- Require BLE hardware. -->
     <uses-feature
         android:name="android.hardware.bluetooth_le"
@@ -103,6 +119,17 @@
             android:name=".ble.De1ConnectionService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- Companion-device presence callbacks (see the permissions above).
+             Bound only by the system (BIND_COMPANION_DEVICE_SERVICE). -->
+        <service
+            android:name=".ble.companion.CremaCompanionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_COMPANION_DEVICE_SERVICE">
+            <intent-filter>
+                <action android:name="android.companion.CompanionDeviceService" />
+            </intent-filter>
+        </service>
 
         <!-- FileProvider — hands the camera app (TakePicture) a writable content
              Uri for the bean-photo capture temp file. Authority tracks the build's

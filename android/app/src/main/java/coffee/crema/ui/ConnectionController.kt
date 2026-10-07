@@ -19,6 +19,12 @@ import coffee.crema.ble.ReconnectPhase
 import coffee.crema.ble.ReconnectTimelineRecorder
 import coffee.crema.ble.ReconnectTrigger
 import coffee.crema.ble.ScaleBleManager
+import coffee.crema.ble.companion.CompanionCoordinator
+import coffee.crema.ble.companion.CompanionDevice
+import coffee.crema.ble.companion.CompanionPresence
+import coffee.crema.ble.companion.PresenceAction
+import coffee.crema.ble.companion.presenceAction
+import coffee.crema.ble.companion.presenceTarget
 import coffee.crema.ble.planKick
 import coffee.crema.ble.showsReconnecting
 import coffee.crema.ble.toLinkState
@@ -29,7 +35,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -101,6 +109,13 @@ class ConnectionController(
     private val timeline: ReconnectTimelineRecorder? = null,
     /** Monotonic clock (debounce, scan age). */
     private val nowMs: () -> Long = SystemClock::elapsedRealtime,
+    /** Companion-device associations + presence (null = not used). */
+    private val companion: CompanionCoordinator? = null,
+    /** Presence reports from the companion service ([CompanionPresence.events]). */
+    private val presenceEvents: Flow<CompanionPresence.Event> = emptyFlow(),
+    /** A device was just remembered (auto-remember on its first READY) — the
+     *  VM may offer "Reconnect automatically when it's nearby". */
+    private val onDeviceRemembered: (CompanionDevice, String) -> Unit = { _, _ -> },
 ) {
 
     /** The connection slice of the UI snapshot — the VM mirrors this into
@@ -188,6 +203,18 @@ class ConnectionController(
             IntentFilter(Intent.ACTION_USER_PRESENT),
             ContextCompat.RECEIVER_EXPORTED,
         )
+        // The lurk tier follows companion presence: idle while an associated
+        // device is reported away, a pending (autoConnect) connect otherwise.
+        companion?.let { c ->
+            ble.lurkPolicy = { c.lurkPolicy(_state.value.rememberedDe1Address, transport.supportsPendingConnect) }
+            scale.lurkPolicy = { c.lurkPolicy(_state.value.rememberedScaleAddress, transport.supportsPendingConnect) }
+        }
+        scope.launch {
+            presenceEvents.collect { e ->
+                runCatching { onPresence(e.address, e.present) }
+                    .onFailure { appendLog("Presence handling failed: ${it.message}") }
+            }
+        }
         // "Reconnecting" for the UI: remembered + not user-ended + not READY +
         // a session between/during re-attempts (or a cold-start scan).
         scope.launch {
@@ -229,6 +256,7 @@ class ConnectionController(
                             if (_state.value.rememberedDe1Address != addr) {
                                 _state.update { it.copy(rememberedDe1Address = addr) }
                                 persistPrefs()
+                                onDeviceRemembered(CompanionDevice.DE1, addr)
                             }
                         }
                         // Hosting now holds the DE1 — refresh our NSD advertisement.
@@ -258,11 +286,13 @@ class ConnectionController(
                             if (_state.value.rememberedScaleAddress != addr ||
                                 _state.value.rememberedScaleName != name
                             ) {
+                                val newDevice = _state.value.rememberedScaleAddress != addr
                                 _state.update { it.copy(
                                     rememberedScaleAddress = addr,
                                     rememberedScaleName = name,
                                 ) }
                                 persistPrefs()
+                                if (newDevice) onDeviceRemembered(CompanionDevice.SCALE, addr)
                             }
                         }
                     }
@@ -434,6 +464,33 @@ class ConnectionController(
     fun kickReconnect(trigger: ReconnectTrigger) {
         runCatching { kickDe1(trigger) }.onFailure { appendLog("DE1 reconnect kick failed: ${it.message}") }
         runCatching { kickScale(trigger) }.onFailure { appendLog("Scale reconnect kick failed: ${it.message}") }
+    }
+
+    /**
+     * A companion presence report. "Appeared" reconnects that device NOW
+     * (trigger `presence`) through the same planner as a foreground kick —
+     * a pending background connect is withdrawn for the fast path; with no
+     * session, a direct connect by address. "Disappeared" changes nothing
+     * immediately: the device's lurk policy now reads IDLE, so its next lurk
+     * round idles instead of scanning.
+     */
+    fun onPresence(address: String, present: Boolean) {
+        val st = _state.value
+        val target = presenceTarget(address, st.rememberedDe1Address, st.rememberedScaleAddress)
+        val userDisconnected = when (target) {
+            CompanionDevice.DE1 -> ble.isUserDisconnected
+            CompanionDevice.SCALE -> scale.isUserDisconnected
+            null -> false
+        }
+        when (presenceAction(target, present, userDisconnected)) {
+            PresenceAction.KICK -> {
+                appendLog("${if (target == CompanionDevice.DE1) "DE1" else "Scale"} is nearby — reconnecting")
+                if (target == CompanionDevice.DE1) kickDe1(ReconnectTrigger.PRESENCE) else kickScale(ReconnectTrigger.PRESENCE)
+            }
+            PresenceAction.IDLE ->
+                appendLog("${if (target == CompanionDevice.DE1) "DE1" else "Scale"} went out of range — waiting for it")
+            PresenceAction.IGNORE -> Unit
+        }
     }
 
     /** "Retry now" on one device's reconnecting status. */
