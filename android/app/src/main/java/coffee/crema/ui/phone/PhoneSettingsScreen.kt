@@ -154,7 +154,7 @@ fun PhoneSettingsScreen(
                     val primaryName = ui.mirroringPrimaryName
                     when (current) {
                         "machine" -> MachineSection(vm, ui.let { it }, connected, onConnect, secondary, primaryName)
-                        "peripherals" -> PeripheralsSection(vm, scaleConnected, ui.scaleName, ui.grinderModel, onConnect, onOpenScale = { onNav("scale") })
+                        "peripherals" -> PeripheralsSection(vm, scaleConnected, ui.scaleName, ui.grinderModel, onConnect, onOpenScale = { onNav("scale") }, scaleReconnecting = ui.scaleReconnecting)
                         "brew" -> BrewDefaultsSection(vm, ui.let { it })
                         "water" -> WaterSection(
                             vm, ui.let { it }, connected,
@@ -347,6 +347,9 @@ private fun MachineSection(
                 )
             }
         }
+        if (!connected && ui.de1Reconnecting) {
+            ReconnectingNotice("DE1", onRetry = { vm.retryReconnectNow(true) }, modifier = Modifier.padding(top = 8.dp))
+        }
     }
     SettingsGroup("Connection") {
         CremaSettingsRow("Telemetry rate", "How often the chart samples live data.", notImplemented = true) { CremaSettingsSelect("50 Hz") }
@@ -457,17 +460,22 @@ private fun PeripheralsSection(
     grinderModel: String,
     onConnect: (String) -> Unit,
     onOpenScale: () -> Unit,
+    scaleReconnecting: Boolean = false,
 ) {
     SettingsGroup("Connected devices") {
         CremaSettingsRow(
             "Scale",
-            if (scaleConnected) "${scaleName ?: "Connected"} · manage on the Scale page." else "Stop-on-weight & auto-tare need a scale.",
+            if (scaleConnected) "${scaleName ?: "Connected"} · manage on the Scale page."
+            else if (scaleReconnecting) "Reconnecting…"
+            else "Stop-on-weight & auto-tare need a scale.",
             last = true,
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CremaStatusDot(scaleConnected)
                 if (scaleConnected) {
                     CremaButton(onClick = onOpenScale, variant = CremaButtonVariant.Outlined, label = "Open")
+                } else if (scaleReconnecting) {
+                    RetryNowPill(onRetry = { vm.retryReconnectNow(false) })
                 } else {
                     CremaButton(onClick = { onConnect("scale") }, variant = CremaButtonVariant.Outlined, icon = "bluetooth", label = "Pair")
                 }
@@ -1149,6 +1157,7 @@ private fun AdvancedSection(
         }
         CopyDiagnosticsRow(last = true)
     }
+    SettingsGroup("Reconnects") { ReconnectTimelineList() }
     SettingsGroup("Multi-device (LAN proxy · debug)") {
         Row(
             verticalAlignment = Alignment.CenterVertically,

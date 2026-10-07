@@ -522,6 +522,8 @@ fun PhoneDevicesSheet(
     onTakeOver: () -> Unit,
     onHandOff: (clientId: String) -> Unit,
     onDismiss: () -> Unit,
+    /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
+    onRetry: (de1: Boolean) -> Unit = {},
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -538,6 +540,7 @@ fun PhoneDevicesSheet(
             onStopMirroring = onStopMirroring,
             onTakeOver = onTakeOver,
             onHandOff = onHandOff,
+            onRetry = onRetry,
             modifier = Modifier.fillMaxWidth().padding(horizontal = CremaEdge).padding(bottom = 20.dp),
         )
     }
@@ -558,6 +561,8 @@ fun DevicesPanel(
     onStopMirroring: () -> Unit,
     onTakeOver: () -> Unit,
     onHandOff: (clientId: String) -> Unit,
+    /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
+    onRetry: (de1: Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -599,13 +604,16 @@ fun DevicesPanel(
                 stat = if (connected) {
                     listOfNotNull("Connected", ui.de1Firmware).joinToString(" · ")
                 } else {
-                    when (ui.bleState) {
-                        De1BleManager.State.SCANNING -> "Scanning…"
-                        De1BleManager.State.CONNECTING, De1BleManager.State.DISCOVERING, De1BleManager.State.SUBSCRIBING -> "Connecting…"
+                    when {
+                        ui.de1Reconnecting -> "Reconnecting…"
+                        ui.bleState == De1BleManager.State.SCANNING -> "Scanning…"
+                        ui.bleState == De1BleManager.State.CONNECTING || ui.bleState == De1BleManager.State.DISCOVERING || ui.bleState == De1BleManager.State.SUBSCRIBING -> "Connecting…"
                         else -> "Not connected"
                     }
                 },
                 on = connected,
+                reconnecting = !connected && ui.de1Reconnecting,
+                onRetry = { onRetry(true) },
                 onAction = { onConnect("machine") },
                 actionEnabled = ui.bluetoothOn,
                 autoConnect = ui.rememberedDe1Address != null,
@@ -624,13 +632,16 @@ fun DevicesPanel(
                         ui.scaleFirmware?.let { add("FW $it") }
                     }.joinToString(" · ")
                 } else {
-                    when (ui.scaleState) {
-                        ScaleBleManager.State.SCANNING -> "Scanning…"
-                        ScaleBleManager.State.CONNECTING, ScaleBleManager.State.DISCOVERING, ScaleBleManager.State.SUBSCRIBING -> "Connecting…"
+                    when {
+                        ui.scaleReconnecting -> "Reconnecting…"
+                        ui.scaleState == ScaleBleManager.State.SCANNING -> "Scanning…"
+                        ui.scaleState == ScaleBleManager.State.CONNECTING || ui.scaleState == ScaleBleManager.State.DISCOVERING || ui.scaleState == ScaleBleManager.State.SUBSCRIBING -> "Connecting…"
                         else -> "Not paired"
                     }
                 },
                 on = scaleConnected,
+                reconnecting = !scaleConnected && ui.scaleReconnecting,
+                onRetry = { onRetry(false) },
                 onAction = { onConnect("scale") },
                 actionEnabled = ui.bluetoothOn,
                 autoConnect = ui.rememberedScaleAddress != null,
@@ -677,6 +688,8 @@ fun TabletDevicesSheet(
     onTakeOver: () -> Unit,
     onHandOff: (clientId: String) -> Unit,
     onDismiss: () -> Unit,
+    /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
+    onRetry: (de1: Boolean) -> Unit = {},
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -694,6 +707,7 @@ fun TabletDevicesSheet(
             onStopMirroring = onStopMirroring,
             onTakeOver = onTakeOver,
             onHandOff = onHandOff,
+            onRetry = onRetry,
             modifier = Modifier.fillMaxWidth().padding(horizontal = CremaEdge).padding(top = 2.dp, bottom = 10.dp),
         )
     }
@@ -714,10 +728,14 @@ fun DevicesPanelWide(
     onStopMirroring: () -> Unit,
     onTakeOver: () -> Unit,
     onHandOff: (clientId: String) -> Unit,
+    /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
+    onRetry: (de1: Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val machineStat = if (connected) {
         listOfNotNull("Connected", ui.de1Firmware).joinToString(" · ")
+    } else if (ui.de1Reconnecting) {
+        "Reconnecting…"
     } else when (ui.bleState) {
         De1BleManager.State.SCANNING -> "Scanning…"
         De1BleManager.State.CONNECTING, De1BleManager.State.DISCOVERING, De1BleManager.State.SUBSCRIBING -> "Connecting…"
@@ -729,6 +747,8 @@ fun DevicesPanelWide(
             ui.scaleBatteryPercent?.let { add("$it%") }
             ui.scaleFirmware?.let { add("FW $it") }
         }.joinToString(" · ")
+    } else if (ui.scaleReconnecting) {
+        "Reconnecting…"
     } else when (ui.scaleState) {
         ScaleBleManager.State.SCANNING -> "Scanning…"
         ScaleBleManager.State.CONNECTING, ScaleBleManager.State.DISCOVERING, ScaleBleManager.State.SUBSCRIBING -> "Connecting…"
@@ -790,6 +810,8 @@ fun DevicesPanelWide(
                 autoConnect = ui.rememberedDe1Address != null,
                 autoConnectEnabled = connected || ui.rememberedDe1Address != null,
                 onAutoConnect = onDe1AutoConnect,
+                reconnecting = !connected && ui.de1Reconnecting,
+                onRetry = { onRetry(true) },
                 modifier = m,
             )
         }
@@ -803,6 +825,8 @@ fun DevicesPanelWide(
                 autoConnect = ui.rememberedScaleAddress != null,
                 autoConnectEnabled = scaleConnected || ui.rememberedScaleAddress != null,
                 onAutoConnect = onScaleAutoConnect,
+                reconnecting = !scaleConnected && ui.scaleReconnecting,
+                onRetry = { onRetry(false) },
                 modifier = m,
             )
         }
@@ -867,6 +891,9 @@ private fun WideDeviceTile(
     autoConnect: Boolean,
     autoConnectEnabled: Boolean,
     onAutoConnect: (Boolean) -> Unit,
+    /** Show a "Retry now" pill (the device is reconnecting). */
+    reconnecting: Boolean = false,
+    onRetry: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val tel = CremaTheme.telemetry
@@ -899,6 +926,7 @@ private fun WideDeviceTile(
                     }
                 }
             }
+            if (reconnecting) RetryNowPill(onRetry)
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -959,6 +987,9 @@ private fun DeviceRow(
     autoConnect: Boolean = false,
     autoConnectEnabled: Boolean = false,
     onAutoConnect: (Boolean) -> Unit = {},
+    /** Show a "Retry now" pill under the status (the device is reconnecting). */
+    reconnecting: Boolean = false,
+    onRetry: () -> Unit = {},
 ) {
     val tel = CremaTheme.telemetry
     Row(
@@ -995,6 +1026,7 @@ private fun DeviceRow(
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
             }
+            if (reconnecting) RetryNowPill(onRetry, Modifier.padding(top = 4.dp))
         }
         // Per-device Auto-connect — a compact label-over-switch BESIDE the Pair
         // pill (ON remembers the device; OFF forgets it). Always shown; greyed out

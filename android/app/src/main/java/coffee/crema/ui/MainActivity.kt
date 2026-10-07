@@ -524,6 +524,7 @@ class MainActivity : ComponentActivity() {
                         onStopMirroring = { viewModel.switchToNormal(); showDevices = false },
                         onTakeOver = { viewModel.requestHandoff(); showDevices = false },
                         onHandOff = { id -> viewModel.offerHandoff(id); showDevices = false },
+                        onRetry = viewModel::retryReconnectNow,
                         onDismiss = { showDevices = false },
                     )
                 }

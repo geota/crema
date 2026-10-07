@@ -8,10 +8,20 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import androidx.core.content.ContextCompat
+import android.os.SystemClock
 import coffee.crema.ble.BleScanner
 import coffee.crema.ble.BleTransport
 import coffee.crema.ble.De1BleManager
+import coffee.crema.ble.KickAction
+import coffee.crema.ble.KickDebouncer
+import coffee.crema.ble.ReconnectKicker
+import coffee.crema.ble.ReconnectPhase
+import coffee.crema.ble.ReconnectTimelineRecorder
+import coffee.crema.ble.ReconnectTrigger
 import coffee.crema.ble.ScaleBleManager
+import coffee.crema.ble.planKick
+import coffee.crema.ble.showsReconnecting
+import coffee.crema.ble.toLinkState
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -19,6 +29,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -84,6 +95,12 @@ class ConnectionController(
      *  suppress-sleep pref, the screensaver and a sleeping machine, and
      *  writes UserPresent. */
     private val keepAliveTick: () -> Unit,
+    /** Whether the activity is visible — gates the unlock (USER_PRESENT) kick. */
+    private val isAppForeground: () -> Boolean = { true },
+    /** Reconnect timelines; a kick that starts a fresh connect opens an episode. */
+    private val timeline: ReconnectTimelineRecorder? = null,
+    /** Monotonic clock (debounce, scan age). */
+    private val nowMs: () -> Long = SystemClock::elapsedRealtime,
 ) {
 
     /** The connection slice of the UI snapshot — the VM mirrors this into
@@ -103,6 +120,11 @@ class ConnectionController(
         val rememberedScaleAddress: String? = null,
         /** The remembered scale's advertised name (the codec re-derive key). */
         val rememberedScaleName: String? = null,
+        /** The DE1 is being reconnected (between / during re-attempts, or a
+         *  cold-start scan) — the UI shows "Reconnecting…" + "Retry now". */
+        val de1Reconnecting: Boolean = false,
+        /** The scale twin of [de1Reconnecting]. */
+        val scaleReconnecting: Boolean = false,
     )
 
     private val _state = MutableStateFlow(State())
@@ -110,6 +132,24 @@ class ConnectionController(
 
     /** The scale keep-alive loop, running only while a scale is READY. */
     private var scaleHeartbeatJob: Job? = null
+
+    /** Debounces the kick paths that start a fresh connect (no session to kick). */
+    private val kickDebouncer = KickDebouncer(nowMs)
+
+    /** When each device's cold-start scan want was registered, for [planKick]'s
+     *  scan-age rule; cleared when the want resolves or is cancelled. */
+    @Volatile private var de1ScanSinceMs: Long? = null
+    @Volatile private var scaleScanSinceMs: Long? = null
+
+    /** Screen unlocked (USER_PRESENT) while the app is visible: reconnect now.
+     *  onStart covers most returns; this catches unlocking onto a visible app. */
+    private val userPresentReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == Intent.ACTION_USER_PRESENT && isAppForeground()) {
+                kickReconnect(ReconnectTrigger.FOREGROUND)
+            }
+        }
+    }
 
     /** Receiver for the system Bluetooth on/off broadcast — registered in
      *  [start], unregistered in [close]. Reflects adapter state into [state]
@@ -121,7 +161,7 @@ class ConnectionController(
             val on = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR) ==
                 BluetoothAdapter.STATE_ON
             _state.update { it.copy(bluetoothOn = on) }
-            if (on) onBluetoothEnabled()
+            if (on) kickReconnect(ReconnectTrigger.BLUETOOTH_ON)
         }
     }
 
@@ -141,6 +181,29 @@ class ConnectionController(
             IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
+        // USER_PRESENT is a protected system broadcast — EXPORTED is required
+        // to receive it (no app can forge it).
+        ContextCompat.registerReceiver(
+            app, userPresentReceiver,
+            IntentFilter(Intent.ACTION_USER_PRESENT),
+            ContextCompat.RECEIVER_EXPORTED,
+        )
+        // "Reconnecting" for the UI: remembered + not user-ended + not READY +
+        // a session between/during re-attempts (or a cold-start scan).
+        scope.launch {
+            combine(ble.state, ble.reconnectPhaseFlow) { s, p -> s to p }.collect { (s, p) ->
+                if (s != De1BleManager.State.SCANNING) de1ScanSinceMs = null
+                val r = showsReconnecting(_state.value.rememberedDe1Address != null, ble.isUserDisconnected, p, s.toLinkState())
+                _state.update { it.copy(de1Reconnecting = r) }
+            }
+        }
+        scope.launch {
+            combine(scale.state, scale.reconnectPhaseFlow) { s, p -> s to p }.collect { (s, p) ->
+                if (s != ScaleBleManager.State.SCANNING) scaleScanSinceMs = null
+                val r = showsReconnecting(_state.value.rememberedScaleAddress != null, scale.isUserDisconnected, p, s.toLinkState())
+                _state.update { it.copy(scaleReconnecting = r) }
+            }
+        }
         // Collect the managers' coarse connection-state flows so the UI
         // snapshot updates promptly when either advances — rather than only
         // when an unrelated event happens to arrive.
@@ -227,6 +290,7 @@ class ConnectionController(
      *  Called from the VM's `onCleared`, before the transport closes. */
     fun close() {
         runCatching { app.unregisterReceiver(bluetoothReceiver) }
+        runCatching { app.unregisterReceiver(userPresentReceiver) }
         bleScanner.cancel(SCAN_LABEL_DE1)
         bleScanner.cancel(SCAN_LABEL_SCALE)
         ble.disconnect()
@@ -240,12 +304,18 @@ class ConnectionController(
         onConnectStarted()
         // Show "scanning" on the connection-status UI while the shared scanner
         // hunts; the scanner's onFound hands the matched DE1 to ble.connect.
+        scanForDe1()
+        // The manager's state flow is collected in [start]; markScanning() above
+        // already pushed the new state, so no manual reflection is needed here.
+    }
+
+    /** Hand the DE1 hunt to the shared scanner (no event-log reset). */
+    private fun scanForDe1() {
         ble.markScanning()
+        de1ScanSinceMs = nowMs()
         bleScanner.scanFor(SCAN_LABEL_DE1, De1BleManager::isDe1Name) { device, _ ->
             ble.connect(device)
         }
-        // The manager's state flow is collected in [start]; markScanning() above
-        // already pushed the new state, so no manual reflection is needed here.
     }
 
     fun disconnect() {
@@ -269,6 +339,7 @@ class ConnectionController(
         // than identify, so a mixed-case unit could pass identify but never
         // scan-match — e.g. "eCompass" vs "ECOMPASS").
         val prefixes = scale.supportedScaleNamePrefixes()
+        scaleScanSinceMs = nowMs()
         bleScanner.scanFor(SCAN_LABEL_SCALE, { name -> prefixes.any { name.startsWith(it, ignoreCase = true) } }) { device, name ->
             scale.connect(device, name)
         }
@@ -326,53 +397,108 @@ class ConnectionController(
         ble.autoReconnectEnabled = de1Address != null
         scale.autoReconnectEnabled = scaleAddress != null
         runCatching {
-            if (de1Address != null && ble.state.value == De1BleManager.State.IDLE) connect()
-            if (scaleAddress != null && scale.state.value == ScaleBleManager.State.IDLE) connectScale()
+            if (de1Address != null && ble.state.value == De1BleManager.State.IDLE) {
+                timeline?.begin(De1BleManager.TIMELINE_DEVICE, ReconnectTrigger.LAUNCH)
+                timeline?.mark(De1BleManager.TIMELINE_DEVICE, ReconnectPhase.SCAN)
+                connect()
+            }
+            if (scaleAddress != null && scale.state.value == ScaleBleManager.State.IDLE) {
+                timeline?.begin(ScaleBleManager.TIMELINE_DEVICE, ReconnectTrigger.LAUNCH)
+                timeline?.mark(ScaleBleManager.TIMELINE_DEVICE, ReconnectPhase.SCAN)
+                connectScale()
+            }
         }
     }
 
-    /** Bluetooth came back ON: kick a fresh connect for any remembered device that
-     *  isn't already connecting/connected. Its reconnect loop may have given up
-     *  (MAX_RECONNECT_ATTEMPTS) while the adapter was off, so nothing else retries. */
-    private fun onBluetoothEnabled() {
-        // Re-kick anything not already connected or mid-handshake. SCANNING is
-        // included on purpose: a scan in flight when the adapter went off is
-        // parked on the shared scan. The transport self-heals that scan when the
-        // adapter powers on (NordicBleTransport.rawScan's retryWhen), so a
-        // first-time pairing recovers on its own — but for a REMEMBERED device we
-        // still prefer the scan-free DIRECT connect below, which also works when
-        // the (unfiltered) scan is throttled to silence with the screen off
-        // (reaprime #107). connectScale/connect cancel+replace the stale want; the
-        // direct branch cancels it explicitly (see below) so the self-healed scan
-        // can't fire a second, competing connect for the same device.
-        fun stale(s: De1BleManager.State) =
-            s == De1BleManager.State.IDLE || s == De1BleManager.State.DISCONNECTED || s == De1BleManager.State.SCANNING
-        fun stale(s: ScaleBleManager.State) =
-            s == ScaleBleManager.State.IDLE || s == ScaleBleManager.State.DISCONNECTED || s == ScaleBleManager.State.SCANNING
-        runCatching {
-            // Prefer a scan-free DIRECT connect by the remembered address:
-            // this receiver can fire with the app backgrounded and the
-            // screen off, where Android throttles our (deliberately)
-            // unfiltered scan to zero results — the reaprime #107 failure.
-            // A direct GATT connect is never throttled. Fall back to the
-            // name scan when the transport can't mint address handles
-            // (LAN-proxy mode) or the scale's name was never persisted.
-            val st = _state.value
-            if (st.rememberedDe1Address != null && stale(ble.state.value)) {
-                val direct = transport.resolveByAddress(st.rememberedDe1Address, "DE1")
+    /**
+     * Reconnect every remembered device NOW — the app came back to the
+     * foreground, the screen was unlocked onto it, Bluetooth came back on, or
+     * the user tapped "Retry now". Per device ([planKick]):
+     *  - a live session between attempts has its backoff / lurk wait
+     *    interrupted and its ladder reset to the fast burst (the session's own
+     *    [ReconnectKicker] refuses a second concurrent attempt, ignores READY,
+     *    and debounces);
+     *  - with no session (a cold-start scan parked for a while, or nothing),
+     *    a scan-free DIRECT connect by the remembered address — never
+     *    throttled, unlike our unfiltered scan with the screen off (reaprime
+     *    #107) — falling back to the name scan where the transport can't mint
+     *    address handles (LAN proxy) or the scale's name was never saved;
+     *  - a device the user disconnected, READY, or mid-handshake: nothing.
+     *
+     * Why the DE1's session kick reconnects scan-first (its [De1BleManager]
+     * reconnect path) while a fresh connect goes direct: a live session's
+     * handle may be stale after a DE1 power cycle (the #65 GATT-133 storm),
+     * and its short address-filtered scan both refreshes it and, in the
+     * foreground, finds an advertising DE1 within a second or two.
+     */
+    fun kickReconnect(trigger: ReconnectTrigger) {
+        runCatching { kickDe1(trigger) }.onFailure { appendLog("DE1 reconnect kick failed: ${it.message}") }
+        runCatching { kickScale(trigger) }.onFailure { appendLog("Scale reconnect kick failed: ${it.message}") }
+    }
+
+    /** "Retry now" on one device's reconnecting status. */
+    fun retryNow(de1: Boolean) {
+        if (de1) kickDe1(ReconnectTrigger.USER_RETRY) else kickScale(ReconnectTrigger.USER_RETRY)
+    }
+
+    private fun kickDe1(trigger: ReconnectTrigger) {
+        val st = _state.value
+        val remembered = st.rememberedDe1Address ?: return
+        val action = planKick(
+            remembered = true,
+            userDisconnected = ble.isUserDisconnected,
+            phase = ble.reconnectPhase,
+            link = ble.state.value.toLinkState(),
+            scanAgeMs = de1ScanSinceMs?.let { nowMs() - it },
+        )
+        when (action) {
+            KickAction.NONE -> Unit
+            KickAction.KICK_SESSION -> {
+                val r = ble.kickReconnect(trigger)
+                if (r == ReconnectKicker.Result.KICKED) appendLog("DE1: reconnecting now (${trigger.label})")
+            }
+            KickAction.DIRECT_CONNECT -> {
+                if (!kickDebouncer.tryAcquire(De1BleManager.TIMELINE_DEVICE)) return
+                appendLog("DE1: connecting now (${trigger.label})")
+                timeline?.begin(De1BleManager.TIMELINE_DEVICE, trigger)
+                val direct = transport.resolveByAddress(remembered, "DE1")
                 if (direct != null) {
-                    // Drop any parked cold-start scan want first: the now-healed
-                    // scan must not deliver a match that fires a second, competing
-                    // ble.connect() against this direct connect.
+                    // Drop any parked cold-start scan want first: a scan that
+                    // heals later must not deliver a match that fires a second,
+                    // competing ble.connect() against this direct connect.
                     bleScanner.cancel(SCAN_LABEL_DE1)
+                    de1ScanSinceMs = null
                     ble.markScanning()
                     ble.connect(direct)
                 } else {
-                    connect()
+                    timeline?.mark(De1BleManager.TIMELINE_DEVICE, ReconnectPhase.SCAN)
+                    scanForDe1()
                 }
             }
-            if (st.rememberedScaleAddress != null && stale(scale.state.value)) {
-                kickScaleReconnect()
+        }
+    }
+
+    private fun kickScale(trigger: ReconnectTrigger) {
+        val st = _state.value
+        if (st.rememberedScaleAddress == null) return
+        val action = planKick(
+            remembered = true,
+            userDisconnected = scale.isUserDisconnected,
+            phase = scale.reconnectPhase,
+            link = scale.state.value.toLinkState(),
+            scanAgeMs = scaleScanSinceMs?.let { nowMs() - it },
+        )
+        when (action) {
+            KickAction.NONE -> Unit
+            KickAction.KICK_SESSION -> {
+                val r = scale.kickReconnect(trigger)
+                if (r == ReconnectKicker.Result.KICKED) appendLog("Scale: reconnecting now (${trigger.label})")
+            }
+            KickAction.DIRECT_CONNECT -> {
+                if (!kickDebouncer.tryAcquire(ScaleBleManager.TIMELINE_DEVICE)) return
+                appendLog("Scale: connecting now (${trigger.label})")
+                timeline?.begin(ScaleBleManager.TIMELINE_DEVICE, trigger)
+                directOrScanScale()
             }
         }
     }
@@ -385,10 +511,21 @@ class ConnectionController(
      * scale can still arrive mid-shot, where the #15 fix arms SAW late.
      */
     fun kickScaleReconnect() {
-        val st = _state.value
         val s = scale.state.value
         val stale = s == ScaleBleManager.State.IDLE || s == ScaleBleManager.State.DISCONNECTED || s == ScaleBleManager.State.SCANNING
         if (!stale) return
+        // A live session between attempts: interrupt its wait instead of
+        // replacing it (replacing used to race its teardown).
+        if (scale.reconnectPhase != ReconnectKicker.Phase.IDLE) {
+            scale.kickReconnect(ReconnectTrigger.USER_RETRY)
+            return
+        }
+        directOrScanScale()
+    }
+
+    /** Direct connect by the remembered address when possible, else the scan. */
+    private fun directOrScanScale() {
+        val st = _state.value
         runCatching {
             val name = st.rememberedScaleName
             val direct = if (st.rememberedScaleAddress != null && name != null) {
@@ -398,8 +535,10 @@ class ConnectionController(
             }
             if (direct != null && name != null) {
                 bleScanner.cancel(SCAN_LABEL_SCALE)
+                scaleScanSinceMs = null
                 scale.connect(direct, name)
             } else {
+                timeline?.mark(ScaleBleManager.TIMELINE_DEVICE, ReconnectPhase.SCAN)
                 connectScale()
             }
         }

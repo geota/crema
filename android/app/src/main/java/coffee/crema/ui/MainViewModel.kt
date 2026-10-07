@@ -461,6 +461,11 @@ data class MainUiState(
     /** The remembered scale's advertised name — feeds the scan-free direct
      *  reconnect (codec identify needs the name). */
     val rememberedScaleName: String? = null,
+    /** The DE1 is reconnecting (a remembered device between / during
+     *  re-attempts) — the device rows show "Reconnecting…" and "Retry now". */
+    val de1Reconnecting: Boolean = false,
+    /** The scale twin of [de1Reconnecting]. */
+    val scaleReconnecting: Boolean = false,
     /**
      * Raw MMR register values the DE1 reported, keyed by [MmrRegister]. Folded
      * from each `Event.MmrValue`; values are the **raw** 32-bit words — the UI
@@ -1938,6 +1943,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         recorder = bleRecorder,
         onCoreOutput = ::onCoreOutputJson,
         onStatus = { line -> _ui.update { it.copy(status = line) } },
+        timeline = coffee.crema.diag.ReconnectTimelines.recorder,
     )
 
     /** Keeps the process — and thus the DE1 link + its reconnect loop — alive
@@ -1964,6 +1970,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onCoreOutput = ::onCoreOutputJson,
         onStatus = { line -> _ui.update { it.copy(status = line) } },
         onScaleIdentified = ::refreshScaleCapabilities,
+        timeline = coffee.crema.diag.ReconnectTimelines.recorder,
     )
 
     /**
@@ -2043,6 +2050,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 pokeUserPresent()
             }
         },
+        isAppForeground = { appInForeground },
+        timeline = coffee.crema.diag.ReconnectTimelines.recorder,
     )
 
     /** Every store file reported unreadable this process (see [KeptAsideNotices]). */
@@ -2060,6 +2069,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(keptAsideNotice = msg) }
             }
         }
+        // Each finished reconnect episode → one compact line in the event log
+        // (and so the diagnostics ring buffer).
+        coffee.crema.diag.ReconnectTimelines.recorder.onFinished = { appendLog(it.compactLine()) }
     }
 
     /** The kept-aside snackbar was dismissed or timed out. */
@@ -2169,6 +2181,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         rememberedDe1Address = cs.rememberedDe1Address,
                         rememberedScaleAddress = cs.rememberedScaleAddress,
                         rememberedScaleName = cs.rememberedScaleName,
+                        de1Reconnecting = cs.de1Reconnecting,
+                        scaleReconnecting = cs.scaleReconnecting,
                     )
                 }
                 // The background keep-alive is wanted whenever a DE1 connection
@@ -4384,8 +4398,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (foreground) {
             noteUserInteraction()
             if (_ui.value.suppressDe1Sleep) pokeUserPresent()
+            // Coming back is when a slow reconnect hurts: interrupt any
+            // remembered device's backoff / 60 s lurk wait and try NOW (the
+            // foreground scan isn't throttled). Debounced per device, a no-op
+            // for READY / mid-handshake / user-disconnected devices.
+            connection.kickReconnect(coffee.crema.ble.ReconnectTrigger.FOREGROUND)
         }
     }
+
+    /** "Retry now" on a reconnecting device row ([de1] = the DE1, else the scale). */
+    fun retryReconnectNow(de1: Boolean) = connection.retryNow(de1)
 
     /** Monotonic ms of the last sleep the app itself asked for (the Brew power
      *  button, the phone menu, a mirrored peer), or 0 once consumed. */
@@ -5667,6 +5689,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         super.onCleared()
         // Adapter watcher off, scans cancelled, both device links down…
         connection.close()
+        // The recorder is process-scoped: don't let it pin this VM.
+        coffee.crema.diag.ReconnectTimelines.recorder.onFinished = {}
         // Close the transport last — it unregisters the Nordic environment's
         // Bluetooth receiver and tears down the central manager. The managers'
         // disconnect() calls above are fire-and-forget coroutines; closing the

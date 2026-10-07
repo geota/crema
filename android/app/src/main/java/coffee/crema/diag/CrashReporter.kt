@@ -111,6 +111,14 @@ object CrashReporter {
                 appendLine()
                 appendLine(lastShot.trim())
             }
+            // How the last reconnects went, phase by phase — the "it takes a
+            // while to reconnect" report answers itself here.
+            val reconnects = runCatching { ReconnectTimelines.snapshotLines() }.getOrDefault(emptyList())
+            if (reconnects.isNotEmpty()) {
+                appendLine()
+                appendLine("-- reconnect timelines (newest first) --")
+                reconnects.forEach { appendLine(it) }
+            }
             appendLine()
             appendLine("-- recent log (last ${recent.size} lines) --")
             recent.forEach { appendLine(it) }
