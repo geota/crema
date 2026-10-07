@@ -73,6 +73,8 @@ class De1BleManager(
     private val onCoreOutput: (String) -> Unit,
     /** Called with human-readable status transitions for the UI log. */
     private val onStatus: (String) -> Unit,
+    /** Per-episode reconnect timelines (Settings → Advanced, diagnostics). */
+    private val timeline: ReconnectTimelineRecorder? = null,
 ) {
     enum class State { IDLE, SCANNING, CONNECTING, DISCOVERING, SUBSCRIBING, READY, DISCONNECTED }
 
@@ -127,6 +129,32 @@ class De1BleManager(
     private var sessionJob: Job? = null
 
     /**
+     * Bumped by every [connect]. A replaced session's `finally` teardown runs
+     * asynchronously AFTER the new session started — without this guard it
+     * nulled [device] (and forced DISCONNECTED) under the new session, which
+     * then reached READY with every write "ignored — not connected".
+     */
+    @Volatile
+    private var sessionGen = 0
+
+    /** Interrupts the session's backoff / lurk wait — see [kickReconnect]. */
+    private val kicker = ReconnectKicker(nowMs = SystemClock::elapsedRealtime)
+
+    /** Where the reconnect supervisor is: IDLE (no session), ATTEMPTING,
+     *  CONNECTED or WAITING (backoff / lurk). */
+    val reconnectPhase: ReconnectKicker.Phase get() = kicker.phase
+
+    /** [reconnectPhase], observable. */
+    val reconnectPhaseFlow: StateFlow<ReconnectKicker.Phase> get() = kicker.phaseFlow
+
+    /** True after a user [disconnect] until the next [connect] — a session the
+     *  user ended must stay ended (no foreground / presence kick revives it). */
+    val isUserDisconnected: Boolean get() = userInitiated
+
+    /** Advertisement misses in a row on reconnect — see [establish]. */
+    private var consecutiveAdvertMisses = 0
+
+    /**
      * Passive dead-link detector (geota/crema#65); runs while the link is READY,
      * cancelled on every drop / reconnect / [disconnect]. See [livenessLoop].
      */
@@ -165,12 +193,26 @@ class De1BleManager(
     fun connect(device: BleTransport.DeviceHandle) {
         this.device = device
         userInitiated = false
+        consecutiveAdvertMisses = 0
         _state.value = State.CONNECTING
         onStatus("Connecting…")
         // One supervisor coroutine owns the whole connect → (drop → reconnect)*
         // lifecycle; a user-initiated disconnect() cancels it.
         sessionJob?.cancel()
-        sessionJob = scope.launch { session(device) }
+        val gen = ++sessionGen
+        sessionJob = scope.launch { session(device, gen) }
+    }
+
+    /**
+     * Attempt a reconnect NOW (the app came back to the foreground, "Retry
+     * now", Bluetooth on, presence): interrupts the supervisor's backoff /
+     * lurk wait and resets it to the fast burst. A no-op while READY or with
+     * no session, debounced, never a second concurrent attempt, and refused
+     * for a session the user disconnected or with auto-reconnect off.
+     */
+    fun kickReconnect(trigger: ReconnectTrigger): ReconnectKicker.Result {
+        if (userInitiated || !autoReconnectEnabled) return ReconnectKicker.Result.IGNORED_IDLE
+        return kicker.kick(trigger)
     }
 
     /**
@@ -184,13 +226,16 @@ class De1BleManager(
      * [reconnectingSession] cap. The DE1 keeps running its profile autonomously
      * during the gap; on reconnect the seed reads re-sync machine state.
      */
-    private suspend fun session(device: BleTransport.DeviceHandle) {
+    private suspend fun session(device: BleTransport.DeviceHandle, gen: Int) {
         reconnectingSession(
             label = "DE1",
             logTag = TAG,
             status = onStatus,
             isUserInitiated = { userInitiated },
             isAutoReconnectEnabled = { autoReconnectEnabled },
+            kicker = kicker,
+            timeline = timeline,
+            expectPostConnect = true,
             establish = { firstConnect -> establish(device, firstConnect = firstConnect) },
             awaitDrop = {
                 transport.connectionState(device).first {
@@ -212,7 +257,10 @@ class De1BleManager(
                 // does NOT notify them at connect, so subscribing alone leaves
                 // those rows blank. Re-seeded on every (re)connect so a reconnect
                 // re-syncs state. Best-effort, off the loop.
-                scope.launch { seedReads(device) }
+                scope.launch {
+                    seedReads(device)
+                    timeline?.postConnectDone(TIMELINE_DEVICE)
+                }
                 // Watch for a silent drop even on the idle screensaver (#65).
                 startLivenessLoop(device)
             },
@@ -221,6 +269,9 @@ class De1BleManager(
                 stopLivenessLoop()
             },
             teardown = {
+                // A replaced session (a newer connect()) must not tear down the
+                // state its successor now owns.
+                if (gen != sessionGen) return@reconnectingSession
                 stopLivenessLoop()
                 if (recording) {
                     recording = false
@@ -254,14 +305,32 @@ class De1BleManager(
         if (!firstConnect) {
             _state.value = State.SCANNING
             onStatus("Looking for the DE1…")
-            if (!transport.awaitAdvertisement(device, RECONNECT_SCAN_TIMEOUT_MS)) {
-                error("DE1 not seen advertising within ${RECONNECT_SCAN_TIMEOUT_MS / 1000}s")
+            timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.SCAN)
+            if (transport.awaitAdvertisement(device, RECONNECT_SCAN_TIMEOUT_MS)) {
+                consecutiveAdvertMisses = 0
+            } else {
+                // Belt and braces: every third miss in a row, try one direct
+                // connect anyway rather than back off. The scan-first rule
+                // exists for the power-cycled-machine 133 storm, but a stack
+                // whose address filter misses the DE1 with the screen off
+                // (where the unfiltered half of the scan is throttled) would
+                // otherwise never reconnect in the background at all.
+                consecutiveAdvertMisses++
+                if (consecutiveAdvertMisses % DIRECT_FALLBACK_EVERY_N_MISSES != 0) {
+                    error("DE1 not seen advertising within ${RECONNECT_SCAN_TIMEOUT_MS / 1000}s")
+                }
+                onStatus("DE1 not seen advertising — trying a direct connect")
             }
             _state.value = State.CONNECTING
             onStatus("Reconnecting…")
         }
-        // BleTransport.connect suspends until connected AND services discovered.
-        transport.connect(device)
+        timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.GATT_CONNECT)
+        // BleTransport.connect suspends until connected AND services discovered;
+        // onLinkUp splits the GATT connect from discovery for the timeline.
+        transport.connect(device) {
+            _state.value = State.DISCOVERING
+            timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.DISCOVER)
+        }
         _state.value = State.DISCOVERING
         onStatus("Connected — discovering services…")
         // Join the shared session recording ONCE per session (not per reconnect),
@@ -272,6 +341,7 @@ class De1BleManager(
         }
         _state.value = State.SUBSCRIBING
         onStatus("Subscribing to StateInfo + ShotSample…")
+        timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.SUBSCRIBE)
         startObserving(device)
     }
 
@@ -279,6 +349,7 @@ class De1BleManager(
         // Mark intentional BEFORE cancelling so the session loop's finally and
         // any in-flight connectionState wait know not to reconnect.
         userInitiated = true
+        timeline?.end(TIMELINE_DEVICE, ReconnectOutcome.CANCELLED)
         sessionJob?.cancel()
         sessionJob = null
         stopLivenessLoop()
@@ -634,6 +705,13 @@ class De1BleManager(
          *  Short enough to retry briskly, long enough to catch a machine still
          *  booting after a power outage across a couple of advertise cycles. */
         private const val RECONNECT_SCAN_TIMEOUT_MS = 12_000L
+
+        /** Every Nth consecutive advertisement miss falls back to one direct
+         *  connect (see [establish]). */
+        private const val DIRECT_FALLBACK_EVERY_N_MISSES = 3
+
+        /** The reconnect-timeline device key — matches the supervisor label. */
+        const val TIMELINE_DEVICE = "DE1"
 
         /** How often the passive liveness loop wakes to check link activity (#65). */
         private const val LIVENESS_CHECK_INTERVAL_MS = 15_000L
