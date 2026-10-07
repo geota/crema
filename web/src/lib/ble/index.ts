@@ -15,8 +15,16 @@ export {
 	isWebBluetoothSupported,
 	type ConnState,
 	type BleNotification,
+	type KickResult,
 	type NotificationSink
 } from './transport';
+export {
+	reconnectTimelines,
+	compactLine,
+	timeToReadyMs,
+	type ReconnectTimeline,
+	type ReconnectTrigger
+} from './reconnect-timeline';
 export {
 	De1Manager,
 	EMPTY_DE1_DIAGNOSTICS,

@@ -29,7 +29,8 @@ import { describeError } from '$lib/utils/error';
 import type { AppRuntime } from '$lib/effect/runtime';
 import { scaleConnectProgram } from '$lib/services/scale-orchestrator';
 import type { BleConnectionState } from './connection-state';
-import { BleDevice, requestDevice, type ConnState } from './transport';
+import { BleDevice, requestDevice, type ConnState, type KickResult } from './transport';
+import type { ReconnectTrigger } from './reconnect-timeline';
 import { scaleScanUuids } from '$lib/wasm/de1_wasm';
 
 /** The pre-connect scan filter set across all supported scales (the core owns
@@ -144,6 +145,7 @@ export class ScaleManager {
 			return;
 		}
 		this.device = device;
+		device.setReconnectTimeline('Scale');
 		// A terminal disconnect — user-initiated or auto-reconnect giving up.
 		device.onDisconnected(() => {
 			this.callbacks.onState('disconnected');
@@ -213,6 +215,11 @@ export class ScaleManager {
 		}
 		this.callbacks.onState('ready');
 		this.callbacks.onStatus('Ready — receiving scale weight');
+	}
+
+	/** Attempt a pending reconnect NOW — the scale twin of `De1Manager.kick`. */
+	kick(trigger: ReconnectTrigger): KickResult {
+		return this.device?.kick(trigger) ?? 'ignored-idle';
 	}
 
 	/** Disconnect the scale. */

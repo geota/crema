@@ -20,6 +20,7 @@
 	import { createCremaApp, type CremaApp } from '$lib/state';
 	import { CremaSidebar } from '$lib/components';
 	import DebugPanel from '$lib/shell/DebugPanel.svelte';
+	import ReconnectStrip from '$lib/shell/ReconnectStrip.svelte';
 	import ToastHost from '$lib/components/shared/ToastHost.svelte';
 	import { toast } from '$lib/components/shared/toast.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
@@ -56,6 +57,7 @@
 	// scope so `onDestroy` can detach them.
 	let onOnline: (() => void) | null = null;
 	let onVisibility: (() => void) | null = null;
+	let onPageShow: ((e: PageTransitionEvent) => void) | null = null;
 	// Unreadable stores kept aside / failed saves -> toasts (see storage-notices).
 	let stopStorageNotices: (() => void) | null = null;
 
@@ -104,10 +106,20 @@
 			retryDecent();
 		};
 		onVisibility = () => {
-			if (document.visibilityState === 'visible') drainNow();
+			if (document.visibilityState !== 'visible') return;
+			drainNow();
+			// Back in view: a DE1 / scale whose auto-reconnect is sitting out a
+			// backoff or the 60 s lurk (timers Chrome throttles in a hidden tab)
+			// tries again now. Debounced per device; a no-op when connected.
+			app?.kickReconnect('foreground');
+		};
+		// Restored from the back/forward cache: no visibilitychange fires.
+		onPageShow = (e) => {
+			if (e.persisted) app?.kickReconnect('foreground');
 		};
 		window.addEventListener('online', onOnline);
 		document.addEventListener('visibilitychange', onVisibility);
+		window.addEventListener('pageshow', onPageShow);
 		try {
 			// Thread the runtime into the orchestrator so its Visualizer side
 			// effects (queue lifecycle, shot-completion upload) run on it.
@@ -145,6 +157,7 @@
 		stopStorageNotices?.();
 		if (onOnline) window.removeEventListener('online', onOnline);
 		if (onVisibility) document.removeEventListener('visibilitychange', onVisibility);
+		if (onPageShow) window.removeEventListener('pageshow', onPageShow);
 		void runtime?.dispose();
 	});
 </script>
@@ -158,6 +171,7 @@
 <CremaSidebar {app} />
 <DebugPanel {app} />
 <div class="shell-content">
+	<ReconnectStrip {app} />
 	{@render children?.()}
 </div>
 <!-- App-wide in-app dialog + toast hosts (FD4) — replace native

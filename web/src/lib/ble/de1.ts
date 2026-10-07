@@ -31,7 +31,8 @@ import type { AppRuntime } from '$lib/effect/runtime';
 import { de1ConnectProgram } from '$lib/services/de1-orchestrator';
 import type { BleConnectionState } from './connection-state';
 import { De1Uuids } from './de1-uuids';
-import { requestDevice, type ConnState } from './transport';
+import { requestDevice, type ConnState, type KickResult } from './transport';
+import type { ReconnectTrigger } from './reconnect-timeline';
 import type { De1Transport } from './de1-transport';
 
 /** Diagnostics publish cadence — advisory counters don't need 25 Hz. */
@@ -201,6 +202,9 @@ export class De1Manager {
 			return;
 		}
 		this.device = device;
+		// Reconnect episodes are recorded as "DE1"; READY waits for the
+		// post-connect profile sync (CremaApp marks it).
+		device.setReconnectTimeline?.('DE1', true);
 		this.patchDiagnostics({ deviceName: device.name, deviceId: device.id });
 		this.callbacks.onStatus(`Selected device: ${device.name} (id ${device.id})`);
 		// A terminal disconnect — user-initiated or auto-reconnect giving up.
@@ -340,6 +344,14 @@ export class De1Manager {
 			.catch(() => {
 				// Best-effort — a failed teardown hint must not break the disconnect.
 			});
+	}
+
+	/**
+	 * Attempt a pending reconnect NOW (tab back in view, "Retry now"). A no-op
+	 * with no device, while connected, or after a deliberate disconnect.
+	 */
+	kick(trigger: ReconnectTrigger): KickResult {
+		return this.device?.kick?.(trigger) ?? 'ignored-idle';
 	}
 
 	/** Disconnect the DE1 and discard the core's session state. */
