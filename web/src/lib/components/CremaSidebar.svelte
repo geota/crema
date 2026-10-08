@@ -7,16 +7,19 @@
 	 *
 	 * Five nav items (Brew / Profiles / History / Scale / Settings) render as
 	 * SvelteKit `<a href>` links; the active item is derived from the current
-	 * route. The DE1 + scale connection-status dots at the bottom are wired to
-	 * the shared `CremaApp`'s live state. Number keys `1`–`5` jump between the
-	 * five routes.
+	 * route. The DE1 + scale status buttons at the bottom
+	 * (`RailDeviceButton`) follow the shared `CremaApp`'s live link state:
+	 * connect when disconnected, Retry now while reconnecting, a small menu
+	 * with Disconnect when connected. Number keys `1`–`6` jump between the
+	 * routes.
 	 */
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import type { CremaApp } from '$lib/state';
 	import CremaMark from './CremaMark.svelte';
-	import { isWebBluetoothSupported, type De1State, type ScaleState } from '$lib/ble';
+	import RailDeviceButton from './RailDeviceButton.svelte';
+	import { isWebBluetoothSupported } from '$lib/ble';
 	import { toast } from '$lib/components/shared/toast.svelte';
 
 	let { app }: { app: CremaApp | null } = $props();
@@ -42,17 +45,6 @@
 	/** Live snapshot from the shared orchestrator, or null before it loads. */
 	const ui = $derived(app?.state.current ?? null);
 
-	/** A connection state counts as "connected" once it is up or recovering. */
-	const liveStates: readonly (De1State | ScaleState)[] = [
-		'connecting',
-		'subscribing',
-		'ready',
-		'reconnecting'
-	];
-
-	const machineConnected = $derived(ui !== null && liveStates.includes(ui.de1State));
-	const scaleConnected = $derived(ui !== null && liveStates.includes(ui.scaleState));
-
 	/**
 	 * Toast + bail when the browser can't do Web Bluetooth — connecting would
 	 * otherwise reject unhandled (the chooser never opens). Disconnect stays
@@ -66,27 +58,10 @@
 		return false;
 	}
 
-	/**
-	 * Toggle the DE1 connection — the bottom status button. Connecting needs a
-	 * Web-Bluetooth user gesture, which a click satisfies.
-	 */
-	function toggleMachine(): void {
-		if (!app) return;
-		if (machineConnected) {
-			void app.disconnectDe1();
-		} else if (canConnect()) {
-			void app.connectDe1();
-		}
-	}
-
-	/** Toggle the scale connection — the other bottom status button. */
-	function toggleScale(): void {
-		if (!app) return;
-		if (scaleConnected) {
-			void app.disconnectScale();
-		} else if (canConnect()) {
-			void app.connectScale();
-		}
+	/** Connect a device from the rail — a click, so Web Bluetooth's gesture holds. */
+	function connect(kind: 'de1' | 'scale'): void {
+		if (!app || !canConnect()) return;
+		void (kind === 'de1' ? app.connectDe1() : app.connectScale());
 	}
 
 	/** Keys 1–5 navigate to the matching route — design parity. */
@@ -131,34 +106,24 @@
 		<div style="flex: 1 1 auto"></div>
 	</div>
 	<div class="cside-bottom">
-		<button
-			type="button"
-			class="cside-status is-button"
-			class:is-connected={machineConnected}
-			onclick={toggleMachine}
+		<RailDeviceButton
+			device="de1"
+			linkState={ui?.de1State ?? 'idle'}
+			deviceName={ui?.de1Diagnostics.deviceName ?? null}
 			disabled={!app}
-			title={machineConnected ? 'DE1 connected — click to disconnect' : 'Click to connect DE1'}
-		>
-			<span class="cside-status-dot" class:off={!machineConnected}></span>
-			<span class="cside-status-label">DE1</span>
-			<span class="cside-status-cta">
-				<Icon cls={'ph ph-' + (machineConnected ? 'check' : 'bluetooth')} aria-hidden="true" />
-			</span>
-		</button>
-		<button
-			type="button"
-			class="cside-status is-button"
-			class:is-connected={scaleConnected}
-			onclick={toggleScale}
+			onConnect={() => connect('de1')}
+			onRetry={() => app?.retryReconnect('de1')}
+			onDisconnect={() => void app?.disconnectDe1()}
+		/>
+		<RailDeviceButton
+			device="scale"
+			linkState={ui?.scaleState ?? 'idle'}
+			deviceName={ui?.scaleName ?? null}
 			disabled={!app}
-			title={scaleConnected ? 'Scale connected — click to disconnect' : 'Click to connect scale'}
-		>
-			<span class="cside-status-dot" class:off={!scaleConnected}></span>
-			<span class="cside-status-label">Scale</span>
-			<span class="cside-status-cta">
-				<Icon cls={'ph ph-' + (scaleConnected ? 'check' : 'bluetooth')} aria-hidden="true" />
-			</span>
-		</button>
+			onConnect={() => connect('scale')}
+			onRetry={() => app?.retryReconnect('scale')}
+			onDisconnect={() => void app?.disconnectScale()}
+		/>
 	</div>
 </nav>
 
