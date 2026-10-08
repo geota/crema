@@ -144,6 +144,30 @@ export class ScaleManager {
 			this.callbacks.onStatus(`Scale connection failed: ${describeError(error)}`);
 			return;
 		}
+		await this.attach(device);
+	}
+
+	/**
+	 * Connect a scale this site was already allowed to use — the launch
+	 * reconnect over `navigator.bluetooth.getDevices()` (no chooser).
+	 */
+	async connectKnown(known: BluetoothDevice): Promise<void> {
+		this.callbacks.onState('connecting');
+		this.device?.disconnect();
+		this.device = null;
+		this.uuids = null;
+		this.callbacks.onStatus(`Reconnecting to the last scale (${known.name ?? known.id})…`);
+		await this.attach(new BleDevice(known));
+	}
+
+	/** The connected (or connecting) scale's browser id + advertised name, or null. */
+	identity(): { id: string; name: string | null } | null {
+		const d = this.device;
+		return d === null ? null : { id: d.id, name: d.device.name ?? null };
+	}
+
+	/** Wire a chosen device and run the connect program (both connect paths). */
+	private async attach(device: BleDevice): Promise<void> {
 		this.device = device;
 		device.setReconnectTimeline('Scale');
 		// A terminal disconnect — user-initiated or auto-reconnect giving up.

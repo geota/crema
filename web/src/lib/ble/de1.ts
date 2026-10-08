@@ -31,7 +31,7 @@ import type { AppRuntime } from '$lib/effect/runtime';
 import { de1ConnectProgram } from '$lib/services/de1-orchestrator';
 import type { BleConnectionState } from './connection-state';
 import { De1Uuids } from './de1-uuids';
-import { requestDevice, type ConnState, type KickResult } from './transport';
+import { BleDevice, requestDevice, type ConnState, type KickResult } from './transport';
 import type { ReconnectTrigger } from './reconnect-timeline';
 import type { De1Transport } from './de1-transport';
 
@@ -201,6 +201,35 @@ export class De1Manager {
 			);
 			return;
 		}
+		await this.attach(device);
+	}
+
+	/**
+	 * Connect a DE1 this site was already allowed to use — the launch
+	 * reconnect over `navigator.bluetooth.getDevices()` (no chooser, so no
+	 * user gesture needed).
+	 */
+	async connectKnown(known: BluetoothDevice): Promise<void> {
+		this.callbacks.onState('connecting');
+		this.device?.disconnect();
+		this.device = null;
+		this.patchDiagnostics(EMPTY_DE1_DIAGNOSTICS);
+		this.notificationCounts = freshCounts();
+		this.callbacks.onStatus(`Reconnecting to the last DE1 (${known.name ?? known.id})…`);
+		await this.attach(new BleDevice(known));
+	}
+
+	/** The connected (or connecting) DE1's browser id + advertised name, or null. */
+	identity(): { id: string; name: string | null } | null {
+		const d = this.device;
+		if (d === null) return null;
+		// `BleDevice.name` falls back to a placeholder; remember the real one.
+		const name = d instanceof BleDevice ? d.device.name : d.name;
+		return { id: d.id, name: name ?? null };
+	}
+
+	/** Wire a chosen device and run the connect program (both connect paths). */
+	private async attach(device: De1Transport): Promise<void> {
 		this.device = device;
 		// Reconnect episodes are recorded as "DE1"; READY waits for the
 		// post-connect profile sync (CremaApp marks it).
