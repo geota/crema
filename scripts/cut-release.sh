@@ -18,7 +18,10 @@
 #   3. Freezes the SAME text into fastlane/metadata/android/en-US/changelogs/<versionCode>.txt
 #      -- F-Droid/IzzyOnDroid want a permanent per-release file, not a mutable "current" one
 #      (see fastlane/README.md).
-#   4. Inserts a "## [X.Y.Z] — <date>" section at the top of CHANGELOG.md --
+#   4. Inserts a "## [X.Y.Z] — <date>" section into CHANGELOG.md: directly
+#      under "## [Unreleased]" when that section exists (its entries become this
+#      version's detail, below the note, and Unreleased is left empty), else
+#      above the most recent version --
 #      release.yml's awk extractor reads this section verbatim as the GitHub
 #      Release body, so a version with no section here just falls back to
 #      GitHub's auto-generated commit list instead.
@@ -112,13 +115,23 @@ with open(path) as f:
 entry = f"## [{version}] — {date.today().isoformat()}\n\n{note}\n\n"
 link = f"[{version}]: https://github.com/geota/crema/releases/tag/v{version}\n"
 
-m = re.search(r"^## \[", text, re.MULTILINE)
-if m:
-    text = text[: m.start()] + entry + text[m.start() :]
+# With a "## [Unreleased]" section, the new version goes directly under its
+# heading: everything collected under Unreleased becomes this version's detail
+# (below the note), and Unreleased is left empty for the next cycle. Without
+# one, insert before the most recent version section.
+unreleased = re.search(r"^## \[Unreleased\][^\n]*\n+", text, re.MULTILINE)
+if unreleased:
+    text = text[: unreleased.end()] + entry + text[unreleased.end() :]
+    text = text[: unreleased.start()] + "## [Unreleased]\n\n" + text[unreleased.end() :]
 else:
-    text = text.rstrip("\n") + "\n\n" + entry
+    m = re.search(r"^## \[", text, re.MULTILINE)
+    if m:
+        text = text[: m.start()] + entry + text[m.start() :]
+    else:
+        text = text.rstrip("\n") + "\n\n" + entry
 
-text = text.rstrip("\n") + "\n" + link
+if link not in text:
+    text = text.rstrip("\n") + "\n" + link
 
 with open(path, "w") as f:
     f.write(text)
