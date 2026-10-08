@@ -9,6 +9,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **The rail's DE1 / scale buttons follow the connection state** — the dot is
+  green only when connected and amber while connecting or reconnecting. A tap
+  connects when disconnected, does nothing while connecting, and retries now
+  while reconnecting (it used to end the reconnect attempts). When connected,
+  a tap opens a small menu with the device name and **Disconnect**, so
+  disconnecting takes two deliberate taps. Esc closes the menu. Web.
 - **The Visualizer catalogue asks before it replaces what you typed** — the
   "Replace fields I've already filled" checkbox is gone. Picking a catalogue
   bag fills every empty field at once; when a field you filled has a
@@ -82,6 +88,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **The web app reconnects your last DE1 and scale on launch**, where the
+  browser lets a site list the devices it may use
+  (`navigator.bluetooth.getDevices()`; in Chrome this is still behind
+  `chrome://flags`). It waits for the device to advertise (up to 30 s) when
+  the browser can watch for that, and connects without the chooser. A device
+  you disconnected yourself is left alone until you connect it again; an
+  unexpected drop keeps it eligible. Elsewhere nothing changes. Web.
 - **Android: "Reconnect when nearby"** — after Crema first connects to a DE1
   or scale it offers, once, to let Android watch for that device (a one-time
   system confirmation filtered to that device). When it comes back into
