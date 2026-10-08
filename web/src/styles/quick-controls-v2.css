@@ -588,6 +588,8 @@
   box-shadow: 0 0 0 2px rgba(107,140,95,0.18);
 }
 .cside-status-dot.off { background: rgba(var(--tint-rgb), 0.2); box-shadow: none; }
+/* Connecting / reconnecting — amber, never the connected green. */
+.cside-status-dot.is-busy { background: var(--warning); box-shadow: 0 0 0 2px rgba(var(--warning-rgb), 0.18); }
 
 /* ─── Quick-connect popover (anchored bottom-left, near sidebar) ── */
 .qc-scrim {

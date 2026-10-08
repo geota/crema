@@ -74,6 +74,12 @@ import {
 } from './ui-state.svelte';
 import { getActiveShotStore, type ActiveShotData } from './active-shot.svelte';
 import { ConnectSweepRunner, readBatteryPercent } from './connect-sweep';
+import {
+	LaunchReconnect,
+	markUserDisconnect,
+	rememberDevice,
+	type DeviceKind
+} from '$lib/ble/launch-reconnect';
 
 /**
  * Thrown by {@link CremaApp.startShot} when the user taps Coffee without an
@@ -233,6 +239,8 @@ export class CremaApp {
 	#stopWriteInFlight = false;
 	private readonly de1: De1Manager;
 	private readonly scale: ScaleManager;
+	/** Reconnect the last DE1 / scale on launch; a user action cancels its wait. */
+	readonly #launch = new LaunchReconnect();
 
 	/**
 	 * The fiber running an in-progress capture replay, or `null` when none is
@@ -368,6 +376,7 @@ export class CremaApp {
 				// loaded and the user has to remember to click Load on
 				// Brew every session.
 				if (de1State === 'ready' && !wasReady) {
+					this.#rememberConnected('de1');
 					// Fire a `de1Connected` webhook on the first transition
 					// into `ready`. The firmware string lands a moment later
 					// via `Event::Firmware`, so it may be `null` here on the
@@ -431,6 +440,7 @@ export class CremaApp {
 				// via `onScaleIdentified` / `refreshScaleCapabilities`, so
 				// `scaleName` may still be `null` here; payload tolerates it.
 				if (scaleState === 'ready' && !wasReady) {
+					this.#rememberConnected('scale');
 					this.fireWebhook('scaleConnected', {
 						deviceName: this.state.current.scaleName,
 						deviceId: null
@@ -985,6 +995,7 @@ export class CremaApp {
 	 * lifecycle never erases the other device's history.
 	 */
 	async connectDe1(): Promise<void> {
+		this.#launch.cancel('de1');
 		this.state.patch({ ...CLEARED_DE1_READOUT });
 		await this.de1.connect();
 	}
@@ -1014,8 +1025,13 @@ export class CremaApp {
 		}
 	}
 
-	/** Disconnect the DE1 and clear its readout fields. */
+	/**
+	 * Disconnect the DE1 and clear its readout fields. Every caller is a user
+	 * action (rail menu, Settings), so the next launch won't reconnect it.
+	 */
 	async disconnectDe1(): Promise<void> {
+		this.#launch.cancel('de1');
+		markUserDisconnect('de1');
 		// Leave the DE1's USB port charging (Decenza
 		// `BatteryManager::ensureChargerOn`): smart charging may have
 		// switched it off, and nothing would switch it back on once Crema is
@@ -1048,6 +1064,42 @@ export class CremaApp {
 		});
 	}
 
+	// ---- Reconnect on launch ----------------------------------------------
+
+	/** A device reached ready: remember it for the next launch. */
+	#rememberConnected(kind: DeviceKind): void {
+		const id = kind === 'de1' ? this.de1.identity() : this.scale.identity();
+		if (id !== null) rememberDevice(kind, id);
+	}
+
+	/**
+	 * Reconnect the DE1 / scale the user last connected, where the browser
+	 * exposes `navigator.bluetooth.getDevices()` (see `$lib/ble/launch-reconnect`).
+	 * A silent no-op elsewhere. A user Connect / Disconnect meanwhile cancels
+	 * the wait for that device.
+	 */
+	async reconnectLastOnLaunch(
+		bluetooth: Bluetooth | undefined = typeof navigator !== 'undefined'
+			? navigator.bluetooth
+			: undefined
+	): Promise<void> {
+		await this.#launch.run({
+			bluetooth,
+			isIdle: (kind) => {
+				const s = kind === 'de1' ? this.state.current.de1State : this.state.current.scaleState;
+				return s === 'idle' || s === 'disconnected' || s === 'failed';
+			},
+			connect: async (kind, device) => {
+				if (kind === 'de1') {
+					this.state.patch({ ...CLEARED_DE1_READOUT });
+					await this.de1.connectKnown(device);
+				} else {
+					await this.scale.connectKnown(device);
+				}
+			}
+		});
+	}
+
 	// ---- Reconnect kicks --------------------------------------------------
 
 	/**
@@ -1077,11 +1129,17 @@ export class CremaApp {
 
 	/** Connect a Bookoo scale — call from a button handler. */
 	async connectScale(): Promise<void> {
+		this.#launch.cancel('scale');
 		await this.scale.connect();
 	}
 
-	/** Disconnect the scale and clear every scale-derived field. */
+	/**
+	 * Disconnect the scale and clear every scale-derived field. A user action,
+	 * so the next launch won't reconnect it.
+	 */
 	async disconnectScale(): Promise<void> {
+		this.#launch.cancel('scale');
+		markUserDisconnect('scale');
 		// Tear down the scale-heartbeat clock before the GATT teardown,
 		// so an in-flight `scaleHeartbeat` write doesn't race against the
 		// disconnect.
@@ -2444,5 +2502,10 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 			});
 		};
 	}
+	// Reconnect the last DE1 / scale where the browser can (client-only: this
+	// factory runs from the layout's onMount, never during SSR / prerender).
+	void app.reconnectLastOnLaunch().catch((e: unknown) => {
+		app.state.log(`Reconnect on launch failed: ${describeError(e)}`);
+	});
 	return app;
 }
