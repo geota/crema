@@ -7,6 +7,16 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.7] — 2026-10-08
+
+Brew Log for filter coffee: guided pour-overs with credited recipes, your own brew methods, and bean usage tracking.
+
+• Faster Bluetooth reconnects when you come back to the app
+• Upload shots to Decent's shot history
+• Visualizer bean & roaster sync on Android, plus catalogue search when adding beans
+• Filter archived beans; lists keep your place
+• Crash-safe saving, and many scale, profile and machine fixes
+
 ### Changed
 
 - **The rail's DE1 / scale buttons follow the connection state** — the dot is
@@ -647,3 +657,4 @@ shot state machine, and domain model.
 
 [0.0.1]: https://github.com/geota/crema/releases/tag/v0.0.1
 [0.0.6]: https://github.com/geota/crema/releases/tag/v0.0.6
+[0.0.7]: https://github.com/geota/crema/releases/tag/v0.0.7
