@@ -83,6 +83,27 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   (web); it tells the machine you're present only when you actually use
   Crema, at most every 30 seconds. Web and Android.
 
+- **The firmware card no longer says "Up to date" without checking** — on
+  Android it said so whenever a DE1 was connected. Settings → Machine now
+  shows the installed build and what it means against a dated list of
+  Decent's builds: "Build 1358 · newest Decent release", "Build 1333 ·
+  Decent stable", "Build 1352 · newer than Decent stable", "older than
+  Decent's current stable", or "newer than Crema knows about". The 2023
+  build 1363, which Decent withdrew, reads as a rolled-back build instead of
+  newer than 1358. Web, tablet and phone (the phone hero gains the card).
+
+- **Honest advice on updating firmware** — Crema can't install firmware
+  yet, and the card now says so and how to update today: with Decent's
+  tablet app (de1app), whose stable and beta versions install build 1333;
+  build 1358 needs its nightly version. The web card used to say to get
+  1358 from de1app, and its "Update firmware…" button ended in "not yet
+  implemented"; the button is gone. Web, tablet and phone.
+
+- **Firmware verify request matches Decent's apps** — the request that asks
+  the DE1 to verify an uploaded image now sets the map flag the way de1app,
+  decaid and Decenza do. Crema doesn't flash firmware yet, so nothing
+  changes for users today.
+
 ## [0.0.7] — 2026-10-08
 
 Brew Log for filter coffee: guided pour-overs with credited recipes, your own brew methods, and bean usage tracking.
