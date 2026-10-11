@@ -375,8 +375,16 @@
 		flex-direction: column;
 		gap: 6px;
 	}
+	.fu-points {
+		list-style: disc;
+	}
 	.fu-steps {
+		list-style: decimal;
 		font-size: 14px;
+	}
+	.fu-check input,
+	.fu-choice input {
+		accent-color: var(--copper-400);
 	}
 	.fu-check {
 		display: flex;
@@ -491,9 +499,22 @@
 		outline: none;
 	}
 	progress {
+		appearance: none;
 		width: 100%;
 		height: 10px;
-		accent-color: var(--copper-400);
+		border: none;
+		border-radius: 5px;
+		overflow: hidden;
+		background: rgba(var(--tint-rgb), 0.12);
+	}
+	progress::-webkit-progress-bar {
+		background: rgba(var(--tint-rgb), 0.12);
+	}
+	progress::-webkit-progress-value {
+		background: var(--copper-400);
+	}
+	progress::-moz-progress-bar {
+		background: var(--copper-400);
 	}
 	.fu-progress-meta {
 		display: flex;
