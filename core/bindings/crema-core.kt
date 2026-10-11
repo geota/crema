@@ -3361,6 +3361,13 @@ data class DecentUploadReplyUploadedInner (
 	val id: String? = null
 )
 
+/// Generated type representing the anonymous struct variant `NotReplaced` of the `DecentUploadReply` Rust enum
+@Serializable
+data class DecentUploadReplyNotReplacedInner (
+	/// The server id of the copy it kept, when the answer carried one.
+	val id: String? = null
+)
+
 /// Generated type representing the anonymous struct variant `Rejected` of the `DecentUploadReply` Rust enum
 @Serializable
 data class DecentUploadReplyRejectedInner (
@@ -3382,21 +3389,39 @@ data class DecentUploadReplyRetryInner (
 /// The `shot_upload` answer, classified.
 @Serializable
 sealed class DecentUploadReply {
-	/// The server stored the shot.
+	/// The server holds the shot — stored now, or (`"duplicate":true` on a
+	/// first upload) already held from an earlier send.
 	@Serializable
 	@SerialName("Uploaded")
 	data class Uploaded(val content: DecentUploadReplyUploadedInner): DecentUploadReply()
+	/// A `?replace=1` upload the server answered `"duplicate":true`: it kept
+	/// its EARLIER copy and the edit was not stored (Decenza `f5c3ce3e`,
+	/// seen live on 2026-10-04). Not a success and not worth an immediate
+	/// retry — the shot's existing upload stands, the edit stays unsent.
+	@Serializable
+	@SerialName("NotReplaced")
+	data class NotReplaced(val content: DecentUploadReplyNotReplacedInner): DecentUploadReply()
 	/// The stored token stopped working (HTTP 401, or a 2xx whose body is
 	/// exactly `0`) — the user must re-link; the shot stays queued.
 	@Serializable
 	@SerialName("Auth")
 	object Auth: DecentUploadReply()
+	/// HTTP 403: the shot's machine serial is not registered to the linked
+	/// account (de1app `5b09f6aa`, Decenza `DECENT_UPLOAD.md`). Permanent
+	/// until the owner adds the machine at decentespresso.com — do not
+	/// retry, do not park the shot for retry, and do not mark it rejected
+	/// (it uploads once the machine is added).
+	@Serializable
+	@SerialName("NotOnAccount")
+	object NotOnAccount: DecentUploadReply()
 	/// The server refused this shot for good (a 4xx other than
 	/// 401 / 403 / 408 / 429) — do not retry it.
 	@Serializable
 	@SerialName("Rejected")
 	data class Rejected(val content: DecentUploadReplyRejectedInner): DecentUploadReply()
-	/// A 5xx / 403 / 408 / 429 / other non-2xx answer — worth retrying.
+	/// A 5xx / 408 / 429 / other non-2xx answer, or a 2xx that is not the
+	/// upload API's JSON answer (a captive portal's page, a proxy) — worth
+	/// retrying.
 	@Serializable
 	@SerialName("Retry")
 	data class Retry(val content: DecentUploadReplyRetryInner): DecentUploadReply()

@@ -168,10 +168,12 @@ pub fn decent_shot_record(shot: &StoredShot, machine: &ShotMachine, app_version:
         });
 
     let mut machine_out = Map::new();
+    // A blank or `0` serial is unknown (`decent_known_serial`): omitted,
+    // never sent as `"0"`.
     put_str(
         &mut machine_out,
         "serialNumber",
-        Some(machine.serial_number.as_str()),
+        crate::decent_wire::decent_known_serial(Some(&machine.serial_number)).as_deref(),
     );
     // decaid sends the DE1's CPU build number alone (`"1352"`); older
     // Crema rows stored a longer label, normalised here so every upload
@@ -744,13 +746,15 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_serial_is_omitted() {
-        let blank = ShotMachine {
-            serial_number: "  ".to_owned(),
-            ..ShotMachine::default()
-        };
-        let rec = decent_shot_record(&shot(), &blank, "x");
-        assert_eq!(rec["machine"], json!({}));
+    fn a_blank_or_zero_serial_is_omitted() {
+        for serial in ["  ", "0"] {
+            let unknown = ShotMachine {
+                serial_number: serial.to_owned(),
+                ..ShotMachine::default()
+            };
+            let rec = decent_shot_record(&shot(), &unknown, "x");
+            assert_eq!(rec["machine"], json!({}), "{serial:?}");
+        }
     }
 
     #[test]
