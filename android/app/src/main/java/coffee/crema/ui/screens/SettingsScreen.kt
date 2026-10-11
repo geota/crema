@@ -1399,8 +1399,9 @@ private fun MachineHeroCard(
                 // weight(1f) child measures that child near zero width, so its
                 // wrapped text can report a huge min height and stretch all three
                 // panels (the "very tall boxes" of issue #35). The cap bounds the
-                // stretch; normal content sits well under it.
-                Modifier.fillMaxWidth().heightIn(max = 240.dp).height(IntrinsicSize.Min).padding(horizontal = 22.dp, vertical = 20.dp),
+                // stretch; normal content sits under it (280: room for the
+                // firmware card's longest note plus its how-to-update line).
+                Modifier.fillMaxWidth().heightIn(max = 280.dp).height(IntrinsicSize.Min).padding(horizontal = 22.dp, vertical = 20.dp),
                 horizontalArrangement = Arrangement.spacedBy(24.dp),
             ) {
                 // Artwork well \u2014 page-dark fill, the stylised DE1 drawing centred.
