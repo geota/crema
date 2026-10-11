@@ -99,10 +99,6 @@ class ConnectionController(
     /** Send one scale keep-alive through the core; runs on [coreDispatcher].
      *  Throws on failure (logged here). */
     private val sendScaleHeartbeat: () -> Unit,
-    /** One DE1 keep-awake tick, every 60 s — the VM gates it on the
-     *  suppress-sleep pref, the screensaver and a sleeping machine, and
-     *  writes UserPresent. */
-    private val keepAliveTick: () -> Unit,
     /** Whether the activity is visible — gates the unlock (USER_PRESENT) kick. */
     private val isAppForeground: () -> Boolean = { true },
     /** Reconnect timelines; a kick that starts a fresh connect opens an episode. */
@@ -303,15 +299,6 @@ class ConnectionController(
                     // only).
                     pushRoster()
                 }.onFailure { appendLog("Scale state handling failed: ${it.message}") }
-            }
-        }
-        // The keep-awake heartbeat: every 60 s the VM decides whether to
-        // rewrite UserPresent (the DE1's sleep timer is minutes-scale, so a
-        // minute cadence keeps it pinned without chattering the bus).
-        scope.launch {
-            while (true) {
-                delay(60_000)
-                keepAliveTick()
             }
         }
     }

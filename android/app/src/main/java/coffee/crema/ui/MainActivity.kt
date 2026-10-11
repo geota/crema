@@ -102,10 +102,9 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
 
-    // Presence follows visibility (issue: backgrounding the phone app kept
-    // the DE1 awake forever — the keep-awake heartbeat had no idea the app
-    // left the screen). onStop → the heartbeat pauses and the DE1's own
-    // sleep timer takes over; onStart → presence re-arms immediately.
+    // Returning to the foreground is activity for the idle-sleep timer
+    // ("Cool down after"): onStart restarts it. onStop is not activity — the
+    // core's timer keeps counting in the background while the process lives.
     override fun onStart() {
         super.onStart()
         viewModel.setAppForeground(true)
@@ -359,10 +358,11 @@ class MainActivity : ComponentActivity() {
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()
-                        // Screensaver idle tracking: observe EVERY touch on the
-                        // Initial pass (before children), never consuming — the
-                        // docs/41 C2 "bump on interaction" design. Cheap: one
-                        // volatile write per pointer event.
+                        // Screensaver + idle-sleep activity: observe EVERY touch
+                        // on the Initial pass (before children), never consuming —
+                        // the docs/41 C2 "bump on interaction" design. Cheap: one
+                        // volatile write per pointer event; the idle-sleep feed is
+                        // throttled to one a second.
                         .pointerInput(Unit) {
                             awaitPointerEventScope {
                                 while (true) {
@@ -414,7 +414,10 @@ class MainActivity : ComponentActivity() {
                 // Beans tab / filter / roaster shelf — above both, so the incoming
                 // host reopens where the outgoing one was.
                 var currentRoute by rememberSaveable { mutableStateOf("brew") }
-                val onRouteChange: (String) -> Unit = { currentRoute = it }
+                val onRouteChange: (String) -> Unit = {
+                    currentRoute = it
+                    viewModel.noteNavigation()
+                }
                 val beansState = rememberBeansViewState()
                 // Every list's scroll position + search / sort / filter state
                 // (issue #123), hoisted above both hosts like the route and
