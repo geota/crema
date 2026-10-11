@@ -36,6 +36,7 @@ import java.io.IOException
 import java.net.ConnectException
 import java.net.ServerSocket
 import java.net.SocketTimeoutException
+import java.util.zip.GZIPInputStream
 import kotlin.concurrent.thread
 
 /**
@@ -54,6 +55,10 @@ class DecentClientTest {
     }
     private val handlers = ArrayDeque<suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData>()
     private val requests = mutableListOf<HttpRequestData>()
+    /** Each request's body as sent (gzipped for an upload). */
+    private val rawBodies = mutableListOf<ByteArray>()
+
+    /** Each request's body, inflated when it went out gzipped. */
     private val bodies = mutableListOf<String>()
     private lateinit var client: DecentClient
 
@@ -61,7 +66,13 @@ class DecentClientTest {
     fun setUp() {
         val engine = MockEngine { req ->
             requests += req
-            bodies += req.body.toByteArray().decodeToString()
+            val raw = req.body.toByteArray()
+            rawBodies += raw
+            bodies += if (req.headers[HttpHeaders.ContentEncoding] == "gzip") {
+                GZIPInputStream(raw.inputStream()).readBytes().decodeToString()
+            } else {
+                raw.decodeToString()
+            }
             handlers.removeFirst()(this, req)
         }
         client = DecentClient(json, FakeDecentCore(), baseUrl = "https://decent.test/", engine = engine, retryBaseDelayMs = 1)
@@ -217,7 +228,33 @@ class DecentClientTest {
         assertEquals("Basic YUBiLmM6dG9r", r.headers[HttpHeaders.Authorization])
         assertEquals("crema-android", r.headers[HttpHeaders.UserAgent])
         assertEquals("application/json; charset=UTF-8", r.body.contentType.toString())
+        // Gzipped, as Decent asked (de1app bd4b8c0c, Decenza 7caec84f): the
+        // header, the gzip magic, and a body that inflates to the record.
+        assertEquals("gzip", r.headers[HttpHeaders.ContentEncoding])
+        val raw = rawBodies.single()
+        assertEquals(0x1f.toByte(), raw[0])
+        assertEquals(0x8b.toByte(), raw[1])
         assertEquals("""{"x":1}""", bodies.single())
+    }
+
+    @Test
+    fun `a GET carries no Content-Encoding`() = runTest {
+        reply(200, "abcdef0123456789")
+        client.login("a@b.c", "pw")
+        assertNull(requests.single().headers[HttpHeaders.ContentEncoding])
+    }
+
+    @Test
+    fun `the socket timeout is Decenza's 60 s`() {
+        assertEquals(60_000L, DecentClient.SOCKET_TIMEOUT_MS)
+    }
+
+    @Test
+    fun `gzip shrinks a ShotRecord-sized body and round-trips it`() {
+        val record = buildString { repeat(5_000) { append("""{"t":$it,"p":9.0,"f":2.1},""") } }
+        val packed = DecentClient.gzip(record)
+        assertTrue("${packed.size} vs ${record.length}", packed.size * 5 < record.length)
+        assertEquals(record, GZIPInputStream(packed.inputStream()).readBytes().decodeToString())
     }
 
     private fun midBodyReset() {

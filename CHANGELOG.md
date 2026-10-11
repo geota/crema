@@ -35,6 +35,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   Decent's own JSON answer counts as stored. Any other reply that comes
   back as a success, such as a captive portal's page or a proxy's, now
   fails and is retried like a network error. Web and Android.
+- **Decent uploads from Android are smaller and no longer time out at
+  30 s.** The shot is sent gzipped (`Content-Encoding: gzip`), as Decent
+  asked app authors to do (de1app `bd4b8c0c`, Decenza `7caec84f`): a typical
+  shot shrinks from about 340 KB to about 40 KB. The wait for Decent's answer
+  is now 60 s, as in Decenza; the server has taken 25-38 s to answer. Before,
+  a slow answer timed out and the shot was sent a second time. The web app
+  still sends the shot uncompressed: decentespresso.com doesn't yet allow
+  browsers to send compressed uploads.
 - **A Descale or Clean tapped right after connecting is no longer dropped**
   on DE1 firmware below build 1356. Crema reads whether a Group Head
   Controller is fitted a moment after connecting; a request made before
