@@ -3408,7 +3408,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * user-visible identity (firmware + heater voltage) has answered or the
      * attempt budget is spent. Reads are idempotent — a re-request re-answers.
      *
-     * Also folds the two pure (no-BLE) core reads — the firmware-update status
+     * Also folds the two pure (no-BLE) core reads — the firmware build report
      * and the resolved line frequency — straight into the snapshot. Safe to
      * call while disconnected: with no BLE link the read requests write nothing
      * and the pure reads still return; the UI just shows "—" until replies land.
@@ -3507,11 +3507,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 delay(retryGapMs)
             }
             // Pure reads — no BLE traffic. Resolved after the sweep so the line
-            // frequency reflects whatever the sweep just brought in; firmware-
-            // UpdateStatus() is logged and the de1Firmware label drives the row.
-            runCatching { bridge.firmwareUpdateStatus() }.onSuccess { status ->
-                appendLog("Firmware update status: $status")
-            }.onFailure { appendLog("Firmware update status failed: ${it.message}") }
+            // frequency reflects whatever the sweep just brought in. The
+            // firmware build report is logged; Settings classifies the live
+            // build itself (FirmwareBuildCopy).
+            runCatching { bridge.firmwareBuildReport() }.onSuccess { report ->
+                appendLog("Firmware build: $report")
+            }.onFailure { appendLog("Firmware build report failed: ${it.message}") }
             val freq = runCatching { bridge.lineFrequencyHz() }.getOrNull()
             _ui.update { it.copy(lineFreqHz = freq) }
         }

@@ -1,6 +1,8 @@
 package coffee.crema.ui.screens
 
 import coffee.crema.ui.maintenanceRunText
+import coffee.crema.ui.FirmwareCardCopy
+import coffee.crema.ui.rememberFirmwareCardCopy
 import androidx.compose.ui.text.style.TextOverflow
 import coffee.crema.visualizer.entityLabel
 import coffee.crema.ui.fmt
@@ -11,6 +13,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -197,7 +200,7 @@ fun SettingsScreen(
                             board = if (connected) cpuBoardLabel(ui.de1MachineInfo).takeIf { it != "—" } else null,
                             ble = if (connected) (ui.de1BluetoothAddress ?: "Paired") else null,
                             onConnect = { onConnect("machine") },
-                            onUpdateFirmware = null,
+                            firmwareCopy = rememberFirmwareCardCopy(ui.de1MachineInfo[MmrRegister.FirmwareVersion], connected),
                         )
                         if (!connected && ui.de1Reconnecting) {
                             ReconnectingNotice("DE1", onRetry = { vm.retryReconnectNow(true) })
@@ -1319,8 +1322,9 @@ private fun MachineHeroCard(
     board: String?,
     ble: String?,
     onConnect: () -> Unit,
-    /** Null = firmware updating isn't implemented yet — the tile drops the button. */
-    onUpdateFirmware: (() -> Unit)?,
+    /** What the installed build means + how to update today (core-classified;
+     *  null only if the bridge call failed). */
+    firmwareCopy: FirmwareCardCopy?,
 ) {
     // Machine info inner card — the neutral twin of the firmware card. The
     // outer sizing comes from the caller: weight(1f)+fillMaxHeight in the
@@ -1371,19 +1375,7 @@ private fun MachineHeroCard(
                     Eyebrow("Firmware", color = MaterialTheme.colorScheme.primary)
                     if (!connected) ConnectDe1Pill()
                 }
-                Text(if (connected) "Up to date" else "No update info", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
-                Text(
-                    if (connected) "Your DE1 is running the latest firmware Crema knows about."
-                    else "Connect your DE1 to compare its installed firmware against the latest.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.weight(1f))
-                if (onUpdateFirmware != null) {
-                    CremaButton(onClick = onUpdateFirmware, variant = CremaButtonVariant.Filled, enabled = connected, icon = "arrow-circle-up", label = "Check for updates")
-                } else {
-                    Text("Update checks aren\u2019t implemented yet.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                FirmwareCopyBody(firmwareCopy, pushGuidanceDown = true)
             }
     }
     CremaCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
@@ -1856,6 +1848,21 @@ internal fun cpuBoardLabel(info: Map<MmrRegister, UInt>): String {
     val raw = info[MmrRegister.CpuBoardVersion]?.toInt() ?: return "—"
     // raw/1000 = major, (raw%1000)/100 = minor — interpolate Ints, no %f.
     return "PCB v${raw / 1000}.${(raw % 1000) / 100}"
+}
+
+/** The firmware card's body — headline, what it means, how to update today
+ *  ([coffee.crema.ui.firmwareCardCopy]). Shared by the tablet hero card and
+ *  the phone hero. [pushGuidanceDown] = the parent Column has a bounded height
+ *  (the tablet card) and the guidance should sit at its bottom. */
+@Composable
+internal fun ColumnScope.FirmwareCopyBody(copy: FirmwareCardCopy?, pushGuidanceDown: Boolean = false) {
+    if (copy == null) return
+    Text(copy.title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+    if (copy.note.isNotEmpty()) {
+        Text(copy.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    if (pushGuidanceDown) Spacer(Modifier.weight(1f)) else Spacer(Modifier.height(2.dp))
+    Text(copy.guidance, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 /**
