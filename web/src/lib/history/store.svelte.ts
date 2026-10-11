@@ -534,9 +534,10 @@ export class HistoryStore {
 	/**
 	 * Stamp the Decent shot-history id onto a local shot once the upload
 	 * returns it (geota/crema#84). Persists. Mirrors {@link bindVisualizerId}.
-	 * `machine` — the identity the upload was sent with, stamped when the
-	 * shot had none (a pre-#84 row uploaded with the connected DE1's serial),
-	 * so its share link (`/shot/<serial>/<id>`) resolves later.
+	 * `machine` — the identity the upload was sent with, passed only when the
+	 * shot had no usable one (a pre-#84 row, or one stamped with an unknown
+	 * serial `0`, uploaded with the connected DE1's serial), so its share link
+	 * (`/shot/<serial>/<id>`) resolves later.
 	 */
 	bindDecentId(id: string, decentId: string, machine?: ShotMachine): void {
 		const idx = this.shots.findIndex((s) => s.id === id);
@@ -544,7 +545,7 @@ export class HistoryStore {
 		const cur = this.shots[idx];
 		this.shots = [
 			...this.shots.slice(0, idx),
-			{ ...cur, decentId, ...(machine && !cur.machine ? { machine: { ...machine } } : {}) },
+			{ ...cur, decentId, ...(machine ? { machine: { ...machine } } : {}) },
 			...this.shots.slice(idx + 1)
 		];
 		this.persist();

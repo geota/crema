@@ -10,7 +10,8 @@
  * skips flushes; de1app and decaid use the same 5 s floor), Decent has not
  * refused it before (auto path only), and a machine serial is known (stamped
  * on the shot, else the connected DE1 — never for a shot pulled from
- * Visualizer, which was not made on this DE1).
+ * Visualizer, which was not made on this DE1). A serial of `0` (older DE1s
+ * answer the serial read with it) is unknown, never uploaded as `"0"`.
  *
  * Concurrency: one upload per shot at a time — a second caller for the same
  * shot gets the pending promise (so a double tap, or the completion hook
@@ -24,6 +25,13 @@
  * remembered too (`rejectedShotIds`) so the backlog stops offering it; an
  * auth failure flags the account `needsReauth`. The server's id is bound to
  * the shot as `decentId`.
+ *
+ * A 403 — the serial is not on the account (de1app 5b09f6aa) — is neither:
+ * no retry, not parked, not rejected; the serial is remembered for the
+ * session and its later automatic / backlog uploads are skipped without a
+ * POST, so the reason shows once. A replace Decent answers `"duplicate"`
+ * (it kept its earlier copy, Decenza f5c3ce3e) is reported as such, never as
+ * an upload.
  */
 
 import { Effect, Schedule } from 'effect';
@@ -36,12 +44,16 @@ import { getMachineReadout } from '$lib/state/machine-readout.svelte';
 import {
 	getDecentCredentials,
 	isDecentLinked,
+	isSerialNotOnAccount,
+	noteSerialNotOnAccount,
 	readDecentAccount,
 	setDecentShotState,
 	updateDecentAccount
 } from './account';
 import {
 	DecentAuthError,
+	decentKnownSerial,
+	decentNotOnAccountMessage,
 	decentShotViewUrl,
 	decentUploadShot,
 	isDecentApiError,
@@ -63,34 +75,52 @@ export type DecentUploadError = DecentApiError | DecentRecordError;
 
 export type DecentUploadOutcome =
 	| { kind: 'uploaded'; id: string | null; url: string | null }
-	| { kind: 'skipped'; reason: string }
+	/** `notOnAccount` — skipped because Decent said this serial is not on the account. */
+	| { kind: 'skipped'; reason: string; notOnAccount?: string }
 	| { kind: 'failed'; error: DecentUploadError };
+
+/** Why an upload waits for the serial: the DE1 answered its serial read with 0. */
+export const SERIAL_UNREAD_REASON = "Crema couldn't read this DE1's serial number yet";
 
 export interface DecentUploadOptions {
 	/** An explicit tap: skips the auto-upload, length and "refused before" gates. */
 	manual?: boolean;
 	/** Re-upload over the server's copy of an already-uploaded shot. */
 	replace?: boolean;
+	/**
+	 * Part of a backlog drain: like the automatic path, skip a serial Decent
+	 * said this session is not on the account (a single manual tap tries again).
+	 */
+	backlog?: boolean;
 	/** Full-resolution telemetry when the caller still has it. */
 	samples?: readonly TimedSample[];
 	fetchFn?: FetchLike;
 	appVersion?: string;
 }
 
-/** The connected DE1's identity, or `null` before the MMR sweep has read a serial. */
+/**
+ * The connected DE1's identity, or `null` before the MMR sweep has read a
+ * serial — or when it read `0`, which is unknown ({@link liveSerialUnreadable}).
+ */
 export function liveMachineIdentity(): ShotMachine | null {
 	const m = getMachineReadout();
-	const serial = m.serialNumber;
+	const serial = decentKnownSerial(m.serialNumber);
 	if (serial == null) return null;
 	// decaid's `machine.firmwareVersion` is the CPU build number alone (`"1352"`),
 	// not the `Version` label; 0 = not reported yet, so omitted.
 	const firmware = m.firmwareBuild ? String(m.firmwareBuild) : null;
 	const model = decentModelName(m.machineModel);
 	return {
-		serialNumber: String(serial),
+		serialNumber: serial,
 		...(firmware ? { firmwareVersion: firmware } : {}),
 		...(model ? { model } : {})
 	};
+}
+
+/** The connected DE1 answered its serial read, but with an unknown serial (`0`). */
+export function liveSerialUnreadable(): boolean {
+	const serial = getMachineReadout().serialNumber;
+	return serial != null && decentKnownSerial(serial) == null;
 }
 
 /** Pulled from Visualizer (`storedShotFromWire` mints `shot:remote:<id>`), not recorded here. */
@@ -100,7 +130,10 @@ export function isPulledShot(shot: StoredShot): boolean {
 
 /** The identity to upload with, and whether it came from the live DE1 (so it gets stamped). */
 function machineFor(shot: StoredShot): { machine: ShotMachine; fromLive: boolean } | null {
-	if (shot.machine?.serialNumber) return { machine: toCoreShotMachine(shot.machine), fromLive: false };
+	// A stamped `0` (an early build stamped the live readout as-is) is no serial.
+	if (shot.machine && decentKnownSerial(shot.machine.serialNumber)) {
+		return { machine: toCoreShotMachine(shot.machine), fromLive: false };
+	}
 	if (isPulledShot(shot)) return null;
 	const live = liveMachineIdentity();
 	return live ? { machine: live, fromLive: true } : null;
@@ -120,11 +153,11 @@ const retrySchedule = Schedule.exponential('2 seconds').pipe(Schedule.intersect(
 function postWithRetry(
 	creds: DecentCredentials,
 	record: string,
-	replace: boolean,
+	opts: { replace: boolean; serial: string },
 	fetchFn: FetchLike | undefined
 ): Effect.Effect<DecentUploadResult, DecentApiError> {
 	const attempt = Effect.tryPromise({
-		try: () => decentUploadShot(creds, record, { replace }, fetchFn),
+		try: () => decentUploadShot(creds, record, opts, fetchFn),
 		catch: (e) => e
 	}).pipe(Effect.catchAll((e) => (isDecentApiError(e) ? Effect.fail(e) : Effect.die(e))));
 	return attempt.pipe(
@@ -158,6 +191,18 @@ function failed(shot: StoredShot, error: DecentUploadError): DecentUploadOutcome
 		case 'DecentRejectedError':
 		case 'DecentRecordError':
 			setDecentShotState(shot.id, 'rejected');
+			updateDecentAccount({ lastUpload });
+			break;
+		case 'DecentNotOnAccountError':
+			// Not the shot's fault and not transient: neither parked for retry
+			// nor rejected — it uploads once the machine is on the account.
+			if (error.serial) noteSerialNotOnAccount(error.serial);
+			setDecentShotState(shot.id, 'clear');
+			updateDecentAccount({ lastUpload });
+			break;
+		case 'DecentNotReplacedError':
+			// The earlier upload stands (the shot keeps its decentId); only the
+			// edit did not land.
 			updateDecentAccount({ lastUpload });
 			break;
 	}
@@ -196,11 +241,13 @@ async function runUpload(shotId: string, opts: DecentUploadOptions): Promise<Dec
 	}
 	const target = machineFor(shot);
 	if (!target) {
-		return skipped(
-			isPulledShot(shot)
-				? 'Pulled from Visualizer — not recorded on this DE1'
-				: 'No DE1 serial number known — connect the machine first'
-		);
+		if (isPulledShot(shot)) return skipped('Pulled from Visualizer — not recorded on this DE1');
+		if (liveSerialUnreadable() || shot.machine) return skipped(SERIAL_UNREAD_REASON);
+		return skipped('No DE1 serial number known — connect the machine first');
+	}
+	const serial = target.machine.serialNumber;
+	if ((!opts.manual || opts.backlog) && isSerialNotOnAccount(serial)) {
+		return { kind: 'skipped', reason: decentNotOnAccountMessage(serial), notOnAccount: serial };
 	}
 
 	let record: string;
@@ -212,7 +259,7 @@ async function runUpload(shotId: string, opts: DecentUploadOptions): Promise<Dec
 	}
 
 	const result = await Effect.runPromise(
-		Effect.either(postWithRetry(creds, record, !!opts.replace, opts.fetchFn))
+		Effect.either(postWithRetry(creds, record, { replace: !!opts.replace, serial }, opts.fetchFn))
 	);
 	if (result._tag === 'Left') return failed(shot, result.left);
 
@@ -259,6 +306,18 @@ export function uploadShotToDecent(
 /** Edit → replace debounce: the notes field fires per keystroke, stars in bursts. */
 export const EDIT_REPLACE_DEBOUNCE_MS = 1_500;
 const editReplaceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/**
+ * An edit's replace that Decent kept its earlier copy for has been toasted
+ * this session. Decenza saw decentespresso.com answer EVERY `?replace=1` this
+ * way (2026-10-04), so a toast per edit would nag; the Settings card's last
+ * upload and Recent activity record each one.
+ */
+let notReplacedToasted = false;
+
+/** Test hook — forget that the "kept its earlier copy" toast was shown. */
+export function resetDecentNotReplacedNotice(): void {
+	notReplacedToasted = false;
+}
 
 /**
  * After an edit to an ALREADY-UPLOADED shot's annotations (rating, notes,
@@ -272,7 +331,9 @@ const editReplaceTimers = new Map<string, ReturnType<typeof setTimeout>>();
  * trigger it — this hook runs from the edit handlers, not on store writes; an
  * upload already running for the shot keeps its slot and the replace follows
  * it. The usual auto-path gates still apply in the upload itself (linked,
- * not refused before, ≥ 5 s). Returns true when a replace was scheduled.
+ * not refused before, ≥ 5 s). A replace Decent answers `"duplicate"` (it
+ * kept its earlier copy) is toasted once per session. Returns true when a
+ * replace was scheduled.
  */
 export function scheduleDecentReplaceAfterEdit(
 	shotId: string,
@@ -294,6 +355,12 @@ export function scheduleDecentReplaceAfterEdit(
 			void running
 				.catch(() => null)
 				.then(() => uploadShotToDecent(shotId, { ...opts, replace: true }))
+				.then((outcome) => {
+					if (outcome.kind !== 'failed' || outcome.error._tag !== 'DecentNotReplacedError') return;
+					if (notReplacedToasted) return;
+					notReplacedToasted = true;
+					reportDecentOutcome(shotId, outcome);
+				})
 				.catch((e) => console.warn('[Crema] Decent replace after edit threw:', e));
 		}, EDIT_REPLACE_DEBOUNCE_MS)
 	);
@@ -359,7 +426,7 @@ export function unsentDecentShots(
 			!s.deletedAt &&
 			shotDurationSeconds(s) >= MIN_SHOT_SECONDS &&
 			!rejected.has(s.id) &&
-			(s.machine?.serialNumber ? true : !isPulledShot(s) && ctx.hasLiveMachine)
+			(decentKnownSerial(s.machine?.serialNumber) ? true : !isPulledShot(s) && ctx.hasLiveMachine)
 	);
 }
 
@@ -370,6 +437,12 @@ export interface DecentDrainResult {
 	uploaded: number;
 	failed: number;
 	skipped: number;
+	/**
+	 * Serials Decent said are not on the account (HTTP 403). Their shots are
+	 * held back — one POST, then skipped without one — and counted here, not
+	 * as failures, so a second machine's shots still go.
+	 */
+	notOnAccount: { serial: string; shots: number }[];
 	/** `null` = ran to the end. */
 	stopped: DecentDrainStop | null;
 	/** The last failure's message, for the notice. */
@@ -397,7 +470,19 @@ async function drain(
 	ids: readonly string[],
 	opts: DecentUploadOptions & { onProgress?: (done: number, total: number) => void }
 ): Promise<DecentDrainResult> {
-	const out: DecentDrainResult = { uploaded: 0, failed: 0, skipped: 0, stopped: null, lastError: null };
+	const out: DecentDrainResult = {
+		uploaded: 0,
+		failed: 0,
+		skipped: 0,
+		notOnAccount: [],
+		stopped: null,
+		lastError: null
+	};
+	const heldBack = (serial: string): void => {
+		const row = out.notOnAccount.find((r) => r.serial === serial);
+		if (row) row.shots += 1;
+		else out.notOnAccount.push({ serial, shots: 1 });
+	};
 	let streak = 0;
 	for (let i = 0; i < ids.length; i++) {
 		let outcome: DecentUploadOutcome;
@@ -414,7 +499,12 @@ async function drain(
 			out.uploaded += 1;
 			streak = 0;
 		} else if (outcome.kind === 'skipped') {
-			out.skipped += 1;
+			if (outcome.notOnAccount) heldBack(outcome.notOnAccount);
+			else out.skipped += 1;
+		} else if (outcome.error._tag === 'DecentNotOnAccountError') {
+			// Not a failure of the drain: this serial's other shots are skipped
+			// (the backlog gate), other machines' shots carry on.
+			heldBack(outcome.error.serial ?? 'unknown');
 		} else {
 			const err = outcome.error;
 			out.failed += 1;
@@ -438,8 +528,10 @@ async function drain(
  * Drain the backlog ({@link unsentDecentShots}) oldest-first, as manual
  * uploads. Stops at the first auth failure, the first failure with no HTTP
  * status (offline), or after {@link FAILURE_STREAK_LIMIT} failures in a row
- * (rejections or server errors). A drain already running (another surface
- * started it) is joined instead of started twice.
+ * (rejections or server errors). A serial Decent says is not on the account
+ * stops cleanly for that serial: its remaining shots are held back without a
+ * POST and the notice says why, once. A drain already running (another
+ * surface started it) is joined instead of started twice.
  */
 export function uploadUnsentDecentShots(
 	opts: { fetchFn?: FetchLike; onProgress?: (done: number, total: number) => void } = {}
@@ -448,7 +540,7 @@ export function uploadUnsentDecentShots(
 		const backlog = unsentDecentShots(getHistoryStore().all).sort((a, b) => a.completedAt - b.completedAt);
 		return drain(
 			backlog.map((s) => s.id),
-			{ manual: true, fetchFn: opts.fetchFn, onProgress: opts.onProgress }
+			{ manual: true, backlog: true, fetchFn: opts.fetchFn, onProgress: opts.onProgress }
 		);
 	});
 }
@@ -482,6 +574,20 @@ export function describeDecentDrain(
 	r: DecentDrainResult
 ): { kind: 'success' | 'error' | 'info'; message: string } | null {
 	const done = `${r.uploaded} shot${r.uploaded === 1 ? '' : 's'} uploaded to Decent`;
+	const notice = describeDrainCore(r, done);
+	if (r.notOnAccount.length === 0) return notice;
+	const held = r.notOnAccount.map(({ serial, shots }) => {
+		const n = `${shots} shot${shots === 1 ? '' : 's'}`;
+		return `${n} held back: ${decentNotOnAccountMessage(serial === 'unknown' ? null : serial)}`;
+	});
+	const lead = notice && notice.kind !== 'info' ? notice.message.replace(/\.$/, '') : done;
+	return { kind: 'error', message: `${lead} — ${held.join(' ')}` };
+}
+
+function describeDrainCore(
+	r: DecentDrainResult,
+	done: string
+): { kind: 'success' | 'error' | 'info'; message: string } | null {
 	if (r.stopped === 'auth') {
 		return { kind: 'error', message: `${done} — stopped: the Decent login stopped working, sign in again in Settings.` };
 	}

@@ -9,6 +9,32 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A DE1 that isn't on your Decent account no longer retries forever.**
+  Decent answers HTTP 403 when the machine's serial isn't registered to the
+  linked account (de1app `5b09f6aa`). Crema treated that as a passing server
+  error: it re-sent the shot twice more, queued it to retry on every
+  reconnect, and a backlog upload stopped after three of them with "HTTP 403".
+  Now the first 403 says once "This DE1 (serial …) isn't registered to your
+  Decent account — add it at decentespresso.com, then uploads resume." Later
+  automatic uploads from that machine wait quietly, and Upload missing shots
+  holds that machine's shots back while still uploading another machine's.
+  The shots stay in the backlog. They upload after you add the machine and
+  then sign in again, restart Crema, or tap Upload on a shot. Web and Android.
+- **An older DE1 that reports serial number 0 no longer has its shots filed
+  under "0".** Decent can never accept them under that serial (Decenza
+  `6c83ca06`). The upload now waits, and says "Crema couldn't read this
+  DE1's serial number yet". Web and Android.
+- **Editing an uploaded shot no longer claims Decent has the edit when it
+  doesn't.** Decenza found that decentespresso.com answers every replace
+  (`?replace=1`) with "duplicate" and keeps its earlier copy (`f5c3ce3e`).
+  Crema now reports "Decent kept its earlier copy of this shot — the edit
+  wasn't saved there", once per session after an edit, and every time in the
+  last-upload line and Recent activity. The earlier upload and its link
+  stay. Web and Android.
+- **A Wi-Fi sign-in page is no longer recorded as a Decent upload.** Only
+  Decent's own JSON answer counts as stored. Any other reply that comes
+  back as a success, such as a captive portal's page or a proxy's, now
+  fails and is retried like a network error. Web and Android.
 - **A Descale or Clean tapped right after connecting is no longer dropped**
   on DE1 firmware below build 1356. Crema reads whether a Group Head
   Controller is fitted a moment after connecting; a request made before

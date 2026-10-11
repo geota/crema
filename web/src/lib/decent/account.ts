@@ -133,12 +133,39 @@ export function decentTokenMigration(): Promise<void> {
 	return migration;
 }
 
+/**
+ * DE1 serials Decent answered 403 for ("not on this account") THIS session —
+ * de1app 5b09f6aa's `unlinked_serials`. In memory only: the owner may add the
+ * machine at decentespresso.com at any time, so a restart or a fresh sign-in
+ * tries again. Automatic uploads and backlog drains skip these serials
+ * without POSTing; the reason is shown once, on the 403 that added it.
+ */
+const notOnAccountSerials = new Set<string>();
+
+/** Record a 403 for `serial`; true when it is new this session (show the reason). */
+export function noteSerialNotOnAccount(serial: string): boolean {
+	if (notOnAccountSerials.has(serial)) return false;
+	notOnAccountSerials.add(serial);
+	return true;
+}
+
+/** Did Decent say this serial is not on the account, this session? */
+export function isSerialNotOnAccount(serial: string | null | undefined): boolean {
+	return serial != null && notOnAccountSerials.has(serial);
+}
+
+/** Forget the session's 403 serials (sign-in, sign-out; tests). */
+export function forgetSerialsNotOnAccount(): void {
+	notOnAccountSerials.clear();
+}
+
 /** Link the account: wraps the freshly issued token before it is persisted. */
 export async function linkDecentAccount(input: {
 	email: string;
 	token: string;
 	serials: string[];
 }): Promise<DecentAccountState> {
+	forgetSerialsNotOnAccount();
 	return updateDecentAccount({
 		email: input.email,
 		token: await secretBox.wrap(input.token),
@@ -197,6 +224,7 @@ export function isDecentLinked(state: DecentAccountState = readDecentAccount()):
 
 /** Forget the linked account — the token, serials and last-upload note. */
 export function unlinkDecentAccount(): void {
+	forgetSerialsNotOnAccount();
 	writeDecentAccount({ ...DEFAULT_DECENT_ACCOUNT });
 }
 

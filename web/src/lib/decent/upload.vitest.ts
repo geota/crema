@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ShotMachine, StoredShot } from '$lib/history/model';
-import { readDecentAccount, writeDecentAccount, DEFAULT_DECENT_ACCOUNT } from './account';
+import { forgetSerialsNotOnAccount, readDecentAccount, writeDecentAccount, DEFAULT_DECENT_ACCOUNT } from './account';
 import type { FetchLike } from './api';
 
 // A tiny in-memory history store — the upload path only needs get/all/bindDecentId.
@@ -13,7 +13,7 @@ vi.mock('$lib/history/store.svelte', () => ({
 		},
 		bindDecentId: (id: string, decentId: string, machine?: ShotMachine) => {
 			const s = shots.get(id);
-			if (s) shots.set(id, { ...s, decentId, ...(machine && !s.machine ? { machine } : {}) });
+			if (s) shots.set(id, { ...s, decentId, ...(machine ? { machine } : {}) });
 		}
 	})
 }));
@@ -28,15 +28,17 @@ vi.mock('$lib/state/machine-readout.svelte', () => ({
 		machineModel: 3
 	})
 }));
-vi.mock('$lib/components/shared/toast.svelte', () => ({
-	toast: { success: () => {}, error: () => {}, info: () => {} }
-}));
+const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
+vi.mock('$lib/components/shared/toast.svelte', () => ({ toast: toasts }));
 
 const {
+	SERIAL_UNREAD_REASON,
 	describeDecentDrain,
+	resetDecentNotReplacedNotice,
 	retryPendingDecentUploads,
 	scheduleDecentReplaceAfterEdit,
 	unsentDecentShots,
+	uploadAndReportDecent,
 	uploadShotToDecent,
 	uploadUnsentDecentShots
 } = await import('./upload');
@@ -62,9 +64,10 @@ function shot(id: string, durationMs: number, over: Partial<StoredShot> = {}): S
 }
 
 let posts = 0;
+// decentespresso.com's answer to a stored shot (Decenza tst_decentshotupload).
 const ok: FetchLike = async () => {
 	posts += 1;
-	return new Response('{"id":"77"}', { status: 200 });
+	return new Response('{"ok":true,"stored":true,"id":"77"}', { status: 200 });
 };
 const statusFetch =
 	(status: number, body = ''): FetchLike =>
@@ -88,6 +91,11 @@ beforeEach(() => {
 	liveSerial = null;
 	posts = 0;
 	setOnline(true);
+	forgetSerialsNotOnAccount();
+	resetDecentNotReplacedNotice();
+	toasts.success.mockClear();
+	toasts.error.mockClear();
+	toasts.info.mockClear();
 	shots.set('a', shot('a', 30_000, { machine: { serialNumber: '6262' } }));
 	shots.set('flush', shot('flush', 2_000, { machine: { serialNumber: '6262' } }));
 	shots.set('old', shot('old', 25_000)); // pre-#84 row: no stamped machine
@@ -398,3 +406,178 @@ describe('scheduleDecentReplaceAfterEdit (shot-upload 435acabb)', () => {
 		expect(posts).toBe(0);
 	});
 });
+
+describe('a serial Decent says is not on the account (HTTP 403, de1app 5b09f6aa)', () => {
+	const forbidden = statusFetch(403, '{"ok":false,"error":"not your machine"}');
+	const REASON =
+		"This DE1 (serial 6262) isn't registered to your Decent account — add it at decentespresso.com, then uploads resume.";
+
+	it('POSTs once, parks nothing, and names the serial', async () => {
+		writeDecentAccount(linked);
+		const r = await uploadShotToDecent('a', { fetchFn: forbidden, appVersion: 't' });
+		expect(r).toMatchObject({ kind: 'failed', error: { _tag: 'DecentNotOnAccountError', serial: '6262' } });
+		expect(posts).toBe(1); // no in-call retry
+		const account = readDecentAccount();
+		expect(account.retryShotIds).toEqual([]);
+		expect(account.rejectedShotIds).toEqual([]);
+		expect(account.needsReauth).toBe(false);
+		expect(account.lastUpload).toMatchObject({ ok: false, message: REASON });
+		// Still in the backlog: it uploads once the machine is added.
+		expect(unsentDecentShots([...shots.values()]).map((s) => s.id)).toContain('a');
+	});
+
+	it('shows the reason once: later automatic uploads for that serial skip without a POST', async () => {
+		writeDecentAccount(linked);
+		shots.set('b', shot('b', 30_000, { machine: { serialNumber: '6262' } }));
+		await uploadAndReportDecent('a', { fetchFn: forbidden, appVersion: 't' });
+		await uploadAndReportDecent('b', { fetchFn: forbidden, appVersion: 't' });
+		expect(posts).toBe(1);
+		expect(toasts.error).toHaveBeenCalledTimes(1);
+		expect(toasts.error.mock.calls[0][0]).toContain(REASON);
+		expect(await uploadShotToDecent('b', { fetchFn: forbidden, appVersion: 't' })).toEqual({
+			kind: 'skipped',
+			reason: REASON,
+			notOnAccount: '6262'
+		});
+		// An explicit tap tries again (the owner may have just added the machine).
+		expect(await uploadShotToDecent('b', { fetchFn: ok, appVersion: 't', manual: true })).toMatchObject({
+			kind: 'uploaded'
+		});
+	});
+
+	it('a backlog stops cleanly for that serial and carries on for another machine', async () => {
+		writeDecentAccount(linked);
+		for (const [id, sn] of [
+			['b', '6262'],
+			['c', '6262'],
+			['d', '7000']
+		] as const) {
+			shots.set(id, shot(id, 30_000, { machine: { serialNumber: sn }, completedAt: 1_700_000_000_000 + id.charCodeAt(0) }));
+		}
+		const bySerial: FetchLike = async (_u, init) => {
+			posts += 1;
+			const sn = JSON.parse(String(init.body)).machine.serialNumber;
+			return sn === '6262'
+				? new Response('{"ok":false,"error":"not your machine"}', { status: 403 })
+				: new Response('{"ok":true,"stored":true,"id":"9"}', { status: 200 });
+		};
+		const r = await uploadUnsentDecentShots({ fetchFn: bySerial });
+		// a, b, c are 6262 (one POST, then held back); d is 7000.
+		expect(posts).toBe(2);
+		expect(r).toMatchObject({ uploaded: 1, failed: 0, stopped: null, notOnAccount: [{ serial: '6262', shots: 3 }] });
+		expect(shots.get('d')?.decentId).toBe('9');
+		const notice = describeDecentDrain(r);
+		expect(notice?.kind).toBe('error');
+		expect(notice?.message).toBe(`1 shot uploaded to Decent — 3 shots held back: ${REASON}`);
+		expect(readDecentAccount().retryShotIds).toEqual([]);
+	});
+
+	it('a 403 drops the shot from the reconnect retry set', async () => {
+		writeDecentAccount({ ...linked, retryShotIds: ['a'] });
+		await uploadShotToDecent('a', { fetchFn: forbidden, appVersion: 't', manual: true });
+		expect(readDecentAccount().retryShotIds).toEqual([]);
+	});
+
+	it('signing in again forgets it', async () => {
+		writeDecentAccount(linked);
+		await uploadShotToDecent('a', { fetchFn: forbidden, appVersion: 't' });
+		const { linkDecentAccount } = await import('./account');
+		await linkDecentAccount({ email: 'me@example.com', token: 'tok', serials: ['6262'] });
+		expect(await uploadShotToDecent('a', { fetchFn: ok, appVersion: 't' })).toMatchObject({ kind: 'uploaded' });
+	});
+});
+
+describe('serial 0 is unknown (Decenza 6c83ca06)', () => {
+	it('never uploads as "0": waits with its own reason', async () => {
+		writeDecentAccount(linked);
+		liveSerial = 0;
+		expect(await uploadShotToDecent('old', { fetchFn: ok, appVersion: 't', manual: true })).toEqual({
+			kind: 'skipped',
+			reason: SERIAL_UNREAD_REASON
+		});
+		expect(SERIAL_UNREAD_REASON).toBe("Crema couldn't read this DE1's serial number yet");
+		expect(posts).toBe(0);
+		expect(shots.get('old')?.machine).toBeUndefined();
+		// Not in the backlog either: there is no serial to file it under.
+		expect(unsentDecentShots([...shots.values()]).map((s) => s.id)).not.toContain('old');
+	});
+
+	it('a shot stamped "0" borrows the connected DE1 and is restamped', async () => {
+		writeDecentAccount(linked);
+		shots.set('zero', shot('zero', 30_000, { machine: { serialNumber: '0' } }));
+		expect(await uploadShotToDecent('zero', { fetchFn: ok, appVersion: 't' })).toEqual({
+			kind: 'skipped',
+			reason: SERIAL_UNREAD_REASON
+		});
+		expect(unsentDecentShots([...shots.values()], { hasLiveMachine: false, rejectedShotIds: [] }).map((s) => s.id)).not.toContain('zero');
+		liveSerial = 6262;
+		const bodies: Array<{ machine: { serialNumber: string } }> = [];
+		const capture: FetchLike = async (_u, init) => {
+			bodies.push(JSON.parse(String(init.body)));
+			return new Response('{"ok":true,"stored":true,"id":"5"}', { status: 200 });
+		};
+		expect(await uploadShotToDecent('zero', { fetchFn: capture, appVersion: 't' })).toMatchObject({
+			kind: 'uploaded',
+			url: 'https://decentespresso.com/shot/6262/5'
+		});
+		expect(bodies[0].machine.serialNumber).toBe('6262');
+		expect(shots.get('zero')?.machine?.serialNumber).toBe('6262');
+	});
+});
+
+describe('replace answered "duplicate" (Decenza f5c3ce3e)', () => {
+	const DUPLICATE = '{"ok":true,"stored":false,"duplicate":true,"id":"77"}';
+	const flush = async () => {
+		for (let i = 0; i < 20; i++) await Promise.resolve();
+	};
+
+	it('is not an upload: the earlier upload stands, nothing is parked, the reason is recorded', async () => {
+		writeDecentAccount(linked);
+		shots.set('a', { ...shots.get('a')!, decentId: '77' });
+		const r = await uploadShotToDecent('a', { fetchFn: statusFetch(200, DUPLICATE), appVersion: 't', manual: true, replace: true });
+		expect(r).toMatchObject({ kind: 'failed', error: { _tag: 'DecentNotReplacedError', id: '77' } });
+		expect(posts).toBe(1);
+		expect(shots.get('a')?.decentId).toBe('77');
+		const account = readDecentAccount();
+		expect(account).toMatchObject({ retryShotIds: [], rejectedShotIds: [], needsReauth: false });
+		expect(account.lastUpload).toMatchObject({ ok: false, message: expect.stringContaining('kept its earlier copy') });
+	});
+
+	it('a first upload answered "duplicate" is an upload', async () => {
+		writeDecentAccount(linked);
+		expect(await uploadShotToDecent('a', { fetchFn: statusFetch(200, DUPLICATE), appVersion: 't' })).toMatchObject({
+			kind: 'uploaded',
+			id: '77'
+		});
+	});
+
+	it('an edit whose replace Decent kept the earlier copy for is toasted once per session', async () => {
+		vi.useFakeTimers();
+		writeDecentAccount(linked);
+		shots.set('a', { ...shots.get('a')!, decentId: '77' });
+		const dup = statusFetch(200, DUPLICATE);
+		for (let i = 0; i < 2; i++) {
+			scheduleDecentReplaceAfterEdit('a', { fetchFn: dup, appVersion: 't' });
+			await vi.advanceTimersByTimeAsync(1_500);
+			await flush();
+		}
+		expect(posts).toBe(2);
+		expect(toasts.error).toHaveBeenCalledTimes(1);
+		expect(toasts.error.mock.calls[0][0]).toContain('Decent kept its earlier copy');
+		expect(toasts.success).not.toHaveBeenCalled();
+	});
+});
+
+describe('a 2xx that is not the API answer (captive portal)', () => {
+	it('is retried in-call and parked for retry, never recorded as an upload', async () => {
+		vi.useFakeTimers();
+		writeDecentAccount(linked);
+		const p = uploadShotToDecent('a', { fetchFn: statusFetch(200, '<html>Sign in to Wi-Fi</html>'), appVersion: 't' });
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(await p).toMatchObject({ kind: 'failed', error: { _tag: 'DecentNetworkError', status: 200 } });
+		expect(posts).toBe(3);
+		expect(shots.get('a')?.decentId).toBeUndefined();
+		expect(readDecentAccount().retryShotIds).toEqual(['a']);
+	});
+});
+
