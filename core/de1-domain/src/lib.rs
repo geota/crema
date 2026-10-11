@@ -77,6 +77,7 @@ pub mod decent_wire;
 pub mod error;
 pub mod filter;
 pub mod firmware_builds;
+pub mod firmware_image;
 pub mod flow;
 pub mod history;
 pub mod history_export;
@@ -207,6 +208,13 @@ pub use firmware_builds::{
     DecentFirmwareChannel, FirmwareBuildReport, FirmwareBuildStatus, KNOWN_FIRMWARE_BUILDS,
     KNOWN_FIRMWARE_BUILDS_REVISION, KNOWN_FIRMWARE_BUILDS_VERIFIED, classify_firmware_build,
     classify_firmware_build_json,
+};
+pub use firmware_image::{
+    BENGLE_BOARD_MARKER, DE1_BOARD_MARKER, FIRMWARE_CHUNK_LEN, FIRMWARE_HEADER_LEN,
+    FIRMWARE_MANIFEST_REVISION, FIRMWARE_MANIFEST_VERIFIED, FirmwareArtifact, FirmwareHeader,
+    FirmwareImageCheck, FirmwareImageError, firmware_artifact_for_channel, firmware_manifest,
+    firmware_manifest_json, parse_firmware_header, sha256_hex, validate_firmware_image,
+    validate_firmware_image_json,
 };
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
 pub use history::{
