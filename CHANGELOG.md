@@ -7,6 +7,16 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Descale or Clean tapped right after connecting is no longer dropped**
+  on DE1 firmware below build 1356. Crema reads whether a Group Head
+  Controller is fitted a moment after connecting; a request made before
+  that read landed went out as a plain write, which that firmware ignores
+  while heating. An unread GHC now counts as fitted, as Decenza does
+  (`d5f405fb`): the worst case on a headless machine is a throwaway
+  warm-up profile. Web and Android.
+
 ## [0.0.7] — 2026-10-08
 
 Brew Log for filter coffee: guided pour-overs with credited recipes, your own brew methods, and bean usage tracking.

@@ -95,10 +95,17 @@ pub fn is_machine_heating(info: StateInfo) -> bool {
 /// counts as old — see [`firmware_drops_cold_requests`]), a Group Head
 /// Controller fitted, and the machine currently heating. `ghc_info` is the raw
 /// MMR `GhcInfo` word; any non-zero value is "fitted" (crema's reading, the
-/// same both shells use). An unread GHC register counts as NOT fitted, the
-/// default both Decenza (`m_isHeadless = true`) and decaid
-/// (`groupHeadControllerPresent: false`) start from — the firmware defect is a
-/// GHC-machine defect.
+/// same both shells use); `Some(0)` is headless.
+///
+/// **An unread GHC register counts as fitted**, as Decenza does since
+/// `d5f405fb` (`de1device.cpp`: `ghcPresent = !m_ghcStatusKnown ||
+/// !isHeadless()`). The register is read in the connect-time MMR sweep, so a
+/// Descale / Clean tapped in the first seconds after connecting can arrive
+/// before it lands. The costs are the same lopsided ones as for an unknown
+/// firmware build (see [`firmware_drops_cold_requests`]): guessing "fitted" on
+/// a headless machine only loads a throwaway profile and waits for preheat,
+/// while guessing "headless" on a GHC machine below build 1356 lets the
+/// firmware drop the request silently.
 #[must_use]
 pub fn needs_cold_workaround(
     requested: MachineState,
@@ -108,7 +115,7 @@ pub fn needs_cold_workaround(
 ) -> bool {
     is_maintenance_state(requested)
         && firmware_drops_cold_requests(firmware_build)
-        && ghc_info.is_some_and(|ghc| ghc != 0)
+        && ghc_info.is_none_or(|ghc| ghc != 0)
         && current.is_some_and(is_machine_heating)
 }
 
@@ -343,17 +350,11 @@ mod tests {
             Some(3),
             heating
         ));
-        // Headless / GHC unread.
+        // Headless → plain.
         assert!(!needs_cold_workaround(
             MachineState::Descale,
             Some(1355),
             Some(0),
-            heating
-        ));
-        assert!(!needs_cold_workaround(
-            MachineState::Descale,
-            Some(1355),
-            None,
             heating
         ));
         // Warm machine.
@@ -369,6 +370,47 @@ mod tests {
             Some(1355),
             Some(3),
             Some(info(MachineState::Busy, SubState::Ready))
+        ));
+    }
+
+    #[test]
+    fn unread_ghc_counts_as_fitted() {
+        // Decenza d5f405fb: a request that beats the GHC_INFO read must still
+        // take the cold path on old firmware, or the firmware drops it.
+        let heating = Some(info(MachineState::Idle, SubState::Heating));
+        for requested in [
+            MachineState::Descale,
+            MachineState::Clean,
+            MachineState::AirPurge,
+        ] {
+            assert!(
+                needs_cold_workaround(requested, Some(1355), None, heating),
+                "{requested:?}"
+            );
+            assert!(
+                needs_cold_workaround(requested, None, None, heating),
+                "{requested:?}"
+            );
+        }
+        // Still plain on new firmware, on a warm machine, and once the read
+        // says headless.
+        assert!(!needs_cold_workaround(
+            MachineState::Descale,
+            Some(1356),
+            None,
+            heating
+        ));
+        assert!(!needs_cold_workaround(
+            MachineState::Descale,
+            Some(1355),
+            None,
+            Some(info(MachineState::Idle, SubState::Ready))
+        ));
+        assert!(!needs_cold_workaround(
+            MachineState::Descale,
+            Some(1355),
+            Some(0),
+            heating
         ));
     }
 
