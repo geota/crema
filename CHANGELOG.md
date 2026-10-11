@@ -7,6 +7,24 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Firmware updates (alpha)** — Settings → Machine → "Update firmware…"
+  installs DE1 firmware from Crema. Pick Decent's Stable build (1333) or the
+  Nightly / early-access build (1358); Crema downloads it from Decent's own
+  update server and installs it only if it matches a copy it has verified
+  byte for byte. A click-through warning comes first. Updating takes about
+  15–25 minutes with the device charging and near the DE1, and ends with
+  switching the DE1 off and on; Crema then reads the build back to confirm.
+  If anything fails or you cancel, the DE1 keeps its current firmware
+  (Crema only writes its spare memory bank) and you can retry. The steps
+  follow Decent's de1app and decaid and Decenza: sleep the machine, erase,
+  send 16-byte blocks one at a time, let the DE1 verify, power-cycle.
+  Classic DE1 models only (DE1PRO, XL, XXL, XXXL; no Bengle). On Android the
+  update keeps running in the background; in the browser, keep the tab open
+  and in front (and if the browser can't download Decent's file directly,
+  download it from Decent and choose it). Web, tablet and phone.
+
 ### Fixed
 
 - **A DE1 that isn't on your Decent account no longer retries forever.**
@@ -88,21 +106,19 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   shows the installed build and what it means against a dated list of
   Decent's builds: "Build 1358 · newest Decent release", "Build 1333 ·
   Decent stable", "Build 1352 · newer than Decent stable", "older than
-  Decent's current stable", or "newer than Crema knows about". The 2023
-  build 1363, which Decent withdrew, reads as a rolled-back build instead of
-  newer than 1358. Web, tablet and phone (the phone hero gains the card).
+  Decent stable", or "newer than Crema knows about". The 2023 build 1363,
+  which Decent withdrew, reads as a rolled-back build instead of newer than
+  1358. Web, tablet and phone (the phone hero gains the card).
 
-- **Honest advice on updating firmware** — Crema can't install firmware
-  yet, and the card now says so and how to update today: with Decent's
-  tablet app (de1app), whose stable and beta versions install build 1333;
-  build 1358 needs its nightly version. The web card used to say to get
-  1358 from de1app, and its "Update firmware…" button ended in "not yet
-  implemented"; the button is gone. Web, tablet and phone.
+- **No more advice to get build 1358 from de1app's stable channel** — the
+  web card used to say to, though de1app's stable and beta versions install
+  build 1333, and its "Update firmware…" button ended in "not yet
+  implemented". The card now says which build is newer, and the button
+  opens the real update.
 
 - **Firmware verify request matches Decent's apps** — the request that asks
   the DE1 to verify an uploaded image now sets the map flag the way de1app,
-  decaid and Decenza do. Crema doesn't flash firmware yet, so nothing
-  changes for users today.
+  decaid and Decenza do.
 
 ## [0.0.7] — 2026-10-08
 
