@@ -48,6 +48,14 @@ import kotlinx.coroutines.sync.withLock
  * returns the FINAL answer. An auth failure flags the account for
  * re-linking; a permanent rejection joins [DecentState.rejectedShotIds] and
  * leaves the backlog; any other failure is recorded and reported.
+ *
+ * A 403 — the serial is not on the account (de1app `5b09f6aa`) — is neither:
+ * the serial is remembered for the session and its later automatic / backlog
+ * uploads are skipped without a POST, so the reason shows once; the shot stays
+ * in the backlog for when the machine is added. A serial of `0` (older DE1s
+ * report it) is unknown, never uploaded. A replace Decent answers `"duplicate"`
+ * (it kept its earlier copy, Decenza `f5c3ce3e`) is reported, never recorded
+ * as an upload.
  */
 class DecentSync(
     private val store: DecentStateStore,
@@ -67,6 +75,10 @@ class DecentSync(
     private val onShotUploaded: (localId: String, decentId: String, machine: ShotMachine?) -> Unit,
     /** The connected DE1's identity, or null before its serial is known. */
     private val liveMachine: () -> ShotMachine?,
+    /** Core's serial rule (`decentKnownSerial`): the serial, or null when blank / `0`. */
+    private val knownSerial: (String?) -> String?,
+    /** The connected DE1 answered its serial read with `0` (unknown) — for the skip reason. */
+    private val liveSerialUnreadable: () -> Boolean = { false },
     /** The shot as history holds it NOW (null = deleted) — re-read before every POST. */
     private val currentShot: (localId: String) -> StoredShot?,
     /** The account was just linked — the moment to offer a catch-up of existing shots. */
@@ -81,6 +93,9 @@ class DecentSync(
 
         /** Edit → replace debounce: the notes field fires per keystroke, stars in bursts (web parity). */
         const val EDIT_REPLACE_DEBOUNCE_MS = 1_500L
+
+        /** Why an upload waits for the serial: the DE1 answered its serial read with 0 (web parity). */
+        const val SERIAL_UNREAD_REASON = "Crema couldn’t read this DE1’s serial number yet"
         private const val LOG_CAP = 20
     }
 
@@ -119,6 +134,21 @@ class DecentSync(
 
     /** One backlog pass at a time. */
     private val drainMutex = Mutex()
+
+    /**
+     * Serials Decent answered 403 for THIS session (de1app's
+     * `unlinked_serials`). In memory only: the owner may add the machine at
+     * any time, so a restart or a fresh sign-in tries again.
+     */
+    private val notOnAccountSerials = HashSet<String>()
+
+    private fun isNotOnAccount(serial: String) = synchronized(notOnAccountSerials) { serial in notOnAccountSerials }
+
+    private fun forgetNotOnAccount() = synchronized(notOnAccountSerials) { notOnAccountSerials.clear() }
+
+    /** An edit's replace Decent kept its earlier copy for has been surfaced this session. */
+    @Volatile
+    private var notReplacedNotified = false
 
     override var onUploadOutcome: ((shotId: String, outcome: UploadOutcome) -> Unit)? = null
 
@@ -191,6 +221,7 @@ class DecentSync(
                     _state.update { it.copy(busy = false, signInError = "Decent accepted the password but not the login token — try again.") }
                     return@launch
                 }
+                forgetNotOnAccount()
                 val saved = persist {
                     DecentState(email = e, token = token, serials = serials, autoUpload = true, log = it.log)
                 }
@@ -208,6 +239,7 @@ class DecentSync(
 
     /** Forget the linked account — the token, email, serials and last-upload note. */
     fun signOut() = scope.launch {
+        forgetNotOnAccount()
         persist { DecentState(log = it.log) }
         _state.update { it.copy(signInError = null) }
     }
@@ -261,7 +293,9 @@ class DecentSync(
 
     sealed class Outcome {
         data class Uploaded(val id: String?, val url: String?) : Outcome()
-        data class Skipped(val reason: String, val alreadyRunning: Boolean = false) : Outcome()
+
+        /** [notOnAccount] — skipped because Decent said this serial is not on the account. */
+        data class Skipped(val reason: String, val alreadyRunning: Boolean = false, val notOnAccount: String? = null) : Outcome()
         data class Failed(val error: DecentError) : Outcome()
     }
 
@@ -276,11 +310,18 @@ class DecentSync(
         _state.update { it.copy(uploadingShotIds = it.uploadingShotIds - shotId) }
     }
 
-    /** The stamped machine, else (for a shot recorded here) the connected DE1. Second = it came from the live DE1. */
+    /**
+     * The stamped machine, else (for a shot recorded here) the connected DE1.
+     * Second = it came from the live DE1. A serial core calls unknown (blank,
+     * or `0`) is no serial: a shot stamped `0` borrows the live DE1, and a
+     * live `0` is never used.
+     */
     private fun resolveMachine(shot: StoredShot): Pair<ShotMachine, Boolean>? {
-        shotMachineOf(shot)?.let { return it to false }
+        shotMachineOf(shot)?.let { m -> knownSerial(m.serialNumber)?.let { return m.copy(serialNumber = it) to false } }
         if (shot.pulledFromVisualizer) return null
-        return liveMachine()?.takeIf { it.serialNumber.isNotBlank() }?.let { it to true }
+        val live = liveMachine() ?: return null
+        val serial = knownSerial(live.serialNumber) ?: return null
+        return live.copy(serialNumber = serial) to true
     }
 
     private fun machineFor(shot: StoredShot): ShotMachine? = resolveMachine(shot)?.first
@@ -348,7 +389,8 @@ class DecentSync(
      * `decentId`) never triggers it — this runs from the edit paths, not on
      * history writes; an upload already running for the shot keeps its slot
      * and the replace follows it. The auto-path gates (length, serial) still
-     * apply. Failures land in Recent activity, without a snackbar. Returns
+     * apply. Failures land in Recent activity, without a snackbar — except a
+     * replace Decent kept its earlier copy for, said once per session. Returns
      * true when a replace was scheduled.
      */
     fun scheduleReplaceAfterEdit(shotId: String): Boolean {
@@ -365,7 +407,13 @@ class DecentSync(
                 // rather than cancelling this one mid-POST.
                 synchronized(editReplaceJobs) { if (editReplaceJobs[shotId] === job) editReplaceJobs.remove(shotId) }
                 while (synchronized(inFlight) { shotId in inFlight }) delay(250)
-                uploadNow(currentShot(shotId) ?: return@launch, manual = false, replace = true, fullSamples = null)
+                val o = uploadNow(currentShot(shotId) ?: return@launch, manual = false, replace = true, fullSamples = null)
+                // Decenza saw the server answer EVERY replace "duplicate" (2026-10-04):
+                // say so once per session, not per edit; Recent activity has each one.
+                if (o is Outcome.Failed && o.error is DecentError.NotReplaced && !notReplacedNotified) {
+                    notReplacedNotified = true
+                    notify(o.error.message ?: "Decent kept its earlier copy")
+                }
             }
             editReplaceJobs[shotId] = job
         }
@@ -379,10 +427,11 @@ class DecentSync(
         replace: Boolean,
         fullSamples: List<TelemetrySample>?,
         clearRejection: Boolean = false,
+        backlog: Boolean = false,
     ): Outcome {
         if (!claim(shot.id)) return Outcome.Skipped("Already uploading", alreadyRunning = true)
         try {
-            return uploadClaimed(shot, manual, replace, fullSamples, clearRejection)
+            return uploadClaimed(shot, manual, replace, fullSamples, clearRejection, backlog)
         } finally {
             release(shot.id)
         }
@@ -394,6 +443,8 @@ class DecentSync(
         replace: Boolean,
         fullSamples: List<TelemetrySample>?,
         clearRejection: Boolean,
+        /** Part of a backlog drain: like the auto path, skip a serial Decent said is not on the account. */
+        backlog: Boolean = false,
     ): Outcome {
         val p = persisted
         val email = p.email
@@ -409,8 +460,16 @@ class DecentSync(
         if (shot.decentId != null && !replace) return Outcome.Skipped("Already on Decent")
         if (!manual && shot.durationMs < MIN_SHOT_SECONDS * 1000L) return Outcome.Skipped("Shorter than $MIN_SHOT_SECONDS s")
         val (machine, fromLive) = resolveMachine(shot) ?: return Outcome.Skipped(
-            if (shot.pulledFromVisualizer) "Pulled from Visualizer without a DE1 serial" else "No DE1 serial number known — connect the machine first",
+            when {
+                shot.pulledFromVisualizer -> "Pulled from Visualizer without a DE1 serial"
+                liveSerialUnreadable() || !shot.machineSerial.isNullOrBlank() -> SERIAL_UNREAD_REASON
+                else -> "No DE1 serial number known — connect the machine first"
+            },
         )
+        val serial = machine.serialNumber
+        if ((!manual || backlog) && isNotOnAccount(serial)) {
+            return Outcome.Skipped(DecentError.notOnAccountMessage(serial), notOnAccount = serial)
+        }
         if (clearRejection && shot.id in p.rejectedShotIds) persist { it.copy(rejectedShotIds = it.rejectedShotIds - shot.id) }
 
         val record = try {
@@ -447,6 +506,11 @@ class DecentSync(
         } catch (e: DecentError.Rejected) {
             persist { it.copy(rejectedShotIds = it.rejectedShotIds + shot.id) }
             return failed(e, shot)
+        } catch (e: DecentError.NotOnAccount) {
+            // Not the shot's fault and not transient: not rejected, so it stays in
+            // the backlog for when the machine is on the account.
+            synchronized(notOnAccountSerials) { notOnAccountSerials += serial }
+            return failed(DecentError.NotOnAccount(serial), shot)
         } catch (e: DecentError) {
             return failed(e, shot)
         }
@@ -463,7 +527,10 @@ class DecentSync(
      * Drain the backlog oldest-first, awaiting the whole pass. Stops at an auth
      * failure, at the first offline network error (the rest would fail the
      * same way), and after [FAILURE_STREAK_LIMIT] failures in a row of any
-     * kind. A second call while a pass runs returns at once.
+     * kind. A serial Decent says is not on the account stops cleanly for that
+     * serial: its remaining shots are held back without a POST (not counted as
+     * failures) and the result's note says why, once. A second call while a
+     * pass runs returns at once.
      */
     override suspend fun uploadUnsentNow(shots: List<StoredShot>): DrainResult {
         if (!drainMutex.tryLock()) return DrainResult(stopped = "A Decent upload pass is already running")
@@ -477,11 +544,15 @@ class DecentSync(
             var skipped = 0
             var streak = 0
             var stopped: String? = null
+            val heldBack = LinkedHashMap<String, Int>()
             for ((i, shot) in backlog.withIndex()) {
-                when (val o = uploadNow(shot, manual = true, replace = false, fullSamples = null)) {
+                when (val o = uploadNow(shot, manual = true, replace = false, fullSamples = null, backlog = true)) {
                     is Outcome.Uploaded -> { uploaded++; streak = 0 }
-                    is Outcome.Skipped -> skipped++
-                    is Outcome.Failed -> {
+                    is Outcome.Skipped ->
+                        if (o.notOnAccount != null) heldBack.merge(o.notOnAccount, 1, Int::plus) else skipped++
+                    is Outcome.Failed -> if (o.error is DecentError.NotOnAccount) {
+                        heldBack.merge(o.error.serial.orEmpty(), 1, Int::plus)
+                    } else {
                         failed++
                         val e = o.error
                         streak++
@@ -496,7 +567,10 @@ class DecentSync(
                 _state.update { it.copy(backlogProgress = (i + 1) to backlog.size) }
                 if (stopped != null) break
             }
-            return DrainResult(uploaded, failed, skipped, stopped)
+            val note = heldBack.entries.joinToString(" ") { (serial, n) ->
+                "$n shot${if (n == 1) "" else "s"} held back: ${DecentError.notOnAccountMessage(serial.ifBlank { null })}"
+            }.ifBlank { null }
+            return DrainResult(uploaded, failed, skipped, stopped, note)
         } finally {
             _state.update { it.copy(backlogProgress = null) }
             drainMutex.unlock()

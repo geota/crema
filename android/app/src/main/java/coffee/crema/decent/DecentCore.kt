@@ -17,8 +17,14 @@ interface DecentCore {
     /** `DecentMachinesReply` JSON for an `sn` answer. */
     fun machinesReplyJson(status: Int, body: String): String
 
-    /** `DecentUploadReply` JSON for a `shot_upload` answer. */
-    fun uploadReplyJson(status: Int, body: String): String
+    /**
+     * `DecentUploadReply` JSON for a `shot_upload` answer; [replace] = the
+     * caller asked for `?replace=1` (a `"duplicate"` answer is then `NotReplaced`).
+     */
+    fun uploadReplyJson(status: Int, body: String, replace: Boolean): String
+
+    /** The serial to file a shot under, or null when unknown (blank, or the `0` older DE1s report). */
+    fun knownSerial(serial: String?): String?
 
     /** The public `/shot/<sn>/<id>` page, or null unless both are real. */
     fun shotViewUrl(serial: String?, decentId: String?): String?
@@ -35,8 +41,10 @@ object UniffiDecentCore : DecentCore {
     override fun machinesReplyJson(status: Int, body: String): String =
         coffee.crema.core.decentMachinesJson(status.toStatus(), body)
 
-    override fun uploadReplyJson(status: Int, body: String): String =
-        coffee.crema.core.decentUploadReplyJson(status.toStatus(), body)
+    override fun uploadReplyJson(status: Int, body: String, replace: Boolean): String =
+        coffee.crema.core.decentUploadReplyJson(status.toStatus(), body, replace)
+
+    override fun knownSerial(serial: String?): String? = coffee.crema.core.decentKnownSerial(serial)
 
     override fun shotViewUrl(serial: String?, decentId: String?): String? =
         coffee.crema.core.decentShotViewUrl(serial, decentId)

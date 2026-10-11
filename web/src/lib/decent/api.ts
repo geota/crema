@@ -8,7 +8,8 @@
  *   GET  /support/api/sn?onlyespressomachines=1
  *                                         Basic email:token    → "serial [sku]" lines
  *   POST /support/api/shot_upload[?replace=1]
- *                                         Basic email:token, JSON ShotRecord → {id,…}
+ *                                         Basic email:token, JSON ShotRecord
+ *                                         → {"ok":true,"stored":…,"id":…}
  *
  * `login_test` answers `0` for a bad login and a token string (the
  * one-way "encrypted password" de1app stores) for a good one; every later
@@ -19,10 +20,20 @@
  * verifies the account and that the shot's machine serial is registered
  * to it before storing the shot. The API sends `access-control-allow-origin:
  * *`, so the browser calls it directly — no proxy.
+ *
+ * The upload body goes UNCOMPRESSED here, unlike Android and de1app / Decenza
+ * (which gzip it, as Decent asked). `Content-Encoding` is not a CORS-safelisted
+ * request header, so a gzipped cross-origin POST needs a preflight that allows
+ * it, and decentespresso.com's preflight answers (checked 2026-10-11)
+ * `access-control-allow-headers: Content-Type, Authorization, X-Requested-With`
+ * whatever is asked for — the browser would block the upload. Revisit when the
+ * server lists `Content-Encoding`. There is no client-side deadline either: the
+ * browser's own (minutes) already outlasts the 25-38 s the server can take.
  */
 
 import { Data } from 'effect';
 import {
+	decentKnownSerial as coreDecentKnownSerial,
 	decentLoginTokenJson,
 	decentMachinesJson,
 	decentShotViewUrl as coreDecentShotViewUrl,
@@ -55,6 +66,15 @@ export function decentShotViewUrl(
 	return coreDecentShotViewUrl(serial ?? undefined, decentId ?? undefined) ?? null;
 }
 
+/**
+ * A machine serial worth sending to Decent, or `null` when it is unknown —
+ * blank, or the `0` some older DE1s answer the serial read with (core's
+ * `decent_known_serial`; Decenza `6c83ca06`).
+ */
+export function decentKnownSerial(serial: string | number | null | undefined): string | null {
+	return serial == null ? null : (coreDecentKnownSerial(String(serial)) ?? null);
+}
+
 /** The linked account's credentials (`token` from {@link decentLogin}). */
 export interface DecentCredentials {
 	email: string;
@@ -67,7 +87,7 @@ export class DecentAuthError extends Data.TaggedError('DecentAuthError')<{ reado
 		return 'Decent account login no longer works — sign in again.';
 	}
 }
-/** The server refused this shot for good (4xx other than auth / 408 / 429). */
+/** The server refused this shot for good (4xx other than 401 / 403 / 408 / 429). */
 export class DecentRejectedError extends Data.TaggedError('DecentRejectedError')<{
 	readonly status: number;
 	readonly body: string;
@@ -76,18 +96,57 @@ export class DecentRejectedError extends Data.TaggedError('DecentRejectedError')
 		return `Decent rejected the shot (HTTP ${this.status})${this.body ? `: ${this.body}` : ''}`;
 	}
 }
-/** Transport failure or a 5xx / 408 / 429 — worth retrying later. */
+/**
+ * Transport failure, a 5xx / 408 / 429, or a 2xx that is not the upload API's
+ * answer (a captive portal's page) — worth retrying later.
+ */
 export class DecentNetworkError extends Data.TaggedError('DecentNetworkError')<{
 	readonly status: number | null;
 	readonly detail: string;
 }> {
 	get message(): string {
-		return this.status === null
-			? `Couldn't reach decentespresso.com: ${this.detail}`
-			: `decentespresso.com answered HTTP ${this.status}`;
+		if (this.status === null) return `Couldn't reach decentespresso.com: ${this.detail}`;
+		if (this.status >= 200 && this.status < 300) {
+			return "decentespresso.com's answer wasn't an upload reply (a Wi-Fi sign-in page?) — the shot wasn't stored";
+		}
+		return `decentespresso.com answered HTTP ${this.status}`;
 	}
 }
-export type DecentApiError = DecentAuthError | DecentRejectedError | DecentNetworkError;
+/**
+ * HTTP 403: the shot's DE1 serial is not registered to the linked account
+ * (de1app 5b09f6aa). Permanent until the owner adds the machine — neither
+ * retried nor a rejection of the shot.
+ */
+export class DecentNotOnAccountError extends Data.TaggedError('DecentNotOnAccountError')<{
+	readonly serial: string | null;
+}> {
+	get message(): string {
+		return decentNotOnAccountMessage(this.serial);
+	}
+}
+/** The one wording for a serial Decent says is not on the account. */
+export function decentNotOnAccountMessage(serial: string | null): string {
+	const which = serial ? `This DE1 (serial ${serial})` : 'This DE1';
+	return `${which} isn't registered to your Decent account — add it at decentespresso.com, then uploads resume.`;
+}
+/**
+ * A `?replace=1` upload answered `"duplicate":true`: Decent kept its earlier
+ * copy and the edit was not stored (Decenza f5c3ce3e). The shot's existing
+ * upload stands.
+ */
+export class DecentNotReplacedError extends Data.TaggedError('DecentNotReplacedError')<{
+	readonly id: string | null;
+}> {
+	get message(): string {
+		return "Decent kept its earlier copy of this shot — the edit wasn't saved there.";
+	}
+}
+export type DecentApiError =
+	| DecentAuthError
+	| DecentRejectedError
+	| DecentNetworkError
+	| DecentNotOnAccountError
+	| DecentNotReplacedError;
 
 export function isDecentRecoverable(e: DecentApiError): boolean {
 	return e._tag === 'DecentNetworkError';
@@ -95,7 +154,13 @@ export function isDecentRecoverable(e: DecentApiError): boolean {
 
 /** Is `e` one of this module's typed failures? (Anything else is a bug, not an API answer.) */
 export function isDecentApiError(e: unknown): e is DecentApiError {
-	return e instanceof DecentAuthError || e instanceof DecentRejectedError || e instanceof DecentNetworkError;
+	return (
+		e instanceof DecentAuthError ||
+		e instanceof DecentRejectedError ||
+		e instanceof DecentNetworkError ||
+		e instanceof DecentNotOnAccountError ||
+		e instanceof DecentNotReplacedError
+	);
 }
 
 /** Minimal fetch surface so tests can stub the network. */
@@ -201,27 +266,35 @@ export interface DecentUploadResult {
 
 /**
  * POST one ShotRecord. `replace` re-uploads over the server's copy (decaid
- * sends `?replace=1` when a shot's annotations changed after upload). A 2xx
- * `0` answer is an auth failure, not an upload (core's classification).
+ * sends `?replace=1` when a shot's annotations changed after upload);
+ * `serial` is the one the record is filed under, for the 403 message. Core
+ * classifies the answer: a 2xx `0` is an auth failure, a 2xx that is not the
+ * API's JSON a retryable failure, a 403 {@link DecentNotOnAccountError}, and
+ * a replace answered `"duplicate":true` {@link DecentNotReplacedError}.
  */
 export async function decentUploadShot(
 	creds: DecentCredentials,
 	recordJson: string,
-	opts: { replace?: boolean } = {},
+	opts: { replace?: boolean; serial?: string | null } = {},
 	fetchFn: FetchLike = fetch
 ): Promise<DecentUploadResult> {
-	const path = `/support/api/shot_upload${opts.replace ? '?replace=1' : ''}`;
+	const replace = !!opts.replace;
+	const path = `/support/api/shot_upload${replace ? '?replace=1' : ''}`;
 	const { status, body } = await call(fetchFn, path, creds.email, creds.token, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json; charset=utf-8' },
 		body: recordJson
 	});
-	const reply = parseReply<DecentUploadReply>(decentUploadReplyJson(status, body));
+	const reply = parseReply<DecentUploadReply>(decentUploadReplyJson(status, body, replace));
 	switch (reply.type) {
 		case 'Uploaded':
 			return { id: reply.content.id ?? null };
+		case 'NotReplaced':
+			throw new DecentNotReplacedError({ id: reply.content.id ?? null });
 		case 'Auth':
 			throw new DecentAuthError({ status });
+		case 'NotOnAccount':
+			throw new DecentNotOnAccountError({ serial: opts.serial ?? null });
 		case 'Rejected':
 			throw new DecentRejectedError({ status: reply.content.status, body: reply.content.body });
 		case 'Retry':

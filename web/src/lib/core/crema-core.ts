@@ -3483,7 +3483,10 @@ export type DecentMachinesReply =
 
 /** The `shot_upload` answer, classified. */
 export type DecentUploadReply = 
-	/** The server stored the shot. */
+	/**
+	 * The server holds the shot — stored now, or (`"duplicate":true` on a
+	 * first upload) already held from an earlier send.
+	 */
 	| { type: "Uploaded", content: {
 	/**
 	 * The stored shot's server id, when the answer carried one —
@@ -3492,10 +3495,28 @@ export type DecentUploadReply =
 	id?: string;
 }}
 	/**
+	 * A `?replace=1` upload the server answered `"duplicate":true`: it kept
+	 * its EARLIER copy and the edit was not stored (Decenza `f5c3ce3e`,
+	 * seen live on 2026-10-04). Not a success and not worth an immediate
+	 * retry — the shot's existing upload stands, the edit stays unsent.
+	 */
+	| { type: "NotReplaced", content: {
+	/** The server id of the copy it kept, when the answer carried one. */
+	id?: string;
+}}
+	/**
 	 * The stored token stopped working (HTTP 401, or a 2xx whose body is
 	 * exactly `0`) — the user must re-link; the shot stays queued.
 	 */
 	| { type: "Auth", content?: undefined }
+	/**
+	 * HTTP 403: the shot's machine serial is not registered to the linked
+	 * account (de1app `5b09f6aa`, Decenza `DECENT_UPLOAD.md`). Permanent
+	 * until the owner adds the machine at decentespresso.com — do not
+	 * retry, do not park the shot for retry, and do not mark it rejected
+	 * (it uploads once the machine is added).
+	 */
+	| { type: "NotOnAccount", content?: undefined }
 	/**
 	 * The server refused this shot for good (a 4xx other than
 	 * 401 / 403 / 408 / 429) — do not retry it.
@@ -3506,7 +3527,11 @@ export type DecentUploadReply =
 	/** The reply body, trimmed and cut to 200 characters. */
 	body: string;
 }}
-	/** A 5xx / 403 / 408 / 429 / other non-2xx answer — worth retrying. */
+	/**
+	 * A 5xx / 408 / 429 / other non-2xx answer, or a 2xx that is not the
+	 * upload API's JSON answer (a captive portal's page, a proxy) — worth
+	 * retrying.
+	 */
 	| { type: "Retry", content: {
 	/** The HTTP status. */
 	status: number;

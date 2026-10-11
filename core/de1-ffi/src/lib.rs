@@ -1734,15 +1734,31 @@ pub fn decent_machines_json(status: u16, body: String) -> Result<String, CremaEr
 }
 
 /// Classify a Decent `shot_upload` reply as a `DecentUploadReply` JSON
-/// (a 2xx `0` is `Auth`, not an upload). Mirrors the wasm
-/// `decentUploadReplyJson`; see [`de1_domain::decent_upload_reply`].
+/// (a 2xx `0` is `Auth`, not an upload; a 403 is `NotOnAccount`; a 2xx that
+/// is not the API's JSON answer is `Retry`). `replace` = the caller asked
+/// for `?replace=1`, so a `"duplicate":true` answer is `NotReplaced`.
+/// Mirrors the wasm `decentUploadReplyJson`; see
+/// [`de1_domain::decent_upload_reply`].
 ///
 /// # Errors
 ///
 /// The serialise error string (effectively never).
 #[uniffi::export]
-pub fn decent_upload_reply_json(status: u16, body: String) -> Result<String, CremaError> {
-    de1_domain::decent_upload_reply_json(status, &body).map_err(CremaError::from)
+pub fn decent_upload_reply_json(
+    status: u16,
+    body: String,
+    replace: bool,
+) -> Result<String, CremaError> {
+    de1_domain::decent_upload_reply_json(status, &body, replace).map_err(CremaError::from)
+}
+
+/// A machine serial worth sending to Decent, or `null` when it is unknown —
+/// blank, or the `0` some older DE1s answer the serial read with (Decenza
+/// `6c83ca06`). Mirrors the wasm `decentKnownSerial`; see
+/// [`de1_domain::decent_known_serial`].
+#[uniffi::export]
+pub fn decent_known_serial(serial: Option<String>) -> Option<String> {
+    de1_domain::decent_known_serial(serial.as_deref())
 }
 
 /// The uploaded shot's public decentespresso.com page, or `null` unless

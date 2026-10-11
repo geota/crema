@@ -1724,15 +1724,25 @@ pub fn decent_machines_json(status: u16, body: &str) -> Result<String, String> {
 }
 
 /// Classify a Decent `shot_upload` reply as a `DecentUploadReply` JSON
-/// (a 2xx `0` is `Auth`, not an upload). See
+/// (a 2xx `0` is `Auth`, not an upload; a 403 is `NotOnAccount`; a 2xx that
+/// is not the API's JSON answer is `Retry`). `replace` = the caller asked
+/// for `?replace=1`, so a `"duplicate":true` answer is `NotReplaced`. See
 /// `de1_domain::decent_upload_reply`.
 ///
 /// # Errors
 ///
 /// The serialise error string (effectively never).
 #[wasm_bindgen(js_name = decentUploadReplyJson)]
-pub fn decent_upload_reply_json(status: u16, body: &str) -> Result<String, String> {
-    de1_domain::decent_upload_reply_json(status, body)
+pub fn decent_upload_reply_json(status: u16, body: &str, replace: bool) -> Result<String, String> {
+    de1_domain::decent_upload_reply_json(status, body, replace)
+}
+
+/// A machine serial worth sending to Decent, or `undefined` when it is
+/// unknown — blank, or the `0` some older DE1s answer the serial read with
+/// (Decenza `6c83ca06`). See `de1_domain::decent_known_serial`.
+#[wasm_bindgen(js_name = decentKnownSerial)]
+pub fn decent_known_serial(serial: Option<String>) -> Option<String> {
+    de1_domain::decent_known_serial(serial.as_deref())
 }
 
 /// The uploaded shot's public decentespresso.com page

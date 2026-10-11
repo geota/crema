@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
 	DecentAuthError,
 	DecentNetworkError,
+	DecentNotOnAccountError,
+	DecentNotReplacedError,
 	DecentRejectedError,
+	decentKnownSerial,
 	decentLogin,
 	decentFetchMachines,
 	decentShotViewUrl,
@@ -13,6 +16,13 @@ import {
 function respond(status: number, body: string): FetchLike {
 	return async () => new Response(body, { status });
 }
+
+// decentespresso.com's answers, from Decenza's tests/tst_decentshotupload.cpp.
+const STORED = '{"ok":true,"stored":true,"id":"srv-1"}';
+const REPLACED = '{"ok":true,"stored":true,"replaced":true,"id":"srv-1"}';
+const DUPLICATE = '{"ok":true,"stored":false,"duplicate":true,"id":"srv-1"}';
+const NOT_YOUR_MACHINE = '{"ok":false,"error":"not your machine"}';
+const creds = { email: 'me@example.com', token: 't' };
 
 describe('Decent support API', () => {
 	it('sends HTTP Basic and treats "0" as a rejected login', async () => {
@@ -72,7 +82,7 @@ describe('Decent support API', () => {
 		let url = '';
 		await decentUploadShot({ email: 'e', token: 't' }, '{}', { replace: true }, async (u) => {
 			url = u;
-			return new Response('ok', { status: 200 });
+			return new Response(REPLACED, { status: 200 });
 		});
 		expect(url).toBe('https://decentespresso.com/support/api/shot_upload?replace=1');
 	});
@@ -82,5 +92,58 @@ describe('Decent support API', () => {
 		expect(decentShotViewUrl(null, '99')).toBeNull();
 		expect(decentShotViewUrl('6262', 'uploaded:1700000000000')).toBeNull();
 		expect(decentShotViewUrl('6262', null)).toBeNull();
+	});
+});
+
+describe('Decent upload answers (P1-1 / P1-2)', () => {
+	it('takes the API answer as an upload, a first-upload duplicate included', async () => {
+		await expect(decentUploadShot(creds, '{}', {}, respond(200, STORED))).resolves.toEqual({ id: 'srv-1' });
+		await expect(decentUploadShot(creds, '{}', {}, respond(200, DUPLICATE))).resolves.toEqual({ id: 'srv-1' });
+		await expect(decentUploadShot(creds, '{}', { replace: true }, respond(200, REPLACED))).resolves.toEqual({
+			id: 'srv-1'
+		});
+	});
+
+	it('a replace answered "duplicate" is not an upload: Decent kept its earlier copy', async () => {
+		const err = await decentUploadShot(creds, '{}', { replace: true }, respond(200, DUPLICATE)).catch((e) => e);
+		expect(err).toBeInstanceOf(DecentNotReplacedError);
+		expect(err).toMatchObject({ id: 'srv-1' });
+		expect(err.message).toBe("Decent kept its earlier copy of this shot — the edit wasn't saved there.");
+	});
+
+	it('a 2xx that is not the API answer (captive portal) is a retryable failure', async () => {
+		for (const body of ['<html>Sign in to Wi-Fi</html>', '', 'ok', '{"ok":false}']) {
+			const err = await decentUploadShot(creds, '{}', {}, respond(200, body)).catch((e) => e);
+			expect(err, body).toBeInstanceOf(DecentNetworkError);
+			expect(err.status).toBe(200);
+			expect(err.message).toContain("wasn't an upload reply");
+		}
+	});
+
+	it('a 403 is "serial not on the account", with the serial in the reason', async () => {
+		const err = await decentUploadShot(creds, '{}', { serial: '6262' }, respond(403, NOT_YOUR_MACHINE)).catch((e) => e);
+		expect(err).toBeInstanceOf(DecentNotOnAccountError);
+		expect(err.message).toBe(
+			"This DE1 (serial 6262) isn't registered to your Decent account — add it at decentespresso.com, then uploads resume."
+		);
+	});
+
+	it('sends the body as plain JSON — no Content-Encoding (the server CORS preflight does not allow it)', async () => {
+		let init: RequestInit | undefined;
+		await decentUploadShot(creds, '{"x":1}', {}, async (_u, i) => {
+			init = i;
+			return new Response(STORED, { status: 200 });
+		});
+		const headers = init?.headers as Record<string, string>;
+		expect(headers['Content-Encoding']).toBeUndefined();
+		expect(headers['Content-Type']).toBe('application/json; charset=utf-8');
+		expect(init?.body).toBe('{"x":1}');
+	});
+
+	it('treats a serial of 0 as unknown', () => {
+		expect(decentKnownSerial(0)).toBeNull();
+		expect(decentKnownSerial('0')).toBeNull();
+		expect(decentKnownSerial(null)).toBeNull();
+		expect(decentKnownSerial(6262)).toBe('6262');
 	});
 });

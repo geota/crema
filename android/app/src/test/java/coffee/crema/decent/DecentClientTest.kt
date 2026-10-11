@@ -26,6 +26,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -35,6 +36,7 @@ import java.io.IOException
 import java.net.ConnectException
 import java.net.ServerSocket
 import java.net.SocketTimeoutException
+import java.util.zip.GZIPInputStream
 import kotlin.concurrent.thread
 
 /**
@@ -44,8 +46,19 @@ import kotlin.concurrent.thread
  */
 class DecentClientTest {
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
+
+    private companion object {
+        // decentespresso.com's answers, from Decenza's tests/tst_decentshotupload.cpp.
+        const val STORED = """{"ok":true,"stored":true,"id":"srv-1"}"""
+        const val DUPLICATE = """{"ok":true,"stored":false,"duplicate":true,"id":"srv-1"}"""
+        const val NOT_YOUR_MACHINE = """{"ok":false,"error":"not your machine"}"""
+    }
     private val handlers = ArrayDeque<suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData>()
     private val requests = mutableListOf<HttpRequestData>()
+    /** Each request's body as sent (gzipped for an upload). */
+    private val rawBodies = mutableListOf<ByteArray>()
+
+    /** Each request's body, inflated when it went out gzipped. */
     private val bodies = mutableListOf<String>()
     private lateinit var client: DecentClient
 
@@ -53,7 +66,13 @@ class DecentClientTest {
     fun setUp() {
         val engine = MockEngine { req ->
             requests += req
-            bodies += req.body.toByteArray().decodeToString()
+            val raw = req.body.toByteArray()
+            rawBodies += raw
+            bodies += if (req.headers[HttpHeaders.ContentEncoding] == "gzip") {
+                GZIPInputStream(raw.inputStream()).readBytes().decodeToString()
+            } else {
+                raw.decodeToString()
+            }
             handlers.removeFirst()(this, req)
         }
         client = DecentClient(json, FakeDecentCore(), baseUrl = "https://decent.test/", engine = engine, retryBaseDelayMs = 1)
@@ -93,9 +112,10 @@ class DecentClientTest {
     }
 
     @Test
-    fun `403 is a network error, not a permanent rejection, and not retried`() = runTest {
-        reply(403, "forbidden")
-        assertEquals(403, uploadFails<DecentError.Network>().status)
+    fun `403 is a serial not on the account - not a rejection, and not retried`() = runTest {
+        reply(403, NOT_YOUR_MACHINE)
+        val e = uploadFails<DecentError.NotOnAccount>()
+        assertFalse(e.recoverable)
         assertEquals(1, requests.size)
     }
 
@@ -147,9 +167,54 @@ class DecentClientTest {
     }
 
     @Test
-    fun `a 2xx without an id uploads with a null id`() = runTest {
-        reply(200, "")
+    fun `the API answer without an id uploads with a null id`() = runTest {
+        reply(200, """{"ok":true}""")
         assertNull(client.uploadShot("a@b.c", "token", "{}").id)
+    }
+
+    @Test
+    fun `Decent's stored answer returns its id`() = runTest {
+        reply(200, STORED)
+        assertEquals("srv-1", client.uploadShot("a@b.c", "token", "{}").id)
+    }
+
+    @Test
+    fun `a 2xx that is not the API answer (captive portal) is a network error, not an upload`() = runTest {
+        for (body in listOf("<html>Sign in to Wi-Fi</html>", "", "ok", """{"ok":false}""")) {
+            reply(200, body)
+            val e = uploadFails<DecentError.Network>()
+            assertEquals(200, e.status)
+            assertTrue(e.message!!.contains("wasn’t an upload reply"))
+        }
+    }
+
+    @Test
+    fun `a first upload answered duplicate is an upload`() = runTest {
+        reply(200, DUPLICATE)
+        assertEquals("srv-1", client.uploadShot("a@b.c", "token", "{}").id)
+    }
+
+    @Test
+    fun `a replace answered duplicate was not applied - Decent kept the earlier copy`() = runTest {
+        reply(200, DUPLICATE)
+        try {
+            client.uploadShot("a@b.c", "token", "{}", replace = true)
+            fail("expected NotReplaced")
+        } catch (e: DecentError.NotReplaced) {
+            assertEquals("srv-1", e.id)
+            assertTrue(e.message!!.contains("kept its earlier copy"))
+        }
+        assertEquals(1, requests.size)
+    }
+
+    @Test
+    fun `a resend that became a replace and was answered duplicate is still an upload`() = runTest {
+        // The first attempt may have been stored: REPLACE_ON_RESEND adds replace=1,
+        // and "duplicate" then confirms the first copy — the caller asked for no replace.
+        throwing(SocketTimeoutException("read timed out"))
+        reply(200, DUPLICATE)
+        assertEquals("srv-1", client.uploadShot("a@b.c", "token", "{}").id)
+        assertEquals(listOf("", "replace=1"), queries())
     }
 
     @Test
@@ -163,7 +228,33 @@ class DecentClientTest {
         assertEquals("Basic YUBiLmM6dG9r", r.headers[HttpHeaders.Authorization])
         assertEquals("crema-android", r.headers[HttpHeaders.UserAgent])
         assertEquals("application/json; charset=UTF-8", r.body.contentType.toString())
+        // Gzipped, as Decent asked (de1app bd4b8c0c, Decenza 7caec84f): the
+        // header, the gzip magic, and a body that inflates to the record.
+        assertEquals("gzip", r.headers[HttpHeaders.ContentEncoding])
+        val raw = rawBodies.single()
+        assertEquals(0x1f.toByte(), raw[0])
+        assertEquals(0x8b.toByte(), raw[1])
         assertEquals("""{"x":1}""", bodies.single())
+    }
+
+    @Test
+    fun `a GET carries no Content-Encoding`() = runTest {
+        reply(200, "abcdef0123456789")
+        client.login("a@b.c", "pw")
+        assertNull(requests.single().headers[HttpHeaders.ContentEncoding])
+    }
+
+    @Test
+    fun `the socket timeout is Decenza's 60 s`() {
+        assertEquals(60_000L, DecentClient.SOCKET_TIMEOUT_MS)
+    }
+
+    @Test
+    fun `gzip shrinks a ShotRecord-sized body and round-trips it`() {
+        val record = buildString { repeat(5_000) { append("""{"t":$it,"p":9.0,"f":2.1},""") } }
+        val packed = DecentClient.gzip(record)
+        assertTrue("${packed.size} vs ${record.length}", packed.size * 5 < record.length)
+        assertEquals(record, GZIPInputStream(packed.inputStream()).readBytes().decodeToString())
     }
 
     private fun midBodyReset() {

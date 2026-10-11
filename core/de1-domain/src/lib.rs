@@ -195,9 +195,10 @@ pub use decent_shot_record::{
     BREW_LOG_NOT_UPLOADABLE, decent_shot_record, decent_shot_record_json, firmware_build_number,
 };
 pub use decent_wire::{
-    DecentLoginReply, DecentMachine, DecentMachinesReply, DecentUploadReply, decent_login_token,
-    decent_login_token_json, decent_machines, decent_machines_json, decent_shot_view_url,
-    decent_upload_reply, decent_upload_reply_json, extract_decent_id, parse_decent_machines,
+    DecentLoginReply, DecentMachine, DecentMachinesReply, DecentUploadReply, decent_known_serial,
+    decent_login_token, decent_login_token_json, decent_machines, decent_machines_json,
+    decent_shot_view_url, decent_upload_reply, decent_upload_reply_json, extract_decent_id,
+    parse_decent_machines,
 };
 pub use error::{DomainError, ImportError};
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};

@@ -1089,6 +1089,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         notify = { msg -> notifyUser(msg) },
         onShotUploaded = { localId, decentId, machine -> library.markShotDecentUploaded(localId, decentId, machine) },
         liveMachine = { sharing.liveMachine() },
+        knownSerial = UniffiDecentCore::knownSerial,
+        liveSerialUnreadable = { sharing.liveSerialUnreadable() },
         currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
         onLinked = { sharing.offerCatchUp(UploadTargetId.Decent) },
     )

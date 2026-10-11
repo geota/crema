@@ -1216,9 +1216,11 @@ class LibraryController(
                         shot.id != localId -> shot
                         // Brew Log rows (issue #10) never carry a machine stamp.
                         shot.isBrewLog -> shot
-                        // The upload used the connected DE1: stamp its identity too, so
-                        // the share link names the serial the server filed it under.
-                        machine != null && shot.machineSerial.isNullOrBlank() -> shot.copy(
+                        // The upload used the connected DE1 (DecentSync passes it only
+                        // when the shot had no usable serial — none, or an unknown `0`):
+                        // stamp its identity too, so the share link names the serial the
+                        // server filed it under.
+                        machine != null -> shot.copy(
                             decentId = decentId,
                             machineSerial = machine.serialNumber,
                             machineFirmware = machine.firmwareVersion,

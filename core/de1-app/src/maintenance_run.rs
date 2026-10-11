@@ -8,7 +8,8 @@
 //! `de1_send_pre_maintenance_profile`, decaid
 //! `_prepareColdMaintenanceWorkaround`). On firmware below build 1356 — or an
 //! unread build, which counts as old — a Descale / Clean / AirPurge request
-//! on a GHC machine that is still heating is silently dropped. So instead of
+//! on a GHC machine (an unread GHC register counts as fitted, Decenza
+//! `d5f405fb`) that is still heating is silently dropped. So instead of
 //! the state write, [`CremaCore::request_machine_state`] uploads the one-frame
 //! 1 °C profile, zeroes the tank threshold, and HOLDS the request
 //! ([`MaintenancePhase::WaitingForPreheat`]). The first state notification
@@ -386,6 +387,41 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_request_before_the_ghc_read_still_takes_the_cold_path() {
+        // Decenza d5f405fb: a Descale tapped right after connecting, before
+        // the GhcInfo MMR reply lands, must not go out as a plain write that
+        // firmware < 1356 drops.
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(
+            Source::De1MmrRead,
+            &mmr_packet(MmrRegister::FirmwareVersion, 1355),
+            0,
+        );
+        let _ = core.on_notification(Source::De1State, &[2, 1], 1_000); // Idle / Heating
+        let out = core.request_machine_state(MachineState::Descale);
+        assert!(uploads_profile(&out), "the 1 °C profile is uploaded");
+        assert!(state_writes(&out).is_empty(), "the request is held");
+    }
+
+    #[test]
+    fn a_headless_machine_gets_the_plain_write() {
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(
+            Source::De1MmrRead,
+            &mmr_packet(MmrRegister::FirmwareVersion, 1355),
+            0,
+        );
+        let _ = core.on_notification(Source::De1MmrRead, &mmr_packet(MmrRegister::GhcInfo, 0), 0);
+        let _ = core.on_notification(Source::De1State, &[2, 1], 1_000);
+        let out = core.request_machine_state(MachineState::Descale);
+        assert!(!uploads_profile(&out));
+        assert_eq!(
+            state_writes(&out),
+            vec![requested_state(MachineState::Descale)]
+        );
     }
 
     #[test]
