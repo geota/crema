@@ -2074,6 +2074,11 @@ export interface De1Uuids {
 	 * here (it only ACKs the ATT write) — the shell synthesizes a frame-ack.
 	 */
 	frameWrite: string;
+	/**
+	 * `A009` FWMapRequest — firmware erase / verify requests (write) and the
+	 * DE1's answers (notify + read). Used only by a firmware flash.
+	 */
+	fwMapRequest: string;
 }
 
 /** A DE1 registered on the linked account. */
@@ -2246,6 +2251,46 @@ export interface FieldHit {
 	snippet: SearchSegment[];
 }
 
+/** One of Decent's de1app update channels. */
+export enum DecentFirmwareChannel {
+	/** `de1plus` — de1app's default (stable) channel. */
+	Stable = "Stable",
+	/** `de1beta`. */
+	Beta = "Beta",
+	/** `de1nightly`. */
+	Nightly = "Nightly",
+}
+
+/** One official DE1 firmware image crema knows how to verify. */
+export interface FirmwareArtifact {
+	/** Stable id, e.g. `"de1-1358"`. */
+	id: string;
+	/** The build the header carries and the DE1 reports afterwards. */
+	build: number;
+	/** The Decent channel crema labels this image with. */
+	channel: DecentFirmwareChannel;
+	/** Every Decent channel serving this exact file on the verified date. */
+	channels: DecentFirmwareChannel[];
+	/** Official download URLs, preferred first. */
+	urls: string[];
+	/** Exact file length in bytes. */
+	byteLength: number;
+	/** Lower-case hex SHA-256 of the whole file. */
+	sha256: string;
+	/** Expected header `BoardMarker`. */
+	boardMarker: number;
+	/** Expected header `ByteCount`. */
+	bodyByteCount: number;
+	/** Expected header `CPUBytes`. */
+	cpuByteCount: number;
+	/** Number of 16-byte upload writes (`byte_length / 16`). */
+	chunkCount: number;
+	/** Short release notes (from the de1app commit that shipped it). */
+	releaseNotes: string;
+	/** Where the pinned values come from. */
+	provenance: string;
+}
+
 /**
  * What an installed build means against [`KNOWN_FIRMWARE_BUILDS`]. Each
  * variant is a status key the shells map to localized copy.
@@ -2276,16 +2321,6 @@ export enum FirmwareBuildStatus {
 	NewerThanKnown = "NewerThanKnown",
 }
 
-/** One of Decent's de1app update channels. */
-export enum DecentFirmwareChannel {
-	/** `de1plus` — de1app's default (stable) channel. */
-	Stable = "Stable",
-	/** `de1beta`. */
-	Beta = "Beta",
-	/** `de1nightly`. */
-	Nightly = "Nightly",
-}
-
 /**
  * The classification plus the reference points the shells need to explain
  * it.
@@ -2312,6 +2347,231 @@ export interface FirmwareBuildReport {
 	tableRevision: number;
 	/** [`KNOWN_FIRMWARE_BUILDS_VERIFIED`]. */
 	tableVerified: string;
+}
+
+/** The parsed 64-byte `.dat` header. */
+export interface FirmwareHeader {
+	/** Checksum of the encrypted body (algorithm unpublished). */
+	checksum: number;
+	/** `0xDE100001` (DE1) or `0xBE1C0001` (Bengle). */
+	boardMarker: number;
+	/** The build number, e.g. 1358. */
+	version: number;
+	/** Body bytes, ignoring padding. */
+	byteCount: number;
+	/** The first `cpu_bytes` of the body are for the CPU; the rest for BLE. */
+	cpuBytes: number;
+	/** Reserved; always zero. */
+	unused: number;
+	/** Checksum of the decrypted body (algorithm unpublished). */
+	decryptedChecksum: number;
+	/** Checksum of the header (algorithm unpublished). */
+	headerChecksum: number;
+}
+
+/** Why an image was refused. */
+export type FirmwareImageError = 
+	/** Shorter than the 64-byte header. */
+	| { type: "TooShort", content: {
+	/** The file's length. */
+	length: number;
+}}
+	/** A Bengle image (`0xBE1C0001`); crema flashes classic DE1s only. */
+	| { type: "BengleImage", content?: undefined }
+	/** Not a DE1 image at all. */
+	| { type: "NotADe1Image", content: {
+	/** The board marker found. */
+	board_marker: number;
+}}
+	/**
+	 * A DE1 image, but not one in the pinned manifest (a different build, a
+	 * newer file on Decent's channel, or a corrupted download).
+	 */
+	| { type: "NotInManifest", content: {
+	/** The header's build number. */
+	build: number;
+	/** The file's SHA-256. */
+	sha256: string;
+}}
+	/**
+	 * In the manifest by digest but a structural check failed — should be
+	 * impossible; it means the manifest itself is wrong.
+	 */
+	| { type: "Malformed", content: {
+	/** Which check failed. */
+	reason: string;
+}};
+
+/** The result of [`validate_firmware_image`]. */
+export interface FirmwareImageCheck {
+	/** `true` when the image may be flashed. */
+	ok: boolean;
+	/** The matching manifest entry. */
+	artifact?: FirmwareArtifact;
+	/** The parsed header, when the file has one. */
+	header?: FirmwareHeader;
+	/** Why the image was refused. */
+	error?: FirmwareImageError;
+	/** The file's length. */
+	byteLength: number;
+	/** The file's SHA-256 (lower-case hex). */
+	sha256: string;
+}
+
+/** What the shell knows that the core does not. */
+export interface FlashShellConditions {
+	/** A DE1 link is up. */
+	connected: boolean;
+	/** The connect setup (subscriptions, seed reads, MMR sweep) finished. */
+	ready: boolean;
+	/** A guided brew session is running in the shell. */
+	guidedBrewActive: boolean;
+	/** Charging, or battery ≥ 50 % (or no battery to speak of). */
+	powerOk: boolean;
+}
+
+/** Where a flash is. The shells map each to copy. */
+export enum FlashPhase {
+	/** Putting the machine to sleep before erasing. */
+	Preparing = "Preparing",
+	/** Erasing the DE1's spare flash bank. */
+	Erasing = "Erasing",
+	/** Streaming the image. */
+	Uploading = "Uploading",
+	/** Waiting for the DE1 to check the written image. */
+	Verifying = "Verifying",
+	/** Verified; the DE1 must be switched off and on to run it. */
+	AwaitingPowerCycle = "AwaitingPowerCycle",
+	/** The DE1 restarted on the new build. */
+	Succeeded = "Succeeded",
+	/** Stopped by an error; the old firmware is still running. */
+	Failed = "Failed",
+	/** Stopped by the user; the old firmware is still running. */
+	Cancelled = "Cancelled",
+}
+
+/** Why a flash failed. Every failure leaves the old firmware running. */
+export type FlashFailure = 
+	/** The DE1 disconnected before verification. */
+	| { type: "LinkLost", content: {
+	/** The phase the link dropped in. */
+	phase: FlashPhase;
+}}
+	/** A write failed. */
+	| { type: "WriteFailed", content: {
+	/** The phase the write belonged to. */
+	phase: FlashPhase;
+	/** The shell's error text. */
+	message: string;
+}}
+	/** A write was never acknowledged. */
+	| { type: "AckTimeout", content: {
+	/** The phase the write belonged to. */
+	phase: FlashPhase;
+}}
+	/** The DE1 kept reporting "erasing" past [`ERASE_TIMEOUT_MS`]. */
+	| { type: "EraseTimeout", content?: undefined }
+	/** The DE1 found a bad block at `first_error` (a byte offset). */
+	| { type: "VerifyFailed", content: {
+	/** The offset of the first corrupt block. */
+	first_error: number;
+}}
+	/** No verdict within [`VERIFY_TIMEOUT_MS`]. */
+	| { type: "VerifyTimeout", content?: undefined }
+	/**
+	 * The link dropped during verification and the DE1 came back on a
+	 * different build.
+	 */
+	| { type: "VerifyUnconfirmed", content: {
+	/** The build the DE1 reported after reconnecting. */
+	reported_build: number;
+}};
+
+/** A snapshot for the UI. */
+export interface FlashStatus {
+	/** Where the flash is. */
+	phase: FlashPhase;
+	/** The manifest entry being flashed. */
+	artifact: FirmwareArtifact;
+	/** The build being installed. */
+	targetBuild: number;
+	/** Upload writes in total. */
+	chunksTotal: number;
+	/** Upload writes acknowledged. */
+	chunksAcked: number;
+	/** Overall progress, 0–100. */
+	percent: number;
+	/** Seconds left until verification ends, when known. */
+	etaSeconds?: number;
+	/** `true` while the ETA is a guess rather than measured. */
+	etaIsEstimate: boolean;
+	/** Seconds since the flash started. */
+	elapsedSeconds: number;
+	/** Whether [`CremaCore::firmware_flash_cancel`] would act. */
+	canCancel: boolean;
+	/** Whether other writes are locked out. */
+	locksWrites: boolean;
+	/** Why it failed. */
+	failure?: FlashFailure;
+	/** The link dropped during verification; the build read decides. */
+	verifyUnconfirmed: boolean;
+	/** The machine has dropped off since verification (i.e. it restarted). */
+	machineRestarted: boolean;
+	/** After restarting the DE1 still reported this (old) build. */
+	restartedOnBuild?: number;
+}
+
+/**
+ * One thing the shell must do, in order. The shell performs actions one at a
+ * time and reports back: a `Write` with
+ * [`CremaCore::firmware_flash_on_write_ack`] /
+ * [`CremaCore::firmware_flash_on_write_failed`], a `ReadFwMap` with
+ * [`CremaCore::firmware_flash_on_fw_map`] /
+ * [`CremaCore::firmware_flash_on_read_failed`].
+ */
+export type FlashAction = 
+	/** Write `data` with response to `target` and report the ACK. */
+	| { type: "Write", content: {
+	/** The characteristic. */
+	target: WriteTarget;
+	/** The exact bytes. */
+	data: number[];
+}}
+	/**
+	 * Enable notifications on `FWMapRequest` (A009) and route each frame to
+	 * [`CremaCore::firmware_flash_on_fw_map`]. Best effort — no report; the
+	 * poll covers a failed subscribe.
+	 */
+	| { type: "SubscribeFwMap", content?: undefined }
+	/** Read A009 once (a fresh GATT read) and report the bytes. */
+	| { type: "ReadFwMap", content?: undefined }
+	/**
+	 * Read MMR `0x800010` through the normal path
+	 * ([`CremaCore::read_mmr`] with `FirmwareVersion`).
+	 */
+	| { type: "ReadBuild", content?: undefined };
+
+/** Why [`CremaCore::firmware_flash_start`] refused. */
+export type FlashStartError = 
+	/** A precondition failed. */
+	| { type: "Blocked", content: {
+	/** Every failing precondition. */
+	blockers: FlashBlocker[];
+}}
+	/** The image is not a pinned official image. */
+	| { type: "InvalidImage", content: {
+	/** Why. */
+	error: FirmwareImageError;
+}};
+
+/** What one call into the flash returns. */
+export interface FlashStep {
+	/** Do these, in order. */
+	actions: FlashAction[];
+	/** The snapshot after this step (`None` when no flash exists). */
+	status?: FlashStatus;
+	/** Set when a start was refused. */
+	error?: FlashStartError;
 }
 
 /**
@@ -3663,6 +3923,53 @@ export enum ExitMetric {
 }
 
 /**
+ * A precondition that stops a flash from starting — the strictest of the
+ * reference apps combined (see [`CremaCore::firmware_flash_blockers`]).
+ */
+export type FlashBlocker = 
+	/** No DE1 link. */
+	| { type: "NotConnected", content?: undefined }
+	/** Connected but the post-connect setup has not finished. */
+	| { type: "NotReady", content?: undefined }
+	/** This device mirrors another (secondary); only the primary may flash. */
+	| { type: "ReadOnlyMirror", content?: undefined }
+	/** A flash is already running. */
+	| { type: "FlashInProgress", content?: undefined }
+	/** MMR `0x800010` has not been read. */
+	| { type: "BuildUnknown", content?: undefined }
+	/** MMR `MachineModel` has not been read. */
+	| { type: "ModelUnknown", content?: undefined }
+	/**
+	 * Not a model the reference apps flash (Bengle, or a model decaid's
+	 * manifest does not list).
+	 */
+	| { type: "UnsupportedModel", content: {
+	/** The raw `MachineModel` value. */
+	model: number;
+}}
+	/** The machine state is unknown. */
+	| { type: "StateUnknown", content?: undefined }
+	/** The machine is not Idle or asleep. */
+	| { type: "MachineBusy", content: {
+	/** What it is doing. */
+	state: MachineState;
+}}
+	/** The machine is refilling or out of water. */
+	| { type: "Refilling", content?: undefined }
+	/** The machine reports an error substate. */
+	| { type: "MachineError", content?: undefined }
+	/** A shot or other flow is running. */
+	| { type: "ShotInProgress", content?: undefined }
+	/** A guided brew is running. */
+	| { type: "GuidedBrewActive", content?: undefined }
+	/** A profile upload is in flight. */
+	| { type: "ProfileUploading", content?: undefined }
+	/** A descale / clean / transport cycle is running. */
+	| { type: "MaintenanceRunning", content?: undefined }
+	/** The tablet is on battery below 50 % and not charging. */
+	| { type: "LowPower", content?: undefined };
+
+/**
  * What the shell saw the user do. Every kind restarts the countdown the
  * same way; the kind is for diagnostics.
  */
@@ -4232,5 +4539,13 @@ export enum WriteTarget {
 	 * echoes each write back as a `Source::De1FrameAck` notification.
 	 */
 	De1ProfileFrame = "De1ProfileFrame",
+	/**
+	 * The DE1 `FWMapRequest` characteristic (`cuuid_09` / `A009`) — erase
+	 * and verify requests during a firmware flash
+	 * ([`FlashAction::Write`](crate::firmware_flash::FlashAction::Write));
+	 * the DE1 answers on the same characteristic's notify / read. Never
+	 * emitted in a [`CoreOutput`].
+	 */
+	De1FwMapRequest = "De1FwMapRequest",
 }
 

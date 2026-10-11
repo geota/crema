@@ -771,6 +771,12 @@ pub enum WriteTarget {
     /// *written* here in upload order during a profile upload. The DE1
     /// echoes each write back as a `Source::De1FrameAck` notification.
     De1ProfileFrame,
+    /// The DE1 `FWMapRequest` characteristic (`cuuid_09` / `A009`) — erase
+    /// and verify requests during a firmware flash
+    /// ([`FlashAction::Write`](crate::firmware_flash::FlashAction::Write));
+    /// the DE1 answers on the same characteristic's notify / read. Never
+    /// emitted in a [`CoreOutput`].
+    De1FwMapRequest,
 }
 
 /// A BLE write the shell should perform on the core's behalf.

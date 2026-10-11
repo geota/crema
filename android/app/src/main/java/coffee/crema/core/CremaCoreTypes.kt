@@ -2062,7 +2062,10 @@ data class De1Uuids (
 	val headerWrite: String,
 	/// `A010` FrameWrite — profile frame writes. The DE1 sends NO notification
 	/// here (it only ACKs the ATT write) — the shell synthesizes a frame-ack.
-	val frameWrite: String
+	val frameWrite: String,
+	/// `A009` FWMapRequest — firmware erase / verify requests (write) and the
+	/// DE1's answers (notify + read). Used only by a firmware flash.
+	val fwMapRequest: String
 )
 
 /// A DE1 registered on the linked account.
@@ -2235,6 +2238,51 @@ data class FieldHit (
 	val snippet: List<SearchSegment>
 )
 
+/// One of Decent's de1app update channels.
+@Serializable
+enum class DecentFirmwareChannel(val string: String) {
+	/// `de1plus` — de1app's default (stable) channel.
+	@SerialName("Stable")
+	Stable("Stable"),
+	/// `de1beta`.
+	@SerialName("Beta")
+	Beta("Beta"),
+	/// `de1nightly`.
+	@SerialName("Nightly")
+	Nightly("Nightly"),
+}
+
+/// One official DE1 firmware image crema knows how to verify.
+@Serializable
+data class FirmwareArtifact (
+	/// Stable id, e.g. `"de1-1358"`.
+	val id: String,
+	/// The build the header carries and the DE1 reports afterwards.
+	val build: UInt,
+	/// The Decent channel crema labels this image with.
+	val channel: DecentFirmwareChannel,
+	/// Every Decent channel serving this exact file on the verified date.
+	val channels: List<DecentFirmwareChannel>,
+	/// Official download URLs, preferred first.
+	val urls: List<String>,
+	/// Exact file length in bytes.
+	val byteLength: UInt,
+	/// Lower-case hex SHA-256 of the whole file.
+	val sha256: String,
+	/// Expected header `BoardMarker`.
+	val boardMarker: UInt,
+	/// Expected header `ByteCount`.
+	val bodyByteCount: UInt,
+	/// Expected header `CPUBytes`.
+	val cpuByteCount: UInt,
+	/// Number of 16-byte upload writes (`byte_length / 16`).
+	val chunkCount: UInt,
+	/// Short release notes (from the de1app commit that shipped it).
+	val releaseNotes: String,
+	/// Where the pinned values come from.
+	val provenance: String
+)
+
 /// What an installed build means against [`KNOWN_FIRMWARE_BUILDS`]. Each
 /// variant is a status key the shells map to localized copy.
 @Serializable
@@ -2265,20 +2313,6 @@ enum class FirmwareBuildStatus(val string: String) {
 	NewerThanKnown("NewerThanKnown"),
 }
 
-/// One of Decent's de1app update channels.
-@Serializable
-enum class DecentFirmwareChannel(val string: String) {
-	/// `de1plus` — de1app's default (stable) channel.
-	@SerialName("Stable")
-	Stable("Stable"),
-	/// `de1beta`.
-	@SerialName("Beta")
-	Beta("Beta"),
-	/// `de1nightly`.
-	@SerialName("Nightly")
-	Nightly("Nightly"),
-}
-
 /// The classification plus the reference points the shells need to explain
 /// it.
 @Serializable
@@ -2302,6 +2336,325 @@ data class FirmwareBuildReport (
 	val tableRevision: UInt,
 	/// [`KNOWN_FIRMWARE_BUILDS_VERIFIED`].
 	val tableVerified: String
+)
+
+/// The parsed 64-byte `.dat` header.
+@Serializable
+data class FirmwareHeader (
+	/// Checksum of the encrypted body (algorithm unpublished).
+	val checksum: UInt,
+	/// `0xDE100001` (DE1) or `0xBE1C0001` (Bengle).
+	val boardMarker: UInt,
+	/// The build number, e.g. 1358.
+	val version: UInt,
+	/// Body bytes, ignoring padding.
+	val byteCount: UInt,
+	/// The first `cpu_bytes` of the body are for the CPU; the rest for BLE.
+	val cpuBytes: UInt,
+	/// Reserved; always zero.
+	val unused: UInt,
+	/// Checksum of the decrypted body (algorithm unpublished).
+	val decryptedChecksum: UInt,
+	/// Checksum of the header (algorithm unpublished).
+	val headerChecksum: UInt
+)
+
+/// Generated type representing the anonymous struct variant `TooShort` of the `FirmwareImageError` Rust enum
+@Serializable
+data class FirmwareImageErrorTooShortInner (
+	/// The file's length.
+	val length: UInt
+)
+
+/// Generated type representing the anonymous struct variant `NotADe1Image` of the `FirmwareImageError` Rust enum
+@Serializable
+data class FirmwareImageErrorNotADe1ImageInner (
+	/// The board marker found.
+	val board_marker: UInt
+)
+
+/// Generated type representing the anonymous struct variant `NotInManifest` of the `FirmwareImageError` Rust enum
+@Serializable
+data class FirmwareImageErrorNotInManifestInner (
+	/// The header's build number.
+	val build: UInt,
+	/// The file's SHA-256.
+	val sha256: String
+)
+
+/// Generated type representing the anonymous struct variant `Malformed` of the `FirmwareImageError` Rust enum
+@Serializable
+data class FirmwareImageErrorMalformedInner (
+	/// Which check failed.
+	val reason: String
+)
+
+/// Why an image was refused.
+@Serializable
+sealed class FirmwareImageError {
+	/// Shorter than the 64-byte header.
+	@Serializable
+	@SerialName("TooShort")
+	data class TooShort(val content: FirmwareImageErrorTooShortInner): FirmwareImageError()
+	/// A Bengle image (`0xBE1C0001`); crema flashes classic DE1s only.
+	@Serializable
+	@SerialName("BengleImage")
+	object BengleImage: FirmwareImageError()
+	/// Not a DE1 image at all.
+	@Serializable
+	@SerialName("NotADe1Image")
+	data class NotADe1Image(val content: FirmwareImageErrorNotADe1ImageInner): FirmwareImageError()
+	/// A DE1 image, but not one in the pinned manifest (a different build, a
+	/// newer file on Decent's channel, or a corrupted download).
+	@Serializable
+	@SerialName("NotInManifest")
+	data class NotInManifest(val content: FirmwareImageErrorNotInManifestInner): FirmwareImageError()
+	/// In the manifest by digest but a structural check failed — should be
+	/// impossible; it means the manifest itself is wrong.
+	@Serializable
+	@SerialName("Malformed")
+	data class Malformed(val content: FirmwareImageErrorMalformedInner): FirmwareImageError()
+}
+
+/// The result of [`validate_firmware_image`].
+@Serializable
+data class FirmwareImageCheck (
+	/// `true` when the image may be flashed.
+	val ok: Boolean,
+	/// The matching manifest entry.
+	val artifact: FirmwareArtifact? = null,
+	/// The parsed header, when the file has one.
+	val header: FirmwareHeader? = null,
+	/// Why the image was refused.
+	val error: FirmwareImageError? = null,
+	/// The file's length.
+	val byteLength: UInt,
+	/// The file's SHA-256 (lower-case hex).
+	val sha256: String
+)
+
+/// What the shell knows that the core does not.
+@Serializable
+data class FlashShellConditions (
+	/// A DE1 link is up.
+	val connected: Boolean,
+	/// The connect setup (subscriptions, seed reads, MMR sweep) finished.
+	val ready: Boolean,
+	/// A guided brew session is running in the shell.
+	val guidedBrewActive: Boolean,
+	/// Charging, or battery ≥ 50 % (or no battery to speak of).
+	val powerOk: Boolean
+)
+
+/// Where a flash is. The shells map each to copy.
+@Serializable
+enum class FlashPhase(val string: String) {
+	/// Putting the machine to sleep before erasing.
+	@SerialName("Preparing")
+	Preparing("Preparing"),
+	/// Erasing the DE1's spare flash bank.
+	@SerialName("Erasing")
+	Erasing("Erasing"),
+	/// Streaming the image.
+	@SerialName("Uploading")
+	Uploading("Uploading"),
+	/// Waiting for the DE1 to check the written image.
+	@SerialName("Verifying")
+	Verifying("Verifying"),
+	/// Verified; the DE1 must be switched off and on to run it.
+	@SerialName("AwaitingPowerCycle")
+	AwaitingPowerCycle("AwaitingPowerCycle"),
+	/// The DE1 restarted on the new build.
+	@SerialName("Succeeded")
+	Succeeded("Succeeded"),
+	/// Stopped by an error; the old firmware is still running.
+	@SerialName("Failed")
+	Failed("Failed"),
+	/// Stopped by the user; the old firmware is still running.
+	@SerialName("Cancelled")
+	Cancelled("Cancelled"),
+}
+
+/// Generated type representing the anonymous struct variant `LinkLost` of the `FlashFailure` Rust enum
+@Serializable
+data class FlashFailureLinkLostInner (
+	/// The phase the link dropped in.
+	val phase: FlashPhase
+)
+
+/// Generated type representing the anonymous struct variant `WriteFailed` of the `FlashFailure` Rust enum
+@Serializable
+data class FlashFailureWriteFailedInner (
+	/// The phase the write belonged to.
+	val phase: FlashPhase,
+	/// The shell's error text.
+	val message: String
+)
+
+/// Generated type representing the anonymous struct variant `AckTimeout` of the `FlashFailure` Rust enum
+@Serializable
+data class FlashFailureAckTimeoutInner (
+	/// The phase the write belonged to.
+	val phase: FlashPhase
+)
+
+/// Generated type representing the anonymous struct variant `VerifyFailed` of the `FlashFailure` Rust enum
+@Serializable
+data class FlashFailureVerifyFailedInner (
+	/// The offset of the first corrupt block.
+	val first_error: UInt
+)
+
+/// Generated type representing the anonymous struct variant `VerifyUnconfirmed` of the `FlashFailure` Rust enum
+@Serializable
+data class FlashFailureVerifyUnconfirmedInner (
+	/// The build the DE1 reported after reconnecting.
+	val reported_build: UInt
+)
+
+/// Why a flash failed. Every failure leaves the old firmware running.
+@Serializable
+sealed class FlashFailure {
+	/// The DE1 disconnected before verification.
+	@Serializable
+	@SerialName("LinkLost")
+	data class LinkLost(val content: FlashFailureLinkLostInner): FlashFailure()
+	/// A write failed.
+	@Serializable
+	@SerialName("WriteFailed")
+	data class WriteFailed(val content: FlashFailureWriteFailedInner): FlashFailure()
+	/// A write was never acknowledged.
+	@Serializable
+	@SerialName("AckTimeout")
+	data class AckTimeout(val content: FlashFailureAckTimeoutInner): FlashFailure()
+	/// The DE1 kept reporting "erasing" past [`ERASE_TIMEOUT_MS`].
+	@Serializable
+	@SerialName("EraseTimeout")
+	object EraseTimeout: FlashFailure()
+	/// The DE1 found a bad block at `first_error` (a byte offset).
+	@Serializable
+	@SerialName("VerifyFailed")
+	data class VerifyFailed(val content: FlashFailureVerifyFailedInner): FlashFailure()
+	/// No verdict within [`VERIFY_TIMEOUT_MS`].
+	@Serializable
+	@SerialName("VerifyTimeout")
+	object VerifyTimeout: FlashFailure()
+	/// The link dropped during verification and the DE1 came back on a
+	/// different build.
+	@Serializable
+	@SerialName("VerifyUnconfirmed")
+	data class VerifyUnconfirmed(val content: FlashFailureVerifyUnconfirmedInner): FlashFailure()
+}
+
+/// A snapshot for the UI.
+@Serializable
+data class FlashStatus (
+	/// Where the flash is.
+	val phase: FlashPhase,
+	/// The manifest entry being flashed.
+	val artifact: FirmwareArtifact,
+	/// The build being installed.
+	val targetBuild: UInt,
+	/// Upload writes in total.
+	val chunksTotal: UInt,
+	/// Upload writes acknowledged.
+	val chunksAcked: UInt,
+	/// Overall progress, 0–100.
+	val percent: Float,
+	/// Seconds left until verification ends, when known.
+	val etaSeconds: UInt? = null,
+	/// `true` while the ETA is a guess rather than measured.
+	val etaIsEstimate: Boolean,
+	/// Seconds since the flash started.
+	val elapsedSeconds: UInt,
+	/// Whether [`CremaCore::firmware_flash_cancel`] would act.
+	val canCancel: Boolean,
+	/// Whether other writes are locked out.
+	val locksWrites: Boolean,
+	/// Why it failed.
+	val failure: FlashFailure? = null,
+	/// The link dropped during verification; the build read decides.
+	val verifyUnconfirmed: Boolean,
+	/// The machine has dropped off since verification (i.e. it restarted).
+	val machineRestarted: Boolean,
+	/// After restarting the DE1 still reported this (old) build.
+	val restartedOnBuild: UInt? = null
+)
+
+/// Generated type representing the anonymous struct variant `Write` of the `FlashAction` Rust enum
+@Serializable
+data class FlashActionWriteInner (
+	/// The characteristic.
+	val target: WriteTarget,
+	/// The exact bytes.
+	val data: List<UByte>
+)
+
+/// One thing the shell must do, in order. The shell performs actions one at a
+/// time and reports back: a `Write` with
+/// [`CremaCore::firmware_flash_on_write_ack`] /
+/// [`CremaCore::firmware_flash_on_write_failed`], a `ReadFwMap` with
+/// [`CremaCore::firmware_flash_on_fw_map`] /
+/// [`CremaCore::firmware_flash_on_read_failed`].
+@Serializable
+sealed class FlashAction {
+	/// Write `data` with response to `target` and report the ACK.
+	@Serializable
+	@SerialName("Write")
+	data class Write(val content: FlashActionWriteInner): FlashAction()
+	/// Enable notifications on `FWMapRequest` (A009) and route each frame to
+	/// [`CremaCore::firmware_flash_on_fw_map`]. Best effort — no report; the
+	/// poll covers a failed subscribe.
+	@Serializable
+	@SerialName("SubscribeFwMap")
+	object SubscribeFwMap: FlashAction()
+	/// Read A009 once (a fresh GATT read) and report the bytes.
+	@Serializable
+	@SerialName("ReadFwMap")
+	object ReadFwMap: FlashAction()
+	/// Read MMR `0x800010` through the normal path
+	/// ([`CremaCore::read_mmr`] with `FirmwareVersion`).
+	@Serializable
+	@SerialName("ReadBuild")
+	object ReadBuild: FlashAction()
+}
+
+/// Generated type representing the anonymous struct variant `Blocked` of the `FlashStartError` Rust enum
+@Serializable
+data class FlashStartErrorBlockedInner (
+	/// Every failing precondition.
+	val blockers: List<FlashBlocker>
+)
+
+/// Generated type representing the anonymous struct variant `InvalidImage` of the `FlashStartError` Rust enum
+@Serializable
+data class FlashStartErrorInvalidImageInner (
+	/// Why.
+	val error: FirmwareImageError
+)
+
+/// Why [`CremaCore::firmware_flash_start`] refused.
+@Serializable
+sealed class FlashStartError {
+	/// A precondition failed.
+	@Serializable
+	@SerialName("Blocked")
+	data class Blocked(val content: FlashStartErrorBlockedInner): FlashStartError()
+	/// The image is not a pinned official image.
+	@Serializable
+	@SerialName("InvalidImage")
+	data class InvalidImage(val content: FlashStartErrorInvalidImageInner): FlashStartError()
+}
+
+/// What one call into the flash returns.
+@Serializable
+data class FlashStep (
+	/// Do these, in order.
+	val actions: List<FlashAction>,
+	/// The snapshot after this step (`None` when no flash exists).
+	val status: FlashStatus? = null,
+	/// Set when a start was refused.
+	val error: FlashStartError? = null
 )
 
 /// One profile frame's configured exit, used to infer
@@ -3556,6 +3909,91 @@ enum class ExitMetric(val string: String) {
 	Flow("flow"),
 }
 
+/// Generated type representing the anonymous struct variant `UnsupportedModel` of the `FlashBlocker` Rust enum
+@Serializable
+data class FlashBlockerUnsupportedModelInner (
+	/// The raw `MachineModel` value.
+	val model: UInt
+)
+
+/// Generated type representing the anonymous struct variant `MachineBusy` of the `FlashBlocker` Rust enum
+@Serializable
+data class FlashBlockerMachineBusyInner (
+	/// What it is doing.
+	val state: MachineState
+)
+
+/// A precondition that stops a flash from starting — the strictest of the
+/// reference apps combined (see [`CremaCore::firmware_flash_blockers`]).
+@Serializable
+sealed class FlashBlocker {
+	/// No DE1 link.
+	@Serializable
+	@SerialName("NotConnected")
+	object NotConnected: FlashBlocker()
+	/// Connected but the post-connect setup has not finished.
+	@Serializable
+	@SerialName("NotReady")
+	object NotReady: FlashBlocker()
+	/// This device mirrors another (secondary); only the primary may flash.
+	@Serializable
+	@SerialName("ReadOnlyMirror")
+	object ReadOnlyMirror: FlashBlocker()
+	/// A flash is already running.
+	@Serializable
+	@SerialName("FlashInProgress")
+	object FlashInProgress: FlashBlocker()
+	/// MMR `0x800010` has not been read.
+	@Serializable
+	@SerialName("BuildUnknown")
+	object BuildUnknown: FlashBlocker()
+	/// MMR `MachineModel` has not been read.
+	@Serializable
+	@SerialName("ModelUnknown")
+	object ModelUnknown: FlashBlocker()
+	/// Not a model the reference apps flash (Bengle, or a model decaid's
+	/// manifest does not list).
+	@Serializable
+	@SerialName("UnsupportedModel")
+	data class UnsupportedModel(val content: FlashBlockerUnsupportedModelInner): FlashBlocker()
+	/// The machine state is unknown.
+	@Serializable
+	@SerialName("StateUnknown")
+	object StateUnknown: FlashBlocker()
+	/// The machine is not Idle or asleep.
+	@Serializable
+	@SerialName("MachineBusy")
+	data class MachineBusy(val content: FlashBlockerMachineBusyInner): FlashBlocker()
+	/// The machine is refilling or out of water.
+	@Serializable
+	@SerialName("Refilling")
+	object Refilling: FlashBlocker()
+	/// The machine reports an error substate.
+	@Serializable
+	@SerialName("MachineError")
+	object MachineError: FlashBlocker()
+	/// A shot or other flow is running.
+	@Serializable
+	@SerialName("ShotInProgress")
+	object ShotInProgress: FlashBlocker()
+	/// A guided brew is running.
+	@Serializable
+	@SerialName("GuidedBrewActive")
+	object GuidedBrewActive: FlashBlocker()
+	/// A profile upload is in flight.
+	@Serializable
+	@SerialName("ProfileUploading")
+	object ProfileUploading: FlashBlocker()
+	/// A descale / clean / transport cycle is running.
+	@Serializable
+	@SerialName("MaintenanceRunning")
+	object MaintenanceRunning: FlashBlocker()
+	/// The tablet is on battery below 50 % and not charging.
+	@Serializable
+	@SerialName("LowPower")
+	object LowPower: FlashBlocker()
+}
+
 /// What the shell saw the user do. Every kind restarts the countdown the
 /// same way; the kind is for diagnostics.
 @Serializable
@@ -4251,5 +4689,12 @@ enum class WriteTarget(val string: String) {
 	/// echoes each write back as a `Source::De1FrameAck` notification.
 	@SerialName("De1ProfileFrame")
 	De1ProfileFrame("De1ProfileFrame"),
+	/// The DE1 `FWMapRequest` characteristic (`cuuid_09` / `A009`) — erase
+	/// and verify requests during a firmware flash
+	/// ([`FlashAction::Write`](crate::firmware_flash::FlashAction::Write));
+	/// the DE1 answers on the same characteristic's notify / read. Never
+	/// emitted in a [`CoreOutput`].
+	@SerialName("De1FwMapRequest")
+	De1FwMapRequest("De1FwMapRequest"),
 }
 

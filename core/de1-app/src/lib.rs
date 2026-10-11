@@ -14,6 +14,7 @@ mod capture;
 pub mod de1_uuids;
 pub mod error;
 pub mod event;
+pub mod firmware_flash;
 pub mod firmware_info;
 #[cfg(test)]
 mod hds_sleep_tests;
@@ -27,6 +28,10 @@ pub use de1_uuids::{
 };
 pub use error::AppError;
 pub use event::{Command, CoreOutput, Event, ProfileUploadFailure, Source, WriteTarget};
+pub use firmware_flash::{
+    FLASHABLE_MODELS, FirmwareFlash, FlashAction, FlashBlocker, FlashFailure, FlashPhase,
+    FlashShellConditions, FlashStartError, FlashStatus, FlashStep,
+};
 
 use capture::{CaptureRecorder, slice_to_jsonl};
 
@@ -703,6 +708,11 @@ pub struct CremaCore {
     /// this field with the real upload-phase state machine.
     #[cfg(test)]
     firmware_lock_override: bool,
+    /// The firmware flash in progress (or finished, until dismissed) — see
+    /// [`firmware_flash`]. Survives [`reset`](Self::reset): the BLE managers
+    /// reset the core on every disconnect, and the power-cycle at the end of a
+    /// flash *is* a disconnect.
+    firmware_flash: Option<FirmwareFlash>,
     /// Low-pass over the tank level (Decenza `7d291524`): the pump sloshes
     /// the reading by ~a third of the tank, which fired false low-water
     /// warnings. Every `Event::WaterLevel` carries the smoothed value, so
@@ -903,6 +913,7 @@ impl CremaCore {
             read_only: false,
             #[cfg(test)]
             firmware_lock_override: false,
+            firmware_flash: None,
             tank_level: TankLevelSmoother::new(),
             de1_firmware_build: None,
             no_ac_since: None,
@@ -945,30 +956,28 @@ impl CremaCore {
         self.line_freq_override = hz;
     }
 
-    /// Whether a firmware upload is currently locking out other writes.
+    /// Whether a firmware flash is currently locking out other writes: `true`
+    /// from the flash's Sleep request until the DE1's verify verdict
+    /// ([`FirmwareFlash::locks_writes`]), `false` everywhere else.
     ///
-    /// v1 always returns `false` — firmware update is a v2 feature.
-    /// The stub is carried now so every
-    /// write method added in v1 can include the one-line lockout guard
-    /// ([`refuse_if_firmware_locked`](Self::refuse_if_firmware_locked)) at the
-    /// time the write lands; retrofitting nine guards at v2 time is more work
-    /// than carrying them piecemeal.
-    ///
-    /// v2 will return `true` for the `Erase..Verifying` phases of a firmware
-    /// upload and `false` everywhere else; read-only methods bypass this check
+    /// Every setter refuses through
+    /// [`refuse_if_firmware_locked`](Self::refuse_if_firmware_locked) with an
+    /// [`Event::FirmwareLockoutHit`], and every other output path drops its
+    /// commands ([`gate_read_only`](Self::gate_read_only)) — a stray 4-byte MMR
+    /// write interleaved with the 16-byte firmware chunks on the same
+    /// characteristic would corrupt the flash (decaid `firmware_mmr_gate.dart`,
+    /// Decenza `de1device.cpp:2091-2124`). Read-only methods bypass the check
     /// because they cannot disturb an in-flight upload.
     pub fn firmware_locks_writes(&self) -> bool {
-        // Test-only override lets unit tests exercise the lockout path so the
-        // per-setter [`Event::FirmwareLockoutHit`] attribution is verifiable
-        // before v2 lands the real upload-phase state machine.
+        // Test-only override lets unit tests exercise the per-setter lockout
+        // attribution without driving a whole flash.
         #[cfg(test)]
-        {
-            self.firmware_lock_override
+        if self.firmware_lock_override {
+            return true;
         }
-        #[cfg(not(test))]
-        {
-            false
-        }
+        self.firmware_flash
+            .as_ref()
+            .is_some_and(FirmwareFlash::locks_writes)
     }
 
     /// If [`firmware_locks_writes`](Self::firmware_locks_writes) is `true`,
@@ -1343,6 +1352,12 @@ impl CremaCore {
     /// [`Event::MmrValue`]. Shaped like
     /// [`query_scale_settings`](Self::query_scale_settings).
     pub fn read_mmr(&self, register: MmrRegister) -> CoreOutput {
+        // Reads are requests *written* to the machine/scale: none may cut in
+        // while a firmware flash holds the link (decaid's gate blocks MMR
+        // reads too, `firmware_mmr_gate.dart`).
+        if let Some(out) = self.refuse_if_firmware_locked("read_mmr") {
+            return out;
+        }
         let mut out = CoreOutput::default();
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1MmrRequest,
@@ -1360,6 +1375,12 @@ impl CremaCore {
     /// by [`handle_calibration`](Self::handle_calibration) into an
     /// [`Event::Calibration`].
     pub fn read_calibration(&self, target: CalTarget) -> CoreOutput {
+        // Reads are requests *written* to the machine/scale: none may cut in
+        // while a firmware flash holds the link (decaid's gate blocks MMR
+        // reads too, `firmware_mmr_gate.dart`).
+        if let Some(out) = self.refuse_if_firmware_locked("read_calibration") {
+            return out;
+        }
         let mut out = CoreOutput::default();
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1Calibration,
@@ -1374,6 +1395,12 @@ impl CremaCore {
     /// returns. The reply is an [`Event::Calibration`] with
     /// [`CalCommand::ReadFactory`](de1_protocol::CalCommand::ReadFactory).
     pub fn read_factory_calibration(&self, target: CalTarget) -> CoreOutput {
+        // Reads are requests *written* to the machine/scale: none may cut in
+        // while a firmware flash holds the link (decaid's gate blocks MMR
+        // reads too, `firmware_mmr_gate.dart`).
+        if let Some(out) = self.refuse_if_firmware_locked("read_factory_calibration") {
+            return out;
+        }
         let mut out = CoreOutput::default();
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1Calibration,
@@ -2653,6 +2680,12 @@ impl CremaCore {
     /// shell compatibility — it has always been the post-connect hook; the
     /// connect-init writes ride the same call.)
     pub fn query_scale_settings(&self) -> CoreOutput {
+        // Reads are requests *written* to the machine/scale: none may cut in
+        // while a firmware flash holds the link (decaid's gate blocks MMR
+        // reads too, `firmware_mmr_gate.dart`).
+        if let Some(out) = self.refuse_if_firmware_locked("query_scale_settings") {
+            return out;
+        }
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale {
             Self::push_scale_writes(&mut out, scale.connect_writes());
@@ -2801,7 +2834,9 @@ impl CremaCore {
     /// effects — a secondary decodes the mirrored stream for its UI but never
     /// drives the DE1/scale. A no-op on a normal (authoritative) core.
     fn gate_read_only(&self, mut out: CoreOutput) -> CoreOutput {
-        if self.read_only {
+        // A running firmware flash owns the link the same way: nothing but
+        // its own writes may reach the DE1 (or the radio) until it is done.
+        if self.read_only || self.firmware_locks_writes() {
             out.commands.clear();
         }
         out
@@ -2943,6 +2978,7 @@ impl CremaCore {
     /// alone — and latched to one stop per outage. The tank-level filter is
     /// re-seeded on reconnect (Decenza resets it on disconnect).
     pub fn de1_link_lost(&mut self) -> CoreOutput {
+        self.firmware_flash_link_lost();
         let mut out = CoreOutput::default();
         self.stop_scale_timer_for_link_loss(&mut out);
         self.tank_level.reset();
@@ -2971,6 +3007,10 @@ impl CremaCore {
     /// scale link usually survives a DE1 drop, and without it the on-scale
     /// clock keeps counting. Empty otherwise.
     pub fn reset(&mut self) -> CoreOutput {
+        // A reset is the shells' disconnect path: tell a running flash, and
+        // carry it across the rebuild (see the `firmware_flash` field).
+        self.firmware_flash_link_lost();
+        let firmware_flash = self.firmware_flash.take();
         let mut out = CoreOutput::default();
         self.stop_scale_timer_for_link_loss(&mut out);
         self.abandon_maintenance(&mut out);
@@ -3038,6 +3078,7 @@ impl CremaCore {
         idle_sleep.link(false);
         *self = CremaCore::new();
         self.idle_sleep = idle_sleep;
+        self.firmware_flash = firmware_flash;
         self.read_only = read_only;
         self.brew_session = brew_session;
         self.scale = scale;
@@ -3812,6 +3853,228 @@ impl CremaCore {
         firmware_info::report(self.capture.firmware_build())
     }
 
+    // ── Firmware flash ────────────────────────────────────────────────────
+    //
+    // The state machine lives in [`firmware_flash`]; these wrappers own it,
+    // check the preconditions, keep it across disconnects and route the
+    // build read-back into it. Each returns a [`FlashStep`]: actions for the
+    // shell to perform one at a time, plus the status snapshot.
+
+    /// Every precondition that stops a flash from starting now — the
+    /// strictest of the reference apps combined:
+    ///
+    /// - a **connected, ready** DE1 (decaid: REST 503 without a machine;
+    ///   de1app `start_firmware_update` returns when not connected,
+    ///   `de1_comms.tcl:980-985`);
+    /// - this device is the **primary**, not a read-only mirror;
+    /// - **no flash** already running (decaid `FirmwareUpdateInProgress`, 409);
+    /// - the **installed build and model are known**, and the model is one
+    ///   decaid's manifest lists ([`FLASHABLE_MODELS`], no Bengle);
+    /// - the machine is **Idle or asleep** — not pouring, steaming, descaling,
+    ///   refilling or in an error substate (Decenza refuses outside
+    ///   Sleep/Idle/Heating/Ready, `maincontroller.cpp:1154-1165`; crema is
+    ///   stricter and refuses those flows, refill and errors too);
+    /// - **no shot, guided brew, profile upload or maintenance cycle**;
+    /// - the shell reports **power ok** (charging, or battery ≥ 50 %) — none
+    ///   of the reference apps checks this; crema adds it for a ~20-minute
+    ///   radio-heavy job.
+    pub fn firmware_flash_blockers(&self, shell: FlashShellConditions) -> Vec<FlashBlocker> {
+        let mut blockers = Vec::new();
+        if !shell.connected {
+            blockers.push(FlashBlocker::NotConnected);
+        } else if !shell.ready {
+            blockers.push(FlashBlocker::NotReady);
+        }
+        if self.read_only {
+            blockers.push(FlashBlocker::ReadOnlyMirror);
+        }
+        if self.firmware_locks_writes() {
+            blockers.push(FlashBlocker::FlashInProgress);
+        }
+        if self.capture.firmware_build().filter(|&b| b != 0).is_none() {
+            blockers.push(FlashBlocker::BuildUnknown);
+        }
+        match self.capture.meta_snapshot().de1_machine_model {
+            None | Some(0) => blockers.push(FlashBlocker::ModelUnknown),
+            Some(model) if !FLASHABLE_MODELS.contains(&model) => {
+                blockers.push(FlashBlocker::UnsupportedModel { model });
+            }
+            Some(_) => {}
+        }
+        match self.last_state {
+            None => blockers.push(FlashBlocker::StateUnknown),
+            Some(info) => match info.state {
+                MachineState::Sleep | MachineState::Idle => {
+                    if info.substate == SubState::Refill {
+                        blockers.push(FlashBlocker::Refilling);
+                    } else if (info.substate as u8) >= 200 {
+                        blockers.push(FlashBlocker::MachineError);
+                    }
+                }
+                MachineState::Refill => blockers.push(FlashBlocker::Refilling),
+                MachineState::FatalError => blockers.push(FlashBlocker::MachineError),
+                state if state.is_flow_state() => blockers.push(FlashBlocker::ShotInProgress),
+                state => blockers.push(FlashBlocker::MachineBusy { state }),
+            },
+        }
+        if self.flow_started.is_some() && !blockers.contains(&FlashBlocker::ShotInProgress) {
+            blockers.push(FlashBlocker::ShotInProgress);
+        }
+        if self.brew_session.is_some() || shell.guided_brew_active {
+            blockers.push(FlashBlocker::GuidedBrewActive);
+        }
+        if self.profile_upload.is_some() {
+            blockers.push(FlashBlocker::ProfileUploading);
+        }
+        if self.maintenance.is_some() {
+            blockers.push(FlashBlocker::MaintenanceRunning);
+        }
+        if !shell.power_ok {
+            blockers.push(FlashBlocker::LowPower);
+        }
+        blockers
+    }
+
+    fn flash_step(&self, actions: Vec<FlashAction>, now_ms: u64) -> FlashStep {
+        FlashStep {
+            actions,
+            status: self.firmware_flash.as_ref().map(|f| f.status(now_ms)),
+            error: None,
+        }
+    }
+
+    fn advance_clock(&mut self, now_ms: u64) {
+        self.clock = self.clock.max(ms_to_duration(now_ms));
+    }
+
+    /// Start flashing `image`: refuse unless every
+    /// [`firmware_flash_blockers`](Self::firmware_flash_blockers) check passes
+    /// and the image is a pinned official image
+    /// ([`de1_domain::validate_firmware_image`]); otherwise replace any
+    /// finished flash and return the first action (the Sleep request).
+    pub fn firmware_flash_start(
+        &mut self,
+        image: Vec<u8>,
+        shell: FlashShellConditions,
+        now_ms: u64,
+    ) -> FlashStep {
+        self.advance_clock(now_ms);
+        let blockers = self.firmware_flash_blockers(shell);
+        if !blockers.is_empty() {
+            return FlashStep {
+                actions: Vec::new(),
+                status: self.firmware_flash.as_ref().map(|f| f.status(now_ms)),
+                error: Some(FlashStartError::Blocked { blockers }),
+            };
+        }
+        match FirmwareFlash::begin(image, now_ms) {
+            Ok((flash, actions)) => {
+                self.firmware_flash = Some(flash);
+                self.flash_step(actions, now_ms)
+            }
+            Err(error) => FlashStep {
+                actions: Vec::new(),
+                status: self.firmware_flash.as_ref().map(|f| f.status(now_ms)),
+                error: Some(FlashStartError::InvalidImage { error }),
+            },
+        }
+    }
+
+    /// The flash's pending write was acknowledged.
+    pub fn firmware_flash_on_write_ack(&mut self, now_ms: u64) -> FlashStep {
+        self.advance_clock(now_ms);
+        let actions = self
+            .firmware_flash
+            .as_mut()
+            .map_or_else(Vec::new, |f| f.on_write_ack(now_ms));
+        self.flash_step(actions, now_ms)
+    }
+
+    /// The flash's pending write failed with `message`.
+    pub fn firmware_flash_on_write_failed(&mut self, message: &str, now_ms: u64) -> FlashStep {
+        self.advance_clock(now_ms);
+        if let Some(f) = self.firmware_flash.as_mut() {
+            f.on_write_failed(message, now_ms);
+        }
+        self.flash_step(Vec::new(), now_ms)
+    }
+
+    /// An `FWMapRequest` (A009) frame arrived — a notification or the answer
+    /// to a [`FlashAction::ReadFwMap`].
+    pub fn firmware_flash_on_fw_map(&mut self, data: &[u8], now_ms: u64) -> FlashStep {
+        self.advance_clock(now_ms);
+        let actions = self
+            .firmware_flash
+            .as_mut()
+            .map_or_else(Vec::new, |f| f.on_fw_map(data, now_ms));
+        self.flash_step(actions, now_ms)
+    }
+
+    /// A [`FlashAction::ReadFwMap`] read failed; the next tick re-polls.
+    pub fn firmware_flash_on_read_failed(&mut self, now_ms: u64) -> FlashStep {
+        self.advance_clock(now_ms);
+        if let Some(f) = self.firmware_flash.as_mut() {
+            f.on_read_failed();
+        }
+        self.flash_step(Vec::new(), now_ms)
+    }
+
+    /// The flash clock: timeouts, the erase poll, the settle and the
+    /// post-restart build reads. The shells tick every ~250 ms while a flash
+    /// exists.
+    pub fn firmware_flash_tick(&mut self, now_ms: u64) -> FlashStep {
+        self.advance_clock(now_ms);
+        let actions = self
+            .firmware_flash
+            .as_mut()
+            .map_or_else(Vec::new, |f| f.on_tick(now_ms));
+        self.flash_step(actions, now_ms)
+    }
+
+    /// Tell a running flash the DE1 link dropped (also called from
+    /// [`de1_link_lost`](Self::de1_link_lost) and [`reset`](Self::reset)).
+    pub fn firmware_flash_link_lost(&mut self) {
+        let now_ms = u64::try_from(self.clock.as_millis()).unwrap_or(u64::MAX);
+        if let Some(f) = self.firmware_flash.as_mut() {
+            f.on_link_lost(now_ms);
+        }
+    }
+
+    /// The DE1 link is back (after the power-cycle, typically).
+    pub fn firmware_flash_link_restored(&mut self, now_ms: u64) -> FlashStep {
+        self.advance_clock(now_ms);
+        let actions = self
+            .firmware_flash
+            .as_mut()
+            .map_or_else(Vec::new, |f| f.on_link_restored(now_ms));
+        self.flash_step(actions, now_ms)
+    }
+
+    /// Cancel, while that is still harmless (up to the verify request). The
+    /// machine is left asleep on its old firmware.
+    pub fn firmware_flash_cancel(&mut self, now_ms: u64) -> FlashStep {
+        self.advance_clock(now_ms);
+        if let Some(f) = self.firmware_flash.as_mut() {
+            f.cancel(now_ms);
+        }
+        self.flash_step(Vec::new(), now_ms)
+    }
+
+    /// Forget a flash that no longer holds the link (finished, failed,
+    /// cancelled, or waiting on a power-cycle the user gave up on). Returns
+    /// whether it was cleared; a flash still holding the lock is kept.
+    pub fn firmware_flash_dismiss(&mut self) -> bool {
+        if self.firmware_locks_writes() {
+            return false;
+        }
+        self.firmware_flash.take().is_some()
+    }
+
+    /// The current snapshot, no side effects.
+    pub fn firmware_flash_status(&self, now_ms: u64) -> FlashStep {
+        self.flash_step(Vec::new(), now_ms)
+    }
+
     // ── Profile upload (write side) ───────────────────────────────────────
     //
     // The shape is: `upload_profile` validates the profile, returns one
@@ -4102,6 +4365,10 @@ impl CremaCore {
             // `ErrorNoAc` filter (see `de1_firmware_build`).
             if register == MmrRegister::FirmwareVersion {
                 self.de1_firmware_build = Some(value);
+                let now_ms = u64::try_from(self.clock.as_millis()).unwrap_or(u64::MAX);
+                if let Some(flash) = self.firmware_flash.as_mut() {
+                    flash.on_build(value, now_ms);
+                }
             }
             if register == MmrRegister::GhcInfo {
                 self.de1_ghc_info = Some(value);
@@ -9798,11 +10065,9 @@ mod tests {
     }
 
     #[test]
-    fn firmware_locks_writes_is_false_in_v1() {
-        // v1 carries the lockout guard as a stub that always returns `false`;
-        // v2 will return `true` for the `Erase..Verifying` upload phases.
-        // This test pins the stub so a future change is a conscious decision,
-        // not an accident.
+    fn firmware_locks_writes_is_false_without_a_flash() {
+        // Only a running flash (Sleep request .. verify verdict) locks writes;
+        // `firmware_flash::tests` covers the locked window itself.
         let core = CremaCore::new();
         assert!(!core.firmware_locks_writes());
     }

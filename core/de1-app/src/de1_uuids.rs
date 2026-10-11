@@ -55,6 +55,9 @@ pub struct De1Uuids {
     /// `A010` FrameWrite — profile frame writes. The DE1 sends NO notification
     /// here (it only ACKs the ATT write) — the shell synthesizes a frame-ack.
     pub frame_write: String,
+    /// `A009` FWMapRequest — firmware erase / verify requests (write) and the
+    /// DE1's answers (notify + read). Used only by a firmware flash.
+    pub fw_map_request: String,
 }
 
 /// The DE1's fixed GATT layout. Pure data — safe to call anytime, with or
@@ -74,6 +77,7 @@ pub fn de1_uuids() -> De1Uuids {
         calibration: short("a012"),
         header_write: short("a00f"),
         frame_write: short("a010"),
+        fw_map_request: short("a009"),
     }
 }
 
@@ -99,6 +103,7 @@ pub fn de1_write_target_uuid(target: WriteTarget) -> String {
         WriteTarget::De1WaterLevels => u.water_levels,
         WriteTarget::De1ProfileHeader => u.header_write,
         WriteTarget::De1ProfileFrame => u.frame_write,
+        WriteTarget::De1FwMapRequest => u.fw_map_request,
     }
 }
 
@@ -156,6 +161,10 @@ mod tests {
         assert_eq!(
             de1_write_target_uuid(WriteTarget::De1ProfileFrame),
             u.frame_write
+        );
+        assert_eq!(
+            de1_write_target_uuid(WriteTarget::De1FwMapRequest),
+            "0000a009-0000-1000-8000-00805f9b34fb"
         );
     }
 
