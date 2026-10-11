@@ -20,8 +20,7 @@ import {
 	loadCore,
 	type Command,
 	type CoreOutput,
-	type CremaCore,
-	type FirmwareUpdateStatus
+	type CremaCore
 } from '$lib/core';
 import { MachineState, MmrRegister } from '$lib/core/crema-core';
 import type { BrewRecipe } from '$lib/core/crema-core';
@@ -1211,17 +1210,6 @@ export class CremaApp {
 			clearInterval(this.scaleHeartbeatId);
 			this.scaleHeartbeatId = null;
 		}
-	}
-
-	/**
-	 * Compare the most recently observed DE1 firmware version against the
-	 * latest firmware Crema was compiled against. Read-only — no BLE traffic.
-	 * Returns the `Unknown` variant until the DE1's `Version` characteristic
-	 * has been read at least once (it is read at connect time, so the value
-	 * is non-`Unknown` as soon as the DE1 is connected and subscribed).
-	 */
-	async firmwareUpdateStatus(): Promise<FirmwareUpdateStatus> {
-		return this.core.firmwareUpdateStatus();
 	}
 
 	/**

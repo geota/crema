@@ -22,7 +22,7 @@
  */
 
 import type { CoreOutput, ScaleCapabilities, ScaleUuids, TimedSample } from './crema-core';
-import type { CalTarget, MmrRegister, FirmwareUpdateStatus } from './crema-core';
+import type { CalTarget, MmrRegister } from './crema-core';
 import type { ShotQualityInput, ShotQualityReport, SawModelLoad } from './crema-core';
 
 /**
@@ -398,13 +398,6 @@ export interface CremaCore {
 	 * characteristics to subscribe to.
 	 */
 	scaleUuids(): Promise<ScaleUuids | undefined>;
-	/**
-	 * Compare the most recently observed DE1 firmware version against the
-	 * latest firmware Crema was compiled against. Pure read — no BLE traffic.
-	 * Returns the `Unknown` variant until the DE1's `Version` characteristic
-	 * has been observed.
-	 */
-	firmwareUpdateStatus(): Promise<FirmwareUpdateStatus>;
 	/**
 	 * Start uploading `profile` to the DE1. Resolves to the initial
 	 * `CoreOutput` carrying `ProfileUploadStarted` + every BLE write
@@ -1033,9 +1026,6 @@ async function createCore(): Promise<CremaCore> {
 			const raw = bridge.scale_uuids();
 			return raw === undefined ? undefined : (JSON.parse(raw) as ScaleUuids);
 		},
-		async firmwareUpdateStatus() {
-			return JSON.parse(bridge.firmware_update_status()) as FirmwareUpdateStatus;
-		},
 		async uploadProfile(profile, nowMs) {
 			return parseOutput(bridge.upload_profile(JSON.stringify(profile), nowMs));
 		},
@@ -1362,7 +1352,7 @@ async function createCore(): Promise<CremaCore> {
 	};
 }
 
-export type { CoreOutput, ScaleCapabilities, ScaleUuids, FirmwareUpdateStatus } from './crema-core';
+export type { CoreOutput, ScaleCapabilities, ScaleUuids, FirmwareBuildReport } from './crema-core';
 export type { Event, Command, ModeInfo, RangeCapability } from './crema-core';
 // Telemetry wire types — now typeshare-generated (review #01 F24); replaced the
 // hand-written `RustShotSample` / `RustTimedSample`.
