@@ -1033,8 +1033,22 @@ data class CommonSettings (
 	val defaultPreinfuseS: Float,
 	/// Free-text equipment grinder model.
 	val grinderModel: String,
-	/// Keep the DE1 awake while Crema is open.
+	/// **Retired** — ignored by every shell. It drove the old "keep the DE1
+	/// awake while Crema is open" heartbeat, whose premise (a firmware
+	/// sleep timer taking over when the pokes stop) does not hold on a stock
+	/// DE1; presence is now poked on real activity only and the app owns
+	/// sleep ([`idle_sleep_min`](Self::idle_sleep_min)). Still written
+	/// (`true`) so a backup stays readable by older versions, which require
+	/// the field.
 	val suppressDe1Sleep: Boolean,
+	/// The idle-sleep timeout ("Cool down after"), minutes — one of
+	/// [`IDLE_SLEEP_CHOICES_MIN`](crate::idle_sleep::IDLE_SLEEP_CHOICES_MIN),
+	/// `0` = Never. `None` = never set: the shell migrates its old setting
+	/// (Android's screensaver-coupled sleep) or uses
+	/// [`DEFAULT_IDLE_SLEEP_MIN`](crate::idle_sleep::DEFAULT_IDLE_SLEEP_MIN).
+	/// de1app `screen_saver_delay`, Decenza `autoSleepMinutes`, decaid
+	/// `sleepTimeoutMinutes`.
+	val idleSleepMin: UInt? = null,
 	/// Quick-Controls steam duration, seconds.
 	val qcSteamTimeS: Float,
 	/// Quick-Controls steam flow, ml/s.
@@ -1150,6 +1164,22 @@ data class EventMaintenanceProgressInner (
 	val cycle: UByte,
 	/// The 1 °C cold-maintenance profile was loaded for this cycle.
 	val cold_workaround: Boolean
+)
+
+/// Generated type representing the anonymous struct variant `IdleSleepRequested` of the `Event` Rust enum
+@Serializable
+data class EventIdleSleepRequestedInner (
+	/// Which send of this idle episode.
+	val attempt: UByte
+)
+
+/// Generated type representing the anonymous struct variant `IdleSleepBlocked` of the `Event` Rust enum
+@Serializable
+data class EventIdleSleepBlockedInner (
+	/// Why it can't send.
+	val reason: IdleSleepBlock,
+	/// The machine state at the time, when known.
+	val state: MachineState? = null
 )
 
 /// Generated type representing the anonymous struct variant `ShotPhaseChanged` of the `Event` Rust enum
@@ -1645,6 +1675,24 @@ sealed class Event {
 	@Serializable
 	@SerialName("MaintenanceProgress")
 	data class MaintenanceProgress(val content: EventMaintenanceProgressInner): Event()
+	/// The idle-sleep timer ("Cool down after") sent Sleep — see
+	/// [`de1_domain::idle_sleep`]. `attempt` is 1 for the episode's send, 2
+	/// for the one retry of a send the machine never confirmed. The shells
+	/// log it; the Sleep report that follows raises the screensaver like any
+	/// sleep the user didn't ask for.
+	@Serializable
+	@SerialName("IdleSleepRequested")
+	data class IdleSleepRequested(val content: EventIdleSleepRequestedInner): Event()
+	/// The idle-sleep timer has expired but can't send Sleep yet; it retries
+	/// on every tick. Edge-triggered: once per reason, not once per tick.
+	@Serializable
+	@SerialName("IdleSleepBlocked")
+	data class IdleSleepBlocked(val content: EventIdleSleepBlockedInner): Event()
+	/// The machine never reported the timer's Sleep (sent twice); the
+	/// countdown re-armed in full rather than re-sending every tick.
+	@Serializable
+	@SerialName("IdleSleepUnconfirmed")
+	object IdleSleepUnconfirmed: Event()
 	/// An espresso shot began.
 	@Serializable
 	@SerialName("ShotStarted")
@@ -3492,6 +3540,93 @@ sealed class FirmwareUpdateStatus {
 	data class NewerInstalled(val content: FirmwareUpdateStatusNewerInstalledInner): FirmwareUpdateStatus()
 }
 
+/// What the shell saw the user do. Every kind restarts the countdown the
+/// same way; the kind is for diagnostics.
+@Serializable
+enum class IdleActivity(val string: String) {
+	/// A touch or pointer press anywhere in Crema.
+	@SerialName("Touch")
+	Touch("Touch"),
+	/// A key press.
+	@SerialName("Key")
+	Key("Key"),
+	/// A screen / route change.
+	@SerialName("Navigation")
+	Navigation("Navigation"),
+	/// A command the shell sent outside the core's own request paths.
+	@SerialName("Command")
+	Command("Command"),
+	/// The app returned to the foreground.
+	@SerialName("Foreground")
+	Foreground("Foreground"),
+	/// A mirrored peer relayed a command or activity to this primary.
+	@SerialName("Mirror")
+	Mirror("Mirror"),
+}
+
+/// Why an expired timer could not send Sleep yet.
+@Serializable
+enum class IdleSleepBlock(val string: String) {
+	/// The DE1 link is down or reconnecting.
+	@SerialName("LinkDown")
+	LinkDown("LinkDown"),
+	/// No machine state has been reported on this link yet.
+	@SerialName("StateUnknown")
+	StateUnknown("StateUnknown"),
+	/// The machine is in Refill and the firmware would latch the request
+	/// and sleep right after the next refill instead (firmware below
+	/// 1357, or a Bengle).
+	@SerialName("RefillLatch")
+	RefillLatch("RefillLatch"),
+}
+
+/// Generated type representing the anonymous struct variant `Configure` of the `IdleSleepInput` Rust enum
+@Serializable
+data class IdleSleepInputConfigureInner (
+	/// Timeout in minutes; `0` turns the timer off.
+	val minutes: UInt
+)
+
+/// Generated type representing the anonymous struct variant `Activity` of the `IdleSleepInput` Rust enum
+@Serializable
+data class IdleSleepInputActivityInner (
+	/// What they did.
+	val kind: IdleActivity
+)
+
+/// Generated type representing the anonymous struct variant `Link` of the `IdleSleepInput` Rust enum
+@Serializable
+data class IdleSleepInputLinkInner (
+	/// Whether writes can reach the machine now.
+	val ready: Boolean
+)
+
+/// One input to the idle-sleep timer, as the shells send it over the
+/// `idle_sleep_json` facade. Adjacently tagged like `Event`:
+/// `{"type":"Tick"}`, `{"type":"Configure","content":{"minutes":60}}`.
+@Serializable
+sealed class IdleSleepInput {
+	/// The user's timeout, minutes (`0` = Never). Sent at startup and on
+	/// every change.
+	@Serializable
+	@SerialName("Configure")
+	data class Configure(val content: IdleSleepInputConfigureInner): IdleSleepInput()
+	/// The user did something in Crema.
+	@Serializable
+	@SerialName("Activity")
+	data class Activity(val content: IdleSleepInputActivityInner): IdleSleepInput()
+	/// The DE1 link became ready (`true`) or went away / is reconnecting
+	/// (`false`).
+	@Serializable
+	@SerialName("Link")
+	data class Link(val content: IdleSleepInputLinkInner): IdleSleepInput()
+	/// The periodic check, every [`IDLE_SLEEP_TICK_MS`] and whenever the
+	/// shell regains the CPU (a tab turning visible, the app resuming).
+	@Serializable
+	@SerialName("Tick")
+	object Tick: IdleSleepInput()
+}
+
 /// DE1 top-level machine state. Discriminants match the firmware `MachineState`
 /// enum (see protocol §4.1).
 @Serializable
@@ -3673,6 +3808,14 @@ enum class MmrRegister(val string: String) {
 	/// Cup-warmer temperature (Bengle models only).
 	@SerialName("CupWarmerTemp")
 	CupWarmerTemp("CupWarmerTemp"),
+	/// The machine's own inactivity-sleep timeout, whole minutes, `0` =
+	/// never (Bengle models only; firmware default 60). The firmware acts on
+	/// it only while no tablet is connected — the connected app owns sleep —
+	/// so it covers a tablet that is off or out of range. de1app
+	/// `set_sleep_timeout_minutes` (`de1_comms.tcl:1431-1446`), decaid
+	/// `BengleMmr.inactivitySleepTimeout`.
+	@SerialName("InactivitySleepTimeout")
+	InactivitySleepTimeout("InactivitySleepTimeout"),
 }
 
 /// Generated type representing the anonymous struct variant `TooManySteps` of the `ProfileUploadFailure` Rust enum

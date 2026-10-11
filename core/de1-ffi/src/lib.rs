@@ -181,6 +181,8 @@ pub enum MmrReg {
     SteamTwoTapStop,
     /// Cup-warmer temperature (Bengle models only).
     CupWarmerTemp,
+    /// The Bengle firmware's own inactivity-sleep timeout, minutes.
+    InactivitySleepTimeout,
 }
 
 impl From<MmrReg> for MmrRegister {
@@ -212,6 +214,7 @@ impl From<MmrReg> for MmrRegister {
             MmrReg::UserPresent => MmrRegister::UserPresent,
             MmrReg::SteamTwoTapStop => MmrRegister::SteamTwoTapStop,
             MmrReg::CupWarmerTemp => MmrRegister::CupWarmerTemp,
+            MmrReg::InactivitySleepTimeout => MmrRegister::InactivitySleepTimeout,
         }
     }
 }
@@ -1052,6 +1055,39 @@ pub fn sleep_request_latches_in_refill(
     let substate = serde_json::from_value(serde_json::Value::String(substate))
         .unwrap_or(de1_protocol::SubState::Ready);
     de1_protocol::sleep_request_latches_in_refill(state, substate, firmware_build, machine_model)
+}
+
+/// The idle-sleep ("Cool down after") choices, minutes; `0` is "Never". See
+/// [`de1_domain::idle_sleep::IDLE_SLEEP_CHOICES_MIN`].
+#[uniffi::export]
+pub fn idle_sleep_choices() -> Vec<u32> {
+    de1_domain::idle_sleep::IDLE_SLEEP_CHOICES_MIN.to_vec()
+}
+
+/// The default idle-sleep timeout, minutes (60: de1app and Decenza).
+#[uniffi::export]
+pub fn default_idle_sleep_min() -> u32 {
+    de1_domain::idle_sleep::DEFAULT_IDLE_SLEEP_MIN
+}
+
+/// How often the shell ticks the idle-sleep timer, ms.
+#[uniffi::export]
+pub fn idle_sleep_tick_ms() -> u64 {
+    de1_domain::idle_sleep::IDLE_SLEEP_TICK_MS
+}
+
+/// Snap any minute count to the nearest idle-sleep choice (`0` stays Never).
+#[uniffi::export]
+pub fn snap_idle_sleep_minutes(minutes: u32) -> u32 {
+    de1_domain::idle_sleep::snap_idle_sleep_minutes(minutes)
+}
+
+/// The idle-sleep timeout for a user upgrading from the screensaver-coupled
+/// sleep: the saver's minutes (snapped) when it slept the machine, else the
+/// default. See [`de1_domain::idle_sleep::idle_sleep_minutes_from_saver`].
+#[uniffi::export]
+pub fn idle_sleep_minutes_from_saver(saver_min: i32, sleep_with_saver: bool) -> u32 {
+    de1_domain::idle_sleep::idle_sleep_minutes_from_saver(saver_min, sleep_with_saver)
 }
 
 /// Whether a Visualizer call error (`tag` + optional HTTP `status`) is worth
@@ -2307,6 +2343,18 @@ impl CremaBridge {
         self.emit(out)
     }
 
+    /// Feed the idle-sleep timer ("Cool down after") one input — a JSON
+    /// `IdleSleepInput` (`{"type":"Tick"}`, `{"type":"Configure","content":
+    /// {"minutes":60}}`, `{"type":"Activity","content":{"kind":"Touch"}}`,
+    /// `{"type":"Link","content":{"ready":true}}`) at the shell's monotonic
+    /// `now_ms` (`elapsedRealtime`). Returns a `CoreOutput` JSON string: the
+    /// Sleep write when the timer fires, a throttled presence poke on
+    /// activity. See `CremaCore::idle_sleep`.
+    pub fn idle_sleep(&self, input_json: String, now_ms: u64) -> String {
+        let out = self.core().idle_sleep_json(&input_json, now_ms);
+        self.emit(out)
+    }
+
     /// The once-a-minute USB-charger check (Decenza `BatteryManager`):
     /// `mode` is the persisted `UsbChargingMode` spelling (`"alwaysOn"` /
     /// `"smart"` / `"smartHigh"`; anything else is `"alwaysOn"`); `battery_percent` is the tablet battery,
@@ -3095,6 +3143,7 @@ mod tests {
                     MmrRegister::UserPresent => MmrReg::UserPresent,
                     MmrRegister::SteamTwoTapStop => MmrReg::SteamTwoTapStop,
                     MmrRegister::CupWarmerTemp => MmrReg::CupWarmerTemp,
+                    MmrRegister::InactivitySleepTimeout => MmrReg::InactivitySleepTimeout,
                 };
                 (mirror, core_reg)
             })
