@@ -20,6 +20,8 @@
 	import StRow from '../StRow.svelte';
 	import StToggle from '../StToggle.svelte';
 	import StSegment from '../StSegment.svelte';
+	import StSelect from '../StSelect.svelte';
+	import { idleSleepChoices, idleSleepLabel } from '$lib/state/idle-sleep';
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
@@ -36,6 +38,20 @@
 	 *
 	 * (3) is a no-op when no Decent Scale is connected.
 	 */
+	/** "Cool down after" — the core's choices (Never / 15 / 30 / 60 / 90 / 120 min). */
+	const idleSleepOptions = idleSleepChoices().map((m) => ({
+		value: String(m),
+		label: idleSleepLabel(m)
+	}));
+
+	/** Persist the idle-sleep timeout and restart the core's timer from now. */
+	function setIdleSleepMin(value: string): void {
+		const minutes = Number(value);
+		if (!Number.isFinite(minutes)) return;
+		settings.set('idleSleepMin', minutes);
+		appCtx().app?.idleSleep.configure(minutes);
+	}
+
 	async function setWeightUnit(value: 'g' | 'oz'): Promise<void> {
 		settings.set('weightUnit', value);
 		const app = appCtx().app;
@@ -138,6 +154,23 @@
 				on={brewCueHapticsOn(prefs)}
 				onChange={(v) => settings.set('brewCueHaptics', v)}
 				label="Guided brew vibration"
+			/>
+		{/snippet}
+	</StRow>
+</StGroup>
+
+<!-- Machine sleep — the core's idle-sleep timer (de1app "Cool down after",
+     Decenza auto-sleep). Same setting on every device (CommonSettings). -->
+<StGroup title="Machine sleep">
+	<StRow
+		title="Cool down after"
+		sub="Put the DE1 to sleep after this long unused — no clicks or keys in Crema, no brewing, steaming or rinsing. Scale readings don't count. Crema has to be open in a browser tab to do it."
+	>
+		{#snippet control()}
+			<StSelect
+				value={String(prefs.idleSleepMin)}
+				options={idleSleepOptions}
+				onChange={setIdleSleepMin}
 			/>
 		{/snippet}
 	</StRow>

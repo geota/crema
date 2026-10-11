@@ -187,16 +187,16 @@ export interface Settings {
 	 */
 	lineFrequencyHz: 0 | 50 | 60;
 	/**
-	 * Keep the DE1 awake while Crema is open and the user is interacting.
-	 * `true` (default): Crema sets `FeatureFlags.UserNotPresent = 0` on the
-	 * DE1 and sends a `UserPresent` heartbeat on every user touch
-	 * (debounced to once per minute). The DE1 will only sleep if Crema
-	 * goes 30+ minutes without any interaction.
-	 * `false`: Crema sets `FeatureFlags.UserNotPresent = 1` and stops the
-	 * heartbeat; the DE1 follows its own internal sleep timer regardless
-	 * of tablet activity. Useful for shared / café machines.
+	 * "Cool down after": idle minutes before Crema puts the DE1 to sleep —
+	 * one of the core's `idleSleepChoices()` (Never / 15 / 30 / 60 / 90 /
+	 * 120), `0` = Never, default 60 (de1app `screen_saver_delay`, Decenza
+	 * `autoSleepMinutes`). The core's idle-sleep timer owns the decision
+	 * (`state/idle-sleep.ts`); cross-shell as `CommonSettings.idleSleepMin`.
+	 * Replaces the retired `suppressDe1Sleep` heartbeat, whose premise — a
+	 * firmware sleep timer taking over when the pokes stop — doesn't hold on
+	 * a stock DE1.
 	 */
-	suppressDe1Sleep: boolean;
+	idleSleepMin: number;
 	/**
 	 * DE1 firmware two-tap steam stop (MMR `SteamTwoTapStop`): first stop
 	 * tap ends steam without the wand auto-purge; a second tap purges.
@@ -369,7 +369,7 @@ export const DEFAULT_SETTINGS: Settings = {
 
 	telemetryRateHz: 50,
 	lineFrequencyHz: 0,
-	suppressDe1Sleep: true,
+	idleSleepMin: 60,
 	steamTwoTapStop: false,
 	fanThresholdC: 55,
 	usbChargingMode: 'alwaysOn',
@@ -493,7 +493,10 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		defaultBrewTempC: s.defaultBrewTempC,
 		defaultPreinfuseS: s.defaultPreinfusionS,
 		grinderModel: s.grinderModel,
-		suppressDe1Sleep: s.suppressDe1Sleep,
+		// Retired (presence follows activity; the app owns sleep) — still
+		// written because older versions require the field in a backup.
+		suppressDe1Sleep: true,
+		idleSleepMin: s.idleSleepMin,
 		qcSteamTimeS: s.qcSteamTimeS,
 		qcSteamFlowMlS: s.qcSteamFlowMlS,
 		qcSteamTempC: s.qcSteamTempC,
@@ -553,7 +556,8 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		defaultBrewTempC: c.defaultBrewTempC,
 		defaultPreinfusionS: c.defaultPreinfuseS,
 		grinderModel: c.grinderModel,
-		suppressDe1Sleep: c.suppressDe1Sleep,
+		// A blob from before the idle timer carries none: keep this device's.
+		idleSleepMin: cIn.idleSleepMin ?? s.idleSleepMin,
 		qcSteamTimeS: c.qcSteamTimeS,
 		qcSteamFlowMlS: c.qcSteamFlowMlS,
 		qcSteamTempC: c.qcSteamTempC,

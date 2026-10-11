@@ -772,6 +772,16 @@ export interface CremaCore {
 		mode: import('./crema-core').UsbChargingMode,
 		batteryPercent: number | null
 	): Promise<CoreOutput>;
+	/**
+	 * Feed the idle-sleep timer ("Cool down after") one input at the
+	 * shell's wall-clock `nowMs` — see `CremaCore::idle_sleep`. On a tick the
+	 * output carries the Sleep write when the timer fires; on activity, a
+	 * throttled `UserPresent` poke.
+	 */
+	idleSleep(
+		input: import('./crema-core').IdleSleepInput,
+		nowMs: number
+	): Promise<CoreOutput>;
 	/** Tell the firmware whether the user is present (distinct from feature flags). */
 	setUserPresent(present: boolean): Promise<CoreOutput>;
 	/** Set the firmware feature-flag bitmask (distinct from user-present). */
@@ -1299,6 +1309,9 @@ async function createCore(): Promise<CremaCore> {
 					? undefined
 					: Math.max(0, Math.min(100, Math.round(batteryPercent)));
 			return parseOutput(bridge.usb_charger_tick(mode, pct));
+		},
+		async idleSleep(input, nowMs) {
+			return parseOutput(bridge.idle_sleep(JSON.stringify(input), nowMs));
 		},
 		async setUserPresent(present) {
 			return parseOutput(bridge.set_user_present(present));
