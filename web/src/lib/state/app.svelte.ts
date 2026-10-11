@@ -74,6 +74,10 @@ import {
 import { getActiveShotStore, type ActiveShotData } from './active-shot.svelte';
 import { ConnectSweepRunner, readBatteryPercent } from './connect-sweep';
 import { IdleSleepRunner } from './idle-sleep';
+import { FirmwareUpdateController } from '$lib/firmware/firmware-update.svelte';
+import { readPowerOk } from '$lib/firmware/power';
+import { setFirmwareWakeLock } from '$lib/shell/wake-lock';
+import type { FlashShellConditions } from '$lib/core';
 import {
 	LaunchReconnect,
 	markUserDisconnect,
@@ -311,6 +315,13 @@ export class CremaApp {
 	readonly idleSleep: IdleSleepRunner;
 
 	/**
+	 * Settings → Machine → "Update firmware…" (alpha): the flow's state and
+	 * the driver that performs the core's firmware-flash actions over the
+	 * DE1 link. See `$lib/firmware/firmware-update.svelte`.
+	 */
+	readonly firmware: FirmwareUpdateController;
+
+	/**
 	 * The Quick Sheet's `BrewParams` at shot start, stashed by the brew
 	 * dashboard via {@link setBrewParamsSnapshot} just before
 	 * {@link startShot} fires. Read by the `ShotCompleted` handler so the
@@ -467,6 +478,25 @@ export class CremaApp {
 				void this.core.queryScaleSettings().then((output) => this.applyCoreOutput(output));
 			}
 		}, runtime);
+		this.firmware = new FirmwareUpdateController({
+			core,
+			io: {
+				write: (target, data) => this.de1.firmwareWrite(target, data),
+				readFwMap: () => this.de1.firmwareReadFwMap(),
+				subscribeFwMap: () => this.de1.firmwareSubscribeFwMap(),
+				readBuild: async () => {
+					this.applyCoreOutput(await core.readMmr(MmrRegister.FirmwareVersion));
+				},
+				setExclusive: (on) => this.de1.setFirmwareExclusive(on),
+				setFwMapListener: (listener) => this.de1.setFwMapListener(listener),
+				addLinkListener: (listener) => this.de1.addLinkListener(listener)
+			},
+			conditions: () => this.firmwareConditions(),
+			installedBuild: () =>
+				this.state.current.de1MachineInfo[MmrRegister.FirmwareVersion] ?? null,
+			log: (line) => this.state.log(line),
+			keepAlive: { set: setFirmwareWakeLock }
+		});
 		// Hydrate the last-uploaded profile fingerprint from localStorage,
 		// so a page reload that kept the DE1 connected (or a quick
 		// reconnect to the same machine) skips the defensive auto-upload
@@ -923,6 +953,18 @@ export class CremaApp {
 	 * `web/src/lib/ble/de1.ts:uuidForWriteTarget`; targets with no UUID
 	 * mapping are dropped with a status log.
 	 */
+	/** What the shell knows for the firmware-flash preconditions. */
+	private async firmwareConditions(): Promise<FlashShellConditions> {
+		const de1State = this.state.current.de1State;
+		return {
+			connected: de1State === 'ready' || de1State === 'subscribing',
+			ready: de1State === 'ready',
+			// The core tracks guided brews itself (`brew_session`).
+			guidedBrewActive: false,
+			powerOk: await readPowerOk()
+		};
+	}
+
 	private async executeCommand(command: Command): Promise<void> {
 		switch (command.type) {
 			case 'WriteScale': {

@@ -24,6 +24,12 @@
 import type { CoreOutput, ScaleCapabilities, ScaleUuids, TimedSample } from './crema-core';
 import type { CalTarget, MmrRegister } from './crema-core';
 import type { ShotQualityInput, ShotQualityReport, SawModelLoad } from './crema-core';
+import type { FlashBlocker, FlashShellConditions, FlashStep } from './crema-core';
+
+/** Parse a bridge `FlashStep` JSON; `status: null` reads as "no flash". */
+function parseStep(raw: string): FlashStep {
+	return JSON.parse(raw) as FlashStep;
+}
 
 /**
  * The web shell stores the user's weight pref as `'g' | 'oz'` (legacy
@@ -336,6 +342,26 @@ export interface CremaCore {
 	 * is kept; the output stops the scale's timer if a shot had it running.
 	 */
 	de1LinkLost(): Promise<CoreOutput>;
+	/**
+	 * The firmware-flash surface (`de1_app::firmware_flash`). Every call
+	 * resolves to a `FlashStep`: `actions` to perform one at a time, the
+	 * `status` snapshot (or `null` with no flash), an optional start `error`.
+	 */
+	firmwareFlashBlockers(conditions: FlashShellConditions): Promise<FlashBlocker[]>;
+	firmwareFlashStart(
+		image: Uint8Array,
+		conditions: FlashShellConditions,
+		nowMs: number
+	): Promise<FlashStep>;
+	firmwareFlashOnWriteAck(nowMs: number): Promise<FlashStep>;
+	firmwareFlashOnWriteFailed(message: string, nowMs: number): Promise<FlashStep>;
+	firmwareFlashOnFwMap(data: Uint8Array, nowMs: number): Promise<FlashStep>;
+	firmwareFlashOnReadFailed(nowMs: number): Promise<FlashStep>;
+	firmwareFlashTick(nowMs: number): Promise<FlashStep>;
+	firmwareFlashLinkRestored(nowMs: number): Promise<FlashStep>;
+	firmwareFlashCancel(nowMs: number): Promise<FlashStep>;
+	firmwareFlashDismiss(): Promise<boolean>;
+	firmwareFlashStatus(nowMs: number): Promise<FlashStep>;
 	/**
 	 * Slice the rolling BLE-capture buffer to JSONL covering `[fromMs, toMs]`,
 	 * with connect-phase identity entries + META prelude prepended. The shell
@@ -997,6 +1023,39 @@ async function createCore(): Promise<CremaCore> {
 		async de1LinkLost() {
 			return parseOutput(bridge.de1_link_lost());
 		},
+		async firmwareFlashBlockers(conditions) {
+			return JSON.parse(bridge.firmware_flash_blockers(JSON.stringify(conditions))) as FlashBlocker[];
+		},
+		async firmwareFlashStart(image, conditions, nowMs) {
+			return parseStep(bridge.firmware_flash_start(image, JSON.stringify(conditions), nowMs));
+		},
+		async firmwareFlashOnWriteAck(nowMs) {
+			return parseStep(bridge.firmware_flash_on_write_ack(nowMs));
+		},
+		async firmwareFlashOnWriteFailed(message, nowMs) {
+			return parseStep(bridge.firmware_flash_on_write_failed(message, nowMs));
+		},
+		async firmwareFlashOnFwMap(data, nowMs) {
+			return parseStep(bridge.firmware_flash_on_fw_map(data, nowMs));
+		},
+		async firmwareFlashOnReadFailed(nowMs) {
+			return parseStep(bridge.firmware_flash_on_read_failed(nowMs));
+		},
+		async firmwareFlashTick(nowMs) {
+			return parseStep(bridge.firmware_flash_tick(nowMs));
+		},
+		async firmwareFlashLinkRestored(nowMs) {
+			return parseStep(bridge.firmware_flash_link_restored(nowMs));
+		},
+		async firmwareFlashCancel(nowMs) {
+			return parseStep(bridge.firmware_flash_cancel(nowMs));
+		},
+		async firmwareFlashDismiss() {
+			return bridge.firmware_flash_dismiss();
+		},
+		async firmwareFlashStatus(nowMs) {
+			return parseStep(bridge.firmware_flash_status(nowMs));
+		},
 		async captureSliceJsonl(fromMs, toMs) {
 			return bridge.capture_slice_jsonl(fromMs, toMs);
 		},
@@ -1353,6 +1412,19 @@ async function createCore(): Promise<CremaCore> {
 }
 
 export type { CoreOutput, ScaleCapabilities, ScaleUuids, FirmwareBuildReport } from './crema-core';
+export type {
+	FirmwareArtifact,
+	FirmwareImageCheck,
+	FirmwareImageError,
+	FlashAction,
+	FlashBlocker,
+	FlashFailure,
+	FlashShellConditions,
+	FlashStartError,
+	FlashStatus,
+	FlashStep
+} from './crema-core';
+export { FlashPhase, DecentFirmwareChannel } from './crema-core';
 export type { Event, Command, ModeInfo, RangeCapability } from './crema-core';
 // Telemetry wire types — now typeshare-generated (review #01 F24); replaced the
 // hand-written `RustShotSample` / `RustTimedSample`.

@@ -28,41 +28,39 @@ describe('firmwareBuildReport (wasm bridge)', () => {
 });
 
 describe('firmwareCardCopy', () => {
-	it('1358 is the newest release, nightly only, nothing to do', () => {
+	it('1358 is the newest release, no update offered', () => {
 		const c = copy(1358);
 		expect(c.title).toBe('Build 1358 · newest Decent release');
-		expect(c.note).toBe(
-			"The newest Decent release. Only de1app's nightly channel installs it; stable installs build 1333."
-		);
-		expect(c.guidance).toContain('Nothing to do');
+		expect(c.note).toBe('Decent has no newer build. Its stable channel is on build 1333.');
+		expect(c.offerUpdate).toBe(false);
 	});
 
-	it('1333 is Decent stable and never claims to be up to date', () => {
+	it('1333 is Decent stable, never "up to date", and offers 1358', () => {
 		const c = copy(1333);
 		expect(c.title).toBe('Build 1333 · Decent stable');
-		expect(c.note).toBe(
-			"The build de1app's stable and beta channels install. The newest release is build 1358."
-		);
+		expect(c.note).toBe('Newer: build 1358 (nightly).');
+		expect(c.offerUpdate).toBe(true);
 		expect(`${c.title} ${c.note}`).not.toMatch(/up to date/i);
 	});
 
-	it('the guidance does not promise 1358 from de1app stable', () => {
-		const g = copy(1333).guidance;
-		expect(g).toContain("Crema can't install firmware yet");
-		expect(g).toContain('de1app');
-		expect(g).toContain(
-			'Its stable and beta versions install build 1333; build 1358 needs the nightly version.'
-		);
+	it('no copy says Crema cannot install firmware any more', () => {
+		for (const b of [1320, 1333, 1352, 1358, 1363, 1370, null]) {
+			const c = copy(b);
+			expect(`${c.title} ${c.note}`).not.toMatch(/can't install|cannot install/i);
+		}
 	});
 
 	it('a build between stable and newest', () => {
-		expect(copy(1352).title).toBe('Build 1352 · newer than Decent stable');
+		const c = copy(1352);
+		expect(c.title).toBe('Build 1352 · newer than Decent stable');
+		expect(c.offerUpdate).toBe(true);
 	});
 
 	it('an old build', () => {
 		const c = copy(1320);
-		expect(c.title).toBe("Build 1320 · older than Decent's current stable");
+		expect(c.title).toBe('Build 1320 · older than Decent stable');
 		expect(c.note).toContain('1333');
+		expect(c.offerUpdate).toBe(true);
 	});
 
 	it('1363 is a rolled-back build, not newer', () => {
@@ -70,12 +68,14 @@ describe('firmwareCardCopy', () => {
 		expect(c.title).toBe('Build 1363 · rolled-back build');
 		expect(c.note).toContain("isn't newer than build 1358");
 		expect(c.title).not.toMatch(/newer/);
+		expect(c.offerUpdate).toBe(true);
 	});
 
 	it('a build above the newest known one', () => {
 		const c = copy(1370);
 		expect(c.title).toBe('Build 1370 · newer than Crema knows about');
 		expect(c.note).toContain('2026-10-11');
+		expect(c.offerUpdate).toBe(false);
 	});
 
 	it('connected before the build is read', () => {
@@ -85,6 +85,6 @@ describe('firmwareCardCopy', () => {
 	it('disconnected', () => {
 		const c = copy(1358, false);
 		expect(c.title).toBe('No build info');
-		expect(c.guidance).toContain('de1app');
+		expect(c.offerUpdate).toBe(false);
 	});
 });

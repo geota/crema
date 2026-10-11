@@ -138,6 +138,22 @@ export class De1Manager {
 	/** The newest arrival stamp, carried into the next throttled publish. */
 	private pendingNotificationStamp = 0;
 
+	/**
+	 * While a firmware flash holds the link, every write except the flash's
+	 * own ({@link firmwareWrite}) is dropped — a stray 4-byte MMR write
+	 * interleaved with the 16-byte firmware chunks on the same characteristic
+	 * would corrupt the flash (decaid `firmware_mmr_gate.dart`, Decenza
+	 * `de1device.cpp:2091-2124`). The core drops its own commands too; this
+	 * catches every shell-side writer as well.
+	 */
+	private firmwareExclusive = false;
+
+	/** Receives `FWMapRequest` (A009) notifications during a flash. */
+	private fwMapListener: ((data: Uint8Array, atMs: number) => void) | null = null;
+
+	/** Link-loss / link-restored observers (the firmware flash). */
+	private readonly linkListeners = new Set<{ lost(): void; restored(): void }>();
+
 	constructor(
 		private readonly core: CremaCore,
 		private readonly callbacks: De1ManagerCallbacks,
@@ -239,6 +255,7 @@ export class De1Manager {
 		// A terminal disconnect — user-initiated or auto-reconnect giving up.
 		device.onDisconnected(() => {
 			this.notifyLinkLost();
+			for (const l of this.linkListeners) l.lost();
 			this.callbacks.onState('disconnected');
 			this.callbacks.onStatus('DE1 disconnected');
 		});
@@ -246,17 +263,25 @@ export class De1Manager {
 			// The link is gone; the core keeps the session for a resume but
 			// stops the scale's timer if a shot had it running (once per
 			// outage — the core latches it).
-			if (attempt === 1) this.notifyLinkLost();
+			if (attempt === 1) {
+				this.notifyLinkLost();
+				for (const l of this.linkListeners) l.lost();
+			}
 			this.callbacks.onState('reconnecting');
 			this.callbacks.onStatus(`Reconnecting to DE1… (attempt ${attempt})`);
 		});
 		device.onReconnected(() => {
+			for (const l of this.linkListeners) l.restored();
 			this.callbacks.onState('ready');
 			this.callbacks.onStatus('Reconnected — receiving DE1 notifications');
 		});
 		// One sink for all characteristics — preserves arrival order + tallies
 		// diagnostics. Set before the program subscribes so early HVNs are caught.
 		device.setSink((notification) => {
+			if (notification.characteristic === De1Uuids.FW_MAP_REQUEST) {
+				this.fwMapListener?.(notification.data, notification.atMs);
+				return;
+			}
 			const source = sourceFor(notification.characteristic);
 			if (source === null) {
 				return;
@@ -343,6 +368,10 @@ export class De1Manager {
 	 * in diagnostics so a forgotten UUID mapping does not silently disappear.
 	 */
 	async writeCharacteristic(target: WriteTarget, data: Uint8Array): Promise<void> {
+		if (this.firmwareExclusive) {
+			this.callbacks.onStatus(`DE1 write skipped: firmware update in progress (${target})`);
+			return;
+		}
 		const uuid = uuidForWriteTarget(target);
 		if (uuid === null) {
 			this.callbacks.onStatus(`DE1 write skipped: no UUID for target ${target}`);
@@ -360,6 +389,52 @@ export class De1Manager {
 				`DE1 write to ${target} failed: ${describeError(error)}`
 			);
 		}
+	}
+
+	// ── Firmware flash I/O ──────────────────────────────────────────────
+	// The flash driver (`$lib/firmware/flash-driver`) performs the core's
+	// `FlashAction`s through these. Unlike `writeCharacteristic` they throw,
+	// because the state machine must see every failure.
+
+	/** Drop every other write while a flash holds the link (see the field). */
+	setFirmwareExclusive(on: boolean): void {
+		this.firmwareExclusive = on;
+	}
+
+	/** Route A009 notifications to `listener` (`null` to stop). */
+	setFwMapListener(listener: ((data: Uint8Array, atMs: number) => void) | null): void {
+		this.fwMapListener = listener;
+	}
+
+	/** Observe link loss / recovery; returns the unsubscribe. */
+	addLinkListener(listener: { lost(): void; restored(): void }): () => void {
+		this.linkListeners.add(listener);
+		return () => this.linkListeners.delete(listener);
+	}
+
+	/** One flash write, with response; throws on failure or no link. */
+	async firmwareWrite(target: WriteTarget, data: Uint8Array): Promise<void> {
+		const uuid = uuidForWriteTarget(target);
+		const device = this.device;
+		if (uuid === null) throw new Error(`no UUID for ${target}`);
+		if (device === null || device.connectionState !== 'connected') {
+			throw new Error('DE1 not connected');
+		}
+		await device.write(De1Uuids.SERVICE, uuid, data);
+	}
+
+	/** A fresh read of A009 (decaid's erase / verify poll). */
+	async firmwareReadFwMap(): Promise<Uint8Array> {
+		const device = this.device;
+		if (device === null) throw new Error('DE1 not connected');
+		return device.readCharacteristic(De1Uuids.SERVICE, De1Uuids.FW_MAP_REQUEST);
+	}
+
+	/** Enable A009 notifications (re-enabled before verify, like de1app). */
+	async firmwareSubscribeFwMap(): Promise<void> {
+		const device = this.device;
+		if (device === null) throw new Error('DE1 not connected');
+		await device.startNotifications(De1Uuids.SERVICE, De1Uuids.FW_MAP_REQUEST);
 	}
 
 	/**

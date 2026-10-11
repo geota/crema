@@ -37,6 +37,7 @@ interface De1UuidMap {
 	calibration: string;
 	headerWrite: string;
 	frameWrite: string;
+	fwMapRequest: string;
 }
 
 /** The core's UUID map — parsed once on first access, then memoized (see header). */
@@ -102,6 +103,14 @@ export const De1Uuids = {
 	/** `cuuid_10` / `A010` — FrameWrite: one 8-byte profile frame (write; no notify). */
 	get FRAME_WRITE() {
 		return uuids().frameWrite;
+	},
+
+	/**
+	 * `cuuid_09` / `A009` — FWMapRequest: firmware erase / verify requests
+	 * (write) and the DE1's answers (notify + read). Firmware flash only.
+	 */
+	get FW_MAP_REQUEST() {
+		return uuids().fwMapRequest;
 	},
 
 	/**

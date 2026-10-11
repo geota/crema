@@ -359,16 +359,11 @@
   color: rgba(var(--tint-rgb), 0.55);
   margin-bottom: 4px;
 }
-/* How to update today (Crema does not install firmware) — sits under the
-   build note, quieter than it. */
-.st-machinecard-fw-guide {
-  font-family: var(--font-sans);
-  font-size: 11px;
-  line-height: 1.5;
-  color: rgba(var(--tint-rgb), 0.45);
+/* "Update firmware…" — pushed to the bottom of the card. */
+.st-machinecard-fw-action {
   margin-top: auto;
   padding-top: 6px;
-  border-top: 1px solid rgba(193,116,75,0.18);
+  display: flex;
 }
 /* Decent stolen-machine list match — one quiet line, never a modal. */
 .st-machinecard-stolen {

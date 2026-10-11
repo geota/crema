@@ -16,8 +16,9 @@
 	 * diagnostics; the Group line shows the live mix ("group") temperature.
 	 *
 	 * **Real** — the Firmware card classifies the installed build against the
-	 * core's known-builds table (`$lib/firmware/build-copy`). Crema does not
-	 * install firmware, so the card explains how to update with Decent's app.
+	 * core's known-builds table (`$lib/firmware/build-copy`) and opens the
+	 * alpha "Update firmware…" flow (`FirmwareUpdateFlow`, driven by
+	 * `app.firmware`).
 	 *
 	 * **UI-only** — Rename, Forget-device, and the peripherals list need DE1 /
 	 * extra-BLE-device support the shell does not have; each is marked with a
@@ -54,6 +55,7 @@
 	import StButton from '../StButton.svelte';
 	import StStatusDot from '../StStatusDot.svelte';
 	import { firmwareBuildReport, firmwareCardCopy } from '$lib/firmware/build-copy';
+	import FirmwareUpdateFlow from '../FirmwareUpdateFlow.svelte';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	let {
@@ -193,15 +195,16 @@
 		return `PCB v${(cpu / 1000).toFixed(1)}`;
 	});
 
-	// ── Firmware card (read-only) ─────────────────────────────────────────
+	// ── Firmware card ─────────────────────────────────────────────────────
 	// The core classifies the installed build (MMR 0x800010) against its
 	// versioned known-builds table (`de1_domain::classify_firmware_build`):
 	// newest release / Decent stable / rolled back / … — never a bare
-	// "up to date". Pure and local, so it tracks the build reactively; Crema
-	// does not install firmware, so the card says how to update today.
+	// "up to date". "Update firmware…" opens the alpha flow; it leads when a
+	// newer official build exists and stays available on request otherwise.
 	const firmwareCopy = $derived(
 		firmwareCardCopy(firmwareBuildReport(machine.firmwareBuild), connected)
 	);
+	const firmwareFlow = $derived(app?.firmware ?? null);
 
 	// Rename / Re-pair were UI-only stubs (no underlying device registry).
 	// Removed to keep the card focused on connect / disconnect / sleep — the
@@ -326,7 +329,16 @@
 		</div>
 		<div class="st-machinecard-fw-ver">{firmwareCopy.title}</div>
 		<div class="st-machinecard-fw-notes">{firmwareCopy.note}</div>
-		<div class="st-machinecard-fw-guide">{firmwareCopy.guidance}</div>
+		{#if connected && firmwareFlow}
+			<div class="st-machinecard-fw-action">
+				<StButton
+					label={firmwareFlow.status ? 'Firmware update…' : 'Update firmware…'}
+					icon="download-simple"
+					variant={firmwareCopy.offerUpdate || firmwareFlow.status ? 'primary' : 'secondary'}
+					onClick={() => firmwareFlow.open()}
+				/>
+			</div>
+		{/if}
 		{#if app?.stolenSerial}
 			<!-- Decent's stolen-machine list (de1app `check_for_missing_sn`):
 			     a non-blocking notice only — nothing is disabled. -->
@@ -336,6 +348,10 @@
 		{/if}
 	</div>
 </div>
+
+{#if firmwareFlow && firmwareFlow.step !== 'closed'}
+	<FirmwareUpdateFlow flow={firmwareFlow} installedBuild={machine.firmwareBuild} />
+{/if}
 
 <StGroup title="Connection">
 	<!--
