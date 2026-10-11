@@ -147,7 +147,7 @@ pub enum Event {
         /// The 1 °C cold-maintenance profile was loaded for this cycle.
         cold_workaround: bool,
     },
-    /// The idle-sleep timer ("Cool down after") sent Sleep — see
+    /// The idle-sleep timer ("Sleep after") sent Sleep — see
     /// [`de1_domain::idle_sleep`]. `attempt` is 1 for the episode's send, 2
     /// for the one retry of a send the machine never confirmed. The shells
     /// log it; the Sleep report that follows raises the screensaver like any

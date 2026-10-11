@@ -21,42 +21,65 @@ import kotlin.test.assertTrue
  *  migration. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class IdleSleepTest {
-    /** The core's rule (`idle_sleep_minutes_from_saver`), recorded. */
+    /** The core's rule (`idle_sleep_minutes_from_saver`), recorded: a saver the
+     *  user changed from its old 30 min default, with the coupling on, carries
+     *  over (snapped — 45 → 60 here); anything else is the default. */
     private val calls = mutableListOf<Pair<Int, Boolean>>()
     private val fromSaver: (Int, Boolean) -> Int = { saver, on ->
         calls += saver to on
-        if (on && saver > 0) 30 else 60
+        if (on && saver > 0 && saver != 30) 60 else 30
     }
 
     @Test
     fun aFreshInstallGetsTheDefault() {
-        val p = resolveIdleSleep(null, fromSaver, defaultMin = { 60 })
-        assertEquals(60, p.idleSleepMin)
+        val p = resolveIdleSleep(null, fromSaver, defaultMin = { 30 })
+        assertEquals(30, p.idleSleepMin)
         assertTrue(calls.isEmpty())
     }
 
     @Test
     fun aStoredValueWins() {
-        val p = resolveIdleSleep(AppPrefs(idleSleepMin = 90, screensaverAfterMin = 15), fromSaver, defaultMin = { 60 })
+        val p = resolveIdleSleep(AppPrefs(idleSleepMin = 90, screensaverAfterMin = 15), fromSaver, defaultMin = { 30 })
         assertEquals(90, p.idleSleepMin)
         assertTrue(calls.isEmpty(), "no migration once set")
     }
 
     @Test
-    fun aPreTimerFileMigratesTheScreensaverCoupling() {
-        val coupled = resolveIdleSleep(
+    fun aChangedSaverWithTheCouplingOnCarriesOver() {
+        val p = resolveIdleSleep(
             AppPrefs(screensaverAfterMin = 45, sleepMachineWithSaver = true),
-            fromSaver, defaultMin = { 60 },
+            fromSaver, defaultMin = { 30 },
         )
-        assertEquals(45 to true, calls.single())
-        assertEquals(30, coupled.idleSleepMin)
-        calls.clear()
-        val uncoupled = resolveIdleSleep(
-            AppPrefs(screensaverAfterMin = 45, sleepMachineWithSaver = false),
-            fromSaver, defaultMin = { 60 },
+        assertEquals(45 to true, calls.single(), "the saver and the coupling reach the core rule")
+        assertEquals(60, p.idleSleepMin)
+    }
+
+    @Test
+    fun theSaverAtItsOldDefaultGetsTheDefault() {
+        val p = resolveIdleSleep(
+            AppPrefs(screensaverAfterMin = 30, sleepMachineWithSaver = true),
+            fromSaver, defaultMin = { 30 },
         )
-        assertEquals(45 to false, calls.single())
-        assertEquals(60, uncoupled.idleSleepMin)
+        assertEquals(30 to true, calls.single())
+        assertEquals(30, p.idleSleepMin)
+    }
+
+    @Test
+    fun theCouplingOffGetsTheDefault() {
+        val p = resolveIdleSleep(
+            AppPrefs(screensaverAfterMin = 90, sleepMachineWithSaver = false),
+            fromSaver, defaultMin = { 30 },
+        )
+        assertEquals(90 to false, calls.single())
+        assertEquals(30, p.idleSleepMin)
+    }
+
+    @Test
+    fun anUntouchedPreTimerFileGetsTheDefault() {
+        // A prefs file written before the timer with the saver never touched
+        // decodes to the old defaults (30 min, coupling on).
+        val p = resolveIdleSleep(AppPrefs(), fromSaver, defaultMin = { 30 })
+        assertEquals(30, p.idleSleepMin)
     }
 
     @Test
@@ -65,7 +88,7 @@ class IdleSleepTest {
         assertEquals(15u, c.idleSleepMin)
         // Retired, but still written for older readers of a backup.
         assertTrue(c.suppressDe1Sleep)
-        assertEquals(15, AppPrefs(idleSleepMin = 60).withCommonSettings(c).idleSleepMin)
+        assertEquals(15, AppPrefs(idleSleepMin = 30).withCommonSettings(c).idleSleepMin)
         val old = c.copy(idleSleepMin = null)
         assertEquals(120, AppPrefs(idleSleepMin = 120).withCommonSettings(old).idleSleepMin)
     }
@@ -142,6 +165,6 @@ class IdleSleepTest {
         assertEquals(2, idleSleepIndex(35, choices), "an off-list value snaps to the nearest")
         assertEquals("Never", idleSleepLabel(0))
         assertEquals("90 min", idleSleepLabel(90))
-        assertEquals(60, DEFAULT_IDLE_SLEEP_MIN, "default 60, as de1app and Decenza")
+        assertEquals(30, DEFAULT_IDLE_SLEEP_MIN, "default 30")
     }
 }

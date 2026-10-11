@@ -191,10 +191,10 @@ describe('IdleSleepRunner', () => {
 	});
 });
 
-describe('the "Cool down after" setting', () => {
-	it('defaults to 60 min, as de1app and Decenza', () => {
-		expect(DEFAULT_SETTINGS.idleSleepMin).toBe(60);
-		expect(DEFAULT_IDLE_SLEEP_MIN).toBe(60);
+describe('the "Sleep after" setting', () => {
+	it('defaults to 30 min on the web too', () => {
+		expect(DEFAULT_SETTINGS.idleSleepMin).toBe(30);
+		expect(DEFAULT_IDLE_SLEEP_MIN).toBe(30);
 		expect(IDLE_SLEEP_FALLBACK_CHOICES).toEqual([0, 15, 30, 60, 90, 120]);
 		expect(idleSleepLabel(0)).toBe('Never');
 		expect(idleSleepLabel(90)).toBe('90 min');

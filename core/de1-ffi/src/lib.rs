@@ -1057,14 +1057,14 @@ pub fn sleep_request_latches_in_refill(
     de1_protocol::sleep_request_latches_in_refill(state, substate, firmware_build, machine_model)
 }
 
-/// The idle-sleep ("Cool down after") choices, minutes; `0` is "Never". See
+/// The idle-sleep ("Sleep after") choices, minutes; `0` is "Never". See
 /// [`de1_domain::idle_sleep::IDLE_SLEEP_CHOICES_MIN`].
 #[uniffi::export]
 pub fn idle_sleep_choices() -> Vec<u32> {
     de1_domain::idle_sleep::IDLE_SLEEP_CHOICES_MIN.to_vec()
 }
 
-/// The default idle-sleep timeout, minutes (60: de1app and Decenza).
+/// The default idle-sleep timeout, minutes (30, as decaid).
 #[uniffi::export]
 pub fn default_idle_sleep_min() -> u32 {
     de1_domain::idle_sleep::DEFAULT_IDLE_SLEEP_MIN
@@ -2343,7 +2343,7 @@ impl CremaBridge {
         self.emit(out)
     }
 
-    /// Feed the idle-sleep timer ("Cool down after") one input — a JSON
+    /// Feed the idle-sleep timer ("Sleep after") one input — a JSON
     /// `IdleSleepInput` (`{"type":"Tick"}`, `{"type":"Configure","content":
     /// {"minutes":60}}`, `{"type":"Activity","content":{"kind":"Touch"}}`,
     /// `{"type":"Link","content":{"ready":true}}`) at the shell's monotonic

@@ -151,7 +151,7 @@ pub struct CommonSettings {
     /// (`true`) so a backup stays readable by older versions, which require
     /// the field.
     pub suppress_de1_sleep: bool,
-    /// The idle-sleep timeout ("Cool down after"), minutes — one of
+    /// The idle-sleep timeout ("Sleep after"), minutes — one of
     /// [`IDLE_SLEEP_CHOICES_MIN`](crate::idle_sleep::IDLE_SLEEP_CHOICES_MIN),
     /// `0` = Never. `None` = never set: the shell migrates its old setting
     /// (Android's screensaver-coupled sleep) or uses

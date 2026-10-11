@@ -1,4 +1,4 @@
-//! The idle-sleep timer ("Cool down after") — the orchestrator half of
+//! The idle-sleep timer ("Sleep after") — the orchestrator half of
 //! [`de1_domain::idle_sleep`], whose module docs carry the rules and the
 //! reference-app sources.
 //!

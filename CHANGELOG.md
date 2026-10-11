@@ -68,11 +68,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **New setting: Settings → Display → Machine sleep → "Cool down after"** —
-  Never, 15, 30, 60, 90 or 120 minutes; default 60 (de1app and Decenza's
-  default). One setting on phone, tablet and web, carried in backups.
-  Upgrading Android users who had the screensaver put the machine to sleep
-  keep that delay (rounded to the nearest choice); everyone else starts at 60.
+- **New setting: Settings → Display → Machine sleep → "Sleep after"** —
+  Never, 15, 30, 60, 90 or 120 minutes; default 30. One setting on phone,
+  tablet and web, carried in backups. Upgrading Android users who had changed
+  the screensaver delay and had it put the machine to sleep keep that delay
+  (rounded to the nearest choice); everyone else starts at 30.
   "Sleep the DE1 when you quit Crema" moved into the same group.
 - **The screensaver is screen-only** — "Sleep machine with screensaver" is
   gone; the timer above sleeps the machine whether or not the saver is on.

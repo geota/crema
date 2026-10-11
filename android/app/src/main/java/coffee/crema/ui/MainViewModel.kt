@@ -586,10 +586,10 @@ data class MainUiState(
     val brewCueSound: Boolean? = null,
     val brewCueHaptics: Boolean? = null,
     // ── Machine sleep & screensaver (Settings → Display) ─────────────────────
-    /** "Cool down after": idle minutes before Crema puts the DE1 to sleep, 0 =
+    /** "Sleep after": idle minutes before Crema puts the DE1 to sleep, 0 =
      *  Never. The core's idle-sleep timer owns the decision (see [IdleSleepRunner]);
-     *  the same setting on phone, tablet and web (de1app / Decenza default 60). */
-    val idleSleepMin: Int = 60,
+     *  the same setting on phone, tablet and web (default 30). */
+    val idleSleepMin: Int = DEFAULT_IDLE_SLEEP_MIN,
     /** Idle minutes before the screensaver shows; 0 = never. Display only —
      *  machine sleep is [idleSleepMin]'s. */
     val screensaverAfterMin: Int = 30,
@@ -4429,7 +4429,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistPrefs()
     }
 
-    /** "Cool down after" — idle minutes before Crema puts the DE1 to sleep (0 =
+    /** "Sleep after" — idle minutes before Crema puts the DE1 to sleep (0 =
      *  Never), snapped to one of the core's choices. Persisted; the timer
      *  restarts from now. */
     fun setIdleSleepMin(minutes: Int) {
@@ -4593,7 +4593,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
 
     /** Show the saver. Display only: the machine sleeps on the idle-sleep
-     *  timer ("Cool down after"), whatever the saver does. */
+     *  timer ("Sleep after"), whatever the saver does. */
     private fun showSaver() {
         _ui.update { it.copy(saverVisible = true) }
     }

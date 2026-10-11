@@ -1041,7 +1041,7 @@ data class CommonSettings (
 	/// (`true`) so a backup stays readable by older versions, which require
 	/// the field.
 	val suppressDe1Sleep: Boolean,
-	/// The idle-sleep timeout ("Cool down after"), minutes — one of
+	/// The idle-sleep timeout ("Sleep after"), minutes — one of
 	/// [`IDLE_SLEEP_CHOICES_MIN`](crate::idle_sleep::IDLE_SLEEP_CHOICES_MIN),
 	/// `0` = Never. `None` = never set: the shell migrates its old setting
 	/// (Android's screensaver-coupled sleep) or uses
@@ -1675,7 +1675,7 @@ sealed class Event {
 	@Serializable
 	@SerialName("MaintenanceProgress")
 	data class MaintenanceProgress(val content: EventMaintenanceProgressInner): Event()
-	/// The idle-sleep timer ("Cool down after") sent Sleep — see
+	/// The idle-sleep timer ("Sleep after") sent Sleep — see
 	/// [`de1_domain::idle_sleep`]. `attempt` is 1 for the episode's send, 2
 	/// for the one retry of a send the machine never confirmed. The shells
 	/// log it; the Sleep report that follows raises the screensaver like any

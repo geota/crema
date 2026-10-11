@@ -1368,7 +1368,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				...snapshot,
 				eventLog: appendLog(snapshot.eventLog, `Decode error: ${event.content.message}`)
 			};
-		// The idle-sleep timer ("Cool down after") — log only; the Sleep state
+		// The idle-sleep timer ("Sleep after") — log only; the Sleep state
 		// report that follows updates the machine readout as usual.
 		case 'IdleSleepRequested':
 			return {

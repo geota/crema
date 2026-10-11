@@ -773,7 +773,7 @@ export interface CremaCore {
 		batteryPercent: number | null
 	): Promise<CoreOutput>;
 	/**
-	 * Feed the idle-sleep timer ("Cool down after") one input at the
+	 * Feed the idle-sleep timer ("Sleep after") one input at the
 	 * shell's wall-clock `nowMs` — see `CremaCore::idle_sleep`. On a tick the
 	 * output carries the Sleep write when the timer fires; on activity, a
 	 * throttled `UserPresent` poke.

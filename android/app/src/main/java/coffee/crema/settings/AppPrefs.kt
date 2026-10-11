@@ -101,11 +101,11 @@ data class AppPrefs(
     /** Guided-brew cue vibration. Null = never chosen → on. */
     val brewCueHaptics: Boolean? = null,
     // ── Machine sleep ────────────────────────────────────────────────────────
-    /** "Cool down after": idle minutes before Crema puts the DE1 to sleep — one
+    /** "Sleep after": idle minutes before Crema puts the DE1 to sleep — one
      *  of the core's `idleSleepChoices()`, 0 = Never (de1app
      *  `screen_saver_delay`, Decenza `autoSleepMinutes`). Cross-shell
      *  (`CommonSettings.idleSleepMin`). Null = never set: [SettingsStore.load]
-     *  migrates it from the old screensaver coupling, or uses the default (60). */
+     *  migrates it from the old screensaver coupling, or uses the default (30). */
     val idleSleepMin: Int? = null,
     // ── Screensaver (platform extras — deliberately NOT in CommonSettings; the
     // backup design keeps screensaver per-shell) ───────────────────────────────
@@ -230,10 +230,11 @@ data class AppPrefs(
 
 /**
  * Resolve the idle-sleep setting on load. A stored value wins. A settings file
- * from before the idle timer migrates the old screensaver coupling: a saver of
- * N minutes that slept the machine becomes an idle sleep of N, snapped to a
- * choice; everyone else gets the default. No file at all (a fresh install) is
- * the default too. [fromSaver] / [defaultMin] are the core's rules
+ * from before the idle timer migrates the old screensaver coupling, but only a
+ * value the user chose: a saver changed from its old 30 min default to N, with
+ * "Sleep machine with screensaver" on, becomes an idle sleep of N, snapped to
+ * a choice; everyone else gets the default (30). No file at all (a fresh
+ * install) is the default too. [fromSaver] / [defaultMin] are the core's rules
  * (`idleSleepMinutesFromSaver`, `defaultIdleSleepMin`), injectable so the JVM
  * tests run without the native library.
  */

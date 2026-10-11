@@ -13,7 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 
 /**
- * The DE1 idle-sleep timer ("Cool down after"), shell side (web twin:
+ * The DE1 idle-sleep timer ("Sleep after"), shell side (web twin:
  * `lib/state/idle-sleep.ts`).
  *
  * The timer itself is core-owned (`CremaCore::idle_sleep`,
@@ -25,9 +25,9 @@ import kotlinx.serialization.json.Json
  * a tick delayed by Doze fires on arrival instead of losing the time).
  */
 
-/** The default "Cool down after", minutes — the core's `DEFAULT_IDLE_SLEEP_MIN`
- *  (de1app `screen_saver_delay` and Decenza `autoSleepMinutes` both 60). */
-const val DEFAULT_IDLE_SLEEP_MIN = 60
+/** The default "Sleep after", minutes — the core's `DEFAULT_IDLE_SLEEP_MIN`
+ *  (30, as decaid's `sleepTimeoutMinutes`). */
+const val DEFAULT_IDLE_SLEEP_MIN = 30
 
 /** The tick cadence — the core's `IDLE_SLEEP_TICK_MS`. */
 const val IDLE_SLEEP_TICK_MS = 30_000L
@@ -35,7 +35,7 @@ const val IDLE_SLEEP_TICK_MS = 30_000L
 /** Touches arrive per pointer event; the timer needs at most one a second. */
 const val IDLE_ACTIVITY_THROTTLE_MS = 1_000L
 
-/** The "Cool down after" choices when the native core can't be asked (JVM
+/** The "Sleep after" choices when the native core can't be asked (JVM
  *  tests, previews) — the core's `IDLE_SLEEP_CHOICES_MIN`. */
 val IDLE_SLEEP_FALLBACK_CHOICES = listOf(0, 15, 30, 60, 90, 120)
 

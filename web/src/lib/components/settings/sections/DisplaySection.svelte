@@ -38,7 +38,7 @@
 	 *
 	 * (3) is a no-op when no Decent Scale is connected.
 	 */
-	/** "Cool down after" — the core's choices (Never / 15 / 30 / 60 / 90 / 120 min). */
+	/** "Sleep after" — the core's choices (Never / 15 / 30 / 60 / 90 / 120 min). */
 	const idleSleepOptions = idleSleepChoices().map((m) => ({
 		value: String(m),
 		label: idleSleepLabel(m)
@@ -163,8 +163,8 @@
      Decenza auto-sleep). Same setting on every device (CommonSettings). -->
 <StGroup title="Machine sleep">
 	<StRow
-		title="Cool down after"
-		sub="Put the DE1 to sleep after this long unused — no clicks or keys in Crema, no brewing, steaming or rinsing. Scale readings don't count. Crema has to be open in a browser tab to do it."
+		title="Sleep after"
+		sub="Put the DE1 to sleep after this long unused — no touches in Crema, no brewing, steaming or rinsing. Scale readings don't count."
 	>
 		{#snippet control()}
 			<StSelect

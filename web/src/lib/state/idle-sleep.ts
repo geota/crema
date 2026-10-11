@@ -1,5 +1,5 @@
 /**
- * The DE1 idle-sleep timer ("Cool down after"), shell side. Android's
+ * The DE1 idle-sleep timer ("Sleep after"), shell side. Android's
  * `IdleSleep.kt` is the twin.
  *
  * The timer itself is core-owned (`CremaCore::idle_sleep`,
@@ -26,13 +26,13 @@ export const IDLE_SLEEP_TICK_MS = 30_000;
 /** Pointer / key events arrive in bursts; the timer needs at most one a second. */
 export const IDLE_ACTIVITY_THROTTLE_MS = 1_000;
 
-/** The default "Cool down after", minutes — de1app and Decenza both use 60. */
-export const DEFAULT_IDLE_SLEEP_MIN = 60;
+/** The default "Sleep after", minutes — the core's `DEFAULT_IDLE_SLEEP_MIN` (30, as decaid). */
+export const DEFAULT_IDLE_SLEEP_MIN = 30;
 
 /** The choices when the wasm core isn't loaded yet — the core's `IDLE_SLEEP_CHOICES_MIN`. */
 export const IDLE_SLEEP_FALLBACK_CHOICES: readonly number[] = [0, 15, 30, 60, 90, 120];
 
-/** The "Cool down after" choices, minutes (`0` = Never), from the core. */
+/** The "Sleep after" choices, minutes (`0` = Never), from the core. */
 export function idleSleepChoices(): number[] {
 	try {
 		return Array.from(wasmIdleSleepChoices());
@@ -51,7 +51,7 @@ export interface IdleSleepDeps {
 	core: Pick<CremaCore, 'idleSleep'>;
 	apply: (out: CoreOutput) => void;
 	/**
-	 * The user's current "Cool down after", minutes. Re-sent before every
+	 * The user's current "Sleep after", minutes. Re-sent before every
 	 * tick — a no-op in the core unless it changed — so a change from any
 	 * path (Settings, a backup restore) reaches the timer within one tick.
 	 */

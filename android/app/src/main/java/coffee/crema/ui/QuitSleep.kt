@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Sleep-on-quit: put the DE1 to sleep when the user QUITS Crema (swipes the
  * task out of recents) — and only then. Backgrounding must never sleep the
- * machine by itself: the idle-sleep timer ("Cool down after", core
+ * machine by itself: the idle-sleep timer ("Sleep after", core
  * `CremaCore::idle_sleep`) keeps counting in the background and sleeps it
  * after the user's idle timeout while the process lives.
  *

@@ -1,4 +1,4 @@
-//! App-owned DE1 **idle sleep** — the "Cool down after" timer.
+//! App-owned DE1 **idle sleep** — the "Sleep after" timer.
 //!
 //! A stock DE1 has no sleep timer of its own that Crema can rely on: with the
 //! user-presence feature flag set, the firmware only drops to the
@@ -13,8 +13,8 @@
 //! | Decenza | `autoSleepMinutes` | 60 min |
 //! | decaid / reaprime | `sleepTimeoutMinutes` | 30 min |
 //!
-//! Crema defaults to [`DEFAULT_IDLE_SLEEP_MIN`] (60, de1app and Decenza) and
-//! offers [`IDLE_SLEEP_CHOICES_MIN`].
+//! Crema defaults to [`DEFAULT_IDLE_SLEEP_MIN`] (30, as decaid; de1app and
+//! Decenza use 60) and offers [`IDLE_SLEEP_CHOICES_MIN`].
 //!
 //! [`IdleSleepPolicy`] is a plain, clock-free state machine: every input that
 //! needs a time carries the shell's `now_ms` (one monotonic-ish clock per
@@ -57,9 +57,15 @@ use typeshare::typeshare;
 /// The idle-sleep choices offered in Settings, minutes. `0` is "Never".
 pub const IDLE_SLEEP_CHOICES_MIN: [u32; 6] = [0, 15, 30, 60, 90, 120];
 
-/// The default idle-sleep timeout, minutes: de1app `screen_saver_delay` and
-/// Decenza `autoSleepMinutes` both default to 60.
-pub const DEFAULT_IDLE_SLEEP_MIN: u32 = 60;
+/// The default idle-sleep timeout, minutes — decaid's `sleepTimeoutMinutes`
+/// default, and the delay Crema's old screensaver-coupled sleep defaulted to
+/// (de1app `screen_saver_delay` and Decenza `autoSleepMinutes` use 60).
+pub const DEFAULT_IDLE_SLEEP_MIN: u32 = 30;
+
+/// The old Android screensaver delay's default, minutes. A stored saver of
+/// exactly this is indistinguishable from one the user never touched, so it
+/// carries nothing over (see [`idle_sleep_minutes_from_saver`]).
+pub const LEGACY_SAVER_DEFAULT_MIN: u32 = 30;
 
 /// How often the shells tick the policy, ms — also the retry cadence while
 /// an expired timer is blocked. Expiry is computed from timestamps, so a
@@ -189,13 +195,17 @@ pub fn snap_idle_sleep_minutes(minutes: u32) -> u32 {
 
 /// The idle-sleep timeout for a user upgrading from the screensaver-coupled
 /// sleep (Android's "Screensaver" N minutes + "Sleep machine with
-/// screensaver"): a saver of N minutes that slept the machine becomes an
-/// idle sleep of N, snapped to a choice. Everyone else — saver off, or the
-/// coupling off — gets [`DEFAULT_IDLE_SLEEP_MIN`].
+/// screensaver"). Only a value the user actually chose carries over: a saver
+/// changed from its old default ([`LEGACY_SAVER_DEFAULT_MIN`]) to N minutes,
+/// with the coupling on, becomes an idle sleep of N, snapped to a choice.
+/// Everyone else — the saver at its default or off, or the coupling off —
+/// gets [`DEFAULT_IDLE_SLEEP_MIN`].
 #[must_use]
 pub fn idle_sleep_minutes_from_saver(saver_min: i32, sleep_with_saver: bool) -> u32 {
     match u32::try_from(saver_min) {
-        Ok(min) if min > 0 && sleep_with_saver => snap_idle_sleep_minutes(min),
+        Ok(min) if min > 0 && min != LEGACY_SAVER_DEFAULT_MIN && sleep_with_saver => {
+            snap_idle_sleep_minutes(min)
+        }
         _ => DEFAULT_IDLE_SLEEP_MIN,
     }
 }
@@ -868,10 +878,21 @@ mod tests {
 
     #[test]
     fn migrating_from_the_screensaver_coupling() {
-        assert_eq!(idle_sleep_minutes_from_saver(30, true), 30);
+        // A saver the user changed, with the coupling on, carries over.
         assert_eq!(idle_sleep_minutes_from_saver(45, true), 60);
         assert_eq!(idle_sleep_minutes_from_saver(5, true), 15);
+        assert_eq!(idle_sleep_minutes_from_saver(60, true), 60);
         assert_eq!(idle_sleep_minutes_from_saver(120, true), 120);
+        // The saver at its old default carries nothing: the default.
+        assert_eq!(
+            idle_sleep_minutes_from_saver(30, true),
+            DEFAULT_IDLE_SLEEP_MIN
+        );
+        // A changed saver with the coupling off: the default.
+        assert_eq!(
+            idle_sleep_minutes_from_saver(90, false),
+            DEFAULT_IDLE_SLEEP_MIN
+        );
         // Saver off, or the coupling off: the default.
         assert_eq!(
             idle_sleep_minutes_from_saver(0, true),

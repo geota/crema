@@ -308,7 +308,7 @@ export class CremaApp {
 	/** The DE1 connect sweep + USB-charger minute check (`connect-sweep.ts`). */
 	private readonly sweep: ConnectSweepRunner;
 
-	/** The idle-sleep timer's feed ("Cool down after", `idle-sleep.ts`). */
+	/** The idle-sleep timer's feed ("Sleep after", `idle-sleep.ts`). */
 	readonly idleSleep: IdleSleepRunner;
 
 	/**
@@ -2417,7 +2417,7 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 	// persisted store; saved back after every completed shot. A corrupt
 	// blob is quarantined, not lost (see `saw-model-store.ts`).
 	void seedSawModel(core).catch(() => undefined);
-	// The idle-sleep timer ("Cool down after", `idle-sleep.ts`): the core owns
+	// The idle-sleep timer ("Sleep after", `idle-sleep.ts`): the core owns
 	// the decision; the shell feeds it the setting, DOM activity (pointer,
 	// keyboard, the tab turning visible), the link state and a 30 s tick
 	// whose expiry is computed from wall-clock timestamps, so a throttled

@@ -781,7 +781,7 @@ pub struct CremaCore {
     /// The DE1's machine model (MMR `MachineModel`), cached from the
     /// connect-time read: it gates the Bengle-only firmware sleep timeout.
     de1_machine_model: Option<u32>,
-    /// The idle-sleep timer ("Cool down after") — see
+    /// The idle-sleep timer ("Sleep after") — see
     /// [`idle_sleep`](crate::idle_sleep). User configuration plus the
     /// current idle episode, so it survives [`reset`](Self::reset) (with the
     /// link marked down).

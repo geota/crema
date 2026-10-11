@@ -187,10 +187,11 @@ export interface Settings {
 	 */
 	lineFrequencyHz: 0 | 50 | 60;
 	/**
-	 * "Cool down after": idle minutes before Crema puts the DE1 to sleep —
+	 * "Sleep after": idle minutes before Crema puts the DE1 to sleep —
 	 * one of the core's `idleSleepChoices()` (Never / 15 / 30 / 60 / 90 /
-	 * 120), `0` = Never, default 60 (de1app `screen_saver_delay`, Decenza
-	 * `autoSleepMinutes`). The core's idle-sleep timer owns the decision
+	 * 120), `0` = Never, default 30 (decaid `sleepTimeoutMinutes`; de1app
+	 * `screen_saver_delay` and Decenza `autoSleepMinutes` are the same
+	 * setting, default 60). The core's idle-sleep timer owns the decision
 	 * (`state/idle-sleep.ts`); cross-shell as `CommonSettings.idleSleepMin`.
 	 * Replaces the retired `suppressDe1Sleep` heartbeat, whose premise — a
 	 * firmware sleep timer taking over when the pokes stop — doesn't hold on
@@ -369,7 +370,7 @@ export const DEFAULT_SETTINGS: Settings = {
 
 	telemetryRateHz: 50,
 	lineFrequencyHz: 0,
-	idleSleepMin: 60,
+	idleSleepMin: 30,
 	steamTwoTapStop: false,
 	fanThresholdC: 55,
 	usbChargingMode: 'alwaysOn',

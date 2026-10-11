@@ -103,7 +103,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
 
     // Returning to the foreground is activity for the idle-sleep timer
-    // ("Cool down after"): onStart restarts it. onStop is not activity — the
+    // ("Sleep after"): onStart restarts it. onStop is not activity — the
     // core's timer keeps counting in the background while the process lives.
     override fun onStart() {
         super.onStart()
