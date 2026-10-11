@@ -1601,6 +1601,15 @@ pub fn maintenance_readout(state_json: &str, now_ms: f64) -> Result<String, Stri
     de1_domain::maintenance_readout_json(state_json, f64_to_ms(now_ms))
 }
 
+/// Classify a DE1 firmware build (MMR `0x800010`; `undefined` = not read
+/// yet) against crema's known-builds table, as a JSON-encoded
+/// `FirmwareBuildReport`. See `de1_domain::classify_firmware_build_json`.
+#[wasm_bindgen(js_name = classifyFirmwareBuild)]
+#[must_use]
+pub fn classify_firmware_build(installed: Option<u32>) -> String {
+    de1_domain::classify_firmware_build_json(installed)
+}
+
 /// Classify a 1..10 roast level into a named band — returns the lowercase
 /// wire string (`"light"` / `"medium"` / `"dark"`), or `undefined` for a
 /// missing (`None`) level. Values outside 1..10 are clamped first. See
@@ -2395,16 +2404,14 @@ impl CremaBridge {
             .and_then(|uuids| serde_json::to_string(&uuids).ok())
     }
 
-    /// The firmware-update check result, as a JSON-encoded
-    /// [`FirmwareUpdateStatus`](de1_app::FirmwareUpdateStatus). Pure read —
-    /// no BLE traffic. Returns the `Unknown` variant until the DE1's `Version`
-    /// characteristic has been observed via `on_notification`.
-    pub fn firmware_update_status(&self) -> String {
-        // RS1: fall back to the `Unknown` variant (`{"type":"Unknown"}`) on the
-        // unreachable serialize error instead of panicking — the shell renders
-        // that as "connect a DE1 to check".
-        serde_json::to_string(&self.core.firmware_update_status())
-            .unwrap_or_else(|_| r#"{"type":"Unknown"}"#.to_string())
+    /// What the connected DE1's firmware build means, as a JSON-encoded
+    /// [`FirmwareBuildReport`](de1_domain::FirmwareBuildReport): the build
+    /// classified against crema's known-builds table. Pure read — no BLE
+    /// traffic. The status is `Unknown` until the DE1's FirmwareVersion MMR
+    /// reply (`0x800010`) has been routed through `on_notification`.
+    pub fn firmware_build_report(&self) -> String {
+        serde_json::to_string(&self.core.firmware_build_report())
+            .unwrap_or_else(|_| r#"{"status":"Unknown"}"#.to_string())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command queries the connected
@@ -2900,6 +2907,18 @@ fn json(output: CoreOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn firmware_build_facades_classify_through_the_table() {
+        assert!(classify_firmware_build(Some(1363)).contains(r#""status":"RolledBack""#));
+        assert!(classify_firmware_build(Some(1333)).contains(r#""status":"Stable""#));
+        assert!(classify_firmware_build(None).contains(r#""status":"Unknown""#));
+        assert!(
+            CremaBridge::new()
+                .firmware_build_report()
+                .contains(r#""status":"Unknown""#)
+        );
+    }
 
     #[test]
     fn on_notification_returns_core_output_json() {

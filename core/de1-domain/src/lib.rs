@@ -76,6 +76,7 @@ pub mod decent_shot_record;
 pub mod decent_wire;
 pub mod error;
 pub mod filter;
+pub mod firmware_builds;
 pub mod flow;
 pub mod history;
 pub mod history_export;
@@ -202,6 +203,11 @@ pub use decent_wire::{
     parse_decent_machines,
 };
 pub use error::{DomainError, ImportError};
+pub use firmware_builds::{
+    DecentFirmwareChannel, FirmwareBuildReport, FirmwareBuildStatus, KNOWN_FIRMWARE_BUILDS,
+    KNOWN_FIRMWARE_BUILDS_REVISION, KNOWN_FIRMWARE_BUILDS_VERIFIED, classify_firmware_build,
+    classify_firmware_build_json,
+};
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
 pub use history::{
     HistoryStats, STORED_SHOT_FORMAT_VERSION, ShotMachine, ShotMetadata, ShotStatInput, StoredShot,

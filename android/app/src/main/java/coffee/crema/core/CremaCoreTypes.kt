@@ -2235,6 +2235,75 @@ data class FieldHit (
 	val snippet: List<SearchSegment>
 )
 
+/// What an installed build means against [`KNOWN_FIRMWARE_BUILDS`]. Each
+/// variant is a status key the shells map to localized copy.
+@Serializable
+enum class FirmwareBuildStatus(val string: String) {
+	/// No build to classify: no DE1 connected, or MMR `0x800010` not read yet
+	/// (or it read 0).
+	@SerialName("Unknown")
+	Unknown("Unknown"),
+	/// The newest released build in the table.
+	@SerialName("Newest")
+	Newest("Newest"),
+	/// The build Decent's stable channel serves (and not also the newest).
+	@SerialName("Stable")
+	Stable("Stable"),
+	/// Newer than Decent's stable build, older than the newest release.
+	@SerialName("BetweenStableAndNewest")
+	BetweenStableAndNewest("BetweenStableAndNewest"),
+	/// Older than Decent's stable build.
+	@SerialName("OlderThanStable")
+	OlderThanStable("OlderThanStable"),
+	/// A build Decent published and then withdrew (e.g. 1363). Not "newer",
+	/// whatever its number.
+	@SerialName("RolledBack")
+	RolledBack("RolledBack"),
+	/// Above the newest released build and not a known rolled-back one —
+	/// released after this table was written.
+	@SerialName("NewerThanKnown")
+	NewerThanKnown("NewerThanKnown"),
+}
+
+/// One of Decent's de1app update channels.
+@Serializable
+enum class DecentFirmwareChannel(val string: String) {
+	/// `de1plus` — de1app's default (stable) channel.
+	@SerialName("Stable")
+	Stable("Stable"),
+	/// `de1beta`.
+	@SerialName("Beta")
+	Beta("Beta"),
+	/// `de1nightly`.
+	@SerialName("Nightly")
+	Nightly("Nightly"),
+}
+
+/// The classification plus the reference points the shells need to explain
+/// it.
+@Serializable
+data class FirmwareBuildReport (
+	/// What the installed build means.
+	val status: FirmwareBuildStatus,
+	/// The installed build, when known.
+	val installed: UInt? = null,
+	/// The newest released build crema knows about.
+	val newestBuild: UInt,
+	/// The build Decent's stable channel serves.
+	val stableBuild: UInt,
+	/// The build Decent's beta channel serves.
+	val betaBuild: UInt,
+	/// The build Decent's nightly channel serves.
+	val nightlyBuild: UInt,
+	/// The Decent channels serving the installed build today (empty when
+	/// none do, or the build is unknown).
+	val channels: List<DecentFirmwareChannel>,
+	/// [`KNOWN_FIRMWARE_BUILDS_REVISION`].
+	val tableRevision: UInt,
+	/// [`KNOWN_FIRMWARE_BUILDS_VERIFIED`].
+	val tableVerified: String
+)
+
 /// One profile frame's configured exit, used to infer
 /// [`PhaseMarker::transition_reason`] for reconstructed markers (indexed by
 /// frame number in [`ShotQualityInput::frame_exits`]).
@@ -3485,59 +3554,6 @@ enum class ExitMetric(val string: String) {
 	/// Watch flow (ml/s).
 	@SerialName("flow")
 	Flow("flow"),
-}
-
-/// Generated type representing the anonymous struct variant `UpToDate` of the `FirmwareUpdateStatus` Rust enum
-@Serializable
-data class FirmwareUpdateStatusUpToDateInner (
-	/// The installed build number.
-	val installed: UShort
-)
-
-/// Generated type representing the anonymous struct variant `UpdateAvailable` of the `FirmwareUpdateStatus` Rust enum
-@Serializable
-data class FirmwareUpdateStatusUpdateAvailableInner (
-	/// The installed build number.
-	val installed: UShort,
-	/// The latest build Crema knows about.
-	val latest: UShort
-)
-
-/// Generated type representing the anonymous struct variant `NewerInstalled` of the `FirmwareUpdateStatus` Rust enum
-@Serializable
-data class FirmwareUpdateStatusNewerInstalledInner (
-	/// The installed build number.
-	val installed: UShort,
-	/// The (older) build Crema knows about.
-	val latest: UShort
-)
-
-/// What the firmware-update check found.
-/// 
-/// `#[non_exhaustive]` so we can grow the enum (e.g. a future "checking…" /
-/// "fetched-from-manifest" variant) without breaking shell `match`es.
-@Serializable
-sealed class FirmwareUpdateStatus {
-	/// No DE1 connected, or MMR register `0x800010` (FirmwareVersion) has not
-	/// yet been read. The shell should render "Connect a DE1 to check" or
-	/// similar.
-	@Serializable
-	@SerialName("Unknown")
-	object Unknown: FirmwareUpdateStatus()
-	/// The installed build matches [`LATEST_KNOWN_FIRMWARE_BUILD`].
-	@Serializable
-	@SerialName("UpToDate")
-	data class UpToDate(val content: FirmwareUpdateStatusUpToDateInner): FirmwareUpdateStatus()
-	/// The installed build is older than [`LATEST_KNOWN_FIRMWARE_BUILD`].
-	@Serializable
-	@SerialName("UpdateAvailable")
-	data class UpdateAvailable(val content: FirmwareUpdateStatusUpdateAvailableInner): FirmwareUpdateStatus()
-	/// The installed build is newer than [`LATEST_KNOWN_FIRMWARE_BUILD`] —
-	/// likely the user updated through the legacy de1app since this Crema
-	/// build shipped. Informational; no action needed.
-	@Serializable
-	@SerialName("NewerInstalled")
-	data class NewerInstalled(val content: FirmwareUpdateStatusNewerInstalledInner): FirmwareUpdateStatus()
 }
 
 /// What the shell saw the user do. Every kind restarts the countdown the

@@ -1973,6 +1973,15 @@ pub fn maintenance_readout(state_json: String, now_ms: i64) -> Result<String, Cr
     de1_domain::maintenance_readout_json(&state_json, now_ms).map_err(crema_err)
 }
 
+/// Classify a DE1 firmware build (MMR `0x800010`; `None` = not read yet)
+/// against crema's known-builds table, as a JSON-encoded
+/// `FirmwareBuildReport`. See [`de1_domain::classify_firmware_build_json`].
+#[uniffi::export]
+#[must_use]
+pub fn classify_firmware_build(installed: Option<u32>) -> String {
+    de1_domain::classify_firmware_build_json(installed)
+}
+
 /// Convert an editable `CremaProfile` JSON into the wire `Profile` JSON the DE1
 /// upload / v2-export path speaks. The segment↔step adapter lives in the core
 /// so every shell shares one mapping. See
@@ -2578,15 +2587,14 @@ impl CremaBridge {
             .and_then(|uuids| serde_json::to_string(&uuids).ok())
     }
 
-    /// The firmware-update check result, as a JSON-encoded
-    /// [`FirmwareUpdateStatus`](de1_app::FirmwareUpdateStatus). Pure read —
-    /// no BLE traffic. Returns the `Unknown` variant until the DE1's `Version`
-    /// characteristic has been observed via `on_notification`.
-    pub fn firmware_update_status(&self) -> String {
-        // RS1: fall back to `{"type":"Unknown"}` on the unreachable serialize
-        // error instead of poisoning the mutex.
-        serde_json::to_string(&self.core().firmware_update_status())
-            .unwrap_or_else(|_| r#"{"type":"Unknown"}"#.to_string())
+    /// What the connected DE1's firmware build means, as a JSON-encoded
+    /// [`FirmwareBuildReport`](de1_domain::FirmwareBuildReport): the build
+    /// classified against crema's known-builds table. Pure read — no BLE
+    /// traffic. The status is `Unknown` until the DE1's FirmwareVersion MMR
+    /// reply (`0x800010`) has been routed through `on_notification`.
+    pub fn firmware_build_report(&self) -> String {
+        serde_json::to_string(&self.core().firmware_build_report())
+            .unwrap_or_else(|_| r#"{"status":"Unknown"}"#.to_string())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command sets the connected scale's
@@ -3034,6 +3042,19 @@ fn json(output: CoreOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn firmware_build_facades_classify_through_the_table() {
+        assert!(classify_firmware_build(Some(1363)).contains(r#""status":"RolledBack""#));
+        assert!(classify_firmware_build(Some(1358)).contains(r#""status":"Newest""#));
+        assert!(classify_firmware_build(None).contains(r#""status":"Unknown""#));
+        // The bridge's own read is Unknown until the FirmwareVersion MMR lands.
+        assert!(
+            CremaBridge::new()
+                .firmware_build_report()
+                .contains(r#""status":"Unknown""#)
+        );
+    }
 
     #[test]
     fn sleep_refill_gate_parses_wire_names() {

@@ -2247,6 +2247,74 @@ export interface FieldHit {
 }
 
 /**
+ * What an installed build means against [`KNOWN_FIRMWARE_BUILDS`]. Each
+ * variant is a status key the shells map to localized copy.
+ */
+export enum FirmwareBuildStatus {
+	/**
+	 * No build to classify: no DE1 connected, or MMR `0x800010` not read yet
+	 * (or it read 0).
+	 */
+	Unknown = "Unknown",
+	/** The newest released build in the table. */
+	Newest = "Newest",
+	/** The build Decent's stable channel serves (and not also the newest). */
+	Stable = "Stable",
+	/** Newer than Decent's stable build, older than the newest release. */
+	BetweenStableAndNewest = "BetweenStableAndNewest",
+	/** Older than Decent's stable build. */
+	OlderThanStable = "OlderThanStable",
+	/**
+	 * A build Decent published and then withdrew (e.g. 1363). Not "newer",
+	 * whatever its number.
+	 */
+	RolledBack = "RolledBack",
+	/**
+	 * Above the newest released build and not a known rolled-back one —
+	 * released after this table was written.
+	 */
+	NewerThanKnown = "NewerThanKnown",
+}
+
+/** One of Decent's de1app update channels. */
+export enum DecentFirmwareChannel {
+	/** `de1plus` — de1app's default (stable) channel. */
+	Stable = "Stable",
+	/** `de1beta`. */
+	Beta = "Beta",
+	/** `de1nightly`. */
+	Nightly = "Nightly",
+}
+
+/**
+ * The classification plus the reference points the shells need to explain
+ * it.
+ */
+export interface FirmwareBuildReport {
+	/** What the installed build means. */
+	status: FirmwareBuildStatus;
+	/** The installed build, when known. */
+	installed?: number;
+	/** The newest released build crema knows about. */
+	newestBuild: number;
+	/** The build Decent's stable channel serves. */
+	stableBuild: number;
+	/** The build Decent's beta channel serves. */
+	betaBuild: number;
+	/** The build Decent's nightly channel serves. */
+	nightlyBuild: number;
+	/**
+	 * The Decent channels serving the installed build today (empty when
+	 * none do, or the build is unknown).
+	 */
+	channels: DecentFirmwareChannel[];
+	/** [`KNOWN_FIRMWARE_BUILDS_REVISION`]. */
+	tableRevision: number;
+	/** [`KNOWN_FIRMWARE_BUILDS_VERIFIED`]. */
+	tableVerified: string;
+}
+
+/**
  * One profile frame's configured exit, used to infer
  * [`PhaseMarker::transition_reason`] for reconstructed markers (indexed by
  * frame number in [`ShotQualityInput::frame_exits`]).
@@ -3593,43 +3661,6 @@ export enum ExitMetric {
 	/** Watch flow (ml/s). */
 	Flow = "flow",
 }
-
-/**
- * What the firmware-update check found.
- * 
- * `#[non_exhaustive]` so we can grow the enum (e.g. a future "checking…" /
- * "fetched-from-manifest" variant) without breaking shell `match`es.
- */
-export type FirmwareUpdateStatus = 
-	/**
-	 * No DE1 connected, or MMR register `0x800010` (FirmwareVersion) has not
-	 * yet been read. The shell should render "Connect a DE1 to check" or
-	 * similar.
-	 */
-	| { type: "Unknown", content?: undefined }
-	/** The installed build matches [`LATEST_KNOWN_FIRMWARE_BUILD`]. */
-	| { type: "UpToDate", content: {
-	/** The installed build number. */
-	installed: number;
-}}
-	/** The installed build is older than [`LATEST_KNOWN_FIRMWARE_BUILD`]. */
-	| { type: "UpdateAvailable", content: {
-	/** The installed build number. */
-	installed: number;
-	/** The latest build Crema knows about. */
-	latest: number;
-}}
-	/**
-	 * The installed build is newer than [`LATEST_KNOWN_FIRMWARE_BUILD`] —
-	 * likely the user updated through the legacy de1app since this Crema
-	 * build shipped. Informational; no action needed.
-	 */
-	| { type: "NewerInstalled", content: {
-	/** The installed build number. */
-	installed: number;
-	/** The (older) build Crema knows about. */
-	latest: number;
-}};
 
 /**
  * What the shell saw the user do. Every kind restarts the countdown the

@@ -253,13 +253,11 @@ impl CaptureRecorder {
         }
     }
 
-    /// The DE1's firmware build number, saturating to `u16::MAX` on the
-    /// impossible overflow path — same shape the legacy
-    /// `last_firmware_build` cache had. Read by
-    /// [`CremaCore::firmware_update_status`](crate::CremaCore::firmware_update_status).
-    pub(crate) fn firmware_build(&self) -> Option<u16> {
+    /// The DE1's firmware build number (MMR `0x800010`), as the machine
+    /// reported it. Read by
+    /// [`CremaCore::firmware_build_report`](crate::CremaCore::firmware_build_report).
+    pub(crate) fn firmware_build(&self) -> Option<u32> {
         self.read_mmr_word(MmrRegister::FirmwareVersion)
-            .map(|v| u16::try_from(v).unwrap_or(u16::MAX))
     }
 
     /// First 32-bit word held for `register` in the identity keeper, or
@@ -690,15 +688,16 @@ mod tests {
     }
 
     #[test]
-    fn firmware_build_saturates_u16_overflow() {
+    fn firmware_build_is_the_full_mmr_word() {
         let mut rec = CaptureRecorder::default();
-        // An impossible-in-practice build number that overflows u16.
+        // An impossible-in-practice build number above u16 passes through
+        // untruncated (the classifier reads it as newer than known).
         rec.record(
             Source::De1MmrRead,
             &mmr_reply_packet(MmrRegister::FirmwareVersion, 100_000),
             0,
         );
-        assert_eq!(rec.firmware_build(), Some(u16::MAX));
+        assert_eq!(rec.firmware_build(), Some(100_000));
     }
 
     #[test]

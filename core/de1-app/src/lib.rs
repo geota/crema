@@ -21,12 +21,12 @@ mod idle_sleep;
 mod maintenance_run;
 mod sweep;
 
+pub use de1_domain::{FirmwareBuildReport, FirmwareBuildStatus};
 pub use de1_uuids::{
     De1Uuids, de1_uuids, de1_uuids_json, de1_write_target_uuid, de1_write_target_uuid_by_name,
 };
 pub use error::AppError;
 pub use event::{Command, CoreOutput, Event, ProfileUploadFailure, Source, WriteTarget};
-pub use firmware_info::{FirmwareUpdateStatus, LATEST_KNOWN_FIRMWARE_BUILD};
 
 use capture::{CaptureRecorder, slice_to_jsonl};
 
@@ -3796,21 +3796,20 @@ impl CremaCore {
         }
     }
 
-    /// Compare the most recently observed DE1 firmware build number against
-    /// the latest build Crema was compiled against
-    /// ([`LATEST_KNOWN_FIRMWARE_BUILD`](firmware_info::LATEST_KNOWN_FIRMWARE_BUILD)).
+    /// Classify the most recently observed DE1 firmware build against the
+    /// known-builds table ([`de1_domain::KNOWN_FIRMWARE_BUILDS`]) — see
+    /// [`firmware_info`].
     ///
     /// The build number comes from MMR register `0x800010`
     /// ([`MmrRegister::FirmwareVersion`]) — the canonical "v1352" build number
     /// the legacy de1app's check uses (`vars.tcl:3787-3797`). The shell must
     /// have issued [`read_mmr(FirmwareVersion)`](Self::read_mmr) and routed
-    /// the reply back through `on_notification` for this to return a
-    /// comparison; otherwise it returns [`FirmwareUpdateStatus::Unknown`].
+    /// the reply back through `on_notification` for this to classify a build;
+    /// otherwise the status is [`FirmwareBuildStatus::Unknown`].
     ///
-    /// The check is a pure read against cached state — no BLE traffic, no
-    /// network.
-    pub fn firmware_update_status(&self) -> FirmwareUpdateStatus {
-        firmware_info::compare(self.capture.firmware_build())
+    /// A pure read against cached state — no BLE traffic, no network.
+    pub fn firmware_build_report(&self) -> FirmwareBuildReport {
+        firmware_info::report(self.capture.firmware_build())
     }
 
     // ── Profile upload (write side) ───────────────────────────────────────
@@ -4094,7 +4093,7 @@ impl CremaCore {
             && let Some(value) = reply.word(0)
         {
             // The FirmwareVersion / MachineModel / SerialNumber registers
-            // used to be cached on `CremaCore` so `firmware_update_status`
+            // used to be cached on `CremaCore` so `firmware_build_report`
             // and the capture META prelude could read them. They are now
             // recovered on demand from the recorder's identity-keeper —
             // see `CaptureRecorder::meta_snapshot` / `firmware_build` —
@@ -6712,18 +6711,20 @@ mod tests {
     #[test]
     fn firmware_version_mmr_reply_caches_last_firmware_build() {
         let mut core = CremaCore::new();
-        // Before any MMR read, the status check returns Unknown.
-        assert_eq!(core.firmware_update_status(), FirmwareUpdateStatus::Unknown);
+        // Before any MMR read, the build is Unknown.
+        assert_eq!(
+            core.firmware_build_report().status,
+            FirmwareBuildStatus::Unknown
+        );
         // Feed a ReadFromMMR reply for 0x800010 with value 1358.
         let mut packet = [0u8; de1_protocol::MMR_PACKET_LEN];
         packet[1..4].copy_from_slice(&[0x80, 0x00, 0x10]);
         packet[4..8].copy_from_slice(&1358u32.to_le_bytes());
         let _ = core.on_notification(Source::De1MmrRead, &packet, 0);
-        // The cache is now populated and the status check finds UpToDate.
-        assert_eq!(
-            core.firmware_update_status(),
-            FirmwareUpdateStatus::UpToDate { installed: 1358 }
-        );
+        // The cache is now populated: 1358 is the newest known release.
+        let report = core.firmware_build_report();
+        assert_eq!(report.status, FirmwareBuildStatus::Newest);
+        assert_eq!(report.installed, Some(1358));
     }
 
     #[test]
