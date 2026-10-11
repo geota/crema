@@ -534,6 +534,62 @@ class De1BleManager(
 
     // ---- Machine control (AND5) -------------------------------------------
 
+    // ---- Firmware flash I/O ---------------------------------------------------
+    // The flash driver (`coffee.crema.firmware.FirmwareFlashDriver`) performs the
+    // core's FlashActions through these. Unlike [writeCharacteristic] they throw,
+    // because the core's state machine must see every failure.
+
+    /**
+     * While a firmware flash holds the link, every write except the flash's own
+     * ([firmwareWrite]) is dropped — a stray 4-byte MMR write interleaved with
+     * the 16-byte firmware chunks on the same characteristic would corrupt the
+     * flash (decaid `firmware_mmr_gate.dart`, Decenza `de1device.cpp:2091-2124`).
+     * The core drops its own commands too; this catches every shell-side writer
+     * (keep-awake poke, sweeps, profile sync) as well.
+     */
+    @Volatile
+    var firmwareExclusive: Boolean = false
+
+    private var fwMapJob: Job? = null
+
+    /** One flash write, with response (one retry, like every DE1 write); throws. */
+    suspend fun firmwareWrite(target: WriteTarget, bytes: ByteArray) {
+        val d = device ?: error("DE1 not connected")
+        writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes)
+        // A flash ACK proves the link is alive; keep the liveness probe quiet
+        // (its StateInfo read would only add traffic mid-upload).
+        lastInboundMs = SystemClock.elapsedRealtime()
+    }
+
+    /** A fresh GATT read of A009 (decaid's erase / verify poll). */
+    suspend fun firmwareReadFwMap(): ByteArray {
+        val d = device ?: error("DE1 not connected")
+        val bytes = withTimeout(FW_MAP_READ_TIMEOUT_MS) {
+            transport.read(d, De1Uuids.SERVICE, De1Uuids.FW_MAP_REQUEST)
+        }
+        lastInboundMs = SystemClock.elapsedRealtime()
+        return bytes
+    }
+
+    /**
+     * (Re-)enable A009 notifications and deliver each frame to [onFrame]. Called
+     * before erase and again right before verify — de1app re-enables it there
+     * (`de1_comms.tcl:1095`) because the upload burst can drop the CCCD.
+     */
+    fun firmwareSubscribeFwMap(onFrame: (ByteArray) -> Unit) {
+        val d = device ?: error("DE1 not connected")
+        fwMapJob?.cancel()
+        fwMapJob = transport.observe(d, De1Uuids.SERVICE, De1Uuids.FW_MAP_REQUEST)
+            .onEach { onFrame(it.data) }
+            .launchIn(scope)
+    }
+
+    /** Stop delivering A009 frames (the flash ended). */
+    fun firmwareUnsubscribeFwMap() {
+        fwMapJob?.cancel()
+        fwMapJob = null
+    }
+
     /**
      * Write a core-issued `Command.WriteCharacteristic` to the DE1: map the
      * [target] to its GATT characteristic and write [bytes].
@@ -554,6 +610,10 @@ class De1BleManager(
          *  registration so stops never preempt stops. */
         urgent: Boolean = false,
     ) {
+        if (firmwareExclusive) {
+            onStatus("DE1 $target write skipped — firmware update in progress")
+            return
+        }
         val d = device ?: run {
             onStatus("Write ignored — DE1 not connected")
             return
@@ -735,6 +795,9 @@ class De1BleManager(
         /** Consecutive write failures before the link is presumed dead and
          *  torn down for the reconnect supervisor (reaprime uses 3). */
         private const val MAX_CONSECUTIVE_WRITE_FAILURES = 3
+
+        /** Bound on one A009 poll read (decaid `_firmwareMapPollReadTimeout`). */
+        private const val FW_MAP_READ_TIMEOUT_MS = 2_000L
 
         /** Spacing before the single write retry (Decenza's retry delay). */
         private const val WRITE_RETRY_DELAY_MS = 500L

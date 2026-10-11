@@ -1,0 +1,99 @@
+package coffee.crema.firmware
+
+import coffee.crema.core.DecentFirmwareChannel
+import coffee.crema.core.FirmwareImageCheck
+import coffee.crema.core.FirmwareImageError
+import coffee.crema.core.FlashBlocker
+import coffee.crema.core.FlashFailure
+import coffee.crema.core.FlashPhase
+import coffee.crema.core.FlashStatus
+
+// English copy for the firmware-update flow — web parity with
+// `$lib/firmware/flash-copy.ts` and `source.ts` (`imageProblem`).
+
+/** The alpha warning, one point per line. */
+val ALPHA_POINTS: List<String> = listOf(
+    "Firmware updates in Crema are alpha. Updating takes about 15 to 25 minutes.",
+    "If anything fails, your DE1 keeps its current firmware: Crema only writes the spare memory bank, and the DE1 switches to it only after checking every byte.",
+    "Keep this device charging and near the DE1, and keep Crema open until it finishes.",
+    "You’ll need to switch the DE1 off and on at the end.",
+)
+
+/** The reassurance under every failure. */
+const val STILL_SAFE =
+    "Your DE1 is still running its previous firmware. You can retry; the update starts again from the beginning."
+
+fun channelLabel(channel: DecentFirmwareChannel): String = when (channel) {
+    DecentFirmwareChannel.Stable -> "Stable"
+    DecentFirmwareChannel.Beta -> "Beta"
+    DecentFirmwareChannel.Nightly -> "Nightly (early access)"
+}
+
+fun phaseLabel(phase: FlashPhase): String = when (phase) {
+    FlashPhase.Preparing -> "Putting the DE1 to sleep"
+    FlashPhase.Erasing -> "Erasing the spare memory bank"
+    FlashPhase.Uploading -> "Sending firmware"
+    FlashPhase.Verifying -> "DE1 is checking the firmware"
+    FlashPhase.AwaitingPowerCycle -> "Switch the DE1 off and on"
+    FlashPhase.Succeeded -> "Firmware updated"
+    FlashPhase.Failed -> "Update stopped"
+    FlashPhase.Cancelled -> "Update cancelled"
+}
+
+/** "About 14 min left" / "40 s left". */
+fun etaText(status: FlashStatus): String {
+    val s = status.etaSeconds?.toInt() ?: return ""
+    val about = if (status.etaIsEstimate) "About " else ""
+    return if (s >= 90) "$about${Math.round(s / 60.0)} min left" else "$about${maxOf(1, s)} s left"
+}
+
+fun blockerText(b: FlashBlocker): String = when (b) {
+    FlashBlocker.NotConnected -> "Connect your DE1."
+    FlashBlocker.NotReady -> "Wait for the DE1 to finish connecting."
+    FlashBlocker.ReadOnlyMirror -> "This device mirrors another Crema. Update from the primary device."
+    FlashBlocker.FlashInProgress -> "A firmware update is already running."
+    FlashBlocker.BuildUnknown -> "The DE1 hasn’t reported its firmware build yet."
+    FlashBlocker.ModelUnknown -> "The DE1 hasn’t reported its model yet."
+    is FlashBlocker.UnsupportedModel ->
+        if (b.content.model >= 128u) {
+            "Bengle firmware can’t be updated from Crema yet."
+        } else {
+            "Crema can’t update this DE1 model yet (it follows Decent’s list: DE1PRO, DE1XL, DE1XXL, DE1XXXL)."
+        }
+    FlashBlocker.StateUnknown -> "The DE1 hasn’t reported its state yet."
+    is FlashBlocker.MachineBusy -> "Wait until the DE1 is idle or asleep."
+    FlashBlocker.Refilling -> "Refill the water tank first."
+    FlashBlocker.MachineError -> "The DE1 reports an error. Clear it first."
+    FlashBlocker.ShotInProgress -> "Wait for the shot, steam or hot water to finish."
+    FlashBlocker.GuidedBrewActive -> "Finish the guided brew first."
+    FlashBlocker.ProfileUploading -> "Wait for the profile upload to finish."
+    FlashBlocker.MaintenanceRunning -> "Wait for the cleaning or descaling cycle to finish."
+    FlashBlocker.LowPower -> "Plug this device in, or charge it above 50 %."
+}
+
+fun failureText(f: FlashFailure): String = when (f) {
+    is FlashFailure.LinkLost -> "The DE1 disconnected during the update."
+    is FlashFailure.WriteFailed -> "A Bluetooth write failed (${f.content.message})."
+    is FlashFailure.AckTimeout -> "The DE1 stopped answering."
+    FlashFailure.EraseTimeout -> "The DE1 didn’t finish erasing within a minute."
+    is FlashFailure.VerifyFailed ->
+        "The DE1 found a damaged block at 0x${f.content.first_error.toString(16).padStart(6, '0')} and kept its current firmware."
+    FlashFailure.VerifyTimeout -> "The DE1 didn’t report a verification result."
+    is FlashFailure.VerifyUnconfirmed ->
+        "The connection dropped while the DE1 was checking, and it came back on build ${f.content.reported_build}."
+}
+
+/** Plain-English reason a firmware file was refused. */
+fun imageProblem(check: FirmwareImageCheck): String = when (val e = check.error) {
+    is FirmwareImageError.TooShort -> "This file is too small to be DE1 firmware."
+    FirmwareImageError.BengleImage -> "This is Bengle firmware. Crema only updates classic DE1 machines."
+    is FirmwareImageError.NotADe1Image -> "This file isn’t DE1 firmware."
+    is FirmwareImageError.NotInManifest ->
+        "Decent is serving DE1 build ${e.content.build}, but not a copy Crema has verified (it may be newer, or damaged). Crema only installs builds it knows byte for byte; update Crema to get it."
+    is FirmwareImageError.Malformed -> "This file failed a firmware check (${e.content.reason})."
+    null -> "This file could not be checked."
+}
+
+/** The power rule: charging, or battery at 50 % or more. */
+fun powerOk(charging: Boolean, levelPercent: Int?): Boolean =
+    charging || levelPercent == null || levelPercent >= 50

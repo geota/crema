@@ -324,7 +324,10 @@ class MainActivity : ComponentActivity() {
                 // display on for hours would only drain the battery.
                 val guidedHolds = ui.guidedBrew.live &&
                     coffee.crema.ui.brewlog.GuidedSetupRules.holdsScreenOn(ui.guidedBrew.recipe, ui.guidedBrew.stepIndex)
-                val keepOn = ui.keepScreenOnBrew || ui.saverVisible || guidedHolds
+                // A running firmware flash (alpha) holds it too: the upload takes
+                // ~15–25 min and the user must see the power-cycle prompt.
+                val firmwareHolds = viewModel.firmware.ui.collectAsStateWithLifecycle().value.running
+                val keepOn = ui.keepScreenOnBrew || ui.saverVisible || guidedHolds || firmwareHolds
                 LaunchedEffect(keepOn) {
                     if (keepOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)

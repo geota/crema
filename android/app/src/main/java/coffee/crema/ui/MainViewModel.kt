@@ -1990,6 +1990,70 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  effective setting, and foreground state below. */
     private val bgConnection = coffee.crema.ble.BackgroundConnectionController(app)
 
+    // ── Firmware updates (alpha) ──────────────────────────────────────────
+    // The core's flash state machine (`de1_app::firmware_flash`) driven over
+    // the DE1 link by [firmwareDriver]; [firmware] is the Settings flow. The
+    // driver runs off Main (29k blocking FFI round trips per flash) in a child
+    // of viewModelScope; the foreground service + screen-on keep it alive.
+
+    private val firmwareScope = kotlinx.coroutines.CoroutineScope(
+        viewModelScope.coroutineContext + kotlinx.coroutines.SupervisorJob(viewModelScope.coroutineContext[kotlinx.coroutines.Job]) + Dispatchers.Default,
+    )
+
+    private val firmwareCore = coffee.crema.firmware.BridgeFlashCore(bridge)
+
+    private val firmwareDriver = coffee.crema.firmware.FirmwareFlashDriver(
+        core = firmwareCore,
+        io = object : coffee.crema.firmware.FlashIoPort {
+            override suspend fun write(target: WriteTarget, data: ByteArray) = ble.firmwareWrite(target, data)
+            override suspend fun readFwMap(): ByteArray = ble.firmwareReadFwMap()
+            override suspend fun subscribeFwMap(onFrame: (ByteArray) -> Unit) = ble.firmwareSubscribeFwMap(onFrame)
+            override suspend fun readBuild() {
+                onCoreOutputJson(bridge.readMmr(MmrReg.FIRMWARE_VERSION))
+            }
+            override fun setExclusive(on: Boolean) {
+                ble.firmwareExclusive = on
+                if (!on) ble.firmwareUnsubscribeFwMap()
+            }
+        },
+        scope = firmwareScope,
+        clock = SystemClock::elapsedRealtime,
+        onStatus = { s -> firmware.onStatus(s) },
+        onLog = ::appendLog,
+        keepAlive = { active ->
+            viewModelScope.launch { bgConnection.setFirmwareFlashActive(active) }
+        },
+    )
+
+    /** Settings → Machine → "Update firmware…" (alpha). */
+    val firmware: coffee.crema.firmware.FirmwareUpdateController = coffee.crema.firmware.FirmwareUpdateController(
+        scope = firmwareScope,
+        driver = firmwareDriver,
+        core = firmwareCore,
+        catalog = object : coffee.crema.firmware.FirmwareCatalog {
+            override fun manifest() = json.decodeFromString(
+                kotlinx.serialization.builtins.ListSerializer(coffee.crema.core.FirmwareArtifact.serializer()),
+                coffee.crema.core.firmwareManifest(),
+            )
+            override fun validate(image: ByteArray) = json.decodeFromString(
+                coffee.crema.core.FirmwareImageCheck.serializer(),
+                coffee.crema.core.validateFirmwareImage(image),
+            )
+        },
+        fetcher = coffee.crema.firmware.KtorFirmwareFetcher(),
+        conditions = {
+            val state = ble.state.value
+            coffee.crema.core.FlashShellConditions(
+                connected = state == De1BleManager.State.READY,
+                ready = state == De1BleManager.State.READY,
+                guidedBrewActive = _ui.value.guidedBrew.live,
+                powerOk = firmwarePowerOk(app),
+            )
+        },
+        installedBuild = { _ui.value.de1MachineInfo[MmrRegister.FirmwareVersion] },
+        log = ::appendLog,
+    )
+
     /** True on tablet-class displays (≥600dp smallest width) — the form-factor
      *  default for [MainUiState.keepConnectedScreenOff] (tablet on / phone off). */
     private val isTablet = app.resources.configuration.smallestScreenWidthDp >= 600
@@ -2198,6 +2262,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         connection.start()
         // Keep-alive service watcher: register the power receiver + evaluate.
         bgConnection.start()
+        // The firmware flash hears link loss from the core (de1LinkLost /
+        // reset) and needs the recovery to re-read the build after the
+        // power-cycle.
+        viewModelScope.launch {
+            var wasReady = false
+            ble.state.collect { st ->
+                val ready = st == De1BleManager.State.READY
+                if (ready && !wasReady) firmwareDriver.onLinkRestored()
+                if (!ready && wasReady) firmwareDriver.onLinkLost()
+                wasReady = ready
+            }
+        }
         viewModelScope.launch {
             connection.state.collect { cs ->
                 _ui.update {
@@ -6000,3 +6076,14 @@ internal fun buildSteamHotWaterSettings(
     espressoVolumeMl = machine?.espresso_volume ?: 200f,
     groupTempC = machine?.group_temp ?: 92f,
 )
+
+/** Charging, or battery ≥ 50 % — the firmware flash's power precondition. */
+private fun firmwarePowerOk(context: android.content.Context): Boolean {
+    val status = context.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        ?: return true
+    val plugged = status.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+    val level = status.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+    val scale = status.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+    val percent = if (level >= 0 && scale > 0) level * 100 / scale else null
+    return coffee.crema.firmware.powerOk(plugged, percent)
+}

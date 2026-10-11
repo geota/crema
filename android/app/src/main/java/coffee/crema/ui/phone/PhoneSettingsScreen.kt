@@ -323,6 +323,8 @@ private fun MachineSection(
 ) {
     // On a mirror, machine settings live on the host — say so up top (issue 10).
     if (secondary) MirrorControlledNote(primaryName)
+    val firmwareFlow by vm.firmware.ui.collectAsStateWithLifecycle()
+    coffee.crema.ui.FirmwareUpdateHost(vm.firmware, ui.de1MachineInfo[MmrRegister.FirmwareVersion])
     // Machine hero (proto .pst-mhero): icon + state + identity key-values.
     Column(Modifier.padding(horizontal = CremaEdge, vertical = 8.dp)) {
         Surface(shape = RoundedCornerShape(CremaCardSpec.phoneRadius), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
@@ -354,7 +356,11 @@ private fun MachineSection(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Eyebrow("Firmware", color = MaterialTheme.colorScheme.primary)
-                        FirmwareCopyBody(copy)
+                        FirmwareCopyBody(
+                            copy,
+                            onUpdate = if (connected) ({ vm.firmware.open() }) else null,
+                            emphasize = firmwareFlow.status != null,
+                        )
                     }
                 }
                 CremaButton(

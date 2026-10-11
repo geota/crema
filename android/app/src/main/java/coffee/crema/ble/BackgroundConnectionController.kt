@@ -35,6 +35,7 @@ class BackgroundConnectionController(private val context: Context) {
     private var enabled = false
     private var de1Active = false
     private var brewSessionActive = false
+    private var firmwareFlashActive = false
     private var foreground = true
     private var backgroundStartAllowed = false
     private var plugged = isPluggedIn(context)
@@ -93,6 +94,22 @@ class BackgroundConnectionController(private val context: Context) {
         if (brewSessionActive != value) { brewSessionActive = value; reconcile() }
     }
 
+    /**
+     * A DE1 firmware flash is running (≈15–25 min). Like a brew session it is
+     * explicit intent, so it ignores the keep-connected setting — and unlike
+     * every other leg it also ignores the charging gate: the flash's own
+     * precondition already required charging or ≥ 50 % battery, and losing
+     * the process mid-flash wastes the upload. The notification says so.
+     */
+    fun setFirmwareFlashActive(value: Boolean) {
+        if (firmwareFlashActive != value) {
+            firmwareFlashActive = value
+            // Restart a running service so its notification text switches.
+            if (running) startService()
+            reconcile()
+        }
+    }
+
     fun setForeground(value: Boolean) {
         if (foreground != value) { foreground = value; reconcile() }
     }
@@ -112,7 +129,7 @@ class BackgroundConnectionController(private val context: Context) {
     fun onCompanionPresence() = reconcile()
 
     private fun reconcile() {
-        val desired = ((enabled && de1Active) || brewSessionActive) && plugged
+        val desired = firmwareFlashActive || (((enabled && de1Active) || brewSessionActive) && plugged)
         when {
             // Foreground-only start (Android 12+ background-start restriction) —
             // unless a companion association grants the background exemption;
@@ -127,7 +144,8 @@ class BackgroundConnectionController(private val context: Context) {
         runCatching {
             ContextCompat.startForegroundService(
                 context,
-                Intent(context, De1ConnectionService::class.java),
+                Intent(context, De1ConnectionService::class.java)
+                    .putExtra(De1ConnectionService.EXTRA_FIRMWARE, firmwareFlashActive),
             )
         }.onFailure {
             running = false

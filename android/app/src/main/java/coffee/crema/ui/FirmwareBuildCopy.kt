@@ -15,17 +15,18 @@ import kotlinx.serialization.json.Json
 // 1358). This file only maps the core's status key to copy — web parity with
 // `$lib/firmware/build-copy.ts`.
 //
-// Crema does not install firmware. The guidance line says how to update today
-// (Decent's tablet app) and which build each de1app channel actually installs.
+// `offerUpdate` says whether a newer official build than the installed one
+// exists; the card then leads with "Update firmware…" (the alpha flow,
+// `coffee.crema.firmware`). The flow is available on request either way.
 
 /** What the firmware card shows. */
 data class FirmwareCardCopy(
     /** Headline, e.g. "Build 1333 · Decent stable". */
     val title: String,
-    /** One or two sentences explaining the headline. */
+    /** One short sentence explaining the headline. */
     val note: String,
-    /** How to update today. */
-    val guidance: String,
+    /** A newer official build than the installed one exists. */
+    val offerUpdate: Boolean,
 )
 
 private val firmwareJson = Json { ignoreUnknownKeys = true }
@@ -40,85 +41,46 @@ fun firmwareBuildReport(build: UInt?): FirmwareBuildReport? = runCatching {
 fun rememberFirmwareCardCopy(build: UInt?, connected: Boolean): FirmwareCardCopy? =
     remember(build, connected) { firmwareBuildReport(build)?.let { firmwareCardCopy(it, connected) } }
 
-/** The de1app channels that install [build], in stable → beta → nightly order. */
-private fun FirmwareBuildReport.channelsFor(build: UInt): List<String> = buildList {
-    if (stableBuild == build) add("stable")
-    if (betaBuild == build) add("beta")
-    if (nightlyBuild == build) add("nightly")
-}
-
-private fun joinAnd(items: List<String>): String =
-    if (items.size <= 1) items.joinToString("") else items.dropLast(1).joinToString(", ") + " and " + items.last()
-
-/** "de1app's stable and beta channels install" / "de1app's nightly channel installs". */
-private fun channelsInstall(channels: List<String>): String {
-    val many = channels.size > 1
-    return "de1app’s ${joinAnd(channels)} channel${if (many) "s" else ""} install${if (many) "" else "s"}"
-}
-
-/** Which build each de1app channel installs, as one sentence. */
-private fun FirmwareBuildReport.channelSummary(): String = when {
-    stableBuild == betaBuild && betaBuild == nightlyBuild -> "Every de1app channel installs build $stableBuild."
-    stableBuild == betaBuild -> "Its stable and beta versions install build $stableBuild; build $nightlyBuild needs the nightly version."
-    else -> "Its stable version installs build $stableBuild, beta $betaBuild and nightly $nightlyBuild."
-}
-
-private const val HOW_TO_UPDATE =
-    "Crema can’t install firmware yet. To update, use Decent’s tablet app (de1app): Settings → Machine → Firmware."
-
 /** The card copy for a classified build. [connected] = a DE1 is connected. */
 fun firmwareCardCopy(r: FirmwareBuildReport, connected: Boolean): FirmwareCardCopy {
-    val guidance = "$HOW_TO_UPDATE ${r.channelSummary()}"
     val b = r.installed
     if (!connected) {
-        return FirmwareCardCopy("No build info", "Connect your DE1 to see which firmware build it runs.", guidance)
+        return FirmwareCardCopy("No build info", "Connect your DE1 to see which firmware build it runs.", false)
     }
     if (r.status == FirmwareBuildStatus.Unknown || b == null) {
-        return FirmwareCardCopy("Build not read yet", "Waiting for the DE1 to report its firmware build.", guidance)
+        return FirmwareCardCopy("Build not read yet", "Waiting for the DE1 to report its firmware build.", false)
     }
+    val newest = "build ${r.newestBuild}" +
+        if (r.nightlyBuild == r.newestBuild && r.stableBuild != r.newestBuild) " (nightly)" else ""
     return when (r.status) {
-        FirmwareBuildStatus.Newest -> {
-            val ch = r.channelsFor(b)
-            val note = when {
-                "stable" in ch -> "The newest Decent release; ${channelsInstall(ch)} it."
-                ch.isNotEmpty() -> "The newest Decent release. Only ${channelsInstall(ch)} it; stable installs build ${r.stableBuild}."
-                else -> "The newest Decent release. de1app’s stable channel installs build ${r.stableBuild}."
-            }
-            FirmwareCardCopy(
-                "Build $b · newest Decent release",
-                note,
-                "Crema can’t install firmware yet. Nothing to do: Decent has no newer build.",
-            )
-        }
-        FirmwareBuildStatus.Stable -> {
-            val ch = r.channelsFor(b).ifEmpty { listOf("stable") }
-            FirmwareCardCopy(
-                "Build $b · Decent stable",
-                "The build ${channelsInstall(ch)}. The newest release is build ${r.newestBuild}.",
-                guidance,
-            )
-        }
-        FirmwareBuildStatus.BetweenStableAndNewest -> FirmwareCardCopy(
-            "Build $b · newer than Decent stable",
-            "Newer than build ${r.stableBuild} (de1app stable), older than the newest release, build ${r.newestBuild}.",
-            guidance,
+        FirmwareBuildStatus.Newest -> FirmwareCardCopy(
+            "Build $b · newest Decent release",
+            if (r.stableBuild == b) {
+                "Decent has no newer build."
+            } else {
+                "Decent has no newer build. Its stable channel is on build ${r.stableBuild}."
+            },
+            false,
         )
+        FirmwareBuildStatus.Stable -> FirmwareCardCopy("Build $b · Decent stable", "Newer: $newest.", true)
+        FirmwareBuildStatus.BetweenStableAndNewest ->
+            FirmwareCardCopy("Build $b · newer than Decent stable", "Newest: $newest.", true)
         FirmwareBuildStatus.OlderThanStable -> FirmwareCardCopy(
-            "Build $b · older than Decent’s current stable",
-            "de1app’s stable channel installs build ${r.stableBuild}.",
-            guidance,
+            "Build $b · older than Decent stable",
+            "Decent stable is build ${r.stableBuild}; the newest is $newest.",
+            true,
         )
         FirmwareBuildStatus.RolledBack -> FirmwareCardCopy(
             "Build $b · rolled-back build",
-            "Decent published this build, then withdrew it and went back to build ${r.stableBuild}." +
+            "Decent withdrew this build and went back to build ${r.stableBuild}." +
                 if (b > r.newestBuild) " Its number is higher, but it isn’t newer than build ${r.newestBuild}." else "",
-            guidance,
+            true,
         )
         FirmwareBuildStatus.NewerThanKnown -> FirmwareCardCopy(
             "Build $b · newer than Crema knows about",
-            "Newer than build ${r.newestBuild}, the newest release in Crema’s list (checked ${r.tableVerified}).",
-            "Crema can’t install firmware yet. Nothing to do.",
+            "Newer than build ${r.newestBuild}, the newest in Crema’s list (checked ${r.tableVerified}).",
+            false,
         )
-        FirmwareBuildStatus.Unknown -> FirmwareCardCopy("Build not read yet", "Waiting for the DE1 to report its firmware build.", guidance)
+        FirmwareBuildStatus.Unknown -> FirmwareCardCopy("Build not read yet", "Waiting for the DE1 to report its firmware build.", false)
     }
 }

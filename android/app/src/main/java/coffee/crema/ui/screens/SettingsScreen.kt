@@ -135,6 +135,7 @@ fun SettingsScreen(
     onConnect: (String) -> Unit,
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    val firmwareFlow by vm.firmware.ui.collectAsStateWithLifecycle()
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
     var active by rememberSaveable { mutableStateOf("machine") }
@@ -201,7 +202,10 @@ fun SettingsScreen(
                             ble = if (connected) (ui.de1BluetoothAddress ?: "Paired") else null,
                             onConnect = { onConnect("machine") },
                             firmwareCopy = rememberFirmwareCardCopy(ui.de1MachineInfo[MmrRegister.FirmwareVersion], connected),
+                            onUpdateFirmware = if (connected) ({ vm.firmware.open() }) else null,
+                            firmwareBusy = firmwareFlow.status != null,
                         )
+                        coffee.crema.ui.FirmwareUpdateHost(vm.firmware, ui.de1MachineInfo[MmrRegister.FirmwareVersion])
                         if (!connected && ui.de1Reconnecting) {
                             ReconnectingNotice("DE1", onRetry = { vm.retryReconnectNow(true) })
                         }
@@ -1322,9 +1326,13 @@ private fun MachineHeroCard(
     board: String?,
     ble: String?,
     onConnect: () -> Unit,
-    /** What the installed build means + how to update today (core-classified;
-     *  null only if the bridge call failed). */
+    /** What the installed build means (core-classified; null only if the
+     *  bridge call failed). */
     firmwareCopy: FirmwareCardCopy?,
+    /** Opens the alpha firmware flow; null when the DE1 isn't connected. */
+    onUpdateFirmware: (() -> Unit)? = null,
+    /** A flash is in progress — the button leads. */
+    firmwareBusy: Boolean = false,
 ) {
     // Machine info inner card — the neutral twin of the firmware card. The
     // outer sizing comes from the caller: weight(1f)+fillMaxHeight in the
@@ -1375,7 +1383,7 @@ private fun MachineHeroCard(
                     Eyebrow("Firmware", color = MaterialTheme.colorScheme.primary)
                     if (!connected) ConnectDe1Pill()
                 }
-                FirmwareCopyBody(firmwareCopy, pushGuidanceDown = true)
+                FirmwareCopyBody(firmwareCopy, pushActionDown = true, onUpdate = onUpdateFirmware, emphasize = firmwareBusy)
             }
     }
     CremaCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
@@ -1851,19 +1859,32 @@ internal fun cpuBoardLabel(info: Map<MmrRegister, UInt>): String {
     return "PCB v${raw / 1000}.${(raw % 1000) / 100}"
 }
 
-/** The firmware card's body — headline, what it means, how to update today
- *  ([coffee.crema.ui.firmwareCardCopy]). Shared by the tablet hero card and
- *  the phone hero. [pushGuidanceDown] = the parent Column has a bounded height
- *  (the tablet card) and the guidance should sit at its bottom. */
+/** The firmware card's body — headline, what it means
+ *  ([coffee.crema.ui.firmwareCardCopy]) and "Update firmware…" (the alpha
+ *  flow; [onUpdate] null = not connected). Shared by the tablet hero card and
+ *  the phone hero. [pushActionDown] = the parent Column has a bounded height
+ *  (the tablet card) and the button should sit at its bottom. [emphasize] =
+ *  lead with the button (a newer build exists, or a flash is in progress). */
 @Composable
-internal fun ColumnScope.FirmwareCopyBody(copy: FirmwareCardCopy?, pushGuidanceDown: Boolean = false) {
+internal fun ColumnScope.FirmwareCopyBody(
+    copy: FirmwareCardCopy?,
+    pushActionDown: Boolean = false,
+    onUpdate: (() -> Unit)? = null,
+    emphasize: Boolean = false,
+) {
     if (copy == null) return
     Text(copy.title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
     if (copy.note.isNotEmpty()) {
         Text(copy.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    if (pushGuidanceDown) Spacer(Modifier.weight(1f)) else Spacer(Modifier.height(2.dp))
-    Text(copy.guidance, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (onUpdate == null) return
+    if (pushActionDown) Spacer(Modifier.weight(1f)) else Spacer(Modifier.height(2.dp))
+    CremaButton(
+        onClick = onUpdate,
+        variant = if (copy.offerUpdate || emphasize) CremaButtonVariant.Filled else CremaButtonVariant.Tonal,
+        icon = "download-simple",
+        label = "Update firmware…",
+    )
 }
 
 /**

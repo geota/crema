@@ -7,6 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * The Settings firmware card copy (web `build-copy.ts` parity). The status
@@ -31,39 +32,41 @@ class FirmwareBuildCopyTest {
     )
 
     @Test
-    fun build1358IsTheNewestReleaseOnNightlyOnly() {
+    fun build1358IsTheNewestReleaseNoUpdateOffered() {
         val c = firmwareCardCopy(report(FirmwareBuildStatus.Newest, 1358, listOf(DecentFirmwareChannel.Nightly)), connected = true)
         assertEquals("Build 1358 · newest Decent release", c.title)
-        assertEquals("The newest Decent release. Only de1app’s nightly channel installs it; stable installs build 1333.", c.note)
-        assertContains(c.guidance, "Nothing to do")
+        assertEquals("Decent has no newer build. Its stable channel is on build 1333.", c.note)
+        assertFalse(c.offerUpdate)
     }
 
     @Test
-    fun build1333IsDecentStableNotUpToDate() {
+    fun build1333IsDecentStableNotUpToDateAndOffers1358() {
         val c = firmwareCardCopy(report(FirmwareBuildStatus.Stable, 1333), connected = true)
         assertEquals("Build 1333 · Decent stable", c.title)
-        assertEquals("The build de1app’s stable and beta channels install. The newest release is build 1358.", c.note)
+        assertEquals("Newer: build 1358 (nightly).", c.note)
+        assertTrue(c.offerUpdate)
         assertFalse("up to date" in (c.title + c.note).lowercase())
     }
 
     @Test
-    fun guidanceSaysHowToUpdateWithoutPromising1358FromStable() {
-        val g = firmwareCardCopy(report(FirmwareBuildStatus.Stable, 1333), connected = true).guidance
-        assertContains(g, "Crema can’t install firmware yet")
-        assertContains(g, "de1app")
-        assertContains(g, "Its stable and beta versions install build 1333; build 1358 needs the nightly version.")
+    fun noCopySaysCremaCannotInstallFirmware() {
+        for (s in FirmwareBuildStatus.entries) {
+            val c = firmwareCardCopy(report(s, 1333), connected = true)
+            assertFalse("can’t install" in c.title + c.note)
+        }
     }
 
     @Test
     fun betweenStableAndNewest() {
         val c = firmwareCardCopy(report(FirmwareBuildStatus.BetweenStableAndNewest, 1352), connected = true)
         assertEquals("Build 1352 · newer than Decent stable", c.title)
+        assertTrue(c.offerUpdate)
     }
 
     @Test
     fun anOldBuild() {
         val c = firmwareCardCopy(report(FirmwareBuildStatus.OlderThanStable, 1320), connected = true)
-        assertEquals("Build 1320 · older than Decent’s current stable", c.title)
+        assertEquals("Build 1320 · older than Decent stable", c.title)
         assertContains(c.note, "1333")
     }
 
@@ -72,6 +75,7 @@ class FirmwareBuildCopyTest {
         val c = firmwareCardCopy(report(FirmwareBuildStatus.RolledBack, 1363), connected = true)
         assertEquals("Build 1363 · rolled-back build", c.title)
         assertContains(c.note, "isn’t newer than build 1358")
+        assertTrue(c.offerUpdate)
     }
 
     @Test
@@ -79,6 +83,7 @@ class FirmwareBuildCopyTest {
         val c = firmwareCardCopy(report(FirmwareBuildStatus.NewerThanKnown, 1370), connected = true)
         assertEquals("Build 1370 · newer than Crema knows about", c.title)
         assertContains(c.note, "2026-10-11")
+        assertFalse(c.offerUpdate)
     }
 
     @Test
@@ -90,6 +95,6 @@ class FirmwareBuildCopyTest {
     fun disconnected() {
         val c = firmwareCardCopy(report(FirmwareBuildStatus.Newest, 1358), connected = false)
         assertEquals("No build info", c.title)
-        assertContains(c.guidance, "de1app")
+        assertFalse(c.offerUpdate)
     }
 }
