@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
@@ -59,17 +60,25 @@ class FakeDecentCore : DecentCore {
         return if (status == 401 || ok(status)) """{"type":"Auth"}""" else retry(status, body)
     }
 
-    override fun uploadReplyJson(status: Int, body: String): String {
+    override fun uploadReplyJson(status: Int, body: String, replace: Boolean): String {
         val t = body.trim()
         if (ok(status)) {
             if (t == "0") return """{"type":"Auth"}"""
+            // Only the upload API's JSON object is an upload: `"ok":true`, or no
+            // `ok` key and a real id. Anything else (a captive portal) → Retry.
+            val o = runCatching { Json.parseToJsonElement(t) }.getOrNull() as? JsonObject ?: return retry(status, body)
+            val okKey = o["ok"]
+            val accepted = if (okKey != null) (okKey as? JsonPrimitive)?.booleanOrNull == true else extractId(t) != null
+            if (!accepted) return retry(status, body)
+            val duplicate = (o["duplicate"] as? JsonPrimitive)?.booleanOrNull == true
             return buildJsonObject {
-                put("type", "Uploaded")
+                put("type", if (replace && duplicate) "NotReplaced" else "Uploaded")
                 put("content", buildJsonObject { put("id", extractId(t)) })
             }.toString()
         }
         if (status == 401) return """{"type":"Auth"}"""
-        if (status in 400..499 && status !in setOf(403, 408, 429)) {
+        if (status == 403) return """{"type":"NotOnAccount"}"""
+        if (status in 400..499 && status !in setOf(408, 429)) {
             return buildJsonObject {
                 put("type", "Rejected")
                 put("content", buildJsonObject { put("status", status); put("body", snippet(body)) })
@@ -77,6 +86,9 @@ class FakeDecentCore : DecentCore {
         }
         return retry(status, body)
     }
+
+    override fun knownSerial(serial: String?): String? =
+        serial?.trim()?.takeIf { it.isNotEmpty() && !it.all { c -> c == '0' } }
 
     private fun extractId(t: String): String? {
         if (t.isEmpty()) return null

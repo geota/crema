@@ -58,12 +58,17 @@ interface UploadDestination {
     suspend fun setAutoUploadNow(enabled: Boolean)
 }
 
-/** One backlog pass. [stopped] names why the pass ended early, if it did. */
+/**
+ * One backlog pass. [stopped] names why the pass ended early, if it did;
+ * [note] is anything else the user should read once (Decent: shots held back
+ * because their DE1 is not on the account).
+ */
 data class DrainResult(
     val uploaded: Int = 0,
     val failed: Int = 0,
     val skipped: Int = 0,
     val stopped: String? = null,
+    val note: String? = null,
 ) {
     val attempted: Int get() = uploaded + failed + skipped
 }

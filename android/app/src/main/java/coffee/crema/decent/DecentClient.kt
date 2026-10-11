@@ -32,7 +32,8 @@ import java.util.Base64
  *
  *   GET  /support/api/login_test                 Basic email:PASSWORD → token text
  *   GET  /support/api/sn?onlyespressomachines=1  Basic email:token    → "serial [sku]" lines
- *   POST /support/api/shot_upload[?replace=1]    Basic email:token, JSON ShotRecord → {id,…}
+ *   POST /support/api/shot_upload[?replace=1]    Basic email:token, JSON ShotRecord
+ *                                                → {"ok":true,"stored":…,"id":…}
  *
  * This client owns only the IO. What an answer MEANS (a `0` body is a bad
  * login / a dead token, which 4xx are permanent, where the id hides in the
@@ -65,11 +66,33 @@ sealed class DecentError(message: String) : Exception(message) {
         DecentError("Decent rejected the shot (HTTP $status)" + (if (body.isBlank()) "" else ": $body"))
 
     /**
-     * Transport failure (no HTTP answer: [status] null) or a retryable HTTP
-     * answer — the final result, after the shared retry policy's attempts.
+     * HTTP 403: the shot's DE1 [serial] is not registered to the linked
+     * account (de1app `5b09f6aa`). Permanent until the owner adds the
+     * machine — neither retried nor a rejection of the shot.
+     */
+    class NotOnAccount(val serial: String? = null) : DecentError(notOnAccountMessage(serial))
+
+    /**
+     * A `?replace=1` upload answered `"duplicate":true`: Decent kept its
+     * earlier copy and the edit was not stored (Decenza `f5c3ce3e`). The
+     * shot's existing upload stands.
+     */
+    class NotReplaced(val id: String?) :
+        DecentError("Decent kept its earlier copy of this shot — the edit wasn’t saved there.")
+
+    /**
+     * Transport failure (no HTTP answer: [status] null), a retryable HTTP
+     * answer, or a 2xx that is not the upload API's answer (a captive
+     * portal's page) — the final result, after the shared retry policy's attempts.
      */
     class Network(val status: Int?, detail: String) :
-        DecentError(if (status == null) "Couldn't reach decentespresso.com: $detail" else "decentespresso.com answered HTTP $status")
+        DecentError(
+            when {
+                status == null -> "Couldn't reach decentespresso.com: $detail"
+                status in 200..299 -> "decentespresso.com’s answer wasn’t an upload reply (a Wi-Fi sign-in page?) — the shot wasn’t stored"
+                else -> "decentespresso.com answered HTTP $status"
+            },
+        )
 
     /** The shot could not be turned into a ShotRecord (a converter error) — nothing was sent. */
     class Invalid(detail: String) : DecentError("Couldn't build the Decent shot record: $detail")
@@ -78,6 +101,13 @@ sealed class DecentError(message: String) : Exception(message) {
 
     /** No HTTP answer at all — offline, DNS, connect or read failure. */
     val offline: Boolean get() = this is Network && status == null
+
+    companion object {
+        /** The one wording for a serial Decent says is not on the account (web parity). */
+        fun notOnAccountMessage(serial: String?): String =
+            (if (serial.isNullOrBlank()) "This DE1" else "This DE1 (serial $serial)") +
+                " isn’t registered to your Decent account — add it at decentespresso.com, then uploads resume."
+    }
 }
 
 /** What the server hands back for a stored shot; [id] is null when the answer carried none. */
@@ -199,9 +229,14 @@ class DecentClient(
 
     override suspend fun uploadShot(email: String, token: String, recordJson: String, replace: Boolean): DecentUploadResult {
         val r = call("/support/api/shot_upload", email, token, body = recordJson, query = if (replace) "?replace=1" else "", safeResend = REPLACE_ON_RESEND)
-        return when (val reply = decode(DecentUploadReply.serializer(), r.status) { core.uploadReplyJson(r.status, r.text) }) {
+        // `replace` is the CALLER's: a resend [REPLACE_ON_RESEND] turned into a
+        // replace is still a first upload, and a "duplicate" answer to it means
+        // the first attempt was stored.
+        return when (val reply = decode(DecentUploadReply.serializer(), r.status) { core.uploadReplyJson(r.status, r.text, replace) }) {
             is DecentUploadReply.Uploaded -> DecentUploadResult(reply.content.id?.takeIf { it.isNotBlank() })
+            is DecentUploadReply.NotReplaced -> throw DecentError.NotReplaced(reply.content.id?.takeIf { it.isNotBlank() })
             DecentUploadReply.Auth -> throw DecentError.Auth()
+            DecentUploadReply.NotOnAccount -> throw DecentError.NotOnAccount()
             is DecentUploadReply.Rejected -> throw DecentError.Rejected(reply.content.status.toInt(), reply.content.body)
             is DecentUploadReply.Retry -> throw DecentError.Network(reply.content.status.toInt(), reply.content.detail)
         }

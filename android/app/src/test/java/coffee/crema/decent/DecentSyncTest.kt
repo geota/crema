@@ -61,19 +61,23 @@ class DecentSyncTest {
         val history = shots.associateBy { it.id }.toMutableMap()
         val stamped = mutableListOf<Triple<String, String, ShotMachine?>>()
         val outcomes = mutableListOf<Pair<String, UploadOutcome>>()
+        val notices = mutableListOf<String>()
         var live: ShotMachine? = null
+        var liveUnreadable = false
         val sync = DecentSync(
             store = store,
             client = api,
             scope = scope,
             buildRecord = { s, m, _ -> """{"shot":"${s.id}","sn":"${m.serialNumber}"}""" },
             shotViewUrl = { sn, id -> FakeDecentCore().shotViewUrl(sn, id) },
-            notify = {},
+            notify = { notices += it },
             onShotUploaded = { id, did, m ->
                 stamped += Triple(id, did, m)
                 history[id] = history.getValue(id).copy(decentId = did)
             },
             liveMachine = { live },
+            knownSerial = { FakeDecentCore().knownSerial(it) },
+            liveSerialUnreadable = { liveUnreadable },
             currentShot = { history[it] },
             now = { 42L },
         ).also { it.onUploadOutcome = { id, o -> outcomes += id to o } }
@@ -146,13 +150,115 @@ class DecentSyncTest {
         assertEquals(listOf(true), h.api.posts.map { it.second })
     }
 
+    // ── 403: the serial is not on the account (de1app 5b09f6aa) ──────────
+
+    private val notOnAccount6262 =
+        "This DE1 (serial 6262) isn’t registered to your Decent account — add it at decentespresso.com, then uploads resume."
+
     @Test
-    fun `a 403 is not retried in the call`() = runTest {
+    fun `a 403 is one POST, names the serial, and leaves the shot in the backlog`() = runTest {
         val h = harness(listOf(shot("s1")))
-        h.api.answers += { throw DecentError.Network(403, "no") }
+        h.api.answers += { throw DecentError.NotOnAccount() }
         val o = h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null)
-        assertTrue(o is DecentSync.Outcome.Failed)
+        assertTrue(o is DecentSync.Outcome.Failed && o.error is DecentError.NotOnAccount)
+        assertEquals(notOnAccount6262, (o as DecentSync.Outcome.Failed).error.message)
         assertEquals(1, h.api.posts.size)
+        assertFalse("s1" in h.store.state.rejectedShotIds)
+        assertFalse(h.store.state.needsReauth)
+        assertEquals(notOnAccount6262, h.store.state.lastUpload!!.message)
+        assertTrue(h.sync.inBacklog(h.history.getValue("s1")))
+    }
+
+    @Test
+    fun `the 403 reason is shown once - later automatic uploads for that serial skip without a POST`() = runTest {
+        val h = harness(listOf(shot("s1", at = 1), shot("s2", at = 2)))
+        h.api.answers += { throw DecentError.NotOnAccount() }
+        assertTrue(h.sync.maybeAutoUpload(h.history.getValue("s1"), null))
+        advanceUntilIdle()
+        assertTrue(h.sync.maybeAutoUpload(h.history.getValue("s2"), null))
+        advanceUntilIdle()
+        assertEquals(1, h.api.posts.size)
+        assertEquals(
+            listOf(UploadOutcomeKind.Failed to notOnAccount6262, UploadOutcomeKind.Skipped to notOnAccount6262),
+            h.outcomes.map { it.second.kind to it.second.message },
+        )
+        // An explicit tap tries again — the owner may have just added the machine.
+        h.sync.uploadNow(h.history.getValue("s2"), manual = true, replace = false, fullSamples = null)
+        assertEquals(2, h.api.posts.size)
+    }
+
+    @Test
+    fun `a backlog stops cleanly for that serial and carries on for another machine`() = runTest {
+        val shots = listOf(shot("a", at = 1), shot("b", at = 2), shot("c", at = 3).copy(machineSerial = "7000"), shot("d", at = 4))
+        val h = harness(shots)
+        h.api.answers += { throw DecentError.NotOnAccount() }
+        val r = h.sync.uploadUnsentNow(shots)
+        // a: 403; b, d: held back without a POST; c (7000) uploads.
+        assertEquals(listOf("a", "c"), h.api.posts.map { it.first.substringAfter("\"shot\":\"").substringBefore('"') })
+        assertEquals(1, r.uploaded)
+        assertEquals(0, r.failed)
+        assertNull(r.stopped)
+        assertEquals("3 shots held back: $notOnAccount6262", r.note)
+    }
+
+    @Test
+    fun `signing in again forgets the 403 serials`() = runTest {
+        val h = harness(listOf(shot("s1", at = 1), shot("s2", at = 2)))
+        h.api.answers += { throw DecentError.NotOnAccount() }
+        h.sync.maybeAutoUpload(h.history.getValue("s1"), null)
+        advanceUntilIdle()
+        h.sync.signIn("a@b.c", "pw")
+        advanceUntilIdle()
+        h.sync.maybeAutoUpload(h.history.getValue("s2"), null)
+        advanceUntilIdle()
+        assertEquals(2, h.api.posts.size)
+    }
+
+    // ── serial 0 is unknown (Decenza 6c83ca06) ───────────────────────────
+
+    @Test
+    fun `a live serial of 0 is never uploaded - the upload waits and says why`() = runTest {
+        val old = StoredShot(id = "old", completedAtMs = 1, durationMs = 30_000)
+        val h = harness(listOf(old))
+        h.live = ShotMachine("0")
+        h.liveUnreadable = true
+        val o = h.sync.uploadNow(old, manual = true, replace = false, fullSamples = null)
+        assertEquals(DecentSync.Outcome.Skipped(DecentSync.SERIAL_UNREAD_REASON), o)
+        assertEquals("Crema couldn’t read this DE1’s serial number yet", DecentSync.SERIAL_UNREAD_REASON)
+        assertEquals(0, h.api.posts.size)
+        assertFalse(h.sync.maybeAutoUpload(old, null))
+    }
+
+    @Test
+    fun `a shot stamped 0 borrows the connected DE1 and is restamped`() = runTest {
+        val zero = shot("z").copy(machineSerial = "0")
+        val h = harness(listOf(zero))
+        assertEquals(
+            DecentSync.Outcome.Skipped(DecentSync.SERIAL_UNREAD_REASON),
+            h.sync.uploadNow(zero, manual = true, replace = false, fullSamples = null),
+        )
+        h.live = ShotMachine("6262", "1352", "DE1PRO")
+        h.sync.uploadNow(zero, manual = true, replace = false, fullSamples = null)
+        assertEquals("""{"shot":"z","sn":"6262"}""", h.api.posts.single().first)
+        assertEquals(Triple("z", "id-1", ShotMachine("6262", "1352", "DE1PRO")), h.stamped.single())
+    }
+
+    // ── replace answered "duplicate" (Decenza f5c3ce3e) ──────────────────
+
+    @Test
+    fun `a replace Decent kept the earlier copy for is not an upload and is said once`() = runTest {
+        val h = harness(listOf(shot("s1").copy(decentId = "d-1")))
+        repeat(2) {
+            h.api.answers += { throw DecentError.NotReplaced("d-1") }
+            assertTrue(h.sync.scheduleReplaceAfterEdit("s1"))
+            advanceUntilIdle()
+        }
+        assertEquals(listOf(true, true), h.api.posts.map { it.second })
+        assertTrue(h.stamped.isEmpty()) // nothing re-recorded
+        assertEquals("d-1", h.history.getValue("s1").decentId)
+        assertFalse("s1" in h.store.state.rejectedShotIds)
+        assertFalse(h.store.state.lastUpload!!.ok)
+        assertEquals(listOf("Decent kept its earlier copy of this shot — the edit wasn’t saved there."), h.notices)
     }
 
     @Test

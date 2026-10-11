@@ -145,6 +145,13 @@ class SharingController(
         ui.de1MachineInfo[MmrRegister.SerialNumber]?.takeIf { it != 0u }?.toString()
 
     /**
+     * The connected DE1 answered its serial read with 0 — older DE1s do
+     * (Decenza `6c83ca06`). Unknown, so nothing is uploaded under it; the
+     * Decent upload says why instead of "connect the machine".
+     */
+    fun liveSerialUnreadable(): Boolean = uiFlow.value.de1MachineInfo[MmrRegister.SerialNumber] == 0u
+
+    /**
      * The connected DE1's identity (#84): serial from the connect-time MMR
      * sweep, the CPU firmware build number, the model name. Null until the
      * serial has been read.
@@ -226,7 +233,7 @@ class SharingController(
                     // Each pass reads the history fresh: an earlier destination's
                     // pass may have stamped ids the next one should see.
                     val r = d.uploadUnsentNow(uiFlow.value.history)
-                    if (r.attempted > 0 || r.stopped != null) parts += summarize(d.id, r)
+                    if (r.attempted > 0 || r.stopped != null || r.note != null) parts += summarize(d.id, r)
                 }
                 if (parts.isNotEmpty()) notify("Uploaded ${parts.joinToString(", ")}")
             } finally {
@@ -241,6 +248,7 @@ class SharingController(
         if (r.failed > 0) append(" (${r.failed} failed)")
         if (r.skipped > 0) append(" (${r.skipped} skipped)")
         r.stopped?.let { append(" — stopped: $it") }
+        r.note?.let { append(" — $it") }
     }
 
     private companion object {
