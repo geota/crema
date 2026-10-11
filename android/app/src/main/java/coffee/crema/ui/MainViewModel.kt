@@ -944,6 +944,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The Rust core, behind the UniFFI bridge. */
     private val bridge: CremaBridge = CremaBridge()
 
+    /** The idle-sleep timer's feed (see [IdleSleepRunner]): every input goes to
+     *  the core with `elapsedRealtime`, and the output (the Sleep write, a
+     *  throttled UserPresent poke on activity, events) routes like any other. */
+    // Declared up here, before any `init` block: [startScreensaverClock] starts
+    // it during construction, and a property declared below the init that
+    // reads it is still null then.
+    private val idleSleep by lazy {
+        IdleSleepRunner(
+            scope = viewModelScope,
+            clock = { SystemClock.elapsedRealtime() },
+            feed = { input, now ->
+                routeWrite("Idle sleep") { bridge.idleSleep(idleSleepInputJson(input), now.toULong()) }
+            },
+        )
+    }
+
+    /** Monotonic ms of the idle timer's last Sleep send (0 = none) — so
+     *  sleep-on-quit never doubles it ([quitSleepAllowed]). */
+    @Volatile
+    private var lastIdleSleepAtMs: Long = 0L
+
+
     /**
      * Single-threaded home for core-event application and every HEAVY
      * FFI interaction (review #28). The generated bridge is synchronous
@@ -4433,24 +4455,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistPrefs()
         bgConnection.setEnabled(on)
     }
-
-    /** The idle-sleep timer's feed (see [IdleSleepRunner]): every input goes to
-     *  the core with `elapsedRealtime`, and the output (the Sleep write, a
-     *  throttled UserPresent poke on activity, events) routes like any other. */
-    private val idleSleep by lazy {
-        IdleSleepRunner(
-            scope = viewModelScope,
-            clock = { SystemClock.elapsedRealtime() },
-            feed = { input, now ->
-                routeWrite("Idle sleep") { bridge.idleSleep(idleSleepInputJson(input), now.toULong()) }
-            },
-        )
-    }
-
-    /** Monotonic ms of the idle timer's last Sleep send (0 = none) — so
-     *  sleep-on-quit never doubles it ([quitSleepAllowed]). */
-    @Volatile
-    private var lastIdleSleepAtMs: Long = 0L
 
     /** A screen / route change — activity for the idle-sleep timer. */
     fun noteNavigation() = idleSleep.activity(coffee.crema.core.IdleActivity.Navigation)
