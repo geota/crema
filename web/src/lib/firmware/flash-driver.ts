@@ -62,6 +62,7 @@ export type FlashCore = Pick<
 	| 'firmwareFlashOnReadFailed'
 	| 'firmwareFlashTick'
 	| 'firmwareFlashLinkRestored'
+	| 'firmwareFlashBindMachine'
 	| 'firmwareFlashCancel'
 	| 'firmwareFlashDismiss'
 	| 'firmwareFlashExit'
@@ -233,14 +234,23 @@ export class FlashDriver {
 	}
 
 	/**
-	 * The DE1 link came up — any path: auto-reconnect, a manual or launch
-	 * connect, a reload (audit r2 M-A). Waiting on a restart, the core reads
-	 * the build.
+	 * The DE1 link came up to the DE1 `machine` ('' = unknown) — any path:
+	 * auto-reconnect, a manual or launch connect, a reload (audit r2 M-A).
+	 * Waiting on a restart, the core reads the build — unless `machine` is a
+	 * different DE1 than the flash's own, which it neither reads nor lets
+	 * release the lock (r3 LOW-2).
 	 */
-	linkRestored(): Promise<void> {
+	linkRestored(machine = ''): Promise<void> {
 		return this.serial(async () =>
-			this.apply(await this.core.firmwareFlashLinkRestored(this.now()), true)
+			this.apply(await this.core.firmwareFlashLinkRestored(this.now(), machine), true)
 		);
+	}
+
+	/** Tie the current flash to the DE1 it is for. */
+	bindMachine(machine: string | null): Promise<void> {
+		return this.serial(async () => {
+			if (machine) await this.core.firmwareFlashBindMachine(machine);
+		});
 	}
 
 	/** Re-read the status (the flow reopening, a restore) and re-attach. */

@@ -93,6 +93,7 @@ function deps(over: {
 			firmwareFlashOnReadFailed: noStep,
 			firmwareFlashTick: noStep,
 			firmwareFlashLinkRestored: vi.fn(async () => over.linkRestored?.() ?? { actions: [] }),
+			firmwareFlashBindMachine: vi.fn(async () => undefined),
 			firmwareFlashCancel: vi.fn(async () => over.cancel ?? { actions: [] }),
 			firmwareFlashDismiss: async () => true,
 			firmwareFlashExit: vi.fn(async () => true),
@@ -287,23 +288,40 @@ describe('FirmwareUpdateController', () => {
 		flow.dispose();
 	});
 
-	it('a restored lock for another DE1 is dropped on connect (audit r2 LOW 7)', async () => {
+	it('every link-up hands the core the connected DE1, which it compares (audit r3 LOW-2)', async () => {
 		const store = memoryStore();
 		store.setItem(AWAITING_KEY, JSON.stringify({ build: 1358, unconfirmed: false, machine: 'dev-A' }));
 		const awaiting = status(FlashPhase.AwaitingPowerCycle, { canExit: true });
 		const d = deps({
 			store,
 			restore: { actions: [], status: awaiting },
-			status: { actions: [], status: awaiting }
+			status: { actions: [], status: awaiting },
+			linkRestored: () => ({ actions: [], status: { ...awaiting, foreignMachine: 'dev-B' } })
 		});
 		const flow = new FirmwareUpdateController(d);
 		await flow.restore();
+		expect(d.core.firmwareFlashBindMachine).toHaveBeenCalledWith('dev-A');
 		await flow.onLinkUp('dev-B');
-		expect(d.core.firmwareFlashExit).toHaveBeenCalledTimes(1);
-		expect(d.core.firmwareFlashLinkRestored).not.toHaveBeenCalled();
-		expect(flow.step).toBe('closed');
-		expect(store.data.has(AWAITING_KEY)).toBe(false);
+		expect(d.core.firmwareFlashLinkRestored).toHaveBeenLastCalledWith(expect.any(Number), 'dev-B');
+		expect(d.core.firmwareFlashExit).not.toHaveBeenCalled(); // never released by another DE1
+		expect(flow.holdsLink).toBe(true);
 		flow.dispose();
+	});
+
+	it('a restored erase hold is capped at 60 s whatever the wall clock says (audit r3 LOW-1)', async () => {
+		// The clock jumped back an hour between the kill and the relaunch.
+		const store = memoryStore();
+		store.setItem(AWAITING_KEY, JSON.stringify({ build: 1358, unconfirmed: false, eraseHoldUntil: 1_000_000 + 3_600_000 }));
+		const d = deps({ store, wallNow: 1_000_000 });
+		await new FirmwareUpdateController(d).restore();
+		expect(d.core.firmwareFlashRestoreEraseHold).toHaveBeenCalledWith(1358, 60_000, expect.any(Number));
+		// …and forward a day: expired, dropped.
+		const fwd = memoryStore();
+		fwd.setItem(AWAITING_KEY, JSON.stringify({ build: 1358, unconfirmed: false, eraseHoldUntil: 1_030_000 }));
+		const d2 = deps({ store: fwd, wallNow: 1_000_000 + 86_400_000 });
+		await new FirmwareUpdateController(d2).restore();
+		expect(d2.core.firmwareFlashRestoreEraseHold).not.toHaveBeenCalled();
+		expect(fwd.data.has(AWAITING_KEY)).toBe(false);
 	});
 
 	it('an erase hold is restored from its deadline; an expired one is dropped', async () => {
@@ -358,6 +376,8 @@ describe('FirmwareUpdateController', () => {
 		expect(waitingText({ ...awaiting, restartedOnBuild: 1333, verifyUnconfirmed: true })).toContain(
 			"didn't take"
 		);
+		expect(waitingText({ ...awaiting, foreignMachine: 'dev-B' })).toContain('A different DE1 is connected');
+		expect(heldBannerText({ ...awaiting, foreignMachine: 'dev-B' })).toContain('a different DE1 is connected');
 	});
 
 	it('the shell hears when the flash lets go of the link', async () => {

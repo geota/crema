@@ -119,6 +119,7 @@ function scriptedCore(script: Partial<Record<keyof FlashCore, FlashStep[]>>) {
 		firmwareFlashOnReadFailed: vi.fn(next('firmwareFlashOnReadFailed')),
 		firmwareFlashTick: vi.fn(next('firmwareFlashTick')),
 		firmwareFlashLinkRestored: vi.fn(next('firmwareFlashLinkRestored')),
+		firmwareFlashBindMachine: vi.fn(async () => undefined),
 		firmwareFlashCancel: vi.fn(next('firmwareFlashCancel')),
 		firmwareFlashDismiss: vi.fn(async () => true),
 		firmwareFlashExit: vi.fn(async () => true),
@@ -382,7 +383,9 @@ function realCore(bridge: CremaBridge): FlashCore {
 		firmwareFlashOnFwMap: async (d, now) => p(bridge.firmware_flash_on_fw_map(d, now)),
 		firmwareFlashOnReadFailed: async (now) => p(bridge.firmware_flash_on_read_failed(now)),
 		firmwareFlashTick: async (now) => p(bridge.firmware_flash_tick(now)),
-		firmwareFlashLinkRestored: async (now) => p(bridge.firmware_flash_link_restored(now)),
+		firmwareFlashLinkRestored: async (now, machine) =>
+			p(bridge.firmware_flash_link_restored(now, machine)),
+		firmwareFlashBindMachine: async (machine) => bridge.firmware_flash_bind_machine(machine),
 		firmwareFlashCancel: async (now) => p(bridge.firmware_flash_cancel(now)),
 		firmwareFlashDismiss: async () => bridge.firmware_flash_dismiss(),
 		firmwareFlashExit: async () => bridge.firmware_flash_exit(),
@@ -458,6 +461,40 @@ describe('FlashDriver with the real core', () => {
 		const after = await driver.refresh();
 		expect(after?.phase).toBe(FlashPhase.Succeeded);
 		expect(after?.locksWrites).toBe(false);
+	});
+
+	it('a different DE1 running the target build neither satisfies the wait nor releases the lock (audit r3 LOW-2)', async () => {
+		const bridge = readyBridge();
+		let clock = 10;
+		const f = fakeIo({
+			async write(target, data) {
+				// Whichever DE1 is connected answers the build read with 1358.
+				if (target === WriteTarget.De1MmrRequest && data[1] === 0x80 && data[3] === 0x10) {
+					bridge.on_notification(NotificationSource.De1MmrRead, mmr(0x800010, 1358), clock);
+				}
+			}
+		});
+		const driver = new FlashDriver(realCore(bridge), f.io, {
+			onStatus: () => undefined,
+			now: () => clock,
+			...noTimer
+		});
+		await driver.restoreAwaiting(1358, false);
+		await driver.bindMachine('dev-A');
+		clock += 30_000;
+		await driver.linkRestored('dev-B');
+		await settle();
+		let s = await driver.refresh();
+		expect(s?.phase).toBe(FlashPhase.AwaitingPowerCycle);
+		expect(s?.locksWrites).toBe(true);
+		expect(s?.foreignMachine).toBe('dev-B');
+		// Its own DE1 comes back: read, and it succeeds.
+		bridge.de1_link_lost();
+		clock += 30_000;
+		await driver.linkRestored('dev-A');
+		await settle();
+		s = await driver.refresh();
+		expect(s?.phase).toBe(FlashPhase.Succeeded);
 	});
 
 	it('the core\'s per-attempt diagnostic lines reach the log', async () => {

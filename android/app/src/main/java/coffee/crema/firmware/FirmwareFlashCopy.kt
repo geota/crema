@@ -47,6 +47,8 @@ fun cancelQuestion(installedBuild: UInt?): String =
 fun waitingText(s: FlashStatus): String {
     val old = s.restartedOnBuild
     val now = when {
+        s.foreignMachine != null ->
+            "A different DE1 is connected. Crema only accepts the build from the DE1 it updated: connect that one after switching it off and on, or exit."
         old != null && s.verifyUnconfirmed ->
             "The DE1 reports build $old, not ${s.targetBuild}. If it still says $old after you switch it off and on, the update didn’t take: your DE1 is fine on build $old, and you can exit and try again."
         old != null ->
@@ -60,6 +62,7 @@ fun waitingText(s: FlashStatus): String {
 
 /** The app-wide notice while a hidden flash holds the DE1. */
 fun heldBannerText(s: FlashStatus?): String = when {
+    s?.foreignMachine != null -> "Firmware update waiting for the DE1 it updated — a different DE1 is connected; DE1 control paused"
     s?.phase == FlashPhase.AwaitingPowerCycle -> "Firmware update waiting for the DE1 to restart — DE1 control paused"
     s?.eraseSettling == true -> "Firmware update stopped; the DE1 may still be erasing — DE1 control paused"
     else -> "Firmware update in progress — DE1 control paused"

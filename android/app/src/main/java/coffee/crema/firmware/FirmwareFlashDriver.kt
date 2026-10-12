@@ -61,7 +61,9 @@ interface FlashCorePort {
     fun onFwMap(data: ByteArray, nowMs: Long): FlashStep
     fun onReadFailed(nowMs: Long): FlashStep
     fun tick(nowMs: Long): FlashStep
-    fun linkRestored(nowMs: Long): FlashStep
+    /** The link is back, to the DE1 [machine] ("" = unknown). */
+    fun linkRestored(nowMs: Long, machine: String): FlashStep
+    fun bindMachine(machine: String)
     fun cancel(nowMs: Long): FlashStep
     fun dismiss(): Boolean
     fun exit(): Boolean
@@ -114,7 +116,9 @@ class BridgeFlashCore(private val bridge: CremaBridge) : FlashCorePort {
     override fun onFwMap(data: ByteArray, nowMs: Long) = step(bridge.firmwareFlashOnFwMap(data, nowMs.toULong()))
     override fun onReadFailed(nowMs: Long) = step(bridge.firmwareFlashOnReadFailed(nowMs.toULong()))
     override fun tick(nowMs: Long) = step(bridge.firmwareFlashTick(nowMs.toULong()))
-    override fun linkRestored(nowMs: Long) = step(bridge.firmwareFlashLinkRestored(nowMs.toULong()))
+    override fun linkRestored(nowMs: Long, machine: String) =
+        step(bridge.firmwareFlashLinkRestored(nowMs.toULong(), machine))
+    override fun bindMachine(machine: String) = bridge.firmwareFlashBindMachine(machine)
     override fun cancel(nowMs: Long) = step(bridge.firmwareFlashCancel(nowMs.toULong()))
     override fun dismiss(): Boolean = bridge.firmwareFlashDismiss()
     override fun exit(): Boolean = bridge.firmwareFlashExit()
@@ -248,8 +252,13 @@ class FirmwareFlashDriver(
     }
 
     /** The DE1 link is back. */
-    fun onLinkRestored() {
-        scope.launch { lock.withLock { apply(core.linkRestored(clock()), force = true) } }
+    fun onLinkRestored(machine: String = "") {
+        scope.launch { lock.withLock { apply(core.linkRestored(clock(), machine), force = true) } }
+    }
+
+    /** Tie the current flash to the DE1 it is for (the core compares on every link-up). */
+    suspend fun bindMachine(machine: String?) {
+        if (!machine.isNullOrEmpty()) lock.withLock { core.bindMachine(machine) }
     }
 
     /** Stop the clock (the core keeps the flash). */

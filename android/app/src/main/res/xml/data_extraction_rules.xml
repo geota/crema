@@ -11,16 +11,20 @@
   file would be a live session. Everything else (shots, beans, profiles,
   prefs) is the user's data and stays transferable; the in-app backup
   (Settings → Sharing → Back up) deliberately excludes these files too.
+  The firmware-flash marker (crema.firmware prefs) is tied to one DE1 and one
+  install's update in progress; another device must not inherit its lock.
 -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="visualizer.json" />
         <exclude domain="file" path="decent.json" />
         <exclude domain="file" path="drive.json" />
+        <exclude domain="sharedpref" path="crema.firmware.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="visualizer.json" />
         <exclude domain="file" path="decent.json" />
         <exclude domain="file" path="drive.json" />
+        <exclude domain="sharedpref" path="crema.firmware.xml" />
     </device-transfer>
 </data-extraction-rules>

@@ -74,7 +74,8 @@ class FirmwareFlashDriverTest {
         override fun onFwMap(data: ByteArray, nowMs: Long) = next("fwMap")
         override fun onReadFailed(nowMs: Long) = next("readFailed")
         override fun tick(nowMs: Long) = next("tick")
-        override fun linkRestored(nowMs: Long) = next("restored")
+        override fun linkRestored(nowMs: Long, machine: String) = next("restored")
+        override fun bindMachine(machine: String) { calls += "bind:$machine" }
         override fun cancel(nowMs: Long) = next("cancel")
         override fun dismiss() = true
         override fun exit() = true

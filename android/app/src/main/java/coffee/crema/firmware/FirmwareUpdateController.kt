@@ -86,6 +86,9 @@ data class FlashMarker(
     val machine: String? = null,
 )
 
+/** The longest an erase can still be running (the core's `ERASE_TIMEOUT_MS`). */
+internal const val ERASE_HOLD_MAX_MS = 60_000L
+
 /** Where the [FlashMarker] lives (SharedPreferences in the app). */
 interface AwaitingMarkerStore {
     fun read(): FlashMarker?
@@ -125,10 +128,6 @@ class FirmwareUpdateController(
     @Volatile
     private var machine: String? = null
 
-    /** The current flash was brought back from a marker (not started here). */
-    @Volatile
-    private var restored = false
-
     /** Called by the driver's status callback. */
     private fun onStatus(status: FlashStatus?) {
         val wasHeld = _ui.value.holdsLink
@@ -153,12 +152,14 @@ class FirmwareUpdateController(
                 markers.clear()
                 return@launch
             }
-            driver.restoreEraseHold(m.build, left)
+            // A wall clock that jumped back can't stretch the hold past what an
+            // erase can take (audit r3 LOW-1; the core clamps too).
+            driver.restoreEraseHold(m.build, left.coerceAtMost(ERASE_HOLD_MAX_MS))
         } else {
             driver.restoreAwaiting(m.build, m.unconfirmed)
         }
         if (status != null) {
-            restored = true
+            driver.bindMachine(m.machine)
             log("Firmware: restored the lock for build ${m.build} (${if (hold != null) "erase may still run" else "waiting for a restart"}, DE1 ${m.machine ?: "unknown"})")
             // Visible at once, not hidden behind Settings (audit r2 M-B).
             _ui.update { it.copy(step = FlowStep.Flash, status = status) }
@@ -277,9 +278,11 @@ class FirmwareUpdateController(
             return@launch
         }
         machine = machineId()
-        restored = false
         when (val err = driver.start(img, conditions())) {
-            null -> _ui.update { it.copy(step = FlowStep.Flash, startProblem = null) }
+            null -> {
+                driver.bindMachine(machine)
+                _ui.update { it.copy(step = FlowStep.Flash, startProblem = null) }
+            }
             is FlashStartError.Blocked ->
                 _ui.update { it.copy(step = FlowStep.Confirm, blockers = err.content.blockers) }
             is FlashStartError.InvalidImage ->
@@ -323,23 +326,12 @@ class FirmwareUpdateController(
 
     /**
      * The DE1 link came up — any path: auto-reconnect, a manual connect, a
-     * cold start. A flash restored for a *different* DE1 is dropped first (its
-     * build read would otherwise "succeed" on another machine, audit r2 LOW 7);
-     * otherwise the core reads the build.
+     * cold start. The core compares the DE1 with the one the flash is for on
+     * every link-up: a different DE1 is not read and can neither satisfy the
+     * wait nor release the lock (audit r3 LOW-2).
      */
     fun onLinkRestored(connected: String? = machineId()) = scope.launch {
-        val mine = machine
-        if (restored && mine != null && connected != null && !mine.equals(connected, ignoreCase = true)) {
-            if (driver.exit()) {
-                log("Firmware: connected to a different DE1 ($connected, not $mine) — restored lock dropped")
-                restored = false
-                machine = null
-                _ui.update { it.copy(step = FlowStep.Closed, confirmingExit = false) }
-                return@launch
-            }
-            log("Firmware: a different DE1 ($connected) — the interrupted erase hold on $mine still runs out")
-        }
-        driver.onLinkRestored()
+        driver.onLinkRestored(connected.orEmpty())
     }
 
     /** The newest pinned build above the installed one, else the newest. */

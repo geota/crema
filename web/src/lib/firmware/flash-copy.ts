@@ -150,7 +150,9 @@ export const EXIT_QUESTION =
 export function waitingText(s: FlashStatus): string {
 	const old = s.restartedOnBuild;
 	let now: string;
-	if (old !== null && old !== undefined && s.verifyUnconfirmed) {
+	if (s.foreignMachine) {
+		now = `A different DE1 is connected. Crema only accepts the build from the DE1 it updated: connect that one after switching it off and on, or exit.`;
+	} else if (old !== null && old !== undefined && s.verifyUnconfirmed) {
 		now = `The DE1 reports build ${old}, not ${s.targetBuild}. If it still says ${old} after you switch it off and on, the update didn't take: your DE1 is fine on build ${old}, and you can exit and try again.`;
 	} else if (old !== null && old !== undefined) {
 		now = `The DE1 reconnected but reports build ${old}, not ${s.targetBuild}. Switch it off at the back, wait 10 seconds and switch it on again.`;
@@ -166,6 +168,9 @@ export function waitingText(s: FlashStatus): string {
 
 /** The app-wide notice while a hidden flash holds the DE1. */
 export function heldBannerText(s: FlashStatus | null): string {
+	if (s?.foreignMachine) {
+		return 'Firmware update waiting for the DE1 it updated — a different DE1 is connected; DE1 control paused';
+	}
 	if (s?.phase === FlashPhase.AwaitingPowerCycle) {
 		return 'Firmware update waiting for the DE1 to restart — DE1 control paused';
 	}

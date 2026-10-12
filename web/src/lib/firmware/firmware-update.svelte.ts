@@ -27,6 +27,9 @@ import { downloadOfficialImage, pinnedFirmware, verifyImageFor } from './source'
 /** The visible step of the flow. */
 export type FlowStep = 'closed' | 'warning' | 'choose' | 'source' | 'confirm' | 'flash';
 
+/** The longest an erase can still be running (the core's `ERASE_TIMEOUT_MS`). */
+const ERASE_HOLD_MAX_MS = 60_000;
+
 /** localStorage key of the flash marker. */
 export const AWAITING_KEY = 'crema.firmware.flashMarker.v2';
 
@@ -140,8 +143,6 @@ export class FirmwareUpdateController {
 	private downloadToken = 0;
 	/** The DE1 this flash is for (set at start, or from a restored marker). */
 	private machine: string | null = null;
-	/** The current flash came back from a marker (not started here). */
-	private restored = false;
 
 	constructor(private readonly deps: FirmwareUpdateDeps) {
 		this.artifacts = pinnedFirmware();
@@ -209,16 +210,18 @@ export class FirmwareUpdateController {
 		let status: FlashStatus | null;
 		if (typeof marker.eraseHoldUntil === 'number') {
 			const left = marker.eraseHoldUntil - this.wallNow();
-			if (left <= 0) {
+			if (!Number.isFinite(left) || left <= 0) {
 				this.persist(null);
 				return;
 			}
-			status = await this.driver.restoreEraseHold(marker.build, left);
+			// A wall clock that jumped back can't stretch the hold past what
+			// an erase can take (audit r3 LOW-1; the core clamps too).
+			status = await this.driver.restoreEraseHold(marker.build, Math.min(left, ERASE_HOLD_MAX_MS));
 		} else {
 			status = await this.driver.restoreAwaiting(marker.build, marker.unconfirmed === true);
 		}
 		if (status === null) return;
-		this.restored = true;
+		await this.driver.bindMachine(this.machine);
 		this.deps.log(
 			`Firmware: restored the lock for build ${marker.build} (${typeof marker.eraseHoldUntil === 'number' ? 'erase may still run' : 'waiting for a restart'}, DE1 ${marker.machine ?? 'unknown'})`
 		);
@@ -228,30 +231,15 @@ export class FirmwareUpdateController {
 
 	/**
 	 * The DE1 link came up — any path: auto-reconnect, a manual or launch
-	 * connect, after a reload (audit r2 M-A). A flash restored for a different
-	 * DE1 is dropped first, so another machine never inherits its lock or
-	 * "succeeds" by already running the target build (r2 LOW 7).
+	 * connect, after a reload (audit r2 M-A). The core compares the DE1 with
+	 * the one the flash is for on every link-up: a different DE1 is not read
+	 * and can't satisfy the wait or release the lock (r3 LOW-2).
 	 */
 	async onLinkUp(connected: string | null): Promise<void> {
 		if (this.status === null) return;
-		const mine = this.machine;
-		if (this.restored && mine !== null && connected !== null && mine !== connected) {
-			if (await this.driver.exit()) {
-				this.deps.log(
-					`Firmware: connected to a different DE1 (${connected}, not ${mine}) — restored lock dropped`
-				);
-				this.restored = false;
-				this.machine = null;
-				this.confirmingExit = false;
-				this.step = 'closed';
-				return;
-			}
-			this.deps.log(
-				`Firmware: a different DE1 (${connected}) — the interrupted erase hold on ${mine} still runs out`
-			);
-		}
-		await this.driver.linkRestored();
+		await this.driver.linkRestored(connected ?? '');
 	}
+
 
 	/** Open the flow — straight to the flash view when one exists. */
 	async open(): Promise<void> {
@@ -374,7 +362,6 @@ export class FirmwareUpdateController {
 			return;
 		}
 		this.machine = this.deps.machineId?.() ?? null;
-		this.restored = false;
 		const error = await this.driver.start(image, await this.deps.conditions());
 		if (error !== null) {
 			if (error.type === 'Blocked') this.blockers = error.content.blockers;
@@ -382,6 +369,7 @@ export class FirmwareUpdateController {
 			this.step = 'confirm';
 			return;
 		}
+		await this.driver.bindMachine(this.machine);
 		this.step = 'flash';
 	}
 
