@@ -130,6 +130,9 @@ class FirmwareUpdateController(
     @Volatile
     private var machine: String? = null
 
+    /** The DE1 this flash is for (its Bluetooth address), or null when unknown. */
+    val machineAddress: String? get() = machine?.takeIf { it.isNotBlank() }
+
     /** Called by the driver's status callback. */
     private fun onStatus(status: FlashStatus?) {
         val wasHeld = _ui.value.holdsLink

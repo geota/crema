@@ -41,15 +41,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coffee.crema.ble.De1BleManager
 import coffee.crema.core.FirmwareBuildStatus
 import coffee.crema.core.FlashPhase
-import coffee.crema.ble.De1BleManager
 import coffee.crema.firmware.ALPHA_POINTS
 import coffee.crema.firmware.ERASE_SETTLING
 import coffee.crema.firmware.EXIT_QUESTION
 import coffee.crema.firmware.FirmwareFlowUi
 import coffee.crema.firmware.FirmwareUpdateController
 import coffee.crema.firmware.FlowStep
+import coffee.crema.firmware.PowerCycleLinkAction
 import coffee.crema.firmware.STILL_SAFE
 import coffee.crema.firmware.UNCONFIRMED
 import coffee.crema.firmware.blockerText
@@ -59,6 +60,7 @@ import coffee.crema.firmware.etaText
 import coffee.crema.firmware.failureText
 import coffee.crema.firmware.waitingText
 import coffee.crema.firmware.phaseLabel
+import coffee.crema.firmware.powerCycleLinkAction
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.Eyebrow
@@ -119,19 +121,12 @@ fun FirmwareUpdateHost(
     }
 }
 
-/**
- * The DE1 link, for the power-cycle step. The modal covers the app while the
- * flash holds the DE1, so that step carries the link controls itself (audit
- * r7 M-1 / L-1): Connect when no DE1 is linked (Auto-connect off, or a
- * permission prompt needed), Disconnect when a different DE1 is connected.
- */
+/** The DE1 link, for the power-cycle step's Connect / Disconnect ([powerCycleLinkAction]). */
 data class FirmwareLinkControls(
     val state: De1BleManager.State,
     val onConnect: () -> Unit,
     val onDisconnect: () -> Unit,
-) {
-    val idle: Boolean get() = state == De1BleManager.State.IDLE || state == De1BleManager.State.DISCONNECTED
-}
+)
 
 @Composable
 private fun Banner(text: String, warn: Boolean = true) {
@@ -366,9 +361,12 @@ private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContro
                     when {
                         ui.confirmingExit ->
                             CremaButton(onClick = { flow.confirmExit() }, danger = true, variant = CremaButtonVariant.Text, label = "Exit")
-                        s.foreignMachine != null && link.state == De1BleManager.State.READY ->
-                            CremaButton(onClick = link.onDisconnect, variant = CremaButtonVariant.Tonal, label = "Disconnect this DE1")
-                        link.idle -> CremaButton(onClick = link.onConnect, label = "Connect DE1")
+                        else -> when (powerCycleLinkAction(s, link.state)) {
+                            PowerCycleLinkAction.Disconnect ->
+                                CremaButton(onClick = link.onDisconnect, variant = CremaButtonVariant.Tonal, label = "Disconnect this DE1")
+                            PowerCycleLinkAction.Connect -> CremaButton(onClick = link.onConnect, label = "Connect DE1")
+                            null -> Unit
+                        }
                     }
                 },
             )

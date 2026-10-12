@@ -1,5 +1,6 @@
 package coffee.crema.firmware
 
+import coffee.crema.ble.De1BleManager
 import coffee.crema.core.DecentFirmwareChannel
 import coffee.crema.core.FirmwareArtifact
 import coffee.crema.core.FirmwareImageCheck
@@ -283,6 +284,21 @@ class FirmwareUpdateControllerTest {
         core.current = status(FlashPhase.AwaitingPowerCycle, canCancel = false, canExit = true)
         c.onLinkRestored("AA"); runCurrent()
         assertEquals(FlowStep.Flash, c.ui.value.step, "the modal comes back while the DE1 is held")
+    }
+
+    @Test
+    fun thePowerCycleStepOffersConnectOrDisconnectFromTheLinkState() {
+        val awaiting = status(FlashPhase.AwaitingPowerCycle)
+        val foreign = awaiting.copy(foreignMachine = "BB")
+        for (s in listOf(De1BleManager.State.IDLE, De1BleManager.State.SCANNING, De1BleManager.State.CONNECTING, De1BleManager.State.DISCONNECTED)) {
+            assertEquals(PowerCycleLinkAction.Connect, powerCycleLinkAction(awaiting, s), "$s")
+        }
+        for (s in listOf(De1BleManager.State.DISCOVERING, De1BleManager.State.SUBSCRIBING)) {
+            assertNull(powerCycleLinkAction(awaiting, s), "$s")
+        }
+        assertNull(powerCycleLinkAction(awaiting, De1BleManager.State.READY))
+        assertEquals(PowerCycleLinkAction.Disconnect, powerCycleLinkAction(foreign, De1BleManager.State.READY))
+        assertEquals(PowerCycleLinkAction.Connect, powerCycleLinkAction(foreign, De1BleManager.State.SCANNING))
     }
 
     @Test

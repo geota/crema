@@ -32,6 +32,7 @@
 		etaText,
 		failureText,
 		phaseLabel,
+		powerCycleLinkAction,
 		waitingText
 	} from '$lib/firmware/flash-copy';
 
@@ -51,13 +52,8 @@
 		onDisconnect?: () => void;
 	} = $props();
 
-	/**
-	 * The modal covers the app while the flash holds the DE1, so the
-	 * power-cycle step carries the link controls itself (audit r7 M-1 / L-1):
-	 * Connect when no DE1 is linked (a reload on web never reconnects on its
-	 * own), Disconnect when a different DE1 is connected.
-	 */
-	const linkIdle = $derived(de1State === 'idle' || de1State === 'disconnected' || de1State === 'failed');
+	/** Connect / Disconnect on the power-cycle step (`powerCycleLinkAction`). */
+	const linkAction = $derived(flow.status ? powerCycleLinkAction(flow.status, de1State) : null);
 
 	const EXPECTED_TOKEN = 'UPDATE';
 	let typed = $state('');
@@ -412,11 +408,11 @@
 							<button type="button" class="st-btn st-btn-danger" onclick={() => flow.confirmExit()}>
 								Exit
 							</button>
-						{:else if status.foreignMachine && de1State === 'ready' && onDisconnect}
+						{:else if linkAction === 'disconnect' && onDisconnect}
 							<button type="button" class="st-btn st-btn-secondary" onclick={onDisconnect}>
 								Disconnect this DE1
 							</button>
-						{:else if linkIdle && onConnect}
+						{:else if linkAction === 'connect' && onConnect}
 							<button type="button" class="st-btn st-btn-primary" onclick={onConnect}>
 								Connect DE1
 							</button>

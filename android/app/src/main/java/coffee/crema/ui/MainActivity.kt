@@ -340,7 +340,7 @@ class MainActivity : ComponentActivity() {
                     ui.de1MachineInfo[coffee.crema.core.MmrRegister.FirmwareVersion],
                     FirmwareLinkControls(
                         state = ui.bleState,
-                        onConnect = { withBlePermission(viewModel::connect) },
+                        onConnect = { withBlePermission(viewModel::connectFirmwareDe1) },
                         onDisconnect = viewModel::disconnect,
                     ),
                 )

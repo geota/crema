@@ -3192,6 +3192,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  Called from the UI once the BLE runtime permissions have been granted. */
     fun connect() = connection.connect()
 
+    /** Connect from the firmware power-cycle step: the DE1 the flash is for
+     *  when its address is known, else the usual scan. */
+    fun connectFirmwareDe1() {
+        val address = firmware.machineAddress
+        if (address != null) connection.connectTo(address) else connection.connect()
+    }
+
     /** Disconnect the DE1 — delegate of [ConnectionController.disconnect]. */
     fun disconnect() {
         // Leave the DE1's USB port charging (Decenza

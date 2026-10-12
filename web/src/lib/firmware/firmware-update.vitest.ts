@@ -15,7 +15,7 @@ import {
 	type FlashStatus,
 	type FlashStep
 } from '$lib/core/crema-core';
-import { waitingText } from './flash-copy';
+import { powerCycleLinkAction, waitingText } from './flash-copy';
 import {
 	AWAITING_KEY,
 	markerFor,
@@ -398,6 +398,20 @@ describe('FirmwareUpdateController', () => {
 		expect(waitingText({ ...awaiting, machineRestarted: true, linkUp: true, identityUnknown: true })).toContain(
 			"can't confirm this is the DE1 it updated"
 		);
+	});
+
+	it('the power-cycle step offers Connect / Disconnect from the link state', () => {
+		const awaiting = status(FlashPhase.AwaitingPowerCycle);
+		const foreign = { ...awaiting, foreignMachine: 'dev-B' };
+		for (const s of ['idle', 'disconnected', 'failed', 'reconnecting'] as const) {
+			expect(powerCycleLinkAction(awaiting, s)).toBe('connect');
+		}
+		for (const s of ['connecting', 'subscribing'] as const) {
+			expect(powerCycleLinkAction(awaiting, s)).toBeNull();
+		}
+		expect(powerCycleLinkAction(awaiting, 'ready')).toBeNull();
+		expect(powerCycleLinkAction(foreign, 'ready')).toBe('disconnect');
+		expect(powerCycleLinkAction(foreign, 'reconnecting')).toBe('connect');
 	});
 
 	it('the shell hears when the flash lets go of the link', async () => {

@@ -326,6 +326,24 @@ class ConnectionController(
         // already pushed the new state, so no manual reflection is needed here.
     }
 
+    /**
+     * Connect to the DE1 at [address] directly — the one a firmware flash is
+     * waiting for, so a different DE1 nearby isn't picked (audit r8 L-2).
+     * Falls back to the name scan when the address can't be resolved.
+     */
+    fun connectTo(address: String) {
+        onConnectStarted()
+        val direct = transport.resolveByAddress(address, "DE1")
+        if (direct == null) {
+            scanForDe1()
+            return
+        }
+        bleScanner.cancel(SCAN_LABEL_DE1)
+        de1ScanSinceMs = null
+        ble.markScanning()
+        ble.connect(direct)
+    }
+
     /** Hand the DE1 hunt to the shared scanner (no event-log reset). */
     private fun scanForDe1() {
         ble.markScanning()
