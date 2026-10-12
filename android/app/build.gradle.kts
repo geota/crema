@@ -384,7 +384,7 @@ dependencies {
 
     // JVM unit tests for pure shell logic (no device / FFI). kotlin-test mapped
     // onto the JUnit 4 runner AGP's unit-test task uses.
-    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.4.20")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.4.21")
     testImplementation("junit:junit:4.13.2")
     // Coroutine tests (runTest / virtual time), Ktor's MockEngine for the
     // HTTP clients' request shape + status mapping (tracks the Ktor version),
