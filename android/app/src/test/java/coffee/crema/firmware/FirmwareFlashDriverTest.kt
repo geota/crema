@@ -50,6 +50,7 @@ class FirmwareFlashDriverTest {
         percent = 0f, etaIsEstimate = true, elapsedSeconds = 0u, canCancel = true, locksWrites = locks,
         eraseSettling = false, canExit = false, failure = failure, verifyUnconfirmed = false, machineRestarted = false,
         linkUp = true,
+        identityUnknown = false,
     )
 
     private fun write(target: WriteTarget, vararg b: Int) =
@@ -75,7 +76,7 @@ class FirmwareFlashDriverTest {
         override fun onReadFailed(nowMs: Long) = next("readFailed")
         override fun tick(nowMs: Long) = next("tick")
         override fun linkRestored(nowMs: Long, machine: String) = next("restored")
-        override fun bindMachine(machine: String) { calls += "bind:$machine" }
+        override fun bindMachine(serial: UInt, linkId: String) { calls += "bind:$serial:$linkId" }
         override fun cancel(nowMs: Long) = next("cancel")
         override fun dismiss() = true
         override fun exit() = true
@@ -148,6 +149,8 @@ class FirmwareFlashDriverTest {
             )),
             "tick" to ArrayDeque(listOf(f("erase"))),
             "fwMap" to ArrayDeque(listOf(f("chunk0"))),
+            // After the build read the driver re-reads the status: the serial read.
+            "status" to ArrayDeque(listOf(ack("readSerial"))),
         ))
         val io = FakeIo()
         driver(core, io, mutableListOf(), mutableListOf()).start(ByteArray(16), ok)
@@ -169,6 +172,9 @@ class FirmwareFlashDriverTest {
         // The build read: an MMR read request for 0x800010, through the lock.
         assertEquals(WriteTarget.De1MmrRequest, io.writes[5].first)
         assertEquals(listOf(0x00, 0x80, 0x00, 0x10), io.writes[5].second.take(4))
+        // The serial read (the DE1's identity): MMR 0x803830, through the lock.
+        assertEquals(WriteTarget.De1MmrRequest, io.writes[6].first)
+        assertEquals(listOf(0x00, 0x80, 0x38, 0x30), io.writes[6].second.take(4))
         // Cancel's Sleep.
         assertEquals(listOf<FlashAction>(write(WriteTarget.De1RequestedState, 0)), f("cancel").actions)
     }

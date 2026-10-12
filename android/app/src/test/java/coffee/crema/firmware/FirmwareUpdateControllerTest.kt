@@ -48,6 +48,7 @@ class FirmwareUpdateControllerTest {
         percent = 30f, etaIsEstimate = false, elapsedSeconds = 60u, canCancel = canCancel, locksWrites = locks,
         eraseSettling = eraseSettling, canExit = canExit, verifyUnconfirmed = false, machineRestarted = false,
         linkUp = false,
+        identityUnknown = false,
     )
 
     /** A core whose status / cancel / restore answers are set per test. */
@@ -69,13 +70,13 @@ class FirmwareUpdateControllerTest {
         override fun onReadFailed(nowMs: Long) = now()
         override fun tick(nowMs: Long) = now()
         val linkMachines = mutableListOf<String>()
-        val bound = mutableListOf<String>()
+        val bound = mutableListOf<Pair<UInt, String>>()
         override fun linkRestored(nowMs: Long, machine: String): FlashStep {
             linkRestores++
             linkMachines += machine
             return now()
         }
-        override fun bindMachine(machine: String) { bound += machine }
+        override fun bindMachine(serial: UInt, linkId: String) { bound += serial to linkId }
         override fun cancel(nowMs: Long): FlashStep {
             cancels++
             current = cancelTo
@@ -324,10 +325,11 @@ class FirmwareUpdateControllerTest {
         // The core compares machines on every link-up (audit r3 LOW-2); the
         // shell must bind the flash's DE1 and pass the connected one along.
         val core = StubCore(current = status(FlashPhase.AwaitingPowerCycle, canCancel = false, canExit = true))
-        val markers = MemoryMarkers(FlashMarker(1358u, false, machine = "AA:AA"))
+        val markers = MemoryMarkers(FlashMarker(1358u, false, machine = "AA:AA", serial = 4242u))
         val c = controller(core = core, markers = markers)
         c.restore(); runCurrent()
-        assertEquals(listOf("AA:AA"), core.bound)
+        // The serial, plus the DE1's static address as the fallback (audit r4 LOW-1).
+        assertEquals(listOf(4242u to "AA:AA"), core.bound)
         c.onLinkRestored("BB:BB"); runCurrent()
         assertEquals(listOf("BB:BB"), core.linkMachines)
         assertEquals(0, core.exits, "another DE1 never releases the lock")
@@ -348,7 +350,7 @@ class FirmwareUpdateControllerTest {
         c.download(); runCurrent()
         core.current = status(FlashPhase.Preparing)
         c.start(); runCurrent()
-        assertEquals(listOf("AA:AA"), core.bound)
+        assertEquals(listOf(0u to "AA:AA"), core.bound, "the core binds the serial from the identity reads")
     }
 
     @Test
@@ -385,8 +387,8 @@ class FirmwareUpdateControllerTest {
         assertEquals(FlashMarker(1358u, true, machine = "AA"), markerFor(verifying, "AA", 0))
         val erasing = status(FlashPhase.Erasing).copy(eraseHoldMsLeft = 45_000u)
         assertEquals(FlashMarker(1358u, false, eraseHoldUntil = 145_000L, machine = "AA"), markerFor(erasing, "AA", 100_000))
-        val awaiting = status(FlashPhase.AwaitingPowerCycle).copy(verifyUnconfirmed = true)
-        assertEquals(FlashMarker(1358u, true, machine = null), markerFor(awaiting, null, 0))
+        val awaiting = status(FlashPhase.AwaitingPowerCycle).copy(verifyUnconfirmed = true, machineSerial = 4242u)
+        assertEquals(FlashMarker(1358u, true, machine = null, serial = 4242u), markerFor(awaiting, null, 0))
         assertNull(markerFor(status(FlashPhase.Uploading), "AA", 0), "the inactive bank needs no lock after a kill")
         assertNull(markerFor(status(FlashPhase.Succeeded, locks = false), "AA", 0))
         assertNull(markerFor(null, "AA", 0))
@@ -401,6 +403,7 @@ class FirmwareUpdateControllerTest {
         assertContains(waitingText(awaiting.copy(machineRestarted = true)), "offline")
         assertContains(waitingText(awaiting.copy(restartedOnBuild = 1333u, verifyUnconfirmed = true)), "didn’t take")
         assertContains(waitingText(awaiting.copy(foreignMachine = "BB")), "A different DE1 is connected")
+        assertContains(waitingText(awaiting.copy(machineRestarted = true, linkUp = true, identityUnknown = true)), "can’t confirm this is the DE1")
         assertContains(heldBannerText(awaiting.copy(foreignMachine = "BB")), "a different DE1 is connected")
     }
 }

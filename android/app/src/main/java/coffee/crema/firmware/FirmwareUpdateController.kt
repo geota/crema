@@ -84,6 +84,8 @@ data class FlashMarker(
     val eraseHoldUntil: Long? = null,
     /** The DE1's Bluetooth address, when known. */
     val machine: String? = null,
+    /** The DE1's serial number, when known. */
+    val serial: UInt? = null,
 )
 
 /** The longest an erase can still be running (the core's `ERASE_TIMEOUT_MS`). */
@@ -159,7 +161,7 @@ class FirmwareUpdateController(
             driver.restoreAwaiting(m.build, m.unconfirmed)
         }
         if (status != null) {
-            driver.bindMachine(m.machine)
+            driver.bindMachine(m.serial ?: 0u, m.machine)
             log("Firmware: restored the lock for build ${m.build} (${if (hold != null) "erase may still run" else "waiting for a restart"}, DE1 ${m.machine ?: "unknown"})")
             // Visible at once, not hidden behind Settings (audit r2 M-B).
             _ui.update { it.copy(step = FlowStep.Flash, status = status) }
@@ -280,7 +282,7 @@ class FirmwareUpdateController(
         machine = machineId()
         when (val err = driver.start(img, conditions())) {
             null -> {
-                driver.bindMachine(machine)
+                driver.bindMachine(0u, machine)
                 _ui.update { it.copy(step = FlowStep.Flash, startProblem = null) }
             }
             is FlashStartError.Blocked ->
@@ -351,10 +353,11 @@ class FirmwareUpdateController(
 internal fun markerFor(s: FlashStatus?, machine: String?, nowWallMs: Long): FlashMarker? {
     if (s == null || !s.locksWrites) return null
     val hold = s.eraseHoldMsLeft
+    val serial = s.machineSerial
     return when {
-        s.phase == FlashPhase.AwaitingPowerCycle -> FlashMarker(s.targetBuild, s.verifyUnconfirmed, machine = machine)
-        s.phase == FlashPhase.Verifying -> FlashMarker(s.targetBuild, unconfirmed = true, machine = machine)
-        hold != null -> FlashMarker(s.targetBuild, false, eraseHoldUntil = nowWallMs + hold.toLong(), machine = machine)
+        s.phase == FlashPhase.AwaitingPowerCycle -> FlashMarker(s.targetBuild, s.verifyUnconfirmed, machine = machine, serial = serial)
+        s.phase == FlashPhase.Verifying -> FlashMarker(s.targetBuild, unconfirmed = true, machine = machine, serial = serial)
+        hold != null -> FlashMarker(s.targetBuild, false, eraseHoldUntil = nowWallMs + hold.toLong(), machine = machine, serial = serial)
         else -> null
     }
 }
@@ -370,6 +373,7 @@ class SharedPrefsAwaitingMarkers(context: android.content.Context) : AwaitingMar
             unconfirmed = prefs.getBoolean(KEY_UNCONFIRMED, false),
             eraseHoldUntil = prefs.getLong(KEY_HOLD, -1L).takeIf { it >= 0 },
             machine = prefs.getString(KEY_MACHINE, null),
+            serial = prefs.getLong(KEY_SERIAL, -1L).takeIf { it in 1L..UInt.MAX_VALUE.toLong() }?.toUInt(),
         )
     }
 
@@ -379,6 +383,7 @@ class SharedPrefsAwaitingMarkers(context: android.content.Context) : AwaitingMar
             putBoolean(KEY_UNCONFIRMED, marker.unconfirmed)
             if (marker.eraseHoldUntil != null) putLong(KEY_HOLD, marker.eraseHoldUntil) else remove(KEY_HOLD)
             if (marker.machine != null) putString(KEY_MACHINE, marker.machine) else remove(KEY_MACHINE)
+            if (marker.serial != null) putLong(KEY_SERIAL, marker.serial.toLong()) else remove(KEY_SERIAL)
         }
     }
 
@@ -388,6 +393,7 @@ class SharedPrefsAwaitingMarkers(context: android.content.Context) : AwaitingMar
             remove(KEY_UNCONFIRMED)
             remove(KEY_HOLD)
             remove(KEY_MACHINE)
+            remove(KEY_SERIAL)
         }
     }
 
@@ -396,5 +402,6 @@ class SharedPrefsAwaitingMarkers(context: android.content.Context) : AwaitingMar
         const val KEY_UNCONFIRMED = "flashMarker.v2.unconfirmed"
         const val KEY_HOLD = "flashMarker.v2.eraseHoldUntil"
         const val KEY_MACHINE = "flashMarker.v2.machine"
+        const val KEY_SERIAL = "flashMarker.v2.serial"
     }
 }

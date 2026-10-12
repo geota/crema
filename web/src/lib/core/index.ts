@@ -360,8 +360,8 @@ export interface CremaCore {
 	firmwareFlashTick(nowMs: number): Promise<FlashStep>;
 	/** The link is back, to the DE1 with id `machine` ('' = unknown). */
 	firmwareFlashLinkRestored(nowMs: number, machine: string): Promise<FlashStep>;
-	/** Tie the current flash to the DE1 it is for. */
-	firmwareFlashBindMachine(machine: string): Promise<void>;
+	/** Tie the current flash to the DE1 it is for: serial (0 = unknown) and Web Bluetooth id ('' = unknown). */
+	firmwareFlashBindMachine(serial: number, linkId: string): Promise<void>;
 	firmwareFlashCancel(nowMs: number): Promise<FlashStep>;
 	firmwareFlashDismiss(): Promise<boolean>;
 	firmwareFlashExit(): Promise<boolean>;
@@ -1057,8 +1057,8 @@ async function createCore(): Promise<CremaCore> {
 		async firmwareFlashTick(nowMs) {
 			return parseStep(bridge.firmware_flash_tick(nowMs));
 		},
-		async firmwareFlashBindMachine(machine) {
-			bridge.firmware_flash_bind_machine(machine);
+		async firmwareFlashBindMachine(serial, linkId) {
+			bridge.firmware_flash_bind_machine(serial, linkId);
 		},
 		async firmwareFlashLinkRestored(nowMs, machine) {
 			return parseStep(bridge.firmware_flash_link_restored(nowMs, machine));

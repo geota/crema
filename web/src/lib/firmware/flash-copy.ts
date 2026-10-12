@@ -163,7 +163,11 @@ export function waitingText(s: FlashStatus): string {
 	} else {
 		now = 'Waiting for the DE1 to be switched off…';
 	}
-	return `${now} Crema keeps other commands away from the DE1 until then.`;
+	const unsure =
+		s.identityUnknown && !s.foreignMachine
+			? " Crema can't confirm this is the DE1 it updated (no serial number to compare)."
+			: '';
+	return `${now}${unsure} Crema keeps other commands away from the DE1 until then.`;
 }
 
 /** The app-wide notice while a hidden flash holds the DE1. */

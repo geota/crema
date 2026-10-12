@@ -39,8 +39,10 @@ export interface FlashMarker {
 	unconfirmed: boolean;
 	/** Wall-clock ms until which the DE1 may still be erasing; absent = power-cycle wait. */
 	eraseHoldUntil?: number;
-	/** The DE1's Web Bluetooth device id, when known. */
+	/** The DE1's Web Bluetooth device id, when known (this browser session only). */
 	machine?: string | null;
+	/** The DE1's serial number (survives browser restarts), when known. */
+	serial?: number;
 }
 
 /**
@@ -54,16 +56,17 @@ export function markerFor(
 	nowWallMs: number
 ): FlashMarker | null {
 	if (s === null || !s.locksWrites) return null;
+	const id = s.machineSerial ? { machine, serial: s.machineSerial } : { machine };
 	if (s.phase === FlashPhase.AwaitingPowerCycle) {
-		return { build: s.targetBuild, unconfirmed: s.verifyUnconfirmed, machine };
+		return { build: s.targetBuild, unconfirmed: s.verifyUnconfirmed, ...id };
 	}
-	if (s.phase === FlashPhase.Verifying) return { build: s.targetBuild, unconfirmed: true, machine };
+	if (s.phase === FlashPhase.Verifying) return { build: s.targetBuild, unconfirmed: true, ...id };
 	if (s.eraseHoldMsLeft !== undefined && s.eraseHoldMsLeft !== null) {
 		return {
 			build: s.targetBuild,
 			unconfirmed: false,
 			eraseHoldUntil: nowWallMs + s.eraseHoldMsLeft,
-			machine
+			...id
 		};
 	}
 	return null;
@@ -221,7 +224,10 @@ export class FirmwareUpdateController {
 			status = await this.driver.restoreAwaiting(marker.build, marker.unconfirmed === true);
 		}
 		if (status === null) return;
-		await this.driver.bindMachine(this.machine);
+		// The serial identifies the DE1 across browser restarts; the stored
+		// device.id is from an earlier session and Chrome may have issued a new
+		// one, so it is not bound (never "a different DE1" for that alone).
+		await this.driver.bindMachine(typeof marker.serial === 'number' ? marker.serial : 0, '');
 		this.deps.log(
 			`Firmware: restored the lock for build ${marker.build} (${typeof marker.eraseHoldUntil === 'number' ? 'erase may still run' : 'waiting for a restart'}, DE1 ${marker.machine ?? 'unknown'})`
 		);
@@ -369,7 +375,7 @@ export class FirmwareUpdateController {
 			this.step = 'confirm';
 			return;
 		}
-		await this.driver.bindMachine(this.machine);
+		await this.driver.bindMachine(0, this.machine);
 		this.step = 'flash';
 	}
 

@@ -57,7 +57,12 @@ fun waitingText(s: FlashStatus): String {
         s.machineRestarted -> "The DE1 is offline. Waiting for it to come back and report its build…"
         else -> "Waiting for the DE1 to be switched off…"
     }
-    return "$now Crema keeps other commands away from the DE1 until then."
+    val unsure = if (s.identityUnknown && s.foreignMachine == null) {
+        " Crema can’t confirm this is the DE1 it updated (no serial number to compare)."
+    } else {
+        ""
+    }
+    return "$now$unsure Crema keeps other commands away from the DE1 until then."
 }
 
 /** The app-wide notice while a hidden flash holds the DE1. */

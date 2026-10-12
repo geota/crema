@@ -63,7 +63,8 @@ interface FlashCorePort {
     fun tick(nowMs: Long): FlashStep
     /** The link is back, to the DE1 [machine] ("" = unknown). */
     fun linkRestored(nowMs: Long, machine: String): FlashStep
-    fun bindMachine(machine: String)
+    /** Tie the flash to its DE1: serial (0 = unknown) and Bluetooth address ("" = unknown). */
+    fun bindMachine(serial: UInt, linkId: String)
     fun cancel(nowMs: Long): FlashStep
     fun dismiss(): Boolean
     fun exit(): Boolean
@@ -118,7 +119,7 @@ class BridgeFlashCore(private val bridge: CremaBridge) : FlashCorePort {
     override fun tick(nowMs: Long) = step(bridge.firmwareFlashTick(nowMs.toULong()))
     override fun linkRestored(nowMs: Long, machine: String) =
         step(bridge.firmwareFlashLinkRestored(nowMs.toULong(), machine))
-    override fun bindMachine(machine: String) = bridge.firmwareFlashBindMachine(machine)
+    override fun bindMachine(serial: UInt, linkId: String) = bridge.firmwareFlashBindMachine(serial, linkId)
     override fun cancel(nowMs: Long) = step(bridge.firmwareFlashCancel(nowMs.toULong()))
     override fun dismiss(): Boolean = bridge.firmwareFlashDismiss()
     override fun exit(): Boolean = bridge.firmwareFlashExit()
@@ -256,9 +257,14 @@ class FirmwareFlashDriver(
         scope.launch { lock.withLock { apply(core.linkRestored(clock(), machine), force = true) } }
     }
 
-    /** Tie the current flash to the DE1 it is for (the core compares on every link-up). */
-    suspend fun bindMachine(machine: String?) {
-        if (!machine.isNullOrEmpty()) lock.withLock { core.bindMachine(machine) }
+    /**
+     * Tie the current flash to the DE1 it is for: its serial number (0 =
+     * unknown; a flash started here binds it from the identity reads) and its
+     * Bluetooth address, which is static on a DE1 (de1app keys the machine on
+     * it, `bluetooth.tcl:2172`). The core compares on every link-up.
+     */
+    suspend fun bindMachine(serial: UInt, address: String?) {
+        lock.withLock { core.bindMachine(serial, address.orEmpty()) }
     }
 
     /** Stop the clock (the core keeps the flash). */
@@ -408,10 +414,15 @@ class FirmwareFlashDriver(
                     apply(if (bytes == null) core.onReadFailed(clock()) else core.onFwMap(bytes, clock()))
                 }
             }
-            is FlashAction.ReadBuild -> {
+            is FlashAction.ReadBuild, is FlashAction.ReadSerial -> {
                 // The MMR read request goes through the lock like the flash's own
                 // writes; the reply arrives as an ordinary MMR notification.
-                val bytes = action.content.data.map { it.toByte() }.toByteArray()
+                val data = when (action) {
+                    is FlashAction.ReadBuild -> action.content.data
+                    is FlashAction.ReadSerial -> action.content.data
+                    else -> emptyList()
+                }
+                val bytes = data.map { it.toByte() }.toByteArray()
                 runCatching { io.write(WriteTarget.De1MmrRequest, bytes) }
                     .onFailure { if (it is CancellationException) throw it }
                 lock.withLock { apply(core.status(clock()), force = true) }

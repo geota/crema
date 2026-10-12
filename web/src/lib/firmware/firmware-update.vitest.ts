@@ -46,6 +46,7 @@ function status(phase: FlashPhase, extra: Partial<FlashStatus> = {}): FlashStatu
 		verifyUnconfirmed: false,
 		machineRestarted: false,
 		linkUp: false,
+		identityUnknown: false,
 		...extra
 	};
 }
@@ -290,17 +291,21 @@ describe('FirmwareUpdateController', () => {
 
 	it('every link-up hands the core the connected DE1, which it compares (audit r3 LOW-2)', async () => {
 		const store = memoryStore();
-		store.setItem(AWAITING_KEY, JSON.stringify({ build: 1358, unconfirmed: false, machine: 'dev-A' }));
+		store.setItem(
+			AWAITING_KEY,
+			JSON.stringify({ build: 1358, unconfirmed: false, machine: 'dev-A', serial: 4242 })
+		);
 		const awaiting = status(FlashPhase.AwaitingPowerCycle, { canExit: true });
 		const d = deps({
 			store,
 			restore: { actions: [], status: awaiting },
 			status: { actions: [], status: awaiting },
-			linkRestored: () => ({ actions: [], status: { ...awaiting, foreignMachine: 'dev-B' } })
+			linkRestored: () => ({ actions: [], status: { ...awaiting, foreignMachine: 'serial 9999' } })
 		});
 		const flow = new FirmwareUpdateController(d);
 		await flow.restore();
-		expect(d.core.firmwareFlashBindMachine).toHaveBeenCalledWith('dev-A');
+		// The serial, never the earlier session's device.id (audit r4 LOW-1).
+		expect(d.core.firmwareFlashBindMachine).toHaveBeenCalledWith(4242, '');
 		await flow.onLinkUp('dev-B');
 		expect(d.core.firmwareFlashLinkRestored).toHaveBeenLastCalledWith(expect.any(Number), 'dev-B');
 		expect(d.core.firmwareFlashExit).not.toHaveBeenCalled(); // never released by another DE1
@@ -352,6 +357,12 @@ describe('FirmwareUpdateController', () => {
 			unconfirmed: true,
 			machine: 'dev'
 		});
+		expect(markerFor(status(FlashPhase.AwaitingPowerCycle, { machineSerial: 4242 }), 'dev', 0)).toEqual({
+			build: 1358,
+			unconfirmed: false,
+			machine: 'dev',
+			serial: 4242
+		});
 		expect(markerFor(status(FlashPhase.Erasing, { eraseHoldMsLeft: 45_000 }), 'dev', 100_000)).toEqual({
 			build: 1358,
 			unconfirmed: false,
@@ -377,6 +388,9 @@ describe('FirmwareUpdateController', () => {
 			"didn't take"
 		);
 		expect(waitingText({ ...awaiting, foreignMachine: 'dev-B' })).toContain('A different DE1 is connected');
+		expect(waitingText({ ...awaiting, machineRestarted: true, linkUp: true, identityUnknown: true })).toContain(
+			"can't confirm this is the DE1 it updated"
+		);
 		expect(heldBannerText({ ...awaiting, foreignMachine: 'dev-B' })).toContain('a different DE1 is connected');
 	});
 

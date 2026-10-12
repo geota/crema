@@ -246,10 +246,14 @@ export class FlashDriver {
 		);
 	}
 
-	/** Tie the current flash to the DE1 it is for. */
-	bindMachine(machine: string | null): Promise<void> {
+	/**
+	 * Tie the current flash to the DE1 it is for: its serial number (0 =
+	 * unknown) and Web Bluetooth id ('' = unknown — never pass an id from an
+	 * earlier browser session: Chrome issues a new one after a restart).
+	 */
+	bindMachine(serial: number, linkId: string | null): Promise<void> {
 		return this.serial(async () => {
-			if (machine) await this.core.firmwareFlashBindMachine(machine);
+			await this.core.firmwareFlashBindMachine(serial, linkId ?? '');
 		});
 	}
 
@@ -423,12 +427,13 @@ export class FlashDriver {
 				return;
 			}
 			case 'ReadBuild':
+			case 'ReadSerial':
 				// The MMR read request goes through the lock like the flash's
 				// own writes; the reply arrives as an ordinary MMR notification.
 				await withTimeout(
 					this.io.write(WriteTarget.De1MmrRequest, Uint8Array.from(action.content.data)),
 					wt,
-					'build read'
+					action.type === 'ReadBuild' ? 'build read' : 'serial read'
 				).catch(() => undefined);
 				this.apply(await this.core.firmwareFlashStatus(this.now()), true);
 				return;

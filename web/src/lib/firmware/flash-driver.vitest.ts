@@ -50,6 +50,7 @@ function status(phase: FlashPhase, extra: Partial<FlashStatus> = {}): FlashStatu
 		verifyUnconfirmed: false,
 		machineRestarted: false,
 		linkUp: true,
+		identityUnknown: false,
 		...extra
 	};
 }
@@ -149,6 +150,9 @@ describe('FlashDriver writes exactly the bytes the core emits (golden fixture)',
 				ack(fixture.verify),
 				ack(fixture.readBuild)
 			],
+			// After the build read the driver re-reads the status; script the
+			// serial read there.
+			firmwareFlashStatus: [ack(fixture.readSerial)],
 			firmwareFlashTick: [fixture.erase],
 			firmwareFlashOnFwMap: [fixture.chunk0]
 		});
@@ -180,6 +184,9 @@ describe('FlashDriver writes exactly the bytes the core emits (golden fixture)',
 		// The build read is an MMR read request for 0x800010, through the lock.
 		expect(f.writes[5].target).toBe(WriteTarget.De1MmrRequest);
 		expect(f.writes[5].data.slice(0, 4)).toEqual([0x00, 0x80, 0x00, 0x10]);
+		// The serial read (identity across browser restarts): MMR 0x803830.
+		expect(f.writes[6].target).toBe(WriteTarget.De1MmrRequest);
+		expect(f.writes[6].data.slice(0, 4)).toEqual([0x00, 0x80, 0x38, 0x30]);
 		expect(fixture.cancel.actions).toEqual([write(WriteTarget.De1RequestedState, [0])]);
 	});
 });
@@ -385,7 +392,8 @@ function realCore(bridge: CremaBridge): FlashCore {
 		firmwareFlashTick: async (now) => p(bridge.firmware_flash_tick(now)),
 		firmwareFlashLinkRestored: async (now, machine) =>
 			p(bridge.firmware_flash_link_restored(now, machine)),
-		firmwareFlashBindMachine: async (machine) => bridge.firmware_flash_bind_machine(machine),
+		firmwareFlashBindMachine: async (serial, linkId) =>
+			bridge.firmware_flash_bind_machine(serial, linkId),
 		firmwareFlashCancel: async (now) => p(bridge.firmware_flash_cancel(now)),
 		firmwareFlashDismiss: async () => bridge.firmware_flash_dismiss(),
 		firmwareFlashExit: async () => bridge.firmware_flash_exit(),
@@ -463,14 +471,24 @@ describe('FlashDriver with the real core', () => {
 		expect(after?.locksWrites).toBe(false);
 	});
 
-	it('a different DE1 running the target build neither satisfies the wait nor releases the lock (audit r3 LOW-2)', async () => {
+	/**
+	 * A restored power-cycle wait against a simulated DE1 that answers the
+	 * build read with 1358 and the serial read with `serial`.
+	 */
+	async function reconnectAfterBrowserRestart(opts: {
+		boundSerial: number;
+		deviceSerial: number;
+	}): Promise<FlashStatus | null> {
 		const bridge = readyBridge();
 		let clock = 10;
 		const f = fakeIo({
 			async write(target, data) {
-				// Whichever DE1 is connected answers the build read with 1358.
-				if (target === WriteTarget.De1MmrRequest && data[1] === 0x80 && data[3] === 0x10) {
+				if (target !== WriteTarget.De1MmrRequest || data[1] !== 0x80) return;
+				if (data[2] === 0x00 && data[3] === 0x10) {
 					bridge.on_notification(NotificationSource.De1MmrRead, mmr(0x800010, 1358), clock);
+				}
+				if (data[2] === 0x38 && data[3] === 0x30) {
+					bridge.on_notification(NotificationSource.De1MmrRead, mmr(0x803830, opts.deviceSerial), clock);
 				}
 			}
 		});
@@ -480,21 +498,32 @@ describe('FlashDriver with the real core', () => {
 			...noTimer
 		});
 		await driver.restoreAwaiting(1358, false);
-		await driver.bindMachine('dev-A');
+		// As the controller does after a reload: the persisted serial, and no
+		// device.id (an earlier session's id may have been replaced).
+		await driver.bindMachine(opts.boundSerial, '');
 		clock += 30_000;
-		await driver.linkRestored('dev-B');
+		await driver.linkRestored('web-id-issued-after-restart');
 		await settle();
-		let s = await driver.refresh();
+		return driver.refresh();
+	}
+
+	it('the same DE1 after a browser restart (new device.id, same serial) succeeds (audit r4 LOW-1)', async () => {
+		const s = await reconnectAfterBrowserRestart({ boundSerial: 4242, deviceSerial: 4242 });
+		expect(s?.phase).toBe(FlashPhase.Succeeded);
+		expect(s?.locksWrites).toBe(false);
+	});
+
+	it('a DE1 with a different serial running the target build neither satisfies the wait nor releases the lock', async () => {
+		const s = await reconnectAfterBrowserRestart({ boundSerial: 4242, deviceSerial: 9999 });
 		expect(s?.phase).toBe(FlashPhase.AwaitingPowerCycle);
 		expect(s?.locksWrites).toBe(true);
-		expect(s?.foreignMachine).toBe('dev-B');
-		// Its own DE1 comes back: read, and it succeeds.
-		bridge.de1_link_lost();
-		clock += 30_000;
-		await driver.linkRestored('dev-A');
-		await settle();
-		s = await driver.refresh();
-		expect(s?.phase).toBe(FlashPhase.Succeeded);
+		expect(s?.foreignMachine).toBe('serial 9999');
+	});
+
+	it(`an unknown serial with a new device.id is "can't confirm", not "a different DE1"`, async () => {
+		const s = await reconnectAfterBrowserRestart({ boundSerial: 0, deviceSerial: 0 });
+		expect(s?.foreignMachine ?? null).toBeNull();
+		expect(s?.identityUnknown).toBe(true);
 	});
 
 	it('the core\'s per-attempt diagnostic lines reach the log', async () => {
