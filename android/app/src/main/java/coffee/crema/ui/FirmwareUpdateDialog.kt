@@ -37,6 +37,8 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -399,7 +401,12 @@ fun FirmwareHeldBanner(status: FlashStatus?, onOpen: () -> Unit, modifier: Modif
         ) {
             PhIcon("arrows-clockwise", sizeDp = 18)
             Text(heldBannerText(status), style = MaterialTheme.typography.labelLarge)
-            Text("View", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Text(
+                "View",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                textDecoration = TextDecoration.Underline,
+            )
         }
     }
 }
