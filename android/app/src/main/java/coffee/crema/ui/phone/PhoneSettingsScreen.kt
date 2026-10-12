@@ -58,7 +58,6 @@ import coffee.crema.ui.screens.ghcRequired
 import coffee.crema.ui.screens.STOLEN_SERIAL_NOTICE
 import coffee.crema.ui.screens.hasCupWarmerPlate
 import coffee.crema.ui.screens.firmwareLabel
-import coffee.crema.ui.screens.FirmwareUpdateButton
 import coffee.crema.ui.screens.FirmwareCopyBody
 import coffee.crema.ui.rememberFirmwareCardCopy
 import coffee.crema.core.MmrRegister
@@ -353,17 +352,14 @@ private fun MachineSection(
                             .padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        // The button shares the header row (right-aligned) so the
-                        // card is one row shorter on a phone.
-                        val onUpdate: (() -> Unit)? =
-                            if (connected || firmwareFlow.status != null) ({ vm.firmware.open() }) else null
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Eyebrow("Firmware", color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
-                            if (onUpdate != null) {
-                                FirmwareUpdateButton(copy, onUpdate, emphasize = firmwareFlow.status != null)
-                            }
-                        }
-                        FirmwareCopyBody(copy)
+                        Eyebrow("Firmware", color = MaterialTheme.colorScheme.primary)
+                        // The button sits at the bottom right, beside the note.
+                        FirmwareCopyBody(
+                            copy,
+                            onUpdate = if (connected || firmwareFlow.status != null) ({ vm.firmware.open() }) else null,
+                            emphasize = firmwareFlow.status != null,
+                            inlineAction = true,
+                        )
                     }
                 }
                 CremaButton(
