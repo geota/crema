@@ -552,10 +552,34 @@ class De1BleManager(
 
     private var fwMapJob: Job? = null
 
-    /** One flash write, with response (one retry, like every DE1 write); throws. */
+    /** Ordinary (non-flash) DE1 writes in flight — a flash waits for zero. */
+    private val nonFlashWritesInFlight = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /**
+     * Wait (at most [timeoutMs]) for ordinary writes that passed the gate
+     * before it closed to finish — decaid's firmware gate waits for active MMR
+     * operations to drain before taking the lock (`firmware_mmr_gate.dart:44-54`).
+     * Returns whether the link went quiet.
+     */
+    suspend fun awaitNonFlashWritesDrained(timeoutMs: Long): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (nonFlashWritesInFlight.get() > 0) {
+            if (SystemClock.elapsedRealtime() >= deadline) return false
+            delay(20)
+        }
+        return true
+    }
+
+    /**
+     * One flash write, with response, a single bounded attempt (audit M2: no
+     * reference app retries a chunk, and a timed-out Nordic write can still be
+     * on the air); throws.
+     */
     suspend fun firmwareWrite(target: WriteTarget, bytes: ByteArray) {
         val d = device ?: error("DE1 not connected")
-        writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes)
+        withTimeout(WRITE_TIMEOUT_MS) {
+            transport.write(d, De1Uuids.SERVICE, De1Uuids.forWriteTarget(target), bytes)
+        }
         // A flash ACK proves the link is alive; keep the liveness probe quiet
         // (its StateInfo read would only add traffic mid-upload).
         lastInboundMs = SystemClock.elapsedRealtime()
@@ -578,10 +602,14 @@ class De1BleManager(
      */
     fun firmwareSubscribeFwMap(onFrame: (ByteArray) -> Unit) {
         val d = device ?: error("DE1 not connected")
-        fwMapJob?.cancel()
+        // Start the new collector before cancelling the old one, so the
+        // subscription never drops to zero and the disable / enable CCCD writes
+        // can't land in the wrong order (audit L7).
+        val previous = fwMapJob
         fwMapJob = transport.observe(d, De1Uuids.SERVICE, De1Uuids.FW_MAP_REQUEST)
             .onEach { onFrame(it.data) }
             .launchIn(scope)
+        previous?.cancel()
     }
 
     /** Stop delivering A009 frames (the flash ended). */
@@ -618,6 +646,7 @@ class De1BleManager(
             onStatus("Write ignored — DE1 not connected")
             return
         }
+        nonFlashWritesInFlight.incrementAndGet()
         try {
             if (urgent) {
                 val dropped = UrgentWriteGate.preempt("an urgent DE1 $target write")
@@ -647,6 +676,8 @@ class De1BleManager(
         } catch (e: Exception) {
             onWriteFailure(d)
             throw e
+        } finally {
+            nonFlashWritesInFlight.decrementAndGet()
         }
         if (target == WriteTarget.De1ProfileFrame) {
             feedCore(NotificationSource.DE1_FRAME_ACK, bytes, SystemClock.elapsedRealtime(), "DE1 frame-ACK")
@@ -782,6 +813,8 @@ class De1BleManager(
         }
         Log.i(TAG, "DE1 write failed (${first.message}) — one retry in ${WRITE_RETRY_DELAY_MS}ms")
         delay(WRITE_RETRY_DELAY_MS)
+        // A firmware flash may have taken the link meanwhile (audit M1).
+        if (firmwareExclusive) throw IllegalStateException("firmware update in progress — retry dropped")
         withTimeout(WRITE_TIMEOUT_MS) { transport.write(d, De1Uuids.SERVICE, characteristic, bytes) }
     }
 

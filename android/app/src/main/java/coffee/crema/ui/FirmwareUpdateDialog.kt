@@ -2,16 +2,20 @@ package coffee.crema.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Checkbox
@@ -29,17 +33,26 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coffee.crema.core.FirmwareBuildStatus
 import coffee.crema.core.FlashPhase
 import coffee.crema.firmware.ALPHA_POINTS
+import coffee.crema.firmware.ERASE_SETTLING
+import coffee.crema.firmware.EXIT_QUESTION
 import coffee.crema.firmware.FirmwareFlowUi
 import coffee.crema.firmware.FirmwareUpdateController
 import coffee.crema.firmware.FlowStep
 import coffee.crema.firmware.STILL_SAFE
+import coffee.crema.firmware.UNCONFIRMED
 import coffee.crema.firmware.blockerText
+import coffee.crema.firmware.cancelQuestion
 import coffee.crema.firmware.channelLabel
 import coffee.crema.firmware.etaText
 import coffee.crema.firmware.failureText
@@ -53,10 +66,11 @@ import coffee.crema.ui.components.PhIcon
  * Settings → Machine → "Update firmware…" (alpha), phone and tablet — web
  * parity with `FirmwareUpdateFlow.svelte`. Alpha warning (click-through) →
  * choose a build → download from Decent and verify → type UPDATE → progress
- * (phase, percent, ETA, Cancel) → power-cycle instructions → the read-back
- * result, or a failure with Retry. State lives in [FirmwareUpdateController];
- * the flash is the core's state machine. Deliberately plain until a design
- * pass. While a flash runs the dialog can't be dismissed.
+ * (phase, percent, ETA, a confirmed Cancel until verify) → switch the DE1 off
+ * and on (waiting / reconnect states, Hide, a confirmed Exit) → the read-back
+ * result, or a failure with Retry. Every step has one footer row: the way back
+ * on the left, the actions on the right. State lives in
+ * [FirmwareUpdateController]; the flash is the core's state machine.
  */
 @Composable
 fun FirmwareUpdateHost(flow: FirmwareUpdateController, installedBuild: UInt?) {
@@ -83,13 +97,14 @@ fun FirmwareUpdateHost(flow: FirmwareUpdateController, installedBuild: UInt?) {
                 Text(
                     if (ui.step == FlowStep.Flash && ui.status != null) phaseLabel(ui.status!!.phase) else "Update DE1 firmware",
                     style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 )
                 when (ui.step) {
                     FlowStep.Warning -> WarningStep(ui, flow)
                     FlowStep.Choose -> ChooseStep(ui, flow, installedBuild)
                     FlowStep.Source -> SourceStep(ui, flow)
                     FlowStep.Confirm -> ConfirmStep(ui, flow, installedBuild)
-                    FlowStep.Flash -> FlashStep(ui, flow)
+                    FlowStep.Flash -> FlashStep(ui, flow, installedBuild)
                     FlowStep.Closed -> Unit
                 }
             }
@@ -113,24 +128,45 @@ private fun Banner(text: String, warn: Boolean = true) {
     }
 }
 
+/** One footer row: [left] (the way back) at the start, [right] (the actions) at the end. */
 @Composable
-private fun Actions(content: @Composable () -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) { content() }
+private fun Footer(left: @Composable RowScope.() -> Unit = {}, right: @Composable RowScope.() -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), content = left)
+        Spacer(Modifier.weight(1f))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), content = right)
+    }
 }
 
 @Composable
 private fun ColumnScope.WarningStep(ui: FirmwareFlowUi, flow: FirmwareUpdateController) {
     Banner(ALPHA_POINTS.joinToString("\n\n"))
     Row(
-        Modifier.clickable { flow.setAcknowledged(!ui.acknowledged) },
+        Modifier.toggleable(
+            value = ui.acknowledged,
+            role = Role.Checkbox,
+            onValueChange = { flow.setAcknowledged(it) },
+        ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Checkbox(checked = ui.acknowledged, onCheckedChange = { flow.setAcknowledged(it) })
+        Checkbox(checked = ui.acknowledged, onCheckedChange = null)
         Text("I understand", style = MaterialTheme.typography.titleSmall)
     }
-    Actions {
-        CremaButton(onClick = { flow.close() }, variant = CremaButtonVariant.Text, label = "Cancel")
-        CremaButton(onClick = { flow.acceptWarning() }, enabled = ui.acknowledged, label = "Continue")
+    Footer(
+        left = { CremaButton(onClick = { flow.close() }, variant = CremaButtonVariant.Text, label = "Cancel") },
+        right = { CremaButton(onClick = { flow.acceptWarning() }, enabled = ui.acknowledged, label = "Continue") },
+    )
+}
+
+/** How a pinned build relates to the installed one; `warn` = a downgrade. */
+private fun relation(build: UInt, installed: UInt?): Pair<String, Boolean>? {
+    installed ?: return null
+    val rolledBack = firmwareBuildReport(installed)?.status == FirmwareBuildStatus.RolledBack
+    return when {
+        rolledBack -> "Replaces the withdrawn installed build" to false
+        build > installed -> "Newer than installed" to false
+        build == installed -> "Reinstalls the installed build" to false
+        else -> "Older than installed build $installed (downgrade)" to true
     }
 }
 
@@ -141,42 +177,40 @@ private fun ColumnScope.ChooseStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContr
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    ui.artifacts.forEach { a ->
-        val chosen = ui.selectedId == a.id
-        Row(
-            Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .border(
-                    1.dp,
-                    if (chosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-                    RoundedCornerShape(10.dp),
-                )
-                .clickable { flow.select(a.id) }
-                .padding(10.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            RadioButton(selected = chosen, onClick = { flow.select(a.id) })
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Build ${a.build} · ${channelLabel(a.channel)}", style = MaterialTheme.typography.titleSmall)
-                installed?.let { i ->
-                    Text(
-                        when {
-                            a.build > i -> "Newer than installed"
-                            a.build == i -> "Reinstalls the installed build"
-                            else -> "Replaces the installed build"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
+    Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ui.artifacts.forEach { a ->
+            val chosen = ui.selectedId == a.id
+            Row(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .border(
+                        1.dp,
+                        if (chosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                        RoundedCornerShape(10.dp),
                     )
+                    .selectable(selected = chosen, role = Role.RadioButton, onClick = { flow.select(a.id) })
+                    .padding(10.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                RadioButton(selected = chosen, onClick = null)
+                Column(Modifier.padding(start = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Build ${a.build} · ${channelLabel(a.channel)}", style = MaterialTheme.typography.titleSmall)
+                    relation(a.build, installed)?.let { (text, warn) ->
+                        Text(
+                            text,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (warn) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    Text(a.releaseNotes, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Text(a.releaseNotes, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
-    Actions {
-        CremaButton(onClick = { flow.close() }, variant = CremaButtonVariant.Text, label = "Cancel")
-        CremaButton(onClick = { flow.download() }, enabled = ui.selected != null, label = "Download and verify")
-    }
+    Footer(
+        left = { CremaButton(onClick = { flow.close() }, variant = CremaButtonVariant.Text, label = "Cancel") },
+        right = { CremaButton(onClick = { flow.download() }, enabled = ui.selected != null, label = "Download and verify") },
+    )
 }
 
 @Composable
@@ -187,12 +221,14 @@ private fun ColumnScope.SourceStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContr
         LinearProgressIndicator(progress = { ui.downloadProgress }, modifier = Modifier.fillMaxWidth())
     }
     ui.sourceProblem?.let { Banner(it) }
-    Actions {
-        CremaButton(onClick = { flow.back() }, variant = CremaButtonVariant.Text, label = "Back")
-        if (!ui.downloading && ui.sourceProblem != null) {
-            CremaButton(onClick = { flow.download() }, label = "Try again")
-        }
-    }
+    Footer(
+        left = { CremaButton(onClick = { flow.back() }, variant = CremaButtonVariant.Text, label = "Back") },
+        right = {
+            if (!ui.downloading && ui.sourceProblem != null) {
+                CremaButton(onClick = { flow.download() }, label = "Try again")
+            }
+        },
+    )
 }
 
 @Composable
@@ -212,6 +248,7 @@ private fun ColumnScope.ConfirmStep(ui: FirmwareFlowUi, flow: FirmwareUpdateCont
         val lo = Math.round(a.chunkCount.toDouble() * 0.03 / 60)
         Kv("Takes about", "$lo–${lo + 10} min")
     }
+    if (relation(a.build, installed)?.second == true) Banner("This rolls the DE1 back to an older build.")
     if (ui.blockers.isNotEmpty()) Banner(ui.blockers.joinToString("\n") { "• " + blockerText(it) })
     ui.startProblem?.let { Banner(it) }
     OutlinedTextField(
@@ -221,17 +258,19 @@ private fun ColumnScope.ConfirmStep(ui: FirmwareFlowUi, flow: FirmwareUpdateCont
         label = { Text("Type “UPDATE” to start") },
         modifier = Modifier.fillMaxWidth(),
     )
-    Actions {
-        if (ui.blockers.isNotEmpty()) {
-            CremaButton(onClick = { flow.refreshBlockers() }, variant = CremaButtonVariant.Text, label = "Check again")
-        }
-        CremaButton(onClick = { flow.close() }, variant = CremaButtonVariant.Text, label = "Cancel")
-        CremaButton(
-            onClick = { flow.start() },
-            enabled = typed.trim().uppercase() == "UPDATE" && ui.blockers.isEmpty(),
-            label = "Update firmware",
-        )
-    }
+    Footer(
+        left = { CremaButton(onClick = { flow.close() }, variant = CremaButtonVariant.Text, label = "Cancel") },
+        right = {
+            if (ui.blockers.isNotEmpty()) {
+                CremaButton(onClick = { flow.refreshBlockers() }, variant = CremaButtonVariant.Text, label = "Check again")
+            }
+            CremaButton(
+                onClick = { flow.start() },
+                enabled = typed.trim().uppercase() == "UPDATE" && ui.blockers.isEmpty(),
+                label = "Update firmware",
+            )
+        },
+    )
 }
 
 @Composable
@@ -243,12 +282,15 @@ private fun Kv(k: String, v: String) {
 }
 
 @Composable
-private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateController) {
+private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateController, installed: UInt?) {
     val s = ui.status ?: return
     when {
         ui.running -> {
             LinearProgressIndicator(progress = { s.percent / 100f }, modifier = Modifier.fillMaxWidth())
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(
+                Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
                 Text("${s.percent.toInt()} %", style = MaterialTheme.typography.bodyMedium)
                 Text(etaText(s), style = MaterialTheme.typography.bodyMedium)
             }
@@ -259,23 +301,30 @@ private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContro
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Banner("Keep Crema open, this device charging and the DE1 nearby. If the update stops, the DE1 keeps its current firmware.", warn = false)
-            Actions {
-                CremaButton(
-                    onClick = { flow.cancel() },
-                    variant = CremaButtonVariant.Tonal,
-                    enabled = s.canCancel,
-                    label = if (s.canCancel) "Cancel" else "Finishing…",
-                )
+            if (ui.confirmingCancel) {
+                Banner(cancelQuestion(installed))
+            } else {
+                Banner("Keep Crema open, this device charging and the DE1 nearby.", warn = false)
             }
+            Footer(
+                right = {
+                    if (ui.confirmingCancel) {
+                        CremaButton(onClick = { flow.keepUpdating() }, variant = CremaButtonVariant.Text, label = "Keep updating")
+                        CremaButton(onClick = { flow.confirmCancel() }, danger = true, variant = CremaButtonVariant.Tonal, label = "Stop")
+                    } else {
+                        CremaButton(
+                            onClick = { flow.requestCancel() },
+                            variant = CremaButtonVariant.Tonal,
+                            enabled = s.canCancel,
+                            label = if (s.canCancel) "Cancel" else "Checking — can’t stop now",
+                        )
+                    }
+                },
+            )
         }
         s.phase == FlashPhase.AwaitingPowerCycle -> {
             Text(
-                if (s.verifyUnconfirmed) {
-                    "The connection dropped while the DE1 was checking the firmware. Switching it off and on shows which build it runs."
-                } else {
-                    "The DE1 checked build ${s.targetBuild} and will run it after a restart."
-                },
+                if (s.verifyUnconfirmed) UNCONFIRMED else "The DE1 checked build ${s.targetBuild} and runs it after a restart.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
@@ -283,27 +332,51 @@ private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContro
                 style = MaterialTheme.typography.bodyMedium,
             )
             val old = s.restartedOnBuild
-            if (old != null) {
-                Banner("The DE1 restarted but still reports build $old. Switch it off and on once more. If it still reports $old, retry the update.")
-            } else if (s.machineRestarted) {
-                Text("Waiting for the DE1 to reconnect…", style = MaterialTheme.typography.bodySmall)
+            val waiting = when {
+                old != null -> "The DE1 reconnected but reports build $old, not ${s.targetBuild}. Switch it off at the back, wait 10 seconds and switch it on again."
+                s.machineRestarted -> "The DE1 went offline. Waiting for it to come back and report its build…"
+                else -> "Waiting for the DE1 to be switched off…"
             }
-            Actions { CremaButton(onClick = { flow.close() }, label = "Close") }
+            Banner("$waiting Crema keeps other commands away from the DE1 until then.", warn = false)
+            if (ui.confirmingExit) Banner(EXIT_QUESTION)
+            Footer(
+                left = {
+                    if (ui.confirmingExit) {
+                        CremaButton(onClick = { flow.keepWaiting() }, variant = CremaButtonVariant.Text, label = "Keep waiting")
+                    } else {
+                        CremaButton(onClick = { flow.requestExit() }, variant = CremaButtonVariant.Text, label = "Exit…")
+                    }
+                },
+                right = {
+                    if (ui.confirmingExit) {
+                        CremaButton(onClick = { flow.confirmExit() }, danger = true, variant = CremaButtonVariant.Tonal, label = "Exit")
+                    } else {
+                        CremaButton(onClick = { flow.close() }, label = "Hide")
+                    }
+                },
+            )
         }
         s.phase == FlashPhase.Succeeded -> {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PhIcon("check-circle", sizeDp = 22, tint = MaterialTheme.colorScheme.primary)
                 Text("Your DE1 now runs build ${s.targetBuild}.", style = MaterialTheme.typography.bodyLarge)
             }
-            Actions { CremaButton(onClick = { flow.close() }, label = "Done") }
+            Footer(right = { CremaButton(onClick = { flow.close() }, label = "Done") })
         }
         else -> {
             s.failure?.let { Text(failureText(it), style = MaterialTheme.typography.bodyMedium) }
+            if (s.eraseSettling) Banner(ERASE_SETTLING)
             Banner(STILL_SAFE, warn = false)
-            Actions {
-                CremaButton(onClick = { flow.close() }, variant = CremaButtonVariant.Text, label = "Close")
-                CremaButton(onClick = { flow.retry() }, label = "Retry")
-            }
+            Footer(
+                left = {
+                    CremaButton(
+                        onClick = { flow.close() },
+                        variant = CremaButtonVariant.Text,
+                        label = if (s.locksWrites) "Hide" else "Close",
+                    )
+                },
+                right = { CremaButton(onClick = { flow.retry() }, enabled = !s.locksWrites, label = "Retry") },
+            )
         }
     }
 }

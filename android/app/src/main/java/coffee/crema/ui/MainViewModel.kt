@@ -1992,43 +1992,46 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Firmware updates (alpha) ──────────────────────────────────────────
     // The core's flash state machine (`de1_app::firmware_flash`) driven over
-    // the DE1 link by [firmwareDriver]; [firmware] is the Settings flow. The
+    // the DE1 link by its FirmwareFlashDriver; [firmware] is the Settings flow. The
     // driver runs off Main (29k blocking FFI round trips per flash) in a child
     // of viewModelScope; the foreground service + screen-on keep it alive.
 
     private val firmwareScope = kotlinx.coroutines.CoroutineScope(
-        viewModelScope.coroutineContext + kotlinx.coroutines.SupervisorJob(viewModelScope.coroutineContext[kotlinx.coroutines.Job]) + Dispatchers.Default,
+        viewModelScope.coroutineContext +
+            kotlinx.coroutines.SupervisorJob(viewModelScope.coroutineContext[kotlinx.coroutines.Job]) +
+            Dispatchers.Default +
+            // A throw in the driver must reach the log, not kill the process
+            // mid-flash (audit L9); the core keeps the flash and its lock.
+            kotlinx.coroutines.CoroutineExceptionHandler { _, e -> appendLog("Firmware: driver error: ${e.message}") },
     )
 
     private val firmwareCore = coffee.crema.firmware.BridgeFlashCore(bridge)
 
-    private val firmwareDriver = coffee.crema.firmware.FirmwareFlashDriver(
-        core = firmwareCore,
-        io = object : coffee.crema.firmware.FlashIoPort {
-            override suspend fun write(target: WriteTarget, data: ByteArray) = ble.firmwareWrite(target, data)
-            override suspend fun readFwMap(): ByteArray = ble.firmwareReadFwMap()
-            override suspend fun subscribeFwMap(onFrame: (ByteArray) -> Unit) = ble.firmwareSubscribeFwMap(onFrame)
-            override suspend fun readBuild() {
-                onCoreOutputJson(bridge.readMmr(MmrReg.FIRMWARE_VERSION))
-            }
-            override fun setExclusive(on: Boolean) {
-                ble.firmwareExclusive = on
-                if (!on) ble.firmwareUnsubscribeFwMap()
-            }
-        },
-        scope = firmwareScope,
-        clock = SystemClock::elapsedRealtime,
-        onStatus = { s -> firmware.onStatus(s) },
-        onLog = ::appendLog,
-        keepAlive = { active ->
-            viewModelScope.launch { bgConnection.setFirmwareFlashActive(active) }
-        },
-    )
+    /** The DE1 link surface for the flash: its own writes pass the exclusive
+     *  gate; the gate waits for ordinary writes already on the air (audit M1). */
+    private val firmwareIo = object : coffee.crema.firmware.FlashIoPort {
+        override suspend fun write(target: WriteTarget, data: ByteArray) = ble.firmwareWrite(target, data)
+        override suspend fun readFwMap(): ByteArray = ble.firmwareReadFwMap()
+        override suspend fun subscribeFwMap(onFrame: (ByteArray) -> Unit) = ble.firmwareSubscribeFwMap(onFrame)
+        override suspend fun awaitQuiet(): Boolean =
+            ble.awaitNonFlashWritesDrained(coffee.crema.firmware.DRAIN_TIMEOUT_MS)
+        override fun setExclusive(on: Boolean) {
+            ble.firmwareExclusive = on
+            if (!on) ble.firmwareUnsubscribeFwMap()
+        }
+    }
+
+    /**
+     * The connect-time setup (identity reads + settings sweep) has run on this
+     * link. A flash only starts after it, so its writes are not still queued
+     * behind the gate (audit M1). Reset on every drop.
+     */
+    @Volatile
+    private var de1SetupDone = false
 
     /** Settings → Machine → "Update firmware…" (alpha). */
     val firmware: coffee.crema.firmware.FirmwareUpdateController = coffee.crema.firmware.FirmwareUpdateController(
         scope = firmwareScope,
-        driver = firmwareDriver,
         core = firmwareCore,
         catalog = object : coffee.crema.firmware.FirmwareCatalog {
             override fun manifest() = json.decodeFromString(
@@ -2045,14 +2048,46 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val state = ble.state.value
             coffee.crema.core.FlashShellConditions(
                 connected = state == De1BleManager.State.READY,
-                ready = state == De1BleManager.State.READY,
+                ready = state == De1BleManager.State.READY && de1SetupDone,
                 guidedBrewActive = _ui.value.guidedBrew.live,
                 powerOk = firmwarePowerOk(app),
             )
         },
         installedBuild = { _ui.value.de1MachineInfo[MmrRegister.FirmwareVersion] },
         log = ::appendLog,
+        markers = coffee.crema.firmware.SharedPrefsAwaitingMarkers(app),
+        // The flash let go of the link: run the connect-time work it held off.
+        onRelease = { viewModelScope.launch { afterFirmwareRelease() } },
+        driverFactory = { onStatus ->
+            coffee.crema.firmware.FirmwareFlashDriver(
+                core = firmwareCore,
+                io = firmwareIo,
+                scope = firmwareScope,
+                clock = SystemClock::elapsedRealtime,
+                onStatus = onStatus,
+                onLog = ::appendLog,
+                keepAlive = { active ->
+                    viewModelScope.launch { bgConnection.setFirmwareFlashActive(active) }
+                },
+            )
+        },
     )
+
+    /**
+     * A flash (or its erase / power-cycle window) holds the DE1 link: the
+     * reconnect side-effects — settings sweep, identity reads, charger checks,
+     * presence pokes, the saver's sleep — stay off the machine (audit H2). The
+     * core refuses them too; this keeps them from running (and being marked
+     * done) at all.
+     */
+    private fun firmwareHolds(): Boolean = firmware.ui.value.holdsLink
+
+    private fun afterFirmwareRelease() {
+        if (ble.state.value != De1BleManager.State.READY) return
+        appendLog("Firmware: link released — running the connect setup")
+        readMachineInfo()
+        sweepRunner.onReady()
+    }
 
     /** True on tablet-class displays (≥600dp smallest width) — the form-factor
      *  default for [MainUiState.keepConnectedScreenOff] (tablet on / phone off). */
@@ -2106,8 +2141,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onDe1SessionClosed = { clearDe1SessionUi() },
         onScaleSessionClosed = { clearScaleSessionUi() },
         onDe1Ready = {
-            readMachineInfo()
-            sweepRunner.onReady()
+            // Into a DE1 still in a flash / reboot window, nothing but the
+            // flash's own build read (audit H2); [afterFirmwareRelease] runs
+            // these once it lets go.
+            if (firmwareHolds()) {
+                appendLog("Firmware: DE1 ready during a firmware update — connect setup deferred")
+            } else {
+                readMachineInfo()
+                sweepRunner.onReady()
+            }
             idleSleep.link(true)
             // Re-assert the stop targets on every (re)connect. The core now
             // carries them across `reset()` itself, so this is belt-and-braces
@@ -2121,6 +2163,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // reconnect would brew against a stale/absent profile.
         onDe1Dropped = {
             lastUploadedFingerprint = null
+            de1SetupDone = false
             sweepRunner.onDropped()
             idleSleep.link(false)
         },
@@ -2262,6 +2305,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         connection.start()
         // Keep-alive service watcher: register the power receiver + evaluate.
         bgConnection.start()
+        // A flash that was waiting for the DE1's power-cycle when the process
+        // died comes back with its lock (audit M3).
+        firmware.restore()
         // The firmware flash hears link loss from the core (de1LinkLost /
         // reset) and needs the recovery to re-read the build after the
         // power-cycle.
@@ -2269,8 +2315,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             var wasReady = false
             ble.state.collect { st ->
                 val ready = st == De1BleManager.State.READY
-                if (ready && !wasReady) firmwareDriver.onLinkRestored()
-                if (!ready && wasReady) firmwareDriver.onLinkLost()
+                if (ready && !wasReady) firmware.onLinkRestored()
+                if (!ready && wasReady) firmware.onLinkLost()
                 wasReady = ready
             }
         }
@@ -3143,7 +3189,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Leave the DE1's USB port charging (Decenza
         // `BatteryManager::ensureChargerOn`): smart charging may have switched
         // it off, and nothing would turn it back on once Crema is gone.
-        if (_ui.value.bleState == De1BleManager.State.READY) {
+        if (_ui.value.bleState == De1BleManager.State.READY && !firmwareHolds()) {
             routeWrite("USB charger on") { bridge.setUsbChargerOn(true) }
         }
         sweepRunner.onDropped()
@@ -3515,6 +3561,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The once-a-minute USB-charger check (Decenza `BatteryManager`) — see [ConnectSweepRunner]. */
     private fun usbChargerTick() {
+        if (firmwareHolds()) return // no charger writes into a flash (audit H2)
         routeWrite("USB charger check") {
             bridge.usbChargerTick(_ui.value.usbChargingMode, batteryPercent()?.toUByte())
         }
@@ -3591,6 +3638,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }.onFailure { appendLog("Firmware build report failed: ${it.message}") }
             val freq = runCatching { bridge.lineFrequencyHz() }.getOrNull()
             _ui.update { it.copy(lineFreqHz = freq) }
+            de1SetupDone = true
         }
     }
 
@@ -4663,7 +4711,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Machine states / app work that must never be interrupted by the saver. */
     private fun machineBusyForSaver(s: MainUiState): Boolean =
-        s.shotInProgress || s.profileUploading || s.guidedBrew.live ||
+        firmwareHolds() || s.shotInProgress || s.profileUploading || s.guidedBrew.live ||
             s.machineStateName in setOf(
                 MachineState.Espresso, MachineState.Steam, MachineState.HotWater,
                 MachineState.HotWaterRinse, MachineState.Descale, MachineState.Clean,
@@ -5285,7 +5333,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val prevState = _ui.value.machineStateName
                 val asleep = c.state.isAsleep()
                 val wasAsleep = prevState.isAsleep()
-                if (shouldRaiseSaver(prevState, c.state, ::appAskedForSleep)) {
+                // The flash's own Sleep is not the user walking away (audit L8).
+                if (!firmwareHolds() && shouldRaiseSaver(prevState, c.state, ::appAskedForSleep)) {
                     _ui.update { it.copy(saverVisible = true) }
                 } else if (!asleep && wasAsleep && _ui.value.saverVisible) {
                     _ui.update { it.copy(saverVisible = false) }

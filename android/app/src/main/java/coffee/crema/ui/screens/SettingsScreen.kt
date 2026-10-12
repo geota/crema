@@ -202,7 +202,7 @@ fun SettingsScreen(
                             ble = if (connected) (ui.de1BluetoothAddress ?: "Paired") else null,
                             onConnect = { onConnect("machine") },
                             firmwareCopy = rememberFirmwareCardCopy(ui.de1MachineInfo[MmrRegister.FirmwareVersion], connected),
-                            onUpdateFirmware = if (connected) ({ vm.firmware.open() }) else null,
+                            onUpdateFirmware = if (connected || firmwareFlow.status != null) ({ vm.firmware.open() }) else null,
                             firmwareBusy = firmwareFlow.status != null,
                         )
                         coffee.crema.ui.FirmwareUpdateHost(vm.firmware, ui.de1MachineInfo[MmrRegister.FirmwareVersion])

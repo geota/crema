@@ -19,22 +19,28 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import java.util.concurrent.atomic.AtomicBoolean
 
 /*
  * The Android I/O half of a DE1 firmware flash — the twin of the web's
  * `$lib/firmware/flash-driver.ts`.
  *
  * Every protocol decision lives in the Rust core (`de1_app::firmware_flash`):
- * which bytes, which characteristic, when a phase is over, when to give up.
- * The core answers each input with a `FlashStep` — actions plus a status
- * snapshot. This driver performs the actions strictly one at a time (one
- * write-with-response in flight — de1app `bluetooth.tcl:3303-3312`, decaid
- * `unified_de1.firmware.dart:239`), reports every ACK / failure / read back,
- * routes A009 notifications and link events, ticks the core every [TICK_MS],
- * holds the DE1 link exclusively while the core locks writes and asks for the
- * keep-alive (foreground service + screen on) while a flash runs. All core
- * calls happen under one [Mutex], so a tick, a notification and an ACK never
- * interleave.
+ * which bytes, which characteristic, when a phase is over, when to give up, how
+ * long the link stays locked. The core answers each input with a `FlashStep` —
+ * actions plus a status snapshot. This driver performs the actions strictly one
+ * at a time (one write-with-response in flight — de1app
+ * `bluetooth.tcl:3303-3312`, decaid `unified_de1.firmware.dart:239`), reports
+ * every ACK / failure / read back, routes A009 notifications and link events,
+ * ticks the core every [TICK_MS] (also while an action is in flight), holds the
+ * DE1 link exclusively while the core locks writes, waits for ordinary writes
+ * already on the air before the first flash write (decaid's gate drains), and
+ * asks for the keep-alive (foreground service + screen on) while a flash runs.
+ *
+ * All core calls happen under one [Mutex], so a tick, a notification and an ACK
+ * never interleave. Queued actions carry the generation they were issued in; a
+ * cancel, failure or link loss starts a new one, so nothing queued before it is
+ * written after it (audit L1).
  */
 
 /** The core's flash clock cadence (decaid polls A009 every 250 ms). */
@@ -42,6 +48,9 @@ const val TICK_MS = 250L
 
 /** How often a running upload republishes its status (UI churn bound). */
 const val STATUS_PUBLISH_MS = 250L
+
+/** Longest wait for ordinary writes to drain before the first flash write. */
+const val DRAIN_TIMEOUT_MS = 6_000L
 
 /** The core surface the driver needs. [BridgeFlashCore] is the real one. */
 interface FlashCorePort {
@@ -55,12 +64,14 @@ interface FlashCorePort {
     fun linkRestored(nowMs: Long): FlashStep
     fun cancel(nowMs: Long): FlashStep
     fun dismiss(): Boolean
+    fun exit(): Boolean
     fun status(nowMs: Long): FlashStep
+    fun restoreAwaiting(build: UInt, unconfirmed: Boolean, nowMs: Long): FlashStep
 }
 
 /** The DE1 link surface the driver needs ([coffee.crema.ble.De1BleManager]). */
 interface FlashIoPort {
-    /** One write with response; throws on failure. */
+    /** One flash write with response, allowed through the lock; throws on failure. */
     suspend fun write(target: WriteTarget, data: ByteArray)
 
     /** A fresh GATT read of A009. */
@@ -69,8 +80,8 @@ interface FlashIoPort {
     /** Enable A009 notifications, delivering frames to [onFrame]. */
     suspend fun subscribeFwMap(onFrame: (ByteArray) -> Unit)
 
-    /** Issue the core's MMR `0x800010` read through the normal path. */
-    suspend fun readBuild()
+    /** Wait for ordinary writes already on the air; false if they didn't drain. */
+    suspend fun awaitQuiet(): Boolean
 
     /** Drop every non-flash DE1 write while [on]. */
     fun setExclusive(on: Boolean)
@@ -105,7 +116,10 @@ class BridgeFlashCore(private val bridge: CremaBridge) : FlashCorePort {
     override fun linkRestored(nowMs: Long) = step(bridge.firmwareFlashLinkRestored(nowMs.toULong()))
     override fun cancel(nowMs: Long) = step(bridge.firmwareFlashCancel(nowMs.toULong()))
     override fun dismiss(): Boolean = bridge.firmwareFlashDismiss()
+    override fun exit(): Boolean = bridge.firmwareFlashExit()
     override fun status(nowMs: Long) = step(bridge.firmwareFlashStatus(nowMs.toULong()))
+    override fun restoreAwaiting(build: UInt, unconfirmed: Boolean, nowMs: Long) =
+        step(bridge.firmwareFlashRestoreAwaiting(build, unconfirmed, nowMs.toULong()))
 }
 
 /** Phases during which the flash must not be interrupted. */
@@ -115,6 +129,8 @@ internal val RUNNING_PHASES = setOf(
     FlashPhase.Uploading,
     FlashPhase.Verifying,
 )
+
+private data class Queued(val action: FlashAction, val gen: Int)
 
 class FirmwareFlashDriver(
     private val core: FlashCorePort,
@@ -127,11 +143,18 @@ class FirmwareFlashDriver(
     private val keepAlive: (Boolean) -> Unit = {},
 ) {
     private val lock = Mutex()
-    private val queue = ArrayDeque<FlashAction>()
+    private val queue = ArrayDeque<Queued>()
+    private var gen = 0
     private var pumpJob: Job? = null
     private var tickJob: Job? = null
+    private val tickPending = AtomicBoolean(false)
     private var lastPublish = 0L
     private var uploadStartedAt: Long? = null
+    private var lastKeepAlive: Boolean? = null
+
+    /** Set by [start]: the next pump first waits for ordinary writes to drain. */
+    @Volatile
+    private var drainBeforeFirstWrite = false
 
     /** The latest status snapshot (null with no flash). */
     @Volatile
@@ -147,30 +170,48 @@ class FirmwareFlashDriver(
         }
         attach()
         onLog("Firmware: flashing build ${step.status?.targetBuild} (${step.status?.chunksTotal} writes)")
-        lock.withLock { apply(step, force = true) }
+        lock.withLock {
+            gen++
+            drainBeforeFirstWrite = true
+            apply(step, force = true)
+        }
         return null
     }
 
-    /** Cancel while the core still allows it. */
+    /** Cancel while the core still allows it (its Sleep follows). */
     suspend fun cancel() = lock.withLock {
+        gen++
         queue.clear()
         apply(core.cancel(clock()), force = true)
     }
 
-    /** Forget a finished flash and stop the clock. */
+    /** Forget a finished, unlocked flash and stop the clock. */
     suspend fun dismiss(): Boolean {
         val cleared = lock.withLock { core.dismiss() }
-        if (cleared) {
-            detach()
-            current = null
-            keepAlive(false)
-            io.setExclusive(false)
-            onStatus(null)
-        }
+        if (cleared) released()
         return cleared
     }
 
-    /** Re-read the status (the flow reopening) and re-attach if a flash exists. */
+    /** The user's explicit exit from the power-cycle step. */
+    suspend fun exit(): Boolean {
+        val cleared = lock.withLock { core.exit() }
+        if (cleared) released()
+        return cleared
+    }
+
+    private suspend fun released() {
+        lock.withLock {
+            gen++
+            queue.clear()
+        }
+        detach()
+        current = null
+        setKeepAlive(false)
+        io.setExclusive(false)
+        onStatus(null)
+    }
+
+    /** Re-read the status (the flow reopening, a restore) and re-attach if a flash exists. */
     suspend fun refresh(): FlashStatus? {
         val step = lock.withLock { core.status(clock()) }
         if (step.status != null) attach()
@@ -178,10 +219,17 @@ class FirmwareFlashDriver(
         return current
     }
 
+    /** Bring back a power-cycle step persisted before a process restart. */
+    suspend fun restoreAwaiting(build: UInt, unconfirmed: Boolean): FlashStatus? {
+        lock.withLock { core.restoreAwaiting(build, unconfirmed, clock()) }
+        return refresh()
+    }
+
     /** The DE1 link dropped (the core already heard it via `de1LinkLost`). */
     fun onLinkLost() {
         scope.launch {
             lock.withLock {
+                gen++
                 queue.clear()
                 apply(core.status(clock()), force = true)
             }
@@ -201,9 +249,14 @@ class FirmwareFlashDriver(
         tickJob = scope.launch {
             while (isActive) {
                 delay(TICK_MS)
-                // Skip while an action is in flight; timeouts are timestamp-based.
-                if (lock.isLocked || pumpJob?.isActive == true) continue
-                lock.withLock { apply(core.tick(clock())) }
+                // Ticks reach the core while an action is in flight too (the
+                // core's timeouts are timestamp-based); coalesced.
+                if (!tickPending.compareAndSet(false, true)) continue
+                try {
+                    lock.withLock { apply(core.tick(clock())) }
+                } finally {
+                    tickPending.set(false)
+                }
             }
         }
     }
@@ -213,25 +266,35 @@ class FirmwareFlashDriver(
         tickJob = null
     }
 
+    private fun setKeepAlive(on: Boolean) {
+        if (lastKeepAlive == on) return
+        lastKeepAlive = on
+        keepAlive(on)
+    }
+
     /** Fold a step: publish, queue actions, keep the link. Caller holds [lock]. */
     private fun apply(step: FlashStep, force: Boolean = false) {
         val prev = current
         val status = step.status
         current = status
         io.setExclusive(status?.locksWrites == true)
-        keepAlive(status != null && status.phase in RUNNING_PHASES)
+        setKeepAlive(status != null && status.phase in RUNNING_PHASES)
         trackUpload(prev, status)
         val now = clock()
-        val changed = prev?.phase != status?.phase || prev?.failure != status?.failure
+        val changed = prev?.phase != status?.phase || prev?.failure != status?.failure ||
+            prev?.locksWrites != status?.locksWrites || prev?.restartedOnBuild != status?.restartedOnBuild
         if (force || changed || now - lastPublish >= STATUS_PUBLISH_MS) {
             lastPublish = now
             onStatus(status)
         }
         if (changed && status != null && status.phase !in RUNNING_PHASES) {
-            onLog("Firmware: ${status.phase.string}${status.failure?.let { " (${it::class.simpleName})" } ?: ""}")
+            onLog(
+                "Firmware: ${status.phase.string}${status.failure?.let { " (${it::class.simpleName})" } ?: ""}" +
+                    if (status.locksWrites) ", link held" else "",
+            )
         }
         if (step.actions.isNotEmpty()) {
-            queue.addAll(step.actions)
+            step.actions.forEach { queue.addLast(Queued(it, gen)) }
             if (pumpJob?.isActive != true) pumpJob = scope.launch { pump() }
         }
     }
@@ -248,14 +311,20 @@ class FirmwareFlashDriver(
     }
 
     private suspend fun pump() {
+        if (drainBeforeFirstWrite) {
+            drainBeforeFirstWrite = false
+            if (!io.awaitQuiet()) onLog("Firmware: ordinary writes still in flight after ${DRAIN_TIMEOUT_MS / 1000} s")
+        }
         while (true) {
-            val action = lock.withLock { queue.removeFirstOrNull() } ?: return
-            perform(action)
+            val next = lock.withLock { queue.removeFirstOrNull() } ?: return
+            perform(next)
         }
     }
 
-    private suspend fun perform(action: FlashAction) {
-        when (action) {
+    private suspend fun perform(item: Queued) {
+        // Issued before a cancel / failure / link loss: never performed after it.
+        if (lock.withLock { item.gen != gen }) return
+        when (val action = item.action) {
             is FlashAction.Write -> {
                 val bytes = action.content.data.map { it.toByte() }.toByteArray()
                 val failure = try {
@@ -268,6 +337,7 @@ class FirmwareFlashDriver(
                 }
                 lock.withLock {
                     if (failure != null) {
+                        gen++
                         queue.clear()
                         apply(core.onWriteFailed(failure.message ?: failure.toString(), clock()), force = true)
                     } else {
@@ -293,10 +363,12 @@ class FirmwareFlashDriver(
                     apply(if (bytes == null) core.onReadFailed(clock()) else core.onFwMap(bytes, clock()))
                 }
             }
-            FlashAction.ReadBuild -> {
-                runCatching { io.readBuild() }.onFailure { if (it is CancellationException) throw it }
-                // The reply lands via the normal notification path, which feeds
-                // the core's flash; publish whatever it decided.
+            is FlashAction.ReadBuild -> {
+                // The MMR read request goes through the lock like the flash's own
+                // writes; the reply arrives as an ordinary MMR notification.
+                val bytes = action.content.data.map { it.toByte() }.toByteArray()
+                runCatching { io.write(WriteTarget.De1MmrRequest, bytes) }
+                    .onFailure { if (it is CancellationException) throw it }
                 lock.withLock { apply(core.status(clock()), force = true) }
             }
         }

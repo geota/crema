@@ -358,7 +358,7 @@ private fun MachineSection(
                         Eyebrow("Firmware", color = MaterialTheme.colorScheme.primary)
                         FirmwareCopyBody(
                             copy,
-                            onUpdate = if (connected) ({ vm.firmware.open() }) else null,
+                            onUpdate = if (connected || firmwareFlow.status != null) ({ vm.firmware.open() }) else null,
                             emphasize = firmwareFlow.status != null,
                         )
                     }
