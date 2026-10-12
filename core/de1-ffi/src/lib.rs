@@ -1973,6 +1973,42 @@ pub fn maintenance_readout(state_json: String, now_ms: i64) -> Result<String, Cr
     de1_domain::maintenance_readout_json(&state_json, now_ms).map_err(crema_err)
 }
 
+/// Classify a DE1 firmware build (MMR `0x800010`; `None` = not read yet)
+/// against crema's known-builds table, as a JSON-encoded
+/// `FirmwareBuildReport`. See [`de1_domain::classify_firmware_build_json`].
+#[uniffi::export]
+#[must_use]
+pub fn classify_firmware_build(installed: Option<u32>) -> String {
+    de1_domain::classify_firmware_build_json(installed)
+}
+
+/// The pinned manifest of official DE1 firmware images crema can verify, as
+/// a JSON array of `FirmwareArtifact`. See [`de1_domain::firmware_manifest`].
+#[uniffi::export]
+#[must_use]
+pub fn firmware_manifest() -> String {
+    de1_domain::firmware_manifest_json()
+}
+
+/// Validate a downloaded firmware file against the pinned manifest, as a JSON
+/// `FirmwareImageCheck`. See [`de1_domain::validate_firmware_image`].
+#[uniffi::export]
+#[must_use]
+pub fn validate_firmware_image(image: Vec<u8>) -> String {
+    de1_domain::validate_firmware_image_json(&image)
+}
+
+/// Parse a `FlashShellConditions` JSON; anything unparsable is the most
+/// restrictive reading (not connected, not ready, power not ok).
+fn parse_flash_conditions(json: &str) -> de1_app::FlashShellConditions {
+    serde_json::from_str(json).unwrap_or(de1_app::FlashShellConditions {
+        connected: false,
+        ready: false,
+        guided_brew_active: false,
+        power_ok: false,
+    })
+}
+
 /// Convert an editable `CremaProfile` JSON into the wire `Profile` JSON the DE1
 /// upload / v2-export path speaks. The segment↔step adapter lives in the core
 /// so every shell shares one mapping. See
@@ -2578,15 +2614,139 @@ impl CremaBridge {
             .and_then(|uuids| serde_json::to_string(&uuids).ok())
     }
 
-    /// The firmware-update check result, as a JSON-encoded
-    /// [`FirmwareUpdateStatus`](de1_app::FirmwareUpdateStatus). Pure read —
-    /// no BLE traffic. Returns the `Unknown` variant until the DE1's `Version`
-    /// characteristic has been observed via `on_notification`.
-    pub fn firmware_update_status(&self) -> String {
-        // RS1: fall back to `{"type":"Unknown"}` on the unreachable serialize
-        // error instead of poisoning the mutex.
-        serde_json::to_string(&self.core().firmware_update_status())
-            .unwrap_or_else(|_| r#"{"type":"Unknown"}"#.to_string())
+    /// What the connected DE1's firmware build means, as a JSON-encoded
+    /// [`FirmwareBuildReport`](de1_domain::FirmwareBuildReport): the build
+    /// classified against crema's known-builds table. Pure read — no BLE
+    /// traffic. The status is `Unknown` until the DE1's FirmwareVersion MMR
+    /// reply (`0x800010`) has been routed through `on_notification`.
+    pub fn firmware_build_report(&self) -> String {
+        serde_json::to_string(&self.core().firmware_build_report())
+            .unwrap_or_else(|_| r#"{"status":"Unknown"}"#.to_string())
+    }
+
+    // ── Firmware flash ───────────────────────────────────────────
+    //
+    // Every call returns a JSON-encoded `FlashStep` (`actions` to perform one
+    // at a time, the `status` snapshot, an optional start `error`). See
+    // `de1_app::firmware_flash`.
+
+    /// Every precondition blocking a flash now, as a JSON array of
+    /// `FlashBlocker`. `conditions_json` is a `FlashShellConditions`; an
+    /// unparsable one is treated as "not connected, power not ok".
+    pub fn firmware_flash_blockers(&self, conditions_json: String) -> String {
+        let conditions = parse_flash_conditions(&conditions_json);
+        serde_json::to_string(&self.core().firmware_flash_blockers(conditions))
+            .unwrap_or_else(|_| "[]".to_string())
+    }
+
+    /// Validate `image` against the pinned manifest and the preconditions,
+    /// then start the flash.
+    pub fn firmware_flash_start(
+        &self,
+        image: Vec<u8>,
+        conditions_json: String,
+        now_ms: u64,
+    ) -> String {
+        let conditions = parse_flash_conditions(&conditions_json);
+        self.core()
+            .firmware_flash_start(image, conditions, now_ms)
+            .to_json()
+    }
+
+    /// The flash's pending write was acknowledged.
+    pub fn firmware_flash_on_write_ack(&self, now_ms: u64) -> String {
+        self.core().firmware_flash_on_write_ack(now_ms).to_json()
+    }
+
+    /// The flash's pending write failed.
+    pub fn firmware_flash_on_write_failed(&self, message: String, now_ms: u64) -> String {
+        self.core()
+            .firmware_flash_on_write_failed(&message, now_ms)
+            .to_json()
+    }
+
+    /// An `FWMapRequest` (A009) frame arrived.
+    pub fn firmware_flash_on_fw_map(&self, data: Vec<u8>, now_ms: u64) -> String {
+        self.core()
+            .firmware_flash_on_fw_map(&data, now_ms)
+            .to_json()
+    }
+
+    /// A `ReadFwMap` poll read failed.
+    pub fn firmware_flash_on_read_failed(&self, now_ms: u64) -> String {
+        self.core().firmware_flash_on_read_failed(now_ms).to_json()
+    }
+
+    /// The flash clock (~250 ms while a flash exists).
+    pub fn firmware_flash_tick(&self, now_ms: u64) -> String {
+        self.core().firmware_flash_tick(now_ms).to_json()
+    }
+
+    /// The DE1 link came back.
+    pub fn firmware_flash_link_restored(&self, now_ms: u64, machine: String) -> String {
+        self.core()
+            .firmware_flash_link_restored(now_ms, &machine)
+            .to_json()
+    }
+
+    /// Tie the current flash to the DE1 it is for: serial (0 = unknown) and
+    /// Bluetooth address ("" = unknown).
+    pub fn firmware_flash_bind_machine(&self, serial: u32, link_id: String) {
+        self.core().firmware_flash_bind_machine(serial, &link_id);
+    }
+
+    /// Cancel while still harmless.
+    pub fn firmware_flash_cancel(&self, now_ms: u64) -> String {
+        self.core().firmware_flash_cancel(now_ms).to_json()
+    }
+
+    /// Forget a finished flash; `false` while one still holds the link.
+    pub fn firmware_flash_dismiss(&self) -> bool {
+        self.core().firmware_flash_dismiss()
+    }
+
+    /// The user's explicit exit from the power-cycle step; `false` while a
+    /// transfer or an interrupted erase holds the link.
+    pub fn firmware_flash_exit(&self) -> bool {
+        self.core().firmware_flash_exit()
+    }
+
+    /// Bring back a flash that was waiting for the power-cycle before the
+    /// process restarted (from what the shell persisted).
+    pub fn firmware_flash_restore_awaiting(
+        &self,
+        build: u32,
+        unconfirmed: bool,
+        now_ms: u64,
+    ) -> String {
+        self.core()
+            .firmware_flash_restore_awaiting(build, unconfirmed, now_ms)
+            .to_json()
+    }
+
+    /// Bring back the lock of an erase that may still be running when the
+    /// process died (from the deadline the shell persisted).
+    pub fn firmware_flash_restore_erase_hold(
+        &self,
+        build: u32,
+        hold_ms_left: u64,
+        now_ms: u64,
+    ) -> String {
+        self.core()
+            .firmware_flash_restore_erase_hold(build, hold_ms_left, now_ms)
+            .to_json()
+    }
+
+    /// Whether a firmware flash (or its erase / reboot window) holds the DE1
+    /// link. The shells refuse takeover, handoff and proxy-mode switches
+    /// while it does.
+    pub fn firmware_locks_writes(&self) -> bool {
+        self.core().firmware_locks_writes()
+    }
+
+    /// The current snapshot.
+    pub fn firmware_flash_status(&self, now_ms: u64) -> String {
+        self.core().firmware_flash_status(now_ms).to_json()
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command sets the connected scale's
@@ -3034,6 +3194,40 @@ fn json(output: CoreOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn firmware_flash_facades_speak_json() {
+        let manifest = firmware_manifest();
+        assert!(manifest.contains(r#""build":1333"#) && manifest.contains(r#""build":1358"#));
+        assert!(manifest.contains("fast.decentespresso.com/download/sync/de1nightly"));
+        let check = validate_firmware_image(vec![0u8; 8]);
+        assert!(check.contains(r#""ok":false"#) && check.contains("TooShort"));
+        let bridge = CremaBridge::new();
+        let blockers = bridge.firmware_flash_blockers("not json".into());
+        assert!(blockers.contains("NotConnected") && blockers.contains("LowPower"));
+        let step = bridge.firmware_flash_start(
+            vec![0x42; 4096],
+            r#"{"connected":false,"ready":false,"guidedBrewActive":false,"powerOk":true}"#.into(),
+            1,
+        );
+        assert!(step.contains(r#""type":"Blocked""#), "{step}");
+        assert!(bridge.firmware_flash_status(1).contains(r#""status":null"#));
+        assert!(bridge.firmware_flash_tick(2).contains(r#""actions":[]"#));
+        assert!(!bridge.firmware_flash_dismiss());
+    }
+
+    #[test]
+    fn firmware_build_facades_classify_through_the_table() {
+        assert!(classify_firmware_build(Some(1363)).contains(r#""status":"RolledBack""#));
+        assert!(classify_firmware_build(Some(1358)).contains(r#""status":"Newest""#));
+        assert!(classify_firmware_build(None).contains(r#""status":"Unknown""#));
+        // The bridge's own read is Unknown until the FirmwareVersion MMR lands.
+        assert!(
+            CremaBridge::new()
+                .firmware_build_report()
+                .contains(r#""status":"Unknown""#)
+        );
+    }
 
     #[test]
     fn sleep_refill_gate_parses_wire_names() {

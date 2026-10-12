@@ -138,6 +138,22 @@ export class De1Manager {
 	/** The newest arrival stamp, carried into the next throttled publish. */
 	private pendingNotificationStamp = 0;
 
+	/**
+	 * While a firmware flash holds the link, every write except the flash's
+	 * own ({@link firmwareWrite}) is dropped — a stray 4-byte MMR write
+	 * interleaved with the 16-byte firmware chunks on the same characteristic
+	 * would corrupt the flash (decaid `firmware_mmr_gate.dart`, Decenza
+	 * `de1device.cpp:2091-2124`). The core drops its own commands too; this
+	 * catches every shell-side writer as well.
+	 */
+	private firmwareExclusive = false;
+
+	/** Receives `FWMapRequest` (A009) notifications during a flash. */
+	private fwMapListener: ((data: Uint8Array, atMs: number) => void) | null = null;
+
+	/** Link-loss / link-restored observers (the firmware flash). */
+	private readonly linkListeners = new Set<{ lost(): void; restored?(): void }>();
+
 	constructor(
 		private readonly core: CremaCore,
 		private readonly callbacks: De1ManagerCallbacks,
@@ -170,8 +186,7 @@ export class De1Manager {
 		// the old `BleDevice` — its `gattserverdisconnected` handler and every
 		// characteristic value-change listener stay bound, and its auto-reconnect
 		// loop may still be armed.
-		this.device?.disconnect();
-		this.device = null;
+		this.dropDevice();
 		// Start each connect from a clean diagnostics slate.
 		this.patchDiagnostics(EMPTY_DE1_DIAGNOSTICS);
 		this.notificationCounts = freshCounts();
@@ -211,8 +226,7 @@ export class De1Manager {
 	 */
 	async connectKnown(known: BluetoothDevice): Promise<void> {
 		this.callbacks.onState('connecting');
-		this.device?.disconnect();
-		this.device = null;
+		this.dropDevice();
 		this.patchDiagnostics(EMPTY_DE1_DIAGNOSTICS);
 		this.notificationCounts = freshCounts();
 		this.callbacks.onStatus(`Reconnecting to the last DE1 (${known.name ?? known.id})…`);
@@ -236,27 +250,45 @@ export class De1Manager {
 		device.setReconnectTimeline?.('DE1', true);
 		this.patchDiagnostics({ deviceName: device.name, deviceId: device.id });
 		this.callbacks.onStatus(`Selected device: ${device.name} (id ${device.id})`);
-		// A terminal disconnect — user-initiated or auto-reconnect giving up.
+		// Each callback checks the device is still the current one: a replaced
+		// device's late events (its reconnect loop finishing after a new
+		// connect, its terminal disconnect) must not touch the new link
+		// (audit r9 L-1). `dropDevice` reports the replaced link's loss itself.
+		// A terminal disconnect of the current device.
 		device.onDisconnected(() => {
+			if (this.device !== device) return;
 			this.notifyLinkLost();
+			for (const l of this.linkListeners) l.lost();
 			this.callbacks.onState('disconnected');
 			this.callbacks.onStatus('DE1 disconnected');
 		});
 		device.onReconnectAttempt((attempt) => {
+			if (this.device !== device) return;
 			// The link is gone; the core keeps the session for a resume but
 			// stops the scale's timer if a shot had it running (once per
 			// outage — the core latches it).
-			if (attempt === 1) this.notifyLinkLost();
+			if (attempt === 1) {
+				this.notifyLinkLost();
+				for (const l of this.linkListeners) l.lost();
+			}
 			this.callbacks.onState('reconnecting');
 			this.callbacks.onStatus(`Reconnecting to DE1… (attempt ${attempt})`);
 		});
 		device.onReconnected(() => {
+			if (this.device !== device) return;
+			// The firmware flash hears link-up from the app's transition into
+			// `ready` (every connect path, audit r2 M-A), not from here.
+			for (const l of this.linkListeners) l.restored?.();
 			this.callbacks.onState('ready');
 			this.callbacks.onStatus('Reconnected — receiving DE1 notifications');
 		});
 		// One sink for all characteristics — preserves arrival order + tallies
 		// diagnostics. Set before the program subscribes so early HVNs are caught.
 		device.setSink((notification) => {
+			if (notification.characteristic === De1Uuids.FW_MAP_REQUEST) {
+				this.fwMapListener?.(notification.data, notification.atMs);
+				return;
+			}
 			const source = sourceFor(notification.characteristic);
 			if (source === null) {
 				return;
@@ -296,8 +328,7 @@ export class De1Manager {
 		});
 
 		if (this.runtime === null) {
-			device.disconnect();
-			this.device = null;
+			this.dropDevice();
 			this.callbacks.onState('failed');
 			this.callbacks.onStatus('DE1 connection failed: app runtime unavailable');
 			return;
@@ -307,21 +338,39 @@ export class De1Manager {
 		// Delegated to the Effect connect program (T-17): step-tagged fatal
 		// errors, serial best-effort sweep. The manager just maps the outcome.
 		this.callbacks.onState('subscribing');
+		// The program's reports count only while this is still the current
+		// device (its GATT I/O already refuses once the device is dropped).
+		const current = () => this.device === device;
 		const exit = await this.runtime.runPromiseExit(
 			de1ConnectProgram({
 				device,
 				core: this.core,
-				onStatus: (line) => this.callbacks.onStatus(line),
-				onCoreOutput: (output) => this.callbacks.onCoreOutput(output),
-				onGattVerified: () => this.patchDiagnostics({ gattVerified: true })
+				onStatus: (line) => {
+					if (current()) this.callbacks.onStatus(line);
+				},
+				onCoreOutput: (output) => {
+					if (current()) this.callbacks.onCoreOutput(output);
+				},
+				onGattVerified: () => {
+					if (current()) this.patchDiagnostics({ gattVerified: true });
+				}
 			})
 		);
+		// Replaced or disconnected while the program ran: the drop already
+		// reported it and the device refuses GATT I/O and feeds nothing, so
+		// leave the state to whatever replaced it (audit r10 L-2). A browser that
+		// doesn't cancel a pending connect may have let this handshake connect
+		// after the drop: close that link — unless the replacement is the same
+		// DE1, whose GATT link is shared and now belongs to it (audit r11 L-1).
+		if (this.device !== device) {
+			if (this.device?.id !== device.id) device.disconnect();
+			return;
+		}
 		const outcome = parseConnectExit(exit);
 		if (!outcome.ok) {
 			// Disconnect before nulling — nulling alone leaves the transport's
 			// auto-reconnect loop running on a half-dead device.
-			device.disconnect();
-			this.device = null;
+			this.dropDevice();
 			this.patchDiagnostics({ gattVerified: false });
 			this.callbacks.onState('failed');
 			// Name the failed step — a service / characteristic failure means the
@@ -343,6 +392,10 @@ export class De1Manager {
 	 * in diagnostics so a forgotten UUID mapping does not silently disappear.
 	 */
 	async writeCharacteristic(target: WriteTarget, data: Uint8Array): Promise<void> {
+		if (this.firmwareExclusive) {
+			this.callbacks.onStatus(`DE1 write skipped: firmware update in progress (${target})`);
+			return;
+		}
 		const uuid = uuidForWriteTarget(target);
 		if (uuid === null) {
 			this.callbacks.onStatus(`DE1 write skipped: no UUID for target ${target}`);
@@ -360,6 +413,67 @@ export class De1Manager {
 				`DE1 write to ${target} failed: ${describeError(error)}`
 			);
 		}
+	}
+
+	// ── Firmware flash I/O ──────────────────────────────────────────────
+	// The flash driver (`$lib/firmware/flash-driver`) performs the core's
+	// `FlashAction`s through these. Unlike `writeCharacteristic` they throw,
+	// because the state machine must see every failure.
+
+	/** Drop every other write while a flash holds the link (see the field). */
+	setFirmwareExclusive(on: boolean): void {
+		this.firmwareExclusive = on;
+	}
+
+	/** Route A009 notifications to `listener` (`null` to stop). */
+	setFwMapListener(listener: ((data: Uint8Array, atMs: number) => void) | null): void {
+		this.fwMapListener = listener;
+	}
+
+	/** Observe link loss (and auto-reconnect recovery); returns the unsubscribe. */
+	addLinkListener(listener: { lost(): void; restored?(): void }): () => void {
+		this.linkListeners.add(listener);
+		return () => this.linkListeners.delete(listener);
+	}
+
+	/** One flash write, with response; throws on failure or no link. */
+	async firmwareWrite(target: WriteTarget, data: Uint8Array): Promise<void> {
+		const uuid = uuidForWriteTarget(target);
+		const device = this.device;
+		if (uuid === null) throw new Error(`no UUID for ${target}`);
+		if (device === null || device.connectionState !== 'connected') {
+			throw new Error('DE1 not connected');
+		}
+		await device.write(De1Uuids.SERVICE, uuid, data);
+	}
+
+	/** A fresh read of A009 (decaid's erase / verify poll). */
+	async firmwareReadFwMap(): Promise<Uint8Array> {
+		const device = this.device;
+		if (device === null) throw new Error('DE1 not connected');
+		return device.readCharacteristic(De1Uuids.SERVICE, De1Uuids.FW_MAP_REQUEST);
+	}
+
+	/** Enable A009 notifications (re-enabled before verify, like de1app). */
+	async firmwareSubscribeFwMap(): Promise<void> {
+		const device = this.device;
+		if (device === null) throw new Error('DE1 not connected');
+		await device.startNotifications(De1Uuids.SERVICE, De1Uuids.FW_MAP_REQUEST);
+	}
+
+	/**
+	 * Drop the current device: disconnect it (which also stops its reconnect
+	 * loop) and tell the core and the link listeners the link is gone. The
+	 * device's own late callbacks are ignored once it isn't current, so this
+	 * is where a deliberate teardown reports the loss.
+	 */
+	private dropDevice(): void {
+		const device = this.device;
+		if (device === null) return;
+		this.device = null;
+		device.disconnect();
+		this.notifyLinkLost();
+		for (const l of this.linkListeners) l.lost();
 	}
 
 	/**
@@ -385,8 +499,7 @@ export class De1Manager {
 
 	/** Disconnect the DE1 and discard the core's session state. */
 	async disconnect(): Promise<void> {
-		this.device?.disconnect();
-		this.device = null;
+		this.dropDevice();
 		// The reset's output is the scale-timer stop for a mid-shot teardown.
 		this.callbacks.onCoreOutput(await this.core.reset());
 		// Clear the diagnostics — the device is gone, so its name / id / GATT

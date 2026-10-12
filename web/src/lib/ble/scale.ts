@@ -122,9 +122,7 @@ export class ScaleManager {
 		// the old `BleDevice` — its `gattserverdisconnected` handler and every
 		// characteristic value-change listener stay bound, and its auto-reconnect
 		// loop may still be armed.
-		this.device?.disconnect();
-		this.device = null;
-		this.uuids = null;
+		this.dropDevice();
 		this.callbacks.onStatus('Requesting a scale…');
 
 		// ── Phase 1: gesture-bound discovery + lifecycle wiring (manager) ──
@@ -153,9 +151,7 @@ export class ScaleManager {
 	 */
 	async connectKnown(known: BluetoothDevice): Promise<void> {
 		this.callbacks.onState('connecting');
-		this.device?.disconnect();
-		this.device = null;
-		this.uuids = null;
+		this.dropDevice();
 		this.callbacks.onStatus(`Reconnecting to the last scale (${known.name ?? known.id})…`);
 		await this.attach(new BleDevice(known));
 	}
@@ -166,29 +162,53 @@ export class ScaleManager {
 		return d === null ? null : { id: d.id, name: d.device.name ?? null };
 	}
 
+	/**
+	 * Drop the current scale: forget it, close its link, and clear the core's
+	 * scale (the DE1 manager's `dropDevice`). Every teardown that doesn't end
+	 * in {@link disconnect} — a new connect (even one whose chooser is then
+	 * cancelled), a failed handshake — goes through here, so no "ghost" scale
+	 * is left in the core to arm stop-at-weight with no weight data (audit
+	 * r13 / r14 L-1). The wasm bridge runs the clear synchronously, so it
+	 * lands before a replacement's `connectScale`.
+	 */
+	private dropDevice(): void {
+		const device = this.device;
+		this.device = null;
+		this.uuids = null;
+		if (device === null) return;
+		device.disconnect();
+		void this.core.disconnectScale().catch(() => undefined);
+	}
+
 	/** Wire a chosen device and run the connect program (both connect paths). */
 	private async attach(device: BleDevice): Promise<void> {
 		this.device = device;
 		device.setReconnectTimeline('Scale');
-		// A terminal disconnect — user-initiated or auto-reconnect giving up.
+		// Each callback counts only while this is still the current device: a
+		// replaced device's late events must not touch the new link (the same
+		// rule as the DE1 manager; `disconnect` reports its own teardown).
+		const current = () => this.device === device;
+		// A terminal disconnect (user-initiated; auto-reconnect never gives up).
 		device.onDisconnected(() => {
+			if (!current()) return;
 			this.callbacks.onState('disconnected');
 			this.callbacks.onStatus('Scale disconnected');
 		});
 		// On recovery the manager re-fires a settings query (via onReconnected).
 		device.onReconnectAttempt((attempt) => {
+			if (!current()) return;
 			this.callbacks.onState('reconnecting');
 			this.callbacks.onStatus(`Reconnecting to scale… (attempt ${attempt})`);
 		});
 		device.onReconnected(() => {
+			if (!current()) return;
 			this.callbacks.onState('ready');
 			this.callbacks.onStatus('Reconnected — receiving scale weight');
 			this.callbacks.onReconnected();
 		});
 
 		if (this.runtime === null) {
-			device.disconnect();
-			this.device = null;
+			this.dropDevice();
 			this.callbacks.onState('failed');
 			this.callbacks.onStatus('Scale connection failed: app runtime unavailable');
 			return;
@@ -196,17 +216,34 @@ export class ScaleManager {
 
 		// ── Phase 2: connect → identify → UUIDs → subscribe → query (Effect) ──
 		this.callbacks.onState('subscribing');
+		// The core too: a stale program must not identify a scale the user
+		// already disconnected (a ghost scale arms stop-at-weight with no
+		// weight data; audit r13 L-1). `current()` is checked in the same
+		// synchronous turn as the call, and the wasm bridge runs it at once.
+		const stale = () => Promise.reject(new Error('Scale was disconnected'));
 		const exit = await this.runtime.runPromiseExit(
 			scaleConnectProgram({
 				device,
-				core: this.core,
+				core: {
+					connectScale: (name, services) =>
+						current() ? this.core.connectScale(name, services) : stale(),
+					scaleUuids: () => (current() ? this.core.scaleUuids() : stale()),
+					queryScaleSettings: () => (current() ? this.core.queryScaleSettings() : stale())
+				},
 				advertisedName: device.name,
-				onStatus: (line) => this.callbacks.onStatus(line),
-				onCoreOutput: (output) => this.callbacks.onCoreOutput(output),
-				onScaleIdentified: (name) => this.callbacks.onScaleIdentified(name),
+				onStatus: (line) => {
+					if (current()) this.callbacks.onStatus(line);
+				},
+				onCoreOutput: (output) => {
+					if (current()) this.callbacks.onCoreOutput(output);
+				},
+				onScaleIdentified: (name) => {
+					if (current()) this.callbacks.onScaleIdentified(name);
+				},
 				// Store the UUIDs + install the sink HERE — before the program
 				// subscribes — so the sink's UUID→source mapping is ready.
 				onUuidsResolved: (uuids) => {
+					if (!current()) return;
 					this.uuids = uuids;
 					device.setSink((notification) => {
 						const source = this.sourceFor(notification.characteristic);
@@ -226,11 +263,18 @@ export class ScaleManager {
 				}
 			})
 		);
+		// Replaced or disconnected while the program ran: leave the state to
+		// whatever replaced it; close a late link unless it's the same scale
+		// (a shared GATT link).
+		if (!current()) {
+			if (this.device?.id !== device.id) device.disconnect();
+			return;
+		}
 		const outcome = parseConnectExit(exit);
 		if (!outcome.ok) {
-			device.disconnect();
-			this.device = null;
-			this.uuids = null;
+			// The core may already have identified the scale: the drop clears
+			// it so a failed handshake leaves no ghost scale behind.
+			this.dropDevice();
 			this.callbacks.onState('failed');
 			this.callbacks.onStatus(
 				`Scale connection failed at "${outcome.step}": ${describeError(outcome.cause)}`
@@ -248,9 +292,12 @@ export class ScaleManager {
 
 	/** Disconnect the scale. */
 	async disconnect(): Promise<void> {
-		this.device?.disconnect();
+		// Forget the device before closing it, so its own disconnect event
+		// (ignored once it isn't current) can't report over this teardown.
+		const device = this.device;
 		this.device = null;
 		this.uuids = null;
+		device?.disconnect();
 		// Reset the core's scale slice so a vanished scale leaves no stale
 		// weight + a reconnect starts clean (the same gap AND4 closed for
 		// Android's ScaleBleManager). Best-effort — never blocks the teardown.

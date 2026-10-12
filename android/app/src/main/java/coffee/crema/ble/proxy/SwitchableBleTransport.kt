@@ -98,4 +98,7 @@ class SwitchableBleTransport(initial: BleTransport) : BleTransport {
 
     override suspend fun requestConnectionPriority(device: BleTransport.DeviceHandle, high: Boolean) =
         current.requestConnectionPriority(device, high)
+
+    override suspend fun rearmNotifications(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID) =
+        current.rearmNotifications(device, service, characteristic)
 }

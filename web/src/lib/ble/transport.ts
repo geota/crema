@@ -349,13 +349,14 @@ export class BleDevice implements De1Transport {
 	 * The sink is retained across reconnects and re-attached automatically.
 	 */
 	setSink(sink: NotificationSink): void {
+		if (this.userDisconnected) return; // single-use: a stale program can't re-arm it
 		this.sink = sink;
 	}
 
 	/**
-	 * Register a callback for a *terminal* disconnect — either a user-initiated
-	 * {@link disconnect} or auto-reconnect giving up after exhausting its
-	 * attempts. Not fired for a transient drop that the backoff loop recovers.
+	 * Register a callback for a *terminal* disconnect — a user-initiated
+	 * {@link disconnect} (the backoff loop never gives up on its own). Not
+	 * fired for a transient drop that the loop recovers.
 	 */
 	onDisconnected(listener: () => void): void {
 		this.onDisconnectedListeners.add(listener);
@@ -453,7 +454,7 @@ export class BleDevice implements De1Transport {
 	 */
 	async discoveredServiceUuids(): Promise<readonly string[]> {
 		const gatt = this.device.gatt;
-		if (!gatt?.connected) return [];
+		if (this.userDisconnected || !gatt?.connected) return [];
 		try {
 			const services = await gatt.getPrimaryServices();
 			return services.map((s) => s.uuid.toLowerCase());
@@ -472,6 +473,10 @@ export class BleDevice implements De1Transport {
 			if (gatt === undefined) {
 				throw new Error('Device exposes no GATT server');
 			}
+			// A disconnected device never connects again — checked before the
+			// shared `gatt` too: a replacement device on the same DE1 may have
+			// connected it (audit r10 L-1).
+			this.assertLive();
 			if (gatt.connected) return;
 			// Web Bluetooth's `gatt.connect()` fails intermittently for some
 			// peripherals ("Connection attempt failed" / NetworkError) — several
@@ -482,6 +487,10 @@ export class BleDevice implements De1Transport {
 			const backoffMs = 400;
 			let lastError: unknown;
 			for (let attempt = 1; attempt <= attempts; attempt++) {
+				// No retry after a deliberate disconnect: it would land after a
+				// replacement connect, and the reconnect loop would then drop the
+				// shared link (audit r10 L-1).
+				this.assertLive();
 				try {
 					await gatt.connect();
 					return;
@@ -505,9 +514,10 @@ export class BleDevice implements De1Transport {
 		serviceUuid: string,
 		characteristicUuid: string
 	): Promise<BluetoothRemoteGATTCharacteristic> {
-		return this.gattQueue.enqueue(() =>
-			this.resolveCharacteristic(serviceUuid, characteristicUuid)
-		);
+		return this.gattQueue.enqueue(() => {
+			this.assertLive();
+			return this.resolveCharacteristic(serviceUuid, characteristicUuid);
+		});
 	}
 
 	/**
@@ -539,9 +549,10 @@ export class BleDevice implements De1Transport {
 	 * runs as one queued GATT step.
 	 */
 	async startNotifications(serviceUuid: string, characteristicUuid: string): Promise<void> {
-		await this.gattQueue.enqueue(() =>
-			this.subscribeRaw(serviceUuid, characteristicUuid)
-		);
+		await this.gattQueue.enqueue(() => {
+			this.assertLive();
+			return this.subscribeRaw(serviceUuid, characteristicUuid);
+		});
 		// Record only after a successful subscribe, so a failed attempt is not
 		// replayed on reconnect. Keyed by characteristic UUID — de-duplicated.
 		this.subscriptions.set(characteristicUuid.toLowerCase(), {
@@ -584,6 +595,7 @@ export class BleDevice implements De1Transport {
 		withResponse = true
 	): Promise<void> {
 		return this.gattQueue.enqueue(async () => {
+			this.assertLive();
 			let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
 			if (characteristic === undefined) {
 				characteristic = await this.resolveCharacteristic(
@@ -614,6 +626,7 @@ export class BleDevice implements De1Transport {
 	 */
 	readCharacteristic(serviceUuid: string, characteristicUuid: string): Promise<Uint8Array> {
 		return this.gattQueue.enqueue(async () => {
+			this.assertLive();
 			let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
 			if (characteristic === undefined) {
 				characteristic = await this.resolveCharacteristic(
@@ -624,6 +637,18 @@ export class BleDevice implements De1Transport {
 			const view = await characteristic.readValue();
 			return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
 		});
+	}
+
+	/**
+	 * A device is single-use after {@link disconnect}: every public GATT
+	 * operation (connect, subscribe, read, write, characteristic lookup)
+	 * refuses and service discovery reports nothing, so a stale connect
+	 * program that outlives its device can't touch the DE1 / scale or feed
+	 * the core (audit r10–r12). The reconnect loop's private replay is not
+	 * gated, so it can still close its own ghost link.
+	 */
+	private assertLive(): void {
+		if (this.userDisconnected) throw new Error('Device was disconnected');
 	}
 
 	/**
@@ -640,10 +665,19 @@ export class BleDevice implements De1Transport {
 		this.reconnecting = false;
 		// End a pending backoff wait now rather than leaving a timer to fire.
 		this.waitAbort?.abort();
+		// Also when not connected: on current Chromium `disconnect()` aborts a
+		// GATT connect still in flight (a reconnect attempt); `connectGattRaw`
+		// starts no new one once `userDisconnected` is set (audit r9 / r10 L-1).
 		const gatt = this.device.gatt;
-		if (gatt !== undefined && gatt.connected) {
+		if (gatt !== undefined) {
 			gatt.disconnect();
 		}
+		// A device is single-use after a disconnect: drop its sink (and refuse
+		// a new one, see setSink) so a link that connected anyway (a browser
+		// that doesn't cancel a pending connect, or characteristics shared
+		// with a replacement on the same device) feeds nothing more (audit r11
+		// L-1).
+		this.sink = null;
 		this.connectionState = 'disconnected';
 		this.notifyStateChanged();
 	}

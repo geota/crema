@@ -16,6 +16,10 @@ export const wakeLockSupported =
 	typeof navigator !== 'undefined' && 'wakeLock' in navigator;
 
 let sentinel: WakeLockSentinel | null = null;
+/** A shot wants the screen held (the brew setting). */
+let wantBrew = false;
+/** A firmware flash wants the screen held (always, while it runs). */
+let wantFirmware = false;
 /** The desired state — drives visibility re-acquire. */
 let wantActive = false;
 
@@ -40,13 +44,40 @@ async function acquire(): Promise<void> {
  * the setting is on), `false` otherwise.
  */
 export function setBrewWakeLock(active: boolean): void {
-	wantActive = active;
-	if (active) {
+	wantBrew = active;
+	sync();
+}
+
+function sync(): void {
+	wantActive = wantBrew || wantFirmware;
+	if (wantActive) {
 		void acquire();
 	} else if (sentinel !== null) {
 		void sentinel.release();
 		sentinel = null;
 	}
+}
+
+/** Ask before leaving the page while a firmware flash runs. */
+function onBeforeUnload(e: BeforeUnloadEvent): void {
+	e.preventDefault();
+	// Legacy browsers need a returnValue to show the prompt.
+	e.returnValue = '';
+}
+
+/**
+ * Hold the screen on and guard against leaving the page while a firmware
+ * flash runs (`true` from the Sleep request to the verify verdict). Closing
+ * the tab mid-flash leaves the DE1 on its old firmware, but wastes the
+ * upload, so the browser's "Leave site?" prompt asks first.
+ */
+export function setFirmwareWakeLock(active: boolean): void {
+	if (active === wantFirmware) return;
+	wantFirmware = active;
+	sync();
+	if (typeof window === 'undefined') return;
+	if (active) window.addEventListener('beforeunload', onBeforeUnload);
+	else window.removeEventListener('beforeunload', onBeforeUnload);
 }
 
 // Re-acquire when the tab becomes visible mid-shot (the UA released the lock

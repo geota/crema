@@ -25,8 +25,7 @@
 //! The replies are adjacently-tagged `#[typeshare]` enums
 //! (`{ "type": "Token", "content": { "token": "…" } }`, a unit variant is
 //! `{ "type": "Rejected" }`) — the shape typeshare 1.x requires for
-//! algebraic enums, and the one `de1_app::FirmwareUpdateStatus` already
-//! uses — so both shells get typed replies.
+//! algebraic enums — so both shells get typed replies.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

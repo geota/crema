@@ -7,8 +7,43 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Firmware updates (alpha)** — Settings → Machine → "Update firmware…"
+  installs DE1 firmware from Crema. It is alpha: it has not yet been tried
+  on a real DE1, and a click-through warning says so first. Pick Decent's
+  Stable build (1333) or the Nightly / early-access build (1358); Crema
+  downloads it from Decent's own update server and installs it only if it
+  matches a copy it has verified byte for byte. Updating takes about 15–25
+  minutes with the device charging and near the DE1, and ends with
+  switching the DE1 off and on; Crema then reads the build back to confirm.
+  Until then, and while the DE1 erases or checks the new firmware, Crema
+  sends it nothing else (no settings, profile or sleep commands, also after
+  a reconnect), and the update screen stays up until the DE1 restarts or
+  you exit; it has its own Connect button for reconnecting the DE1 after
+  the restart. You can cancel, after a confirmation, until the DE1 starts
+  checking; the DE1 is then put to sleep and should keep its current
+  firmware, since Crema only writes its spare memory bank. A failure offers
+  Retry. The steps follow Decent's de1app and decaid: sleep the machine,
+  erase, send 16-byte blocks one at a time, let the DE1 verify, power-cycle.
+  Classic DE1 models only (DE1PRO, XL, XXL, XXXL; no Bengle). On Android the
+  update keeps running in the background; in the browser, keep the tab open
+  and in front (and if the browser can't download Decent's file directly,
+  download it from Decent and choose it). Web, tablet and phone.
+
 ### Fixed
 
+- **No "ghost" scale after a cancelled or failed scale connect** — tapping
+  Disconnect while a scale was still connecting, Re-pair with the chooser
+  then cancelled, or a scale handshake that failed partway, could leave
+  Crema thinking a scale was attached: shots
+  then waited for a weight stop that never came, and hot water could run
+  on to 250 ml because Crema expected the scale to stop it. Web.
+- **Reconnecting the DE1 in the browser no longer drops the new link** —
+  connecting while Crema was still retrying the old connection could let
+  that old attempt land afterwards, drop the new connection and show
+  "disconnected". Crema now stops retrying the old connection once you
+  connect or disconnect, and ignores anything it reports afterwards. Web.
 - **A DE1 that isn't on your Decent account no longer retries forever.**
   Decent answers HTTP 403 when the machine's serial isn't registered to the
   linked account (de1app `5b09f6aa`). Crema treated that as a passing server
@@ -65,6 +100,22 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   asleep it isn't sent again, and nothing is sent while disconnected. Waking
   the machine at the group head starts the timer over. On a Bengle the same
   timeout is also set in the machine's own firmware timer. Web and Android.
+- **The firmware card no longer says "Up to date" without checking** — on
+  Android it said so whenever a DE1 was connected. Settings → Machine now
+  shows the installed build and what it means against a dated list of
+  Decent's builds: "Build 1358 · newest Decent release", "Build 1333 ·
+  Decent stable", "Build 1352 · newer than Decent stable", "older than
+  Decent stable", or "newer than Crema knows about". The 2023 build 1363,
+  which Decent withdrew, reads as a rolled-back build instead of newer than
+  1358. Web, tablet and phone (the phone hero gains the card).
+- **No more advice to get build 1358 from de1app's stable channel** — the
+  web card used to say to, though de1app's stable and beta versions install
+  build 1333, and its "Update firmware…" button ended in "not yet
+  implemented". The card now says which build is newer, and the button
+  opens the real update.
+- **Firmware verify request matches Decent's apps** — the request that asks
+  the DE1 to verify an uploaded image now sets the map flag the way de1app,
+  decaid and Decenza do.
 
 ### Changed
 

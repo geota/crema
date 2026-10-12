@@ -20,8 +20,7 @@ import {
 	loadCore,
 	type Command,
 	type CoreOutput,
-	type CremaCore,
-	type FirmwareUpdateStatus
+	type CremaCore
 } from '$lib/core';
 import { MachineState, MmrRegister } from '$lib/core/crema-core';
 import type { BrewRecipe } from '$lib/core/crema-core';
@@ -75,6 +74,10 @@ import {
 import { getActiveShotStore, type ActiveShotData } from './active-shot.svelte';
 import { ConnectSweepRunner, readBatteryPercent } from './connect-sweep';
 import { IdleSleepRunner } from './idle-sleep';
+import { FirmwareUpdateController } from '$lib/firmware/firmware-update.svelte';
+import { readPowerOk } from '$lib/firmware/power';
+import { setFirmwareWakeLock } from '$lib/shell/wake-lock';
+import type { FlashShellConditions } from '$lib/core';
 import {
 	LaunchReconnect,
 	markUserDisconnect,
@@ -312,6 +315,13 @@ export class CremaApp {
 	readonly idleSleep: IdleSleepRunner;
 
 	/**
+	 * Settings → Machine → "Update firmware…" (alpha): the flow's state and
+	 * the driver that performs the core's firmware-flash actions over the
+	 * DE1 link. See `$lib/firmware/firmware-update.svelte`.
+	 */
+	readonly firmware: FirmwareUpdateController;
+
+	/**
 	 * The Quick Sheet's `BrewParams` at shot start, stashed by the brew
 	 * dashboard via {@link setBrewParamsSnapshot} just before
 	 * {@link startShot} fires. Read by the `ShotCompleted` handler so the
@@ -385,6 +395,10 @@ export class CremaApp {
 				// loaded and the user has to remember to click Load on
 				// Brew every session.
 				if (de1State === 'ready' && !wasReady) {
+					// Every connect path (fresh, launch, reload, auto-reconnect)
+					// tells a firmware flash the link is up, so a power-cycle wait
+					// reads the build (audit r2 M-A).
+					void this.firmware?.onLinkUp(this.state.current.de1Diagnostics.deviceId ?? null);
 					this.#rememberConnected('de1');
 					// Fire a `de1Connected` webhook on the first transition
 					// into `ready`. The firmware string lands a moment later
@@ -398,7 +412,12 @@ export class CremaApp {
 						deviceName: diag.deviceName
 					});
 				}
-				if (de1State === 'ready') {
+				// While a firmware flash holds the link (a transfer, an interrupted
+				// erase, or the power-cycle wait), a reconnect must not touch the
+				// DE1: no profile auto-upload, user-present poke or settings
+				// sweep (audit H2). They run once the flash lets go.
+				const held = this.firmware?.holdsLink ?? false;
+				if (de1State === 'ready' && !held) {
 					this.ensureLoadedMatches();
 				}
 				// The idle-sleep timer learns the link state (a reconnect is not
@@ -414,7 +433,7 @@ export class CremaApp {
 				// refill point, tank threshold, steam / hot water, steam
 				// flow, flush, eco. Also runs the once-a-minute
 				// USB-charger check while ready.
-				this.sweep.onDe1State(de1State);
+				this.sweep.onDe1State(held ? 'held-by-firmware' : de1State);
 			},
 			// The connection-diagnostics snapshot — fold it straight in.
 			onDiagnostics: (de1Diagnostics) => this.state.patch({ de1Diagnostics })
@@ -468,6 +487,33 @@ export class CremaApp {
 				void this.core.queryScaleSettings().then((output) => this.applyCoreOutput(output));
 			}
 		}, runtime);
+		this.firmware = new FirmwareUpdateController({
+			core,
+			io: {
+				write: (target, data) => this.de1.firmwareWrite(target, data),
+				readFwMap: () => this.de1.firmwareReadFwMap(),
+				subscribeFwMap: () => this.de1.firmwareSubscribeFwMap(),
+				setExclusive: (on) => this.de1.setFirmwareExclusive(on),
+				setFwMapListener: (listener) => this.de1.setFwMapListener(listener),
+				addLinkListener: (listener) => this.de1.addLinkListener(listener)
+			},
+			conditions: () => this.firmwareConditions(),
+			installedBuild: () =>
+				this.state.current.de1MachineInfo[MmrRegister.FirmwareVersion] ?? null,
+			log: (line) => this.state.log(line),
+			keepAlive: { set: setFirmwareWakeLock },
+			onRelease: () => this.afterFirmwareRelease(),
+			machineId: () => this.state.current.de1Diagnostics.deviceId ?? null,
+			linkUp: () => this.state.current.de1State === 'ready',
+			transportLabel: () => {
+				const d = this.state.current.de1Diagnostics;
+				const ua = typeof navigator === 'undefined' ? 'unknown browser' : navigator.userAgent;
+				return `Web Bluetooth (${ua}), DE1 ${d.deviceName ?? '?'} id ${d.deviceId ?? '?'}`;
+			}
+		});
+		// A flash that was waiting for the DE1's power-cycle before a reload
+		// comes back with its lock (audit M3).
+		void this.firmware.restore();
 		// Hydrate the last-uploaded profile fingerprint from localStorage,
 		// so a page reload that kept the DE1 connected (or a quick
 		// reconnect to the same machine) skips the defensive auto-upload
@@ -924,6 +970,31 @@ export class CremaApp {
 	 * `web/src/lib/ble/de1.ts:uuidForWriteTarget`; targets with no UUID
 	 * mapping are dropped with a status log.
 	 */
+	/**
+	 * The flash let go of the link: run what a reconnect skipped while it held
+	 * it (the settings sweep, the profile check).
+	 */
+	private afterFirmwareRelease(): void {
+		if (this.state.current.de1State !== 'ready') return;
+		this.sweep.onDe1State('ready');
+		this.ensureLoadedMatches();
+		// No presence poke here: the idle-sleep timer (#139) pokes on real
+		// activity only, and the core pinned its countdown while the flash
+		// held the DE1, so it starts over from this release.
+	}
+
+	/** What the shell knows for the firmware-flash preconditions. */
+	private async firmwareConditions(): Promise<FlashShellConditions> {
+		const de1State = this.state.current.de1State;
+		return {
+			connected: de1State === 'ready' || de1State === 'subscribing',
+			ready: de1State === 'ready',
+			// The core tracks guided brews itself (`brew_session`).
+			guidedBrewActive: false,
+			powerOk: await readPowerOk()
+		};
+	}
+
 	private async executeCommand(command: Command): Promise<void> {
 		switch (command.type) {
 			case 'WriteScale': {
@@ -1040,7 +1111,8 @@ export class CremaApp {
 		// `BatteryManager::ensureChargerOn`): smart charging may have
 		// switched it off, and nothing would switch it back on once Crema is
 		// gone.
-		if (this.state.current.de1State === 'ready') {
+		// Not while a firmware flash holds the DE1 (the core refuses it too).
+		if (this.state.current.de1State === 'ready' && !(this.firmware?.holdsLink ?? false)) {
 			try {
 				this.applyCoreOutput(await this.core.setUsbChargerOn(true));
 			} catch {
@@ -1211,17 +1283,6 @@ export class CremaApp {
 			clearInterval(this.scaleHeartbeatId);
 			this.scaleHeartbeatId = null;
 		}
-	}
-
-	/**
-	 * Compare the most recently observed DE1 firmware version against the
-	 * latest firmware Crema was compiled against. Read-only — no BLE traffic.
-	 * Returns the `Unknown` variant until the DE1's `Version` characteristic
-	 * has been read at least once (it is read at connect time, so the value
-	 * is non-`Unknown` as soon as the DE1 is connected and subscribed).
-	 */
-	async firmwareUpdateStatus(): Promise<FirmwareUpdateStatus> {
-		return this.core.firmwareUpdateStatus();
 	}
 
 	/**
@@ -2289,6 +2350,12 @@ export class CremaApp {
 	 * is strictly an offline diagnostic.
 	 */
 	async replayCapture(file: File, opts: ReplayCaptureOptions = {}): Promise<void> {
+		// A replay swaps the live core out; a firmware flash must not lose its
+		// notifications and link events to it (audit L3).
+		if (this.firmware.status !== null) {
+			toast.error('Finish or close the firmware update before replaying a capture.');
+			return;
+		}
 		if (this.replayFiber) return;
 		// A live DE1 keeps notifying while the replay's shadow core is
 		// installed — its packets would land in the shadow session and both

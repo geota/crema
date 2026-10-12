@@ -324,11 +324,26 @@ class MainActivity : ComponentActivity() {
                 // display on for hours would only drain the battery.
                 val guidedHolds = ui.guidedBrew.live &&
                     coffee.crema.ui.brewlog.GuidedSetupRules.holdsScreenOn(ui.guidedBrew.recipe, ui.guidedBrew.stepIndex)
-                val keepOn = ui.keepScreenOnBrew || ui.saverVisible || guidedHolds
+                // A running firmware flash (alpha) holds it too: the upload takes
+                // ~15–25 min and the user must see the power-cycle prompt.
+                val firmwareHolds = viewModel.firmware.ui.collectAsStateWithLifecycle().value.running
+                val keepOn = ui.keepScreenOnBrew || ui.saverVisible || guidedHolds || firmwareHolds
                 LaunchedEffect(keepOn) {
                     if (keepOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
+                // The firmware-update flow, app-wide: leaving Settings never
+                // hides a running flash or its power-cycle step (web parity,
+                // audit L4 / M3).
+                FirmwareUpdateHost(
+                    viewModel.firmware,
+                    ui.de1MachineInfo[coffee.crema.core.MmrRegister.FirmwareVersion],
+                    FirmwareLinkControls(
+                        state = ui.bleState,
+                        onConnect = { withBlePermission(viewModel::connectFirmwareDe1) },
+                        onDisconnect = viewModel::disconnect,
+                    ),
+                )
                 // Re-usable debug-panel slot (Phase-0 readout) — hosted at the
                 // `debug` route on both form factors.
                 val debugSlot: @Composable () -> Unit = {

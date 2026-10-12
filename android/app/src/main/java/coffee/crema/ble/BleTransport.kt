@@ -202,6 +202,18 @@ interface BleTransport {
     suspend fun requestConnectionPriority(device: DeviceHandle, high: Boolean) {}
 
     /**
+     * Force a fresh CCCD enable on [characteristic] while an [observe] of it
+     * is already being collected: write "disable" then "enable", both awaited
+     * (de1app re-enables A009 notifications before the firmware verify,
+     * `de1_comms.tcl:1095`; Decenza re-subscribes, `firmwareupdater.cpp:
+     * 819-822`). A second [observe] can't do it: Nordic's `setNotifying(true)`
+     * returns early while it already thinks notifications are on, and
+     * cancelling a collection never disables them. Throws on failure. The
+     * default is a no-op for transports with no radio underneath.
+     */
+    suspend fun rearmNotifications(device: DeviceHandle, service: UUID, characteristic: UUID) {}
+
+    /**
      * Write [data] to the [characteristic] of [service] on [device]. Suspends
      * until the write completes; throws on failure. Used for scale tare /
      * timer commands.

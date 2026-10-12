@@ -15,9 +15,14 @@
 	 * the BLE line shows the Web Bluetooth device id from the connection
 	 * diagnostics; the Group line shows the live mix ("group") temperature.
 	 *
-	 * **UI-only** — the firmware-*update* block, Rename, Forget-device, and the
-	 * peripherals list need DE1 / extra-BLE-device support the shell does not
-	 * have; each is marked with a `// TODO`.
+	 * **Real** — the Firmware card classifies the installed build against the
+	 * core's known-builds table (`$lib/firmware/build-copy`) and opens the
+	 * alpha "Update firmware…" flow (`FirmwareUpdateFlow`, driven by
+	 * `app.firmware`).
+	 *
+	 * **UI-only** — Rename, Forget-device, and the peripherals list need DE1 /
+	 * extra-BLE-device support the shell does not have; each is marked with a
+	 * `// TODO`.
 	 *
 	 * ## DE1 connection diagnostics
 	 *
@@ -35,7 +40,6 @@
 	 */
 	import { getMachineReadout, type CremaApp, type UiSnapshot } from '$lib/state';
 	import { bleStateLabel, type De1State } from '$lib/ble';
-	import type { FirmwareUpdateStatus } from '$lib/core';
 	import { MachineState, MmrRegister } from '$lib/core/crema-core';
 	import { machineModelName, hasCupWarmer } from '$lib/wasm/de1_wasm';
 	import { getSettingsStore } from '$lib/settings';
@@ -50,7 +54,7 @@
 	import StSlider from '../StSlider.svelte';
 	import StButton from '../StButton.svelte';
 	import StStatusDot from '../StStatusDot.svelte';
-	import FirmwareUpdateModal from '../FirmwareUpdateModal.svelte';
+	import { firmwareBuildReport, firmwareCardCopy } from '$lib/firmware/build-copy';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	let {
@@ -138,8 +142,7 @@
 	 * `0x800010` shortly after pairing), and falls back to the BLE Version
 	 * label (`v1.5.559 (API 4)`-style) while the MMR reply is in flight or
 	 * if the MMR read failed. The dash is the initial state before either
-	 * arrives. Same format as the update-status string below the card, so
-	 * the two readouts read consistently.
+	 * arrives.
 	 */
 	const firmwareLabel = $derived.by(() => {
 		const build = machine.firmwareBuild;
@@ -191,94 +194,16 @@
 		return `PCB v${(cpu / 1000).toFixed(1)}`;
 	});
 
-	// ── Firmware-update check (read-only) ─────────────────────────────────
-	// Mirrors the legacy de1app's local comparison (`vars.tcl:3787-3797`):
-	// the BLE shell reads MMR register 0x800010 (FirmwareVersion) at connect
-	// time — the canonical "v1352" build number — caches it in the core, and
-	// this UI compares against a hardcoded LATEST_KNOWN_FIRMWARE_BUILD bumped
-	// per Crema release. No network, no file picker, no upload — the
-	// upload flow is deferred to v2.
-	let firmwareStatus: FirmwareUpdateStatus | null = $state(null);
-	let firmwareChecking = $state(false);
-
-	const firmwareStatusLabel = $derived.by(() => {
-		if (firmwareStatus === null) {
-			return 'No update info';
-		}
-		switch (firmwareStatus.type) {
-			case 'Unknown':
-				return 'Connect a DE1 first';
-			case 'UpToDate':
-				return `Up to date — v${firmwareStatus.content.installed}`;
-			case 'UpdateAvailable':
-				return `Update available — v${firmwareStatus.content.latest}`;
-			case 'NewerInstalled':
-				return `Newer than Crema knows — v${firmwareStatus.content.installed}`;
-		}
-	});
-
-	const firmwareStatusNotes = $derived.by(() => {
-		if (firmwareStatus === null) {
-			return "Click to compare your DE1's installed firmware against the latest Crema knows about.";
-		}
-		switch (firmwareStatus.type) {
-			case 'Unknown':
-				return 'Crema needs the DE1 connected and its FirmwareVersion MMR read.';
-			case 'UpToDate':
-				return 'Your DE1 is on the latest firmware this Crema build was tested against.';
-			case 'UpdateAvailable':
-				return `Use the legacy de1app to apply firmware v${firmwareStatus.content.latest}. Crema's own update flow ships in a later release.`;
-			case 'NewerInstalled':
-				return "Your DE1's firmware is ahead of this Crema build. Nothing to do.";
-		}
-	});
-
-	async function updateFirmware(): Promise<void> {
-		if (!app) return;
-		firmwareChecking = true;
-		try {
-			firmwareStatus = await app.firmwareUpdateStatus();
-		} finally {
-			firmwareChecking = false;
-		}
-	}
-
-	// ── Firmware update — type-to-confirm gate (#55 stub) ─────────────────
-	//
-	// The gate exists today; the underlying flashing flow does not. The
-	// entry point still needs the same destructive-action UX guard the
-	// mains writes use, so a future "Update" button can't ship without it. When #55 lands, the
-	// onConfirm handler is the single seam to wire to the real flow.
-	let showUpdateModal = $state(false);
-	let updateStubNotice = $state<string | null>(null);
-
-	/** Latest build Crema knows about — pulled off the read-only status. */
-	const latestKnownBuild = $derived.by(() => {
-		if (firmwareStatus === null) return undefined;
-		switch (firmwareStatus.type) {
-			case 'UpToDate':
-				return firmwareStatus.content.installed;
-			case 'UpdateAvailable':
-				return firmwareStatus.content.latest;
-			case 'NewerInstalled':
-				return firmwareStatus.content.installed;
-			default:
-				return undefined;
-		}
-	});
-
-	function openUpdateModal(): void {
-		updateStubNotice = null;
-		showUpdateModal = true;
-	}
-	function closeUpdateModal(): void {
-		showUpdateModal = false;
-	}
-	function onUpdateConfirm(): void {
-		// TODO(#55): wire to firmware-update v2 implementation
-		showUpdateModal = false;
-		updateStubNotice = 'Firmware update is not yet implemented (#55).';
-	}
+	// ── Firmware card ─────────────────────────────────────────────────────
+	// The core classifies the installed build (MMR 0x800010) against its
+	// versioned known-builds table (`de1_domain::classify_firmware_build`):
+	// newest release / Decent stable / rolled back / … — never a bare
+	// "up to date". "Update firmware…" opens the alpha flow; it leads when a
+	// newer official build exists and stays available on request otherwise.
+	const firmwareCopy = $derived(
+		firmwareCardCopy(firmwareBuildReport(machine.firmwareBuild), connected)
+	);
+	const firmwareFlow = $derived(app?.firmware ?? null);
 
 	// Rename / Re-pair were UI-only stubs (no underlying device registry).
 	// Removed to keep the card focused on connect / disconnect / sleep — the
@@ -401,26 +326,18 @@
 				>
 			{/if}
 		</div>
-		<div class="st-machinecard-fw-ver">{firmwareStatusLabel}</div>
-		<div class="st-machinecard-fw-notes">{firmwareStatusNotes}</div>
-		<div class="st-machinecard-fw-actions">
-			<StButton
-				label={firmwareChecking ? 'Checking…' : 'Check for updates'}
-				icon="arrow-circle-up"
-				variant="primary"
-				disabled={!connected || firmwareChecking}
-				onClick={updateFirmware}
-			/>
-			<StButton
-				label="Update firmware…"
-				icon="download-simple"
-				disabled={!connected}
-				onClick={openUpdateModal}
-			/>
-		</div>
-		{#if updateStubNotice !== null}
-			<div class="st-machinecard-fw-stub" role="status" aria-live="polite">
-				{updateStubNotice}
+		<div class="st-machinecard-fw-ver">{firmwareCopy.title}</div>
+		<div class="st-machinecard-fw-notes">{firmwareCopy.note}</div>
+		<!-- Reachable while the DE1 is off too when a flash holds it, so the
+		     power-cycle step and its Exit are never stranded (audit r2 M-B). -->
+		{#if firmwareFlow && (connected || firmwareFlow.status)}
+			<div class="st-machinecard-fw-action">
+				<StButton
+					label={firmwareFlow.status ? 'Firmware update…' : 'Update firmware…'}
+					icon="download-simple"
+					variant={firmwareCopy.offerUpdate || firmwareFlow.status ? 'primary' : 'secondary'}
+					onClick={() => firmwareFlow.open()}
+				/>
 			</div>
 		{/if}
 		{#if app?.stolenSerial}
@@ -701,14 +618,6 @@
 	</StRow>
 </StGroup>
 
-{#if showUpdateModal}
-	<FirmwareUpdateModal
-		installedBuild={machine.firmwareBuild ?? undefined}
-		latestBuild={latestKnownBuild}
-		onConfirm={onUpdateConfirm}
-		onCancel={closeUpdateModal}
-	/>
-{/if}
 
 <style>
 	/* Retry now + Connect / Disconnect side by side, wrapping when narrow. */

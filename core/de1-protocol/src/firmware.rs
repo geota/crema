@@ -95,11 +95,19 @@ impl FWMapRequest {
     /// A request asking the DE1 for the first byte that failed to verify after
     /// an upload. The DE1 replies on the same characteristic; decode it with
     /// [`decode`](Self::decode) and read [`first_error`](Self::first_error).
+    ///
+    /// Byte-matches all three reference apps: `FWToErase=0`, **`FWToMap=1`**,
+    /// `FirstError=FF FF FF` — de1app `de1_comms.tcl:1108-1113` (`set
+    /// arr(FWToMap) 1`), decaid `unified_de1.firmware.dart:72` + `:104-109`
+    /// (`firmwareToErase: 0` through the shared builder, `firmwareToMap: 1`),
+    /// and Decenza `firmwareupdater.cpp:824` (`writeFWMapRequest(/*erase*/ 0,
+    /// /*map*/ 1, {0xFF, 0xFF, 0xFF})`). Crema previously sent `FWToMap=0`,
+    /// which no reference does (latent: crema does not flash yet).
     pub fn request_first_error() -> FWMapRequest {
         FWMapRequest {
             window_increment: 0,
             fw_to_erase: 0,
-            fw_to_map: 0,
+            fw_to_map: 1,
             first_error: FIRST_ERROR_REQUEST,
         }
     }
@@ -307,6 +315,16 @@ mod tests {
         let req = FWMapRequest::request_first_error();
         assert_eq!(req.first_error, FIRST_ERROR_REQUEST);
         assert!(!req.verified());
+    }
+
+    #[test]
+    fn request_first_error_matches_the_reference_verify_bytes() {
+        // de1app / decaid / Decenza all verify with WindowIncrement=0,
+        // FWToErase=0, FWToMap=1, FirstError=FF FF FF.
+        let req = FWMapRequest::request_first_error();
+        assert_eq!(req.fw_to_erase, 0);
+        assert_eq!(req.fw_to_map, 1);
+        assert_eq!(req.encode(), [0x00, 0x00, 0x00, 0x01, 0xFF, 0xFF, 0xFF]);
     }
 
     #[test]

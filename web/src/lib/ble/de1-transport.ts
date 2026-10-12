@@ -63,10 +63,9 @@ export interface De1Transport {
 	setSink(sink: NotificationSink): void;
 
 	/**
-	 * Register a callback for a *terminal* disconnect — either a
-	 * user-initiated {@link disconnect} or auto-reconnect giving up
-	 * after exhausting its attempts. Not fired for a transient drop
-	 * the backoff loop recovers.
+	 * Register a callback for a *terminal* disconnect — a user-initiated
+	 * {@link disconnect} (the backoff loop never gives up on its own).
+	 * Not fired for a transient drop the backoff loop recovers.
 	 */
 	onDisconnected(listener: () => void): void;
 

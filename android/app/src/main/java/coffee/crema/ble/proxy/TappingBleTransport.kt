@@ -114,6 +114,9 @@ class TappingBleTransport(
     override suspend fun requestConnectionPriority(device: BleTransport.DeviceHandle, high: Boolean) =
         delegate.requestConnectionPriority(device, high)
 
+    override suspend fun rearmNotifications(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID) =
+        delegate.rearmNotifications(device, service, characteristic)
+
     /** Serve a hub read by address: resolve the handle and read through the
      *  delegate. This backs [RelayHub]'s `readSource`. */
     suspend fun readByAddress(address: String, service: UUID, char: UUID): ByteArray {

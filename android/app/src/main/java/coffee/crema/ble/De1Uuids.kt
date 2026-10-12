@@ -45,6 +45,10 @@ object De1Uuids {
     /** `A005` ReadFromMMR — MMR read-reply notify. */
     val MMR_READ: UUID = uuid(map.mmrRead)
 
+    /** `A009` FWMapRequest — firmware erase / verify requests and the DE1's
+     *  answers (notify + read). Firmware flash only. */
+    val FW_MAP_REQUEST: UUID = uuid(map.fwMapRequest)
+
     /**
      * The DE1 advertises with a name beginning "DE1"; some units advertise
      * "BENGLE". The service-UUID scan already does the real narrowing.

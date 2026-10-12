@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -534,6 +535,93 @@ class De1BleManager(
 
     // ---- Machine control (AND5) -------------------------------------------
 
+    // ---- Firmware flash I/O ---------------------------------------------------
+    // The flash driver (`coffee.crema.firmware.FirmwareFlashDriver`) performs the
+    // core's FlashActions through these. Unlike [writeCharacteristic] they throw,
+    // because the core's state machine must see every failure.
+
+    /**
+     * While a firmware flash holds the link, every write except the flash's own
+     * ([firmwareWrite]) is dropped — a stray 4-byte MMR write interleaved with
+     * the 16-byte firmware chunks on the same characteristic would corrupt the
+     * flash (decaid `firmware_mmr_gate.dart`, Decenza `de1device.cpp:2091-2124`).
+     * The core drops its own commands too; this catches every shell-side writer
+     * (keep-awake poke, sweeps, profile sync) as well.
+     */
+    @Volatile
+    var firmwareExclusive: Boolean = false
+
+    /** The A009 collection for a flash ([firmwareSubscribeFwMap]). */
+    private var fwMap: FwMapSubscription? = null
+
+    /** Ordinary (non-flash) DE1 writes in flight — a flash waits for zero. */
+    private val nonFlashWritesInFlight = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /**
+     * Wait (at most [timeoutMs]) for ordinary writes that passed the gate
+     * before it closed to finish — decaid's firmware gate waits for active MMR
+     * operations to drain before taking the lock (`firmware_mmr_gate.dart:44-54`).
+     * Returns whether the link went quiet.
+     */
+    suspend fun awaitNonFlashWritesDrained(timeoutMs: Long): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (nonFlashWritesInFlight.get() > 0) {
+            if (SystemClock.elapsedRealtime() >= deadline) return false
+            delay(20)
+        }
+        return true
+    }
+
+    /**
+     * One flash write, with response, a single bounded attempt (audit M2: no
+     * reference app retries a chunk, and a timed-out Nordic write can still be
+     * on the air); throws.
+     */
+    suspend fun firmwareWrite(target: WriteTarget, bytes: ByteArray) {
+        val d = device ?: error("DE1 not connected")
+        withTimeout(WRITE_TIMEOUT_MS) {
+            transport.write(d, De1Uuids.SERVICE, De1Uuids.forWriteTarget(target), bytes)
+        }
+        // A flash ACK proves the link is alive; keep the liveness probe quiet
+        // (its StateInfo read would only add traffic mid-upload).
+        lastInboundMs = SystemClock.elapsedRealtime()
+    }
+
+    /** A fresh GATT read of A009 (decaid's erase / verify poll). */
+    suspend fun firmwareReadFwMap(): ByteArray {
+        val d = device ?: error("DE1 not connected")
+        val bytes = withTimeout(FW_MAP_READ_TIMEOUT_MS) {
+            transport.read(d, De1Uuids.SERVICE, De1Uuids.FW_MAP_REQUEST)
+        }
+        lastInboundMs = SystemClock.elapsedRealtime()
+        return bytes
+    }
+
+    /**
+     * (Re-)enable A009 notifications and deliver each frame to [onFrame]. Called
+     * before erase and again right before verify — de1app re-enables it there
+     * (`de1_comms.tcl:1095`) because the upload burst can drop the CCCD.
+     */
+    suspend fun firmwareSubscribeFwMap(onFrame: (ByteArray) -> Unit) {
+        val d = device ?: error("DE1 not connected")
+        val sub = fwMap?.takeIf { it.device == d } ?: run {
+            fwMap?.cancel()
+            FwMapSubscription(
+                device = d,
+                scope = scope,
+                observe = { transport.observe(d, De1Uuids.SERVICE, De1Uuids.FW_MAP_REQUEST).map { it.data } },
+                rearm = { transport.rearmNotifications(d, De1Uuids.SERVICE, De1Uuids.FW_MAP_REQUEST) },
+            ).also { fwMap = it }
+        }
+        sub.subscribe(onFrame)
+    }
+
+    /** Stop delivering A009 frames (the flash ended). */
+    fun firmwareUnsubscribeFwMap() {
+        fwMap?.cancel()
+        fwMap = null
+    }
+
     /**
      * Write a core-issued `Command.WriteCharacteristic` to the DE1: map the
      * [target] to its GATT characteristic and write [bytes].
@@ -554,7 +642,17 @@ class De1BleManager(
          *  registration so stops never preempt stops. */
         urgent: Boolean = false,
     ) {
+        // Count the write BEFORE checking the gate (audit r2 LOW 3): a write
+        // that passes the check is then always visible to the flash's drain,
+        // which runs after the gate closes.
+        nonFlashWritesInFlight.incrementAndGet()
+        if (firmwareExclusive) {
+            nonFlashWritesInFlight.decrementAndGet()
+            onStatus("DE1 $target write skipped — firmware update in progress")
+            return
+        }
         val d = device ?: run {
+            nonFlashWritesInFlight.decrementAndGet()
             onStatus("Write ignored — DE1 not connected")
             return
         }
@@ -587,6 +685,8 @@ class De1BleManager(
         } catch (e: Exception) {
             onWriteFailure(d)
             throw e
+        } finally {
+            nonFlashWritesInFlight.decrementAndGet()
         }
         if (target == WriteTarget.De1ProfileFrame) {
             feedCore(NotificationSource.DE1_FRAME_ACK, bytes, SystemClock.elapsedRealtime(), "DE1 frame-ACK")
@@ -722,6 +822,8 @@ class De1BleManager(
         }
         Log.i(TAG, "DE1 write failed (${first.message}) — one retry in ${WRITE_RETRY_DELAY_MS}ms")
         delay(WRITE_RETRY_DELAY_MS)
+        // A firmware flash may have taken the link meanwhile (audit M1).
+        if (firmwareExclusive) throw IllegalStateException("firmware update in progress — retry dropped")
         withTimeout(WRITE_TIMEOUT_MS) { transport.write(d, De1Uuids.SERVICE, characteristic, bytes) }
     }
 
@@ -735,6 +837,9 @@ class De1BleManager(
         /** Consecutive write failures before the link is presumed dead and
          *  torn down for the reconnect supervisor (reaprime uses 3). */
         private const val MAX_CONSECUTIVE_WRITE_FAILURES = 3
+
+        /** Bound on one A009 poll read (decaid `_firmwareMapPollReadTimeout`). */
+        private const val FW_MAP_READ_TIMEOUT_MS = 2_000L
 
         /** Spacing before the single write retry (Decenza's retry delay). */
         private const val WRITE_RETRY_DELAY_MS = 500L
@@ -795,5 +900,38 @@ class De1BleManager(
             return upper.startsWith(De1Uuids.ADVERTISED_NAME_PREFIX) ||
                 upper.startsWith("BENGLE")
         }
+    }
+}
+
+/**
+ * The A009 collection behind a firmware flash. The first [subscribe] starts
+ * collecting (which enables the CCCD); every later one keeps that collection
+ * and re-arms the CCCD with an explicit disable + enable ([rearm]), because a
+ * second collection would not write it (Nordic skips an enable it believes is
+ * already on) and cancelling one never disables it (audit r2 LOW 4). Frames go
+ * to the latest callback.
+ */
+internal class FwMapSubscription(
+    val device: BleTransport.DeviceHandle,
+    private val scope: CoroutineScope,
+    private val observe: () -> kotlinx.coroutines.flow.Flow<ByteArray>,
+    private val rearm: suspend () -> Unit,
+) {
+    @Volatile
+    private var onFrame: (ByteArray) -> Unit = {}
+    private var job: Job? = null
+
+    suspend fun subscribe(callback: (ByteArray) -> Unit) {
+        onFrame = callback
+        if (job?.isActive == true) {
+            rearm()
+        } else {
+            job = observe().onEach { onFrame(it) }.launchIn(scope)
+        }
+    }
+
+    fun cancel() {
+        job?.cancel()
+        job = null
     }
 }

@@ -58,6 +58,9 @@ import coffee.crema.ui.screens.ghcRequired
 import coffee.crema.ui.screens.STOLEN_SERIAL_NOTICE
 import coffee.crema.ui.screens.hasCupWarmerPlate
 import coffee.crema.ui.screens.firmwareLabel
+import coffee.crema.ui.screens.FirmwareCopyBody
+import coffee.crema.ui.rememberFirmwareCardCopy
+import coffee.crema.core.MmrRegister
 import coffee.crema.ui.screens.heaterVoltageLabel
 import coffee.crema.ui.screens.heaterVoltageValue
 import coffee.crema.ui.screens.machineModelLabel
@@ -320,6 +323,7 @@ private fun MachineSection(
 ) {
     // On a mirror, machine settings live on the host — say so up top (issue 10).
     if (secondary) MirrorControlledNote(primaryName)
+    val firmwareFlow by vm.firmware.ui.collectAsStateWithLifecycle()
     // Machine hero (proto .pst-mhero): icon + state + identity key-values.
     Column(Modifier.padding(horizontal = CremaEdge, vertical = 8.dp)) {
         Surface(shape = RoundedCornerShape(CremaCardSpec.phoneRadius), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
@@ -338,6 +342,25 @@ private fun MachineSection(
                     HeroKV("Model", if (connected) machineModelLabel(ui.de1MachineInfo) else "—")
                     HeroKV("Board", if (connected) cpuBoardLabel(ui.de1MachineInfo) else "—")
                     HeroKV("BLE", if (connected) (ui.de1BluetoothAddress ?: "Paired") else "—")
+                }
+                // Firmware: what the installed build means + how to update
+                // today (core-classified; tablet hero-card parity).
+                rememberFirmwareCardCopy(ui.de1MachineInfo[MmrRegister.FirmwareVersion], connected)?.let { copy ->
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.06f))
+                            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Eyebrow("Firmware", color = MaterialTheme.colorScheme.primary)
+                        FirmwareCopyBody(
+                            copy,
+                            onUpdate = if (connected || firmwareFlow.status != null) ({ vm.firmware.open() }) else null,
+                            emphasize = firmwareFlow.status != null,
+                        )
+                    }
                 }
                 CremaButton(
                     onClick = { onConnect("machine") },

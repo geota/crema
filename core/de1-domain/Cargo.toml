@@ -24,6 +24,9 @@ regex-lite = "0.1"
 # Used by `new_profile_id` for custom profiles + the `gen-builtin-ids`
 # tool that fills `profiles/builtin.json` with stable IDs once.
 uuid = { version = "1", features = ["v7"] }
+# SHA-256 for pinning official DE1 firmware images (`firmware_image`): an
+# image must match the manifest digest byte-for-byte before it is flashed.
+sha2 = "0.10"
 
 [[bin]]
 # One-shot tool: fills `profiles/builtin.json` with stable UUID v7 IDs

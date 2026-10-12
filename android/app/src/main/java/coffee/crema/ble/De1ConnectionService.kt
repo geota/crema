@@ -49,9 +49,10 @@ class De1ConnectionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val firmware = intent?.getBooleanExtra(EXTRA_FIRMWARE, false) == true
         startForeground(
             NOTIF_ID,
-            buildNotification(),
+            buildNotification(firmware),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
         )
         acquireWakeLock()
@@ -71,11 +72,17 @@ class De1ConnectionService : Service() {
         super.onDestroy()
     }
 
-    private fun buildNotification(): Notification =
+    private fun buildNotification(firmware: Boolean): Notification =
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_bluetooth)
-            .setContentTitle("Crema is keeping your DE1 connected")
-            .setContentText("Reconnects the machine even while the screen is off.")
+            .setContentTitle(if (firmware) "Updating DE1 firmware" else "Crema is keeping your DE1 connected")
+            .setContentText(
+                if (firmware) {
+                    "Keep the DE1 nearby. If it stops, the DE1 keeps its current firmware."
+                } else {
+                    "Reconnects the machine even while the screen is off."
+                },
+            )
             .setContentIntent(
                 packageManager.getLaunchIntentForPackage(packageName)?.let { launch ->
                     android.app.PendingIntent.getActivity(
@@ -117,10 +124,12 @@ class De1ConnectionService : Service() {
         Log.i(TAG, "background-connection service stopped")
     }
 
-    private companion object {
-        const val TAG = "De1ConnectionService"
-        const val CHANNEL_ID = "de1_background_connection"
-        const val NOTIF_ID = 4265
-        const val WAKE_TAG = "crema:de1-connection"
+    companion object {
+        /** `true` while a firmware flash runs — switches the notification text. */
+        const val EXTRA_FIRMWARE = "coffee.crema.extra.FIRMWARE"
+        private const val TAG = "De1ConnectionService"
+        private const val CHANNEL_ID = "de1_background_connection"
+        private const val NOTIF_ID = 4265
+        private const val WAKE_TAG = "crema:de1-connection"
     }
 }
