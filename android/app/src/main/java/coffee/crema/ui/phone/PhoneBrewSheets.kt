@@ -515,8 +515,8 @@ fun PhoneDevicesSheet(
     connected: Boolean,
     scaleConnected: Boolean,
     onConnect: (String) -> Unit,
-    onDe1AutoConnect: (Boolean) -> Unit,
-    onScaleAutoConnect: (Boolean) -> Unit,
+    onForgetDe1: () -> Unit,
+    onForgetScale: () -> Unit,
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
     onTakeOver: () -> Unit,
@@ -534,8 +534,8 @@ fun PhoneDevicesSheet(
             connected = connected,
             scaleConnected = scaleConnected,
             onConnect = onConnect,
-            onDe1AutoConnect = onDe1AutoConnect,
-            onScaleAutoConnect = onScaleAutoConnect,
+            onForgetDe1 = onForgetDe1,
+            onForgetScale = onForgetScale,
             onMirrorFrom = onMirrorFrom,
             onStopMirroring = onStopMirroring,
             onTakeOver = onTakeOver,
@@ -555,8 +555,8 @@ fun DevicesPanel(
     connected: Boolean,
     scaleConnected: Boolean,
     onConnect: (String) -> Unit,
-    onDe1AutoConnect: (Boolean) -> Unit,
-    onScaleAutoConnect: (Boolean) -> Unit,
+    onForgetDe1: () -> Unit,
+    onForgetScale: () -> Unit,
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
     onTakeOver: () -> Unit,
@@ -616,9 +616,8 @@ fun DevicesPanel(
                 onRetry = { onRetry(true) },
                 onAction = { onConnect("machine") },
                 actionEnabled = ui.bluetoothOn,
-                autoConnect = ui.rememberedDe1Address != null,
-                autoConnectEnabled = connected || ui.rememberedDe1Address != null,
-                onAutoConnect = onDe1AutoConnect,
+                remembered = ui.rememberedDe1Address != null,
+                onForget = onForgetDe1,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             DeviceRow(
@@ -644,9 +643,8 @@ fun DevicesPanel(
                 onRetry = { onRetry(false) },
                 onAction = { onConnect("scale") },
                 actionEnabled = ui.bluetoothOn,
-                autoConnect = ui.rememberedScaleAddress != null,
-                autoConnectEnabled = scaleConnected || ui.rememberedScaleAddress != null,
-                onAutoConnect = onScaleAutoConnect,
+                remembered = ui.rememberedScaleAddress != null,
+                onForget = onForgetScale,
             )
             Spacer(Modifier.height(14.dp))
             OutlinedButton(
@@ -681,8 +679,8 @@ fun TabletDevicesSheet(
     connected: Boolean,
     scaleConnected: Boolean,
     onConnect: (String) -> Unit,
-    onDe1AutoConnect: (Boolean) -> Unit,
-    onScaleAutoConnect: (Boolean) -> Unit,
+    onForgetDe1: () -> Unit,
+    onForgetScale: () -> Unit,
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
     onTakeOver: () -> Unit,
@@ -701,8 +699,8 @@ fun TabletDevicesSheet(
             connected = connected,
             scaleConnected = scaleConnected,
             onConnect = onConnect,
-            onDe1AutoConnect = onDe1AutoConnect,
-            onScaleAutoConnect = onScaleAutoConnect,
+            onForgetDe1 = onForgetDe1,
+            onForgetScale = onForgetScale,
             onMirrorFrom = onMirrorFrom,
             onStopMirroring = onStopMirroring,
             onTakeOver = onTakeOver,
@@ -722,8 +720,8 @@ fun DevicesPanelWide(
     connected: Boolean,
     scaleConnected: Boolean,
     onConnect: (String) -> Unit,
-    onDe1AutoConnect: (Boolean) -> Unit,
-    onScaleAutoConnect: (Boolean) -> Unit,
+    onForgetDe1: () -> Unit,
+    onForgetScale: () -> Unit,
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
     onTakeOver: () -> Unit,
@@ -807,9 +805,8 @@ fun DevicesPanelWide(
                 actionLabel = if (connected) "Disconnect" else "Connect",
                 actionIcon = if (connected) "sign-out" else "bluetooth",
                 onAction = { onConnect("machine") }, actionEnabled = ui.bluetoothOn,
-                autoConnect = ui.rememberedDe1Address != null,
-                autoConnectEnabled = connected || ui.rememberedDe1Address != null,
-                onAutoConnect = onDe1AutoConnect,
+                remembered = ui.rememberedDe1Address != null,
+                onForget = onForgetDe1,
                 reconnecting = !connected && ui.de1Reconnecting,
                 onRetry = { onRetry(true) },
                 modifier = m,
@@ -822,9 +819,8 @@ fun DevicesPanelWide(
                 actionLabel = if (scaleConnected) "Disconnect" else "Pair",
                 actionIcon = if (scaleConnected) "sign-out" else "bluetooth",
                 onAction = { onConnect("scale") }, actionEnabled = ui.bluetoothOn,
-                autoConnect = ui.rememberedScaleAddress != null,
-                autoConnectEnabled = scaleConnected || ui.rememberedScaleAddress != null,
-                onAutoConnect = onScaleAutoConnect,
+                remembered = ui.rememberedScaleAddress != null,
+                onForget = onForgetScale,
                 reconnecting = !scaleConnected && ui.scaleReconnecting,
                 onRetry = { onRetry(false) },
                 modifier = m,
@@ -888,9 +884,9 @@ private fun WideDeviceTile(
     actionIcon: String,
     onAction: () -> Unit,
     actionEnabled: Boolean,
-    autoConnect: Boolean,
-    autoConnectEnabled: Boolean,
-    onAutoConnect: (Boolean) -> Unit,
+    /** The device is remembered (reconnects automatically); [onForget] forgets it. */
+    remembered: Boolean,
+    onForget: () -> Unit,
     /** Show a "Retry now" pill (the device is reconnecting). */
     reconnecting: Boolean = false,
     onRetry: () -> Unit = {},
@@ -932,13 +928,8 @@ private fun WideDeviceTile(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    CremaSwitch(autoConnect, onAutoConnect, enabled = autoConnectEnabled)
-                    Text(
-                        "Auto",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (autoConnectEnabled) 1f else 0.5f),
-                    )
+                if (remembered) {
+                    CremaButton(onClick = onForget, variant = CremaButtonVariant.Text, danger = true, label = "Forget")
                 }
                 Surface(
                     onClick = onAction,
@@ -981,12 +972,10 @@ private fun DeviceRow(
     /** Whether the Pair/Disconnect action is live. Greyed out (disabled) when the
      *  Bluetooth adapter is off — there's nothing to scan/connect against. */
     actionEnabled: Boolean = true,
-    /** Per-device "Auto-connect" state + whether it's interactive. Greyed out
-     *  (disabled) when there's no device to control — neither connected nor
-     *  remembered — rather than hidden. */
-    autoConnect: Boolean = false,
-    autoConnectEnabled: Boolean = false,
-    onAutoConnect: (Boolean) -> Unit = {},
+    /** The device is remembered (reconnects automatically after a dropout and
+     *  on launch); [onForget] forgets it. */
+    remembered: Boolean = false,
+    onForget: () -> Unit = {},
     /** Show a "Retry now" pill under the status (the device is reconnecting). */
     reconnecting: Boolean = false,
     onRetry: () -> Unit = {},
@@ -1028,17 +1017,10 @@ private fun DeviceRow(
             }
             if (reconnecting) RetryNowPill(onRetry, Modifier.padding(top = 4.dp))
         }
-        // Per-device Auto-connect — a compact label-over-switch BESIDE the Pair
-        // pill (ON remembers the device; OFF forgets it). Always shown; greyed out
-        // when there's no device to control (neither connected nor remembered).
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text(
-                "Auto-connect",
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp, letterSpacing = 0.2.sp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (autoConnectEnabled) 1f else 0.5f),
-                maxLines = 1,
-            )
-            CremaSwitch(autoConnect, onAutoConnect, enabled = autoConnectEnabled)
+        // A remembered device reconnects on its own; Forget sits BESIDE the
+        // Pair pill (the old Auto-connect switch, one way to say it).
+        if (remembered) {
+            CremaButton(onClick = onForget, variant = CremaButtonVariant.Text, danger = true, label = "Forget")
         }
         Surface(
             onClick = onAction,

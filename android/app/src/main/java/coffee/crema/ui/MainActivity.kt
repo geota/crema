@@ -229,7 +229,8 @@ class MainActivity : ComponentActivity() {
                 SafeMode.bootStable(this@MainActivity)
             }
             val ui by viewModel.ui.collectAsStateWithLifecycle()
-            // "Reconnect when nearby": launch the system association dialog.
+            // "Keep connected in the background" → the one-time "nearby" setup:
+            // launch the system association dialog.
             LaunchedEffect(ui.companionRequest) {
                 val device = ui.companionRequest ?: return@LaunchedEffect
                 val address = viewModel.companionTargetAddress(device)
@@ -243,13 +244,6 @@ class MainActivity : ComponentActivity() {
                 else -> isSystemInDarkTheme()
             }
             CremaTheme(darkTheme = darkTheme, forceDark = false) {
-                ui.companionOffer?.let { device ->
-                    coffee.crema.ui.components.CompanionOfferDialog(
-                        device = if (device == coffee.crema.ble.companion.CompanionDevice.DE1) "DE1" else "scale",
-                        onSetUp = { viewModel.startCompanionSetup(device) },
-                        onNotNow = { viewModel.declineCompanionOffer(device) },
-                    )
-                }
                 val machineConnected = ui.bleState == De1BleManager.State.READY
                 val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
                 val onRailConnect: (String) -> Unit = { which ->
@@ -557,8 +551,8 @@ class MainActivity : ComponentActivity() {
                         connected = machineConnected,
                         scaleConnected = scaleConnected,
                         onConnect = onRailConnect,
-                        onDe1AutoConnect = viewModel::setDe1AutoConnect,
-                        onScaleAutoConnect = viewModel::setScaleAutoConnect,
+                        onForgetDe1 = viewModel::forgetDe1,
+                        onForgetScale = viewModel::forgetScale,
                         onMirrorFrom = { host, port -> viewModel.switchToSecondary(host, port); showDevices = false },
                         onStopMirroring = { viewModel.switchToNormal(); showDevices = false },
                         onTakeOver = { viewModel.requestHandoff(); showDevices = false },
