@@ -19,7 +19,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   switching the DE1 off and on; Crema then reads the build back to confirm.
   Until then, and while the DE1 erases or checks the new firmware, Crema
   sends it nothing else (no settings, profile or sleep commands, also after
-  a reconnect). You can cancel, after a confirmation, until the DE1 starts
+  a reconnect), and the update screen stays up until the DE1 restarts or
+  you exit; it has its own Connect button for reconnecting the DE1 after
+  the restart. You can cancel, after a confirmation, until the DE1 starts
   checking; the DE1 is then put to sleep and should keep its current
   firmware, since Crema only writes its spare memory bank. A failure offers
   Retry. The steps follow Decent's de1app and decaid: sleep the machine,
