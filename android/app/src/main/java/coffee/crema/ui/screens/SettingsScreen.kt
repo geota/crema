@@ -205,7 +205,6 @@ fun SettingsScreen(
                             onUpdateFirmware = if (connected || firmwareFlow.status != null) ({ vm.firmware.open() }) else null,
                             firmwareBusy = firmwareFlow.status != null,
                         )
-                        coffee.crema.ui.FirmwareUpdateHost(vm.firmware, ui.de1MachineInfo[MmrRegister.FirmwareVersion])
                         if (!connected && ui.de1Reconnecting) {
                             ReconnectingNotice("DE1", onRetry = { vm.retryReconnectNow(true) })
                         }

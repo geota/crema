@@ -309,8 +309,8 @@ private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContro
             Footer(
                 right = {
                     if (ui.confirmingCancel) {
-                        CremaButton(onClick = { flow.keepUpdating() }, variant = CremaButtonVariant.Text, label = "Keep updating")
-                        CremaButton(onClick = { flow.confirmCancel() }, danger = true, variant = CremaButtonVariant.Tonal, label = "Stop")
+                        CremaButton(onClick = { flow.keepUpdating() }, variant = CremaButtonVariant.Tonal, label = "Keep updating")
+                        CremaButton(onClick = { flow.confirmCancel() }, danger = true, variant = CremaButtonVariant.Text, label = "Stop")
                     } else {
                         CremaButton(
                             onClick = { flow.requestCancel() },
@@ -342,14 +342,14 @@ private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContro
             Footer(
                 left = {
                     if (ui.confirmingExit) {
-                        CremaButton(onClick = { flow.keepWaiting() }, variant = CremaButtonVariant.Text, label = "Keep waiting")
+                        CremaButton(onClick = { flow.keepWaiting() }, variant = CremaButtonVariant.Tonal, label = "Keep waiting")
                     } else {
                         CremaButton(onClick = { flow.requestExit() }, variant = CremaButtonVariant.Text, label = "Exit…")
                     }
                 },
                 right = {
                     if (ui.confirmingExit) {
-                        CremaButton(onClick = { flow.confirmExit() }, danger = true, variant = CremaButtonVariant.Tonal, label = "Exit")
+                        CremaButton(onClick = { flow.confirmExit() }, danger = true, variant = CremaButtonVariant.Text, label = "Exit")
                     } else {
                         CremaButton(onClick = { flow.close() }, label = "Hide")
                     }

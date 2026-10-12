@@ -332,6 +332,10 @@ class MainActivity : ComponentActivity() {
                     if (keepOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
+                // The firmware-update flow, app-wide: leaving Settings never
+                // hides a running flash or its power-cycle step (web parity,
+                // audit L4 / M3).
+                FirmwareUpdateHost(viewModel.firmware, ui.de1MachineInfo[coffee.crema.core.MmrRegister.FirmwareVersion])
                 // Re-usable debug-panel slot (Phase-0 readout) — hosted at the
                 // `debug` route on both form factors.
                 val debugSlot: @Composable () -> Unit = {
