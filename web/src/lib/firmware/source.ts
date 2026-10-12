@@ -93,7 +93,16 @@ export async function downloadOfficialImage(
 			detail = `HTTP ${res.status}`;
 			continue;
 		}
-		const bytes = await readAll(res, artifact.byteLength, onProgress);
+		const declared = Number(res.headers.get('content-length') ?? '0');
+		if (declared > artifact.byteLength * 2) {
+			return { kind: 'rejected', problem: 'Decent is serving a file far too large to be DE1 firmware.' };
+		}
+		let bytes: Uint8Array;
+		try {
+			bytes = await readAll(res, artifact.byteLength, onProgress);
+		} catch (error) {
+			return { kind: 'rejected', problem: error instanceof Error ? error.message : String(error) };
+		}
 		const verdict = verifyImageFor(artifact, bytes);
 		if (verdict.ok) return { kind: 'ok', image: verdict.image, check: verdict.check };
 		return { kind: 'rejected', problem: verdict.problem };
@@ -106,7 +115,12 @@ async function readAll(
 	expected: number,
 	onProgress?: (received: number, total: number) => void
 ): Promise<Uint8Array> {
-	if (res.body == null || onProgress == null) return new Uint8Array(await res.arrayBuffer());
+	const cap = expected * 2;
+	if (res.body == null) {
+		const all = new Uint8Array(await res.arrayBuffer());
+		if (all.byteLength > cap) throw new Error('The download is far too large to be DE1 firmware.');
+		return all;
+	}
 	const reader = res.body.getReader();
 	const parts: Uint8Array[] = [];
 	let received = 0;
@@ -115,7 +129,12 @@ async function readAll(
 		if (done) break;
 		parts.push(value);
 		received += value.byteLength;
-		onProgress(received, expected);
+		// Audit L6: stop early instead of buffering an arbitrarily large body.
+		if (received > cap) {
+			await reader.cancel();
+			throw new Error('The download is far too large to be DE1 firmware.');
+		}
+		onProgress?.(received, expected);
 	}
 	const out = new Uint8Array(received);
 	let at = 0;

@@ -2,31 +2,75 @@
  * `$lib/firmware/firmware-update` — the flow's gating: the alpha warning must
  * be acknowledged, the default build is the newest above the installed one,
  * a CORS-blocked download falls back to the manual file, a bad file never
- * reaches the confirm step, blockers stop the start, and the flow cannot be
- * closed while a flash runs.
+ * reaches the confirm step, blockers stop the start, cancel and exit are
+ * confirmed, the power-cycle marker survives a reload, the shell hears when
+ * the flash lets go of the link, and the flow can't close while it runs.
  */
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { initTestWasm } from '$lib/testing/test-init';
-import { FlashPhase, type FlashBlocker, type FlashStep } from '$lib/core/crema-core';
-import { FirmwareUpdateController, type FirmwareUpdateDeps } from './firmware-update.svelte';
+import {
+	FlashPhase,
+	type FlashBlocker,
+	type FlashStatus,
+	type FlashStep
+} from '$lib/core/crema-core';
+import {
+	AWAITING_KEY,
+	FirmwareUpdateController,
+	type FirmwareUpdateDeps,
+	type MarkerStore
+} from './firmware-update.svelte';
 import type { FlashIo } from './flash-driver';
 
 beforeAll(initTestWasm);
 
 const noStep = async (): Promise<FlashStep> => ({ actions: [] });
 
+function status(phase: FlashPhase, extra: Partial<FlashStatus> = {}): FlashStatus {
+	return {
+		phase,
+		artifact: {} as never,
+		targetBuild: 1358,
+		chunksTotal: 10,
+		chunksAcked: 3,
+		percent: 30,
+		etaIsEstimate: false,
+		elapsedSeconds: 60,
+		canCancel: true,
+		locksWrites: true,
+		eraseSettling: false,
+		canExit: false,
+		verifyUnconfirmed: false,
+		machineRestarted: false,
+		...extra
+	};
+}
+
+function memoryStore(): MarkerStore & { data: Map<string, string> } {
+	const data = new Map<string, string>();
+	return {
+		data,
+		getItem: (k) => data.get(k) ?? null,
+		setItem: (k, v) => void data.set(k, v),
+		removeItem: (k) => void data.delete(k)
+	};
+}
+
 function deps(over: {
 	installed?: number | null;
 	blockers?: FlashBlocker[];
 	fetchFn?: typeof fetch;
 	status?: FlashStep;
+	cancel?: FlashStep;
+	store?: MarkerStore | null;
+	restore?: FlashStep;
+	onRelease?: () => void;
 }): FirmwareUpdateDeps {
 	const io: FlashIo = {
 		write: async () => undefined,
 		readFwMap: async () => new Uint8Array(7),
 		subscribeFwMap: async () => undefined,
-		readBuild: async () => undefined,
 		setExclusive: () => undefined,
 		setFwMapListener: () => undefined,
 		addLinkListener: () => () => undefined
@@ -41,15 +85,19 @@ function deps(over: {
 			firmwareFlashOnReadFailed: noStep,
 			firmwareFlashTick: noStep,
 			firmwareFlashLinkRestored: noStep,
-			firmwareFlashCancel: noStep,
+			firmwareFlashCancel: vi.fn(async () => over.cancel ?? { actions: [] }),
 			firmwareFlashDismiss: async () => true,
-			firmwareFlashStatus: async () => over.status ?? { actions: [] }
+			firmwareFlashExit: vi.fn(async () => true),
+			firmwareFlashStatus: async () => over.status ?? { actions: [] },
+			firmwareFlashRestoreAwaiting: vi.fn(async () => over.restore ?? { actions: [] })
 		},
 		io,
 		conditions: async () => ({ connected: true, ready: true, guidedBrewActive: false, powerOk: true }),
 		installedBuild: () => over.installed ?? 1333,
 		log: () => undefined,
 		keepAlive: { set: () => undefined },
+		store: over.store === undefined ? null : over.store,
+		onRelease: over.onRelease,
 		fetchFn:
 			over.fetchFn ??
 			((async () => {
@@ -91,6 +139,22 @@ describe('FirmwareUpdateController', () => {
 		expect(flow.image).toBeNull();
 	});
 
+	it('Back during a download wins over the late result (audit L5)', async () => {
+		let resolve: (r: Response) => void = () => undefined;
+		const flow = new FirmwareUpdateController(
+			deps({
+				fetchFn: (() => new Promise<Response>((r) => (resolve = r))) as unknown as typeof fetch
+			})
+		);
+		await flow.open();
+		const pending = flow.fetchImage();
+		flow.backToChoose();
+		resolve(new Response(new Uint8Array(16)));
+		await pending;
+		expect(flow.step).toBe('choose');
+		expect(flow.sourceProblem).toBeNull();
+	});
+
 	it('blockers keep the flow on the confirm step', async () => {
 		const d = deps({ blockers: [{ type: 'LowPower' }] });
 		const flow = new FirmwareUpdateController(d);
@@ -103,24 +167,9 @@ describe('FirmwareUpdateController', () => {
 	});
 
 	it('reopens on the running flash and refuses to close while it runs', async () => {
-		const running: FlashStep = {
-			actions: [],
-			status: {
-				phase: FlashPhase.Uploading,
-				artifact: {} as never,
-				targetBuild: 1358,
-				chunksTotal: 10,
-				chunksAcked: 3,
-				percent: 30,
-				etaIsEstimate: false,
-				elapsedSeconds: 60,
-				canCancel: true,
-				locksWrites: true,
-				verifyUnconfirmed: false,
-				machineRestarted: false
-			}
-		};
-		const flow = new FirmwareUpdateController(deps({ status: running }));
+		const flow = new FirmwareUpdateController(
+			deps({ status: { actions: [], status: status(FlashPhase.Uploading) } })
+		);
 		await flow.open();
 		expect(flow.step).toBe('flash');
 		expect(flow.running).toBe(true);
@@ -129,16 +178,122 @@ describe('FirmwareUpdateController', () => {
 		flow.dispose();
 	});
 
-	it('a real downloaded file goes to confirm (needs CREMA_FIRMWARE_DIR)', async () => {
-		const dir = process.env.CREMA_FIRMWARE_DIR;
-		if (!dir) return;
-		const { readFile } = await import('node:fs/promises');
-		const bytes = new Uint8Array(await readFile(`${dir}/de1nightly.dat`));
-		const flow = new FirmwareUpdateController(deps({}));
+	it('cancel asks first; Keep updating backs out; Stop cancels', async () => {
+		const d = deps({
+			status: { actions: [], status: status(FlashPhase.Uploading) },
+			cancel: { actions: [], status: status(FlashPhase.Cancelled, { locksWrites: false }) }
+		});
+		const flow = new FirmwareUpdateController(d);
 		await flow.open();
-		await flow.fetchImage();
-		await flow.useFile(new Blob([bytes]));
-		expect(flow.sourceProblem).toBeNull();
-		expect(flow.step).toBe('confirm');
+		flow.requestCancel();
+		expect(flow.confirmingCancel).toBe(true);
+		flow.keepUpdating();
+		expect(flow.confirmingCancel).toBe(false);
+		expect(d.core.firmwareFlashCancel).not.toHaveBeenCalled();
+		flow.requestCancel();
+		await flow.confirmCancel();
+		expect(d.core.firmwareFlashCancel).toHaveBeenCalledTimes(1);
+		expect(flow.status?.phase).toBe(FlashPhase.Cancelled);
+		flow.dispose();
 	});
+
+	it('no cancel once verify started', async () => {
+		const flow = new FirmwareUpdateController(
+			deps({ status: { actions: [], status: status(FlashPhase.Verifying, { canCancel: false }) } })
+		);
+		await flow.open();
+		flow.requestCancel();
+		expect(flow.confirmingCancel).toBe(false);
+		flow.dispose();
+	});
+
+	it('the power-cycle step hides rather than closes, and exit asks first', async () => {
+		const store = memoryStore();
+		const d = deps({
+			store,
+			status: {
+				actions: [],
+				status: status(FlashPhase.AwaitingPowerCycle, { canCancel: false, canExit: true })
+			}
+		});
+		const flow = new FirmwareUpdateController(d);
+		await flow.open();
+		expect(flow.holdsLink).toBe(true);
+		expect(JSON.parse(store.data.get(AWAITING_KEY) ?? 'null')).toEqual({
+			build: 1358,
+			unconfirmed: false
+		});
+		await flow.close();
+		expect(flow.step).toBe('closed');
+		expect(flow.status?.phase).toBe(FlashPhase.AwaitingPowerCycle); // still held
+		await flow.open();
+		flow.requestExit();
+		expect(flow.confirmingExit).toBe(true);
+		await flow.confirmExit();
+		expect(d.core.firmwareFlashExit).toHaveBeenCalledTimes(1);
+		expect(flow.step).toBe('closed');
+		expect(store.data.has(AWAITING_KEY)).toBe(false);
+		flow.dispose();
+	});
+
+	it('a persisted power-cycle marker is restored into the core after a reload', async () => {
+		const store = memoryStore();
+		store.setItem(AWAITING_KEY, JSON.stringify({ build: 1358, unconfirmed: true }));
+		const awaiting = status(FlashPhase.AwaitingPowerCycle, { canExit: true });
+		const d = deps({
+			store,
+			restore: { actions: [], status: awaiting },
+			status: { actions: [], status: awaiting }
+		});
+		const flow = new FirmwareUpdateController(d);
+		await flow.restore();
+		expect(d.core.firmwareFlashRestoreAwaiting).toHaveBeenCalledWith(1358, true, expect.any(Number));
+		expect(flow.holdsLink).toBe(true);
+		flow.dispose();
+	});
+
+	it('the shell hears when the flash lets go of the link', async () => {
+		const onRelease = vi.fn();
+		const d = deps({
+			onRelease,
+			status: { actions: [], status: status(FlashPhase.Uploading) },
+			cancel: { actions: [], status: status(FlashPhase.Cancelled, { locksWrites: false }) }
+		});
+		const flow = new FirmwareUpdateController(d);
+		await flow.open();
+		expect(onRelease).not.toHaveBeenCalled();
+		await flow.confirmCancel();
+		expect(onRelease).toHaveBeenCalledTimes(1);
+		flow.dispose();
+	});
+
+	it('retry waits for an interrupted erase to settle', async () => {
+		const flow = new FirmwareUpdateController(
+			deps({
+				status: {
+					actions: [],
+					status: status(FlashPhase.Failed, { eraseSettling: true, locksWrites: true })
+				}
+			})
+		);
+		await flow.open();
+		flow.image = new Uint8Array(16);
+		await flow.retry();
+		expect(flow.step).toBe('flash');
+		flow.dispose();
+	});
+
+	it.skipIf(!process.env.CREMA_FIRMWARE_DIR)(
+		'a real downloaded file goes to confirm (skipped: needs CREMA_FIRMWARE_DIR; no firmware is committed)',
+		async () => {
+			const { readFile } = await import('node:fs/promises');
+			const bytes = new Uint8Array(await readFile(`${process.env.CREMA_FIRMWARE_DIR}/de1nightly.dat`));
+			const flow = new FirmwareUpdateController(deps({}));
+			await flow.open();
+			await flow.fetchImage();
+			await flow.useFile(new Blob([bytes]));
+			expect(flow.sourceProblem).toBeNull();
+			expect(flow.step).toBe('confirm');
+		}
+	);
 });

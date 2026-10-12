@@ -30,6 +30,7 @@
 	import { createAppRuntime, type AppRuntime } from '$lib/effect/runtime';
 	import { createCremaServices, type CremaServices } from '$lib/effect/crema-services';
 	import { setBrewWakeLock } from '$lib/shell/wake-lock';
+	import FirmwareUpdateHost from '$lib/components/settings/FirmwareUpdateHost.svelte';
 	import { retryPendingDecentUploads } from '$lib/decent/upload';
 	import { getGuidedBrewStore } from '$lib/brew/session.svelte';
 	import { getSettingsStore } from '$lib/settings';
@@ -178,6 +179,9 @@
      confirm/alert/prompt. Single instances, driven by the shared stores. -->
 <ConfirmDialog />
 <ToastHost />
+<!-- The firmware-update flow (alpha) — app-wide so a running flash or its
+     power-cycle step stays visible on every page. -->
+<FirmwareUpdateHost {app} />
 
 <style>
 	/* The content area clears the fixed side rail (--sidebar-w wide). */

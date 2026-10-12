@@ -5,20 +5,28 @@
 	 * Steps: alpha warning (click-through) → choose a build → download and
 	 * verify against the core's pinned manifest (or, when the browser blocks
 	 * Decent's server, download it from Decent and choose the file) → type
-	 * UPDATE → flash with phase, percent, ETA and Cancel → switch the DE1 off
-	 * and on → the read-back result, or a failure with Retry.
+	 * UPDATE → flash with phase, percent, ETA and a confirmed Cancel → switch
+	 * the DE1 off and on (waiting / reconnect states, a confirmed Exit) → the
+	 * read-back result, or a failure with Retry.
 	 *
-	 * All state lives in `FirmwareUpdateController`; the flash itself is the
-	 * core's state machine. Styling mirrors `MainsConfirmModal` (the `fu-`
-	 * prefix), deliberately plain until a design pass.
+	 * Mounted app-wide by `FirmwareUpdateHost` so navigating away doesn't hide
+	 * a running flash. All state lives in `FirmwareUpdateController`; the flash
+	 * itself is the core's state machine. Every step has one footer row: the
+	 * way back on the left, the actions on the right.
 	 */
 	import Icon from '$lib/icons/Icon.svelte';
 	import { FlashPhase } from '$lib/core';
+	import { FirmwareBuildStatus } from '$lib/core/crema-core';
+	import { firmwareBuildReport } from '$lib/firmware/build-copy';
 	import type { FirmwareUpdateController } from '$lib/firmware/firmware-update.svelte';
 	import {
 		ALPHA_POINTS,
+		ERASE_SETTLING,
+		EXIT_QUESTION,
 		STILL_SAFE,
+		UNCONFIRMED,
 		blockerText,
+		cancelQuestion,
 		channelLabel,
 		etaText,
 		failureText,
@@ -36,11 +44,24 @@
 	const selected = $derived(flow.selected);
 	const running = $derived(flow.running);
 
-	function relation(build: number): string {
-		if (installedBuild === null) return '';
-		if (build > installedBuild) return 'Newer than installed';
-		if (build === installedBuild) return 'Reinstalls the installed build';
-		return 'Replaces the installed build';
+	let panel = $state<HTMLDivElement | null>(null);
+	$effect(() => {
+		// Move focus into the dialog when it opens (audit L13).
+		panel?.focus();
+	});
+
+	/** The installed build is one Decent withdrew (1363): every pinned build replaces it. */
+	const installedRolledBack = $derived(
+		installedBuild !== null &&
+			firmwareBuildReport(installedBuild).status === FirmwareBuildStatus.RolledBack
+	);
+
+	function relation(build: number): { text: string; warn: boolean } {
+		if (installedBuild === null) return { text: '', warn: false };
+		if (installedRolledBack) return { text: 'Replaces the withdrawn installed build', warn: false };
+		if (build > installedBuild) return { text: 'Newer than installed', warn: false };
+		if (build === installedBuild) return { text: 'Reinstalls the installed build', warn: false };
+		return { text: `Older than installed build ${installedBuild} (downgrade)`, warn: true };
 	}
 
 	function minutes(chunks: number): string {
@@ -68,10 +89,17 @@
 <svelte:document onkeydown={onKeydown} />
 
 <div class="fu-scrim" role="presentation">
-	<div class="fu-panel" role="dialog" aria-modal="true" aria-labelledby="fu-title" tabindex="-1">
+	<div
+		class="fu-panel"
+		role="dialog"
+		aria-modal="true"
+		aria-labelledby="fu-title"
+		tabindex="-1"
+		bind:this={panel}
+	>
 		<div class="fu-head">
 			<div class="t-eyebrow">Firmware · alpha</div>
-			<h2 id="fu-title">
+			<h2 id="fu-title" aria-live="polite">
 				{#if flow.step === 'flash' && status}{phaseLabel(status.phase)}{:else}Update DE1 firmware{/if}
 			</h2>
 		</div>
@@ -88,15 +116,19 @@
 				<span>I understand</span>
 			</label>
 			<div class="fu-actions">
-				<button type="button" class="st-btn st-btn-secondary" onclick={() => flow.close()}>
-					Cancel
-				</button>
-				<button
-					type="button"
-					class="st-btn st-btn-primary"
-					disabled={!flow.acknowledged}
-					onclick={() => flow.acceptWarning()}>Continue</button
-				>
+				<div class="fu-actions-left">
+					<button type="button" class="st-btn st-btn-secondary" onclick={() => flow.close()}>
+						Cancel
+					</button>
+				</div>
+				<div class="fu-actions-right">
+					<button
+						type="button"
+						class="st-btn st-btn-primary"
+						disabled={!flow.acknowledged}
+						onclick={() => flow.acceptWarning()}>Continue</button
+					>
+				</div>
 			</div>
 		{:else if flow.step === 'choose'}
 			<div class="fu-body">
@@ -105,6 +137,7 @@
 				</div>
 				<div class="fu-choices" role="radiogroup" aria-label="Firmware build">
 					{#each flow.artifacts as a (a.id)}
+						{@const rel = relation(a.build)}
 						<label class="fu-choice" class:is-chosen={flow.selectedId === a.id}>
 							<input
 								type="radio"
@@ -114,7 +147,9 @@
 							/>
 							<span class="fu-choice-body">
 								<span class="fu-choice-title">Build {a.build} · {channelLabel(a.channel)}</span>
-								<span class="fu-choice-rel">{relation(a.build)}</span>
+								{#if rel.text}
+									<span class="fu-choice-rel" class:is-warn={rel.warn}>{rel.text}</span>
+								{/if}
 								<span class="fu-choice-notes">{a.releaseNotes}</span>
 							</span>
 						</label>
@@ -122,28 +157,50 @@
 				</div>
 			</div>
 			<div class="fu-actions">
-				<button type="button" class="st-btn st-btn-secondary" onclick={() => flow.close()}>
-					Cancel
-				</button>
-				<button
-					type="button"
-					class="st-btn st-btn-primary"
-					disabled={selected === null}
-					onclick={() => flow.fetchImage()}>Download and verify</button
-				>
+				<div class="fu-actions-left">
+					<button type="button" class="st-btn st-btn-secondary" onclick={() => flow.close()}>
+						Cancel
+					</button>
+				</div>
+				<div class="fu-actions-right">
+					<button
+						type="button"
+						class="st-btn st-btn-primary"
+						disabled={selected === null}
+						onclick={() => flow.fetchImage()}>Download and verify</button
+					>
+				</div>
 			</div>
 		{:else if flow.step === 'source' && selected}
 			<div class="fu-body">
 				{#if flow.downloading}
-					<div class="fu-sub">Downloading build {selected.build} from Decent…</div>
-					<progress max="1" value={flow.downloadProgress}></progress>
+					<div class="fu-sub" aria-live="polite">Downloading build {selected.build} from Decent…</div>
+					<progress
+						max="1"
+						value={flow.downloadProgress}
+						aria-label="Download progress"
+					></progress>
 				{:else if flow.manualNeeded}
 					<p class="fu-text">
 						Your browser can't fetch Decent's file directly. Download it from Decent, then choose
 						the downloaded file (<code>bootfwupdate.dat</code>). Crema checks it byte for byte
 						before using it.
 					</p>
-					<div class="fu-row-actions">
+				{/if}
+				{#if flow.sourceProblem}
+					<div class="fu-banner fu-banner-warn" role="alert">
+						<Icon cls="ph ph-warning-circle" aria-hidden="true" /><span>{flow.sourceProblem}</span>
+					</div>
+				{/if}
+			</div>
+			<div class="fu-actions">
+				<div class="fu-actions-left">
+					<button type="button" class="st-btn st-btn-secondary" onclick={() => flow.backToChoose()}>
+						Back
+					</button>
+				</div>
+				{#if flow.manualNeeded && !flow.downloading}
+					<div class="fu-actions-right">
 						<a
 							class="st-btn st-btn-secondary"
 							href={selected.urls[0]}
@@ -157,16 +214,6 @@
 						</label>
 					</div>
 				{/if}
-				{#if flow.sourceProblem}
-					<div class="fu-banner fu-banner-warn" role="alert">
-						<Icon cls="ph ph-warning-circle" aria-hidden="true" /><span>{flow.sourceProblem}</span>
-					</div>
-				{/if}
-			</div>
-			<div class="fu-actions">
-				<button type="button" class="st-btn st-btn-secondary" onclick={() => (flow.step = 'choose')}>
-					Back
-				</button>
 			</div>
 		{:else if flow.step === 'confirm' && selected}
 			<div class="fu-body">
@@ -190,6 +237,12 @@
 						<span class="fu-row-value">{minutes(selected.chunkCount)}</span>
 					</div>
 				</div>
+				{#if relation(selected.build).warn}
+					<div class="fu-banner fu-banner-warn" role="alert">
+						<Icon cls="ph ph-warning-circle" aria-hidden="true" />
+						<span>This rolls the DE1 back to an older build.</span>
+					</div>
+				{/if}
 				{#if flow.blockers.length > 0}
 					<div class="fu-banner fu-banner-warn" role="alert">
 						<Icon cls="ph ph-warning-circle" aria-hidden="true" />
@@ -215,26 +268,37 @@
 				</label>
 			</div>
 			<div class="fu-actions">
-				{#if flow.blockers.length > 0}
-					<button type="button" class="st-btn st-btn-secondary" onclick={() => flow.refreshBlockers()}>
-						Check again
+				<div class="fu-actions-left">
+					<button type="button" class="st-btn st-btn-secondary" onclick={() => flow.close()}>
+						Cancel
 					</button>
-				{/if}
-				<button type="button" class="st-btn st-btn-secondary" onclick={() => flow.close()}>
-					Cancel
-				</button>
-				<button
-					type="button"
-					class="st-btn st-btn-danger"
-					disabled={!typedMatches || flow.blockers.length > 0}
-					onclick={() => flow.startFlash()}>Update firmware</button
-				>
+				</div>
+				<div class="fu-actions-right">
+					{#if flow.blockers.length > 0}
+						<button
+							type="button"
+							class="st-btn st-btn-secondary"
+							onclick={() => flow.refreshBlockers()}>Check again</button
+						>
+					{/if}
+					<button
+						type="button"
+						class="st-btn st-btn-danger"
+						disabled={!typedMatches || flow.blockers.length > 0}
+						onclick={() => flow.startFlash()}>Update firmware</button
+					>
+				</div>
 			</div>
 		{:else if flow.step === 'flash' && status}
 			<div class="fu-body">
 				{#if running}
-					<progress max="100" value={status.percent}></progress>
-					<div class="fu-progress-meta">
+					<progress
+						max="100"
+						value={status.percent}
+						aria-label="Firmware update progress"
+						aria-valuetext={`${status.percent.toFixed(0)} percent`}
+					></progress>
+					<div class="fu-progress-meta" aria-live="polite">
 						<span>{status.percent.toFixed(0)} %</span>
 						<span>{etaText(status)}</span>
 					</div>
@@ -244,28 +308,43 @@
 							build {status.targetBuild}
 						</div>
 					{/if}
-					<div class="fu-banner fu-banner-info" role="status">
-						Keep this tab open and in front, this device charging, and the DE1 nearby. If the
-						update stops, the DE1 keeps its current firmware.
-					</div>
+					{#if flow.confirmingCancel}
+						<div class="fu-banner fu-banner-warn" role="alertdialog" aria-label="Stop the update?">
+							<Icon cls="ph ph-warning-circle" aria-hidden="true" />
+							<span>{cancelQuestion(installedBuild)}</span>
+						</div>
+					{:else}
+						<div class="fu-banner fu-banner-info" role="status">
+							Keep this tab open and in front, this device charging, and the DE1 nearby.
+						</div>
+					{/if}
 				{:else if status.phase === FlashPhase.AwaitingPowerCycle}
 					<p class="fu-text">
 						{status.verifyUnconfirmed
-							? 'The connection dropped while the DE1 was checking the firmware. Switching it off and on shows which build it runs.'
-							: `The DE1 checked build ${status.targetBuild} and will run it after a restart.`}
+							? UNCONFIRMED
+							: `The DE1 checked build ${status.targetBuild} and runs it after a restart.`}
 					</p>
 					<ol class="fu-steps">
 						<li>Switch the DE1 off with the switch on the back.</li>
 						<li>Wait 10 seconds.</li>
 						<li>Switch it on. Crema reconnects and reads the build.</li>
 					</ol>
-					{#if status.restartedOnBuild !== null && status.restartedOnBuild !== undefined}
-						<div class="fu-banner fu-banner-warn" role="alert">
-							The DE1 restarted but still reports build {status.restartedOnBuild}. Switch it off and
-							on once more. If it still reports {status.restartedOnBuild}, retry the update.
+					<div class="fu-banner fu-banner-info" role="status" aria-live="polite">
+						{#if status.restartedOnBuild !== null && status.restartedOnBuild !== undefined}
+							The DE1 reconnected but reports build {status.restartedOnBuild}, not {status.targetBuild}.
+							Switch it off at the back, wait 10 seconds and switch it on again.
+						{:else if status.machineRestarted}
+							The DE1 went offline. Waiting for it to come back and report its build…
+						{:else}
+							Waiting for the DE1 to be switched off…
+						{/if}
+						Crema keeps other commands away from the DE1 until then.
+					</div>
+					{#if flow.confirmingExit}
+						<div class="fu-banner fu-banner-warn" role="alertdialog" aria-label="Exit?">
+							<Icon cls="ph ph-warning-circle" aria-hidden="true" />
+							<span>{EXIT_QUESTION}</span>
 						</div>
-					{:else if status.machineRestarted}
-						<div class="fu-sub">Waiting for the DE1 to reconnect…</div>
 					{/if}
 				{:else if status.phase === FlashPhase.Succeeded}
 					<div class="fu-banner fu-banner-ok" role="status">
@@ -274,29 +353,79 @@
 					</div>
 				{:else}
 					{#if status.failure}<p class="fu-text">{failureText(status.failure)}</p>{/if}
+					{#if status.eraseSettling}
+						<div class="fu-banner fu-banner-warn" role="status">{ERASE_SETTLING}</div>
+					{/if}
 					<div class="fu-banner fu-banner-info" role="status">{STILL_SAFE}</div>
 				{/if}
 			</div>
 			<div class="fu-actions">
 				{#if running}
-					<button
-						type="button"
-						class="st-btn st-btn-secondary"
-						disabled={!status.canCancel}
-						onclick={() => flow.cancel()}
-						>{status.canCancel ? 'Cancel' : 'Finishing…'}</button
-					>
+					<div class="fu-actions-left"></div>
+					<div class="fu-actions-right">
+						{#if flow.confirmingCancel}
+							<button type="button" class="st-btn st-btn-secondary" onclick={() => flow.keepUpdating()}>
+								Keep updating
+							</button>
+							<button type="button" class="st-btn st-btn-danger" onclick={() => flow.confirmCancel()}>
+								Stop
+							</button>
+						{:else}
+							<button
+								type="button"
+								class="st-btn st-btn-secondary"
+								disabled={!status.canCancel}
+								onclick={() => flow.requestCancel()}
+								>{status.canCancel ? 'Cancel' : 'Checking — can’t stop now'}</button
+							>
+						{/if}
+					</div>
+				{:else if status.phase === FlashPhase.AwaitingPowerCycle}
+					<div class="fu-actions-left">
+						{#if flow.confirmingExit}
+							<button type="button" class="st-btn st-btn-secondary" onclick={() => flow.keepWaiting()}>
+								Keep waiting
+							</button>
+						{:else}
+							<button type="button" class="st-btn st-btn-secondary" onclick={() => flow.requestExit()}>
+								Exit…
+							</button>
+						{/if}
+					</div>
+					<div class="fu-actions-right">
+						{#if flow.confirmingExit}
+							<button type="button" class="st-btn st-btn-danger" onclick={() => flow.confirmExit()}>
+								Exit
+							</button>
+						{:else}
+							<button type="button" class="st-btn st-btn-primary" onclick={() => flow.close()}>
+								Hide
+							</button>
+						{/if}
+					</div>
 				{:else if status.phase === FlashPhase.Failed || status.phase === FlashPhase.Cancelled}
-					<button type="button" class="st-btn st-btn-secondary" onclick={() => flow.close()}>
-						Close
-					</button>
-					<button type="button" class="st-btn st-btn-primary" onclick={() => flow.retry()}>
-						Retry
-					</button>
+					<div class="fu-actions-left">
+						<button
+							type="button"
+							class="st-btn st-btn-secondary"
+							onclick={() => flow.close()}>{status.locksWrites ? 'Hide' : 'Close'}</button
+						>
+					</div>
+					<div class="fu-actions-right">
+						<button
+							type="button"
+							class="st-btn st-btn-primary"
+							disabled={status.locksWrites}
+							onclick={() => flow.retry()}>Retry</button
+						>
+					</div>
 				{:else}
-					<button type="button" class="st-btn st-btn-primary" onclick={() => flow.close()}>
-						{status.phase === FlashPhase.Succeeded ? 'Done' : 'Close'}
-					</button>
+					<div class="fu-actions-left"></div>
+					<div class="fu-actions-right">
+						<button type="button" class="st-btn st-btn-primary" onclick={() => flow.close()}>
+							Done
+						</button>
+					</div>
 				{/if}
 			</div>
 		{/if}
@@ -361,6 +490,7 @@
 		background: rgba(var(--tint-rgb), 0.05);
 		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		color: var(--fg-2, var(--fg-1));
+		display: block;
 	}
 	.fu-banner-ok {
 		background: rgba(var(--tint-rgb), 0.06);
@@ -446,6 +576,9 @@
 		font-size: 12px;
 		color: var(--copper-400);
 	}
+	.fu-choice-rel.is-warn {
+		color: var(--warning);
+	}
 	.fu-choice-notes {
 		font-size: 12px;
 		color: rgba(var(--tint-rgb), 0.7);
@@ -522,11 +655,6 @@
 		font-size: 13px;
 		font-variant-numeric: tabular-nums;
 	}
-	.fu-row-actions {
-		display: flex;
-		gap: 8px;
-		flex-wrap: wrap;
-	}
 	.fu-file {
 		position: relative;
 		overflow: hidden;
@@ -537,10 +665,22 @@
 		opacity: 0;
 		cursor: pointer;
 	}
+	/* One footer row on every step: the way back left, the actions right. */
 	.fu-actions {
 		display: flex;
+		align-items: center;
+		justify-content: space-between;
 		gap: 8px;
-		justify-content: flex-end;
 		flex-wrap: wrap;
+	}
+	.fu-actions-left,
+	.fu-actions-right {
+		display: flex;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.fu-actions-right {
+		margin-left: auto;
+		justify-content: flex-end;
 	}
 </style>

@@ -2,22 +2,27 @@
  * `$lib/firmware/flash-driver` — runs a DE1 firmware flash for the web shell.
  *
  * Every protocol decision lives in the Rust core (`de1_app::firmware_flash`):
- * which bytes, which characteristic, when a phase is over, when to give up.
- * The core answers each input with a `FlashStep` — `actions` to perform and a
- * `status` snapshot. This driver is the I/O half and nothing more:
+ * which bytes, which characteristic, when a phase is over, when to give up,
+ * how long the link stays locked. The core answers each input with a
+ * `FlashStep` — `actions` to perform and a `status` snapshot. This driver is
+ * the I/O half and nothing more:
  *
  * - performs the actions strictly **one at a time** (one write-with-response
  *   in flight — de1app `bluetooth.tcl:3303-3312`, decaid
  *   `unified_de1.firmware.dart:239`) and reports each ACK, failure or read
  *   back to the core;
+ * - bounds every GATT call ({@link WRITE_TIMEOUT_MS}, {@link READ_TIMEOUT_MS}),
+ *   so a promise Chrome never settles can't hold the lock forever;
  * - routes `FWMapRequest` (A009) notifications and link loss / recovery to it;
- * - ticks it every {@link TICK_MS} (the erase / verify poll, the settle, the
- *   timeouts, the post-restart build reads);
+ * - ticks it every {@link TICK_MS}, also while an action is in flight (the
+ *   core's timeouts are computed from timestamps and it ignores stale ACKs);
  * - holds the DE1 link exclusively while the core says writes are locked, and
  *   keeps the page awake while a flash is running.
  *
  * All calls into the core go through one serial chain, so a tick, a
- * notification and an ACK can never interleave.
+ * notification and an ACK can never interleave. Queued actions carry the
+ * generation they were issued in; a cancel, failure or link loss starts a new
+ * one, so a chunk queued before it is never written after it (audit L1).
  */
 
 import type {
@@ -28,7 +33,7 @@ import type {
 	FlashStatus,
 	FlashStep
 } from '$lib/core';
-import { FlashPhase, type WriteTarget } from '$lib/core/crema-core';
+import { FlashPhase, WriteTarget } from '$lib/core/crema-core';
 import { describeError } from '$lib/utils/error';
 
 /** The core's flash clock cadence (decaid polls A009 every 250 ms). */
@@ -36,6 +41,12 @@ export const TICK_MS = 250;
 
 /** How often a running upload republishes its status (UI churn bound). */
 export const STATUS_PUBLISH_MS = 250;
+
+/** Bound on one GATT write (Decenza / the Android shell use 5 s). */
+export const WRITE_TIMEOUT_MS = 5_000;
+
+/** Bound on one A009 read (decaid `_firmwareMapPollReadTimeout`). */
+export const READ_TIMEOUT_MS = 2_000;
 
 /** The core surface the driver needs — a `CremaCore` satisfies it. */
 export type FlashCore = Pick<
@@ -49,19 +60,18 @@ export type FlashCore = Pick<
 	| 'firmwareFlashLinkRestored'
 	| 'firmwareFlashCancel'
 	| 'firmwareFlashDismiss'
+	| 'firmwareFlashExit'
 	| 'firmwareFlashStatus'
 >;
 
-/** The DE1 link surface the driver needs — `De1Manager` plus a build read. */
+/** The DE1 link surface the driver needs (`De1Manager`). */
 export interface FlashIo {
-	/** One write with response; rejects on failure. */
+	/** One flash write with response (allowed through the lock); rejects on failure. */
 	write(target: WriteTarget, data: Uint8Array): Promise<void>;
 	/** A fresh GATT read of A009. */
 	readFwMap(): Promise<Uint8Array>;
 	/** Enable A009 notifications. */
 	subscribeFwMap(): Promise<void>;
-	/** Issue the core's MMR `0x800010` read through the normal write path. */
-	readBuild(): Promise<void>;
 	/** Drop every non-flash write while `on`. */
 	setExclusive(on: boolean): void;
 	/** Route A009 notifications (`null` to stop). */
@@ -85,6 +95,9 @@ export interface FlashDriverOptions {
 	now?: () => number;
 	setInterval?: (fn: () => void, ms: number) => unknown;
 	clearInterval?: (id: unknown) => void;
+	/** Overridable for tests. */
+	writeTimeoutMs?: number;
+	readTimeoutMs?: number;
 }
 
 /** Phases during which the page must stay open. */
@@ -95,11 +108,34 @@ const ACTIVE: ReadonlySet<FlashPhase> = new Set([
 	FlashPhase.Verifying
 ]);
 
+/** Reject after `ms` with a timeout error. */
+export function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const t = setTimeout(() => reject(new Error(`${what} timed out after ${ms} ms`)), ms);
+		p.then(
+			(v) => {
+				clearTimeout(t);
+				resolve(v);
+			},
+			(e: unknown) => {
+				clearTimeout(t);
+				reject(e);
+			}
+		);
+	});
+}
+
+interface Queued {
+	action: FlashAction;
+	gen: number;
+}
+
 export class FlashDriver {
 	private chain: Promise<void> = Promise.resolve();
-	private queue: FlashAction[] = [];
+	private queue: Queued[] = [];
+	private gen = 0;
 	private pumping = false;
-	private busy = 0;
+	private tickQueued = false;
 	private timer: unknown = null;
 	private unlink: (() => void) | null = null;
 	private status: FlashStatus | null = null;
@@ -130,6 +166,7 @@ export class FlashDriver {
 			this.apply(step, true);
 			return step.error;
 		}
+		this.gen++;
 		this.attach();
 		this.opts.onLog?.(
 			`Firmware: flashing build ${step.status?.targetBuild} (${step.status?.chunksTotal} writes)`
@@ -138,28 +175,40 @@ export class FlashDriver {
 		return null;
 	}
 
-	/** Cancel while the core still allows it. */
+	/** Cancel while the core still allows it (its Sleep follows). */
 	cancel(): Promise<void> {
 		return this.serial(async () => {
+			this.gen++;
 			this.queue = [];
 			this.apply(await this.core.firmwareFlashCancel(this.now()), true);
 		});
 	}
 
-	/** Forget a finished flash and stop listening. */
+	/** Forget a finished, unlocked flash and stop listening. */
 	async dismiss(): Promise<boolean> {
 		const cleared = await this.core.firmwareFlashDismiss();
-		if (cleared) {
-			this.detach();
-			this.status = null;
-			this.opts.keepAlive?.set(false);
-			this.io.setExclusive(false);
-			this.opts.onStatus(null);
-		}
+		if (cleared) this.released();
 		return cleared;
 	}
 
-	/** Re-read the status (e.g. when the flow reopens) and re-attach. */
+	/** The user's explicit exit from the power-cycle step. */
+	async exit(): Promise<boolean> {
+		const cleared = await this.core.firmwareFlashExit();
+		if (cleared) this.released();
+		return cleared;
+	}
+
+	private released(): void {
+		this.gen++;
+		this.queue = [];
+		this.detach();
+		this.status = null;
+		this.opts.keepAlive?.set(false);
+		this.io.setExclusive(false);
+		this.opts.onStatus(null);
+	}
+
+	/** Re-read the status (the flow reopening, a restore) and re-attach. */
 	async refresh(): Promise<FlashStatus | null> {
 		const step = await this.core.firmwareFlashStatus(this.now());
 		if (step.status && this.timer === null) this.attach();
@@ -183,6 +232,7 @@ export class FlashDriver {
 			lost: () => {
 				// The core heard it from `de1LinkLost`; publish the new phase.
 				void this.serial(async () => {
+					this.gen++;
 					this.queue = [];
 					this.apply(await this.core.firmwareFlashStatus(this.now()), true);
 				});
@@ -206,21 +256,22 @@ export class FlashDriver {
 	}
 
 	private tick(): void {
-		// Skip a tick while an action is still in flight — the next one
-		// catches up; the core's timeouts are computed from timestamps.
-		if (this.busy > 0 || this.pumping) return;
-		void this.serial(async () => this.apply(await this.core.firmwareFlashTick(this.now())));
+		// Ticks run while an action is in flight too (audit M4); coalesce so a
+		// slow action can't pile them up.
+		if (this.tickQueued) return;
+		this.tickQueued = true;
+		void this.serial(async () => {
+			this.tickQueued = false;
+			this.apply(await this.core.firmwareFlashTick(this.now()));
+		});
 	}
 
 	/** Run `fn` after everything already queued. */
 	private serial(fn: () => Promise<void>): Promise<void> {
-		this.busy++;
 		const run = this.chain.then(fn).catch((error: unknown) => {
 			this.opts.onLog?.(`Firmware: driver error: ${describeError(error)}`);
 		});
-		this.chain = run.finally(() => {
-			this.busy--;
-		});
+		this.chain = run;
 		return run;
 	}
 
@@ -229,24 +280,26 @@ export class FlashDriver {
 		const prev = this.status;
 		const status = step.status ?? null;
 		this.status = status;
-		const locked = status?.locksWrites ?? false;
-		this.io.setExclusive(locked);
+		this.io.setExclusive(status?.locksWrites ?? false);
 		this.opts.keepAlive?.set(status !== null && ACTIVE.has(status.phase));
 		this.trackUpload(prev, status);
 		const now = this.now();
-		const phaseChanged = prev?.phase !== status?.phase || prev?.failure !== status?.failure;
-		if (force || phaseChanged || now - this.lastPublish >= STATUS_PUBLISH_MS) {
+		const changed =
+			prev?.phase !== status?.phase ||
+			prev?.failure !== status?.failure ||
+			prev?.locksWrites !== status?.locksWrites ||
+			prev?.restartedOnBuild !== status?.restartedOnBuild;
+		if (force || changed || now - this.lastPublish >= STATUS_PUBLISH_MS) {
 			this.lastPublish = now;
 			this.opts.onStatus(status);
 		}
-		if (status !== null && !ACTIVE.has(status.phase) && status.phase !== FlashPhase.AwaitingPowerCycle) {
-			// Terminal: nothing more will come from the core unaided.
-			if (prev === null || ACTIVE.has(prev.phase) || prev.phase === FlashPhase.AwaitingPowerCycle) {
-				this.opts.onLog?.(`Firmware: ${status.phase}${status.failure ? ` (${status.failure.type})` : ''}`);
-			}
+		if (changed && status !== null && !ACTIVE.has(status.phase)) {
+			this.opts.onLog?.(
+				`Firmware: ${status.phase}${status.failure ? ` (${status.failure.type})` : ''}${status.locksWrites ? ', link held' : ''}`
+			);
 		}
 		if (step.actions.length > 0) {
-			this.queue.push(...step.actions);
+			for (const action of step.actions) this.queue.push({ action, gen: this.gen });
 			void this.pump();
 		}
 	}
@@ -256,7 +309,11 @@ export class FlashDriver {
 		if (next?.phase === FlashPhase.Uploading && prev?.phase !== FlashPhase.Uploading) {
 			this.uploadStartedAt = this.now();
 		}
-		if (prev?.phase === FlashPhase.Uploading && next?.phase !== FlashPhase.Uploading && this.uploadStartedAt !== null) {
+		if (
+			prev?.phase === FlashPhase.Uploading &&
+			next?.phase !== FlashPhase.Uploading &&
+			this.uploadStartedAt !== null
+		) {
 			const secs = (this.now() - this.uploadStartedAt) / 1000;
 			const n = next?.chunksAcked ?? 0;
 			if (n > 0) {
@@ -274,21 +331,26 @@ export class FlashDriver {
 		this.pumping = true;
 		try {
 			while (this.queue.length > 0) {
-				const action = this.queue.shift() as FlashAction;
-				await this.serial(() => this.perform(action));
+				const next = this.queue.shift() as Queued;
+				await this.serial(() => this.perform(next));
 			}
 		} finally {
 			this.pumping = false;
 		}
 	}
 
-	private async perform(action: FlashAction): Promise<void> {
+	private async perform({ action, gen }: Queued): Promise<void> {
+		// Issued before a cancel / failure / link loss: never written after it.
+		if (gen !== this.gen) return;
+		const wt = this.opts.writeTimeoutMs ?? WRITE_TIMEOUT_MS;
+		const rt = this.opts.readTimeoutMs ?? READ_TIMEOUT_MS;
 		switch (action.type) {
 			case 'Write': {
 				const { target, data } = action.content;
 				try {
-					await this.io.write(target, Uint8Array.from(data));
+					await withTimeout(this.io.write(target, Uint8Array.from(data)), wt, 'write');
 				} catch (error) {
+					this.gen++;
 					this.queue = [];
 					this.apply(
 						await this.core.firmwareFlashOnWriteFailed(describeError(error), this.now()),
@@ -301,14 +363,16 @@ export class FlashDriver {
 			}
 			case 'SubscribeFwMap':
 				// Best effort: the poll covers a failed subscribe (decaid).
-				await this.io.subscribeFwMap().catch((error: unknown) => {
-					this.opts.onLog?.(`Firmware: A009 subscribe failed: ${describeError(error)}`);
-				});
+				await withTimeout(this.io.subscribeFwMap(), wt, 'A009 subscribe').catch(
+					(error: unknown) => {
+						this.opts.onLog?.(`Firmware: A009 subscribe failed: ${describeError(error)}`);
+					}
+				);
 				return;
 			case 'ReadFwMap': {
 				let bytes: Uint8Array;
 				try {
-					bytes = await this.io.readFwMap();
+					bytes = await withTimeout(this.io.readFwMap(), rt, 'A009 read');
 				} catch {
 					this.apply(await this.core.firmwareFlashOnReadFailed(this.now()));
 					return;
@@ -317,9 +381,13 @@ export class FlashDriver {
 				return;
 			}
 			case 'ReadBuild':
-				await this.io.readBuild().catch(() => undefined);
-				// The reply lands through the normal notification path, which
-				// feeds the core's flash; publish whatever it decided.
+				// The MMR read request goes through the lock like the flash's
+				// own writes; the reply arrives as an ordinary MMR notification.
+				await withTimeout(
+					this.io.write(WriteTarget.De1MmrRequest, Uint8Array.from(action.content.data)),
+					wt,
+					'build read'
+				).catch(() => undefined);
 				this.apply(await this.core.firmwareFlashStatus(this.now()), true);
 				return;
 		}

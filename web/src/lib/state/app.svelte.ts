@@ -408,7 +408,12 @@ export class CremaApp {
 						deviceName: diag.deviceName
 					});
 				}
-				if (de1State === 'ready') {
+				// While a firmware flash holds the link (a transfer, an interrupted
+				// erase, or the power-cycle wait), a reconnect must not touch the
+				// DE1: no profile auto-upload, user-present poke or settings
+				// sweep (audit H2). They run once the flash lets go.
+				const held = this.firmware?.holdsLink ?? false;
+				if (de1State === 'ready' && !held) {
 					this.ensureLoadedMatches();
 				}
 				// The idle-sleep timer learns the link state (a reconnect is not
@@ -424,7 +429,7 @@ export class CremaApp {
 				// refill point, tank threshold, steam / hot water, steam
 				// flow, flush, eco. Also runs the once-a-minute
 				// USB-charger check while ready.
-				this.sweep.onDe1State(de1State);
+				this.sweep.onDe1State(held ? 'held-by-firmware' : de1State);
 			},
 			// The connection-diagnostics snapshot — fold it straight in.
 			onDiagnostics: (de1Diagnostics) => this.state.patch({ de1Diagnostics })
@@ -484,9 +489,6 @@ export class CremaApp {
 				write: (target, data) => this.de1.firmwareWrite(target, data),
 				readFwMap: () => this.de1.firmwareReadFwMap(),
 				subscribeFwMap: () => this.de1.firmwareSubscribeFwMap(),
-				readBuild: async () => {
-					this.applyCoreOutput(await core.readMmr(MmrRegister.FirmwareVersion));
-				},
 				setExclusive: (on) => this.de1.setFirmwareExclusive(on),
 				setFwMapListener: (listener) => this.de1.setFwMapListener(listener),
 				addLinkListener: (listener) => this.de1.addLinkListener(listener)
@@ -495,8 +497,12 @@ export class CremaApp {
 			installedBuild: () =>
 				this.state.current.de1MachineInfo[MmrRegister.FirmwareVersion] ?? null,
 			log: (line) => this.state.log(line),
-			keepAlive: { set: setFirmwareWakeLock }
+			keepAlive: { set: setFirmwareWakeLock },
+			onRelease: () => this.afterFirmwareRelease()
 		});
+		// A flash that was waiting for the DE1's power-cycle before a reload
+		// comes back with its lock (audit M3).
+		void this.firmware.restore();
 		// Hydrate the last-uploaded profile fingerprint from localStorage,
 		// so a page reload that kept the DE1 connected (or a quick
 		// reconnect to the same machine) skips the defensive auto-upload
@@ -953,6 +959,16 @@ export class CremaApp {
 	 * `web/src/lib/ble/de1.ts:uuidForWriteTarget`; targets with no UUID
 	 * mapping are dropped with a status log.
 	 */
+	/**
+	 * The flash let go of the link: run what a reconnect skipped while it held
+	 * it (the settings sweep, the profile check).
+	 */
+	private afterFirmwareRelease(): void {
+		if (this.state.current.de1State !== 'ready') return;
+		this.sweep.onDe1State('ready');
+		this.ensureLoadedMatches();
+	}
+
 	/** What the shell knows for the firmware-flash preconditions. */
 	private async firmwareConditions(): Promise<FlashShellConditions> {
 		const de1State = this.state.current.de1State;
@@ -2319,6 +2335,12 @@ export class CremaApp {
 	 * is strictly an offline diagnostic.
 	 */
 	async replayCapture(file: File, opts: ReplayCaptureOptions = {}): Promise<void> {
+		// A replay swaps the live core out; a firmware flash must not lose its
+		// notifications and link events to it (audit L3).
+		if (this.firmware.status !== null) {
+			toast.error('Finish or close the firmware update before replaying a capture.');
+			return;
+		}
 		if (this.replayFiber) return;
 		// A live DE1 keeps notifying while the replay's shadow core is
 		// installed — its packets would land in the shadow session and both

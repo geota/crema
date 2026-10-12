@@ -361,6 +361,12 @@ export interface CremaCore {
 	firmwareFlashLinkRestored(nowMs: number): Promise<FlashStep>;
 	firmwareFlashCancel(nowMs: number): Promise<FlashStep>;
 	firmwareFlashDismiss(): Promise<boolean>;
+	firmwareFlashExit(): Promise<boolean>;
+	firmwareFlashRestoreAwaiting(
+		build: number,
+		unconfirmed: boolean,
+		nowMs: number
+	): Promise<FlashStep>;
 	firmwareFlashStatus(nowMs: number): Promise<FlashStep>;
 	/**
 	 * Slice the rolling BLE-capture buffer to JSONL covering `[fromMs, toMs]`,
@@ -1052,6 +1058,12 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async firmwareFlashDismiss() {
 			return bridge.firmware_flash_dismiss();
+		},
+		async firmwareFlashExit() {
+			return bridge.firmware_flash_exit();
+		},
+		async firmwareFlashRestoreAwaiting(build, unconfirmed, nowMs) {
+			return parseStep(bridge.firmware_flash_restore_awaiting(build, unconfirmed, nowMs));
 		},
 		async firmwareFlashStatus(nowMs) {
 			return parseStep(bridge.firmware_flash_status(nowMs));

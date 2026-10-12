@@ -14,8 +14,8 @@ import {
 
 /** The alpha warning, one point per line. */
 export const ALPHA_POINTS: readonly string[] = [
-	'Firmware updates in Crema are alpha. Updating takes about 15 to 25 minutes.',
-	'If anything fails, your DE1 keeps its current firmware: Crema only writes the spare memory bank, and the DE1 switches to it only after checking every byte.',
+	'Firmware updates in Crema are alpha and have not yet been tried on a real DE1. Updating takes about 15 to 25 minutes.',
+	"Crema writes only the DE1's spare memory bank. Decent's apps report that the DE1 switches to it only after checking every byte, so a failed update leaves the current firmware in place.",
 	'Keep this device charging and near the DE1, and keep Crema open and in front until it finishes.',
 	"You'll need to switch the DE1 off and on at the end."
 ];
@@ -120,13 +120,28 @@ export function failureText(f: FlashFailure): string {
 			return "The DE1 didn't finish erasing within a minute.";
 		case 'VerifyFailed':
 			return `The DE1 found a damaged block at ${hex24(f.content.first_error)} and kept its current firmware.`;
-		case 'VerifyTimeout':
-			return "The DE1 didn't report a verification result.";
-		case 'VerifyUnconfirmed':
-			return `The connection dropped while the DE1 was checking, and it came back on build ${f.content.reported_build}.`;
 	}
 }
 
-/** The reassurance under every failure. */
+/** Under every failure before the verify request. */
 export const STILL_SAFE =
-	'Your DE1 is still running its previous firmware. You can retry; the update starts again from the beginning.';
+	"Decent's apps report that the DE1 stays on its previous firmware when an update stops before it is checked. The DE1 was left asleep. You can retry; the update starts again from the beginning.";
+
+/** When the verify outcome was lost. */
+export const UNCONFIRMED =
+	'The connection dropped or the DE1 didn\'t answer while it was checking the firmware. The DE1 may be running either build. Switch it off and on and Crema will read which.';
+
+/** While an interrupted erase may still be running. */
+export const ERASE_SETTLING =
+	'The DE1 may still be erasing. Crema keeps other commands away from it until it finishes (up to a minute).';
+
+/** The cancel confirmation. */
+export function cancelQuestion(installedBuild: number | null): string {
+	return installedBuild === null
+		? 'Stop the update? Your DE1 stays on its current build.'
+		: `Stop the update? Your DE1 stays on build ${installedBuild}.`;
+}
+
+/** The exit confirmation on the power-cycle step. */
+export const EXIT_QUESTION =
+	"Exit without confirming the build? Switch the DE1 off and on before using it, and don't start another update until it has restarted.";

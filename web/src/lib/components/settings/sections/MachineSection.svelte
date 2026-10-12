@@ -55,7 +55,6 @@
 	import StButton from '../StButton.svelte';
 	import StStatusDot from '../StStatusDot.svelte';
 	import { firmwareBuildReport, firmwareCardCopy } from '$lib/firmware/build-copy';
-	import FirmwareUpdateFlow from '../FirmwareUpdateFlow.svelte';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	let {
@@ -348,10 +347,6 @@
 		{/if}
 	</div>
 </div>
-
-{#if firmwareFlow && firmwareFlow.step !== 'closed'}
-	<FirmwareUpdateFlow flow={firmwareFlow} installedBuild={machine.firmwareBuild} />
-{/if}
 
 <StGroup title="Connection">
 	<!--
