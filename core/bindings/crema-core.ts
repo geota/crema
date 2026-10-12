@@ -4000,10 +4000,7 @@ export type FlashBlocker =
 	| { type: "BuildUnknown", content?: undefined }
 	/** MMR `MachineModel` has not been read. */
 	| { type: "ModelUnknown", content?: undefined }
-	/**
-	 * Not a model the reference apps flash (Bengle, or a model decaid's
-	 * manifest does not list).
-	 */
+	/** Not a classic DE1 model (Bengle, or a value outside the known table). */
 	| { type: "UnsupportedModel", content: {
 	/** The raw `MachineModel` value. */
 	model: number;

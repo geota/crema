@@ -3988,8 +3988,7 @@ sealed class FlashBlocker {
 	@Serializable
 	@SerialName("ModelUnknown")
 	object ModelUnknown: FlashBlocker()
-	/// Not a model the reference apps flash (Bengle, or a model decaid's
-	/// manifest does not list).
+	/// Not a classic DE1 model (Bengle, or a value outside the known table).
 	@Serializable
 	@SerialName("UnsupportedModel")
 	data class UnsupportedModel(val content: FlashBlockerUnsupportedModelInner): FlashBlocker()

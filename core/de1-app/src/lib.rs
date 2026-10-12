@@ -3868,8 +3868,8 @@ impl CremaCore {
     ///   `de1_comms.tcl:980-985`);
     /// - this device is the **primary**, not a read-only mirror;
     /// - **no flash** already running (decaid `FirmwareUpdateInProgress`, 409);
-    /// - the **installed build and model are known**, and the model is one
-    ///   decaid's manifest lists ([`FLASHABLE_MODELS`], no Bengle);
+    /// - the **installed build and model are known**, and the model is a
+    ///   classic DE1, as de1app flashes ([`FLASHABLE_MODELS`], no Bengle);
     /// - the machine is **Idle or asleep** — not pouring, steaming, descaling,
     ///   refilling or in an error substate (Decenza refuses outside
     ///   Sleep/Idle/Heating/Ready, `maincontroller.cpp:1154-1165`; crema is

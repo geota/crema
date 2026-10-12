@@ -101,7 +101,7 @@ fun blockerText(b: FlashBlocker): String = when (b) {
         if (b.content.model >= 128u) {
             "Bengle firmware can’t be updated from Crema yet."
         } else {
-            "Crema can’t update this DE1 model yet (it follows Decent’s list: DE1PRO, DE1XL, DE1XXL, DE1XXXL)."
+            "Crema doesn’t recognise this DE1 model (${b.content.model}), so it won’t update it."
         }
     FlashBlocker.StateUnknown -> "The DE1 hasn’t reported its state yet."
     is FlashBlocker.MachineBusy -> "Wait until the DE1 is idle or asleep."

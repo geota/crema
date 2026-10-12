@@ -397,8 +397,7 @@ pub enum FlashBlocker {
     BuildUnknown,
     /// MMR `MachineModel` has not been read.
     ModelUnknown,
-    /// Not a model the reference apps flash (Bengle, or a model decaid's
-    /// manifest does not list).
+    /// Not a classic DE1 model (Bengle, or a value outside the known table).
     UnsupportedModel {
         /// The raw `MachineModel` value.
         model: u32,
@@ -1508,15 +1507,18 @@ impl FirmwareFlash {
     }
 }
 
-/// Models the reference apps flash. decaid's manifest lists DE1Pro (3), DE1XL
-/// (4), DE1XXL (6) and DE1XXXL (7) (`assets/firmware/manifest.json`
-/// `supportedModels`; `DecentMachineModel`, `de1.models.dart:388-397`) and
-/// refuses others (`firmware_validator.dart:120-124`). de1app hands the same
-/// `bootfwupdate.dat` to every non-Bengle model (`fwfile`,
-/// `de1_comms.tcl:947-956`); crema follows the stricter decaid list. Bengle
-/// (≥ 128) needs a different image and an extra `FWUpgrade` state (de1app
-/// `bengle.tcl:494-524`) and is excluded.
-pub const FLASHABLE_MODELS: &[u32] = &[3, 4, 6, 7];
+/// Models crema flashes: every classic DE1 — DE1 (1), DE1Plus (2), DE1Pro (3),
+/// DE1XL (4), DE1Cafe (5), DE1XXL (6), DE1XXXL (7). This follows de1app,
+/// Decent's own app, which hands the same `bootfwupdate.dat` to every
+/// non-Bengle model (`fwfile`, `de1_comms.tcl:947-956`) and has done so in the
+/// field for years. decaid's manifest lists only Pro / XL / XXL / XXXL
+/// (`assets/firmware/manifest.json` `supportedModels`, enforced in
+/// `firmware_validator.dart:120-124`) with no stated hardware reason, and
+/// Decenza ships that manifest without enforcing it; crema first followed
+/// decaid, which wrongly refused a DE1+. Bengle (≥ 128) needs a different
+/// image and an extra `FWUpgrade` state (de1app `bengle.tcl:494-524`) and is
+/// excluded, as is any value outside the known table.
+pub const FLASHABLE_MODELS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
 
 /// Golden `FlashStep` JSON the shells' tests decode and drive, so a decode or
 /// byte-handling bug in a shell is caught there (relative to the de1-app
@@ -2435,8 +2437,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn flashable_models_follow_decaid() {
-        assert_eq!(FLASHABLE_MODELS, &[3, 4, 6, 7]);
+    fn flashable_models_follow_de1app() {
+        assert_eq!(FLASHABLE_MODELS, &[1, 2, 3, 4, 5, 6, 7]);
         assert!(
             !FLASHABLE_MODELS
                 .iter()
@@ -2629,8 +2631,8 @@ mod core_tests {
     }
 
     #[test]
-    fn bengle_and_unlisted_models_are_blocked() {
-        for model in [128u32, 1, 2, 5] {
+    fn bengle_and_unknown_models_are_blocked() {
+        for model in [128u32, 8, 127] {
             let mut core = ready_core();
             core.on_notification(
                 Source::De1MmrRead,
@@ -2640,6 +2642,27 @@ mod core_tests {
             assert!(
                 core.firmware_flash_blockers(OK)
                     .contains(&FlashBlocker::UnsupportedModel { model }),
+                "model {model}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_classic_de1_model_is_flashable() {
+        // DE1, DE1+ (a user's DE1+ was refused when this followed decaid's
+        // list), Pro, XL, Cafe, XXL, XXXL.
+        for model in 1u32..=7 {
+            let mut core = ready_core();
+            core.on_notification(
+                Source::De1MmrRead,
+                &mmr_packet(MmrRegister::MachineModel, model),
+                60,
+            );
+            assert!(
+                !core
+                    .firmware_flash_blockers(OK)
+                    .iter()
+                    .any(|b| matches!(b, FlashBlocker::UnsupportedModel { .. })),
                 "model {model}"
             );
         }
