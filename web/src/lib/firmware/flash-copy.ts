@@ -175,15 +175,15 @@ export function waitingText(s: FlashStatus): string {
  * Which link control the power-cycle step offers (audit r7 M-1 / L-1, r8
  * L-1). The modal covers the app while the flash holds the DE1, so the step
  * carries them: Disconnect when a different DE1 is connected; Connect
- * whenever no DE1 is linked, including while an auto-reconnect loops (it may
- * be chasing the wrong DE1, and a connect replaces it); nothing while a
- * connect the user started is still settling.
+ * when no DE1 is linked; a quieter Connect now while an auto-reconnect loops
+ * (it may be chasing the wrong DE1, and a connect replaces it); nothing
+ * while a connect the user started is still settling.
  */
 export function powerCycleLinkAction(
 	s: FlashStatus,
 	de1State: De1State
-): 'connect' | 'disconnect' | null {
+): 'connect' | 'connect-now' | 'disconnect' | null {
 	if (de1State === 'ready') return s.foreignMachine ? 'disconnect' : null;
 	if (de1State === 'connecting' || de1State === 'subscribing') return null;
-	return 'connect';
+	return de1State === 'reconnecting' ? 'connect-now' : 'connect';
 }

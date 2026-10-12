@@ -290,15 +290,30 @@ class FirmwareUpdateControllerTest {
     fun thePowerCycleStepOffersConnectOrDisconnectFromTheLinkState() {
         val awaiting = status(FlashPhase.AwaitingPowerCycle)
         val foreign = awaiting.copy(foreignMachine = "BB")
-        for (s in listOf(De1BleManager.State.IDLE, De1BleManager.State.SCANNING, De1BleManager.State.CONNECTING, De1BleManager.State.DISCONNECTED)) {
+        for (s in listOf(De1BleManager.State.IDLE, De1BleManager.State.DISCONNECTED)) {
             assertEquals(PowerCycleLinkAction.Connect, powerCycleLinkAction(awaiting, s), "$s")
+        }
+        for (s in listOf(De1BleManager.State.SCANNING, De1BleManager.State.CONNECTING)) {
+            assertEquals(PowerCycleLinkAction.ConnectNow, powerCycleLinkAction(awaiting, s), "$s")
         }
         for (s in listOf(De1BleManager.State.DISCOVERING, De1BleManager.State.SUBSCRIBING)) {
             assertNull(powerCycleLinkAction(awaiting, s), "$s")
         }
         assertNull(powerCycleLinkAction(awaiting, De1BleManager.State.READY))
         assertEquals(PowerCycleLinkAction.Disconnect, powerCycleLinkAction(foreign, De1BleManager.State.READY))
-        assertEquals(PowerCycleLinkAction.Connect, powerCycleLinkAction(foreign, De1BleManager.State.SCANNING))
+        assertEquals(PowerCycleLinkAction.ConnectNow, powerCycleLinkAction(foreign, De1BleManager.State.SCANNING))
+    }
+
+    @Test
+    fun machineAddressIsTheBoundDe1OrNull() = runTest {
+        val awaiting = status(FlashPhase.AwaitingPowerCycle, canCancel = false, canExit = true)
+        val known = controller(core = StubCore(current = awaiting), markers = MemoryMarkers(FlashMarker(1358u, false, machine = "AA:BB")))
+        known.restore(); runCurrent()
+        assertEquals("AA:BB", known.machineAddress)
+        val blank = controller(core = StubCore(current = awaiting), markers = MemoryMarkers(FlashMarker(1358u, false, machine = "")))
+        blank.restore(); runCurrent()
+        assertNull(blank.machineAddress, "blank falls back to the scan")
+        assertNull(controller(core = StubCore()).machineAddress)
     }
 
     @Test

@@ -403,15 +403,16 @@ describe('FirmwareUpdateController', () => {
 	it('the power-cycle step offers Connect / Disconnect from the link state', () => {
 		const awaiting = status(FlashPhase.AwaitingPowerCycle);
 		const foreign = { ...awaiting, foreignMachine: 'dev-B' };
-		for (const s of ['idle', 'disconnected', 'failed', 'reconnecting'] as const) {
+		for (const s of ['idle', 'disconnected', 'failed'] as const) {
 			expect(powerCycleLinkAction(awaiting, s)).toBe('connect');
 		}
+		expect(powerCycleLinkAction(awaiting, 'reconnecting')).toBe('connect-now');
 		for (const s of ['connecting', 'subscribing'] as const) {
 			expect(powerCycleLinkAction(awaiting, s)).toBeNull();
 		}
 		expect(powerCycleLinkAction(awaiting, 'ready')).toBeNull();
 		expect(powerCycleLinkAction(foreign, 'ready')).toBe('disconnect');
-		expect(powerCycleLinkAction(foreign, 'reconnecting')).toBe('connect');
+		expect(powerCycleLinkAction(foreign, 'reconnecting')).toBe('connect-now');
 	});
 
 	it('the shell hears when the flash lets go of the link', async () => {

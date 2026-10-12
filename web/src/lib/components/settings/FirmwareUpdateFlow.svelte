@@ -416,6 +416,10 @@
 							<button type="button" class="st-btn st-btn-primary" onclick={onConnect}>
 								Connect DE1
 							</button>
+						{:else if linkAction === 'connect-now' && onConnect}
+							<button type="button" class="st-btn st-btn-secondary" onclick={onConnect}>
+								Connect now
+							</button>
 						{/if}
 					</div>
 				{:else if status.phase === FlashPhase.Failed || status.phase === FlashPhase.Cancelled}

@@ -186,8 +186,7 @@ export class De1Manager {
 		// the old `BleDevice` — its `gattserverdisconnected` handler and every
 		// characteristic value-change listener stay bound, and its auto-reconnect
 		// loop may still be armed.
-		this.device?.disconnect();
-		this.device = null;
+		this.dropDevice();
 		// Start each connect from a clean diagnostics slate.
 		this.patchDiagnostics(EMPTY_DE1_DIAGNOSTICS);
 		this.notificationCounts = freshCounts();
@@ -227,8 +226,7 @@ export class De1Manager {
 	 */
 	async connectKnown(known: BluetoothDevice): Promise<void> {
 		this.callbacks.onState('connecting');
-		this.device?.disconnect();
-		this.device = null;
+		this.dropDevice();
 		this.patchDiagnostics(EMPTY_DE1_DIAGNOSTICS);
 		this.notificationCounts = freshCounts();
 		this.callbacks.onStatus(`Reconnecting to the last DE1 (${known.name ?? known.id})…`);
@@ -252,14 +250,20 @@ export class De1Manager {
 		device.setReconnectTimeline?.('DE1', true);
 		this.patchDiagnostics({ deviceName: device.name, deviceId: device.id });
 		this.callbacks.onStatus(`Selected device: ${device.name} (id ${device.id})`);
-		// A terminal disconnect — user-initiated or auto-reconnect giving up.
+		// Each callback checks the device is still the current one: a replaced
+		// device's late events (its reconnect loop finishing after a new
+		// connect, its terminal disconnect) must not touch the new link
+		// (audit r9 L-1). `dropDevice` reports the replaced link's loss itself.
+		// A terminal disconnect — auto-reconnect giving up.
 		device.onDisconnected(() => {
+			if (this.device !== device) return;
 			this.notifyLinkLost();
 			for (const l of this.linkListeners) l.lost();
 			this.callbacks.onState('disconnected');
 			this.callbacks.onStatus('DE1 disconnected');
 		});
 		device.onReconnectAttempt((attempt) => {
+			if (this.device !== device) return;
 			// The link is gone; the core keeps the session for a resume but
 			// stops the scale's timer if a shot had it running (once per
 			// outage — the core latches it).
@@ -271,6 +275,7 @@ export class De1Manager {
 			this.callbacks.onStatus(`Reconnecting to DE1… (attempt ${attempt})`);
 		});
 		device.onReconnected(() => {
+			if (this.device !== device) return;
 			// The firmware flash hears link-up from the app's transition into
 			// `ready` (every connect path, audit r2 M-A), not from here.
 			for (const l of this.linkListeners) l.restored?.();
@@ -323,8 +328,7 @@ export class De1Manager {
 		});
 
 		if (this.runtime === null) {
-			device.disconnect();
-			this.device = null;
+			this.dropDevice();
 			this.callbacks.onState('failed');
 			this.callbacks.onStatus('DE1 connection failed: app runtime unavailable');
 			return;
@@ -347,8 +351,7 @@ export class De1Manager {
 		if (!outcome.ok) {
 			// Disconnect before nulling — nulling alone leaves the transport's
 			// auto-reconnect loop running on a half-dead device.
-			device.disconnect();
-			this.device = null;
+			this.dropDevice();
 			this.patchDiagnostics({ gattVerified: false });
 			this.callbacks.onState('failed');
 			// Name the failed step — a service / characteristic failure means the
@@ -443,6 +446,21 @@ export class De1Manager {
 	 * Tell the core the DE1 link dropped (Decenza 29878266). Fire-and-forget:
 	 * the output (at most one scale-timer stop) routes like any other.
 	 */
+	/**
+	 * Drop the current device: disconnect it (which also stops its reconnect
+	 * loop) and tell the core and the link listeners the link is gone. The
+	 * device's own late callbacks are ignored once it isn't current, so this
+	 * is where a deliberate teardown reports the loss.
+	 */
+	private dropDevice(): void {
+		const device = this.device;
+		if (device === null) return;
+		this.device = null;
+		device.disconnect();
+		this.notifyLinkLost();
+		for (const l of this.linkListeners) l.lost();
+	}
+
 	private notifyLinkLost(): void {
 		this.core
 			.de1LinkLost()
@@ -462,8 +480,7 @@ export class De1Manager {
 
 	/** Disconnect the DE1 and discard the core's session state. */
 	async disconnect(): Promise<void> {
-		this.device?.disconnect();
-		this.device = null;
+		this.dropDevice();
 		// The reset's output is the scale-timer stop for a mid-shot teardown.
 		this.callbacks.onCoreOutput(await this.core.reset());
 		// Clear the diagnostics — the device is gone, so its name / id / GATT

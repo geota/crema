@@ -139,19 +139,20 @@ fun powerOk(charging: Boolean, levelPercent: Int?): Boolean =
     charging || levelPercent == null || levelPercent >= 50
 
 /** What the power-cycle step offers for the DE1 link ([powerCycleLinkAction]). */
-enum class PowerCycleLinkAction { Connect, Disconnect }
+enum class PowerCycleLinkAction { Connect, ConnectNow, Disconnect }
 
 /**
  * Which link control the power-cycle step offers (audit r7 M-1 / L-1, r8
  * L-1). The modal covers the app while the flash holds the DE1, so the step
- * carries them: Disconnect when a different DE1 is connected; Connect
- * whenever no DE1 is linked, including while a scan or reconnect loops (it
- * may be chasing the wrong DE1, or be stuck without a permission, and a
- * connect replaces it); nothing while a link is being set up.
+ * carries them: Disconnect when a different DE1 is connected; Connect when
+ * no DE1 is linked; a quieter Connect now while a scan or connect is under
+ * way (a reconnect may be chasing the wrong DE1, or be stuck without a
+ * permission, and a connect replaces it); nothing while a link is being set
+ * up.
  */
 fun powerCycleLinkAction(s: FlashStatus, state: De1BleManager.State): PowerCycleLinkAction? = when (state) {
     De1BleManager.State.READY -> if (s.foreignMachine != null) PowerCycleLinkAction.Disconnect else null
     De1BleManager.State.DISCOVERING, De1BleManager.State.SUBSCRIBING -> null
-    De1BleManager.State.IDLE, De1BleManager.State.SCANNING, De1BleManager.State.CONNECTING,
-    De1BleManager.State.DISCONNECTED -> PowerCycleLinkAction.Connect
+    De1BleManager.State.SCANNING, De1BleManager.State.CONNECTING -> PowerCycleLinkAction.ConnectNow
+    De1BleManager.State.IDLE, De1BleManager.State.DISCONNECTED -> PowerCycleLinkAction.Connect
 }

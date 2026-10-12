@@ -640,8 +640,11 @@ export class BleDevice implements De1Transport {
 		this.reconnecting = false;
 		// End a pending backoff wait now rather than leaving a timer to fire.
 		this.waitAbort?.abort();
+		// Also when not connected: `disconnect()` aborts a GATT connect still
+		// in flight (a reconnect attempt), so it can't land after a new
+		// connect and drop the shared link (audit r9 L-1).
 		const gatt = this.device.gatt;
-		if (gatt !== undefined && gatt.connected) {
+		if (gatt !== undefined) {
 			gatt.disconnect();
 		}
 		this.connectionState = 'disconnected';

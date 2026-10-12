@@ -329,10 +329,10 @@ class ConnectionController(
     /**
      * Connect to the DE1 at [address] directly — the one a firmware flash is
      * waiting for, so a different DE1 nearby isn't picked (audit r8 L-2).
-     * Falls back to the name scan when the address can't be resolved.
+     * Falls back to the name scan when the address can't be resolved. Unlike
+     * [connect] it keeps the event log, which holds the flash's diagnostics.
      */
     fun connectTo(address: String) {
-        onConnectStarted()
         val direct = transport.resolveByAddress(address, "DE1")
         if (direct == null) {
             scanForDe1()

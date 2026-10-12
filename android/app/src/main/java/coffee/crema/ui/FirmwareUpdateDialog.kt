@@ -365,6 +365,8 @@ private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContro
                             PowerCycleLinkAction.Disconnect ->
                                 CremaButton(onClick = link.onDisconnect, variant = CremaButtonVariant.Tonal, label = "Disconnect this DE1")
                             PowerCycleLinkAction.Connect -> CremaButton(onClick = link.onConnect, label = "Connect DE1")
+                            PowerCycleLinkAction.ConnectNow ->
+                                CremaButton(onClick = link.onConnect, variant = CremaButtonVariant.Tonal, label = "Connect now")
                             null -> Unit
                         }
                     }
