@@ -129,6 +129,8 @@ pub enum MmrReg {
     SteamTwoTapStop,
     /// Cup-warmer temperature (Bengle models only).
     CupWarmerTemp,
+    /// The Bengle firmware's own inactivity-sleep timeout, minutes.
+    InactivitySleepTimeout,
 }
 
 impl From<MmrReg> for MmrRegister {
@@ -160,6 +162,7 @@ impl From<MmrReg> for MmrRegister {
             MmrReg::UserPresent => MmrRegister::UserPresent,
             MmrReg::SteamTwoTapStop => MmrRegister::SteamTwoTapStop,
             MmrReg::CupWarmerTemp => MmrRegister::CupWarmerTemp,
+            MmrReg::InactivitySleepTimeout => MmrRegister::InactivitySleepTimeout,
         }
     }
 }
@@ -421,6 +424,32 @@ pub fn blank_recipe_for_style_json(
 #[wasm_bindgen(js_name = validateCustomMethodLabelJson)]
 pub fn validate_custom_method_label_json(input_json: &str) -> Result<String, String> {
     de1_domain::validate_custom_method_label_json(input_json)
+}
+
+/// The idle-sleep ("Sleep after") choices, minutes; `0` is "Never". See
+/// `de1_domain::idle_sleep::IDLE_SLEEP_CHOICES_MIN`.
+#[wasm_bindgen(js_name = idleSleepChoices)]
+pub fn idle_sleep_choices() -> Vec<u32> {
+    de1_domain::idle_sleep::IDLE_SLEEP_CHOICES_MIN.to_vec()
+}
+
+/// The default idle-sleep timeout, minutes (30, as decaid).
+#[wasm_bindgen(js_name = defaultIdleSleepMin)]
+pub fn default_idle_sleep_min() -> u32 {
+    de1_domain::idle_sleep::DEFAULT_IDLE_SLEEP_MIN
+}
+
+/// How often the shell ticks the idle-sleep timer, ms.
+#[wasm_bindgen(js_name = idleSleepTickMs)]
+pub fn idle_sleep_tick_ms() -> u32 {
+    // 30 000 — well inside u32.
+    u32::try_from(de1_domain::idle_sleep::IDLE_SLEEP_TICK_MS).unwrap_or(30_000)
+}
+
+/// Snap any minute count to the nearest idle-sleep choice (`0` stays Never).
+#[wasm_bindgen(js_name = snapIdleSleepMinutes)]
+pub fn snap_idle_sleep_minutes(minutes: u32) -> u32 {
+    de1_domain::idle_sleep::snap_idle_sleep_minutes(minutes)
 }
 
 /// The built-in brew recipe catalogue (`BrewRecipe` JSON array) — real,
@@ -2108,6 +2137,17 @@ impl CremaBridge {
         json(self.core.connect_sweep_json(settings_json, now_ms as u64))
     }
 
+    /// Feed the idle-sleep timer ("Sleep after") one input — a JSON
+    /// `IdleSleepInput` (`{"type":"Tick"}`, `{"type":"Configure","content":
+    /// {"minutes":60}}`, `{"type":"Activity","content":{"kind":"Touch"}}`,
+    /// `{"type":"Link","content":{"ready":true}}`) at the shell's wall-clock
+    /// `now_ms` (`Date.now()`). Returns a `CoreOutput` JSON string: the Sleep
+    /// write when the timer fires, a throttled presence poke on activity.
+    /// See `CremaCore::idle_sleep`.
+    pub fn idle_sleep(&mut self, input_json: &str, now_ms: f64) -> String {
+        json(self.core.idle_sleep_json(input_json, now_ms as u64))
+    }
+
     /// The once-a-minute USB-charger check (Decenza `BatteryManager`):
     /// `mode` is the persisted `UsbChargingMode` spelling (`"alwaysOn"` /
     /// `"smart"` / `"smartHigh"`; anything else is `"alwaysOn"`); `battery_percent` is the tablet battery,
@@ -3357,6 +3397,7 @@ mod tests {
                     MmrRegister::UserPresent => MmrReg::UserPresent,
                     MmrRegister::SteamTwoTapStop => MmrReg::SteamTwoTapStop,
                     MmrRegister::CupWarmerTemp => MmrReg::CupWarmerTemp,
+                    MmrRegister::InactivitySleepTimeout => MmrReg::InactivitySleepTimeout,
                 };
                 (mirror, core_reg)
             })

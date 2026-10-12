@@ -80,6 +80,9 @@ import coffee.crema.ui.components.CremaStepperStyle
 import coffee.crema.ui.components.CremaTextField
 import coffee.crema.ui.components.CremaNavigationRail
 import coffee.crema.ui.components.CremaSegmentedButton
+import coffee.crema.ui.components.IdleSleepRow
+import coffee.crema.ui.components.SCREENSAVER_HINT
+import coffee.crema.ui.components.WAKE_WITH_SAVER_HINT
 import coffee.crema.ui.components.CremaSwitch
 import coffee.crema.ui.components.CremaValueUnit
 import coffee.crema.ui.components.Eyebrow
@@ -213,17 +216,6 @@ fun SettingsScreen(
                         }
                         SetGroup("Connection") {
                             CremaSettingsRow("Telemetry rate", "How often the chart samples live data.", notImplemented = true) { CremaSettingsSelect("50 Hz") }
-                            // Keep-awake is REAL: a 60 s UserPresent (MMR 0x803858)
-                            // heartbeat in the VM resets the DE1's sleep timer while on.
-                            CremaSettingsRow("Keep DE1 awake while Crema is open", "Re-arms the DE1's sleep timer every minute while Crema is on screen. In the background the pokes stop, so the machine falls back to its own ~30 min sleep timer.") {
-                                CremaSwitch(ui.suppressDe1Sleep, vm::setSuppressDe1Sleep)
-                            }
-                            // Quit ≠ background: the swipe-away signal rides a tiny
-                            // service's onTaskRemoved (see QuitSleep) — best-effort,
-                            // idle-only, primary-only.
-                            CremaSettingsRow("Sleep the DE1 when you quit Crema", "Swiping Crema out of recents puts an idle machine to sleep first (best effort). Just switching apps never sleeps it.") {
-                                CremaSwitch(ui.sleepOnQuit, vm::setSleepOnQuit)
-                            }
                             // Screen-off keep-alive (#65): a foreground service
                             // that keeps the link + reconnect loop alive with the
                             // screen off — engages only while charging.
@@ -659,11 +651,23 @@ fun SettingsScreen(
                                     uniform = true,
                                 )
                             }
-                            CremaSettingsRow("Screensaver", "Show a dim clock after this long idle — tap to wake.", dot = true, dotOn = ui.screensaverAfterMin > 0, onDot = { vm.setScreensaverAfterMin(if (ui.screensaverAfterMin > 0) 0 else 30) }) {
+                        }
+                        // Machine sleep: the core's idle-sleep timer (de1app "Cool
+                        // down after", Decenza autoSleepMinutes) and sleep-on-quit.
+                        SetGroup("Machine sleep") {
+                            IdleSleepRow(ui.idleSleepMin, vm::setIdleSleepMin, CremaStepperStyle.Bare)
+                            // Quit ≠ background: the swipe-away signal rides a tiny
+                            // service's onTaskRemoved (see QuitSleep) — best-effort,
+                            // idle-only, primary-only.
+                            CremaSettingsRow("Sleep the DE1 when you quit Crema", "Swiping Crema out of recents puts an idle machine to sleep straight away (best effort). Just switching apps never sleeps it.", last = true) {
+                                CremaSwitch(ui.sleepOnQuit, vm::setSleepOnQuit)
+                            }
+                        }
+                        SetGroup("Screensaver") {
+                            CremaSettingsRow("Screensaver", SCREENSAVER_HINT, dot = true, dotOn = ui.screensaverAfterMin > 0, onDot = { vm.setScreensaverAfterMin(if (ui.screensaverAfterMin > 0) 0 else 30) }) {
                                 CremaStepper(value = ui.screensaverAfterMin.toDouble(), unit = "min", step = 5.0, min = 0.0, max = 120.0, fmt = { if (it <= 0.0) "Off" else fmt("%.0f", it) }, style = CremaStepperStyle.Bare, onChange = { vm.setScreensaverAfterMin(it.toInt()) })
                             }
-                            CremaSettingsRow("Sleep machine with screensaver", "Also put the DE1 to sleep when the saver starts.") { CremaSwitch(ui.sleepMachineWithSaver, vm::setSleepMachineWithSaver) }
-                            CremaSettingsRow("Wake machine with screensaver", "Tapping the saver also wakes a sleeping DE1. Off: the tap only dismisses — wake with the power button.") { CremaSwitch(ui.wakeMachineWithSaver, vm::setWakeMachineWithSaver) }
+                            CremaSettingsRow("Wake machine with screensaver", WAKE_WITH_SAVER_HINT) { CremaSwitch(ui.wakeMachineWithSaver, vm::setWakeMachineWithSaver) }
                             CremaSettingsRow("Keep screen on", "Hold the display awake while Crema is open.", last = true) { CremaSwitch(ui.keepScreenOnBrew, vm::setKeepScreenOnBrew) }
                         }
                         SetGroup("Guided brew cues") {

@@ -1,6 +1,7 @@
 //! FFI value types: the input discriminator [`Source`], the observed [`Event`]s
 //! and [`Command`]s the core emits, and the [`CoreOutput`] envelope.
 
+use de1_domain::idle_sleep::IdleSleepBlock;
 use de1_domain::{
     BrewCue, BrewSessionSummary, MaintenancePhase, ShotDisposition, ShotPhase, SteamClogReason,
     StopReason, WaterSessionKind,
@@ -146,6 +147,26 @@ pub enum Event {
         /// The 1 °C cold-maintenance profile was loaded for this cycle.
         cold_workaround: bool,
     },
+    /// The idle-sleep timer ("Sleep after") sent Sleep — see
+    /// [`de1_domain::idle_sleep`]. `attempt` is 1 for the episode's send, 2
+    /// for the one retry of a send the machine never confirmed. The shells
+    /// log it; the Sleep report that follows raises the screensaver like any
+    /// sleep the user didn't ask for.
+    IdleSleepRequested {
+        /// Which send of this idle episode.
+        attempt: u8,
+    },
+    /// The idle-sleep timer has expired but can't send Sleep yet; it retries
+    /// on every tick. Edge-triggered: once per reason, not once per tick.
+    IdleSleepBlocked {
+        /// Why it can't send.
+        reason: IdleSleepBlock,
+        /// The machine state at the time, when known.
+        state: Option<MachineState>,
+    },
+    /// The machine never reported the timer's Sleep (sent twice); the
+    /// countdown re-armed in full rather than re-sending every tick.
+    IdleSleepUnconfirmed,
     /// An espresso shot began.
     ShotStarted,
     /// The shot moved to a new phase.

@@ -50,6 +50,38 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   while heating. An unread GHC now counts as fitted, as Decenza does
   (`d5f405fb`): the worst case on a headless machine is a throwaway
   warm-up profile. Web and Android.
+- **The DE1 now goes to sleep after it's been left alone** — Crema relied on
+  a firmware sleep timer that a stock DE1 doesn't have, so the machine could
+  stay hot indefinitely (always on the web; on Android whenever the
+  screensaver was off, its machine-sleep switch was off, or the machine was
+  refilling or reconnecting at that moment). Crema now puts the machine to
+  sleep itself after an idle period, as de1app, Decenza and decaid do.
+  Touches, keys and navigation in Crema, commands, returning to the app and
+  anything the machine is doing (espresso, steam, hot water, flush, descale,
+  clean) count as activity; scale readings don't. It never sleeps mid-shot,
+  while steaming, descaling or cleaning, during a profile upload or a guided
+  brew. If the sleep can't be sent yet (reconnecting, or refilling on
+  firmware below 1357) it keeps trying every 30 seconds; once the machine is
+  asleep it isn't sent again, and nothing is sent while disconnected. Waking
+  the machine at the group head starts the timer over. On a Bengle the same
+  timeout is also set in the machine's own firmware timer. Web and Android.
+
+### Changed
+
+- **New setting: Settings → Display → Machine sleep → "Sleep after"** —
+  Never, 15, 30, 60, 90 or 120 minutes; default 30. One setting on phone,
+  tablet and web, carried in backups. Upgrading Android users who had changed
+  the screensaver delay and had it put the machine to sleep keep that delay
+  (rounded to the nearest choice); everyone else starts at 30.
+  "Sleep the DE1 when you quit Crema" moved into the same group.
+- **The screensaver is screen-only** — "Sleep machine with screensaver" is
+  gone; the timer above sleeps the machine whether or not the saver is on.
+  Tapping the saver while the DE1 sleeps still wakes it by default (as in
+  de1app), and the setting now says that starts heating. Android.
+- **"Keep DE1 awake while Crema is open" is gone** — Crema no longer pokes
+  the DE1 every minute while it's on screen (Android) or on every touch
+  (web); it tells the machine you're present only when you actually use
+  Crema, at most every 30 seconds. Web and Android.
 
 ## [0.0.7] — 2026-10-08
 

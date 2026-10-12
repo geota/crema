@@ -74,6 +74,7 @@ import {
 } from './ui-state.svelte';
 import { getActiveShotStore, type ActiveShotData } from './active-shot.svelte';
 import { ConnectSweepRunner, readBatteryPercent } from './connect-sweep';
+import { IdleSleepRunner } from './idle-sleep';
 import {
 	LaunchReconnect,
 	markUserDisconnect,
@@ -307,6 +308,9 @@ export class CremaApp {
 	/** The DE1 connect sweep + USB-charger minute check (`connect-sweep.ts`). */
 	private readonly sweep: ConnectSweepRunner;
 
+	/** The idle-sleep timer's feed ("Sleep after", `idle-sleep.ts`). */
+	readonly idleSleep: IdleSleepRunner;
+
 	/**
 	 * The Quick Sheet's `BrewParams` at shot start, stashed by the brew
 	 * dashboard via {@link setBrewParamsSnapshot} just before
@@ -353,6 +357,11 @@ export class CremaApp {
 			battery: readBatteryPercent,
 			apply: (out) => this.applyCoreOutput(out)
 		});
+		this.idleSleep = new IdleSleepRunner({
+			core,
+			apply: (out) => this.applyCoreOutput(out),
+			minutes: () => getSettingsStore().current.idleSleepMin
+		});
 		this.de1 = new De1Manager(core, {
 			onCoreOutput: (output) => this.applyCoreOutput(output),
 			// A DE1 status line is both the live status and an event-log entry,
@@ -391,15 +400,10 @@ export class CremaApp {
 				}
 				if (de1State === 'ready') {
 					this.ensureLoadedMatches();
-					// Fire one heartbeat at connect when the user has
-					// suppressDe1Sleep on, so the DE1's presence timer
-					// starts from a fresh "user just touched" state rather
-					// than from whenever the user last interacted on the
-					// prior session.
-					if (getSettingsStore().current.suppressDe1Sleep) {
-						void this.markUserPresent();
-					}
 				}
+				// The idle-sleep timer learns the link state (a reconnect is not
+				// presence: no poke here — the core pokes on real activity only).
+				this.idleSleep.onDe1State(de1State);
 				// The connect sweep: every machine setting Crema owns a
 				// preference for, re-asserted because the DE1 forgets them
 				// across a power cycle. The list is core-owned
@@ -2040,40 +2044,6 @@ export class CremaApp {
 		this.applyCoreOutput(await this.core.setCalibrationFlowMultiplier(multiplier));
 	}
 
-	// ---- User-presence heartbeat ------------------------------------------
-	//
-	// `markUserPresent()` writes a `1` to `0x803860` via `WriteToMMR`
-	// (`cuuid_06`) — the legacy `set_user_present` heartbeat
-	// (`de1_comms.tcl:1166`). Resets the DE1's "user has gone away"
-	// timer. Debounced to once per minute by the caller (`createCremaApp`
-	// attaches the document listener).
-	//
-	// The `suppressDe1Sleep` setting gates whether the heartbeat loop in
-	// `createCremaApp` actually fires; the FeatureFlags bit is written
-	// unconditionally as `1` on every connect (`onState('ready')` block,
-	// matching reaprime's `enableUserPresenceFeature()`), so the DE1 is
-	// always listening to the UserPresent register. Suppress=ON → feature
-	// bit=1 + heartbeat running → DE1 sleeps only when Crema is genuinely
-	// idle. Suppress=OFF → feature bit=1 + heartbeat silent → DE1 follows
-	// its own ~30 min timer. The setting is read directly off the
-	// settings store on each tick, so no orchestrator-side setter is
-	// needed.
-
-	/**
-	 * Send a `UserPresent = 1` heartbeat to the DE1. Best-effort: ignores
-	 * failures so a flaky link doesn't bubble exceptions into the
-	 * shell-side debounce loop. The typed core method enforces the
-	 * firmware-upload lockout (no MMR writes while a firmware upload is
-	 * in progress) — see CremaCore::set_user_present.
-	 */
-	async markUserPresent(): Promise<void> {
-		try {
-			this.applyCoreOutput(await this.core.setUserPresent(true));
-		} catch {
-			// Best-effort: the next debounce tick will retry.
-		}
-	}
-
 	/**
 	 * Kick off a HotWaterRinse a brief moment after a steam session ended.
 	 *
@@ -2447,29 +2417,16 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 	// persisted store; saved back after every completed shot. A corrupt
 	// blob is quarantined, not lost (see `saw-model-store.ts`).
 	void seedSawModel(core).catch(() => undefined);
-	// Install the user-presence heartbeat — every user touch / keystroke
-	// (debounced to once per minute) writes `UserPresent = 1` to the DE1,
-	// resetting its "user has gone away" timer. The actual MMR write is
-	// gated by the `suppressDe1Sleep` preference being on AND the DE1 being
-	// connected; either condition false is a no-op. Mirrors the legacy app
-	// firing `set_user_present` on every touch (`de1_comms.tcl:1166`), but
-	// debounced to keep the BLE channel quiet — the DE1's threshold for
-	// "user is gone" is on the order of minutes, so once-per-minute resets
-	// are plenty.
-	if (typeof document !== 'undefined') {
-		const HEARTBEAT_DEBOUNCE_MS = 60_000;
-		let lastFiredAt = 0;
-		const tick = () => {
-			if (!getSettingsStore().current.suppressDe1Sleep) return;
-			if (app.state.current.de1State !== 'ready') return;
-			const now = performance.now();
-			if (now - lastFiredAt < HEARTBEAT_DEBOUNCE_MS) return;
-			lastFiredAt = now;
-			void app.markUserPresent();
-		};
-		document.addEventListener('pointerdown', tick, { passive: true });
-		document.addEventListener('keydown', tick, { passive: true });
-	}
+	// The idle-sleep timer ("Sleep after", `idle-sleep.ts`): the core owns
+	// the decision; the shell feeds it the setting, DOM activity (pointer,
+	// keyboard, the tab turning visible), the link state and a 30 s tick
+	// whose expiry is computed from wall-clock timestamps, so a throttled
+	// hidden-tab timer still fires on its next run. Replaces the old
+	// per-touch UserPresent heartbeat: presence is now poked by the core on
+	// activity only, throttled.
+	app.idleSleep.configure(getSettingsStore().current.idleSleepMin);
+	app.idleSleep.start();
+	if (typeof document !== 'undefined') app.idleSleep.attach(document);
 	// Register the eager DE1 upload hook on profile activation. Every
 	// `ProfileStore.setActive(...)` site (BrewDashboard, ProfileEditor,
 	// ShotDetail, profiles page, library delete-self) gets a

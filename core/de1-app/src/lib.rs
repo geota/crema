@@ -17,6 +17,7 @@ pub mod event;
 pub mod firmware_info;
 #[cfg(test)]
 mod hds_sleep_tests;
+mod idle_sleep;
 mod maintenance_run;
 mod sweep;
 
@@ -777,6 +778,14 @@ pub struct CremaCore {
     /// The held "discharging" latch for the smart-charging band (Decenza
     /// `BatteryManager::m_discharging`).
     usb_discharging: bool,
+    /// The DE1's machine model (MMR `MachineModel`), cached from the
+    /// connect-time read: it gates the Bengle-only firmware sleep timeout.
+    de1_machine_model: Option<u32>,
+    /// The idle-sleep timer ("Sleep after") — see
+    /// [`idle_sleep`](crate::idle_sleep). User configuration plus the
+    /// current idle episode, so it survives [`reset`](Self::reset) (with the
+    /// link marked down).
+    idle_sleep: de1_domain::idle_sleep::IdleSleepPolicy,
 }
 
 /// In-flight state of one profile upload. Owned by
@@ -914,6 +923,8 @@ impl CremaCore {
             hds: None,
             usb_charging: de1_domain::UsbChargingMode::AlwaysOn,
             usb_discharging: false,
+            de1_machine_model: None,
+            idle_sleep: de1_domain::idle_sleep::IdleSleepPolicy::new(),
         }
     }
 
@@ -1279,6 +1290,14 @@ impl CremaCore {
     pub fn request_machine_state(&mut self, state: MachineState) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("request_machine_state") {
             return out;
+        }
+        // The idle-sleep timer: an app Sleep (power button, sleep-on-quit) is
+        // adopted as the idle episode's send so the timer never doubles it;
+        // any other request is the user doing something.
+        if state == MachineState::Sleep {
+            self.idle_sleep.note_app_sleep();
+        } else {
+            self.idle_sleep.note_activity();
         }
         let mut out = CoreOutput::default();
         self.supersede_held_maintenance(&mut out);
@@ -2928,6 +2947,7 @@ impl CremaCore {
         self.stop_scale_timer_for_link_loss(&mut out);
         self.tank_level.reset();
         self.abandon_maintenance(&mut out);
+        self.idle_sleep.link(false);
         self.gate_read_only(out)
     }
 
@@ -3012,7 +3032,12 @@ impl CremaCore {
         // state — the BLE managers reset the core on a DE1 drop, and a
         // pourover mid-bloom must survive that (issue #10).
         let brew_session = self.brew_session.take();
+        // The idle-sleep timer holds user config and the idle episode (a
+        // machine asleep before the drop must not be re-slept after it).
+        let mut idle_sleep = std::mem::take(&mut self.idle_sleep);
+        idle_sleep.link(false);
         *self = CremaCore::new();
+        self.idle_sleep = idle_sleep;
         self.read_only = read_only;
         self.brew_session = brew_session;
         self.scale = scale;
@@ -3120,6 +3145,7 @@ impl CremaCore {
             let prev_info = self.last_state;
             let prev_state = prev_info.map(|s| s.state);
             self.last_state = Some(info);
+            self.idle_sleep.machine_state(info.state, info.substate);
             self.descale.on_state(prev_info, info, now);
             self.advance_maintenance(info, now, out);
             out.events.push(Event::MachineStateChanged {
@@ -3878,6 +3904,9 @@ impl CremaCore {
             extension_frame_count: extension_count,
         });
 
+        // A profile upload is the user doing something (and, while in
+        // flight, pins the idle-sleep countdown — see `idle_sleep_busy`).
+        self.idle_sleep.note_activity();
         self.profile_upload = Some(ProfileUpload {
             title: profile.title.clone(),
             beverage_type: profile.beverage_type,
@@ -4078,7 +4107,24 @@ impl CremaCore {
             if register == MmrRegister::GhcInfo {
                 self.de1_ghc_info = Some(value);
             }
+            if register == MmrRegister::MachineModel {
+                self.de1_machine_model = Some(value);
+            }
+            if matches!(
+                register,
+                MmrRegister::FirmwareVersion | MmrRegister::MachineModel
+            ) {
+                self.idle_sleep
+                    .set_machine_info(self.de1_firmware_build, self.de1_machine_model);
+            }
             out.events.push(Event::MmrValue { register, value });
+            // A Bengle learns the app's idle timeout as its own firmware
+            // timeout once its model is known (de1app pushes it on connect).
+            if register == MmrRegister::MachineModel {
+                let write = self.bengle_sleep_timeout_write();
+                out.events.extend(write.events);
+                out.commands.extend(write.commands);
+            }
         }
     }
 

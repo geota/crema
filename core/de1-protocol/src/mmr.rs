@@ -217,6 +217,13 @@ pub enum MmrRegister {
     SteamTwoTapStop,
     /// Cup-warmer temperature (Bengle models only).
     CupWarmerTemp,
+    /// The machine's own inactivity-sleep timeout, whole minutes, `0` =
+    /// never (Bengle models only; firmware default 60). The firmware acts on
+    /// it only while no tablet is connected — the connected app owns sleep —
+    /// so it covers a tablet that is off or out of range. de1app
+    /// `set_sleep_timeout_minutes` (`de1_comms.tcl:1431-1446`), decaid
+    /// `BengleMmr.inactivitySleepTimeout`.
+    InactivitySleepTimeout,
 }
 
 impl MmrRegister {
@@ -249,6 +256,7 @@ impl MmrRegister {
             MmrRegister::UserPresent => 0x80_3860,
             MmrRegister::SteamTwoTapStop => 0x80_3850,
             MmrRegister::CupWarmerTemp => 0x80_3874,
+            MmrRegister::InactivitySleepTimeout => 0x80_38BC,
         }
     }
 
@@ -300,7 +308,8 @@ impl MmrRegister {
             | MmrRegister::FeatureFlags
             | MmrRegister::UserPresent
             | MmrRegister::SteamTwoTapStop
-            | MmrRegister::CupWarmerTemp => 1.0,
+            | MmrRegister::CupWarmerTemp
+            | MmrRegister::InactivitySleepTimeout => 1.0,
         }
     }
 
@@ -308,7 +317,7 @@ impl MmrRegister {
     /// [`from_address`](Self::from_address) and a useful read-set for callers
     /// that want to poll the whole diagnostic window. Order is not significant;
     /// the `all_covers_every_variant` test pins this list to the enum.
-    pub const ALL: [MmrRegister; 26] = [
+    pub const ALL: [MmrRegister; 27] = [
         MmrRegister::CpuBoardVersion,
         MmrRegister::MachineModel,
         MmrRegister::FirmwareVersion,
@@ -335,6 +344,7 @@ impl MmrRegister {
         MmrRegister::UserPresent,
         MmrRegister::SteamTwoTapStop,
         MmrRegister::CupWarmerTemp,
+        MmrRegister::InactivitySleepTimeout,
     ];
 
     /// The register at the raw 24-bit MMR `address`, or `None` if `address` is
@@ -419,6 +429,7 @@ mod tests {
         assert_eq!(MmrRegister::UserPresent.address(), 0x80_3860);
         assert_eq!(MmrRegister::SteamTwoTapStop.address(), 0x80_3850);
         assert_eq!(MmrRegister::CupWarmerTemp.address(), 0x80_3874);
+        assert_eq!(MmrRegister::InactivitySleepTimeout.address(), 0x80_38BC);
     }
 
     #[test]
@@ -476,7 +487,8 @@ mod tests {
                 | MmrRegister::FeatureFlags
                 | MmrRegister::UserPresent
                 | MmrRegister::SteamTwoTapStop
-                | MmrRegister::CupWarmerTemp => covers(reg),
+                | MmrRegister::CupWarmerTemp
+                | MmrRegister::InactivitySleepTimeout => covers(reg),
             }
         }
         // No two variants share an address, so `ALL` has no duplicates.
@@ -520,6 +532,7 @@ mod tests {
             (MmrRegister::UserPresent, 1.0),
             (MmrRegister::SteamTwoTapStop, 1.0),
             (MmrRegister::CupWarmerTemp, 1.0),
+            (MmrRegister::InactivitySleepTimeout, 1.0),
         ] {
             let got = reg.scale();
             assert!(

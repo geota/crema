@@ -1139,8 +1139,26 @@ export interface CommonSettings {
 	defaultPreinfuseS: number;
 	/** Free-text equipment grinder model. */
 	grinderModel: string;
-	/** Keep the DE1 awake while Crema is open. */
+	/**
+	 * **Retired** — ignored by every shell. It drove the old "keep the DE1
+	 * awake while Crema is open" heartbeat, whose premise (a firmware
+	 * sleep timer taking over when the pokes stop) does not hold on a stock
+	 * DE1; presence is now poked on real activity only and the app owns
+	 * sleep ([`idle_sleep_min`](Self::idle_sleep_min)). Still written
+	 * (`true`) so a backup stays readable by older versions, which require
+	 * the field.
+	 */
 	suppressDe1Sleep: boolean;
+	/**
+	 * The idle-sleep timeout ("Sleep after"), minutes — one of
+	 * [`IDLE_SLEEP_CHOICES_MIN`](crate::idle_sleep::IDLE_SLEEP_CHOICES_MIN),
+	 * `0` = Never. `None` = never set: the shell migrates its old setting
+	 * (Android's screensaver-coupled sleep) or uses
+	 * [`DEFAULT_IDLE_SLEEP_MIN`](crate::idle_sleep::DEFAULT_IDLE_SLEEP_MIN).
+	 * de1app `screen_saver_delay`, Decenza `autoSleepMinutes`, decaid
+	 * `sleepTimeoutMinutes`.
+	 */
+	idleSleepMin?: number;
 	/** Quick-Controls steam duration, seconds. */
 	qcSteamTimeS: number;
 	/** Quick-Controls steam flow, ml/s. */
@@ -1294,6 +1312,32 @@ export type Event =
 	/** The 1 °C cold-maintenance profile was loaded for this cycle. */
 	cold_workaround: boolean;
 }}
+	/**
+	 * The idle-sleep timer ("Sleep after") sent Sleep — see
+	 * [`de1_domain::idle_sleep`]. `attempt` is 1 for the episode's send, 2
+	 * for the one retry of a send the machine never confirmed. The shells
+	 * log it; the Sleep report that follows raises the screensaver like any
+	 * sleep the user didn't ask for.
+	 */
+	| { type: "IdleSleepRequested", content: {
+	/** Which send of this idle episode. */
+	attempt: number;
+}}
+	/**
+	 * The idle-sleep timer has expired but can't send Sleep yet; it retries
+	 * on every tick. Edge-triggered: once per reason, not once per tick.
+	 */
+	| { type: "IdleSleepBlocked", content: {
+	/** Why it can't send. */
+	reason: IdleSleepBlock;
+	/** The machine state at the time, when known. */
+	state?: MachineState;
+}}
+	/**
+	 * The machine never reported the timer's Sleep (sent twice); the
+	 * countdown re-armed in full rather than re-sending every tick.
+	 */
+	| { type: "IdleSleepUnconfirmed", content?: undefined }
 	/** An espresso shot began. */
 	| { type: "ShotStarted", content?: undefined }
 	/** The shot moved to a new phase. */
@@ -3588,6 +3632,72 @@ export type FirmwareUpdateStatus =
 }};
 
 /**
+ * What the shell saw the user do. Every kind restarts the countdown the
+ * same way; the kind is for diagnostics.
+ */
+export enum IdleActivity {
+	/** A touch or pointer press anywhere in Crema. */
+	Touch = "Touch",
+	/** A key press. */
+	Key = "Key",
+	/** A screen / route change. */
+	Navigation = "Navigation",
+	/** A command the shell sent outside the core's own request paths. */
+	Command = "Command",
+	/** The app returned to the foreground. */
+	Foreground = "Foreground",
+	/** A mirrored peer relayed a command or activity to this primary. */
+	Mirror = "Mirror",
+}
+
+/** Why an expired timer could not send Sleep yet. */
+export enum IdleSleepBlock {
+	/** The DE1 link is down or reconnecting. */
+	LinkDown = "LinkDown",
+	/** No machine state has been reported on this link yet. */
+	StateUnknown = "StateUnknown",
+	/**
+	 * The machine is in Refill and the firmware would latch the request
+	 * and sleep right after the next refill instead (firmware below
+	 * 1357, or a Bengle).
+	 */
+	RefillLatch = "RefillLatch",
+}
+
+/**
+ * One input to the idle-sleep timer, as the shells send it over the
+ * `idle_sleep_json` facade. Adjacently tagged like `Event`:
+ * `{"type":"Tick"}`, `{"type":"Configure","content":{"minutes":60}}`.
+ */
+export type IdleSleepInput = 
+	/**
+	 * The user's timeout, minutes (`0` = Never). Sent at startup and on
+	 * every change.
+	 */
+	| { type: "Configure", content: {
+	/** Timeout in minutes; `0` turns the timer off. */
+	minutes: number;
+}}
+	/** The user did something in Crema. */
+	| { type: "Activity", content: {
+	/** What they did. */
+	kind: IdleActivity;
+}}
+	/**
+	 * The DE1 link became ready (`true`) or went away / is reconnecting
+	 * (`false`).
+	 */
+	| { type: "Link", content: {
+	/** Whether writes can reach the machine now. */
+	ready: boolean;
+}}
+	/**
+	 * The periodic check, every [`IDLE_SLEEP_TICK_MS`] and whenever the
+	 * shell regains the CPU (a tab turning visible, the app resuming).
+	 */
+	| { type: "Tick", content?: undefined };
+
+/**
  * DE1 top-level machine state. Discriminants match the firmware `MachineState`
  * enum (see protocol §4.1).
  */
@@ -3734,6 +3844,15 @@ export enum MmrRegister {
 	SteamTwoTapStop = "SteamTwoTapStop",
 	/** Cup-warmer temperature (Bengle models only). */
 	CupWarmerTemp = "CupWarmerTemp",
+	/**
+	 * The machine's own inactivity-sleep timeout, whole minutes, `0` =
+	 * never (Bengle models only; firmware default 60). The firmware acts on
+	 * it only while no tablet is connected — the connected app owns sleep —
+	 * so it covers a tablet that is off or out of range. de1app
+	 * `set_sleep_timeout_minutes` (`de1_comms.tcl:1431-1446`), decaid
+	 * `BengleMmr.inactivitySleepTimeout`.
+	 */
+	InactivitySleepTimeout = "InactivitySleepTimeout",
 }
 
 /**

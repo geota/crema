@@ -143,8 +143,22 @@ pub struct CommonSettings {
     pub default_preinfuse_s: f32,
     /// Free-text equipment grinder model.
     pub grinder_model: String,
-    /// Keep the DE1 awake while Crema is open.
+    /// **Retired** — ignored by every shell. It drove the old "keep the DE1
+    /// awake while Crema is open" heartbeat, whose premise (a firmware
+    /// sleep timer taking over when the pokes stop) does not hold on a stock
+    /// DE1; presence is now poked on real activity only and the app owns
+    /// sleep ([`idle_sleep_min`](Self::idle_sleep_min)). Still written
+    /// (`true`) so a backup stays readable by older versions, which require
+    /// the field.
     pub suppress_de1_sleep: bool,
+    /// The idle-sleep timeout ("Sleep after"), minutes — one of
+    /// [`IDLE_SLEEP_CHOICES_MIN`](crate::idle_sleep::IDLE_SLEEP_CHOICES_MIN),
+    /// `0` = Never. `None` = never set: the shell migrates its old setting
+    /// (Android's screensaver-coupled sleep) or uses
+    /// [`DEFAULT_IDLE_SLEEP_MIN`](crate::idle_sleep::DEFAULT_IDLE_SLEEP_MIN).
+    /// de1app `screen_saver_delay`, Decenza `autoSleepMinutes`, decaid
+    /// `sleepTimeoutMinutes`.
+    pub idle_sleep_min: Option<u32>,
     /// Quick-Controls steam duration, seconds.
     pub qc_steam_time_s: f32,
     /// Quick-Controls steam flow, ml/s.
@@ -198,6 +212,7 @@ impl Default for CommonSettings {
             default_preinfuse_s: 8.0,
             grinder_model: String::new(),
             suppress_de1_sleep: true,
+            idle_sleep_min: None,
             qc_steam_time_s: 12.0,
             qc_steam_flow_ml_s: 1.2,
             qc_steam_temp_c: 148.0,

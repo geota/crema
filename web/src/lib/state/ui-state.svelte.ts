@@ -1368,6 +1368,34 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				...snapshot,
 				eventLog: appendLog(snapshot.eventLog, `Decode error: ${event.content.message}`)
 			};
+		// The idle-sleep timer ("Sleep after") — log only; the Sleep state
+		// report that follows updates the machine readout as usual.
+		case 'IdleSleepRequested':
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Idle — putting the DE1 to sleep${event.content.attempt > 1 ? ' (retry)' : ''}`
+				)
+			};
+		case 'IdleSleepBlocked':
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Idle sleep due but waiting: ${event.content.reason}${
+						event.content.state ? ` (${event.content.state})` : ''
+					}`
+				)
+			};
+		case 'IdleSleepUnconfirmed':
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					'Idle sleep: the DE1 never reported Sleep — timer re-armed'
+				)
+			};
 	}
 }
 

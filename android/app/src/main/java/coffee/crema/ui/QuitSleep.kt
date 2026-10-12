@@ -9,10 +9,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Sleep-on-quit: put the DE1 to sleep when the user QUITS Crema (swipes the
  * task out of recents) — and only then. Backgrounding must never sleep the
- * machine: the presence model already handles that case (the keep-awake
- * pokes pause and the DE1's own timer takes over — armed by the
- * user-presence feature flag `MainViewModel.seedMachineSettings` writes at
- * connect, without which neither path did anything).
+ * machine by itself: the idle-sleep timer ("Sleep after", core
+ * `CremaCore::idle_sleep`) keeps counting in the background and sleeps it
+ * after the user's idle timeout while the process lives.
  *
  * Two quit signals feed one latched handler, because neither alone is
  * reliable (verified on an API-36 emulator):
@@ -30,11 +29,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  *     because the system stops idle background services.
  *
  * Best-effort by design: a force-stop or OOM kill delivers nothing
- * anywhere, and a swipe long after backgrounding may miss both signals —
- * the DE1's own sleep timer (counting since the pokes stopped) still puts
- * the machine down in every fallback case. That fallback is what makes
- * "best-effort" acceptable, so it must stay genuinely armed; see the
- * feature-flag seed above.
+ * anywhere, and a swipe long after backgrounding may miss both signals. A
+ * stock DE1 has no sleep timer of its own to fall back on (with the presence
+ * flag set it only drops to UserNotPresent), so once the process is gone
+ * nothing sleeps it until it's next connected; a Bengle does fall back, on
+ * the firmware inactivity timeout the core sets to the same minutes. The
+ * idle timer and this path never double-send: the core adopts this Sleep
+ * as the idle episode's, and this path skips while an idle Sleep is in
+ * flight (`quitSleepAllowed`).
  */
 object QuitSleep {
     @Volatile

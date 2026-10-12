@@ -100,11 +100,21 @@ data class AppPrefs(
     val brewCueSound: Boolean? = null,
     /** Guided-brew cue vibration. Null = never chosen → on. */
     val brewCueHaptics: Boolean? = null,
-    // ── Sleep & screensaver (platform extras — deliberately NOT in
-    // CommonSettings; the backup design keeps screensaver per-shell) ─────────
-    /** Idle minutes before the screensaver shows; 0 = never. */
+    // ── Machine sleep ────────────────────────────────────────────────────────
+    /** "Sleep after": idle minutes before Crema puts the DE1 to sleep — one
+     *  of the core's `idleSleepChoices()`, 0 = Never (de1app
+     *  `screen_saver_delay`, Decenza `autoSleepMinutes`). Cross-shell
+     *  (`CommonSettings.idleSleepMin`). Null = never set: [SettingsStore.load]
+     *  migrates it from the old screensaver coupling, or uses the default (30). */
+    val idleSleepMin: Int? = null,
+    // ── Screensaver (platform extras — deliberately NOT in CommonSettings; the
+    // backup design keeps screensaver per-shell) ───────────────────────────────
+    /** Idle minutes before the screensaver shows; 0 = never. Display only — the
+     *  machine's sleep is [idleSleepMin]'s. */
     val screensaverAfterMin: Int = 30,
-    /** Put the DE1 to sleep when the saver starts (tap wakes both). */
+    /** LEGACY, read only to migrate into [idleSleepMin]: the old "Sleep machine
+     *  with screensaver" coupling, the only app-side idle sleep before the
+     *  idle timer. No longer shown or acted on. */
     val sleepMachineWithSaver: Boolean = true,
     /** Wake a sleeping DE1 when the saver is dismissed; OFF = the tap only
      *  clears the overlay and the machine stays asleep. */
@@ -152,9 +162,6 @@ data class AppPrefs(
     /** Equipment-level grinder model (web `grinderModel`) — free text shown on
      *  Brew + sent with Visualizer uploads/patches. Blank = unset. */
     val grinderModel: String = "",
-    /** Keep the DE1 awake while Crema is open (web `suppressDe1Sleep`) — a
-     *  60 s UserPresent (MMR 0x803858) heartbeat resets the sleep timer. */
-    val suppressDe1Sleep: Boolean = true,
     // ── Quick-Controls steam / hot-water / flush (issue 14) ──────────────────
     /** Persisted QC overrides for the machine's steam / hot-water / flush params.
      *  These stick (no throwaway state) and take priority; on change they're
@@ -221,6 +228,26 @@ data class AppPrefs(
     val companionDeclined: List<String> = emptyList(),
 )
 
+/**
+ * Resolve the idle-sleep setting on load. A stored value wins. A settings file
+ * from before the idle timer migrates the old screensaver coupling, but only a
+ * value the user chose: a saver changed from its old 30 min default to N, with
+ * "Sleep machine with screensaver" on, becomes an idle sleep of N, snapped to
+ * a choice; everyone else gets the default (30). No file at all (a fresh
+ * install) is the default too. [fromSaver] / [defaultMin] are the core's rules
+ * (`idleSleepMinutesFromSaver`, `defaultIdleSleepMin`), injectable so the JVM
+ * tests run without the native library.
+ */
+internal fun resolveIdleSleep(
+    stored: AppPrefs?,
+    fromSaver: (Int, Boolean) -> Int = { saver, on -> coffee.crema.core.idleSleepMinutesFromSaver(saver, on).toInt() },
+    defaultMin: () -> Int = { coffee.crema.core.defaultIdleSleepMin().toInt() },
+): AppPrefs = when {
+    stored == null -> AppPrefs(idleSleepMin = defaultMin())
+    stored.idleSleepMin != null -> stored
+    else -> stored.copy(idleSleepMin = fromSaver(stored.screensaverAfterMin, stored.sleepMachineWithSaver))
+}
+
 /** A companion association that exists but has no platform id (API 31–32). */
 const val COMPANION_ID_UNKNOWN = -1
 
@@ -257,7 +284,10 @@ fun AppPrefs.toCommonSettings(): CommonSettings = CommonSettings(
     defaultBrewTempC = defaultBrewTempC,
     defaultPreinfuseS = defaultPreinfuseS,
     grinderModel = grinderModel,
-    suppressDe1Sleep = suppressDe1Sleep,
+    // Retired (presence follows activity; the app owns sleep) — still written
+    // because older versions require the field when reading a backup.
+    suppressDe1Sleep = true,
+    idleSleepMin = idleSleepMin?.toUInt(),
     qcSteamTimeS = qcSteamTimeS,
     qcSteamFlowMlS = qcSteamFlowMlS,
     qcSteamTempC = qcSteamTempC,
@@ -302,7 +332,8 @@ fun AppPrefs.withCommonSettings(c: CommonSettings): AppPrefs = copy(
     defaultBrewTempC = c.defaultBrewTempC,
     defaultPreinfuseS = c.defaultPreinfuseS,
     grinderModel = c.grinderModel,
-    suppressDe1Sleep = c.suppressDe1Sleep,
+    // A backup from before the idle timer carries none: keep this device's.
+    idleSleepMin = c.idleSleepMin?.toInt() ?: idleSleepMin,
     qcSteamTimeS = c.qcSteamTimeS,
     qcSteamFlowMlS = c.qcSteamFlowMlS,
     qcSteamTempC = c.qcSteamTempC,
@@ -474,7 +505,7 @@ class SettingsStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
     suspend fun load(): AppPrefs = withContext(Dispatchers.IO) {
-        loadStore(file, "settings") { text ->
+        val stored = loadStore(file, "settings") { text ->
             if (json.parseToJsonElement(text).jsonObject["common"] != null) {
                 json.decodeFromString(PersistedPrefs.serializer(), text).toAppPrefs()
             } else {
@@ -482,7 +513,11 @@ class SettingsStore(private val context: Context, private val json: Json) {
                 // save() rewrites it in the nested `common` shape.
                 json.decodeFromString(AppPrefs.serializer(), text)
             }
-        }.valueOrNull() ?: AppPrefs()
+        }.valueOrNull()
+        val prefs = resolveIdleSleep(stored)
+        // Persist a migration once, so a later screensaver change can't move it.
+        if (stored != null && stored.idleSleepMin == null) save(prefs)
+        prefs
     }
 
     suspend fun save(prefs: AppPrefs) {

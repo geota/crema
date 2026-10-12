@@ -80,6 +80,7 @@ pub mod flow;
 pub mod history;
 pub mod history_export;
 pub mod history_import;
+pub mod idle_sleep;
 pub mod ids;
 pub mod maintenance;
 pub mod mode_targets;

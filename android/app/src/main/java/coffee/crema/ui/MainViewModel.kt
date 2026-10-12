@@ -585,15 +585,17 @@ data class MainUiState(
      *  bell). Null = never chosen — read through [coffee.crema.ui.brewlog.BrewCueDefaults]. */
     val brewCueSound: Boolean? = null,
     val brewCueHaptics: Boolean? = null,
-    // ── Sleep & screensaver (Settings → Display; per-shell platform prefs) ──
-    /** Idle minutes before the screensaver shows; 0 = never. */
+    // ── Machine sleep & screensaver (Settings → Display) ─────────────────────
+    /** "Sleep after": idle minutes before Crema puts the DE1 to sleep, 0 =
+     *  Never. The core's idle-sleep timer owns the decision (see [IdleSleepRunner]);
+     *  the same setting on phone, tablet and web (default 30). */
+    val idleSleepMin: Int = DEFAULT_IDLE_SLEEP_MIN,
+    /** Idle minutes before the screensaver shows; 0 = never. Display only —
+     *  machine sleep is [idleSleepMin]'s. */
     val screensaverAfterMin: Int = 30,
-    /** Also put the DE1 to sleep when the saver starts (de1app/Decenza
-     *  coupling; OFF = display-only dimming). */
-    val sleepMachineWithSaver: Boolean = true,
-    /** Wake a sleeping DE1 when the saver is dismissed (de1app's saver-tap
-     *  behaviour). OFF = the tap only dismisses; the machine stays asleep
-     *  until the power button. */
+    /** Wake a sleeping DE1 when the saver is tapped (de1app's saver button runs
+     *  `start_idle`; Decenza's ScreensaverPage wakes too). OFF = the tap only
+     *  dismisses; the machine stays asleep until the power button. */
     val wakeMachineWithSaver: Boolean = true,
     /** Put the DE1 to sleep when Crema is QUIT (task swiped from recents) —
      *  never on mere backgrounding. Best-effort; idle + primary only. */
@@ -757,7 +759,6 @@ data class MainUiState(
     /** Theme mode — `"system" | "light" | "dark"` (Settings), persisted. */
     val themeMode: String = "dark",
     val grinderModel: String = "",
-    val suppressDe1Sleep: Boolean = true,
     val showDebugPanel: Boolean = false,
     // Multi-device LAN proxy (M1/M2). Live mode switches via the device picker.
     val proxyRole: String = "normal",
@@ -942,6 +943,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The Rust core, behind the UniFFI bridge. */
     private val bridge: CremaBridge = CremaBridge()
+
+    /** The idle-sleep timer's feed (see [IdleSleepRunner]): every input goes to
+     *  the core with `elapsedRealtime`, and the output (the Sleep write, a
+     *  throttled UserPresent poke on activity, events) routes like any other. */
+    // Declared up here, before any `init` block: [startScreensaverClock] starts
+    // it during construction, and a property declared below the init that
+    // reads it is still null then.
+    private val idleSleep by lazy {
+        IdleSleepRunner(
+            scope = viewModelScope,
+            clock = { SystemClock.elapsedRealtime() },
+            feed = { input, now ->
+                routeWrite("Idle sleep") { bridge.idleSleep(idleSleepInputJson(input), now.toULong()) }
+            },
+        )
+    }
+
+    /** Monotonic ms of the idle timer's last Sleep send (0 = none) — so
+     *  sleep-on-quit never doubles it ([quitSleepAllowed]). */
+    @Volatile
+    private var lastIdleSleepAtMs: Long = 0L
+
 
     /**
      * Single-threaded home for core-event application and every HEAVY
@@ -2021,6 +2044,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onDe1Ready = {
             readMachineInfo()
             sweepRunner.onReady()
+            idleSleep.link(true)
             // Re-assert the stop targets on every (re)connect. The core now
             // carries them across `reset()` itself, so this is belt-and-braces
             // — but it is the only thing standing between a GHC-started shot
@@ -2034,44 +2058,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onDe1Dropped = {
             lastUploadedFingerprint = null
             sweepRunner.onDropped()
+            idleSleep.link(false)
         },
         pushRoster = { proxy.pushRoster() },
         refreshAdvertisement = { proxy.refreshAdvertisement() },
         heartbeatIntervalMs = { _ui.value.scaleCapabilities?.heartbeat_interval_ms?.toLong() },
         sendScaleHeartbeat = { onCoreOutputJson(bridge.scaleHeartbeat()) },
-        // The saver owns the sleep policy while shown: don't re-arm the DE1's
-        // presence timer against our own idle decision (reaprime's
-        // PresenceController model — the heartbeat keeps the machine awake
-        // only while the user is actually present).
-        // Also suppressed while the machine is asleep, saver or not: a manual
-        // sleep leaves the app awake on the Brew screen, and a presence poke
-        // there would argue with the sleep the user just asked for.
-        // Suppressed mid-shot (issue #15): the machine can't sleep while it's
-        // pouring, and the poke's MMR write would contend with the SAW stop
-        // write on the serial GATT queue — the one write that must not wait.
-        keepAliveTick = {
-            val s = _ui.value
-            val asleep = s.machineStateName == MachineState.Sleep ||
-                s.machineStateName == MachineState.GoingToSleep
-            // Foreground-gated (the reaprime PresenceController model): a
-            // backgrounded app is not a present user, so it must stop
-            // re-arming the DE1's sleep timer — otherwise pocketing the
-            // phone with Crema open held the machine awake indefinitely.
-            // The moment the pokes stop, the DE1's own timer takes over and
-            // sleeps the machine with no phone in range.
-            //
-            // That hand-off only works because [seedMachineSettings] enables
-            // the firmware's user-presence feature flag at connect. Until it
-            // did, this gate was the bug rather than the fix: the pokes were
-            // no-ops, the firmware timer was never armed, and a backgrounded
-            // or walked-away-from app left the machine hot indefinitely
-            // (geota/crema, "doesn't go to sleep ever"). Deliberately the
-            // ONLY background sleep path — no foreground service, so it also
-            // holds when Android kills the process outright.
-            if (s.suppressDe1Sleep && appInForeground && !s.saverVisible && !asleep && !s.shotInProgress) {
-                pokeUserPresent()
-            }
-        },
         isAppForeground = { appInForeground },
         timeline = coffee.crema.diag.ReconnectTimelines.recorder,
         companion = companion,
@@ -2165,14 +2157,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 s.machineStateName != MachineState.GoingToSleep &&
                 !sleepLatchesInRefill(s)
             val primary = s.proxyRole != "secondary"
+            // The idle timer may have sent Sleep moments ago (not yet
+            // confirmed): don't send a second one.
+            val notDoubled = quitSleepAllowed(lastIdleSleepAtMs, SystemClock.elapsedRealtime(), APP_SLEEP_WINDOW_MS)
             // Logcat, not appendLog: the in-app event log dies with the task.
-            if (s.sleepOnQuit && sleepable && primary) {
+            if (s.sleepOnQuit && sleepable && primary && notDoubled) {
                 Log.i("QuitSleep", "quit while idle — putting the DE1 to sleep")
                 sleep()
             } else {
                 Log.i(
                     "QuitSleep",
-                    "quit — sleep skipped (on=${s.sleepOnQuit} state=${s.machineStateName} role=${s.proxyRole})",
+                    "quit — sleep skipped (on=${s.sleepOnQuit} state=${s.machineStateName} role=${s.proxyRole} idleSleepPending=${!notDoubled})",
                 )
             }
         }
@@ -2780,6 +2775,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  current selection. */
     private fun applyRestoredSettings(p: AppPrefs) {
         _ui.update { it.copy(
+            idleSleepMin = p.idleSleepMin ?: it.idleSleepMin,
             themeMode = p.themeMode,
             maxShotDurationS = p.maxShotDurationS,
             autoTare = p.autoTare,
@@ -2797,7 +2793,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             brewCueSound = p.brewCueSound,
             brewCueHaptics = p.brewCueHaptics,
             grinderModel = p.grinderModel,
-            suppressDe1Sleep = p.suppressDe1Sleep,
             showDebugPanel = p.showDebugPanel,
             defaultDoseG = p.defaultDoseG,
             defaultRatio = p.defaultRatio,
@@ -2828,6 +2823,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // restore takes effect without waiting for the next connect or QC edit
         // (a no-op when disconnected or off-primary).
         seedMachineSettings()
+        idleSleep.configure(_ui.value.idleSleepMin)
         persistPrefs()
     }
 
@@ -3075,6 +3071,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             routeWrite("USB charger on") { bridge.setUsbChargerOn(true) }
         }
         sweepRunner.onDropped()
+        idleSleep.link(false)
         connection.disconnect()
     }
 
@@ -3153,6 +3150,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  [ProxyController]'s dispatch router; a throw on an unknown method becomes
      *  a `ControlErr` back to the peer. */
     private fun dispatchRelayedControl(method: String, args: String) {
+        // Someone is using Crema on a mirror: that's presence at the machine.
+        idleSleep.activity(coffee.crema.core.IdleActivity.Mirror)
         when (method) {
             "machineState" -> requestMachineState(MachineRequest.valueOf(args))
             "startShot" -> startShot()
@@ -3422,8 +3421,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun seedMachineSettings() {
         // One core-owned list (`CremaCore::connect_sweep`, web runs the same):
         // USB charger (Tablet charging setting), the user-presence feature flag
-        // (FeatureFlags bit 0 — without it the DE1 never runs its own
-        // inactivity sleep, see [keepAliveTick]), fan threshold, de1app's
+        // (FeatureFlags bit 0 — UserPresent pokes, sent on real activity by the
+        // idle-sleep timer, only count with it set), fan threshold, de1app's
         // heater tweaks (phase-1 / phase-2 flow, hot-water idle temp, espresso
         // warm-up timeout, two-tap steam stop), the machine's own refill point
         // (geota/crema#47), the active profile's tank-temperature threshold,
@@ -3665,8 +3664,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         keepScreenOnBrew = _ui.value.keepScreenOnBrew,
         brewCueSound = _ui.value.brewCueSound,
         brewCueHaptics = _ui.value.brewCueHaptics,
+        idleSleepMin = _ui.value.idleSleepMin,
         screensaverAfterMin = _ui.value.screensaverAfterMin,
-        sleepMachineWithSaver = _ui.value.sleepMachineWithSaver,
         wakeMachineWithSaver = _ui.value.wakeMachineWithSaver,
         sleepOnQuit = _ui.value.sleepOnQuit,
         keepConnectedScreenOff = _ui.value.keepConnectedScreenOff,
@@ -3676,7 +3675,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         lastSeenLatestVersion = _ui.value.lastSeenLatestVersion,
         lastBrewLogMethod = _ui.value.lastBrewLogMethod,
         grinderModel = _ui.value.grinderModel,
-        suppressDe1Sleep = _ui.value.suppressDe1Sleep,
         showDebugPanel = _ui.value.showDebugPanel,
         defaultDoseG = _ui.value.defaultDoseG,
         defaultRatio = _ui.value.defaultRatio,
@@ -4277,8 +4275,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             keepScreenOnBrew = p.keepScreenOnBrew,
             brewCueSound = p.brewCueSound,
             brewCueHaptics = p.brewCueHaptics,
+            idleSleepMin = p.idleSleepMin ?: DEFAULT_IDLE_SLEEP_MIN,
             screensaverAfterMin = p.screensaverAfterMin,
-            sleepMachineWithSaver = p.sleepMachineWithSaver,
             wakeMachineWithSaver = p.wakeMachineWithSaver,
             sleepOnQuit = p.sleepOnQuit,
             // Resolve the nullable pref against the form-factor default (#65).
@@ -4289,7 +4287,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             lastSeenLatestVersion = p.lastSeenLatestVersion,
             lastBrewLogMethod = p.lastBrewLogMethod,
             grinderModel = p.grinderModel,
-            suppressDe1Sleep = p.suppressDe1Sleep,
             showDebugPanel = p.showDebugPanel,
             defaultDoseG = p.defaultDoseG,
             defaultRatio = p.defaultRatio,
@@ -4329,6 +4326,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
         runCatching { bridge.setVolumeStopWithScale(p.volumeStopWithScale) }
         prefsLoaded = true
+        // The idle-sleep timer starts counting once it knows the setting.
+        idleSleep.configure(_ui.value.idleSleepMin)
         // The Brew setup opens on the most recent method, now it's known.
         resolveGuidedSetup()
         // Hydrate the remembered addresses, arm each manager's reconnect loop,
@@ -4430,12 +4429,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistPrefs()
     }
 
-    /** Keep the DE1 awake while Crema is open (web `suppressDe1Sleep`). The
-     *  [de1KeepAlive] heartbeat consumes this; an enable pokes it immediately. */
-    fun setSuppressDe1Sleep(on: Boolean) {
-        _ui.update { it.copy(suppressDe1Sleep = on) }
+    /** "Sleep after" — idle minutes before Crema puts the DE1 to sleep (0 =
+     *  Never), snapped to one of the core's choices. Persisted; the timer
+     *  restarts from now. */
+    fun setIdleSleepMin(minutes: Int) {
+        val choices = idleSleepChoices()
+        val snapped = choices[idleSleepIndex(minutes, choices)]
+        _ui.update { it.copy(idleSleepMin = snapped) }
         persistPrefs()
-        if (on) pokeUserPresent()
+        idleSleep.configure(snapped)
     }
 
     /** Sleep the machine when Crema is quit (swiped from recents) — the
@@ -4454,13 +4456,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         bgConnection.setEnabled(on)
     }
 
-    /** One UserPresent write (MMR **0x803860** — 0x803858 is the separate
-     *  FeatureFlags register seeded at connect) — resets the DE1's sleep
-     *  timer. Only acted on once that feature flag is set. */
-    private fun pokeUserPresent() {
-        if (_ui.value.bleState != De1BleManager.State.READY) return
-        runCatching { bridge.setUserPresent(true) }.getOrNull()?.let(::onCoreOutputJson)
-    }
+    /** A screen / route change — activity for the idle-sleep timer. */
+    fun noteNavigation() = idleSleep.activity(coffee.crema.core.IdleActivity.Navigation)
 
     // ── Sleep & screensaver ───────────────────────────────────────────────────
 
@@ -4501,27 +4498,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile
     private var shotStartedByApp: Boolean = false
 
-    /** Monotonic ms of the last user interaction — bumped by the activity's
-     *  root touch interceptor and by machine transitions into active modes. */
+    /** Monotonic ms of the last user interaction (the screensaver's idle
+     *  clock) — bumped by the activity's root touch interceptor and by machine
+     *  transitions into active modes. */
     @Volatile
     private var lastInteractionAtMs: Long = SystemClock.elapsedRealtime()
 
-    /** Bump the idle clock. Called on every touch (MainActivity's root
-     *  interceptor, Initial pass, never consumes) — cheap and lock-free. */
+    /** Bump the saver's idle clock and tell the idle-sleep timer (throttled to
+     *  one a second, see [IdleSleepRunner.activity]). Called on every touch
+     *  (MainActivity's root interceptor, Initial pass, never consumes). */
     fun noteUserInteraction() {
         lastInteractionAtMs = SystemClock.elapsedRealtime()
+        idleSleep.activity(coffee.crema.core.IdleActivity.Touch)
     }
 
-    /** Whether the activity is started (visible). Presence follows this: the
-     *  keep-awake heartbeat only runs foregrounded — see [keepAliveTick]. */
+    /** Whether the activity is started (visible). */
     @Volatile
     private var appInForeground = true
 
     /** Foreground/background transitions from [MainActivity]'s
-     *  onStart/onStop. Returning counts as user presence: the idle clock is
-     *  bumped (so the saver doesn't fire seconds after a long absence) and,
-     *  when keep-awake is on, one immediate poke re-arms the DE1 — it may be
-     *  minutes from its own sleep deadline after a background stretch. */
+     *  onStart/onStop. Returning counts as user presence: the saver's idle
+     *  clock is bumped (so it doesn't fire seconds after a long absence) and
+     *  the idle-sleep timer restarts (its throttled presence poke goes with
+     *  it). Backgrounding by itself is not activity — the timer keeps
+     *  counting in the background for as long as the process lives. */
     fun setAppForeground(foreground: Boolean) {
         appInForeground = foreground
         // A foreground service may only be STARTED from the foreground (Android
@@ -4529,8 +4529,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // screen turning off after (#65).
         bgConnection.setForeground(foreground)
         if (foreground) {
-            noteUserInteraction()
-            if (_ui.value.suppressDe1Sleep) pokeUserPresent()
+            lastInteractionAtMs = SystemClock.elapsedRealtime()
+            idleSleep.activity(coffee.crema.core.IdleActivity.Foreground)
             // Coming back is when a slow reconnect hurts: interrupt any
             // remembered device's backoff / 60 s lurk wait and try NOW (the
             // foreground scan isn't throttled). Debounced per device, a no-op
@@ -4566,8 +4566,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The idle checker: every 30 s, show the saver once idle passes the
      *  threshold — never during a shot / steam / cleaning / an upload
      *  (de1app + Decenza's operation guards; a blocked trigger simply
-     *  re-arms). Coupled machine sleep only from Idle. */
+     *  re-arms). Screen only: machine sleep is the idle-sleep timer's, which
+     *  starts ticking here too. */
     private fun startScreensaverClock() {
+        idleSleep.start()
         viewModelScope.launch {
             while (true) {
                 delay(30_000)
@@ -4590,18 +4592,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 MachineState.HotWaterRinse, MachineState.Descale, MachineState.Clean,
             )
 
-    /** Show the saver; when coupled, also put the DE1 to sleep (only from a
-     *  known-Idle machine — de1app's start_sleep gate — and never into the
-     *  firmware's Refill sleep latch, see [sleepLatchesInRefill]). */
+    /** Show the saver. Display only: the machine sleeps on the idle-sleep
+     *  timer ("Sleep after"), whatever the saver does. */
     private fun showSaver() {
         _ui.update { it.copy(saverVisible = true) }
-        if (_ui.value.sleepMachineWithSaver &&
-            ble.state.value == De1BleManager.State.READY &&
-            _ui.value.machineStateName == MachineState.Idle &&
-            !sleepLatchesInRefill(_ui.value)
-        ) {
-            sleep()
-        }
     }
 
     /** Tap-to-wake: dismiss the saver, re-arm the idle clock, and — when
@@ -4625,12 +4619,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Set the screensaver idle timeout, minutes (0 = never). Persisted. */
     fun setScreensaverAfterMin(minutes: Int) {
         _ui.update { it.copy(screensaverAfterMin = minutes.coerceIn(0, 120)) }
-        persistPrefs()
-    }
-
-    /** Toggle the coupled machine sleep. Persisted. */
-    fun setSleepMachineWithSaver(on: Boolean) {
-        _ui.update { it.copy(sleepMachineWithSaver = on) }
         persistPrefs()
     }
 
@@ -5224,9 +5212,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _ui.update { it.copy(saverVisible = true) }
                 } else if (!asleep && wasAsleep && _ui.value.saverVisible) {
                     _ui.update { it.copy(saverVisible = false) }
-                    noteUserInteraction()
+                    lastInteractionAtMs = SystemClock.elapsedRealtime()
                 }
-                if (mode || c.state == MachineState.Espresso) noteUserInteraction()
+                // The saver's idle clock only — the core's idle-sleep timer sees
+                // every machine state itself.
+                if (mode || c.state == MachineState.Espresso) lastInteractionAtMs = SystemClock.elapsedRealtime()
                 _ui.update { prev ->
                     val started = when {
                         !mode -> null
@@ -5244,6 +5234,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 updateModeTicker()
                 appendLog("MachineState -> ${c.state.string} / ${c.substate.string}")
             }
+            is Event.IdleSleepRequested -> {
+                lastIdleSleepAtMs = SystemClock.elapsedRealtime()
+                appendLog(
+                    "Idle for ${_ui.value.idleSleepMin} min — putting the DE1 to sleep" +
+                        if (event.content.attempt > 1u) " (retry)" else "",
+                )
+            }
+            is Event.IdleSleepBlocked -> appendLog(
+                "Idle sleep due but waiting: ${event.content.reason}" +
+                    (event.content.state?.let { " (${it.string})" } ?: ""),
+            )
+            is Event.IdleSleepUnconfirmed -> appendLog("Idle sleep: the DE1 never reported Sleep — timer re-armed")
             is Event.MaintenanceProgress -> {
                 val c = event.content
                 val terminal = c.phase == MaintenancePhase.Finished || c.phase == MaintenancePhase.Cancelled
