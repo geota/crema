@@ -28,7 +28,8 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   erase, send 16-byte blocks one at a time, let the DE1 verify, power-cycle.
   Every classic DE1 model (DE1, DE1+, PRO, XL, CAFE, XXL, XXXL; no Bengle),
   as Decent's de1app does. On Android the
-  update keeps running in the background; in the browser, keep the tab open
+  update keeps running in the background, with the DE1 link at high priority
+  so each block goes out faster; in the browser, keep the tab open
   and in front (and if the browser can't download Decent's file directly,
   download it from Decent and choose it). Web, tablet and phone.
 

@@ -696,7 +696,8 @@ class De1BleManager(
     /**
      * Best-effort connection-priority hint for the DE1 link — HIGH during a
      * shot (tighter connection interval → steadier ShotSample cadence and a
-     * lower-latency stop-at-weight write), BALANCED otherwise. Decenza runs
+     * lower-latency stop-at-weight write) and during a firmware transfer (its
+     * one-write-at-a-time pace is set by the interval), BALANCED otherwise. Decenza runs
      * its DE1 link at HIGH for the same reason; the shot-window gating (and
      * leaving the scale at BALANCED) avoids the dual-HIGH radio starvation it
      * had to add a backoff latch for (#1093/#1176). No-op when disconnected;

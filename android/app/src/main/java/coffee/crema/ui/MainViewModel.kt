@@ -2074,6 +2074,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 onLog = ::appendLog,
                 keepAlive = { active ->
                     viewModelScope.launch { bgConnection.setFirmwareFlashActive(active) }
+                    // HIGH priority for the transfer: one acknowledged 16-byte
+                    // write at a time makes the connection interval the
+                    // speed limit (~29,000 round trips), so this cuts it from
+                    // Android's default ~30-50 ms to ~11-15 ms (Decenza keeps
+                    // its DE1 link at HIGH). Back to BALANCED when it ends.
+                    viewModelScope.launch { ble.setConnectionPriority(high = active) }
                 },
                 transportLabel = {
                     "Android ${android.os.Build.VERSION.RELEASE} (${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}), " +
