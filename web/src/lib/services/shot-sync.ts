@@ -15,7 +15,7 @@
  *
  * **Behavior is preserved bit-for-bit** with the old module (plan §4): same wire
  * bytes, same premium-gate probe, the soft follow-up PATCH on upload, the
- * `Effect.iterate` pagination walk's stop condition, the per-detail
+ * `iterate` pagination walk's stop condition, the per-detail
  * re-throw-on-auth / swallow-others, and the snapshot-vs-live-bean discipline.
  * The pure converters (`wireShotFromDetail`, `samplesFromVisualizerDetail`, the
  * inline-bean / grinder / tag resolvers, `buildShotPayload`) are copied verbatim
@@ -412,7 +412,7 @@ export interface PullResult {
 	truncated: boolean;
 }
 
-/** Internal iteration state for the `pullAllShotsSince` `Effect.iterate` walk. */
+/** Internal iteration state for the `pullAllShotsSince` `iterate` walk. */
 interface PullState {
 	page: number;
 	totalPages: number;
@@ -420,7 +420,28 @@ interface PullState {
 	keepGoing: boolean;
 }
 
-export class ShotSync extends Context.Tag('crema/ShotSync')<
+/**
+ * Effect 3's `Effect.iterate` (gone in Effect 4) on `Effect.whileLoop`: from
+ * `initial`, run `body` while `while` holds, feeding each result into the next
+ * step; succeeds with the final state.
+ */
+function iterate<Z, E, R>(
+	initial: Z,
+	options: { readonly while: (z: Z) => boolean; readonly body: (z: Z) => Effect.Effect<Z, E, R> }
+): Effect.Effect<Z, E, R> {
+	return Effect.suspend(() => {
+		let state = initial;
+		return Effect.whileLoop({
+			while: () => options.while(state),
+			body: () => options.body(state),
+			step: (z) => {
+				state = z;
+			}
+		}).pipe(Effect.map(() => state));
+	});
+}
+
+export class ShotSync extends Context.Service<
 	ShotSync,
 	{
 		readonly uploadShot: (
@@ -459,7 +480,7 @@ export class ShotSync extends Context.Tag('crema/ShotSync')<
 		) => Effect.Effect<{ pulled: number; truncated: boolean }, VisualizerCallError>;
 		readonly uploadUnsyncedShots: (history: HistoryStore) => Effect.Effect<UnsyncedUploadResult>;
 	}
->() {}
+>()('crema/ShotSync') {}
 
 export const ShotSyncLive = Layer.effect(
 	ShotSync,
@@ -523,7 +544,7 @@ export const ShotSyncLive = Layer.effect(
 					...(shot.bean != null ? { bean: shot.bean } : {}),
 					...(grinderModel != null ? { grinderModel } : {})
 				}).pipe(
-					Effect.catchAll((e) =>
+					Effect.catch((e) =>
 						Effect.sync(() =>
 							console.warn(
 								'[Crema] post-upload PATCH (coffee_bag_id / tag_list / inline bean / grinder_model) failed:',
@@ -670,7 +691,7 @@ export const ShotSyncLive = Layer.effect(
 			const profilesById = new Map<string, unknown>();
 
 			const initial: PullState = { page: 1, totalPages: 1, reachedOlder: false, keepGoing: true };
-			const finalState = yield* Effect.iterate(initial, {
+			const finalState = yield* iterate(initial, {
 				while: (s) => s.keepGoing && s.page <= maxPages,
 				body: (s) =>
 					Effect.gen(function* () {
@@ -701,7 +722,7 @@ export const ShotSyncLive = Layer.effect(
 								// Pull the recipe too so the shot is self-contained (#12); a
 								// profile-less stub / fetch error just leaves it name-only.
 								const profileOpt = yield* fetchShotProfile(summary.id).pipe(
-									Effect.map(Option.fromNullable),
+									Effect.map(Option.fromNullishOr),
 									Effect.catchIf(
 										(e) => !isAuthError(e),
 										() => Effect.succeedNone
@@ -879,7 +900,7 @@ export const ShotSyncLive = Layer.effect(
 							return false;
 						})
 					),
-					Effect.catchAll((e) =>
+					Effect.catch((e) =>
 						isAmbiguousSuccess(e)
 							? // The POST may already have landed — bind by reconcile, never
 								// re-POST. A successful bind is logged as a push (the reconcile
@@ -913,9 +934,9 @@ export const ShotSyncLive = Layer.effect(
 					)
 				);
 
-			// `Effect.iterate` over the index; on abort, jump the index past the end
+			// `iterate` over the index; on abort, jump the index past the end
 			// to terminate (mirrors the old loop's early `return`).
-			yield* Effect.iterate(0, {
+			yield* iterate(0, {
 				while: (i) => i < list.length,
 				body: (i) => uploadOne(list[i]).pipe(Effect.map((aborted) => (aborted ? list.length : i + 1)))
 			});

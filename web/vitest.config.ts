@@ -11,8 +11,8 @@ import { defineConfig } from 'vitest/config';
  * store-coupled services (ShotSync / BeanSync / UploadQueue / Webhooks) were
  * verified only by hand. This config gives them a home: the svelte plugin
  * compiles runes, `$lib` resolves, jsdom supplies `localStorage` / `document`,
- * and Effect's own `TestContext` / `TestClock` (no `@effect/vitest` needed —
- * it conflicts with the vite-8-required vitest 4) drive time-based behavior.
+ * and Effect's own `TestClock` (`effect/testing`; no `@effect/vitest` needed —
+ * it conflicts with the vite-8-required vitest 4) drives time-based behavior.
  *
  * Scoped to `*.vitest.ts` so it does NOT pick up the node:test `*.test.ts`
  * files (those import `node:test` and would fail here). The two runners

@@ -95,7 +95,7 @@ function provide<A, E>(
 const failTag = async (eff: Effect.Effect<unknown, unknown, never>) => {
 	const exit = await Effect.runPromiseExit(eff);
 	if (!Exit.isFailure(exit)) return { tag: undefined as string | undefined, value: undefined };
-	const f = Cause.failureOption(exit.cause);
+	const f = Cause.findErrorOption(exit.cause);
 	const value = f._tag === 'Some' ? (f.value as { _tag?: string; status?: number }) : undefined;
 	return { tag: value?._tag, value };
 };

@@ -6,8 +6,8 @@
  * persist the `TokenSet`, hand out known-fresh access tokens, and run an
  * authenticated request with a one-shot refresh-on-401. The in-memory listener
  * set (`onTokenChange`) becomes a `SubscriptionRef` (`changes`) — a single
- * source of truth whose `.changes` is a `Stream` consumers can later bridge
- * into a rune.
+ * source of truth whose `SubscriptionRef.changes` is a `Stream` consumers can
+ * later bridge into a rune.
  *
  * Behavior matches today's `withFreshToken` exactly:
  *  - proactive refresh when the token is within 5 min of expiry,
@@ -20,7 +20,7 @@
  * `visualizer/token-store.ts` remains the live implementation.
  */
 
-import { Context, Effect, Layer, Ref, SubscriptionRef } from 'effect';
+import { Context, Effect, Layer, SubscriptionRef } from 'effect';
 import { readJson, writeJson } from '../utils/storage.ts';
 import { decodeOr } from '../effect/schema/decode.ts';
 import { TokenSetSchema } from '../effect/schema/tokens.ts';
@@ -93,7 +93,7 @@ async function wrapTokens(t: TokenSet): Promise<TokenSet> {
 	};
 }
 
-export class TokenVault extends Context.Tag('crema/TokenVault')<
+export class TokenVault extends Context.Service<
 	TokenVault,
 	{
 		readonly getTokens: Effect.Effect<TokenSet | null>;
@@ -107,10 +107,10 @@ export class TokenVault extends Context.Tag('crema/TokenVault')<
 		readonly withFreshToken: <A, E>(
 			req: (token: string) => Effect.Effect<A, E | HttpStatusError>
 		) => Effect.Effect<A, E | HttpStatusError | NotAuthenticatedError | TokenRefreshFailedError>;
-		/** Live token state; `.changes` is a Stream for reactive consumers. */
+		/** Live token state; `SubscriptionRef.changes` is a Stream for reactive consumers. */
 		readonly changes: SubscriptionRef.SubscriptionRef<TokenSet | null>;
 	}
->() {}
+>()('crema/TokenVault') {}
 
 export const TokenVaultLive = Layer.effect(
 	TokenVault,
@@ -129,29 +129,29 @@ export const TokenVaultLive = Layer.effect(
 		 * `getTokens` (matching token-store's own cache-free reads) and only fall
 		 * back to the `SubscriptionRef` when localStorage is unavailable (node:test,
 		 * where the tests seed state via `storeTokens`). The ref stays the reactive
-		 * mirror that `.changes` exposes (writes go through `storeTokens` /
-		 * `clearTokens`); once token-store is deleted next phase the ref can become
-		 * the sole source again.
+		 * mirror that `SubscriptionRef.changes` exposes (writes go through
+		 * `storeTokens` / `clearTokens`); once token-store is deleted next phase the
+		 * ref can become the sole source again.
 		 */
 		const getTokens: Effect.Effect<TokenSet | null> = Effect.suspend(() =>
-			typeof localStorage !== 'undefined' ? Effect.promise(loadTokens) : Ref.get(ref)
+			typeof localStorage !== 'undefined' ? Effect.promise(loadTokens) : SubscriptionRef.get(ref)
 		);
 
 		const storeTokens = (t: TokenSet) =>
-			Effect.zipRight(
+			Effect.andThen(
 				Effect.promise(async () => {
 					writeJson(TOKENS_KEY, await wrapTokens(t));
 					storedButUnreadable = false;
 				}),
-				Ref.set(ref, t)
+				SubscriptionRef.set(ref, t)
 			);
 
-		const clearTokens = Effect.zipRight(
+		const clearTokens = Effect.andThen(
 			Effect.sync(() => {
 				if (typeof localStorage !== 'undefined') localStorage.removeItem(TOKENS_KEY);
 				storedButUnreadable = false;
 			}),
-			Ref.set(ref, null)
+			SubscriptionRef.set(ref, null)
 		);
 
 		const isExpiringSoon = (t: TokenSet) => t.expiresAt - Date.now() <= EXPIRY_SAFETY_MS;
@@ -161,16 +161,16 @@ export const TokenVaultLive = Layer.effect(
 			t: TokenSet
 		): Effect.Effect<TokenSet, NotAuthenticatedError | TokenRefreshFailedError> => {
 			if (!t.refreshToken) {
-				return clearTokens.pipe(Effect.zipRight(Effect.fail(new NotAuthenticatedError())));
+				return clearTokens.pipe(Effect.andThen(Effect.fail(new NotAuthenticatedError())));
 			}
 			const rt = t.refreshToken;
 			return oauth.refreshToken(rt).pipe(
 				// Doorkeeper rotates refresh tokens; keep the old one if omitted.
 				Effect.map((fresh): TokenSet => ({ ...fresh, refreshToken: fresh.refreshToken ?? rt })),
 				Effect.tap(storeTokens),
-				Effect.catchAll((cause) =>
+				Effect.catch((cause) =>
 					clearTokens.pipe(
-						Effect.zipRight(
+						Effect.andThen(
 							Effect.fail(
 								cause instanceof TokenRefreshFailedError
 									? cause

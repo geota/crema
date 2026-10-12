@@ -12,7 +12,7 @@
  * ```
  *
  * — five Effect concepts (the runtime handle, the null guard, `runtimePromise`,
- * the `Context.Tag`, the `pipe`/`flatMap`) to make one call. {@link createCremaServices}
+ * the `Context.Service`, the `pipe`/`flatMap`) to make one call. {@link createCremaServices}
  * binds the app runtime once and exposes each operation as a plain `async`
  * method, so callers write `await services.shots.uploadUnsynced(h)` and never
  * import `effect` at all. The Effect machinery lives behind this one interface.
@@ -28,7 +28,7 @@
  * reaching for a service, so neither routes through here.
  */
 
-import { Effect, Fiber, Stream } from 'effect';
+import { Effect, Fiber, Stream, SubscriptionRef } from 'effect';
 import type { AppRuntime, AppServices } from './runtime.ts';
 import { runtimePromise } from './bridge.ts';
 import { TokenVault } from '../services/token-vault.ts';
@@ -153,14 +153,14 @@ export function createCremaServices(runtime: AppRuntime): CremaServices {
 			getTokens: () => run(Effect.flatMap(TokenVault, (v) => v.getTokens)),
 			clearTokens: () => run(Effect.flatMap(TokenVault, (v) => v.clearTokens)),
 			onConnectionChange: (cb) => {
-				// `TokenVault.changes` is a `SubscriptionRef`; its `.changes` Stream
-				// emits the current token state immediately, then every subsequent
+				// `TokenVault.changes` is a `SubscriptionRef`; its `SubscriptionRef.changes`
+				// Stream emits the current token state immediately, then every subsequent
 				// write (`storeTokens` / `clearTokens`). Fork a consumer on the app
 				// runtime that maps each emission to a connected boolean; the returned
 				// unsubscribe interrupts that fiber.
 				const fiber = runtime.runFork(
 					Effect.flatMap(TokenVault, (v) =>
-						Stream.runForEach(v.changes.changes, (t) => Effect.sync(() => cb(t !== null)))
+						Stream.runForEach(SubscriptionRef.changes(v.changes), (t) => Effect.sync(() => cb(t !== null)))
 					)
 				);
 				return () => {

@@ -391,6 +391,10 @@ describe('BeanSync.runSync — no echo after a pull (issue: fresh pulled timesta
 		// Edit the bag locally after the pull.
 		const bag = lib.beans.find((b) => b.visualizerId === 'vb-1')!;
 		Object.assign(bag, { name: 'Geometry (edited)', updatedAt: synced + 1 });
+		// Let the wall clock pass the edit's stamp: this sync's `lastSyncAt` must
+		// land after `updatedAt`, or the next sync re-pushes the bag. (Under
+		// Effect 4 a whole sync can finish inside the millisecond it started in.)
+		await new Promise((resolve) => setTimeout(resolve, 2));
 		await run(lib, viz.layer);
 		expect(viz.writes().map((w) => `${w.method} ${new URL(w.url).pathname}`)).toEqual([
 			'PATCH /api/coffee_bags/vb-1'

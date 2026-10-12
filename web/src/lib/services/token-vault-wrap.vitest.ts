@@ -42,7 +42,7 @@ const oauth = Layer.succeed(
 		revokeToken: () => Effect.void
 	})
 );
-const run = <A>(f: (v: Effect.Effect.Success<typeof TokenVault>) => Effect.Effect<A>) =>
+const run = <A>(f: (v: Effect.Success<typeof TokenVault>) => Effect.Effect<A>) =>
 	Effect.runPromise(Effect.flatMap(TokenVault, f).pipe(Effect.provide(Layer.provide(TokenVaultLive, oauth))));
 
 beforeEach(async () => {

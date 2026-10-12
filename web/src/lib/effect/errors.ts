@@ -29,7 +29,7 @@ export class HttpStatusError extends Data.TaggedError('HttpStatusError')<{
 
 export class ResponseDecodeError extends Data.TaggedError('ResponseDecodeError')<{
 	readonly url: string;
-	/** A `ParseError` from `Schema.decode`, kept opaque at this boundary. */
+	/** A `SchemaError` from `Schema.decodeUnknownEffect`, kept opaque at this boundary. */
 	readonly cause: unknown;
 }> {}
 

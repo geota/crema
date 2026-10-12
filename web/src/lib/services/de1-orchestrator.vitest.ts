@@ -59,7 +59,7 @@ function mkDeps(device: De1Transport, core = mkCore()) {
 const run = (deps: De1ConnectDeps) => Effect.runPromiseExit(de1ConnectProgram(deps));
 const failStep = (exit: Exit.Exit<void, { step?: string }>) => {
 	if (!Exit.isFailure(exit)) return undefined;
-	const f = Cause.failureOption(exit.cause);
+	const f = Cause.findErrorOption(exit.cause);
 	return f._tag === 'Some' ? f.value.step : undefined;
 };
 

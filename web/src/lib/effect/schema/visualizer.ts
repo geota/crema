@@ -101,7 +101,7 @@ export type ShotListResponse = Schema.Schema.Type<typeof ShotListResponseSchema>
  * corruption becomes a logged warning).
  */
 export function decodeResponse<A, I>(
-	schema: Schema.Schema<A, I>,
+	schema: Schema.Codec<A, I>,
 	input: unknown,
 	context: string
 ): A | null {

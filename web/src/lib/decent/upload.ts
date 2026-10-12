@@ -142,7 +142,7 @@ function machineFor(shot: StoredShot): { machine: ShotMachine; fromLive: boolean
 const isOffline = (): boolean => typeof navigator !== 'undefined' && navigator.onLine === false;
 
 /** 2 s, then 4 s — the same backoff as before, now an Effect `Schedule`. */
-const retrySchedule = Schedule.exponential('2 seconds').pipe(Schedule.intersect(Schedule.recurs(RETRIES)));
+const retrySchedule = Schedule.max([Schedule.exponential('2 seconds'), Schedule.recurs(RETRIES)]);
 
 /**
  * POST with the in-call retry. Only the api's typed failures are expected
@@ -159,7 +159,7 @@ function postWithRetry(
 	const attempt = Effect.tryPromise({
 		try: () => decentUploadShot(creds, record, opts, fetchFn),
 		catch: (e) => e
-	}).pipe(Effect.catchAll((e) => (isDecentApiError(e) ? Effect.fail(e) : Effect.die(e))));
+	}).pipe(Effect.catch((e) => (isDecentApiError(e) ? Effect.fail(e) : Effect.die(e))));
 	return attempt.pipe(
 		Effect.retry({ schedule: retrySchedule, while: (e) => isDecentRecoverable(e) && !isOffline() })
 	);
@@ -259,11 +259,11 @@ async function runUpload(shotId: string, opts: DecentUploadOptions): Promise<Dec
 	}
 
 	const result = await Effect.runPromise(
-		Effect.either(postWithRetry(creds, record, { replace: !!opts.replace, serial }, opts.fetchFn))
+		Effect.result(postWithRetry(creds, record, { replace: !!opts.replace, serial }, opts.fetchFn))
 	);
-	if (result._tag === 'Left') return failed(shot, result.left);
+	if (result._tag === 'Failure') return failed(shot, result.failure);
 
-	const id = result.right.id;
+	const id = result.success.id;
 	const url = decentShotViewUrl(target.machine.serialNumber, id);
 	// A pre-#84 row uploaded with the live DE1's serial keeps that identity,
 	// so the share link (`/shot/<serial>/<id>`) works later.

@@ -38,7 +38,7 @@
   },
   "dependencies": {
     "bits-ui": "^2.19.5",
-    "effect": "^3.22.2",
+    "effect": "^4.0.1",
     "fflate": "^0.8.3",
     "phosphor-svelte": "^3.1.0",
     "uplot": "^1.6.32"

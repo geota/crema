@@ -16,7 +16,7 @@
  *    (the old `AbortController.abort()`); `Effect.onInterrupt` paints the
  *    `cancelled` UI state.
  *
- * Like the de1/scale orchestrators (D-07), this is NOT a `Context.Tag`/Layer
+ * Like the de1/scale orchestrators (D-07), this is NOT a `Context.Service`/Layer
  * service — the core + the parsed capture are per-replay values, and every
  * store / UI touch is injected so the program is `R = never`. That lets it run
  * on Effect's *default* runtime (`Effect.runFork`), so offline replay keeps
@@ -249,7 +249,7 @@ export function replayCaptureProgram(d: ReplayCaptureDeps): Effect.Effect<void> 
 			)
 		),
 		// Any defect (e.g. an onNotification rejection) → error state.
-		Effect.catchAllDefect((defect) =>
+		Effect.catchDefect((defect) =>
 			Effect.sync(() =>
 				d.patch(replayState('error', d.currentDone(), `Replay failed: ${describeError(defect)}`))
 			)
@@ -263,10 +263,10 @@ export function replayCaptureProgram(d: ReplayCaptureDeps): Effect.Effect<void> 
 		() => use,
 		() =>
 			Effect.sync(() => d.clearActiveShot()).pipe(
-				Effect.zipRight(
+				Effect.andThen(
 					Effect.promise(() => d.core.endReplay()).pipe(
 						// Errors here would only mask the real outcome — swallow defensively.
-						Effect.catchAllDefect((e) =>
+						Effect.catchDefect((e) =>
 							Effect.sync(() => console.error('[replay] endReplay failed', e))
 						)
 					)
@@ -274,8 +274,8 @@ export function replayCaptureProgram(d: ReplayCaptureDeps): Effect.Effect<void> 
 			)
 	).pipe(
 		// If beginReplay itself fails (release never ran), still report it.
-		Effect.catchAllCause((cause) =>
-			Cause.isInterruptedOnly(cause)
+		Effect.catchCause((cause) =>
+			Cause.hasInterruptsOnly(cause)
 				? Effect.void
 				: Effect.sync(() =>
 						d.patch(

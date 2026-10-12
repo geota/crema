@@ -80,7 +80,7 @@ const failTag = async (program: Effect.Effect<unknown, unknown, BeanSync>, http:
 		Effect.provide(program, Layer.provide(BeanSyncLive, Layer.merge(http, vault)))
 	);
 	if (!Exit.isFailure(exit)) return undefined;
-	const f = Cause.failureOption(exit.cause);
+	const f = Cause.findErrorOption(exit.cause);
 	return f._tag === 'Some' ? (f.value as { _tag?: string })._tag : undefined;
 };
 

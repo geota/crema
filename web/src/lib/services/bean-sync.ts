@@ -210,7 +210,7 @@ function planRoasterLinkPatches(
 	) as RoasterLinkPatch[];
 }
 
-export class BeanSync extends Context.Tag('crema/BeanSync')<
+export class BeanSync extends Context.Service<
 	BeanSync,
 	{
 		/**
@@ -286,7 +286,7 @@ export class BeanSync extends Context.Tag('crema/BeanSync')<
 		 */
 		readonly testConnection: Effect.Effect<ConnectionTestResult>;
 	}
->() {}
+>()('crema/BeanSync') {}
 
 /** How often the app-start premium re-probe may run ({@link BeanSync.refreshPremiumIfStale}). */
 export const PREMIUM_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -412,17 +412,17 @@ export const BeanSyncLive = Layer.effect(
 					rows,
 					(row) =>
 						row.id && wanted.has(row.id)
-							? Effect.either(call(`${base}/${row.id}`)).pipe(
+							? Effect.result(call(`${base}/${row.id}`)).pipe(
 									Effect.map((res) => {
-										const detail = res._tag === 'Right' ? (res.right as T | null) : null;
+										const detail = res._tag === 'Success' ? (res.success as T | null) : null;
 										if (detail && typeof detail === 'object' && detail.id === row.id) {
 											return detail;
 										}
 										failures.push({
 											id: row.id as string,
 											error:
-												res._tag === 'Left'
-													? describeVisualizerError(res.left)
+												res._tag === 'Failure'
+													? describeVisualizerError(res.failure)
 													: 'unexpected detail body'
 										});
 										return row;
@@ -573,23 +573,23 @@ export const BeanSyncLive = Layer.effect(
 						}
 						// EF2: the push routes through `uploadRoaster` (POST without an id,
 						// PATCH with one), carrying the resolved catalogue link.
-						const res = yield* Effect.either(uploadRoaster(withCatalogueLink(local)));
-						if (res._tag === 'Right') {
+						const res = yield* Effect.result(uploadRoaster(withCatalogueLink(local)));
+						if (res._tag === 'Success') {
 							if (item.create) {
-								library.updateRoaster(local.id, { visualizerId: res.right.visualizerId });
-								remoteRoasterIdToLocal.set(res.right.visualizerId, local.id);
+								library.updateRoaster(local.id, { visualizerId: res.success.visualizerId });
+								remoteRoasterIdToLocal.set(res.success.visualizerId, local.id);
 							}
 							pushedRoasterIds.add(local.id);
 							result.pushed += 1;
 							writeSyncSettings({ premium: true });
 							log.push({ direction: 'push', kind: 'roaster', id: local.id, name: local.name, at: Date.now() });
-						} else if (res.left._tag === 'VisualizerPremiumGatedError') {
+						} else if (res.failure._tag === 'VisualizerPremiumGatedError') {
 							premiumLocked = true;
 							writeSyncSettings({ premium: false });
 							logPremiumBannerOnce();
 							log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
 						} else {
-							result.error = describeVisualizerError(res.left);
+							result.error = describeVisualizerError(res.failure);
 							log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: result.error });
 						}
 					}
@@ -605,8 +605,8 @@ export const BeanSyncLive = Layer.effect(
 						const local = library.getRoaster(patch.localId);
 						if (!local) continue;
 						const linked = { ...local, catalogueRoasterId: patch.catalogueRoasterId };
-						const res = yield* Effect.either(uploadRoaster(linked));
-						if (res._tag === 'Right') {
+						const res = yield* Effect.result(uploadRoaster(linked));
+						if (res._tag === 'Success') {
 							if (!local.catalogueRoasterId) {
 								// Keeps `updatedAt`: the link now matches the remote.
 								library.replaceRoaster(linked);
@@ -614,12 +614,12 @@ export const BeanSyncLive = Layer.effect(
 							result.pushed += 1;
 							log.push({ direction: 'push', kind: 'roaster', id: local.id, name: local.name, at: Date.now() });
 						} else {
-							if (res.left._tag === 'VisualizerPremiumGatedError') {
+							if (res.failure._tag === 'VisualizerPremiumGatedError') {
 								premiumLocked = true;
 								writeSyncSettings({ premium: false });
 								logPremiumBannerOnce();
 							}
-							log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.left) });
+							log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.failure) });
 						}
 					}
 				}
@@ -683,18 +683,18 @@ export const BeanSyncLive = Layer.effect(
 							: null;
 						// EF2: `uploadBean` builds `coffeeBagWriteRequest(local, remoteRoasterId)`
 						// and PATCHes (id present) or POSTs (id absent).
-						const res = yield* Effect.either(uploadBean(local, remoteRoasterId));
-						if (res._tag === 'Right') {
-							if (item.create) library.updateBean(local.id, { visualizerId: res.right.visualizerId });
+						const res = yield* Effect.result(uploadBean(local, remoteRoasterId));
+						if (res._tag === 'Success') {
+							if (item.create) library.updateBean(local.id, { visualizerId: res.success.visualizerId });
 							result.pushed += 1;
 							log.push({ direction: 'push', kind: 'bean', id: local.id, name: local.name, at: Date.now() });
-						} else if (res.left._tag === 'VisualizerPremiumGatedError') {
+						} else if (res.failure._tag === 'VisualizerPremiumGatedError') {
 							premiumLocked = true;
 							writeSyncSettings({ premium: false });
 							logPremiumBannerOnce();
-							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: item.create ? 'premium required' : describeVisualizerError(res.left) });
+							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: item.create ? 'premium required' : describeVisualizerError(res.failure) });
 						} else {
-							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.left) });
+							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.failure) });
 						}
 					}
 				}
@@ -708,7 +708,7 @@ export const BeanSyncLive = Layer.effect(
 			// The pull legs surface unrecoverable failures (auth/network) as the
 			// run's `error`, matching the old top-level try/catch.
 			yield* program.pipe(
-				Effect.catchAll((e) =>
+				Effect.catch((e) =>
 					Effect.sync(() => {
 						result.error = describeVisualizerError(e);
 					})
@@ -737,19 +737,19 @@ export const BeanSyncLive = Layer.effect(
 		 */
 		const probePremium = Effect.gen(function* () {
 			const sentinelName = `__crema_premium_probe_${Date.now()}`;
-			const created = yield* Effect.either(
+			const created = yield* Effect.result(
 				call('/roasters', {
 					method: 'POST',
 					body: { roaster: { name: sentinelName, website: null, canonical_roaster_id: null } }
 				})
 			);
-			if (created._tag === 'Left') {
-				return created.left._tag === 'VisualizerPremiumGatedError' ? false : null;
+			if (created._tag === 'Failure') {
+				return created.failure._tag === 'VisualizerPremiumGatedError' ? false : null;
 			}
-			const wire = created.right as { id?: string } | null;
+			const wire = created.success as { id?: string } | null;
 			if (wire?.id) {
 				yield* call(`/roasters/${wire.id}`, { method: 'DELETE' }).pipe(
-					Effect.catchAll(() =>
+					Effect.catch(() =>
 						Effect.sync(() =>
 							console.warn(
 								`[visualizer] premium-probe sentinel ${sentinelName} not cleaned up; will be removed on next full Sync`
@@ -773,8 +773,8 @@ export const BeanSyncLive = Layer.effect(
 		const testConnection: Effect.Effect<ConnectionTestResult> = Effect.gen(function* () {
 			const tokens = yield* vault.getTokens;
 			if (tokens === null) return { ok: false, error: 'Sign in to Visualizer first.' };
-			const check = yield* Effect.either(call('/coffee_bags?items=1'));
-			if (check._tag === 'Left') return { ok: false, error: describeVisualizerError(check.left) };
+			const check = yield* Effect.result(call('/coffee_bags?items=1'));
+			if (check._tag === 'Failure') return { ok: false, error: describeVisualizerError(check.failure) };
 			const premium = yield* probePremium;
 			// Mirror into both caches so every UI surface agrees (matches the old impl).
 			storePremium(premium);

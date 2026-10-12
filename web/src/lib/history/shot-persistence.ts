@@ -426,7 +426,7 @@ function describePushError(e: ShotPushError): string {
  * Recoverable failures route through the persistent retry queue; auth / premium
  * / not-found / decode bypass it (the user has to fix something). Because this
  * runs *on the app runtime* — not across the Promise boundary — the classifier
- * + log see the original `Data.TaggedError`s directly via `catchAll`, retiring
+ * + log see the original `Data.TaggedError`s directly via `catch`, retiring
  * the `isRecoverableUploadError` string-`_tag` probe the boundary forced (R-05).
  *
  * The error channel is `never`: every failure is caught here (queued and/or
@@ -480,7 +480,7 @@ export function pushShotToVisualizer(
 					reportUploadOutcome(shotId, 'Visualizer', { kind: 'uploaded' });
 				})
 			),
-			Effect.catchAll((e) =>
+			Effect.catch((e) =>
 				Effect.gen(function* () {
 					const queued = isRecoverable(e);
 					if (queued) {
