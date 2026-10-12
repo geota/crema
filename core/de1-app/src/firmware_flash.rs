@@ -31,8 +31,10 @@
 //!    the other three fields of an erase-complete frame (Decenza
 //!    `firmwareupdater.cpp:853-861`). Crema races notifications against a
 //!    fresh read of A009 every [`FW_MAP_POLL_INTERVAL_MS`] (decaid `a207a74d`,
-//!    `unified_de1.firmware.dart:122-173`). If the DE1 says nothing at all for
-//!    [`ERASE_FALLBACK_MS`] the upload starts anyway — de1app always waits a
+//!    `unified_de1.firmware.dart:122-173`). If the DE1 says nothing at all on
+//!    A009 for [`ERASE_FALLBACK_MS`] the upload starts anyway (any decoded
+//!    A009 frame after the ACK means it is answering, and then only a real
+//!    erase-complete starts the upload) — de1app always waits a
 //!    fixed 10 s (`de1_comms.tcl:1048`), Decenza falls back after 10 s
 //!    (`firmwareupdater.cpp:40`); a 1 s wait caused Decenza's `0x4800` verify
 //!    failures. If it keeps reporting "still erasing", crema fails at
@@ -53,12 +55,16 @@
 //!    FWToMap == 1 && FirstError != FF FF FF` (decaid
 //!    `_isTerminalVerificationResponse`, `unified_de1.firmware.dart:182-187`;
 //!    Decenza `04fca499`). `FF FF FD` is success; anything else is the first
-//!    bad offset. A failed verify-*request* write is re-sent up to
-//!    [`VERIFY_REQUEST_ATTEMPTS`] times (decaid's transport retries a write
-//!    after a reconnect, `bec1433`; the request only asks a question). Once the
-//!    request may have reached the DE1, nothing after it is a definite failure:
-//!    a lost verdict, a [`VERIFY_TIMEOUT_MS`] timeout or a link drop all lead
-//!    to the *unconfirmed* power-cycle path (Decenza's "ambiguous verify",
+//!    bad offset. The verify request is written **once** and never re-sent:
+//!    de1app (`de1_comms.tcl:1108-1115`), decaid (`unified_de1.firmware.dart:
+//!    68-75`) and Decenza (`firmwareupdater.cpp:823`) each send it once and
+//!    then only wait or poll. If its write fails or never ACKs, it may still
+//!    have reached the DE1, so crema keeps polling A009 for the verdict until
+//!    [`VERIFY_TIMEOUT_MS`] after the request (the DE1 is then done checking
+//!    before the user is told to power-cycle) and treats the outcome as
+//!    *unconfirmed*. Once the request may have reached the DE1, nothing after
+//!    it is a definite failure: a lost verdict, a timeout or a link drop all
+//!    lead to the unconfirmed power-cycle path (Decenza's "ambiguous verify",
 //!    `firmwareupdater.cpp:224-233`; `FIRMWARE_UPDATE.md:59`).
 //! 6. **Power-cycle**: the DE1 keeps running the old image until it is
 //!    switched off and on (de1app pages 4/5, `de1_skin_settings.tcl:1250-1265`;
@@ -112,6 +118,9 @@ pub const SLEEP_SETTLE_MS: u64 = 1_000;
 /// No A009 frame at all for this long after the erase ACK: start the upload
 /// anyway (de1app fixed 10 s, `de1_comms.tcl:1048`; Decenza fallback,
 /// `firmwareupdater.cpp:40`). Measured erase: 1.31 s (Decenza `04fca499`).
+/// Only silence counts: once any A009 frame decodes after the ACK, the DE1
+/// is answering and the upload waits for a real erase-complete (up to
+/// [`ERASE_TIMEOUT_MS`]).
 pub const ERASE_FALLBACK_MS: u64 = 10_000;
 
 /// The DE1 keeps reporting "still erasing": give up after this (decaid
@@ -136,16 +145,17 @@ pub const WRITE_ACK_TIMEOUT_MS: u64 = 15_000;
 pub const POST_UPLOAD_SETTLE_MS: u64 = 1_500;
 
 /// Verification bound (decaid `firmwareVerificationTimeout`,
-/// `unified_de1.dart:75`; Decenza uses 60 s). Past it the outcome is
-/// unconfirmed, not failed.
+/// `unified_de1.dart:75`; Decenza uses 60 s), counted from the verify request.
+/// Past it the outcome is unconfirmed, not failed.
+///
+/// The verify request is written **once** and never re-sent, like de1app
+/// (`de1_comms.tcl:1108-1115`), decaid (`unified_de1.firmware.dart:68-75`,
+/// then only waits and polls) and Decenza (`firmwareupdater.cpp:823`, then
+/// only waits). A second verify-and-map after a first one succeeded is
+/// undocumented A/B behaviour, and a failed or timed-out write may still be
+/// on the air. So a lost write waits for the DE1's verdict on A009 up to this
+/// bound and then goes to the unconfirmed power-cycle path.
 pub const VERIFY_TIMEOUT_MS: u64 = 120_000;
-
-/// Attempts at writing the verify request before the outcome is treated as
-/// unconfirmed.
-pub const VERIFY_REQUEST_ATTEMPTS: u32 = 3;
-
-/// Spacing between verify-request attempts.
-pub const VERIFY_REQUEST_RETRY_MS: u64 = 1_000;
 
 /// While waiting for the power-cycle, re-read the build this often after the
 /// link comes back (de1app's Bengle monitor polls every 3 s, `bengle.tcl:613`).
@@ -296,6 +306,11 @@ pub struct FlashStatus {
     pub machine_restarted: bool,
     /// After reconnecting the DE1 reported this build, not the target.
     pub restarted_on_build: Option<u32>,
+    /// Whether the flash currently sees the DE1 link up.
+    pub link_up: bool,
+    /// How long the DE1 may still be erasing (during the erase, or after an
+    /// interrupted one): the shells persist it so a restart keeps the lock.
+    pub erase_hold_ms_left: Option<u32>,
 }
 
 /// Why [`CremaCore::firmware_flash_start`] refused.
@@ -326,6 +341,10 @@ pub struct FlashStep {
     pub status: Option<FlashStatus>,
     /// Set when a start was refused.
     pub error: Option<FlashStartError>,
+    /// Diagnostic lines from this step, each stamped `[+mm:ss]` from the
+    /// start of the attempt. The shells append them to their event log.
+    #[serde(default)]
+    pub log: Vec<String>,
 }
 
 impl FlashStep {
@@ -414,7 +433,9 @@ enum Stage {
     },
     Erase {
         acked_at: Option<u64>,
-        seen_busy: bool,
+        /// An A009 frame decoded after the erase ACK: the DE1 is answering,
+        /// so the silent fallback no longer applies.
+        heard: bool,
     },
     Upload,
     Settle {
@@ -422,8 +443,11 @@ enum Stage {
     },
     Verify {
         acked_at: Option<u64>,
-        attempts: u32,
-        retry_at: Option<u64>,
+        /// When the (single) verify request was written.
+        sent_at: u64,
+        /// Its write failed or never ACKed: not re-sent; any verdict is
+        /// treated as unconfirmed.
+        write_lost: bool,
     },
     AwaitPowerCycle,
     Succeeded,
@@ -459,6 +483,10 @@ pub struct FirmwareFlash {
     erase_hold_until: Option<u64>,
     /// The latest time the flash has seen (every input carries one).
     clock_ms: u64,
+    /// Diagnostic lines not yet handed to the shell ([`Self::take_log`]).
+    log: Vec<String>,
+    /// The last A009 frame logged (frames are logged when they change).
+    last_frame_logged: Option<Vec<u8>>,
 }
 
 impl FirmwareFlash {
@@ -484,6 +512,7 @@ impl FirmwareFlash {
             }
         };
         let mut flash = Self::blank(image, artifact, now_ms);
+        flash.note_start(now_ms);
         let action = flash.send(Pending::Sleep, now_ms);
         Ok((flash, vec![action]))
     }
@@ -512,7 +541,39 @@ impl FirmwareFlash {
             erase_started_ms: None,
             erase_hold_until: None,
             clock_ms: now_ms,
+            log: Vec::new(),
+            last_frame_logged: None,
         }
+    }
+
+    /// Add a diagnostic line, stamped `[+mm:ss]` from the start of this
+    /// attempt.
+    pub(crate) fn note(&mut self, now_ms: u64, line: impl AsRef<str>) {
+        let secs = now_ms.saturating_sub(self.started_ms) / 1000;
+        self.log.push(format!(
+            "[+{:02}:{:02}] {}",
+            secs / 60,
+            secs % 60,
+            line.as_ref()
+        ));
+    }
+
+    fn note_start(&mut self, now_ms: u64) {
+        let line = format!(
+            "start: build {} ({:?}), {} bytes, sha256 {}, {} writes; Sleep requested",
+            self.artifact.build,
+            self.artifact.channel,
+            self.image.len(),
+            self.artifact.sha256,
+            self.chunk_count
+        );
+        self.note(now_ms, line);
+    }
+
+    /// The diagnostic lines since the last call (the shells append them to
+    /// their event log, which the diagnostics export carries).
+    pub fn take_log(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.log)
     }
 
     /// Re-create a flash that was waiting for the power-cycle when the shell
@@ -531,7 +592,44 @@ impl FirmwareFlash {
         // A fresh shell can't know whether the DE1 restarted meanwhile, so any
         // build read counts: the target means it took.
         flash.machine_restarted = true;
-        flash.build_reads_until = now_ms + BUILD_READ_WINDOW_MS;
+        // Not connected yet: the shell's next link-up (any connect path)
+        // calls `on_link_restored`, which opens the build-read window.
+        flash.link_up = false;
+        flash.note(
+            now_ms,
+            format!("restored: waiting for the DE1 to restart on build {build} (unconfirmed: {unconfirmed})"),
+        );
+        Some(flash)
+    }
+
+    /// Re-create the lock of an erase that may still be running when the
+    /// shell went away (tab closed or process killed within
+    /// [`ERASE_TIMEOUT_MS`] of the erase request): a stopped flash whose lock
+    /// expires after `hold_ms_left`. `None` if `build` is not pinned or the
+    /// hold is over.
+    #[must_use]
+    pub fn restore_erase_hold(build: u32, hold_ms_left: u64, now_ms: u64) -> Option<Self> {
+        if hold_ms_left == 0 {
+            return None;
+        }
+        let artifact = firmware_manifest().into_iter().find(|a| a.build == build)?;
+        let chunks = artifact.chunk_count;
+        let mut flash = Self::blank(Vec::new(), artifact, now_ms);
+        flash.chunk_count = chunks;
+        flash.stage = Stage::Failed;
+        flash.failure = Some(FlashFailure::LinkLost {
+            phase: FlashPhase::Erasing,
+        });
+        flash.erase_hold_until = Some(now_ms + hold_ms_left);
+        flash.ended_ms = Some(now_ms);
+        flash.link_up = false;
+        flash.note(
+            now_ms,
+            format!(
+                "restored: an interrupted erase may still run for {} s",
+                hold_ms_left.div_ceil(1000)
+            ),
+        );
         Some(flash)
     }
 
@@ -553,6 +651,20 @@ impl FirmwareFlash {
     #[must_use]
     pub fn chunk_count(&self) -> u32 {
         self.chunk_count
+    }
+
+    /// How long the DE1 may still be erasing: during the erase, or after an
+    /// interrupted one. The shells persist it so a restart keeps the lock.
+    fn erase_hold_ms_left(&self) -> Option<u64> {
+        match self.stage {
+            Stage::Erase { .. } => self
+                .erase_started_ms
+                .map(|t| (t + ERASE_TIMEOUT_MS).saturating_sub(self.clock_ms)),
+            Stage::Failed | Stage::Cancelled if self.erase_settling() => self
+                .erase_hold_until
+                .map(|t| t.saturating_sub(self.clock_ms)),
+            _ => None,
+        }
     }
 
     fn erase_settling(&self) -> bool {
@@ -670,18 +782,20 @@ impl FirmwareFlash {
     }
 
     fn start_upload(&mut self, now_ms: u64) -> Vec<FlashAction> {
+        self.note(now_ms, "upload started");
         self.stage = Stage::Upload;
         self.poll_sent_at = None;
         self.upload_started_ms = Some(now_ms);
         vec![self.send(Pending::Chunk(0), now_ms)]
     }
 
-    fn send_verify(&mut self, attempts: u32, now_ms: u64) -> Vec<FlashAction> {
+    fn send_verify(&mut self, now_ms: u64) -> Vec<FlashAction> {
         self.stage = Stage::Verify {
             acked_at: None,
-            attempts,
-            retry_at: None,
+            sent_at: now_ms,
+            write_lost: false,
         };
+        self.note(now_ms, "verify requested (sent once, never re-sent)");
         vec![
             FlashAction::SubscribeFwMap,
             self.send(Pending::Verify, now_ms),
@@ -703,32 +817,52 @@ impl FirmwareFlash {
                 self.stage = Stage::Sleep {
                     acked_at: Some(now_ms),
                 };
+                self.note(now_ms, "Sleep acknowledged");
                 Vec::new()
             }
-            (Pending::Erase, Stage::Erase { seen_busy, .. }) => {
+            (Pending::Erase, Stage::Erase { heard, .. }) => {
                 self.stage = Stage::Erase {
                     acked_at: Some(now_ms),
-                    seen_busy,
+                    heard,
                 };
                 self.last_poll_ms = now_ms;
+                self.note(now_ms, "erase acknowledged");
                 Vec::new()
             }
             (Pending::Chunk(i), Stage::Upload) => {
                 self.chunks_acked = i + 1;
                 if self.chunks_acked >= self.chunk_count {
                     self.stage = Stage::Settle { since: now_ms };
+                    let ms = now_ms.saturating_sub(self.upload_started_ms.unwrap_or(now_ms));
+                    self.note(
+                        now_ms,
+                        format!(
+                            "upload done: {} writes in {} s ({} ms per write)",
+                            self.chunks_acked,
+                            ms / 1000,
+                            ms / u64::from(self.chunks_acked.max(1))
+                        ),
+                    );
                     Vec::new()
                 } else {
                     vec![self.send(Pending::Chunk(i + 1), now_ms)]
                 }
             }
-            (Pending::Verify, Stage::Verify { attempts, .. }) => {
+            (
+                Pending::Verify,
+                Stage::Verify {
+                    sent_at,
+                    write_lost: false,
+                    ..
+                },
+            ) => {
                 self.stage = Stage::Verify {
                     acked_at: Some(now_ms),
-                    attempts,
-                    retry_at: None,
+                    sent_at,
+                    write_lost: false,
                 };
                 self.last_poll_ms = now_ms;
+                self.note(now_ms, "verify acknowledged");
                 Vec::new()
             }
             // An ACK that no longer matches the stage (after a cancel, or the
@@ -737,24 +871,31 @@ impl FirmwareFlash {
         }
     }
 
-    fn write_failed(&mut self, failure: FlashFailure, now_ms: u64) {
+    fn write_failed(&mut self, what: Pending, failure: FlashFailure, now_ms: u64) {
+        let at = match what {
+            Pending::Chunk(i) => format!(" at write {i} of {}", self.chunk_count),
+            _ => String::new(),
+        };
+        self.note(now_ms, format!("{what:?} write failed{at}: {failure:?}"));
         match self.stage {
-            // The verify request may or may not have reached the DE1: retry
-            // it, and if it keeps failing, the outcome is unconfirmed.
+            // The verify request may or may not have reached the DE1. Never
+            // re-send it (no upstream does); wait for its verdict on A009 up
+            // to the verify bound, then treat the outcome as unconfirmed.
             Stage::Verify {
                 acked_at: None,
-                attempts,
+                sent_at,
                 ..
             } => {
-                if attempts < VERIFY_REQUEST_ATTEMPTS {
-                    self.stage = Stage::Verify {
-                        acked_at: None,
-                        attempts,
-                        retry_at: Some(now_ms + VERIFY_REQUEST_RETRY_MS),
-                    };
-                } else {
-                    self.unconfirmed();
-                }
+                self.stage = Stage::Verify {
+                    acked_at: None,
+                    sent_at,
+                    write_lost: true,
+                };
+                self.last_poll_ms = now_ms;
+                self.note(
+                    now_ms,
+                    "verify request not re-sent; waiting for the DE1's verdict",
+                );
             }
             _ => self.fail(failure, now_ms),
         }
@@ -763,9 +904,12 @@ impl FirmwareFlash {
     /// The pending write failed.
     pub fn on_write_failed(&mut self, message: &str, now_ms: u64) {
         self.see(now_ms);
-        if self.pending.take().is_some() && self.active() {
+        if let Some((what, _)) = self.pending.take()
+            && self.active()
+        {
             let phase = self.phase();
             self.write_failed(
+                what,
                 FlashFailure::WriteFailed {
                     phase,
                     message: message.to_owned(),
@@ -794,39 +938,77 @@ impl FirmwareFlash {
         self.see(now_ms);
         self.poll_sent_at = None;
         let Ok(frame) = FWMapRequest::decode(data) else {
+            self.note(now_ms, format!("A009 undecodable ({} bytes)", data.len()));
             return Vec::new();
         };
+        if self.last_frame_logged.as_deref() != Some(data) {
+            self.last_frame_logged = Some(data.to_vec());
+            let hex: Vec<String> = data.iter().map(|b| format!("{b:02X}")).collect();
+            self.note(
+                now_ms,
+                format!("A009 {} ({:?})", hex.join(" "), self.phase()),
+            );
+        }
+        let terminal = frame.window_increment == 0
+            && frame.fw_to_erase == 0
+            && frame.fw_to_map == 1
+            && frame.first_error != FIRST_ERROR_REQUEST;
         match self.stage {
             Stage::Erase {
                 acked_at: Some(_),
-                seen_busy,
+                heard,
             } => {
-                if frame.fw_to_erase == 1 {
-                    if !seen_busy && let Stage::Erase { seen_busy, .. } = &mut self.stage {
-                        *seen_busy = true;
-                    }
-                    return Vec::new();
-                }
                 if Self::is_erase_complete(&frame) {
+                    self.note(now_ms, "erase complete");
                     return self.start_upload(now_ms);
                 }
-                // A late or cached verify verdict, or anything else: not ours.
+                // "Still erasing", a late or cached verify verdict, or
+                // anything else: not complete, but the DE1 is answering, so
+                // the silent fallback is off from here.
+                if !heard && let Stage::Erase { heard, .. } = &mut self.stage {
+                    *heard = true;
+                }
+                Vec::new()
+            }
+            Stage::Verify {
+                write_lost: true, ..
+            } => {
+                if terminal {
+                    // The DE1 has finished checking, but this can't be tied
+                    // to a request known to have arrived: let the build after
+                    // a restart decide.
+                    self.note(
+                        now_ms,
+                        format!(
+                            "verdict {:06X} after a lost verify write: unconfirmed",
+                            frame.first_error
+                        ),
+                    );
+                    self.unconfirmed();
+                }
                 Vec::new()
             }
             Stage::Verify {
                 acked_at: Some(_), ..
             } => {
-                let terminal = frame.window_increment == 0
-                    && frame.fw_to_erase == 0
-                    && frame.fw_to_map == 1
-                    && frame.first_error != FIRST_ERROR_REQUEST;
                 if !terminal {
                     return Vec::new();
                 }
                 if frame.first_error == FIRST_ERROR_NONE {
+                    self.note(
+                        now_ms,
+                        "verdict FFFFFD: verified; waiting for the power-cycle",
+                    );
                     self.stage = Stage::AwaitPowerCycle;
                     self.pending = None;
                 } else {
+                    self.note(
+                        now_ms,
+                        format!(
+                            "verdict {:06X}: the DE1 rejected the image",
+                            frame.first_error
+                        ),
+                    );
                     self.fail(
                         FlashFailure::VerifyFailed {
                             first_error: frame.first_error,
@@ -840,6 +1022,7 @@ impl FirmwareFlash {
             Stage::Failed | Stage::Cancelled
                 if self.erase_settling() && Self::is_erase_complete(&frame) =>
             {
+                self.note(now_ms, "interrupted erase finished: lock released");
                 self.erase_hold_until = None;
                 Vec::new()
             }
@@ -874,22 +1057,23 @@ impl FirmwareFlash {
     /// The clock advanced.
     pub fn on_tick(&mut self, now_ms: u64) -> Vec<FlashAction> {
         self.see(now_ms);
-        if let Some((_, sent)) = self.pending
+        if let Some((what, sent)) = self.pending
             && self.active()
             && now_ms.saturating_sub(sent) >= WRITE_ACK_TIMEOUT_MS
         {
             self.pending = None;
             let phase = self.phase();
-            self.write_failed(FlashFailure::AckTimeout { phase }, now_ms);
+            self.write_failed(what, FlashFailure::AckTimeout { phase }, now_ms);
             return Vec::new();
         }
         match self.stage {
             Stage::Sleep { acked_at: Some(at) } if now_ms.saturating_sub(at) >= SLEEP_SETTLE_MS => {
                 self.stage = Stage::Erase {
                     acked_at: None,
-                    seen_busy: false,
+                    heard: false,
                 };
                 self.erase_started_ms = Some(now_ms);
+                self.note(now_ms, "erase requested");
                 vec![
                     FlashAction::SubscribeFwMap,
                     self.send(Pending::Erase, now_ms),
@@ -897,30 +1081,36 @@ impl FirmwareFlash {
             }
             Stage::Erase {
                 acked_at: Some(at),
-                seen_busy,
+                heard,
             } => {
                 let waited = now_ms.saturating_sub(at);
-                if !seen_busy && waited >= ERASE_FALLBACK_MS {
+                if !heard && waited >= ERASE_FALLBACK_MS {
+                    self.note(
+                        now_ms,
+                        "no A009 answer 10 s after the erase ACK: upload started (fallback)",
+                    );
                     return self.start_upload(now_ms);
                 }
-                if seen_busy && waited >= ERASE_TIMEOUT_MS {
+                if heard && waited >= ERASE_TIMEOUT_MS {
+                    self.note(now_ms, "no erase-complete 60 s after the erase ACK");
                     self.fail(FlashFailure::EraseTimeout, now_ms);
                     return Vec::new();
                 }
                 self.poll(now_ms)
             }
             Stage::Settle { since } if now_ms.saturating_sub(since) >= POST_UPLOAD_SETTLE_MS => {
-                self.send_verify(1, now_ms)
+                self.send_verify(now_ms)
             }
             Stage::Verify {
-                acked_at: None,
-                attempts,
-                retry_at: Some(at),
-            } if self.pending.is_none() && now_ms >= at => self.send_verify(attempts + 1, now_ms),
-            Stage::Verify {
-                acked_at: Some(at), ..
-            } => {
-                if now_ms.saturating_sub(at) >= VERIFY_TIMEOUT_MS {
+                acked_at,
+                sent_at,
+                write_lost,
+            } if acked_at.is_some() || write_lost => {
+                if now_ms.saturating_sub(sent_at) >= VERIFY_TIMEOUT_MS {
+                    self.note(
+                        now_ms,
+                        "no verdict 120 s after the verify request: unconfirmed",
+                    );
                     self.unconfirmed();
                     return Vec::new();
                 }
@@ -943,6 +1133,9 @@ impl FirmwareFlash {
     /// The DE1 link dropped.
     pub fn on_link_lost(&mut self, now_ms: u64) {
         self.see(now_ms);
+        if self.link_up {
+            self.note(now_ms, format!("link lost ({:?})", self.phase()));
+        }
         self.link_up = false;
         match self.stage {
             Stage::Sleep { .. } | Stage::Erase { .. } | Stage::Upload | Stage::Settle { .. } => {
@@ -964,6 +1157,9 @@ impl FirmwareFlash {
     /// on a restart.
     pub fn on_link_restored(&mut self, now_ms: u64) -> Vec<FlashAction> {
         self.see(now_ms);
+        if !self.link_up {
+            self.note(now_ms, format!("link restored ({:?})", self.phase()));
+        }
         self.link_up = true;
         if self.stage == Stage::AwaitPowerCycle && self.machine_restarted {
             self.last_build_read_ms = now_ms;
@@ -980,6 +1176,9 @@ impl FirmwareFlash {
         self.see(now_ms);
         if self.stage != Stage::AwaitPowerCycle || !self.machine_restarted || !self.link_up {
             return;
+        }
+        if self.restarted_on_build != Some(build) || build == self.artifact.build {
+            self.note(now_ms, format!("DE1 reports build {build}"));
         }
         if build == self.artifact.build {
             self.stage = Stage::Succeeded;
@@ -1010,6 +1209,10 @@ impl FirmwareFlash {
         if !self.can_cancel() {
             return None;
         }
+        self.note(
+            now_ms,
+            format!("cancelled ({:?}); Sleep requested", self.phase()),
+        );
         self.stop(Stage::Cancelled, now_ms);
         // Through the flash's own path: the shell writes it even while the
         // lock is held. The ACK is ignored (stage Cancelled).
@@ -1082,6 +1285,10 @@ impl FirmwareFlash {
             verify_unconfirmed: self.verify_unconfirmed,
             machine_restarted: self.machine_restarted,
             restarted_on_build: self.restarted_on_build,
+            link_up: self.link_up,
+            erase_hold_ms_left: self
+                .erase_hold_ms_left()
+                .map(|ms| u32::try_from(ms).unwrap_or(u32::MAX)),
         }
     }
 }
@@ -1116,6 +1323,7 @@ pub(crate) mod tests {
         }
         let artifact = de1_domain::firmware_manifest()[1].clone();
         let mut flash = FirmwareFlash::blank(image, artifact, now);
+        flash.note_start(now);
         let a = flash.send(Pending::Sleep, now);
         (flash, vec![a])
     }
@@ -1320,6 +1528,62 @@ pub(crate) mod tests {
         assert_eq!(f.failure, Some(FlashFailure::EraseTimeout));
     }
 
+    #[test]
+    fn any_a009_frame_after_the_erase_ack_turns_the_silent_fallback_off() {
+        // A cached verify verdict is not erase-complete (H1), but it shows the
+        // DE1 answers: wait for a real erase-complete instead of assuming.
+        let mut f = to_erase_acked();
+        f.on_fw_map(&VERIFY_OK, 1_300);
+        f.on_tick(1_050 + ERASE_FALLBACK_MS + 1);
+        assert_eq!(f.phase(), FlashPhase::Erasing, "no fallback once heard");
+        let a = f.on_fw_map(&ERASE_DONE, 1_050 + ERASE_FALLBACK_MS + 500);
+        assert_eq!(f.phase(), FlashPhase::Uploading);
+        assert_eq!(a.len(), 1);
+        // …and if erase-complete never comes, it fails at 60 s.
+        let mut g = to_erase_acked();
+        g.on_fw_map(&VERIFY_OK, 1_300);
+        g.on_tick(1_050 + ERASE_TIMEOUT_MS);
+        assert_eq!(g.failure, Some(FlashFailure::EraseTimeout));
+    }
+
+    #[test]
+    fn the_erase_hold_left_is_reported_and_can_be_restored() {
+        let f = to_erase_acked();
+        // Erase requested at 1 010: up to 60 s from there.
+        assert_eq!(f.status(1_050).erase_hold_ms_left, Some(59_960));
+        let mut r = FirmwareFlash::restore_erase_hold(1358, 20_000, 5_000).expect("pinned");
+        assert!(r.locks_writes());
+        assert!(r.status(5_000).erase_settling);
+        assert!(!r.can_exit(), "no exit while the DE1 may be erasing");
+        r.on_tick(24_999);
+        assert!(r.locks_writes());
+        r.on_tick(25_000);
+        assert!(!r.locks_writes(), "released when the hold ends");
+        assert!(FirmwareFlash::restore_erase_hold(1358, 0, 5_000).is_none());
+        assert!(FirmwareFlash::restore_erase_hold(1234, 9_000, 5_000).is_none());
+    }
+
+    #[test]
+    fn the_attempt_log_has_the_image_frames_failures_and_timestamps() {
+        let (mut f, mut now) = to_upload(4);
+        now += 30;
+        f.on_write_ack(now);
+        f.on_write_failed("GATT 133", now + 61_000);
+        let log = f.take_log();
+        let all = log.join("\n");
+        assert!(log[0].starts_with("[+00:00] start: build 1358"), "{all}");
+        assert!(all.contains("sha256 "), "{all}");
+        assert!(all.contains("[+00:01] erase requested"), "{all}");
+        assert!(all.contains("A009 00 00 00 01 FF FF FF"), "{all}");
+        assert!(
+            all.contains("Chunk(1) write failed at write 1 of 4"),
+            "{all}"
+        );
+        assert!(all.contains("GATT 133"), "{all}");
+        assert!(all.contains("[+01:03]"), "{all}");
+        assert!(f.take_log().is_empty(), "drained");
+    }
+
     // ── Verify ───────────────────────────────────────────────────────────
 
     #[test]
@@ -1375,21 +1639,34 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_failed_verify_request_is_retried_then_unconfirmed() {
+    fn a_failed_verify_request_is_never_resent_and_waits_for_the_verdict() {
         let (mut f, mut now) = to_upload(1);
         now += 30;
         f.on_write_ack(now);
         now += POST_UPLOAD_SETTLE_MS;
-        f.on_tick(now);
-        for attempt in 1..VERIFY_REQUEST_ATTEMPTS {
-            f.on_write_failed("busy", now + 5);
-            assert_eq!(f.phase(), FlashPhase::Verifying, "attempt {attempt}");
-            assert!(f.on_tick(now + 500).is_empty(), "spaced");
-            now += VERIFY_REQUEST_RETRY_MS + 5;
-            let a = f.on_tick(now);
-            assert_eq!(a[1], write(WriteTarget::De1FwMapRequest, &VERIFY));
+        let sent = now;
+        assert_eq!(
+            f.on_tick(now)[1],
+            write(WriteTarget::De1FwMapRequest, &VERIFY)
+        );
+        f.on_write_failed("GATT timeout", now + 5);
+        assert_eq!(
+            f.phase(),
+            FlashPhase::Verifying,
+            "still waiting for the DE1"
+        );
+        assert!(f.locks_writes());
+        // Only polls from here: never the verify request again.
+        let mut t = now + 5;
+        while t + FW_MAP_POLL_INTERVAL_MS < sent + VERIFY_TIMEOUT_MS {
+            t += FW_MAP_POLL_INTERVAL_MS;
+            for a in f.on_tick(t) {
+                assert_eq!(a, FlashAction::ReadFwMap, "no re-send at {t}");
+                f.on_read_failed(t);
+            }
         }
-        f.on_write_failed("busy", now + 5);
+        assert_eq!(f.phase(), FlashPhase::Verifying);
+        f.on_tick(sent + VERIFY_TIMEOUT_MS);
         assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle);
         assert!(f.status(now).verify_unconfirmed);
         assert!(f.locks_writes());
@@ -1397,11 +1674,37 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_verdict_after_a_lost_verify_write_is_unconfirmed_even_if_good() {
+        let (mut f, mut now) = to_upload(1);
+        now += 30;
+        f.on_write_ack(now);
+        now += POST_UPLOAD_SETTLE_MS;
+        f.on_tick(now);
+        f.on_write_failed("GATT timeout", now + 5);
+        f.on_fw_map(&VERIFY_OK, now + 400);
+        assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle);
+        assert!(f.status(now).verify_unconfirmed);
+        // A bad verdict is also only unconfirmed: the request may not be ours.
+        let (mut g, mut now) = to_upload(1);
+        now += 30;
+        g.on_write_ack(now);
+        now += POST_UPLOAD_SETTLE_MS;
+        g.on_tick(now);
+        g.on_tick(now + WRITE_ACK_TIMEOUT_MS);
+        g.on_fw_map(&[0, 0, 0, 1, 0, 0x48, 0], now + WRITE_ACK_TIMEOUT_MS + 10);
+        assert_eq!(g.phase(), FlashPhase::AwaitingPowerCycle);
+        assert!(g.status(now).verify_unconfirmed);
+        assert_eq!(g.failure, None);
+    }
+
+    #[test]
     fn a_verify_timeout_is_unconfirmed_not_failed() {
         let (mut f, now) = to_verify(1);
-        f.on_tick(now + VERIFY_TIMEOUT_MS - 1);
+        // Counted from the request (sent 40 ms before its ACK).
+        let sent = now - 40;
+        f.on_tick(sent + VERIFY_TIMEOUT_MS - 1);
         assert_eq!(f.phase(), FlashPhase::Verifying);
-        f.on_tick(now + VERIFY_TIMEOUT_MS);
+        f.on_tick(sent + VERIFY_TIMEOUT_MS);
         assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle);
         assert!(f.status(now).verify_unconfirmed);
         assert!(f.locks_writes());
@@ -1614,11 +1917,27 @@ pub(crate) mod tests {
         let mut f = FirmwareFlash::restore_awaiting(1358, false, 1_000).expect("pinned");
         assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle);
         assert!(f.locks_writes());
+        assert!(
+            !f.status(1_000).link_up,
+            "a fresh shell is not connected yet"
+        );
+        assert!(
+            f.on_tick(1_000 + BUILD_READ_INTERVAL_MS).is_empty(),
+            "no reads while disconnected"
+        );
+        f.on_build(1358, 4_500);
         assert_eq!(
-            f.on_tick(1_000 + BUILD_READ_INTERVAL_MS),
+            f.phase(),
+            FlashPhase::AwaitingPowerCycle,
+            "no build accepted before the link is up"
+        );
+        // The user connects much later than the old 60 s window: still read.
+        let later = 1_000 + 10 * BUILD_READ_WINDOW_MS;
+        assert_eq!(
+            f.on_link_restored(later),
             vec![FirmwareFlash::read_build_action()]
         );
-        f.on_build(1358, 5_000);
+        f.on_build(1358, later + 200);
         assert_eq!(f.phase(), FlashPhase::Succeeded);
         assert!(FirmwareFlash::restore_awaiting(1234, false, 0).is_none());
     }
@@ -1764,6 +2083,7 @@ pub(crate) mod tests {
             actions,
             status: Some(f.status(now)),
             error: None,
+            log: vec!["[+00:00] fixture".to_owned()],
         };
         let start = step(&f, first, 0);
         f.on_write_ack(10);
@@ -1776,6 +2096,7 @@ pub(crate) mod tests {
             actions: vec![a],
             status: None,
             error: None,
+            log: Vec::new(),
         };
         let chunk_1234 = only(FlashAction::Write {
             target: WriteTarget::De1MmrWrite,
@@ -2149,6 +2470,10 @@ mod core_tests {
         // A second restore while one exists is a no-op.
         let again = core.firmware_flash_restore_awaiting(1333, false, 1_100);
         assert_eq!(again.status.unwrap().target_build, 1358);
+        // Any connect path (fresh connect, reload, auto-reconnect) reports
+        // the link up, minutes later: the build read is issued.
+        let up = core.firmware_flash_link_restored(300_000);
+        assert!(matches!(up.actions[..], [FlashAction::ReadBuild { .. }]));
         core.on_notification(
             Source::De1MmrRead,
             &mmr_packet(MmrRegister::FirmwareVersion, 1358),

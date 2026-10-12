@@ -2531,6 +2531,13 @@ export interface FlashStatus {
 	machineRestarted: boolean;
 	/** After reconnecting the DE1 reported this build, not the target. */
 	restartedOnBuild?: number;
+	/** Whether the flash currently sees the DE1 link up. */
+	linkUp: boolean;
+	/**
+	 * How long the DE1 may still be erasing (during the erase, or after an
+	 * interrupted one): the shells persist it so a restart keeps the lock.
+	 */
+	eraseHoldMsLeft?: number;
 }
 
 /**
@@ -2591,6 +2598,11 @@ export interface FlashStep {
 	status?: FlashStatus;
 	/** Set when a start was refused. */
 	error?: FlashStartError;
+	/**
+	 * Diagnostic lines from this step, each stamped `[+mm:ss]` from the
+	 * start of the attempt. The shells append them to their event log.
+	 */
+	log?: string[];
 }
 
 /**

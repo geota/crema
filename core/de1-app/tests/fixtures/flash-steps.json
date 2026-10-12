@@ -12,6 +12,9 @@
       }
     ],
     "error": null,
+    "log": [
+      "[+00:00] fixture"
+    ],
     "status": {
       "artifact": {
         "boardMarker": 3725590529,
@@ -37,10 +40,12 @@
       "chunksAcked": 0,
       "chunksTotal": 8193,
       "elapsedSeconds": 1,
+      "eraseHoldMsLeft": null,
       "eraseSettling": false,
       "etaIsEstimate": false,
       "etaSeconds": null,
       "failure": null,
+      "linkUp": true,
       "locksWrites": false,
       "machineRestarted": false,
       "percent": 0.0,
@@ -82,6 +87,9 @@
       }
     ],
     "error": null,
+    "log": [
+      "[+00:00] fixture"
+    ],
     "status": {
       "artifact": {
         "boardMarker": 3725590529,
@@ -107,10 +115,12 @@
       "chunksAcked": 0,
       "chunksTotal": 8193,
       "elapsedSeconds": 1,
+      "eraseHoldMsLeft": null,
       "eraseSettling": false,
       "etaIsEstimate": true,
       "etaSeconds": 251,
       "failure": null,
+      "linkUp": true,
       "locksWrites": true,
       "machineRestarted": false,
       "percent": 1.0,
@@ -152,6 +162,7 @@
       }
     ],
     "error": null,
+    "log": [],
     "status": null
   },
   "erase": {
@@ -176,6 +187,9 @@
       }
     ],
     "error": null,
+    "log": [
+      "[+00:00] fixture"
+    ],
     "status": {
       "artifact": {
         "boardMarker": 3725590529,
@@ -201,10 +215,12 @@
       "chunksAcked": 0,
       "chunksTotal": 8193,
       "elapsedSeconds": 1,
+      "eraseHoldMsLeft": 60000,
       "eraseSettling": false,
       "etaIsEstimate": true,
       "etaSeconds": 253,
       "failure": null,
+      "linkUp": true,
       "locksWrites": true,
       "machineRestarted": false,
       "percent": 1.0,
@@ -245,6 +261,7 @@
       }
     ],
     "error": null,
+    "log": [],
     "status": null
   },
   "start": {
@@ -260,6 +277,9 @@
       }
     ],
     "error": null,
+    "log": [
+      "[+00:00] fixture"
+    ],
     "status": {
       "artifact": {
         "boardMarker": 3725590529,
@@ -285,10 +305,12 @@
       "chunksAcked": 0,
       "chunksTotal": 8193,
       "elapsedSeconds": 0,
+      "eraseHoldMsLeft": null,
       "eraseSettling": false,
       "etaIsEstimate": true,
       "etaSeconds": 253,
       "failure": null,
+      "linkUp": true,
       "locksWrites": true,
       "machineRestarted": false,
       "percent": 0.0,
@@ -317,6 +339,7 @@
       }
     ],
     "error": null,
+    "log": [],
     "status": null
   }
 }

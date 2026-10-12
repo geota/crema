@@ -3935,11 +3935,18 @@ impl CremaCore {
         blockers
     }
 
-    fn flash_step(&self, actions: Vec<FlashAction>, now_ms: u64) -> FlashStep {
+    /// The step after a flash input, carrying the diagnostic lines it
+    /// produced.
+    fn flash_step(&mut self, actions: Vec<FlashAction>, now_ms: u64) -> FlashStep {
         FlashStep {
             actions,
             status: self.firmware_flash.as_ref().map(|f| f.status(now_ms)),
             error: None,
+            log: self
+                .firmware_flash
+                .as_mut()
+                .map(FirmwareFlash::take_log)
+                .unwrap_or_default(),
         }
     }
 
@@ -3964,17 +3971,31 @@ impl CremaCore {
             return FlashStep {
                 actions: Vec::new(),
                 status: self.firmware_flash.as_ref().map(|f| f.status(now_ms)),
+                log: vec![format!("start refused: {blockers:?}")],
                 error: Some(FlashStartError::Blocked { blockers }),
             };
         }
         match FirmwareFlash::begin(image, now_ms) {
-            Ok((flash, actions)) => {
+            Ok((mut flash, actions)) => {
+                let meta = self.capture.meta_snapshot();
+                let hex =
+                    |v: Option<u32>| v.map_or_else(|| "unknown".to_owned(), |v| format!("{v}"));
+                flash.note(
+                    now_ms,
+                    format!(
+                        "DE1: model {}, serial {}, installed build {}",
+                        hex(meta.de1_machine_model),
+                        hex(meta.de1_serial_number),
+                        hex(self.capture.firmware_build())
+                    ),
+                );
                 self.firmware_flash = Some(flash);
                 self.flash_step(actions, now_ms)
             }
             Err(error) => FlashStep {
                 actions: Vec::new(),
                 status: self.firmware_flash.as_ref().map(|f| f.status(now_ms)),
+                log: vec![format!("start refused: invalid image {error:?}")],
                 error: Some(FlashStartError::InvalidImage { error }),
             },
         }
@@ -4096,6 +4117,23 @@ impl CremaCore {
         self.flash_step(Vec::new(), now_ms)
     }
 
+    /// Bring back the lock of an erase that may still be running when the
+    /// shell went away (tab closed or process killed during the erase or its
+    /// hold), from the deadline the shell persisted. A no-op when a flash
+    /// already exists, `build` is not pinned or the hold is over.
+    pub fn firmware_flash_restore_erase_hold(
+        &mut self,
+        build: u32,
+        hold_ms_left: u64,
+        now_ms: u64,
+    ) -> FlashStep {
+        self.advance_clock(now_ms);
+        if self.firmware_flash.is_none() {
+            self.firmware_flash = FirmwareFlash::restore_erase_hold(build, hold_ms_left, now_ms);
+        }
+        self.flash_step(Vec::new(), now_ms)
+    }
+
     /// Forget a flash that no longer holds the link (finished, failed,
     /// cancelled, or waiting on a power-cycle the user gave up on). Returns
     /// whether it was cleared; a flash still holding the lock is kept.
@@ -4106,9 +4144,15 @@ impl CremaCore {
         self.firmware_flash.take().is_some()
     }
 
-    /// The current snapshot, no side effects.
+    /// The current snapshot, no side effects (pending diagnostic lines stay
+    /// for the next step).
     pub fn firmware_flash_status(&self, now_ms: u64) -> FlashStep {
-        self.flash_step(Vec::new(), now_ms)
+        FlashStep {
+            actions: Vec::new(),
+            status: self.firmware_flash.as_ref().map(|f| f.status(now_ms)),
+            error: None,
+            log: Vec::new(),
+        }
     }
 
     // ── Profile upload (write side) ───────────────────────────────────────

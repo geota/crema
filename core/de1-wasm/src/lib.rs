@@ -2548,6 +2548,26 @@ impl CremaBridge {
             .to_json()
     }
 
+    /// Bring back the lock of an erase that may still be running when the
+    /// tab closed (from the deadline the shell persisted).
+    pub fn firmware_flash_restore_erase_hold(
+        &mut self,
+        build: u32,
+        hold_ms_left: f64,
+        now_ms: f64,
+    ) -> String {
+        self.live_core()
+            .firmware_flash_restore_erase_hold(build, hold_ms_left as u64, now_ms as u64)
+            .to_json()
+    }
+
+    /// Whether a firmware flash (or its erase / reboot window) holds the DE1
+    /// link. The shells refuse takeover, handoff and proxy-mode switches
+    /// while it does.
+    pub fn firmware_locks_writes(&mut self) -> bool {
+        self.live_core().firmware_locks_writes()
+    }
+
     /// The current snapshot.
     pub fn firmware_flash_status(&mut self, now_ms: f64) -> String {
         self.live_core()

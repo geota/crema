@@ -2572,7 +2572,12 @@ data class FlashStatus (
 	/// or only a Bluetooth reconnect — the two can't be told apart).
 	val machineRestarted: Boolean,
 	/// After reconnecting the DE1 reported this build, not the target.
-	val restartedOnBuild: UInt? = null
+	val restartedOnBuild: UInt? = null,
+	/// Whether the flash currently sees the DE1 link up.
+	val linkUp: Boolean,
+	/// How long the DE1 may still be erasing (during the erase, or after an
+	/// interrupted one): the shells persist it so a restart keeps the lock.
+	val eraseHoldMsLeft: UInt? = null
 )
 
 /// Generated type representing the anonymous struct variant `Write` of the `FlashAction` Rust enum
@@ -2657,7 +2662,10 @@ data class FlashStep (
 	/// The snapshot after this step (`None` when no flash exists).
 	val status: FlashStatus? = null,
 	/// Set when a start was refused.
-	val error: FlashStartError? = null
+	val error: FlashStartError? = null,
+	/// Diagnostic lines from this step, each stamped `[+mm:ss]` from the
+	/// start of the attempt. The shells append them to their event log.
+	val log: List<String>? = null
 )
 
 /// One profile frame's configured exit, used to infer
