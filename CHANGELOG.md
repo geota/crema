@@ -26,7 +26,8 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   firmware, since Crema only writes its spare memory bank. A failure offers
   Retry. The steps follow Decent's de1app and decaid: sleep the machine,
   erase, send 16-byte blocks one at a time, let the DE1 verify, power-cycle.
-  Classic DE1 models only (DE1PRO, XL, XXL, XXXL; no Bengle). On Android the
+  Every classic DE1 model (DE1, DE1+, PRO, XL, CAFE, XXL, XXXL; no Bengle),
+  as Decent's de1app does. On Android the
   update keeps running in the background; in the browser, keep the tab open
   and in front (and if the browser can't download Decent's file directly,
   download it from Decent and choose it). Web, tablet and phone.

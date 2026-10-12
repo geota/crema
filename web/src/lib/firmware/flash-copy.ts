@@ -82,7 +82,7 @@ export function blockerText(b: FlashBlocker): string {
 		case 'UnsupportedModel':
 			return b.content.model >= 128
 				? "Bengle firmware can't be updated from Crema yet."
-				: "Crema can't update this DE1 model yet (it follows Decent's list: DE1PRO, DE1XL, DE1XXL, DE1XXXL).";
+				: `Crema doesn't recognise this DE1 model (${b.content.model}), so it won't update it.`;
 		case 'StateUnknown':
 			return "The DE1 hasn't reported its state yet.";
 		case 'MachineBusy':
