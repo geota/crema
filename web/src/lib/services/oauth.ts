@@ -50,7 +50,7 @@ const FORM_HEADERS = {
 	Accept: 'application/json'
 } as const;
 
-export class OAuth extends Context.Tag('crema/OAuth')<
+export class OAuth extends Context.Service<
 	OAuth,
 	{
 		/** Begin the PKCE redirect; fails fast when no client_id is configured. */
@@ -72,7 +72,7 @@ export class OAuth extends Context.Tag('crema/OAuth')<
 		/** Best-effort token revocation; never fails. */
 		readonly revokeToken: (token: string) => Effect.Effect<void>;
 	}
->() {}
+>()('crema/OAuth') {}
 
 export const OAuthLive = Layer.effect(
 	OAuth,
@@ -86,7 +86,7 @@ export const OAuthLive = Layer.effect(
 					try: () => res.json(),
 					catch: (cause) => new ResponseDecodeError({ url: TOKEN_URL, cause })
 				});
-				const wire = yield* Schema.decodeUnknown(TokenWireSchema)(json).pipe(
+				const wire = yield* Schema.decodeUnknownEffect(TokenWireSchema)(json).pipe(
 					Effect.mapError((cause) => new ResponseDecodeError({ url: TOKEN_URL, cause }))
 				);
 				return yield* Effect.try({
@@ -157,7 +157,7 @@ export const OAuthLive = Layer.effect(
 					body
 				});
 				return yield* parseTokenResponse(res);
-			}).pipe(Effect.catchAll((cause) => Effect.fail(new TokenRefreshFailedError({ cause }))));
+			}).pipe(Effect.catch((cause) => Effect.fail(new TokenRefreshFailedError({ cause }))));
 
 		const revokeToken = (token: string) =>
 			Effect.gen(function* () {

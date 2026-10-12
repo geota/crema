@@ -37,7 +37,7 @@ export type ConnectOutcome =
  */
 export function parseConnectExit(exit: Exit.Exit<void, ConnectStepFailure>): ConnectOutcome {
 	if (Exit.isSuccess(exit)) return { ok: true };
-	const failure = Cause.failureOption(exit.cause);
+	const failure = Cause.findErrorOption(exit.cause);
 	return failure._tag === 'Some'
 		? { ok: false, step: failure.value.step, cause: failure.value.cause }
 		: { ok: false, step: 'connect', cause: exit.cause };

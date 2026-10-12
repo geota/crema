@@ -95,8 +95,8 @@ describe('TokenVault.getTokens — localStorage coherence (T-16)', () => {
 				Effect.flatMap((v) =>
 					// Read once (warms the ref), then clear LS externally and read again.
 					v.getTokens.pipe(
-						Effect.zipRight(Effect.sync(reset)),
-						Effect.zipRight(v.getTokens)
+						Effect.andThen(Effect.sync(reset)),
+						Effect.andThen(v.getTokens)
 					)
 				),
 				Effect.provide(layer)
@@ -114,8 +114,8 @@ describe('TokenVault.getTokens — localStorage coherence (T-16)', () => {
 					// (token-store) rotates LS to B. getTokens must return B, not the
 					// ref's stale A — this is the whole point of the option-A fix.
 					v.storeTokens(tokenAt('A')).pipe(
-						Effect.zipRight(Effect.sync(() => writeLs(tokenAt('B')))),
-						Effect.zipRight(v.getTokens)
+						Effect.andThen(Effect.sync(() => writeLs(tokenAt('B')))),
+						Effect.andThen(v.getTokens)
 					)
 				),
 				Effect.provide(layer)

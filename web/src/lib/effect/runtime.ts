@@ -54,7 +54,7 @@ export const AppLayer = Layer.mergeAll(
 );
 
 /** The services the app runtime provides. `never` while `AppLayer` is empty. */
-export type AppServices = Layer.Layer.Success<typeof AppLayer>;
+export type AppServices = Layer.Success<typeof AppLayer>;
 
 /** The concrete runtime type published to routes via Svelte context. */
 export type AppRuntime = ManagedRuntime.ManagedRuntime<AppServices, never>;

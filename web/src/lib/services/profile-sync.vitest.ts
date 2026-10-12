@@ -19,12 +19,13 @@
  *
  * The time-free behaviors run on the live runtime with a tiny real `sleep` to
  * let forked fibers settle; the time-based ones use Effect's `TestClock` (no
- * `@effect/vitest` — TestContext + TestClock under plain vitest). Run:
+ * `@effect/vitest` — `TestClock.layer()` under plain vitest). Run:
  * `cd web && pnpm test:vitest` (or `vitest run profile-sync`).
  */
 
 import { describe, expect, it } from 'vitest';
-import { Deferred, Duration, Effect, Fiber, Option, TestClock, TestContext } from 'effect';
+import { Deferred, Duration, Effect, Fiber } from 'effect';
+import { TestClock } from 'effect/testing';
 import { ProfileSync, ProfileSyncLive } from './profile-sync.ts';
 
 const noop = () => {};
@@ -37,7 +38,7 @@ function run<A>(program: Effect.Effect<A, never, ProfileSync>): Promise<A> {
 /** Run a program against a fresh `ProfileSync` with Effect's `TestClock`. */
 function runTest<A>(program: Effect.Effect<A, never, ProfileSync>): Promise<A> {
 	return Effect.runPromise(
-		Effect.provide(Effect.provide(program, ProfileSyncLive), TestContext.TestContext)
+		Effect.provide(Effect.provide(program, ProfileSyncLive), TestClock.layer())
 	);
 }
 
@@ -74,7 +75,7 @@ describe('ProfileSync.sync — completion', () => {
 			Effect.gen(function* () {
 				const ps = yield* ProfileSync;
 				const started = yield* Deferred.make<void>();
-				const fiber = yield* Effect.fork(
+				const fiber = yield* Effect.forkChild(
 					ps.sync({
 						desired: 'fp1',
 						alreadyLoaded: false,
@@ -98,7 +99,7 @@ describe('ProfileSync.sync — completion', () => {
 			Effect.gen(function* () {
 				const ps = yield* ProfileSync;
 				const started = yield* Deferred.make<void>();
-				const fiber = yield* Effect.fork(
+				const fiber = yield* Effect.forkChild(
 					ps.sync({
 						desired: 'fp1',
 						alreadyLoaded: false,
@@ -130,12 +131,12 @@ describe('ProfileSync.sync — piggyback', () => {
 				const mkUpload = () =>
 					Effect.sync(() => {
 						uploadCount += 1;
-					}).pipe(Effect.zipRight(Deferred.succeed(started, undefined)), Effect.asVoid);
-				const f1 = yield* Effect.fork(
+					}).pipe(Effect.andThen(Deferred.succeed(started, undefined)), Effect.asVoid);
+				const f1 = yield* Effect.forkChild(
 					ps.sync({ desired: 'fp1', alreadyLoaded: false, upload: mkUpload(), cancel: Effect.void, log: noop })
 				);
 				yield* Deferred.await(started);
-				const f2 = yield* Effect.fork(
+				const f2 = yield* Effect.forkChild(
 					ps.sync({ desired: 'fp1', alreadyLoaded: false, upload: mkUpload(), cancel: Effect.void, log: noop })
 				);
 				yield* Effect.sleep(Duration.millis(5)); // let f1 release the permit + f2 piggyback
@@ -159,7 +160,7 @@ describe('ProfileSync.sync — supersession', () => {
 				const ps = yield* ProfileSync;
 				const started1 = yield* Deferred.make<void>();
 				const started2 = yield* Deferred.make<void>();
-				const f1 = yield* Effect.fork(
+				const f1 = yield* Effect.forkChild(
 					ps.sync({
 						desired: 'fp1',
 						alreadyLoaded: false,
@@ -169,7 +170,7 @@ describe('ProfileSync.sync — supersession', () => {
 					})
 				);
 				yield* Deferred.await(started1);
-				const f2 = yield* Effect.fork(
+				const f2 = yield* Effect.forkChild(
 					ps.sync({
 						desired: 'fp2',
 						alreadyLoaded: false,
@@ -200,7 +201,7 @@ describe('ProfileSync.sync — timeout (TestClock)', () => {
 				const ps = yield* ProfileSync;
 				const logs: string[] = [];
 				const started = yield* Deferred.make<void>();
-				const fiber = yield* Effect.fork(
+				const fiber = yield* Effect.forkChild(
 					ps.sync({
 						desired: 'fp1',
 						alreadyLoaded: false,
@@ -240,11 +241,11 @@ describe('ProfileSync.profileDownloadGuard (TestClock)', () => {
 			Effect.gen(function* () {
 				const ps = yield* ProfileSync;
 				yield* ps.completed; // stamps lastCompletedAt at test-time 0
-				const fiber = yield* Effect.fork(ps.profileDownloadGuard);
+				const fiber = yield* Effect.forkChild(ps.profileDownloadGuard);
 				yield* TestClock.adjust(Duration.zero); // let the guard arm its 500ms sleep
-				const waitingAtStart = Option.isNone(yield* Fiber.poll(fiber));
+				const waitingAtStart = (yield* Effect.sync(() => fiber.pollUnsafe())) === undefined;
 				yield* TestClock.adjust(Duration.millis(499));
-				const waitingAt499 = Option.isNone(yield* Fiber.poll(fiber));
+				const waitingAt499 = (yield* Effect.sync(() => fiber.pollUnsafe())) === undefined;
 				yield* TestClock.adjust(Duration.millis(1)); // crosses 500ms → guard completes
 				yield* Fiber.join(fiber);
 				return { waitingAtStart, waitingAt499 };

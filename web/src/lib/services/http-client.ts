@@ -37,7 +37,7 @@ export interface HttpRequest {
 	readonly mode?: RequestMode;
 }
 
-export class HttpClient extends Context.Tag('crema/HttpClient')<
+export class HttpClient extends Context.Service<
 	HttpClient,
 	{
 		/**
@@ -47,7 +47,7 @@ export class HttpClient extends Context.Tag('crema/HttpClient')<
 		 */
 		readonly request: (req: HttpRequest) => Effect.Effect<Response, NetworkError | HttpStatusError>;
 	}
->() {}
+>()('crema/HttpClient') {}
 
 const request = Effect.fn('HttpClient.request')(function* (req: HttpRequest) {
 	const doFetch = Effect.tryPromise({
@@ -65,13 +65,15 @@ const request = Effect.fn('HttpClient.request')(function* (req: HttpRequest) {
 	const res = yield* (req.timeoutMs === undefined
 		? doFetch
 		: doFetch.pipe(
-				Effect.timeoutFail({
+				Effect.timeoutOrElse({
 					duration: req.timeoutMs,
-					onTimeout: () =>
-						new NetworkError({
-							cause: new Error(`Request timed out after ${req.timeoutMs}ms`),
-							url: req.url
-						})
+					orElse: () =>
+						Effect.fail(
+							new NetworkError({
+								cause: new Error(`Request timed out after ${req.timeoutMs}ms`),
+								url: req.url
+							})
+						)
 				})
 			));
 

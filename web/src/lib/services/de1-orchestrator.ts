@@ -8,11 +8,11 @@
  * `De1ConnectStepFailed` — so a failure is attributed precisely (which is how
  * the user learns a non-DE1 device was selected) without the manual mutable
  * `step` variable. The non-fatal connect-time reads (version / state /
- * shot-settings) + the MMR sweep are `Effect.catchAll(log)`-wrapped so a single
+ * shot-settings) + the MMR sweep are `Effect.catch(log)`-wrapped so a single
  * failure logs-and-continues exactly as before; the sweep runs serially
  * (`concurrency: 1`) in declaration order, matching the legacy register order.
  *
- * Deliberately NOT a `Context.Tag`/Layer service: the transport + core are
+ * Deliberately NOT a `Context.Service`/Layer service: the transport + core are
  * per-connect runtime values, not layer dependencies. `de1.ts`'s `De1Manager`
  * keeps the gesture-bound `requestDevice`, the device lifecycle listeners, and
  * the notification `setSink` (it mutates the manager's diagnostics counts), then
@@ -99,7 +99,7 @@ export const de1ConnectProgram = (d: De1ConnectDeps): Effect.Effect<void, De1Con
 				d.onCoreOutput(output);
 				d.onStatus(`DE1 ${label} read ✓`);
 			}).pipe(
-				Effect.catchAll((e) =>
+				Effect.catch((e) =>
 					Effect.sync(() => d.onStatus(`DE1 ${label} read skipped: ${describeError(e)}`))
 				)
 			);
@@ -111,7 +111,7 @@ export const de1ConnectProgram = (d: De1ConnectDeps): Effect.Effect<void, De1Con
 				d.onCoreOutput(out);
 				if (ok) d.onStatus(ok);
 			}).pipe(
-				Effect.catchAll((e) =>
+				Effect.catch((e) =>
 					Effect.sync(() => d.onStatus(`DE1 MMR read ${reg} skipped: ${describeError(e)}`))
 				)
 			);
@@ -141,7 +141,7 @@ export const de1ConnectProgram = (d: De1ConnectDeps): Effect.Effect<void, De1Con
 			);
 			d.onStatus('Calibration A012 subscribed ✓');
 		}).pipe(
-			Effect.catchAll((e) =>
+			Effect.catch((e) =>
 				Effect.sync(() => d.onStatus(`DE1 Calibration A012 subscribe skipped: ${describeError(e)}`))
 			)
 		);

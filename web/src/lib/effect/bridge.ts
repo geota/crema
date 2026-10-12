@@ -13,11 +13,12 @@ import type { AppRuntime, AppServices } from './runtime';
 /**
  * Run an `Effect` on the app runtime and resolve/reject as a `Promise`.
  *
- * Unlike `runtime.runPromise`, which rejects with Effect's `FiberFailure`
- * wrapper, this rejects with the **original** failure value via
- * `Cause.squash`. That keeps legacy call-site `instanceof` checks working
- * during the migration (risk R-05) — components see the same error shapes
- * they always have until each error becomes a `Data.TaggedError`.
+ * Rejects with the **original** failure value via `Cause.squash` (Effect 3's
+ * `runtime.runPromise` rejected with a `FiberFailure` wrapper; Effect 4's
+ * squashes too, but this stays the one explicit seam). That keeps legacy
+ * call-site `instanceof` checks working during the migration (risk R-05) —
+ * components see the same error shapes they always have until each error
+ * becomes a `Data.TaggedError`.
  */
 export async function runtimePromise<A, E, R extends AppServices>(
 	runtime: AppRuntime,

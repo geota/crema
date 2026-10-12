@@ -13,7 +13,7 @@
  *    + the waiter share one entry now — they were always set/cleared together);
  *  - `this.pendingUploadCompletion`   → a `Deferred<boolean>` inside that entry,
  *    so concurrent callers on the same fingerprint await one outcome (piggyback);
- *  - the 15 s `window.setTimeout` backstop → `Effect.timeoutFail` →
+ *  - the 15 s `window.setTimeout` backstop → `Effect.timeoutOrElse` →
  *    `ProfileUploadTimeoutError` → caught back to `false`;
  *  - `this.lastProfileUploadCompletedAtMs` → `Ref<Option<number>>`, read by the
  *    `profileDownloadGuard` (the BC 9788201734 race — see below).
@@ -31,7 +31,7 @@
  * `profile-sync.vitest.ts` for the piggyback / supersession / timeout coverage.
  */
 
-import { Clock, Context, Deferred, Duration, Effect, Layer, Option, Ref } from 'effect';
+import { Clock, Context, Deferred, Duration, Effect, Layer, Option, Ref, Semaphore } from 'effect';
 import { ProfileUploadTimeoutError } from '../effect/errors.ts';
 
 /**
@@ -80,7 +80,7 @@ export interface ProfileSyncRequest {
 	readonly log: (line: string) => void;
 }
 
-export class ProfileSync extends Context.Tag('crema/ProfileSync')<
+export class ProfileSync extends Context.Service<
 	ProfileSync,
 	{
 		/**
@@ -111,7 +111,7 @@ export class ProfileSync extends Context.Tag('crema/ProfileSync')<
 		 */
 		readonly profileDownloadGuard: Effect.Effect<void>;
 	}
->() {}
+>()('crema/ProfileSync') {}
 
 export const ProfileSyncLive = Layer.effect(
 	ProfileSync,
@@ -123,7 +123,7 @@ export const ProfileSyncLive = Layer.effect(
 		// long await on the waiter happens *outside* the permit. `completed` /
 		// `failed` deliberately do NOT take the permit — they run inside the fold
 		// (synchronously, from `runtime.runSync`) and operate on the atomic Ref.
-		const gate = yield* Effect.makeSemaphore(1);
+		const gate = yield* Semaphore.make(1);
 
 		const completed: Effect.Effect<string | null> = Effect.gen(function* () {
 			const now = yield* Clock.currentTimeMillis;
@@ -177,9 +177,9 @@ export const ProfileSyncLive = Layer.effect(
 
 				// Await the outcome outside the permit, with the 15 s backstop.
 				return yield* Deferred.await(waiter).pipe(
-					Effect.timeoutFail({
+					Effect.timeoutOrElse({
 						duration: UPLOAD_TIMEOUT,
-						onTimeout: () => new ProfileUploadTimeoutError()
+						orElse: () => Effect.fail(new ProfileUploadTimeoutError())
 					}),
 					Effect.catchTag('ProfileUploadTimeoutError', () =>
 						Effect.gen(function* () {

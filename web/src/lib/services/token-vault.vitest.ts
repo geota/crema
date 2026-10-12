@@ -48,7 +48,7 @@ const provide = (next: TokenSet | null) =>
 const failTag = (exit: Exit.Exit<unknown, { readonly _tag?: string }>) =>
 	Exit.isFailure(exit)
 		? (() => {
-				const f = Cause.failureOption(exit.cause);
+				const f = Cause.findErrorOption(exit.cause);
 				return f._tag === 'Some' ? f.value?._tag : undefined;
 			})()
 		: undefined;
@@ -73,7 +73,7 @@ describe('TokenVault.withFreshToken', () => {
 			TokenVault.pipe(
 				Effect.flatMap((v) =>
 					v.storeTokens(tokenAt(FAR, 'fresh')).pipe(
-						Effect.zipRight(v.withFreshToken((t) => Effect.succeed(t)))
+						Effect.andThen(v.withFreshToken((t) => Effect.succeed(t)))
 					)
 				),
 				Effect.provide(provide(tokenAt(FAR, 'REFRESHED')))
@@ -88,7 +88,7 @@ describe('TokenVault.withFreshToken', () => {
 			TokenVault.pipe(
 				Effect.flatMap((v) =>
 					v.storeTokens(tokenAt(SOON, 'stale')).pipe(
-						Effect.zipRight(v.withFreshToken((t) => Effect.succeed(t)))
+						Effect.andThen(v.withFreshToken((t) => Effect.succeed(t)))
 					)
 				),
 				Effect.provide(provide(tokenAt(FAR, 'REFRESHED')))
@@ -104,7 +104,7 @@ describe('TokenVault.withFreshToken', () => {
 			TokenVault.pipe(
 				Effect.flatMap((v) =>
 					v.storeTokens(tokenAt(FAR, 'stale')).pipe(
-						Effect.zipRight(
+						Effect.andThen(
 							v.withFreshToken((token) => {
 								calls += 1;
 								return token === 'REFRESHED'
@@ -127,7 +127,7 @@ describe('TokenVault.withFreshToken', () => {
 			TokenVault.pipe(
 				Effect.flatMap((v) =>
 					v.storeTokens(tokenAt(FAR, 'stale', null)).pipe(
-						Effect.zipRight(
+						Effect.andThen(
 							v.withFreshToken(() => Effect.fail(new HttpStatusError({ status: 401, url: 'u' })))
 						)
 					)
@@ -143,7 +143,7 @@ describe('TokenVault.withFreshToken', () => {
 			TokenVault.pipe(
 				Effect.flatMap((v) =>
 					v.storeTokens(tokenAt(FAR, 'stale')).pipe(
-						Effect.zipRight(
+						Effect.andThen(
 							v.withFreshToken(() => Effect.fail(new HttpStatusError({ status: 500, url: 'u' })))
 						)
 					)

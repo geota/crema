@@ -13,7 +13,7 @@
  *    blocking — a plain `Semaphore.withPermits` would serialise + re-drain,
  *    which changes behavior);
  *  - the 5-min foreground tick becomes `Schedule.spaced("5 minutes")` under
- *    `Effect.forkDaemon` (matching the old never-cleared `setInterval`);
+ *    `Effect.forkDetach` (matching the old never-cleared `setInterval`);
  *  - `runEntry` calls the new `ShotSync` / `BeanSync` services;
  *  - **intentional behavior change (the one in the plan)**: `attempts` now
  *    counts *attempts made*, not *attempts queued*. The old `enqueue()` bumped
@@ -71,7 +71,7 @@ const DEFERRED: DrainResult = { processed: 0, succeeded: 0, dropped: 0, deferred
  */
 type UploadError = VisualizerCallError | ResponseDecodeError;
 
-export class UploadQueue extends Context.Tag('crema/UploadQueue')<
+export class UploadQueue extends Context.Service<
 	UploadQueue,
 	{
 		/**
@@ -85,7 +85,7 @@ export class UploadQueue extends Context.Tag('crema/UploadQueue')<
 		/** Arm the on-launch + 5-min-tick drain loop. Idempotent. */
 		readonly armLifecycle: Effect.Effect<void>;
 	}
->() {}
+>()('crema/UploadQueue') {}
 
 export const UploadQueueLive = Layer.effect(
 	UploadQueue,
@@ -137,12 +137,12 @@ export const UploadQueueLive = Layer.effect(
 			const ready = readQueue().entries.filter((e) => e.nextAttemptAt <= now);
 			for (const entry of ready) {
 				out.processed += 1;
-				const result = yield* Effect.either(runEntry(entry));
-				if (result._tag === 'Right') {
+				const result = yield* Effect.result(runEntry(entry));
+				if (result._tag === 'Success') {
 					yield* dequeue(entry.entity, entry.id, entry.op);
 					out.succeeded += 1;
 				} else {
-					const e = result.left;
+					const e = result.failure;
 					const made = entry.attempts + 1;
 					if (quotaLimit(e) != null) {
 						// The free-plan daily cap: drop the entry (the shot stays
@@ -196,16 +196,16 @@ export const UploadQueueLive = Layer.effect(
 			if (already) return;
 			// `Effect.repeat` runs `tick` ONCE immediately (the startup flush) and
 			// then every 5 min thereafter, so a single daemon covers both. The old
-			// code also armed a separate `forkDaemon(drain)`, double-draining on
+			// code also armed a separate detached `drain` fiber, double-draining on
 			// launch (EF4) — dropped. (Lone nuance: the startup flush now rides
 			// `tick`, which skips while the tab is hidden/offline; at app launch the
 			// tab is visible, and the `online` event + each sync tail still drain, so
-			// a backlog is never stranded.) `forkDaemon` matches the old never-cleared
+			// a backlog is never stranded.) `forkDetach` matches the old never-cleared
 			// `setInterval` lifetime (lives until the runtime is disposed). The
 			// `online` / `visibilitychange` DOM listeners are wired at the call site
 			// at T-16, where the runtime is in scope — bridging DOM events into a
 			// fiber needs the runtime handle (D-07).
-			yield* Effect.forkDaemon(Effect.repeat(tick, Schedule.spaced('5 minutes')));
+			yield* Effect.forkDetach(Effect.repeat(tick, Schedule.spaced('5 minutes')));
 		});
 
 		return UploadQueue.of({

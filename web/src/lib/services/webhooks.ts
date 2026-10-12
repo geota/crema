@@ -57,7 +57,7 @@ function isAllowedWebhookUrl(url: string): boolean {
 	);
 }
 
-export class Webhooks extends Context.Tag('crema/Webhooks')<
+export class Webhooks extends Context.Service<
 	Webhooks,
 	{
 		/**
@@ -69,7 +69,7 @@ export class Webhooks extends Context.Tag('crema/Webhooks')<
 		/** Send a one-shot test delivery to `url`, reporting a readable outcome. */
 		readonly sendTest: (url: string) => Effect.Effect<WebhookTestResult>;
 	}
->() {}
+>()('crema/Webhooks') {}
 
 export const WebhooksLive = Layer.effect(
 	Webhooks,
@@ -99,7 +99,7 @@ export const WebhooksLive = Layer.effect(
 						Effect.asVoid,
 						// No retry — a failed webhook is the user's endpoint's problem; a
 						// log line (BLE debug panel, once wired) is the whole story.
-						Effect.catchAll((cause) =>
+						Effect.catch((cause) =>
 							Effect.logError(`webhook ${eventType} failed: ${describe(cause)}`)
 						)
 					);
@@ -121,7 +121,7 @@ export const WebhooksLive = Layer.effect(
 				});
 				// 1) Real CORS request — reports an actual HTTP status when the
 				//    endpoint supports CORS.
-				const cors = yield* Effect.either(
+				const cors = yield* Effect.result(
 					http.request({
 						url: trimmed,
 						method: 'POST',
@@ -130,16 +130,16 @@ export const WebhooksLive = Layer.effect(
 						timeoutMs: TIMEOUT_MS
 					})
 				);
-				if (cors._tag === 'Right') {
-					return { ok: true, message: `Sent (HTTP ${cors.right.status})` };
+				if (cors._tag === 'Success') {
+					return { ok: true, message: `Sent (HTTP ${cors.success.status})` };
 				}
 				// A non-2xx response is a real, readable status — report it, no retry.
-				if (cors.left._tag === 'HttpStatusError') {
-					return { ok: false, message: `HTTP ${cors.left.status}` };
+				if (cors.failure._tag === 'HttpStatusError') {
+					return { ok: false, message: `HTTP ${cors.failure.status}` };
 				}
 				// 2) CORS blocked (preflight failed → the POST never left) — retry
 				//    opaque, exactly how `fire` delivers live events.
-				const opaque = yield* Effect.either(
+				const opaque = yield* Effect.result(
 					http.request({
 						url: trimmed,
 						method: 'POST',
@@ -149,13 +149,13 @@ export const WebhooksLive = Layer.effect(
 						timeoutMs: TIMEOUT_MS
 					})
 				);
-				if (opaque._tag === 'Right') {
+				if (opaque._tag === 'Success') {
 					return {
 						ok: true,
 						message: 'Sent — opaque response; delivery not confirmable (endpoint lacks CORS)'
 					};
 				}
-				return { ok: false, message: describe(opaque.left) };
+				return { ok: false, message: describe(opaque.failure) };
 			});
 
 		return Webhooks.of({ fire, sendTest });

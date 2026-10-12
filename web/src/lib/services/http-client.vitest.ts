@@ -28,7 +28,7 @@ function run(req: HttpRequest) {
 /** The `_tag` of the failure, or null when the exit succeeded. */
 function failTag(exit: Exit.Exit<unknown, { readonly _tag: string }>): string | null {
 	if (!Exit.isFailure(exit)) return null;
-	const f = Cause.failureOption(exit.cause);
+	const f = Cause.findErrorOption(exit.cause);
 	return f._tag === 'Some' ? f.value._tag : null;
 }
 
@@ -46,7 +46,7 @@ describe('HttpClient.request', () => {
 		const exit = await run({ url: 'https://x/api' });
 		assert.equal(failTag(exit), 'HttpStatusError');
 		if (Exit.isFailure(exit)) {
-			const f = Cause.failureOption(exit.cause);
+			const f = Cause.findErrorOption(exit.cause);
 			assert.ok(f._tag === 'Some');
 			const err = f.value as { status: number; body?: string };
 			assert.equal(err.status, 404);

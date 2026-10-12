@@ -251,7 +251,7 @@ export class CremaApp {
 	 * running. {@link cancelReplay} interrupts it (T-28 — the old
 	 * `AbortController`; `Effect.sleep` pacing is interrupted for free).
 	 */
-	private replayFiber: Fiber.RuntimeFiber<void> | null = null;
+	private replayFiber: Fiber.Fiber<void> | null = null;
 
 	/**
 	 * `performance.now()` of the previous `Telemetry` event, or `null` before

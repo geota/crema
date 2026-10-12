@@ -10,7 +10,7 @@
  * corruption becomes observable. That logging is the only behavior change.
  */
 
-import { Either, Schema } from 'effect';
+import { Result, Schema } from 'effect';
 
 /**
  * Decode `input` against `schema`. On success returns the decoded value; on
@@ -20,12 +20,12 @@ import { Either, Schema } from 'effect';
  * `TokenSet` schema), so the result is `A | F`.
  */
 export function decodeOr<A, I, F>(
-	schema: Schema.Schema<A, I>,
+	schema: Schema.Codec<A, I>,
 	input: unknown,
 	fallback: F,
 	context: string
 ): A | F {
-	return Either.getOrElse(Schema.decodeUnknownEither(schema)(input), (error) => {
+	return Result.getOrElse(Schema.decodeUnknownResult(schema)(input), (error) => {
 		console.warn(`[crema] decode failed (${context})`, error);
 		return fallback;
 	});

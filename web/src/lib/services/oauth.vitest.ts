@@ -23,7 +23,7 @@ const OAuthProvided = Layer.provide(OAuthLive, HttpClientLive);
 
 function failTag(exit: Exit.Exit<unknown, { readonly _tag?: string }>): string | undefined {
 	if (!Exit.isFailure(exit)) return undefined;
-	const f = Cause.failureOption(exit.cause);
+	const f = Cause.findErrorOption(exit.cause);
 	return f._tag === 'Some' ? f.value?._tag : undefined;
 }
 
