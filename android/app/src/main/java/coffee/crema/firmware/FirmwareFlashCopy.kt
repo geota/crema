@@ -48,7 +48,7 @@ fun waitingText(s: FlashStatus): String {
     val old = s.restartedOnBuild
     val now = when {
         s.foreignMachine != null ->
-            "A different DE1 is connected. Crema only accepts the build from the DE1 it updated: connect that one after switching it off and on, or exit."
+            "A different DE1 is connected. Crema only accepts the build from the DE1 it updated: disconnect this one and connect that one, or exit."
         old != null && s.verifyUnconfirmed ->
             "The DE1 reports build $old, not ${s.targetBuild}. If it still says $old after you switch it off and on, the update didn’t take: your DE1 is fine on build $old, and you can exit and try again."
         old != null ->

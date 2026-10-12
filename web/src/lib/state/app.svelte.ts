@@ -1111,7 +1111,8 @@ export class CremaApp {
 		// `BatteryManager::ensureChargerOn`): smart charging may have
 		// switched it off, and nothing would switch it back on once Crema is
 		// gone.
-		if (this.state.current.de1State === 'ready') {
+		// Not while a firmware flash holds the DE1 (the core refuses it too).
+		if (this.state.current.de1State === 'ready' && !(this.firmware?.holdsLink ?? false)) {
 			try {
 				this.applyCoreOutput(await this.core.setUsbChargerOn(true));
 			} catch {

@@ -27,9 +27,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +43,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.core.FirmwareBuildStatus
 import coffee.crema.core.FlashPhase
+import coffee.crema.ble.De1BleManager
 import coffee.crema.firmware.ALPHA_POINTS
 import coffee.crema.firmware.ERASE_SETTLING
 import coffee.crema.firmware.EXIT_QUESTION
@@ -74,7 +75,11 @@ import coffee.crema.ui.components.PhIcon
  * [FirmwareUpdateController]; the flash is the core's state machine.
  */
 @Composable
-fun FirmwareUpdateHost(flow: FirmwareUpdateController, installedBuild: UInt?) {
+fun FirmwareUpdateHost(
+    flow: FirmwareUpdateController,
+    installedBuild: UInt?,
+    link: FirmwareLinkControls,
+) {
     val ui by flow.ui.collectAsStateWithLifecycle()
     if (ui.step == FlowStep.Closed) return
     Dialog(
@@ -106,12 +111,26 @@ fun FirmwareUpdateHost(flow: FirmwareUpdateController, installedBuild: UInt?) {
                     FlowStep.Choose -> ChooseStep(ui, flow, installedBuild)
                     FlowStep.Source -> SourceStep(ui, flow)
                     FlowStep.Confirm -> ConfirmStep(ui, flow, installedBuild)
-                    FlowStep.Flash -> FlashStep(ui, flow, installedBuild)
+                    FlowStep.Flash -> FlashStep(ui, flow, installedBuild, link)
                     FlowStep.Closed -> Unit
                 }
             }
         }
     }
+}
+
+/**
+ * The DE1 link, for the power-cycle step. The modal covers the app while the
+ * flash holds the DE1, so that step carries the link controls itself (audit
+ * r7 M-1 / L-1): Connect when no DE1 is linked (Auto-connect off, or a
+ * permission prompt needed), Disconnect when a different DE1 is connected.
+ */
+data class FirmwareLinkControls(
+    val state: De1BleManager.State,
+    val onConnect: () -> Unit,
+    val onDisconnect: () -> Unit,
+) {
+    val idle: Boolean get() = state == De1BleManager.State.IDLE || state == De1BleManager.State.DISCONNECTED
 }
 
 @Composable
@@ -284,7 +303,7 @@ private fun Kv(k: String, v: String) {
 }
 
 @Composable
-private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateController, installed: UInt?) {
+private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateController, installed: UInt?, link: FirmwareLinkControls) {
     val s = ui.status ?: return
     when {
         ui.running -> {
@@ -330,7 +349,7 @@ private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContro
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
-                "1. Switch the DE1 off with the switch on the back.\n2. Wait 10 seconds.\n3. Switch it on. Crema reconnects and reads the build.",
+                "1. Switch the DE1 off with the switch on the back.\n2. Wait 10 seconds.\n3. Switch it on. Crema reads the build once it reconnects.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Banner(waitingText(s), warn = false)
@@ -344,8 +363,12 @@ private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContro
                     }
                 },
                 right = {
-                    if (ui.confirmingExit) {
-                        CremaButton(onClick = { flow.confirmExit() }, danger = true, variant = CremaButtonVariant.Text, label = "Exit")
+                    when {
+                        ui.confirmingExit ->
+                            CremaButton(onClick = { flow.confirmExit() }, danger = true, variant = CremaButtonVariant.Text, label = "Exit")
+                        s.foreignMachine != null && link.state == De1BleManager.State.READY ->
+                            CremaButton(onClick = link.onDisconnect, variant = CremaButtonVariant.Tonal, label = "Disconnect this DE1")
+                        link.idle -> CremaButton(onClick = link.onConnect, label = "Connect DE1")
                     }
                 },
             )

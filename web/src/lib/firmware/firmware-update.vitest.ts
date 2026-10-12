@@ -250,6 +250,18 @@ describe('FirmwareUpdateController', () => {
 		flow.dispose();
 	});
 
+	it('a held status arriving while the flow is closed reopens it', async () => {
+		const awaiting = status(FlashPhase.AwaitingPowerCycle, { canCancel: false, canExit: true });
+		const flow = new FirmwareUpdateController(
+			deps({ status: { actions: [], status: awaiting }, linkRestored: () => ({ actions: [], status: awaiting }) })
+		);
+		await flow.open();
+		flow.step = 'closed'; // e.g. a view that was closed before the hold began
+		await flow.onLinkUp('dev');
+		expect(flow.step).toBe('flash');
+		flow.dispose();
+	});
+
 	it('a persisted power-cycle marker is restored into the core after a reload and shown', async () => {
 		const store = memoryStore();
 		store.setItem(AWAITING_KEY, JSON.stringify({ build: 1358, unconfirmed: true }));

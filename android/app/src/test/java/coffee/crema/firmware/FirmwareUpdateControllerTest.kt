@@ -274,6 +274,18 @@ class FirmwareUpdateControllerTest {
     }
 
     @Test
+    fun aHeldStatusWhileClosedReopensTheFlow() = runTest {
+        val core = StubCore()
+        val c = controller(core = core)
+        c.open(); runCurrent()
+        c.close(); runCurrent()
+        assertEquals(FlowStep.Closed, c.ui.value.step)
+        core.current = status(FlashPhase.AwaitingPowerCycle, canCancel = false, canExit = true)
+        c.onLinkRestored("AA"); runCurrent()
+        assertEquals(FlowStep.Flash, c.ui.value.step, "the modal comes back while the DE1 is held")
+    }
+
+    @Test
     fun aPersistedPowerCycleMarkerIsRestoredIntoTheCore() = runTest {
         val core = StubCore(current = status(FlashPhase.AwaitingPowerCycle, canCancel = false, canExit = true))
         val c = controller(core = core, markers = MemoryMarkers(FlashMarker(1358u, true)))

@@ -18,6 +18,7 @@
 	import { FlashPhase } from '$lib/core';
 	import { FirmwareBuildStatus } from '$lib/core/crema-core';
 	import { firmwareBuildReport } from '$lib/firmware/build-copy';
+	import type { De1State } from '$lib/ble';
 	import type { FirmwareUpdateController } from '$lib/firmware/firmware-update.svelte';
 	import {
 		ALPHA_POINTS,
@@ -34,8 +35,29 @@
 		waitingText
 	} from '$lib/firmware/flash-copy';
 
-	let { flow, installedBuild }: { flow: FirmwareUpdateController; installedBuild: number | null } =
-		$props();
+	let {
+		flow,
+		installedBuild,
+		de1State = 'idle',
+		onConnect,
+		onDisconnect
+	}: {
+		flow: FirmwareUpdateController;
+		installedBuild: number | null;
+		/** The DE1 link — the power-cycle step offers Connect / Disconnect from it. */
+		de1State?: De1State;
+		/** Open the DE1 chooser (must run from the click: Web Bluetooth). */
+		onConnect?: () => void;
+		onDisconnect?: () => void;
+	} = $props();
+
+	/**
+	 * The modal covers the app while the flash holds the DE1, so the
+	 * power-cycle step carries the link controls itself (audit r7 M-1 / L-1):
+	 * Connect when no DE1 is linked (a reload on web never reconnects on its
+	 * own), Disconnect when a different DE1 is connected.
+	 */
+	const linkIdle = $derived(de1State === 'idle' || de1State === 'disconnected' || de1State === 'failed');
 
 	const EXPECTED_TOKEN = 'UPDATE';
 	let typed = $state('');
@@ -328,7 +350,7 @@
 					<ol class="fu-steps">
 						<li>Switch the DE1 off with the switch on the back.</li>
 						<li>Wait 10 seconds.</li>
-						<li>Switch it on. Crema reconnects and reads the build.</li>
+						<li>Switch it on. Crema reads the build once it reconnects.</li>
 					</ol>
 					<div class="fu-banner fu-banner-info" role="status" aria-live="polite">
 						{waitingText(status)}
@@ -385,13 +407,21 @@
 							</button>
 						{/if}
 					</div>
-					{#if flow.confirmingExit}
-						<div class="fu-actions-right">
+					<div class="fu-actions-right">
+						{#if flow.confirmingExit}
 							<button type="button" class="st-btn st-btn-danger" onclick={() => flow.confirmExit()}>
 								Exit
 							</button>
-						</div>
-					{/if}
+						{:else if status.foreignMachine && de1State === 'ready' && onDisconnect}
+							<button type="button" class="st-btn st-btn-secondary" onclick={onDisconnect}>
+								Disconnect this DE1
+							</button>
+						{:else if linkIdle && onConnect}
+							<button type="button" class="st-btn st-btn-primary" onclick={onConnect}>
+								Connect DE1
+							</button>
+						{/if}
+					</div>
 				{:else if status.phase === FlashPhase.Failed || status.phase === FlashPhase.Cancelled}
 					<div class="fu-actions-left">
 						<button

@@ -191,11 +191,11 @@ class FirmwareUpdateController(
     }
 
     /**
-     * Close. Ignored while a transfer runs; on the power-cycle step it only
-     * hides (the lock stays, reopening returns there); a finished, unlocked
-     * flash is forgotten.
+     * Close. Refused while the flash holds the DE1 (a transfer, an erase that
+     * may still run, the power-cycle wait): the modal blocks the app until
+     * the DE1 restarts or the user Exits. A finished, unlocked flash is
+     * forgotten.
      */
-    /** Close the flow — refused while the flash holds the DE1 (the modal blocks until a restart or Exit). */
     fun close() = scope.launch {
         val s = _ui.value
         if (s.running || s.holdsLink) return@launch

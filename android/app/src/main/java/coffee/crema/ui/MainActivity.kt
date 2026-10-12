@@ -335,7 +335,15 @@ class MainActivity : ComponentActivity() {
                 // The firmware-update flow, app-wide: leaving Settings never
                 // hides a running flash or its power-cycle step (web parity,
                 // audit L4 / M3).
-                FirmwareUpdateHost(viewModel.firmware, ui.de1MachineInfo[coffee.crema.core.MmrRegister.FirmwareVersion])
+                FirmwareUpdateHost(
+                    viewModel.firmware,
+                    ui.de1MachineInfo[coffee.crema.core.MmrRegister.FirmwareVersion],
+                    FirmwareLinkControls(
+                        state = ui.bleState,
+                        onConnect = { withBlePermission(viewModel::connect) },
+                        onDisconnect = viewModel::disconnect,
+                    ),
+                )
                 // Re-usable debug-panel slot (Phase-0 readout) — hosted at the
                 // `debug` route on both form factors.
                 val debugSlot: @Composable () -> Unit = {

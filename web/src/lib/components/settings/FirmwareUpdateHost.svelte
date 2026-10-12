@@ -17,5 +17,11 @@
 </script>
 
 {#if flow && flow.step !== 'closed'}
-	<FirmwareUpdateFlow {flow} installedBuild={machine.firmwareBuild} />
+	<FirmwareUpdateFlow
+		{flow}
+		installedBuild={machine.firmwareBuild}
+		de1State={app?.state.current.de1State ?? 'idle'}
+		onConnect={() => void app?.connectDe1()}
+		onDisconnect={() => void app?.disconnectDe1()}
+	/>
 {/if}

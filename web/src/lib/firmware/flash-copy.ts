@@ -151,7 +151,7 @@ export function waitingText(s: FlashStatus): string {
 	const old = s.restartedOnBuild;
 	let now: string;
 	if (s.foreignMachine) {
-		now = `A different DE1 is connected. Crema only accepts the build from the DE1 it updated: connect that one after switching it off and on, or exit.`;
+		now = `A different DE1 is connected. Crema only accepts the build from the DE1 it updated: disconnect this one and connect that one, or exit.`;
 	} else if (old !== null && old !== undefined && s.verifyUnconfirmed) {
 		now = `The DE1 reports build ${old}, not ${s.targetBuild}. If it still says ${old} after you switch it off and on, the update didn't take: your DE1 is fine on build ${old}, and you can exit and try again.`;
 	} else if (old !== null && old !== undefined) {
