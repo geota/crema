@@ -141,4 +141,30 @@ describe('ScaleManager stale handshake', () => {
 		expect(t.core.disconnectScale.mock.calls.length).toBe(before);
 		expect(t.states).not.toContain('failed');
 	});
+
+	it('a teardown forgets the scale before closing it, so its own disconnect event reports nothing', async () => {
+		const t = setup();
+		const scale = fakeScale();
+		// Like Chromium: closing the link fires the device's disconnect event at once.
+		scale.disconnect.mockImplementation(() => scale.cbs.disconnected?.());
+		const pending = t.attach(scale.device);
+		await Promise.resolve();
+		t.finishes[0](Exit.void);
+		await pending;
+		t.states.length = 0;
+		await t.manager.disconnect();
+		expect(scale.disconnect).toHaveBeenCalledTimes(1);
+		expect(t.states).toEqual(['disconnected']); // the explicit one only
+
+		const next = fakeScale('scale-B');
+		next.disconnect.mockImplementation(() => next.cbs.disconnected?.());
+		const pendingNext = t.attach(next.device);
+		await Promise.resolve();
+		t.finishes[1](Exit.void);
+		await pendingNext;
+		t.states.length = 0;
+		await t.manager.connect(); // Re-pair; the chooser is cancelled
+		expect(next.disconnect).toHaveBeenCalledTimes(1);
+		expect(t.states).toEqual(['connecting', 'failed']);
+	});
 });
