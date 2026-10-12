@@ -34,7 +34,7 @@ class FirmwareBuildCopyTest {
     @Test
     fun build1358IsTheNewestReleaseNoUpdateOffered() {
         val c = firmwareCardCopy(report(FirmwareBuildStatus.Newest, 1358, listOf(DecentFirmwareChannel.Nightly)), connected = true)
-        assertEquals("Build 1358 · newest Decent release", c.title)
+        assertEquals("Build 1358 · newest", c.title)
         assertEquals("Decent has no newer build. Its stable channel is on build 1333.", c.note)
         assertFalse(c.offerUpdate)
     }
@@ -42,8 +42,8 @@ class FirmwareBuildCopyTest {
     @Test
     fun build1333IsDecentStableNotUpToDateAndOffers1358() {
         val c = firmwareCardCopy(report(FirmwareBuildStatus.Stable, 1333), connected = true)
-        assertEquals("Build 1333 · Decent stable", c.title)
-        assertEquals("Newer: build 1358 (nightly).", c.note)
+        assertEquals("Build 1333 · stable", c.title)
+        assertEquals("Decent’s stable build. Newer: build 1358 (nightly).", c.note)
         assertTrue(c.offerUpdate)
         assertFalse("up to date" in (c.title + c.note).lowercase())
     }
@@ -59,21 +59,21 @@ class FirmwareBuildCopyTest {
     @Test
     fun betweenStableAndNewest() {
         val c = firmwareCardCopy(report(FirmwareBuildStatus.BetweenStableAndNewest, 1352), connected = true)
-        assertEquals("Build 1352 · newer than Decent stable", c.title)
+        assertEquals("Build 1352 · newer than stable", c.title)
         assertTrue(c.offerUpdate)
     }
 
     @Test
     fun anOldBuild() {
         val c = firmwareCardCopy(report(FirmwareBuildStatus.OlderThanStable, 1320), connected = true)
-        assertEquals("Build 1320 · older than Decent stable", c.title)
+        assertEquals("Build 1320 · older than stable", c.title)
         assertContains(c.note, "1333")
     }
 
     @Test
     fun build1363IsRolledBackNotNewer() {
         val c = firmwareCardCopy(report(FirmwareBuildStatus.RolledBack, 1363), connected = true)
-        assertEquals("Build 1363 · rolled-back build", c.title)
+        assertEquals("Build 1363 · withdrawn", c.title)
         assertContains(c.note, "isn’t newer than build 1358")
         assertTrue(c.offerUpdate)
     }
@@ -81,7 +81,7 @@ class FirmwareBuildCopyTest {
     @Test
     fun aBuildAboveTheNewestKnown() {
         val c = firmwareCardCopy(report(FirmwareBuildStatus.NewerThanKnown, 1370), connected = true)
-        assertEquals("Build 1370 · newer than Crema knows about", c.title)
+        assertEquals("Build 1370 · newer than Crema knows", c.title)
         assertContains(c.note, "2026-10-11")
         assertFalse(c.offerUpdate)
     }

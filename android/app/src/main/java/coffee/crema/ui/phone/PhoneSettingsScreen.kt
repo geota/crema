@@ -58,6 +58,7 @@ import coffee.crema.ui.screens.ghcRequired
 import coffee.crema.ui.screens.STOLEN_SERIAL_NOTICE
 import coffee.crema.ui.screens.hasCupWarmerPlate
 import coffee.crema.ui.screens.firmwareLabel
+import coffee.crema.ui.screens.FirmwareUpdateButton
 import coffee.crema.ui.screens.FirmwareCopyBody
 import coffee.crema.ui.rememberFirmwareCardCopy
 import coffee.crema.core.MmrRegister
@@ -169,8 +170,6 @@ fun PhoneSettingsScreen(
                         "display" -> DisplaySection(
                             vm, ui.themeMode, ui.keepScreenOnBrew,
                             density, { density = it },
-                            idleSleepMin = ui.idleSleepMin,
-                            sleepOnQuit = ui.sleepOnQuit,
                             screensaverAfterMin = ui.screensaverAfterMin,
                             wakeMachineWithSaver = ui.wakeMachineWithSaver,
                             tempUnit = ui.tempUnit,
@@ -354,12 +353,17 @@ private fun MachineSection(
                             .padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        Eyebrow("Firmware", color = MaterialTheme.colorScheme.primary)
-                        FirmwareCopyBody(
-                            copy,
-                            onUpdate = if (connected || firmwareFlow.status != null) ({ vm.firmware.open() }) else null,
-                            emphasize = firmwareFlow.status != null,
-                        )
+                        // The button shares the header row (right-aligned) so the
+                        // card is one row shorter on a phone.
+                        val onUpdate: (() -> Unit)? =
+                            if (connected || firmwareFlow.status != null) ({ vm.firmware.open() }) else null
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Eyebrow("Firmware", color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+                            if (onUpdate != null) {
+                                FirmwareUpdateButton(copy, onUpdate, emphasize = firmwareFlow.status != null)
+                            }
+                        }
+                        FirmwareCopyBody(copy)
                     }
                 }
                 CremaButton(
@@ -442,6 +446,16 @@ private fun MachineSection(
             else "A group head controller is fitted. Crema can still start shots directly."
         CremaSettingsRow("Group Head Controller (GHC)", ghcSub, last = true, needsConnection = !connected) {
             CremaMonoReadout(ghcLabel, strong = true)
+        }
+    }
+    // Machine sleep: the core's idle-sleep timer (de1app "Cool down after",
+    // Decenza autoSleepMinutes) and sleep-on-quit — same setting as the tablet.
+    SettingsGroup("Machine sleep") {
+        IdleSleepRow(ui.idleSleepMin, vm::setIdleSleepMin, CremaStepperStyle.BareCompact)
+        // Quit ≠ background: the swipe-away signal rides a tiny service's
+        // onTaskRemoved (see QuitSleep) — best-effort, idle-only, primary-only.
+        CremaSettingsRow("Sleep the DE1 when you quit Crema", "Swiping Crema out of recents puts an idle machine to sleep straight away (best effort). Just switching apps never sleeps it.", last = true) {
+            CremaSwitch(ui.sleepOnQuit, vm::setSleepOnQuit)
         }
     }
     SettingsGroup("Identity") {
@@ -781,8 +795,6 @@ private fun DisplaySection(
     themeMode: String,
     keepScreenOnBrew: Boolean,
     density: String, onDensity: (String) -> Unit,
-    idleSleepMin: Int,
-    sleepOnQuit: Boolean,
     screensaverAfterMin: Int,
     wakeMachineWithSaver: Boolean,
     tempUnit: String,
@@ -807,16 +819,6 @@ private fun DisplaySection(
                 onChange = onDensity,
                 fillWidth = true,
             )
-        }
-    }
-    // Machine sleep: the core's idle-sleep timer (de1app "Cool down after",
-    // Decenza autoSleepMinutes) and sleep-on-quit — same setting as the tablet.
-    SettingsGroup("Machine sleep") {
-        IdleSleepRow(idleSleepMin, vm::setIdleSleepMin, CremaStepperStyle.BareCompact)
-        // Quit ≠ background: the swipe-away signal rides a tiny service's
-        // onTaskRemoved (see QuitSleep) — best-effort, idle-only, primary-only.
-        CremaSettingsRow("Sleep the DE1 when you quit Crema", "Swiping Crema out of recents puts an idle machine to sleep straight away (best effort). Just switching apps never sleeps it.", last = true) {
-            CremaSwitch(sleepOnQuit, vm::setSleepOnQuit)
         }
     }
     SettingsGroup("Screensaver") {

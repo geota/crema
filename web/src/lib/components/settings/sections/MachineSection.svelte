@@ -43,6 +43,7 @@
 	import { MachineState, MmrRegister } from '$lib/core/crema-core';
 	import { machineModelName, hasCupWarmer } from '$lib/wasm/de1_wasm';
 	import { getSettingsStore } from '$lib/settings';
+	import { idleSleepChoices, idleSleepLabel } from '$lib/state/idle-sleep';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -65,6 +66,20 @@
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
+
+	/** "Sleep after" — the core's choices (Never / 15 / 30 / 60 / 90 / 120 min). */
+	const idleSleepOptions = idleSleepChoices().map((m) => ({
+		value: String(m),
+		label: idleSleepLabel(m)
+	}));
+
+	/** Persist the idle-sleep timeout and restart the core's timer from now. */
+	function setIdleSleepMin(value: string): void {
+		const minutes = Number(value);
+		if (!Number.isFinite(minutes)) return;
+		settings.set('idleSleepMin', minutes);
+		app?.idleSleep.configure(minutes);
+	}
 	const machine = getMachineReadout();
 
 	/**
@@ -447,6 +462,23 @@
 						? 'Required'
 						: 'Installed'
 					: 'Not installed'}
+			/>
+		{/snippet}
+	</StRow>
+</StGroup>
+
+<!-- Machine sleep — the core's idle-sleep timer (de1app "Cool down after",
+     Decenza auto-sleep). Same setting on every device (CommonSettings). -->
+<StGroup title="Machine sleep">
+	<StRow
+		title="Sleep after"
+		sub="Put the DE1 to sleep after this long unused — no touches in Crema, no brewing, steaming or rinsing. Scale readings don't count."
+	>
+		{#snippet control()}
+			<StSelect
+				value={String(prefs.idleSleepMin)}
+				options={idleSleepOptions}
+				onChange={setIdleSleepMin}
 			/>
 		{/snippet}
 	</StRow>
