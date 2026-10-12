@@ -137,7 +137,8 @@ export class ScaleManager {
 				optionalServices: scan.service_uuids
 			});
 		} catch (error) {
-			this.device = null;
+			// The previous device was already dropped above; whatever is current
+			// now (nothing, or a connect that raced this chooser) is left alone.
 			this.callbacks.onState('failed');
 			this.callbacks.onStatus(`Scale connection failed: ${describeError(error)}`);
 			return;
