@@ -27,9 +27,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,15 +37,12 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.core.FirmwareBuildStatus
 import coffee.crema.core.FlashPhase
-import coffee.crema.core.FlashStatus
 import coffee.crema.firmware.ALPHA_POINTS
 import coffee.crema.firmware.ERASE_SETTLING
 import coffee.crema.firmware.EXIT_QUESTION
@@ -59,7 +56,6 @@ import coffee.crema.firmware.cancelQuestion
 import coffee.crema.firmware.channelLabel
 import coffee.crema.firmware.etaText
 import coffee.crema.firmware.failureText
-import coffee.crema.firmware.heldBannerText
 import coffee.crema.firmware.waitingText
 import coffee.crema.firmware.phaseLabel
 import coffee.crema.ui.components.CremaButton
@@ -72,7 +68,7 @@ import coffee.crema.ui.components.PhIcon
  * parity with `FirmwareUpdateFlow.svelte`. Alpha warning (click-through) →
  * choose a build → download from Decent and verify → type UPDATE → progress
  * (phase, percent, ETA, a confirmed Cancel until verify) → switch the DE1 off
- * and on (waiting / reconnect states, Hide, a confirmed Exit) → the read-back
+ * and on (waiting / reconnect states, a confirmed Exit) → the read-back
  * result, or a failure with Retry. Every step has one footer row: the way back
  * on the left, the actions on the right. State lives in
  * [FirmwareUpdateController]; the flash is the core's state machine.
@@ -84,7 +80,8 @@ fun FirmwareUpdateHost(flow: FirmwareUpdateController, installedBuild: UInt?) {
     Dialog(
         onDismissRequest = { flow.close() },
         properties = DialogProperties(
-            dismissOnBackPress = !ui.running,
+            // Can't be dismissed while the flash holds the DE1.
+            dismissOnBackPress = !ui.running && !ui.holdsLink,
             dismissOnClickOutside = false,
             usePlatformDefaultWidth = false,
         ),
@@ -349,8 +346,6 @@ private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContro
                 right = {
                     if (ui.confirmingExit) {
                         CremaButton(onClick = { flow.confirmExit() }, danger = true, variant = CremaButtonVariant.Text, label = "Exit")
-                    } else {
-                        CremaButton(onClick = { flow.close() }, label = "Hide")
                     }
                 },
             )
@@ -371,41 +366,11 @@ private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContro
                     CremaButton(
                         onClick = { flow.close() },
                         variant = CremaButtonVariant.Text,
-                        label = if (s.locksWrites) "Hide" else "Close",
+                        enabled = !s.locksWrites,
+                        label = "Close",
                     )
                 },
                 right = { CremaButton(onClick = { flow.retry() }, enabled = !s.locksWrites, label = "Retry") },
-            )
-        }
-    }
-}
-
-/** The app-wide notice while a hidden flash holds the DE1 (see [heldBannerText]). */
-@Composable
-fun FirmwareHeldBanner(status: FlashStatus?, onOpen: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(
-        onClick = onOpen,
-        shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        shadowElevation = 6.dp,
-        modifier = modifier
-            .widthIn(max = 640.dp)
-            .heightIn(min = 48.dp)
-            .semantics { liveRegion = LiveRegionMode.Polite },
-    ) {
-        Row(
-            Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            PhIcon("arrows-clockwise", sizeDp = 18)
-            Text(heldBannerText(status), style = MaterialTheme.typography.labelLarge)
-            Text(
-                "View",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                textDecoration = TextDecoration.Underline,
             )
         }
     }

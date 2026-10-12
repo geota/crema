@@ -251,7 +251,7 @@ class FirmwareUpdateControllerTest {
     }
 
     @Test
-    fun thePowerCycleStepHidesPersistsAndExitAsksFirst() = runTest {
+    fun thePowerCycleStepCannotCloseAndExitAsksFirst() = runTest {
         val markers = MemoryMarkers()
         val core = StubCore(current = status(FlashPhase.AwaitingPowerCycle, canCancel = false, canExit = true))
         val c = controller(core = core, markers = markers)
@@ -259,10 +259,8 @@ class FirmwareUpdateControllerTest {
         assertTrue(c.ui.value.holdsLink)
         assertEquals(FlashMarker(1358u, false), markers.value)
         c.close(); runCurrent()
-        assertEquals(FlowStep.Closed, c.ui.value.step)
-        assertEquals(FlashPhase.AwaitingPowerCycle, c.ui.value.status?.phase, "hidden, still held")
-        c.open(); runCurrent()
-        assertEquals(FlowStep.Flash, c.ui.value.step)
+        assertEquals(FlowStep.Flash, c.ui.value.step, "held: the modal stays up")
+        assertEquals(FlashPhase.AwaitingPowerCycle, c.ui.value.status?.phase)
         c.requestExit()
         assertTrue(c.ui.value.confirmingExit)
         c.keepWaiting()
@@ -294,7 +292,8 @@ class FirmwareUpdateControllerTest {
         c.retry(); runCurrent()
         assertEquals(FlowStep.Flash, c.ui.value.step)
         c.close(); runCurrent()
-        assertEquals(FlashPhase.Failed, c.ui.value.status?.phase, "hiding keeps the held flash")
+        assertEquals(FlowStep.Flash, c.ui.value.step, "no closing while the erase may still run")
+        assertEquals(FlashPhase.Failed, c.ui.value.status?.phase)
     }
 
     @Test
@@ -395,15 +394,12 @@ class FirmwareUpdateControllerTest {
     }
 
     @Test
-    fun theBannerAndWaitingCopyFollowTheStatus() {
+    fun theWaitingCopyFollowsTheStatus() {
         val awaiting = status(FlashPhase.AwaitingPowerCycle)
-        assertContains(heldBannerText(awaiting), "waiting for the DE1 to restart")
-        assertContains(heldBannerText(status(FlashPhase.Failed, eraseSettling = true)), "may still be erasing")
         assertContains(waitingText(awaiting.copy(machineRestarted = true, linkUp = true)), "Reading its build")
         assertContains(waitingText(awaiting.copy(machineRestarted = true)), "offline")
         assertContains(waitingText(awaiting.copy(restartedOnBuild = 1333u, verifyUnconfirmed = true)), "didn’t take")
         assertContains(waitingText(awaiting.copy(foreignMachine = "BB")), "A different DE1 is connected")
         assertContains(waitingText(awaiting.copy(machineRestarted = true, linkUp = true, identityUnknown = true)), "can’t confirm this is the DE1")
-        assertContains(heldBannerText(awaiting.copy(foreignMachine = "BB")), "a different DE1 is connected")
     }
 }

@@ -133,7 +133,11 @@ class FirmwareUpdateController(
     /** Called by the driver's status callback. */
     private fun onStatus(status: FlashStatus?) {
         val wasHeld = _ui.value.holdsLink
-        _ui.update { it.copy(status = status) }
+        // The flow stays on screen for as long as the flash holds the DE1:
+        // it's the only place to watch, wait or Exit.
+        _ui.update {
+            it.copy(status = status, step = if (status?.locksWrites == true && it.step == FlowStep.Closed) FlowStep.Flash else it.step)
+        }
         persist(status)
         if (wasHeld && status?.locksWrites != true) onRelease()
     }
@@ -191,9 +195,10 @@ class FirmwareUpdateController(
      * hides (the lock stays, reopening returns there); a finished, unlocked
      * flash is forgotten.
      */
+    /** Close the flow — refused while the flash holds the DE1 (the modal blocks until a restart or Exit). */
     fun close() = scope.launch {
         val s = _ui.value
-        if (s.running) return@launch
+        if (s.running || s.holdsLink) return@launch
         if (s.status != null && !s.holdsLink) driver.dismiss()
         _ui.update { it.copy(step = FlowStep.Closed, confirmingCancel = false, confirmingExit = false) }
     }

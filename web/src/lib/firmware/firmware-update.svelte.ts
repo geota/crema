@@ -155,6 +155,9 @@ export class FirmwareUpdateController {
 				const wasHeld = this.status?.locksWrites ?? false;
 				this.status = s;
 				this.persist(s);
+				// The flow stays on screen for as long as the flash holds the
+				// DE1: it's the only place to watch, wait or Exit.
+				if (s?.locksWrites && this.step === 'closed') this.step = 'flash';
 				if (wasHeld && !(s?.locksWrites ?? false)) deps.onRelease?.();
 			},
 			onLog: deps.log,
@@ -266,12 +269,13 @@ export class FirmwareUpdateController {
 	}
 
 	/**
-	 * Close the flow. While a transfer runs it can't close. On the power-cycle
-	 * step it only hides (the lock stays; reopening returns there). A finished
-	 * flash is forgotten.
+	 * Close the flow. It can't close while the flash holds the DE1 (a
+	 * transfer, an erase that may still run, the power-cycle wait): the
+	 * modal blocks the app until the DE1 restarts or the user Exits. A
+	 * finished flash is forgotten.
 	 */
 	async close(): Promise<void> {
-		if (this.running) return;
+		if (this.running || this.holdsLink) return;
 		this.confirmingCancel = false;
 		this.confirmingExit = false;
 		if (this.status !== null && !this.status.locksWrites) {

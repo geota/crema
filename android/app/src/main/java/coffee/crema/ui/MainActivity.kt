@@ -565,17 +565,6 @@ class MainActivity : ComponentActivity() {
                     hostState = snackbarHostState,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
                 )
-                // A firmware flash (or its erase / restart wait) still holds the
-                // DE1 while its flow is hidden: say so on every screen, one tap
-                // from the flow and its Exit (audit r2 M-B).
-                val fwFlow = viewModel.firmware.ui.collectAsStateWithLifecycle().value
-                if (fwFlow.holdsLink && fwFlow.step == coffee.crema.firmware.FlowStep.Closed) {
-                    FirmwareHeldBanner(
-                        status = fwFlow.status,
-                        onOpen = { viewModel.firmware.open() },
-                        modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 16.dp, end = 16.dp),
-                    )
-                }
                 // Host-side TOFU pairing prompt (issue 02) — a new device wants to
                 // mirror this machine. Modal over any screen; dismiss = Deny.
                 ui.pendingPairing?.let { prompt ->

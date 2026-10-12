@@ -73,7 +73,7 @@
 	}
 
 	function onKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape' && !running) {
+		if (e.key === 'Escape' && !running && !flow.holdsLink) {
 			e.stopPropagation();
 			void flow.close();
 		}
@@ -385,23 +385,20 @@
 							</button>
 						{/if}
 					</div>
-					<div class="fu-actions-right">
-						{#if flow.confirmingExit}
+					{#if flow.confirmingExit}
+						<div class="fu-actions-right">
 							<button type="button" class="st-btn st-btn-danger" onclick={() => flow.confirmExit()}>
 								Exit
 							</button>
-						{:else}
-							<button type="button" class="st-btn st-btn-primary" onclick={() => flow.close()}>
-								Hide
-							</button>
-						{/if}
-					</div>
+						</div>
+					{/if}
 				{:else if status.phase === FlashPhase.Failed || status.phase === FlashPhase.Cancelled}
 					<div class="fu-actions-left">
 						<button
 							type="button"
 							class="st-btn st-btn-secondary"
-							onclick={() => flow.close()}>{status.locksWrites ? 'Hide' : 'Close'}</button
+							disabled={status.locksWrites}
+							onclick={() => flow.close()}>Close</button
 						>
 					</div>
 					<div class="fu-actions-right">

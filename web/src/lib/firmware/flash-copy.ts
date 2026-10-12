@@ -169,17 +169,3 @@ export function waitingText(s: FlashStatus): string {
 			: '';
 	return `${now}${unsure} Crema keeps other commands away from the DE1 until then.`;
 }
-
-/** The app-wide notice while a hidden flash holds the DE1. */
-export function heldBannerText(s: FlashStatus | null): string {
-	if (s?.foreignMachine) {
-		return 'Firmware update waiting for the DE1 it updated — a different DE1 is connected; DE1 control paused';
-	}
-	if (s?.phase === FlashPhase.AwaitingPowerCycle) {
-		return 'Firmware update waiting for the DE1 to restart — DE1 control paused';
-	}
-	if (s?.eraseSettling) {
-		return 'Firmware update stopped; the DE1 may still be erasing — DE1 control paused';
-	}
-	return 'Firmware update in progress — DE1 control paused';
-}

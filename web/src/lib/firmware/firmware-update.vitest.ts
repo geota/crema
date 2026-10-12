@@ -15,7 +15,7 @@ import {
 	type FlashStatus,
 	type FlashStep
 } from '$lib/core/crema-core';
-import { heldBannerText, waitingText } from './flash-copy';
+import { waitingText } from './flash-copy';
 import {
 	AWAITING_KEY,
 	markerFor,
@@ -221,7 +221,7 @@ describe('FirmwareUpdateController', () => {
 		flow.dispose();
 	});
 
-	it('the power-cycle step hides rather than closes, and exit asks first', async () => {
+	it('the power-cycle step cannot be closed, and exit asks first', async () => {
 		const store = memoryStore();
 		const d = deps({
 			store,
@@ -239,9 +239,8 @@ describe('FirmwareUpdateController', () => {
 			machine: null
 		});
 		await flow.close();
-		expect(flow.step).toBe('closed');
-		expect(flow.status?.phase).toBe(FlashPhase.AwaitingPowerCycle); // still held
-		await flow.open();
+		expect(flow.step).toBe('flash'); // held: the modal stays up
+		expect(flow.status?.phase).toBe(FlashPhase.AwaitingPowerCycle);
 		flow.requestExit();
 		expect(flow.confirmingExit).toBe(true);
 		await flow.confirmExit();
@@ -374,12 +373,8 @@ describe('FirmwareUpdateController', () => {
 		expect(markerFor(null, 'dev', 0)).toBeNull();
 	});
 
-	it('the banner and waiting copy follow the status', () => {
+	it('the waiting copy follows the status', () => {
 		const awaiting = status(FlashPhase.AwaitingPowerCycle);
-		expect(heldBannerText(awaiting)).toContain('waiting for the DE1 to restart');
-		expect(heldBannerText(status(FlashPhase.Failed, { eraseSettling: true }))).toContain(
-			'may still be erasing'
-		);
 		expect(waitingText({ ...awaiting, machineRestarted: true, linkUp: true })).toContain(
 			'Reading its build'
 		);
@@ -391,7 +386,6 @@ describe('FirmwareUpdateController', () => {
 		expect(waitingText({ ...awaiting, machineRestarted: true, linkUp: true, identityUnknown: true })).toContain(
 			"can't confirm this is the DE1 it updated"
 		);
-		expect(heldBannerText({ ...awaiting, foreignMachine: 'dev-B' })).toContain('a different DE1 is connected');
 	});
 
 	it('the shell hears when the flash lets go of the link', async () => {
