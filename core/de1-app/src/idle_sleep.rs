@@ -50,7 +50,13 @@ impl CremaCore {
                 }
             }
             IdleSleepInput::Activity { .. } => {
-                if !self.read_only && self.idle_sleep.activity(now_ms) {
+                // No presence poke into a DE1 a firmware flash holds (its
+                // transfer, erase hold or reboot window): the activity still
+                // counts, but the write would be refused anyway.
+                if !self.read_only
+                    && self.idle_sleep.activity(now_ms)
+                    && !self.firmware_locks_writes()
+                {
                     out = self.set_user_present(true);
                 }
             }
@@ -87,9 +93,18 @@ impl CremaCore {
     /// Espresso entry to its recorded completion), a profile upload, a
     /// guided brew (armed, running or paused), a maintenance cycle the core
     /// is following (Descale / Clean / AirPurge, including the
-    /// cold-firmware preheat hold).
+    /// cold-firmware preheat hold), and a firmware flash for as long as it
+    /// holds the DE1 (transfer, erase hold, power-cycle wait).
+    ///
+    /// The flash pins the countdown like the others rather than merely
+    /// having its Sleep refused: a refused expiry would leave the policy
+    /// believing it had sent (then "unconfirmed", then a retry), while a pin
+    /// keeps restarting the countdown, so it starts over from the moment the
+    /// lock releases — the flash's own Sleep (before flashing, after a cancel)
+    /// is never doubled and nothing fires the instant the lock lets go.
     pub(crate) fn idle_sleep_busy(&self) -> bool {
-        self.shot_started.is_some()
+        self.firmware_locks_writes()
+            || self.shot_started.is_some()
             || self.post_shot_settle.is_some()
             || self.profile_upload.is_some()
             || self.brew_session.as_ref().is_some_and(|session| {
@@ -437,5 +452,48 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn a_firmware_flash_pins_the_idle_timer_and_it_restarts_on_release() {
+        let mut core = CremaCore::new();
+        report(&mut core, MachineState::Idle, 0);
+        core.idle_sleep(IdleSleepInput::Configure { minutes: 15 }, T0);
+        core.idle_sleep(IdleSleepInput::Link { ready: true }, T0);
+        // A power-cycle wait holds the DE1 (as after a verify or a restore).
+        core.firmware_flash_restore_awaiting(1358, false, 1_000);
+        assert!(core.firmware_locks_writes());
+        let mut now = T0;
+        for _ in 0..80 {
+            now += 30_000; // 40 min of ticks, well past 15
+            let out = tick(&mut core, now);
+            assert_eq!(sleep_writes(&out), 0, "no idle Sleep mid-flash");
+            assert!(
+                !out.events
+                    .iter()
+                    .any(|e| matches!(e, Event::FirmwareLockoutHit { .. })),
+                "pinned, not refused"
+            );
+        }
+        // Activity during the flash: no UserPresent poke.
+        let poke = core.idle_sleep(
+            IdleSleepInput::Activity {
+                kind: IdleActivity::Touch,
+            },
+            now,
+        );
+        assert!(poke.commands.is_empty(), "no presence poke into a held DE1");
+        // The lock releases (the user exits the power-cycle step).
+        assert!(core.firmware_flash_exit());
+        let out = tick(&mut core, now + 30_000);
+        assert_eq!(
+            sleep_writes(&out),
+            0,
+            "the countdown starts over at release"
+        );
+        let out = tick(&mut core, now + 14 * MIN);
+        assert_eq!(sleep_writes(&out), 0);
+        let out = tick(&mut core, now + 15 * MIN + 30_000);
+        assert_eq!(sleep_writes(&out), 1, "normal behaviour after release");
     }
 }

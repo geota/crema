@@ -978,8 +978,9 @@ export class CremaApp {
 		if (this.state.current.de1State !== 'ready') return;
 		this.sweep.onDe1State('ready');
 		this.ensureLoadedMatches();
-		// The connect-time presence poke a held reconnect skipped (r2 NOTE 3).
-		if (getSettingsStore().current.suppressDe1Sleep) void this.markUserPresent();
+		// No presence poke here: the idle-sleep timer (#139) pokes on real
+		// activity only, and the core pinned its countdown while the flash
+		// held the DE1, so it starts over from this release.
 	}
 
 	/** What the shell knows for the firmware-flash preconditions. */

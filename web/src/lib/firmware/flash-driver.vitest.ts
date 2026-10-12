@@ -28,6 +28,9 @@ import {
 	type FlashStep
 } from '$lib/core/crema-core';
 import { FlashDriver, withTimeout, type FlashCore, type FlashIo } from './flash-driver';
+import type { CoreOutput } from '$lib/core';
+import { IdleActivity } from '$lib/core/crema-core';
+import { IdleSleepRunner } from '$lib/state/idle-sleep';
 
 beforeAll(initTestWasm);
 
@@ -524,6 +527,55 @@ describe('FlashDriver with the real core', () => {
 		const s = await reconnectAfterBrowserRestart({ boundSerial: 0, deviceSerial: 0 });
 		expect(s?.foreignMachine ?? null).toBeNull();
 		expect(s?.identityUnknown).toBe(true);
+	});
+
+	it('the idle-sleep timer sends no Sleep while a flash holds the DE1, and counts down afresh after release', async () => {
+		// The real core behind #139's IdleSleepRunner, as the app wires it.
+		const bridge = readyBridge();
+		let now = 10_000_000;
+		const applied: CoreOutput[] = [];
+		const runner = new IdleSleepRunner({
+			core: {
+				idleSleep: async (input, nowMs) =>
+					JSON.parse(bridge.idle_sleep(JSON.stringify(input), nowMs)) as CoreOutput
+			},
+			apply: (out) => applied.push(out),
+			now: () => now,
+			minutes: () => 15
+		});
+		const sleeps = () =>
+			applied.flatMap((o) => o.commands).filter(
+				(c) =>
+					c.type === 'WriteCharacteristic' &&
+					c.content.target === WriteTarget.De1RequestedState &&
+					c.content.data.length === 1 &&
+					c.content.data[0] === 0
+			).length;
+		const flush = () => new Promise((r) => setTimeout(r, 0));
+		runner.onDe1State('ready');
+		// A flash holds the DE1 (here: the power-cycle wait).
+		bridge.firmware_flash_restore_awaiting(1358, false, 1_000);
+		for (let i = 0; i < 80; i++) {
+			now += 30_000; // 40 min of ticks, past the 15 min timeout
+			runner.tick();
+			await flush();
+		}
+		runner.activity(IdleActivity.Touch);
+		await flush();
+		expect(sleeps()).toBe(0);
+		expect(applied.flatMap((o) => o.commands)).toEqual([]); // no presence poke either
+		// Released: the countdown starts over from here.
+		expect(bridge.firmware_flash_exit()).toBe(true);
+		now += 30_000;
+		runner.tick();
+		now += 13 * 60_000;
+		runner.tick();
+		await flush();
+		expect(sleeps()).toBe(0);
+		now += 2.5 * 60_000;
+		runner.tick();
+		await flush();
+		expect(sleeps()).toBe(1);
 	});
 
 	it('the core\'s per-attempt diagnostic lines reach the log', async () => {

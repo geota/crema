@@ -87,6 +87,22 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   asleep it isn't sent again, and nothing is sent while disconnected. Waking
   the machine at the group head starts the timer over. On a Bengle the same
   timeout is also set in the machine's own firmware timer. Web and Android.
+- **The firmware card no longer says "Up to date" without checking** — on
+  Android it said so whenever a DE1 was connected. Settings → Machine now
+  shows the installed build and what it means against a dated list of
+  Decent's builds: "Build 1358 · newest Decent release", "Build 1333 ·
+  Decent stable", "Build 1352 · newer than Decent stable", "older than
+  Decent stable", or "newer than Crema knows about". The 2023 build 1363,
+  which Decent withdrew, reads as a rolled-back build instead of newer than
+  1358. Web, tablet and phone (the phone hero gains the card).
+- **No more advice to get build 1358 from de1app's stable channel** — the
+  web card used to say to, though de1app's stable and beta versions install
+  build 1333, and its "Update firmware…" button ended in "not yet
+  implemented". The card now says which build is newer, and the button
+  opens the real update.
+- **Firmware verify request matches Decent's apps** — the request that asks
+  the DE1 to verify an uploaded image now sets the map flag the way de1app,
+  decaid and Decenza do.
 
 ### Changed
 
@@ -104,25 +120,6 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   the DE1 every minute while it's on screen (Android) or on every touch
   (web); it tells the machine you're present only when you actually use
   Crema, at most every 30 seconds. Web and Android.
-
-- **The firmware card no longer says "Up to date" without checking** — on
-  Android it said so whenever a DE1 was connected. Settings → Machine now
-  shows the installed build and what it means against a dated list of
-  Decent's builds: "Build 1358 · newest Decent release", "Build 1333 ·
-  Decent stable", "Build 1352 · newer than Decent stable", "older than
-  Decent stable", or "newer than Crema knows about". The 2023 build 1363,
-  which Decent withdrew, reads as a rolled-back build instead of newer than
-  1358. Web, tablet and phone (the phone hero gains the card).
-
-- **No more advice to get build 1358 from de1app's stable channel** — the
-  web card used to say to, though de1app's stable and beta versions install
-  build 1333, and its "Update firmware…" button ended in "not yet
-  implemented". The card now says which build is newer, and the button
-  opens the real update.
-
-- **Firmware verify request matches Decent's apps** — the request that asks
-  the DE1 to verify an uploaded image now sets the map flag the way de1app,
-  decaid and Decenza do.
 
 ## [0.0.7] — 2026-10-08
 
