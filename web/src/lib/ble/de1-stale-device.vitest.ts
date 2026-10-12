@@ -6,6 +6,8 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { Exit } from 'effect';
+import type { AppRuntime } from '$lib/effect/runtime';
 import type { CremaCore } from '$lib/core';
 import { De1Manager } from './de1';
 import type { De1Transport } from './de1-transport';
@@ -51,5 +53,39 @@ describe('De1Manager stale device', () => {
 		expect(states).toEqual([]);
 		expect(de1LinkLost).toHaveBeenCalledTimes(1);
 		expect(lost).toHaveBeenCalledTimes(1);
+	});
+
+	it('a connect replaced while its program runs leaves the replacement alone (audit r10 L-2)', async () => {
+		const states: string[] = [];
+		const finishes: ((exit: Exit.Exit<void, never>) => void)[] = [];
+		const runtime = {
+			runPromiseExit: () => new Promise((resolve) => finishes.push(resolve))
+		} as unknown as AppRuntime;
+		const de1LinkLost = vi.fn(async () => ({ actions: [] }));
+		const manager = new De1Manager(
+			{ de1LinkLost, reset: async () => ({ actions: [] }) } as unknown as CremaCore,
+			{
+				onCoreOutput: () => undefined,
+				onStatus: () => undefined,
+				onState: (s) => states.push(s),
+				onDiagnostics: () => undefined
+			},
+			runtime
+		);
+		const attach = (d: De1Transport) =>
+			(manager as unknown as { attach(d: De1Transport): Promise<void> }).attach(d);
+		const first = fakeDevice();
+		const pending = attach(first.device);
+		await Promise.resolve();
+		// The user disconnects mid-handshake, then a replacement starts.
+		await manager.disconnect();
+		const second = fakeDevice();
+		void attach(second.device);
+		states.length = 0;
+		finishes[0](Exit.void); // the first handshake completes late
+		await pending;
+		expect(states).not.toContain('ready');
+		expect(second.disconnect).not.toHaveBeenCalled();
+		expect(manager.identity()?.id).toBe('dev-A');
 	});
 });

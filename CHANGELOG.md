@@ -36,7 +36,8 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **Reconnecting the DE1 in the browser no longer drops the new link** —
   connecting while Crema was still retrying the old connection could let
   that old attempt land afterwards, drop the new connection and show
-  "disconnected". The old attempt is now cancelled and ignored. Web.
+  "disconnected". Crema now stops retrying the old connection once you
+  connect or disconnect, and ignores anything it reports afterwards. Web.
 - **A DE1 that isn't on your Decent account no longer retries forever.**
   Decent answers HTTP 403 when the machine's serial isn't registered to the
   linked account (de1app `5b09f6aa`). Crema treated that as a passing server

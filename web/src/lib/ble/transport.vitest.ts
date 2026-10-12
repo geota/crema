@@ -181,6 +181,23 @@ describe('BleDevice reconnect kick', () => {
 		expect(t.recorder.timelines[0].outcome).toBe('cancelled');
 	});
 
+	it('a disconnect between connect retries starts no further connect (audit r10 L-1)', async () => {
+		const t = setup();
+		t.drop();
+		// Into the first attempt: its gatt.connect() fails, then a 400 ms retry wait.
+		await vi.advanceTimersByTimeAsync(reconnectDelayMs(1) + 100);
+		expect(t.gatt.connect).toHaveBeenCalledTimes(1);
+		t.ble.disconnect();
+		expect(t.gatt.disconnect).toHaveBeenCalledTimes(1);
+		// A replacement device on the same DE1 connects the shared GATT.
+		t.script.ok = true;
+		t.gatt.connected = true;
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(t.gatt.connect).toHaveBeenCalledTimes(1);
+		expect(t.gatt.disconnect).toHaveBeenCalledTimes(1); // the shared link stays up
+		expect(t.gatt.connected).toBe(true);
+	});
+
 	it('the first outage is announced even when a kick beats the first backoff', async () => {
 		const t = setup();
 		const announced = vi.fn();

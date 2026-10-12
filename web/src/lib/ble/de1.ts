@@ -254,7 +254,7 @@ export class De1Manager {
 		// device's late events (its reconnect loop finishing after a new
 		// connect, its terminal disconnect) must not touch the new link
 		// (audit r9 L-1). `dropDevice` reports the replaced link's loss itself.
-		// A terminal disconnect — auto-reconnect giving up.
+		// A terminal disconnect of the current device.
 		device.onDisconnected(() => {
 			if (this.device !== device) return;
 			this.notifyLinkLost();
@@ -347,6 +347,10 @@ export class De1Manager {
 				onGattVerified: () => this.patchDiagnostics({ gattVerified: true })
 			})
 		);
+		// Replaced or disconnected while the program ran: the drop already
+		// disconnected this device and reported it; don't touch the device or
+		// state that replaced it (audit r10 L-2).
+		if (this.device !== device) return;
 		const outcome = parseConnectExit(exit);
 		if (!outcome.ok) {
 			// Disconnect before nulling — nulling alone leaves the transport's
@@ -443,10 +447,6 @@ export class De1Manager {
 	}
 
 	/**
-	 * Tell the core the DE1 link dropped (Decenza 29878266). Fire-and-forget:
-	 * the output (at most one scale-timer stop) routes like any other.
-	 */
-	/**
 	 * Drop the current device: disconnect it (which also stops its reconnect
 	 * loop) and tell the core and the link listeners the link is gone. The
 	 * device's own late callbacks are ignored once it isn't current, so this
@@ -461,6 +461,10 @@ export class De1Manager {
 		for (const l of this.linkListeners) l.lost();
 	}
 
+	/**
+	 * Tell the core the DE1 link dropped (Decenza 29878266). Fire-and-forget:
+	 * the output (at most one scale-timer stop) routes like any other.
+	 */
 	private notifyLinkLost(): void {
 		this.core
 			.de1LinkLost()

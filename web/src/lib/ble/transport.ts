@@ -472,6 +472,10 @@ export class BleDevice implements De1Transport {
 			if (gatt === undefined) {
 				throw new Error('Device exposes no GATT server');
 			}
+			// A disconnected device never connects again — checked before the
+			// shared `gatt` too: a replacement device on the same DE1 may have
+			// connected it (audit r10 L-1).
+			if (this.userDisconnected) throw new Error('Device was disconnected');
 			if (gatt.connected) return;
 			// Web Bluetooth's `gatt.connect()` fails intermittently for some
 			// peripherals ("Connection attempt failed" / NetworkError) — several
@@ -482,6 +486,10 @@ export class BleDevice implements De1Transport {
 			const backoffMs = 400;
 			let lastError: unknown;
 			for (let attempt = 1; attempt <= attempts; attempt++) {
+				// No retry after a deliberate disconnect: it would land after a
+				// replacement connect, and the reconnect loop would then drop the
+				// shared link (audit r10 L-1).
+				if (this.userDisconnected) throw new Error('Device was disconnected');
 				try {
 					await gatt.connect();
 					return;
@@ -640,9 +648,9 @@ export class BleDevice implements De1Transport {
 		this.reconnecting = false;
 		// End a pending backoff wait now rather than leaving a timer to fire.
 		this.waitAbort?.abort();
-		// Also when not connected: `disconnect()` aborts a GATT connect still
-		// in flight (a reconnect attempt), so it can't land after a new
-		// connect and drop the shared link (audit r9 L-1).
+		// Also when not connected: on current Chromium `disconnect()` aborts a
+		// GATT connect still in flight (a reconnect attempt); `connectGattRaw`
+		// starts no new one once `userDisconnected` is set (audit r9 / r10 L-1).
 		const gatt = this.device.gatt;
 		if (gatt !== undefined) {
 			gatt.disconnect();
