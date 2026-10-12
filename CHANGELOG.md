@@ -104,11 +104,13 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **The firmware card no longer says "Up to date" without checking** — on
   Android it said so whenever a DE1 was connected. Settings → Machine now
   shows the installed build and what it means against a dated list of
-  Decent's builds: "Build 1358 · newest Decent release", "Build 1333 ·
-  Decent stable", "Build 1352 · newer than Decent stable", "older than
-  Decent stable", or "newer than Crema knows about". The 2023 build 1363,
-  which Decent withdrew, reads as a rolled-back build instead of newer than
-  1358. Web, tablet and phone (the phone hero gains the card).
+  Decent's builds: "Build 1358 · newest", "Build 1333 · stable", "Build
+  1352 · newer than stable", "older than stable", or "newer than Crema
+  knows", with a short note naming Decent's builds. The 2023 build 1363,
+  which Decent withdrew, reads as "withdrawn" instead of newer than 1358.
+  "Update firmware…" sits at the right of the card; on a phone it shares
+  the card's header row, so the card is a row shorter. Web, tablet and
+  phone (the phone hero gains the card).
 - **No more advice to get build 1358 from de1app's stable channel** — the
   web card used to say to, though de1app's stable and beta versions install
   build 1333, and its "Update firmware…" button ended in "not yet
@@ -120,7 +122,7 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **New setting: Settings → Display → Machine sleep → "Sleep after"** —
+- **New setting: Settings → Machine → Machine sleep → "Sleep after"** —
   Never, 15, 30, 60, 90 or 120 minutes; default 30. One setting on phone,
   tablet and web, carried in backups. Upgrading Android users who had changed
   the screensaver delay and had it put the machine to sleep keep that delay

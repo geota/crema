@@ -21,7 +21,7 @@ import kotlinx.serialization.json.Json
 
 /** What the firmware card shows. */
 data class FirmwareCardCopy(
-    /** Headline, e.g. "Build 1333 · Decent stable". */
+    /** Headline, e.g. "Build 1333 · stable". */
     val title: String,
     /** One short sentence explaining the headline. */
     val note: String,
@@ -54,7 +54,7 @@ fun firmwareCardCopy(r: FirmwareBuildReport, connected: Boolean): FirmwareCardCo
         if (r.nightlyBuild == r.newestBuild && r.stableBuild != r.newestBuild) " (nightly)" else ""
     return when (r.status) {
         FirmwareBuildStatus.Newest -> FirmwareCardCopy(
-            "Build $b · newest Decent release",
+            "Build $b · newest",
             if (r.stableBuild == b) {
                 "Decent has no newer build."
             } else {
@@ -62,22 +62,22 @@ fun firmwareCardCopy(r: FirmwareBuildReport, connected: Boolean): FirmwareCardCo
             },
             false,
         )
-        FirmwareBuildStatus.Stable -> FirmwareCardCopy("Build $b · Decent stable", "Newer: $newest.", true)
+        FirmwareBuildStatus.Stable -> FirmwareCardCopy("Build $b · stable", "Decent’s stable build. Newer: $newest.", true)
         FirmwareBuildStatus.BetweenStableAndNewest ->
-            FirmwareCardCopy("Build $b · newer than Decent stable", "Newest: $newest.", true)
+            FirmwareCardCopy("Build $b · newer than stable", "Newer than Decent’s stable build ${r.stableBuild}. Newest: $newest.", true)
         FirmwareBuildStatus.OlderThanStable -> FirmwareCardCopy(
-            "Build $b · older than Decent stable",
+            "Build $b · older than stable",
             "Decent stable is build ${r.stableBuild}; the newest is $newest.",
             true,
         )
         FirmwareBuildStatus.RolledBack -> FirmwareCardCopy(
-            "Build $b · rolled-back build",
+            "Build $b · withdrawn",
             "Decent withdrew this build and went back to build ${r.stableBuild}." +
                 if (b > r.newestBuild) " Its number is higher, but it isn’t newer than build ${r.newestBuild}." else "",
             true,
         )
         FirmwareBuildStatus.NewerThanKnown -> FirmwareCardCopy(
-            "Build $b · newer than Crema knows about",
+            "Build $b · newer than Crema knows",
             "Newer than build ${r.newestBuild}, the newest in Crema’s list (checked ${r.tableVerified}).",
             false,
         )

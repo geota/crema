@@ -24,7 +24,7 @@ export function firmwareBuildReport(build: number | null | undefined): FirmwareB
 
 /** What the firmware card shows. */
 export interface FirmwareCardCopy {
-	/** Headline, e.g. "Build 1333 · Decent stable". */
+	/** Headline, e.g. "Build 1333 · stable". */
 	title: string;
 	/** One short sentence explaining the headline. */
 	note: string;
@@ -53,7 +53,7 @@ export function firmwareCardCopy(r: FirmwareBuildReport, connected: boolean): Fi
 	switch (r.status) {
 		case FirmwareBuildStatus.Newest:
 			return {
-				title: `Build ${b} · newest Decent release`,
+				title: `Build ${b} · newest`,
 				note:
 					r.stableBuild === b
 						? 'Decent has no newer build.'
@@ -62,25 +62,25 @@ export function firmwareCardCopy(r: FirmwareBuildReport, connected: boolean): Fi
 			};
 		case FirmwareBuildStatus.Stable:
 			return {
-				title: `Build ${b} · Decent stable`,
-				note: `Newer: ${newest}.`,
+				title: `Build ${b} · stable`,
+				note: `Decent's stable build. Newer: ${newest}.`,
 				offerUpdate: true
 			};
 		case FirmwareBuildStatus.BetweenStableAndNewest:
 			return {
-				title: `Build ${b} · newer than Decent stable`,
-				note: `Newest: ${newest}.`,
+				title: `Build ${b} · newer than stable`,
+				note: `Newer than Decent's stable build ${r.stableBuild}. Newest: ${newest}.`,
 				offerUpdate: true
 			};
 		case FirmwareBuildStatus.OlderThanStable:
 			return {
-				title: `Build ${b} · older than Decent stable`,
+				title: `Build ${b} · older than stable`,
 				note: `Decent stable is build ${r.stableBuild}; the newest is ${newest}.`,
 				offerUpdate: true
 			};
 		case FirmwareBuildStatus.RolledBack:
 			return {
-				title: `Build ${b} · rolled-back build`,
+				title: `Build ${b} · withdrawn`,
 				note:
 					`Decent withdrew this build and went back to build ${r.stableBuild}.` +
 					(b > r.newestBuild ? ` Its number is higher, but it isn't newer than build ${r.newestBuild}.` : ''),
@@ -88,7 +88,7 @@ export function firmwareCardCopy(r: FirmwareBuildReport, connected: boolean): Fi
 			};
 		case FirmwareBuildStatus.NewerThanKnown:
 			return {
-				title: `Build ${b} · newer than Crema knows about`,
+				title: `Build ${b} · newer than Crema knows`,
 				note: `Newer than build ${r.newestBuild}, the newest in Crema's list (checked ${r.tableVerified}).`,
 				offerUpdate: false
 			};

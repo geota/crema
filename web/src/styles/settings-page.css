@@ -359,11 +359,12 @@
   color: rgba(var(--tint-rgb), 0.55);
   margin-bottom: 4px;
 }
-/* "Update firmware…" — pushed to the bottom of the card. */
+/* "Update firmware…" — pushed to the bottom-right of the card. */
 .st-machinecard-fw-action {
   margin-top: auto;
   padding-top: 6px;
   display: flex;
+  justify-content: flex-end;
 }
 /* Decent stolen-machine list match — one quiet line, never a modal. */
 .st-machinecard-stolen {

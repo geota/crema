@@ -30,15 +30,15 @@ describe('firmwareBuildReport (wasm bridge)', () => {
 describe('firmwareCardCopy', () => {
 	it('1358 is the newest release, no update offered', () => {
 		const c = copy(1358);
-		expect(c.title).toBe('Build 1358 · newest Decent release');
+		expect(c.title).toBe('Build 1358 · newest');
 		expect(c.note).toBe('Decent has no newer build. Its stable channel is on build 1333.');
 		expect(c.offerUpdate).toBe(false);
 	});
 
 	it('1333 is Decent stable, never "up to date", and offers 1358', () => {
 		const c = copy(1333);
-		expect(c.title).toBe('Build 1333 · Decent stable');
-		expect(c.note).toBe('Newer: build 1358 (nightly).');
+		expect(c.title).toBe('Build 1333 · stable');
+		expect(c.note).toBe("Decent's stable build. Newer: build 1358 (nightly).");
 		expect(c.offerUpdate).toBe(true);
 		expect(`${c.title} ${c.note}`).not.toMatch(/up to date/i);
 	});
@@ -52,20 +52,20 @@ describe('firmwareCardCopy', () => {
 
 	it('a build between stable and newest', () => {
 		const c = copy(1352);
-		expect(c.title).toBe('Build 1352 · newer than Decent stable');
+		expect(c.title).toBe('Build 1352 · newer than stable');
 		expect(c.offerUpdate).toBe(true);
 	});
 
 	it('an old build', () => {
 		const c = copy(1320);
-		expect(c.title).toBe('Build 1320 · older than Decent stable');
+		expect(c.title).toBe('Build 1320 · older than stable');
 		expect(c.note).toContain('1333');
 		expect(c.offerUpdate).toBe(true);
 	});
 
 	it('1363 is a rolled-back build, not newer', () => {
 		const c = copy(1363);
-		expect(c.title).toBe('Build 1363 · rolled-back build');
+		expect(c.title).toBe('Build 1363 · withdrawn');
 		expect(c.note).toContain("isn't newer than build 1358");
 		expect(c.title).not.toMatch(/newer/);
 		expect(c.offerUpdate).toBe(true);
@@ -73,7 +73,7 @@ describe('firmwareCardCopy', () => {
 
 	it('a build above the newest known one', () => {
 		const c = copy(1370);
-		expect(c.title).toBe('Build 1370 · newer than Crema knows about');
+		expect(c.title).toBe('Build 1370 · newer than Crema knows');
 		expect(c.note).toContain('2026-10-11');
 		expect(c.offerUpdate).toBe(false);
 	});

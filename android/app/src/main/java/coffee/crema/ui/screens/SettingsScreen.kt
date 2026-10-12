@@ -282,6 +282,17 @@ fun SettingsScreen(
                                 CremaMonoReadout(ghcLabel, color = MaterialTheme.colorScheme.onSurface)
                             }
                         }
+                        // Machine sleep: the core's idle-sleep timer (de1app "Cool
+                        // down after", Decenza autoSleepMinutes) and sleep-on-quit.
+                        SetGroup("Machine sleep") {
+                            IdleSleepRow(ui.idleSleepMin, vm::setIdleSleepMin, CremaStepperStyle.Bare)
+                            // Quit ≠ background: the swipe-away signal rides a tiny
+                            // service's onTaskRemoved (see QuitSleep) — best-effort,
+                            // idle-only, primary-only.
+                            CremaSettingsRow("Sleep the DE1 when you quit Crema", "Swiping Crema out of recents puts an idle machine to sleep straight away (best effort). Just switching apps never sleeps it.", last = true) {
+                                CremaSwitch(ui.sleepOnQuit, vm::setSleepOnQuit)
+                            }
+                        }
                         SetGroup("Identity") {
                             CremaSettingsRow("Model") { CremaMonoReadout(machineModelLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
                             // Non-blocking notice when Decent lists this serial as stolen.
@@ -656,17 +667,6 @@ fun SettingsScreen(
                                     onChange = { density = it },
                                     uniform = true,
                                 )
-                            }
-                        }
-                        // Machine sleep: the core's idle-sleep timer (de1app "Cool
-                        // down after", Decenza autoSleepMinutes) and sleep-on-quit.
-                        SetGroup("Machine sleep") {
-                            IdleSleepRow(ui.idleSleepMin, vm::setIdleSleepMin, CremaStepperStyle.Bare)
-                            // Quit ≠ background: the swipe-away signal rides a tiny
-                            // service's onTaskRemoved (see QuitSleep) — best-effort,
-                            // idle-only, primary-only.
-                            CremaSettingsRow("Sleep the DE1 when you quit Crema", "Swiping Crema out of recents puts an idle machine to sleep straight away (best effort). Just switching apps never sleeps it.", last = true) {
-                                CremaSwitch(ui.sleepOnQuit, vm::setSleepOnQuit)
                             }
                         }
                         SetGroup("Screensaver") {
@@ -1860,10 +1860,11 @@ internal fun cpuBoardLabel(info: Map<MmrRegister, UInt>): String {
 
 /** The firmware card's body — headline, what it means
  *  ([coffee.crema.ui.firmwareCardCopy]) and "Update firmware…" (the alpha
- *  flow; [onUpdate] null = not connected). Shared by the tablet hero card and
- *  the phone hero. [pushActionDown] = the parent Column has a bounded height
- *  (the tablet card) and the button should sit at its bottom. [emphasize] =
- *  lead with the button (a newer build exists, or a flash is in progress). */
+ *  flow; [onUpdate] null = not connected, or the caller places the button
+ *  itself — the phone puts it in the card's header row). [pushActionDown] =
+ *  the parent Column has a bounded height (the tablet card) and the button
+ *  should sit at its bottom; it sits at the right edge either way.
+ *  [emphasize] = lead with the button (a flash is in progress). */
 @Composable
 internal fun ColumnScope.FirmwareCopyBody(
     copy: FirmwareCardCopy?,
@@ -1878,11 +1879,23 @@ internal fun ColumnScope.FirmwareCopyBody(
     }
     if (onUpdate == null) return
     if (pushActionDown) Spacer(Modifier.weight(1f)) else Spacer(Modifier.height(2.dp))
+    FirmwareUpdateButton(copy, onUpdate, emphasize, Modifier.align(Alignment.End))
+}
+
+/** "Update firmware…" — filled when a newer build exists or a flash runs. */
+@Composable
+internal fun FirmwareUpdateButton(
+    copy: FirmwareCardCopy,
+    onUpdate: () -> Unit,
+    emphasize: Boolean,
+    modifier: Modifier = Modifier,
+) {
     CremaButton(
         onClick = onUpdate,
         variant = if (copy.offerUpdate || emphasize) CremaButtonVariant.Filled else CremaButtonVariant.Tonal,
         icon = "download-simple",
         label = "Update firmware…",
+        modifier = modifier,
     )
 }
 
