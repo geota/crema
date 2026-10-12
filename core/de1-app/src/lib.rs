@@ -3989,6 +3989,7 @@ impl CremaCore {
                         hex(self.capture.firmware_build())
                     ),
                 );
+                flash.bind_machine(meta.de1_serial_number.unwrap_or(0), "");
                 self.firmware_flash = Some(flash);
                 self.flash_step(actions, now_ms)
             }
@@ -4074,11 +4075,13 @@ impl CremaCore {
         self.flash_step(actions, now_ms)
     }
 
-    /// Tie the current flash to the DE1 it is for (called by the shells at
-    /// start and after a restore). The first non-empty id wins.
-    pub fn firmware_flash_bind_machine(&mut self, machine: &str) {
+    /// Tie the current flash to the DE1 it is for: its serial number (`0` =
+    /// unknown; a flash started here binds the serial the identity reads
+    /// found) and the shell's Bluetooth id (`""` = unknown). Called by the
+    /// shells at start and after a restore. The first known value wins.
+    pub fn firmware_flash_bind_machine(&mut self, serial: u32, link_id: &str) {
         if let Some(f) = self.firmware_flash.as_mut() {
-            f.bind_machine(machine);
+            f.bind_machine(serial, link_id);
         }
     }
 
@@ -4462,6 +4465,11 @@ impl CremaCore {
                 if let Some(flash) = self.firmware_flash.as_mut() {
                     flash.on_build(value, flash.clock_ms());
                 }
+            }
+            if register == MmrRegister::SerialNumber
+                && let Some(flash) = self.firmware_flash.as_mut()
+            {
+                flash.on_serial(value, flash.clock_ms());
             }
             if register == MmrRegister::GhcInfo {
                 self.de1_ghc_info = Some(value);

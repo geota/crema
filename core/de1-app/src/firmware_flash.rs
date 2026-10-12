@@ -164,6 +164,10 @@ pub const BUILD_READ_INTERVAL_MS: u64 = 3_000;
 /// …for this long after each link restore (then until the next restore).
 pub const BUILD_READ_WINDOW_MS: u64 = 60_000;
 
+/// After a link-up during the power-cycle wait, how long to wait for the DE1's
+/// serial number before falling back to the Bluetooth id (or "unknown").
+pub const SERIAL_WAIT_MS: u64 = 5_000;
+
 /// ETA guess per chunk before enough have been ACKed to measure: Android's
 /// ~30 ms per write-with-response ACK (Decenza `FIRMWARE_UPDATE.md:22`).
 pub const ESTIMATED_MS_PER_CHUNK: u64 = 30;
@@ -261,6 +265,14 @@ pub enum FlashAction {
         /// The exact bytes.
         data: Vec<u8>,
     },
+    /// Write `data` (an MMR `SerialNumber` read request) to
+    /// [`WriteTarget::De1MmrRequest`] through the lock, no report — like
+    /// [`FlashAction::ReadBuild`]. The serial tells the DE1 being updated from
+    /// another one, across browser restarts (audit r4 LOW-1).
+    ReadSerial {
+        /// The exact bytes.
+        data: Vec<u8>,
+    },
 }
 
 /// A snapshot for the UI.
@@ -308,10 +320,17 @@ pub struct FlashStatus {
     pub restarted_on_build: Option<u32>,
     /// Whether the flash currently sees the DE1 link up.
     pub link_up: bool,
-    /// A different DE1 than the one being updated is connected (its id): it
-    /// is not read, and the lock stays until that DE1 reports or the user
-    /// exits.
+    /// A different DE1 than the one being updated is connected (its serial,
+    /// or its Bluetooth id): it is not read, and the lock stays until the DE1
+    /// being updated reports or the user exits.
     pub foreign_machine: Option<String>,
+    /// The serial number of the DE1 being updated, when known (non-zero).
+    /// The shells persist it with the power-cycle marker.
+    pub machine_serial: Option<u32>,
+    /// The connected DE1 could not be identified (no serial on one side and
+    /// no comparable Bluetooth id): it is *not* treated as a different DE1,
+    /// but Crema can't confirm it is the same one.
+    pub identity_unknown: bool,
     /// How long the DE1 may still be erasing (during the erase, or after an
     /// interrupted one): the shells persist it so a restart keeps the lock.
     pub erase_hold_ms_left: Option<u32>,
@@ -491,11 +510,31 @@ pub struct FirmwareFlash {
     log: Vec<String>,
     /// The last A009 frame logged (frames are logged when they change).
     last_frame_logged: Option<Vec<u8>>,
-    /// The DE1 this flash is for (the shell's device id / address), once bound.
-    machine: Option<String>,
+    /// The serial number of the DE1 this flash is for (non-zero), once bound.
+    serial: Option<u32>,
+    /// The shell's Bluetooth id of that DE1 (Android: its static address;
+    /// web: `device.id`, only within one browser session), once bound.
+    link_id: Option<String>,
+    /// The Bluetooth id of the DE1 on the current link ("" = unknown).
+    link_id_now: String,
+    /// What the current link's serial read has shown.
+    link_serial: LinkSerial,
+    /// A build read that arrived while the link's serial was still awaited.
+    pending_build: Option<u32>,
     /// A *different* DE1 is connected: it must not satisfy the wait nor
     /// release this flash's lock (audit r3 LOW-2).
     foreign_machine: Option<String>,
+    /// The current link's identity fell back to "unknown".
+    identity_unknown: bool,
+}
+
+/// The current link's serial number, as far as the flash knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinkSerial {
+    NotAsked,
+    Waiting { until: u64 },
+    Known(u32),
+    Unknown,
 }
 
 impl FirmwareFlash {
@@ -552,25 +591,107 @@ impl FirmwareFlash {
             clock_ms: now_ms,
             log: Vec::new(),
             last_frame_logged: None,
-            machine: None,
+            serial: None,
+            link_id: None,
+            link_id_now: String::new(),
+            link_serial: LinkSerial::NotAsked,
+            pending_build: None,
             foreign_machine: None,
+            identity_unknown: false,
         }
     }
 
-    /// Tie the flash to the DE1 it is for (the shell's device id / address).
-    /// The first non-empty id wins; later calls are ignored.
-    pub fn bind_machine(&mut self, machine: &str) {
-        if self.machine.is_none() && !machine.is_empty() {
-            self.machine = Some(machine.to_owned());
+    /// Tie the flash to the DE1 it is for: its serial number (`0` = unknown)
+    /// and the shell's Bluetooth id (`""` = unknown). The first known value of
+    /// each wins; later calls don't change it.
+    pub fn bind_machine(&mut self, serial: u32, link_id: &str) {
+        if self.serial.is_none() && serial != 0 {
+            self.serial = Some(serial);
+        }
+        if self.link_id.is_none() && !link_id.is_empty() {
+            self.link_id = Some(link_id.to_owned());
         }
     }
 
-    /// Whether `connected` is a different DE1 from the one this flash is for.
-    /// An unknown id on either side can't be compared and counts as the same.
-    fn is_foreign(&self, connected: &str) -> bool {
-        self.machine
-            .as_deref()
-            .is_some_and(|mine| !connected.is_empty() && !mine.eq_ignore_ascii_case(connected))
+    /// Both Bluetooth ids are known and differ.
+    fn ids_differ(&self) -> bool {
+        self.link_id.as_deref().is_some_and(|mine| {
+            !self.link_id_now.is_empty() && !mine.eq_ignore_ascii_case(&self.link_id_now)
+        })
+    }
+
+    /// Whether the current link is a different DE1: `None` while its serial
+    /// is still awaited. A known serial on both sides decides; otherwise the
+    /// Bluetooth ids, when both are known; otherwise it is unknown, which is
+    /// never treated as different.
+    fn foreign_verdict(&self) -> Option<bool> {
+        match (self.serial, self.link_serial) {
+            (Some(_), LinkSerial::Waiting { .. }) => None,
+            (Some(mine), LinkSerial::Known(theirs)) => Some(mine != theirs),
+            _ => Some(self.ids_differ()),
+        }
+    }
+
+    fn identity_is_unknown(&self) -> bool {
+        let serials = matches!(
+            (self.serial, self.link_serial),
+            (Some(_), LinkSerial::Known(_))
+        );
+        let ids = self.link_id.is_some() && !self.link_id_now.is_empty();
+        !serials && !ids
+    }
+
+    fn mark_foreign(&mut self, now_ms: u64) {
+        let who = match self.link_serial {
+            LinkSerial::Known(s) => format!("serial {s}"),
+            _ => self.link_id_now.clone(),
+        };
+        if self.foreign_machine.as_deref() != Some(who.as_str()) {
+            let mine = match (self.serial, self.link_id.as_deref()) {
+                (Some(s), _) => format!("serial {s}"),
+                (None, Some(id)) => id.to_owned(),
+                (None, None) => "?".to_owned(),
+            };
+            self.note(
+                now_ms,
+                format!("a different DE1 connected ({who}, not {mine}): not read, lock kept"),
+            );
+        }
+        self.foreign_machine = Some(who);
+        self.link_up = false;
+        self.pending_build = None;
+    }
+
+    /// The identity of the current link is settled: act on it.
+    fn resolve_identity(&mut self, now_ms: u64) {
+        match self.foreign_verdict() {
+            None => {}
+            Some(true) => self.mark_foreign(now_ms),
+            Some(false) => {
+                self.identity_unknown = self.identity_is_unknown();
+                if self.identity_unknown {
+                    self.note(now_ms, "the connected DE1 can't be identified (no serial or Bluetooth id to compare): not treated as different");
+                }
+                if let Some(build) = self.pending_build.take() {
+                    self.accept_build(build, now_ms);
+                }
+            }
+        }
+    }
+
+    /// The DE1 reported its serial number (MMR `SerialNumber`).
+    pub fn on_serial(&mut self, serial: u32, now_ms: u64) {
+        self.see(now_ms);
+        if !matches!(self.link_serial, LinkSerial::Waiting { .. }) {
+            return;
+        }
+        self.link_serial = if serial == 0 {
+            LinkSerial::Unknown
+        } else {
+            LinkSerial::Known(serial)
+        };
+        self.note(now_ms, format!("connected DE1 reports serial {serial}"));
+        self.resolve_identity(now_ms);
     }
 
     /// Add a diagnostic line, stamped `[+mm:ss]` from the start of this
@@ -778,6 +899,12 @@ impl FirmwareFlash {
             ),
         };
         FlashAction::Write { target, data }
+    }
+
+    fn read_serial_action() -> FlashAction {
+        FlashAction::ReadSerial {
+            data: mmr::read_request(MmrRegister::SerialNumber.address(), 1).to_vec(),
+        }
     }
 
     fn read_build_action() -> FlashAction {
@@ -1147,6 +1274,16 @@ impl FirmwareFlash {
                 }
                 self.poll(now_ms)
             }
+            Stage::AwaitPowerCycle if matches!(self.link_serial, LinkSerial::Waiting { until } if now_ms >= until) =>
+            {
+                self.note(
+                    now_ms,
+                    "no serial reply: identifying the DE1 by its Bluetooth id, if any",
+                );
+                self.link_serial = LinkSerial::Unknown;
+                self.resolve_identity(now_ms);
+                Vec::new()
+            }
             Stage::AwaitPowerCycle
                 if self.machine_restarted
                     && self.link_up
@@ -1169,6 +1306,9 @@ impl FirmwareFlash {
         }
         self.link_up = false;
         self.foreign_machine = None;
+        self.link_serial = LinkSerial::NotAsked;
+        self.pending_build = None;
+        self.identity_unknown = false;
         match self.stage {
             Stage::Sleep { .. } | Stage::Erase { .. } | Stage::Upload | Stage::Settle { .. } => {
                 let phase = self.phase();
@@ -1185,28 +1325,35 @@ impl FirmwareFlash {
         }
     }
 
-    /// The DE1 link is back, to the DE1 with id `machine` (empty = unknown).
-    /// A different DE1 than the one this flash is for neither counts as the
-    /// link coming back nor gets a build read: it can't satisfy the wait or
-    /// release the lock (audit r3 LOW-2). Otherwise as [`Self::on_link_restored`].
-    pub fn on_link_restored_from(&mut self, now_ms: u64, machine: &str) -> Vec<FlashAction> {
+    /// The DE1 link is back, to the DE1 with Bluetooth id `link_id` (empty =
+    /// unknown). Waiting on a restart with a known serial, the DE1's serial is
+    /// read alongside the build, and the build only counts once the serial
+    /// matches (r4 LOW-1: a web `device.id` changes across browser restarts).
+    /// Without a serial the Bluetooth ids decide when both are known. A
+    /// different DE1 neither counts as the link coming back nor gets its build
+    /// accepted: it can't satisfy the wait or release the lock (r3 LOW-2).
+    pub fn on_link_restored_from(&mut self, now_ms: u64, link_id: &str) -> Vec<FlashAction> {
         self.see(now_ms);
-        if self.is_foreign(machine) {
-            if self.foreign_machine.as_deref() != Some(machine) {
-                self.note(
-                    now_ms,
-                    format!(
-                        "a different DE1 connected ({machine}, not {}): not read, lock kept",
-                        self.machine.as_deref().unwrap_or("?")
-                    ),
-                );
-            }
-            self.foreign_machine = Some(machine.to_owned());
-            self.link_up = false;
+        link_id.clone_into(&mut self.link_id_now);
+        self.foreign_machine = None;
+        self.pending_build = None;
+        self.identity_unknown = false;
+        if self.stage == Stage::AwaitPowerCycle && self.machine_restarted && self.serial.is_some() {
+            self.link_serial = LinkSerial::Waiting {
+                until: now_ms + SERIAL_WAIT_MS,
+            };
+            let mut actions = vec![Self::read_serial_action()];
+            actions.extend(self.on_link_restored(now_ms));
+            return actions;
+        }
+        self.link_serial = LinkSerial::NotAsked;
+        if self.ids_differ() {
+            self.mark_foreign(now_ms);
             return Vec::new();
         }
-        self.foreign_machine = None;
-        self.on_link_restored(now_ms)
+        let actions = self.on_link_restored(now_ms);
+        self.resolve_identity(now_ms);
+        actions
     }
 
     /// The DE1 link is back. Re-reads the build straight away when waiting
@@ -1233,6 +1380,15 @@ impl FirmwareFlash {
         if self.stage != Stage::AwaitPowerCycle || !self.machine_restarted || !self.link_up {
             return;
         }
+        if matches!(self.link_serial, LinkSerial::Waiting { .. }) {
+            // Not yet known to be the DE1 being updated: hold the reading.
+            self.pending_build = Some(build);
+            return;
+        }
+        self.accept_build(build, now_ms);
+    }
+
+    fn accept_build(&mut self, build: u32, now_ms: u64) {
         if self.restarted_on_build != Some(build) || build == self.artifact.build {
             self.note(now_ms, format!("DE1 reports build {build}"));
         }
@@ -1343,6 +1499,8 @@ impl FirmwareFlash {
             restarted_on_build: self.restarted_on_build,
             link_up: self.link_up,
             foreign_machine: self.foreign_machine.clone(),
+            machine_serial: self.serial,
+            identity_unknown: self.identity_unknown,
             erase_hold_ms_left: self
                 .erase_hold_ms_left()
                 .map(|ms| u32::try_from(ms).unwrap_or(u32::MAX)),
@@ -1636,21 +1794,27 @@ pub(crate) mod tests {
         assert_eq!(g.status(0).erase_hold_ms_left, Some(60_000));
     }
 
-    #[test]
-    fn a_different_de1_neither_satisfies_the_wait_nor_releases_the_lock() {
-        // Within a session: verified on DE1 A, the user connects DE1 B, which
-        // already runs the target build (audit r3 LOW-2).
+    /// Verified, link dropped: the power-cycle wait.
+    fn awaiting_restart(serial: u32, link_id: &str) -> (FirmwareFlash, u64) {
         let (mut f, now) = to_verify(1);
-        f.bind_machine("AA:AA");
-        f.bind_machine("CC:CC"); // first id wins
+        f.bind_machine(serial, link_id);
         f.on_fw_map(&VERIFY_OK, now + 100);
         assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle);
         f.on_link_lost(now + 1_000);
+        (f, now + 30_000)
+    }
+
+    #[test]
+    fn a_different_de1_neither_satisfies_the_wait_nor_releases_the_lock() {
+        // Within a session, by Bluetooth id (no serial known): verified on A,
+        // the user connects B, which already runs the target build (r3 LOW-2).
+        let (mut f, now) = awaiting_restart(0, "AA:AA");
+        f.bind_machine(0, "CC:CC"); // first id wins
         assert!(
-            f.on_link_restored_from(now + 30_000, "BB:BB").is_empty(),
+            f.on_link_restored_from(now, "BB:BB").is_empty(),
             "no build read from another DE1"
         );
-        f.on_build(1358, now + 30_100);
+        f.on_build(1358, now + 100);
         assert_eq!(
             f.phase(),
             FlashPhase::AwaitingPowerCycle,
@@ -1659,26 +1823,108 @@ pub(crate) mod tests {
         assert!(f.locks_writes(), "A's lock is kept");
         assert_eq!(f.status(now).foreign_machine.as_deref(), Some("BB:BB"));
         assert!(
-            f.on_tick(now + 33_000).is_empty(),
+            f.on_tick(now + 3_000).is_empty(),
             "no periodic reads either"
         );
-        // DE1 A comes back (any case): read, and the target build succeeds.
-        f.on_link_lost(now + 40_000);
+        f.on_link_lost(now + 10_000);
         assert_eq!(
-            f.on_link_restored_from(now + 50_000, "aa:aa"),
+            f.on_link_restored_from(now + 20_000, "aa:aa"),
             vec![FirmwareFlash::read_build_action()]
         );
         assert_eq!(f.status(now).foreign_machine, None);
-        f.on_build(1358, now + 50_100);
+        f.on_build(1358, now + 20_100);
         assert_eq!(f.phase(), FlashPhase::Succeeded);
-        // Unknown ids can't be compared: treated as the same DE1.
-        let (mut g, now) = to_verify(1);
-        g.on_fw_map(&VERIFY_OK, now + 100);
-        g.on_link_lost(now + 1_000);
+    }
+
+    #[test]
+    fn the_same_de1_after_a_browser_restart_is_recognised_by_its_serial() {
+        // r4 LOW-1: a new web device.id, the same serial → the build counts.
+        let (mut f, now) = awaiting_restart(4242, "web-id-old");
         assert_eq!(
-            g.on_link_restored_from(now + 2_000, "BB"),
+            f.on_link_restored_from(now, "web-id-new"),
+            vec![
+                FirmwareFlash::read_serial_action(),
+                FirmwareFlash::read_build_action()
+            ]
+        );
+        f.on_build(1358, now + 50); // held until the serial answers
+        assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle);
+        f.on_serial(4242, now + 60);
+        assert_eq!(
+            f.phase(),
+            FlashPhase::Succeeded,
+            "same serial, different web id"
+        );
+        assert!(!f.status(now).identity_unknown);
+    }
+
+    #[test]
+    fn a_different_serial_can_neither_satisfy_the_wait_nor_release_the_lock() {
+        let (mut f, now) = awaiting_restart(4242, "");
+        f.on_link_restored_from(now, "");
+        f.on_build(1358, now + 50);
+        f.on_serial(9999, now + 60);
+        assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle);
+        assert!(f.locks_writes());
+        assert_eq!(
+            f.status(now).foreign_machine.as_deref(),
+            Some("serial 9999")
+        );
+        f.on_build(1358, now + 3_000);
+        assert_eq!(
+            f.phase(),
+            FlashPhase::AwaitingPowerCycle,
+            "later reads don't count either"
+        );
+        // Even with a matching Bluetooth id, a different serial is a different DE1.
+        let (mut g, now) = awaiting_restart(4242, "AA:AA");
+        g.on_link_restored_from(now, "AA:AA");
+        g.on_serial(9999, now + 10);
+        g.on_build(1358, now + 20);
+        assert_eq!(g.phase(), FlashPhase::AwaitingPowerCycle);
+    }
+
+    #[test]
+    fn an_unknown_serial_and_a_new_web_id_is_unknown_not_different() {
+        // Serial 0 at start, and the web never binds an id from an earlier
+        // session: can't confirm, so not claimed to be another DE1.
+        let (mut f, now) = awaiting_restart(0, "");
+        assert_eq!(
+            f.on_link_restored_from(now, "web-id-new"),
             vec![FirmwareFlash::read_build_action()]
         );
+        assert!(f.status(now).identity_unknown);
+        assert_eq!(f.status(now).foreign_machine, None);
+        f.on_build(1358, now + 50);
+        assert_eq!(f.phase(), FlashPhase::Succeeded);
+        // A known serial on our side but the DE1 answers 0: unknown too.
+        let (mut g, now) = awaiting_restart(4242, "");
+        g.on_link_restored_from(now, "web-id-new");
+        g.on_serial(0, now + 10);
+        assert!(g.status(now).identity_unknown);
+        assert_eq!(g.status(now).foreign_machine, None);
+        // …and no serial reply at all falls back after SERIAL_WAIT_MS.
+        let (mut h, now) = awaiting_restart(4242, "");
+        h.on_link_restored_from(now, "web-id-new");
+        h.on_build(1358, now + 50);
+        h.on_tick(now + SERIAL_WAIT_MS - 1);
+        assert_eq!(h.phase(), FlashPhase::AwaitingPowerCycle);
+        h.on_tick(now + SERIAL_WAIT_MS);
+        assert_eq!(h.phase(), FlashPhase::Succeeded);
+        assert!(h.status(now).identity_unknown);
+    }
+
+    #[test]
+    fn android_falls_back_to_the_static_bluetooth_address_without_a_serial() {
+        let (mut f, now) = awaiting_restart(4242, "AA:AA");
+        f.on_link_restored_from(now, "BB:BB");
+        f.on_serial(0, now + 10); // no usable serial → the address decides
+        assert_eq!(f.status(now).foreign_machine.as_deref(), Some("BB:BB"));
+        let (mut g, now) = awaiting_restart(4242, "AA:AA");
+        g.on_link_restored_from(now, "AA:AA");
+        g.on_tick(now + SERIAL_WAIT_MS); // no serial reply → the address decides
+        assert!(!g.status(now).identity_unknown);
+        assert_eq!(g.status(now).foreign_machine, None);
     }
 
     #[test]
@@ -2066,6 +2312,7 @@ pub(crate) mod tests {
         flash_bank: Vec<u8>,
         erased: bool,
         build: u32,
+        serial: u32,
         corrupt_at: Option<usize>,
     }
 
@@ -2092,6 +2339,7 @@ pub(crate) mod tests {
             flash_bank: vec![0u8; image.len()],
             erased: false,
             build: 1333,
+            serial: 4242,
             corrupt_at,
         };
         let mut queue: std::collections::VecDeque<FlashAction> = actions.into();
@@ -2136,6 +2384,10 @@ pub(crate) mod tests {
                     FlashAction::ReadBuild { data } => {
                         assert_eq!(data, BUILD_READ.to_vec());
                         f.on_build(sim.build, now);
+                        Vec::new()
+                    }
+                    FlashAction::ReadSerial { .. } => {
+                        f.on_serial(sim.serial, now);
                         Vec::new()
                     }
                 };
@@ -2234,6 +2486,7 @@ pub(crate) mod tests {
             "verify": verify,
             "cancel": cancel,
             "readBuild": only(FirmwareFlash::read_build_action()),
+            "readSerial": only(FirmwareFlash::read_serial_action()),
         })
     }
 
@@ -2578,6 +2831,41 @@ mod core_tests {
     }
 
     #[test]
+    fn a_restored_wait_checks_the_serial_through_the_mmr_replies() {
+        // After a browser restart: restored, bound to the persisted serial,
+        // reconnected with a new web id. The serial and build replies arrive
+        // as ordinary MMR notifications.
+        for (serial, released) in [(4242, true), (9999, false)] {
+            let mut core = ready_core();
+            core.firmware_flash_restore_awaiting(1358, false, 1_000);
+            core.firmware_flash_bind_machine(4242, "");
+            let up = core.firmware_flash_link_restored(60_000, "web-id-new");
+            assert!(matches!(
+                up.actions[..],
+                [
+                    FlashAction::ReadSerial { .. },
+                    FlashAction::ReadBuild { .. }
+                ]
+            ));
+            core.on_notification(
+                Source::De1MmrRead,
+                &mmr_packet(MmrRegister::FirmwareVersion, 1358),
+                60_050,
+            );
+            assert!(
+                core.firmware_locks_writes(),
+                "no build accepted before the serial"
+            );
+            core.on_notification(
+                Source::De1MmrRead,
+                &mmr_packet(MmrRegister::SerialNumber, serial),
+                60_060,
+            );
+            assert_eq!(!core.firmware_locks_writes(), released, "serial {serial}");
+        }
+    }
+
+    #[test]
     fn restore_awaiting_after_a_reload_relocks_until_the_build_is_read() {
         let mut core = ready_core();
         let step = core.firmware_flash_restore_awaiting(1358, true, 1_000);
@@ -2677,6 +2965,14 @@ mod core_tests {
                         core.on_notification(
                             Source::De1MmrRead,
                             &mmr_packet(MmrRegister::FirmwareVersion, target),
+                            now,
+                        );
+                        core.firmware_flash_status(now)
+                    }
+                    FlashAction::ReadSerial { .. } => {
+                        core.on_notification(
+                            Source::De1MmrRead,
+                            &mmr_packet(MmrRegister::SerialNumber, 4242),
                             now,
                         );
                         core.firmware_flash_status(now)

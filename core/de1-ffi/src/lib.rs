@@ -2689,9 +2689,10 @@ impl CremaBridge {
             .to_json()
     }
 
-    /// Tie the current flash to the DE1 it is for (its Bluetooth address).
-    pub fn firmware_flash_bind_machine(&self, machine: String) {
-        self.core().firmware_flash_bind_machine(&machine);
+    /// Tie the current flash to the DE1 it is for: serial (0 = unknown) and
+    /// Bluetooth address ("" = unknown).
+    pub fn firmware_flash_bind_machine(&self, serial: u32, link_id: String) {
+        self.core().firmware_flash_bind_machine(serial, &link_id);
     }
 
     /// Cancel while still harmless.

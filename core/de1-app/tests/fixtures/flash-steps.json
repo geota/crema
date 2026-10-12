@@ -46,9 +46,11 @@
       "etaSeconds": null,
       "failure": null,
       "foreignMachine": null,
+      "identityUnknown": false,
       "linkUp": true,
       "locksWrites": false,
       "machineRestarted": false,
+      "machineSerial": null,
       "percent": 0.0,
       "phase": "Cancelled",
       "restartedOnBuild": null,
@@ -122,9 +124,11 @@
       "etaSeconds": 251,
       "failure": null,
       "foreignMachine": null,
+      "identityUnknown": false,
       "linkUp": true,
       "locksWrites": true,
       "machineRestarted": false,
+      "machineSerial": null,
       "percent": 1.0,
       "phase": "Uploading",
       "restartedOnBuild": null,
@@ -223,9 +227,11 @@
       "etaSeconds": 253,
       "failure": null,
       "foreignMachine": null,
+      "identityUnknown": false,
       "linkUp": true,
       "locksWrites": true,
       "machineRestarted": false,
+      "machineSerial": null,
       "percent": 1.0,
       "phase": "Erasing",
       "restartedOnBuild": null,
@@ -261,6 +267,40 @@
           ]
         },
         "type": "ReadBuild"
+      }
+    ],
+    "error": null,
+    "log": [],
+    "status": null
+  },
+  "readSerial": {
+    "actions": [
+      {
+        "content": {
+          "data": [
+            0,
+            128,
+            56,
+            48,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "type": "ReadSerial"
       }
     ],
     "error": null,
@@ -314,9 +354,11 @@
       "etaSeconds": 253,
       "failure": null,
       "foreignMachine": null,
+      "identityUnknown": false,
       "linkUp": true,
       "locksWrites": true,
       "machineRestarted": false,
+      "machineSerial": null,
       "percent": 0.0,
       "phase": "Preparing",
       "restartedOnBuild": null,

@@ -2575,10 +2575,17 @@ data class FlashStatus (
 	val restartedOnBuild: UInt? = null,
 	/// Whether the flash currently sees the DE1 link up.
 	val linkUp: Boolean,
-	/// A different DE1 than the one being updated is connected (its id): it
-	/// is not read, and the lock stays until that DE1 reports or the user
-	/// exits.
+	/// A different DE1 than the one being updated is connected (its serial,
+	/// or its Bluetooth id): it is not read, and the lock stays until the DE1
+	/// being updated reports or the user exits.
 	val foreignMachine: String? = null,
+	/// The serial number of the DE1 being updated, when known (non-zero).
+	/// The shells persist it with the power-cycle marker.
+	val machineSerial: UInt? = null,
+	/// The connected DE1 could not be identified (no serial on one side and
+	/// no comparable Bluetooth id): it is *not* treated as a different DE1,
+	/// but Crema can't confirm it is the same one.
+	val identityUnknown: Boolean,
 	/// How long the DE1 may still be erasing (during the erase, or after an
 	/// interrupted one): the shells persist it so a restart keeps the lock.
 	val eraseHoldMsLeft: UInt? = null
@@ -2596,6 +2603,13 @@ data class FlashActionWriteInner (
 /// Generated type representing the anonymous struct variant `ReadBuild` of the `FlashAction` Rust enum
 @Serializable
 data class FlashActionReadBuildInner (
+	/// The exact bytes.
+	val data: List<UByte>
+)
+
+/// Generated type representing the anonymous struct variant `ReadSerial` of the `FlashAction` Rust enum
+@Serializable
+data class FlashActionReadSerialInner (
 	/// The exact bytes.
 	val data: List<UByte>
 )
@@ -2629,6 +2643,13 @@ sealed class FlashAction {
 	@Serializable
 	@SerialName("ReadBuild")
 	data class ReadBuild(val content: FlashActionReadBuildInner): FlashAction()
+	/// Write `data` (an MMR `SerialNumber` read request) to
+	/// [`WriteTarget::De1MmrRequest`] through the lock, no report — like
+	/// [`FlashAction::ReadBuild`]. The serial tells the DE1 being updated from
+	/// another one, across browser restarts (audit r4 LOW-1).
+	@Serializable
+	@SerialName("ReadSerial")
+	data class ReadSerial(val content: FlashActionReadSerialInner): FlashAction()
 }
 
 /// Generated type representing the anonymous struct variant `Blocked` of the `FlashStartError` Rust enum

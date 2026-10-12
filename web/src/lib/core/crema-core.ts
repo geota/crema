@@ -2534,11 +2534,22 @@ export interface FlashStatus {
 	/** Whether the flash currently sees the DE1 link up. */
 	linkUp: boolean;
 	/**
-	 * A different DE1 than the one being updated is connected (its id): it
-	 * is not read, and the lock stays until that DE1 reports or the user
-	 * exits.
+	 * A different DE1 than the one being updated is connected (its serial,
+	 * or its Bluetooth id): it is not read, and the lock stays until the DE1
+	 * being updated reports or the user exits.
 	 */
 	foreignMachine?: string;
+	/**
+	 * The serial number of the DE1 being updated, when known (non-zero).
+	 * The shells persist it with the power-cycle marker.
+	 */
+	machineSerial?: number;
+	/**
+	 * The connected DE1 could not be identified (no serial on one side and
+	 * no comparable Bluetooth id): it is *not* treated as a different DE1,
+	 * but Crema can't confirm it is the same one.
+	 */
+	identityUnknown: boolean;
 	/**
 	 * How long the DE1 may still be erasing (during the erase, or after an
 	 * interrupted one): the shells persist it so a restart keeps the lock.
@@ -2579,6 +2590,16 @@ export type FlashAction =
 	 * arrives as an ordinary MMR notification, which feeds the flash.
 	 */
 	| { type: "ReadBuild", content: {
+	/** The exact bytes. */
+	data: number[];
+}}
+	/**
+	 * Write `data` (an MMR `SerialNumber` read request) to
+	 * [`WriteTarget::De1MmrRequest`] through the lock, no report — like
+	 * [`FlashAction::ReadBuild`]. The serial tells the DE1 being updated from
+	 * another one, across browser restarts (audit r4 LOW-1).
+	 */
+	| { type: "ReadSerial", content: {
 	/** The exact bytes. */
 	data: number[];
 }};
