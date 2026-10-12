@@ -2440,17 +2440,23 @@ export enum FlashPhase {
 	Uploading = "Uploading",
 	/** Waiting for the DE1 to check the written image. */
 	Verifying = "Verifying",
-	/** Verified; the DE1 must be switched off and on to run it. */
+	/**
+	 * Verified, or the verdict was lost: the DE1 must be switched off and on;
+	 * the build it reports afterwards decides.
+	 */
 	AwaitingPowerCycle = "AwaitingPowerCycle",
 	/** The DE1 restarted on the new build. */
 	Succeeded = "Succeeded",
-	/** Stopped by an error; the old firmware is still running. */
+	/** Stopped by an error before the verify request. */
 	Failed = "Failed",
-	/** Stopped by the user; the old firmware is still running. */
+	/** Stopped by the user. */
 	Cancelled = "Cancelled",
 }
 
-/** Why a flash failed. Every failure leaves the old firmware running. */
+/**
+ * Why a flash failed (before the verify request; after it, the outcome is
+ * unconfirmed rather than failed — see [`FlashStatus::verify_unconfirmed`]).
+ */
 export type FlashFailure = 
 	/** The DE1 disconnected before verification. */
 	| { type: "LinkLost", content: {
@@ -2475,16 +2481,6 @@ export type FlashFailure =
 	| { type: "VerifyFailed", content: {
 	/** The offset of the first corrupt block. */
 	first_error: number;
-}}
-	/** No verdict within [`VERIFY_TIMEOUT_MS`]. */
-	| { type: "VerifyTimeout", content?: undefined }
-	/**
-	 * The link dropped during verification and the DE1 came back on a
-	 * different build.
-	 */
-	| { type: "VerifyUnconfirmed", content: {
-	/** The build the DE1 reported after reconnecting. */
-	reported_build: number;
 }};
 
 /** A snapshot for the UI. */
@@ -2509,15 +2505,31 @@ export interface FlashStatus {
 	elapsedSeconds: number;
 	/** Whether [`CremaCore::firmware_flash_cancel`] would act. */
 	canCancel: boolean;
-	/** Whether other writes are locked out. */
+	/**
+	 * Whether other writes are locked out. The shells drop every non-flash
+	 * DE1 write and skip their reconnect sweeps while this is `true`.
+	 */
 	locksWrites: boolean;
+	/**
+	 * A failure or cancel happened during erase and the lock is held until
+	 * the DE1 finishes erasing (at most [`ERASE_TIMEOUT_MS`]).
+	 */
+	eraseSettling: boolean;
+	/** Whether [`CremaCore::firmware_flash_exit`] would act. */
+	canExit: boolean;
 	/** Why it failed. */
 	failure?: FlashFailure;
-	/** The link dropped during verification; the build read decides. */
+	/**
+	 * The verify outcome was lost (link drop, timeout, failed request): the
+	 * DE1 may be running either build until it is switched off and on.
+	 */
 	verifyUnconfirmed: boolean;
-	/** The machine has dropped off since verification (i.e. it restarted). */
+	/**
+	 * The link has dropped and come back since verification (a power-cycle,
+	 * or only a Bluetooth reconnect — the two can't be told apart).
+	 */
 	machineRestarted: boolean;
-	/** After restarting the DE1 still reported this (old) build. */
+	/** After reconnecting the DE1 reported this build, not the target. */
 	restartedOnBuild?: number;
 }
 
@@ -2530,7 +2542,10 @@ export interface FlashStatus {
  * [`CremaCore::firmware_flash_on_read_failed`].
  */
 export type FlashAction = 
-	/** Write `data` with response to `target` and report the ACK. */
+	/**
+	 * Write `data` with response to `target` and report the ACK. Allowed
+	 * through the write lock (it *is* the flash).
+	 */
 	| { type: "Write", content: {
 	/** The characteristic. */
 	target: WriteTarget;
@@ -2546,10 +2561,14 @@ export type FlashAction =
 	/** Read A009 once (a fresh GATT read) and report the bytes. */
 	| { type: "ReadFwMap", content?: undefined }
 	/**
-	 * Read MMR `0x800010` through the normal path
-	 * ([`CremaCore::read_mmr`] with `FirmwareVersion`).
+	 * Write `data` (an MMR `0x800010` read request) to
+	 * [`WriteTarget::De1MmrRequest`] through the lock, no report: the reply
+	 * arrives as an ordinary MMR notification, which feeds the flash.
 	 */
-	| { type: "ReadBuild", content?: undefined };
+	| { type: "ReadBuild", content: {
+	/** The exact bytes. */
+	data: number[];
+}};
 
 /** Why [`CremaCore::firmware_flash_start`] refused. */
 export type FlashStartError = 
@@ -3933,7 +3952,10 @@ export type FlashBlocker =
 	| { type: "NotReady", content?: undefined }
 	/** This device mirrors another (secondary); only the primary may flash. */
 	| { type: "ReadOnlyMirror", content?: undefined }
-	/** A flash is already running. */
+	/**
+	 * A flash is running, waiting for the DE1's power-cycle, or settling
+	 * after an erase-phase failure.
+	 */
 	| { type: "FlashInProgress", content?: undefined }
 	/** MMR `0x800010` has not been read. */
 	| { type: "BuildUnknown", content?: undefined }

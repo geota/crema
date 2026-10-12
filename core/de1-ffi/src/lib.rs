@@ -2697,6 +2697,25 @@ impl CremaBridge {
         self.core().firmware_flash_dismiss()
     }
 
+    /// The user's explicit exit from the power-cycle step; `false` while a
+    /// transfer or an interrupted erase holds the link.
+    pub fn firmware_flash_exit(&self) -> bool {
+        self.core().firmware_flash_exit()
+    }
+
+    /// Bring back a flash that was waiting for the power-cycle before the
+    /// process restarted (from what the shell persisted).
+    pub fn firmware_flash_restore_awaiting(
+        &self,
+        build: u32,
+        unconfirmed: bool,
+        now_ms: u64,
+    ) -> String {
+        self.core()
+            .firmware_flash_restore_awaiting(build, unconfirmed, now_ms)
+            .to_json()
+    }
+
     /// The current snapshot.
     pub fn firmware_flash_status(&self, now_ms: u64) -> String {
         self.core().firmware_flash_status(now_ms).to_json()

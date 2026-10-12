@@ -2461,16 +2461,17 @@ enum class FlashPhase(val string: String) {
 	/// Waiting for the DE1 to check the written image.
 	@SerialName("Verifying")
 	Verifying("Verifying"),
-	/// Verified; the DE1 must be switched off and on to run it.
+	/// Verified, or the verdict was lost: the DE1 must be switched off and on;
+	/// the build it reports afterwards decides.
 	@SerialName("AwaitingPowerCycle")
 	AwaitingPowerCycle("AwaitingPowerCycle"),
 	/// The DE1 restarted on the new build.
 	@SerialName("Succeeded")
 	Succeeded("Succeeded"),
-	/// Stopped by an error; the old firmware is still running.
+	/// Stopped by an error before the verify request.
 	@SerialName("Failed")
 	Failed("Failed"),
-	/// Stopped by the user; the old firmware is still running.
+	/// Stopped by the user.
 	@SerialName("Cancelled")
 	Cancelled("Cancelled"),
 }
@@ -2505,14 +2506,8 @@ data class FlashFailureVerifyFailedInner (
 	val first_error: UInt
 )
 
-/// Generated type representing the anonymous struct variant `VerifyUnconfirmed` of the `FlashFailure` Rust enum
-@Serializable
-data class FlashFailureVerifyUnconfirmedInner (
-	/// The build the DE1 reported after reconnecting.
-	val reported_build: UInt
-)
-
-/// Why a flash failed. Every failure leaves the old firmware running.
+/// Why a flash failed (before the verify request; after it, the outcome is
+/// unconfirmed rather than failed — see [`FlashStatus::verify_unconfirmed`]).
 @Serializable
 sealed class FlashFailure {
 	/// The DE1 disconnected before verification.
@@ -2535,15 +2530,6 @@ sealed class FlashFailure {
 	@Serializable
 	@SerialName("VerifyFailed")
 	data class VerifyFailed(val content: FlashFailureVerifyFailedInner): FlashFailure()
-	/// No verdict within [`VERIFY_TIMEOUT_MS`].
-	@Serializable
-	@SerialName("VerifyTimeout")
-	object VerifyTimeout: FlashFailure()
-	/// The link dropped during verification and the DE1 came back on a
-	/// different build.
-	@Serializable
-	@SerialName("VerifyUnconfirmed")
-	data class VerifyUnconfirmed(val content: FlashFailureVerifyUnconfirmedInner): FlashFailure()
 }
 
 /// A snapshot for the UI.
@@ -2569,15 +2555,23 @@ data class FlashStatus (
 	val elapsedSeconds: UInt,
 	/// Whether [`CremaCore::firmware_flash_cancel`] would act.
 	val canCancel: Boolean,
-	/// Whether other writes are locked out.
+	/// Whether other writes are locked out. The shells drop every non-flash
+	/// DE1 write and skip their reconnect sweeps while this is `true`.
 	val locksWrites: Boolean,
+	/// A failure or cancel happened during erase and the lock is held until
+	/// the DE1 finishes erasing (at most [`ERASE_TIMEOUT_MS`]).
+	val eraseSettling: Boolean,
+	/// Whether [`CremaCore::firmware_flash_exit`] would act.
+	val canExit: Boolean,
 	/// Why it failed.
 	val failure: FlashFailure? = null,
-	/// The link dropped during verification; the build read decides.
+	/// The verify outcome was lost (link drop, timeout, failed request): the
+	/// DE1 may be running either build until it is switched off and on.
 	val verifyUnconfirmed: Boolean,
-	/// The machine has dropped off since verification (i.e. it restarted).
+	/// The link has dropped and come back since verification (a power-cycle,
+	/// or only a Bluetooth reconnect — the two can't be told apart).
 	val machineRestarted: Boolean,
-	/// After restarting the DE1 still reported this (old) build.
+	/// After reconnecting the DE1 reported this build, not the target.
 	val restartedOnBuild: UInt? = null
 )
 
@@ -2590,6 +2584,13 @@ data class FlashActionWriteInner (
 	val data: List<UByte>
 )
 
+/// Generated type representing the anonymous struct variant `ReadBuild` of the `FlashAction` Rust enum
+@Serializable
+data class FlashActionReadBuildInner (
+	/// The exact bytes.
+	val data: List<UByte>
+)
+
 /// One thing the shell must do, in order. The shell performs actions one at a
 /// time and reports back: a `Write` with
 /// [`CremaCore::firmware_flash_on_write_ack`] /
@@ -2598,7 +2599,8 @@ data class FlashActionWriteInner (
 /// [`CremaCore::firmware_flash_on_read_failed`].
 @Serializable
 sealed class FlashAction {
-	/// Write `data` with response to `target` and report the ACK.
+	/// Write `data` with response to `target` and report the ACK. Allowed
+	/// through the write lock (it *is* the flash).
 	@Serializable
 	@SerialName("Write")
 	data class Write(val content: FlashActionWriteInner): FlashAction()
@@ -2612,11 +2614,12 @@ sealed class FlashAction {
 	@Serializable
 	@SerialName("ReadFwMap")
 	object ReadFwMap: FlashAction()
-	/// Read MMR `0x800010` through the normal path
-	/// ([`CremaCore::read_mmr`] with `FirmwareVersion`).
+	/// Write `data` (an MMR `0x800010` read request) to
+	/// [`WriteTarget::De1MmrRequest`] through the lock, no report: the reply
+	/// arrives as an ordinary MMR notification, which feeds the flash.
 	@Serializable
 	@SerialName("ReadBuild")
-	object ReadBuild: FlashAction()
+	data class ReadBuild(val content: FlashActionReadBuildInner): FlashAction()
 }
 
 /// Generated type representing the anonymous struct variant `Blocked` of the `FlashStartError` Rust enum
@@ -3939,7 +3942,8 @@ sealed class FlashBlocker {
 	@Serializable
 	@SerialName("ReadOnlyMirror")
 	object ReadOnlyMirror: FlashBlocker()
-	/// A flash is already running.
+	/// A flash is running, waiting for the DE1's power-cycle, or settling
+	/// after an erase-phase failure.
 	@Serializable
 	@SerialName("FlashInProgress")
 	object FlashInProgress: FlashBlocker()

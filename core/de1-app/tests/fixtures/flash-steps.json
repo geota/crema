@@ -1,0 +1,322 @@
+{
+  "cancel": {
+    "actions": [
+      {
+        "content": {
+          "data": [
+            0
+          ],
+          "target": "De1RequestedState"
+        },
+        "type": "Write"
+      }
+    ],
+    "error": null,
+    "status": {
+      "artifact": {
+        "boardMarker": 3725590529,
+        "bodyByteCount": 461824,
+        "build": 1358,
+        "byteLength": 463872,
+        "channel": "Nightly",
+        "channels": [
+          "Nightly"
+        ],
+        "chunkCount": 28992,
+        "cpuByteCount": 298880,
+        "id": "de1-1358",
+        "provenance": "fast.decentespresso.com de1nightly bootfwupdate.dat (Last-Modified 2026-09-21), probed 2026-10-11; identical to de1app main (25a66f66) and decaid assets/firmware/de1/de1-1358.bin",
+        "releaseNotes": "Cold maintenance forwards requests through preheat; sleep and air-purge requests allowed in refill with no refill kit (out of water).",
+        "sha256": "ada25161ebbd661b44b3aab2c7756f42d95064a931462b3d134e8db66d198747",
+        "urls": [
+          "https://fast.decentespresso.com/download/sync/de1nightly/fw/bootfwupdate.dat"
+        ]
+      },
+      "canCancel": false,
+      "canExit": true,
+      "chunksAcked": 0,
+      "chunksTotal": 8193,
+      "elapsedSeconds": 1,
+      "eraseSettling": false,
+      "etaIsEstimate": false,
+      "etaSeconds": null,
+      "failure": null,
+      "locksWrites": false,
+      "machineRestarted": false,
+      "percent": 0.0,
+      "phase": "Cancelled",
+      "restartedOnBuild": null,
+      "targetBuild": 1358,
+      "verifyUnconfirmed": false
+    }
+  },
+  "chunk0": {
+    "actions": [
+      {
+        "content": {
+          "data": [
+            16,
+            0,
+            0,
+            0,
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15
+          ],
+          "target": "De1MmrWrite"
+        },
+        "type": "Write"
+      }
+    ],
+    "error": null,
+    "status": {
+      "artifact": {
+        "boardMarker": 3725590529,
+        "bodyByteCount": 461824,
+        "build": 1358,
+        "byteLength": 463872,
+        "channel": "Nightly",
+        "channels": [
+          "Nightly"
+        ],
+        "chunkCount": 28992,
+        "cpuByteCount": 298880,
+        "id": "de1-1358",
+        "provenance": "fast.decentespresso.com de1nightly bootfwupdate.dat (Last-Modified 2026-09-21), probed 2026-10-11; identical to de1app main (25a66f66) and decaid assets/firmware/de1/de1-1358.bin",
+        "releaseNotes": "Cold maintenance forwards requests through preheat; sleep and air-purge requests allowed in refill with no refill kit (out of water).",
+        "sha256": "ada25161ebbd661b44b3aab2c7756f42d95064a931462b3d134e8db66d198747",
+        "urls": [
+          "https://fast.decentespresso.com/download/sync/de1nightly/fw/bootfwupdate.dat"
+        ]
+      },
+      "canCancel": true,
+      "canExit": false,
+      "chunksAcked": 0,
+      "chunksTotal": 8193,
+      "elapsedSeconds": 1,
+      "eraseSettling": false,
+      "etaIsEstimate": true,
+      "etaSeconds": 251,
+      "failure": null,
+      "locksWrites": true,
+      "machineRestarted": false,
+      "percent": 1.0,
+      "phase": "Uploading",
+      "restartedOnBuild": null,
+      "targetBuild": 1358,
+      "verifyUnconfirmed": false
+    }
+  },
+  "chunk0x1234": {
+    "actions": [
+      {
+        "content": {
+          "data": [
+            16,
+            1,
+            35,
+            64,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28
+          ],
+          "target": "De1MmrWrite"
+        },
+        "type": "Write"
+      }
+    ],
+    "error": null,
+    "status": null
+  },
+  "erase": {
+    "actions": [
+      {
+        "type": "SubscribeFwMap"
+      },
+      {
+        "content": {
+          "data": [
+            0,
+            0,
+            1,
+            1,
+            255,
+            255,
+            255
+          ],
+          "target": "De1FwMapRequest"
+        },
+        "type": "Write"
+      }
+    ],
+    "error": null,
+    "status": {
+      "artifact": {
+        "boardMarker": 3725590529,
+        "bodyByteCount": 461824,
+        "build": 1358,
+        "byteLength": 463872,
+        "channel": "Nightly",
+        "channels": [
+          "Nightly"
+        ],
+        "chunkCount": 28992,
+        "cpuByteCount": 298880,
+        "id": "de1-1358",
+        "provenance": "fast.decentespresso.com de1nightly bootfwupdate.dat (Last-Modified 2026-09-21), probed 2026-10-11; identical to de1app main (25a66f66) and decaid assets/firmware/de1/de1-1358.bin",
+        "releaseNotes": "Cold maintenance forwards requests through preheat; sleep and air-purge requests allowed in refill with no refill kit (out of water).",
+        "sha256": "ada25161ebbd661b44b3aab2c7756f42d95064a931462b3d134e8db66d198747",
+        "urls": [
+          "https://fast.decentespresso.com/download/sync/de1nightly/fw/bootfwupdate.dat"
+        ]
+      },
+      "canCancel": true,
+      "canExit": false,
+      "chunksAcked": 0,
+      "chunksTotal": 8193,
+      "elapsedSeconds": 1,
+      "eraseSettling": false,
+      "etaIsEstimate": true,
+      "etaSeconds": 253,
+      "failure": null,
+      "locksWrites": true,
+      "machineRestarted": false,
+      "percent": 1.0,
+      "phase": "Erasing",
+      "restartedOnBuild": null,
+      "targetBuild": 1358,
+      "verifyUnconfirmed": false
+    }
+  },
+  "readBuild": {
+    "actions": [
+      {
+        "content": {
+          "data": [
+            0,
+            128,
+            0,
+            16,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "type": "ReadBuild"
+      }
+    ],
+    "error": null,
+    "status": null
+  },
+  "start": {
+    "actions": [
+      {
+        "content": {
+          "data": [
+            0
+          ],
+          "target": "De1RequestedState"
+        },
+        "type": "Write"
+      }
+    ],
+    "error": null,
+    "status": {
+      "artifact": {
+        "boardMarker": 3725590529,
+        "bodyByteCount": 461824,
+        "build": 1358,
+        "byteLength": 463872,
+        "channel": "Nightly",
+        "channels": [
+          "Nightly"
+        ],
+        "chunkCount": 28992,
+        "cpuByteCount": 298880,
+        "id": "de1-1358",
+        "provenance": "fast.decentespresso.com de1nightly bootfwupdate.dat (Last-Modified 2026-09-21), probed 2026-10-11; identical to de1app main (25a66f66) and decaid assets/firmware/de1/de1-1358.bin",
+        "releaseNotes": "Cold maintenance forwards requests through preheat; sleep and air-purge requests allowed in refill with no refill kit (out of water).",
+        "sha256": "ada25161ebbd661b44b3aab2c7756f42d95064a931462b3d134e8db66d198747",
+        "urls": [
+          "https://fast.decentespresso.com/download/sync/de1nightly/fw/bootfwupdate.dat"
+        ]
+      },
+      "canCancel": true,
+      "canExit": false,
+      "chunksAcked": 0,
+      "chunksTotal": 8193,
+      "elapsedSeconds": 0,
+      "eraseSettling": false,
+      "etaIsEstimate": true,
+      "etaSeconds": 253,
+      "failure": null,
+      "locksWrites": true,
+      "machineRestarted": false,
+      "percent": 0.0,
+      "phase": "Preparing",
+      "restartedOnBuild": null,
+      "targetBuild": 1358,
+      "verifyUnconfirmed": false
+    }
+  },
+  "verify": {
+    "actions": [
+      {
+        "content": {
+          "data": [
+            0,
+            0,
+            0,
+            1,
+            255,
+            255,
+            255
+          ],
+          "target": "De1FwMapRequest"
+        },
+        "type": "Write"
+      }
+    ],
+    "error": null,
+    "status": null
+  }
+}

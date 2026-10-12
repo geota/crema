@@ -4014,7 +4014,7 @@ impl CremaCore {
     pub fn firmware_flash_on_read_failed(&mut self, now_ms: u64) -> FlashStep {
         self.advance_clock(now_ms);
         if let Some(f) = self.firmware_flash.as_mut() {
-            f.on_read_failed();
+            f.on_read_failed(now_ms);
         }
         self.flash_step(Vec::new(), now_ms)
     }
@@ -4034,9 +4034,10 @@ impl CremaCore {
     /// Tell a running flash the DE1 link dropped (also called from
     /// [`de1_link_lost`](Self::de1_link_lost) and [`reset`](Self::reset)).
     pub fn firmware_flash_link_lost(&mut self) {
-        let now_ms = u64::try_from(self.clock.as_millis()).unwrap_or(u64::MAX);
+        // The flash's own (shell) clock, not the core's — see
+        // `FirmwareFlash::clock_ms`.
         if let Some(f) = self.firmware_flash.as_mut() {
-            f.on_link_lost(now_ms);
+            f.on_link_lost(f.clock_ms());
         }
     }
 
@@ -4054,8 +4055,43 @@ impl CremaCore {
     /// machine is left asleep on its old firmware.
     pub fn firmware_flash_cancel(&mut self, now_ms: u64) -> FlashStep {
         self.advance_clock(now_ms);
-        if let Some(f) = self.firmware_flash.as_mut() {
-            f.cancel(now_ms);
+        let actions = self
+            .firmware_flash
+            .as_mut()
+            .and_then(|f| f.cancel(now_ms))
+            .unwrap_or_default();
+        self.flash_step(actions, now_ms)
+    }
+
+    /// The user's explicit exit from the power-cycle step (or from a finished
+    /// flash): forget it and release the lock. Refused while a transfer runs or
+    /// an interrupted erase may still be running. Returns whether it acted.
+    pub fn firmware_flash_exit(&mut self) -> bool {
+        if self
+            .firmware_flash
+            .as_ref()
+            .is_some_and(FirmwareFlash::can_exit)
+        {
+            self.firmware_flash = None;
+            return true;
+        }
+        false
+    }
+
+    /// Bring back a flash that was waiting for the DE1's power-cycle when the
+    /// shell went away (page reload, process restart), from what the shell
+    /// persisted: the lock and the power-cycle step return until the DE1
+    /// reports a build. A no-op when a flash already exists or `build` is not
+    /// pinned.
+    pub fn firmware_flash_restore_awaiting(
+        &mut self,
+        build: u32,
+        unconfirmed: bool,
+        now_ms: u64,
+    ) -> FlashStep {
+        self.advance_clock(now_ms);
+        if self.firmware_flash.is_none() {
+            self.firmware_flash = FirmwareFlash::restore_awaiting(build, unconfirmed, now_ms);
         }
         self.flash_step(Vec::new(), now_ms)
     }
@@ -4110,6 +4146,10 @@ impl CremaCore {
         profile: &Profile,
         now: Duration,
     ) -> Result<CoreOutput, AppError> {
+        // A firmware flash holds the link (the reconnect path auto-uploads).
+        if let Some(out) = self.refuse_if_firmware_locked("upload_profile") {
+            return Ok(out);
+        }
         let mut assembled = profile.assemble()?;
         // NEVER arm the firmware-side dispensed-volume stop: the tail's
         // max_total_volume_ml drives the DE1's own (flow-integrated) volume
@@ -4365,9 +4405,8 @@ impl CremaCore {
             // `ErrorNoAc` filter (see `de1_firmware_build`).
             if register == MmrRegister::FirmwareVersion {
                 self.de1_firmware_build = Some(value);
-                let now_ms = u64::try_from(self.clock.as_millis()).unwrap_or(u64::MAX);
                 if let Some(flash) = self.firmware_flash.as_mut() {
-                    flash.on_build(value, now_ms);
+                    flash.on_build(value, flash.clock_ms());
                 }
             }
             if register == MmrRegister::GhcInfo {
