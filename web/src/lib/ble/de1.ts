@@ -152,7 +152,7 @@ export class De1Manager {
 	private fwMapListener: ((data: Uint8Array, atMs: number) => void) | null = null;
 
 	/** Link-loss / link-restored observers (the firmware flash). */
-	private readonly linkListeners = new Set<{ lost(): void; restored(): void }>();
+	private readonly linkListeners = new Set<{ lost(): void; restored?(): void }>();
 
 	constructor(
 		private readonly core: CremaCore,
@@ -271,7 +271,9 @@ export class De1Manager {
 			this.callbacks.onStatus(`Reconnecting to DE1… (attempt ${attempt})`);
 		});
 		device.onReconnected(() => {
-			for (const l of this.linkListeners) l.restored();
+			// The firmware flash hears link-up from the app's transition into
+			// `ready` (every connect path, audit r2 M-A), not from here.
+			for (const l of this.linkListeners) l.restored?.();
 			this.callbacks.onState('ready');
 			this.callbacks.onStatus('Reconnected — receiving DE1 notifications');
 		});
@@ -406,8 +408,8 @@ export class De1Manager {
 		this.fwMapListener = listener;
 	}
 
-	/** Observe link loss / recovery; returns the unsubscribe. */
-	addLinkListener(listener: { lost(): void; restored(): void }): () => void {
+	/** Observe link loss (and auto-reconnect recovery); returns the unsubscribe. */
+	addLinkListener(listener: { lost(): void; restored?(): void }): () => void {
 		this.linkListeners.add(listener);
 		return () => this.linkListeners.delete(listener);
 	}

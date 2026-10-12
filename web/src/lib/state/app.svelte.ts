@@ -395,6 +395,10 @@ export class CremaApp {
 				// loaded and the user has to remember to click Load on
 				// Brew every session.
 				if (de1State === 'ready' && !wasReady) {
+					// Every connect path (fresh, launch, reload, auto-reconnect)
+					// tells a firmware flash the link is up, so a power-cycle wait
+					// reads the build (audit r2 M-A).
+					void this.firmware?.onLinkUp(this.state.current.de1Diagnostics.deviceId ?? null);
 					this.#rememberConnected('de1');
 					// Fire a `de1Connected` webhook on the first transition
 					// into `ready`. The firmware string lands a moment later
@@ -498,7 +502,14 @@ export class CremaApp {
 				this.state.current.de1MachineInfo[MmrRegister.FirmwareVersion] ?? null,
 			log: (line) => this.state.log(line),
 			keepAlive: { set: setFirmwareWakeLock },
-			onRelease: () => this.afterFirmwareRelease()
+			onRelease: () => this.afterFirmwareRelease(),
+			machineId: () => this.state.current.de1Diagnostics.deviceId ?? null,
+			linkUp: () => this.state.current.de1State === 'ready',
+			transportLabel: () => {
+				const d = this.state.current.de1Diagnostics;
+				const ua = typeof navigator === 'undefined' ? 'unknown browser' : navigator.userAgent;
+				return `Web Bluetooth (${ua}), DE1 ${d.deviceName ?? '?'} id ${d.deviceId ?? '?'}`;
+			}
 		});
 		// A flash that was waiting for the DE1's power-cycle before a reload
 		// comes back with its lock (audit M3).
@@ -967,6 +978,8 @@ export class CremaApp {
 		if (this.state.current.de1State !== 'ready') return;
 		this.sweep.onDe1State('ready');
 		this.ensureLoadedMatches();
+		// The connect-time presence poke a held reconnect skipped (r2 NOTE 3).
+		if (getSettingsStore().current.suppressDe1Sleep) void this.markUserPresent();
 	}
 
 	/** What the shell knows for the firmware-flash preconditions. */

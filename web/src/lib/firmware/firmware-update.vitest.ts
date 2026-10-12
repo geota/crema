@@ -15,8 +15,10 @@ import {
 	type FlashStatus,
 	type FlashStep
 } from '$lib/core/crema-core';
+import { heldBannerText, waitingText } from './flash-copy';
 import {
 	AWAITING_KEY,
+	markerFor,
 	FirmwareUpdateController,
 	type FirmwareUpdateDeps,
 	type MarkerStore
@@ -43,6 +45,7 @@ function status(phase: FlashPhase, extra: Partial<FlashStatus> = {}): FlashStatu
 		canExit: false,
 		verifyUnconfirmed: false,
 		machineRestarted: false,
+		linkUp: false,
 		...extra
 	};
 }
@@ -65,7 +68,12 @@ function deps(over: {
 	cancel?: FlashStep;
 	store?: MarkerStore | null;
 	restore?: FlashStep;
+	restoreHold?: FlashStep;
 	onRelease?: () => void;
+	machineId?: string | null;
+	linkUp?: boolean;
+	wallNow?: number;
+	linkRestored?: () => FlashStep;
 }): FirmwareUpdateDeps {
 	const io: FlashIo = {
 		write: async () => undefined,
@@ -84,12 +92,13 @@ function deps(over: {
 			firmwareFlashOnFwMap: noStep,
 			firmwareFlashOnReadFailed: noStep,
 			firmwareFlashTick: noStep,
-			firmwareFlashLinkRestored: noStep,
+			firmwareFlashLinkRestored: vi.fn(async () => over.linkRestored?.() ?? { actions: [] }),
 			firmwareFlashCancel: vi.fn(async () => over.cancel ?? { actions: [] }),
 			firmwareFlashDismiss: async () => true,
 			firmwareFlashExit: vi.fn(async () => true),
 			firmwareFlashStatus: async () => over.status ?? { actions: [] },
-			firmwareFlashRestoreAwaiting: vi.fn(async () => over.restore ?? { actions: [] })
+			firmwareFlashRestoreAwaiting: vi.fn(async () => over.restore ?? { actions: [] }),
+			firmwareFlashRestoreEraseHold: vi.fn(async () => over.restoreHold ?? { actions: [] })
 		},
 		io,
 		conditions: async () => ({ connected: true, ready: true, guidedBrewActive: false, powerOk: true }),
@@ -98,6 +107,9 @@ function deps(over: {
 		keepAlive: { set: () => undefined },
 		store: over.store === undefined ? null : over.store,
 		onRelease: over.onRelease,
+		machineId: () => over.machineId ?? null,
+		linkUp: () => over.linkUp ?? false,
+		wallNow: () => over.wallNow ?? 1_000_000,
 		fetchFn:
 			over.fetchFn ??
 			((async () => {
@@ -221,7 +233,8 @@ describe('FirmwareUpdateController', () => {
 		expect(flow.holdsLink).toBe(true);
 		expect(JSON.parse(store.data.get(AWAITING_KEY) ?? 'null')).toEqual({
 			build: 1358,
-			unconfirmed: false
+			unconfirmed: false,
+			machine: null
 		});
 		await flow.close();
 		expect(flow.step).toBe('closed');
@@ -236,7 +249,7 @@ describe('FirmwareUpdateController', () => {
 		flow.dispose();
 	});
 
-	it('a persisted power-cycle marker is restored into the core after a reload', async () => {
+	it('a persisted power-cycle marker is restored into the core after a reload and shown', async () => {
 		const store = memoryStore();
 		store.setItem(AWAITING_KEY, JSON.stringify({ build: 1358, unconfirmed: true }));
 		const awaiting = status(FlashPhase.AwaitingPowerCycle, { canExit: true });
@@ -249,7 +262,102 @@ describe('FirmwareUpdateController', () => {
 		await flow.restore();
 		expect(d.core.firmwareFlashRestoreAwaiting).toHaveBeenCalledWith(1358, true, expect.any(Number));
 		expect(flow.holdsLink).toBe(true);
+		expect(flow.step).toBe('flash'); // visible at once (audit r2 M-B)
+		expect(d.core.firmwareFlashLinkRestored).not.toHaveBeenCalled(); // not connected yet
+		// Any later connect path reads the build (audit r2 M-A).
+		await flow.onLinkUp('dev-1');
+		expect(d.core.firmwareFlashLinkRestored).toHaveBeenCalledTimes(1);
 		flow.dispose();
+	});
+
+	it('a restore while already connected reads the build at once', async () => {
+		const store = memoryStore();
+		store.setItem(AWAITING_KEY, JSON.stringify({ build: 1358, unconfirmed: false, machine: 'dev-1' }));
+		const awaiting = status(FlashPhase.AwaitingPowerCycle, { canExit: true });
+		const d = deps({
+			store,
+			linkUp: true,
+			machineId: 'dev-1',
+			restore: { actions: [], status: awaiting },
+			status: { actions: [], status: awaiting }
+		});
+		const flow = new FirmwareUpdateController(d);
+		await flow.restore();
+		expect(d.core.firmwareFlashLinkRestored).toHaveBeenCalledTimes(1);
+		flow.dispose();
+	});
+
+	it('a restored lock for another DE1 is dropped on connect (audit r2 LOW 7)', async () => {
+		const store = memoryStore();
+		store.setItem(AWAITING_KEY, JSON.stringify({ build: 1358, unconfirmed: false, machine: 'dev-A' }));
+		const awaiting = status(FlashPhase.AwaitingPowerCycle, { canExit: true });
+		const d = deps({
+			store,
+			restore: { actions: [], status: awaiting },
+			status: { actions: [], status: awaiting }
+		});
+		const flow = new FirmwareUpdateController(d);
+		await flow.restore();
+		await flow.onLinkUp('dev-B');
+		expect(d.core.firmwareFlashExit).toHaveBeenCalledTimes(1);
+		expect(d.core.firmwareFlashLinkRestored).not.toHaveBeenCalled();
+		expect(flow.step).toBe('closed');
+		expect(store.data.has(AWAITING_KEY)).toBe(false);
+		flow.dispose();
+	});
+
+	it('an erase hold is restored from its deadline; an expired one is dropped', async () => {
+		const store = memoryStore();
+		store.setItem(AWAITING_KEY, JSON.stringify({ build: 1358, unconfirmed: false, eraseHoldUntil: 1_030_000 }));
+		const held = status(FlashPhase.Failed, { eraseSettling: true, eraseHoldMsLeft: 30_000 });
+		const d = deps({
+			store,
+			restoreHold: { actions: [], status: held },
+			status: { actions: [], status: held }
+		});
+		const flow = new FirmwareUpdateController(d);
+		await flow.restore();
+		expect(d.core.firmwareFlashRestoreEraseHold).toHaveBeenCalledWith(1358, 30_000, expect.any(Number));
+		expect(flow.holdsLink).toBe(true);
+		flow.dispose();
+		const stale = memoryStore();
+		stale.setItem(AWAITING_KEY, JSON.stringify({ build: 1358, unconfirmed: false, eraseHoldUntil: 900_000 }));
+		const d2 = deps({ store: stale });
+		await new FirmwareUpdateController(d2).restore();
+		expect(d2.core.firmwareFlashRestoreEraseHold).not.toHaveBeenCalled();
+		expect(stale.data.has(AWAITING_KEY)).toBe(false);
+	});
+
+	it('the marker covers verify, the erase hold and the power-cycle wait (audit r2 LOW 2)', () => {
+		expect(markerFor(status(FlashPhase.Verifying, { canCancel: false }), 'dev', 0)).toEqual({
+			build: 1358,
+			unconfirmed: true,
+			machine: 'dev'
+		});
+		expect(markerFor(status(FlashPhase.Erasing, { eraseHoldMsLeft: 45_000 }), 'dev', 100_000)).toEqual({
+			build: 1358,
+			unconfirmed: false,
+			eraseHoldUntil: 145_000,
+			machine: 'dev'
+		});
+		expect(markerFor(status(FlashPhase.Uploading), 'dev', 0)).toBeNull();
+		expect(markerFor(status(FlashPhase.Succeeded, { locksWrites: false }), 'dev', 0)).toBeNull();
+		expect(markerFor(null, 'dev', 0)).toBeNull();
+	});
+
+	it('the banner and waiting copy follow the status', () => {
+		const awaiting = status(FlashPhase.AwaitingPowerCycle);
+		expect(heldBannerText(awaiting)).toContain('waiting for the DE1 to restart');
+		expect(heldBannerText(status(FlashPhase.Failed, { eraseSettling: true }))).toContain(
+			'may still be erasing'
+		);
+		expect(waitingText({ ...awaiting, machineRestarted: true, linkUp: true })).toContain(
+			'Reading its build'
+		);
+		expect(waitingText({ ...awaiting, machineRestarted: true })).toContain('offline');
+		expect(waitingText({ ...awaiting, restartedOnBuild: 1333, verifyUnconfirmed: true })).toContain(
+			"didn't take"
+		);
 	});
 
 	it('the shell hears when the flash lets go of the link', async () => {

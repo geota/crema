@@ -145,3 +145,32 @@ export function cancelQuestion(installedBuild: number | null): string {
 /** The exit confirmation on the power-cycle step. */
 export const EXIT_QUESTION =
 	"Exit without confirming the build? Switch the DE1 off and on before using it, and don't start another update until it has restarted.";
+
+/** Under the power-cycle steps: what Crema sees right now. */
+export function waitingText(s: FlashStatus): string {
+	const old = s.restartedOnBuild;
+	let now: string;
+	if (old !== null && old !== undefined && s.verifyUnconfirmed) {
+		now = `The DE1 reports build ${old}, not ${s.targetBuild}. If it still says ${old} after you switch it off and on, the update didn't take: your DE1 is fine on build ${old}, and you can exit and try again.`;
+	} else if (old !== null && old !== undefined) {
+		now = `The DE1 reconnected but reports build ${old}, not ${s.targetBuild}. Switch it off at the back, wait 10 seconds and switch it on again.`;
+	} else if (s.machineRestarted && s.linkUp) {
+		now = 'The DE1 is connected. Reading its build…';
+	} else if (s.machineRestarted) {
+		now = 'The DE1 is offline. Waiting for it to come back and report its build…';
+	} else {
+		now = 'Waiting for the DE1 to be switched off…';
+	}
+	return `${now} Crema keeps other commands away from the DE1 until then.`;
+}
+
+/** The app-wide notice while a hidden flash holds the DE1. */
+export function heldBannerText(s: FlashStatus | null): string {
+	if (s?.phase === FlashPhase.AwaitingPowerCycle) {
+		return 'Firmware update waiting for the DE1 to restart — DE1 control paused';
+	}
+	if (s?.eraseSettling) {
+		return 'Firmware update stopped; the DE1 may still be erasing — DE1 control paused';
+	}
+	return 'Firmware update in progress — DE1 control paused';
+}

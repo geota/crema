@@ -13,9 +13,13 @@
  *   back to the core;
  * - bounds every GATT call ({@link WRITE_TIMEOUT_MS}, {@link READ_TIMEOUT_MS}),
  *   so a promise Chrome never settles can't hold the lock forever;
- * - routes `FWMapRequest` (A009) notifications and link loss / recovery to it;
- * - ticks it every {@link TICK_MS}, also while an action is in flight (the
- *   core's timeouts are computed from timestamps and it ignores stale ACKs);
+ * - routes `FWMapRequest` (A009) notifications and link loss to it, and link
+ *   recovery from any connect path ({@link FlashDriver.linkRestored});
+ * - ticks it every {@link TICK_MS}. Ticks share the serial chain, so one
+ *   waits behind an in-flight action; what keeps the core's timeouts honest is
+ *   that every GATT call is bounded (the core's timeouts are computed from
+ *   timestamps, so a late tick still fires them);
+ * - appends the core's per-attempt diagnostic lines to the event log;
  * - holds the DE1 link exclusively while the core says writes are locked, and
  *   keeps the page awake while a flash is running.
  *
@@ -62,6 +66,8 @@ export type FlashCore = Pick<
 	| 'firmwareFlashDismiss'
 	| 'firmwareFlashExit'
 	| 'firmwareFlashStatus'
+	| 'firmwareFlashRestoreAwaiting'
+	| 'firmwareFlashRestoreEraseHold'
 >;
 
 /** The DE1 link surface the driver needs (`De1Manager`). */
@@ -76,8 +82,12 @@ export interface FlashIo {
 	setExclusive(on: boolean): void;
 	/** Route A009 notifications (`null` to stop). */
 	setFwMapListener(listener: ((data: Uint8Array, atMs: number) => void) | null): void;
-	/** Observe link loss / recovery; returns the unsubscribe. */
-	addLinkListener(listener: { lost(): void; restored(): void }): () => void;
+	/**
+	 * Observe link loss; returns the unsubscribe. (Recovery comes from the
+	 * shell's ready transition, every connect path, via
+	 * {@link FlashDriver.linkRestored}.)
+	 */
+	addLinkListener(listener: { lost(): void; restored?(): void }): () => void;
 }
 
 /** Screen-on + leave-page guard while a flash runs. */
@@ -95,6 +105,8 @@ export interface FlashDriverOptions {
 	now?: () => number;
 	setInterval?: (fn: () => void, ms: number) => unknown;
 	clearInterval?: (id: unknown) => void;
+	/** Logged at each start: the transport and the DE1. */
+	transportLabel?: () => string;
 	/** Overridable for tests. */
 	writeTimeoutMs?: number;
 	readTimeoutMs?: number;
@@ -169,7 +181,7 @@ export class FlashDriver {
 		this.gen++;
 		this.attach();
 		this.opts.onLog?.(
-			`Firmware: flashing build ${step.status?.targetBuild} (${step.status?.chunksTotal} writes)`
+			`Firmware: flashing build ${step.status?.targetBuild} (${step.status?.chunksTotal} writes) over ${this.opts.transportLabel?.() ?? 'Web Bluetooth'}`
 		);
 		this.apply(step, true);
 		return null;
@@ -208,6 +220,29 @@ export class FlashDriver {
 		this.opts.onStatus(null);
 	}
 
+	/** Bring back a power-cycle wait persisted before a reload. */
+	async restoreAwaiting(build: number, unconfirmed: boolean): Promise<FlashStatus | null> {
+		this.apply(await this.core.firmwareFlashRestoreAwaiting(build, unconfirmed, this.now()), true);
+		return this.refresh();
+	}
+
+	/** Bring back the lock of an erase that may still be running (persisted deadline). */
+	async restoreEraseHold(build: number, holdMsLeft: number): Promise<FlashStatus | null> {
+		this.apply(await this.core.firmwareFlashRestoreEraseHold(build, holdMsLeft, this.now()), true);
+		return this.refresh();
+	}
+
+	/**
+	 * The DE1 link came up — any path: auto-reconnect, a manual or launch
+	 * connect, a reload (audit r2 M-A). Waiting on a restart, the core reads
+	 * the build.
+	 */
+	linkRestored(): Promise<void> {
+		return this.serial(async () =>
+			this.apply(await this.core.firmwareFlashLinkRestored(this.now()), true)
+		);
+	}
+
 	/** Re-read the status (the flow reopening, a restore) and re-attach. */
 	async refresh(): Promise<FlashStatus | null> {
 		const step = await this.core.firmwareFlashStatus(this.now());
@@ -236,11 +271,6 @@ export class FlashDriver {
 					this.queue = [];
 					this.apply(await this.core.firmwareFlashStatus(this.now()), true);
 				});
-			},
-			restored: () => {
-				void this.serial(async () =>
-					this.apply(await this.core.firmwareFlashLinkRestored(this.now()), true)
-				);
 			}
 		});
 	}
@@ -256,8 +286,8 @@ export class FlashDriver {
 	}
 
 	private tick(): void {
-		// Ticks run while an action is in flight too (audit M4); coalesce so a
-		// slow action can't pile them up.
+		// Queued behind any in-flight action (bounded by the GATT timeouts);
+		// coalesced so a slow action can't pile them up.
 		if (this.tickQueued) return;
 		this.tickQueued = true;
 		void this.serial(async () => {
@@ -277,6 +307,8 @@ export class FlashDriver {
 
 	/** Fold a step: publish its status, queue its actions, keep the link. */
 	private apply(step: FlashStep, force = false): void {
+		// The core's [+mm:ss]-stamped lines for this attempt (diagnostics export).
+		for (const line of step.log ?? []) this.opts.onLog?.(`Firmware: ${line}`);
 		const prev = this.status;
 		const status = step.status ?? null;
 		this.status = status;

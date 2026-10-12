@@ -328,7 +328,9 @@
 		</div>
 		<div class="st-machinecard-fw-ver">{firmwareCopy.title}</div>
 		<div class="st-machinecard-fw-notes">{firmwareCopy.note}</div>
-		{#if connected && firmwareFlow}
+		<!-- Reachable while the DE1 is off too when a flash holds it, so the
+		     power-cycle step and its Exit are never stranded (audit r2 M-B). -->
+		{#if firmwareFlow && (connected || firmwareFlow.status)}
 			<div class="st-machinecard-fw-action">
 				<StButton
 					label={firmwareFlow.status ? 'Firmware update…' : 'Update firmware…'}

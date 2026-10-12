@@ -367,6 +367,10 @@ export interface CremaCore {
 		unconfirmed: boolean,
 		nowMs: number
 	): Promise<FlashStep>;
+	/** Bring back the lock of an erase that may still be running after a reload. */
+	firmwareFlashRestoreEraseHold(build: number, holdMsLeft: number, nowMs: number): Promise<FlashStep>;
+	/** Whether a flash (or its erase / reboot window) holds the DE1 link. */
+	firmwareLocksWrites(): Promise<boolean>;
 	firmwareFlashStatus(nowMs: number): Promise<FlashStep>;
 	/**
 	 * Slice the rolling BLE-capture buffer to JSONL covering `[fromMs, toMs]`,
@@ -1064,6 +1068,12 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async firmwareFlashRestoreAwaiting(build, unconfirmed, nowMs) {
 			return parseStep(bridge.firmware_flash_restore_awaiting(build, unconfirmed, nowMs));
+		},
+		async firmwareFlashRestoreEraseHold(build, holdMsLeft, nowMs) {
+			return parseStep(bridge.firmware_flash_restore_erase_hold(build, holdMsLeft, nowMs));
+		},
+		async firmwareLocksWrites() {
+			return bridge.firmware_locks_writes();
 		},
 		async firmwareFlashStatus(nowMs) {
 			return parseStep(bridge.firmware_flash_status(nowMs));

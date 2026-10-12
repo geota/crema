@@ -30,7 +30,8 @@
 		channelLabel,
 		etaText,
 		failureText,
-		phaseLabel
+		phaseLabel,
+		waitingText
 	} from '$lib/firmware/flash-copy';
 
 	let { flow, installedBuild }: { flow: FirmwareUpdateController; installedBuild: number | null } =
@@ -330,15 +331,7 @@
 						<li>Switch it on. Crema reconnects and reads the build.</li>
 					</ol>
 					<div class="fu-banner fu-banner-info" role="status" aria-live="polite">
-						{#if status.restartedOnBuild !== null && status.restartedOnBuild !== undefined}
-							The DE1 reconnected but reports build {status.restartedOnBuild}, not {status.targetBuild}.
-							Switch it off at the back, wait 10 seconds and switch it on again.
-						{:else if status.machineRestarted}
-							The DE1 went offline. Waiting for it to come back and report its build…
-						{:else}
-							Waiting for the DE1 to be switched off…
-						{/if}
-						Crema keeps other commands away from the DE1 until then.
+						{waitingText(status)}
 					</div>
 					{#if flow.confirmingExit}
 						<div class="fu-banner fu-banner-warn" role="alertdialog" aria-label="Exit?">

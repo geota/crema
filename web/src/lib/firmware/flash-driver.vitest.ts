@@ -49,6 +49,7 @@ function status(phase: FlashPhase, extra: Partial<FlashStatus> = {}): FlashStatu
 		canExit: false,
 		verifyUnconfirmed: false,
 		machineRestarted: false,
+		linkUp: true,
 		...extra
 	};
 }
@@ -69,7 +70,7 @@ function fakeIo(over: Partial<FlashIo> = {}) {
 	const writes: { target: WriteTarget; data: number[] }[] = [];
 	const exclusive: boolean[] = [];
 	let fwListener: ((d: Uint8Array, t: number) => void) | null = null;
-	let link: { lost(): void; restored(): void } | null = null;
+	let link: { lost(): void; restored?(): void } | null = null;
 	const io: FlashIo = {
 		async write(target, data) {
 			inFlight++;
@@ -121,7 +122,9 @@ function scriptedCore(script: Partial<Record<keyof FlashCore, FlashStep[]>>) {
 		firmwareFlashCancel: vi.fn(next('firmwareFlashCancel')),
 		firmwareFlashDismiss: vi.fn(async () => true),
 		firmwareFlashExit: vi.fn(async () => true),
-		firmwareFlashStatus: vi.fn(next('firmwareFlashStatus'))
+		firmwareFlashStatus: vi.fn(next('firmwareFlashStatus')),
+		firmwareFlashRestoreAwaiting: vi.fn(next('firmwareFlashRestoreAwaiting')),
+		firmwareFlashRestoreEraseHold: vi.fn(next('firmwareFlashRestoreEraseHold'))
 	} satisfies FlashCore;
 	return core;
 }
@@ -326,7 +329,7 @@ describe('FlashDriver mechanics (scripted core)', () => {
 			0, 0, 0, 1, 0xff, 0xff, 0xfd
 		]);
 		f.notify([0, 0, 0, 1, 0xff, 0xff, 0xff]);
-		f.link()?.restored();
+		await driver.linkRestored();
 		await settle();
 		expect(core.firmwareFlashOnFwMap).toHaveBeenCalledTimes(2);
 		expect(core.firmwareFlashLinkRestored).toHaveBeenCalledTimes(1);
@@ -383,7 +386,11 @@ function realCore(bridge: CremaBridge): FlashCore {
 		firmwareFlashCancel: async (now) => p(bridge.firmware_flash_cancel(now)),
 		firmwareFlashDismiss: async () => bridge.firmware_flash_dismiss(),
 		firmwareFlashExit: async () => bridge.firmware_flash_exit(),
-		firmwareFlashStatus: async (now) => p(bridge.firmware_flash_status(now))
+		firmwareFlashStatus: async (now) => p(bridge.firmware_flash_status(now)),
+		firmwareFlashRestoreAwaiting: async (b, u, now) =>
+			p(bridge.firmware_flash_restore_awaiting(b, u, now)),
+		firmwareFlashRestoreEraseHold: async (b, left, now) =>
+			p(bridge.firmware_flash_restore_erase_hold(b, left, now))
 	};
 }
 
@@ -424,15 +431,47 @@ describe('FlashDriver with the real core', () => {
 		expect(err?.type).toBe('Blocked');
 	});
 
-	it('a restored power-cycle step holds the link until the build reads back', async () => {
+	it('a restored power-cycle wait reads the build on a fresh connect minutes later (audit r2 M-A)', async () => {
 		const bridge = readyBridge();
-		const restored = JSON.parse(bridge.firmware_flash_restore_awaiting(1358, false, 10)) as FlashStep;
-		expect(restored.status?.locksWrites).toBe(true);
+		let clock = 10;
+		const f = fakeIo({
+			async write(target, data) {
+				// The DE1 answers the build read with the new build.
+				if (target === WriteTarget.De1MmrRequest && data[1] === 0x80 && data[3] === 0x10) {
+					bridge.on_notification(NotificationSource.De1MmrRead, mmr(0x800010, 1358), clock);
+				}
+			}
+		});
+		const driver = new FlashDriver(realCore(bridge), f.io, {
+			onStatus: () => undefined,
+			now: () => clock,
+			...noTimer
+		});
+		const restored = await driver.restoreAwaiting(1358, false);
+		expect(restored?.locksWrites).toBe(true);
+		expect(restored?.linkUp).toBe(false);
 		expect(bridge.connect_sweep('{}', 20)).toContain('FirmwareLockoutHit');
-		bridge.on_notification(NotificationSource.De1MmrRead, mmr(0x800010, 1358), 30);
-		const after = JSON.parse(bridge.firmware_flash_status(40)) as FlashStep;
-		expect(after.status?.phase).toBe(FlashPhase.Succeeded);
-		expect(after.status?.locksWrites).toBe(false);
+		// The user clicks Connect long after the old 60 s read window.
+		clock += 5 * 60_000;
+		await driver.linkRestored();
+		await settle();
+		const after = await driver.refresh();
+		expect(after?.phase).toBe(FlashPhase.Succeeded);
+		expect(after?.locksWrites).toBe(false);
+	});
+
+	it('the core\'s per-attempt diagnostic lines reach the log', async () => {
+		const logs: string[] = [];
+		const driver = new FlashDriver(realCore(readyBridge()), fakeIo().io, {
+			onStatus: () => undefined,
+			onLog: (l) => logs.push(l),
+			transportLabel: () => 'Web Bluetooth (test), DE1 id X',
+			...noTimer
+		});
+		await driver.restoreAwaiting(1358, true);
+		expect(logs.some((l) => /^Firmware: \[\+00:00\] restored: waiting for the DE1 to restart on build 1358/.test(l))).toBe(
+			true
+		);
 	});
 
 	it.skipIf(!FIRMWARE_DIR)(
@@ -444,7 +483,7 @@ describe('FlashDriver with the real core', () => {
 			let verifyRequested = false;
 			let clock = 100;
 			let tick: () => void = () => undefined;
-			const linkRef: { current: { lost(): void; restored(): void } | null } = { current: null };
+			const linkRef: { current: { lost(): void; restored?(): void } | null } = { current: null };
 			const io: FlashIo = {
 				async write(target, data) {
 					if (target === WriteTarget.De1FwMapRequest) verifyRequested = data[2] === 0;
@@ -492,7 +531,7 @@ describe('FlashDriver with the real core', () => {
 					bridge.de1_link_lost();
 					linkRef.current?.lost();
 					clock += 40_000;
-					linkRef.current?.restored();
+					await driver.linkRestored();
 				}
 			}
 			expect(driver.current?.phase).toBe(FlashPhase.Succeeded);

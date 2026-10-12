@@ -6,8 +6,10 @@
  *
  * The flash itself is the core's state machine driven by {@link FlashDriver};
  * this class owns only the flow's steps, the image the user picked, and the
- * persisted "waiting for the DE1's power-cycle" marker that survives a page
- * reload (audit M3).
+ * persisted marker that survives a page reload while the flash holds the DE1
+ * (audit M3; r2 LOW 2 / LOW 7): the power-cycle wait (written as soon as verify
+ * starts, unconfirmed), or the deadline of an erase that may still be running,
+ * tied to the DE1 it was for.
  */
 
 import type {
@@ -25,12 +27,43 @@ import { downloadOfficialImage, pinnedFirmware, verifyImageFor } from './source'
 /** The visible step of the flow. */
 export type FlowStep = 'closed' | 'warning' | 'choose' | 'source' | 'confirm' | 'flash';
 
-/** localStorage key of the power-cycle marker. */
-export const AWAITING_KEY = 'crema.firmware.awaitingPowerCycle.v1';
+/** localStorage key of the flash marker. */
+export const AWAITING_KEY = 'crema.firmware.flashMarker.v2';
 
-interface AwaitingMarker {
+/** What survives a reload while a flash holds the DE1. */
+export interface FlashMarker {
 	build: number;
 	unconfirmed: boolean;
+	/** Wall-clock ms until which the DE1 may still be erasing; absent = power-cycle wait. */
+	eraseHoldUntil?: number;
+	/** The DE1's Web Bluetooth device id, when known. */
+	machine?: string | null;
+}
+
+/**
+ * The marker to persist for `s`, or `null` to clear: the power-cycle wait; the
+ * verify phase as an unconfirmed wait (a tab closed there must still keep the
+ * lock); an erase that may still run, as a wall-clock deadline.
+ */
+export function markerFor(
+	s: FlashStatus | null,
+	machine: string | null,
+	nowWallMs: number
+): FlashMarker | null {
+	if (s === null || !s.locksWrites) return null;
+	if (s.phase === FlashPhase.AwaitingPowerCycle) {
+		return { build: s.targetBuild, unconfirmed: s.verifyUnconfirmed, machine };
+	}
+	if (s.phase === FlashPhase.Verifying) return { build: s.targetBuild, unconfirmed: true, machine };
+	if (s.eraseHoldMsLeft !== undefined && s.eraseHoldMsLeft !== null) {
+		return {
+			build: s.targetBuild,
+			unconfirmed: false,
+			eraseHoldUntil: nowWallMs + s.eraseHoldMsLeft,
+			machine
+		};
+	}
+	return null;
 }
 
 /** Minimal storage surface (localStorage in the app, a map in tests). */
@@ -41,7 +74,7 @@ export interface MarkerStore {
 }
 
 export interface FirmwareUpdateDeps {
-	core: FlashCore & Pick<CremaCore, 'firmwareFlashBlockers' | 'firmwareFlashRestoreAwaiting'>;
+	core: FlashCore & Pick<CremaCore, 'firmwareFlashBlockers'>;
 	io: FlashIo;
 	/** What the shell knows: link, ready, guided brew, power. */
 	conditions: () => Promise<FlashShellConditions>;
@@ -55,6 +88,14 @@ export interface FirmwareUpdateDeps {
 	now?: () => number;
 	/** The flash let go of the DE1 link (the shell runs what it skipped). */
 	onRelease?: () => void;
+	/** The connected DE1's id (Web Bluetooth `device.id`), or null. */
+	machineId?: () => string | null;
+	/** Whether the DE1 link is up right now. */
+	linkUp?: () => boolean;
+	/** Wall clock for the persisted erase-hold deadline. */
+	wallNow?: () => number;
+	/** Logged at each start: the transport and the DE1. */
+	transportLabel?: () => string;
 }
 
 /** The phases in which the flow must stay open. */
@@ -97,6 +138,10 @@ export class FirmwareUpdateController {
 	private readonly store: MarkerStore | null;
 	/** Bumped when the user leaves the source step, so a late download is ignored. */
 	private downloadToken = 0;
+	/** The DE1 this flash is for (set at start, or from a restored marker). */
+	private machine: string | null = null;
+	/** The current flash came back from a marker (not started here). */
+	private restored = false;
 
 	constructor(private readonly deps: FirmwareUpdateDeps) {
 		this.artifacts = pinnedFirmware();
@@ -110,7 +155,8 @@ export class FirmwareUpdateController {
 			},
 			onLog: deps.log,
 			keepAlive: deps.keepAlive,
-			now: deps.now
+			now: deps.now,
+			transportLabel: deps.transportLabel
 		});
 	}
 
@@ -129,43 +175,82 @@ export class FirmwareUpdateController {
 		return this.status?.locksWrites ?? false;
 	}
 
-	/** Keep the power-cycle marker in step with the core. */
+	private wallNow(): number {
+		return this.deps.wallNow?.() ?? Date.now();
+	}
+
+	/** Keep the persisted marker in step with the core. */
 	private persist(s: FlashStatus | null): void {
 		if (this.store === null) return;
 		try {
-			if (s?.phase === FlashPhase.AwaitingPowerCycle) {
-				const marker: AwaitingMarker = { build: s.targetBuild, unconfirmed: s.verifyUnconfirmed };
-				this.store.setItem(AWAITING_KEY, JSON.stringify(marker));
-			} else if (s === null || s.phase === FlashPhase.Succeeded) {
-				this.store.removeItem(AWAITING_KEY);
-			}
+			const marker = markerFor(s, this.machine, this.wallNow());
+			if (marker !== null) this.store.setItem(AWAITING_KEY, JSON.stringify(marker));
+			else this.store.removeItem(AWAITING_KEY);
 		} catch {
 			// Storage blocked: the in-memory lock still holds for this session.
 		}
 	}
 
 	/**
-	 * After a reload: re-create a flash that was waiting for the DE1's
-	 * power-cycle, so the lock and that step come back.
+	 * After a reload: bring back the lock the flash held (a power-cycle wait,
+	 * or an erase that may still be running) and show it at once (audit r2
+	 * M-B). Already connected: read the build now.
 	 */
 	async restore(): Promise<void> {
-		let marker: AwaitingMarker | null = null;
+		let marker: FlashMarker | null = null;
 		try {
 			const raw = this.store?.getItem(AWAITING_KEY) ?? null;
-			marker = raw === null ? null : (JSON.parse(raw) as AwaitingMarker);
+			marker = raw === null ? null : (JSON.parse(raw) as FlashMarker);
 		} catch {
 			marker = null;
 		}
 		if (marker === null || typeof marker.build !== 'number') return;
-		const step = await this.deps.core.firmwareFlashRestoreAwaiting(
-			marker.build,
-			marker.unconfirmed === true,
-			this.deps.now?.() ?? performance.now()
-		);
-		if (step.status) {
-			this.deps.log(`Firmware: still waiting for the DE1 to restart on build ${marker.build}`);
-			await this.driver.refresh();
+		this.machine = marker.machine ?? null;
+		let status: FlashStatus | null;
+		if (typeof marker.eraseHoldUntil === 'number') {
+			const left = marker.eraseHoldUntil - this.wallNow();
+			if (left <= 0) {
+				this.persist(null);
+				return;
+			}
+			status = await this.driver.restoreEraseHold(marker.build, left);
+		} else {
+			status = await this.driver.restoreAwaiting(marker.build, marker.unconfirmed === true);
 		}
+		if (status === null) return;
+		this.restored = true;
+		this.deps.log(
+			`Firmware: restored the lock for build ${marker.build} (${typeof marker.eraseHoldUntil === 'number' ? 'erase may still run' : 'waiting for a restart'}, DE1 ${marker.machine ?? 'unknown'})`
+		);
+		this.step = 'flash';
+		if (this.deps.linkUp?.()) await this.onLinkUp(this.deps.machineId?.() ?? null);
+	}
+
+	/**
+	 * The DE1 link came up — any path: auto-reconnect, a manual or launch
+	 * connect, after a reload (audit r2 M-A). A flash restored for a different
+	 * DE1 is dropped first, so another machine never inherits its lock or
+	 * "succeeds" by already running the target build (r2 LOW 7).
+	 */
+	async onLinkUp(connected: string | null): Promise<void> {
+		if (this.status === null) return;
+		const mine = this.machine;
+		if (this.restored && mine !== null && connected !== null && mine !== connected) {
+			if (await this.driver.exit()) {
+				this.deps.log(
+					`Firmware: connected to a different DE1 (${connected}, not ${mine}) — restored lock dropped`
+				);
+				this.restored = false;
+				this.machine = null;
+				this.confirmingExit = false;
+				this.step = 'closed';
+				return;
+			}
+			this.deps.log(
+				`Firmware: a different DE1 (${connected}) — the interrupted erase hold on ${mine} still runs out`
+			);
+		}
+		await this.driver.linkRestored();
 	}
 
 	/** Open the flow — straight to the flash view when one exists. */
@@ -288,6 +373,8 @@ export class FirmwareUpdateController {
 			this.step = 'confirm';
 			return;
 		}
+		this.machine = this.deps.machineId?.() ?? null;
+		this.restored = false;
 		const error = await this.driver.start(image, await this.deps.conditions());
 		if (error !== null) {
 			if (error.type === 'Blocked') this.blockers = error.content.blockers;
