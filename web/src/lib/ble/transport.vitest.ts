@@ -214,6 +214,14 @@ describe('BleDevice reconnect kick', () => {
 		// A replacement on the same DE1 connected the shared GATT.
 		t.gatt.connected = true;
 		await expect(t.ble.connectGatt()).rejects.toThrow('Device was disconnected');
+		// Every public GATT operation refuses, and the sink can't be re-armed (audit r12).
+		await expect(t.ble.readCharacteristic('a000', 'a00d')).rejects.toThrow('Device was disconnected');
+		await expect(t.ble.write('a000', 'a002', new Uint8Array([1]))).rejects.toThrow('Device was disconnected');
+		await expect(t.ble.startNotifications('a000', 'a00d')).rejects.toThrow('Device was disconnected');
+		const late = vi.fn();
+		t.ble.setSink(late);
+		notify(event);
+		expect(late).not.toHaveBeenCalled();
 	});
 
 	it('the first outage is announced even when a kick beats the first backoff', async () => {

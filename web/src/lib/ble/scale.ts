@@ -170,17 +170,24 @@ export class ScaleManager {
 	private async attach(device: BleDevice): Promise<void> {
 		this.device = device;
 		device.setReconnectTimeline('Scale');
+		// Each callback counts only while this is still the current device: a
+		// replaced device's late events must not touch the new link (the same
+		// rule as the DE1 manager; `disconnect` reports its own teardown).
+		const current = () => this.device === device;
 		// A terminal disconnect (user-initiated; auto-reconnect never gives up).
 		device.onDisconnected(() => {
+			if (!current()) return;
 			this.callbacks.onState('disconnected');
 			this.callbacks.onStatus('Scale disconnected');
 		});
 		// On recovery the manager re-fires a settings query (via onReconnected).
 		device.onReconnectAttempt((attempt) => {
+			if (!current()) return;
 			this.callbacks.onState('reconnecting');
 			this.callbacks.onStatus(`Reconnecting to scale… (attempt ${attempt})`);
 		});
 		device.onReconnected(() => {
+			if (!current()) return;
 			this.callbacks.onState('ready');
 			this.callbacks.onStatus('Reconnected — receiving scale weight');
 			this.callbacks.onReconnected();
@@ -201,12 +208,19 @@ export class ScaleManager {
 				device,
 				core: this.core,
 				advertisedName: device.name,
-				onStatus: (line) => this.callbacks.onStatus(line),
-				onCoreOutput: (output) => this.callbacks.onCoreOutput(output),
-				onScaleIdentified: (name) => this.callbacks.onScaleIdentified(name),
+				onStatus: (line) => {
+					if (current()) this.callbacks.onStatus(line);
+				},
+				onCoreOutput: (output) => {
+					if (current()) this.callbacks.onCoreOutput(output);
+				},
+				onScaleIdentified: (name) => {
+					if (current()) this.callbacks.onScaleIdentified(name);
+				},
 				// Store the UUIDs + install the sink HERE — before the program
 				// subscribes — so the sink's UUID→source mapping is ready.
 				onUuidsResolved: (uuids) => {
+					if (!current()) return;
 					this.uuids = uuids;
 					device.setSink((notification) => {
 						const source = this.sourceFor(notification.characteristic);
@@ -226,6 +240,13 @@ export class ScaleManager {
 				}
 			})
 		);
+		// Replaced or disconnected while the program ran: leave the state to
+		// whatever replaced it; close a late link unless it's the same scale
+		// (a shared GATT link).
+		if (!current()) {
+			if (this.device?.id !== device.id) device.disconnect();
+			return;
+		}
 		const outcome = parseConnectExit(exit);
 		if (!outcome.ok) {
 			device.disconnect();

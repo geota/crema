@@ -349,6 +349,7 @@ export class BleDevice implements De1Transport {
 	 * The sink is retained across reconnects and re-attached automatically.
 	 */
 	setSink(sink: NotificationSink): void {
+		if (this.userDisconnected) return; // single-use: a stale program can't re-arm it
 		this.sink = sink;
 	}
 
@@ -475,7 +476,7 @@ export class BleDevice implements De1Transport {
 			// A disconnected device never connects again — checked before the
 			// shared `gatt` too: a replacement device on the same DE1 may have
 			// connected it (audit r10 L-1).
-			if (this.userDisconnected) throw new Error('Device was disconnected');
+			this.assertLive();
 			if (gatt.connected) return;
 			// Web Bluetooth's `gatt.connect()` fails intermittently for some
 			// peripherals ("Connection attempt failed" / NetworkError) — several
@@ -489,7 +490,7 @@ export class BleDevice implements De1Transport {
 				// No retry after a deliberate disconnect: it would land after a
 				// replacement connect, and the reconnect loop would then drop the
 				// shared link (audit r10 L-1).
-				if (this.userDisconnected) throw new Error('Device was disconnected');
+				this.assertLive();
 				try {
 					await gatt.connect();
 					return;
@@ -547,9 +548,10 @@ export class BleDevice implements De1Transport {
 	 * runs as one queued GATT step.
 	 */
 	async startNotifications(serviceUuid: string, characteristicUuid: string): Promise<void> {
-		await this.gattQueue.enqueue(() =>
-			this.subscribeRaw(serviceUuid, characteristicUuid)
-		);
+		await this.gattQueue.enqueue(() => {
+			this.assertLive();
+			return this.subscribeRaw(serviceUuid, characteristicUuid);
+		});
 		// Record only after a successful subscribe, so a failed attempt is not
 		// replayed on reconnect. Keyed by characteristic UUID — de-duplicated.
 		this.subscriptions.set(characteristicUuid.toLowerCase(), {
@@ -592,6 +594,7 @@ export class BleDevice implements De1Transport {
 		withResponse = true
 	): Promise<void> {
 		return this.gattQueue.enqueue(async () => {
+			this.assertLive();
 			let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
 			if (characteristic === undefined) {
 				characteristic = await this.resolveCharacteristic(
@@ -622,6 +625,7 @@ export class BleDevice implements De1Transport {
 	 */
 	readCharacteristic(serviceUuid: string, characteristicUuid: string): Promise<Uint8Array> {
 		return this.gattQueue.enqueue(async () => {
+			this.assertLive();
 			let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
 			if (characteristic === undefined) {
 				characteristic = await this.resolveCharacteristic(
@@ -640,6 +644,17 @@ export class BleDevice implements De1Transport {
 	 * Marks the teardown *deliberate*, which suppresses the auto-reconnect loop
 	 * — a user-initiated disconnect must stay disconnected.
 	 */
+	/**
+	 * A device is single-use after {@link disconnect}: every public GATT
+	 * operation (connect, subscribe, read, write) refuses, so a stale connect
+	 * program that outlives its device can't touch the DE1 / scale or feed
+	 * the core (audit r10–r12). The reconnect loop's private replay is not
+	 * gated, so it can still close its own ghost link.
+	 */
+	private assertLive(): void {
+		if (this.userDisconnected) throw new Error('Device was disconnected');
+	}
+
 	disconnect(): void {
 		this.userDisconnected = true;
 		if (this.reconnecting && this.timelineLabel !== null) {
@@ -655,10 +670,11 @@ export class BleDevice implements De1Transport {
 		if (gatt !== undefined) {
 			gatt.disconnect();
 		}
-		// A device is single-use after a disconnect: drop its sink so a link
-		// that connected anyway (a browser that doesn't cancel a pending
-		// connect, or characteristics shared with a replacement on the same
-		// device) feeds nothing more (audit r11 L-1).
+		// A device is single-use after a disconnect: drop its sink (and refuse
+		// a new one, see setSink) so a link that connected anyway (a browser
+		// that doesn't cancel a pending connect, or characteristics shared
+		// with a replacement on the same device) feeds nothing more (audit r11
+		// L-1).
 		this.sink = null;
 		this.connectionState = 'disconnected';
 		this.notifyStateChanged();

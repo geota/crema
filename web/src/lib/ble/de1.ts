@@ -338,18 +338,27 @@ export class De1Manager {
 		// Delegated to the Effect connect program (T-17): step-tagged fatal
 		// errors, serial best-effort sweep. The manager just maps the outcome.
 		this.callbacks.onState('subscribing');
+		// The program's reports count only while this is still the current
+		// device (its GATT I/O already refuses once the device is dropped).
+		const current = () => this.device === device;
 		const exit = await this.runtime.runPromiseExit(
 			de1ConnectProgram({
 				device,
 				core: this.core,
-				onStatus: (line) => this.callbacks.onStatus(line),
-				onCoreOutput: (output) => this.callbacks.onCoreOutput(output),
-				onGattVerified: () => this.patchDiagnostics({ gattVerified: true })
+				onStatus: (line) => {
+					if (current()) this.callbacks.onStatus(line);
+				},
+				onCoreOutput: (output) => {
+					if (current()) this.callbacks.onCoreOutput(output);
+				},
+				onGattVerified: () => {
+					if (current()) this.patchDiagnostics({ gattVerified: true });
+				}
 			})
 		);
 		// Replaced or disconnected while the program ran: the drop already
-		// reported it and silenced the device (its sink is cleared), so leave
-		// the state to whatever replaced it (audit r10 L-2). A browser that
+		// reported it and the device refuses GATT I/O and feeds nothing, so
+		// leave the state to whatever replaced it (audit r10 L-2). A browser that
 		// doesn't cancel a pending connect may have let this handshake connect
 		// after the drop: close that link — unless the replacement is the same
 		// DE1, whose GATT link is shared and now belongs to it (audit r11 L-1).

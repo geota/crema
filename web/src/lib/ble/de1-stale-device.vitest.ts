@@ -10,6 +10,20 @@ import { Exit } from 'effect';
 import type { AppRuntime } from '$lib/effect/runtime';
 import type { CremaCore } from '$lib/core';
 import { De1Manager } from './de1';
+
+// Capture each connect program's dependencies so a test can play a stale
+// program's late reports (the fake runtime never runs the Effect).
+const programDeps: {
+	onStatus(line: string): void;
+	onCoreOutput(output: unknown): void;
+	onGattVerified(): void;
+}[] = [];
+vi.mock('$lib/services/de1-orchestrator', () => ({
+	de1ConnectProgram: (deps: (typeof programDeps)[number]) => {
+		programDeps.push(deps);
+		return {};
+	}
+}));
 import type { De1Transport } from './de1-transport';
 
 function fakeDevice(id = 'dev-A') {
@@ -125,5 +139,38 @@ describe('De1Manager stale device', () => {
 		expect(states).not.toContain('failed');
 		expect(second.disconnect).not.toHaveBeenCalled();
 		expect(manager.identity()?.id).toBe('dev-B');
+	});
+
+	it("a stale handshake's late reports reach nothing (audit r12 L-1)", async () => {
+		programDeps.length = 0;
+		const lines: string[] = [];
+		const outputs: unknown[] = [];
+		const diagnostics: unknown[] = [];
+		const runtime = { runPromiseExit: () => new Promise(() => undefined) } as unknown as AppRuntime;
+		const manager = new De1Manager(
+			{ de1LinkLost: async () => ({ actions: [] }), reset: async () => ({ actions: [] }) } as unknown as CremaCore,
+			{
+				onCoreOutput: (o) => outputs.push(o),
+				onStatus: (l) => lines.push(l),
+				onState: () => undefined,
+				onDiagnostics: (d) => diagnostics.push(d)
+			},
+			runtime
+		);
+		void (manager as unknown as { attach(d: De1Transport): Promise<void> }).attach(fakeDevice('dev-A').device);
+		await Promise.resolve();
+		const stale = programDeps[0];
+		stale.onStatus('while current');
+		expect(lines).toContain('while current');
+		await manager.disconnect();
+		lines.length = 0;
+		outputs.length = 0;
+		diagnostics.length = 0;
+		stale.onStatus('Ready — receiving DE1 notifications');
+		stale.onCoreOutput({ actions: [] });
+		stale.onGattVerified();
+		expect(lines).toEqual([]);
+		expect(outputs).toEqual([]);
+		expect(diagnostics).toEqual([]);
 	});
 });
