@@ -71,11 +71,25 @@ interface FirmwareCatalog {
     fun validate(image: ByteArray): FirmwareImageCheck
 }
 
-/** Where the power-cycle marker lives (SharedPreferences in the app). */
+/**
+ * What survives a process death while the flash holds the DE1 (audit M3, r2
+ * LOW 2 / LOW 7): the power-cycle wait (also written as soon as verify starts,
+ * unconfirmed), or the deadline of an erase that may still be running — tied
+ * to the DE1 it was for.
+ */
+data class FlashMarker(
+    val build: UInt,
+    val unconfirmed: Boolean,
+    /** Wall-clock ms until which the DE1 may still be erasing; null = power-cycle wait. */
+    val eraseHoldUntil: Long? = null,
+    /** The DE1's Bluetooth address, when known. */
+    val machine: String? = null,
+)
+
+/** Where the [FlashMarker] lives (SharedPreferences in the app). */
 interface AwaitingMarkerStore {
-    /** `(build, unconfirmed)` or null. */
-    fun read(): Pair<UInt, Boolean>?
-    fun write(build: UInt, unconfirmed: Boolean)
+    fun read(): FlashMarker?
+    fun write(marker: FlashMarker)
     fun clear()
 }
 
@@ -92,6 +106,12 @@ class FirmwareUpdateController(
     private val markers: AwaitingMarkerStore? = null,
     /** The flash let go of the DE1 link (the shell runs what it skipped). */
     private val onRelease: () -> Unit = {},
+    /** The connected DE1's Bluetooth address, or null. */
+    private val machineId: () -> String? = { null },
+    /** Wall clock (ms) for the persisted erase-hold deadline. */
+    private val wallClock: () -> Long = System::currentTimeMillis,
+    /** Whether the DE1 link is up right now. */
+    private val linkUp: () -> Boolean = { false },
     driverFactory: ((FlashStatus?) -> Unit) -> FirmwareFlashDriver,
 ) {
     private val _ui = MutableStateFlow(FirmwareFlowUi())
@@ -100,6 +120,14 @@ class FirmwareUpdateController(
     private val driver: FirmwareFlashDriver = driverFactory(::onStatus)
     private var image: ByteArray? = null
     private var downloadJob: Job? = null
+
+    /** The DE1 this flash is for (set at start, or from a restored marker). */
+    @Volatile
+    private var machine: String? = null
+
+    /** The current flash was brought back from a marker (not started here). */
+    @Volatile
+    private var restored = false
 
     /** Called by the driver's status callback. */
     private fun onStatus(status: FlashStatus?) {
@@ -111,19 +139,31 @@ class FirmwareUpdateController(
 
     private fun persist(s: FlashStatus?) {
         val store = markers ?: return
-        runCatching {
-            when {
-                s?.phase == FlashPhase.AwaitingPowerCycle -> store.write(s.targetBuild, s.verifyUnconfirmed)
-                s == null || s.phase == FlashPhase.Succeeded -> store.clear()
-            }
-        }
+        runCatching { markerFor(s, machine, wallClock())?.let(store::write) ?: store.clear() }
     }
 
-    /** After a process restart: bring back a flash that was waiting for the power-cycle. */
+    /** After a process restart: bring back the lock a flash held, and show it. */
     fun restore() = scope.launch {
-        val (build, unconfirmed) = markers?.read() ?: return@launch
-        if (driver.restoreAwaiting(build, unconfirmed) != null) {
-            log("Firmware: still waiting for the DE1 to restart on build $build")
+        val m = markers?.read() ?: return@launch
+        machine = m.machine
+        val hold = m.eraseHoldUntil
+        val status = if (hold != null) {
+            val left = hold - wallClock()
+            if (left <= 0) {
+                markers.clear()
+                return@launch
+            }
+            driver.restoreEraseHold(m.build, left)
+        } else {
+            driver.restoreAwaiting(m.build, m.unconfirmed)
+        }
+        if (status != null) {
+            restored = true
+            log("Firmware: restored the lock for build ${m.build} (${if (hold != null) "erase may still run" else "waiting for a restart"}, DE1 ${m.machine ?: "unknown"})")
+            // Visible at once, not hidden behind Settings (audit r2 M-B).
+            _ui.update { it.copy(step = FlowStep.Flash, status = status) }
+            // Already connected (the link beat the restore): read the build now.
+            if (linkUp()) onLinkRestored(machineId())
         }
     }
 
@@ -236,6 +276,8 @@ class FirmwareUpdateController(
             _ui.update { it.copy(step = FlowStep.Confirm, blockers = blockers) }
             return@launch
         }
+        machine = machineId()
+        restored = false
         when (val err = driver.start(img, conditions())) {
             null -> _ui.update { it.copy(step = FlowStep.Flash, startProblem = null) }
             is FlashStartError.Blocked ->
@@ -278,7 +320,27 @@ class FirmwareUpdateController(
 
     /** Link events from the BLE manager's state. */
     fun onLinkLost() = driver.onLinkLost()
-    fun onLinkRestored() = driver.onLinkRestored()
+
+    /**
+     * The DE1 link came up — any path: auto-reconnect, a manual connect, a
+     * cold start. A flash restored for a *different* DE1 is dropped first (its
+     * build read would otherwise "succeed" on another machine, audit r2 LOW 7);
+     * otherwise the core reads the build.
+     */
+    fun onLinkRestored(connected: String? = machineId()) = scope.launch {
+        val mine = machine
+        if (restored && mine != null && connected != null && !mine.equals(connected, ignoreCase = true)) {
+            if (driver.exit()) {
+                log("Firmware: connected to a different DE1 ($connected, not $mine) — restored lock dropped")
+                restored = false
+                machine = null
+                _ui.update { it.copy(step = FlowStep.Closed, confirmingExit = false) }
+                return@launch
+            }
+            log("Firmware: a different DE1 ($connected) — the interrupted erase hold on $mine still runs out")
+        }
+        driver.onLinkRestored()
+    }
 
     /** The newest pinned build above the installed one, else the newest. */
     private fun defaultArtifact(artifacts: List<FirmwareArtifact>): FirmwareArtifact? {
@@ -289,25 +351,58 @@ class FirmwareUpdateController(
 }
 
 /** [AwaitingMarkerStore] over a private SharedPreferences file. */
+/**
+ * The marker to persist for [s], or null to clear: the power-cycle wait; the
+ * verify phase as an unconfirmed wait (a kill there must still keep the lock,
+ * audit r2 LOW 2); an erase that may still run, as a wall-clock deadline.
+ */
+internal fun markerFor(s: FlashStatus?, machine: String?, nowWallMs: Long): FlashMarker? {
+    if (s == null || !s.locksWrites) return null
+    val hold = s.eraseHoldMsLeft
+    return when {
+        s.phase == FlashPhase.AwaitingPowerCycle -> FlashMarker(s.targetBuild, s.verifyUnconfirmed, machine = machine)
+        s.phase == FlashPhase.Verifying -> FlashMarker(s.targetBuild, unconfirmed = true, machine = machine)
+        hold != null -> FlashMarker(s.targetBuild, false, eraseHoldUntil = nowWallMs + hold.toLong(), machine = machine)
+        else -> null
+    }
+}
+
 class SharedPrefsAwaitingMarkers(context: android.content.Context) : AwaitingMarkerStore {
     private val prefs = context.getSharedPreferences("crema.firmware", android.content.Context.MODE_PRIVATE)
 
-    override fun read(): Pair<UInt, Boolean>? {
+    override fun read(): FlashMarker? {
         val build = prefs.getLong(KEY_BUILD, -1L)
         if (build !in 0L..UInt.MAX_VALUE.toLong()) return null
-        return build.toUInt() to prefs.getBoolean(KEY_UNCONFIRMED, false)
+        return FlashMarker(
+            build = build.toUInt(),
+            unconfirmed = prefs.getBoolean(KEY_UNCONFIRMED, false),
+            eraseHoldUntil = prefs.getLong(KEY_HOLD, -1L).takeIf { it >= 0 },
+            machine = prefs.getString(KEY_MACHINE, null),
+        )
     }
 
-    override fun write(build: UInt, unconfirmed: Boolean) {
-        prefs.edit { putLong(KEY_BUILD, build.toLong()).putBoolean(KEY_UNCONFIRMED, unconfirmed) }
+    override fun write(marker: FlashMarker) {
+        prefs.edit {
+            putLong(KEY_BUILD, marker.build.toLong())
+            putBoolean(KEY_UNCONFIRMED, marker.unconfirmed)
+            if (marker.eraseHoldUntil != null) putLong(KEY_HOLD, marker.eraseHoldUntil) else remove(KEY_HOLD)
+            if (marker.machine != null) putString(KEY_MACHINE, marker.machine) else remove(KEY_MACHINE)
+        }
     }
 
     override fun clear() {
-        prefs.edit { remove(KEY_BUILD).remove(KEY_UNCONFIRMED) }
+        prefs.edit {
+            remove(KEY_BUILD)
+            remove(KEY_UNCONFIRMED)
+            remove(KEY_HOLD)
+            remove(KEY_MACHINE)
+        }
     }
 
     private companion object {
-        const val KEY_BUILD = "awaitingPowerCycle.v1.build"
-        const val KEY_UNCONFIRMED = "awaitingPowerCycle.v1.unconfirmed"
+        const val KEY_BUILD = "flashMarker.v2.build"
+        const val KEY_UNCONFIRMED = "flashMarker.v2.unconfirmed"
+        const val KEY_HOLD = "flashMarker.v2.eraseHoldUntil"
+        const val KEY_MACHINE = "flashMarker.v2.machine"
     }
 }

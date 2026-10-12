@@ -43,6 +43,28 @@ fun cancelQuestion(installedBuild: UInt?): String =
         "Stop the update? Your DE1 stays on build $installedBuild."
     }
 
+/** Under the power-cycle steps: what Crema sees right now. */
+fun waitingText(s: FlashStatus): String {
+    val old = s.restartedOnBuild
+    val now = when {
+        old != null && s.verifyUnconfirmed ->
+            "The DE1 reports build $old, not ${s.targetBuild}. If it still says $old after you switch it off and on, the update didn’t take: your DE1 is fine on build $old, and you can exit and try again."
+        old != null ->
+            "The DE1 reconnected but reports build $old, not ${s.targetBuild}. Switch it off at the back, wait 10 seconds and switch it on again."
+        s.machineRestarted && s.linkUp -> "The DE1 is connected. Reading its build…"
+        s.machineRestarted -> "The DE1 is offline. Waiting for it to come back and report its build…"
+        else -> "Waiting for the DE1 to be switched off…"
+    }
+    return "$now Crema keeps other commands away from the DE1 until then."
+}
+
+/** The app-wide notice while a hidden flash holds the DE1. */
+fun heldBannerText(s: FlashStatus?): String = when {
+    s?.phase == FlashPhase.AwaitingPowerCycle -> "Firmware update waiting for the DE1 to restart — DE1 control paused"
+    s?.eraseSettling == true -> "Firmware update stopped; the DE1 may still be erasing — DE1 control paused"
+    else -> "Firmware update in progress — DE1 control paused"
+}
+
 fun channelLabel(channel: DecentFirmwareChannel): String = when (channel) {
     DecentFirmwareChannel.Stable -> "Stable"
     DecentFirmwareChannel.Beta -> "Beta"

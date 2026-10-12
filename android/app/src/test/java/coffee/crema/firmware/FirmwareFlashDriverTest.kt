@@ -49,6 +49,7 @@ class FirmwareFlashDriverTest {
         phase = phase, artifact = artifact, targetBuild = 1358u, chunksTotal = 2u, chunksAcked = 0u,
         percent = 0f, etaIsEstimate = true, elapsedSeconds = 0u, canCancel = true, locksWrites = locks,
         eraseSettling = false, canExit = false, failure = failure, verifyUnconfirmed = false, machineRestarted = false,
+        linkUp = true,
     )
 
     private fun write(target: WriteTarget, vararg b: Int) =
@@ -61,6 +62,7 @@ class FirmwareFlashDriverTest {
         private var last: FlashStatus? = null
         private fun next(name: String): FlashStep {
             calls += name
+            maybeThrow(name)
             val step = script[name]?.removeFirstOrNull() ?: FlashStep(actions = emptyList(), status = last)
             if (step.status != null) last = step.status
             return step
@@ -78,6 +80,11 @@ class FirmwareFlashDriverTest {
         override fun exit() = true
         override fun status(nowMs: Long) = next("status")
         override fun restoreAwaiting(build: UInt, unconfirmed: Boolean, nowMs: Long) = next("restore")
+        override fun restoreEraseHold(build: UInt, holdMsLeft: Long, nowMs: Long) = next("restoreHold")
+
+        /** Throw from these call names (a driver / core bug). */
+        val throwOn = mutableSetOf<String>()
+        fun maybeThrow(name: String) { if (name in throwOn) error("boom in $name") }
     }
 
     private class FakeIo(val failWrites: Boolean = false, val failReads: Boolean = false) : FlashIoPort {
@@ -290,5 +297,50 @@ class FirmwareFlashDriverTest {
         advanceTimeBy(TICK_MS * 2); runCurrent()
         assertTrue("tick" !in core.calls, "no clock without a flash")
         assertTrue(io.writes.isEmpty())
+    }
+
+    @Test
+    fun aThrowingTickNeverStopsTheClock() = runTest {
+        val core = ScriptedCore(mutableMapOf(
+            "start" to ArrayDeque(listOf(FlashStep(emptyList(), status(FlashPhase.Erasing)))),
+        ))
+        val logs = mutableListOf<String>()
+        val d = FirmwareFlashDriver(core, FakeIo(), backgroundScope, clock = { testScheduler.currentTime }, onStatus = {}, onLog = { logs += it })
+        d.start(ByteArray(32), ok)
+        core.throwOn += "tick"
+        advanceTimeBy(TICK_MS * 3 + 1); runCurrent()
+        core.throwOn.clear()
+        val before = core.calls.count { it == "tick" }
+        advanceTimeBy(TICK_MS * 3 + 1); runCurrent()
+        assertTrue(core.calls.count { it == "tick" } > before, "ticks resume after errors (audit r2 LOW 5)")
+        assertTrue(logs.any { "tick error" in it })
+    }
+
+    @Test
+    fun aDriverErrorInThePumpFailsTheFlashThroughTheCore() = runTest {
+        val core = ScriptedCore(mutableMapOf(
+            "start" to ArrayDeque(listOf(FlashStep(listOf(write(WriteTarget.De1MmrWrite, 1)), status(FlashPhase.Uploading)))),
+            "failed" to ArrayDeque(listOf(FlashStep(emptyList(), status(FlashPhase.Failed, locks = false)))),
+        ))
+        core.throwOn += "ack"
+        val statuses = mutableListOf<FlashStatus?>()
+        driver(core, FakeIo(), statuses, mutableListOf()).start(ByteArray(32), ok)
+        advanceTimeBy(100); runCurrent()
+        assertTrue(core.failMessages.single().startsWith("driver error"))
+        assertEquals(FlashPhase.Failed, statuses.last()?.phase)
+    }
+
+    @Test
+    fun theCoresDiagnosticLinesReachTheLog() = runTest {
+        val core = ScriptedCore(mutableMapOf(
+            "start" to ArrayDeque(listOf(FlashStep(emptyList(), status(FlashPhase.Preparing), log = listOf("[+00:00] start: build 1358")))),
+        ))
+        val logs = mutableListOf<String>()
+        FirmwareFlashDriver(
+            core, FakeIo(), backgroundScope, clock = { 0L }, onStatus = {}, onLog = { logs += it },
+            transportLabel = { "Nordic BLE, DE1 AA:BB" },
+        ).start(ByteArray(32), ok)
+        assertTrue("Firmware: [+00:00] start: build 1358" in logs, "$logs")
+        assertTrue(logs.any { "over Nordic BLE, DE1 AA:BB" in it }, "$logs")
     }
 }

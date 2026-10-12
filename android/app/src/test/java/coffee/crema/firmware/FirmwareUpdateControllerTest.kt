@@ -47,6 +47,7 @@ class FirmwareUpdateControllerTest {
         phase = phase, artifact = nightly, targetBuild = 1358u, chunksTotal = 10u, chunksAcked = 3u,
         percent = 30f, etaIsEstimate = false, elapsedSeconds = 60u, canCancel = canCancel, locksWrites = locks,
         eraseSettling = eraseSettling, canExit = canExit, verifyUnconfirmed = false, machineRestarted = false,
+        linkUp = false,
     )
 
     /** A core whose status / cancel / restore answers are set per test. */
@@ -67,7 +68,10 @@ class FirmwareUpdateControllerTest {
         override fun onFwMap(data: ByteArray, nowMs: Long) = now()
         override fun onReadFailed(nowMs: Long) = now()
         override fun tick(nowMs: Long) = now()
-        override fun linkRestored(nowMs: Long) = now()
+        override fun linkRestored(nowMs: Long): FlashStep {
+            linkRestores++
+            return now()
+        }
         override fun cancel(nowMs: Long): FlashStep {
             cancels++
             current = cancelTo
@@ -84,6 +88,12 @@ class FirmwareUpdateControllerTest {
             restores += build to unconfirmed
             return now()
         }
+        val holdRestores = mutableListOf<Pair<UInt, Long>>()
+        var linkRestores = 0
+        override fun restoreEraseHold(build: UInt, holdMsLeft: Long, nowMs: Long): FlashStep {
+            holdRestores += build to holdMsLeft
+            return now()
+        }
     }
 
     private object NoIo : FlashIoPort {
@@ -94,9 +104,9 @@ class FirmwareUpdateControllerTest {
         override fun setExclusive(on: Boolean) = Unit
     }
 
-    private class MemoryMarkers(var value: Pair<UInt, Boolean>? = null) : AwaitingMarkerStore {
+    private class MemoryMarkers(var value: FlashMarker? = null) : AwaitingMarkerStore {
         override fun read() = value
-        override fun write(build: UInt, unconfirmed: Boolean) { value = build to unconfirmed }
+        override fun write(marker: FlashMarker) { value = marker }
         override fun clear() { value = null }
     }
 
@@ -107,6 +117,9 @@ class FirmwareUpdateControllerTest {
         check: FirmwareImageCheck = FirmwareImageCheck(ok = false, byteLength = 0u, sha256 = "", error = FirmwareImageError.BengleImage),
         markers: AwaitingMarkerStore? = null,
         onRelease: () -> Unit = {},
+        machineId: () -> String? = { null },
+        linkUp: () -> Boolean = { false },
+        wall: () -> Long = { 1_000_000L },
     ) = FirmwareUpdateController(
         scope = this,
         core = core,
@@ -119,6 +132,9 @@ class FirmwareUpdateControllerTest {
         installedBuild = { installed },
         markers = markers,
         onRelease = onRelease,
+        machineId = machineId,
+        wallClock = wall,
+        linkUp = linkUp,
         driverFactory = { onStatus -> FirmwareFlashDriver(core, NoIo, backgroundScope, { 0L }, onStatus = onStatus) },
     )
 
@@ -236,7 +252,7 @@ class FirmwareUpdateControllerTest {
         val c = controller(core = core, markers = markers)
         c.open(); runCurrent()
         assertTrue(c.ui.value.holdsLink)
-        assertEquals(1358u to false, markers.value)
+        assertEquals(FlashMarker(1358u, false), markers.value)
         c.close(); runCurrent()
         assertEquals(FlowStep.Closed, c.ui.value.step)
         assertEquals(FlashPhase.AwaitingPowerCycle, c.ui.value.status?.phase, "hidden, still held")
@@ -257,10 +273,12 @@ class FirmwareUpdateControllerTest {
     @Test
     fun aPersistedPowerCycleMarkerIsRestoredIntoTheCore() = runTest {
         val core = StubCore(current = status(FlashPhase.AwaitingPowerCycle, canCancel = false, canExit = true))
-        val c = controller(core = core, markers = MemoryMarkers(1358u to true))
+        val c = controller(core = core, markers = MemoryMarkers(FlashMarker(1358u, true)))
         c.restore(); runCurrent()
         assertEquals(listOf(1358u to true), core.restores)
         assertTrue(c.ui.value.holdsLink)
+        assertEquals(FlowStep.Flash, c.ui.value.step, "a restored lock is shown at once (audit r2 M-B)")
+        assertEquals(0, core.linkRestores, "not connected yet")
     }
 
     @Test
@@ -287,5 +305,68 @@ class FirmwareUpdateControllerTest {
         assertFalse(powerOk(charging = false, levelPercent = 49))
         assertTrue(powerOk(charging = false, levelPercent = null))
         assertNotNull(ALPHA_POINTS.firstOrNull { "alpha" in it })
+    }
+
+    @Test
+    fun aRestoreWhileAlreadyConnectedReadsTheBuildAtOnce() = runTest {
+        val core = StubCore(current = status(FlashPhase.AwaitingPowerCycle, canCancel = false, canExit = true))
+        val c = controller(core = core, markers = MemoryMarkers(FlashMarker(1358u, false, machine = "AA")), linkUp = { true }, machineId = { "AA" })
+        c.restore(); runCurrent()
+        assertEquals(1, core.linkRestores)
+    }
+
+    @Test
+    fun aRestoredLockForAnotherDe1IsDroppedOnConnect() = runTest {
+        val core = StubCore(current = status(FlashPhase.AwaitingPowerCycle, canCancel = false, canExit = true))
+        val markers = MemoryMarkers(FlashMarker(1358u, false, machine = "AA:AA"))
+        val c = controller(core = core, markers = markers)
+        c.restore(); runCurrent()
+        c.onLinkRestored("BB:BB"); runCurrent()
+        assertEquals(1, core.exits, "a different DE1 must not inherit the lock (audit r2 LOW 7)")
+        assertEquals(0, core.linkRestores, "and no build read on it")
+        assertNull(markers.value)
+        // The same DE1 (any case) keeps it and reads the build.
+        val core2 = StubCore(current = status(FlashPhase.AwaitingPowerCycle, canCancel = false, canExit = true))
+        val c2 = controller(core = core2, markers = MemoryMarkers(FlashMarker(1358u, false, machine = "AA:AA")))
+        c2.restore(); runCurrent()
+        c2.onLinkRestored("aa:aa"); runCurrent()
+        assertEquals(0, core2.exits)
+        assertEquals(1, core2.linkRestores)
+    }
+
+    @Test
+    fun anEraseHoldIsRestoredFromItsDeadlineAndAnExpiredOneIsDropped() = runTest {
+        val core = StubCore(current = status(FlashPhase.Failed, eraseSettling = true, locks = true))
+        val c = controller(core = core, markers = MemoryMarkers(FlashMarker(1358u, false, eraseHoldUntil = 1_030_000L)), wall = { 1_000_000L })
+        c.restore(); runCurrent()
+        assertEquals(listOf(1358u to 30_000L), core.holdRestores)
+        val stale = MemoryMarkers(FlashMarker(1358u, false, eraseHoldUntil = 900_000L))
+        val core2 = StubCore()
+        controller(core = core2, markers = stale, wall = { 1_000_000L }).restore(); runCurrent()
+        assertTrue(core2.holdRestores.isEmpty())
+        assertNull(stale.value)
+    }
+
+    @Test
+    fun theMarkerCoversVerifyTheEraseHoldAndThePowerCycleWait() {
+        val verifying = status(FlashPhase.Verifying, canCancel = false)
+        assertEquals(FlashMarker(1358u, true, machine = "AA"), markerFor(verifying, "AA", 0))
+        val erasing = status(FlashPhase.Erasing).copy(eraseHoldMsLeft = 45_000u)
+        assertEquals(FlashMarker(1358u, false, eraseHoldUntil = 145_000L, machine = "AA"), markerFor(erasing, "AA", 100_000))
+        val awaiting = status(FlashPhase.AwaitingPowerCycle).copy(verifyUnconfirmed = true)
+        assertEquals(FlashMarker(1358u, true, machine = null), markerFor(awaiting, null, 0))
+        assertNull(markerFor(status(FlashPhase.Uploading), "AA", 0), "the inactive bank needs no lock after a kill")
+        assertNull(markerFor(status(FlashPhase.Succeeded, locks = false), "AA", 0))
+        assertNull(markerFor(null, "AA", 0))
+    }
+
+    @Test
+    fun theBannerAndWaitingCopyFollowTheStatus() {
+        val awaiting = status(FlashPhase.AwaitingPowerCycle)
+        assertContains(heldBannerText(awaiting), "waiting for the DE1 to restart")
+        assertContains(heldBannerText(status(FlashPhase.Failed, eraseSettling = true)), "may still be erasing")
+        assertContains(waitingText(awaiting.copy(machineRestarted = true, linkUp = true)), "Reading its build")
+        assertContains(waitingText(awaiting.copy(machineRestarted = true)), "offline")
+        assertContains(waitingText(awaiting.copy(restartedOnBuild = 1333u, verifyUnconfirmed = true)), "didn’t take")
     }
 }

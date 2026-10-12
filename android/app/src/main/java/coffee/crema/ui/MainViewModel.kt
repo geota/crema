@@ -1933,6 +1933,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pairedDevices = { _ui.value.pairedDevices },
         rememberPaired = { id, name, canControl -> rememberPaired(id, name, canControl) },
         onHandoffGranted = { promoteMirroredProfile() },
+        firmwareHoldsLink = { runCatching { bridge.firmwareLocksWrites() }.getOrDefault(false) },
         onModeApplied = { role, host, port ->
             _ui.update {
                 it.copy(
@@ -2056,6 +2057,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         installedBuild = { _ui.value.de1MachineInfo[MmrRegister.FirmwareVersion] },
         log = ::appendLog,
         markers = coffee.crema.firmware.SharedPrefsAwaitingMarkers(app),
+        machineId = { ble.connectedAddress },
+        linkUp = { ble.state.value == De1BleManager.State.READY },
         // The flash let go of the link: run the connect-time work it held off.
         onRelease = { viewModelScope.launch { afterFirmwareRelease() } },
         driverFactory = { onStatus ->
@@ -2069,6 +2072,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 keepAlive = { active ->
                     viewModelScope.launch { bgConnection.setFirmwareFlashActive(active) }
                 },
+                transportLabel = {
+                    "Android ${android.os.Build.VERSION.RELEASE} (${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}), " +
+                        "Nordic BLE, DE1 ${ble.connectedAddress ?: "unknown"}"
+                },
             )
         },
     )
@@ -2080,7 +2087,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * core refuses them too; this keeps them from running (and being marked
      * done) at all.
      */
-    private fun firmwareHolds(): Boolean = firmware.ui.value.holdsLink
+    private fun firmwareHolds(): Boolean =
+        runCatching { bridge.firmwareLocksWrites() }.getOrDefault(firmware.ui.value.holdsLink)
 
     private fun afterFirmwareRelease() {
         if (ble.state.value != De1BleManager.State.READY) return
@@ -2315,7 +2323,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             var wasReady = false
             ble.state.collect { st ->
                 val ready = st == De1BleManager.State.READY
-                if (ready && !wasReady) firmware.onLinkRestored()
+                if (ready && !wasReady) firmware.onLinkRestored(ble.connectedAddress)
                 if (!ready && wasReady) firmware.onLinkLost()
                 wasReady = ready
             }

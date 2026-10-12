@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -550,7 +551,8 @@ class De1BleManager(
     @Volatile
     var firmwareExclusive: Boolean = false
 
-    private var fwMapJob: Job? = null
+    /** The A009 collection for a flash ([firmwareSubscribeFwMap]). */
+    private var fwMap: FwMapSubscription? = null
 
     /** Ordinary (non-flash) DE1 writes in flight — a flash waits for zero. */
     private val nonFlashWritesInFlight = java.util.concurrent.atomic.AtomicInteger(0)
@@ -600,22 +602,24 @@ class De1BleManager(
      * before erase and again right before verify — de1app re-enables it there
      * (`de1_comms.tcl:1095`) because the upload burst can drop the CCCD.
      */
-    fun firmwareSubscribeFwMap(onFrame: (ByteArray) -> Unit) {
+    suspend fun firmwareSubscribeFwMap(onFrame: (ByteArray) -> Unit) {
         val d = device ?: error("DE1 not connected")
-        // Start the new collector before cancelling the old one, so the
-        // subscription never drops to zero and the disable / enable CCCD writes
-        // can't land in the wrong order (audit L7).
-        val previous = fwMapJob
-        fwMapJob = transport.observe(d, De1Uuids.SERVICE, De1Uuids.FW_MAP_REQUEST)
-            .onEach { onFrame(it.data) }
-            .launchIn(scope)
-        previous?.cancel()
+        val sub = fwMap?.takeIf { it.device == d } ?: run {
+            fwMap?.cancel()
+            FwMapSubscription(
+                device = d,
+                scope = scope,
+                observe = { transport.observe(d, De1Uuids.SERVICE, De1Uuids.FW_MAP_REQUEST).map { it.data } },
+                rearm = { transport.rearmNotifications(d, De1Uuids.SERVICE, De1Uuids.FW_MAP_REQUEST) },
+            ).also { fwMap = it }
+        }
+        sub.subscribe(onFrame)
     }
 
     /** Stop delivering A009 frames (the flash ended). */
     fun firmwareUnsubscribeFwMap() {
-        fwMapJob?.cancel()
-        fwMapJob = null
+        fwMap?.cancel()
+        fwMap = null
     }
 
     /**
@@ -638,15 +642,20 @@ class De1BleManager(
          *  registration so stops never preempt stops. */
         urgent: Boolean = false,
     ) {
+        // Count the write BEFORE checking the gate (audit r2 LOW 3): a write
+        // that passes the check is then always visible to the flash's drain,
+        // which runs after the gate closes.
+        nonFlashWritesInFlight.incrementAndGet()
         if (firmwareExclusive) {
+            nonFlashWritesInFlight.decrementAndGet()
             onStatus("DE1 $target write skipped — firmware update in progress")
             return
         }
         val d = device ?: run {
+            nonFlashWritesInFlight.decrementAndGet()
             onStatus("Write ignored — DE1 not connected")
             return
         }
-        nonFlashWritesInFlight.incrementAndGet()
         try {
             if (urgent) {
                 val dropped = UrgentWriteGate.preempt("an urgent DE1 $target write")
@@ -891,5 +900,38 @@ class De1BleManager(
             return upper.startsWith(De1Uuids.ADVERTISED_NAME_PREFIX) ||
                 upper.startsWith("BENGLE")
         }
+    }
+}
+
+/**
+ * The A009 collection behind a firmware flash. The first [subscribe] starts
+ * collecting (which enables the CCCD); every later one keeps that collection
+ * and re-arms the CCCD with an explicit disable + enable ([rearm]), because a
+ * second collection would not write it (Nordic skips an enable it believes is
+ * already on) and cancelling one never disables it (audit r2 LOW 4). Frames go
+ * to the latest callback.
+ */
+internal class FwMapSubscription(
+    val device: BleTransport.DeviceHandle,
+    private val scope: CoroutineScope,
+    private val observe: () -> kotlinx.coroutines.flow.Flow<ByteArray>,
+    private val rearm: suspend () -> Unit,
+) {
+    @Volatile
+    private var onFrame: (ByteArray) -> Unit = {}
+    private var job: Job? = null
+
+    suspend fun subscribe(callback: (ByteArray) -> Unit) {
+        onFrame = callback
+        if (job?.isActive == true) {
+            rearm()
+        } else {
+            job = observe().onEach { onFrame(it) }.launchIn(scope)
+        }
+    }
+
+    fun cancel() {
+        job?.cancel()
+        job = null
     }
 }

@@ -491,6 +491,32 @@ class NordicBleTransport(context: Context) : BleTransport {
         }
     }
 
+    override suspend fun rearmNotifications(
+        device: BleTransport.DeviceHandle,
+        service: UUID,
+        characteristic: UUID,
+    ) {
+        val handle = device as NordicDeviceHandle
+        val peripheral = peripherals[handle]
+            ?: error("rearmNotifications() for an unknown device handle ${handle.address}")
+        val serviceUuid = service.toKotlinUuid()
+        val charUuid = characteristic.toKotlinUuid()
+        val remote = peripheral.services()
+            .mapNotNull { (it as? RemoteServices.Discovered)?.services }
+            .first()
+            .firstOrNull { it.uuid == serviceUuid }
+            ?.characteristics
+            ?.firstOrNull { it.uuid == charUuid }
+            ?: error("Characteristic $characteristic not found in service $service")
+        // setNotifying(true) is a no-op while Nordic believes the CCCD is on
+        // (BaseRemoteCharacteristic short-circuits on isNotifying), so turn it
+        // off first: two awaited CCCD writes, in order, on Nordic's GATT queue.
+        // The running subscribe() collection survives (it only ends on a
+        // service-invalidated event).
+        remote.setNotifying(false)
+        remote.setNotifying(true)
+    }
+
     override suspend fun disconnect(device: BleTransport.DeviceHandle) {
         val handle = device as NordicDeviceHandle
         val peripheral = peripherals[handle] ?: return

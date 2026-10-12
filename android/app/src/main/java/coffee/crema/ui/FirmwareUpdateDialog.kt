@@ -43,6 +43,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.core.FirmwareBuildStatus
 import coffee.crema.core.FlashPhase
+import coffee.crema.core.FlashStatus
 import coffee.crema.firmware.ALPHA_POINTS
 import coffee.crema.firmware.ERASE_SETTLING
 import coffee.crema.firmware.EXIT_QUESTION
@@ -56,6 +57,8 @@ import coffee.crema.firmware.cancelQuestion
 import coffee.crema.firmware.channelLabel
 import coffee.crema.firmware.etaText
 import coffee.crema.firmware.failureText
+import coffee.crema.firmware.heldBannerText
+import coffee.crema.firmware.waitingText
 import coffee.crema.firmware.phaseLabel
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
@@ -331,13 +334,7 @@ private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContro
                 "1. Switch the DE1 off with the switch on the back.\n2. Wait 10 seconds.\n3. Switch it on. Crema reconnects and reads the build.",
                 style = MaterialTheme.typography.bodyMedium,
             )
-            val old = s.restartedOnBuild
-            val waiting = when {
-                old != null -> "The DE1 reconnected but reports build $old, not ${s.targetBuild}. Switch it off at the back, wait 10 seconds and switch it on again."
-                s.machineRestarted -> "The DE1 went offline. Waiting for it to come back and report its build…"
-                else -> "Waiting for the DE1 to be switched off…"
-            }
-            Banner("$waiting Crema keeps other commands away from the DE1 until then.", warn = false)
+            Banner(waitingText(s), warn = false)
             if (ui.confirmingExit) Banner(EXIT_QUESTION)
             Footer(
                 left = {
@@ -377,6 +374,32 @@ private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContro
                 },
                 right = { CremaButton(onClick = { flow.retry() }, enabled = !s.locksWrites, label = "Retry") },
             )
+        }
+    }
+}
+
+/** The app-wide notice while a hidden flash holds the DE1 (see [heldBannerText]). */
+@Composable
+fun FirmwareHeldBanner(status: FlashStatus?, onOpen: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        onClick = onOpen,
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        shadowElevation = 6.dp,
+        modifier = modifier
+            .widthIn(max = 640.dp)
+            .heightIn(min = 48.dp)
+            .semantics { liveRegion = LiveRegionMode.Polite },
+    ) {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            PhIcon("arrows-clockwise", sizeDp = 18)
+            Text(heldBannerText(status), style = MaterialTheme.typography.labelLarge)
+            Text("View", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
         }
     }
 }

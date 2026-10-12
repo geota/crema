@@ -67,6 +67,7 @@ interface FlashCorePort {
     fun exit(): Boolean
     fun status(nowMs: Long): FlashStep
     fun restoreAwaiting(build: UInt, unconfirmed: Boolean, nowMs: Long): FlashStep
+    fun restoreEraseHold(build: UInt, holdMsLeft: Long, nowMs: Long): FlashStep
 }
 
 /** The DE1 link surface the driver needs ([coffee.crema.ble.De1BleManager]). */
@@ -120,6 +121,8 @@ class BridgeFlashCore(private val bridge: CremaBridge) : FlashCorePort {
     override fun status(nowMs: Long) = step(bridge.firmwareFlashStatus(nowMs.toULong()))
     override fun restoreAwaiting(build: UInt, unconfirmed: Boolean, nowMs: Long) =
         step(bridge.firmwareFlashRestoreAwaiting(build, unconfirmed, nowMs.toULong()))
+    override fun restoreEraseHold(build: UInt, holdMsLeft: Long, nowMs: Long) =
+        step(bridge.firmwareFlashRestoreEraseHold(build, holdMsLeft.toULong(), nowMs.toULong()))
 }
 
 /** Phases during which the flash must not be interrupted. */
@@ -141,6 +144,8 @@ class FirmwareFlashDriver(
     private val onLog: (String) -> Unit = {},
     /** `true` while the flash must not be interrupted (FGS + screen on). */
     private val keepAlive: (Boolean) -> Unit = {},
+    /** Logged at each start: the transport, the phone and the DE1 address. */
+    private val transportLabel: () -> String = { "Android BLE" },
 ) {
     private val lock = Mutex()
     private val queue = ArrayDeque<Queued>()
@@ -169,7 +174,7 @@ class FirmwareFlashDriver(
             return it
         }
         attach()
-        onLog("Firmware: flashing build ${step.status?.targetBuild} (${step.status?.chunksTotal} writes)")
+        onLog("Firmware: flashing build ${step.status?.targetBuild} (${step.status?.chunksTotal} writes) over ${transportLabel()}")
         lock.withLock {
             gen++
             drainBeforeFirstWrite = true
@@ -221,7 +226,13 @@ class FirmwareFlashDriver(
 
     /** Bring back a power-cycle step persisted before a process restart. */
     suspend fun restoreAwaiting(build: UInt, unconfirmed: Boolean): FlashStatus? {
-        lock.withLock { core.restoreAwaiting(build, unconfirmed, clock()) }
+        lock.withLock { apply(core.restoreAwaiting(build, unconfirmed, clock()), force = true) }
+        return refresh()
+    }
+
+    /** Bring back the lock of an erase that may still be running (persisted deadline). */
+    suspend fun restoreEraseHold(build: UInt, holdMsLeft: Long): FlashStatus? {
+        lock.withLock { apply(core.restoreEraseHold(build, holdMsLeft, clock()), force = true) }
         return refresh()
     }
 
@@ -254,6 +265,13 @@ class FirmwareFlashDriver(
                 if (!tickPending.compareAndSet(false, true)) continue
                 try {
                     lock.withLock { apply(core.tick(clock())) }
+                } catch (c: CancellationException) {
+                    throw c
+                } catch (e: Exception) {
+                    // Never let one bad tick stop the clock while the lock is
+                    // held: the erase hold and the timeouts depend on it
+                    // (audit r2 LOW 5).
+                    onLog("Firmware: tick error (clock keeps running): ${e.message}")
                 } finally {
                     tickPending.set(false)
                 }
@@ -274,6 +292,9 @@ class FirmwareFlashDriver(
 
     /** Fold a step: publish, queue actions, keep the link. Caller holds [lock]. */
     private fun apply(step: FlashStep, force: Boolean = false) {
+        // The core's per-attempt diagnostic lines ([+mm:ss] stamped) go to the
+        // event log, which the diagnostics export carries.
+        step.log?.forEach { onLog("Firmware: $it") }
         val prev = current
         val status = step.status
         current = status
@@ -317,7 +338,22 @@ class FirmwareFlashDriver(
         }
         while (true) {
             val next = lock.withLock { queue.removeFirstOrNull() } ?: return
-            perform(next)
+            try {
+                perform(next)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                // A driver bug, not a GATT failure: fail the flash through the
+                // core (which keeps any erase hold) instead of leaving it
+                // stalled with the lock held (audit r2 LOW 5).
+                onLog("Firmware: driver error: ${e.message}")
+                lock.withLock {
+                    gen++
+                    queue.clear()
+                    apply(core.onWriteFailed("driver error: ${e.message}", clock()), force = true)
+                }
+                return
+            }
         }
     }
 

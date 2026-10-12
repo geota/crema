@@ -119,6 +119,10 @@ class ProxyController(
     /** A mode switch landed: mirror role/host/port into MainUiState (sticky
      *  rules), drop the mirror overlay fields, and persist the prefs. */
     private val onModeApplied: (role: String, host: String, port: Int) -> Unit,
+    /** The core's firmware lock (`bridge.firmwareLocksWrites()`): a flash or
+     *  its erase / reboot window holds the DE1, so no takeover, handoff or mode
+     *  switch may move the radio (audit r2 H1). */
+    private val firmwareHoldsLink: () -> Boolean = { false },
 ) {
 
     /** The proxy slice of the UI snapshot — the VM mirrors this into MainUiState. */
@@ -191,7 +195,7 @@ class ProxyController(
      *  09): everything else — dispensing, cleaning, calibrating, erroring, booting —
      *  refuses, and so does an unknown/`null` state, so we never grant during a
      *  moment we can't positively call idle. `Idle` covers warm-up/ready. */
-    private val handoffIdleStates = setOf("Sleep", "GoingToSleep", "Idle", "SchedIdle")
+    private val handoffIdleStates = HANDOFF_IDLE_STATES
 
     // The managers + scanner sit on this facade so the transport can be swapped at
     // runtime — M2 mode switches (Mirror/Hand-off) with NO app restart. The startup
@@ -346,8 +350,10 @@ class ProxyController(
      *  relay down. Throwing here becomes a `ControlErr` → the taker stays put.
      *  Reached through the VM's control router (the `"handoff"` verb). */
     internal fun grantHandoff() {
-        val state = machineStateName()
-        require(state in handoffIdleStates) { "machine not idle (${state ?: "unknown"}) — handoff is idle-only" }
+        handoffRefusal(machineStateName(), firmwareHoldsLink())?.let { reason ->
+            appendLog("Handoff refused: $reason")
+            throw IllegalStateException(reason)
+        }
         appendLog("Handoff granted — releasing the DE1")
         scope.launch {
             delay(400) // let this grant (ControlOk) flush before the relay tears down
@@ -424,7 +430,7 @@ class ProxyController(
                 }
                 .onFailure {
                     appendLog("Handoff refused: ${it.message}")
-                    notify("Can't take over — the machine is busy")
+                    notify(takeoverRefusedMessage(it.message))
                 }
         }
     }
@@ -442,6 +448,10 @@ class ProxyController(
      *  prompts and, on accept, runs its normal "Take over" back at us — so the
      *  idle-gated release + reclaim (issue 01) handles the swap. */
     fun offerHandoff(clientId: String) {
+        if (firmwareHoldsLink()) {
+            notify(FIRMWARE_BUSY_NOTICE)
+            return
+        }
         if (relayHub?.offerHandoff(clientId) == true) {
             notify("Offered the machine — waiting for the other device")
         } else {
@@ -660,6 +670,13 @@ class ProxyController(
      * before it is replaced.
      */
     private fun applyMode(role: String, host: String, port: Int, reconnect: Boolean = true) {
+        // Never move the radio while a firmware flash or its erase / reboot
+        // window holds the DE1 (audit r2 H1 / r1 NOTE 8).
+        if (firmwareHoldsLink()) {
+            appendLog("Mode switch to $role refused: $FIRMWARE_BUSY_REASON")
+            notify(FIRMWARE_BUSY_NOTICE)
+            return
+        }
         scope.launch {
             disconnectDevices()
             delay(150)
@@ -767,3 +784,31 @@ class ProxyController(
         else -> null
     }
 }
+
+/** Machine states it's safe to hand off the radio in (see [ProxyController]). */
+internal val HANDOFF_IDLE_STATES = setOf("Sleep", "GoingToSleep", "Idle", "SchedIdle")
+
+/** The `ControlErr` reason a primary gives while a firmware flash holds the DE1. */
+internal const val FIRMWARE_BUSY_REASON = "DE1 is updating firmware"
+
+/** What this device shows when it refuses a mode switch or handoff offer itself. */
+internal const val FIRMWARE_BUSY_NOTICE = "Not now — the DE1 is updating firmware"
+
+/**
+ * Why a relayed "Take over" must be refused, or null to grant. The firmware
+ * lock comes first: the flash's own Sleep makes the machine read as idle, so
+ * the idle allowlist alone would hand the radio away mid-flash.
+ */
+internal fun handoffRefusal(machineState: String?, firmwareHoldsLink: Boolean): String? = when {
+    firmwareHoldsLink -> FIRMWARE_BUSY_REASON
+    machineState !in HANDOFF_IDLE_STATES -> "machine not idle (${machineState ?: "unknown"}) — handoff is idle-only"
+    else -> null
+}
+
+/** The requesting device's notice for a refused takeover, from the primary's reason. */
+internal fun takeoverRefusedMessage(reason: String?): String =
+    if (reason?.contains(FIRMWARE_BUSY_REASON) == true) {
+        "Can't take over — the DE1 is updating firmware"
+    } else {
+        "Can't take over — the machine is busy"
+    }
