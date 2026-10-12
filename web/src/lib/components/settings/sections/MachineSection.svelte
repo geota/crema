@@ -417,7 +417,7 @@
 	-->
 	<StRow
 		title="Tablet charging"
-		sub="For a tablet powered from the DE1's USB port. Always on (the default)
+		sub="For a tablet powered from the DE1's USB port. Always (the default)
 		never switches the port off; Smart keeps the battery between 55 and 65 %,
 		High between 90 and 95 %. Applied within a minute."
 	>
@@ -427,7 +427,7 @@
 				options={[
 					{ value: 'smart', label: 'Smart' },
 					{ value: 'smartHigh', label: 'High' },
-					{ value: 'alwaysOn', label: 'Always on' }
+					{ value: 'alwaysOn', label: 'Always' }
 				]}
 				onChange={(v) => settings.set('usbChargingMode', parseUsbChargingMode(v))}
 			/>

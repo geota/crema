@@ -122,6 +122,19 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **One reconnect control per device (Android)** — Settings → Machine →
+  Connection now shows "Remembered DE1" with a **Forget** button and "Keep
+  connected in the background"; the scale gets the same "Remembered scale"
+  row under Peripherals and on the Scale page, and the Devices sheet's
+  Auto-connect switches became Forget. A remembered device always reconnects
+  after a dropout and on launch, as in de1app and Decenza. The separate
+  "Reconnect when nearby" row and the pop-up after connecting are gone: its
+  "Set up" searched for a DE1 that was connected, so it never found it.
+  Android's "nearby" association is now part of "Keep connected in the
+  background" — set up once (when the setting is turned on, or shortly after
+  a connect while it's on), on an idle machine: Crema pauses the link so
+  Android can find the DE1, Android asks to confirm, and Crema reconnects.
+  Tablet and phone; Tablet charging's "Always on" also reads "Always" on web.
 - **New setting: Settings → Machine → Machine sleep → "Sleep after"** —
   Never, 15, 30, 60, 90 or 120 minutes; default 30. One setting on phone,
   tablet and web, carried in backups. Upgrading Android users who had changed
@@ -193,7 +206,7 @@ Brew Log for filter coffee: guided pour-overs with credited recipes, your own br
   espresso warm-up timeout (de1app's heater tweaks and defaults), and the
   active profile's tank-temperature target, so they survive a DE1 power
   cycle. New **Tablet charging** setting (Settings → Machine) for a tablet
-  powered from the DE1's USB port: it defaults to **Always on** (the port is
+  powered from the DE1's USB port: it defaults to **Always** (the port is
   never switched off, as before; decaid's default). Opt in to **Smart**
   (keeps the battery between 55 and 65 %) or **High** (90–95 %), Decenza's
   smart-charging modes, and Crema switches the port on and off, re-checking

@@ -68,7 +68,8 @@ import coffee.crema.ui.refillPointMm
 import coffee.crema.ui.refillThresholdDepthMm
 import coffee.crema.ui.tankDepthMm
 import coffee.crema.ui.waterWarnThresholdMl
-import coffee.crema.ui.components.CompanionSettingsRow
+import coffee.crema.ui.components.KEEP_CONNECTED_HINT
+import coffee.crema.ui.components.RememberedDeviceRow
 import coffee.crema.ui.components.CopyDiagnosticsRow
 import coffee.crema.ui.components.ReconnectTimelineList
 import coffee.crema.ui.components.ReconnectingNotice
@@ -208,32 +209,26 @@ fun SettingsScreen(
                         if (!connected && ui.de1Reconnecting) {
                             ReconnectingNotice("DE1", onRetry = { vm.retryReconnectNow(true) })
                         }
-                        if (ui.companionSupported) {
-                            SetGroup("Reconnect") {
-                                CompanionSettingsRow(
-                                    device = "DE1",
-                                    associated = ui.de1Companion,
-                                    remembered = ui.rememberedDe1Address != null,
-                                    onSetUp = { vm.startCompanionSetup(coffee.crema.ble.companion.CompanionDevice.DE1) },
-                                    onRemove = { vm.removeCompanion(coffee.crema.ble.companion.CompanionDevice.DE1) },
-                                    last = true,
-                                )
-                            }
-                        }
                         SetGroup("Connection") {
-                            CremaSettingsRow("Telemetry rate", "How often the chart samples live data.", notImplemented = true) { CremaSettingsSelect("50 Hz") }
+                            // The one reconnect control: the remembered DE1 and
+                            // Forget (replaces the Auto-connect switch and the
+                            // separate "Reconnect when nearby" row).
+                            RememberedDeviceRow("DE1", ui.rememberedDe1Address != null, vm::forgetDe1)
                             // Screen-off keep-alive (#65): a foreground service
                             // that keeps the link + reconnect loop alive with the
-                            // screen off — engages only while charging.
-                            CremaSettingsRow("Keep connected in the background", "Reconnects the machine even while the screen is off — so it's ready again after a power cut. Runs only while this device is charging. Default on for tablets, off for phones.") {
+                            // screen off — engages only while charging. Turning it
+                            // on also sets up Android's "nearby" association once,
+                            // so the service can restart from the background.
+                            CremaSettingsRow("Keep connected in the background", KEEP_CONNECTED_HINT) {
                                 CremaSwitch(ui.keepConnectedScreenOff, vm::setKeepConnectedScreenOff)
                             }
+                            CremaSettingsRow("Telemetry rate", "How often the chart samples live data.", notImplemented = true) { CremaSettingsSelect("50 Hz") }
                             // Tablet charging from the DE1's USB port (Decenza BatteryManager modes; default Always on, as decaid):
                             // core decides from the tablet battery on connect and every minute after;
                             // an explicit disconnect always leaves it on.
-                            CremaSettingsRow("Tablet charging", "For a tablet powered from the DE1's USB port. Always on (the default) never switches the port off; Smart keeps the battery between 55 and 65 %, High between 90 and 95 %.") {
+                            CremaSettingsRow("Tablet charging", "For a tablet powered from the DE1's USB port. Always (the default) never switches the port off; Smart keeps the battery between 55 and 65 %, High between 90 and 95 %.") {
                                 CremaSegmentedButton(
-                                    options = listOf(SegOption("smart", "Smart"), SegOption("smartHigh", "High"), SegOption("alwaysOn", "Always on")),
+                                    options = listOf(SegOption("smart", "Smart"), SegOption("smartHigh", "High"), SegOption("alwaysOn", "Always")),
                                     value = ui.usbChargingMode,
                                     onChange = vm::setUsbChargingMode,
                                 )
@@ -263,9 +258,6 @@ fun SettingsScreen(
                                         onDismiss = { pendingFan = null },
                                     )
                                 }
-                            }
-                            CremaSettingsRow("Auto-connect", "Reconnect to this DE1 automatically after a dropout, and on launch. Turning it off forgets the device.") {
-                                CremaSwitch(ui.rememberedDe1Address != null, vm::setDe1AutoConnect, enabled = connected || ui.rememberedDe1Address != null)
                             }
                             // GHC status is READ-ONLY: whether the firmware gates
                             // shot-start on the group-head touch is machine-owned
@@ -318,15 +310,7 @@ fun SettingsScreen(
                                 else if (ui.scaleReconnecting) RetryNowPill(onRetry = { vm.retryReconnectNow(false) })
                                 else CremaButton(onClick = { onConnect("scale") }, variant = CremaButtonVariant.Outlined, label = "Pair")
                             }
-                            if (ui.companionSupported) {
-                                CompanionSettingsRow(
-                                    device = "scale",
-                                    associated = ui.scaleCompanion,
-                                    remembered = ui.rememberedScaleAddress != null,
-                                    onSetUp = { vm.startCompanionSetup(coffee.crema.ble.companion.CompanionDevice.SCALE) },
-                                    onRemove = { vm.removeCompanion(coffee.crema.ble.companion.CompanionDevice.SCALE) },
-                                )
-                            }
+                            RememberedDeviceRow("scale", ui.rememberedScaleAddress != null, vm::forgetScale)
                             CremaSettingsRow("Grinder", "No grinder support yet.") { CremaStatusDot(false) }
                             // Equipment-level grinder model (web `grinderModel`): free
                             // text, persisted, shown on Brew + sent to Visualizer.

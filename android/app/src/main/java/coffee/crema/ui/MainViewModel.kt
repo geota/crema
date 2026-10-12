@@ -112,6 +112,10 @@ import coffee.crema.decent.decentShotRecordJson
  */
 const val DEFAULT_SCALE_VOLUME: Int = 3
 
+/** How long after a DE1 connects the one-time "nearby" setup waits — long
+ *  enough for the machine state to arrive (it only runs on an idle machine). */
+private const val NEARBY_SETUP_DELAY_MS = 5_000L
+
 /**
  * Default scale auto-standby timeout (minutes) shown before the first live
  * reading.
@@ -474,7 +478,6 @@ data class MainUiState(
     /** The remembered scale has a companion association. */
     val scaleCompanion: Boolean = false,
     /** Show the one-time "Reconnect automatically when it's nearby?" offer for this device. */
-    val companionOffer: coffee.crema.ble.companion.CompanionDevice? = null,
     /** The activity should launch the system association dialog for this device. */
     val companionRequest: coffee.crema.ble.companion.CompanionDevice? = null,
     /** Addresses whose offer was declined (persisted; never re-offered). */
@@ -2165,6 +2168,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // and an unarmed auto-stop if the core is ever rebuilt some other
             // way (geota/crema#56). Pure core state, no BLE.
             pushStopTargets()
+            // "Keep connected in the background" sets up Android's "nearby"
+            // association once — a few seconds in, once the machine state is
+            // known (it only runs on an idle machine).
+            scheduleNearbySetup()
         },
         // The DE1 no longer holds our profile — drop the upload-skip cache so
         // the next shot re-uploads (issue 11). Without this, a skip after a
@@ -2183,7 +2190,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         timeline = coffee.crema.diag.ReconnectTimelines.recorder,
         companion = companion,
         presenceEvents = coffee.crema.ble.companion.CompanionPresence.events,
-        onDeviceRemembered = { device, address -> offerCompanion(device, address) },
     )
 
     /** Every store file reported unreadable this process (see [KeptAsideNotices]). */
@@ -3980,9 +3986,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Auto-connect (per device) ─────────────────────────────────────────────
 
+    /** "Forget" the remembered DE1: no more reconnects (after a dropout or on
+     *  launch) and its "nearby" association goes; a live session stays. */
+    fun forgetDe1() = setDe1AutoConnect(false)
+
+    /** "Forget" the remembered scale (the scale-side twin of [forgetDe1]). */
+    fun forgetScale() = setScaleAutoConnect(false)
+
     /** Per-device "Auto-connect" toggle for the DE1 — delegate of
      *  [ConnectionController.setDe1AutoConnect]. */
-    fun setDe1AutoConnect(on: Boolean) {
+    private fun setDe1AutoConnect(on: Boolean) {
         // Forgetting the DE1 also drops its companion association.
         if (!on) connection.state.value.rememberedDe1Address?.let { if (companion.isAssociated(it)) companion.remove(it) }
         connection.setDe1AutoConnect(on)
@@ -3990,7 +4003,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Per-device "Auto-connect" toggle for the scale (the scale-side twin). */
-    fun setScaleAutoConnect(on: Boolean) {
+    private fun setScaleAutoConnect(on: Boolean) {
         if (!on) connection.state.value.rememberedScaleAddress?.let { if (companion.isAssociated(it)) companion.remove(it) }
         connection.setScaleAutoConnect(on)
         if (!on) refreshCompanion()
@@ -4504,17 +4517,60 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (companion.associated.value != before) persistPrefs()
     }
 
-    /** A device was just remembered: offer "Reconnect when nearby" once. */
-    private fun offerCompanion(device: coffee.crema.ble.companion.CompanionDevice, address: String) {
-        if (!companion.isSupported || companion.isAssociated(address)) return
-        val a = coffee.crema.ble.companion.normalizeAddress(address)
-        if (a in _ui.value.companionDeclined) return
-        _ui.update { it.copy(companionOffer = device) }
+    /** The pending "nearby" setup after a DE1 connects (see [setUpNearby]). */
+    private var nearbySetupJob: kotlinx.coroutines.Job? = null
+
+    /** The address of a DE1 link the setup paused, to reconnect afterwards. */
+    private var nearbyPausedAddress: String? = null
+
+    /** Try the one-time "nearby" setup a few seconds after a DE1 connects. */
+    private fun scheduleNearbySetup() {
+        if (!companion.isSupported) return
+        nearbySetupJob?.cancel()
+        nearbySetupJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(NEARBY_SETUP_DELAY_MS)
+            setUpNearby(explicit = false)
+        }
     }
 
-    /** "Set up" (the offer, or Settings): the activity launches the system dialog. */
-    fun startCompanionSetup(device: coffee.crema.ble.companion.CompanionDevice) {
-        _ui.update { it.copy(companionOffer = null, companionRequest = device) }
+    /**
+     * Part of "Keep connected in the background": set up Android's "nearby"
+     * association for the remembered DE1 once, so the keep-alive service can
+     * restart from the background (after a power cut) and Crema hears when the
+     * DE1 is back in range. Runs when the setting is turned on ([explicit]) and
+     * a few seconds after a DE1 connects while it's on, until it's set up or
+     * declined (an explicit turn-on tries again after a decline).
+     *
+     * Android finds the DE1 by its advertisement, which a connected DE1
+     * doesn't send — the old "Set up" button searched forever for that reason —
+     * so a live link is paused while the system's confirm is up and resumed
+     * after. Only on an idle machine, on the primary device, and never while a
+     * firmware flash holds the DE1.
+     */
+    private fun setUpNearby(explicit: Boolean) {
+        if (!companion.isSupported) return
+        val s = _ui.value
+        if (!s.keepConnectedScreenOff || s.proxyRole == "secondary" || s.companionRequest != null) return
+        val address = connection.state.value.rememberedDe1Address ?: return
+        if (companion.isAssociated(address)) return
+        if (!explicit && coffee.crema.ble.companion.normalizeAddress(address) in s.companionDeclined) return
+        if (firmwareHolds()) return
+        if (s.bleState == De1BleManager.State.READY) {
+            val idle = s.machineStateName == MachineState.Idle || s.machineStateName == MachineState.Sleep
+            if (!idle) return
+            appendLog("Nearby: pausing the DE1 link so Android can find it")
+            nearbyPausedAddress = address
+            disconnect()
+        }
+        notifyUser("Android will ask to confirm the DE1 once, so Crema can reconnect in the background")
+        _ui.update { it.copy(companionRequest = coffee.crema.ble.companion.CompanionDevice.DE1) }
+    }
+
+    /** Reconnect the DE1 link the setup paused, if it paused one. */
+    private fun resumeAfterNearby() {
+        val address = nearbyPausedAddress ?: return
+        nearbyPausedAddress = null
+        connection.connectTo(address)
     }
 
     /** The remembered address to associate for [device], or null. */
@@ -4531,29 +4587,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val observing = companion.onAssociated(address, id)
         _ui.update { it.copy(companionRequest = null) }
         refreshCompanion()
+        resumeAfterNearby()
         val name = if (device == coffee.crema.ble.companion.CompanionDevice.DE1) "the DE1" else "the scale"
         notifyUser(
-            if (observing) "Crema will reconnect to $name as soon as it's nearby"
+            if (observing) "Crema can now reconnect to $name in the background"
             else "Associated $name, but Android wouldn't watch for it — reconnecting as before",
         )
     }
 
-    /** The association didn't happen (cancelled, not found, unsupported): fall back silently. */
+    /** The association didn't happen (cancelled, not found, unsupported):
+     *  reconnect a paused link, and don't ask again on connect (turning
+     *  "Keep connected in the background" on again retries). */
     fun onCompanionSetupEnded(reason: String?) {
-        _ui.update { it.copy(companionRequest = null) }
-        reason?.let { appendLog("Companion setup: $it") }
-    }
-
-    /** "Not now" on the offer — remembered, never offered again for this device. */
-    fun declineCompanionOffer(device: coffee.crema.ble.companion.CompanionDevice) {
-        val address = companionTargetAddress(device)?.let { coffee.crema.ble.companion.normalizeAddress(it) }
+        val address = connection.state.value.rememberedDe1Address?.let { coffee.crema.ble.companion.normalizeAddress(it) }
         _ui.update {
             it.copy(
-                companionOffer = null,
+                companionRequest = null,
                 companionDeclined = if (address == null) it.companionDeclined else (it.companionDeclined + address).distinct(),
             )
         }
         persistPrefs()
+        resumeAfterNearby()
+        reason?.let { appendLog("Companion setup: $it") }
     }
 
     /** Settings → "Remove": stop watching for the device and drop the association. */
@@ -4594,6 +4649,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(keepConnectedScreenOff = on) }
         persistPrefs()
         bgConnection.setEnabled(on)
+        if (on) setUpNearby(explicit = true)
     }
 
     /** A screen / route change — activity for the idle-sleep timer. */

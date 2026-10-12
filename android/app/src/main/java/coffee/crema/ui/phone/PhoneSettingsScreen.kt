@@ -379,31 +379,22 @@ private fun MachineSection(
             ReconnectingNotice("DE1", onRetry = { vm.retryReconnectNow(true) }, modifier = Modifier.padding(top = 8.dp))
         }
     }
-    if (ui.companionSupported) {
-        SettingsGroup("Reconnect") {
-            CompanionSettingsRow(
-                device = "DE1",
-                associated = ui.de1Companion,
-                remembered = ui.rememberedDe1Address != null,
-                onSetUp = { vm.startCompanionSetup(coffee.crema.ble.companion.CompanionDevice.DE1) },
-                onRemove = { vm.removeCompanion(coffee.crema.ble.companion.CompanionDevice.DE1) },
-                last = true,
-            )
-        }
-    }
     SettingsGroup("Connection") {
-        CremaSettingsRow("Telemetry rate", "How often the chart samples live data.", notImplemented = true) { CremaSettingsSelect("50 Hz") }
+        // The one reconnect control: the remembered DE1 and Forget.
+        RememberedDeviceRow("DE1", ui.rememberedDe1Address != null, vm::forgetDe1)
         // Screen-off keep-alive (#65): keeps the link + reconnect loop alive
-        // with the screen off — engages only while charging.
-        CremaSettingsRow("Keep connected in the background", "Reconnects the machine even while the screen is off — so it's ready again after a power cut. Runs only while this device is charging. Default on for tablets, off for phones.") {
+        // with the screen off — engages only while charging; turning it on
+        // sets up Android's "nearby" association once.
+        CremaSettingsRow("Keep connected in the background", KEEP_CONNECTED_HINT) {
             CremaSwitch(ui.keepConnectedScreenOff, vm::setKeepConnectedScreenOff)
         }
+        CremaSettingsRow("Telemetry rate", "How often the chart samples live data.", notImplemented = true) { CremaSettingsSelect("50 Hz") }
         // Tablet charging from the DE1's USB port (Decenza BatteryManager modes; default Always on, as decaid):
         // core decides from the tablet battery on connect and every minute after;
         // an explicit disconnect always leaves it on.
-        CremaSettingsRow("Tablet charging", "For a tablet powered from the DE1's USB port. Always on (the default) never switches the port off; Smart keeps the battery between 55 and 65 %, High between 90 and 95 %.", stacked = true) {
+        CremaSettingsRow("Tablet charging", "For a tablet powered from the DE1's USB port. Always (the default) never switches the port off; Smart keeps the battery between 55 and 65 %, High between 90 and 95 %.", stacked = true) {
             CremaSegmentedButton(
-                options = listOf(SegOption("smart", "Smart"), SegOption("smartHigh", "High"), SegOption("alwaysOn", "Always on")),
+                options = listOf(SegOption("smart", "Smart"), SegOption("smartHigh", "High"), SegOption("alwaysOn", "Always")),
                 value = ui.usbChargingMode,
                 onChange = vm::setUsbChargingMode,
             )
@@ -433,9 +424,6 @@ private fun MachineSection(
                     onDismiss = { pendingFan = null },
                 )
             }
-        }
-        CremaSettingsRow("Auto-connect", "Reconnect to this DE1 automatically after a dropout, and on launch. Turning it off forgets the device.") {
-            CremaSwitch(ui.rememberedDe1Address != null, vm::setDe1AutoConnect, enabled = connected || ui.rememberedDe1Address != null)
         }
         // GHC status is READ-ONLY (machine-owned GhcInfo 0x80381C; audit F2/F3).
         val ghcInstalled = ghcPresent(ui.de1MachineInfo) == true
@@ -511,7 +499,7 @@ private fun PeripheralsSection(
             if (scaleConnected) "${scaleName ?: "Connected"} · manage on the Scale page."
             else if (scaleReconnecting) "Reconnecting…"
             else "Stop-on-weight & auto-tare need a scale.",
-            last = true,
+            last = ui == null,
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CremaStatusDot(scaleConnected)
@@ -524,17 +512,8 @@ private fun PeripheralsSection(
                 }
             }
         }
-    }
-    if (ui != null && ui.companionSupported) {
-        SettingsGroup("Reconnect") {
-            CompanionSettingsRow(
-                device = "scale",
-                associated = ui.scaleCompanion,
-                remembered = ui.rememberedScaleAddress != null,
-                onSetUp = { vm.startCompanionSetup(coffee.crema.ble.companion.CompanionDevice.SCALE) },
-                onRemove = { vm.removeCompanion(coffee.crema.ble.companion.CompanionDevice.SCALE) },
-                last = true,
-            )
+        if (ui != null) {
+            RememberedDeviceRow("scale", ui.rememberedScaleAddress != null, vm::forgetScale, last = true)
         }
     }
     SettingsGroup("Grinder") {

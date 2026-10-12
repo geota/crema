@@ -394,13 +394,9 @@ fun ScaleCapabilityRows(
     caps: coffee.crema.core.ScaleCapabilities,
     showDisplayMode: Boolean = true,
 ) {
-    // Auto-connect — the scale-side twin of the DE1's (Settings → Machine →
-    // Connection). ON remembers this scale (reconnect on drop + connect on
-    // launch); OFF forgets it. Not capability-gated — a connection setting shown
-    // for any connected scale.
-    CremaSettingsRow("Auto-connect", "Reconnect to this scale automatically after a dropout, and on launch. Turning it off forgets it.") {
-        CremaSwitch(ui.rememberedScaleAddress != null, vm::setScaleAutoConnect)
-    }
+    // The remembered scale and Forget — the scale-side twin of the DE1's
+    // (Settings → Machine → Connection). Not capability-gated.
+    coffee.crema.ui.components.RememberedDeviceRow("scale", ui.rememberedScaleAddress != null, vm::forgetScale)
     if (caps.flow_smoothing) CremaSettingsRow("Flow smoothing", "Smooths the live mass-flow readout.") {
         CremaSwitch(ui.scaleFlowSmoothing, vm::setScaleFlowSmoothing)
     }
