@@ -34,8 +34,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - **No "ghost" scale after a cancelled or failed scale connect** — tapping
-  Disconnect while a scale was still connecting, or a scale handshake that
-  failed partway, could leave Crema thinking a scale was attached: shots
+  Disconnect while a scale was still connecting, Re-pair with the chooser
+  then cancelled, or a scale handshake that failed partway, could leave
+  Crema thinking a scale was attached: shots
   then waited for a weight stop that never came, and hot water could run
   on to 250 ml because Crema expected the scale to stop it. Web.
 - **Reconnecting the DE1 in the browser no longer drops the new link** —

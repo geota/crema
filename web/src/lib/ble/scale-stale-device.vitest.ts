@@ -15,6 +15,15 @@ import { ScaleManager } from './scale';
 import type { BleDevice } from './transport';
 
 const programDeps: ScaleConnectDeps[] = [];
+// The chooser is cancelled (connect()'s requestDevice rejects).
+vi.mock('./transport', async (importOriginal) => ({
+	...(await importOriginal<typeof import('./transport')>()),
+	requestDevice: () => Promise.reject(new Error('User cancelled the requestDevice() chooser.'))
+}));
+vi.mock('$lib/wasm/de1_wasm', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/wasm/de1_wasm')>()),
+	scaleScanUuids: () => JSON.stringify({ name_prefixes: ['BOOKOO'], service_uuids: [] })
+}));
 vi.mock('$lib/services/scale-orchestrator', () => ({
 	scaleConnectProgram: (deps: ScaleConnectDeps) => {
 		programDeps.push(deps);
@@ -104,5 +113,32 @@ describe('ScaleManager stale handshake', () => {
 		await pending;
 		expect(t.states.at(-1)).toBe('failed');
 		expect(t.core.disconnectScale).toHaveBeenCalledTimes(1);
+	});
+
+	it('Re-pair with the chooser cancelled leaves no ghost scale (audit r14 L-1)', async () => {
+		const t = setup();
+		const old = fakeScale();
+		const pending = t.attach(old.device);
+		await Promise.resolve();
+		t.finishes[0](Exit.void);
+		await pending; // the old scale is ready
+		expect(t.core.disconnectScale).not.toHaveBeenCalled();
+		await t.manager.connect(); // Re-pair; the chooser is cancelled
+		expect(old.disconnect).toHaveBeenCalledTimes(1);
+		expect(t.core.disconnectScale).toHaveBeenCalledTimes(1);
+		expect(t.states.at(-1)).toBe('failed');
+	});
+
+	it("a stale handshake's late failure leaves the replacement scale identified", async () => {
+		const t = setup();
+		const pendingOld = t.attach(fakeScale('scale-A').device);
+		await Promise.resolve();
+		void t.attach(fakeScale('scale-B').device); // replaced mid-handshake
+		await Promise.resolve();
+		const before = t.core.disconnectScale.mock.calls.length;
+		t.finishes[0](Exit.fail({ step: 'scale UUIDs', cause: new Error('late') }));
+		await pendingOld;
+		expect(t.core.disconnectScale.mock.calls.length).toBe(before);
+		expect(t.states).not.toContain('failed');
 	});
 });
