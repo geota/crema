@@ -353,9 +353,9 @@ export class BleDevice implements De1Transport {
 	}
 
 	/**
-	 * Register a callback for a *terminal* disconnect — either a user-initiated
-	 * {@link disconnect} or auto-reconnect giving up after exhausting its
-	 * attempts. Not fired for a transient drop that the backoff loop recovers.
+	 * Register a callback for a *terminal* disconnect — a user-initiated
+	 * {@link disconnect} (the backoff loop never gives up on its own). Not
+	 * fired for a transient drop that the loop recovers.
 	 */
 	onDisconnected(listener: () => void): void {
 		this.onDisconnectedListeners.add(listener);
@@ -655,6 +655,11 @@ export class BleDevice implements De1Transport {
 		if (gatt !== undefined) {
 			gatt.disconnect();
 		}
+		// A device is single-use after a disconnect: drop its sink so a link
+		// that connected anyway (a browser that doesn't cancel a pending
+		// connect, or characteristics shared with a replacement on the same
+		// device) feeds nothing more (audit r11 L-1).
+		this.sink = null;
 		this.connectionState = 'disconnected';
 		this.notifyStateChanged();
 	}

@@ -12,11 +12,11 @@ import type { CremaCore } from '$lib/core';
 import { De1Manager } from './de1';
 import type { De1Transport } from './de1-transport';
 
-function fakeDevice() {
+function fakeDevice(id = 'dev-A') {
 	const cbs: { disconnected?: () => void; attempt?: (n: number) => void; reconnected?: () => void } = {};
 	const device = {
 		name: 'DE1',
-		id: 'dev-A',
+		id,
 		disconnect: vi.fn(),
 		setSink: () => undefined,
 		onDisconnected: (l: () => void) => (cbs.disconnected = l),
@@ -55,15 +55,17 @@ describe('De1Manager stale device', () => {
 		expect(lost).toHaveBeenCalledTimes(1);
 	});
 
-	it('a connect replaced while its program runs leaves the replacement alone (audit r10 L-2)', async () => {
+	function managerWithRuntime() {
 		const states: string[] = [];
-		const finishes: ((exit: Exit.Exit<void, never>) => void)[] = [];
+		const finishes: ((exit: Exit.Exit<void, unknown>) => void)[] = [];
 		const runtime = {
 			runPromiseExit: () => new Promise((resolve) => finishes.push(resolve))
 		} as unknown as AppRuntime;
-		const de1LinkLost = vi.fn(async () => ({ actions: [] }));
 		const manager = new De1Manager(
-			{ de1LinkLost, reset: async () => ({ actions: [] }) } as unknown as CremaCore,
+			{
+				de1LinkLost: async () => ({ actions: [] }),
+				reset: async () => ({ actions: [] })
+			} as unknown as CremaCore,
 			{
 				onCoreOutput: () => undefined,
 				onStatus: () => undefined,
@@ -74,18 +76,54 @@ describe('De1Manager stale device', () => {
 		);
 		const attach = (d: De1Transport) =>
 			(manager as unknown as { attach(d: De1Transport): Promise<void> }).attach(d);
-		const first = fakeDevice();
+		return { manager, states, finishes, attach };
+	}
+
+	it('a stale handshake success leaves a different replacement alone and closes its own link (audit r10 L-2, r11 L-1)', async () => {
+		const { manager, states, finishes, attach } = managerWithRuntime();
+		const first = fakeDevice('dev-A');
 		const pending = attach(first.device);
 		await Promise.resolve();
-		// The user disconnects mid-handshake, then a replacement starts.
-		await manager.disconnect();
-		const second = fakeDevice();
+		await manager.disconnect(); // mid-handshake
+		expect(first.disconnect).toHaveBeenCalledTimes(1);
+		const second = fakeDevice('dev-B');
 		void attach(second.device);
 		states.length = 0;
 		finishes[0](Exit.void); // the first handshake completes late
 		await pending;
 		expect(states).not.toContain('ready');
 		expect(second.disconnect).not.toHaveBeenCalled();
-		expect(manager.identity()?.id).toBe('dev-A');
+		expect(first.disconnect).toHaveBeenCalledTimes(2); // its late link is closed
+		expect(manager.identity()?.id).toBe('dev-B');
+	});
+
+	it('a stale handshake on the same DE1 leaves the shared link to the replacement', async () => {
+		const { manager, finishes, attach } = managerWithRuntime();
+		const first = fakeDevice('dev-A');
+		const pending = attach(first.device);
+		await Promise.resolve();
+		await manager.disconnect();
+		const second = fakeDevice('dev-A');
+		void attach(second.device);
+		finishes[0](Exit.void);
+		await pending;
+		expect(first.disconnect).toHaveBeenCalledTimes(1); // not again: the GATT link is shared
+		expect(second.disconnect).not.toHaveBeenCalled();
+	});
+
+	it('a stale handshake failure does not drop the replacement', async () => {
+		const { manager, states, finishes, attach } = managerWithRuntime();
+		const first = fakeDevice('dev-A');
+		const pending = attach(first.device);
+		await Promise.resolve();
+		await manager.disconnect();
+		const second = fakeDevice('dev-B');
+		void attach(second.device);
+		states.length = 0;
+		finishes[0](Exit.fail({ step: 'connect', cause: new Error('Device was disconnected') }));
+		await pending;
+		expect(states).not.toContain('failed');
+		expect(second.disconnect).not.toHaveBeenCalled();
+		expect(manager.identity()?.id).toBe('dev-B');
 	});
 });

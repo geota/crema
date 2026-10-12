@@ -348,9 +348,15 @@ export class De1Manager {
 			})
 		);
 		// Replaced or disconnected while the program ran: the drop already
-		// disconnected this device and reported it; don't touch the device or
-		// state that replaced it (audit r10 L-2).
-		if (this.device !== device) return;
+		// reported it and silenced the device (its sink is cleared), so leave
+		// the state to whatever replaced it (audit r10 L-2). A browser that
+		// doesn't cancel a pending connect may have let this handshake connect
+		// after the drop: close that link — unless the replacement is the same
+		// DE1, whose GATT link is shared and now belongs to it (audit r11 L-1).
+		if (this.device !== device) {
+			if (this.device?.id !== device.id) device.disconnect();
+			return;
+		}
 		const outcome = parseConnectExit(exit);
 		if (!outcome.ok) {
 			// Disconnect before nulling — nulling alone leaves the transport's

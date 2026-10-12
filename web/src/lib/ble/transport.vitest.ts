@@ -198,6 +198,24 @@ describe('BleDevice reconnect kick', () => {
 		expect(t.gatt.connected).toBe(true);
 	});
 
+	it('a disconnected device feeds nothing and never takes a shared GATT as its own (audit r11)', async () => {
+		const t = setup();
+		const sink = vi.fn();
+		t.ble.setSink(sink);
+		const notify = (t.ble as unknown as { onValueChanged(e: Event): void }).onValueChanged;
+		const event = {
+			target: { uuid: 'A00D', value: new DataView(new Uint8Array([1, 2]).buffer) }
+		} as unknown as Event;
+		notify(event);
+		expect(sink).toHaveBeenCalledTimes(1);
+		t.ble.disconnect();
+		notify(event); // a link that connected anyway, or a shared characteristic
+		expect(sink).toHaveBeenCalledTimes(1);
+		// A replacement on the same DE1 connected the shared GATT.
+		t.gatt.connected = true;
+		await expect(t.ble.connectGatt()).rejects.toThrow('Device was disconnected');
+	});
+
 	it('the first outage is announced even when a kick beats the first backoff', async () => {
 		const t = setup();
 		const announced = vi.fn();

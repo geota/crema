@@ -170,7 +170,7 @@ export class ScaleManager {
 	private async attach(device: BleDevice): Promise<void> {
 		this.device = device;
 		device.setReconnectTimeline('Scale');
-		// A terminal disconnect — user-initiated or auto-reconnect giving up.
+		// A terminal disconnect (user-initiated; auto-reconnect never gives up).
 		device.onDisconnected(() => {
 			this.callbacks.onState('disconnected');
 			this.callbacks.onStatus('Scale disconnected');
