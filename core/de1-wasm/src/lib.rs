@@ -2511,10 +2511,15 @@ impl CremaBridge {
     }
 
     /// The DE1 link came back.
-    pub fn firmware_flash_link_restored(&mut self, now_ms: f64) -> String {
+    pub fn firmware_flash_link_restored(&mut self, now_ms: f64, machine: String) -> String {
         self.live_core()
-            .firmware_flash_link_restored(now_ms as u64)
+            .firmware_flash_link_restored(now_ms as u64, &machine)
             .to_json()
+    }
+
+    /// Tie the current flash to the DE1 it is for (its Web Bluetooth id).
+    pub fn firmware_flash_bind_machine(&mut self, machine: String) {
+        self.live_core().firmware_flash_bind_machine(&machine);
     }
 
     /// Cancel while still harmless.

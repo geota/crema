@@ -2575,6 +2575,10 @@ data class FlashStatus (
 	val restartedOnBuild: UInt? = null,
 	/// Whether the flash currently sees the DE1 link up.
 	val linkUp: Boolean,
+	/// A different DE1 than the one being updated is connected (its id): it
+	/// is not read, and the lock stays until that DE1 reports or the user
+	/// exits.
+	val foreignMachine: String? = null,
 	/// How long the DE1 may still be erasing (during the erase, or after an
 	/// interrupted one): the shells persist it so a restart keeps the lock.
 	val eraseHoldMsLeft: UInt? = null

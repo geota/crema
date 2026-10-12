@@ -308,6 +308,10 @@ pub struct FlashStatus {
     pub restarted_on_build: Option<u32>,
     /// Whether the flash currently sees the DE1 link up.
     pub link_up: bool,
+    /// A different DE1 than the one being updated is connected (its id): it
+    /// is not read, and the lock stays until that DE1 reports or the user
+    /// exits.
+    pub foreign_machine: Option<String>,
     /// How long the DE1 may still be erasing (during the erase, or after an
     /// interrupted one): the shells persist it so a restart keeps the lock.
     pub erase_hold_ms_left: Option<u32>,
@@ -487,6 +491,11 @@ pub struct FirmwareFlash {
     log: Vec<String>,
     /// The last A009 frame logged (frames are logged when they change).
     last_frame_logged: Option<Vec<u8>>,
+    /// The DE1 this flash is for (the shell's device id / address), once bound.
+    machine: Option<String>,
+    /// A *different* DE1 is connected: it must not satisfy the wait nor
+    /// release this flash's lock (audit r3 LOW-2).
+    foreign_machine: Option<String>,
 }
 
 impl FirmwareFlash {
@@ -543,7 +552,25 @@ impl FirmwareFlash {
             clock_ms: now_ms,
             log: Vec::new(),
             last_frame_logged: None,
+            machine: None,
+            foreign_machine: None,
         }
+    }
+
+    /// Tie the flash to the DE1 it is for (the shell's device id / address).
+    /// The first non-empty id wins; later calls are ignored.
+    pub fn bind_machine(&mut self, machine: &str) {
+        if self.machine.is_none() && !machine.is_empty() {
+            self.machine = Some(machine.to_owned());
+        }
+    }
+
+    /// Whether `connected` is a different DE1 from the one this flash is for.
+    /// An unknown id on either side can't be compared and counts as the same.
+    fn is_foreign(&self, connected: &str) -> bool {
+        self.machine
+            .as_deref()
+            .is_some_and(|mine| !connected.is_empty() && !mine.eq_ignore_ascii_case(connected))
     }
 
     /// Add a diagnostic line, stamped `[+mm:ss]` from the start of this
@@ -609,6 +636,10 @@ impl FirmwareFlash {
     /// hold is over.
     #[must_use]
     pub fn restore_erase_hold(build: u32, hold_ms_left: u64, now_ms: u64) -> Option<Self> {
+        // An erase can't outlast ERASE_TIMEOUT_MS from its request, whatever a
+        // wall clock that jumped between the kill and the relaunch claims
+        // (audit r3 LOW-1).
+        let hold_ms_left = hold_ms_left.min(ERASE_TIMEOUT_MS);
         if hold_ms_left == 0 {
             return None;
         }
@@ -1137,6 +1168,7 @@ impl FirmwareFlash {
             self.note(now_ms, format!("link lost ({:?})", self.phase()));
         }
         self.link_up = false;
+        self.foreign_machine = None;
         match self.stage {
             Stage::Sleep { .. } | Stage::Erase { .. } | Stage::Upload | Stage::Settle { .. } => {
                 let phase = self.phase();
@@ -1151,6 +1183,30 @@ impl FirmwareFlash {
             Stage::AwaitPowerCycle => self.machine_restarted = true,
             _ => {}
         }
+    }
+
+    /// The DE1 link is back, to the DE1 with id `machine` (empty = unknown).
+    /// A different DE1 than the one this flash is for neither counts as the
+    /// link coming back nor gets a build read: it can't satisfy the wait or
+    /// release the lock (audit r3 LOW-2). Otherwise as [`Self::on_link_restored`].
+    pub fn on_link_restored_from(&mut self, now_ms: u64, machine: &str) -> Vec<FlashAction> {
+        self.see(now_ms);
+        if self.is_foreign(machine) {
+            if self.foreign_machine.as_deref() != Some(machine) {
+                self.note(
+                    now_ms,
+                    format!(
+                        "a different DE1 connected ({machine}, not {}): not read, lock kept",
+                        self.machine.as_deref().unwrap_or("?")
+                    ),
+                );
+            }
+            self.foreign_machine = Some(machine.to_owned());
+            self.link_up = false;
+            return Vec::new();
+        }
+        self.foreign_machine = None;
+        self.on_link_restored(now_ms)
     }
 
     /// The DE1 link is back. Re-reads the build straight away when waiting
@@ -1286,6 +1342,7 @@ impl FirmwareFlash {
             machine_restarted: self.machine_restarted,
             restarted_on_build: self.restarted_on_build,
             link_up: self.link_up,
+            foreign_machine: self.foreign_machine.clone(),
             erase_hold_ms_left: self
                 .erase_hold_ms_left()
                 .map(|ms| u32::try_from(ms).unwrap_or(u32::MAX)),
@@ -1561,6 +1618,67 @@ pub(crate) mod tests {
         assert!(!r.locks_writes(), "released when the hold ends");
         assert!(FirmwareFlash::restore_erase_hold(1358, 0, 5_000).is_none());
         assert!(FirmwareFlash::restore_erase_hold(1234, 9_000, 5_000).is_none());
+    }
+
+    #[test]
+    fn a_restored_erase_hold_never_outlasts_the_erase_timeout() {
+        // A wall clock that jumped back an hour between kill and relaunch
+        // makes the shell compute an hour left: still at most 60 s.
+        let mut r = FirmwareFlash::restore_erase_hold(1358, 3_600_000, 5_000).expect("pinned");
+        assert_eq!(r.status(5_000).erase_hold_ms_left, Some(60_000));
+        r.on_tick(5_000 + ERASE_TIMEOUT_MS - 1);
+        assert!(r.locks_writes());
+        r.on_tick(5_000 + ERASE_TIMEOUT_MS);
+        assert!(!r.locks_writes(), "released at 60 s, not after an hour");
+        assert!(r.can_exit());
+        // Garbage (u64::MAX, e.g. a negative difference cast) is clamped too.
+        let g = FirmwareFlash::restore_erase_hold(1358, u64::MAX, 0).expect("pinned");
+        assert_eq!(g.status(0).erase_hold_ms_left, Some(60_000));
+    }
+
+    #[test]
+    fn a_different_de1_neither_satisfies_the_wait_nor_releases_the_lock() {
+        // Within a session: verified on DE1 A, the user connects DE1 B, which
+        // already runs the target build (audit r3 LOW-2).
+        let (mut f, now) = to_verify(1);
+        f.bind_machine("AA:AA");
+        f.bind_machine("CC:CC"); // first id wins
+        f.on_fw_map(&VERIFY_OK, now + 100);
+        assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle);
+        f.on_link_lost(now + 1_000);
+        assert!(
+            f.on_link_restored_from(now + 30_000, "BB:BB").is_empty(),
+            "no build read from another DE1"
+        );
+        f.on_build(1358, now + 30_100);
+        assert_eq!(
+            f.phase(),
+            FlashPhase::AwaitingPowerCycle,
+            "B's build doesn't count"
+        );
+        assert!(f.locks_writes(), "A's lock is kept");
+        assert_eq!(f.status(now).foreign_machine.as_deref(), Some("BB:BB"));
+        assert!(
+            f.on_tick(now + 33_000).is_empty(),
+            "no periodic reads either"
+        );
+        // DE1 A comes back (any case): read, and the target build succeeds.
+        f.on_link_lost(now + 40_000);
+        assert_eq!(
+            f.on_link_restored_from(now + 50_000, "aa:aa"),
+            vec![FirmwareFlash::read_build_action()]
+        );
+        assert_eq!(f.status(now).foreign_machine, None);
+        f.on_build(1358, now + 50_100);
+        assert_eq!(f.phase(), FlashPhase::Succeeded);
+        // Unknown ids can't be compared: treated as the same DE1.
+        let (mut g, now) = to_verify(1);
+        g.on_fw_map(&VERIFY_OK, now + 100);
+        g.on_link_lost(now + 1_000);
+        assert_eq!(
+            g.on_link_restored_from(now + 2_000, "BB"),
+            vec![FirmwareFlash::read_build_action()]
+        );
     }
 
     #[test]
@@ -2391,7 +2509,7 @@ mod core_tests {
                 .unwrap()
         ));
         // The flash itself reads the build through the lock.
-        let step = core.firmware_flash_link_restored(5_000);
+        let step = core.firmware_flash_link_restored(5_000, "");
         assert!(matches!(step.actions[..], [FlashAction::ReadBuild { .. }]));
         assert!(
             core.firmware_flash_blockers(OK)
@@ -2472,7 +2590,7 @@ mod core_tests {
         assert_eq!(again.status.unwrap().target_build, 1358);
         // Any connect path (fresh connect, reload, auto-reconnect) reports
         // the link up, minutes later: the build read is issued.
-        let up = core.firmware_flash_link_restored(300_000);
+        let up = core.firmware_flash_link_restored(300_000, "");
         assert!(matches!(up.actions[..], [FlashAction::ReadBuild { .. }]));
         core.on_notification(
             Source::De1MmrRead,
@@ -2575,7 +2693,7 @@ mod core_tests {
                 assert!(core.firmware_locks_writes());
                 core.de1_link_lost();
                 now += 45_000;
-                queue.extend(core.firmware_flash_link_restored(now).actions);
+                queue.extend(core.firmware_flash_link_restored(now, "").actions);
             }
             if matches!(status.phase, FlashPhase::Succeeded | FlashPhase::Failed) {
                 return (bank, status);

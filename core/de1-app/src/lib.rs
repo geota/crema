@@ -4062,14 +4062,24 @@ impl CremaCore {
         }
     }
 
-    /// The DE1 link is back (after the power-cycle, typically).
-    pub fn firmware_flash_link_restored(&mut self, now_ms: u64) -> FlashStep {
+    /// The DE1 link is back (after the power-cycle, typically), to the DE1
+    /// with id `machine` (the shell's device id / address; empty = unknown).
+    /// A different DE1 than the flash's own is not read and keeps the lock.
+    pub fn firmware_flash_link_restored(&mut self, now_ms: u64, machine: &str) -> FlashStep {
         self.advance_clock(now_ms);
         let actions = self
             .firmware_flash
             .as_mut()
-            .map_or_else(Vec::new, |f| f.on_link_restored(now_ms));
+            .map_or_else(Vec::new, |f| f.on_link_restored_from(now_ms, machine));
         self.flash_step(actions, now_ms)
+    }
+
+    /// Tie the current flash to the DE1 it is for (called by the shells at
+    /// start and after a restore). The first non-empty id wins.
+    pub fn firmware_flash_bind_machine(&mut self, machine: &str) {
+        if let Some(f) = self.firmware_flash.as_mut() {
+            f.bind_machine(machine);
+        }
     }
 
     /// Cancel, while that is still harmless (up to the verify request). The
