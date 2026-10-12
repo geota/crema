@@ -203,10 +203,19 @@ export class ScaleManager {
 
 		// ── Phase 2: connect → identify → UUIDs → subscribe → query (Effect) ──
 		this.callbacks.onState('subscribing');
+		// The core too: a stale program must not identify a scale the user
+		// already disconnected (a ghost scale arms stop-at-weight with no
+		// weight data; audit r13 L-1).
+		const stale = () => Promise.reject(new Error('Scale was disconnected'));
 		const exit = await this.runtime.runPromiseExit(
 			scaleConnectProgram({
 				device,
-				core: this.core,
+				core: {
+					connectScale: (name, services) =>
+						current() ? this.core.connectScale(name, services) : stale(),
+					scaleUuids: () => (current() ? this.core.scaleUuids() : stale()),
+					queryScaleSettings: () => (current() ? this.core.queryScaleSettings() : stale())
+				},
 				advertisedName: device.name,
 				onStatus: (line) => {
 					if (current()) this.callbacks.onStatus(line);
@@ -252,6 +261,9 @@ export class ScaleManager {
 			device.disconnect();
 			this.device = null;
 			this.uuids = null;
+			// The core may already have identified the scale: clear it so a
+			// failed handshake leaves no ghost scale behind.
+			void this.core.disconnectScale().catch(() => undefined);
 			this.callbacks.onState('failed');
 			this.callbacks.onStatus(
 				`Scale connection failed at "${outcome.step}": ${describeError(outcome.cause)}`

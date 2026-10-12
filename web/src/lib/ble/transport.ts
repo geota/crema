@@ -454,7 +454,7 @@ export class BleDevice implements De1Transport {
 	 */
 	async discoveredServiceUuids(): Promise<readonly string[]> {
 		const gatt = this.device.gatt;
-		if (!gatt?.connected) return [];
+		if (this.userDisconnected || !gatt?.connected) return [];
 		try {
 			const services = await gatt.getPrimaryServices();
 			return services.map((s) => s.uuid.toLowerCase());
@@ -514,9 +514,10 @@ export class BleDevice implements De1Transport {
 		serviceUuid: string,
 		characteristicUuid: string
 	): Promise<BluetoothRemoteGATTCharacteristic> {
-		return this.gattQueue.enqueue(() =>
-			this.resolveCharacteristic(serviceUuid, characteristicUuid)
-		);
+		return this.gattQueue.enqueue(() => {
+			this.assertLive();
+			return this.resolveCharacteristic(serviceUuid, characteristicUuid);
+		});
 	}
 
 	/**
@@ -639,14 +640,9 @@ export class BleDevice implements De1Transport {
 	}
 
 	/**
-	 * Disconnect the GATT server and drop the device's listeners. Idempotent.
-	 *
-	 * Marks the teardown *deliberate*, which suppresses the auto-reconnect loop
-	 * — a user-initiated disconnect must stay disconnected.
-	 */
-	/**
 	 * A device is single-use after {@link disconnect}: every public GATT
-	 * operation (connect, subscribe, read, write) refuses, so a stale connect
+	 * operation (connect, subscribe, read, write, characteristic lookup)
+	 * refuses and service discovery reports nothing, so a stale connect
 	 * program that outlives its device can't touch the DE1 / scale or feed
 	 * the core (audit r10–r12). The reconnect loop's private replay is not
 	 * gated, so it can still close its own ghost link.
@@ -655,6 +651,12 @@ export class BleDevice implements De1Transport {
 		if (this.userDisconnected) throw new Error('Device was disconnected');
 	}
 
+	/**
+	 * Disconnect the GATT server and drop the device's listeners. Idempotent.
+	 *
+	 * Marks the teardown *deliberate*, which suppresses the auto-reconnect loop
+	 * — a user-initiated disconnect must stay disconnected.
+	 */
 	disconnect(): void {
 		this.userDisconnected = true;
 		if (this.reconnecting && this.timelineLabel !== null) {
