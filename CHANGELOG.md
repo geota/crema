@@ -10,16 +10,20 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - **Firmware updates (alpha)** — Settings → Machine → "Update firmware…"
-  installs DE1 firmware from Crema. Pick Decent's Stable build (1333) or the
-  Nightly / early-access build (1358); Crema downloads it from Decent's own
-  update server and installs it only if it matches a copy it has verified
-  byte for byte. A click-through warning comes first. Updating takes about
-  15–25 minutes with the device charging and near the DE1, and ends with
+  installs DE1 firmware from Crema. It is alpha: it has not yet been tried
+  on a real DE1, and a click-through warning says so first. Pick Decent's
+  Stable build (1333) or the Nightly / early-access build (1358); Crema
+  downloads it from Decent's own update server and installs it only if it
+  matches a copy it has verified byte for byte. Updating takes about 15–25
+  minutes with the device charging and near the DE1, and ends with
   switching the DE1 off and on; Crema then reads the build back to confirm.
-  If anything fails or you cancel, the DE1 keeps its current firmware
-  (Crema only writes its spare memory bank) and you can retry. The steps
-  follow Decent's de1app and decaid and Decenza: sleep the machine, erase,
-  send 16-byte blocks one at a time, let the DE1 verify, power-cycle.
+  Until then, and while the DE1 erases or checks the new firmware, Crema
+  sends it nothing else (no settings, profile or sleep commands, also after
+  a reconnect). You can cancel, after a confirmation, until the DE1 starts
+  checking; the DE1 is then put to sleep and should keep its current
+  firmware, since Crema only writes its spare memory bank. A failure offers
+  Retry. The steps follow Decent's de1app and decaid: sleep the machine,
+  erase, send 16-byte blocks one at a time, let the DE1 verify, power-cycle.
   Classic DE1 models only (DE1PRO, XL, XXL, XXXL; no Bengle). On Android the
   update keeps running in the background; in the browser, keep the tab open
   and in front (and if the browser can't download Decent's file directly,
