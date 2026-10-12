@@ -109,8 +109,8 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   1352 · newer than stable", "older than stable", or "newer than Crema
   knows", with a short note naming Decent's builds. The 2023 build 1363,
   which Decent withdrew, reads as "withdrawn" instead of newer than 1358.
-  "Update firmware…" sits at the right of the card; on a phone it shares
-  the card's header row, so the card is a row shorter. Web, tablet and
+  "Update firmware…" sits at the bottom right of the card; on a phone it
+  shares the note's row, so the card is a row shorter. Web, tablet and
   phone (the phone hero gains the card).
 - **No more advice to get build 1358 from de1app's stable channel** — the
   web card used to say to, though de1app's stable and beta versions install

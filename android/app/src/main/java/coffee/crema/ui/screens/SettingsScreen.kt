@@ -1844,10 +1844,10 @@ internal fun cpuBoardLabel(info: Map<MmrRegister, UInt>): String {
 
 /** The firmware card's body — headline, what it means
  *  ([coffee.crema.ui.firmwareCardCopy]) and "Update firmware…" (the alpha
- *  flow; [onUpdate] null = not connected, or the caller places the button
- *  itself — the phone puts it in the card's header row). [pushActionDown] =
- *  the parent Column has a bounded height (the tablet card) and the button
- *  should sit at its bottom; it sits at the right edge either way.
+ *  flow; [onUpdate] null = not connected). [pushActionDown] = the parent
+ *  Column has a bounded height (the tablet card) and the button should sit at
+ *  its bottom; it sits at the bottom right either way. [inlineAction] = the
+ *  button shares the note's row (the phone, to keep the card short).
  *  [emphasize] = lead with the button (a flash is in progress). */
 @Composable
 internal fun ColumnScope.FirmwareCopyBody(
@@ -1855,9 +1855,24 @@ internal fun ColumnScope.FirmwareCopyBody(
     pushActionDown: Boolean = false,
     onUpdate: (() -> Unit)? = null,
     emphasize: Boolean = false,
+    inlineAction: Boolean = false,
 ) {
     if (copy == null) return
     Text(copy.title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+    if (inlineAction && onUpdate != null) {
+        // Phone: the note and the button share the last row, the button at the
+        // bottom right, so the card stays a row shorter.
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                copy.note,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            FirmwareUpdateButton(copy, onUpdate, emphasize)
+        }
+        return
+    }
     if (copy.note.isNotEmpty()) {
         Text(copy.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
