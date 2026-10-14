@@ -7,6 +7,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.8] — 2026-10-14
+
+New: update your DE1's firmware from Crema (alpha), on every classic DE1. Crema now puts the DE1 to sleep after an idle time you choose (Settings → Machine → Sleep after, default 30 min). Android has one simpler reconnect setting per device, with Forget. Fixes for Decent shot uploads and for DE1 and scale reconnects in the browser.
+
 ### Added
 
 - **Firmware updates (alpha)** — Settings → Machine → "Update firmware…"
@@ -802,3 +806,4 @@ shot state machine, and domain model.
 [0.0.1]: https://github.com/geota/crema/releases/tag/v0.0.1
 [0.0.6]: https://github.com/geota/crema/releases/tag/v0.0.6
 [0.0.7]: https://github.com/geota/crema/releases/tag/v0.0.7
+[0.0.8]: https://github.com/geota/crema/releases/tag/v0.0.8

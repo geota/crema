@@ -1,0 +1,1 @@
+New: update your DE1's firmware from Crema (alpha), on every classic DE1. Crema now puts the DE1 to sleep after an idle time you choose (Settings → Machine → Sleep after, default 30 min). Android has one simpler reconnect setting per device, with Forget. Fixes for Decent shot uploads and for DE1 and scale reconnects in the browser.
