@@ -1,7 +1,1 @@
-Brew Log for filter coffee: guided pour-overs with credited recipes, your own brew methods, and bean usage tracking.
-
-• Faster Bluetooth reconnects when you come back to the app
-• Upload shots to Decent's shot history
-• Visualizer bean & roaster sync on Android, plus catalogue search when adding beans
-• Filter archived beans; lists keep your place
-• Crash-safe saving, and many scale, profile and machine fixes
+New: update your DE1's firmware from Crema (alpha), on every classic DE1. Crema now puts the DE1 to sleep after an idle time you choose (Settings → Machine → Sleep after, default 30 min). Android has one simpler reconnect setting per device, with Forget. Fixes for Decent shot uploads and for DE1 and scale reconnects in the browser.
