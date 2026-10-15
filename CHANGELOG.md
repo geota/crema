@@ -7,6 +7,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.9] — 2026-10-15
+
+Fixes a crash on Android 14 and later when turning on "Keep connected in the background" while the DE1 was connected.
+
 ### Fixed
 
 - **Turning on "Keep connected in the background" could crash Crema
@@ -817,3 +821,4 @@ shot state machine, and domain model.
 [0.0.6]: https://github.com/geota/crema/releases/tag/v0.0.6
 [0.0.7]: https://github.com/geota/crema/releases/tag/v0.0.7
 [0.0.8]: https://github.com/geota/crema/releases/tag/v0.0.8
+[0.0.9]: https://github.com/geota/crema/releases/tag/v0.0.9
