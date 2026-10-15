@@ -60,6 +60,12 @@ class CompanionAssociator(
             onEnded("companion devices unavailable")
             return
         }
+        // ScanFilter throws on anything but a real MAC (e.g. the replay
+        // transport's "DE1:REPLAY"): end the setup instead of crashing.
+        if (!android.bluetooth.BluetoothAdapter.checkBluetoothAddress(address)) {
+            onEnded("not a Bluetooth address: $address")
+            return
+        }
         val filter = BluetoothLeDeviceFilter.Builder()
             .setScanFilter(ScanFilter.Builder().setDeviceAddress(address).build())
             .build()

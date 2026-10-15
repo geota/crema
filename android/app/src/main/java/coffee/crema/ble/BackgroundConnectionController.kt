@@ -141,6 +141,7 @@ class BackgroundConnectionController(private val context: Context) {
 
     private fun startService() {
         running = true
+        De1ConnectionService.wanted = true
         runCatching {
             ContextCompat.startForegroundService(
                 context,
@@ -149,12 +150,22 @@ class BackgroundConnectionController(private val context: Context) {
             )
         }.onFailure {
             running = false
+            De1ConnectionService.wanted = false
             Log.w(TAG, "could not start background-connection service", it)
         }
     }
 
+    /**
+     * Stop the keep-alive. A start still in flight (startForegroundService()
+     * called, startForeground() not yet) must not be stopped from here —
+     * Android 14+ kills the app for that (ForegroundServiceDidNotStartInTime).
+     * The service then stops itself right after going foreground, because
+     * [De1ConnectionService.wanted] is false.
+     */
     private fun stopService() {
         running = false
+        De1ConnectionService.wanted = false
+        if (!De1ConnectionService.inForeground) return
         runCatching { context.stopService(Intent(context, De1ConnectionService::class.java)) }
     }
 
