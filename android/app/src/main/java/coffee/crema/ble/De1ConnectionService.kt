@@ -50,11 +50,22 @@ class De1ConnectionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val firmware = intent?.getBooleanExtra(EXTRA_FIRMWARE, false) == true
+        // Always go foreground first: a service started with
+        // startForegroundService() that stops before calling startForeground()
+        // crashes the app on Android 14+ (ForegroundServiceDidNotStartInTime).
         startForeground(
             NOTIF_ID,
             buildNotification(firmware),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
         )
+        inForeground = true
+        // The controller may have changed its mind while this start was in
+        // flight (e.g. the DE1 link paused right after the setting turned on):
+        // it leaves the stop to us, now that the promise is kept.
+        if (!wanted) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         acquireWakeLock()
         // NOT sticky: if the OS reclaims us, the controller re-decides on the next
         // app launch rather than restarting a bare keep-alive on its own.
@@ -68,6 +79,7 @@ class De1ConnectionService : Service() {
     }
 
     override fun onDestroy() {
+        inForeground = false
         releaseWakeLock()
         super.onDestroy()
     }
@@ -125,6 +137,18 @@ class De1ConnectionService : Service() {
     }
 
     companion object {
+        /**
+         * Whether [BackgroundConnectionController] still wants the service.
+         * Main thread only (the controller and these callbacks both run there).
+         */
+        @Volatile
+        internal var wanted = false
+
+        /** The running service has called startForeground() — only then may
+         *  the controller stop it directly. */
+        @Volatile
+        internal var inForeground = false
+
         /** `true` while a firmware flash runs — switches the notification text. */
         const val EXTRA_FIRMWARE = "coffee.crema.extra.FIRMWARE"
         private const val TAG = "De1ConnectionService"
