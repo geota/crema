@@ -123,7 +123,19 @@
 			</h2>
 		</div>
 
-		{#if flow.step === 'warning'}
+		{#if flow.step === 'warning' && flow.unavailable}
+			<div class="fu-banner fu-banner-warn" role="alert">
+				<Icon cls="ph ph-warning-circle" aria-hidden="true" />
+				<span>{flow.unavailable}</span>
+			</div>
+			<div class="fu-actions">
+				<div class="fu-actions-left">
+					<button type="button" class="st-btn st-btn-secondary" onclick={() => flow.close()}>
+						Close
+					</button>
+				</div>
+			</div>
+		{:else if flow.step === 'warning'}
 			<div class="fu-banner fu-banner-warn" role="alert">
 				<Icon cls="ph ph-warning-circle" aria-hidden="true" />
 				<ul class="fu-points">

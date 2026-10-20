@@ -111,6 +111,59 @@ const RECONNECT_MAX_ATTEMPTS = 8;
 const RECONNECT_LURK_DELAY_MS = 60_000;
 
 /**
+ * In the lurk tier, where the browser can watch advertisements, a cycle that
+ * heard none skips its connect attempt — a device that isn't advertising is
+ * off, out of range or held by another central, and on iOS each blind
+ * `gatt.connect()` costs a 10 s timeout three times over. Every Nth quiet
+ * cycle still tries blind, in case advertisement delivery itself is broken.
+ */
+const LURK_BLIND_EVERY = 5;
+
+/** Dropped-notification reports are summed over this window, ms. */
+const OVERFLOW_REPORT_MS = 10_000;
+
+/**
+ * Longest one `gatt.connect()` may run. Web Bluetooth sets no limit and some
+ * platforms (Chrome on macOS / Windows) can leave a connect pending forever,
+ * which would hold the serial GATT queue — and the reconnect loop — with it.
+ */
+const GATT_CONNECT_TIMEOUT_MS = 20_000;
+
+/** Longest any other GATT operation (lookup, subscribe, read, write) may run. */
+const GATT_OP_TIMEOUT_MS = 10_000;
+
+/** Exported for tests. */
+export const GATT_TIMEOUTS = {
+	connectMs: GATT_CONNECT_TIMEOUT_MS,
+	operationMs: GATT_OP_TIMEOUT_MS
+} as const;
+
+/** A GATT operation that never settled within its time limit. */
+export class GattTimeoutError extends Error {
+	override name = 'GattTimeoutError';
+}
+
+/** `p`, or a {@link GattTimeoutError} once `ms` pass first. */
+function withGattTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(
+			() => reject(new GattTimeoutError(`${what} timed out after ${ms / 1000} s`)),
+			ms
+		);
+		p.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			(error: unknown) => {
+				clearTimeout(timer);
+				reject(error);
+			}
+		);
+	});
+}
+
+/**
  * Kicks closer together than this collapse into one (rapid tab switches, a
  * `visibilitychange` and a `pageshow` for the same return, a "Retry now" tap
  * right after). Android's `ReconnectKicker` uses the same window.
@@ -137,8 +190,24 @@ export function reconnectDelayMs(attempt: number): number {
 /** Exported for tests. */
 export const RECONNECT_LADDER = {
 	maxAttempts: RECONNECT_MAX_ATTEMPTS,
-	lurkDelayMs: RECONNECT_LURK_DELAY_MS
+	lurkDelayMs: RECONNECT_LURK_DELAY_MS,
+	lurkBlindEvery: LURK_BLIND_EVERY
 } as const;
+
+/** How a reconnect wait ended — see `BleDevice.waitOrKick`. */
+interface WaitOutcome {
+	/** The kick that cut the wait short, or null. */
+	readonly kickedBy: ReconnectTrigger | null;
+	/** An advertisement from the device ended the wait. */
+	readonly advertised: boolean;
+	/** The browser watched advertisements for the whole wait. */
+	readonly watched: boolean;
+}
+
+/** A GATT server with Beacio's one-round-trip connect + discover (iOS only). */
+type FastConnectServer = BluetoothRemoteGATTServer & {
+	connectAndDiscover?: (services: BluetoothServiceUUID[]) => Promise<unknown>;
+};
 
 /**
  * A strictly-serial async operation queue.
@@ -316,6 +385,46 @@ export class BleDevice implements De1Transport {
 
 	private readonly onReconnectedListeners = new Set<() => void>();
 
+	private readonly onAdvertisementListeners = new Set<(rssi: number | null) => void>();
+
+	private readonly onOverflowListeners = new Set<
+		(characteristic: string, evicted: number) => void
+	>();
+
+	/**
+	 * Safari (via Beacio) drops notifications under sustained load and says so
+	 * with a `beacio:overflow` event on the characteristic. Surfaced, not
+	 * recovered: the DE1 and scale streams are state snapshots, so the next
+	 * notification resynchronises.
+	 */
+	private readonly onOverflow = (event: Event): void => {
+		const target = event.target as BluetoothRemoteGATTCharacteristic;
+		const detail = (event as CustomEvent<{ evictedCount?: number } | null>).detail;
+		const evicted = typeof detail?.evictedCount === 'number' ? detail.evictedCount : 1;
+		const uuid = target.uuid.toLowerCase();
+		this.droppedSinceReport.set(uuid, (this.droppedSinceReport.get(uuid) ?? 0) + evicted);
+		// Report the first drop at once, then at most one summed report per
+		// window, so a sustained overload can't flood the event log.
+		if (this.overflowTimer !== null) return;
+		this.reportDropped();
+		this.overflowTimer = setTimeout(() => {
+			this.overflowTimer = null;
+			this.reportDropped();
+		}, OVERFLOW_REPORT_MS);
+	};
+
+	/** Notifications dropped since the last report, by characteristic. */
+	private readonly droppedSinceReport = new Map<string, number>();
+
+	private overflowTimer: ReturnType<typeof setTimeout> | null = null;
+
+	private reportDropped(): void {
+		for (const [uuid, evicted] of this.droppedSinceReport) {
+			this.onOverflowListeners.forEach((l) => l(uuid, evicted));
+		}
+		this.droppedSinceReport.clear();
+	}
+
 	constructor(
 		/** The underlying Web Bluetooth device. */
 		readonly device: BluetoothDevice,
@@ -385,6 +494,19 @@ export class BleDevice implements De1Transport {
 	 */
 	onReconnected(listener: () => void): void {
 		this.onReconnectedListeners.add(listener);
+	}
+
+	/**
+	 * Register a callback for each advertisement the reconnect loop hears while
+	 * watching for this device, with its RSSI (dBm, or null).
+	 */
+	onAdvertisement(listener: (rssi: number | null) => void): void {
+		this.onAdvertisementListeners.add(listener);
+	}
+
+	/** Register a callback for notifications the browser dropped (Safari / Beacio). */
+	onNotificationOverflow(listener: (characteristic: string, evicted: number) => void): void {
+		this.onOverflowListeners.add(listener);
 	}
 
 	/**
@@ -467,9 +589,9 @@ export class BleDevice implements De1Transport {
 	 * The raw queued `gatt.connect()` — used by both {@link connectGatt} and
 	 * the reconnect loop, so it does not touch {@link connectionState} itself.
 	 */
-	private connectGattRaw(): Promise<void> {
+	private connectGattRaw(services: readonly string[] = []): Promise<void> {
 		return this.gattQueue.enqueue(async () => {
-			const gatt = this.device.gatt;
+			const gatt = this.device.gatt as FastConnectServer | undefined;
 			if (gatt === undefined) {
 				throw new Error('Device exposes no GATT server');
 			}
@@ -492,9 +614,24 @@ export class BleDevice implements De1Transport {
 				// shared link (audit r10 L-1).
 				this.assertLive();
 				try {
-					await gatt.connect();
+					// Beacio's iOS bridge can connect and discover the services we
+					// will replay in one round-trip through the extension, instead
+					// of a connect then a lookup per service.
+					const connecting =
+						services.length > 0 && typeof gatt.connectAndDiscover === 'function'
+							? gatt.connectAndDiscover([...services])
+							: gatt.connect();
+					await withGattTimeout(connecting, GATT_CONNECT_TIMEOUT_MS, 'GATT connect');
 					return;
 				} catch (error) {
+					if (error instanceof GattTimeoutError) {
+						// Abandon the hung connect (Chromium cancels a pending
+						// connect on `disconnect()`). No quick retry: those are for
+						// the flaky-but-fast failures; the reconnect loop's backoff
+						// takes it from here.
+						gatt.disconnect();
+						throw error;
+					}
 					lastError = error;
 					if (attempt < attempts) {
 						await new Promise((resolve) => setTimeout(resolve, backoffMs));
@@ -514,10 +651,30 @@ export class BleDevice implements De1Transport {
 		serviceUuid: string,
 		characteristicUuid: string
 	): Promise<BluetoothRemoteGATTCharacteristic> {
-		return this.gattQueue.enqueue(() => {
-			this.assertLive();
-			return this.resolveCharacteristic(serviceUuid, characteristicUuid);
-		});
+		return this.gattQueue.enqueue(() =>
+			this.bounded('characteristic lookup', () => {
+				this.assertLive();
+				return this.resolveCharacteristic(serviceUuid, characteristicUuid);
+			})
+		);
+	}
+
+	/**
+	 * Run one GATT operation under {@link GATT_OP_TIMEOUT_MS}, timed from when
+	 * it starts (inside the queue), not when it was queued. An operation that
+	 * never settles means the link is wedged: drop it, which frees the queue
+	 * and hands recovery to the reconnect loop like any other drop.
+	 */
+	private async bounded<T>(what: string, operation: () => Promise<T>): Promise<T> {
+		try {
+			return await withGattTimeout(operation(), GATT_OP_TIMEOUT_MS, what);
+		} catch (error) {
+			if (error instanceof GattTimeoutError) {
+				const gatt = this.device.gatt;
+				if (gatt?.connected) gatt.disconnect();
+			}
+			throw error;
+		}
 	}
 
 	/**
@@ -549,10 +706,12 @@ export class BleDevice implements De1Transport {
 	 * runs as one queued GATT step.
 	 */
 	async startNotifications(serviceUuid: string, characteristicUuid: string): Promise<void> {
-		await this.gattQueue.enqueue(() => {
-			this.assertLive();
-			return this.subscribeRaw(serviceUuid, characteristicUuid);
-		});
+		await this.gattQueue.enqueue(() =>
+			this.bounded('subscribe', () => {
+				this.assertLive();
+				return this.subscribeRaw(serviceUuid, characteristicUuid);
+			})
+		);
 		// Record only after a successful subscribe, so a failed attempt is not
 		// replayed on reconnect. Keyed by characteristic UUID — de-duplicated.
 		this.subscriptions.set(characteristicUuid.toLowerCase(), {
@@ -575,6 +734,7 @@ export class BleDevice implements De1Transport {
 		// packet would be delivered twice.
 		if (!this.listenerAttached.has(characteristic)) {
 			characteristic.addEventListener('characteristicvaluechanged', this.onValueChanged);
+			characteristic.addEventListener('beacio:overflow', this.onOverflow);
 			this.listenerAttached.add(characteristic);
 		}
 		await characteristic.startNotifications();
@@ -594,7 +754,7 @@ export class BleDevice implements De1Transport {
 		data: Uint8Array,
 		withResponse = true
 	): Promise<void> {
-		return this.gattQueue.enqueue(async () => {
+		return this.gattQueue.enqueue(() => this.bounded('write', async () => {
 			this.assertLive();
 			let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
 			if (characteristic === undefined) {
@@ -613,7 +773,7 @@ export class BleDevice implements De1Transport {
 			} else {
 				await characteristic.writeValueWithoutResponse(buffer);
 			}
-		});
+		}));
 	}
 
 	/**
@@ -625,7 +785,7 @@ export class BleDevice implements De1Transport {
 	 * with a notification subscribe, a write, or a reconnect.
 	 */
 	readCharacteristic(serviceUuid: string, characteristicUuid: string): Promise<Uint8Array> {
-		return this.gattQueue.enqueue(async () => {
+		return this.gattQueue.enqueue(() => this.bounded('read', async () => {
 			this.assertLive();
 			let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
 			if (characteristic === undefined) {
@@ -636,7 +796,7 @@ export class BleDevice implements De1Transport {
 			}
 			const view = await characteristic.readValue();
 			return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
-		});
+		}));
 	}
 
 	/**
@@ -678,6 +838,8 @@ export class BleDevice implements De1Transport {
 		// with a replacement on the same device) feeds nothing more (audit r11
 		// L-1).
 		this.sink = null;
+		if (this.overflowTimer !== null) clearTimeout(this.overflowTimer);
+		this.overflowTimer = null;
 		this.connectionState = 'disconnected';
 		this.notifyStateChanged();
 	}
@@ -711,6 +873,8 @@ export class BleDevice implements De1Transport {
 		// the link was lost) — a kick before the first backoff ends must not
 		// skip that.
 		let announced = false;
+		// Lurk cycles in a row that watched for the device and heard nothing.
+		let quietCycles = 0;
 		while (true) {
 			// A deliberate disconnect during the wait aborts the loop.
 			if (this.userDisconnected) {
@@ -729,15 +893,26 @@ export class BleDevice implements De1Transport {
 			// The wait is interruptible: a kick (the tab coming back into view,
 			// "Retry now") ends it early — attempt now, then 500 ms, 1 s, … —
 			// instead of sitting out a lurk timer Chrome throttles in hidden tabs.
-			const kickedBy = await this.waitOrKick(reconnectDelayMs(attempt));
+			// In the lurk tier it also listens for the device's advertisements:
+			// one ends the wait at once (the machine was switched back on).
+			const waited = await this.waitOrKick(reconnectDelayMs(attempt), lurking);
 			if (this.userDisconnected) {
 				this.reconnecting = false;
 				return;
 			}
+			const kickedBy = waited.kickedBy;
 			if (kickedBy !== null) {
 				attempt = 0;
+				quietCycles = 0;
 				lurking = true; // a kicked attempt isn't a numbered burst step
 				if (label !== null) this.timeline.begin(label, kickedBy);
+			} else if (waited.advertised) {
+				quietCycles = 0;
+			} else if (lurking && waited.watched) {
+				// A whole lurk cycle without hearing the device: don't spend a
+				// blind connect on it, except every LURK_BLIND_EVERY-th time.
+				quietCycles += 1;
+				if (quietCycles % LURK_BLIND_EVERY !== 0) continue;
 			}
 			if (!lurking) {
 				this.notifyReconnectAttempt(attempt);
@@ -780,21 +955,51 @@ export class BleDevice implements De1Transport {
 	}
 
 	/**
-	 * Wait `ms`, or less if {@link kick} cuts it short. Resolves with the
-	 * kick's trigger, or `null` when the wait simply elapsed.
+	 * Wait `ms`, or less if {@link kick} cuts it short — or, with
+	 * `watchAdverts` where the browser supports `watchAdvertisements()`, as soon
+	 * as the device advertises. `watched` is true only when the browser was
+	 * still watching at the end (it stops when the page is hidden), so a quiet
+	 * cycle it didn't watch through still gets its blind attempt.
 	 */
-	private async waitOrKick(ms: number): Promise<ReconnectTrigger | null> {
+	private async waitOrKick(ms: number, watchAdverts = false): Promise<WaitOutcome> {
 		const abort = new AbortController();
 		this.waitAbort = abort;
 		this.kickTrigger = null;
+		const stopWatch = new AbortController();
+		let advertised = false;
+		let watching = false;
+		const onAdvert = (event: Event): void => {
+			const rssi = (event as Event & { rssi?: number | null }).rssi;
+			this.onAdvertisementListeners.forEach((l) => l(typeof rssi === 'number' ? rssi : null));
+			if (abort.signal.aborted) return;
+			advertised = true;
+			abort.abort();
+		};
+		const device = this.device;
+		const listening = watchAdverts && typeof device.watchAdvertisements === 'function';
+		if (listening) {
+			device.addEventListener('advertisementreceived', onAdvert);
+			try {
+				await device.watchAdvertisements({ signal: stopWatch.signal });
+				watching = true;
+			} catch {
+				// Not permitted or not supported here: a plain timed wait.
+			}
+		}
+		let watched = false;
 		try {
 			await abortableSleep(ms, abort.signal);
 		} finally {
 			this.waitAbort = null;
+			watched = watching && device.watchingAdvertisements !== false;
+			if (listening) {
+				stopWatch.abort();
+				device.removeEventListener('advertisementreceived', onAdvert);
+			}
 		}
-		const trigger = abort.signal.aborted ? this.kickTrigger : null;
+		const kickedBy = abort.signal.aborted && !advertised ? this.kickTrigger : null;
 		this.kickTrigger = null;
-		return trigger;
+		return { kickedBy, advertised, watched };
 	}
 
 	/**
@@ -808,7 +1013,8 @@ export class BleDevice implements De1Transport {
 	private async reconnectAndReplay(): Promise<void> {
 		const label = this.timelineLabel;
 		if (label !== null) this.timeline.mark(label, 'gatt');
-		await this.connectGattRaw();
+		const services = new Set([...this.subscriptions.values()].map((s) => s.serviceUuid));
+		await this.connectGattRaw([...services]);
 		// The cached characteristics belong to the dead GATT session.
 		this.characteristics.clear();
 		// Web Bluetooth discovers services lazily, so resolving + subscribing
@@ -818,7 +1024,9 @@ export class BleDevice implements De1Transport {
 		// so they never overlap.
 		for (const sub of this.subscriptions.values()) {
 			await this.gattQueue.enqueue(() =>
-				this.subscribeRaw(sub.serviceUuid, sub.characteristicUuid)
+				this.bounded('resubscribe', () =>
+					this.subscribeRaw(sub.serviceUuid, sub.characteristicUuid)
+				)
 			);
 		}
 	}
@@ -858,6 +1066,28 @@ export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 		}
 		signal.addEventListener('abort', done, { once: true });
 	});
+}
+
+/** `0000a00d-0000-1000-8000-00805f9b34fb` → `A00D`, for log lines. */
+export function shortUuid(uuid: string): string {
+	return /^0000[0-9a-f]{4}-0000-1000-8000-00805f9b34fb$/i.test(uuid)
+		? uuid.slice(4, 8).toUpperCase()
+		: uuid;
+}
+
+/**
+ * Whether `requestDevice()` rejected because the user dismissed the chooser
+ * (Chrome: `NotFoundError` "User cancelled the requestDevice() chooser.") —
+ * a choice, not a failure. Other `NotFoundError`s (no adapter, Bluetooth off)
+ * stay failures.
+ */
+export function isChooserCancelled(error: unknown): boolean {
+	const e = error as { name?: unknown; message?: unknown } | null;
+	return (
+		(e?.name === 'NotFoundError' || e?.name === 'AbortError') &&
+		typeof e.message === 'string' &&
+		/cancel/i.test(e.message)
+	);
 }
 
 /** `true` when the running browser exposes the Web Bluetooth API. */

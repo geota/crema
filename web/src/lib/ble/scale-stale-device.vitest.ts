@@ -41,7 +41,9 @@ function fakeScale(id = 'scale-A') {
 		setReconnectTimeline: () => undefined,
 		onDisconnected: (l: () => void) => (cbs.disconnected = l),
 		onReconnectAttempt: (l: (n: number) => void) => (cbs.attempt = l),
-		onReconnected: (l: () => void) => (cbs.reconnected = l)
+		onReconnected: (l: () => void) => (cbs.reconnected = l),
+		onAdvertisement: () => undefined,
+		onNotificationOverflow: () => undefined
 	};
 	return { device: device as unknown as BleDevice, cbs, disconnect: device.disconnect };
 }

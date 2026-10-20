@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	LAST_DEVICES_KEY,
 	LaunchReconnect,
+	forgetDevice,
 	markUserDisconnect,
 	readLastDevices,
 	rememberDevice,
@@ -234,13 +235,41 @@ describe('CremaApp wiring', () => {
 		rememberDevice('de1', { id: 'de1-id', name: 'DE1' });
 		const { app, spies } = await makeApp();
 		const de1 = fakeDevice('de1-id', 'DE1', true);
-		const pending = app.reconnectLastOnLaunch(fakeBluetooth([de1]));
-		await vi.waitFor(() => expect(de1.watchAdvertisements).toHaveBeenCalled());
+		const bluetooth = fakeBluetooth([de1]);
+		// Connect checks the browser has Web Bluetooth before opening the chooser.
+		Object.defineProperty(navigator, 'bluetooth', { value: bluetooth, configurable: true });
+		try {
+			const pending = app.reconnectLastOnLaunch(bluetooth);
+			await vi.waitFor(() => expect(de1.watchAdvertisements).toHaveBeenCalled());
+			await app.connectDe1();
+			await pending;
+			advertise(de1);
+			expect(spies.de1Connect).toHaveBeenCalledOnce();
+			expect(spies.de1Known).not.toHaveBeenCalled();
+		} finally {
+			Reflect.deleteProperty(navigator, 'bluetooth');
+		}
+	});
+
+	it('Connect without Web Bluetooth is refused before the chooser', async () => {
+		const { app, spies } = await makeApp();
 		await app.connectDe1();
-		await pending;
+		await app.connectScale();
+		expect(spies.de1Connect).not.toHaveBeenCalled();
+	});
+
+	it('a re-run replaces a pending wait (the page came back into view)', async () => {
+		rememberDevice('de1', { id: 'de1-id', name: 'DE1' });
+		const { app, spies } = await makeApp();
+		const de1 = fakeDevice('de1-id', 'DE1', true);
+		const first = app.reconnectLastOnLaunch(fakeBluetooth([de1]));
+		await vi.waitFor(() => expect(de1.watchAdvertisements).toHaveBeenCalledOnce());
+		const second = app.reconnectLastOnLaunch(fakeBluetooth([de1]));
+		await first;
+		await vi.waitFor(() => expect(de1.watchAdvertisements).toHaveBeenCalledTimes(2));
 		advertise(de1);
-		expect(spies.de1Connect).toHaveBeenCalledOnce();
-		expect(spies.de1Known).not.toHaveBeenCalled();
+		await second;
+		expect(spies.de1Known).toHaveBeenCalledOnce();
 	});
 
 	it('is a no-op without getDevices', async () => {
@@ -249,5 +278,35 @@ describe('CremaApp wiring', () => {
 		await app.reconnectLastOnLaunch(undefined);
 		await app.reconnectLastOnLaunch({} as Bluetooth);
 		expect(spies.de1Known).not.toHaveBeenCalled();
+	});
+});
+
+describe('forgetDevice', () => {
+	it('drops the memory and revokes the live device', async () => {
+		rememberDevice('de1', { id: 'de1-id', name: 'DE1' });
+		const live = Object.assign(fakeDevice('de1-id', 'DE1'), { forget: vi.fn(async () => {}) });
+		expect(await forgetDevice('de1', live as unknown as BluetoothDevice, undefined)).toBe(true);
+		expect(live.forget).toHaveBeenCalledOnce();
+		expect(readLastDevices().de1).toBeNull();
+	});
+
+	it('finds a disconnected device by its remembered id', async () => {
+		rememberDevice('scale', { id: 'sc-id', name: 'BOOKOO_SC' });
+		const other = Object.assign(fakeDevice('x', 'BOOKOO_SC'), { forget: vi.fn(async () => {}) });
+		const mine = Object.assign(fakeDevice('sc-id', 'BOOKOO_SC'), { forget: vi.fn(async () => {}) });
+		const bluetooth = {
+			getDevices: vi.fn(async () => [other, mine])
+		} as unknown as Bluetooth;
+		expect(await forgetDevice('scale', null, bluetooth)).toBe(true);
+		expect(mine.forget).toHaveBeenCalledOnce();
+		expect(other.forget).not.toHaveBeenCalled();
+	});
+
+	it('still forgets the memory where the browser has no forget()', async () => {
+		rememberDevice('de1', { id: 'de1-id', name: 'DE1' });
+		expect(
+			await forgetDevice('de1', fakeDevice('de1-id', 'DE1') as unknown as BluetoothDevice, undefined)
+		).toBe(false);
+		expect(readLastDevices().de1).toBeNull();
 	});
 });

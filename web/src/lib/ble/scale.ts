@@ -29,7 +29,14 @@ import { describeError } from '$lib/utils/error';
 import type { AppRuntime } from '$lib/effect/runtime';
 import { scaleConnectProgram } from '$lib/services/scale-orchestrator';
 import type { BleConnectionState } from './connection-state';
-import { BleDevice, requestDevice, type ConnState, type KickResult } from './transport';
+import {
+	BleDevice,
+	isChooserCancelled,
+	requestDevice,
+	shortUuid,
+	type ConnState,
+	type KickResult
+} from './transport';
 import type { ReconnectTrigger } from './reconnect-timeline';
 import { scaleScanUuids } from '$lib/wasm/de1_wasm';
 
@@ -139,6 +146,12 @@ export class ScaleManager {
 		} catch (error) {
 			// The previous device was already dropped above; whatever is current
 			// now (nothing, or a connect that raced this chooser) is left alone.
+			if (isChooserCancelled(error)) {
+				// Dismissing the chooser is a choice, not a failed connection.
+				this.callbacks.onState('idle');
+				this.callbacks.onStatus('Scale chooser closed — not connected');
+				return;
+			}
 			this.callbacks.onState('failed');
 			this.callbacks.onStatus(`Scale connection failed: ${describeError(error)}`);
 			return;
@@ -155,6 +168,11 @@ export class ScaleManager {
 		this.dropDevice();
 		this.callbacks.onStatus(`Reconnecting to the last scale (${known.name ?? known.id})…`);
 		await this.attach(new BleDevice(known));
+	}
+
+	/** The current scale's Web Bluetooth device (for `forget()`), or null. */
+	bluetoothDevice(): BluetoothDevice | null {
+		return this.device?.device ?? null;
 	}
 
 	/** The connected (or connecting) scale's browser id + advertised name, or null. */
@@ -200,6 +218,18 @@ export class ScaleManager {
 			if (!current()) return;
 			this.callbacks.onState('reconnecting');
 			this.callbacks.onStatus(`Reconnecting to scale… (attempt ${attempt})`);
+		});
+		device.onAdvertisement((rssi) => {
+			if (!current()) return;
+			this.callbacks.onStatus(
+				`Scale is advertising${rssi === null ? '' : ` (${rssi} dBm)`} — reconnecting`
+			);
+		});
+		device.onNotificationOverflow((characteristic, evicted) => {
+			if (!current()) return;
+			this.callbacks.onStatus(
+				`Scale: the browser dropped ${evicted} notification${evicted === 1 ? '' : 's'} (${shortUuid(characteristic)})`
+			);
 		});
 		device.onReconnected(() => {
 			if (!current()) return;

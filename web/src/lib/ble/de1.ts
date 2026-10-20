@@ -31,7 +31,14 @@ import type { AppRuntime } from '$lib/effect/runtime';
 import { de1ConnectProgram } from '$lib/services/de1-orchestrator';
 import type { BleConnectionState } from './connection-state';
 import { De1Uuids } from './de1-uuids';
-import { BleDevice, requestDevice, type ConnState, type KickResult } from './transport';
+import {
+	BleDevice,
+	isChooserCancelled,
+	requestDevice,
+	shortUuid,
+	type ConnState,
+	type KickResult
+} from './transport';
 import type { ReconnectTrigger } from './reconnect-timeline';
 import type { De1Transport } from './de1-transport';
 
@@ -88,6 +95,12 @@ export interface De1Diagnostics {
 	 * `null` before the first one — drives the "data is flowing" indicator.
 	 */
 	readonly lastNotificationAtMs: number | null;
+	/**
+	 * Signal strength (dBm) of the DE1's last advertisement heard while
+	 * reconnecting, or `null`. A connected DE1 doesn't advertise, so this is
+	 * only refreshed while the link is down.
+	 */
+	readonly rssi: number | null;
 }
 
 /** The pre-connect / disconnected diagnostics snapshot. */
@@ -96,7 +109,8 @@ export const EMPTY_DE1_DIAGNOSTICS: De1Diagnostics = {
 	deviceId: null,
 	gattVerified: false,
 	notificationCount: 0,
-	lastNotificationAtMs: null
+	lastNotificationAtMs: null,
+	rssi: null
 };
 
 /** Callbacks the manager reports up to the orchestrator. */
@@ -210,6 +224,12 @@ export class De1Manager {
 			});
 		} catch (error) {
 			this.device = null;
+			if (isChooserCancelled(error)) {
+				// Dismissing the chooser is a choice, not a failed connection.
+				this.callbacks.onState('idle');
+				this.callbacks.onStatus('DE1 chooser closed — not connected');
+				return;
+			}
 			this.callbacks.onState('failed');
 			this.callbacks.onStatus(
 				`DE1 connection failed at "device chooser": ${describeError(error)}`
@@ -231,6 +251,11 @@ export class De1Manager {
 		this.notificationCounts = freshCounts();
 		this.callbacks.onStatus(`Reconnecting to the last DE1 (${known.name ?? known.id})…`);
 		await this.attach(new BleDevice(known));
+	}
+
+	/** The current DE1's Web Bluetooth device (for `forget()`), or null. */
+	bluetoothDevice(): BluetoothDevice | null {
+		return this.device instanceof BleDevice ? this.device.device : null;
 	}
 
 	/** The connected (or connecting) DE1's browser id + advertised name, or null. */
@@ -273,6 +298,19 @@ export class De1Manager {
 			}
 			this.callbacks.onState('reconnecting');
 			this.callbacks.onStatus(`Reconnecting to DE1… (attempt ${attempt})`);
+		});
+		device.onAdvertisement?.((rssi) => {
+			if (this.device !== device) return;
+			this.patchDiagnostics({ rssi });
+			this.callbacks.onStatus(
+				`DE1 is advertising${rssi === null ? '' : ` (${rssi} dBm)`} — reconnecting`
+			);
+		});
+		device.onNotificationOverflow?.((characteristic, evicted) => {
+			if (this.device !== device) return;
+			this.callbacks.onStatus(
+				`DE1: the browser dropped ${evicted} notification${evicted === 1 ? '' : 's'} (${shortUuid(characteristic)})`
+			);
 		});
 		device.onReconnected(() => {
 			if (this.device !== device) return;
