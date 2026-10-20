@@ -53,6 +53,7 @@ import coffee.crema.firmware.FlowStep
 import coffee.crema.firmware.PowerCycleLinkAction
 import coffee.crema.firmware.STILL_SAFE
 import coffee.crema.firmware.UNCONFIRMED
+import coffee.crema.firmware.VERIFY_OFFLINE
 import coffee.crema.firmware.blockerText
 import coffee.crema.firmware.cancelQuestion
 import coffee.crema.firmware.channelLabel
@@ -319,6 +320,8 @@ private fun ColumnScope.FlashStep(ui: FirmwareFlowUi, flow: FirmwareUpdateContro
             }
             if (ui.confirmingCancel) {
                 Banner(cancelQuestion(installed))
+            } else if (s.phase == FlashPhase.Verifying && !s.linkUp) {
+                Banner(VERIFY_OFFLINE)
             } else {
                 Banner("Keep Crema open, this device charging and the DE1 nearby.", warn = false)
             }
