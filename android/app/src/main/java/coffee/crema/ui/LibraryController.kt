@@ -1934,6 +1934,8 @@ class LibraryController(
             machineSerial = machine?.serialNumber,
             machineFirmware = machine?.firmwareVersion,
             machineModel = machine?.model,
+            // The Settings default barista (dye2 audit #1), editable later.
+            barista = s.baristaName.trim().ifEmpty { null },
         )
         // Aborted-shot auto-discard (Decenza abortedshotclassifier.h:19-25,
         // validated over 882 shots): under 10 s of flow AND under 5 g in the
@@ -2044,6 +2046,7 @@ class LibraryController(
             waterG = input.waterG,
             brewTempC = input.brewTempC,
             brewSeries = input.brewSeries?.let { coffee.crema.history.downsampleBrewSeries(it) },
+            barista = uiState().baristaName.trim().ifEmpty { null },
             // No machine stamp (issue #10): a logged brew involves no DE1, so
             // machineSerial / Firmware / Model stay null — the #84 record-time
             // stamp belongs to the live-shot path only.
@@ -2157,6 +2160,32 @@ class LibraryController(
         }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
+    }
+
+    /**
+     * Set (or with null / blank, clear) who made (`"barista"`) or drank
+     * (`"drinker"`) a shot. Persisted. The barista mirrors to Visualizer
+     * (its `barista` field); both re-send the Decent copy, whose workflow
+     * context carries them.
+     */
+    fun setShotPerson(id: String, field: String, name: String?) {
+        val value = name?.trim()?.takeIf { it.isNotEmpty() }
+        updateUi { st ->
+            st.copy(
+                history = st.history.map {
+                    when {
+                        it.id != id -> it
+                        field == "barista" -> it.copy(barista = value)
+                        field == "drinker" -> it.copy(drinker = value)
+                        else -> it
+                    }
+                },
+            )
+        }
+        val snapshot = uiState().history
+        scope.launch { historyStore.save(snapshot) }
+        if (field == "barista") schedulePatchEdited(id)
+        onShotAnnotationsEdited(id)
     }
 
     /**

@@ -123,6 +123,17 @@ pub fn decent_shot_record(shot: &StoredShot, machine: &ShotMachine, app_version:
         "coffeeRoaster",
         bean.and_then(|b| b.roaster_name.as_deref()),
     );
+    // decaid's WorkflowContext person fields.
+    put_str(
+        &mut context,
+        "baristaName",
+        meta.barista.as_deref().map(str::trim),
+    );
+    put_str(
+        &mut context,
+        "drinkerName",
+        meta.drinker.as_deref().map(str::trim),
+    );
     let mut extras = Map::new();
     put_str(
         &mut extras,
@@ -652,6 +663,24 @@ mod tests {
         let ctx = &rec["workflow"]["context"];
         assert_eq!(ctx["grinderModel"], "EG-1");
         assert_eq!(ctx["grinderSetting"], "6.5");
+    }
+
+    #[test]
+    fn carries_barista_and_drinker_in_the_workflow_context() {
+        let mut s = shot();
+        s.metadata.barista = Some(" Ana ".to_owned());
+        s.metadata.drinker = Some("Ben".to_owned());
+        let rec = decent_shot_record(&s, &machine(), "x");
+        let ctx = &rec["workflow"]["context"];
+        assert_eq!(ctx["baristaName"], "Ana");
+        assert_eq!(ctx["drinkerName"], "Ben");
+
+        s.metadata.barista = Some("  ".to_owned());
+        s.metadata.drinker = None;
+        let rec = decent_shot_record(&s, &machine(), "x");
+        let ctx = &rec["workflow"]["context"];
+        assert!(ctx.get("baristaName").is_none());
+        assert!(ctx.get("drinkerName").is_none());
     }
 
     #[test]

@@ -20,6 +20,7 @@
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	import { getBeanStore, type Roaster } from '$lib/bean';
+	import { getSettingsStore } from '$lib/settings';
 	import { openingBeanId } from '$lib/brew/bean-pick';
 	import {
 		INLINE_PRESET_COUNT,
@@ -259,7 +260,8 @@
 			notes: notes.trim() ? notes.trim() : null,
 			nextPlan: nextPlan.trim() ? nextPlan.trim() : null,
 			recipeName: seed?.recipeName ?? null,
-			brewSeries: seed?.brewSeries ?? null
+			brewSeries: seed?.brewSeries ?? null,
+			barista: getSettingsStore().current.baristaName?.trim() || null
 		});
 		if (bean && dose > 0) {
 			const emptied = library.debitBean(bean.id, dose);

@@ -206,6 +206,10 @@ export interface RustShotMetadata {
 	extractionYield: number | null;
 	/** Water in, grams — the pour total for filter/immersion brews. */
 	waterG?: number | null;
+	/** Who made the shot (de1app `my_name`). Absent when unset. */
+	barista?: string | null;
+	/** Who drank it (de1app `drinker_name`). Absent when unset. */
+	drinker?: string | null;
 }
 
 /**

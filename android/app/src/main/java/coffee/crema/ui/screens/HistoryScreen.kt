@@ -64,6 +64,11 @@ import coffee.crema.ui.compare.RowCheck
 import coffee.crema.ui.compare.TabletCompareBar
 import coffee.crema.ui.compare.rememberCompareSelection
 import coffee.crema.history.filterAndSortShots
+import coffee.crema.ui.components.ShotPeopleFields
+import coffee.crema.history.beanFilterOptions
+import coffee.crema.history.liveCoffeeLookup
+import coffee.crema.history.recentNames
+import coffee.crema.history.shotCoffee
 import coffee.crema.beans.roastBand
 import coffee.crema.core.daysOffRoast as coreDaysOffRoast
 import coffee.crema.ui.freshnessColor
@@ -225,7 +230,13 @@ fun HistoryScreen(
     // Client-side search + time-range filter + sort over the shot log. The stat
     // strip is scoped to the same filtered set (issue 48) — it reflects what the
     // current filter / range shows, not all-time.
-    val shots = filterAndSortShots(ui.history, query, range, profileFilter, sort, sortDesc, System.currentTimeMillis(), beanFilter, methodFilter)
+    // Bean filter: a coffee (every bag of it) or, from the bean detail's deep
+    // link, one bag. The coffee resolves through the live library.
+    val liveCoffee = remember(ui.beans, ui.roasters) { liveCoffeeLookup(ui.beans, ui.roasters) }
+    val shots = filterAndSortShots(
+        ui.history, query, range, profileFilter, sort, sortDesc, System.currentTimeMillis(), beanFilter, methodFilter,
+        coffeeOf = { shotCoffee(it, liveCoffee)?.key },
+    )
     // Default the detail to the newest (top) shot until the user picks one.
     val selected = shots.firstOrNull { it.id == selectedId } ?: shots.firstOrNull()
 
@@ -400,24 +411,19 @@ fun HistoryScreen(
                     }
                 }
                 val controls: @Composable () -> Unit = {
-                    // Bean — a split dropdown scoping the log to one bag (the
-                    // bag as a unit of history, bean-workflow-unify §B). Only
-                    // bags that actually have shots, ordered by shot count;
-                    // labels prefer the live library name over the snapshot's.
+                    // Bean — a split dropdown scoping the log to one coffee:
+                    // every bag of it (roaster + name, [beanFilterOptions]).
+                    // Only coffees with shots, most shots first; the bean
+                    // detail's "See all N shots" deep link adds a leading
+                    // "This bag" entry, and picking its coffee widens to all bags.
                     run {
-                        val byBean = ui.history.mapNotNull { it.bean?.beanId }
-                            .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
-                        if (byBean.isNotEmpty()) {
+                        val beanOptions = beanFilterOptions(ui.history, liveCoffee, beanFilter)
+                        if (beanOptions.isNotEmpty()) {
                             CremaFilterDropdown(
                                 icon = "coffee-bean",
                                 keys = buildList {
                                     add(SortKey("all", "All beans"))
-                                    byBean.forEach { (bid, _) ->
-                                        val label = ui.beans.firstOrNull { it.id == bid }?.name
-                                            ?: ui.history.firstOrNull { it.bean?.beanId == bid }?.beanLabel
-                                            ?: "Unnamed bag"
-                                        add(SortKey(bid, label))
-                                    }
+                                    beanOptions.forEach { add(SortKey(it.key, it.label)) }
                                 },
                                 selectedKey = beanFilter ?: "all",
                                 onKeyChange = { beanFilter = if (it == "all") null else it },
@@ -549,6 +555,9 @@ fun HistoryScreen(
                             pressureUnit = ui.pressureUnit,
                             onRate = { r, n -> vm.updateShot(selected.id, r, n) },
                             onNextPlanChange = { p -> vm.setShotNextPlan(selected.id, p) },
+                            baristaNames = recentNames(ui.history, "barista"),
+                            drinkerNames = recentNames(ui.history, "drinker"),
+                            onPersonChange = { field, name -> vm.setShotPerson(selected.id, field, name) },
                             onStartFromShot = { vm.startFromShot(selected.id) },
                             onLoadOnBrew = { vm.loadProfileOnBrew(selected.profileName) },
                             onExport = { vm.exportShot(selected.id) },
@@ -895,6 +904,11 @@ private fun ShotDetail(
     onBeanChange: (String?) -> Unit = {},
     /** Edit the forward-looking "next time" plan (local-only). */
     onNextPlanChange: (String) -> Unit = {},
+    /** Barista / drinker names used before, most recent first. */
+    baristaNames: List<String> = emptyList(),
+    drinkerNames: List<String> = emptyList(),
+    /** Edit who made (`"barista"`) or drank (`"drinker"`) it; null clears. */
+    onPersonChange: (field: String, name: String?) -> Unit = { _, _ -> },
     /** Prefill Brew from this shot: profile + grind + yield target. */
     onStartFromShot: (() -> Unit)? = null,
     /** Brew rows (issue #10): re-open the Log-brew form seeded from this
@@ -1282,6 +1296,14 @@ private fun ShotDetail(
                 )
             }
         }
+        ShotPeopleFields(
+            shotId = shot.id,
+            barista = shot.barista,
+            drinker = shot.drinker,
+            baristaNames = baristaNames,
+            drinkerNames = drinkerNames,
+            onChange = onPersonChange,
+        )
         CremaTextField(
             value = notes,
             onValueChange = { notes = it; onRate(rating, it) },

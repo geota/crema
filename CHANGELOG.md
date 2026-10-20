@@ -7,6 +7,29 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Barista and drinker on each shot** — the History detail has Barista and
+  Drinker fields, with the names you've used before offered as you type
+  (most recent first). Settings → Brew defaults → Barista fills in the
+  barista on every new shot and brew. They export where the formats have
+  fields: de1app's `my_name` / `drinker_name` in a `.shot.json` (Visualizer
+  reads `my_name` as its barista), Visualizer's `barista` on an edit, and
+  decaid's `baristaName` / `drinkerName` on a Decent account upload. Visualizer
+  has no drinker field. Importing a `.shot` / `.shot.json` that carries
+  `my_name` / `drinker_name` (de1app's, or one Crema exported) reads both
+  back. Web, tablet and phone.
+- **History's bean filter picks a coffee, not just a bag** — choosing a coffee
+  lists every bag of it (same roaster and name, ignoring case and spacing; a
+  roaster you merged counts as the one it was merged into). A bean's "See all
+  N shots" still opens just that bag, shown as "This bag", and choosing its
+  coffee widens to all its bags. Web, tablet and phone.
+
+### Changed
+
+- **History search finds more** — it now also matches the coffee's name and
+  roaster, the grinder, and the barista and drinker. Web, tablet and phone.
+
 ## [0.0.9] — 2026-10-15
 
 Fixes a crash on Android 14 and later when turning on "Keep connected in the background" while the DE1 was connected.

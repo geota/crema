@@ -41,3 +41,12 @@ export {
 
 export { exportStoredShotAsV2Json, extractCremaExtras } from './v2-export';
 
+export {
+	shotMatchesQuery,
+	coffeeKey,
+	shotCoffee,
+	recentNames,
+	COFFEE_FILTER_PREFIX,
+	type ShotCoffee
+} from './search';
+
