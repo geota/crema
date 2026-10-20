@@ -132,6 +132,10 @@ export const STILL_SAFE =
 export const UNCONFIRMED =
 	'The connection dropped or the DE1 didn\'t answer while it was checking the firmware. The DE1 may be running either build. Switch it off and on and Crema will read which.';
 
+/** The link dropped while the DE1 checks the image: it keeps checking without it. */
+export const VERIFY_OFFLINE =
+	"The connection dropped while the DE1 checks the new firmware. Don't switch it off: it keeps checking without Bluetooth. Crema waits up to 2 minutes for its answer, then tells you when to restart it.";
+
 /** While an interrupted erase may still be running. */
 export const ERASE_SETTLING =
 	'The DE1 may still be erasing. Crema keeps other commands away from it until it finishes (up to a minute).';

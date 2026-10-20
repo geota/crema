@@ -65,7 +65,12 @@
 //!    *unconfirmed*. Once the request may have reached the DE1, nothing after
 //!    it is a definite failure: a lost verdict, a timeout or a link drop all
 //!    lead to the unconfirmed power-cycle path (Decenza's "ambiguous verify",
-//!    `firmwareupdater.cpp:224-233`; `FIRMWARE_UPDATE.md:59`).
+//!    `firmwareupdater.cpp:224-233`; `FIRMWARE_UPDATE.md:59`). A link drop
+//!    takes that path only after the same [`VERIFY_TIMEOUT_MS`] wait: the DE1
+//!    goes on checking without Bluetooth, and nothing shows that cutting its
+//!    power mid-check is safe, so the user isn't told to power-cycle until it
+//!    can have finished. If the link comes back meanwhile, polling resumes and
+//!    a verdict for an ACKed request still counts.
 //! 6. **Power-cycle**: the DE1 keeps running the old image until it is
 //!    switched off and on (de1app pages 4/5, `de1_skin_settings.tcl:1250-1265`;
 //!    Decenza `AwaitingReboot`). The lock stays held (Decenza keeps its guard
@@ -931,11 +936,23 @@ impl FirmwareFlash {
     }
 
     /// The verify request may have reached the DE1 but its outcome is lost.
-    fn unconfirmed(&mut self) {
-        self.stage = Stage::AwaitPowerCycle;
+    fn unconfirmed(&mut self, now_ms: u64) -> Vec<FlashAction> {
         self.verify_unconfirmed = true;
+        self.await_power_cycle(now_ms)
+    }
+
+    /// Verify is over: wait for the power-cycle. When the link dropped during
+    /// the check and is up again, that drop may have been a restart: identify
+    /// the DE1 and read its build now, as a reconnect into this step would.
+    fn await_power_cycle(&mut self, now_ms: u64) -> Vec<FlashAction> {
+        self.stage = Stage::AwaitPowerCycle;
         self.pending = None;
         self.poll_sent_at = None;
+        if self.machine_restarted && self.link_up {
+            let link_id = self.link_id_now.clone();
+            return self.on_link_restored_from(now_ms, &link_id);
+        }
+        Vec::new()
     }
 
     fn start_upload(&mut self, now_ms: u64) -> Vec<FlashAction> {
@@ -1141,7 +1158,7 @@ impl FirmwareFlash {
                             frame.first_error
                         ),
                     );
-                    self.unconfirmed();
+                    return self.unconfirmed(now_ms);
                 }
                 Vec::new()
             }
@@ -1156,8 +1173,7 @@ impl FirmwareFlash {
                         now_ms,
                         "verdict FFFFFD: verified; waiting for the power-cycle",
                     );
-                    self.stage = Stage::AwaitPowerCycle;
-                    self.pending = None;
+                    return self.await_power_cycle(now_ms);
                 } else {
                     self.note(
                         now_ms,
@@ -1268,8 +1284,7 @@ impl FirmwareFlash {
                         now_ms,
                         "no verdict 120 s after the verify request: unconfirmed",
                     );
-                    self.unconfirmed();
-                    return Vec::new();
+                    return self.unconfirmed(now_ms);
                 }
                 self.poll(now_ms)
             }
@@ -1313,10 +1328,32 @@ impl FirmwareFlash {
                 let phase = self.phase();
                 self.fail(FlashFailure::LinkLost { phase }, now_ms);
             }
-            Stage::Verify { .. } => {
-                // The verdict may have been lost with the link (Decenza's
-                // "ambiguous verify"): the build after a restart decides.
-                self.unconfirmed();
+            Stage::Verify {
+                acked_at,
+                sent_at,
+                write_lost,
+            } => {
+                // The DE1 goes on checking without the link, and nothing shows
+                // cutting its power mid-check is safe: don't ask for the
+                // power-cycle yet. Wait out VERIFY_TIMEOUT_MS from the request
+                // (the tick does), polling again if the link returns; then the
+                // unconfirmed path, where the build after a restart decides
+                // (Decenza's "ambiguous verify"). An unACKed request may or may
+                // not have arrived, so its verdict won't count as confirmed.
+                if acked_at.is_none() && !write_lost {
+                    self.stage = Stage::Verify {
+                        acked_at: None,
+                        sent_at,
+                        write_lost: true,
+                    };
+                }
+                self.note(
+                    now_ms,
+                    "the DE1 keeps checking: waiting out the verify window before the power-cycle",
+                );
+                self.pending = None;
+                self.poll_sent_at = None;
+                // The drop may have been a restart; the build read decides.
                 self.machine_restarted = true;
             }
             Stage::AwaitPowerCycle => self.machine_restarted = true,
@@ -2167,25 +2204,102 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn link_loss_during_verify_is_unconfirmed_and_locked() {
+    fn link_loss_during_verify_waits_out_the_check_before_the_power_cycle() {
         let (mut f, now) = to_verify(1);
+        let sent = now - 40;
         f.on_link_lost(now + 5);
+        // Not told to power-cycle while the DE1 may still be checking.
+        assert_eq!(f.phase(), FlashPhase::Verifying);
+        assert!(f.locks_writes());
+        assert!(!f.can_exit());
+        assert!(f.on_tick(now + 1_000).is_empty(), "no reads while down");
+        f.on_tick(sent + VERIFY_TIMEOUT_MS - 1);
+        assert_eq!(f.phase(), FlashPhase::Verifying);
+        assert!(
+            f.on_tick(sent + VERIFY_TIMEOUT_MS).is_empty(),
+            "still down: nothing to read"
+        );
         assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle);
         assert!(f.status(now).verify_unconfirmed);
         assert!(f.locks_writes());
+        let back = sent + VERIFY_TIMEOUT_MS + 30_000;
         assert_eq!(
-            f.on_link_restored(now + 30_000),
+            f.on_link_restored(back),
             vec![FirmwareFlash::read_build_action()]
         );
-        f.on_build(1333, now + 30_100);
+        f.on_build(1333, back + 100);
         assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle, "still waiting");
         assert_eq!(f.status(now).restarted_on_build, Some(1333));
         assert!(f.locks_writes());
-        f.on_link_lost(now + 60_000);
-        f.on_link_restored(now + 90_000);
-        f.on_build(1358, now + 90_100);
+        f.on_link_lost(back + 30_000);
+        f.on_link_restored(back + 60_000);
+        f.on_build(1358, back + 60_100);
         assert_eq!(f.phase(), FlashPhase::Succeeded);
         assert!(!f.locks_writes());
+    }
+
+    #[test]
+    fn a_verdict_heard_after_the_link_returns_mid_check_still_counts() {
+        let (mut f, now) = to_verify(1);
+        f.on_link_lost(now + 5);
+        f.on_link_restored(now + 3_000);
+        assert_eq!(f.phase(), FlashPhase::Verifying);
+        assert_eq!(
+            f.on_tick(now + 3_000 + FW_MAP_POLL_INTERVAL_MS),
+            vec![FlashAction::ReadFwMap],
+            "polling resumes"
+        );
+        // The request was ACKed before the drop: a verdict is confirmed. The
+        // drop may have been a restart, so the build is read at once.
+        assert_eq!(
+            f.on_fw_map(&VERIFY_OK, now + 3_600),
+            vec![FirmwareFlash::read_build_action()]
+        );
+        assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle);
+        assert!(!f.status(now).verify_unconfirmed);
+        // A Bluetooth-only drop: still the old build, so still waiting.
+        f.on_build(1333, now + 3_700);
+        assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle);
+        assert_eq!(f.status(now).restarted_on_build, Some(1333));
+    }
+
+    #[test]
+    fn a_rejection_heard_after_the_link_returns_mid_check_fails() {
+        let (mut f, now) = to_verify(1);
+        f.on_link_lost(now + 5);
+        f.on_link_restored(now + 3_000);
+        f.on_tick(now + 3_000 + FW_MAP_POLL_INTERVAL_MS);
+        f.on_fw_map(&[0, 0, 0, 1, 0x00, 0x48, 0x00], now + 3_600);
+        assert_eq!(
+            f.failure,
+            Some(FlashFailure::VerifyFailed {
+                first_error: 0x00_4800
+            })
+        );
+    }
+
+    #[test]
+    fn a_verify_request_unacked_when_the_link_dropped_is_never_confirmed() {
+        let (mut f, mut now) = to_upload(1);
+        now += 30;
+        f.on_write_ack(now);
+        now += POST_UPLOAD_SETTLE_MS;
+        f.on_tick(now); // the verify request goes out
+        f.on_link_lost(now + 10);
+        f.on_write_failed("Device was disconnected", now + 20);
+        assert_eq!(
+            f.phase(),
+            FlashPhase::Verifying,
+            "still waiting out the check"
+        );
+        f.on_link_restored(now + 2_000);
+        f.on_tick(now + 2_000 + FW_MAP_POLL_INTERVAL_MS);
+        f.on_fw_map(&VERIFY_OK, now + 2_500);
+        assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle);
+        assert!(
+            f.status(now).verify_unconfirmed,
+            "it may not have been this request's verdict"
+        );
     }
 
     #[test]
@@ -2823,7 +2937,7 @@ mod core_tests {
     }
 
     #[test]
-    fn reconnect_during_verify_stays_locked_and_unconfirmed() {
+    fn link_loss_during_verify_stays_locked_through_the_check() {
         let mut core = ready_core();
         let (mut flash, _) = tests::synthetic_flash(1, 0);
         flash.on_write_ack(10);
@@ -2831,16 +2945,29 @@ mod core_tests {
         flash.on_write_ack(1_050);
         flash.on_fw_map(&[0, 0, 0, 1, 0xFF, 0xFF, 0xFF], 1_100);
         flash.on_write_ack(1_130);
-        flash.on_tick(2_700);
+        flash.on_tick(2_700); // the verify request goes out
         core.firmware_flash = Some(flash);
         core.de1_link_lost();
         core.reset();
         let status = core.firmware_flash_status(3_000).status.unwrap();
+        assert_eq!(
+            status.phase,
+            FlashPhase::Verifying,
+            "the DE1 may still be checking"
+        );
+        assert!(refused(&core.connect_sweep(
+            &de1_domain::ConnectSweepSettings::default(),
+            3_100
+        )));
+        let status = core
+            .firmware_flash_tick(2_700 + VERIFY_TIMEOUT_MS)
+            .status
+            .unwrap();
         assert_eq!(status.phase, FlashPhase::AwaitingPowerCycle);
         assert!(status.verify_unconfirmed);
         assert!(refused(&core.connect_sweep(
             &de1_domain::ConnectSweepSettings::default(),
-            3_100
+            2_800 + VERIFY_TIMEOUT_MS
         )));
     }
 

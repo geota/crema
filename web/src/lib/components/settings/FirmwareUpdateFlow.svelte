@@ -26,6 +26,7 @@
 		EXIT_QUESTION,
 		STILL_SAFE,
 		UNCONFIRMED,
+		VERIFY_OFFLINE,
 		blockerText,
 		cancelQuestion,
 		channelLabel,
@@ -343,6 +344,11 @@
 						<div class="fu-banner fu-banner-warn" role="alertdialog" aria-label="Stop the update?">
 							<Icon cls="ph ph-warning-circle" aria-hidden="true" />
 							<span>{cancelQuestion(installedBuild)}</span>
+						</div>
+					{:else if status.phase === FlashPhase.Verifying && !status.linkUp}
+						<div class="fu-banner fu-banner-warn" role="alert">
+							<Icon cls="ph ph-warning-circle" aria-hidden="true" />
+							<span>{VERIFY_OFFLINE}</span>
 						</div>
 					{:else}
 						<div class="fu-banner fu-banner-info" role="status">
