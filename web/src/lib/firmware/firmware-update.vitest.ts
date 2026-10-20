@@ -180,6 +180,20 @@ describe('FirmwareUpdateController', () => {
 		expect(d.core.firmwareFlashStart).not.toHaveBeenCalled();
 	});
 
+	it('a browser that must not flash (iOS bridge) stops at the warning and never starts', async () => {
+		const d = { ...deps({}), unavailableReason: () => 'Not on iPhone.' };
+		const flow = new FirmwareUpdateController(d);
+		await flow.open();
+		expect(flow.unavailable).toBe('Not on iPhone.');
+		flow.acknowledged = true;
+		flow.acceptWarning();
+		expect(flow.step).toBe('warning');
+		flow.image = new Uint8Array(16);
+		await flow.startFlash();
+		expect(flow.startProblem).toBe('Not on iPhone.');
+		expect(d.core.firmwareFlashStart).not.toHaveBeenCalled();
+	});
+
 	it('reopens on the running flash and refuses to close while it runs', async () => {
 		const flow = new FirmwareUpdateController(
 			deps({ status: { actions: [], status: status(FlashPhase.Uploading) } })

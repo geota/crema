@@ -98,6 +98,8 @@ export interface FirmwareUpdateDeps {
 	machineId?: () => string | null;
 	/** Whether the DE1 link is up right now. */
 	linkUp?: () => boolean;
+	/** Why this browser must not flash at all (e.g. the iOS Beacio bridge), or null. */
+	unavailableReason?: () => string | null;
 	/** Wall clock for the persisted erase-hold deadline. */
 	wallNow?: () => number;
 	/** Logged at each start: the transport and the DE1. */
@@ -175,6 +177,11 @@ export class FirmwareUpdateController {
 	/** Whether a transfer is running (the flow must not close). */
 	get running(): boolean {
 		return this.status !== null && RUNNING.has(this.status.phase);
+	}
+
+	/** Why a new flash can't start in this browser, or null when it can. */
+	get unavailable(): string | null {
+		return this.deps.unavailableReason?.() ?? null;
 	}
 
 	/** Whether the flash holds the DE1 link (the shell skips its sweeps). */
@@ -285,7 +292,7 @@ export class FirmwareUpdateController {
 	}
 
 	acceptWarning(): void {
-		if (this.acknowledged) this.step = 'choose';
+		if (this.acknowledged && this.unavailable === null) this.step = 'choose';
 	}
 
 	select(id: string): void {
@@ -366,7 +373,11 @@ export class FirmwareUpdateController {
 	async startFlash(): Promise<void> {
 		const image = this.image;
 		if (image === null) return;
-		this.startProblem = null;
+		this.startProblem = this.unavailable;
+		if (this.startProblem !== null) {
+			this.step = 'confirm';
+			return;
+		}
 		if ((await this.refreshBlockers()).length > 0) {
 			this.step = 'confirm';
 			return;

@@ -84,6 +84,7 @@ import {
 	rememberDevice,
 	type DeviceKind
 } from '$lib/ble/launch-reconnect';
+import { installIosBridge, isBridgedBluetooth } from '$lib/ble/ios-bridge';
 
 /**
  * Thrown by {@link CremaApp.startShot} when the user taps Coffee without an
@@ -505,10 +506,15 @@ export class CremaApp {
 			onRelease: () => this.afterFirmwareRelease(),
 			machineId: () => this.state.current.de1Diagnostics.deviceId ?? null,
 			linkUp: () => this.state.current.de1State === 'ready',
+			unavailableReason: () =>
+				isBridgedBluetooth()
+					? "Firmware updates aren't available on iPhone or iPad: Bluetooth runs through the Beacio Safari extension, and a dropped link mid-flash is too risky. Use Chrome or Edge on a computer, or the Android app."
+					: null,
 			transportLabel: () => {
 				const d = this.state.current.de1Diagnostics;
 				const ua = typeof navigator === 'undefined' ? 'unknown browser' : navigator.userAgent;
-				return `Web Bluetooth (${ua}), DE1 ${d.deviceName ?? '?'} id ${d.deviceId ?? '?'}`;
+				const api = isBridgedBluetooth() ? 'Web Bluetooth via Beacio' : 'Web Bluetooth';
+				return `${api} (${ua}), DE1 ${d.deviceName ?? '?'} id ${d.deviceId ?? '?'}`;
 			}
 		});
 		// A flash that was waiting for the DE1's power-cycle before a reload
@@ -2528,8 +2534,15 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 	}
 	// Reconnect the last DE1 / scale where the browser can (client-only: this
 	// factory runs from the layout's onMount, never during SSR / prerender).
-	void app.reconnectLastOnLaunch().catch((e: unknown) => {
-		app.state.log(`Reconnect on launch failed: ${describeError(e)}`);
-	});
+	// On iPhone / iPad the Beacio bridge goes in first, so it can see the
+	// remembered devices.
+	void installIosBridge()
+		.then((bridged) => {
+			if (bridged) app.state.log('Bluetooth: using the Beacio Safari extension');
+			return app.reconnectLastOnLaunch();
+		})
+		.catch((e: unknown) => {
+			app.state.log(`Reconnect on launch failed: ${describeError(e)}`);
+		});
 	return app;
 }
