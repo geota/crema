@@ -3,6 +3,8 @@ import {
 	BEACIO_READY_EVENT,
 	installIosBridge,
 	isBridgedBluetooth,
+	isIOSHomeScreenApp,
+	openInSafariUrl,
 	resetIosBridgeForTests
 } from './ios-bridge';
 
@@ -84,12 +86,44 @@ describe('installIosBridge', () => {
 		vi.useFakeTimers();
 		setUserAgent(IPHONE_UA);
 		const load = fakeLoad();
-		const done = installIosBridge({ load, waitMs: 1_000 });
+		const onLateInstall = vi.fn();
+		const done = installIosBridge({ load, waitMs: 1_000, onLateInstall });
 		await vi.advanceTimersByTimeAsync(1_000);
 		expect(await done).toBe(false);
 		setExtension(true);
 		window.dispatchEvent(new Event(BEACIO_READY_EVENT));
 		await vi.waitFor(() => expect(isBridgedBluetooth()).toBe(true));
+		await vi.waitFor(() => expect(onLateInstall).toHaveBeenCalledOnce());
+	});
+
+	it('an extension that arrives inside the wait is not a late install', async () => {
+		setUserAgent(IPHONE_UA);
+		const onLateInstall = vi.fn();
+		const done = installIosBridge({ load: fakeLoad(), waitMs: 1_000, onLateInstall });
+		setExtension(true);
+		window.dispatchEvent(new Event(BEACIO_READY_EVENT));
+		expect(await done).toBe(true);
+		await Promise.resolve();
+		expect(onLateInstall).not.toHaveBeenCalled();
+	});
+});
+
+describe('iOS Home Screen app', () => {
+	it('is detected only on iPhone / iPad in standalone display mode', () => {
+		const standalone = vi.fn(() => ({ matches: true }) as MediaQueryList);
+		vi.stubGlobal('matchMedia', standalone);
+		expect(isIOSHomeScreenApp()).toBe(false);
+		setUserAgent(IPHONE_UA);
+		expect(isIOSHomeScreenApp()).toBe(true);
+		vi.unstubAllGlobals();
+	});
+
+	it('builds an open-in-Safari link for http(s) only', () => {
+		expect(openInSafariUrl('https://crema.example/brew?x=1')).toBe(
+			'x-safari-https://crema.example/brew?x=1'
+		);
+		expect(openInSafariUrl('file:///x')).toBeNull();
+		expect(openInSafariUrl('not a url')).toBeNull();
 	});
 
 	it('a failed load reports false and can be retried', async () => {

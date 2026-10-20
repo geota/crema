@@ -80,11 +80,38 @@ import { setFirmwareWakeLock } from '$lib/shell/wake-lock';
 import type { FlashShellConditions } from '$lib/core';
 import {
 	LaunchReconnect,
+	forgetDevice,
 	markUserDisconnect,
 	rememberDevice,
 	type DeviceKind
 } from '$lib/ble/launch-reconnect';
 import { installIosBridge, isBridgedBluetooth } from '$lib/ble/ios-bridge';
+import { watchBluetoothAvailability } from '$lib/ble/availability';
+import { connectBlocker } from '$lib/ble/connect-blocker';
+
+/** `navigator.bluetooth` as it is now (the iOS bridge may install it late). */
+function currentBluetooth(): Bluetooth | undefined {
+	return typeof navigator !== 'undefined' ? navigator.bluetooth : undefined;
+}
+
+/**
+ * Toast and return true when a Connect can't open the chooser here (no Web
+ * Bluetooth, the iOS Home Screen app, Bluetooth off) — otherwise the chooser
+ * would just fail. Synchronous: it runs inside the click's user activation.
+ */
+function refuseConnect(): boolean {
+	const blocked = connectBlocker();
+	if (blocked === null) return false;
+	const href = blocked.openInSafari;
+	if (href !== undefined) {
+		toast.action(blocked.message, 'Open in Safari', () => {
+			window.location.href = href;
+		});
+	} else {
+		toast.error(blocked.message);
+	}
+	return true;
+}
 
 /**
  * Thrown by {@link CremaApp.startShot} when the user taps Coffee without an
@@ -1076,6 +1103,7 @@ export class CremaApp {
 	 * lifecycle never erases the other device's history.
 	 */
 	async connectDe1(): Promise<void> {
+		if (refuseConnect()) return;
 		this.#launch.cancel('de1');
 		this.state.patch({ ...CLEARED_DE1_READOUT });
 		await this.de1.connect();
@@ -1160,11 +1188,7 @@ export class CremaApp {
 	 * A silent no-op elsewhere. A user Connect / Disconnect meanwhile cancels
 	 * the wait for that device.
 	 */
-	async reconnectLastOnLaunch(
-		bluetooth: Bluetooth | undefined = typeof navigator !== 'undefined'
-			? navigator.bluetooth
-			: undefined
-	): Promise<void> {
+	async reconnectLastOnLaunch(bluetooth: Bluetooth | undefined = currentBluetooth()): Promise<void> {
 		await this.#launch.run({
 			bluetooth,
 			isIdle: (kind) => {
@@ -1197,6 +1221,33 @@ export class CremaApp {
 		const scale = this.scale.kick(trigger);
 		if (de1 === 'kicked') this.state.log(`DE1: reconnecting now (${trigger})`);
 		if (scale === 'kicked') this.state.log(`Scale: reconnecting now (${trigger})`);
+		// A launch reconnect that gave up (or whose advertisement watch the
+		// browser stopped while the page was hidden) gets another pass. It
+		// skips devices that are connected, connecting, or user-disconnected.
+		void this.reconnectLastOnLaunch().catch((e: unknown) => {
+			this.state.log(`Reconnect (${trigger}) failed: ${describeError(e)}`);
+		});
+	}
+
+	/**
+	 * Forget the DE1: disconnect, drop it from launch memory, and revoke this
+	 * site's Bluetooth permission for it where the browser can.
+	 */
+	async forgetDe1(): Promise<void> {
+		const live = this.de1.bluetoothDevice();
+		await this.disconnectDe1();
+		const revoked = await forgetDevice('de1', live, currentBluetooth());
+		this.state.log(revoked ? 'DE1 forgotten and its Bluetooth permission revoked' : 'DE1 forgotten');
+	}
+
+	/** Forget the scale — see {@link forgetDe1}. */
+	async forgetScale(): Promise<void> {
+		const live = this.scale.bluetoothDevice();
+		await this.disconnectScale();
+		const revoked = await forgetDevice('scale', live, currentBluetooth());
+		this.state.log(
+			revoked ? 'Scale forgotten and its Bluetooth permission revoked' : 'Scale forgotten'
+		);
 	}
 
 	/** "Retry now" on a reconnecting device. */
@@ -1211,6 +1262,7 @@ export class CremaApp {
 
 	/** Connect a Bookoo scale — call from a button handler. */
 	async connectScale(): Promise<void> {
+		if (refuseConnect()) return;
 		this.#launch.cancel('scale');
 		await this.scale.connect();
 	}
@@ -2535,12 +2587,32 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 	// Reconnect the last DE1 / scale where the browser can (client-only: this
 	// factory runs from the layout's onMount, never during SSR / prerender).
 	// On iPhone / iPad the Beacio bridge goes in first, so it can see the
-	// remembered devices.
-	void installIosBridge()
-		.then((bridged) => {
-			if (bridged) app.state.log('Bluetooth: using the Beacio Safari extension');
-			return app.reconnectLastOnLaunch();
-		})
+	// remembered devices; an extension that shows up later re-runs it.
+	let stopAvailability = (): void => undefined;
+	const onBluetoothReady = (bridged: boolean): Promise<void> => {
+		if (bridged) app.state.log('Bluetooth: using the Beacio Safari extension');
+		// Bluetooth switched off / back on: log it, and on "on" retry a
+		// device that is reconnecting or was never reached at launch.
+		stopAvailability();
+		let known: boolean | null = null;
+		stopAvailability = watchBluetoothAvailability((on) => {
+			// The first answer is only news when it's "off".
+			if (known !== null || !on) {
+				app.state.log(on ? 'Bluetooth is available again' : 'Bluetooth is off or unavailable');
+			}
+			if (on && known === false) app.kickReconnect('bt-on');
+			known = on;
+		});
+		return app.reconnectLastOnLaunch();
+	};
+	void installIosBridge({
+		onLateInstall: () => {
+			void onBluetoothReady(true).catch((e: unknown) => {
+				app.state.log(`Reconnect on launch failed: ${describeError(e)}`);
+			});
+		}
+	})
+		.then(onBluetoothReady)
 		.catch((e: unknown) => {
 			app.state.log(`Reconnect on launch failed: ${describeError(e)}`);
 		});

@@ -87,6 +87,43 @@ export function markUserDisconnect(kind: DeviceKind): void {
 	if (cur) writeEntry(kind, { ...cur, auto: false });
 }
 
+/** Whether a device of `kind` is remembered at all (auto or not). */
+export function hasRememberedDevice(kind: DeviceKind): boolean {
+	return readLastDevices()[kind] !== null;
+}
+
+/**
+ * Forget a device: drop it from launch memory and, where the browser has
+ * `BluetoothDevice.forget()`, revoke this site's permission for it, so the
+ * next connect has to pick it in the chooser again. `live` is the device the
+ * app holds right now (Chrome only lists permitted devices through the
+ * flagged `getDevices()`); otherwise it's looked up by its remembered id.
+ * Resolves whether the browser permission was revoked.
+ */
+export async function forgetDevice(
+	kind: DeviceKind,
+	live: BluetoothDevice | null,
+	bluetooth: Bluetooth | undefined
+): Promise<boolean> {
+	const remembered = readLastDevices()[kind];
+	writeJson(LAST_DEVICES_KEY, { ...readLastDevices(), [kind]: null });
+	let device = live;
+	if (device === null && remembered !== null && supportsLaunchReconnect(bluetooth)) {
+		try {
+			device = (await bluetooth!.getDevices()).find((d) => d.id === remembered.id) ?? null;
+		} catch {
+			device = null;
+		}
+	}
+	if (device === null || typeof device.forget !== 'function') return false;
+	try {
+		await device.forget();
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /** Whether this browser can reconnect on launch (`navigator.bluetooth.getDevices`). */
 export function supportsLaunchReconnect(bluetooth: Bluetooth | undefined): boolean {
 	return bluetooth !== undefined && typeof bluetooth.getDevices === 'function';
@@ -222,6 +259,10 @@ export class LaunchReconnect {
 			(['de1', 'scale'] as const).map(async (kind): Promise<LaunchOutcome> => {
 				const remembered = last[kind];
 				if (remembered === null || !remembered.auto || !opts.isIdle(kind)) return 'not-remembered';
+				// A re-run (the page back in view) replaces an earlier wait: the
+				// browser stops watching advertisements while the page is hidden,
+				// so that wait may never hear the device.
+				this.#pending[kind]?.abort();
 				const abort = new AbortController();
 				this.#pending[kind] = abort;
 				try {

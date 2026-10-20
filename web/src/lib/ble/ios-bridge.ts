@@ -60,6 +60,29 @@ export function isAppleMobile(): boolean {
 	);
 }
 
+/**
+ * Crema running as an installed Home Screen app on iPhone / iPad. iOS loads
+ * no Safari extensions there, so Bluetooth can only work in a Safari tab.
+ */
+export function isIOSHomeScreenApp(): boolean {
+	if (!isAppleMobile() || typeof window === 'undefined') return false;
+	return (
+		(navigator as Navigator & { standalone?: boolean }).standalone === true ||
+		(typeof window.matchMedia === 'function' &&
+			window.matchMedia('(display-mode: standalone)').matches)
+	);
+}
+
+/** A link that opens `href` in Safari proper (`x-safari-https://…`), or null. */
+export function openInSafariUrl(href: string): string | null {
+	try {
+		const url = new URL(href);
+		return url.protocol === 'https:' || url.protocol === 'http:' ? `x-safari-${url.href}` : null;
+	} catch {
+		return null;
+	}
+}
+
 function install(load: () => Promise<unknown>): Promise<boolean> {
 	installing ??= (async () => {
 		(window as Window & { beacioAutoReconnect?: { enabled: boolean } }).beacioAutoReconnect = {
@@ -82,10 +105,11 @@ function install(load: () => Promise<unknown>): Promise<boolean> {
  *
  * On iPhone / iPad it waits up to `waitMs` for a late extension; elsewhere it
  * never delays. Either way a late `beacio:extension:ready` still installs the
- * bridge, so a Connect tap after that works.
+ * bridge, so a Connect tap after that works, and `onLateInstall` runs once it
+ * has (the launch reconnect missed it).
  */
 export async function installIosBridge(
-	opts: { waitMs?: number; load?: () => Promise<unknown> } = {}
+	opts: { waitMs?: number; load?: () => Promise<unknown>; onLateInstall?: () => void } = {}
 ): Promise<boolean> {
 	if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
 	if (bridged) return true;
@@ -103,12 +127,21 @@ export async function installIosBridge(
 		};
 		window.addEventListener(BEACIO_READY_EVENT, lateListener, { once: true });
 	});
-	if (!isAppleMobile()) return false;
+	let settled = false;
+	void late.then((ok) => {
+		if (ok && settled) opts.onLateInstall?.();
+	});
+	if (!isAppleMobile()) {
+		settled = true;
+		return false;
+	}
 	const waitMs = opts.waitMs ?? IOS_BRIDGE_WAIT_MS;
-	return Promise.race([
+	const result = await Promise.race([
 		late,
 		new Promise<boolean>((resolve) => setTimeout(() => resolve(false), waitMs))
 	]);
+	settled = true;
+	return result;
 }
 
 /** Test seam: forget the installed bridge. */
