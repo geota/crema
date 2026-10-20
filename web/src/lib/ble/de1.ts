@@ -33,6 +33,7 @@ import type { BleConnectionState } from './connection-state';
 import { De1Uuids } from './de1-uuids';
 import {
 	BleDevice,
+	isChooserCancelled,
 	requestDevice,
 	shortUuid,
 	type ConnState,
@@ -223,6 +224,12 @@ export class De1Manager {
 			});
 		} catch (error) {
 			this.device = null;
+			if (isChooserCancelled(error)) {
+				// Dismissing the chooser is a choice, not a failed connection.
+				this.callbacks.onState('idle');
+				this.callbacks.onStatus('DE1 chooser closed — not connected');
+				return;
+			}
 			this.callbacks.onState('failed');
 			this.callbacks.onStatus(
 				`DE1 connection failed at "device chooser": ${describeError(error)}`

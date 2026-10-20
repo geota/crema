@@ -10,9 +10,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	BleDevice,
+	GATT_TIMEOUTS,
+	GattTimeoutError,
 	KICK_DEBOUNCE_MS,
 	RECONNECT_LADDER,
 	abortableSleep,
+	isChooserCancelled,
 	reconnectDelayMs
 } from './transport.ts';
 import { ReconnectTimelineRecorder } from './reconnect-timeline.ts';
@@ -245,7 +248,8 @@ function watchingSetup() {
 	const script = { ok: false };
 	const characteristic = Object.assign(new EventTarget(), {
 		uuid: 'a00d',
-		startNotifications: vi.fn(async () => characteristic)
+		startNotifications: vi.fn(async () => characteristic),
+		writeValueWithResponse: vi.fn(async (_value: ArrayBuffer) => undefined)
 	});
 	const service = { getCharacteristic: vi.fn(async () => characteristic) };
 	const gatt = {
@@ -255,8 +259,11 @@ function watchingSetup() {
 			gatt.connected = true;
 			return gatt;
 		}),
+		// Like the browser: disconnecting a live link fires gattserverdisconnected.
 		disconnect: vi.fn(() => {
+			const wasConnected = gatt.connected;
 			gatt.connected = false;
+			if (wasConnected) target.dispatchEvent(new Event('gattserverdisconnected'));
 		}),
 		getPrimaryService: vi.fn(async () => service),
 		connectAndDiscover: undefined as ((services: string[]) => Promise<unknown>) | undefined
@@ -351,6 +358,69 @@ describe('BleDevice lurk tier with advertisement watching', () => {
 		expect(t.ble.connectionState).toBe('connected');
 		expect(t.characteristic.startNotifications).toHaveBeenCalledTimes(2);
 		t.ble.disconnect();
+	});
+});
+
+describe('BleDevice GATT time limits', () => {
+	it('a hung connect is abandoned after the limit and not retried', async () => {
+		const t = watchingSetup();
+		t.gatt.connect.mockImplementation(() => new Promise(() => undefined));
+		const result = t.ble.connectGatt().catch((e: unknown) => e);
+		await vi.advanceTimersByTimeAsync(GATT_TIMEOUTS.connectMs);
+		expect(await result).toBeInstanceOf(GattTimeoutError);
+		expect(t.gatt.connect).toHaveBeenCalledOnce();
+		expect(t.gatt.disconnect).toHaveBeenCalledOnce();
+		expect(t.ble.connectionState).toBe('failed');
+		t.ble.disconnect();
+	});
+
+	it('a hung write frees the queue and drops the link into the reconnect loop', async () => {
+		const t = watchingSetup();
+		t.script.ok = true;
+		await t.ble.connectGatt();
+		t.characteristic.writeValueWithResponse.mockImplementationOnce(
+			() => new Promise(() => undefined)
+		);
+		const hung = t.ble.write('a000', 'a00d', new Uint8Array([1])).catch((e: unknown) => e);
+		const next = t.ble.write('a000', 'a00d', new Uint8Array([2])).catch((e: unknown) => e);
+		await vi.advanceTimersByTimeAsync(GATT_TIMEOUTS.operationMs);
+		expect(await hung).toBeInstanceOf(GattTimeoutError);
+		expect(t.gatt.disconnect).toHaveBeenCalledOnce();
+		expect(t.ble.connectionState).toBe('reconnecting');
+		// The queued write ran instead of waiting forever behind the hung one.
+		await next;
+		expect(t.characteristic.writeValueWithResponse).toHaveBeenCalledTimes(2);
+		t.ble.disconnect();
+	});
+
+	it('an operation is timed from when it starts, not when it was queued', async () => {
+		const t = watchingSetup();
+		t.script.ok = true;
+		await t.ble.connectGatt();
+		let finishFirst!: () => void;
+		t.characteristic.writeValueWithResponse.mockImplementationOnce(
+			() => new Promise<undefined>((r) => (finishFirst = () => r(undefined)))
+		);
+		const first = t.ble.write('a000', 'a00d', new Uint8Array([1]));
+		const second = t.ble.write('a000', 'a00d', new Uint8Array([2]));
+		await vi.advanceTimersByTimeAsync(GATT_TIMEOUTS.operationMs - 1_000);
+		finishFirst();
+		await first;
+		// The second write started ~9 s after it was queued; it still gets its full limit.
+		await vi.advanceTimersByTimeAsync(0);
+		await expect(second).resolves.toBeUndefined();
+		expect(t.gatt.disconnect).not.toHaveBeenCalled();
+		t.ble.disconnect();
+	});
+});
+
+describe('isChooserCancelled', () => {
+	it('is true only for a dismissed chooser', () => {
+		const err = (name: string, message: string) => Object.assign(new Error(message), { name });
+		expect(isChooserCancelled(err('NotFoundError', 'User cancelled the requestDevice() chooser.'))).toBe(true);
+		expect(isChooserCancelled(err('NotFoundError', 'Bluetooth adapter not available.'))).toBe(false);
+		expect(isChooserCancelled(err('NetworkError', 'cancelled'))).toBe(false);
+		expect(isChooserCancelled(null)).toBe(false);
 	});
 });
 

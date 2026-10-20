@@ -31,6 +31,7 @@ import { scaleConnectProgram } from '$lib/services/scale-orchestrator';
 import type { BleConnectionState } from './connection-state';
 import {
 	BleDevice,
+	isChooserCancelled,
 	requestDevice,
 	shortUuid,
 	type ConnState,
@@ -145,6 +146,12 @@ export class ScaleManager {
 		} catch (error) {
 			// The previous device was already dropped above; whatever is current
 			// now (nothing, or a connect that raced this chooser) is left alone.
+			if (isChooserCancelled(error)) {
+				// Dismissing the chooser is a choice, not a failed connection.
+				this.callbacks.onState('idle');
+				this.callbacks.onStatus('Scale chooser closed — not connected');
+				return;
+			}
 			this.callbacks.onState('failed');
 			this.callbacks.onStatus(`Scale connection failed: ${describeError(error)}`);
 			return;
