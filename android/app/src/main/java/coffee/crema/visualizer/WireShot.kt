@@ -72,6 +72,11 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
                 // Brew Log water-in (issue #10) — a backup must keep it.
                 if (forBackup) shot.waterG?.let { put("waterG", it) }
                 if (forBackup) shot.nextPlan?.let { put("nextPlan", it) }
+                // Who made / drank it: the v2 export turns these into de1app's
+                // my_name / drinker_name, the Decent record into baristaName /
+                // drinkerName — so they ride the upload too, not just a backup.
+                shot.barista?.let { put("barista", it) }
+                shot.drinker?.let { put("drinker", it) }
                 put("tds", JsonNull)
                 put("extractionYield", JsonNull)
             },
@@ -283,6 +288,8 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
         brewMethodLabel = str("brewMethodLabel")?.takeIf { it.isNotBlank() },
         recipeName = str("recipeName"),
         nextPlan = metaStr("nextPlan"),
+        barista = metaStr("barista")?.takeIf { it.isNotBlank() },
+        drinker = metaStr("drinker")?.takeIf { it.isNotBlank() },
         waterG = metaStr("waterG")?.toFloatOrNull(),
         brewTempC = str("brewTempTarget")?.toFloatOrNull(),
         brewSeries = (o["brewSeries"] as? JsonObject)?.let {

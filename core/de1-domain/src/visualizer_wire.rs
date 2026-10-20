@@ -935,6 +935,8 @@ pub struct ShotPatchInputs {
     pub bean_notes: Option<String>,
     /// Inline bean: the bean's recorded dial → `grinder_setting`.
     pub grinder_setting: Option<String>,
+    /// Who made the shot → `barista` (editable on free accounts too).
+    pub barista: Option<String>,
 }
 
 /// Assemble the `PATCH /shots/{id}` body (the inner object — the shell
@@ -962,6 +964,7 @@ pub fn visualizer_shot_patch(inputs: &ShotPatchInputs) -> Value {
     );
     put_trimmed("grinder_setting", &inputs.grinder_setting);
     put_trimmed("grinder_model", &inputs.grinder_model);
+    put_trimmed("barista", &inputs.barista);
     if let Some(level) = roast_level_to_wire(inputs.roast_level) {
         body.insert("roast_level".to_owned(), Value::String(level));
     }
@@ -1941,6 +1944,7 @@ mod tests {
             roast_level: Some(3.0),
             bean_notes: Some("washed".to_owned()),
             grinder_setting: Some("14".to_owned()),
+            barista: Some(" Ana ".to_owned()),
         });
         assert_eq!(body["flavor"], 12);
         assert_eq!(body["private_notes"], "<p>syrupy</p>");
@@ -1954,6 +1958,7 @@ mod tests {
         assert_eq!(body["roast_level"], "Medium-Light");
         assert_eq!(body["bean_notes"], "<p>washed</p>");
         assert_eq!(body["grinder_setting"], "14");
+        assert_eq!(body["barista"], "Ana");
     }
 
     #[test]
@@ -2016,6 +2021,7 @@ mod tests {
             roast_level: Some(3.0),
             bean_notes: Some("washed".to_owned()),
             grinder_setting: Some("14".to_owned()),
+            barista: Some("Ana".to_owned()),
         })
     }
 
@@ -2045,6 +2051,7 @@ mod tests {
                     "bean_notes": "<p>washed</p>",
                     "grinder_setting": "14",
                     "grinder_model": "Niche Zero",
+                    "barista": "Ana",
                     "privacy": "unlisted"
                 })
             );

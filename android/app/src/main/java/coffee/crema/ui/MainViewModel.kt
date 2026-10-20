@@ -762,6 +762,8 @@ data class MainUiState(
     /** Theme mode — `"system" | "light" | "dark"` (Settings), persisted. */
     val themeMode: String = "dark",
     val grinderModel: String = "",
+    /** Default barista stamped on new shots / brew logs (Settings). Blank = unset. */
+    val baristaName: String = "",
     val showDebugPanel: Boolean = false,
     // Multi-device LAN proxy (M1/M2). Live mode switches via the device picker.
     val proxyRole: String = "normal",
@@ -2768,6 +2770,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Set a shot's forward-looking "next time" plan (local-only). */
     fun setShotNextPlan(id: String, nextPlan: String) = library.setShotNextPlan(id, nextPlan)
+    fun setShotPerson(id: String, field: String, name: String?) = library.setShotPerson(id, field, name)
 
     /**
      * Prefill Brew from a logged shot — "start from this shot". Re-activates
@@ -2935,6 +2938,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             brewCueSound = p.brewCueSound,
             brewCueHaptics = p.brewCueHaptics,
             grinderModel = p.grinderModel,
+            baristaName = p.baristaName,
             showDebugPanel = p.showDebugPanel,
             defaultDoseG = p.defaultDoseG,
             defaultRatio = p.defaultRatio,
@@ -3827,6 +3831,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         lastSeenLatestVersion = _ui.value.lastSeenLatestVersion,
         lastBrewLogMethod = _ui.value.lastBrewLogMethod,
         grinderModel = _ui.value.grinderModel,
+        baristaName = _ui.value.baristaName,
         showDebugPanel = _ui.value.showDebugPanel,
         defaultDoseG = _ui.value.defaultDoseG,
         defaultRatio = _ui.value.defaultRatio,
@@ -4446,6 +4451,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             lastSeenLatestVersion = p.lastSeenLatestVersion,
             lastBrewLogMethod = p.lastBrewLogMethod,
             grinderModel = p.grinderModel,
+            baristaName = p.baristaName,
             showDebugPanel = p.showDebugPanel,
             defaultDoseG = p.defaultDoseG,
             defaultRatio = p.defaultRatio,
@@ -4627,6 +4633,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  uploads/patches as `grinder_model`. */
     fun setGrinderModel(model: String) {
         _ui.update { it.copy(grinderModel = model) }
+        persistPrefs()
+    }
+
+    /** Default barista name (free text), stamped on each new shot and brew log. Persisted. */
+    fun setBaristaName(name: String) {
+        _ui.update { it.copy(baristaName = name) }
         persistPrefs()
     }
 

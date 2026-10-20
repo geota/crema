@@ -53,6 +53,8 @@ class BackupShotRoundTripTest {
             ),
             rating = 4,
             notes = "tasty",
+            barista = "Ana",
+            drinker = "Ben",
             samples = listOf(sample(0, 2f, null), sample(1000, 9.1f, 12.3f), sample(2000, 8.4f, 30.5f)),
             visualizerId = "viz:abc",
         )
@@ -73,6 +75,8 @@ class BackupShotRoundTripTest {
         assertEquals(original.profileName, restored.profileName)
         assertEquals(original.rating, restored.rating)
         assertEquals(original.notes, restored.notes)
+        assertEquals("Ana", restored.barista)
+        assertEquals("Ben", restored.drinker)
         assertEquals(original.visualizerId, restored.visualizerId)
         val ob = original.bean!!
         val rb = restored.bean!!

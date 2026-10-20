@@ -204,6 +204,9 @@ pub fn import_v2_json_shot(content: &str) -> Result<StoredShot, ImportError> {
             stored.brew_method = crate::brew::normalize_brew_method(method);
         }
         stored.metadata.water_g = app.data.settings.crema_water_g.filter(|w| *w > 0.0);
+        // de1app's person fields, which Crema's exporter also writes.
+        stored.metadata.barista = settings_name(app.data.settings.my_name.as_ref());
+        stored.metadata.drinker = settings_name(app.data.settings.drinker_name.as_ref());
     }
     stored.format_version = STORED_SHOT_FORMAT_VERSION;
     Ok(stored)
@@ -376,6 +379,13 @@ fn tcl_metadata(settings: &TclDict) -> ShotMetadata {
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     let beans = combine_bean_label(settings.get("bean_brand"), settings.get("bean_type"));
+    let name = |key: &str| {
+        settings
+            .get(key)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
 
     ShotMetadata {
         dose,
@@ -388,6 +398,8 @@ fn tcl_metadata(settings: &TclDict) -> ShotMetadata {
         tds,
         extraction_yield,
         water_g: None,
+        barista: name("my_name"),
+        drinker: name("drinker_name"),
     }
 }
 
@@ -512,6 +524,23 @@ struct V2AppSettings {
     crema_brew_method: Option<String>,
     #[serde(default)]
     crema_water_g: Option<f32>,
+    /// de1app's barista name (Visualizer reads it as `barista`).
+    #[serde(default)]
+    my_name: Option<serde_json::Value>,
+    /// de1app's drinker name.
+    #[serde(default)]
+    drinker_name: Option<serde_json::Value>,
+}
+
+/// A de1app settings name value as a trimmed, non-empty string. Numbers are
+/// stringified; anything else is ignored rather than failing the import.
+fn settings_name(v: Option<&serde_json::Value>) -> Option<String> {
+    let s = match v? {
+        serde_json::Value::String(s) => s.trim().to_owned(),
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => return None,
+    };
+    (!s.is_empty()).then_some(s)
 }
 
 #[derive(Deserialize, Default)]
@@ -638,6 +667,8 @@ fn v2_metadata(raw: &V2ShotJson) -> ShotMetadata {
         tds,
         extraction_yield,
         water_g: None,
+        barista: None,
+        drinker: None,
     }
 }
 
@@ -720,6 +751,9 @@ settings {
         assert_eq!(shot.metadata.yield_out, Some(38.0));
         assert_eq!(shot.metadata.tds, Some(9.0));
         assert_eq!(shot.metadata.extraction_yield, Some(21.0));
+        // de1app's `my_name` is the barista; the fixture has no drinker.
+        assert_eq!(shot.metadata.barista.as_deref(), Some("Barista"));
+        assert_eq!(shot.metadata.drinker, None);
         // Enjoyment 80 → rating 4 (80 / 25 = 3.2 round = 3, + 1 = 4).
         assert_eq!(shot.metadata.rating, Some(4));
         assert_eq!(

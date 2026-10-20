@@ -156,6 +156,21 @@
 			/>
 		{/snippet}
 	</StRow>
+	<StRow
+		title="Barista"
+		sub="Who makes the shots. Saved on each new shot and brew; change it per shot in History."
+	>
+		{#snippet control()}
+			<input
+				type="text"
+				class="bd-barista"
+				placeholder="Your name"
+				autocomplete="off"
+				value={prefs.baristaName}
+				oninput={(e) => settings.set('baristaName', (e.currentTarget as HTMLInputElement).value)}
+			/>
+		{/snippet}
+	</StRow>
 </StGroup>
 
 <StGroup title="Shot behaviour">
@@ -317,3 +332,22 @@
 		{/snippet}
 	</StRow>
 </StGroup>
+
+<style>
+	/* Same metrics as the grinder-model field in Settings → Machine. */
+	.bd-barista {
+		width: 220px;
+		max-width: 100%;
+		padding: 6px 10px;
+		font-family: var(--font-sans);
+		font-size: 12px;
+		color: var(--fg-1);
+		background: rgba(var(--tint-rgb), 0.06);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border-radius: 6px;
+		outline: none;
+	}
+	.bd-barista:focus {
+		border-color: rgba(var(--tint-rgb), 0.4);
+	}
+</style>

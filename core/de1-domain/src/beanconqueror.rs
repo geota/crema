@@ -1387,6 +1387,8 @@ where
             tds: None,
             extraction_yield: None,
             water_g,
+            barista: None,
+            drinker: None,
         };
         shot = shot.with_metadata(meta);
         if let Some(method) = brew_method.clone() {

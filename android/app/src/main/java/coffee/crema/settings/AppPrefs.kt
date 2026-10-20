@@ -162,6 +162,9 @@ data class AppPrefs(
     /** Equipment-level grinder model (web `grinderModel`) — free text shown on
      *  Brew + sent with Visualizer uploads/patches. Blank = unset. */
     val grinderModel: String = "",
+    /** Default barista name (web `baristaName`) — stamped on each new shot and
+     *  brew log. Blank = unset. */
+    val baristaName: String = "",
     // ── Quick-Controls steam / hot-water / flush (issue 14) ──────────────────
     /** Persisted QC overrides for the machine's steam / hot-water / flush params.
      *  These stick (no throwaway state) and take priority; on change they're
@@ -284,6 +287,7 @@ fun AppPrefs.toCommonSettings(): CommonSettings = CommonSettings(
     defaultBrewTempC = defaultBrewTempC,
     defaultPreinfuseS = defaultPreinfuseS,
     grinderModel = grinderModel,
+    baristaName = baristaName.trim().ifEmpty { null },
     // Retired (presence follows activity; the app owns sleep) — still written
     // because older versions require the field when reading a backup.
     suppressDe1Sleep = true,
@@ -332,6 +336,7 @@ fun AppPrefs.withCommonSettings(c: CommonSettings): AppPrefs = copy(
     defaultBrewTempC = c.defaultBrewTempC,
     defaultPreinfuseS = c.defaultPreinfuseS,
     grinderModel = c.grinderModel,
+    baristaName = c.baristaName.orEmpty(),
     // A backup from before the idle timer carries none: keep this device's.
     idleSleepMin = c.idleSleepMin?.toInt() ?: idleSleepMin,
     qcSteamTimeS = c.qcSteamTimeS,

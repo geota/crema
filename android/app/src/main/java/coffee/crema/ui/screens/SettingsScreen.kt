@@ -354,7 +354,17 @@ fun SettingsScreen(
                             CremaSettingsRow("Default dose", "Starting dose for a fresh shot.") { CremaStepper(value = dD.toDouble(), unit = "g", step = 0.1, min = 5.0, max = 30.0, fmt = { fmt("%.1f", it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(it.toFloat(), dR, dT, dP) }) }
                             CremaSettingsRow("Default ratio", "Target brew ratio (yield ÷ dose).") { CremaStepper(value = dR.toDouble(), unit = null, step = 0.1, min = 1.0, max = 5.0, fmt = { fmt("1:%.1f", it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(dD, it.toFloat(), dT, dP) }) }
                             CremaSettingsRow("Default brew temp", "Starting group temperature.") { CremaStepper(value = dT.toDouble(), unit = "°C", step = 0.5, min = 80.0, max = 100.0, fmt = { fmt("%.1f", it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(dD, dR, it.toFloat(), dP) }) }
-                            CremaSettingsRow("Default pre-infusion", "Low-pressure soak before the main shot.", last = true, dot = true, dotOn = dP > 0f, onDot = { setDefs(dD, dR, dT, if (dP > 0f) 0f else 8f) }) { CremaStepper(value = dP.toDouble(), unit = "s", step = 1.0, min = 0.0, max = 60.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(dD, dR, dT, it.toFloat()) }) }
+                            CremaSettingsRow("Default pre-infusion", "Low-pressure soak before the main shot.", dot = true, dotOn = dP > 0f, onDot = { setDefs(dD, dR, dT, if (dP > 0f) 0f else 8f) }) { CremaStepper(value = dP.toDouble(), unit = "s", step = 1.0, min = 0.0, max = 60.0, fmt = { fmt("%.0f", it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(dD, dR, dT, it.toFloat()) }) }
+                            // Default barista (dye2 audit #1): stamped on each new shot and brew.
+                            CremaSettingsRow("Barista", "Saved on each new shot and brew; change it per shot in History.", last = true) {
+                                CremaTextField(
+                                    value = ui.baristaName,
+                                    onValueChange = vm::setBaristaName,
+                                    placeholder = "Your name",
+                                    singleLine = true,
+                                    modifier = Modifier.width(240.dp),
+                                )
+                            }
                         }
                         SetGroup("Shot behaviour") {
                             CremaSettingsRow("Auto-tare on shot start", "Zero the scale automatically when extraction begins.") { CremaSwitch(ui.autoTare, vm::setAutoTare) }

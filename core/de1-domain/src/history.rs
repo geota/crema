@@ -63,6 +63,16 @@ pub struct ShotMetadata {
     /// V60 speaks its ratio in water-in (1:16.7), an espresso in
     /// beverage-out. `None` on espresso rows.
     pub water_g: Option<f32>,
+    /// Who made the shot. Exported as de1app's `my_name` (which Visualizer
+    /// reads as `barista`) and decaid's `workflow.context.baristaName`.
+    /// Omitted from the JSON when unset, so older records and fixtures stay
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub barista: Option<String>,
+    /// Who drank it. Exported as de1app's `drinker_name` and decaid's
+    /// `workflow.context.drinkerName`; Visualizer has no field for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drinker: Option<String>,
 }
 
 impl ShotMetadata {
@@ -616,6 +626,8 @@ mod tests {
                 tds: Some(9.1),
                 extraction_yield: Some(20.5),
                 water_g: None,
+                barista: Some("Ana".to_owned()),
+                drinker: None,
             });
         let json = shot.to_json().unwrap();
         assert_eq!(StoredShot::from_json(&json), Ok(shot));

@@ -1033,6 +1033,11 @@ data class CommonSettings (
 	val defaultPreinfuseS: Float,
 	/// Free-text equipment grinder model.
 	val grinderModel: String,
+	/// Default barista name, stamped on each new shot's
+	/// [`ShotMetadata::barista`](crate::ShotMetadata::barista). `None` (or
+	/// blank) = no default; `Option` so an older `prefs.json` / backup still
+	/// decodes.
+	val baristaName: String? = null,
 	/// **Retired** — ignored by every shell. It drove the old "keep the DE1
 	/// awake while Crema is open" heartbeat, whose premise (a firmware
 	/// sleep timer taking over when the pokes stop) does not hold on a stock
@@ -3364,7 +3369,9 @@ data class ShotPatchInputs (
 	/// Inline bean: the bean's free-form notes → `bean_notes`.
 	val beanNotes: String? = null,
 	/// Inline bean: the bean's recorded dial → `grinder_setting`.
-	val grinderSetting: String? = null
+	val grinderSetting: String? = null,
+	/// Who made the shot → `barista` (editable on free accounts too).
+	val barista: String? = null
 )
 
 /// Pre-computed summary peaks over a [`ShotRecord`]'s telemetry —

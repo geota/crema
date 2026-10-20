@@ -364,6 +364,8 @@ export interface ShotPatch {
 	 */
 	bean?: ShotBean | null;
 	grinderModel?: string;
+	/** Who made the shot → Visualizer `barista` (a free-account field). */
+	barista?: string;
 	/**
 	 * The effective per-shot grind (issue #16): the shot's own recorded /
 	 * edited setting, else the bean snapshot's reference — the same
@@ -592,6 +594,7 @@ export const ShotSyncLive = Layer.effect(
 				notes: patch.notes,
 				privacy: patch.privacy,
 				grinderModel: patch.grinderModel,
+				barista: patch.barista,
 				coffeeBagId: patch.coffeeBagId ?? undefined,
 				tagList: patch.tagList ?? [],
 				beanBrand: patch.bean?.roasterName ?? undefined,
@@ -958,6 +961,7 @@ export const ShotSyncLive = Layer.effect(
 			const tagList = resolveTagList(shot);
 			const grinderModel = resolveGrinderModel(shot, settings.grinderModel);
 			const grinderSetting = effectiveGrindSetting(shot);
+			const barista = shot.metadata.barista?.trim();
 			return {
 				rating: (shot.metadata.rating ?? 0) > 0 ? (shot.metadata.rating ?? null) : null,
 				...(cfg.includeNotes ? { notes: shot.metadata.notes ?? '' } : {}),
@@ -966,7 +970,8 @@ export const ShotSyncLive = Layer.effect(
 				...(tagList != null && tagList.length > 0 ? { tagList } : {}),
 				...(shot.bean != null ? { bean: shot.bean } : {}),
 				...(grinderModel != null ? { grinderModel } : {}),
-				...(grinderSetting != null ? { grinderSetting } : {})
+				...(grinderSetting != null ? { grinderSetting } : {}),
+				...(barista ? { barista } : {})
 			};
 		};
 

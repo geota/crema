@@ -680,6 +680,8 @@ class VisualizerSync(
             // reference setting — the same precedence History displays
             // (issue #16: a grind edit must reach the uploaded copy).
             grinderSetting = shot.effectiveGrindSetting,
+            // Who made it → `barista` (a free-account field; no drinker field).
+            barista = shot.barista,
         )
         // Fitted to the account tier in core: a free account — or one whose tier
         // isn't probed yet — silently loses the Premium-only fields
