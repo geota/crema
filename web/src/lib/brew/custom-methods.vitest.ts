@@ -16,7 +16,8 @@ import {
 	methodLabel,
 	methodLabelSnapshot,
 	rememberMethod,
-	shotMethodLabel
+	shotMethodLabel,
+	shotTitle
 } from './methods';
 import { newRecipeFor } from './recipes.svelte';
 
@@ -88,6 +89,25 @@ describe('custom brew methods', () => {
 		expect(methodLabel('custom:lost')).toBe('Custom method');
 		expect(methodLabel('karlsbad_kanne')).toBe('Karlsbad kanne');
 		expect(methodLabel('pourover', 'ignored')).toBe('V60 / pourover');
+	});
+
+	it('titles a row by its profile, else its recipe, else its method (#165)', () => {
+		const store = getCustomMethodStore();
+		const orb = store.create(draft('ORB'))!;
+		// Machine espresso: the profile name, or the shell's untitled fallback.
+		expect(shotTitle({ profileName: 'Best of Decent' })).toBe('Best of Decent');
+		expect(shotTitle({ profileName: null, brewMethod: null })).toBe('Untitled shot');
+		expect(shotTitle({ profileName: '  ' })).toBe('Untitled shot');
+		// Guided brews carry their recipe name; a profile name (if any) still wins.
+		expect(shotTitle({ brewMethod: 'pourover', recipeName: 'V60 recipe' })).toBe('V60 recipe');
+		expect(shotTitle({ brewMethod: orb.id, recipeName: 'ORB recipe' })).toBe('ORB recipe');
+		expect(shotTitle({ profileName: 'P', brewMethod: 'pourover', recipeName: 'R' })).toBe('P');
+		// A logged brew with no recipe falls back to the method's label —
+		// the custom method's live name, its snapshot once lost, the preset label.
+		expect(shotTitle({ brewMethod: 'pourover' })).toBe('V60 / pourover');
+		expect(shotTitle({ brewMethod: orb.id })).toBe('ORB');
+		expect(shotTitle({ brewMethod: 'custom:lost', brewMethodLabel: 'Mine' })).toBe('Mine');
+		expect(shotTitle({ brewMethod: 'espresso' })).toBe('Espresso');
 	});
 
 	it('seeds the log form and the first recipe from the method and its style', () => {

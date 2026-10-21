@@ -33,6 +33,7 @@ import coffee.crema.beans.roastBand5
 import coffee.crema.core.Bean
 import coffee.crema.history.StoredShot
 import coffee.crema.history.grindLabel
+import coffee.crema.history.shotTitle
 import coffee.crema.ui.components.BeanPhotoBox
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaStarRating
@@ -75,7 +76,7 @@ private const val EMPTY = "—"
  * chrome; this is pure content.
  *
  * @param shotCount how many stored shots reference this bag.
- * @param recentShots the newest few, as `(date label, profile name, rating)`.
+ * @param recentShots the newest few, as `(date label, title, rating)`.
  * @param linkedProfileName resolved name of `Bean.linkedProfileId`, or
  *   `"(missing profile)"` when the id dangles, or null when unlinked.
  * @param onPhotoTap opens the full-size viewer; null when there is no photo.
@@ -205,7 +206,7 @@ fun BeanDetailContent(
                         )
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                             Text(
-                                s.profileName ?: EMPTY,
+                                s.title,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 maxLines = 1,
@@ -263,7 +264,8 @@ fun BeanDetailContent(
 data class ShotRowSummary(
     val id: String,
     val date: String,
-    val profileName: String?,
+    /** The row's name — profile, recipe, or method ([shotTitle], #165). */
+    val title: String,
     val rating: Int,
     /** "Grind 4.2 · 36.5 g · 28 s" — the dial-in facts, pieces omitted when unknown. */
     val dial: String?,
@@ -275,7 +277,7 @@ data class ShotRowSummary(
 fun shotRowSummary(shot: StoredShot): ShotRowSummary = ShotRowSummary(
     id = shot.id,
     date = SHOT_DATE_FORMAT.format(Date(shot.completedAtMs)),
-    profileName = shot.profileName,
+    title = shotTitle(shot),
     rating = shot.rating ?: 0,
     dial = listOfNotNull(
         shot.grindLabel,

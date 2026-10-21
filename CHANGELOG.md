@@ -7,6 +7,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A bag's "Shots" list showed "—" for every non-espresso brew** — the
+  bean profile's recent-shots rows only ever read the espresso profile name,
+  so a logged V60 or a custom-method brew (an "ORB recipe", say) had no
+  title. The rows now use the same name History does: the profile, else the
+  recipe, else the method. Web, tablet and phone. (#165)
+
 ## [0.0.9] — 2026-10-15
 
 Fixes a crash on Android 14 and later when turning on "Keep connected in the background" while the DE1 was connected.
