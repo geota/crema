@@ -125,6 +125,28 @@ export function shotMethodLabel(shot: {
 }
 
 /**
+ * What a stored row is called wherever it is listed — the History row,
+ * the bean drawer's "Shots" list. One rule for every brew shape (issue
+ * #165): the profile name (a machine espresso), else the guided recipe's
+ * name, else the method's label (a manual or custom-method brew). A
+ * machine espresso with no profile name is "Untitled shot". Blank names
+ * count as absent. Android's `shotTitle` applies the same order.
+ */
+export function shotTitle(shot: {
+	profileName?: string | null;
+	recipeName?: string | null;
+	brewMethod?: string | null;
+	brewMethodLabel?: string | null;
+}): string {
+	const profile = shot.profileName?.trim();
+	if (profile) return profile;
+	const recipe = shot.recipeName?.trim();
+	if (recipe) return recipe;
+	const method = shot.brewMethod?.trim();
+	return method ? methodLabel(method, shot.brewMethodLabel) : 'Untitled shot';
+}
+
+/**
  * The label to snapshot onto a brew saved with `method` — the custom
  * method's current name, `null` for presets and free text (their label
  * derives from the id).
