@@ -63,6 +63,9 @@ class SwitchableBleTransport(initial: BleTransport) : BleTransport {
     override suspend fun awaitAdvertisement(device: BleTransport.DeviceHandle, timeoutMs: Long): Boolean =
         current.awaitAdvertisement(device, timeoutMs)
 
+    override fun isLinkHeldByStack(device: BleTransport.DeviceHandle): Boolean =
+        current.isLinkHeldByStack(device)
+
     override val supportsPendingConnect: Boolean get() = current.supportsPendingConnect
 
     override suspend fun connectWhenAvailable(device: BleTransport.DeviceHandle, onLinkUp: () -> Unit) =

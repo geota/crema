@@ -120,6 +120,14 @@ export interface De1Transport {
 	disconnect(): void;
 
 	/**
+	 * Drop the GATT link *without* marking a user disconnect, so the ordinary
+	 * reconnect loop runs — for a link that came up hollow (connected,
+	 * subscribed, not answering). Optional: a transport without it is dropped
+	 * outright instead.
+	 */
+	recycle?(): void;
+
+	/**
 	 * Cut a pending auto-reconnect wait short and attempt now (the tab came
 	 * back into view, "Retry now"). Optional — a transport with no reconnect
 	 * loop omits it.

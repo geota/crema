@@ -411,6 +411,14 @@ export class CremaApp {
 			onState: (de1State) => {
 				const wasReady = this.state.current.de1State === 'ready';
 				this.state.patch({ de1State });
+				// Leaving `ready` for anything but `subscribing` means the link is
+				// gone (or being re-seeded after a reconnect): the last state the
+				// DE1 reported is history. Clear it so nothing reads "Idle" from
+				// before the drop until the next StateInfo seed read lands —
+				// mirrors Android's `onDe1Dropped`.
+				if (de1State !== 'ready' && de1State !== 'subscribing') {
+					this.state.patch({ machineState: null, machineStateName: null, machineSubstate: null });
+				}
 				// Defensive re-upload of the active profile when the DE1
 				// becomes ready. Mirrors the legacy DE1-app's
 				// `save_settings_to_de1` → `de1_send_shot_frames` chain

@@ -28,7 +28,9 @@ import { WriteTarget } from '$lib/core/crema-core';
 import { de1WriteTargetUuid as wasmDe1WriteTargetUuid } from '$lib/wasm/de1_wasm';
 import { describeError } from '$lib/utils/error';
 import type { AppRuntime } from '$lib/effect/runtime';
-import { de1ConnectProgram } from '$lib/services/de1-orchestrator';
+import { Effect } from 'effect';
+import { de1ConnectProgram, de1SeedProgram } from '$lib/services/de1-orchestrator';
+import { HOLLOW_LINK_STATUS, stuckLinkHint } from './stuck-link';
 import type { BleConnectionState } from './connection-state';
 import { De1Uuids } from './de1-uuids';
 import {
@@ -297,7 +299,12 @@ export class De1Manager {
 				for (const l of this.linkListeners) l.lost();
 			}
 			this.callbacks.onState('reconnecting');
-			this.callbacks.onStatus(`Reconnecting to DE1… (attempt ${attempt})`);
+			// Attempt N starting means N-1 failed since the drop. A DE1 we were
+			// just connected to that keeps refusing is most likely holding the
+			// dead link — say so, with the remedies in order (stuck-link.ts).
+			this.callbacks.onStatus(
+				stuckLinkHint(true, attempt - 1) ?? `Reconnecting to DE1… (attempt ${attempt})`
+			);
 		});
 		device.onAdvertisement?.((rssi) => {
 			if (this.device !== device) return;
@@ -314,11 +321,7 @@ export class De1Manager {
 		});
 		device.onReconnected(() => {
 			if (this.device !== device) return;
-			// The firmware flash hears link-up from the app's transition into
-			// `ready` (every connect path, audit r2 M-A), not from here.
-			for (const l of this.linkListeners) l.restored?.();
-			this.callbacks.onState('ready');
-			this.callbacks.onStatus('Reconnected — receiving DE1 notifications');
+			void this.reseedAfterReconnect(device);
 		});
 		// One sink for all characteristics — preserves arrival order + tallies
 		// diagnostics. Set before the program subscribes so early HVNs are caught.
@@ -525,6 +528,50 @@ export class De1Manager {
 			.catch(() => {
 				// Best-effort — a failed teardown hint must not break the disconnect.
 			});
+	}
+
+	/**
+	 * A transport-level reconnect replays the subscriptions but not the
+	 * connect-time seed reads, so the dashboard would come back `ready` over
+	 * whatever state it held before the drop. Re-seed first: `ready` only once
+	 * the DE1 has reported a state on *this* link. A StateInfo read that fails
+	 * twice means the link is hollow (edge of range) — recycle it so the
+	 * transport's reconnect loop tries again, rather than report ready.
+	 */
+	private async reseedAfterReconnect(device: De1Transport): Promise<void> {
+		this.callbacks.onState('subscribing');
+		this.callbacks.onStatus('Reconnected — reading machine state…');
+		const current = () => this.device === device;
+		const program = de1SeedProgram({
+			device,
+			core: this.core,
+			onStatus: (line) => {
+				if (current()) this.callbacks.onStatus(line);
+			},
+			onCoreOutput: (output) => {
+				if (current()) this.callbacks.onCoreOutput(output);
+			}
+		});
+		const exit =
+			this.runtime === null
+				? await Effect.runPromiseExit(program)
+				: await this.runtime.runPromiseExit(program);
+		if (!current()) return;
+		if (!parseConnectExit(exit).ok) {
+			this.callbacks.onStatus(HOLLOW_LINK_STATUS);
+			if (device.recycle) {
+				device.recycle();
+			} else {
+				this.dropDevice();
+				this.callbacks.onState('failed');
+			}
+			return;
+		}
+		// The firmware flash hears link-up from the app's transition into
+		// `ready` (every connect path, audit r2 M-A), not from here.
+		for (const l of this.linkListeners) l.restored?.();
+		this.callbacks.onState('ready');
+		this.callbacks.onStatus('Reconnected — receiving DE1 notifications');
 	}
 
 	/**

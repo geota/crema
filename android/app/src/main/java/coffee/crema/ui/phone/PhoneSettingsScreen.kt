@@ -329,7 +329,7 @@ private fun MachineSection(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     CremaStatusDot(connected)
                     Text(
-                        if (connected) "Connected · ${ui.machineState ?: "ready"}" else "Not connected",
+                        if (connected) "Connected · ${ui.machineState ?: "syncing…"}" else "Not connected",
                         style = MaterialTheme.typography.labelLarge,
                         color = if (connected) CremaTheme.telemetry.success else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -451,7 +451,7 @@ private fun MachineSection(
         CremaSettingsRow("Heater voltage", last = true) { CremaMonoReadout(heaterVoltageLabel(ui.de1MachineInfo), strong = true) }
     }
     SettingsGroup("Diagnostics") {
-        CremaSettingsRow("Connection state") { CremaMonoReadout(if (connected) "Ready" else "Disconnected", strong = true) }
+        CremaSettingsRow("Connection state") { CremaMonoReadout(if (!connected) "Disconnected" else if (ui.machineStateName == null) "Syncing…" else "Ready", strong = true) }
         CremaSettingsRow("GATT verified") { CremaStatusDot(connected) }
         CremaSettingsRow("Machine state", last = ui.machineError == null) { CremaMonoReadout(ui.machineState ?: "—", strong = true) }
         // Readable error copy (core `subStateErrorMessage`, web parity), only while erroring.
