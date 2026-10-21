@@ -238,6 +238,7 @@ fun BrewScreen(
                         phase = ui.shotPhase,
                         modeLabel = if (running) null else mode,
                         substate = ui.machineSubstate,
+                        stateKnown = !connected || ui.machineStateName != null,
                     )
                     RatioCard(active = active, weightG = ratioWeight(ui, running))
                     // Steam / hot water / flush run no profile, so the phase
@@ -1055,6 +1056,10 @@ private fun TimerCard(
      *  Heating" text (issue #35), so this is the substate's surface:
      *  "READY · HEATING" says the machine is still warming on every size. */
     substate: String? = null,
+    /** False while a live link has not yet reported a machine state — the
+     *  idle eyebrow reads "Syncing…" rather than claiming READY over a link
+     *  that hasn't answered (BrewReadiness). */
+    stateKnown: Boolean = true,
 ) {
     val totalSec = elapsedMs / 1000.0
     val mm = (totalSec / 60).toInt()
@@ -1067,6 +1072,7 @@ private fun TimerCard(
     }
     val step = when {
         modeLabel != null -> modeLabel
+        !running && !stateKnown -> "Syncing…"
         !running -> if (informativeSub != null) "Ready · $informativeSub" else "Ready"
         else -> phaseStepLabel(phase)
     }

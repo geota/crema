@@ -193,7 +193,7 @@ fun SettingsScreen(
                         SetHead("Hardware", "Machine", "Your espresso machine, scale, and grinder. Crema talks to these over Bluetooth.")
                         MachineHeroCard(
                             connected = connected,
-                            stateLabel = if (connected) "Connected · ${ui.machineState ?: "ready"}" else "Not connected",
+                            stateLabel = if (connected) "Connected · ${ui.machineState ?: "syncing…"}" else "Not connected",
                             // BUG FIX: this row previously showed a hardcoded
                             // "v1352" (and even fell back to the SCALE firmware) —
                             // it must reflect the MACHINE firmware the DE1 reports.
@@ -294,7 +294,7 @@ fun SettingsScreen(
                             CremaSettingsRow("Heater voltage", last = true) { CremaMonoReadout(heaterVoltageLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
                         }
                         SetGroup("Diagnostics") {
-                            CremaSettingsRow("Connection state") { CremaMonoReadout(if (connected) "Ready" else "Disconnected", color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("Connection state") { CremaMonoReadout(if (!connected) "Disconnected" else if (ui.machineStateName == null) "Syncing…" else "Ready", color = MaterialTheme.colorScheme.onSurface) }
                             CremaSettingsRow("GATT verified") { CremaStatusDot(connected) }
                             CremaSettingsRow("Machine state") { CremaMonoReadout(ui.machineState ?: "—", color = MaterialTheme.colorScheme.onSurface) }
                             // Readable error copy (core `subStateErrorMessage`, web parity),

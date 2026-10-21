@@ -9,7 +9,12 @@
 
 import { Cause, Effect, Exit } from 'effect';
 import { describe, expect, it, vi } from 'vitest';
-import { de1ConnectProgram, type De1ConnectDeps } from './de1-orchestrator.ts';
+import {
+	STATE_SEED_STEP,
+	de1ConnectProgram,
+	de1SeedProgram,
+	type De1ConnectDeps
+} from './de1-orchestrator.ts';
 import { De1Uuids } from '$lib/ble/de1-uuids';
 import { MmrRegister } from '$lib/core/crema-core';
 import type { De1Transport } from '$lib/ble/de1-transport';
@@ -133,17 +138,66 @@ describe('de1ConnectProgram — fatal steps', () => {
 	});
 });
 
-describe('de1ConnectProgram — non-fatal reads/sweep', () => {
-	it('succeeds even when a connect-time read fails (logs + continues)', async () => {
+describe('de1ConnectProgram — connect-time seed reads', () => {
+	/** Reads answer or fail per characteristic: StateInfo gets `state`, the rest `others`. */
+	const seedsBy = (state: () => Promise<Uint8Array>, others: () => Promise<Uint8Array>) =>
+		vi.fn((_service: string, char: string) => (char === De1Uuids.STATE_INFO ? state() : others()));
+
+	it('succeeds when the best-effort reads fail but StateInfo answers (logs + continues)', async () => {
 		const device = mkDevice({
-			readCharacteristic: vi.fn(() => Promise.reject(new Error('read flaked')))
+			readCharacteristic: seedsBy(
+				() => Promise.resolve(new Uint8Array()),
+				() => Promise.reject(new Error('read flaked'))
+			)
 		});
 		const deps = mkDeps(device);
 		const exit = await run(deps);
 		expect(Exit.isSuccess(exit)).toBe(true);
 		expect(deps.onGattVerified).toHaveBeenCalledOnce();
-		// All three reads were attempted despite each failing.
+		// All three reads were attempted; the two best-effort ones just logged.
 		expect(device.readCharacteristic).toHaveBeenCalledTimes(3);
+		expect(deps.onStatus).toHaveBeenCalledWith(expect.stringMatching(/firmware version read skipped/));
+		expect(deps.onStatus).toHaveBeenCalledWith(expect.stringMatching(/shot-settings read skipped/));
+	});
+
+	it('retries StateInfo once, then fails the program: a link that cannot answer it is hollow', async () => {
+		const device = mkDevice({
+			readCharacteristic: vi.fn(() => Promise.reject(new Error('read timed out')))
+		});
+		const deps = mkDeps(device);
+		const exit = await run(deps);
+		expect(failStep(exit)).toBe(STATE_SEED_STEP);
+		// Version (1, best-effort) + StateInfo (2 tries); shot-settings never ran.
+		expect(device.readCharacteristic).toHaveBeenCalledTimes(3);
+		expect(deps.core.readMmr).not.toHaveBeenCalled();
+	});
+
+	it('a StateInfo read that answers on the retry still succeeds', async () => {
+		let stateReads = 0;
+		const device = mkDevice({
+			readCharacteristic: seedsBy(
+				() =>
+					++stateReads === 1
+						? Promise.reject(new Error('flaked'))
+						: Promise.resolve(new Uint8Array()),
+				() => Promise.resolve(new Uint8Array())
+			)
+		});
+		const deps = mkDeps(device);
+		const exit = await run(deps);
+		expect(Exit.isSuccess(exit)).toBe(true);
+		expect(stateReads).toBe(2);
+		expect(deps.onStatus).toHaveBeenCalledWith('DE1 machine state read ✓');
+	});
+
+	it('de1SeedProgram alone re-seeds after a transport reconnect', async () => {
+		const device = mkDevice();
+		const deps = mkDeps(device);
+		const exit = await Effect.runPromiseExit(de1SeedProgram(deps));
+		expect(Exit.isSuccess(exit)).toBe(true);
+		expect(device.readCharacteristic).toHaveBeenCalledTimes(3);
+		expect(device.connectGatt).not.toHaveBeenCalled();
+		expect(device.startNotifications).not.toHaveBeenCalled();
 	});
 
 	it('succeeds and keeps sweeping when one MMR read fails', async () => {

@@ -14,6 +14,23 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   so a logged V60 or a custom-method brew (an "ORB recipe", say) had no
   title. The rows now use the same name History does: the profile, else the
   recipe, else the method. Web, tablet and phone. (#165)
+- **A link that came up at the edge of range could read "Ready to brew" with
+  no machine behind it** — GATT connected and subscribed, but the DE1 never
+  answered the connect-time machine-state read, and an unknown state was
+  shown as ready. "Ready" now needs a state the DE1 actually reported; until
+  then the Brew hero says "Syncing with the DE1…". A link that cannot
+  produce the state in two tries is treated as hollow and reconnected rather
+  than kept. The last reported state is also cleared the moment a link drops,
+  so a reconnect never replays "Idle" from before it. Web, tablet and phone.
+- **A DE1 holding a dead link after a drop looked like "looking for the
+  DE1" forever** — the DE1 takes one connection and advertises only while it
+  has none, so a drop at the edge of range that never delivered a clean
+  disconnect leaves it invisible until its own timeout or a power cycle.
+  After two reconnect attempts that find nothing, the status now says so,
+  with the remedies in order: toggle this device's Bluetooth, then
+  power-cycle the DE1. On Android, when this device's own Bluetooth stack
+  still holds the link, the app now reuses that link directly instead of
+  scanning for an advertisement that cannot come.
 
 ## [0.0.9] — 2026-10-15
 

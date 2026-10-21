@@ -817,6 +817,18 @@ export class BleDevice implements De1Transport {
 	 * Marks the teardown *deliberate*, which suppresses the auto-reconnect loop
 	 * — a user-initiated disconnect must stay disconnected.
 	 */
+	/**
+	 * Drop the GATT link *without* marking a user disconnect: the browser's
+	 * `gattserverdisconnected` then arms the ordinary reconnect loop. For a
+	 * link that came up hollow — connected and subscribed, yet the StateInfo
+	 * read never answers (a connect at the edge of range). A no-op while
+	 * already reconnecting or after {@link disconnect}.
+	 */
+	recycle(): void {
+		if (this.userDisconnected || this.reconnecting) return;
+		this.device.gatt?.disconnect();
+	}
+
 	disconnect(): void {
 		this.userDisconnected = true;
 		if (this.reconnecting && this.timelineLabel !== null) {
