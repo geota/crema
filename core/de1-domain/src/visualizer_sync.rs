@@ -182,7 +182,7 @@ pub struct WireShotBean {
 
 /// A slim view onto the shell's `StoredShot`: only the fields the
 /// reconcile planner reads. Lets the shell project its full record
-/// (web `StoredShot` in `$lib/history/model.ts`, Android equivalent)
+/// (web `StoredShot` in `#lib/history/model.ts`, Android equivalent)
 /// into a stable cross-shell shape without dragging the rest of the
 /// record (`series`, `bean`, `metadata`) through the FFI.
 ///
