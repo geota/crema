@@ -1,5 +1,5 @@
 /**
- * `$lib/components/history` — the Shot History page's view components, a
+ * `#lib/components/history` — the Shot History page's view components, a
  * Svelte 5 port of `ShotRow` / `ShotDetail` from the design's
  * `history-page.jsx`.
  *

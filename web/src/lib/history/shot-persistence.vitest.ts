@@ -1,5 +1,5 @@
 /**
- * `$lib/history/shot-persistence.vitest` — vitest for the Visualizer shot-push
+ * `#lib/history/shot-persistence.vitest.js` — vitest for the Visualizer shot-push
  * (docs/53 T-22, the safe win).
  *
  * `pushShotToVisualizer` is the `ShotCompleted` commit's fire-and-forget upload,
@@ -13,7 +13,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Effect, Layer } from 'effect';
 
-// Stores + sync-config reached via `$lib`; mock them so no rune store / real
+// Stores + sync-config reached via `#lib`; mock them so no rune store / real
 // localStorage is touched and we can observe bind / log calls + drive gating.
 // `vi.hoisted` makes the shared spies safe to reference inside the (hoisted)
 // `vi.mock` factories.
@@ -41,25 +41,25 @@ const h = vi.hoisted(() => {
 const { mockHistory, appendSyncLog } = h;
 
 // shot-persistence.ts imports `getHistoryStore` from `./store.svelte` (relative),
-// so the mock must target that path, not the `$lib/history` barrel. The
+// so the mock must target that path, not the `#lib/history/index.js` barrel. The
 // auto-upload gate + shots direction both read the sync-config now.
 vi.mock('./store.svelte', () => ({ getHistoryStore: () => h.mockHistory }));
-vi.mock('$lib/visualizer', () => ({
+vi.mock('#lib/visualizer/index.js', () => ({
 	appendSyncLog: h.appendSyncLog,
 	directionPushes: (d: string) => d === 'push',
 	readSyncConfig: () => ({ direction: { shots: h.getDirection() }, autoUpload: h.getAutoUpload() })
 }));
 
 // The auto path skips when no readable Visualizer session is stored.
-vi.mock('$lib/services/token-vault', async (importOriginal) => ({
-	...(await importOriginal<typeof import('$lib/services/token-vault')>()),
+vi.mock('#lib/services/token-vault.js', async (importOriginal) => ({
+	...(await importOriginal<typeof import('#lib/services/token-vault.js')>()),
 	hasStoredVisualizerTokens: () => h.hasTokens()
 }));
 
 import { pushShotToVisualizer } from './shot-persistence.ts';
-import { ShotSync } from '$lib/services/shot-sync';
-import { UploadQueue } from '$lib/services/upload-queue';
-import { HttpStatusError, NetworkError, VisualizerPremiumGatedError } from '$lib/effect/errors';
+import { ShotSync } from '#lib/services/shot-sync.js';
+import { UploadQueue } from '#lib/services/upload-queue.js';
+import { HttpStatusError, NetworkError, VisualizerPremiumGatedError } from '#lib/effect/errors.js';
 
 const die = (label: string) => () => Effect.die(`unused: ${label}`);
 

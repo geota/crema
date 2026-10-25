@@ -1,5 +1,5 @@
 /**
- * `$lib/firmware/power` — the "power ok" precondition for a firmware flash:
+ * `#lib/firmware/power` — the "power ok" precondition for a firmware flash:
  * charging, or battery at 50 % or more. None of the reference apps checks
  * this; crema adds it for a ~20-minute radio-heavy job. A browser without the
  * Battery Status API (or a desktop that reports no battery) counts as ok.

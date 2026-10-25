@@ -1,13 +1,13 @@
 /**
- * `$lib/services/upload-queue.vitest` — vitest for the `UploadQueue` drain
+ * `#lib/services/upload-queue.vitest` — vitest for the `UploadQueue` drain
  * orchestration (docs/53 T-14, the store-coupled half of T-16).
  *
  * This is the behavior that was previously verified only by the docs/55 manual
  * smoke test ("kill the network mid-upload → confirm it queues and drains on
  * reconnect, and a persistently-failing op drops after exactly 3 attempts").
  * It's unreachable under the node:test runner (`upload-queue.ts` imports
- * `$lib/history` and the `ShotSync`/`BeanSync` tags), so it lives here: vitest
- * resolves `$lib`, jsdom supplies `localStorage`, the history store is mocked,
+ * `#lib/history` and the `ShotSync`/`BeanSync` tags), so it lives here: vitest
+ * resolves `#lib`, jsdom supplies `localStorage`, the history store is mocked,
  * and fake `ShotSync` / `BeanSync` layers stand in for the network.
  *
  * Run: `cd web && pnpm test:vitest` (or `vitest run upload-queue`).
@@ -16,21 +16,21 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Effect, Layer } from 'effect';
 
-// runEntry reaches the history store via `$lib/history`; mock it so no real
+// runEntry reaches the history store via `#lib/history/index.js`; mock it so no real
 // rune store is instantiated and we can observe the bind / purge calls.
 const mockHistory = {
 	get: vi.fn(),
 	bindVisualizerId: vi.fn(),
 	purgeTombstone: vi.fn()
 };
-vi.mock('$lib/history', () => ({ getHistoryStore: () => mockHistory }));
+vi.mock('#lib/history/index.js', () => ({ getHistoryStore: () => mockHistory }));
 
 import { UploadQueue, UploadQueueLive } from './upload-queue.ts';
 import { ShotSync } from './shot-sync.ts';
 import { BeanSync } from './bean-sync.ts';
 import { HttpStatusError, NetworkError, VisualizerPremiumGatedError } from '../effect/errors.ts';
 import { enqueueEntry, readQueue } from './queue-store.ts';
-import { initTestWasm } from '$lib/testing/test-init';
+import { initTestWasm } from '#lib/testing/test-init.js';
 
 // The drain's recoverable-vs-drop decision goes through the wasm-backed
 // `isRecoverable` (CORE5), so init the bundle first.

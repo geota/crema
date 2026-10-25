@@ -1,5 +1,5 @@
 /**
- * `$lib/brew/bean-pick` — which bag a brew debits (issue #10 feedback).
+ * `#lib/brew/bean-pick.js` — which bag a brew debits (issue #10 feedback).
  *
  * The guided Brew setup offers a bean picker next to the recipe picker;
  * the pick rides through the session into the log form's prefill, where
@@ -10,8 +10,8 @@
  * Pure: the store slot lives on `GuidedBrewStore.beanPick`.
  */
 
-import type { Bean } from '$lib/bean';
-import type { BrewRecipe, BrewSessionSummary } from '$lib/core/crema-core';
+import type { Bean } from '#lib/bean/index.js';
+import type { BrewRecipe, BrewSessionSummary } from '#lib/core/crema-core.js';
 import { guidedPrefillWeights, type LogBrewPrefill } from './methods';
 
 /**

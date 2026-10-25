@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { BrewMethodStyle, CustomMethodLabelError } from '$lib/core/crema-core';
-import { getHistoryStore } from '$lib/history';
+import { BrewMethodStyle, CustomMethodLabelError } from '#lib/core/crema-core.js';
+import { getHistoryStore } from '#lib/history/index.js';
 import {
 	getCustomMethodStore,
 	isCustomMethodId,

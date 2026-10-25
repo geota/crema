@@ -1,5 +1,5 @@
 /**
- * `$lib/history/upload-targets` — the shot menu's single "Upload" entry
+ * `#lib/history/upload-targets` — the shot menu's single "Upload" entry
  * across every cloud destination (Visualizer, the Decent account, …).
  *
  * Each destination the user can turn on in Settings → Sharing is an
@@ -11,7 +11,7 @@
  * Android (`ui/UploadTargets.kt`).
  */
 
-import { DECENT_HISTORY_URL, decentShotViewUrl } from '$lib/decent/api';
+import { DECENT_HISTORY_URL, decentShotViewUrl } from '#lib/decent/api.js';
 import { isBrewLog, type StoredShot } from './model';
 
 export interface UploadTarget {

@@ -1,11 +1,11 @@
 /**
- * `$lib/bean/roaster-duplicates.vitest` — the wasm-backed duplicate detection +
+ * `#lib/bean/roaster-duplicates.vitest.js` — the wasm-backed duplicate detection +
  * merge plan the Roasters tab runs (the rules are pinned in the core tests;
  * this proves the bridge and the camelCase shapes). Run: `pnpm test:vitest`.
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { initTestWasm } from '$lib/testing/test-init';
+import { initTestWasm } from '#lib/testing/test-init.js';
 import { blankBean, blankRoaster, type Roaster } from './model.ts';
 import { detectRoasterDuplicates, planRoasterMerge } from './roaster-duplicates.ts';
 

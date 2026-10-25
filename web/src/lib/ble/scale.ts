@@ -1,5 +1,5 @@
 /**
- * `$lib/ble/scale` — Web Bluetooth manager for a Bookoo coffee scale.
+ * `#lib/ble/scale.js` — Web Bluetooth manager for a Bookoo coffee scale.
  *
  * The web mirror of the Android shell's `ScaleBleManager`. A close sibling of
  * {@link De1Manager}. Responsibilities:
@@ -24,10 +24,10 @@
  */
 
 import { parseConnectExit } from './connect-exit.ts';
-import type { CoreOutput, CremaCore, NotificationSource, ScaleUuids } from '$lib/core';
-import { describeError } from '$lib/utils/error';
-import type { AppRuntime } from '$lib/effect/runtime';
-import { scaleConnectProgram } from '$lib/services/scale-orchestrator';
+import type { CoreOutput, CremaCore, NotificationSource, ScaleUuids } from '#lib/core/index.js';
+import { describeError } from '#lib/utils/error.js';
+import type { AppRuntime } from '#lib/effect/runtime.js';
+import { scaleConnectProgram } from '#lib/services/scale-orchestrator.js';
 import type { BleConnectionState } from './connection-state';
 import {
 	BleDevice,
@@ -38,7 +38,7 @@ import {
 	type KickResult
 } from './transport';
 import type { ReconnectTrigger } from './reconnect-timeline';
-import { scaleScanUuids } from '$lib/wasm/de1_wasm';
+import { scaleScanUuids } from '#lib/wasm/de1_wasm.js';
 
 /** The pre-connect scan filter set across all supported scales (the core owns
  *  `Scale::identify`, so it owns the scan filters). */
@@ -64,7 +64,7 @@ function scanFilters(): ScaleScanFilters {
  * Coarse state of the scale connection — an alias of
  * {@link BleConnectionState}, the shared BLE-manager lifecycle. Kept as
  * `ScaleState` for backward compatibility at the existing call sites; new
- * code should import `BleConnectionState` directly from `$lib/ble`.
+ * code should import `BleConnectionState` directly from `#lib/ble/index.js`.
  */
 export type ScaleState = BleConnectionState;
 

@@ -1,5 +1,5 @@
 /**
- * `$lib/services/de1-orchestrator` — the DE1 connect sequence as an Effect
+ * `#lib/services/de1-orchestrator.js` — the DE1 connect sequence as an Effect
  * program (docs/53 §2.5 PR 4.1, T-17).
  *
  * Lifts `de1.ts`'s 250-line `connect()` `try/catch` (with its `let step = …`
@@ -26,11 +26,11 @@
  */
 
 import { Effect, Exit } from 'effect';
-import type { CoreOutput, CremaCore, NotificationSource } from '$lib/core';
-import { MmrRegister } from '$lib/core/crema-core';
-import { De1Uuids } from '$lib/ble/de1-uuids';
-import type { De1Transport } from '$lib/ble/de1-transport';
-import { describeError } from '$lib/utils/error';
+import type { CoreOutput, CremaCore, NotificationSource } from '#lib/core/index.js';
+import { MmrRegister } from '#lib/core/crema-core.js';
+import { De1Uuids } from '#lib/ble/de1-uuids.js';
+import type { De1Transport } from '#lib/ble/de1-transport.js';
+import { describeError } from '#lib/utils/error.js';
 import { De1ConnectStepFailed } from '../effect/errors.ts';
 
 /** The slice of `CremaCore` the connect program touches. */

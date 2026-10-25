@@ -1,8 +1,8 @@
 /**
- * `$lib/drive/store` — the reactive Google Drive auth state for the backup
+ * `#lib/drive/store` — the reactive Google Drive auth state for the backup
  * feature. One process-wide singleton ({@link getDriveAuthStore}).
  *
- * Uses the GIS **token model** (see `$lib/drive/oauth`): no client secret, no
+ * Uses the GIS **token model** (see `#lib/drive/oauth.js`): no client secret, no
  * refresh token, no redirect. {@link DriveAuthStore.connect} opens the consent
  * popup; {@link DriveAuthStore.accessToken} hands out a valid token, silently
  * re-granting one (no consent screen after the first authorization) when the

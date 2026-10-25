@@ -14,12 +14,12 @@
 	 * app runtime (Option 3, T-16) — the store stays pure-local; the free-tier
 	 * skip + best-effort warn live in that helper.
 	 */
-	import { getBeanStore } from '$lib/bean';
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { bestEffortRemoteDelete } from '$lib/visualizer';
-	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
-	import SplitButton from '$lib/components/shared/SplitButton.svelte';
-	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
+	import { getBeanStore } from '#lib/bean/index.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { bestEffortRemoteDelete } from '#lib/visualizer/index.js';
+	import { useVisualizerConnection } from '#lib/visualizer/useVisualizerConnection.svelte.js';
+	import SplitButton from '#lib/components/shared/SplitButton.svelte';
+	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 
 	let {
 		beanId,

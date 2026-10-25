@@ -4,13 +4,13 @@
  * the brew fields, and `isBrewLog` is the one local-only gate.
  */
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { initTestWasm } from '$lib/testing/test-init';
-import { BeanLibraryStore } from '$lib/bean/store.svelte';
-import { coerceBean } from '$lib/bean/model';
-import { brewLogSeeds, brewMethodPresets, guidedPrefillWeights } from '$lib/brew/methods';
-import { brews_remaining_estimate } from '$lib/wasm/de1_wasm';
+import { initTestWasm } from '#lib/testing/test-init.js';
+import { BeanLibraryStore } from '#lib/bean/store.svelte.js';
+import { coerceBean } from '#lib/bean/model.js';
+import { brewLogSeeds, brewMethodPresets, guidedPrefillWeights } from '#lib/brew/methods.js';
+import { brews_remaining_estimate } from '#lib/wasm/de1_wasm.js';
 import { BREW_SERIES_CAP, HistoryStore, downsampleBrewSeries } from './store.svelte';
-import { plannedStaircase } from '$lib/brew/staircase';
+import { plannedStaircase } from '#lib/brew/staircase.js';
 import { isBrewLog, isManualLog, ratioLabel, type StoredShot } from './model';
 
 const input = {

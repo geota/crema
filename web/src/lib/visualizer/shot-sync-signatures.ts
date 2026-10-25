@@ -1,7 +1,7 @@
 /**
- * `$lib/visualizer/shot-sync-signatures` — a thin TS shim over the
+ * `#lib/visualizer/shot-sync-signatures.js` — a thin TS shim over the
  * Rust-core `de1_domain::visualizer_sync` impl (exposed via wasm-bindgen
- * as `$lib/wasm/de1_wasm`).
+ * as `#lib/wasm/de1_wasm.js`).
  *
  * The signature helpers and the {@link reconcileShots} action planner
  * used to live here as TS. They're pure functions — djb2 hash, action
@@ -27,9 +27,9 @@ import {
 	signatureForBean as wasmSignatureForBean,
 	signatureForRoaster as wasmSignatureForRoaster,
 	reconcileShots as wasmReconcileShots
-} from '$lib/wasm/de1_wasm';
-import type { TimedSample, WireShotBean } from '$lib/core';
-import { peaksOf, type ShotBean, type StoredShot } from '$lib/history/model';
+} from '#lib/wasm/de1_wasm.js';
+import type { TimedSample, WireShotBean } from '#lib/core/index.js';
+import { peaksOf, type ShotBean, type StoredShot } from '#lib/history/model.js';
 
 // ── Types ─────────────────────────────────────────────────────────────
 

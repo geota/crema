@@ -1,5 +1,5 @@
 /**
- * `$lib/firmware/flash-driver` — the web I/O half of the firmware flash.
+ * `#lib/firmware/flash-driver.js` — the web I/O half of the firmware flash.
  *
  * Three layers:
  * - the core's golden `FlashStep` fixture (`core/de1-app/tests/fixtures/
@@ -17,8 +17,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { CremaBridge, NotificationSource } from '$lib/wasm/de1_wasm.js';
-import { initTestWasm } from '$lib/testing/test-init';
+import { CremaBridge, NotificationSource } from '#lib/wasm/de1_wasm.js';
+import { initTestWasm } from '#lib/testing/test-init.js';
 import {
 	FlashPhase,
 	WriteTarget,
@@ -26,11 +26,11 @@ import {
 	type FlashShellConditions,
 	type FlashStatus,
 	type FlashStep
-} from '$lib/core/crema-core';
+} from '#lib/core/crema-core.js';
 import { FlashDriver, withTimeout, type FlashCore, type FlashIo } from './flash-driver';
-import type { CoreOutput } from '$lib/core';
-import { IdleActivity } from '$lib/core/crema-core';
-import { IdleSleepRunner } from '$lib/state/idle-sleep';
+import type { CoreOutput } from '#lib/core/index.js';
+import { IdleActivity } from '#lib/core/crema-core.js';
+import { IdleSleepRunner } from '#lib/state/idle-sleep.js';
 
 beforeAll(initTestWasm);
 

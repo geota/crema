@@ -1,5 +1,5 @@
 /**
- * `$lib/services/profile-sync` — the lazy DE1 profile-upload coordinator as an
+ * `#lib/services/profile-sync.js` — the lazy DE1 profile-upload coordinator as an
  * Effect service (docs/53 §2.7 PR 6.1, T-21).
  *
  * Lifts the orchestrator's `syncActiveProfile` coordination (and its three

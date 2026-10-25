@@ -1,5 +1,5 @@
 /**
- * `$lib/brew/cues` — guided-brew cue rendering (issue #10).
+ * `#lib/brew/cues.js` — guided-brew cue rendering (issue #10).
  *
  * The core decides WHEN a cue is due (`Event::BrewCueDue` /
  * `BrewStepChanged`); this module decides what it sounds and feels
@@ -14,7 +14,7 @@
  * screen alone.
  */
 
-import { brewCueHapticsOn, brewCueSoundOn, getSettingsStore } from '$lib/settings';
+import { brewCueHapticsOn, brewCueSoundOn, getSettingsStore } from '#lib/settings/index.js';
 
 export type BrewCueKind = 'approach' | 'boundary' | 'step' | 'done';
 

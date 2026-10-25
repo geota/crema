@@ -1,5 +1,5 @@
 /**
- * `$lib/decent/shot-record` — a Crema {@link StoredShot} as the decaid
+ * `#lib/decent/shot-record.js` — a Crema {@link StoredShot} as the decaid
  * `ShotRecord` Decent's shot-history ingest accepts.
  *
  * The converter lives in core (`de1_domain::decent_shot_record`, pinned by a
@@ -9,9 +9,9 @@
  */
 
 import { Data } from 'effect';
-import { decentShotRecordJson, machineModelName } from '$lib/wasm/de1_wasm';
-import type { ShotMachine, TimedSample } from '$lib/core/crema-core';
-import type { StoredShot } from '$lib/history/model';
+import { decentShotRecordJson, machineModelName } from '#lib/wasm/de1_wasm.js';
+import type { ShotMachine, TimedSample } from '#lib/core/crema-core.js';
+import type { StoredShot } from '#lib/history/model.js';
 
 /** The core could not read the shot (a malformed persisted row) — retrying will not help. */
 export class DecentRecordError extends Data.TaggedError('DecentRecordError')<{ readonly detail: string }> {

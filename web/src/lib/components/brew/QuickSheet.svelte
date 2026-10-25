@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
 	import BookmarkSimpleIcon from 'phosphor-svelte/lib/BookmarkSimpleIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
@@ -19,8 +19,8 @@
 	 * shot through the orchestrator (`app.startShot` / `app.stopShot`).
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
-	import type { CremaProfile } from '$lib/profiles';
-	import type { Bean, Roaster } from '$lib/bean';
+	import type { CremaProfile } from '#lib/profiles/index.js';
+	import type { Bean, Roaster } from '#lib/bean/index.js';
 	import FavoritesStrip from './FavoritesStrip.svelte';
 	import DoseGrindStepper from './DoseGrindStepper.svelte';
 	import YieldRatioStepper from './YieldRatioStepper.svelte';
@@ -28,7 +28,7 @@
 	import SteamStepper from './SteamStepper.svelte';
 	import WaterStepper from './WaterStepper.svelte';
 	import PreinfFlushStepper from './PreinfFlushStepper.svelte';
-	import { getSettingsStore, type Settings } from '$lib/settings';
+	import { getSettingsStore, type Settings } from '#lib/settings/index.js';
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);

@@ -9,13 +9,13 @@
 		uploadAndReportDecent,
 		uploadUnsentDecentShots,
 		scheduleDecentReplaceAfterEdit
-	} from '$lib/decent';
+	} from '#lib/decent/index.js';
 	import {
 		shotUploadTargets,
 		type UploadTarget
-	} from '$lib/history/upload-targets';
-	import { registerUploadBatch, reportUploadOutcome } from '$lib/history/upload-toast';
-	import Icon from '$lib/icons/Icon.svelte';
+	} from '#lib/history/upload-targets.js';
+	import { registerUploadBatch, reportUploadOutcome } from '#lib/history/upload-toast.js';
+	import Icon from '#lib/icons/Icon.svelte';
 	import ArrowsLeftRightIcon from 'phosphor-svelte/lib/ArrowsLeftRightIcon';
 	import ChartLineIcon from 'phosphor-svelte/lib/ChartLineIcon';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
@@ -54,29 +54,29 @@
 		recentNames,
 		COFFEE_FILTER_PREFIX,
 		selectedShot
-	} from '$lib/history';
-	import type { StoredShot } from '$lib/history';
-	import { ShotRow, ShotDetail, CompareOverlay } from '$lib/components/history';
-	import ShotImportDialog from '$lib/components/history/ShotImportDialog.svelte';
-	import LogBrewDialog from '$lib/components/brewlog/LogBrewDialog.svelte';
-	import { methodLabel, type LogBrewPrefill } from '$lib/brew/methods';
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { getSettingsStore, convertWeight } from '$lib/settings';
-	import { getCaptureStore, captureJsonl } from '$lib/capture';
-	import { downloadBlob, filenameStamp } from '$lib/utils/download';
+	} from '#lib/history/index.js';
+	import type { StoredShot } from '#lib/history/index.js';
+	import { ShotRow, ShotDetail, CompareOverlay } from '#lib/components/history/index.js';
+	import ShotImportDialog from '#lib/components/history/ShotImportDialog.svelte';
+	import LogBrewDialog from '#lib/components/brewlog/LogBrewDialog.svelte';
+	import { methodLabel, type LogBrewPrefill } from '#lib/brew/methods.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { getSettingsStore, convertWeight } from '#lib/settings/index.js';
+	import { getCaptureStore, captureJsonl } from '#lib/capture/index.js';
+	import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
 	import { zip as fflateZip, strToU8 } from 'fflate';
-	import FilterPills from '$lib/components/shared/FilterPills.svelte';
-	import SortPill from '$lib/components/shared/SortPill.svelte';
-	import SplitButton from '$lib/components/shared/SplitButton.svelte';
-	import { getBeanStore } from '$lib/bean';
+	import FilterPills from '#lib/components/shared/FilterPills.svelte';
+	import SortPill from '#lib/components/shared/SortPill.svelte';
+	import SplitButton from '#lib/components/shared/SplitButton.svelte';
+	import { getBeanStore } from '#lib/bean/index.js';
 	import { onMount } from 'svelte';
-	import { appendSyncLog, directionPushes, readSyncConfig } from '$lib/visualizer';
-	import { readQueue } from '$lib/services/queue-store';
-	import { toast } from '$lib/components/shared/toast.svelte';
-	import { describeUnsyncedStop } from '$lib/services/shot-sync';
-	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
-	import { recallView } from '$lib/state/view-memory';
-	import { persistView, useScrollMemory } from '$lib/state/use-view-memory.svelte';
+	import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
+	import { readQueue } from '#lib/services/queue-store.js';
+	import { toast } from '#lib/components/shared/toast.svelte.js';
+	import { describeUnsyncedStop } from '#lib/services/shot-sync.js';
+	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { recallView } from '#lib/state/view-memory.js';
+	import { persistView, useScrollMemory } from '#lib/state/use-view-memory.svelte.js';
 
 	const store = getHistoryStore();
 	const appCtx = getCremaAppContext();

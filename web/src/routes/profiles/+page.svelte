@@ -1,6 +1,6 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
-	import { pinActiveThenFavourite } from '$lib/library-order';
+	import Icon from '#lib/icons/Icon.svelte';
+	import { pinActiveThenFavourite } from '#lib/library-order.js';
 	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
@@ -32,42 +32,42 @@
 		fromCoreProfile,
 		newProfileId,
 		type CremaProfile
-	} from '$lib/profiles';
+	} from '#lib/profiles/index.js';
 	import {
 		getRecipeStore,
 		isBuiltinRecipe,
 		newRecipeFor,
 		recipeEstimateLabel
-	} from '$lib/brew/recipes.svelte';
-	import { methodLabel } from '$lib/brew/methods';
-	import MethodMark from '$lib/components/brewlog/MethodMark.svelte';
-	import RecipeCredit from '$lib/components/brewlog/RecipeCredit.svelte';
-	import RecipeNotes from '$lib/components/brewlog/RecipeNotes.svelte';
-	import RecipeEditor from '$lib/components/brewlog/RecipeEditor.svelte';
+	} from '#lib/brew/recipes.svelte.js';
+	import { methodLabel } from '#lib/brew/methods.js';
+	import MethodMark from '#lib/components/brewlog/MethodMark.svelte';
+	import RecipeCredit from '#lib/components/brewlog/RecipeCredit.svelte';
+	import RecipeNotes from '#lib/components/brewlog/RecipeNotes.svelte';
+	import RecipeEditor from '#lib/components/brewlog/RecipeEditor.svelte';
 	import TrashIcon from 'phosphor-svelte/lib/TrashIcon';
-	import type { BrewRecipe } from '$lib/core/crema-core';
-	import { BrewStepKind } from '$lib/core/crema-core';
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { ProfileCard } from '$lib/components/profiles';
-	import SortPill from '$lib/components/shared/SortPill.svelte';
-	import FilterPills from '$lib/components/shared/FilterPills.svelte';
+	import type { BrewRecipe } from '#lib/core/crema-core.js';
+	import { BrewStepKind } from '#lib/core/crema-core.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { ProfileCard } from '#lib/components/profiles/index.js';
+	import SortPill from '#lib/components/shared/SortPill.svelte';
+	import FilterPills from '#lib/components/shared/FilterPills.svelte';
 	import {
 		filterProfiles,
 		profileFacetCount,
 		profileStatusCounts,
 		type ProfileFilterInput,
 		type ProfileStatus
-	} from '$lib/profiles/library-filter';
-	import { downloadBlob, filenameStamp } from '$lib/utils/download';
-	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
-	import CustomMethodDialog from '$lib/components/brewlog/CustomMethodDialog.svelte';
-	import type { CustomBrewMethod } from '$lib/core/crema-core';
+	} from '#lib/profiles/library-filter.js';
+	import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
+	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import CustomMethodDialog from '#lib/components/brewlog/CustomMethodDialog.svelte';
+	import type { CustomBrewMethod } from '#lib/core/crema-core.js';
 	import {
 		METHOD_STYLES,
 		getCustomMethodStore
-	} from '$lib/brew/custom-methods.svelte';
-	import { recallView } from '$lib/state/view-memory';
-	import { persistView, useScrollMemory } from '$lib/state/use-view-memory.svelte';
+	} from '#lib/brew/custom-methods.svelte.js';
+	import { recallView } from '#lib/state/view-memory.js';
+	import { persistView, useScrollMemory } from '#lib/state/use-view-memory.svelte.js';
 
 	const store = getProfileStore();
 	const ctx = getCremaAppContext();
@@ -78,10 +78,10 @@
 	 * page header (mirrors the History page pattern).
 	 */
 	let importBanner = $state<
-		| { kind: 'success'; message: string }
-		| { kind: 'error'; message: string }
-		| null
-	>(null);
+		{ kind: 'success'; message: string } |
+		{ kind: 'error'; message: string } |
+		null>(null);
+
 	let importing = $state(false);
 
 	// Kick off the one-time built-in load (no-op if already loaded).
@@ -158,15 +158,14 @@
 	 * represented in the library, with a count. Order follows the
 	 * `BEVERAGE_TYPES` constant for deterministic UI.
 	 */
-	const beverageFacets = $derived(
-		BEVERAGE_TYPES.filter((bt) =>
-			// A chip per beverage the library holds (visible or hidden), so
-			// chips don't vanish while filtering; the count is faceted.
-			[...profiles, ...store.hiddenBuiltinProfiles].some((p) => p.beverageType === bt)
-		).map((bt) => ({
-			id: `b:${bt}`,
-			label: bt.charAt(0).toUpperCase() + bt.slice(1),
-			count: profileFacetCount(filterInput, `b:${bt}`)
+	const beverageFacets = $derived(BEVERAGE_TYPES.filter((bt
+
+	// A chip per beverage the library holds (visible or hidden), so
+	// chips don't vanish while filtering; the count is faceted.
+	) => [...profiles, ...store.hiddenBuiltinProfiles].some((p) => p.beverageType === bt)).map((bt) => ({
+		id: `b:${bt}`,
+		label: bt.charAt(0).toUpperCase() + bt.slice(1),
+		count: profileFacetCount(filterInput, `b:${bt}`)
 		}))
 	);
 
@@ -316,23 +315,19 @@
 					return a.name.localeCompare(b.name);
 				case 'dose':
 					return a.dose - b.dose;
-				case 'roast': {
-					const rank = (p: CremaProfile): number =>
-						p.roast != null ? (ROAST_ORDER[p.roast] ?? 99) : 99;
-					return rank(a) - rank(b);
-				}
+				case 'roast':
+					{
+						const rank = (p: CremaProfile): number => p.roast != null ? ROAST_ORDER[p.roast] ?? 99 : 99;
+						return rank(a) - rank(b);
+					}
 				case 'beverage':
-					return (
-						BEVERAGE_TYPES.indexOf(a.beverageType) -
-						BEVERAGE_TYPES.indexOf(b.beverageType)
-					);
+					return BEVERAGE_TYPES.indexOf(a.beverageType) - BEVERAGE_TYPES.indexOf(b.beverageType);
+
 				case 'author':
 					return (a.author || '').localeCompare(b.author || '');
 				case 'recent':
-					return (
-						(a.lastUsed != null ? Date.parse(a.lastUsed) : 0) -
-						(b.lastUsed != null ? Date.parse(b.lastUsed) : 0)
-					);
+					return (a.lastUsed != null ? Date.parse(a.lastUsed) : 0) - (b.lastUsed != null ? Date.parse(b.lastUsed) : 0);
+
 				default:
 					return 0;
 			}
@@ -393,12 +388,12 @@
 
 	/** Duplicate a profile into a new custom profile, then open it for editing. */
 	function duplicate(id: string): void {
-		void goto(resolve(`/profiles/${encodeURIComponent(id)}/edit?duplicate=1`));
+		void goto(resolve(`profiles/${encodeURIComponent(id)}/edit?duplicate=1`));
 	}
 
 	/** Open a profile in the editor. */
 	function edit(id: string): void {
-		void goto(resolve(`/profiles/${encodeURIComponent(id)}/edit`));
+		void goto(resolve(`profiles/${encodeURIComponent(id)}/edit`));
 	}
 
 	/** Toggle a profile's pinned state. */
@@ -454,7 +449,7 @@
 	 * CremaProfile (fresh UUID, source `custom`, `Built-in` tag stripped).
 	 * Used by both the per-file and per-line import paths.
 	 */
-	function adoptImportedProfile(core: import('$lib/core').Profile): void {
+	function adoptImportedProfile(core: import('#lib/core/index.js').Profile): void {
 		const adapted = fromCoreProfile(core, -1);
 		const custom: CremaProfile = {
 			...adapted,
@@ -651,10 +646,10 @@
 							(r.credit ?? '').toLowerCase().includes(query)
 					);
 		const groups = new Map<string, BrewRecipe[]>();
-		for (const r of list) groups.set(r.method, [...(groups.get(r.method) ?? []), r]);
-		return [...groups.entries()]
-			.sort(([a], [b]) => methodLabel(a).localeCompare(methodLabel(b)))
-			.map(([method, recipes]) => ({ method, recipes }));
+
+		for (const r of list) groups.set(r.method, [...groups.get(r.method) ?? [], r]);
+
+		return [...groups.entries()].sort(([a], [b]) => methodLabel(a).localeCompare(methodLabel(b))).map(([method, recipes]) => ({ method, recipes }));
 	});
 
 	let recipeEditing = $state<BrewRecipe | null>(null);
@@ -774,9 +769,11 @@
 				<MagnifyingGlassIcon aria-hidden="true" />
 				<input bind:value={q} placeholder="Search profiles, beans, notes…" />
 				{#if q}
-					<button class="pp-search-clear" aria-label="Clear search" onclick={() => (q = '')}>
-						<XIcon aria-hidden="true" />
-					</button>
+					<button
+						class="pp-search-clear"
+						aria-label="Clear search"
+						onclick={() => q = ''}
+					><XIcon aria-hidden="true" /></button>
 				{/if}
 			</div>
 			<!-- Import: pick one-or-many community v2 .json or legacy
@@ -803,12 +800,12 @@
 				disabled={profiles.length === 0}
 				onclick={exportAllAsV2Jsonl}
 				title="Download every profile as one .jsonl file — one community-v2 profile per line"
-			>
-				<DownloadSimpleIcon aria-hidden="true" /> Export
-			</button>
-			<button class="pp-btn pp-btn-primary" onclick={() => goto(resolve('/profiles/new'))}>
-				<PlusIcon aria-hidden="true" /> New profile
-			</button>
+			><DownloadSimpleIcon aria-hidden="true" />Export</button>
+
+			<button
+				class="pp-btn pp-btn-primary"
+				onclick={() => goto(resolve('profiles/new'))}
+			><PlusIcon aria-hidden="true" />New profile</button>
 		</div>
 	</div>
 
@@ -828,10 +825,8 @@
 				type="button"
 				class="pp-import-banner-close"
 				aria-label="Dismiss"
-				onclick={() => (importBanner = null)}
-			>
-				<XIcon aria-hidden="true" />
-			</button>
+				onclick={() => importBanner = null}
+			><XIcon aria-hidden="true" /></button>
 		</div>
 	{/if}
 
@@ -887,16 +882,22 @@
 				onExport={exportProfile}
 			/>
 		{/each}
-		<button class="pp-card-new" onclick={() => goto(resolve('/profiles/new'))}>
+
+		<button
+			class="pp-card-new"
+			onclick={() => goto(resolve('profiles/new'))}
+		>
 			<div class="pp-card-new-glyph"><PlusIcon aria-hidden="true" /></div>
 			<div class="pp-card-new-label">New profile</div>
 			<div class="pp-card-new-sub">Start from a template or scratch</div>
 		</button>
 		{#if store.loaded && filtered.length === 0}
 			<div class="pp-empty">
-				No profiles match the current filters.
-				{#if q}<button class="pp-empty-link" onclick={() => (q = '')}>Clear search</button
-					>{/if}
+				No profiles match the current filters. 
+
+				{#if q}
+					<button class="pp-empty-link" onclick={() => q = ''}>Clear search</button>
+				{/if}
 			</div>
 		{/if}
 	</div>
@@ -922,7 +923,11 @@
 			<div class="pp-methods" aria-label="Your methods">
 				<div class="pp-methods-head">
 					<span class="pp-recipe-group-head" style="margin:0">Your methods</span>
-					<button class="pp-link" onclick={() => (methodDialog = 'new')}>+ Add method</button>
+
+					<button
+						class="pp-link"
+						onclick={() => methodDialog = 'new'}
+					>+ Add method</button>
 				</div>
 				{#if customMethods.live.length === 0}
 					<p class="pp-sub" style="margin:0">
@@ -938,11 +943,13 @@
 									<span class="pp-method-meta">{styleLabel(m)}</span>
 								</span>
 								<span class="pp-method-actions">
-									<button class="pp-link" onclick={() => (methodDialog = m)}>Rename</button>
-									<button class="pp-link" onclick={() => (methodDialog = m)}>Edit defaults</button>
-									<button class="pp-link pp-link-danger" onclick={() => void removeMethod(m)}
-										>Delete</button
-									>
+									<button class="pp-link" onclick={() => methodDialog = m}>Rename</button>
+									<button class="pp-link" onclick={() => methodDialog = m}>Edit defaults</button>
+
+									<button
+										class="pp-link pp-link-danger"
+										onclick={() => void removeMethod(m)}
+									>Delete</button>
 								</span>
 							</li>
 						{/each}
@@ -954,7 +961,7 @@
 					<button
 						class="pp-link"
 						aria-pressed={showHiddenRecipes}
-						onclick={() => (showHiddenRecipes = !showHiddenRecipes)}
+						onclick={() => showHiddenRecipes = !showHiddenRecipes}
 					>
 						{showHiddenRecipes ? 'Hide hidden built-ins' : `Show hidden (${hiddenRecipeCount})`}
 					</button>
@@ -1028,7 +1035,7 @@
 										{#if builtin}
 											<button
 												class="pp-recipe-btn pp-recipe-btn-quiet"
-												onclick={() => (hidden ? recipeStore.unhide(r.id) : recipeStore.hide(r.id))}
+												onclick={() => hidden ? recipeStore.unhide(r.id) : recipeStore.hide(r.id)}
 												title={hidden
 													? 'Show this built-in in the library and the Scale picker again'
 													: 'Hide this built-in from the library and the Scale picker'}
@@ -1060,8 +1067,8 @@
 {#if methodDialog}
 	<CustomMethodDialog
 		editing={methodDialog === 'new' ? null : methodDialog}
-		onSave={() => (methodDialog = null)}
-		onClose={() => (methodDialog = null)}
+		onSave={() => methodDialog = null}
+		onClose={() => methodDialog = null}
 	/>
 {/if}
 
@@ -1520,14 +1527,14 @@
 		position: relative;
 		cursor: pointer;
 	}
-	.pp-import input[type='file'] {
+	.pp-import input[type="file"] {
 		position: absolute;
 		inset: 0;
 		opacity: 0;
 		cursor: pointer;
 	}
 	.pp-import-disabled,
-	.pp-import-disabled input[type='file'] {
+	.pp-import-disabled input[type="file"] {
 		opacity: 0.5;
 		cursor: not-allowed;
 		pointer-events: none;

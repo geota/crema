@@ -1,5 +1,5 @@
 /**
- * `$lib/profiles` — the profile library: the working model, the
+ * `#lib/profiles/index.js` — the profile library: the working model, the
  * localStorage-backed store, and the curve-editor geometry.
  *
  * Built-in profiles are real (sourced from the wasm core); custom profiles are

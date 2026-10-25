@@ -1,5 +1,5 @@
 /**
- * `$lib/effect/schema/visualizer.test` — node:test suite for the Visualizer
+ * `#lib/effect/schema/visualizer.test` — node:test suite for the Visualizer
  * wire schemas (docs/53 T-03).
  *
  * Run with the platform's built-in test runner:

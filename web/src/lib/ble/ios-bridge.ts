@@ -1,10 +1,10 @@
 /**
- * `$lib/ble/ios-bridge` — Web Bluetooth on iPhone / iPad through the Beacio
+ * `#lib/ble/ios-bridge.js` — Web Bluetooth on iPhone / iPad through the Beacio
  * Safari extension.
  *
  * Safari has no `navigator.bluetooth`. The Beacio extension exposes its own
  * `navigator.beacio` object instead, and the `@beacio/core/auto` polyfill maps
- * that onto a standard `navigator.bluetooth`, so the rest of `$lib/ble` runs
+ * that onto a standard `navigator.bluetooth`, so the rest of `#lib/ble/index.js` runs
  * unchanged.
  *
  * ## Why the polyfill is gated

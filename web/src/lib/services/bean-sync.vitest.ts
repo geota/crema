@@ -1,8 +1,8 @@
 /**
- * `$lib/services/bean-sync.vitest` — vitest for the `BeanSync` mutations (docs/53
+ * `#lib/services/bean-sync.vitest` — vitest for the `BeanSync` mutations (docs/53
  * T-13). Previously verified only by the docs/55 "delete a bag + roaster on
  * Visualizer" manual step; `bean-sync.ts` pulls the bean store + wire converters
- * (`$lib/bean`) so it's unreachable under node:test.
+ * (`#lib/bean`) so it's unreachable under node:test.
  *
  * Covers: POST-vs-PATCH on `visualizerId` (create binds the returned id, update
  * keeps the existing one), the premium (402/403) mapping, the missing-id decode
@@ -16,11 +16,11 @@ import { BeanSync, BeanSyncLive, PREMIUM_REFRESH_INTERVAL_MS } from './bean-sync
 import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import { HttpStatusError } from '../effect/errors.ts';
-import { blankBean, blankRoaster } from '$lib/bean';
+import { blankBean, blankRoaster } from '#lib/bean/index.js';
 import type { TokenSet } from '../visualizer/oauth.ts';
-import { initTestWasm } from '$lib/testing/test-init';
-import { readSyncConfig } from '$lib/visualizer/sync-config';
-import { readSyncSettings, writeSyncSettings } from '$lib/bean/visualizer-sync';
+import { initTestWasm } from '#lib/testing/test-init.js';
+import { readSyncConfig } from '#lib/visualizer/sync-config.js';
+import { readSyncSettings, writeSyncSettings } from '#lib/bean/visualizer-sync.js';
 import { completeVisualizerSignIn } from './visualizer-sign-in.ts';
 
 // `uploadBean` / `uploadRoaster` build their bodies through the wasm-backed

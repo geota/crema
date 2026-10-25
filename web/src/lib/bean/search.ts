@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/search` — fuzzy library search, delegated to the core.
+ * `#lib/bean/search.js` — fuzzy library search, delegated to the core.
  *
  * The ranking itself lives in `de1_domain::bean_search` (issue 62) so web,
  * Android tablet and Android phone return the same rows in the same order
@@ -13,8 +13,8 @@
  * the (cheap) match runs per keystroke.
  */
 
-import { searchBeans as wasmSearchBeans, searchRoasters as wasmSearchRoasters } from '$lib/wasm/de1_wasm';
-import { SearchField, type FieldHit, type SearchHit, type SearchSegment } from '$lib/core/crema-core';
+import { searchBeans as wasmSearchBeans, searchRoasters as wasmSearchRoasters } from '#lib/wasm/de1_wasm.js';
+import { SearchField, type FieldHit, type SearchHit, type SearchSegment } from '#lib/core/crema-core.js';
 import type { Bean, Roaster } from './model';
 
 export { SearchField };
@@ -75,7 +75,7 @@ const beansJson = memoJson<Bean>();
 const roastersJson = memoJson<Roaster>();
 
 /**
- * The memoised `Bean[]` JSON — shared with `$lib/bean/filter` so the facet
+ * The memoised `Bean[]` JSON — shared with `#lib/bean/filter.js` so the facet
  * filter and the search serialise the library once between edits, not once
  * each.
  */

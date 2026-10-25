@@ -8,9 +8,9 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { Exit } from 'effect';
-import type { AppRuntime } from '$lib/effect/runtime';
-import type { CremaCore } from '$lib/core';
-import type { ScaleConnectDeps } from '$lib/services/scale-orchestrator';
+import type { AppRuntime } from '#lib/effect/runtime.js';
+import type { CremaCore } from '#lib/core/index.js';
+import type { ScaleConnectDeps } from '#lib/services/scale-orchestrator.js';
 import { ScaleManager } from './scale';
 import type { BleDevice } from './transport';
 
@@ -20,11 +20,11 @@ vi.mock('./transport', async (importOriginal) => ({
 	...(await importOriginal<typeof import('./transport')>()),
 	requestDevice: () => Promise.reject(new Error('User cancelled the requestDevice() chooser.'))
 }));
-vi.mock('$lib/wasm/de1_wasm', async (importOriginal) => ({
-	...(await importOriginal<typeof import('$lib/wasm/de1_wasm')>()),
+vi.mock('#lib/wasm/de1_wasm.js', async (importOriginal) => ({
+	...(await importOriginal<typeof import('#lib/wasm/de1_wasm.js')>()),
 	scaleScanUuids: () => JSON.stringify({ name_prefixes: ['BOOKOO'], service_uuids: [] })
 }));
-vi.mock('$lib/services/scale-orchestrator', () => ({
+vi.mock('#lib/services/scale-orchestrator.js', () => ({
 	scaleConnectProgram: (deps: ScaleConnectDeps) => {
 		programDeps.push(deps);
 		return {};

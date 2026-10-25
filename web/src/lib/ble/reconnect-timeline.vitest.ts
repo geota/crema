@@ -1,5 +1,5 @@
 /**
- * `$lib/ble/reconnect-timeline.vitest` — episode bookkeeping, phase
+ * `#lib/ble/reconnect-timeline.vitest.js` — episode bookkeeping, phase
  * durations and the compact line. The expected lines match the Android
  * shell's `ReconnectTimelineTest`, so a report reads the same from either.
  */

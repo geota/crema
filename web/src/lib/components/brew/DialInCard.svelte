@@ -11,10 +11,10 @@
 	 * Yields the floor to `LastShotCard` right after a pull — the caller
 	 * gates the two so the same shot is never described twice.
 	 */
-	import { getSettingsStore, convertWeight } from '$lib/settings';
-	import { formatRatio } from '$lib/utils/ratio';
-	import { effectiveGrindSetting, yieldOf, type StoredShot } from '$lib/history';
-	import StarRating from '$lib/components/common/StarRating.svelte';
+	import { getSettingsStore, convertWeight } from '#lib/settings/index.js';
+	import { formatRatio } from '#lib/utils/ratio.js';
+	import { effectiveGrindSetting, yieldOf, type StoredShot } from '#lib/history/index.js';
+	import StarRating from '#lib/components/common/StarRating.svelte';
 	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
 
 	let {

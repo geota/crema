@@ -16,9 +16,9 @@
 	import { untrack } from 'svelte';
 	import uPlot from 'uplot';
 	import 'uplot/dist/uPlot.min.css';
-	import { sampleCurve, preinfuseSeconds, type ProfileSegment } from '$lib/profiles';
-	import { theme } from '$lib/theme.svelte';
-	import { cssVar } from '$lib/components/charts/chartHelpers';
+	import { sampleCurve, preinfuseSeconds, type ProfileSegment } from '#lib/profiles/index.js';
+	import { theme } from '#lib/theme.svelte.js';
+	import { cssVar } from '#lib/components/charts/chartHelpers.js';
 
 	let {
 		segments,

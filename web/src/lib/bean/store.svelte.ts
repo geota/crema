@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/store` — the bean library store.
+ * `#lib/bean/store` — the bean library store.
  *
  * Backs `/beans` (the library + roaster directory) and the brew-page
  * bean picker. Two reactive lists — beans and roasters — plus an
@@ -18,8 +18,8 @@
  * {@link getBeanLibraryStore} or the legacy alias {@link getBeanStore}.
  */
 
-import { isIdOrNull, isJsonObject, readJson, writeJson } from '$lib/utils/storage';
-import { credit_remaining, debit_remaining, resettle_remaining } from '$lib/wasm/de1_wasm';
+import { isIdOrNull, isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
+import { credit_remaining, debit_remaining, resettle_remaining } from '#lib/wasm/de1_wasm.js';
 import {
 	type Bean,
 	type Roaster,

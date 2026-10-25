@@ -1,5 +1,5 @@
 /**
- * `$lib/services/token-vault-coherence.test` — node:test for the T-16
+ * `#lib/services/token-vault-coherence.test` — node:test for the T-16
  * localStorage-coherence fix in `TokenVault.getTokens`.
  *
  * `token-vault.test.ts` covers the refresh / 401 semantics with localStorage

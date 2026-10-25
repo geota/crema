@@ -12,9 +12,9 @@
 	 * units feed the rest of the app's value formatting; density and screensaver
 	 * are persisted app preferences.
 	 */
-	import { brewCueHapticsOn, brewCueSoundOn, getSettingsStore } from '$lib/settings';
-	import { wakeLockSupported } from '$lib/shell/wake-lock';
-	import { getCremaAppContext } from '$lib/shell/app-context';
+	import { brewCueHapticsOn, brewCueSoundOn, getSettingsStore } from '#lib/settings/index.js';
+	import { wakeLockSupported } from '#lib/shell/wake-lock.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -97,7 +97,7 @@
 		{/snippet}
 	</StRow>
 	<!-- Screen Wake Lock while a shot pulls — the layout's effect consumes
-	     this (`$lib/shell/wake-lock`). Disabled with a note on browsers
+	     this (`#lib/shell/wake-lock.js`). Disabled with a note on browsers
 	     without the API (pre-16.4 Safari, insecure contexts). -->
 	<StRow
 		title="Keep screen on while brewing"

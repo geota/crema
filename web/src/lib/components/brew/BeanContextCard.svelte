@@ -24,28 +24,24 @@
 		roastBand,
 		beanFreshness,
 		freshnessColor,
-		type Roaster, activateBean } from '$lib/bean';
-	import RoasterAutocomplete from '$lib/components/beans/RoasterAutocomplete.svelte';
+		type Roaster, activateBean } from '#lib/bean/index.js';
+	import RoasterAutocomplete from '#lib/components/beans/RoasterAutocomplete.svelte';
 	import QuickStepper from './QuickStepper.svelte';
-	import { getSettingsStore } from '$lib/settings';
-	import { getBrewContext } from '$lib/state';
-	import type { Roast } from '$lib/profiles';
+	import { getSettingsStore } from '#lib/settings/index.js';
+	import { getBrewContext } from '#lib/state/index.js';
+	import type { Roast } from '#lib/profiles/index.js';
 
-	let {
-		grind,
-		onEditingChange
-	}: {
-		/** The current grinder click setting from the Quick Sheet params. */
-		grind: number;
-		/**
-		 * Fires when the inline editor opens or closes. The Brew dashboard
-		 * uses this to collapse sibling cards (Max stack, Phase indicator,
-		 * Last shot) while the bean form is expanded, so a tall form
-		 * doesn't push the foot strip out of viewport. The card reverts to
-		 * its normal compact size on save / cancel.
-		 */
-		onEditingChange?: (editing: boolean) => void;
-	} = $props();
+	let { grind, onEditingChange
+
+	/** The current grinder click setting from the Quick Sheet params. */
+	/**
+	 * Fires when the inline editor opens or closes. The Brew dashboard
+	 * uses this to collapse sibling cards (Max stack, Phase indicator,
+	 * Last shot) while the bean form is expanded, so a tall form
+	 * doesn't push the foot strip out of viewport. The card reverts to
+	 * its normal compact size on save / cancel.
+	 */
+	 }: { grind: number; onEditingChange?: (editing: boolean) => void } = $props();
 
 	/** The shared library store — used for editor write paths only. */
 	const library = getBeanStore();
@@ -187,7 +183,7 @@
 		// No editable library row → route to the library page (or no-op
 		// during replay, since the snapshot isn't a writable record).
 		if (!editableBean) {
-			if (!display) void goto(resolve('/beans'));
+			if (!display) void goto(resolve('beans'));
 			return;
 		}
 		creating = false;
@@ -304,7 +300,7 @@
 						type="button"
 						class="bean-default-chip"
 						title="Use the equipment-level default from Settings → Machine"
-						onclick={() => (eGrinder = defaultGrinder)}
+						onclick={() => eGrinder = defaultGrinder}
 					>
 						<span class="bean-default-chip-tag">default</span>
 						<span>{defaultGrinder}</span>
@@ -317,7 +313,7 @@
 					class="bean-input"
 					type="date"
 					value={eRoastedOn ?? ''}
-					oninput={(e) => (eRoastedOn = e.currentTarget.value || null)}
+					oninput={(e) => eRoastedOn = e.currentTarget.value || null}
 				/>
 			</label>
 			<div class="bean-field">
@@ -327,17 +323,15 @@
 					min={1}
 					max={10}
 					step={1}
-					onChange={(v) => (eRoastLevel = parseRoastLevel(String(v)))}
+					onChange={(v) => eRoastLevel = parseRoastLevel(String(v))}
 				/>
 				<div class="bean-roast">
 					{#each roastOptions as r (r)}
 						<button
 							class="bean-roast-opt"
 							class:is-active={roastBand(eRoastLevel) === r}
-							onclick={() => (eRoastLevel = ROAST_PILL_LEVEL[r])}
-						>
-							{r}
-						</button>
+							onclick={() => eRoastLevel = ROAST_PILL_LEVEL[r]}
+						>{r}</button>
 					{/each}
 				</div>
 			</div>
@@ -359,7 +353,7 @@
 					<CheckIcon aria-hidden="true" />
 				</button>
 			</div>
-			<a class="bean-fullopen" href={resolve('/beans')}>Open in library →</a>
+			<a class="bean-fullopen" href={resolve('beans')}>Open in library →</a>
 		</div>
 	</div>
 {:else}
@@ -414,9 +408,12 @@
 			</div>
 			<div class="crema-bean-cell">
 				<span class="t-eyebrow">Grind</span>
-				<span class="crema-bean-val"
-					>{grind.toFixed(1)}{#if grinder}&nbsp;<em>{grinder}</em>{/if}</span
-				>
+
+				<span class="crema-bean-val">
+					{grind.toFixed(1)}{#if grinder}
+						<em>{grinder}</em>
+					{/if}
+				</span>
 			</div>
 		</div>
 	</div>

@@ -1,5 +1,5 @@
 /**
- * `$lib/components/brew` — the Brew dashboard's view components, a Svelte 5
+ * `#lib/components/brew` — the Brew dashboard's view components, a Svelte 5
  * port of the `variant === 'g'` path of `WebQDashV2` in the design's
  * `web-dashboard-v2.jsx` / `quick-controls-v2.jsx`.
  *

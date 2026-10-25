@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	import CopyIcon from 'phosphor-svelte/lib/CopyIcon';
 	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
 	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
@@ -14,7 +14,7 @@
 	 * real data — the profile is a `CremaProfile` from the library store.
 	 *
 	 * The card carries no bean line: a bag of coffee is not profile-scoped (see
-	 * `$lib/bean`), so the meta line shows only the relative last-used time.
+	 * `#lib/bean/index.js`), so the meta line shows only the relative last-used time.
 	 */
 	import ProfilePreview from './ProfilePreview.svelte';
 	import {
@@ -22,8 +22,8 @@
 		relativeLastUsed,
 		preinfuseSeconds,
 		type CremaProfile
-	} from '$lib/profiles';
-	import { getSettingsStore, convertWeight, convertTemp } from '$lib/settings';
+	} from '#lib/profiles/index.js';
+	import { getSettingsStore, convertWeight, convertTemp } from '#lib/settings/index.js';
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);

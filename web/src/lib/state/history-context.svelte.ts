@@ -1,5 +1,5 @@
 /**
- * `$lib/state/history-context` — joined per-shot views for the history
+ * `#lib/state/history-context` — joined per-shot views for the history
  * readers (`ShotDetail`, `ShotRow`, `CompareOverlay`, `StaticShotChart`,
  * `BeanPicker`).
  *
@@ -14,9 +14,9 @@
  * underlying data is the shot itself.
  */
 
-import { getBeanStore, type Bean, type BeanLibraryStore } from '$lib/bean';
-import { getProfileStore, type CremaProfile, type ProfileStore } from '$lib/profiles';
-import type { StoredShot } from '$lib/history';
+import { getBeanStore, type Bean, type BeanLibraryStore } from '#lib/bean/index.js';
+import { getProfileStore, type CremaProfile, type ProfileStore } from '#lib/profiles/index.js';
+import type { StoredShot } from '#lib/history/index.js';
 
 /**
  * One shot's joined view. Live fields (`liveBean`, `resolvedProfile`)

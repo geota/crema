@@ -1,5 +1,5 @@
 /**
- * `$lib/testing/test-init` — initialise the `de1_wasm` bundle for vitest.
+ * `#lib/testing/test-init` — initialise the `de1_wasm` bundle for vitest.
  *
  * The bundle is built with wasm-bindgen `--target web`, so its default
  * initializer fetches `de1_wasm_bg.wasm` by URL — which neither Node nor jsdom
@@ -8,12 +8,12 @@
  * old `node:test` suites did. Idempotent — safe to `beforeAll` in every wasm-
  * touching vitest file. NOT a test file (no `.test.ts` / `.vitest.ts` suffix).
  *
- * Lives here, NOT under `$lib/wasm/`: that dir is the wasm-pack `--out-dir` and
+ * Lives here, NOT under `#lib/wasm/`: that dir is the wasm-pack `--out-dir` and
  * is gitignored (CI regenerates it fresh via `pnpm wasm`), so a helper placed
  * there is untracked and vanishes in CI — svelte-check then can't resolve it.
  */
 
-import initWasm from '$lib/wasm/de1_wasm.js';
+import initWasm from '#lib/wasm/de1_wasm.js';
 
 let initialised = false;
 

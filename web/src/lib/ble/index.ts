@@ -1,5 +1,5 @@
 /**
- * `$lib/ble` — the Web Bluetooth layer: a transport abstraction plus a DE1
+ * `#lib/ble/index.js` — the Web Bluetooth layer: a transport abstraction plus a DE1
  * manager and a scale manager, mirroring the Android shell's `ble` package.
  *
  * Unlike Android, there is no scanner: Web Bluetooth's `requestDevice()` is

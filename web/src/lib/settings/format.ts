@@ -1,5 +1,5 @@
 /**
- * `$lib/settings/format` — the shared unit-formatting helpers.
+ * `#lib/settings/format.js` — the shared unit-formatting helpers.
  *
  * Every Crema readout (Brew, History, Scale) measures in the core's canonical
  * SI-ish units — grams, °C, bar, ml — but the user picks a display unit in
@@ -39,7 +39,7 @@ import {
 	ml_to_fl_oz as wasmMlToFlOz,
 	oz_to_grams as wasmOzToGrams,
 	psi_to_bar as wasmPsiToBar
-} from '$lib/wasm/de1_wasm';
+} from '#lib/wasm/de1_wasm.js';
 
 /** The placeholder shown for a missing reading — matches the dashboards. */
 const DASH = '—';

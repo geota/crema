@@ -6,8 +6,8 @@
 	 * (archived bags excluded). Choosing here never changes the app's
 	 * active bag.
 	 */
-	import { getBeanStore, type Bean } from '$lib/bean';
-	import BeanPicker from '$lib/components/history/BeanPicker.svelte';
+	import { getBeanStore, type Bean } from '#lib/bean/index.js';
+	import BeanPicker from '#lib/components/history/BeanPicker.svelte';
 
 	let {
 		beanId,

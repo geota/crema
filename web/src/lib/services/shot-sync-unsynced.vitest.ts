@@ -1,5 +1,5 @@
 /**
- * `$lib/services/shot-sync-unsynced.vitest` — vitest for `ShotSync.uploadUnsyncedShots`'s
+ * `#lib/services/shot-sync-unsynced.vitest` — vitest for `ShotSync.uploadUnsyncedShots`'s
  * EF1 self-heal: a `POST /shots/upload` that returns a 2xx with no parseable
  * `id` (→ `ResponseDecodeError`) means the shot is ALREADY on the server but
  * never got its `visualizerId` bound locally. Re-POSTing it (the naive "enqueue
@@ -17,8 +17,8 @@
 
 import { Effect, Exit, Layer } from 'effect';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ReconcileAction } from '$lib/visualizer/shot-sync-signatures';
-import { initTestWasm } from '$lib/testing/test-init';
+import type { ReconcileAction } from '#lib/visualizer/shot-sync-signatures.js';
+import { initTestWasm } from '#lib/testing/test-init.js';
 
 // The self-heal pull materialises rows through the wasm-backed
 // `wireShotFromDetail` (CORE1; not mocked here), so init the bundle first.
@@ -36,17 +36,17 @@ const h = vi.hoisted(() => ({
 	appendSyncLog: vi.fn()
 }));
 
-vi.mock('$lib/settings', () => ({
+vi.mock('#lib/settings/index.js', () => ({
 	getSettingsStore: () => ({
 		current: { visualizerIncludeProfile: true, visualizerIncludeNotes: true, visualizerPrivacy: 'unlisted', grinderModel: '' }
 	})
 }));
-vi.mock('$lib/history/v2-export', () => ({
+vi.mock('#lib/history/v2-export.js', () => ({
 	exportStoredShotAsV2Json: () => JSON.stringify({ profile: { title: 'P' }, metadata: {} })
 }));
-vi.mock('$lib/bean/store.svelte', () => ({ getBeanStore: () => ({ getBean: () => null }) }));
-vi.mock('$lib/bean/visualizer-sync', () => ({ roastLevelToWire: () => null }));
-vi.mock('$lib/visualizer/shot-sync-signatures', () => ({
+vi.mock('#lib/bean/store.svelte.js', () => ({ getBeanStore: () => ({ getBean: () => null }) }));
+vi.mock('#lib/bean/visualizer-sync.js', () => ({ roastLevelToWire: () => null }));
+vi.mock('#lib/visualizer/shot-sync-signatures.js', () => ({
 	signatureForShot: () => 'SIG',
 	signatureForBean: () => 'b',
 	signatureForRoaster: () => 'r',
@@ -57,7 +57,7 @@ vi.mock('$lib/visualizer/shot-sync-signatures', () => ({
 // Capture queue + sync-log writes so we can assert "never enqueued a create".
 vi.mock('./queue-store.ts', () => ({ enqueueEntry: h.enqueueEntry }));
 // buildShotPayload reads the upload prefs from the sync-config (the unification).
-vi.mock('$lib/visualizer/sync-config', () => ({
+vi.mock('#lib/visualizer/sync-config.js', () => ({
 	appendSyncLog: h.appendSyncLog,
 	readSyncConfig: () => ({ includeProfile: true, includeNotes: true, privacy: 'unlisted' })
 }));
@@ -66,8 +66,8 @@ import { describeUnsyncedStop, ShotSync, ShotSyncLive, type UnsyncedUploadResult
 import { HttpStatusError } from '../effect/errors.ts';
 import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
-import type { StoredShot } from '$lib/history/model';
-import type { HistoryStore } from '$lib/history/store.svelte';
+import type { StoredShot } from '#lib/history/model.js';
+import type { HistoryStore } from '#lib/history/store.svelte.js';
 import type { TokenSet } from '../visualizer/oauth.ts';
 
 /** A fake HttpClient driven by `handler`; every reply here is a 2xx. */

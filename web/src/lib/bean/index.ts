@@ -1,5 +1,5 @@
 /**
- * `$lib/bean` — the bean library: bags of coffee and the roasters that produced
+ * `#lib/bean/index.js` — the bean library: bags of coffee and the roasters that produced
  * them. Mirrors `de1_domain::bean`; types are shareable across shells via
  * `#[typeshare]`. Persistence and CRUD live in the shell store.
  */
@@ -60,8 +60,8 @@ export {
 } from './image-storage';
 
 // Account identity now comes from the `BeanSync` service (it owns the authed
-// `/me` call); token storage + the OAuth redirect helpers stay in `$lib/visualizer`.
-export { type VisualizerAccount } from '$lib/services/bean-sync';
+// `/me` call); token storage + the OAuth redirect helpers stay in `#lib/visualizer/index.js`.
+export { type VisualizerAccount } from '#lib/services/bean-sync.js';
 
 export {
 	isConfigured as isVisualizerOauthConfigured,
@@ -69,4 +69,4 @@ export {
 	startVisualizerLogin,
 	OAUTH_SCOPES as VISUALIZER_OAUTH_SCOPES,
 	type TokenSet as VisualizerTokenSet
-} from '$lib/visualizer';
+} from '#lib/visualizer/index.js';

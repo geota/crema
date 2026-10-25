@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/roaster-favicon` — best-effort logo lookup for a roaster,
+ * `#lib/bean/roaster-favicon.js` — best-effort logo lookup for a roaster,
  * using Google's public favicon service.
  *
  * The {@link Roaster} type already has an `imageUrl` field for a uploaded

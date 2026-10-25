@@ -8,20 +8,20 @@
 	 * patch through to the store). If the id is unknown the user is
 	 * bounced back to `/beans`.
 	 */
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { getBeanStore } from '$lib/bean';
-	import RoasterEditor from '$lib/components/beans/RoasterEditor.svelte';
+	import { getBeanStore } from '#lib/bean/index.js';
+	import RoasterEditor from '#lib/components/beans/RoasterEditor.svelte';
 
 	const library = getBeanStore();
 
-	const id = $derived($page.params.id ?? '');
+	const id = $derived(page.params.id ?? '');
 	const roaster = $derived(id ? library.getRoaster(id) : null);
 
 	$effect(() => {
 		if (id && !roaster) {
-			queueMicrotask(() => goto(resolve('/beans?tab=roasters'), { replaceState: true }));
+			queueMicrotask(() => goto(resolve('beans?tab=roasters'), { replaceState: true }));
 		}
 	});
 </script>
@@ -31,7 +31,7 @@
 </svelte:head>
 
 {#if roaster}
-	<RoasterEditor {roaster} />
+	<RoasterEditor roaster={roaster} />
 {:else}
 	<div class="rd-loading">Loading…</div>
 {/if}

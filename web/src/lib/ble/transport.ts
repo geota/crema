@@ -1,5 +1,5 @@
 /**
- * `$lib/ble/transport` — Crema's small abstraction over the Web Bluetooth
+ * `#lib/ble/transport` — Crema's small abstraction over the Web Bluetooth
  * central stack. The web mirror of the Android shell's `BleTransport`.
  *
  * ## How this differs from the Android model

@@ -1,5 +1,5 @@
 /**
- * `$lib/effect/runtime.test` — composition smoke test for the node-resolvable
+ * `#lib/effect/runtime.test` — composition smoke test for the node-resolvable
  * slice of the app runtime (docs/53 T-09..T-12 wiring).
  *
  * Builds the auth trio (TokenVault <- OAuth <- HttpClient) on a real
@@ -9,10 +9,10 @@
  * fine; we're verifying composition, not persistence.
  *
  * **Why not the real `AppLayer` / `createAppRuntime()`**: as of T-12, `AppLayer`
- * also composes `ShotSyncLive`, which is store-coupled (`$lib/bean`,
- * `$lib/history`, `$lib/settings`, Svelte runes) and therefore not loadable
+ * also composes `ShotSyncLive`, which is store-coupled (`#lib/bean/index.js`,
+ * `#lib/history`, `$lib/settings`, Svelte runes) and therefore not loadable
  * under node's resolver — importing `runtime.ts` here would fail with
- * `ERR_MODULE_NOT_FOUND ('$lib')`. The full `AppLayer` is only ever
+ * `ERR_MODULE_NOT_FOUND ('#lib')`. The full `AppLayer` is only ever
  * instantiated in the browser (D-03), and its composition completeness is now a
  * compile-time guarantee: `createAppRuntime(): ManagedRuntime<AppServices,
  * never>` only typechecks if every service's requirements are provided, so an

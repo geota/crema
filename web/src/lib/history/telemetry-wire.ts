@@ -1,5 +1,5 @@
 /**
- * `$lib/history/telemetry-wire` — bidirectional codec between the
+ * `#lib/history/telemetry-wire.js` — bidirectional codec between the
  * chart-friendly {@link TelemetrySample} shape and the wire-shape
  * {@link TimedSample}.
  *
@@ -26,8 +26,8 @@
  * declared today.
  */
 
-import type { ShotSample, TimedSample } from '$lib/core';
-import type { TelemetrySample } from '$lib/state';
+import type { ShotSample, TimedSample } from '#lib/core/index.js';
+import type { TelemetrySample } from '#lib/state/index.js';
 
 /**
  * Convert a live {@link TelemetrySample} into the persisted wire shape.

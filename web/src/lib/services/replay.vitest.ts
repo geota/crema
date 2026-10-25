@@ -1,5 +1,5 @@
 /**
- * `$lib/services/replay.vitest` — vitest for the replay engine (docs/53 T-28).
+ * `#lib/services/replay.vitest.js` — vitest for the replay engine (docs/53 T-28).
  *
  * Mocks at the core seam (a fake `CremaCore` slice + spy callbacks) and asserts
  * the orchestration Effect adds: the shadow-core swap is leak-proof (endReplay +
@@ -14,8 +14,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Effect, Fiber } from 'effect';
 import { replayCaptureProgram, type ReplayCaptureDeps } from './replay.ts';
-import type { CoreOutput, CremaCore } from '$lib/core';
-import type { CaptureEvent, ParsedCapture, ReplayMeta } from '$lib/replay';
+import type { CoreOutput, CremaCore } from '#lib/core/index.js';
+import type { CaptureEvent, ParsedCapture, ReplayMeta } from '#lib/replay/index.js';
 
 const EMPTY_OUTPUT = {} as CoreOutput;
 

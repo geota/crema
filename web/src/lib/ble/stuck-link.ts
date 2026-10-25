@@ -1,5 +1,5 @@
 /**
- * `$lib/ble/stuck-link` — the two ways a DE1 link lies, and what the status
+ * `#lib/ble/stuck-link.js` — the two ways a DE1 link lies, and what the status
  * line says about each. Shared with Android (`ble/StuckLink.kt`) so the same
  * situation reads the same on every device.
  *

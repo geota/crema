@@ -1,5 +1,5 @@
 /**
- * `$lib/services/bean-sync` — the `BeanSync` service (docs/53 §1.3, §2.4 PR 3.6,
+ * `#lib/services/bean-sync` — the `BeanSync` service (docs/53 §1.3, §2.4 PR 3.6,
  * T-13).
  *
  * The Effect-native home for the bean/roaster Visualizer *mutations* currently
@@ -17,7 +17,7 @@
  * A 404 on delete is treated as success (already gone), like `ShotSync`.
  *
  * `BeanSyncLive` is the production implementation, composed into `AppLayer`.
- * Store-coupled (`$lib/bean`), so not node:test-able.
+ * Store-coupled (`#lib/bean/index.js`), so not node:test-able.
  */
 
 import { Context, Effect, Layer } from 'effect';
@@ -37,8 +37,8 @@ import {
 	VisualizerAccountSchema,
 	decodeResponse
 } from '../effect/schema/visualizer.ts';
-import type { Bean, Roaster } from '$lib/bean';
-import type { BeanLibraryStore } from '$lib/bean/store.svelte';
+import type { Bean, Roaster } from '#lib/bean/index.js';
+import type { BeanLibraryStore } from '#lib/bean/store.svelte.js';
 import {
 	beanFromWire,
 	coffeeBagWriteRequest,
@@ -48,7 +48,7 @@ import {
 	writeSyncSettings,
 	type SyncLogEntry,
 	type SyncResult
-} from '$lib/bean/visualizer-sync';
+} from '#lib/bean/visualizer-sync.js';
 import {
 	beanSyncScope as wasmBeanSyncScope,
 	mergePulledRoaster as wasmMergePulledRoaster,
@@ -60,23 +60,23 @@ import {
 	reconcileBeans as wasmReconcileBeans,
 	reconcileRoasters as wasmReconcileRoasters,
 	resolveRoasterCatalogueLink as wasmResolveRoasterCatalogueLink
-} from '$lib/wasm/de1_wasm';
+} from '#lib/wasm/de1_wasm.js';
 import type {
 	BeanPushItem,
 	BeanSyncScope,
 	RoasterLinkPatch,
 	RoasterPushItem
-} from '$lib/core/crema-core';
-import { readSyncConfig, updateSyncConfig } from '$lib/visualizer/sync-config';
-import type { components } from '$lib/visualizer/openapi';
+} from '#lib/core/crema-core.js';
+import { readSyncConfig, updateSyncConfig } from '#lib/visualizer/sync-config.js';
+import type { components } from '#lib/visualizer/openapi.js';
 import {
 	CATALOGUE_PAGE_SIZE,
 	parseCataloguePage,
 	parseCatalogueRoasterPage,
 	type CataloguePage,
 	type CatalogueRoasterPage
-} from '$lib/bean/catalogue';
-import { mintBeanId } from '$lib/bean/model';
+} from '#lib/bean/catalogue.js';
+import { mintBeanId } from '#lib/bean/model.js';
 
 /** Crema-side projection of the Visualizer `/me` response (camel-cased). */
 export interface VisualizerAccount {

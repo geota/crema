@@ -179,8 +179,8 @@ describe('LaunchReconnect', () => {
 describe('CremaApp wiring', () => {
 	// Imported lazily so the module-level tests above stay light.
 	async function makeApp() {
-		const { CremaApp } = await import('$lib/state/app.svelte');
-		const { De1Manager, ScaleManager } = await import('$lib/ble');
+		const { CremaApp } = await import('#lib/state/app.svelte.js');
+		const { De1Manager, ScaleManager } = await import('#lib/ble/index.js');
 		const spies = {
 			de1Known: vi.spyOn(De1Manager.prototype, 'connectKnown').mockResolvedValue(),
 			de1Connect: vi.spyOn(De1Manager.prototype, 'connect').mockResolvedValue(),

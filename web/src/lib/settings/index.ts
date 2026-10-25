@@ -1,5 +1,5 @@
 /**
- * `$lib/settings` — the app-preferences layer.
+ * `#lib/settings/index.js` — the app-preferences layer.
  *
  * A single localStorage-backed `$state` store holding every Crema *app*
  * preference: units, theme, sound cues, brew defaults, display density and the

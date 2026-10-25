@@ -6,8 +6,8 @@
 	 * Save persists + navigates back to `/beans`. The draft is local to
 	 * this route, so abandoning the form leaves no trace in the library.
 	 */
-	import { blankRoaster } from '$lib/bean';
-	import RoasterEditor from '$lib/components/beans/RoasterEditor.svelte';
+	import { blankRoaster } from '#lib/bean/index.js';
+	import RoasterEditor from '#lib/components/beans/RoasterEditor.svelte';
 
 	// One-shot draft. Re-mounted whenever the route is re-entered.
 	const draft = blankRoaster('');

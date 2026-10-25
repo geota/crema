@@ -1,5 +1,5 @@
 /**
- * `$lib/profiles/fingerprint` — a stable, cheap hash of an "effective profile"
+ * `#lib/profiles/fingerprint` — a stable, cheap hash of an "effective profile"
  * (a library {@link CremaProfile} merged with the user's per-shot Quick
  * Controls overrides) used to decide whether the DE1 already has the right
  * bytes loaded.
@@ -21,7 +21,7 @@
  * thin adapter that hands the shell shape over the wasm boundary.
  */
 
-import { profileFingerprint as wasmProfileFingerprint } from '$lib/wasm/de1_wasm';
+import { profileFingerprint as wasmProfileFingerprint } from '#lib/wasm/de1_wasm.js';
 import type { CremaProfile } from './model';
 
 /**

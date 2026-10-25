@@ -1,5 +1,5 @@
 /**
- * `$lib/ble/de1-transport` — the transport-agnostic interface every
+ * `#lib/ble/de1-transport.js` — the transport-agnostic interface every
  * concrete DE1 link implementation satisfies.
  *
  * `BleDevice` (Web Bluetooth GATT, the current default) is one impl;

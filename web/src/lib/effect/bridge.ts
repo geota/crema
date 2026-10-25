@@ -1,5 +1,5 @@
 /**
- * `$lib/effect/bridge` — interop primitives between the Effect world and the
+ * `#lib/effect/bridge.js` — interop primitives between the Effect world and the
  * `Promise`-shaped public boundary that Svelte components consume (docs/53 D-04).
  *
  * The boundary stays `Promise`-shaped: services are `Effect`s internally, but

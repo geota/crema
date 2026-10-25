@@ -1,5 +1,5 @@
 /**
- * `$lib/services/profile-sync.vitest` — vitest for the `ProfileSync`
+ * `#lib/services/profile-sync.vitest` — vitest for the `ProfileSync`
  * coordination service (docs/53 T-21, risk R-03).
  *
  * This is the behavior that was previously buried in `state/app.svelte.ts`'s

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	import LockKeyIcon from 'phosphor-svelte/lib/LockKeyIcon';
 	/**
 	 * `BeanSyncSection` — Settings → Sharing → "Sync" card.
@@ -13,8 +13,8 @@
 	 * The name predates the unification — kept for git-blame continuity.
 	 */
 	import { onMount } from 'svelte';
-	import { getBeanStore, readSyncSettings, type SyncResult as BeanSyncResult } from '$lib/bean';
-	import { getHistoryStore, isBrewLog } from '$lib/history';
+	import { getBeanStore, readSyncSettings, type SyncResult as BeanSyncResult } from '#lib/bean/index.js';
+	import { getHistoryStore, isBrewLog } from '#lib/history/index.js';
 	import {
 		appendSyncLog,
 		directionPulls,
@@ -23,17 +23,17 @@
 		readSyncConfig,
 		updateSyncConfig,
 		type SyncDirection
-	} from '$lib/visualizer';
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
-	import { describeUnsyncedStop, type PullOptions } from '$lib/services/shot-sync';
-	import { toast } from '$lib/components/shared/toast.svelte';
+	} from '#lib/visualizer/index.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { useVisualizerConnection } from '#lib/visualizer/useVisualizerConnection.svelte.js';
+	import { describeUnsyncedStop, type PullOptions } from '#lib/services/shot-sync.js';
+	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StSegment from '../StSegment.svelte';
 	import StToggle from '../StToggle.svelte';
-	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
-	import { syncTimeLabel } from '$lib/utils/relative-time';
+	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { syncTimeLabel } from '#lib/utils/relative-time.js';
 
 	let {
 		onShotPushEnabled

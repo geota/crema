@@ -1,5 +1,5 @@
 /**
- * `$lib/security/secret-box` — at-rest wrapping for the credentials the app
+ * `#lib/security/secret-box.js` — at-rest wrapping for the credentials the app
  * has to keep in browser storage (the Visualizer OAuth tokens, the Decent
  * account token).
  *

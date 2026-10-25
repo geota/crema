@@ -1,5 +1,5 @@
 /**
- * `$lib/visualizer` — top-level barrel for the Visualizer integration.
+ * `#lib/visualizer/index.js` — top-level barrel for the Visualizer integration.
  *
  * Modules:
  *   - {@link ./oauth}            — OAuth 2.0 + PKCE redirect flow + crypto helpers
@@ -7,7 +7,7 @@
  *   - {@link ./migrate-basic-auth} — one-shot legacy-credential cleanup
  *
  * Token persistence + refresh and the authed HTTP now live in the Effect
- * services (`$lib/services/{token-vault,http-client,shot-sync,bean-sync}`); the
+ * services (`#lib/services/{token-vault,http-client,shot-sync,bean-sync}`); the
  * shot/queue work runs on the app runtime (Option 3). The wasm-side de-dup
  * helpers live in {@link ./shot-sync-signatures}.
  */
@@ -48,8 +48,8 @@ export { migrateLegacyBasicAuth } from './migrate-basic-auth';
 export { bestEffortRemoteDelete } from './bestEffortRemoteDelete';
 
 // ── Shot sync + upload queue (T-16) ────────────────────────────────
-// Moved to the Effect services `$lib/services/{shot-sync,upload-queue}` and the
-// pure `$lib/services/queue-store`. Call sites run them on the app runtime
+// Moved to the Effect services `#lib/services/{shot-sync,upload-queue}` and the
+// pure `#lib/services/queue-store.js`. Call sites run them on the app runtime
 // (Option 3) — there is no Promise-shaped facade here. The wasm-side
 // de-dup/signature helpers (`reconcileShots`, `signatureFor*`,
 // `storedShotFromWire`, `WireShot`) live in `./shot-sync-signatures` and are

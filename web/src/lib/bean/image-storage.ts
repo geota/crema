@@ -1,9 +1,9 @@
 /**
- * `$lib/bean/image-storage` — IndexedDB-backed store for bean photo blobs.
+ * `#lib/bean/image-storage.js` — IndexedDB-backed store for bean photo blobs.
  *
  * Bean records keep a small string pointer in `Bean.imageRef` (e.g.
  * `"idb:bean-image:bean:<uuid>"`); the actual JPEG/PNG/etc bytes live
- * here. Mirrors `$lib/capture/store` field-for-field — IndexedDB
+ * here. Mirrors `#lib/capture/store.js` field-for-field — IndexedDB
  * because blobs can be MB-scale (one user's BC export shipped a 2.2 MB
  * JPG); `localStorage` would be exhausted by the first bag.
  *

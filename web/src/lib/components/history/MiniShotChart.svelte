@@ -15,7 +15,7 @@
 	 * entirely instead of drawing a flat zero. Pressure and flow are always
 	 * present on a DE1 telemetry sample, so they always render.
 	 */
-	import type { TelemetrySample } from '$lib/state';
+	import type { TelemetrySample } from '#lib/state/index.js';
 
 	let {
 		series,

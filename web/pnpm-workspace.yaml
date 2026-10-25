@@ -7,4 +7,3 @@
 overrides:
   undici: '^7.30.1' # <7.30.1 advisories, via jsdom (test dep)
   js-yaml: '^4.3.2' # <4.3.2 advisories, via @redocly/openapi-core (codegen)
-  cookie: '^0.7.0' # <0.7.0 advisory, via @sveltejs/kit

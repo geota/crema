@@ -15,13 +15,13 @@
 	 * store stays pure-local, and the free-tier skip + best-effort warn (plus
 	 * the bags-before-roaster order) live in that helper.
 	 */
-	import { getBeanStore } from '$lib/bean';
-	import { planRoasterDelete } from '$lib/bean/roaster-delete';
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { bestEffortRemoteDelete } from '$lib/visualizer';
-	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
-	import SplitButton from '$lib/components/shared/SplitButton.svelte';
-	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
+	import { getBeanStore } from '#lib/bean/index.js';
+	import { planRoasterDelete } from '#lib/bean/roaster-delete.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { bestEffortRemoteDelete } from '#lib/visualizer/index.js';
+	import { useVisualizerConnection } from '#lib/visualizer/useVisualizerConnection.svelte.js';
+	import SplitButton from '#lib/components/shared/SplitButton.svelte';
+	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 
 	let {
 		roasterId,

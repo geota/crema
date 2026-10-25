@@ -6,8 +6,8 @@
  * `setActiveBean` and never auto-load.
  */
 import { getBeanStore } from './store.svelte';
-import { getProfileStore } from '$lib/profiles';
-import { toast } from '$lib/components/shared/toast.svelte';
+import { getProfileStore } from '#lib/profiles/index.js';
+import { toast } from '#lib/components/shared/toast.svelte.js';
 
 export function activateBean(id: string, opts: { shotInProgress?: boolean } = {}): void {
 	const library = getBeanStore();

@@ -29,8 +29,8 @@ const core = {
 	}))
 };
 
-vi.mock('$lib/core', async (importOriginal) => ({
-	...(await importOriginal<typeof import('$lib/core')>()),
+vi.mock('#lib/core/index.js', async (importOriginal) => ({
+	...(await importOriginal<typeof import('#lib/core/index.js')>()),
 	loadCore: async () => core
 }));
 
@@ -46,7 +46,7 @@ function lastPushedWeights(): (number | null)[] | undefined {
 /** A fresh store (a page reload) with `activeId` persisted, fully loaded. */
 async function reloadWithActive(activeId: string | null) {
 	vi.resetModules();
-	await (await import('$lib/testing/test-init')).initTestWasm();
+	await (await import('#lib/testing/test-init.js')).initTestWasm();
 	localStorage.setItem(ACTIVE_KEY, JSON.stringify(activeId));
 	const { getProfileStore } = await import('./store.svelte');
 	const store = getProfileStore();
@@ -57,7 +57,7 @@ async function reloadWithActive(activeId: string | null) {
 
 /** The first built-in whose steps carry a weight exit (an A-Flow). */
 async function weightedBuiltin() {
-	await (await import('$lib/testing/test-init')).initTestWasm();
+	await (await import('#lib/testing/test-init.js')).initTestWasm();
 	const { builtinCremaProfiles } = await import('./model');
 	const p = builtinCremaProfiles().find((b) => b.segments.some((s) => (s.weight ?? 0) > 0));
 	if (!p) throw new Error('no built-in with a step weight');

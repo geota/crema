@@ -28,7 +28,7 @@
  * docs/48 for the broader replay architecture.
  */
 
-import type { ShotBean } from '$lib/history';
+import type { ShotBean } from '#lib/history/index.js';
 
 /**
  * The Quick-Controls subset that persists into a `StoredShot` and rides

@@ -7,6 +7,17 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The web app shell now runs on SvelteKit 3** — no visible change; routes,
+  deep links, offline caching and the install prompt behave as before. For
+  maintainers: `svelte.config.js` is gone (configuration lives in the
+  `sveltekit()` plugin in `web/vite.config.ts`), imports use `#lib/...` with
+  explicit extensions, and the service worker is built with
+  `@katama-labs/vite-pwa-sveltekit`, a published copy of the pending upstream
+  SvelteKit 3 support for `@vite-pwa/sveltekit` (#172 tracks switching back;
+  a weekly workflow watches npm for the official release).
+
 ### Added
 
 - **Barista and drinker on each shot** — the History detail has Barista and

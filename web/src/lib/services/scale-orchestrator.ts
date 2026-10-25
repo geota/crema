@@ -1,5 +1,5 @@
 /**
- * `$lib/services/scale-orchestrator` — the scale connect sequence as an Effect
+ * `#lib/services/scale-orchestrator.js` — the scale connect sequence as an Effect
  * program (docs/53 §2.5 PR 4.3, T-19). The sibling of `de1-orchestrator`.
  *
  * Lifts `scale.ts`'s `connect()` try/catch into one `Effect.gen` with
@@ -16,8 +16,8 @@
  */
 
 import { Effect } from 'effect';
-import type { CoreOutput, CremaCore, ScaleUuids } from '$lib/core';
-import type { De1Transport } from '$lib/ble/de1-transport';
+import type { CoreOutput, CremaCore, ScaleUuids } from '#lib/core/index.js';
+import type { De1Transport } from '#lib/ble/de1-transport.js';
 import { ScaleConnectStepFailed } from '../effect/errors.ts';
 
 type CoreSlice = Pick<CremaCore, 'connectScale' | 'scaleUuids' | 'queryScaleSettings'>;

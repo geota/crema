@@ -1,5 +1,5 @@
 /**
- * `$lib/services/webhooks` — outgoing webhook fan-out (docs/53 §1.3, §2.4
+ * `#lib/services/webhooks.js` — outgoing webhook fan-out (docs/53 §1.3, §2.4
  * PR 3.7, T-15).
  *
  * The Effect-native home for `state/app.svelte.ts`'s `fireWebhook` +
@@ -19,13 +19,13 @@
  *
  * `WebhooksLive` is the production implementation, composed into `AppLayer`;
  * `app.svelte.ts` calls `Webhooks.fire()` / `Webhooks.sendTest()`. Reads the
- * settings store (`$lib/settings`), so not node:test-able.
+ * settings store (`#lib/settings/index.js`), so not node:test-able.
  */
 
 import { Context, Effect, Layer } from 'effect';
 import { HttpClient } from './http-client.ts';
 import type { HttpStatusError, NetworkError } from '../effect/errors.ts';
-import { getSettingsStore } from '$lib/settings';
+import { getSettingsStore } from '#lib/settings/index.js';
 
 /** Matches today's `AbortSignal.timeout(5000)` on every webhook fetch. */
 const TIMEOUT_MS = 5000;

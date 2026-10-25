@@ -28,7 +28,7 @@
 		getCustomMethodStore,
 		isCustomMethodId,
 		methodIconKey
-	} from '$lib/brew/custom-methods.svelte';
+	} from '#lib/brew/custom-methods.svelte.js';
 
 	let {
 		method = null,

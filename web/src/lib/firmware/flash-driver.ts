@@ -1,5 +1,5 @@
 /**
- * `$lib/firmware/flash-driver` — runs a DE1 firmware flash for the web shell.
+ * `#lib/firmware/flash-driver.js` — runs a DE1 firmware flash for the web shell.
  *
  * Every protocol decision lives in the Rust core (`de1_app::firmware_flash`):
  * which bytes, which characteristic, when a phase is over, when to give up,
@@ -36,9 +36,9 @@ import type {
 	FlashStartError,
 	FlashStatus,
 	FlashStep
-} from '$lib/core';
-import { FlashPhase, WriteTarget } from '$lib/core/crema-core';
-import { describeError } from '$lib/utils/error';
+} from '#lib/core/index.js';
+import { FlashPhase, WriteTarget } from '#lib/core/crema-core.js';
+import { describeError } from '#lib/utils/error.js';
 
 /** The core's flash clock cadence (decaid polls A009 every 250 ms). */
 export const TICK_MS = 250;

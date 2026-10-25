@@ -1,5 +1,5 @@
 /**
- * `$lib/brew/recipes` — the guided-brew recipe library (issue #10).
+ * `#lib/brew/recipes` — the guided-brew recipe library (issue #10).
  *
  * A recipe is a named multi-stage plan for a brew method (core
  * `BrewRecipe`, typeshared). Two kinds live side by side:
@@ -24,9 +24,9 @@ import type {
 	BrewStep,
 	RecipeLibraryMigration,
 	RecipeTimeEstimate
-} from '$lib/core/crema-core';
-import { BrewStepKind, StepAdvance } from '$lib/core/crema-core';
-import { isJsonObject, readJson, writeJsonChecked } from '$lib/utils/storage';
+} from '#lib/core/crema-core.js';
+import { BrewStepKind, StepAdvance } from '#lib/core/crema-core.js';
+import { isJsonObject, readJson, writeJsonChecked } from '#lib/utils/storage.js';
 import {
 	blankRecipeJson,
 	builtinBrewRecipesJson,
@@ -36,7 +36,7 @@ import {
 	migrateRecipeLibraryJson,
 	recipeEstimatedDurationJson,
 	recipePlannedPourTotalGJson
-} from '$lib/wasm/de1_wasm';
+} from '#lib/wasm/de1_wasm.js';
 import { getCustomMethodStore, isCustomMethodId } from './custom-methods.svelte';
 import { methodLabel } from './methods';
 

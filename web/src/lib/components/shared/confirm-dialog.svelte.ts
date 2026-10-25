@@ -1,5 +1,5 @@
 /**
- * `$lib/components/shared/confirm-dialog` — a promise-based in-app replacement
+ * `#lib/components/shared/confirm-dialog` — a promise-based in-app replacement
  * for native `confirm()` / `prompt()` (FD4).
  *
  * `await confirmDialog({ message })` resolves `true` / `false`;

@@ -1,5 +1,5 @@
 /**
- * `$lib/components/profiles` — the Profiles library + editor components,
+ * `#lib/components/profiles/index.js` — the Profiles library + editor components,
  * ported from `profiles-page.jsx` and `profile-edit-page.jsx`.
  */
 

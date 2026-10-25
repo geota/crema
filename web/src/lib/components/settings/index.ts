@@ -1,5 +1,5 @@
 /**
- * `$lib/components/settings` — the Settings-page primitive kit.
+ * `#lib/components/settings/index.js` — the Settings-page primitive kit.
  *
  * Svelte ports of the design's `St*` components (`settings-page.jsx`): the
  * section head, group, row, and the controls (toggle, select, segment,

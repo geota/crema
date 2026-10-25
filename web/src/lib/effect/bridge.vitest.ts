@@ -1,5 +1,5 @@
 /**
- * `$lib/effect/bridge.test` — node:test for `runtimePromise`, the Promise-shaped
+ * `#lib/effect/bridge.test` — node:test for `runtimePromise`, the Promise-shaped
  * boundary every Svelte call site crosses (docs/53 D-04, R-05).
  *
  * `bridge.ts` only imports `effect` at runtime (its `runtime.ts` import is

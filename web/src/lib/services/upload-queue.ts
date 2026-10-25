@@ -1,5 +1,5 @@
 /**
- * `$lib/services/upload-queue` — persistent retry queue for Visualizer sync
+ * `#lib/services/upload-queue.js` — persistent retry queue for Visualizer sync
  * operations (docs/53 §1.3, §2.4 PR 3.5, T-14).
  *
  * Every push that fails for a *recoverable* reason (network / 5xx / 408) is
@@ -25,7 +25,7 @@
  *    `enqueue()` no longer touches `attempts`.
  *
  * `UploadQueueLive` is the production implementation, composed into `AppLayer`.
- * Store-coupled (`$lib/history` in `runEntry`), so not node:test-able — the
+ * Store-coupled (`#lib/history` in `runEntry`), so not node:test-able — the
  * attempts-ceiling test rides `@effect/vitest` (`TestClock` drives the backoff
  * deterministically).
  */
@@ -51,7 +51,7 @@ import {
 	type EnqueueInput,
 	type QueueEntry
 } from './queue-store.ts';
-import { getHistoryStore } from '$lib/history';
+import { getHistoryStore } from '#lib/history/index.js';
 
 export type { EnqueueInput, QueueEntry } from './queue-store.ts';
 

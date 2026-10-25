@@ -50,9 +50,9 @@
 	 * register, not on `cuuid_12`.
 	 */
 	import { onMount } from 'svelte';
-	import { getMachineReadout, type CremaApp } from '$lib/state';
-	import { CalTarget, MmrRegister } from '$lib/core';
-	import { INITIAL_SNAPSHOT } from '$lib/state';
+	import { getMachineReadout, type CremaApp } from '#lib/state/index.js';
+	import { CalTarget, MmrRegister } from '#lib/core/index.js';
+	import { INITIAL_SNAPSHOT } from '#lib/state/index.js';
 
 	const machine = getMachineReadout();
 	import StSectionHead from '../StSectionHead.svelte';
@@ -65,7 +65,7 @@
 		displayToCanonical,
 		displayDecimals,
 		type Dimension
-	} from '$lib/settings';
+	} from '#lib/settings/index.js';
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);

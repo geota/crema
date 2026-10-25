@@ -1,5 +1,5 @@
 /**
- * `$lib/services/shot-sync` — the `ShotSync` service (docs/53 §1.3, §2.4, T-12).
+ * `#lib/services/shot-sync` — the `ShotSync` service (docs/53 §1.3, §2.4, T-12).
  *
  * Syncs Crema's local shot library against Visualizer's `/shots*` endpoints (per the
  * vendored OpenAPI spec at `../visualizer/openapi.json`). It consumes
@@ -26,7 +26,7 @@
  *
  * **No automated behavioral coverage**: `shot-sync.test.ts` drives the wasm
  * bundle directly, not this module, and `ShotSync` is store-coupled
- * (`$lib/bean`, `$lib/history`, `$lib/settings`) so it isn't node:test-able.
+ * (`#lib/bean`, `$lib/history`, `$lib/settings`) so it isn't node:test-able.
  * Correctness rests on the careful port below + a manual browser smoke test
  * (connect a real Visualizer account; upload + delete a shot; pull/reconcile).
  */
@@ -53,28 +53,28 @@ import {
 	ShotListResponseSchema,
 	decodeResponse
 } from '../effect/schema/visualizer.ts';
-import { getBeanStore } from '$lib/bean/store.svelte';
-import { readSyncSettings } from '$lib/bean/visualizer-sync';
-import { effectiveGrindSetting } from '$lib/history';
-import { exportStoredShotAsV2Json } from '$lib/history/v2-export';
-import type { ShotPatchInputs, TimedSample } from '$lib/core';
-import { isBrewLog, type ShotBean, type StoredShot } from '$lib/history/model';
-import type { HistoryStore } from '$lib/history/store.svelte';
-import { getSettingsStore } from '$lib/settings';
-import type { components } from '$lib/visualizer/openapi';
+import { getBeanStore } from '#lib/bean/store.svelte.js';
+import { readSyncSettings } from '#lib/bean/visualizer-sync.js';
+import { effectiveGrindSetting } from '#lib/history/index.js';
+import { exportStoredShotAsV2Json } from '#lib/history/v2-export.js';
+import type { ShotPatchInputs, TimedSample } from '#lib/core/index.js';
+import { isBrewLog, type ShotBean, type StoredShot } from '#lib/history/model.js';
+import type { HistoryStore } from '#lib/history/store.svelte.js';
+import { getSettingsStore } from '#lib/settings/index.js';
+import type { components } from '#lib/visualizer/openapi.js';
 import {
 	reconcileShots,
 	signatureForShot,
 	storedShotFromWire,
 	type WireShot
-} from '$lib/visualizer/shot-sync-signatures';
-import { appendSyncLog, readSyncConfig } from '$lib/visualizer/sync-config';
+} from '#lib/visualizer/shot-sync-signatures.js';
+import { appendSyncLog, readSyncConfig } from '#lib/visualizer/sync-config.js';
 import {
 	samplesFromVisualizerDetail as wasmSamplesFromVisualizerDetail,
 	wireShotFromDetail as wasmWireShotFromDetail,
 	parseV2Profile as wasmParseV2Profile,
 	visualizerShotPatchJson as wasmVisualizerShotPatchJson
-} from '$lib/wasm/de1_wasm';
+} from '#lib/wasm/de1_wasm.js';
 import { enqueueEntry as enqueueSyncOp } from './queue-store.ts';
 
 // Spec-typed aliases — these ride DIRECTLY on the wire so they stay

@@ -1,5 +1,5 @@
 /**
- * `$lib/firmware/firmware-update` — the state behind Settings → Machine →
+ * `#lib/firmware/firmware-update` — the state behind Settings → Machine →
  * "Update firmware…": alpha warning → choose a build → download and verify →
  * type UPDATE → flash (progress, confirmed cancel) → power-cycle → result /
  * retry.
@@ -18,9 +18,9 @@ import type {
 	FlashBlocker,
 	FlashShellConditions,
 	FlashStatus
-} from '$lib/core';
-import { FlashPhase } from '$lib/core';
-import { describeError } from '$lib/utils/error';
+} from '#lib/core/index.js';
+import { FlashPhase } from '#lib/core/index.js';
+import { describeError } from '#lib/utils/error.js';
 import { FlashDriver, type FlashCore, type FlashIo, type FlashKeepAlive } from './flash-driver';
 import { downloadOfficialImage, pinnedFirmware, verifyImageFor } from './source';
 

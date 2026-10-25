@@ -9,7 +9,7 @@
  *   Disconnect item is the only way to disconnect from the rail.
  */
 
-import type { BleConnectionState } from '$lib/ble/connection-state';
+import type { BleConnectionState } from '#lib/ble/connection-state.js';
 
 export type RailDevice = 'de1' | 'scale';
 

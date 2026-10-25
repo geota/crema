@@ -4,10 +4,10 @@
 		resolveModeTargets as wasmResolveModeTargets,
 		steam_at_temperature as wasmSteamAtTemperature,
 		group_at_temperature as wasmGroupAtTemperature,
-	} from '$lib/wasm/de1_wasm';
-	import type { ModeTargetInputs, ModeTargets } from '$lib/core/crema-core';
+	} from '#lib/wasm/de1_wasm.js';
+	import type { ModeTargetInputs, ModeTargets } from '#lib/core/crema-core.js';
 	import { onMount, tick, untrack } from 'svelte';
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
 	/**
 	 * `BrewDashboard` — the Brew route's centrepiece, ported from the
@@ -36,8 +36,8 @@
 		ProfileSyncFailedError,
 		ScaleRequiredError,
 		type UiSnapshot
-	} from '$lib/state';
-	import { ShotPhase, MachineState, MmrRegister } from '$lib/core/crema-core';
+	} from '#lib/state/index.js';
+	import { ShotPhase, MachineState, MmrRegister } from '#lib/core/crema-core.js';
 	import ModeChip from './ModeChip.svelte';
 	import ModeCard from './ModeCard.svelte';
 	import MachineErrorBanner from './MachineErrorBanner.svelte';
@@ -50,9 +50,9 @@
 		formatTemp,
 		formatVolume,
 		formatWeight
-	} from '$lib/settings';
-	import { getProfileStore, newProfileId, preinfuseSeconds, type CremaProfile } from '$lib/profiles';
-	import { formatRatio } from '$lib/utils/ratio';
+	} from '#lib/settings/index.js';
+	import { getProfileStore, newProfileId, preinfuseSeconds, type CremaProfile } from '#lib/profiles/index.js';
+	import { formatRatio } from '#lib/utils/ratio.js';
 	import {
 		getBeanStore,
 		roasterMarkTone,
@@ -61,12 +61,12 @@
 		beanFreshness,
 		freshnessColor,
 		type Bean,
-		type Roaster, activateBean } from '$lib/bean';
-	import { scoreMap, searchBeans } from '$lib/bean/search';
-	import { getMaintenanceStore } from '$lib/maintenance';
-	import { toast } from '$lib/components/shared/toast.svelte';
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { getActiveShotStore, getBrewContext, getMachineReadout } from '$lib/state';
+		type Roaster, activateBean } from '#lib/bean/index.js';
+	import { scoreMap, searchBeans } from '#lib/bean/search.js';
+	import { getMaintenanceStore } from '#lib/maintenance/index.js';
+	import { toast } from '#lib/components/shared/toast.svelte.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { getActiveShotStore, getBrewContext, getMachineReadout } from '#lib/state/index.js';
 	import { BrewParamState, DEFAULT_BREW_PARAMS, type BrewParamSeed } from './brew-params.svelte';
 	import ExtractionTimer from './ExtractionTimer.svelte';
 	import ChannelReadout from './ChannelReadout.svelte';
@@ -75,23 +75,21 @@
 	import BrewHeader from './BrewHeader.svelte';
 	import { type PickerItem } from './HeaderPicker.svelte';
 	import LiveChart from './LiveChart.svelte';
-	import ChartModal from '$lib/components/shared/ChartModal.svelte';
+	import ChartModal from '#lib/components/shared/ChartModal.svelte';
 	import QuickSheet from './QuickSheet.svelte';
 	import LastShotCard from './LastShotCard.svelte';
 	import DialInCard from './DialInCard.svelte';
 	import { takePendingDialIn } from './dial-in.svelte';
-	import { getHistoryStore, effectiveGrindSetting, type StoredShot } from '$lib/history';
-	import PowerButton from '$lib/components/PowerButton.svelte';
+	import { getHistoryStore, effectiveGrindSetting, type StoredShot } from '#lib/history/index.js';
+	import PowerButton from '#lib/components/PowerButton.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { promptDialog } from '$lib/components/shared/confirm-dialog.svelte';
+	import { promptDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 
-	let {
-		ui
-	}: {
-		/** The live UI snapshot from the shared orchestrator. */
-		ui: UiSnapshot;
-	} = $props();
+	let { ui
+
+	/** The live UI snapshot from the shared orchestrator. */
+	 }: { ui: UiSnapshot } = $props();
 
 	// ── App context (real — orchestrator for write actions) ─────────────
 	/** Live ref to the shared CremaApp; used for the mode-chip writes. */
@@ -280,9 +278,9 @@
 		modeState === 'idle' ? 0 : MODE_TARGET_SEC[modeState]
 	);
 	/** Progress percentage 0-100 for the mode card's bar. */
-	const modeProgressPct = $derived(
-		modeTargetSec > 0 ? Math.min(100, (modeElapsedSec / modeTargetSec) * 100) : 0
-	);
+	const modeProgressPct = $derived(modeTargetSec > 0
+		? Math.min(100, modeElapsedSec / modeTargetSec * 100)
+		: 0);
 	/**
 	 * Everything the mode card needs that varies by mode. The label is the
 	 * NOUN, matching the foot chips — the extraction timer's step line already
@@ -320,17 +318,17 @@
 	 */
 	const steamChipSub = $derived(
 		modeState === 'steaming'
-			? `${modeElapsedSec.toFixed(1)} / ${modeTargetSec.toFixed(1)} s`
+		? `${modeElapsedSec.toFixed(1)} / ${modeTargetSec.toFixed(1)} s`
 			: MODE_TARGET_LABEL.steaming
 	);
 	const waterChipSub = $derived(
 		modeState === 'dispensing'
-			? `${modeElapsedSec.toFixed(1)} / ${modeTargetSec.toFixed(1)} s`
+		? `${modeElapsedSec.toFixed(1)} / ${modeTargetSec.toFixed(1)} s`
 			: MODE_TARGET_LABEL.dispensing
 	);
 	const flushChipSub = $derived(
 		modeState === 'flushing'
-			? `${modeElapsedSec.toFixed(1)} / ${modeTargetSec.toFixed(1)} s`
+		? `${modeElapsedSec.toFixed(1)} / ${modeTargetSec.toFixed(1)} s`
 			: MODE_TARGET_LABEL.flushing
 	);
 
@@ -466,32 +464,32 @@
 		(key, value) => {
 			if (typeof value !== 'number') return;
 			switch (key) {
-				// Yield → the core's per-shot dial override. The core composes
+				case // Yield → the core's per-shot dial override. The core composes
 				// (dial > profile-recipe) at shot-start, so a QC bump on top of
 				// an active profile takes effect on the very next shot — GHC
 				// shots included.
-				case 'yield':
+				'yield':
 					void app?.applyShotTargetWeight(value);
 					break;
-				// Steam temp/time + hot-water temp/vol share the one cuuid_0B
+				case // Steam temp/time + hot-water temp/vol share the one cuuid_0B
 				// packet — persist + read-modify-write all four together (issue
 				// 14), reading the just-updated `params.current`.
-				case 'steamTime':
+				'steamTime':
 				case 'steamTemp':
 				case 'waterTemp':
 				case 'waterVolume': {
-					settings.set(QC_SETTING[key as keyof typeof QC_SETTING], value);
-					const c = params.current;
-					void app?.setSteamHotwater({
-						steamTempC: c.steamTemp,
-						steamTimeoutS: c.steamTime,
-						hotWaterTempC: c.waterTemp,
-						hotWaterVolumeMl: c.waterVolume
-					});
-					break;
-				}
-				// Steam flow + flush temp/time are standalone MMR writes.
-				case 'steamFlow':
+						settings.set(QC_SETTING[key as keyof typeof QC_SETTING], value);
+						const c = params.current;
+						void app?.setSteamHotwater({
+							steamTempC: c.steamTemp,
+							steamTimeoutS: c.steamTime,
+							hotWaterTempC: c.waterTemp,
+							hotWaterVolumeMl: c.waterVolume
+						});
+						break;
+					}
+				case // Steam flow + flush temp/time are standalone MMR writes.
+				'steamFlow':
 					settings.set('qcSteamFlowMlS', value);
 					void app?.setSteamFlow(value);
 					break;
@@ -687,9 +685,7 @@
 		// must not seed the DE1 dial-in card — its grind / water targets
 		// belong to a different instrument. Filter dial continuity comes
 		// from "Log again" instead.
-		return (
-			historyStore.all.find((s) => s.bean?.beanId === beanId && !s.brewMethod) ?? null
-		);
+		return historyStore.all.find((s) => s.bean?.beanId === beanId && !s.brewMethod) ?? null;
 	});
 	/**
 	 * Show the dial-in card when idle — but yield to the session Last-shot
@@ -833,12 +829,12 @@
 	 */
 	const weight = $derived(
 		pinnedSample
-			? pinnedSample.weight
-			: finalShotSample
-				? finalShotSample.weight
-				// floor at 0: a post-stop cup-lift flips live weight crazy-negative (null stays null)
-				: ui.scaleWeight != null && ui.scaleWeight < 0 ? 0 : ui.scaleWeight
-	);
+		? pinnedSample.weight
+		: finalShotSample
+			? finalShotSample.weight
+			: // floor at 0: a post-stop cup-lift flips live weight crazy-negative (null stays null)
+			ui.scaleWeight != null && ui.scaleWeight < 0 ? 0 : ui.scaleWeight);
+
 	/** Weight readout, in the chosen weight unit. */
 	const weightM = $derived(convertWeight(weight, prefs.weightUnit));
 	/**
@@ -955,9 +951,7 @@
 	/** The connected scale's advertised name, with a neutral fallback. */
 	const scaleName = $derived(ui.scaleName ?? 'Scale');
 	/** Yield progress as a 0..100 % bar width. */
-	const yieldPct = $derived(
-		shotWeight == null ? 0 : Math.min(100, (shotWeight / p.yield) * 100)
-	);
+	const yieldPct = $derived(shotWeight == null ? 0 : Math.min(100, shotWeight / p.yield * 100));
 
 	/**
 	 * Whether the per-shot weight target is engaged for the next / current
@@ -1004,7 +998,7 @@
 	const maxVolumePct = $derived.by(() => {
 		const cap = stopTargets?.volumeMl ?? 0;
 		if (cap <= 0) return 0;
-		return Math.min(100, ((ui.dispensedVolume ?? 0) / cap) * 100);
+		return Math.min(100, (ui.dispensedVolume ?? 0) / cap * 100);
 	});
 	/** Whether to render the Max Duration target card. */
 	const maxDurationCardVisible = $derived(stopTargets?.maxTimeS != null);
@@ -1012,7 +1006,7 @@
 	const maxDurationPct = $derived.by(() => {
 		const cap = stopTargets?.maxTimeS ?? 0;
 		if (cap <= 0) return 0;
-		return Math.min(100, (elapsedSec / cap) * 100);
+		return Math.min(100, elapsedSec / cap * 100);
 	});
 
 	/**
@@ -1176,24 +1170,24 @@
 	});
 
 	/** Bean rows for the header's ▾ picker — all non-archived, favourites first. */
-	const beanPickerItems = $derived.by<PickerItem[]>(() =>
-		beanLibrary.beans
-			.filter((b) => b.archivedAt == null)
-			.map((b) => {
-				const r = b.roasterId ? (beanLibrary.roasters.find((x) => x.id === b.roasterId) ?? null) : null;
-				const mt = roasterMarkTone(r);
-				const rn = r?.name?.trim() ?? '';
-				const tn = b.name.trim();
-				return {
-					id: b.id,
-					primary: rn && tn ? `${rn} · ${tn}` : rn || tn || 'Untitled bean',
-					secondary: b.origin.country || undefined,
-					pinned: b.favourite,
-					mark: mt.mark,
-					tone: mt.tone,
-					linked: b.linkedProfileId != null,
-					search: `${rn} ${tn} ${b.origin.country ?? ''} ${b.tags.join(' ')}`.toLowerCase()
-				};
+	const beanPickerItems = $derived.by<PickerItem[]>(() => beanLibrary.beans.filter((b) => b.archivedAt == null).map((b) => {
+		const r = b.roasterId
+			? beanLibrary.roasters.find((x) => x.id === b.roasterId) ?? null
+			: null;
+
+		const mt = roasterMarkTone(r);
+		const rn = r?.name?.trim() ?? '';
+		const tn = b.name.trim();
+		return {
+			id: b.id,
+			primary: rn && tn ? `${rn} · ${tn}` : rn || tn || 'Untitled bean',
+			secondary: b.origin.country || undefined,
+			pinned: b.favourite,
+			mark: mt.mark,
+			tone: mt.tone,
+			linked: b.linkedProfileId != null,
+			search: `${rn} ${tn} ${b.origin.country ?? ''} ${b.tags.join(' ')}`.toLowerCase()
+		};
 			})
 	);
 
@@ -1210,22 +1204,22 @@
 	/** Profile-upload sync chip for the header, or null when idle. */
 	const profileSyncLabel = $derived(
 		ui.profileUploadProgress
-			? `Uploading… ${ui.profileUploadProgress.acksReceived}/${ui.profileUploadProgress.totalAcks}`
+		? `Uploading… ${ui.profileUploadProgress.acksReceived}/${ui.profileUploadProgress.totalAcks}`
 			: null
 	);
 	const profileSyncTitle = $derived(
 		ui.profileUploadProgress
-			? `Uploading ${ui.profileUploadProgress.title} (${ui.profileUploadProgress.acksReceived}/${ui.profileUploadProgress.totalAcks})`
+		? `Uploading ${ui.profileUploadProgress.title} (${ui.profileUploadProgress.acksReceived}/${ui.profileUploadProgress.totalAcks})`
 			: ''
 	);
 
 	function editActiveProfile(): void {
 		const id = profileStore.activeId;
-		if (id) void goto(resolve(`/profiles/${encodeURIComponent(id)}/edit?from=brew`));
+		if (id) void goto(resolve(`profiles/${encodeURIComponent(id)}/edit?from=brew`));
 	}
 	function editActiveBean(): void {
 		const id = beanLibrary.activeBeanId;
-		void goto(resolve(id ? `/beans/${encodeURIComponent(id)}/edit?from=brew` : '/beans'));
+		void goto(id ? `${resolve('/beans/[id]/edit', { id })}?from=brew` : resolve('beans'));
 	}
 	/**
 	 * Water-tank volume (ml) for the foot readout — the DE1's `WaterLevel`
@@ -1281,7 +1275,7 @@
 	let shotStartError = $state<string | null>(null);
 
 	// ── Maintenance advisory banner ──────────────────────────────────────
-	// The maintenance store (`$lib/maintenance`) integrates flow into a
+	// The maintenance store (`#lib/maintenance/index.js`) integrates flow into a
 	// litre counter and flags filter / descale / clean as `Ok = false`
 	// once the configured intervals are exceeded. Surface that as a yellow
 	// banner on the brew page so the user sees it without digging into
@@ -1320,7 +1314,7 @@
 	}
 	/** Route to Settings → Water & maintenance — the cards' canonical home. */
 	function openMaintenance(): void {
-		void goto(resolve('/settings#water'));
+		void goto(resolve('settings#water'));
 	}
 
 	/**
@@ -1366,7 +1360,7 @@
 		void app.tareScale();
 		tarePulse = true;
 		clearTimeout(tarePulseTimer);
-		tarePulseTimer = setTimeout(() => (tarePulse = false), 600);
+		tarePulseTimer = setTimeout(() => tarePulse = false, 600);
 	}
 
 	async function toggleRun(): Promise<void> {
@@ -1438,13 +1432,13 @@
 	}
 </script>
 
-<svelte:window onkeydown={onKeydown} onclick={onDocClick} />
+<svelte:window onkeydown={onKeydown} onclick={onDocClick}></svelte:window>
 
 <div class="qcontain">
 	<div class="crema-dash">
 		<!-- Profile header strip -->
 		<BrewHeader
-			{profileName}
+			profileName={profileName}
 			profileMeta={`Pre-inf ${p.preinf}s · ${ratio} · ${formatWeight(p.yield, prefs.weightUnit)} · ${formatTemp(p.brewTemp, prefs.tempUnit)}`}
 			profileSpec={profileIdentity}
 			profileTags={profileTags}
@@ -1463,26 +1457,30 @@
 			beanItems={beanPickerItems}
 			activeBeanId={beanLibrary.activeBeanId}
 			beanRank={rankBeansForPicker}
-			{quickSheetOpen}
+			quickSheetOpen={quickSheetOpen}
 			onEditProfile={editActiveProfile}
 			onSelectProfile={(id) => {
 				profileStore.setActive(id);
 				shotStartError = null;
 			}}
-			onAddProfile={() => void goto(resolve('/profiles/new'))}
-			onProfileLibrary={() => void goto(resolve('/profiles'))}
+			onAddProfile={() => void goto(resolve('profiles/new'))}
+			onProfileLibrary={() => void goto(resolve('profiles'))}
 			onEditBean={editActiveBean}
 			onSelectBean={(id) => activateBean(id, { shotInProgress: ui.shotInProgress })}
-			onAddBean={() => void goto(resolve('/beans/new'))}
-			onBeanLibrary={() => void goto(resolve('/beans'))}
-			onOpenQuick={() => (quickSheetOpen = true)}
+			onAddBean={() => void goto(resolve('beans/new'))}
+			onBeanLibrary={() => void goto(resolve('beans'))}
+			onOpenQuick={() => quickSheetOpen = true}
 		>
 			{#snippet status()}
 				{#if ui.machineError != null}
 					<div class="crema-dash-head-mid"><MachineErrorBanner text={ui.machineError} /></div>
 				{:else if shotStartError != null}
 					<div class="crema-dash-head-mid">
-						<MachineErrorBanner text={shotStartError} title="Can't start shot" onDismiss={() => (shotStartError = null)} />
+						<MachineErrorBanner
+							text={shotStartError}
+							title="Can't start shot"
+							onDismiss={() => shotStartError = null}
+						/>
 					</div>
 				{:else if maintVisibleText !== ''}
 					<div class="crema-dash-head-mid">
@@ -1541,7 +1539,7 @@
 							<DialInCard
 								shot={lastBeanShot}
 								onStart={(s) => void applyDialIn(s)}
-								onOpen={(s) => void goto(resolve(`/history?shot=${encodeURIComponent(s.id)}`))}
+								onOpen={(s) => void goto(resolve(`history?shot=${encodeURIComponent(s.id)}`))}
 							/>
 						{/if}
 					{/if}
@@ -1619,8 +1617,8 @@
 						showWeightFlow={prefs.showWeightFlow}
 						smoothPressure={prefs.smoothPressure}
 						telemetryRateHz={prefs.telemetryRateHz}
-						{pinnedTimeSec}
-						onPin={(t) => (pinnedTimeSec = t)}
+						pinnedTimeSec={pinnedTimeSec}
+						onPin={(t) => pinnedTimeSec = t}
 					/>
 				{/snippet}
 				<div class="crema-chart">
@@ -1632,7 +1630,7 @@
 					<button
 						type="button"
 						class="crema-chart-expand"
-						onclick={() => (chartExpanded = true)}
+						onclick={() => chartExpanded = true}
 						aria-label="Enlarge chart"
 						title="Enlarge chart"
 					>
@@ -1640,9 +1638,7 @@
 					</button>
 				</div>
 				{#if chartExpanded}
-					<ChartModal onclose={() => (chartExpanded = false)}>
-						{@render liveChart()}
-					</ChartModal>
+					<ChartModal onclose={() => chartExpanded = false}>{@render liveChart()}</ChartModal>
 				{/if}
 			</div>
 		</div>
@@ -1662,7 +1658,7 @@
 				     foot-meta item. Moved here from the layout's fixed
 				     top-right corner, which was overlapping the
 				     profile-switcher dropdown in the dashboard header. -->
-				<PowerButton {app} />
+				<PowerButton app={app} />
 				<!-- Machine: the formatted "State / Substate" string from the
 				     last `MachineStateChanged` event (e.g. "Sleep / Ready",
 				     "Espresso / Pouring", "Idle / HeatWaterTank"). `—` until
@@ -1708,7 +1704,7 @@
 						icon="cloud"
 						label="Steam"
 						sub={steamChipSub}
-						onTap={() => (modeState === 'steaming' ? cancelMode() : tapSteam())}
+						onTap={() => modeState === 'steaming' ? cancelMode() : tapSteam()}
 					/>
 					<ModeChip
 						kind="water"
@@ -1718,7 +1714,7 @@
 						icon="drop"
 						label="Hot water"
 						sub={waterChipSub}
-						onTap={() => (modeState === 'dispensing' ? cancelMode() : tapWater())}
+						onTap={() => modeState === 'dispensing' ? cancelMode() : tapWater()}
 					/>
 					<ModeChip
 						kind="flush"
@@ -1728,7 +1724,7 @@
 						icon="sparkle"
 						label="Flush"
 						sub={flushChipSub}
-						onTap={() => (modeState === 'flushing' ? cancelMode() : tapFlush())}
+						onTap={() => modeState === 'flushing' ? cancelMode() : tapFlush()}
 					/>
 				</div>
 				<span class="mc-foot-rule" aria-hidden="true"></span>
@@ -1761,16 +1757,16 @@
 
 		<!-- Docked Quick Sheet, variant G -->
 		<QuickSheet
-			{params}
-			{pinnedProfiles}
+			params={params}
+			pinnedProfiles={pinnedProfiles}
 			selectedProfileId={profileStore.activeId}
-			{pinnedBeans}
+			pinnedBeans={pinnedBeans}
 			roasters={beanLibrary.roasters}
 			activeBeanId={beanLibrary.activeBeanId}
 			open={quickSheetOpen}
 			onSelectFavorite={selectFavorite}
 			onSelectBean={selectBean}
-			onClose={() => (quickSheetOpen = false)}
+			onClose={() => quickSheetOpen = false}
 			onToggleAutoTare={(v) => {
 				settings.set('autoTareOnShotStart', v);
 				void app?.applyAutoTare(v);
@@ -1779,8 +1775,8 @@
 				settings.set('stopOnWeight', v);
 				void app?.applyStopOnWeight(v);
 			}}
-			{yieldTargetOn}
-			{onToggleYieldTarget}
+			yieldTargetOn={yieldTargetOn}
+			onToggleYieldTarget={onToggleYieldTarget}
 			onSavePreset={activeProfile ? savePreset : undefined}
 			onToggleSteamEco={(v) => {
 				settings.set('steamEcoMode', v);

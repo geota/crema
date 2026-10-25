@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/bag-empty-prompt` — the bean run-out UX.
+ * `#lib/bean/bag-empty-prompt.js` — the bean run-out UX.
  *
  * Fired when a pulled shot debits a bag to empty (`beanStore.debitBean`
  * returned `true`): offer to archive the finished bag (and drop it as the
@@ -7,7 +7,7 @@
  * still unrated — nudge a rating. Called fire-and-forget from the shot-side
  * effect; never throws.
  */
-import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
+import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 import { goto } from '$app/navigation';
 import { resolve } from '$app/paths';
 import { getBeanStore } from './store.svelte';
@@ -38,6 +38,6 @@ export async function promptBagEmpty(beanId: string): Promise<void> {
 			confirmLabel: 'Rate it',
 			cancelLabel: 'Later'
 		});
-		if (rate) await goto(resolve('/beans'));
+		if (rate) await goto(resolve('beans'));
 	}
 }

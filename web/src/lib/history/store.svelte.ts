@@ -1,10 +1,10 @@
 /**
- * `$lib/history/store` — the shot-history store.
+ * `#lib/history/store` — the shot-history store.
  *
  * Backs the `/history` library: the list of past shots, their stored curves,
  * and the editable tasting-notes / star rating. Crema's web shell is a static,
  * client-only PWA — there is no server — so `localStorage` is the store, the
- * same choice (and the shared `$lib/utils/storage` helpers) the profile
+ * same choice (and the shared `#lib/utils/storage.js` helpers) the profile
  * library makes.
  *
  * Records arrive one way: the orchestrator calls {@link HistoryStore.record}
@@ -17,13 +17,13 @@
  * {@link getHistoryStore}. It loads synchronously from `localStorage`.
  */
 
-import type { RustStoredShot, TimedSample } from '$lib/core';
-import type { BrewSeries } from '$lib/core/crema-core';
-import { downsampleIndices } from '$lib/wasm/de1_wasm';
-import type { TelemetrySample } from '$lib/state';
+import type { RustStoredShot, TimedSample } from '#lib/core/index.js';
+import type { BrewSeries } from '#lib/core/crema-core.js';
+import { downsampleIndices } from '#lib/wasm/de1_wasm.js';
+import type { TelemetrySample } from '#lib/state/index.js';
 import { toWire } from './telemetry-wire';
-import { readJson, writeJsonChecked } from '$lib/utils/storage';
-import { toast } from '$lib/components/shared/toast.svelte';
+import { readJson, writeJsonChecked } from '#lib/utils/storage.js';
+import { toast } from '#lib/components/shared/toast.svelte.js';
 import {
 	clearAllSeries,
 	deleteSeries,
@@ -40,7 +40,7 @@ import {
 	type ShotMetadata,
 	type StoredShot
 } from './model';
-import type { Bean, Roaster } from '$lib/bean';
+import type { Bean, Roaster } from '#lib/bean/index.js';
 
 /** Current persisted-shot schema version — matches Rust's `STORED_SHOT_FORMAT_VERSION`. */
 const STORED_SHOT_FORMAT_VERSION = 3;

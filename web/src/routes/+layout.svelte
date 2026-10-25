@@ -17,23 +17,23 @@
 	 */
 	import { onMount, onDestroy } from 'svelte';
 	import '../app.css';
-	import { createCremaApp, type CremaApp } from '$lib/state';
-	import { CremaSidebar } from '$lib/components';
-	import DebugPanel from '$lib/shell/DebugPanel.svelte';
-	import ReconnectStrip from '$lib/shell/ReconnectStrip.svelte';
-	import ToastHost from '$lib/components/shared/ToastHost.svelte';
-	import { toast } from '$lib/components/shared/toast.svelte';
-	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
-	import { describeError } from '$lib/utils/error';
-	import { installStorageNotices } from '$lib/shell/storage-notices';
-	import { setCremaAppContext, type CoreLoadState } from '$lib/shell/app-context';
-	import { createAppRuntime, type AppRuntime } from '$lib/effect/runtime';
-	import { createCremaServices, type CremaServices } from '$lib/effect/crema-services';
-	import { setBrewWakeLock } from '$lib/shell/wake-lock';
-	import FirmwareUpdateHost from '$lib/components/settings/FirmwareUpdateHost.svelte';
-	import { retryPendingDecentUploads } from '$lib/decent/upload';
-	import { getGuidedBrewStore } from '$lib/brew/session.svelte';
-	import { getSettingsStore } from '$lib/settings';
+	import { createCremaApp, type CremaApp } from '#lib/state/index.js';
+	import { CremaSidebar } from '#lib/components/index.js';
+	import DebugPanel from '#lib/shell/DebugPanel.svelte';
+	import ReconnectStrip from '#lib/shell/ReconnectStrip.svelte';
+	import ToastHost from '#lib/components/shared/ToastHost.svelte';
+	import { toast } from '#lib/components/shared/toast.svelte.js';
+	import ConfirmDialog from '#lib/components/shared/ConfirmDialog.svelte';
+	import { describeError } from '#lib/utils/error.js';
+	import { installStorageNotices } from '#lib/shell/storage-notices.js';
+	import { setCremaAppContext, type CoreLoadState } from '#lib/shell/app-context.js';
+	import { createAppRuntime, type AppRuntime } from '#lib/effect/runtime.js';
+	import { createCremaServices, type CremaServices } from '#lib/effect/crema-services.js';
+	import { setBrewWakeLock } from '#lib/shell/wake-lock.js';
+	import FirmwareUpdateHost from '#lib/components/settings/FirmwareUpdateHost.svelte';
+	import { retryPendingDecentUploads } from '#lib/decent/upload.js';
+	import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
+	import { getSettingsStore } from '#lib/settings/index.js';
 
 	let { children } = $props();
 

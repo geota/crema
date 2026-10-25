@@ -10,8 +10,8 @@
 	 * persisting them now is the whole job. The Steam group additionally pushes
 	 * to the DE1 while connected (the connect path re-seeds it otherwise).
 	 */
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { getSettingsStore } from '$lib/settings';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { getSettingsStore } from '#lib/settings/index.js';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';

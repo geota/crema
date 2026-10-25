@@ -10,7 +10,7 @@
  * stale request.
  */
 
-import type { StoredShot } from '$lib/history';
+import type { StoredShot } from '#lib/history/index.js';
 
 let pending = $state<StoredShot | null>(null);
 

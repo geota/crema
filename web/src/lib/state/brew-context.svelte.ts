@@ -1,5 +1,5 @@
 /**
- * `$lib/state/brew-context` — the read-side seam for the brew dashboard
+ * `#lib/state/brew-context` — the read-side seam for the brew dashboard
  * and its children.
  *
  * Joins the four stores the dashboard reads from (`BeanLibraryStore`,
@@ -17,9 +17,9 @@
  * fallback.
  */
 
-import { getBeanStore, type Bean, type BeanLibraryStore } from '$lib/bean';
-import { getProfileStore, type CremaProfile, type ProfileStore } from '$lib/profiles';
-import { getSettingsStore, type SettingsStore } from '$lib/settings';
+import { getBeanStore, type Bean, type BeanLibraryStore } from '#lib/bean/index.js';
+import { getProfileStore, type CremaProfile, type ProfileStore } from '#lib/profiles/index.js';
+import { getSettingsStore, type SettingsStore } from '#lib/settings/index.js';
 import {
 	getActiveShotStore,
 	type ActiveShotBrewParams,

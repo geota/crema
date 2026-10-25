@@ -19,8 +19,8 @@
 		daysOffRoast,
 		type Bean,
 		type Roaster
-	} from '$lib/bean';
-	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
+	} from '#lib/bean/index.js';
+	import QuickStepper from '#lib/components/brew/QuickStepper.svelte';
 	import RoasterAutocomplete from './RoasterAutocomplete.svelte';
 
 	let {

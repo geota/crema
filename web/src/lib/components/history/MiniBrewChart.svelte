@@ -6,7 +6,7 @@
 	 * pours / drawdown rhythm reads at a glance. Same hand-rolled-SVG
 	 * posture — short data, no axes, no cursor.
 	 */
-	import type { BrewSeries } from '$lib/core/crema-core';
+	import type { BrewSeries } from '#lib/core/crema-core.js';
 
 	let {
 		series,

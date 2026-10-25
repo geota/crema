@@ -1,5 +1,5 @@
 /**
- * `$lib/brew/session` — the guided-brew session's SHELL state
+ * `#lib/brew/session` — the guided-brew session's SHELL state
  * (issue #10).
  *
  * The core's `BrewSessionMonitor` owns the truth (step boundaries,
@@ -18,8 +18,8 @@ import type {
 	BrewSeries,
 	BrewSessionSummary,
 	StageMark
-} from '$lib/core/crema-core';
-import { stageMarkForJson } from '$lib/wasm/de1_wasm';
+} from '#lib/core/crema-core.js';
+import { stageMarkForJson } from '#lib/wasm/de1_wasm.js';
 import type { BeanPick } from './bean-pick';
 
 /** A step at least this long (s) releases the screen wake lock. */

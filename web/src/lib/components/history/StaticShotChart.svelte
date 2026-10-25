@@ -13,10 +13,10 @@
 	import { untrack } from 'svelte';
 	import uPlot from 'uplot';
 	import 'uplot/dist/uPlot.min.css';
-	import type { TelemetrySample } from '$lib/state';
-	import { theme } from '$lib/theme.svelte';
-	import { getSettingsStore } from '$lib/settings';
-	import { cssVar, xRangeStep, yRange, sharedAxes } from '$lib/components/charts/chartHelpers';
+	import type { TelemetrySample } from '#lib/state/index.js';
+	import { theme } from '#lib/theme.svelte.js';
+	import { getSettingsStore } from '#lib/settings/index.js';
+	import { cssVar, xRangeStep, yRange, sharedAxes } from '#lib/components/charts/chartHelpers.js';
 
 	let {
 		series,

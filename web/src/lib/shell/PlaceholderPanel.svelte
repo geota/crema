@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	/**
 	 * `PlaceholderPanel` — the Step-1 stand-in for a real screen.
 	 *
@@ -8,7 +8,7 @@
 	 * porting steps; this just proves the shell, routing and shared `CremaApp`
 	 * all work.
 	 */
-	import { getCremaAppContext } from '$lib/shell/app-context';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
 
 	let {
 		title,

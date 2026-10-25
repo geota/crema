@@ -1,13 +1,13 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	/**
 	 * Settings — the `/settings` route, ported from `SettingsPage` in
 	 * `settings-page.jsx`.
 	 *
 	 * A two-pane screen: a left section nav (eight sections) and a right
 	 * scrollable content pane. The active section is local UI state. Each
-	 * section is its own component under `$lib/components/settings/sections`;
-	 * the `St*` primitives live in `$lib/components/settings`.
+	 * section is its own component under `#lib/components/settings/sections`;
+	 * the `St*` primitives live in `#lib/components/settings/index.js`.
 	 *
 	 * ## Real vs. stubbed — by section
 	 *
@@ -32,20 +32,20 @@
 	 * The `lib/settings` store applies the persisted theme at construction, so
 	 * the screen — and a reload — paints under the right theme.
 	 */
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { getSettingsStore } from '$lib/settings';
-	import MachineSection from '$lib/components/settings/sections/MachineSection.svelte';
-	import BrewDefaultsSection from '$lib/components/settings/sections/BrewDefaultsSection.svelte';
-	import WaterSection from '$lib/components/settings/sections/WaterSection.svelte';
-	import DisplaySection from '$lib/components/settings/sections/DisplaySection.svelte';
-	import SharingSection from '$lib/components/settings/sections/SharingSection.svelte';
-	import AdvancedSection from '$lib/components/settings/sections/AdvancedSection.svelte';
-	import CalibrationSection from '$lib/components/settings/sections/CalibrationSection.svelte';
-	import AboutSection from '$lib/components/settings/sections/AboutSection.svelte';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { getSettingsStore } from '#lib/settings/index.js';
+	import MachineSection from '#lib/components/settings/sections/MachineSection.svelte';
+	import BrewDefaultsSection from '#lib/components/settings/sections/BrewDefaultsSection.svelte';
+	import WaterSection from '#lib/components/settings/sections/WaterSection.svelte';
+	import DisplaySection from '#lib/components/settings/sections/DisplaySection.svelte';
+	import SharingSection from '#lib/components/settings/sections/SharingSection.svelte';
+	import AdvancedSection from '#lib/components/settings/sections/AdvancedSection.svelte';
+	import CalibrationSection from '#lib/components/settings/sections/CalibrationSection.svelte';
+	import AboutSection from '#lib/components/settings/sections/AboutSection.svelte';
 
-	import { INITIAL_SNAPSHOT } from '$lib/state';
-	import { recallView } from '$lib/state/view-memory';
-	import { persistView, useScrollMemory } from '$lib/state/use-view-memory.svelte';
+	import { INITIAL_SNAPSHOT } from '#lib/state/index.js';
+	import { recallView } from '#lib/state/view-memory.js';
+	import { persistView, useScrollMemory } from '#lib/state/use-view-memory.svelte.js';
 
 	const ctx = getCremaAppContext();
 	/** The shared orchestrator, or `null` while the wasm core loads. */

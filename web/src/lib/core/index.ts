@@ -1,5 +1,5 @@
 /**
- * `$lib/core` — the async facade over the `de1-wasm` `CremaBridge`.
+ * `#lib/core` — the async facade over the `de1-wasm` `CremaBridge`.
  *
  * The Crema core is a sans-IO event processor: feed it raw BLE bytes and clock
  * ticks, get back a `CoreOutput` of observed `Event`s and `Command`s to
@@ -217,7 +217,7 @@ export interface RustShotMetadata {
  * `importLegacyTclShot` / `importV2JsonShot`. Field names match the
  * Rust struct's serde projection (`#[serde(rename_all = "camelCase")]`),
  * so this is the actual wire shape — not the Rust source-level names.
- * The shell maps this onto its own (`$lib/history` `StoredShot`) shape
+ * The shell maps this onto its own (`#lib/history` `StoredShot`) shape
  * at the import boundary.
  */
 export interface RustStoredShot {
@@ -384,7 +384,7 @@ export interface CremaCore {
 	 * with connect-phase identity entries + META prelude prepended. The shell
 	 * persists the result to IndexedDB on every `ShotCompleted`; the same
 	 * JSONL bytes are the format the Android `BleSessionRecorder`, the Rust
-	 * `examples/replay.rs` tool, and the web `$lib/replay/capture` parser all
+	 * `examples/replay.rs` tool, and the web `#lib/replay/capture.js` parser all
 	 * consume. Empty when no notifications have been recorded.
 	 */
 	captureSliceJsonl(fromMs: number, toMs: number): Promise<string>;
@@ -881,7 +881,7 @@ let corePromise: Promise<CremaCore> | undefined;
  * exports without re-doing the async init. `undefined` until the first
  * {@link loadCore} resolves.
  */
-let wasmModule: typeof import('$lib/wasm/de1_wasm.js') | undefined;
+let wasmModule: typeof import('#lib/wasm/de1_wasm.js') | undefined;
 
 /**
  * Mint a fresh profile ID — a UUID v7 (RFC 9562, 2024) in the
@@ -927,7 +927,7 @@ export function loadCore(): Promise<CremaCore> {
 
 /** The actual one-time wasm load + facade construction, memoized by {@link loadCore}. */
 async function createCore(): Promise<CremaCore> {
-	const wasm = await import('$lib/wasm/de1_wasm.js');
+	const wasm = await import('#lib/wasm/de1_wasm.js');
 	await wasm.default();
 	// Cache the namespace so the synchronous top-level helpers (e.g.
 	// `newProfileId`) can reach the wasm without going through the
@@ -935,7 +935,7 @@ async function createCore(): Promise<CremaCore> {
 	// paths (create / duplicate / import a profile).
 	wasmModule = wasm;
 	// Mirror the wasm namespace onto `window` so deep modules that
-	// can't import `$lib/core` without a cycle (e.g. `$lib/history/model`'s
+	// can't import `#lib/core` without a cycle (e.g. `$lib/history/model`'s
 	// `shotId` minter) can still reach into the Rust UUID-v7 minter
 	// once the core is loaded. SSR / test paths fall back to
 	// `crypto.randomUUID`.

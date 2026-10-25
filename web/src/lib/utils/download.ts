@@ -1,5 +1,5 @@
 /**
- * `$lib/utils/download` — browser-side download helpers.
+ * `#lib/utils/download.js` — browser-side download helpers.
  *
  * Pattern: build a `Blob`, hand it to the browser via an anchor
  * `<a download>` click, revoke the object URL once the click has been

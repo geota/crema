@@ -1,0 +1,74 @@
+# Watch for the official @vite-pwa/sveltekit release that supports SvelteKit 3.
+#
+# The web shell builds its service worker with @katama-labs/vite-pwa-sveltekit,
+# a published copy of upstream's pending Kit 3 support (vite-pwa/sveltekit#111),
+# because @vite-pwa/sveltekit 1.x peers Kit 1–2 and under Kit 3 emits no sw.js.
+# Weekly, this reads the `latest` tag's peer range for @sveltejs/kit from the
+# npm registry and, the first time that range admits 3.0.0, comments on the
+# tracking issue (#172) so the swap back gets scheduled. One comment per
+# version: a later run that finds the same version already reported stays
+# quiet. Nothing is installed or built; the default token only writes comments.
+
+name: vite-pwa-sveltekit-watch
+
+on:
+  schedule:
+    - cron: '17 6 * * 1' # Mondays, 06:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  TRACKING_ISSUE: 172
+  PACKAGE: '@vite-pwa/sveltekit'
+
+jobs:
+  watch:
+    name: check npm for SvelteKit 3 support
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+
+      # The registry's abbreviated metadata carries dist-tags and per-version
+      # peerDependencies; `semver` (the same library npm uses) tests the range.
+      - name: Read the latest release's peer range
+        id: peer
+        run: |
+          set -euo pipefail
+          meta=$(curl -fsSL -H 'Accept: application/vnd.npm.install-v1+json' \
+            "https://registry.npmjs.org/$PACKAGE")
+          version=$(printf '%s' "$meta" | node -e 'const m=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(m["dist-tags"].latest)')
+          range=$(printf '%s' "$meta" | node -e 'const m=JSON.parse(require("fs").readFileSync(0,"utf8"));const v=m.versions[m["dist-tags"].latest];process.stdout.write((v.peerDependencies||{})["@sveltejs/kit"]||"")')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "range=$range" >> "$GITHUB_OUTPUT"
+          if [ -n "$range" ] && npx --yes semver@7 -r "$range" 3.0.0 >/dev/null 2>&1; then
+            echo "supported=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "$PACKAGE@$version peers @sveltejs/kit '$range'" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on the tracking issue (once per version)
+        if: steps.peer.outputs.supported == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.peer.outputs.version }}
+          RANGE: ${{ steps.peer.outputs.range }}
+        run: |
+          set -euo pipefail
+          marker="<!-- vite-pwa-sveltekit-watch: $VERSION -->"
+          if gh issue view "$TRACKING_ISSUE" --json comments --jq '.comments[].body' | grep -qF "$marker"; then
+            echo "Already reported $VERSION on #$TRACKING_ISSUE."
+            exit 0
+          fi
+          gh issue comment "$TRACKING_ISSUE" --body "$(printf '%s\n%s\n\n%s\n' \
+            "$marker" \
+            "**\`$PACKAGE@$VERSION\` declares \`@sveltejs/kit: $RANGE\`, which admits SvelteKit 3.** The official plugin can replace the fork; see the steps in this issue's description." \
+            "Reported by the \`vite-pwa-sveltekit-watch\` workflow.")"
+          echo "Commented on #$TRACKING_ISSUE for $VERSION." | tee -a "$GITHUB_STEP_SUMMARY"

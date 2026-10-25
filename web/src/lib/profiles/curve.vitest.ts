@@ -1,5 +1,5 @@
 /**
- * `$lib/profiles/curve.vitest` — unit coverage for `sampleCurve`, the
+ * `#lib/profiles/curve.vitest` — unit coverage for `sampleCurve`, the
  * segment-list → uPlot column sampler (GEN11). Pure math, no wasm.
  *
  * Pins the GEN9 empty-segments guard (an empty profile must yield empty columns,

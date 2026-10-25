@@ -9,15 +9,15 @@
 	 */
 	import TrashIcon from 'phosphor-svelte/lib/TrashIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
-	import type { BrewRecipe, BrewStep } from '$lib/core/crema-core';
-	import { BrewStepKind, StepAdvance } from '$lib/core/crema-core';
+	import type { BrewRecipe, BrewStep } from '#lib/core/crema-core.js';
+	import { BrewStepKind, StepAdvance } from '#lib/core/crema-core.js';
 	import {
 		cleanRecipeNotes,
 		newRecipeFor,
 		plannedPourTotalG,
 		recipeId
-	} from '$lib/brew/recipes.svelte';
-	import { brewMethodPresets, methodLabel } from '$lib/brew/methods';
+	} from '#lib/brew/recipes.svelte.js';
+	import { brewMethodPresets, methodLabel } from '#lib/brew/methods.js';
 	import RecipeCredit from './RecipeCredit.svelte';
 	import CustomMethodDialog from './CustomMethodDialog.svelte';
 

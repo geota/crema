@@ -1,5 +1,5 @@
 /**
- * `$lib/maintenance` — the water-accumulation & maintenance layer.
+ * `#lib/maintenance/index.js` — the water-accumulation & maintenance layer.
  *
  * The DE1 keeps no cumulative water-volume counter; the shell derives one by
  * integrating group flow over time (the de1app's approach). The running litre
@@ -10,4 +10,4 @@
 
 export { MaintenanceStore, getMaintenanceStore } from './store.svelte';
 // The state/readout shapes are the typeshare-generated core types — one source.
-export type { MaintenanceState, MaintenanceReadout } from '$lib/core/crema-core';
+export type { MaintenanceState, MaintenanceReadout } from '#lib/core/crema-core.js';

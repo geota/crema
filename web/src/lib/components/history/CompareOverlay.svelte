@@ -4,9 +4,9 @@
 		celsius_to_fahrenheit as celsiusToFahrenheit,
 		grams_to_oz as gramsToOz,
 		ml_to_fl_oz as mlToFlOz
-	} from '$lib/wasm/de1_wasm';
-	import Icon from '$lib/icons/Icon.svelte';
-	import StarRating from '$lib/components/common/StarRating.svelte';
+	} from '#lib/wasm/de1_wasm.js';
+	import Icon from '#lib/icons/Icon.svelte';
+	import StarRating from '#lib/components/common/StarRating.svelte';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `CompareOverlay` — full-screen modal that overlays multiple recorded
@@ -23,16 +23,16 @@
 	 * we want fine control over per-shot colour. uPlot's shared-x model would
 	 * require resampling every shot to a common grid; SVG paths sidestep that.
 	 */
-	import type { StoredShot } from '$lib/history';
-	import { ratioLabel, peaksOf, yieldOf, flatSamplesOf } from '$lib/history';
-	import type { TelemetrySample } from '$lib/state';
+	import type { StoredShot } from '#lib/history/index.js';
+	import { ratioLabel, peaksOf, yieldOf, flatSamplesOf } from '#lib/history/index.js';
+	import type { TelemetrySample } from '#lib/state/index.js';
 	import {
 		getSettingsStore,
 		convertWeight,
 		convertTemp,
 		convertPressure,
 		unitLabel
-	} from '$lib/settings';
+	} from '#lib/settings/index.js';
 
 	let {
 		shots,

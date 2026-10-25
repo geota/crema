@@ -1,5 +1,5 @@
 /**
- * `$lib/effect/schema/tokens.test` — node:test suite for TokenSetSchema
+ * `#lib/effect/schema/tokens.test` — node:test suite for TokenSetSchema
  * (docs/53 T-04).
  *
  * Run: `cd web && node --experimental-strip-types --experimental-detect-module

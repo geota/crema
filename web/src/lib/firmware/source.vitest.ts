@@ -1,11 +1,11 @@
 /**
- * `$lib/firmware/source` + `power` — the runtime firmware source and the
+ * `#lib/firmware/source` + `power` — the runtime firmware source and the
  * power precondition. Validation runs through the real wasm manifest check.
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { initTestWasm } from '$lib/testing/test-init';
-import { DecentFirmwareChannel } from '$lib/core/crema-core';
+import { initTestWasm } from '#lib/testing/test-init.js';
+import { DecentFirmwareChannel } from '#lib/core/crema-core.js';
 import { downloadOfficialImage, imageProblem, pinnedFirmware, verifyImageFor } from './source';
 import { powerOk } from './power';
 

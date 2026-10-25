@@ -35,19 +35,19 @@
 	 * URL is caught at save rather than rendering a sad-cloud thumbnail.
 	 */
 	import { tick, untrack } from 'svelte';
-	import { leaveEditor } from '$lib/beans/editor-nav';
+	import { leaveEditor } from '#lib/beans/editor-nav.js';
 	import { resolve } from '$app/paths';
-	import { getBeanStore, roasterMarkTone, type Roaster } from '$lib/bean';
+	import { getBeanStore, roasterMarkTone, type Roaster } from '#lib/bean/index.js';
 	import RoasterDeleteSplit from './RoasterDeleteSplit.svelte';
-	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
+	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import CatalogueSearch from './CatalogueSearch.svelte';
 	import {
 		catalogueFillStatus,
 		runCatalogueRoasterPick,
 		type CatalogueRoaster
-	} from '$lib/bean/catalogue';
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
+	} from '#lib/bean/catalogue.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { useVisualizerConnection } from '#lib/visualizer/useVisualizerConnection.svelte.js';
 
 	let {
 		roaster,
@@ -88,9 +88,7 @@
 	const viz = useVisualizerConnection();
 	let pickedLabel = $state<string | null>(null);
 	let catalogueStatus = $state<string | null>(null);
-	const catalogueLinkLabel = $derived(
-		current.catalogueRoasterId ? (pickedLabel ?? 'Visualizer catalogue') : null
-	);
+	const catalogueLinkLabel = $derived(current.catalogueRoasterId ? pickedLabel ?? 'Visualizer catalogue' : null);
 
 	async function searchCatalogueRoasters(query: string) {
 		const services = appCtx().services;
@@ -183,30 +181,25 @@
 		// `?tab=roasters` query keeps the Roasters tab pinned on return so
 		// the user lands where they came from rather than getting bumped
 		// to the Bags tab.
-		leaveEditor(resolve('/beans?tab=roasters'));
+		leaveEditor(resolve('beans?tab=roasters'));
 	}
 
 	function back(): void {
-		leaveEditor(resolve('/beans?tab=roasters'));
+		leaveEditor(resolve('beans?tab=roasters'));
 	}
 
 	async function discard(): Promise<void> {
 		if (isNew) {
 			// Nothing to lose unless the draft is non-empty.
-			const dirty =
-				draftRecord.name.trim() ||
-				draftRecord.website ||
-				draftRecord.imageUrl ||
-				draftRecord.city ||
-				draftRecord.country ||
-				draftRecord.notes.trim();
-			if (dirty && !(await confirmDialog({ message: 'Discard new roaster?', confirmLabel: 'Discard' }))) return;
+			const dirty = draftRecord.name.trim() || draftRecord.website || draftRecord.imageUrl || draftRecord.city || draftRecord.country || draftRecord.notes.trim();
+
+			if (dirty && !await confirmDialog({ message: 'Discard new roaster?', confirmLabel: 'Discard' })) return;
 		}
 		back();
 	}
 
 	function onRoasterDeleted(): void {
-		leaveEditor(resolve('/beans?tab=roasters'));
+		leaveEditor(resolve('beans?tab=roasters'));
 	}
 </script>
 
@@ -239,7 +232,7 @@
 					<img
 						src={current.imageUrl}
 						alt=""
-						onerror={() => (logoLoadFailed = true)}
+						onerror={() => logoLoadFailed = true}
 					/>
 				{:else}
 					<span class="rd-hero-glyph">{mt.mark}</span>
@@ -320,11 +313,8 @@
 						aria-invalid={(websiteTouched || attempted) && isWebsiteInvalid}
 						value={current.website ?? ''}
 						placeholder="https://counterculturecoffee.com"
-						oninput={(e) =>
-							patch({
-								website: (e.currentTarget as HTMLInputElement).value || null
-							})}
-						onblur={() => (websiteTouched = true)}
+						oninput={(e) => patch({ website: (e.currentTarget as HTMLInputElement).value || null })}
+						onblur={() => websiteTouched = true}
 					/>
 					{#if (websiteTouched || attempted) && isWebsiteInvalid}
 						<div class="rd-required">Must start with https:// or http://</div>
@@ -355,16 +345,16 @@
 							placeholder="https://…/logo.png"
 							oninput={(e) =>
 								patch({
-									imageUrl: (e.currentTarget as HTMLInputElement).value || null
-								})}
-							onblur={() => (logoTouched = true)}
+								imageUrl: (e.currentTarget as HTMLInputElement).value || null
+							})}
+							onblur={() => logoTouched = true}
 						/>
 						<div class="rd-logo-preview" style="--tone: {mt.tone}">
 							{#if current.imageUrl && !logoLoadFailed}
 								<img
 									src={current.imageUrl}
 									alt="logo preview"
-									onerror={() => (logoLoadFailed = true)}
+									onerror={() => logoLoadFailed = true}
 								/>
 							{:else}
 								<span class="rd-logo-mark">{mt.mark}</span>

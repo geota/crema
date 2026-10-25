@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { uploadMenuEntry, viewableTargets, type UploadTarget } from '$lib/history/upload-targets';
-	import Icon from '$lib/icons/Icon.svelte';
-	import StarRating from '$lib/components/common/StarRating.svelte';
+	import { uploadMenuEntry, viewableTargets, type UploadTarget } from '#lib/history/upload-targets.js';
+	import Icon from '#lib/icons/Icon.svelte';
+	import StarRating from '#lib/components/common/StarRating.svelte';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import DropIcon from 'phosphor-svelte/lib/DropIcon';
 	import GaugeIcon from 'phosphor-svelte/lib/GaugeIcon';
@@ -18,7 +18,7 @@
 	 * and persisted to the `lib/history` store. Save-as-profile is a stub
 	 * (`// TODO`).
 	 */
-	import type { ManualBrewPatch, StoredShot } from '$lib/history';
+	import type { ManualBrewPatch, StoredShot } from '#lib/history/index.js';
 	import {
 		ratioLabel,
 		shotFilename,
@@ -30,29 +30,29 @@
 		isBrewLog,
 		isManualLog,
 		methodOf,
-	} from '$lib/history';
-	import { methodLabel } from '$lib/brew/methods';
-	import MethodMark from '$lib/components/brewlog/MethodMark.svelte';
+	} from '#lib/history/index.js';
+	import { methodLabel } from '#lib/brew/methods.js';
+	import MethodMark from '#lib/components/brewlog/MethodMark.svelte';
 	import BrewSessionChart from './BrewSessionChart.svelte';
-	import { loadCore, type ShotQualityReport } from '$lib/core';
-	import { getCaptureStore, captureJsonl } from '$lib/capture';
-	import { daysOffRoast, roastBand, roastFreshness, freshnessColor, type Bean, type Roaster } from '$lib/bean';
-	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
-	import { getProfileStore } from '$lib/profiles';
-	import { onSyncConfigChange, readSyncConfig } from '$lib/visualizer';
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { downloadBlob } from '$lib/utils/download';
-	import { getBeanStore } from '$lib/bean';
-	import { getHistoryContext } from '$lib/state';
-	import TagInput from '$lib/components/profiles/TagInput.svelte';
-	import SplitButton from '$lib/components/shared/SplitButton.svelte';
-	import { toast } from '$lib/components/shared/toast.svelte';
+	import { loadCore, type ShotQualityReport } from '#lib/core/index.js';
+	import { getCaptureStore, captureJsonl } from '#lib/capture/index.js';
+	import { daysOffRoast, roastBand, roastFreshness, freshnessColor, type Bean, type Roaster } from '#lib/bean/index.js';
+	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '#lib/settings/index.js';
+	import { getProfileStore } from '#lib/profiles/index.js';
+	import { onSyncConfigChange, readSyncConfig } from '#lib/visualizer/index.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { downloadBlob } from '#lib/utils/download.js';
+	import { getBeanStore } from '#lib/bean/index.js';
+	import { getHistoryContext } from '#lib/state/index.js';
+	import TagInput from '#lib/components/profiles/TagInput.svelte';
+	import SplitButton from '#lib/components/shared/SplitButton.svelte';
+	import { toast } from '#lib/components/shared/toast.svelte.js';
 	import StaticShotChart from './StaticShotChart.svelte';
-	import ChartModal from '$lib/components/shared/ChartModal.svelte';
+	import ChartModal from '#lib/components/shared/ChartModal.svelte';
 	import BeanPicker from './BeanPicker.svelte';
-	import HeaderBlock from '$lib/components/brew/HeaderBlock.svelte';
-	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
-	import { requestDialIn } from '$lib/components/brew/dial-in.svelte';
+	import HeaderBlock from '#lib/components/brew/HeaderBlock.svelte';
+	import QuickStepper from '#lib/components/brew/QuickStepper.svelte';
+	import { requestDialIn } from '#lib/components/brew/dial-in.svelte.js';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 

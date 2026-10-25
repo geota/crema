@@ -7,7 +7,7 @@
 	 * `?duplicate=1`) forks a fresh custom copy — built-ins are read-only.
 	 */
 	import { page } from '$app/state';
-	import { ProfileEditor } from '$lib/components/profiles';
+	import { ProfileEditor } from '#lib/components/profiles/index.js';
 
 	/** The profile id from the route. */
 	const id = $derived(page.params.id);

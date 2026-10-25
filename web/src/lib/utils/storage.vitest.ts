@@ -5,9 +5,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BeanLibraryStore } from '$lib/bean/store.svelte';
-import { RecipeStore } from '$lib/brew/recipes.svelte';
-import { corruptMessage, keptAsideBundle } from '$lib/shell/storage-notices';
+import { BeanLibraryStore } from '#lib/bean/store.svelte.js';
+import { RecipeStore } from '#lib/brew/recipes.svelte.js';
+import { corruptMessage, keptAsideBundle } from '#lib/shell/storage-notices.js';
 import {
 	corruptAtKeyOf,
 	corruptKeyOf,

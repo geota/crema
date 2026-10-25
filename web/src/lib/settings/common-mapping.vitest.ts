@@ -6,7 +6,7 @@
  */
 
 import { beforeAll, describe, it, expect } from 'vitest';
-import { initTestWasm } from '$lib/testing/test-init';
+import { initTestWasm } from '#lib/testing/test-init.js';
 import {
 	settingsToCommon,
 	applyCommonToSettings,

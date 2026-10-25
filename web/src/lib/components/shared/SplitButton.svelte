@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 	/**
 	 * `SplitButton` — primary action + caret-revealed menu of variants.

@@ -1,5 +1,5 @@
 /**
- * `$lib/effect/schema/decode` — the shared decode-or-fallback primitive used
+ * `#lib/effect/schema/decode.js` — the shared decode-or-fallback primitive used
  * at every untrusted boundary (HTTP responses, localStorage, IndexedDB,
  * capture files).
  *

@@ -1,5 +1,5 @@
 /**
- * `$lib/services/de1-orchestrator.vitest` — vitest for the DE1 connect program
+ * `#lib/services/de1-orchestrator.vitest.js` — vitest for the DE1 connect program
  * (docs/53 T-17). Mocks at the transport seam (D-07 keeps Web Bluetooth in
  * `transport.ts`): a fake `De1Transport` + core slice let us assert the
  * orchestration that Effect adds — step order, `De1ConnectStepFailed{step}`
@@ -15,10 +15,10 @@ import {
 	de1SeedProgram,
 	type De1ConnectDeps
 } from './de1-orchestrator.ts';
-import { De1Uuids } from '$lib/ble/de1-uuids';
-import { MmrRegister } from '$lib/core/crema-core';
-import type { De1Transport } from '$lib/ble/de1-transport';
-import type { CoreOutput, CremaCore } from '$lib/core';
+import { De1Uuids } from '#lib/ble/de1-uuids.js';
+import { MmrRegister } from '#lib/core/crema-core.js';
+import type { De1Transport } from '#lib/ble/de1-transport.js';
+import type { CoreOutput, CremaCore } from '#lib/core/index.js';
 
 const EMPTY_OUTPUT = {} as CoreOutput;
 

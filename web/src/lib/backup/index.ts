@@ -1,5 +1,5 @@
 /**
- * `$lib/backup` — whole-app local backup & restore, the web side of the
+ * `#lib/backup/index.js` — whole-app local backup & restore, the web side of the
  * cross-shell `crema-backup/v1` bundle (core `export_backup_jsonl_from_json` /
  * the line-tagged JSONL; mirrors Android's `MainViewModel.backupBundleJson`).
  *
@@ -19,9 +19,9 @@
  * (the cross-shell DATA still restores either way).
  */
 
-import { exportBackupJsonl, importBackupJsonl } from '$lib/wasm/de1_wasm';
-import { getBeanStore } from '$lib/bean';
-import { getHistoryStore } from '$lib/history';
+import { exportBackupJsonl, importBackupJsonl } from '#lib/wasm/de1_wasm.js';
+import { getBeanStore } from '#lib/bean/index.js';
+import { getHistoryStore } from '#lib/history/index.js';
 import {
 	getSettingsStore,
 	settingsToCommon,
@@ -29,26 +29,26 @@ import {
 	settingsPlatformExtras,
 	DEFAULT_SETTINGS,
 	type Settings
-} from '$lib/settings';
-import { getProfileStore } from '$lib/profiles';
-import { getRecipeStore, type RecipeBackupMeta } from '$lib/brew/recipes.svelte';
-import { getCustomMethodStore } from '$lib/brew/custom-methods.svelte';
-import { getMaintenanceStore } from '$lib/maintenance';
-import { visualizerSyncPrefs, applyVisualizerSyncPrefs } from '$lib/visualizer/sync-config';
-import { getBeanImageStore, refForBean } from '$lib/bean/image-storage';
+} from '#lib/settings/index.js';
+import { getProfileStore } from '#lib/profiles/index.js';
+import { getRecipeStore, type RecipeBackupMeta } from '#lib/brew/recipes.svelte.js';
+import { getCustomMethodStore } from '#lib/brew/custom-methods.svelte.js';
+import { getMaintenanceStore } from '#lib/maintenance/index.js';
+import { visualizerSyncPrefs, applyVisualizerSyncPrefs } from '#lib/visualizer/sync-config.js';
+import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
 import { strToU8, strFromU8, zipSync, unzipSync } from 'fflate';
-import { readJson } from '$lib/utils/storage';
-import { downloadBlob, filenameStamp } from '$lib/utils/download';
-import type { Bean, Roaster } from '$lib/bean/model';
-import type { StoredShot } from '$lib/history';
-import type { CremaProfile } from '$lib/profiles/model';
+import { readJson } from '#lib/utils/storage.js';
+import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
+import type { Bean, Roaster } from '#lib/bean/model.js';
+import type { StoredShot } from '#lib/history/index.js';
+import type { CremaProfile } from '#lib/profiles/model.js';
 import type {
 	BrewRecipe,
 	CommonSettings,
 	CustomBrewMethod,
 	MaintenanceState,
 	VisualizerSyncPrefs
-} from '$lib/core/crema-core';
+} from '#lib/core/crema-core.js';
 
 /** localStorage key for the user's custom profiles (a `CremaProfile[]`). Mirror
  *  of `profiles/store`'s `CUSTOM_KEY` — read directly so the bundle carries the

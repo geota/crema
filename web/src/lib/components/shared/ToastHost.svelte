@@ -1,6 +1,6 @@
 <script lang="ts">
 	import XIcon from 'phosphor-svelte/lib/XIcon';
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	/**
 	 * `ToastHost` — renders the live {@link toast} queue. Mounted once in the
 	 * root layout (FD4). Bottom-right stack; each toast auto-dismisses (the

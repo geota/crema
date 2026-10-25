@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	/**
 	 * `StButton` — the settings-kit button: secondary (default), primary, or
 	 * danger, with an optional leading Phosphor icon. Ported from the design's

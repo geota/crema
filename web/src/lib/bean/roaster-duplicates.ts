@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/roaster-duplicates` — the Roasters tab's duplicate detection +
+ * `#lib/bean/roaster-duplicates` — the Roasters tab's duplicate detection +
  * merge bookkeeping, delegated to the Rust core (`de1_domain::bean_sync`) so
  * the Android shell suggests and merges identically.
  *
@@ -11,11 +11,11 @@
  *   kept, so clearing that pointer un-merges it.
  */
 
-import type { RoasterDuplicate, RoasterMergePlan } from '$lib/core/crema-core';
+import type { RoasterDuplicate, RoasterMergePlan } from '#lib/core/crema-core.js';
 import {
 	detectRoasterDuplicates as wasmDetectRoasterDuplicates,
 	planRoasterMerge as wasmPlanRoasterMerge
-} from '$lib/wasm/de1_wasm';
+} from '#lib/wasm/de1_wasm.js';
 import type { Bean, Roaster } from './model';
 
 /** Probable duplicate pairs (`canonicalId` keeps, `dupeId` folds in). */

@@ -1,5 +1,5 @@
 /**
- * `$lib/utils/country-detect` — lazy ISO-3166 country lookup via IP.
+ * `#lib/utils/country-detect.js` — lazy ISO-3166 country lookup via IP.
  *
  * The detection is **advisory only** — used by `MainsConfirmModal` to
  * surface "expected 230 V, you're setting 120 V" warnings when committing

@@ -1,5 +1,5 @@
 /**
- * `$lib/effect/crema-services.vitest` — the Promise-shaped service facade
+ * `#lib/effect/crema-services.vitest.js` — the Promise-shaped service facade
  * (architecture review #1). `pnpm check` proves the types line up; this locks
  * the hand-wiring — that each facade method dispatches to the RIGHT service
  * method (a `deleteBean`→`deleteRoaster` transposition typechecks but is wrong)
@@ -18,7 +18,7 @@ import { TokenVault } from '../services/token-vault.ts';
 import { ShotSync } from '../services/shot-sync.ts';
 import { BeanSync } from '../services/bean-sync.ts';
 import { UploadQueue } from '../services/upload-queue.ts';
-import type { TokenSet } from '$lib/visualizer/oauth';
+import type { TokenSet } from '#lib/visualizer/oauth.js';
 
 const aToken = {
 	accessToken: 'tok',

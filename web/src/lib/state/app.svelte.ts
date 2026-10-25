@@ -1,5 +1,5 @@
 /**
- * `$lib/state/app` — the orchestrator: the web mirror of the Android shell's
+ * `#lib/state/app` — the orchestrator: the web mirror of the Android shell's
  * `MainViewModel`. Ties the core, the BLE layer, and the runes state together
  * and exposes the actions the screen calls.
  *
@@ -21,11 +21,11 @@ import {
 	type Command,
 	type CoreOutput,
 	type CremaCore
-} from '$lib/core';
-import { MachineState, MmrRegister } from '$lib/core/crema-core';
-import type { BrewRecipe } from '$lib/core/crema-core';
-import { getGuidedBrewStore } from '$lib/brew/session.svelte';
-import { playBrewCue } from '$lib/brew/cues';
+} from '#lib/core/index.js';
+import { MachineState, MmrRegister } from '#lib/core/crema-core.js';
+import type { BrewRecipe } from '#lib/core/crema-core.js';
+import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
+import { playBrewCue } from '#lib/brew/cues.js';
 import {
 	De1Manager,
 	EMPTY_DE1_DIAGNOSTICS,
@@ -33,33 +33,33 @@ import {
 	compactLine,
 	reconnectTimelines,
 	type ReconnectTrigger
-} from '$lib/ble';
-import { getBeanStore, getBeanLibraryStore } from '$lib/bean';
-import { getHistoryStore, snapshotFromBean, extractCremaExtras } from '$lib/history';
-import { commitShotCompletion } from '$lib/history/shot-persistence';
-import { getCaptureStore } from '$lib/capture';
+} from '#lib/ble/index.js';
+import { getBeanStore, getBeanLibraryStore } from '#lib/bean/index.js';
+import { getHistoryStore, snapshotFromBean, extractCremaExtras } from '#lib/history/index.js';
+import { commitShotCompletion } from '#lib/history/shot-persistence.js';
+import { getCaptureStore } from '#lib/capture/index.js';
 import {
 	getProfileStore,
 	profileFingerprint,
 	toCoreProfile,
 	type CremaProfile,
 	type ProfileFingerprintOverrides
-} from '$lib/profiles';
-import { readJson, writeJson } from '$lib/utils/storage';
-import { isSerialStolen } from '$lib/decent/stolen-serials';
+} from '#lib/profiles/index.js';
+import { readJson, writeJson } from '#lib/utils/storage.js';
+import { isSerialStolen } from '#lib/decent/stolen-serials.js';
 import { SAW_MODEL_KEY, seedSawModel } from './saw-model-store';
-import { getSettingsStore } from '$lib/settings';
-import { toast } from '$lib/components/shared/toast.svelte';
-import { getMaintenanceStore } from '$lib/maintenance';
-import { parseCaptureFile } from '$lib/replay';
-import { describeError } from '$lib/utils/error';
+import { getSettingsStore } from '#lib/settings/index.js';
+import { toast } from '#lib/components/shared/toast.svelte.js';
+import { getMaintenanceStore } from '#lib/maintenance/index.js';
+import { parseCaptureFile } from '#lib/replay/index.js';
+import { describeError } from '#lib/utils/error.js';
 import { Effect, Fiber } from 'effect';
-import type { AppRuntime } from '$lib/effect/runtime';
-import { runtimePromise } from '$lib/effect/bridge';
-import { UploadQueue } from '$lib/services/upload-queue';
-import { Webhooks } from '$lib/services/webhooks';
-import { ProfileSync } from '$lib/services/profile-sync';
-import { replayCaptureProgram } from '$lib/services/replay';
+import type { AppRuntime } from '#lib/effect/runtime.js';
+import { runtimePromise } from '#lib/effect/bridge.js';
+import { UploadQueue } from '#lib/services/upload-queue.js';
+import { Webhooks } from '#lib/services/webhooks.js';
+import { ProfileSync } from '#lib/services/profile-sync.js';
+import { replayCaptureProgram } from '#lib/services/replay.js';
 import {
 	CremaUiState,
 	DEFAULT_SCALE_STANDBY,
@@ -74,20 +74,20 @@ import {
 import { getActiveShotStore, type ActiveShotData } from './active-shot.svelte';
 import { ConnectSweepRunner, readBatteryPercent } from './connect-sweep';
 import { IdleSleepRunner } from './idle-sleep';
-import { FirmwareUpdateController } from '$lib/firmware/firmware-update.svelte';
-import { readPowerOk } from '$lib/firmware/power';
-import { setFirmwareWakeLock } from '$lib/shell/wake-lock';
-import type { FlashShellConditions } from '$lib/core';
+import { FirmwareUpdateController } from '#lib/firmware/firmware-update.svelte.js';
+import { readPowerOk } from '#lib/firmware/power.js';
+import { setFirmwareWakeLock } from '#lib/shell/wake-lock.js';
+import type { FlashShellConditions } from '#lib/core/index.js';
 import {
 	LaunchReconnect,
 	forgetDevice,
 	markUserDisconnect,
 	rememberDevice,
 	type DeviceKind
-} from '$lib/ble/launch-reconnect';
-import { installIosBridge, isBridgedBluetooth } from '$lib/ble/ios-bridge';
-import { watchBluetoothAvailability } from '$lib/ble/availability';
-import { connectBlocker } from '$lib/ble/connect-blocker';
+} from '#lib/ble/launch-reconnect.js';
+import { installIosBridge, isBridgedBluetooth } from '#lib/ble/ios-bridge.js';
+import { watchBluetoothAvailability } from '#lib/ble/availability.js';
+import { connectBlocker } from '#lib/ble/connect-blocker.js';
 
 /** `navigator.bluetooth` as it is now (the iOS bridge may install it late). */
 function currentBluetooth(): Bluetooth | undefined {
@@ -250,7 +250,7 @@ const WATER_COUNTING_STATES: ReadonlySet<string> = new Set([
 /**
  * The replay-specific helpers — `composeReplayStartMessage`,
  * `replayMetaToActiveShot`, `guessScaleAdvertisedName` — moved to
- * `$lib/services/replay` alongside the `replayCaptureProgram` they serve (T-28).
+ * `#lib/services/replay` alongside the `replayCaptureProgram` they serve (T-28).
  */
 
 /** Options for {@link CremaApp.replayCapture}. */
@@ -305,7 +305,7 @@ export class CremaApp {
 
 	/**
 	 * Whether the connected DE1's serial is on Decent's stolen-machine list
-	 * (`$lib/decent/stolen-serials`) — drives a non-blocking one-line notice
+	 * (`#lib/decent/stolen-serials.js`) — drives a non-blocking one-line notice
 	 * in Settings → Machine. Checked when the serial is read; cleared on
 	 * disconnect. Never blocks anything.
 	 */
@@ -345,7 +345,7 @@ export class CremaApp {
 	/**
 	 * Settings → Machine → "Update firmware…" (alpha): the flow's state and
 	 * the driver that performs the core's firmware-flash actions over the
-	 * DE1 link. See `$lib/firmware/firmware-update.svelte`.
+	 * DE1 link. See `#lib/firmware/firmware-update.svelte.js`.
 	 */
 	readonly firmware: FirmwareUpdateController;
 
@@ -862,7 +862,7 @@ export class CremaApp {
 				// Persist the shot's history row, run live-only side effects
 				// (bean burn-down, webhook), enqueue the Visualizer push,
 				// and persist the capture slice with both META preludes.
-				// See `$lib/history/shot-persistence` for the whole pipeline.
+				// See `#lib/history/shot-persistence.js` for the whole pipeline.
 				commitShotCompletion(event, {
 					snapshot: this.state.current,
 					shotStartedAtMs: this.shotStartedAtMs,
@@ -1192,7 +1192,7 @@ export class CremaApp {
 
 	/**
 	 * Reconnect the DE1 / scale the user last connected, where the browser
-	 * exposes `navigator.bluetooth.getDevices()` (see `$lib/ble/launch-reconnect`).
+	 * exposes `navigator.bluetooth.getDevices()` (see `#lib/ble/launch-reconnect.js`).
 	 * A silent no-op elsewhere. A user Connect / Disconnect meanwhile cancels
 	 * the wait for that device.
 	 */
@@ -1363,7 +1363,7 @@ export class CremaApp {
 	 * `profile` is the typed `Profile` (de1-domain shape) — the shell's
 	 * `lib/profiles` model converts via `toCoreProfile` before calling this.
 	 */
-	async uploadProfile(profile: import('$lib/core').Profile): Promise<void> {
+	async uploadProfile(profile: import('#lib/core/index.js').Profile): Promise<void> {
 		const now = performance.now();
 		this.applyCoreOutput(await this.core.uploadProfile(profile, now));
 	}
@@ -1755,7 +1755,7 @@ export class CremaApp {
 	 */
 	async importProfileFile(
 		file: File
-	): Promise<{ profile: import('$lib/core').Profile | null; error: string | null }> {
+	): Promise<{ profile: import('#lib/core/index.js').Profile | null; error: string | null }> {
 		let content: string;
 		try {
 			content = await file.text();
@@ -1780,7 +1780,7 @@ export class CremaApp {
 	}
 
 	/** Serialize a Crema `Profile` (TS shape) as a community-v2 JSON string. */
-	async exportProfileAsV2Json(profile: import('$lib/core').Profile): Promise<string> {
+	async exportProfileAsV2Json(profile: import('#lib/core/index.js').Profile): Promise<string> {
 		return this.core.exportV2JsonProfile(profile);
 	}
 
@@ -1790,7 +1790,7 @@ export class CremaApp {
 	 * failure — callers handle per-line error reporting in bulk
 	 * imports.
 	 */
-	async parseV2JsonProfile(content: string): Promise<import('$lib/core').Profile> {
+	async parseV2JsonProfile(content: string): Promise<import('#lib/core/index.js').Profile> {
 		return this.core.importV2JsonProfile(content);
 	}
 
@@ -2113,7 +2113,7 @@ export class CremaApp {
 	 * calibration-screen open).
 	 */
 	async readCalibration(
-		sensor: import('$lib/core').CalTarget,
+		sensor: import('#lib/core/index.js').CalTarget,
 		factory = false
 	): Promise<void> {
 		this.applyCoreOutput(await this.core.readCalibration(sensor, factory));
@@ -2128,7 +2128,7 @@ export class CremaApp {
 	 * reports as in-use; the factory read is unchanged.
 	 */
 	async writeCalibration(
-		sensor: import('$lib/core').CalTarget,
+		sensor: import('#lib/core/index.js').CalTarget,
 		reported: number,
 		measured: number
 	): Promise<void> {
@@ -2142,7 +2142,7 @@ export class CremaApp {
 	 * now applies (and a stale factory readout from a prior session is
 	 * brought up to date).
 	 */
-	async resetCalibrationToFactory(sensor: import('$lib/core').CalTarget): Promise<void> {
+	async resetCalibrationToFactory(sensor: import('#lib/core/index.js').CalTarget): Promise<void> {
 		this.applyCoreOutput(await this.core.resetCalibrationToFactory(sensor));
 		await this.readCalibration(sensor, false);
 		await this.readCalibration(sensor, true);
@@ -2156,7 +2156,7 @@ export class CremaApp {
 	 * and after each Apply / Reset so the row's "Current" label re-renders
 	 * from the live read.
 	 */
-	async readMmr(register: import('$lib/core').MmrRegister): Promise<void> {
+	async readMmr(register: import('#lib/core/index.js').MmrRegister): Promise<void> {
 		this.applyCoreOutput(await this.core.readMmr(register));
 	}
 
@@ -2406,7 +2406,7 @@ export class CremaApp {
 	 * and readouts, and `ShotCompleted` into the History store.
 	 *
 	 * The replay is paced at real time by the events' timestamps (see
-	 * `$lib/services/replay`'s `replayCaptureProgram`); `opts.speed` scales the
+	 * `#lib/services/replay`'s `replayCaptureProgram`); `opts.speed` scales the
 	 * pace. Progress and outcome are exposed on `state.current.replay`;
 	 * {@link cancelReplay} stops it.
 	 *
@@ -2514,7 +2514,7 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 	// The read-side context singletons (BrewContext, MachineReadout,
 	// HistoryContext) construct themselves lazily on first access via
 	// the shared store + `getCremaUiState()` singletons — no bind step
-	// needed. See `$lib/state/{brew-context,machine-readout,history-context}.svelte`.
+	// needed. See `#lib/state/{brew-context,machine-readout,history-context}.svelte`.
 	// Push the persisted AC mains-frequency preference into the core's
 	// volume integrator. `0` = auto (the core's auto-detector decides);
 	// `50` / `60` pin the value. Done once at construction; subsequent

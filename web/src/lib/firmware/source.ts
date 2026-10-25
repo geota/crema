@@ -1,5 +1,5 @@
 /**
- * `$lib/firmware/source` — where a firmware image comes from on the web.
+ * `#lib/firmware/source.js` — where a firmware image comes from on the web.
  *
  * Crema never bundles firmware. The image is fetched at runtime from Decent's
  * own update channel (`fast.decentespresso.com/download/sync/<channel>/fw/
@@ -14,8 +14,8 @@
  * downloaded file, which is validated exactly like a fetched one.
  */
 
-import { firmwareManifest, validateFirmwareImage } from '$lib/wasm/de1_wasm.js';
-import type { FirmwareArtifact, FirmwareImageCheck } from '$lib/core';
+import { firmwareManifest, validateFirmwareImage } from '#lib/wasm/de1_wasm.js';
+import type { FirmwareArtifact, FirmwareImageCheck } from '#lib/core/index.js';
 
 /** The pinned official images (stable first). */
 export function pinnedFirmware(): FirmwareArtifact[] {

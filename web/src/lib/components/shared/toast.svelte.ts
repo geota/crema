@@ -1,5 +1,5 @@
 /**
- * `$lib/components/shared/toast` — a tiny app-wide toast/snackbar store.
+ * `#lib/components/shared/toast` — a tiny app-wide toast/snackbar store.
  *
  * The in-app replacement for `alert()` on async-error / info paths (FD4): a
  * native `alert()` blocks the main thread, can't be styled, and reads

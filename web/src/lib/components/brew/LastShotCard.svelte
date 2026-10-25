@@ -8,11 +8,11 @@
 	 * state (temperature is the warmed-up signal and must stay live), while this
 	 * card is a frozen *result* — duration, yield, ratio and the shot's peaks.
 	 */
-	import { getSettingsStore, convertWeight, convertPressure, convertTemp } from '$lib/settings';
-	import { formatRatio } from '$lib/utils/ratio';
-	import type { CompletedShot } from '$lib/state';
-	import { StopReason } from '$lib/core/crema-core';
-	import Icon from '$lib/icons/Icon.svelte';
+	import { getSettingsStore, convertWeight, convertPressure, convertTemp } from '#lib/settings/index.js';
+	import { formatRatio } from '#lib/utils/ratio.js';
+	import type { CompletedShot } from '#lib/state/index.js';
+	import { StopReason } from '#lib/core/crema-core.js';
+	import Icon from '#lib/icons/Icon.svelte';
 
 	let {
 		shot,

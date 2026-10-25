@@ -12,7 +12,7 @@
 	 * with an in-range value.
 	 */
 	import type { Snippet } from 'svelte';
-	import { type Dimension } from '$lib/settings/format';
+	import { type Dimension } from '#lib/settings/format.js';
 	import { useStepper } from '../useStepper.svelte';
 
 	let {

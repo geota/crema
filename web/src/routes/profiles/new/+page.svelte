@@ -6,7 +6,7 @@
 	 * from a blank custom profile with the default segment list, and Save
 	 * creates a new entry in the `localStorage`-backed library.
 	 */
-	import { ProfileEditor } from '$lib/components/profiles';
+	import { ProfileEditor } from '#lib/components/profiles/index.js';
 </script>
 
 <ProfileEditor mode="new" />

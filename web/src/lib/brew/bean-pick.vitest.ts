@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { blankBean, type Bean } from '$lib/bean';
-import type { BrewRecipe, BrewSessionSummary } from '$lib/core/crema-core';
+import { blankBean, type Bean } from '#lib/bean/index.js';
+import type { BrewRecipe, BrewSessionSummary } from '#lib/core/crema-core.js';
 import {
 	beanOverdraws,
 	guidedLogPrefill,

@@ -1,12 +1,12 @@
 /**
- * `$lib/profiles/library-filter.vitest` — the `/profiles` rail's two axes
+ * `#lib/profiles/library-filter.vitest` — the `/profiles` rail's two axes
  * (geota/crema#124): the Hidden status composes with the roast / beverage /
  * tag facet and the search, and every count is given the other selections.
  * Run: `pnpm test:vitest`.
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { initTestWasm } from '$lib/testing/test-init';
+import { initTestWasm } from '#lib/testing/test-init.js';
 import { blankProfile, type CremaProfile } from './model.ts';
 import {
 	filterProfiles,

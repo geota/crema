@@ -1,5 +1,5 @@
 /**
- * `$lib/state` — the runes state layer: the `MainUiState`-equivalent store,
+ * `#lib/state` — the runes state layer: the `MainUiState`-equivalent store,
  * the pure event-folding logic, and the `MainViewModel`-equivalent
  * orchestrator. Mirrors the Android shell's `ui` package.
  */

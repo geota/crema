@@ -1,5 +1,5 @@
 /**
- * `$lib/ble/connection-state` — the coarse lifecycle of a BLE peripheral
+ * `#lib/ble/connection-state.js` — the coarse lifecycle of a BLE peripheral
  * connection, shared by the DE1 and the scale managers.
  *
  * Both managers run the same connect → subscribe → ready → recover →

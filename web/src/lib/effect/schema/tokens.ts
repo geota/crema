@@ -1,5 +1,5 @@
 /**
- * `$lib/effect/schema/tokens` — `Schema` for the persisted Visualizer OAuth
+ * `#lib/effect/schema/tokens` — `Schema` for the persisted Visualizer OAuth
  * `TokenSet` (docs/53 §1.5).
  *
  * Replaces the shallow `typeof raw.accessToken === 'string'` guard in

@@ -1,5 +1,5 @@
 /**
- * `$lib/beans/editor-nav` — how the bean and roaster editors are entered and
+ * `#lib/beans/editor-nav.js` — how the bean and roaster editors are entered and
  * left, so browser Back never walks back into an editor you just saved or
  * cancelled (#86).
  *

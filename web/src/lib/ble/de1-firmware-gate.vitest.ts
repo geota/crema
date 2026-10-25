@@ -5,8 +5,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { CremaCore } from '$lib/core';
-import { WriteTarget } from '$lib/core/crema-core';
+import type { CremaCore } from '#lib/core/index.js';
+import { WriteTarget } from '#lib/core/crema-core.js';
 import { De1Manager } from './de1';
 
 describe('De1Manager firmware gate', () => {

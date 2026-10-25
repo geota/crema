@@ -7,10 +7,10 @@ import { defineConfig } from 'vitest/config';
  * Vitest config for store-coupled service tests (docs/53 T-27, pulled forward).
  *
  * The existing `node --experimental-strip-types --test 'src/**​/*.test.ts'`
- * runner can't resolve the `$lib` alias or compile `.svelte.ts` runes, so the
+ * runner can't resolve the `#lib` alias or compile `.svelte.ts` runes, so the
  * store-coupled services (ShotSync / BeanSync / UploadQueue / Webhooks) were
  * verified only by hand. This config gives them a home: the svelte plugin
- * compiles runes, `$lib` resolves, jsdom supplies `localStorage` / `document`,
+ * compiles runes, `#lib` resolves (from package.json `imports`), jsdom supplies `localStorage` / `document`,
  * and Effect's own `TestClock` (`effect/testing`; no `@effect/vitest` needed —
  * it conflicts with the vite-8-required vitest 4) drives time-based behavior.
  *
@@ -30,10 +30,9 @@ export default defineConfig({
 	plugins: [svelte({ compilerOptions: { hmr: false } })],
 	resolve: {
 		alias: {
-			$lib: path.resolve('./src/lib'),
 			// SvelteKit's `$app/*` virtual modules exist only inside the Kit
 			// runtime — stand-ins keep store-coupled imports that reach them
-			// (e.g. `$lib/bean/bag-empty-prompt`) collectable under vitest.
+			// (e.g. `#lib/bean/bag-empty-prompt.js`) collectable under vitest.
 			'$app/navigation': path.resolve('./vitest.mocks/app-navigation.ts'),
 			'$app/paths': path.resolve('./vitest.mocks/app-paths.ts')
 		},

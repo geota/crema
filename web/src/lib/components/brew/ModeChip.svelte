@@ -15,7 +15,7 @@
 	 * again to cancel" — the same click handler fires from any state, the
 	 * orchestrator decides whether to request the mode or return to Idle.
 	 */
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 
 	type Kind = 'steam' | 'water' | 'flush';

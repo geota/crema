@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/filter.vitest` — the web side of the core bean facet filter
+ * `#lib/bean/filter.vitest.js` — the web side of the core bean facet filter
  * (geota/crema#124). The composition rules are covered by the Rust tests in
  * `de1_domain::bean_filter`; here we prove the wasm bridge round-trips the
  * page's facets + search hits, and that a failing call never hides the
@@ -7,7 +7,7 @@
  */
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { initTestWasm } from '$lib/testing/test-init';
+import { initTestWasm } from '#lib/testing/test-init.js';
 import { blankBean, type Bean } from './model.ts';
 import { BeanStatusFilter, filterBeans, toQuery, type BeanFacets } from './filter.ts';
 import { noSearch, searchBeans } from './search.ts';

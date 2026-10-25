@@ -1,5 +1,5 @@
 /**
- * `$lib/ble/de1` — Web Bluetooth manager for a DE1 espresso machine.
+ * `#lib/ble/de1.js` — Web Bluetooth manager for a DE1 espresso machine.
  *
  * The web mirror of the Android shell's `De1BleManager`. Responsibilities, and
  * nothing more:
@@ -23,13 +23,13 @@
  */
 
 import { parseConnectExit } from './connect-exit.ts';
-import type { CremaCore, NotificationSource } from '$lib/core';
-import { WriteTarget } from '$lib/core/crema-core';
-import { de1WriteTargetUuid as wasmDe1WriteTargetUuid } from '$lib/wasm/de1_wasm';
-import { describeError } from '$lib/utils/error';
-import type { AppRuntime } from '$lib/effect/runtime';
+import type { CremaCore, NotificationSource } from '#lib/core/index.js';
+import { WriteTarget } from '#lib/core/crema-core.js';
+import { de1WriteTargetUuid as wasmDe1WriteTargetUuid } from '#lib/wasm/de1_wasm.js';
+import { describeError } from '#lib/utils/error.js';
+import type { AppRuntime } from '#lib/effect/runtime.js';
 import { Effect } from 'effect';
-import { de1ConnectProgram, de1SeedProgram } from '$lib/services/de1-orchestrator';
+import { de1ConnectProgram, de1SeedProgram } from '#lib/services/de1-orchestrator.js';
 import { HOLLOW_LINK_STATUS, stuckLinkHint } from './stuck-link';
 import type { BleConnectionState } from './connection-state';
 import { De1Uuids } from './de1-uuids';
@@ -63,7 +63,7 @@ type De1NotificationSource = Extract<
  * Coarse state of the DE1 connection — an alias of {@link BleConnectionState},
  * the shared BLE-manager lifecycle. Kept as `De1State` for backward
  * compatibility at the existing call sites; new code should import
- * `BleConnectionState` directly from `$lib/ble`.
+ * `BleConnectionState` directly from `#lib/ble/index.js`.
  */
 export type De1State = BleConnectionState;
 
@@ -118,7 +118,7 @@ export const EMPTY_DE1_DIAGNOSTICS: De1Diagnostics = {
 /** Callbacks the manager reports up to the orchestrator. */
 export interface De1ManagerCallbacks {
 	/** A raw `CoreOutput` is ready to be folded into state. */
-	onCoreOutput: (output: import('$lib/core').CoreOutput) => void;
+	onCoreOutput: (output: import('#lib/core/index.js').CoreOutput) => void;
 	/** A human-readable status line for the UI. */
 	onStatus: (line: string) => void;
 	/** The coarse connection state advanced. */
@@ -457,7 +457,7 @@ export class De1Manager {
 	}
 
 	// ── Firmware flash I/O ──────────────────────────────────────────────
-	// The flash driver (`$lib/firmware/flash-driver`) performs the core's
+	// The flash driver (`#lib/firmware/flash-driver`) performs the core's
 	// `FlashAction`s through these. Unlike `writeCharacteristic` they throw,
 	// because the state machine must see every failure.
 

@@ -1,5 +1,5 @@
 /**
- * `$lib/effect/runtime` — construction of the app-wide Effect runtime.
+ * `#lib/effect/runtime.js` — construction of the app-wide Effect runtime.
  *
  * One `ManagedRuntime` is mounted at the app shell (`+layout.svelte`'s
  * `onMount`) and published through Svelte context, mirroring how the shared

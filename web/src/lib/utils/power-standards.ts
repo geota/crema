@@ -1,5 +1,5 @@
 /**
- * `$lib/utils/power-standards` — embedded ISO-3166 alpha-2 → mains
+ * `#lib/utils/power-standards.js` — embedded ISO-3166 alpha-2 → mains
  * voltage / frequency lookup.
  *
  * Used by `MainsConfirmModal` to surface "we think your country expects

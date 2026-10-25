@@ -1,6 +1,6 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
-	import StarRating from '$lib/components/common/StarRating.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
+	import StarRating from '#lib/components/common/StarRating.svelte';
 	import CopyIcon from 'phosphor-svelte/lib/CopyIcon';
 	import PackageIcon from 'phosphor-svelte/lib/PackageIcon';
 	import PencilIcon from 'phosphor-svelte/lib/PencilIcon';
@@ -37,15 +37,15 @@
 		freshnessColor,
 		type Bean,
 		type Roaster
-	} from '$lib/bean';
+	} from '#lib/bean/index.js';
 	import {
 		explanatoryHit,
 		hitForField,
 		SearchField,
 		type SearchHit
-	} from '$lib/bean/search';
-	import LibraryCardShell from '$lib/components/shared/LibraryCardShell.svelte';
-	import HighlightedText from '$lib/components/shared/HighlightedText.svelte';
+	} from '#lib/bean/search.js';
+	import LibraryCardShell from '#lib/components/shared/LibraryCardShell.svelte';
+	import HighlightedText from '#lib/components/shared/HighlightedText.svelte';
 	import BeanImage from './BeanImage.svelte';
 	import BeanDeleteSplit from './BeanDeleteSplit.svelte';
 

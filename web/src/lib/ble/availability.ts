@@ -1,5 +1,5 @@
 /**
- * `$lib/ble/availability` — whether the browser says Bluetooth is usable
+ * `#lib/ble/availability.js` — whether the browser says Bluetooth is usable
  * right now: `navigator.bluetooth.getAvailability()` plus the
  * `availabilitychanged` event.
  *

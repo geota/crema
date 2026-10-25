@@ -27,10 +27,10 @@
 	 */
 	import { untrack } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
-	import ProfilePreview from '$lib/components/profiles/ProfilePreview.svelte';
+	import ProfilePreview from '#lib/components/profiles/ProfilePreview.svelte';
 	import BeanPill from './BeanPill.svelte';
-	import { ratioLabel, type CremaProfile } from '$lib/profiles';
-	import type { Bean, Roaster } from '$lib/bean';
+	import { ratioLabel, type CremaProfile } from '#lib/profiles/index.js';
+	import type { Bean, Roaster } from '#lib/bean/index.js';
 
 	let {
 		profiles,

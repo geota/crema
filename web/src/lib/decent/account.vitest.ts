@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // jsdom has no IndexedDB, so the real box would pass plaintext through. Swap
 // in a box over an in-memory key the test can "lose".
 let key: Promise<CryptoKey> | null = null;
-vi.mock('$lib/security/secret-box', async (importOriginal) => {
-	const real = await importOriginal<typeof import('$lib/security/secret-box')>();
+vi.mock('#lib/security/secret-box.js', async (importOriginal) => {
+	const real = await importOriginal<typeof import('#lib/security/secret-box.js')>();
 	return {
 		...real,
 		secretBox: real.createSecretBox({ getKey: () => key ?? Promise.resolve(null) })
@@ -13,7 +13,7 @@ vi.mock('$lib/security/secret-box', async (importOriginal) => {
 
 const { decentTokenMigration, getDecentCredentials, readDecentAccount, writeDecentAccount, DEFAULT_DECENT_ACCOUNT } =
 	await import('./account');
-const { isWrapped } = await import('$lib/security/secret-box');
+const { isWrapped } = await import('#lib/security/secret-box.js');
 
 const ACCOUNT_KEY = 'crema.decent.v1';
 const stored = (): { token: string; needsReauth: boolean } => JSON.parse(localStorage.getItem(ACCOUNT_KEY) ?? '{}');
@@ -35,7 +35,7 @@ describe('Decent account token at rest', () => {
 	});
 
 	it('flags needsReauth when the wrapped token becomes unreadable (key lost)', async () => {
-		const { createSecretBox } = await import('$lib/security/secret-box');
+		const { createSecretBox } = await import('#lib/security/secret-box.js');
 		const lostKey = crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 		const wrapped = await createSecretBox({ getKey: () => lostKey }).wrap('tok');
 		localStorage.setItem(ACCOUNT_KEY, JSON.stringify({ email: 'me@example.com', token: wrapped, autoUpload: true }));

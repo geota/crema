@@ -25,10 +25,10 @@
 	import { untrack } from 'svelte';
 	import uPlot from 'uplot';
 	import 'uplot/dist/uPlot.min.css';
-	import type { TelemetrySample } from '$lib/state';
-	import { sampleCurve, type ProfileSegment } from '$lib/profiles';
-	import { theme } from '$lib/theme.svelte';
-	import { cssVar, yRange, sharedAxes } from '$lib/components/charts/chartHelpers';
+	import type { TelemetrySample } from '#lib/state/index.js';
+	import { sampleCurve, type ProfileSegment } from '#lib/profiles/index.js';
+	import { theme } from '#lib/theme.svelte.js';
+	import { cssVar, yRange, sharedAxes } from '#lib/components/charts/chartHelpers.js';
 
 	let {
 		series,

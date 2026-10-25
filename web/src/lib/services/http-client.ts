@@ -1,5 +1,5 @@
 /**
- * `$lib/services/http-client` — the Visualizer HTTP client service (docs/53
+ * `#lib/services/http-client.js` — the Visualizer HTTP client service (docs/53
  * §1.3, T-09).
  *
  * Wraps `fetch` and turns its two failure modes into typed errors:

@@ -1,5 +1,5 @@
 /**
- * `$lib/profiles/model` — the shell's working profile model and its mapping
+ * `#lib/profiles/model` — the shell's working profile model and its mapping
  * to / from the core's `Profile` JSON shape.
  *
  * The design (`profile-edit-page.jsx`) edits a **segment-based** model: a
@@ -16,7 +16,7 @@
  * `blankCremaProfile`) — the same JSON-boundary pattern the bean / shot /
  * Visualizer-wire converters use. The interfaces below stay hand-written: they
  * mirror the core's JSON shape (a Rust test pins it), exactly as the wire
- * `Profile` interface in `$lib/core` already does.
+ * `Profile` interface in `#lib/core/index.js` already does.
  *
  * A `CremaProfile` additionally carries the **library** metadata the cards and
  * editor need (roast, custom tags, pinned, last-used) which the core's
@@ -24,21 +24,21 @@
  *
  * Note `roast` is **recipe-suitability** metadata (which roast a recipe is
  * tuned for — it drives the Profiles page Light/Med/Dark filter), not bean
- * identity. The bag of coffee you are actually pulling lives in `$lib/bean`.
+ * identity. The bag of coffee you are actually pulling lives in `#lib/bean/index.js`.
  */
 
 import type { Profile, SparkShape } from './core-types';
-import { newProfileId } from '$lib/core';
+import { newProfileId } from '#lib/core/index.js';
 import {
 	blankCremaProfile,
 	builtinCremaProfiles as wasmBuiltinCremaProfiles,
 	cremaProfileFromWire,
 	cremaProfileToWire,
 	defaultProfileSegments
-} from '$lib/wasm/de1_wasm';
-import { formatRatio } from '$lib/utils/ratio';
-import { relativeAgo } from '$lib/utils/relative-time';
-import { getSettingsStore } from '$lib/settings/store.svelte';
+} from '#lib/wasm/de1_wasm.js';
+import { formatRatio } from '#lib/utils/ratio.js';
+import { relativeAgo } from '#lib/utils/relative-time.js';
+import { getSettingsStore } from '#lib/settings/store.svelte.js';
 
 /** Roast level — a fixed library filter facet. */
 export type Roast = 'light' | 'medium' | 'dark';
@@ -217,7 +217,7 @@ export { newProfileId };
 /**
  * The brew ratio label, e.g. `1:2.4`, derived from yield ÷ dose.
  *
- * Delegates to the shared `formatRatio` helper in `$lib/utils/ratio`
+ * Delegates to the shared `formatRatio` helper in `#lib/utils/ratio.js`
  * (which uses `de1_domain::brew_ratio` via the wasm bridge), so the
  * Profiles and History screens read identical ratios from the same
  * inputs and any future shell picks up the same arithmetic.

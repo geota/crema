@@ -32,11 +32,11 @@
 		SegmentRamp,
 		SegmentExit,
 		SegmentLimiter
-	} from '$lib/profiles';
-	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
-	import QuickSplitLabel from '$lib/components/brew/QuickSplitLabel.svelte';
-	import { getSettingsStore, unitLabel } from '$lib/settings';
-	import { ProfileBounds } from '$lib/profiles/bounds';
+	} from '#lib/profiles/index.js';
+	import QuickStepper from '#lib/components/brew/QuickStepper.svelte';
+	import QuickSplitLabel from '#lib/components/brew/QuickSplitLabel.svelte';
+	import { getSettingsStore, unitLabel } from '#lib/settings/index.js';
+	import { ProfileBounds } from '#lib/profiles/bounds.js';
 
 	const settings = getSettingsStore();
 

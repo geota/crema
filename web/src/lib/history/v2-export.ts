@@ -1,5 +1,5 @@
 /**
- * `$lib/history/v2-export` — emit a Crema {@link StoredShot} as a
+ * `#lib/history/v2-export.js` — emit a Crema {@link StoredShot} as a
  * community-v2 `.shot.json` document.
  *
  * The shape, the field semantics, the `enjoyment` mapping and the
@@ -22,8 +22,8 @@
  * downloaded archive and the upload path.
  */
 
-import { export_v2_json_shot, export_v2_json_shot_full } from '$lib/wasm/de1_wasm';
-import type { Profile, RustStoredShot } from '$lib/core';
+import { export_v2_json_shot, export_v2_json_shot_full } from '#lib/wasm/de1_wasm.js';
+import type { Profile, RustStoredShot } from '#lib/core/index.js';
 import { peaksOf, type StoredShot } from './model';
 
 /**

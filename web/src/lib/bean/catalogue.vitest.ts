@@ -1,12 +1,12 @@
 /**
- * `$lib/bean/catalogue.vitest` — the Visualizer catalogue search controller
+ * `#lib/bean/catalogue.vitest.js` — the Visualizer catalogue search controller
  * (debounce, min length, last-query-wins) and the pick → bean autofill rule
  * (fill empty only / replace all, links always recorded) through the real wasm
  * core. Run: `pnpm test:vitest`.
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { initTestWasm } from '$lib/testing/test-init';
+import { initTestWasm } from '#lib/testing/test-init.js';
 import { blankBean } from './model.ts';
 import {
 	autofillFromCatalogue,

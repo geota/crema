@@ -10,7 +10,7 @@
 	 * the actual ingestion via `CremaApp.importShotFile` and surfaces the
 	 * result banner on /history.
 	 */
-	import FileDropZone from '$lib/components/shared/FileDropZone.svelte';
+	import FileDropZone from '#lib/components/shared/FileDropZone.svelte';
 
 	let {
 		onClose,

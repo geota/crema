@@ -9,9 +9,9 @@
 	 * render the dashboard against the empty `INITIAL_SNAPSHOT`, so it shows a
 	 * clean idle / empty state rather than a spinner.
 	 */
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { INITIAL_SNAPSHOT } from '$lib/state';
-	import { BrewDashboard } from '$lib/components/brew';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { INITIAL_SNAPSHOT } from '#lib/state/index.js';
+	import { BrewDashboard } from '#lib/components/brew/index.js';
 
 	// The shared orchestrator — `app` is null until the core loads.
 	const ctx = getCremaAppContext();

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	/**
 	 * `FileDropZone` — drag-drop file region with a hidden file-picker
 	 * button. Hands the chosen / dropped files back to the caller as a

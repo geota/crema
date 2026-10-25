@@ -15,8 +15,8 @@
 	 * the image and let the mark render instead. There is no flicker —
 	 * the mark is the always-mounted background of the avatar.
 	 */
-	import type { Roaster } from '$lib/bean';
-	import { roasterMarkTone, roasterFaviconUrl } from '$lib/bean';
+	import type { Roaster } from '#lib/bean/index.js';
+	import { roasterMarkTone, roasterFaviconUrl } from '#lib/bean/index.js';
 
 	let {
 		roaster,

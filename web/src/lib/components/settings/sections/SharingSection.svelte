@@ -18,24 +18,24 @@
 	 * shared `ActivityLog`.
 	 */
 	import { onMount } from 'svelte';
-	import { getHistoryStore, isBrewLog } from '$lib/history';
-	import { downloadBlob } from '$lib/utils/download';
+	import { getHistoryStore, isBrewLog } from '#lib/history/index.js';
+	import { downloadBlob } from '#lib/utils/download.js';
 	import {
 		clearVisualizerPremiumCache,
 		isVisualizerOauthConfigured,
 		revokeVisualizerToken,
 		startVisualizerLogin,
 		type VisualizerAccount
-	} from '$lib/bean';
+	} from '#lib/bean/index.js';
 	import {
 		directionPushes,
 		onSyncConfigChange,
 		readSyncConfig,
 		takeVisualizerJustConnected,
 		updateSyncConfig
-	} from '$lib/visualizer';
-	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
-	import { getCremaAppContext } from '$lib/shell/app-context';
+	} from '#lib/visualizer/index.js';
+	import { useVisualizerConnection } from '#lib/visualizer/useVisualizerConnection.svelte.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -46,9 +46,9 @@
 	import ActivityLog from './ActivityLog.svelte';
 	import CatchUpRow from './CatchUpRow.svelte';
 	import DecentAccountCard from './DecentAccountCard.svelte';
-	import { toast } from '$lib/components/shared/toast.svelte';
-	import { describeUnsyncedStop } from '$lib/services/shot-sync';
-	import { type SharingPrivacy } from '$lib/settings';
+	import { toast } from '#lib/components/shared/toast.svelte.js';
+	import { describeUnsyncedStop } from '#lib/services/shot-sync.js';
+	import { type SharingPrivacy } from '#lib/settings/index.js';
 	import {
 		backupFileName,
 		buildBackupZip,
@@ -56,8 +56,8 @@
 		describeBackup,
 		restoreBackupData,
 		type RestoreMode
-	} from '$lib/backup';
-	import { getDriveAuthStore } from '$lib/drive/store.svelte';
+	} from '#lib/backup/index.js';
+	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
 	import {
 		describeDecentDrain,
 		isDecentLinked,
@@ -65,9 +65,9 @@
 		readDecentAccount,
 		unsentDecentShots,
 		uploadUnsentDecentShots
-	} from '$lib/decent';
-	import { getMachineReadout } from '$lib/state';
-	import { downloadBackup, listBackups, uploadBackup } from '$lib/drive/rest';
+	} from '#lib/decent/index.js';
+	import { getMachineReadout } from '#lib/state/index.js';
+	import { downloadBackup, listBackups, uploadBackup } from '#lib/drive/rest.js';
 
 	const history = getHistoryStore();
 	const appCtx = getCremaAppContext();

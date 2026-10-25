@@ -40,27 +40,23 @@
 		type ProfileSegment,
 		type Roast,
 		type BeverageType
-	} from '$lib/profiles';
+	} from '#lib/profiles/index.js';
 	import ProfileCurveEditor from './ProfileCurveEditor.svelte';
 	import SegmentRow from './SegmentRow.svelte';
 	import TagInput from './TagInput.svelte';
 	import PeNumber from './PeNumber.svelte';
-	import { getSettingsStore } from '$lib/settings';
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
-	import { ProfileBounds } from '$lib/profiles/bounds';
+	import { getSettingsStore } from '#lib/settings/index.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { ProfileBounds } from '#lib/profiles/bounds.js';
 
 	const settings = getSettingsStore();
 
-	let {
-		mode,
-		sourceId
-	}: {
-		/** `new` for `/profiles/new`; `edit` for `/profiles/[id]/edit`. */
-		mode: 'new' | 'edit';
-		/** The profile id to edit — only set in `edit` mode. */
-		sourceId?: string;
-	} = $props();
+	let { mode, sourceId
+
+	/** `new` for `/profiles/new`; `edit` for `/profiles/[id]/edit`. */
+	/** The profile id to edit — only set in `edit` mode. */
+	 }: { mode: 'new' | 'edit'; sourceId?: string } = $props();
 
 	const store = getProfileStore();
 	void store.ensureLoaded();
@@ -84,7 +80,7 @@
 			case 'brew':
 				return resolve('/');
 			default:
-				return resolve('/profiles');
+				return resolve('profiles');
 		}
 	});
 
@@ -205,7 +201,7 @@
 	function editSegment(id: string, p: Partial<ProfileSegment>): void {
 		draft = {
 			...draft,
-			segments: draft.segments.map((s) => (s.id === id ? { ...s, ...p } : s))
+			segments: draft.segments.map((s) => s.id === id ? { ...s, ...p } : s)
 		};
 		dirty = true;
 	}
@@ -313,7 +309,11 @@
 
 	/** Discard edits — revert the draft to its loaded baseline. */
 	async function discard(): Promise<void> {
-		if (dirty && !(await confirmDialog({ message: 'Discard all changes to this profile?', confirmLabel: 'Discard' }))) return;
+		if (dirty && !await confirmDialog({
+			message: 'Discard all changes to this profile?',
+			confirmLabel: 'Discard'
+		})) return;
+
 		const base = baseline ?? blankProfile();
 		draft = { ...base, segments: base.segments.map((s) => ({ ...s })) };
 		isCreateOverride = null;
@@ -330,7 +330,11 @@
 
 	/** Back to wherever the user came from (Brew or Profiles per `returnPath`). */
 	async function back(): Promise<void> {
-		if (dirty && !(await confirmDialog({ message: 'Leave the editor? Unsaved changes will be lost.', confirmLabel: 'Leave' }))) return;
+		if (dirty && !await confirmDialog({
+			message: 'Leave the editor? Unsaved changes will be lost.',
+			confirmLabel: 'Leave'
+		})) return;
+
 		void goto(returnPath);
 	}
 
@@ -592,8 +596,8 @@
 					</div>
 					<ProfileCurveEditor
 						segments={draft.segments}
-						{activeSegId}
-						onSelect={(id) => (selectedSegId = id)}
+						activeSegId={activeSegId}
+						onSelect={(id) => selectedSegId = id}
 						onEdit={editSegment}
 					/>
 				</div>
@@ -612,11 +616,11 @@
 					<div class="pe-segs">
 						{#each draft.segments as seg, i (seg.id)}
 							<SegmentRow
-								{seg}
+								seg={seg}
 								index={i}
 								count={draft.segments.length}
 								active={activeSegId === seg.id}
-								onSelect={() => (selectedSegId = seg.id)}
+								onSelect={() => selectedSegId = seg.id}
 								onEdit={(p) => editSegment(seg.id, p)}
 								onDelete={() => deleteSegment(seg.id)}
 								onReorder={moveSegment}
