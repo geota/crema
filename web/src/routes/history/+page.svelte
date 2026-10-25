@@ -48,7 +48,8 @@
 		brewStatsOf,
 		isBrewLog,
 		isManualLog,
-		methodOf
+		methodOf,
+		selectedShot
 	} from '$lib/history';
 	import type { StoredShot } from '$lib/history';
 	import { ShotRow, ShotDetail, CompareOverlay } from '$lib/components/history';
@@ -854,10 +855,11 @@
 		return arr;
 	});
 
-	/** The selected shot record — the first filtered shot when none is picked. */
-	const selected = $derived(
-		(selectedId ? store.get(selectedId) : undefined) ?? filtered[0]
-	);
+	/**
+	 * The selected shot record — the picked one while the filtered list
+	 * still shows it, else the first filtered shot ({@link selectedShot}).
+	 */
+	const selected = $derived(selectedShot(filtered, selectedId));
 
 	// ── Stats (issue 48) ──────────────────────────────────────────────────
 	// Scoped to the FILTERED set (reflects the active filter/range, not all-time).

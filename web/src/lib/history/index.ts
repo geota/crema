@@ -41,3 +41,5 @@ export {
 
 export { exportStoredShotAsV2Json, extractCremaExtras } from './v2-export';
 
+export { selectedShot } from './selection';
+
