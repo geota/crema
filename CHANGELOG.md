@@ -7,6 +7,16 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The web app now works offline and opens instantly** — the offline app
+  shell (including the wasm core) had been built on every deploy but never
+  switched on: nothing registered the service worker. It is registered now,
+  so a return visit loads from the device even without Wi-Fi. A new release
+  is never applied behind your back: an "updated — Reload" notice appears
+  once the machine is idle (never mid-shot, mid-brew or during a firmware
+  update), and the next launch picks it up regardless.
+
 ### Changed
 
 - **The web app shell now runs on SvelteKit 3** — no visible change; routes,

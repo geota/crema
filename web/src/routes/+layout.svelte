@@ -34,6 +34,8 @@
 	import { retryPendingDecentUploads } from '#lib/decent/upload.js';
 	import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
 	import { getSettingsStore } from '#lib/settings/index.js';
+	import { installServiceWorker, type Handle as ServiceWorkerHandle } from '#lib/pwa/register.js';
+	import { canReloadNow, type ReloadInputs } from '#lib/pwa/update-gate.js';
 
 	let { children } = $props();
 
@@ -61,9 +63,40 @@
 	let onPageShow: ((e: PageTransitionEvent) => void) | null = null;
 	// Unreadable stores kept aside / failed saves -> toasts (see storage-notices).
 	let stopStorageNotices: (() => void) | null = null;
+	// The service worker (offline app shell + wasm precache) and its update
+	// offer. Production only: the PWA plugin is build-only, so `vite dev` has
+	// no sw.js to register.
+	let serviceWorker: ServiceWorkerHandle | null = null;
+
+	/**
+	 * What a reload would interrupt right now — a pulling shot, a guided brew
+	 * mid-session, a firmware transfer, or a DE1 that is doing anything but
+	 * sitting idle. Read inside an `$effect` so every change re-evaluates a
+	 * parked update offer.
+	 */
+	function reloadInputs(): ReloadInputs {
+		const snapshot = app?.state.current ?? null;
+		const brewPhase = getGuidedBrewStore().phase;
+		return {
+			connected: snapshot?.de1State === 'ready',
+			machineStateName: snapshot?.machineStateName ?? null,
+			shotInProgress: snapshot?.shotInProgress ?? false,
+			guidedBrewLive: brewPhase === 'armed' || brewPhase === 'running' || brewPhase === 'paused',
+			firmwareBusy: app?.firmware.running ?? false
+		};
+	}
 
 	onMount(async () => {
 		stopStorageNotices = installStorageNotices();
+		if (import.meta.env.PROD) {
+			serviceWorker = installServiceWorker({
+				canReload: () => canReloadNow(reloadInputs()),
+				// Pinned until acted on: a new build is never applied behind the
+				// user's back, and the next launch picks it up regardless.
+				offer: (apply) =>
+					toast.action('Crema has been updated. Reload when you are ready.', 'Reload', apply, 0)
+			});
+		}
 		// Web Bluetooth is Chromium-only. The app still loads on Firefox / Safari /
 		// iOS — history, beans, profiles and Visualizer sync all work without a
 		// machine — but connecting to a DE1 or scale won't, so warn once on launch.
@@ -152,10 +185,18 @@
 		setBrewWakeLock(on);
 	});
 
+	// A parked update offer (the machine was busy when the build arrived) is
+	// retried whenever the inputs change — reading them here is what subscribes.
+	$effect(() => {
+		reloadInputs();
+		serviceWorker?.onStateChange();
+	});
+
 	// Tear the runtime's fibers + finalizers down when the shell unmounts
 	// (also fires on HMR), so a dev reload doesn't leak runtimes or listeners.
 	onDestroy(() => {
 		stopStorageNotices?.();
+		serviceWorker?.dispose();
 		if (onOnline) window.removeEventListener('online', onOnline);
 		if (onVisibility) document.removeEventListener('visibilitychange', onVisibility);
 		if (onPageShow) window.removeEventListener('pageshow', onPageShow);
