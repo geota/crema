@@ -143,6 +143,11 @@ pub struct CommonSettings {
     pub default_preinfuse_s: f32,
     /// Free-text equipment grinder model.
     pub grinder_model: String,
+    /// Default barista name, stamped on each new shot's
+    /// [`ShotMetadata::barista`](crate::ShotMetadata::barista). `None` (or
+    /// blank) = no default; `Option` so an older `prefs.json` / backup still
+    /// decodes.
+    pub barista_name: Option<String>,
     /// **Retired** — ignored by every shell. It drove the old "keep the DE1
     /// awake while Crema is open" heartbeat, whose premise (a firmware
     /// sleep timer taking over when the pokes stop) does not hold on a stock
@@ -211,6 +216,7 @@ impl Default for CommonSettings {
             default_brew_temp_c: 93.0,
             default_preinfuse_s: 8.0,
             grinder_model: String::new(),
+            barista_name: None,
             suppress_de1_sleep: true,
             idle_sleep_min: None,
             qc_steam_time_s: 12.0,

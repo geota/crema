@@ -41,6 +41,11 @@ import coffee.crema.history.effectiveGrindSetting
 import coffee.crema.history.formatShotDuration
 import coffee.crema.history.grindLabel
 import coffee.crema.history.filterAndSortShots
+import coffee.crema.ui.components.ShotPeopleFields
+import coffee.crema.history.beanFilterOptions
+import coffee.crema.history.liveCoffeeLookup
+import coffee.crema.history.recentNames
+import coffee.crema.history.shotCoffee
 import coffee.crema.history.isManualLog
 import coffee.crema.history.methodOf
 import coffee.crema.history.methodRatioLabel
@@ -165,7 +170,13 @@ fun PhoneHistoryScreen(
         cal.set(java.util.Calendar.SECOND, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
         cal.timeInMillis
     }
-    val filtered = filterAndSortShots(ui.history, query, range, profileFilter, sort, sortDesc, now, beanFilter, methodFilter)
+    // Bean filter: a coffee (every bag of it) or, from the bean detail's deep
+    // link, one bag. The coffee resolves through the live library.
+    val liveCoffee = remember(ui.beans, ui.roasters) { liveCoffeeLookup(ui.beans, ui.roasters) }
+    val filtered = filterAndSortShots(
+        ui.history, query, range, profileFilter, sort, sortDesc, now, beanFilter, methodFilter,
+        coffeeOf = { shotCoffee(it, liveCoffee)?.key },
+    )
 
     val detail = detailId?.let { id -> ui.history.firstOrNull { it.id == id } }
 
@@ -298,20 +309,15 @@ fun PhoneHistoryScreen(
                                     onKeyChange = { methodFilter = if (it == "all") null else it },
                                 )
                             }
-                            // Bean — scope the log to one bag (tablet parity).
-                            val byBean = ui.history.mapNotNull { it.bean?.beanId }
-                                .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
-                            if (byBean.isNotEmpty()) {
+                            // Bean — scope the log to one coffee, every bag of it
+                            // (tablet parity); a deep-linked single bag leads.
+                            val beanOptions = beanFilterOptions(ui.history, liveCoffee, beanFilter)
+                            if (beanOptions.isNotEmpty()) {
                                 CremaFilterDropdown(
                                     icon = "coffee-bean",
                                     keys = buildList {
                                         add(SortKey("all", "All beans"))
-                                        byBean.forEach { (bid, _) ->
-                                            val label = ui.beans.firstOrNull { it.id == bid }?.name
-                                                ?: ui.history.firstOrNull { it.bean?.beanId == bid }?.beanLabel
-                                                ?: "Unnamed bag"
-                                            add(SortKey(bid, label))
-                                        }
+                                        beanOptions.forEach { add(SortKey(it.key, it.label)) }
                                     },
                                     selectedKey = beanFilter ?: "all",
                                     onKeyChange = { beanFilter = if (it == "all") null else it },
@@ -973,6 +979,15 @@ private fun PhoneShotDetail(
                             fmt = { v -> if (v % 1.0 == 0.0) fmt("%.0f", v) else fmt("%.1f", v) },
                         )
                     }
+                    val people by vm.ui.collectAsStateWithLifecycle()
+                    ShotPeopleFields(
+                        shotId = shot.id,
+                        barista = shot.barista,
+                        drinker = shot.drinker,
+                        baristaNames = recentNames(people.history, "barista"),
+                        drinkerNames = recentNames(people.history, "drinker"),
+                        onChange = { field, name -> vm.setShotPerson(shot.id, field, name) },
+                    )
                     CremaTextField(
                         value = notes,
                         onValueChange = { notes = it; vm.updateShot(shot.id, rating, it) },

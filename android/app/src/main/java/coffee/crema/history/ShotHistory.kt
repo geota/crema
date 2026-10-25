@@ -103,6 +103,18 @@ data class StoredShot(
      */
     val nextPlan: String? = null,
     /**
+     * Who made the shot (dye2 audit #1) — the Settings default barista at
+     * capture, editable from the History detail. Exported as de1app's
+     * `my_name` (Visualizer's `barista`) and decaid's `baristaName`.
+     * Mirrors core `ShotMetadata.barista`. Additive.
+     */
+    val barista: String? = null,
+    /**
+     * Who drank it — de1app's `drinker_name`, decaid's `drinkerName`
+     * (Visualizer has no field). Mirrors core `ShotMetadata.drinker`.
+     */
+    val drinker: String? = null,
+    /**
      * A downsampled telemetry slice for the History detail chart (≤
      * [SHOT_SAMPLE_CAP] points). Empty for shots captured before this field
      * existed (additive — older records deserialise cleanly).
@@ -294,6 +306,8 @@ fun StoredShot.coreShotJson(): JsonObject = buildJsonObject {
         put("rating", rating)
         put("notes", notes)
         waterG?.let { put("waterG", it) }
+        barista?.let { put("barista", it) }
+        drinker?.let { put("drinker", it) }
     }
     yieldTargetG?.let { put("yieldTarget", it) }
     // Brew Log fields (issue #10) — ride the core shape so the v2

@@ -63,6 +63,9 @@
 		onRatingChange,
 		onPrivacyChange,
 		onGrinderModelChange,
+		onPersonChange,
+		baristaSuggestions = [],
+		drinkerSuggestions = [],
 		onTagsChange,
 		onGrindChange,
 		onBeanChange,
@@ -92,6 +95,15 @@
 		 * sets a shot-specific override.
 		 */
 		onGrinderModelChange: (grinderModel: string | null) => void;
+		/**
+		 * Persist who made (`barista`) or drank (`drinker`) the shot. `null`
+		 * clears it.
+		 */
+		onPersonChange: (field: 'barista' | 'drinker', name: string | null) => void;
+		/** Barista names used before, most recent first. */
+		baristaSuggestions?: readonly string[];
+		/** Drinker names used before, most recent first. */
+		drinkerSuggestions?: readonly string[];
 		/** Persist edited shot-level tags. */
 		onTagsChange: (tags: string[]) => void;
 		/**
@@ -324,6 +336,15 @@
 		// Only persist on real changes so a click-and-blur doesn't churn.
 		if ((shot.grinderModel ?? null) === next) return;
 		onGrinderModelChange(next);
+	}
+
+	// ── Barista / drinker (dye2 audit #1) ─────────────────────────────────
+	// Free text with the names used before offered as suggestions. Blank
+	// clears; only real changes persist, like the grinder model.
+	function commitPerson(field: 'barista' | 'drinker', raw: string): void {
+		const next = raw.trim() || null;
+		if ((shot.metadata[field] ?? null) === next) return;
+		onPersonChange(field, next);
 	}
 
 	// ── Header blocks (issue #16 round 4) — the Brew page's profile/bean
@@ -1059,6 +1080,32 @@
 		</span>
 	</div>
 
+	<!-- Barista / drinker — who made it and who drank it. Suggestions are
+	     the names already in History, most recent first. -->
+	<div class="hi-people">
+		{#each [{ field: 'barista', label: 'Barista', names: baristaSuggestions }, { field: 'drinker', label: 'Drinker', names: drinkerSuggestions }] as p (p.field)}
+			{@const field = p.field as 'barista' | 'drinker'}
+			<label class="hi-person">
+				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">{p.label}</span>
+				<input
+					class="hi-grinder-input"
+					type="text"
+					autocomplete="off"
+					list={`hi-${field}-names`}
+					placeholder={field === 'barista' ? 'Who made it' : 'Who drank it'}
+					value={shot.metadata[field] ?? ''}
+					onchange={(e) => commitPerson(field, (e.currentTarget as HTMLInputElement).value)}
+					onblur={(e) => commitPerson(field, (e.currentTarget as HTMLInputElement).value)}
+				/>
+				<datalist id={`hi-${field}-names`}>
+					{#each p.names as name (name)}
+						<option value={name}></option>
+					{/each}
+				</datalist>
+			</label>
+		{/each}
+	</div>
+
 	<!-- Notes -->
 	<div class="hi-notes">
 		<div class="hi-notes-head">
@@ -1485,6 +1532,22 @@
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
+	}
+	/* Barista / drinker — two labelled inputs side by side, wrapping on
+	   narrow panes. The inputs reuse the grinder field's look. */
+	.hi-people {
+		display: flex;
+		gap: 14px;
+		flex-wrap: wrap;
+	}
+	.hi-person {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex: 1 1 220px;
+	}
+	.hi-person .hi-grinder-input {
+		min-width: 0;
 	}
 	/* Grinder-model override — same surface as the rating row, with
 	   the text input sized so a "Eureka Mignon Specialita"-class string

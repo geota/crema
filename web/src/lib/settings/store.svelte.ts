@@ -236,6 +236,11 @@ export interface Settings {
 	 * at completion; a shot may override it in the shot-detail panel.
 	 */
 	grinderModel: string;
+	/**
+	 * Default barista name, stamped on each new shot and brew log at
+	 * completion (`metadata.barista`). Empty = none. Editable per shot.
+	 */
+	baristaName: string;
 
 	/**
 	 * Hold a Screen Wake Lock while a shot is pulling so the display can't
@@ -376,6 +381,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	usbChargingMode: 'alwaysOn',
 
 	grinderModel: '',
+	baristaName: '',
 
 	keepScreenOnBrew: false,
 
@@ -494,6 +500,7 @@ export function settingsToCommon(s: Settings): CommonSettings {
 		defaultBrewTempC: s.defaultBrewTempC,
 		defaultPreinfuseS: s.defaultPreinfusionS,
 		grinderModel: s.grinderModel,
+		baristaName: s.baristaName.trim() || undefined,
 		// Retired (presence follows activity; the app owns sleep) — still
 		// written because older versions require the field in a backup.
 		suppressDe1Sleep: true,
@@ -557,6 +564,7 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 		defaultBrewTempC: c.defaultBrewTempC,
 		defaultPreinfusionS: c.defaultPreinfuseS,
 		grinderModel: c.grinderModel,
+		baristaName: c.baristaName ?? '',
 		// A blob from before the idle timer carries none: keep this device's.
 		idleSleepMin: cIn.idleSleepMin ?? s.idleSleepMin,
 		qcSteamTimeS: c.qcSteamTimeS,

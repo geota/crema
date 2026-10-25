@@ -320,6 +320,9 @@ fn build_v2_document(shot: &StoredShot, truncate_at_flow_end: bool) -> V2Documen
         // byte-identical to the pre-Brew-Log shape.
         crema_brew_method: shot.brew_method.clone(),
         crema_water_g: shot.metadata.water_g,
+        // de1app's person keys; Visualizer reads `my_name` as the barista.
+        my_name: non_blank_owned(shot.metadata.barista.as_deref()),
+        drinker_name: non_blank_owned(shot.metadata.drinker.as_deref()),
     };
 
     V2DocumentOut {
@@ -657,6 +660,19 @@ struct V2AppSettingsOut {
     /// Crema extension: water in, grams, for filter/immersion brews.
     #[serde(skip_serializing_if = "Option::is_none")]
     crema_water_g: Option<f32>,
+    /// Who made the shot — de1app's `my_name`, Visualizer's `barista`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    my_name: Option<String>,
+    /// Who drank it — de1app's `drinker_name`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    drinker_name: Option<String>,
+}
+
+/// A trimmed copy of `s`, or `None` when it is absent or blank.
+fn non_blank_owned(s: Option<&str>) -> Option<String> {
+    s.map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned)
 }
 
 #[cfg(test)]
@@ -734,6 +750,8 @@ mod tests {
             tds: Some(8.5),
             extraction_yield: Some(20.5),
             water_g: None,
+            barista: None,
+            drinker: None,
         };
         shot
     }
@@ -833,6 +851,24 @@ mod tests {
         // stays byte-identical to the pre-Brew-Log exporter.
         assert!(settings.get("crema_brew_method").is_none());
         assert!(settings.get("crema_water_g").is_none());
+        // No barista / drinker recorded → no person keys.
+        assert!(settings.get("my_name").is_none());
+        assert!(settings.get("drinker_name").is_none());
+    }
+
+    #[test]
+    fn barista_and_drinker_round_trip_through_v2() {
+        let mut shot = fixture();
+        shot.metadata.barista = Some("Ana".to_owned());
+        shot.metadata.drinker = Some("Ben".to_owned());
+        let json = export_v2_json_shot(&shot).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let settings = &v["app"]["data"]["settings"];
+        assert_eq!(settings["my_name"], "Ana");
+        assert_eq!(settings["drinker_name"], "Ben");
+        let imported = import_v2_json_shot(&json).expect("re-imports");
+        assert_eq!(imported.metadata.barista.as_deref(), Some("Ana"));
+        assert_eq!(imported.metadata.drinker.as_deref(), Some("Ben"));
     }
 
     #[test]

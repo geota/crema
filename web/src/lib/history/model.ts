@@ -246,6 +246,16 @@ export interface ShotMetadata {
 	 * Absent on espresso rows. Editable on manual brew logs.
 	 */
 	waterG?: number | null;
+	/**
+	 * Who made the shot. Exported as de1app's `my_name` (Visualizer's
+	 * `barista`) and decaid's `workflow.context.baristaName`. Editable.
+	 */
+	barista?: string | null;
+	/**
+	 * Who drank it. Exported as de1app's `drinker_name` and decaid's
+	 * `workflow.context.drinkerName` (Visualizer has no field). Editable.
+	 */
+	drinker?: string | null;
 }
 
 /**

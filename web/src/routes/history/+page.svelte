@@ -49,6 +49,10 @@
 		isBrewLog,
 		isManualLog,
 		methodOf,
+		shotMatchesQuery,
+		shotCoffee,
+		recentNames,
+		COFFEE_FILTER_PREFIX,
 		selectedShot
 	} from '$lib/history';
 	import type { StoredShot } from '$lib/history';
@@ -628,6 +632,10 @@
 	/** Milliseconds in a day — shared by the range filter and the stats. */
 	const dayMs = 24 * 60 * 60 * 1000;
 
+	/** Names already used for the shot editor's barista / drinker suggestions. */
+	const baristaSuggestions = $derived(recentNames(shots, 'barista'));
+	const drinkerSuggestions = $derived(recentNames(shots, 'drinker'));
+
 	/** Distinct profile names across the history, for the filter chips. */
 	const profilesInUse = $derived([
 		...new Set(shots.map((s) => s.profileName).filter((n): n is string => !!n))
@@ -653,30 +661,83 @@
 	});
 
 	/**
-	 * Distinct beans across the history (by snapshot id), counted, for the
-	 * bean filter pills — the bag as a unit of history. The label prefers
-	 * the live library row's name (it may have been edited since) and
-	 * falls back to the frozen snapshot's, so archived and since-deleted
-	 * bags keep their shots reachable.
+	 * A library bag's live name and roaster for {@link shotCoffee}. A roaster
+	 * merged into another (`canonicalRoasterId`) answers with the one it was
+	 * merged into, so both rows' bags count as one coffee.
+	 */
+	function liveCoffee(beanId: string): { name: string; roaster: string | null } | null {
+		const bean = beanLibrary.getBean(beanId);
+		if (!bean) return null;
+		let roaster = bean.roasterId ? beanLibrary.getRoaster(bean.roasterId) : null;
+		if (roaster?.canonicalRoasterId) roaster = beanLibrary.getRoaster(roaster.canonicalRoasterId) ?? roaster;
+		return { name: bean.name, roaster: roaster?.name ?? null };
+	}
+
+	/** Each shot's coffee key, computed once per history change. */
+	const coffeeKeyById = $derived.by(() => {
+		const m = new Map<string, string>();
+		for (const s of shots) {
+			const c = shotCoffee(s, liveCoffee);
+			if (c) m.set(s.id, c.key);
+		}
+		return m;
+	});
+
+	/**
+	 * Distinct coffees across the history, counted, for the bean filter
+	 * pills. A coffee is roaster + name ({@link shotCoffee}), so every bag of
+	 * it is one pill: picking it lists all their shots. Labels come from the
+	 * live library where the bag still exists, else the frozen snapshot, so
+	 * archived and since-deleted bags keep their shots reachable. A name two
+	 * roasters share gets the roaster appended.
 	 */
 	const beansInUse = $derived.by(() => {
-		const m = new Map<string, { label: string; count: number }>();
+		const m = new Map<string, { name: string; roaster: string | null; count: number; bags: Set<string> }>();
 		for (const s of shots) {
-			const id = s.bean?.beanId;
-			if (!id) continue;
-			const entry = m.get(id);
-			if (entry) {
-				entry.count += 1;
-			} else {
-				const live = beanLibrary.getBean(id);
-				const label = live?.name.trim() || s.bean?.name?.trim() || 'Unnamed bag';
-				m.set(id, { label, count: 1 });
-			}
+			const c = shotCoffee(s, liveCoffee);
+			if (!c) continue;
+			const entry = m.get(c.key) ?? { name: c.name, roaster: c.roaster, count: 0, bags: new Set<string>() };
+			entry.count += 1;
+			if (s.bean?.beanId) entry.bags.add(s.bean.beanId);
+			m.set(c.key, entry);
+		}
+		const nameCounts = new Map<string, number>();
+		for (const v of m.values()) {
+			const n = v.name.toLowerCase();
+			nameCounts.set(n, (nameCounts.get(n) ?? 0) + 1);
 		}
 		return [...m.entries()]
-			.map(([id, v]) => ({ id, ...v }))
+			.map(([key, v]) => ({
+				id: `${COFFEE_FILTER_PREFIX}${key}`,
+				label:
+					(nameCounts.get(v.name.toLowerCase()) ?? 0) > 1 && v.roaster ? `${v.name} · ${v.roaster}` : v.name,
+				title: [v.roaster, v.bags.size > 1 ? `${v.bags.size} bags` : null].filter(Boolean).join(' · ') || undefined,
+				count: v.count
+			}))
 			.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 	});
+
+	/**
+	 * The single bag the filter is scoped to — set by the bean drawer's
+	 * "See all N shots" deep link (`?bean=<id>`) — or `null` when the filter
+	 * is off or names a whole coffee. Rendered as a "This bag" pill ahead of
+	 * the coffees; tapping its coffee's pill widens to every bag.
+	 */
+	const scopedBag = $derived.by(() => {
+		if (filterBean === 'all' || filterBean.startsWith(COFFEE_FILTER_PREFIX)) return null;
+		const sample = shots.find((s) => s.bean?.beanId === filterBean);
+		const label = beanLibrary.getBean(filterBean)?.name.trim() || sample?.bean?.name?.trim() || 'Unnamed bag';
+		return { id: filterBean, label, count: shots.filter((s) => s.bean?.beanId === filterBean).length };
+	});
+
+	/** Whether `s` passes the bean filter: one bag, one coffee, or off. */
+	function matchesBeanFilter(s: StoredShot): boolean {
+		if (filterBean === 'all') return true;
+		if (filterBean.startsWith(COFFEE_FILTER_PREFIX)) {
+			return coffeeKeyById.get(s.id) === filterBean.slice(COFFEE_FILTER_PREFIX.length);
+		}
+		return s.bean?.beanId === filterBean;
+	}
 
 	/**
 	 * Distinct tags across the history, counted, sorted by frequency
@@ -744,15 +805,25 @@
 				});
 			}
 		}
-		if (beansInUse.length > 0) {
+		if (beansInUse.length > 0 || scopedBag) {
 			items.push({ id: '__divbeans', divider: true });
 			items.push({ id: '__beans', groupLabel: 'Beans' });
+			if (scopedBag) {
+				items.push({
+					id: `b:${scopedBag.id}`,
+					label: `This bag · ${scopedBag.label}`,
+					count: scopedBag.count,
+					selected: true,
+					title: 'Only this bag. Tap its coffee to see every bag.'
+				});
+			}
 			for (const b of beansInUse) {
 				items.push({
 					id: `b:${b.id}`,
 					label: b.label,
 					count: b.count,
-					selected: filterBean === b.id
+					selected: filterBean === b.id,
+					title: b.title
 				});
 			}
 		}
@@ -799,7 +870,7 @@
 		const base = shots.filter((s) => {
 			if (cutoff != null && s.completedAt < cutoff) return false;
 			if (filterProfile !== 'all' && s.profileName !== filterProfile) return false;
-			if (filterBean !== 'all' && s.bean?.beanId !== filterBean) return false;
+			if (!matchesBeanFilter(s)) return false;
 			if (filterMethod !== 'all' && (methodOf(s) ?? 'espresso') !== filterMethod)
 				return false;
 			// AND semantics — a shot must carry every selected tag.
@@ -813,11 +884,7 @@
 			}
 			if (query === '') return true;
 			return (
-				(s.profileName ?? '').toLowerCase().includes(query) ||
-				methodLabel(methodOf(s), s.brewMethodLabel).toLowerCase().includes(query) ||
-				(s.recipeName ?? '').toLowerCase().includes(query) ||
-				(s.metadata.notes ?? '').toLowerCase().includes(query) ||
-				(s.metadata.nextPlan ?? '').toLowerCase().includes(query) ||
+				shotMatchesQuery(s, query) ||
 				effectiveShotTags(s).some((t) => t.toLowerCase().includes(query))
 			);
 		});
@@ -1341,6 +1408,15 @@
 							syncEditToVisualizer(selected.id);
 							scheduleDecentReplaceAfterEdit(selected.id);
 						}}
+						onPersonChange={(field, name) => {
+							store.setPerson(selected.id, field, name);
+							// Visualizer has a barista field but no drinker;
+							// the Decent record carries both.
+							if (field === 'barista') syncEditToVisualizer(selected.id);
+							scheduleDecentReplaceAfterEdit(selected.id);
+						}}
+						{baristaSuggestions}
+						{drinkerSuggestions}
 						onTagsChange={(tags) => {
 							store.setTags(selected.id, tags);
 							syncEditToVisualizer(selected.id);

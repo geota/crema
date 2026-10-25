@@ -1140,6 +1140,13 @@ export interface CommonSettings {
 	/** Free-text equipment grinder model. */
 	grinderModel: string;
 	/**
+	 * Default barista name, stamped on each new shot's
+	 * [`ShotMetadata::barista`](crate::ShotMetadata::barista). `None` (or
+	 * blank) = no default; `Option` so an older `prefs.json` / backup still
+	 * decodes.
+	 */
+	baristaName?: string;
+	/**
 	 * **Retired** — ignored by every shell. It drove the old "keep the DE1
 	 * awake while Crema is open" heartbeat, whose premise (a firmware
 	 * sleep timer taking over when the pokes stop) does not hold on a stock
@@ -3401,6 +3408,8 @@ export interface ShotPatchInputs {
 	beanNotes?: string;
 	/** Inline bean: the bean's recorded dial → `grinder_setting`. */
 	grinderSetting?: string;
+	/** Who made the shot → `barista` (editable on free accounts too). */
+	barista?: string;
 }
 
 /**

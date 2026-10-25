@@ -29,6 +29,7 @@ describe('common-settings mapping', () => {
 			defaultPreinfusionS: 11,
 			maxShotDurationS: 42,
 			grinderModel: 'Niche Zero',
+			baristaName: 'Ana',
 			qcSteamTempC: 150
 		};
 		const back = applyCommonToSettings(settingsToCommon(s), DEFAULT_SETTINGS);
@@ -40,7 +41,12 @@ describe('common-settings mapping', () => {
 		expect(back.defaultPreinfusionS).toBe(11);
 		expect(back.maxShotDurationS).toBe(42);
 		expect(back.grinderModel).toBe('Niche Zero');
+		expect(back.baristaName).toBe('Ana');
 		expect(back.qcSteamTempC).toBe(150);
+		// No default barista travels as absent, and an older blob without
+		// the field reads as empty.
+		expect(settingsToCommon(DEFAULT_SETTINGS).baristaName).toBeUndefined();
+		expect(applyCommonToSettings({ ...settingsToCommon(s), baristaName: undefined }, DEFAULT_SETTINGS).baristaName).toBe('');
 	});
 
 	it('maps showVolume to the canonical dispensedVolume key (and back)', () => {

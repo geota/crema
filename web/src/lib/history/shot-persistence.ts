@@ -21,6 +21,7 @@ import { brew_ratio } from '$lib/wasm/de1_wasm';
 import type { CaptureEntry } from '$lib/capture';
 import { getCaptureStore } from '$lib/capture';
 import { getBeanStore } from '$lib/bean';
+import { getSettingsStore } from '$lib/settings';
 import { toast } from '$lib/components/shared/toast.svelte';
 import { promptBagEmpty } from '$lib/bean/bag-empty-prompt';
 import { getProfileStore, toCoreProfile } from '$lib/profiles';
@@ -240,6 +241,7 @@ function recordShotHistory(
 		dose: activeShot?.dose ?? null,
 		series: snapshot.shotTelemetry,
 		grinderModel: activeShot?.grinderModel ?? null,
+		barista: getSettingsStore().current.baristaName?.trim() || null,
 		// The DE1 this ran on — frozen here so a later upload (Decent shot
 		// history, #84) carries the serial the server verifies, even after
 		// the machine disconnects or another one is paired.

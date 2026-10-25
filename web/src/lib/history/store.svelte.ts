@@ -111,6 +111,11 @@ export interface ShotCompletion {
 	 * change can't rewrite history.
 	 */
 	grinderModel: string | null;
+	/**
+	 * Who made the shot — the Settings default barista at completion time,
+	 * or `null`/absent when none is set. Editable afterwards.
+	 */
+	barista?: string | null;
 	/** Peak group pressure observed during the shot, bar — from the core. */
 	peakPressure: number | null;
 	/** Peak group-head temperature observed during the shot, °C — from the core. */
@@ -279,6 +284,7 @@ export class HistoryStore {
 			rating: null,
 			notes: null,
 			nextPlan: null,
+			...(completion.barista?.trim() ? { barista: completion.barista.trim() } : {}),
 			// Same number formatting as the history grind stepper's commit.
 			...(completion.grindSetting != null
 				? {
@@ -344,6 +350,25 @@ export class HistoryStore {
 		this.shots = [
 			...this.shots.slice(0, idx),
 			{ ...target, metadata: { ...target.metadata, nextPlan: value } },
+			...this.shots.slice(idx + 1)
+		];
+		this.persist();
+	}
+
+	/**
+	 * Set (or with `null` / a blank string, clear) who made or drank a shot.
+	 * Mirrors {@link setNotes}: a thin replace-and-persist; the value is
+	 * trimmed.
+	 */
+	setPerson(id: string, field: 'barista' | 'drinker', name: string | null): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		const target = this.shots[idx];
+		const value = name?.trim() || null;
+		if ((target.metadata[field] ?? null) === value) return;
+		this.shots = [
+			...this.shots.slice(0, idx),
+			{ ...target, metadata: { ...target.metadata, [field]: value } },
 			...this.shots.slice(idx + 1)
 		];
 		this.persist();
@@ -680,7 +705,8 @@ export class HistoryStore {
 			grinderSetting: input.grinderSetting ?? null,
 			rating: input.rating ?? null,
 			notes: input.notes ?? null,
-			nextPlan: input.nextPlan ?? null
+			nextPlan: input.nextPlan ?? null,
+			...(input.barista?.trim() ? { barista: input.barista.trim() } : {})
 		};
 		const record: StoredShot = {
 			formatVersion: STORED_SHOT_FORMAT_VERSION,
@@ -782,6 +808,8 @@ export interface ManualBrewInput {
 	rating: number | null;
 	notes: string | null;
 	nextPlan: string | null;
+	/** Who made it — the Settings default barista, when one is set. */
+	barista?: string | null;
 	/** Guided sessions only: the recipe name + weight series. */
 	recipeName?: string | null;
 	brewSeries?: BrewSeries | null;
