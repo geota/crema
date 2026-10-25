@@ -120,6 +120,14 @@ export interface De1Transport {
 	disconnect(): void;
 
 	/**
+	 * Drop the GATT link *without* marking a user disconnect, so the ordinary
+	 * reconnect loop runs — for a link that came up hollow (connected,
+	 * subscribed, not answering). Optional: a transport without it is dropped
+	 * outright instead.
+	 */
+	recycle?(): void;
+
+	/**
 	 * Cut a pending auto-reconnect wait short and attempt now (the tab came
 	 * back into view, "Retry now"). Optional — a transport with no reconnect
 	 * loop omits it.
@@ -128,6 +136,20 @@ export interface De1Transport {
 
 	/** Record this device's reconnect episodes under `label`. Optional. */
 	setReconnectTimeline?(label: string, expectPostConnect?: boolean): void;
+
+	/**
+	 * Register a callback for each advertisement seen while the reconnect loop
+	 * watches for the device, with its RSSI in dBm (null when the browser
+	 * doesn't report one). Optional — BLE only.
+	 */
+	onAdvertisement?(listener: (rssi: number | null) => void): void;
+
+	/**
+	 * Register a callback for notifications the browser dropped under load
+	 * (Safari via Beacio's `beacio:overflow`), with the evicted count.
+	 * Optional — never fires on Chrome.
+	 */
+	onNotificationOverflow?(listener: (characteristic: string, evicted: number) => void): void;
 }
 
 // Re-export the shared types so callers that import the transport

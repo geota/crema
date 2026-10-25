@@ -3,8 +3,8 @@
 # This workflow runs on every PR to `main` and on direct pushes to `main`,
 # plus a weekly schedule that runs ONLY the advisory `audit` job (every other
 # job is guarded with `if: github.event_name != 'schedule'`). It does NOT
-# deploy. Cloudflare Pages handles auto-deploy from GitHub independently. See
-# DEPLOY.md for the deploy story.
+# deploy, and neither does a push to `main`: the web deploys to Cloudflare
+# Pages only from release.yml on a `v*.*.*` tag. See DEPLOY.md.
 #
 # The two main jobs (`rust` and `web`) run in parallel for shorter wall-clock
 # time. We don't gate them on per-job path filters because the web shell

@@ -25,7 +25,7 @@
  * best-effort sweep, and non-fatal-read swallowing. See `de1-orchestrator.vitest.ts`.
  */
 
-import { Effect } from 'effect';
+import { Effect, Exit } from 'effect';
 import type { CoreOutput, CremaCore, NotificationSource } from '$lib/core';
 import { MmrRegister } from '$lib/core/crema-core';
 import { De1Uuids } from '$lib/ble/de1-uuids';
@@ -82,20 +82,41 @@ const CONNECT_MMR_SWEEP: ReadonlyArray<MmrRegister> = [
 	MmrRegister.CalibrationFlowMultiplier
 ];
 
-export const de1ConnectProgram = (d: De1ConnectDeps): Effect.Effect<void, De1ConnectStepFailed> =>
-	Effect.gen(function* () {
-		/** A fatal transport step — failure carries the step name for attribution. */
-		const fatal = (step: string, thunk: () => Promise<unknown>) =>
-			Effect.tryPromise({ try: thunk, catch: (cause) => new De1ConnectStepFailed({ step, cause }) });
+/** The step name a hollow link fails at — see {@link de1SeedProgram}. */
+export const STATE_SEED_STEP = 'machine state read';
 
-		/** A non-fatal connect-time one-shot read: read → core → fold → log. A
-		 *  failure logs-and-continues (the connection is already verified). */
+/** Pause before the one StateInfo retry, ms. */
+const STATE_SEED_RETRY_DELAY_MS = 500;
+
+/**
+ * The connect-time one-shot reads that seed the dashboard — the DE1 answers
+ * these on a direct GATT read but does not notify them at connect, so
+ * subscribing alone leaves the rows blank. Runs on every connect path: the
+ * first connect (inside {@link de1ConnectProgram}) and a transport-level
+ * reconnect (which replays subscriptions, not reads).
+ *
+ * Version and ShotSettings are best-effort: a failure logs and continues.
+ * **StateInfo is required.** The DE1 answers it even while asleep, so a link
+ * that can't produce it in two tries is hollow — up at the GATT level, dead
+ * for data (a connect at the edge of range). Failing the program here is what
+ * keeps the UI from reporting `ready` over a machine that isn't answering;
+ * the manager then drops the link for the reconnect loop. Android's
+ * `seedReads` applies the same rule.
+ */
+export const de1SeedProgram = (
+	d: Pick<De1ConnectDeps, 'device' | 'core' | 'onStatus' | 'onCoreOutput'>
+): Effect.Effect<void, De1ConnectStepFailed> =>
+	Effect.gen(function* () {
+		const readOnce = (source: NotificationSource, char: string) =>
+			Effect.tryPromise(async () => {
+				const bytes = await d.device.readCharacteristic(De1Uuids.SERVICE, char);
+				return d.core.onNotification(source, bytes, performance.now());
+			});
+
+		/** A non-fatal read: read → core → fold → log. A failure logs-and-continues. */
 		const readSeed = (source: NotificationSource, char: string, label: string) =>
 			Effect.gen(function* () {
-				const bytes = yield* Effect.tryPromise(() => d.device.readCharacteristic(De1Uuids.SERVICE, char));
-				const output = yield* Effect.tryPromise(() =>
-					d.core.onNotification(source, bytes, performance.now())
-				);
+				const output = yield* readOnce(source, char);
 				d.onCoreOutput(output);
 				d.onStatus(`DE1 ${label} read ✓`);
 			}).pipe(
@@ -103,6 +124,34 @@ export const de1ConnectProgram = (d: De1ConnectDeps): Effect.Effect<void, De1Con
 					Effect.sync(() => d.onStatus(`DE1 ${label} read skipped: ${describeError(e)}`))
 				)
 			);
+
+		/** The required read: one retry, then the program fails at {@link STATE_SEED_STEP}. */
+		const readStateSeed = Effect.gen(function* () {
+			const first = yield* Effect.exit(readOnce('De1State', De1Uuids.STATE_INFO));
+			let output: CoreOutput;
+			if (Exit.isSuccess(first)) {
+				output = first.value;
+			} else {
+				d.onStatus('DE1 machine state read failed — retrying once');
+				yield* Effect.sleep(STATE_SEED_RETRY_DELAY_MS);
+				output = yield* readOnce('De1State', De1Uuids.STATE_INFO).pipe(
+					Effect.mapError((cause) => new De1ConnectStepFailed({ step: STATE_SEED_STEP, cause }))
+				);
+			}
+			d.onCoreOutput(output);
+			d.onStatus('DE1 machine state read ✓');
+		});
+
+		yield* readSeed('De1Version', De1Uuids.VERSION, 'firmware version');
+		yield* readStateSeed;
+		yield* readSeed('De1ShotSettings', De1Uuids.SHOT_SETTINGS, 'shot-settings');
+	});
+
+export const de1ConnectProgram = (d: De1ConnectDeps): Effect.Effect<void, De1ConnectStepFailed> =>
+	Effect.gen(function* () {
+		/** A fatal transport step — failure carries the step name for attribution. */
+		const fatal = (step: string, thunk: () => Promise<unknown>) =>
+			Effect.tryPromise({ try: thunk, catch: (cause) => new De1ConnectStepFailed({ step, cause }) });
 
 		/** A non-fatal MMR read: dispatch → fold. Logs on skip; optional success line. */
 		const readMmr = (reg: MmrRegister, ok?: string) =>
@@ -146,10 +195,9 @@ export const de1ConnectProgram = (d: De1ConnectDeps): Effect.Effect<void, De1Con
 			)
 		);
 
-		// 4) Connect-time one-shot reads to seed the dashboard (all non-fatal).
-		yield* readSeed('De1Version', De1Uuids.VERSION, 'firmware version');
-		yield* readSeed('De1State', De1Uuids.STATE_INFO, 'machine state');
-		yield* readSeed('De1ShotSettings', De1Uuids.SHOT_SETTINGS, 'shot-settings');
+		// 4) Connect-time one-shot reads to seed the dashboard. StateInfo is
+		//    required — a link that can't answer it is hollow (see de1SeedProgram).
+		yield* de1SeedProgram(d);
 
 		// 5) FirmwareVersion MMR (build number for the update check), then the sweep
 		//    serially in declaration order. All best-effort.

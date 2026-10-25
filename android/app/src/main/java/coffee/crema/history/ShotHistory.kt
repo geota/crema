@@ -1,6 +1,7 @@
 package coffee.crema.history
 
 import android.content.Context
+import coffee.crema.brew.methodLabel
 import coffee.crema.core.BrewHistoryStats
 import coffee.crema.core.BrewSeries
 import coffee.crema.core.BrewStatInput
@@ -205,6 +206,20 @@ const val BREW_LOG_UPLOAD_SKIP = "Brew Log entries stay on this device"
 /** The row's method for display: the stored method, null = machine espresso. */
 val StoredShot.methodOf: String?
     get() = brewMethod?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+
+/**
+ * What a stored row is called wherever it is listed — the History rows, the
+ * bean detail's "Shots" list. One rule for every brew shape (#165): the
+ * profile name (a machine espresso), else the guided recipe's name, else the
+ * method's label (a manual or custom-method brew). A machine espresso with
+ * no profile name is "Shot". Blank names count as absent. Mirrors the web's
+ * `shotTitle`.
+ */
+fun shotTitle(shot: StoredShot): String =
+    shot.profileName?.trim()?.takeIf { it.isNotEmpty() }
+        ?: shot.recipeName?.trim()?.takeIf { it.isNotEmpty() }
+        ?: shot.methodOf?.let(::methodLabel)
+        ?: "Shot"
 
 /**
  * Manually logged: a method was declared but no telemetry of any kind was

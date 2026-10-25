@@ -577,12 +577,21 @@ export class HistoryStore {
 	}
 
 	/**
-	 * Insert a shot pulled from Visualizer. Caller has already mapped
-	 * the wire row onto a `StoredShot` shape (with `visualizerId` set)
-	 * and verified de-dup. Prepends newest-first and persists.
+	 * Insert a shot that arrived whole from elsewhere — a Visualizer pull,
+	 * a backup restore or a Beanconqueror import. The caller has already
+	 * mapped it onto a `StoredShot` and verified de-dup. Prepends
+	 * newest-first and persists.
+	 *
+	 * The telemetry series rides IndexedDB (review #27): `persist()` strips
+	 * it from the localStorage row, so it is written here too, or the curve
+	 * is gone on the next load — a restored or pulled shot showed an empty
+	 * chart and 0 samples.
 	 */
 	insertPulled(shot: StoredShot): void {
 		this.shots = [shot, ...this.shots].slice(0, MAX_RECORDS);
+		if (shot.record.samples.length > 0) {
+			void putSeries(shot.id, shot.record.samples).catch(seriesSaveFailed);
+		}
 		this.persist();
 	}
 

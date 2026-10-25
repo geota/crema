@@ -115,6 +115,15 @@ interface BleTransport {
     suspend fun awaitAdvertisement(device: DeviceHandle, timeoutMs: Long): Boolean = true
 
     /**
+     * Whether this device's Bluetooth stack still holds a GATT link to
+     * [device] — for any client, not just ours. A DE1 in that state never
+     * advertises (one central, and it has one), so a scan-first reconnect
+     * waits forever; a direct connect reuses the open link instantly. False
+     * when the transport cannot tell.
+     */
+    fun isLinkHeldByStack(device: DeviceHandle): Boolean = false
+
+    /**
      * Connect to [device] and discover its GATT services. Suspends until the
      * device is connected and services are resolved, or throws on failure /
      * timeout. After this returns, [observe] and [write] may be called for

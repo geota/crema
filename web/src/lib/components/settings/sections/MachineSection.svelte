@@ -40,6 +40,7 @@
 	 */
 	import { getMachineReadout, type CremaApp, type UiSnapshot } from '$lib/state';
 	import { bleStateLabel, type De1State } from '$lib/ble';
+	import { hasRememberedDevice } from '$lib/ble/launch-reconnect';
 	import { MachineState, MmrRegister } from '$lib/core/crema-core';
 	import { machineModelName, hasCupWarmer } from '$lib/wasm/de1_wasm';
 	import { getSettingsStore } from '$lib/settings';
@@ -125,6 +126,38 @@
 	function disconnect(): void {
 		void app?.disconnectDe1();
 	}
+
+	/**
+	 * Whether a DE1 / scale is remembered for launch reconnect — re-read from
+	 * storage whenever a connection state changes (a connect remembers it).
+	 */
+	let forgotten = $state(0);
+	const de1Remembered = $derived.by(() => {
+		void de1State;
+		void forgotten;
+		return hasRememberedDevice('de1');
+	});
+	const scaleRemembered = $derived.by(() => {
+		void snapshot.scaleState;
+		void forgotten;
+		return hasRememberedDevice('scale');
+	});
+
+	/** Forget a device: disconnect, stop reconnecting it, revoke the permission. */
+	async function forget(kind: 'de1' | 'scale'): Promise<void> {
+		const what = kind === 'de1' ? 'DE1' : 'scale';
+		const ok = await confirmDialog({
+			title: `Forget this ${what}?`,
+			message: `Crema disconnects it, stops reconnecting it at launch, and removes this site's Bluetooth permission for it where the browser allows. To use it again, pick it in the Bluetooth chooser.`,
+			confirmLabel: `Forget ${what}`
+		});
+		if (!ok) return;
+		await (kind === 'de1' ? app?.forgetDe1() : app?.forgetScale());
+		forgotten += 1;
+	}
+
+	/** Signal strength of the DE1's last advertisement, or a dash. */
+	const rssiLabel = $derived(diag.rssi === null ? '—' : `${diag.rssi} dBm`);
 
 	/** Live "data is flowing" — at least one DE1 notification received. */
 	const dataFlowing = $derived(diag.notificationCount > 0);
@@ -329,6 +362,9 @@
 					disabled={!app}
 					onClick={connect}
 				/>
+			{/if}
+			{#if connected || de1Remembered}
+				<StButton label="Forget" icon="trash" disabled={!app} onClick={() => forget('de1')} />
 			{/if}
 		</div>
 	</div>
@@ -580,6 +616,14 @@
 			<span class="st-diag-mono">{notificationsLabel}</span>
 		{/snippet}
 	</StRow>
+	<StRow
+		title="Signal strength"
+		sub="From the DE1's last advertisement, heard while reconnecting. A connected DE1 doesn't advertise, and some browsers never report it."
+	>
+		{#snippet control()}
+			<span class="st-diag-mono">{rssiLabel}</span>
+		{/snippet}
+	</StRow>
 </StGroup>
 
 <StGroup title="Peripherals">
@@ -606,6 +650,9 @@
 				disabled={!app}
 				onClick={() => app?.connectScale()}
 			/>
+			{#if scaleConnected || scaleRemembered}
+				<StButton label="Forget" icon="trash" disabled={!app} onClick={() => forget('scale')} />
+			{/if}
 		{/snippet}
 	</StRow>
 	<StRow

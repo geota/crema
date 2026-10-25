@@ -46,6 +46,8 @@ import coffee.crema.ui.stopIcon
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.MachineState
+import coffee.crema.ui.BrewReadiness
+import coffee.crema.ui.brewReadiness
 import coffee.crema.core.ModeTargets
 import coffee.crema.core.Pump
 import coffee.crema.core.StopReason
@@ -809,14 +811,14 @@ private fun RestingBody(
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(11.dp),
             ) {
-                // Badge + group temp.
-                val asleep = ui.machineStateName == MachineState.Sleep
-                val heating = ui.machineSubstate == "Heating"
-                val (badge, badgeColor) = when {
-                    !connected -> "Not connected" to MaterialTheme.colorScheme.onSurfaceVariant
-                    asleep -> "Asleep — tap Coffee to wake" to MaterialTheme.colorScheme.onSurfaceVariant
-                    heating -> "Heating…" to Color(0xFFDBA764)
-                    else -> "Ready to brew" to tel.success
+                // Badge + group temp. "Ready" needs a state the DE1 actually
+                // reported — a link with none yet is syncing (BrewReadiness).
+                val (badge, badgeColor) = when (brewReadiness(connected, ui.machineStateName, ui.machineSubstate)) {
+                    BrewReadiness.NOT_CONNECTED -> "Not connected" to MaterialTheme.colorScheme.onSurfaceVariant
+                    BrewReadiness.SYNCING -> "Syncing with the DE1…" to MaterialTheme.colorScheme.onSurfaceVariant
+                    BrewReadiness.ASLEEP -> "Asleep — tap Coffee to wake" to MaterialTheme.colorScheme.onSurfaceVariant
+                    BrewReadiness.HEATING -> "Heating…" to Color(0xFFDBA764)
+                    BrewReadiness.READY -> "Ready to brew" to tel.success
                 }
                 Row(
                     Modifier.fillMaxWidth(),

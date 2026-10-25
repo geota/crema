@@ -19,8 +19,6 @@
 	import type { CremaApp } from '$lib/state';
 	import CremaMark from './CremaMark.svelte';
 	import RailDeviceButton from './RailDeviceButton.svelte';
-	import { isWebBluetoothSupported } from '$lib/ble';
-	import { toast } from '$lib/components/shared/toast.svelte';
 
 	let { app }: { app: CremaApp | null } = $props();
 
@@ -46,21 +44,12 @@
 	const ui = $derived(app?.state.current ?? null);
 
 	/**
-	 * Toast + bail when the browser can't do Web Bluetooth — connecting would
-	 * otherwise reject unhandled (the chooser never opens). Disconnect stays
-	 * allowed (it touches no Bluetooth). Returns true when it's safe to connect.
+	 * Connect a device from the rail — a click, so Web Bluetooth's gesture
+	 * holds. The app toasts and bails when this browser can't connect (no Web
+	 * Bluetooth, the iOS Home Screen app, Bluetooth off).
 	 */
-	function canConnect(): boolean {
-		if (isWebBluetoothSupported()) return true;
-		toast.error(
-			"This browser can't connect over Bluetooth — use Chrome, Edge or Opera on desktop or Android."
-		);
-		return false;
-	}
-
-	/** Connect a device from the rail — a click, so Web Bluetooth's gesture holds. */
 	function connect(kind: 'de1' | 'scale'): void {
-		if (!app || !canConnect()) return;
+		if (!app) return;
 		void (kind === 'de1' ? app.connectDe1() : app.connectScale());
 	}
 

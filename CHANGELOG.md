@@ -30,6 +30,40 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **History search finds more** — it now also matches the coffee's name and
   roaster, the grinder, and the barista and drinker. Web, tablet and phone.
 
+### Fixed
+
+- **Restored and pulled shots lost their charts (web)** — a backup restore, a
+  Visualizer pull and a Beanconqueror import stored each shot's summary row
+  but never its telemetry series, so every such shot showed an empty chart
+  and 0 samples after the next page load. The series is now written with the
+  row.
+- **History kept showing a shot the filter had hidden (web)** — with a search
+  or a profile / bean / tag filter active, the detail pane stayed on the
+  previously picked shot even once it no longer appeared in the list. It now
+  follows the tablet's rule and shows the first matching shot.
+- **A bag's "Shots" list showed "—" for every non-espresso brew** — the
+  bean profile's recent-shots rows only ever read the espresso profile name,
+  so a logged V60 or a custom-method brew (an "ORB recipe", say) had no
+  title. The rows now use the same name History does: the profile, else the
+  recipe, else the method. Web, tablet and phone. (#165)
+- **A link that came up at the edge of range could read "Ready to brew" with
+  no machine behind it** — GATT connected and subscribed, but the DE1 never
+  answered the connect-time machine-state read, and an unknown state was
+  shown as ready. "Ready" now needs a state the DE1 actually reported; until
+  then the Brew hero says "Syncing with the DE1…". A link that cannot
+  produce the state in two tries is treated as hollow and reconnected rather
+  than kept. The last reported state is also cleared the moment a link drops,
+  so a reconnect never replays "Idle" from before it. Web, tablet and phone.
+- **A DE1 holding a dead link after a drop looked like "looking for the
+  DE1" forever** — the DE1 takes one connection and advertises only while it
+  has none, so a drop at the edge of range that never delivered a clean
+  disconnect leaves it invisible until its own timeout or a power cycle.
+  After two reconnect attempts that find nothing, the status now says so,
+  with the remedies in order: toggle this device's Bluetooth, then
+  power-cycle the DE1. On Android, when this device's own Bluetooth stack
+  still holds the link, the app now reuses that link directly instead of
+  scanning for an advertisement that cannot come.
+
 ## [0.0.9] — 2026-10-15
 
 Fixes a crash on Android 14 and later when turning on "Keep connected in the background" while the DE1 was connected.

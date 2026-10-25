@@ -319,7 +319,14 @@ class De1BleManager(
         // primes the stack and refreshes the handle. Throwing on timeout lets the
         // supervisor back off and rescan rather than burn a full connect timeout on
         // an absent machine. (First connect already arrived via the scanner.)
-        if (!firstConnect) {
+        if (!firstConnect && transport.isLinkHeldByStack(device)) {
+            // This device's stack still holds a GATT link to the DE1 (another
+            // client, or a client the OS hasn't let go of). A connected DE1
+            // never advertises, so the scan below would miss it for as long as
+            // that link lives; a direct connect joins the open link at once.
+            consecutiveAdvertMisses = 0
+            onStatus("DE1 link is still open on this device — reusing it")
+        } else if (!firstConnect) {
             _state.value = State.SCANNING
             onStatus("Looking for the DE1…")
             timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.SCAN)
@@ -334,7 +341,13 @@ class De1BleManager(
                 // otherwise never reconnect in the background at all.
                 consecutiveAdvertMisses++
                 if (consecutiveAdvertMisses % DIRECT_FALLBACK_EVERY_N_MISSES != 0) {
-                    error("DE1 not seen advertising within ${RECONNECT_SCAN_TIMEOUT_MS / 1000}s")
+                    // A machine we were just connected to that stays unseen is
+                    // most likely holding the dead link (see StuckLink.kt): say
+                    // so, with the remedies in order, instead of looking forever.
+                    error(
+                        stuckLinkHint(wasConnected = true, consecutiveMisses = consecutiveAdvertMisses)
+                            ?: "DE1 not seen advertising within ${RECONNECT_SCAN_TIMEOUT_MS / 1000}s",
+                    )
                 }
                 onStatus("DE1 not seen advertising — trying a direct connect")
             }
@@ -457,10 +470,15 @@ class De1BleManager(
      * them the Settings firmware row and machine-state readout stay blank even
      * though the connection is healthy and the MMR identity sweep populated.
      *
-     * Each read is best-effort + time-boxed: a failure (or a notify-only char on
-     * some firmware) just logs and the others still run. The read bytes are fed
-     * to the core through the same seam as a notification, so they decode and
-     * record identically.
+     * Version and ShotSettings are best-effort + time-boxed: a failure (or a
+     * notify-only char on some firmware) just logs and the others still run.
+     * **StateInfo is required.** The DE1 answers it on a direct read even while
+     * asleep, so a link that can't produce it in two tries is hollow — up at
+     * the GATT level, dead for data (a connect at the edge of range). Rather
+     * than sit READY with no state behind it, the link is torn down and the
+     * supervisor reconnects ([HOLLOW_LINK_STATUS]). The web connect program
+     * applies the same rule. The read bytes are fed to the core through the
+     * same seam as a notification, so they decode and record identically.
      */
     private suspend fun seedReads(device: BleTransport.DeviceHandle) {
         val seeds = listOf(
@@ -469,17 +487,41 @@ class De1BleManager(
             Triple(De1Uuids.SHOT_SETTINGS, NotificationSource.DE1_SHOT_SETTINGS, "shot-settings"),
         )
         for ((char, source, label) in seeds) {
-            runCatching {
-                val bytes = kotlinx.coroutines.withTimeoutOrNull(3_000) {
-                    transport.read(device, De1Uuids.SERVICE, char)
-                } ?: error("read timed out")
-                val tMs = SystemClock.elapsedRealtime()
-                recorder.recordInbound(source, bytes, tMs)
-                val json = bridge.onNotification(source, bytes, tMs.toULong())
-                onCoreOutput(json)
-                onStatus("DE1 $label read ✓")
-            }.onFailure { onStatus("DE1 $label seed read skipped: ${it.message}") }
+            val required = char == De1Uuids.STATE_INFO
+            val attempts = if (required) SEED_READ_ATTEMPTS_REQUIRED else 1
+            var failure: Throwable? = null
+            for (attempt in 1..attempts) {
+                failure = seedRead(device, char, source, label).exceptionOrNull() ?: break
+                if (attempt < attempts) delay(SEED_READ_RETRY_DELAY_MS)
+            }
+            if (failure == null) continue
+            if (!required) {
+                onStatus("DE1 $label seed read skipped: ${failure.message}")
+                continue
+            }
+            Log.w(TAG, "DE1 machine-state seed read failed $attempts× (${failure.message}) — hollow link, tearing down")
+            onStatus(HOLLOW_LINK_STATUS)
+            runCatching { transport.disconnect(device) }
+                .onFailure { Log.w(TAG, "Forced DE1 teardown (hollow link) failed", it) }
+            return
         }
+    }
+
+    /** One time-boxed seed read, fed to the core on success. */
+    private suspend fun seedRead(
+        device: BleTransport.DeviceHandle,
+        char: UUID,
+        source: NotificationSource,
+        label: String,
+    ): Result<Unit> = runCatching {
+        val bytes = kotlinx.coroutines.withTimeoutOrNull(SEED_READ_TIMEOUT_MS) {
+            transport.read(device, De1Uuids.SERVICE, char)
+        } ?: error("read timed out")
+        val tMs = SystemClock.elapsedRealtime()
+        recorder.recordInbound(source, bytes, tMs)
+        val json = bridge.onNotification(source, bytes, tMs.toULong())
+        onCoreOutput(json)
+        onStatus("DE1 $label read ✓")
     }
 
     // ---- Core integration -------------------------------------------------
@@ -850,6 +892,14 @@ class De1BleManager(
          *  Short enough to retry briskly, long enough to catch a machine still
          *  booting after a power outage across a couple of advertise cycles. */
         private const val RECONNECT_SCAN_TIMEOUT_MS = 12_000L
+
+        /** One connect-time seed read's ceiling. */
+        private const val SEED_READ_TIMEOUT_MS = 3_000L
+
+        /** StateInfo tries before the link counts as hollow (see [seedReads]). */
+        private const val SEED_READ_ATTEMPTS_REQUIRED = 2
+
+        private const val SEED_READ_RETRY_DELAY_MS = 500L
 
         /** Every Nth consecutive advertisement miss falls back to one direct
          *  connect (see [establish]). */

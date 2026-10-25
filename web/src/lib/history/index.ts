@@ -50,3 +50,5 @@ export {
 	type ShotCoffee
 } from './search';
 
+export { selectedShot } from './selection';
+

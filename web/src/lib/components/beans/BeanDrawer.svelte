@@ -29,6 +29,7 @@
 	} from '$lib/bean';
 	import { getHistoryStore, effectiveGrindSetting, yieldOf } from '$lib/history';
 	import { getProfileStore } from '$lib/profiles';
+	import { shotTitle } from '$lib/brew/methods';
 	import BeanImage from './BeanImage.svelte';
 	import BeanPhotoViewer from './BeanPhotoViewer.svelte';
 	import RoastSlider from './RoastSlider.svelte';
@@ -547,7 +548,7 @@
 										})}
 									</div>
 									<div class="bn-shotrow-meta">
-										<span class="bn-shotrow-profile">{s.profileName ?? '—'}</span>
+										<span class="bn-shotrow-profile">{shotTitle(s)}</span>
 										<span class="bn-shotrow-dial">
 											{[
 												sGrind ? `Grind ${sGrind}` : null,

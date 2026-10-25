@@ -15,7 +15,7 @@
 		yieldOf,
 		flatSamplesOf
 	} from '$lib/history';
-	import { methodLabel } from '$lib/brew/methods';
+	import { shotTitle } from '$lib/brew/methods';
 	import StarRating from '$lib/components/common/StarRating.svelte';
 	import MethodMark from '$lib/components/brewlog/MethodMark.svelte';
 	import { getSettingsStore, convertWeight } from '$lib/settings';
@@ -172,7 +172,7 @@
 	</div>
 	<div class="hi-row-main">
 		<div class="hi-row-name">
-			{shot.profileName ?? shot.recipeName ?? (method ? methodLabel(method, shot.brewMethodLabel) : 'Untitled shot')}
+			{shotTitle(shot)}
 			{#if manual}<span class="hi-row-logged">· logged</span>{/if}
 		</div>
 		<div class="hi-row-bean">{rowBeanLine}</div>

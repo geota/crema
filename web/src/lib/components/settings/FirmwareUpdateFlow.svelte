@@ -26,6 +26,7 @@
 		EXIT_QUESTION,
 		STILL_SAFE,
 		UNCONFIRMED,
+		VERIFY_OFFLINE,
 		blockerText,
 		cancelQuestion,
 		channelLabel,
@@ -123,7 +124,19 @@
 			</h2>
 		</div>
 
-		{#if flow.step === 'warning'}
+		{#if flow.step === 'warning' && flow.unavailable}
+			<div class="fu-banner fu-banner-warn" role="alert">
+				<Icon cls="ph ph-warning-circle" aria-hidden="true" />
+				<span>{flow.unavailable}</span>
+			</div>
+			<div class="fu-actions">
+				<div class="fu-actions-left">
+					<button type="button" class="st-btn st-btn-secondary" onclick={() => flow.close()}>
+						Close
+					</button>
+				</div>
+			</div>
+		{:else if flow.step === 'warning'}
 			<div class="fu-banner fu-banner-warn" role="alert">
 				<Icon cls="ph ph-warning-circle" aria-hidden="true" />
 				<ul class="fu-points">
@@ -331,6 +344,11 @@
 						<div class="fu-banner fu-banner-warn" role="alertdialog" aria-label="Stop the update?">
 							<Icon cls="ph ph-warning-circle" aria-hidden="true" />
 							<span>{cancelQuestion(installedBuild)}</span>
+						</div>
+					{:else if status.phase === FlashPhase.Verifying && !status.linkUp}
+						<div class="fu-banner fu-banner-warn" role="alert">
+							<Icon cls="ph ph-warning-circle" aria-hidden="true" />
+							<span>{VERIFY_OFFLINE}</span>
 						</div>
 					{:else}
 						<div class="fu-banner fu-banner-info" role="status">

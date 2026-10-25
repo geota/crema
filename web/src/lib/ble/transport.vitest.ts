@@ -10,9 +10,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	BleDevice,
+	GATT_TIMEOUTS,
+	GattTimeoutError,
 	KICK_DEBOUNCE_MS,
 	RECONNECT_LADDER,
 	abortableSleep,
+	isChooserCancelled,
 	reconnectDelayMs
 } from './transport.ts';
 import { ReconnectTimelineRecorder } from './reconnect-timeline.ts';
@@ -233,6 +236,210 @@ describe('BleDevice reconnect kick', () => {
 		await vi.advanceTimersByTimeAsync(0);
 		expect(announced).toHaveBeenCalledWith(1);
 		t.ble.disconnect();
+	});
+});
+
+/**
+ * A device that can watch advertisements (`watchAdvertisements` stops when its
+ * signal aborts) and has one DE1 service, for the lurk-tier and replay tests.
+ */
+function watchingSetup() {
+	const target = new EventTarget();
+	const script = { ok: false };
+	const characteristic = Object.assign(new EventTarget(), {
+		uuid: 'a00d',
+		startNotifications: vi.fn(async () => characteristic),
+		writeValueWithResponse: vi.fn(async (_value: ArrayBuffer) => undefined)
+	});
+	const service = { getCharacteristic: vi.fn(async () => characteristic) };
+	const gatt = {
+		connected: false,
+		connect: vi.fn(async () => {
+			if (!script.ok) throw new Error('Connection attempt failed');
+			gatt.connected = true;
+			return gatt;
+		}),
+		// Like the browser: disconnecting a live link fires gattserverdisconnected.
+		disconnect: vi.fn(() => {
+			const wasConnected = gatt.connected;
+			gatt.connected = false;
+			if (wasConnected) target.dispatchEvent(new Event('gattserverdisconnected'));
+		}),
+		getPrimaryService: vi.fn(async () => service),
+		connectAndDiscover: undefined as ((services: string[]) => Promise<unknown>) | undefined
+	};
+	const device = Object.assign(target, {
+		name: 'DE1',
+		id: 'dev-1',
+		gatt,
+		watchingAdvertisements: false,
+		watchAdvertisements: vi.fn(async (opts?: { signal?: AbortSignal }) => {
+			device.watchingAdvertisements = true;
+			opts?.signal?.addEventListener('abort', () => (device.watchingAdvertisements = false));
+		})
+	});
+	const recorder = new ReconnectTimelineRecorder(
+		() => Date.now(),
+		() => 0
+	);
+	const ble = new BleDevice(device as unknown as BluetoothDevice, recorder, () => Date.now());
+	return {
+		device,
+		gatt,
+		script,
+		ble,
+		characteristic,
+		drop: () => {
+			gatt.connected = false;
+			target.dispatchEvent(new Event('gattserverdisconnected'));
+		},
+		advertise: (rssi: number) =>
+			target.dispatchEvent(Object.assign(new Event('advertisementreceived'), { rssi }))
+	};
+}
+
+/** Connect calls one failed attempt makes (3 tries). */
+const TRIES_PER_ATTEMPT = 3;
+
+describe('BleDevice lurk tier with advertisement watching', () => {
+	it('a quiet watched cycle skips the blind connect; every Nth still tries', async () => {
+		const t = watchingSetup();
+		t.drop();
+		await vi.advanceTimersByTimeAsync(BURST_MS);
+		const afterBurst = t.gatt.connect.mock.calls.length;
+		expect(afterBurst).toBe(RECONNECT_LADDER.maxAttempts * TRIES_PER_ATTEMPT);
+		await vi.advanceTimersByTimeAsync(
+			(RECONNECT_LADDER.lurkBlindEvery - 1) * RECONNECT_LADDER.lurkDelayMs
+		);
+		expect(t.gatt.connect.mock.calls.length).toBe(afterBurst);
+		await vi.advanceTimersByTimeAsync(RECONNECT_LADDER.lurkDelayMs + FAILED_ATTEMPT_MS);
+		expect(t.gatt.connect.mock.calls.length).toBe(afterBurst + TRIES_PER_ATTEMPT);
+		t.ble.disconnect();
+	});
+
+	it('an advertisement ends the lurk wait at once and reports its RSSI', async () => {
+		const t = watchingSetup();
+		const rssi = vi.fn();
+		t.ble.onAdvertisement(rssi);
+		t.drop();
+		await vi.advanceTimersByTimeAsync(BURST_MS + 5_000);
+		expect(t.device.watchingAdvertisements).toBe(true);
+		t.script.ok = true;
+		t.advertise(-61);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(rssi).toHaveBeenCalledWith(-61);
+		expect(t.ble.connectionState).toBe('connected');
+		expect(t.device.watchingAdvertisements).toBe(false);
+	});
+
+	it('a cycle the browser stopped watching (page hidden) still tries blind', async () => {
+		const t = watchingSetup();
+		t.drop();
+		await vi.advanceTimersByTimeAsync(BURST_MS);
+		const afterBurst = t.gatt.connect.mock.calls.length;
+		t.device.watchingAdvertisements = false;
+		await vi.advanceTimersByTimeAsync(RECONNECT_LADDER.lurkDelayMs + FAILED_ATTEMPT_MS);
+		expect(t.gatt.connect.mock.calls.length).toBe(afterBurst + TRIES_PER_ATTEMPT);
+		t.ble.disconnect();
+	});
+
+	it("reconnects through Beacio's connectAndDiscover with the subscribed services", async () => {
+		const t = watchingSetup();
+		t.script.ok = true;
+		await t.ble.connectGatt();
+		await t.ble.startNotifications('a000', 'a00d');
+		const fast = vi.fn(async () => {
+			t.gatt.connected = true;
+		});
+		t.gatt.connectAndDiscover = fast;
+		t.drop();
+		await vi.advanceTimersByTimeAsync(reconnectDelayMs(1));
+		expect(fast).toHaveBeenCalledWith(['a000']);
+		expect(t.ble.connectionState).toBe('connected');
+		expect(t.characteristic.startNotifications).toHaveBeenCalledTimes(2);
+		t.ble.disconnect();
+	});
+});
+
+describe('BleDevice GATT time limits', () => {
+	it('a hung connect is abandoned after the limit and not retried', async () => {
+		const t = watchingSetup();
+		t.gatt.connect.mockImplementation(() => new Promise(() => undefined));
+		const result = t.ble.connectGatt().catch((e: unknown) => e);
+		await vi.advanceTimersByTimeAsync(GATT_TIMEOUTS.connectMs);
+		expect(await result).toBeInstanceOf(GattTimeoutError);
+		expect(t.gatt.connect).toHaveBeenCalledOnce();
+		expect(t.gatt.disconnect).toHaveBeenCalledOnce();
+		expect(t.ble.connectionState).toBe('failed');
+		t.ble.disconnect();
+	});
+
+	it('a hung write frees the queue and drops the link into the reconnect loop', async () => {
+		const t = watchingSetup();
+		t.script.ok = true;
+		await t.ble.connectGatt();
+		t.characteristic.writeValueWithResponse.mockImplementationOnce(
+			() => new Promise(() => undefined)
+		);
+		const hung = t.ble.write('a000', 'a00d', new Uint8Array([1])).catch((e: unknown) => e);
+		const next = t.ble.write('a000', 'a00d', new Uint8Array([2])).catch((e: unknown) => e);
+		await vi.advanceTimersByTimeAsync(GATT_TIMEOUTS.operationMs);
+		expect(await hung).toBeInstanceOf(GattTimeoutError);
+		expect(t.gatt.disconnect).toHaveBeenCalledOnce();
+		expect(t.ble.connectionState).toBe('reconnecting');
+		// The queued write ran instead of waiting forever behind the hung one.
+		await next;
+		expect(t.characteristic.writeValueWithResponse).toHaveBeenCalledTimes(2);
+		t.ble.disconnect();
+	});
+
+	it('an operation is timed from when it starts, not when it was queued', async () => {
+		const t = watchingSetup();
+		t.script.ok = true;
+		await t.ble.connectGatt();
+		let finishFirst!: () => void;
+		t.characteristic.writeValueWithResponse.mockImplementationOnce(
+			() => new Promise<undefined>((r) => (finishFirst = () => r(undefined)))
+		);
+		const first = t.ble.write('a000', 'a00d', new Uint8Array([1]));
+		const second = t.ble.write('a000', 'a00d', new Uint8Array([2]));
+		await vi.advanceTimersByTimeAsync(GATT_TIMEOUTS.operationMs - 1_000);
+		finishFirst();
+		await first;
+		// The second write started ~9 s after it was queued; it still gets its full limit.
+		await vi.advanceTimersByTimeAsync(0);
+		await expect(second).resolves.toBeUndefined();
+		expect(t.gatt.disconnect).not.toHaveBeenCalled();
+		t.ble.disconnect();
+	});
+});
+
+describe('isChooserCancelled', () => {
+	it('is true only for a dismissed chooser', () => {
+		const err = (name: string, message: string) => Object.assign(new Error(message), { name });
+		expect(isChooserCancelled(err('NotFoundError', 'User cancelled the requestDevice() chooser.'))).toBe(true);
+		expect(isChooserCancelled(err('NotFoundError', 'Bluetooth adapter not available.'))).toBe(false);
+		expect(isChooserCancelled(err('NetworkError', 'cancelled'))).toBe(false);
+		expect(isChooserCancelled(null)).toBe(false);
+	});
+});
+
+describe('BleDevice notification overflow', () => {
+	it('reports the first drop at once, then one summed report per window', async () => {
+		const t = watchingSetup();
+		const dropped = vi.fn();
+		t.ble.onNotificationOverflow(dropped);
+		const overflow = (t.ble as unknown as { onOverflow(e: Event): void }).onOverflow;
+		const event = (evictedCount: number) =>
+			({ target: { uuid: 'A00D' }, detail: { evictedCount } }) as unknown as Event;
+		overflow(event(3));
+		expect(dropped).toHaveBeenLastCalledWith('a00d', 3);
+		overflow(event(2));
+		overflow(event(4));
+		expect(dropped).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(dropped).toHaveBeenLastCalledWith('a00d', 6);
+		expect(dropped).toHaveBeenCalledTimes(2);
 	});
 });
 

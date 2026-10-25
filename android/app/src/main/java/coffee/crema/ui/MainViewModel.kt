@@ -2189,6 +2189,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             de1SetupDone = false
             sweepRunner.onDropped()
             idleSleep.link(false)
+            // The last state the DE1 reported is history once the link is
+            // gone. Until the next connect's StateInfo seed read lands, the
+            // Brew hero must say "syncing", not replay "Idle" from before the
+            // drop (BrewReadiness).
+            _ui.update { it.copy(machineState = null, machineStateName = null, machineSubstate = null) }
         },
         pushRoster = { proxy.pushRoster() },
         refreshAdvertisement = { proxy.refreshAdvertisement() },

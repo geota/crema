@@ -1,5 +1,7 @@
 package coffee.crema.ble
 
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
@@ -79,6 +81,10 @@ import kotlin.uuid.toKotlinUuid
  */
 @OptIn(ExperimentalUuidApi::class)
 class NordicBleTransport(context: Context) : BleTransport {
+
+    /** The platform view of the stack's links — see [isLinkHeldByStack]. */
+    private val bluetoothManager: BluetoothManager? =
+        context.applicationContext.getSystemService(BluetoothManager::class.java)
 
     /**
      * The transport's own coroutine scope. Connections and the central manager
@@ -323,6 +329,18 @@ class NordicBleTransport(context: Context) : BleTransport {
             Log.i(TAG, "${handle.address} re-advertised — reconnecting")
             true
         } ?: false
+    }
+
+    override fun isLinkHeldByStack(device: BleTransport.DeviceHandle): Boolean {
+        val handle = device as NordicDeviceHandle
+        val manager = bluetoothManager ?: return false
+        val adapter = manager.adapter ?: return false
+        // getRemoteDevice throws on a malformed address; getConnectionState
+        // throws SecurityException without BLUETOOTH_CONNECT. Either way: unknown.
+        return runCatching {
+            val remote = adapter.getRemoteDevice(handle.address)
+            manager.getConnectionState(remote, BluetoothProfile.GATT) == BluetoothProfile.STATE_CONNECTED
+        }.getOrDefault(false)
     }
 
     override suspend fun connect(device: BleTransport.DeviceHandle) = connect(device) {}

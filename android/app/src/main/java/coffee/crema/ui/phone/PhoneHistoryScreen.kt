@@ -49,6 +49,7 @@ import coffee.crema.history.shotCoffee
 import coffee.crema.history.isManualLog
 import coffee.crema.history.methodOf
 import coffee.crema.history.methodRatioLabel
+import coffee.crema.history.shotTitle
 import coffee.crema.ui.brewlog.BrewSessionCanvas
 import coffee.crema.ui.brewlog.BrewSparkChart
 import coffee.crema.ui.phone.components.CremaNewFab
@@ -1036,7 +1037,7 @@ private fun PhoneShotDetail(
 
     if (menu) {
         CremaOverflowSheet(
-            title = (shot.profileName ?: shot.recipeName ?: methodLabel(shot.methodOf)) + " · " + remember(shot.completedAtMs) {
+            title = shotTitle(shot) + " · " + remember(shot.completedAtMs) {
                 java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(shot.completedAtMs))
             },
             items = buildList {

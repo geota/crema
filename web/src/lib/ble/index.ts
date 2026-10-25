@@ -18,6 +18,9 @@ export {
 	type KickResult,
 	type NotificationSink
 } from './transport';
+export { installIosBridge, isAppleMobile, isBridgedBluetooth } from './ios-bridge';
+export { bluetoothAvailable } from './availability';
+export { connectBlocker, type ConnectBlocker } from './connect-blocker';
 export {
 	reconnectTimelines,
 	compactLine,
