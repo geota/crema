@@ -13,8 +13,8 @@
  *
  * Resolved **lazily** (on first property read) and memoized — *never* at module
  * scope. The wasm export is only callable once `loadCore()` has run, yet this
- * module sits on the BLE import chain the app evaluates during boot (`$lib/state`
- * → `$lib/ble` → `de1.ts`). Calling `de1Uuids()` at module-load time raced wasm
+ * module sits on the BLE import chain the app evaluates during boot (`#lib/state/index.js`
+ * → `#lib/ble` → `de1.ts`). Calling `de1Uuids()` at module-load time raced wasm
  * init and crashed first paint with `Cannot read properties of undefined
  * (reading '__wbindgen_free')`. Every read here happens from a connect-time /
  * gesture-bound path, long after the core has loaded — the same rule
@@ -22,7 +22,7 @@
  * "never at module scope (the wasm bundle loads first)".
  */
 
-import { de1Uuids as wasmDe1Uuids } from '$lib/wasm/de1_wasm';
+import { de1Uuids as wasmDe1Uuids } from '#lib/wasm/de1_wasm.js';
 
 interface De1UuidMap {
 	service: string;

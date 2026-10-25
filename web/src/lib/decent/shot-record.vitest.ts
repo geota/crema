@@ -6,7 +6,7 @@
  * recipe-less retry, the typed error, and the two helpers.
  */
 import { describe, expect, it } from 'vitest';
-import type { StoredShot } from '$lib/history/model';
+import type { StoredShot } from '#lib/history/model.js';
 import { DecentRecordError, decentModelName, decentShotRecord, shotDurationSeconds } from './shot-record';
 
 function sample(elapsed: number) {

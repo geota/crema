@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ShotMachine, StoredShot } from '$lib/history/model';
+import type { ShotMachine, StoredShot } from '#lib/history/model.js';
 import { forgetSerialsNotOnAccount, readDecentAccount, writeDecentAccount, DEFAULT_DECENT_ACCOUNT } from './account';
 import type { FetchLike } from './api';
 
 // A tiny in-memory history store — the upload path only needs get/all/bindDecentId.
 const shots = new Map<string, StoredShot>();
-vi.mock('$lib/history/store.svelte', () => ({
+vi.mock('#lib/history/store.svelte.js', () => ({
 	getHistoryStore: () => ({
 		get: (id: string) => shots.get(id),
 		get all() {
@@ -18,7 +18,7 @@ vi.mock('$lib/history/store.svelte', () => ({
 	})
 }));
 let liveSerial: number | null = null;
-vi.mock('$lib/state/machine-readout.svelte', () => ({
+vi.mock('#lib/state/machine-readout.svelte.js', () => ({
 	getMachineReadout: () => ({
 		get serialNumber() {
 			return liveSerial;
@@ -29,7 +29,7 @@ vi.mock('$lib/state/machine-readout.svelte', () => ({
 	})
 }));
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
-vi.mock('$lib/components/shared/toast.svelte', () => ({ toast: toasts }));
+vi.mock('#lib/components/shared/toast.svelte.js', () => ({ toast: toasts }));
 
 const {
 	SERIAL_UNREAD_REASON,

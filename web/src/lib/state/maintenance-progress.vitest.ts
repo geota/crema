@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { MachineState, MaintenancePhase } from '$lib/core/crema-core';
+import { MachineState, MaintenancePhase } from '#lib/core/crema-core.js';
 import { applyEvent, INITIAL_SNAPSHOT, type MaintenanceView } from './ui-state.svelte';
 
 function progress(over: Partial<MaintenanceView>) {

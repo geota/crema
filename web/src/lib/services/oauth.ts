@@ -1,5 +1,5 @@
 /**
- * `$lib/services/oauth` — the OAuth/PKCE service (docs/53 §1.3, T-10).
+ * `#lib/services/oauth.js` — the OAuth/PKCE service (docs/53 §1.3, T-10).
  *
  * Effect-native reimplementation of the Authorization-Code + PKCE flow on top
  * of {@link HttpClient}. The token requests are rebuilt here so the service

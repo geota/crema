@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/filter` — the bean library's facet filter + chip counts,
+ * `#lib/bean/filter` — the bean library's facet filter + chip counts,
  * delegated to the core (`de1_domain::bean_filter`, geota/crema#124).
  *
  * Status (where "archived" is one more status), "include archived", roast
@@ -11,12 +11,12 @@
  * Sorting stays on the page — the core hands back ids in library order.
  */
 
-import { filterBeans as wasmFilterBeans } from '$lib/wasm/de1_wasm';
+import { filterBeans as wasmFilterBeans } from '#lib/wasm/de1_wasm.js';
 import {
 	BeanStatusFilter,
 	type BeanFilterQuery,
 	type BeanFilterResult
-} from '$lib/core/crema-core';
+} from '#lib/core/crema-core.js';
 import type { Bean } from './model';
 import { libraryBeansJson, type SearchResults } from './search';
 

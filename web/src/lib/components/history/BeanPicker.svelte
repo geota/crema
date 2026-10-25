@@ -19,7 +19,7 @@
 	 * Sort: most-recently-updated bag first — same default the brew
 	 * page's library page uses for the bags tab.
 	 */
-	import { getBeanStore, beanDaysOffRoast, type Bean, type Roaster } from '$lib/bean';
+	import { getBeanStore, beanDaysOffRoast, type Bean, type Roaster } from '#lib/bean/index.js';
 
 	let {
 		currentBeanId,

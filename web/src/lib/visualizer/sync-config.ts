@@ -1,5 +1,5 @@
 /**
- * `$lib/visualizer/sync-config` — persisted per-entity sync direction +
+ * `#lib/visualizer/sync-config.js` — persisted per-entity sync direction +
  * cadence settings.
  *
  * One unified shape replaces the bean-only `crema.beans.sync.v1` config
@@ -12,8 +12,8 @@
  * background pushes; manual "Sync now" always works regardless.
  */
 
-import { readJson, writeJson } from '$lib/utils/storage';
-import type { VisualizerSyncPrefs } from '$lib/core/crema-core';
+import { readJson, writeJson } from '#lib/utils/storage.js';
+import type { VisualizerSyncPrefs } from '#lib/core/crema-core.js';
 
 /** New unified persistence key. */
 const SYNC_KEY = 'crema.visualizer.sync.v1';

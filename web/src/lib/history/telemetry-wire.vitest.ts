@@ -1,5 +1,5 @@
 /**
- * `$lib/history/telemetry-wire.test` — node:test suite pinning the
+ * `#lib/history/telemetry-wire.test` — node:test suite pinning the
  * {@link toWire} / {@link fromWire} pair as a forward/inverse codec.
  *
  * Same runner style as `shot-sync.test.ts`. Invoked with:

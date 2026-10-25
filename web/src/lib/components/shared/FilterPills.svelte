@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	/**
 	 * `FilterPills` — a horizontal row of selectable filter pills, the shared
 	 * surface for filter-chip rails across the app.

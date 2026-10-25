@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/visualizer-sync` — bidirectional sync between Crema's bean
+ * `#lib/bean/visualizer-sync` — bidirectional sync between Crema's bean
  * library and Visualizer's `/coffee_bags` + `/roasters` REST endpoints
  * (two-way direction).
  *
@@ -20,7 +20,7 @@
  * **As of the token-store retirement this module is PURE** — the live
  * bidirectional sync + the authed HTTP (`call` / `runSync` / `testConnection` /
  * the premium probe) moved to the `BeanSync` Effect service
- * (`$lib/services/bean-sync`), which funnels through `TokenVault.withFreshToken`
+ * (`#lib/services/bean-sync`), which funnels through `TokenVault.withFreshToken`
  * + `HttpClient`. What remains here is the wire-shape contract the service
  * reuses: the `*ToWire` / `*FromWire` converters, the `*WriteRequest` envelope
  * builders, the persisted `VisualizerSyncSettings` (lastSyncAt + cached premium
@@ -31,9 +31,9 @@
  * here), and the UI surfaces "read-only (free tier)".
  */
 
-import { readJson, writeJson } from '$lib/utils/storage';
-import { updateSyncConfig } from '$lib/visualizer/sync-config';
-import type { components } from '$lib/visualizer/openapi';
+import { readJson, writeJson } from '#lib/utils/storage.js';
+import { updateSyncConfig } from '#lib/visualizer/sync-config.js';
+import type { components } from '#lib/visualizer/openapi.js';
 import {
 	beanFromWire as wasmBeanFromWire,
 	beanToWire as wasmBeanToWire,
@@ -43,7 +43,7 @@ import {
 	roasterFromWire as wasmRoasterFromWire,
 	roasterToWire as wasmRoasterToWire,
 	roasterWriteRequest as wasmRoasterWriteRequest
-} from '$lib/wasm/de1_wasm';
+} from '#lib/wasm/de1_wasm.js';
 import { mintBeanId, mintRoasterId, type Bean, type Roaster } from './model';
 
 // Spec-typed aliases so the wire shape stays in lock-step with the
@@ -61,7 +61,7 @@ const API_BASE = 'https://visualizer.coffee/api';
 const SYNC_KEY = 'crema.beans.sync.v1';
 
 /**
- * Persisted sync metadata. Credentials live in `$lib/visualizer/token-store`
+ * Persisted sync metadata. Credentials live in `#lib/visualizer/token-store`
  * — the OAuth bearer is the source of authority. This shape holds only the
  * sync bookkeeping (`lastSyncAt`, `premium`).
  */
@@ -253,7 +253,7 @@ export function roasterWriteRequest(roaster: Roaster): RoasterWriteRequest {
 /**
  * Legacy error shape from the old `fetch`-based sync (the bean/roaster HTTP now
  * lives in the `BeanSync` service with `Data.TaggedError`s). Kept only because
- * it's still re-exported through `$lib/bean` for any external `instanceof`
+ * it's still re-exported through `#lib/bean` for any external `instanceof`
  * checks during the migration.
  */
 export class VisualizerError extends Error {

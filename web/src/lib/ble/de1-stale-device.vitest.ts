@@ -7,8 +7,8 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { Exit } from 'effect';
-import type { AppRuntime } from '$lib/effect/runtime';
-import type { CremaCore } from '$lib/core';
+import type { AppRuntime } from '#lib/effect/runtime.js';
+import type { CremaCore } from '#lib/core/index.js';
 import { De1Manager } from './de1';
 
 // Capture each connect program's dependencies so a test can play a stale
@@ -18,7 +18,7 @@ const programDeps: {
 	onCoreOutput(output: unknown): void;
 	onGattVerified(): void;
 }[] = [];
-vi.mock('$lib/services/de1-orchestrator', () => ({
+vi.mock('#lib/services/de1-orchestrator.js', () => ({
 	de1ConnectProgram: (deps: (typeof programDeps)[number]) => {
 		programDeps.push(deps);
 		return {};

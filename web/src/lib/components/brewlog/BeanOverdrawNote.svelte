@@ -4,8 +4,8 @@
 	 * note, shared by the Log-brew form and the guided Brew setup. Renders
 	 * nothing unless the dose exceeds the bag's remaining grams.
 	 */
-	import type { Bean } from '$lib/bean';
-	import { beanOverdraws } from '$lib/brew/bean-pick';
+	import type { Bean } from '#lib/bean/index.js';
+	import { beanOverdraws } from '#lib/brew/bean-pick.js';
 
 	let { bean, dose }: { bean: Bean | null; dose: number | null } = $props();
 </script>

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	/**
 	 * `CremaSidebar` — the fixed 72px left rail, ported from the design's
 	 * `CremaSidebar` in `web-dashboard-v2.jsx` and the `.cside` rules in
@@ -16,7 +16,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import type { CremaApp } from '$lib/state';
+	import type { CremaApp } from '#lib/state/index.js';
 	import CremaMark from './CremaMark.svelte';
 	import RailDeviceButton from './RailDeviceButton.svelte';
 
@@ -29,12 +29,53 @@
 	 * route table.
 	 */
 	const items = [
-		{ id: 'brew', icon: 'coffee', label: 'Brew', href: resolve('/'), kbd: '1' },
-		{ id: 'profiles', icon: 'list-bullets', label: 'Profiles', href: resolve('/profiles'), kbd: '2' },
-		{ id: 'beans', icon: 'coffee-bean', label: 'Beans', href: resolve('/beans'), kbd: '3' },
-		{ id: 'history', icon: 'chart-line', label: 'History', href: resolve('/history'), kbd: '4' },
-		{ id: 'scale', icon: 'scales', label: 'Scale', href: resolve('/scale'), kbd: '5' },
-		{ id: 'settings', icon: 'gear-six', label: 'Settings', href: resolve('/settings'), kbd: '6' }
+		{
+			id: 'brew',
+			icon: 'coffee',
+			label: 'Brew',
+			href: resolve('/'),
+			kbd: '1'
+		},
+
+		{
+			id: 'profiles',
+			icon: 'list-bullets',
+			label: 'Profiles',
+			href: resolve('profiles'),
+			kbd: '2'
+		},
+
+		{
+			id: 'beans',
+			icon: 'coffee-bean',
+			label: 'Beans',
+			href: resolve('beans'),
+			kbd: '3'
+		},
+
+		{
+			id: 'history',
+			icon: 'chart-line',
+			label: 'History',
+			href: resolve('history'),
+			kbd: '4'
+		},
+
+		{
+			id: 'scale',
+			icon: 'scales',
+			label: 'Scale',
+			href: resolve('scale'),
+			kbd: '5'
+		},
+
+		{
+			id: 'settings',
+			icon: 'gear-six',
+			label: 'Settings',
+			href: resolve('settings'),
+			kbd: '6'
+		}
 	];
 
 	/** The active item is the one whose href matches the current path. */
@@ -74,7 +115,7 @@
 	}
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydown={onKeydown}></svelte:window>
 
 <nav class="cside" aria-label="Primary">
 	<div class="cside-mark">

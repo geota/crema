@@ -1,5 +1,5 @@
 /**
- * `$lib/utils/storage` — the shared `localStorage` JSON helpers.
+ * `#lib/utils/storage` — the shared `localStorage` JSON helpers.
  *
  * Crema's web shell is a static, client-only PWA — there is no server — so
  * `localStorage` is the home for every persisted store (`lib/profiles`,

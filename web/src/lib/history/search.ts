@@ -1,11 +1,11 @@
 /**
- * `$lib/history/search` — the History list's text search and the
+ * `#lib/history/search` — the History list's text search and the
  * "same coffee" grouping behind its bean filter. Pure over a
  * {@link StoredShot}; mirrored by Android's `ShotFilter.kt` so both shells
  * match the same shots.
  */
 
-import { methodLabel } from '$lib/brew/methods';
+import { methodLabel } from '#lib/brew/methods.js';
 import { methodOf, type StoredShot } from './model';
 
 /**

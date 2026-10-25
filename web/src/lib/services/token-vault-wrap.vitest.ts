@@ -11,8 +11,8 @@ import { Effect, Layer } from 'effect';
 // over an in-memory key the test can swap ("lose").
 let key: Promise<CryptoKey | null> = Promise.resolve(null);
 const newKey = () => crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-vi.mock('$lib/security/secret-box', async (importOriginal) => {
-	const real = await importOriginal<typeof import('$lib/security/secret-box')>();
+vi.mock('#lib/security/secret-box.js', async (importOriginal) => {
+	const real = await importOriginal<typeof import('#lib/security/secret-box.js')>();
 	// No caching wrapper: every call sees the current `key`, like a new session would.
 	const box = {
 		wrap: (p: string) => real.createSecretBox({ getKey: () => key }).wrap(p),
@@ -23,7 +23,7 @@ vi.mock('$lib/security/secret-box', async (importOriginal) => {
 
 const { OAuth } = await import('./oauth.ts');
 const { TokenVault, TokenVaultLive, hasStoredVisualizerTokens, loadTokens } = await import('./token-vault.ts');
-const { isWrapped } = await import('$lib/security/secret-box');
+const { isWrapped } = await import('#lib/security/secret-box.js');
 
 const TOKENS_KEY = 'crema.visualizer.tokens.v1';
 const tokens = {

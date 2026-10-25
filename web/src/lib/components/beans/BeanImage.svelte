@@ -17,7 +17,7 @@
 	 * a corrupted IDB never leaves the UI with a blank square.
 	 */
 	import { untrack, type Snippet } from 'svelte';
-	import { getBeanImageStore } from '$lib/bean';
+	import { getBeanImageStore } from '#lib/bean/index.js';
 
 	let {
 		ref,

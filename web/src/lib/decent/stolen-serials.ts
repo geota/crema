@@ -1,5 +1,5 @@
 /**
- * `$lib/decent/stolen-serials` — Decent's stolen-machine serial list.
+ * `#lib/decent/stolen-serials` — Decent's stolen-machine serial list.
  *
  * Decent publishes the serials of DE1s stolen from customers (or "lost" by a
  * carrier) as `stolen_serials.json` in the de1app repo, for other apps to
@@ -19,8 +19,8 @@ import {
 	stolenSerialsListIsValid,
 	stolenSerialsRefreshDue,
 	stolenSerialsUrl
-} from '$lib/wasm/de1_wasm';
-import { readJson, writeJson } from '$lib/utils/storage';
+} from '#lib/wasm/de1_wasm.js';
+import { readJson, writeJson } from '#lib/utils/storage.js';
 
 const CACHE_KEY = 'crema.stolenSerials.v1';
 

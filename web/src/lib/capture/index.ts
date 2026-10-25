@@ -1,5 +1,5 @@
 /**
- * `$lib/capture` — record raw BLE notifications during a session and persist
+ * `#lib/capture/index.js` — record raw BLE notifications during a session and persist
  * each completed shot's slice as a replayable JSONL capture.
  *
  * The recording / slicing / META-prelude logic lives in the Rust core

@@ -1,5 +1,5 @@
 /**
- * `$lib/services/visualizer-call` — the single authenticated entry point to the
+ * `#lib/services/visualizer-call.js` — the single authenticated entry point to the
  * Visualizer cloud service (see `web/CONTEXT.md` → **visualizerCall**).
  *
  * Every Visualizer request funnels through {@link visualizerCall}. It:
@@ -41,7 +41,7 @@ import {
 	isRecoverable as wasmIsRecoverable,
 	retryBackoffMs as wasmRetryBackoffMs,
 	visualizerQuotaLimit as wasmVisualizerQuotaLimit
-} from '$lib/wasm/de1_wasm';
+} from '#lib/wasm/de1_wasm.js';
 
 /** Visualizer API base. */
 export const API_BASE = 'https://visualizer.coffee/api';

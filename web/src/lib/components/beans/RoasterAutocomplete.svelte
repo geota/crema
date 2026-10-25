@@ -21,7 +21,7 @@
 	 *
 	 * Mirrors the brief's spec in §7 of the bean-editor-polish task.
 	 */
-	import type { Roaster } from '$lib/bean';
+	import type { Roaster } from '#lib/bean/index.js';
 
 	let {
 		value,

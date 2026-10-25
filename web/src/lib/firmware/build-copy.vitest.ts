@@ -1,12 +1,12 @@
 /**
- * `$lib/firmware/build-copy` — the firmware card's copy, driven through the
+ * `#lib/firmware/build-copy` — the firmware card's copy, driven through the
  * real wasm classifier (`classifyFirmwareBuild`) so the core's known-builds
  * table and the shell's copy are tested together.
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { FirmwareBuildStatus } from '$lib/core/crema-core';
-import { initTestWasm } from '$lib/testing/test-init';
+import { FirmwareBuildStatus } from '#lib/core/crema-core.js';
+import { initTestWasm } from '#lib/testing/test-init.js';
 import { firmwareBuildReport, firmwareCardCopy } from './build-copy';
 
 beforeAll(initTestWasm);

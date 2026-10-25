@@ -1,6 +1,6 @@
 /**
- * `$lib/state/use-view-memory.svelte` — the Svelte glue over
- * `$lib/state/view-memory` (#123). Call these during a page's component init.
+ * `#lib/state/use-view-memory.svelte.js` — the Svelte glue over
+ * `#lib/state/view-memory` (#123). Call these during a page's component init.
  *
  *  - {@link persistView}: keep the page's filter / search / sort values in the
  *    view memory as they change; seed the `$state` from `recallView(...)`.
@@ -61,8 +61,9 @@ export function useScrollMemory(opts: ScrollMemoryOptions): void {
 	let armed = false;
 	let token = 0;
 
-	const scroller = (): Scroller | null =>
-		opts.container ? (opts.container() ?? null) : typeof window === 'undefined' ? null : window;
+	const scroller = (): Scroller | null => opts.container
+		? opts.container() ?? null
+		: typeof window === 'undefined' ? null : window;
 
 	function save(): void {
 		const s = scroller();
@@ -190,8 +191,15 @@ export function useScrollMemory(opts: ScrollMemoryOptions): void {
 		});
 	});
 
-	afterNavigate(() => restore(null));
-	beforeNavigate(() => {
+	afterNavigate(({ shallow, type }) => {
+		if (shallow && type === 'goto') return;
+
+		return restore(null);
+	});
+
+	beforeNavigate(({ shallow, type }) => {
+		if (shallow && type === 'goto') return;
+
 		save();
 		flushViewMemory();
 	});

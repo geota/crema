@@ -1,5 +1,5 @@
 /**
- * `$lib/decent/account` — the linked Decent Espresso account + the
+ * `#lib/decent/account.js` — the linked Decent Espresso account + the
  * "upload shots to Decent" preferences (geota/crema#84).
  *
  * Decent's shot history (decentespresso.com → My account → shot
@@ -17,14 +17,14 @@
  * email + password — the password itself is never persisted (same
  * discipline as de1app / decaid: the account's password never lives on
  * the device) — and it sits in storage WRAPPED by the secret box
- * (`$lib/security/secret-box`), so read it through
+ * (`#lib/security/secret-box.js`), so read it through
  * {@link getDecentCredentials}, never off the state record. Decent cannot
  * revoke a token per device: signing out only forgets it here, and a lost
  * device means changing the Decent password.
  */
 
-import { isJsonObject, readJson, writeJson } from '$lib/utils/storage';
-import { isWrapped, secretBox } from '$lib/security/secret-box';
+import { isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
+import { isWrapped, secretBox } from '#lib/security/secret-box.js';
 import type { DecentCredentials } from './api';
 
 const ACCOUNT_KEY = 'crema.decent.v1';

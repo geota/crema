@@ -1,5 +1,5 @@
 /**
- * `$lib/services/token-vault` — Visualizer token storage + refresh service
+ * `#lib/services/token-vault.js` — Visualizer token storage + refresh service
  * (docs/53 §1.3, Appendix A, T-11).
  *
  * The Effect-native home for what `visualizer/token-store.ts` does today:

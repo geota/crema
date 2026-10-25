@@ -1,5 +1,5 @@
 /**
- * `$lib/decent` — upload shots to the owner's Decent Espresso account
+ * `#lib/decent` — upload shots to the owner's Decent Espresso account
  * (decentespresso.com shot history + charts; geota/crema#84).
  */
 export {

@@ -27,16 +27,16 @@
 	import {
 		importBeanconquerorJson as wasmImportBeanconquerorJson,
 		importCremaJsonl as wasmImportCremaJsonl
-	} from '$lib/wasm/de1_wasm';
+	} from '#lib/wasm/de1_wasm.js';
 	import {
 		getBeanStore,
 		getBeanImageStore,
 		beanImageRefFor,
 		type Bean,
 		type Roaster
-	} from '$lib/bean';
-	import { getHistoryStore, type StoredShot, type ShotBean } from '$lib/history';
-	import FileDropZone from '$lib/components/shared/FileDropZone.svelte';
+	} from '#lib/bean/index.js';
+	import { getHistoryStore, type StoredShot, type ShotBean } from '#lib/history/index.js';
+	import FileDropZone from '#lib/components/shared/FileDropZone.svelte';
 
 	let { onClose }: { onClose: () => void } = $props();
 

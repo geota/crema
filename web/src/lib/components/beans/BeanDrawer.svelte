@@ -1,6 +1,6 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
-	import StarRating from '$lib/components/common/StarRating.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
+	import StarRating from '#lib/components/common/StarRating.svelte';
 	import CoffeeIcon from 'phosphor-svelte/lib/CoffeeIcon';
 	import MagnifyingGlassPlusIcon from 'phosphor-svelte/lib/MagnifyingGlassPlusIcon';
 	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
@@ -26,15 +26,15 @@
 		freshnessColor,
 		type Bean,
 		type Roaster
-	} from '$lib/bean';
-	import { getHistoryStore, effectiveGrindSetting, yieldOf } from '$lib/history';
-	import { getProfileStore } from '$lib/profiles';
-	import { shotTitle } from '$lib/brew/methods';
+	} from '#lib/bean/index.js';
+	import { getHistoryStore, effectiveGrindSetting, yieldOf } from '#lib/history/index.js';
+	import { getProfileStore } from '#lib/profiles/index.js';
+	import { shotTitle } from '#lib/brew/methods.js';
 	import BeanImage from './BeanImage.svelte';
 	import BeanPhotoViewer from './BeanPhotoViewer.svelte';
 	import RoastSlider from './RoastSlider.svelte';
 	import BeanDeleteSplit from './BeanDeleteSplit.svelte';
-	import { brews_remaining_estimate } from '$lib/wasm/de1_wasm';
+	import { brews_remaining_estimate } from '#lib/wasm/de1_wasm.js';
 
 	let {
 		bean,

@@ -1,5 +1,5 @@
 /**
- * `$lib/ble/connect-exit.vitest` — the BLE connect-`Exit` interpreter
+ * `#lib/ble/connect-exit.vitest` — the BLE connect-`Exit` interpreter
  * (architecture review #4). This was copied verbatim into `De1Manager` and
  * `ScaleManager`; extracting it both dedupes the densest manager duplicate and
  * gives the connect FAILURE path its first automated coverage (the managers'

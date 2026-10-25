@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/export` — emit the bean library in one of two formats:
+ * `#lib/bean/export.js` — emit the bean library in one of two formats:
  *
  *  - **Crema JSONL** — one record per line, header first. Round-trip
  *    lossless against Crema. Covers **beans + roasters + photo blobs**.
@@ -20,11 +20,11 @@ import { strToU8, zipSync } from 'fflate';
 import {
 	exportCremaJsonl,
 	exportBeanconquerorMainJson
-} from '$lib/wasm/de1_wasm';
+} from '#lib/wasm/de1_wasm.js';
 import type { Bean, Roaster } from './model';
-import type { StoredShot } from '$lib/history';
+import type { StoredShot } from '#lib/history/index.js';
 import { getBeanImageStore } from './image-storage';
-import { downloadBlob, filenameStamp } from '$lib/utils/download';
+import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
 
 /**
  * Export the user's bean library as a Crema bundle.

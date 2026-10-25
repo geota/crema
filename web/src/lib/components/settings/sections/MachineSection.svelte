@@ -16,7 +16,7 @@
 	 * diagnostics; the Group line shows the live mix ("group") temperature.
 	 *
 	 * **Real** — the Firmware card classifies the installed build against the
-	 * core's known-builds table (`$lib/firmware/build-copy`) and opens the
+	 * core's known-builds table (`#lib/firmware/build-copy.js`) and opens the
 	 * alpha "Update firmware…" flow (`FirmwareUpdateFlow`, driven by
 	 * `app.firmware`).
 	 *
@@ -38,26 +38,26 @@
 	 * verification (the connect itself would have failed at the failing step,
 	 * named in the event log).
 	 */
-	import { getMachineReadout, type CremaApp, type UiSnapshot } from '$lib/state';
-	import { bleStateLabel, type De1State } from '$lib/ble';
-	import { hasRememberedDevice } from '$lib/ble/launch-reconnect';
-	import { MachineState, MmrRegister } from '$lib/core/crema-core';
-	import { machineModelName, hasCupWarmer } from '$lib/wasm/de1_wasm';
-	import { getSettingsStore } from '$lib/settings';
-	import { idleSleepChoices, idleSleepLabel } from '$lib/state/idle-sleep';
+	import { getMachineReadout, type CremaApp, type UiSnapshot } from '#lib/state/index.js';
+	import { bleStateLabel, type De1State } from '#lib/ble/index.js';
+	import { hasRememberedDevice } from '#lib/ble/launch-reconnect.js';
+	import { MachineState, MmrRegister } from '#lib/core/crema-core.js';
+	import { machineModelName, hasCupWarmer } from '#lib/wasm/de1_wasm.js';
+	import { getSettingsStore } from '#lib/settings/index.js';
+	import { idleSleepChoices, idleSleepLabel } from '#lib/state/idle-sleep.js';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StSegment from '../StSegment.svelte';
-	import { parseUsbChargingMode } from '$lib/settings/store.svelte';
+	import { parseUsbChargingMode } from '#lib/settings/store.svelte.js';
 	import StToggle from '../StToggle.svelte';
 	import StSelect from '../StSelect.svelte';
 	import StStepper from '../StStepper.svelte';
 	import StSlider from '../StSlider.svelte';
 	import StButton from '../StButton.svelte';
 	import StStatusDot from '../StStatusDot.svelte';
-	import { firmwareBuildReport, firmwareCardCopy } from '$lib/firmware/build-copy';
-	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
+	import { firmwareBuildReport, firmwareCardCopy } from '#lib/firmware/build-copy.js';
+	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 
 	let {
 		app,

@@ -7,13 +7,13 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { initSync } from '$lib/wasm/de1_wasm';
+import { initSync } from '#lib/wasm/de1_wasm.js';
 
 /**
  * Instantiate the core's wasm bridge for the whole suite.
  *
  * Some modules read core-sourced data through wasm exports — e.g. `De1Uuids`
- * (`$lib/ble/de1-uuids`) calls `de1Uuids()` on first access — and the GATT
+ * (`#lib/ble/de1-uuids`) calls `de1Uuids()` on first access — and the GATT
  * UUIDs now live in the Rust core, not hardcoded in the shell. The app gets
  * there via `loadCore()` at boot; tests have no boot, so we load the wasm here
  * (synchronously, from the build output on disk) so those reads resolve.

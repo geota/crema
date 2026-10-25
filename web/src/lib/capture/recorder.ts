@@ -1,5 +1,5 @@
 /**
- * `$lib/capture/recorder` — capture-entry shape + the JSONL download
+ * `#lib/capture/recorder.js` — capture-entry shape + the JSONL download
  * serializer. Once a thick rolling-buffer / identity-keeper / META-prelude
  * implementation, now type-only — the rolling buffer, the per-source
  * identity dictionary, and the META construction all live in the Rust core

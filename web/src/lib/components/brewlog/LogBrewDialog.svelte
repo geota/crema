@@ -19,9 +19,9 @@
 	 */
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
-	import { getBeanStore, type Roaster } from '$lib/bean';
-	import { getSettingsStore } from '$lib/settings';
-	import { openingBeanId } from '$lib/brew/bean-pick';
+	import { getBeanStore, type Roaster } from '#lib/bean/index.js';
+	import { getSettingsStore } from '#lib/settings/index.js';
+	import { openingBeanId } from '#lib/brew/bean-pick.js';
 	import {
 		INLINE_PRESET_COUNT,
 		OTHER_METHOD,
@@ -33,21 +33,21 @@
 		rememberMethod,
 		type BrewSeedInput,
 		type LogBrewPrefill
-	} from '$lib/brew/methods';
-	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
-	import StarRating from '$lib/components/common/StarRating.svelte';
-	import { toast } from '$lib/components/shared/toast.svelte';
-	import { promptBagEmpty } from '$lib/bean/bag-empty-prompt';
-	import { getHistoryStore } from '$lib/history/store.svelte';
-	import { snapshotFromBean, type StoredShot } from '$lib/history/model';
-	import { formatRatio } from '$lib/utils/ratio';
+	} from '#lib/brew/methods.js';
+	import QuickStepper from '#lib/components/brew/QuickStepper.svelte';
+	import StarRating from '#lib/components/common/StarRating.svelte';
+	import { toast } from '#lib/components/shared/toast.svelte.js';
+	import { promptBagEmpty } from '#lib/bean/bag-empty-prompt.js';
+	import { getHistoryStore } from '#lib/history/store.svelte.js';
+	import { snapshotFromBean, type StoredShot } from '#lib/history/model.js';
+	import { formatRatio } from '#lib/utils/ratio.js';
 	import BeanOverdrawNote from './BeanOverdrawNote.svelte';
 	import BrewBeanRow from './BrewBeanRow.svelte';
 	import MethodMark from './MethodMark.svelte';
 	import CustomMethodDialog from './CustomMethodDialog.svelte';
-	import type { CustomBrewMethod } from '$lib/core/crema-core';
-	import { getCustomMethodStore } from '$lib/brew/custom-methods.svelte';
-	import { readJson, writeJson } from '$lib/utils/storage';
+	import type { CustomBrewMethod } from '#lib/core/crema-core.js';
+	import { getCustomMethodStore } from '#lib/brew/custom-methods.svelte.js';
+	import { readJson, writeJson } from '#lib/utils/storage.js';
 
 	let {
 		onClose,

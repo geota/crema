@@ -1,5 +1,5 @@
 /**
- * `$lib/services/queue-store` — the pure localStorage persistence layer for the
+ * `#lib/services/queue-store.js` — the pure localStorage persistence layer for the
  * Visualizer upload queue (docs/53 §1.3, T-14/T-16).
  *
  * This is deliberately Effect-free: it is the durable store the `UploadQueue`

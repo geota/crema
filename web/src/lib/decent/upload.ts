@@ -1,5 +1,5 @@
 /**
- * `$lib/decent/upload` — push a stored shot to the linked Decent account.
+ * `#lib/decent/upload.js` — push a stored shot to the linked Decent account.
  *
  * The shot-completion hook fires {@link pushShotToDecent} next to the
  * Visualizer push; History's detail action calls {@link uploadShotToDecent}
@@ -35,12 +35,12 @@
  */
 
 import { Effect, Schedule } from 'effect';
-import { getHistoryStore } from '$lib/history/store.svelte';
-import { reportUploadOutcome } from '$lib/history/upload-toast';
-import { appendSyncLog } from '$lib/visualizer/sync-config';
-import { isBrewLog, toCoreShotMachine, type StoredShot } from '$lib/history/model';
-import type { ShotMachine, TimedSample } from '$lib/core/crema-core';
-import { getMachineReadout } from '$lib/state/machine-readout.svelte';
+import { getHistoryStore } from '#lib/history/store.svelte.js';
+import { reportUploadOutcome } from '#lib/history/upload-toast.js';
+import { appendSyncLog } from '#lib/visualizer/sync-config.js';
+import { isBrewLog, toCoreShotMachine, type StoredShot } from '#lib/history/model.js';
+import type { ShotMachine, TimedSample } from '#lib/core/crema-core.js';
+import { getMachineReadout } from '#lib/state/machine-readout.svelte.js';
 import {
 	getDecentCredentials,
 	isDecentLinked,
@@ -367,7 +367,7 @@ export function scheduleDecentReplaceAfterEdit(
 	return true;
 }
 
-/** Report an outcome to the per-shot toast batch (`$lib/history/upload-toast`). */
+/** Report an outcome to the per-shot toast batch (`#lib/history/upload-toast.js`). */
 export function reportDecentOutcome(shotId: string, outcome: DecentUploadOutcome): void {
 	if (outcome.kind === 'uploaded') reportUploadOutcome(shotId, 'Decent', { kind: 'uploaded' });
 	else if (outcome.kind === 'failed') reportUploadOutcome(shotId, 'Decent', { kind: 'failed', message: outcome.error.message });

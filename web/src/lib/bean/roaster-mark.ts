@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/roaster-mark` — derive a deterministic two-letter mark and a
+ * `#lib/bean/roaster-mark.js` — derive a deterministic two-letter mark and a
  * tone colour for a roaster, so the avatars on the bean tile, drawer hero
  * and roaster card all look the same whatever surface renders them.
  *

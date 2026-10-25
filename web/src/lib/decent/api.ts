@@ -1,5 +1,5 @@
 /**
- * `$lib/decent/api` — the Decent Espresso support API, as the de1app
+ * `#lib/decent/api.js` — the Decent Espresso support API, as the de1app
  * `shot_upload` plugin and decaid's `DecentAccountService` speak it.
  *
  * Three calls, all HTTP Basic:
@@ -38,15 +38,15 @@ import {
 	decentMachinesJson,
 	decentShotViewUrl as coreDecentShotViewUrl,
 	decentUploadReplyJson
-} from '$lib/wasm/de1_wasm';
+} from '#lib/wasm/de1_wasm.js';
 import type {
 	DecentLoginReply,
 	DecentMachine,
 	DecentMachinesReply,
 	DecentUploadReply
-} from '$lib/core/crema-core';
+} from '#lib/core/crema-core.js';
 
-export type { DecentMachine } from '$lib/core/crema-core';
+export type { DecentMachine } from '#lib/core/crema-core.js';
 
 export const DECENT_BASE = 'https://decentespresso.com';
 /** The account's shot-history page — where an uploaded shot with no public URL is found. */

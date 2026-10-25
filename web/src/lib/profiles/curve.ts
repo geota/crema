@@ -1,5 +1,5 @@
 /**
- * `$lib/profiles/curve` — the pressure-curve geometry for the editor SVG.
+ * `#lib/profiles/curve.js` — the pressure-curve geometry for the editor SVG.
  *
  * Ported from `curvePath` / `boundaryDots` in `profile-edit-page.jsx`, plus
  * the **inverse** the design only mocked: {@link svgToSegment} maps a dragged

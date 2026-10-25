@@ -18,8 +18,8 @@
 	 *
 	 * Z-index 40 — below the sidebar (50) so its tap-targets always win.
 	 */
-	import type { CremaApp } from '$lib/state';
-	import { getSettingsStore } from '$lib/settings';
+	import type { CremaApp } from '#lib/state/index.js';
+	import { getSettingsStore } from '#lib/settings/index.js';
 
 	let { app }: { app: CremaApp | null } = $props();
 

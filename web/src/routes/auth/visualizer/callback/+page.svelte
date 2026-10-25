@@ -31,13 +31,14 @@
 	import { onMount } from 'svelte';
 	import { Cause, Effect, Exit, Layer, ManagedRuntime } from 'effect';
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { OAuth, OAuthLive } from '$lib/services/oauth';
-	import { HttpClientLive } from '$lib/services/http-client';
-	import { TokenVault, TokenVaultLive } from '$lib/services/token-vault';
-	import { BeanSyncLive } from '$lib/services/bean-sync';
-	import { completeVisualizerSignIn } from '$lib/services/visualizer-sign-in';
-	import { markVisualizerJustConnected, takeReturnPath } from '$lib/visualizer';
+	import { OAuth, OAuthLive } from '#lib/services/oauth.js';
+	import { HttpClientLive } from '#lib/services/http-client.js';
+	import { TokenVault, TokenVaultLive } from '#lib/services/token-vault.js';
+	import { BeanSyncLive } from '#lib/services/bean-sync.js';
+	import { completeVisualizerSignIn } from '#lib/services/visualizer-sign-in.js';
+	import { markVisualizerJustConnected, takeReturnPath } from '#lib/visualizer/index.js';
 
 	type Status =
 		| { kind: 'working' }
@@ -117,7 +118,10 @@
 			status = { kind: 'done', returnTo };
 			// Tiny delay so the user sees the success state before navigating.
 			setTimeout(() => {
-				void goto(returnTo, { replaceState: true });
+				// Kit 3's goto rejects a path that is not a route; fall back to Settings.
+				void goto(returnTo, { replaceState: true }).catch(() =>
+					goto(resolve('settings'), { replaceState: true })
+				);
 			}, 600);
 		} catch (e) {
 			status = {

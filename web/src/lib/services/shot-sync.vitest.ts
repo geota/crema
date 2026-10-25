@@ -1,5 +1,5 @@
 /**
- * `$lib/services/shot-sync.vitest` — vitest for the `ShotSync` HTTP orchestration
+ * `#lib/services/shot-sync.vitest` — vitest for the `ShotSync` HTTP orchestration
  * (docs/53 T-12, the store-coupled half of T-16).
  *
  * Covers the service behavior that was previously verified only by hand: the
@@ -22,7 +22,7 @@ import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import { HttpStatusError } from '../effect/errors.ts';
 import type { TokenSet } from '../visualizer/oauth.ts';
-import { initTestWasm } from '$lib/testing/test-init';
+import { initTestWasm } from '#lib/testing/test-init.js';
 
 // `pullAllShotsSince` now materialises each row through the wasm-backed
 // `wireShotFromDetail` / `samplesFromVisualizerDetail` (CORE1), so the bundle

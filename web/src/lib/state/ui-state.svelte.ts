@@ -1,5 +1,5 @@
 /**
- * `$lib/state/ui-state` — the `MainUiState`-equivalent Svelte 5 runes store,
+ * `#lib/state/ui-state` — the `MainUiState`-equivalent Svelte 5 runes store,
  * plus the event-folding logic. The web mirror of the Android shell's
  * `MainUiState` data class and `MainViewModel.applyEvent`.
  *
@@ -24,18 +24,18 @@ import type {
 	MmrRegister,
 	CalTarget,
 	SubState
-} from '$lib/core';
-import type { StopReason } from '$lib/core/crema-core';
-import type { De1State, De1Diagnostics } from '$lib/ble/de1';
-import { EMPTY_DE1_DIAGNOSTICS } from '$lib/ble/de1';
-import type { ScaleState } from '$lib/ble/scale';
+} from '#lib/core/index.js';
+import type { StopReason } from '#lib/core/crema-core.js';
+import type { De1State, De1Diagnostics } from '#lib/ble/de1.js';
+import { EMPTY_DE1_DIAGNOSTICS } from '#lib/ble/de1.js';
+import type { ScaleState } from '#lib/ble/scale.js';
 import {
 	water_tank_ml as wasmWaterTankMl,
 	water_tank_percent as wasmWaterTankPercent,
 	water_tank_depth_mm as wasmWaterTankDepthMm,
 	default_refill_point_mm as wasmDefaultRefillPointMm,
 	subStateErrorMessage
-} from '$lib/wasm/de1_wasm';
+} from '#lib/wasm/de1_wasm.js';
 
 /** Default scale beeper-volume step shown before the first live reading. */
 export const DEFAULT_SCALE_VOLUME = 3;
@@ -1436,7 +1436,7 @@ let cremaUiState: CremaUiState | undefined;
  * classes (`BrewContext`, `MachineReadout`) share the same instance —
  * promoted to a singleton so the contexts can construct themselves
  * lazily without a separate bind step, matching the pattern every
- * other store in `$lib` follows.
+ * other store in `#lib` follows.
  */
 /**
  * Re-read the core's stop-target projection into the UI snapshot.

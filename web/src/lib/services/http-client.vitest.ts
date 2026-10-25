@@ -1,5 +1,5 @@
 /**
- * `$lib/services/http-client.test` — node:test suite for the HttpClient service
+ * `#lib/services/http-client.test` — node:test suite for the HttpClient service
  * (docs/53 T-09). Stubs the global `fetch` and asserts the typed-error mapping.
  *
  * Run: `cd web && node --experimental-strip-types --experimental-detect-module

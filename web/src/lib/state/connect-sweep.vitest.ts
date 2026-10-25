@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CoreOutput } from '$lib/core';
-import { UsbChargingMode, type ConnectSweepSettings } from '$lib/core/crema-core';
-import { DEFAULT_SETTINGS, type Settings } from '$lib/settings/store.svelte';
+import type { CoreOutput } from '#lib/core/index.js';
+import { UsbChargingMode, type ConnectSweepSettings } from '#lib/core/crema-core.js';
+import { DEFAULT_SETTINGS, type Settings } from '#lib/settings/store.svelte.js';
 import {
 	buildConnectSweepSettings,
 	ConnectSweepRunner,

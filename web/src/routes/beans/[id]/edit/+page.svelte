@@ -7,24 +7,24 @@
 	 * patch through to the store). If the id is unknown the user is
 	 * bounced back to `/beans`.
 	 */
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { getBeanStore } from '$lib/bean';
-	import BeanEditPage from '$lib/components/beans/BeanEditPage.svelte';
+	import { getBeanStore } from '#lib/bean/index.js';
+	import BeanEditPage from '#lib/components/beans/BeanEditPage.svelte';
 
 	const library = getBeanStore();
 
 	// `$page.params.id` is decoded for us by SvelteKit. The param can be
 	// `undefined` if SvelteKit hasn't hydrated the route yet — defensively
 	// coerce so the lookup never throws.
-	const id = $derived($page.params.id ?? '');
+	const id = $derived(page.params.id ?? '');
 	const bean = $derived(id ? library.getBean(id) : null);
 
 	$effect(() => {
 		if (id && !bean) {
 			// Defer one tick so the navigation isn't fighting the route load.
-			queueMicrotask(() => goto(resolve('/beans'), { replaceState: true }));
+			queueMicrotask(() => goto(resolve('beans'), { replaceState: true }));
 		}
 	});
 
@@ -40,7 +40,7 @@
 </svelte:head>
 
 {#if bean}
-	<BeanEditPage {bean} tagSuggestions={tagSuggestions} />
+	<BeanEditPage bean={bean} tagSuggestions={tagSuggestions} />
 {:else}
 	<div class="be-loading">Loading…</div>
 {/if}

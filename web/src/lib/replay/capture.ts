@@ -1,5 +1,5 @@
 /**
- * `$lib/replay/capture` — parse a recorded BLE capture file into replayable
+ * `#lib/replay/capture.js` — parse a recorded BLE capture file into replayable
  * notification events.
  *
  * The project records BLE sessions to JSON Lines — one event per line:
@@ -17,8 +17,8 @@
  * driven by writes.
  */
 
-import type { NotificationSource } from '$lib/core';
-import { foldReplayMetaJsonl as wasmFoldReplayMetaJsonl } from '$lib/wasm/de1_wasm';
+import type { NotificationSource } from '#lib/core/index.js';
+import { foldReplayMetaJsonl as wasmFoldReplayMetaJsonl } from '#lib/wasm/de1_wasm.js';
 
 /**
  * One raw capture line — the JSON Lines schema the Android `BleSessionRecorder`

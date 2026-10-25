@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CoreOutput } from '$lib/core';
-import { IdleActivity, type IdleSleepInput } from '$lib/core/crema-core';
+import type { CoreOutput } from '#lib/core/index.js';
+import { IdleActivity, type IdleSleepInput } from '#lib/core/crema-core.js';
 import {
 	applyCommonToSettings,
 	DEFAULT_SETTINGS,
 	settingsToCommon
-} from '$lib/settings/store.svelte';
+} from '#lib/settings/store.svelte.js';
 import {
 	DEFAULT_IDLE_SLEEP_MIN,
 	IDLE_ACTIVITY_THROTTLE_MS,

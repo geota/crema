@@ -16,9 +16,9 @@
  * losing the elapsed time.
  */
 
-import type { CoreOutput, CremaCore } from '$lib/core';
-import { IdleActivity, type IdleSleepInput } from '$lib/core/crema-core';
-import { idleSleepChoices as wasmIdleSleepChoices } from '$lib/wasm/de1_wasm';
+import type { CoreOutput, CremaCore } from '#lib/core/index.js';
+import { IdleActivity, type IdleSleepInput } from '#lib/core/crema-core.js';
+import { idleSleepChoices as wasmIdleSleepChoices } from '#lib/wasm/de1_wasm.js';
 
 /** The tick cadence — the core's `IDLE_SLEEP_TICK_MS`. */
 export const IDLE_SLEEP_TICK_MS = 30_000;

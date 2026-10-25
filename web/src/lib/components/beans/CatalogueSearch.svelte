@@ -18,7 +18,7 @@
 	 * Keyboard: ↓ / ↑ move the active row, Enter picks, Esc closes.
 	 */
 	import { onDestroy } from 'svelte';
-	import { createCatalogueSearch, type CatalogueSearchState } from '$lib/bean/catalogue';
+	import { createCatalogueSearch, type CatalogueSearchState } from '#lib/bean/catalogue.js';
 
 	let {
 		search,

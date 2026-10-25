@@ -6,7 +6,7 @@
 	 *
 	 * ## Real vs. stubbed
 	 *
-	 * **Real** — the maintenance cards are driven by `$lib/maintenance`: the
+	 * **Real** — the maintenance cards are driven by `#lib/maintenance/index.js`: the
 	 * DE1 has no water-volume counter, so the shell integrates group flow over
 	 * time (the de1app's approach) into a persisted litre total. The filter
 	 * capacity, litres-since-descale and hours-since-clean all derive from
@@ -15,7 +15,7 @@
 	 * "Run now" button that fires the matching `requestMachineState` after a
 	 * confirm dialog — the firmware drives the cycle to completion, then the
 	 * user manually taps "Mark complete" once the puck-side hardware is reset.
-	 * The Tank group's low-water threshold is a `$lib/settings` pref — this
+	 * The Tank group's low-water threshold is a `#lib/settings/index.js` pref — this
 	 * row is only the input; the once-per-dip toast lives in `app.svelte.ts`.
 	 *
 	 * **UI-only** — the water-chemistry inputs are faithful UI; they are not
@@ -31,11 +31,11 @@
 	 * user-visible vocabulary in line with the firmware. The cycle is the
 	 * same; the wire is the same.
 	 */
-	import { getMaintenanceStore } from '$lib/maintenance';
-	import { getSettingsStore } from '$lib/settings';
-	import { MachineState } from '$lib/core/crema-core';
-	import type { CremaApp } from '$lib/state';
-	import { INITIAL_SNAPSHOT, defaultRefillPointMm } from '$lib/state';
+	import { getMaintenanceStore } from '#lib/maintenance/index.js';
+	import { getSettingsStore } from '#lib/settings/index.js';
+	import { MachineState } from '#lib/core/crema-core.js';
+	import type { CremaApp } from '#lib/state/index.js';
+	import { INITIAL_SNAPSHOT, defaultRefillPointMm } from '#lib/state/index.js';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';

@@ -1,5 +1,5 @@
 /**
- * `$lib/utils/relative-time` — the one relative "ago" label.
+ * `#lib/utils/relative-time` — the one relative "ago" label.
  *
  * Both the History list (per recorded shot) and the Profile library (a
  * profile's `lastUsed`) need a compact `Nm / Nh / Nd / Nw / Nmo / Ny ago`

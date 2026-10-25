@@ -1,5 +1,5 @@
 /**
- * `$lib/maintenance/store` — the water-accumulation & maintenance store.
+ * `#lib/maintenance/store` — the water-accumulation & maintenance store.
  *
  * The DE1 has **no** cumulative water-volume counter — but the legacy de1app
  * derives one by integrating group flow over time (`de1_de1.tcl:570-628`:
@@ -28,13 +28,13 @@
  * the next session, so we keep it.
  *
  * Like the profile / history / settings stores this is a Svelte 5 `$state`
- * class over the shared `$lib/utils/storage` helpers and a single versioned
+ * class over the shared `#lib/utils/storage.js` helpers and a single versioned
  * key; obtain the singleton with {@link getMaintenanceStore}.
  */
 
-import type { MaintenanceState, MaintenanceReadout } from '$lib/core/crema-core';
-import { isJsonObject, readJson, writeJson } from '$lib/utils/storage';
-import { maintenanceReadout as wasmMaintenanceReadout } from '$lib/wasm/de1_wasm';
+import type { MaintenanceState, MaintenanceReadout } from '#lib/core/crema-core.js';
+import { isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
+import { maintenanceReadout as wasmMaintenanceReadout } from '#lib/wasm/de1_wasm.js';
 
 /** localStorage key for the maintenance counters ({@link MaintenanceState}). */
 const MAINTENANCE_KEY = 'crema.maintenance.v2';
@@ -53,7 +53,7 @@ const MAINTENANCE_KEY_V1 = 'crema.maintenance.v1';
 const MAX_SAMPLE_ML = 1000;
 
 // `MaintenanceState` and `MaintenanceReadout` are the typeshare-generated
-// types from `$lib/core/crema-core` (the Rust `de1_domain::maintenance` shapes)
+// types from `#lib/core/crema-core` (the Rust `de1_domain::maintenance` shapes)
 // — imported above, not re-declared here, so the field set has one source.
 
 /**

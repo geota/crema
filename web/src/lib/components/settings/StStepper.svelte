@@ -24,7 +24,7 @@
 	 * canonical before invoking `onCommit`. `value` / `step` / `min` / `max`
 	 * always remain canonical (grams / °C / ml / bar).
 	 */
-	import { type Dimension } from '$lib/settings/format';
+	import { type Dimension } from '#lib/settings/format.js';
 	import { useStepper } from '../useStepper.svelte';
 
 	let {

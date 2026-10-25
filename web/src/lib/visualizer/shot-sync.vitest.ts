@@ -1,5 +1,5 @@
 /**
- * `$lib/visualizer/shot-sync.test` — node:test suite for the de-dup
+ * `#lib/visualizer/shot-sync.test` — node:test suite for the de-dup
  * signature helpers and the {@link reconcileShots} action planner.
  *
  * Mirrors the existing `oauth.test.ts` style: no vitest dependency, runs
@@ -15,7 +15,7 @@
  * The pure helpers now live in Rust (`de1_domain::visualizer_sync`)
  * and are surfaced via wasm-bindgen. This test exercises that wasm
  * directly: it imports the `de1_wasm` bundle via a relative path
- * (node doesn't resolve the SvelteKit `$lib` alias), `await`s its
+ * (node doesn't resolve the SvelteKit `#lib` alias), `await`s its
  * `init()` once, then drives the same adapters
  * `shot-sync-signatures.ts` uses in production. The contract under
  * test is therefore the wasm export — proving the byte-identical
@@ -33,7 +33,7 @@ import {
 	signatureForRoaster as wasmSignatureForRoaster,
 	reconcileShots as wasmReconcileShots
 } from '../wasm/de1_wasm.js';
-import { initTestWasm } from '$lib/testing/test-init';
+import { initTestWasm } from '#lib/testing/test-init.js';
 import type { ShotBean, StoredShot } from '../history/model.ts';
 
 // ── Types (mirrored from shot-sync-signatures.ts) ────────────────────
@@ -57,7 +57,7 @@ type ReconcileAction =
 
 // ── Adapters (mirror $lib/visualizer/shot-sync-signatures.ts) ────────
 //
-// Production calls these through the `$lib/wasm` alias; the alias
+// Production calls these through the `#lib/wasm` alias; the alias
 // doesn't resolve in node, so the test inlines the same adapter
 // shapes against a relative import. If the production adapters in
 // `shot-sync-signatures.ts` ever drift from these, the test would
@@ -189,7 +189,7 @@ function resolveGrinderModel(
 // ── Wasm bootstrap ────────────────────────────────────────────────────
 // The `--target web` bundle's default init `fetch`es the `.wasm` by URL, which
 // vitest can't do over `file://`; `initTestWasm` reads the bytes off disk and
-// hands them to the initializer (`$lib/testing/test-init`).
+// hands them to the initializer (`#lib/testing/test-init.js`).
 beforeAll(initTestWasm);
 
 // ── Fixtures ─────────────────────────────────────────────────────────

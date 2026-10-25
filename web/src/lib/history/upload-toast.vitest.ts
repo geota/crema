@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const shown: { kind: string; message: string }[] = [];
-vi.mock('$lib/components/shared/toast.svelte', () => ({
+vi.mock('#lib/components/shared/toast.svelte.js', () => ({
 	toast: {
 		success: (m: string) => shown.push({ kind: 'success', message: m }),
 		error: (m: string) => shown.push({ kind: 'error', message: m }),

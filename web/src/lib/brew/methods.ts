@@ -1,5 +1,5 @@
 /**
- * `$lib/brew/methods` — the Brew Log method vocabulary (issue #10).
+ * `#lib/brew/methods.js` — the Brew Log method vocabulary (issue #10).
  *
  * Storage accepts ANY normalized method string (the core's
  * `normalize_brew_method` rule); this module owns what the *UI* makes
@@ -15,12 +15,12 @@ import type {
 	BrewMethodPreset as CoreBrewMethodPreset,
 	BrewSeedInput,
 	BrewSeries
-} from '$lib/core/crema-core';
+} from '#lib/core/crema-core.js';
 import {
 	brewLogSeedsJson as wasmBrewLogSeeds,
 	brewMethodPresetsWithCustom as wasmBrewMethodPresetsWithCustom,
 	normalizeBrewMethod as wasmNormalize
-} from '$lib/wasm/de1_wasm';
+} from '#lib/wasm/de1_wasm.js';
 import { getCustomMethodStore, isCustomMethodId } from './custom-methods.svelte';
 import { PRESET_METHOD_LABELS } from './method-labels';
 

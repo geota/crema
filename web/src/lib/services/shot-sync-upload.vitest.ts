@@ -1,5 +1,5 @@
 /**
- * `$lib/services/shot-sync-upload.vitest` — vitest for `ShotSync.uploadShot`'s
+ * `#lib/services/shot-sync-upload.vitest` — vitest for `ShotSync.uploadShot`'s
  * payload shaping + soft post-upload PATCH (docs/53 T-12, §4.1 "no byte changes
  * to requests"). This was the last manual-only ShotSync path.
  *
@@ -29,16 +29,16 @@ const h = vi.hoisted(() => ({
 	beanVisualizerId: null as string | null
 }));
 
-vi.mock('$lib/settings', () => ({ getSettingsStore: () => ({ current: h.settings }) }));
-vi.mock('$lib/visualizer/sync-config', async (importOriginal) => ({
-	...(await importOriginal<typeof import('$lib/visualizer/sync-config')>()),
+vi.mock('#lib/settings/index.js', () => ({ getSettingsStore: () => ({ current: h.settings }) }));
+vi.mock('#lib/visualizer/sync-config.js', async (importOriginal) => ({
+	...(await importOriginal<typeof import('#lib/visualizer/sync-config.js')>()),
 	readSyncConfig: () => h.cfg
 }));
-vi.mock('$lib/history/v2-export', () => ({ exportStoredShotAsV2Json: () => h.exportJson }));
-vi.mock('$lib/bean/store.svelte', () => ({
+vi.mock('#lib/history/v2-export.js', () => ({ exportStoredShotAsV2Json: () => h.exportJson }));
+vi.mock('#lib/bean/store.svelte.js', () => ({
 	getBeanStore: () => ({ getBean: () => ({ visualizerId: h.beanVisualizerId }) })
 }));
-vi.mock('$lib/visualizer/shot-sync-signatures', () => ({
+vi.mock('#lib/visualizer/shot-sync-signatures.js', () => ({
 	signatureForShot: () => 'SIG-FIXED',
 	signatureForBean: () => 'b',
 	signatureForRoaster: () => 'r',
@@ -47,7 +47,7 @@ vi.mock('$lib/visualizer/shot-sync-signatures', () => ({
 }));
 
 import { ShotSync, ShotSyncLive } from './shot-sync.ts';
-import { writeSyncSettings } from '$lib/bean/visualizer-sync';
+import { writeSyncSettings } from '#lib/bean/visualizer-sync.js';
 
 /** Seed the bean-sync premium flag the edit sync reads (`undefined` = never written → null). */
 const setPremium = (premium: boolean | null | undefined): void => {
@@ -57,8 +57,8 @@ const setPremium = (premium: boolean | null | undefined): void => {
 import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import { HttpStatusError } from '../effect/errors.ts';
-import type { StoredShot } from '$lib/history/model';
-import type { HistoryStore } from '$lib/history/store.svelte';
+import type { StoredShot } from '#lib/history/model.js';
+import type { HistoryStore } from '#lib/history/store.svelte.js';
 import type { TokenSet } from '../visualizer/oauth.ts';
 
 function mkHttp(handler: (req: HttpRequest) => { ok: true; status?: number; json?: unknown } | { ok: false; status: number }) {

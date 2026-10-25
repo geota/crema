@@ -1,5 +1,5 @@
 /**
- * `$lib/history/upload-toast` — one completion toast per shot across every
+ * `#lib/history/upload-toast.js` — one completion toast per shot across every
  * cloud destination.
  *
  * Each destination's push (Visualizer, Decent) used to toast on its own, so a
@@ -18,7 +18,7 @@
  * reasons, so the tap never looks ignored.
  */
 
-import { toast } from '$lib/components/shared/toast.svelte';
+import { toast } from '#lib/components/shared/toast.svelte.js';
 
 export type UploadOutcomeKind = 'uploaded' | 'queued' | 'failed' | 'skipped';
 export interface UploadOutcome {

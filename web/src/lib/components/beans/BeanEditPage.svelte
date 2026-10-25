@@ -1,6 +1,6 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
-	import StarRating from '$lib/components/common/StarRating.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
+	import StarRating from '#lib/components/common/StarRating.svelte';
 	import ArchiveIcon from 'phosphor-svelte/lib/ArchiveIcon';
 	import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeftIcon';
 	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
@@ -31,11 +31,11 @@
 	 * on Save; edit-mode commits each patch immediately.
 	 */
 	import { tick, untrack } from 'svelte';
-	import { getProfileStore } from '$lib/profiles';
+	import { getProfileStore } from '#lib/profiles/index.js';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import type { ResolvedPathname } from '$app/types';
-	import { leaveEditor, toQuery } from '$lib/beans/editor-nav';
+	import { leaveEditor, toQuery } from '#lib/beans/editor-nav.js';
 	import {
 		getBeanStore,
 		getBeanImageStore,
@@ -45,11 +45,11 @@
 		roasterMarkTone,
 		blankBean,
 		type Bean,
-		type Roaster, activateBean } from '$lib/bean';
+		type Roaster, activateBean } from '#lib/bean/index.js';
 	import BeanImage from './BeanImage.svelte';
 	import BeanDeleteSplit from './BeanDeleteSplit.svelte';
-	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
-	import StToggle from '$lib/components/settings/StToggle.svelte';
+	import QuickStepper from '#lib/components/brew/QuickStepper.svelte';
+	import StToggle from '#lib/components/settings/StToggle.svelte';
 	import RoasterAutocomplete from './RoasterAutocomplete.svelte';
 	import CatalogueSearch from './CatalogueSearch.svelte';
 	import {
@@ -60,13 +60,13 @@
 		type CataloguePickInput,
 		type CataloguePickRoaster,
 		type CatalogueRoaster
-	} from '$lib/bean/catalogue';
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
-	import TagInput from '$lib/components/profiles/TagInput.svelte';
+	} from '#lib/bean/catalogue.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { useVisualizerConnection } from '#lib/visualizer/useVisualizerConnection.svelte.js';
+	import TagInput from '#lib/components/profiles/TagInput.svelte';
 	import RoastSlider from './RoastSlider.svelte';
-	import { getSettingsStore } from '$lib/settings';
-	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
+	import { getSettingsStore } from '#lib/settings/index.js';
+	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 
 	let {
 		bean,
@@ -239,9 +239,8 @@
 	/** New bag only: the picked roaster, written at Save (as a typed name is)
 	 *  if the roaster input still names it. */
 	let pendingRoaster = $state<CataloguePickRoaster | null>(null);
-	const catalogueLinkLabel = $derived(
-		current.canonicalCoffeeBagId ? (pickedLabel ?? 'Visualizer catalogue') : null
-	);
+
+	const catalogueLinkLabel = $derived(current.canonicalCoffeeBagId ? pickedLabel ?? 'Visualizer catalogue' : null);
 
 	async function searchCatalogue(query: string) {
 		const services = appCtx().services;
@@ -329,7 +328,7 @@
 			patch({ roasterId: row.id });
 		} else {
 			pendingRoaster = picked;
-			resolvedRoaster = picked.isNew ? null : (library.getRoaster(picked.roaster.id) ?? null);
+			resolvedRoaster = picked.isNew ? null : library.getRoaster(picked.roaster.id) ?? null;
 		}
 	}
 
@@ -432,7 +431,7 @@
 				...draftRecord,
 				roasterId: roaster?.id ?? null,
 				name: draftRecord.name.trim(),
-				remaining: remaining,
+				remaining,
 				updatedAt: Date.now()
 			};
 			library.upsertBean(persisted);
@@ -459,7 +458,7 @@
 	 *  when there is no list entry to step back to (see leaveEditor). */
 	function returnTo(): ResolvedPathname {
 		const scope = page.url.searchParams.get('roaster');
-		return resolve(`/beans${toQuery(new URLSearchParams(scope ? { tab: 'bags', roaster: scope } : {}))}`);
+		return resolve(`beans${toQuery(new URLSearchParams(scope ? { tab: 'bags', roaster: scope } : {}))}`);
 	}
 
 	function back(): void {
@@ -467,7 +466,7 @@
 	}
 
 	async function discard(): Promise<void> {
-		if (!(await confirmDialog({ message: 'Discard changes?', confirmLabel: 'Discard' }))) return;
+		if (!await confirmDialog({ message: 'Discard changes?', confirmLabel: 'Discard' })) return;
 		if (isNew) {
 			back();
 		} else {
@@ -685,12 +684,12 @@
 								}}
 								onCommitTyped={live
 									? (typed) => {
-											const r = resolveRoasterOrCreate(typed);
-											if (r) {
-												resolvedRoaster = r;
-												patch({ roasterId: r.id });
-											}
+										const r = resolveRoasterOrCreate(typed);
+										if (r) {
+											resolvedRoaster = r;
+											patch({ roasterId: r.id });
 										}
+									}
 									: undefined}
 							/>
 							{#if attempted && isRoasterMissing}
@@ -807,11 +806,8 @@
 				<header class="be-block-head">
 					<span class="be-block-n">02</span>
 					<div>
-						<h3 class="be-block-title">Roast &amp; mix</h3>
-						<div class="be-block-sub">
-							Roast level drives the freshness window. Mix changes how the
-							origin block reads.
-						</div>
+						<h3 class="be-block-title">Roast & mix</h3>
+						<div class="be-block-sub">Roast level drives the freshness window. Mix changes how the origin block reads.</div>
 					</div>
 				</header>
 				<div class="be-block-body">
@@ -1039,7 +1035,7 @@
 				<header class="be-block-head">
 					<span class="be-block-n">04</span>
 					<div>
-						<h3 class="be-block-title">Bag &amp; Grind</h3>
+						<h3 class="be-block-title">Bag & Grind</h3>
 						<div class="be-block-sub">
 							Bag size auto-debits per shot. Grinder is bean-scoped — surfaced
 							at brew time when you swap to this bean.
@@ -1412,11 +1408,8 @@
 										: undefined}
 									value={current.url ?? ''}
 									placeholder="https://…"
-									oninput={(e) =>
-										patch({
-											url: (e.currentTarget as HTMLInputElement).value || null
-										})}
-									onblur={() => (urlTouched = true)}
+									oninput={(e) => patch({ url: (e.currentTarget as HTMLInputElement).value || null })}
+									onblur={() => urlTouched = true}
 								/>
 								{#if (urlTouched || attempted) && isBuyUrlInvalid}
 									<div id={urlErrorId} class="be-required">

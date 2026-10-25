@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { BrewRecipe } from "$lib/core/crema-core";
+import type { BrewRecipe } from "#lib/core/crema-core.js";
 import {
   RecipeStore,
   brewClock,

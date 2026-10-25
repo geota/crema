@@ -1,5 +1,5 @@
 /**
- * `$lib/services/oauth.test` — node:test for the OAuth service's typed-error
+ * `#lib/services/oauth.test` — node:test for the OAuth service's typed-error
  * contracts (docs/53 T-10).
  *
  * Scope note: under node:test `import.meta.env` is undefined, so the env-read

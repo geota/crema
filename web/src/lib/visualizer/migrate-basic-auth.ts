@@ -1,5 +1,5 @@
 /**
- * `$lib/visualizer/migrate-basic-auth` — one-shot clean-up of the
+ * `#lib/visualizer/migrate-basic-auth.js` — one-shot clean-up of the
  * pre-OAuth credential blob.
  *
  * Prior versions of Crema stored a Visualizer email + cleartext password

@@ -1,5 +1,5 @@
 /**
- * `$lib/components` — shared, screen-agnostic view components.
+ * `#lib/components/index.js` — shared, screen-agnostic view components.
  */
 
 /** App shell — the fixed left nav rail. */

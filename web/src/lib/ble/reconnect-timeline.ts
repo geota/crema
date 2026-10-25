@@ -1,5 +1,5 @@
 /**
- * `$lib/ble/reconnect-timeline` — per-device reconnect timelines, the "why
+ * `#lib/ble/reconnect-timeline` — per-device reconnect timelines, the "why
  * did it take so long to come back" instrument. The web twin of the Android
  * shell's `ReconnectTimeline.kt` (same triggers, phases, outcomes and the
  * same compact line, so a report from either shell reads the same).

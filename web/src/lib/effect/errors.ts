@@ -1,5 +1,5 @@
 /**
- * `$lib/effect/errors` — the single source of truth for every typed failure
+ * `#lib/effect/errors.js` — the single source of truth for every typed failure
  * in the web app's async subsystems.
  *
  * Every async failure path in `web/src/lib/` maps to exactly one of these

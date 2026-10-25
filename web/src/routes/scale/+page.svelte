@@ -37,12 +37,12 @@
 	 * active profile. The auto-tare / stop-on-weight brew-behaviour toggles have
 	 * moved to Settings → Brew defaults.
 	 */
-	import { bleStateLabel } from '$lib/ble';
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { getProfileStore } from '$lib/profiles';
-	import { getSettingsStore, convertWeight, formatWeight } from '$lib/settings';
-	import GuidedBrewPanel from '$lib/components/brewlog/GuidedBrewPanel.svelte';
-	import { getGuidedBrewStore } from '$lib/brew/session.svelte';
+	import { bleStateLabel } from '#lib/ble/index.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { getProfileStore } from '#lib/profiles/index.js';
+	import { getSettingsStore, convertWeight, formatWeight } from '#lib/settings/index.js';
+	import GuidedBrewPanel from '#lib/components/brewlog/GuidedBrewPanel.svelte';
+	import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
 
 	const ctx = getCremaAppContext();
 	const profiles = getProfileStore();

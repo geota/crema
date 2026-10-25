@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/catalogue` — the Visualizer canonical-catalogue search behind the
+ * `#lib/bean/catalogue.js` — the Visualizer canonical-catalogue search behind the
  * bean and roaster forms' "Visualizer catalogue" field.
  *
  * The HTTP (`GET /canonical_coffee_bags?q=…`, `GET /canonical_roasters?q=…`)
@@ -25,15 +25,15 @@ import {
 	catalogueRoasterClashes as wasmCatalogueRoasterClashes,
 	parseCatalogueCoffeeBags as wasmParseCatalogueCoffeeBags,
 	parseCatalogueRoasters as wasmParseCatalogueRoasters
-} from '$lib/wasm/de1_wasm';
+} from '#lib/wasm/de1_wasm.js';
 import {
 	CatalogueField,
 	type CatalogueCoffeeBag,
 	type CataloguePage,
 	type CatalogueRoaster,
 	type CatalogueRoasterPage
-} from '$lib/core/crema-core';
-import { choiceDialog } from '$lib/components/shared/confirm-dialog.svelte';
+} from '#lib/core/crema-core.js';
+import { choiceDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 import { blankRoaster, type Bean, type Roaster } from './model';
 
 export { CatalogueField };

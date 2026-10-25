@@ -8,7 +8,7 @@
 	import QuickSplitLabel from './QuickSplitLabel.svelte';
 	import QuickStepper from './QuickStepper.svelte';
 	import QuickChipRow from './QuickChipRow.svelte';
-	import { getSettingsStore, formatWeight } from '$lib/settings';
+	import { getSettingsStore, formatWeight } from '#lib/settings/index.js';
 
 	let { params }: { params: BrewParamState } = $props();
 

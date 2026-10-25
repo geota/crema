@@ -1,5 +1,5 @@
 /**
- * `$lib/firmware/firmware-update` — the flow's gating: the alpha warning must
+ * `#lib/firmware/firmware-update` — the flow's gating: the alpha warning must
  * be acknowledged, the default build is the newest above the installed one,
  * a CORS-blocked download falls back to the manual file, a bad file never
  * reaches the confirm step, blockers stop the start, cancel and exit are
@@ -8,13 +8,13 @@
  */
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { initTestWasm } from '$lib/testing/test-init';
+import { initTestWasm } from '#lib/testing/test-init.js';
 import {
 	FlashPhase,
 	type FlashBlocker,
 	type FlashStatus,
 	type FlashStep
-} from '$lib/core/crema-core';
+} from '#lib/core/crema-core.js';
 import { powerCycleLinkAction, waitingText } from './flash-copy';
 import {
 	AWAITING_KEY,

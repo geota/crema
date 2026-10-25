@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
-import type { BleConnectionState } from '$lib/ble/connection-state';
+import type { BleConnectionState } from '#lib/ble/connection-state.js';
 import RailDeviceButton from './RailDeviceButton.svelte';
 import { railAction, railDotClass, railLabel, railStatus } from './rail-status';
 

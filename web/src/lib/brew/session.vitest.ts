@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BrewRecipe } from "$lib/core/crema-core";
+import type { BrewRecipe } from "#lib/core/crema-core.js";
 import { GuidedBrewStore } from "./session.svelte";
 
 const recipe = (steps: BrewRecipe["steps"]): BrewRecipe =>

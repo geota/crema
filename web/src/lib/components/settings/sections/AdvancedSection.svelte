@@ -27,8 +27,8 @@
 	 * shot plays out in the Brew dashboard and lands in History with no live
 	 * machine. See `CremaApp.replayCapture`.
 	 */
-	import { getMachineReadout, type CremaApp, type UiSnapshot } from '$lib/state';
-	import { getSettingsStore } from '$lib/settings';
+	import { getMachineReadout, type CremaApp, type UiSnapshot } from '#lib/state/index.js';
+	import { getSettingsStore } from '#lib/settings/index.js';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -37,8 +37,8 @@
 	import StButton from '../StButton.svelte';
 	import MainsConfirmModal from '../MainsConfirmModal.svelte';
 	import { onMount } from 'svelte';
-	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
-	import { compactLine, reconnectTimelines, type ReconnectTimeline } from '$lib/ble';
+	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { compactLine, reconnectTimelines, type ReconnectTimeline } from '#lib/ble/index.js';
 
 	/** The shared orchestrator, or `null` while the wasm core is still loading. */
 	let { app, snapshot }: { app: CremaApp | null; snapshot: UiSnapshot } = $props();

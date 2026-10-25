@@ -1,5 +1,5 @@
 /**
- * `$lib/visualizer/oauth` — OAuth 2.0 Authorization-Code + PKCE flow for
+ * `#lib/visualizer/oauth.js` — OAuth 2.0 Authorization-Code + PKCE flow for
  * Crema talking to Visualizer (Doorkeeper on the Rails side).
  *
  * Crema is a static, client-only PWA — there is no server that could keep

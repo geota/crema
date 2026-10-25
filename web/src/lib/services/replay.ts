@@ -1,5 +1,5 @@
 /**
- * `$lib/services/replay` — the capture-replay engine as an Effect program
+ * `#lib/services/replay.js` — the capture-replay engine as an Effect program
  * (docs/53 §2.9 PR 8.1, T-28).
  *
  * Lifts `state/app.svelte.ts`'s `replayCapture` body (the shadow-core swap +
@@ -27,13 +27,13 @@
  */
 
 import { Cause, Duration, Effect } from 'effect';
-import type { CoreOutput, CremaCore } from '$lib/core';
-import type { ParsedCapture, ReplayMeta } from '$lib/replay';
-import { guessScaleFromFirstWeightPacket as wasmGuessScaleFromFirstWeightPacket } from '$lib/wasm/de1_wasm';
-import { describeError } from '$lib/utils/error';
-import type { ActiveShotBrewParams, ActiveShotData } from '$lib/state/active-shot.svelte';
-import type { UiSnapshot } from '$lib/state/ui-state.svelte';
-import type { ShotBean } from '$lib/history';
+import type { CoreOutput, CremaCore } from '#lib/core/index.js';
+import type { ParsedCapture, ReplayMeta } from '#lib/replay/index.js';
+import { guessScaleFromFirstWeightPacket as wasmGuessScaleFromFirstWeightPacket } from '#lib/wasm/de1_wasm.js';
+import { describeError } from '#lib/utils/error.js';
+import type { ActiveShotBrewParams, ActiveShotData } from '#lib/state/active-shot.svelte.js';
+import type { UiSnapshot } from '#lib/state/ui-state.svelte.js';
+import type { ShotBean } from '#lib/history/index.js';
 
 /**
  * The largest inter-event wait the replay will honour, in ms. A capture can

@@ -7,8 +7,8 @@
 	 * this route (Page component holds it), so abandoning the form
 	 * leaves no trace in the library.
 	 */
-	import { blankBean, getBeanStore } from '$lib/bean';
-	import BeanEditPage from '$lib/components/beans/BeanEditPage.svelte';
+	import { blankBean, getBeanStore } from '#lib/bean/index.js';
+	import BeanEditPage from '#lib/components/beans/BeanEditPage.svelte';
 
 	const library = getBeanStore();
 

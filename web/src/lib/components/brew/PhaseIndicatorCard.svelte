@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	/**
 	 * `PhaseIndicatorCard` — the left-column "where in the shot are we" card.
 	 *
@@ -28,7 +28,7 @@
 	 * Presentational — data contract unchanged: `seconds`, `frame`, `segments`.
 	 */
 	import { SvelteSet } from 'svelte/reactivity';
-	import type { ExitMetric, ProfileSegment } from '$lib/profiles';
+	import type { ExitMetric, ProfileSegment } from '#lib/profiles/index.js';
 
 	let {
 		seconds,

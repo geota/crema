@@ -1,5 +1,5 @@
 /**
- * `$lib/drive/oauth` — Google Drive authorization via the Google Identity
+ * `#lib/drive/oauth.js` — Google Drive authorization via the Google Identity
  * Services (GIS) **token model** (`google.accounts.oauth2`).
  *
  * Crema's web shell is a static, client-only PWA — there is no server to hold a

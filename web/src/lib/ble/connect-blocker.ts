@@ -1,5 +1,5 @@
 /**
- * `$lib/ble/connect-blocker` — why a Connect tap can't open the Bluetooth
+ * `#lib/ble/connect-blocker` — why a Connect tap can't open the Bluetooth
  * chooser in this browser right now, in words the user can act on.
  *
  * Synchronous on purpose: it runs inside the click handler, before

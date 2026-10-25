@@ -1,5 +1,5 @@
 /**
- * `$lib/services/visualizer-sign-in` — what happens once the OAuth code
+ * `#lib/services/visualizer-sign-in.js` — what happens once the OAuth code
  * exchange has produced a token set: persist it, then refresh the cached
  * Visualizer Premium flag (the bean-sync sentinel probe, `BeanSync.refreshPremium`)
  * so the edit sync knows the new account's tier straight away instead of

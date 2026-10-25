@@ -27,7 +27,7 @@
 		unlinkDecentAccount,
 		updateDecentAccount,
 		type DecentAccountState
-	} from '$lib/decent';
+	} from '#lib/decent/index.js';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StToggle from '../StToggle.svelte';

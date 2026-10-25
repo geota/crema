@@ -1,5 +1,5 @@
 /**
- * `$lib/brew/custom-methods` — the user's own brewing methods ("my ORB",
+ * `#lib/brew/custom-methods` — the user's own brewing methods ("my ORB",
  * issue #10 feedback).
  *
  * The core owns the shape and every rule (`CustomBrewMethod`, the style
@@ -15,15 +15,15 @@ import type {
 	BrewRecipe,
 	CustomBrewMethod,
 	CustomMethodLabelCheck
-} from '$lib/core/crema-core';
-import { BrewMethodStyle, CustomMethodLabelError } from '$lib/core/crema-core';
-import { readJson, writeJsonChecked } from '$lib/utils/storage';
+} from '#lib/core/crema-core.js';
+import { BrewMethodStyle, CustomMethodLabelError } from '#lib/core/crema-core.js';
+import { readJson, writeJsonChecked } from '#lib/utils/storage.js';
 import {
 	blankRecipeForStyleJson,
 	brewMethodStyleSeedsJson,
 	newCustomMethodId as wasmNewCustomMethodId,
 	validateCustomMethodLabelJson
-} from '$lib/wasm/de1_wasm';
+} from '#lib/wasm/de1_wasm.js';
 import { PRESET_METHOD_LABELS } from './method-labels';
 
 const METHODS_KEY = 'crema.brewMethods.custom.v1';

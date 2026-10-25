@@ -4,7 +4,7 @@
 	 * `history-page.jsx`. Time, a tiny sparkline of the stored curve, the
 	 * profile name, the ratio + yield metrics and a star rating.
 	 */
-	import type { StoredShot } from '$lib/history';
+	import type { StoredShot } from '#lib/history/index.js';
 	import {
 		grindLabel,
 		isBrewLog,
@@ -14,15 +14,15 @@
 		peaksOf,
 		yieldOf,
 		flatSamplesOf
-	} from '$lib/history';
-	import { shotTitle } from '$lib/brew/methods';
-	import StarRating from '$lib/components/common/StarRating.svelte';
-	import MethodMark from '$lib/components/brewlog/MethodMark.svelte';
-	import { getSettingsStore, convertWeight } from '$lib/settings';
+	} from '#lib/history/index.js';
+	import { shotTitle } from '#lib/brew/methods.js';
+	import StarRating from '#lib/components/common/StarRating.svelte';
+	import MethodMark from '#lib/components/brewlog/MethodMark.svelte';
+	import { getSettingsStore, convertWeight } from '#lib/settings/index.js';
 	import MiniShotChart from './MiniShotChart.svelte';
 	import MiniBrewChart from './MiniBrewChart.svelte';
-	import Icon from '$lib/icons/Icon.svelte';
-	import { relativeAgo } from '$lib/utils/relative-time';
+	import Icon from '#lib/icons/Icon.svelte';
+	import { relativeAgo } from '#lib/utils/relative-time.js';
 
 	let {
 		shot,

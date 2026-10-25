@@ -1,25 +1,27 @@
 {
-	"extends": "./.svelte-kit/tsconfig.json",
+	"extends": "$app/tsconfig",
 	"compilerOptions": {
-		"allowJs": true,
-		"checkJs": true,
-		"esModuleInterop": true,
-		"forceConsistentCasingInFileNames": true,
-		"resolveJsonModule": true,
-		"skipLibCheck": true,
 		"sourceMap": true,
 		"strict": true,
-		"moduleResolution": "bundler",
-		// `node:test` files import sibling modules with explicit `.ts`
-		// extensions — that's what Node's `--experimental-strip-types`
-		// resolver requires. Bundlers (Vite) and `noEmit: true` make this
-		// safe in the IDE / svelte-check toolchain.
-		"allowImportingTsExtensions": true,
+		// `$app/tsconfig` (SvelteKit 3) supplies the module settings, the
+		// `#lib` subpath imports and `allowImportingTsExtensions` (the
+		// `node:test` files import siblings with explicit `.ts`, as Node's
+		// `--experimental-strip-types` resolver requires).
 		// The Web Bluetooth API is not in TypeScript's standard DOM lib;
 		// `@types/web-bluetooth` supplies `navigator.bluetooth` and the
-		// `Bluetooth*` GATT types the `$lib/ble` layer depends on.
-		"types": ["@types/web-bluetooth"]
-	}
-	// Path aliases ($lib etc.) and other options are managed by SvelteKit;
-	// see .svelte-kit/tsconfig.json for the generated base config.
+		// `Bluetooth*` GATT types the `#lib/ble` layer depends on.
+		"types": [
+			"$app/types",
+			"@types/web-bluetooth"
+		]
+	},
+	// The three globs, not a bare "src": a directory include also pulls the
+	// wasm-pack glue (src/lib/wasm/de1_wasm.js) into checkJs and yields ~800
+	// implicit-any errors; with globs TypeScript prefers its sibling .d.ts.
+	"include": [
+		"src/**/*.js",
+		"src/**/*.ts",
+		"src/**/*.svelte",
+		"vite.config.ts"
+	]
 }

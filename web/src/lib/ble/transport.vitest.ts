@@ -1,5 +1,5 @@
 /**
- * `$lib/ble/transport.vitest` — the auto-reconnect loop's kick contract, on
+ * `#lib/ble/transport.vitest` — the auto-reconnect loop's kick contract, on
  * fake timers: a kick (the tab back in view, "Retry now") cuts the backoff /
  * 60 s lurk wait short and resets the ladder to the fast burst; a connected
  * device ignores it; kicks are debounced and never stack a second attempt; a

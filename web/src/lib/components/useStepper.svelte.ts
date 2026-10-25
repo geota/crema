@@ -23,8 +23,8 @@ import {
 	displayToCanonical,
 	unitLabel,
 	type Dimension
-} from '$lib/settings/format';
-import { getSettingsStore } from '$lib/settings/store.svelte';
+} from '#lib/settings/format.js';
+import { getSettingsStore } from '#lib/settings/store.svelte.js';
 
 export interface UseStepperOptions {
 	/** Current value, canonical units (reactive getter). */

@@ -7,8 +7,8 @@
 	 * restored after a reload) the flow can't be closed: it blocks the app
 	 * until the DE1 restarts or the user Exits.
 	 */
-	import type { CremaApp } from '$lib/state';
-	import { getMachineReadout } from '$lib/state';
+	import type { CremaApp } from '#lib/state/index.js';
+	import { getMachineReadout } from '#lib/state/index.js';
 	import FirmwareUpdateFlow from './FirmwareUpdateFlow.svelte';
 
 	let { app }: { app: CremaApp | null } = $props();

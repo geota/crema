@@ -30,10 +30,10 @@
 		totalTime,
 		Y_MAX,
 		type ProfileSegment
-	} from '$lib/profiles';
-	import { theme } from '$lib/theme.svelte';
-	import { getSettingsStore, unitLabel } from '$lib/settings';
-	import { cssVar } from '$lib/components/charts/chartHelpers';
+	} from '#lib/profiles/index.js';
+	import { theme } from '#lib/theme.svelte.js';
+	import { getSettingsStore, unitLabel } from '#lib/settings/index.js';
+	import { cssVar } from '#lib/components/charts/chartHelpers.js';
 
 	const settings = getSettingsStore();
 	const pressureUnitLabel = $derived(unitLabel('pressure', settings.current));

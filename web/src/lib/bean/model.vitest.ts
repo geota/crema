@@ -1,12 +1,12 @@
 /**
- * `$lib/bean/model.vitest` — defensive-coercion coverage for `coerceBean` /
+ * `#lib/bean/model.vitest` — defensive-coercion coverage for `coerceBean` /
  * `coerceRoaster` (GEN11). These normalise untrusted localStorage rows, so a
  * stored-shape regression must never crash a load. Also the baseline that pins
  * behaviour before CORE2 moves this logic to Rust serde. Run: `pnpm test:vitest`.
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { initTestWasm } from '$lib/testing/test-init';
+import { initTestWasm } from '#lib/testing/test-init.js';
 import { coerceBean, coerceRoaster } from './model.ts';
 
 beforeAll(async () => {

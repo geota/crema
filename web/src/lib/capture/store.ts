@@ -1,5 +1,5 @@
 /**
- * `$lib/capture/store` — IndexedDB-backed per-shot capture store.
+ * `#lib/capture/store.js` — IndexedDB-backed per-shot capture store.
  *
  * Keyed by `StoredShot.id` — one capture per shot. IndexedDB rather than
  * `localStorage` because a raw capture is ~300–400 KB / shot, easily exceeding

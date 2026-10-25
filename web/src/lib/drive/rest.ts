@@ -1,5 +1,5 @@
 /**
- * `$lib/drive/rest` — the thin Google Drive v3 REST calls the backup feature
+ * `#lib/drive/rest.js` — the thin Google Drive v3 REST calls the backup feature
  * needs. Scope `drive.file` means every call is implicitly limited to files
  * THIS app created — listing never sees the user's other Drive contents.
  *

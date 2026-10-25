@@ -1,5 +1,5 @@
 /**
- * `$lib/history` — the shot-history library: the persisted record model and
+ * `#lib/history/index.js` — the shot-history library: the persisted record model and
  * the localStorage-backed store.
  *
  * Shot records are real and persisted in `localStorage`. They are written by

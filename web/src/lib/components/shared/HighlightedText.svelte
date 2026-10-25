@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { SearchSegment } from '$lib/bean/search';
+	import type { SearchSegment } from '#lib/bean/search.js';
 
 	let {
 		segments,

@@ -1,11 +1,11 @@
 /**
- * `$lib/settings/store` — the app-preferences store.
+ * `#lib/settings/store` — the app-preferences store.
  *
  * Backs the `/settings` page. Crema's web shell is a static, client-only PWA —
  * there is no server, and (per the project's framing) there is no Crema
  * account either — so `localStorage` is the right home for user preferences.
  * This store mirrors `lib/profiles` and `lib/history`: a Svelte 5 `$state`
- * class, the shared `$lib/utils/storage` helpers, a single versioned key.
+ * class, the shared `#lib/utils/storage.js` helpers, a single versioned key.
  *
  * What lives here are **app preferences only** — units, theme, sound/haptic
  * cues, brew defaults, display density, advanced toggles. None of it is a
@@ -22,10 +22,10 @@ import {
 	defaultBrewCueHaptics,
 	defaultBrewCueSound,
 	defaultBrewDefaults
-} from '$lib/wasm/de1_wasm';
-import { isJsonObject, readJson, writeJson } from '$lib/utils/storage';
-import { readSyncConfig } from '$lib/visualizer/sync-config';
-import type { CommonSettings } from '$lib/core/crema-core';
+} from '#lib/wasm/de1_wasm.js';
+import { isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
+import { readSyncConfig } from '#lib/visualizer/sync-config.js';
+import type { CommonSettings } from '#lib/core/crema-core.js';
 
 /** localStorage key for the bundle of app preferences ({@link Settings}). */
 const SETTINGS_KEY = 'crema.settings.v1';
@@ -36,7 +36,7 @@ const SETTINGS_KEY = 'crema.settings.v1';
  * through getters so the seed values live in the Rust core, not hardcoded here.
  *
  * Lazy — *never* at module scope: the wasm export is only callable once
- * `loadCore()` has run (the rule `$lib/profiles/bounds.ts` follows). The getters
+ * `loadCore()` has run (the rule `#lib/profiles/bounds.ts` follows). The getters
  * fire when the settings store is first constructed at render time, long after
  * boot. See `de1_domain::default_brew_defaults_json`.
  */
@@ -245,7 +245,7 @@ export interface Settings {
 	/**
 	 * Hold a Screen Wake Lock while a shot is pulling so the display can't
 	 * sleep mid-extraction. Consumed by the shell layout's effect via
-	 * `$lib/shell/wake-lock`; a no-op on browsers without the API.
+	 * `#lib/shell/wake-lock.js`; a no-op on browsers without the API.
 	 */
 	keepScreenOnBrew: boolean;
 

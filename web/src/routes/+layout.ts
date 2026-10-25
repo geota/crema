@@ -27,7 +27,7 @@ export const prerender = false;
 // Top-level await is an ES2022 feature; Vite + SvelteKit support it natively.
 // Because `ssr = false`, this code only ever runs in the browser, which is
 // the only environment where the wasm module exists at all.
-import { loadCore } from '$lib/core';
+import { loadCore } from '#lib/core/index.js';
 await loadCore();
 
 // ─── One-shot Visualizer Basic-auth → OAuth migration ──────────────────
@@ -37,5 +37,5 @@ await loadCore();
 // strip those fields out of `localStorage` on every boot (idempotent
 // no-op once clean). The Settings UI then shows the "Sign in with
 // Visualizer" button as if it's first-run — the intended re-auth nudge.
-import { migrateLegacyBasicAuth } from '$lib/visualizer';
+import { migrateLegacyBasicAuth } from '#lib/visualizer/index.js';
 migrateLegacyBasicAuth();

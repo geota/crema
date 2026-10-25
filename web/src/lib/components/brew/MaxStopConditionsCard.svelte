@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	/**
 	 * `MaxStopConditionsCard` — the consolidated "Stop conditions" card in
 	 * the brew dashboard's left column. Replaces the inline `.crema-target-stack`

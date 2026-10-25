@@ -1,5 +1,5 @@
 /**
- * `$lib/shell/app-context` — the shell-level `CremaApp` singleton.
+ * `#lib/shell/app-context` — the shell-level `CremaApp` singleton.
  *
  * The orchestrator (`CremaApp`) owns one wasm core and one BLE connection. It
  * must be created **once**, at the app shell, and shared by every route, so a
@@ -13,9 +13,9 @@
  */
 
 import { getContext, setContext } from 'svelte';
-import type { CremaApp } from '$lib/state';
-import type { AppRuntime } from '$lib/effect/runtime';
-import type { CremaServices } from '$lib/effect/crema-services';
+import type { CremaApp } from '#lib/state/index.js';
+import type { AppRuntime } from '#lib/effect/runtime.js';
+import type { CremaServices } from '#lib/effect/crema-services.js';
 
 /** How the wasm core load is progressing — drives the shell's gate UI. */
 export type CoreLoadState = 'loading' | 'ready' | 'failed';
@@ -38,7 +38,7 @@ export interface CremaAppContext {
 	 * The `Promise`-shaped facade over the Visualizer sync services, bound to
 	 * `runtime` at the shell (`null` whenever `runtime` is). Components call
 	 * `services.shots.uploadUnsynced(…)` etc. instead of crossing the Effect
-	 * boundary by hand — see `$lib/effect/crema-services`.
+	 * boundary by hand — see `#lib/effect/crema-services.js`.
 	 */
 	readonly services: CremaServices | null;
 	/** Lifecycle of the one-time core load. */

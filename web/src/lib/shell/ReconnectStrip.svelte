@@ -9,8 +9,8 @@
 	 * resets it to the fast burst (`CremaApp.retryReconnect`) — the same kick
 	 * the tab gets when it comes back into view.
 	 */
-	import Icon from '$lib/icons/Icon.svelte';
-	import type { CremaApp } from '$lib/state';
+	import Icon from '#lib/icons/Icon.svelte';
+	import type { CremaApp } from '#lib/state/index.js';
 
 	let { app }: { app: CremaApp | null } = $props();
 

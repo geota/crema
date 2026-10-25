@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { getBeanStore, blankBean, blankRoaster } from '$lib/bean';
-import { getHistoryStore, type StoredShot } from '$lib/history';
-import { getProfileStore } from '$lib/profiles';
-import { blankProfile } from '$lib/profiles/model';
-import { getSettingsStore } from '$lib/settings';
-import { getRecipeStore } from '$lib/brew/recipes.svelte';
-import { getCustomMethodStore } from '$lib/brew/custom-methods.svelte';
-import { methodLabel } from '$lib/brew/methods';
-import { BrewMethodStyle } from '$lib/core/crema-core';
+import { getBeanStore, blankBean, blankRoaster } from '#lib/bean/index.js';
+import { getHistoryStore, type StoredShot } from '#lib/history/index.js';
+import { getProfileStore } from '#lib/profiles/index.js';
+import { blankProfile } from '#lib/profiles/model.js';
+import { getSettingsStore } from '#lib/settings/index.js';
+import { getRecipeStore } from '#lib/brew/recipes.svelte.js';
+import { getCustomMethodStore } from '#lib/brew/custom-methods.svelte.js';
+import { methodLabel } from '#lib/brew/methods.js';
+import { BrewMethodStyle } from '#lib/core/crema-core.js';
 import { buildBackupJsonl, restoreBackup } from './index';
 
 /**

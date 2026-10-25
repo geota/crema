@@ -7,8 +7,8 @@
 	import type { BrewParamState } from './brew-params.svelte';
 	import QuickStepper from './QuickStepper.svelte';
 	import QuickChipRow from './QuickChipRow.svelte';
-	import { getSettingsStore, formatWeight } from '$lib/settings';
-	import { formatRatio } from '$lib/utils/ratio';
+	import { getSettingsStore, formatWeight } from '#lib/settings/index.js';
+	import { formatRatio } from '#lib/utils/ratio.js';
 
 	let {
 		params,

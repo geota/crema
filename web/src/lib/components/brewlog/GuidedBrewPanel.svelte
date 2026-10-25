@@ -16,9 +16,9 @@
 	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
 	import PauseIcon from 'phosphor-svelte/lib/PauseIcon';
 	import PlayIcon from 'phosphor-svelte/lib/PlayIcon';
-	import { brewCueSoundOn, getSettingsStore } from '$lib/settings';
-	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { getGuidedBrewStore } from '$lib/brew/session.svelte';
+	import { brewCueSoundOn, getSettingsStore } from '#lib/settings/index.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
 	import {
 		brewClock,
 		getRecipeStore,
@@ -26,20 +26,20 @@
 		isBuiltinRecipe,
 		newRecipeFor,
 		recipeEstimateLabel
-	} from '$lib/brew/recipes.svelte';
-	import { primeBrewCues } from '$lib/brew/cues';
+	} from '#lib/brew/recipes.svelte.js';
+	import { primeBrewCues } from '#lib/brew/cues.js';
 	import {
 		brewMethodPresets,
 		openingMethod,
 		methodLabel,
 		type LogBrewPrefill
-	} from '$lib/brew/methods';
-	import type { BrewRecipe, BrewStep } from '$lib/core/crema-core';
-	import { BrewStepKind, StepAdvance } from '$lib/core/crema-core';
-	import { getBeanStore } from '$lib/bean';
-	import { guidedLogPrefill, resolveBrewBean } from '$lib/brew/bean-pick';
-	import { toast } from '$lib/components/shared/toast.svelte';
-	import BrewSessionChart from '$lib/components/history/BrewSessionChart.svelte';
+	} from '#lib/brew/methods.js';
+	import type { BrewRecipe, BrewStep } from '#lib/core/crema-core.js';
+	import { BrewStepKind, StepAdvance } from '#lib/core/crema-core.js';
+	import { getBeanStore } from '#lib/bean/index.js';
+	import { guidedLogPrefill, resolveBrewBean } from '#lib/brew/bean-pick.js';
+	import { toast } from '#lib/components/shared/toast.svelte.js';
+	import BrewSessionChart from '#lib/components/history/BrewSessionChart.svelte';
 	import BeanOverdrawNote from './BeanOverdrawNote.svelte';
 	import BrewBeanRow from './BrewBeanRow.svelte';
 	import LogBrewDialog from './LogBrewDialog.svelte';
@@ -48,7 +48,7 @@
 	import RecipeNotes from './RecipeNotes.svelte';
 	import RecipeEditor from './RecipeEditor.svelte';
 	import CustomMethodDialog from './CustomMethodDialog.svelte';
-	import { isCustomMethodId } from '$lib/brew/custom-methods.svelte';
+	import { isCustomMethodId } from '#lib/brew/custom-methods.svelte.js';
 
 	let {
 		connected = false,

@@ -1,5 +1,5 @@
 /**
- * `$lib/services/token-vault.test` — node:test for the TokenVault refresh /
+ * `#lib/services/token-vault.test` — node:test for the TokenVault refresh /
  * 401-retry semantics (docs/53 T-11).
  *
  * OAuth is replaced with a controllable mock so we can drive refresh outcomes

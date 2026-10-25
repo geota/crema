@@ -9,9 +9,9 @@
  * (Decenza `BatteryManager`) while it stays ready. Android's `ConnectSweep.kt` is the twin.
  */
 
-import type { CoreOutput, CremaCore } from '$lib/core';
-import { type ConnectSweepSettings, UsbChargingMode } from '$lib/core/crema-core';
-import type { Settings } from '$lib/settings/store.svelte';
+import type { CoreOutput, CremaCore } from '#lib/core/index.js';
+import { type ConnectSweepSettings, UsbChargingMode } from '#lib/core/crema-core.js';
+import type { Settings } from '#lib/settings/store.svelte.js';
 import { defaultRefillPointMm } from './ui-state.svelte';
 
 /**

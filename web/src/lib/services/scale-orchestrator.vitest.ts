@@ -1,5 +1,5 @@
 /**
- * `$lib/services/scale-orchestrator.vitest` — vitest for the scale connect
+ * `#lib/services/scale-orchestrator.vitest.js` — vitest for the scale connect
  * program (docs/53 T-19). Mocks at the transport seam: a fake `De1Transport` +
  * core slice assert the orchestration — step order, the core-reported-UUID
  * handoff, the distinct-vs-shared command-characteristic branch, and the
@@ -10,8 +10,8 @@
 import { Cause, Effect, Exit } from 'effect';
 import { describe, expect, it, vi } from 'vitest';
 import { scaleConnectProgram, type ScaleConnectDeps } from './scale-orchestrator.ts';
-import type { De1Transport } from '$lib/ble/de1-transport';
-import type { CoreOutput, CremaCore, ScaleUuids } from '$lib/core';
+import type { De1Transport } from '#lib/ble/de1-transport.js';
+import type { CoreOutput, CremaCore, ScaleUuids } from '#lib/core/index.js';
 
 const EMPTY_OUTPUT = {} as CoreOutput;
 const UUIDS = (over: Partial<ScaleUuids> = {}) =>

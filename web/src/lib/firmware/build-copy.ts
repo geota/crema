@@ -1,5 +1,5 @@
 /**
- * `$lib/firmware/build-copy` — the Settings → Machine firmware card's copy.
+ * `#lib/firmware/build-copy` — the Settings → Machine firmware card's copy.
  *
  * The classification (what an installed DE1 build *means*) lives in the core:
  * `de1_domain::classify_firmware_build`, which compares the build with a
@@ -10,12 +10,12 @@
  *
  * `offerUpdate` says whether a newer official build than the installed one
  * exists; the card then leads with "Update firmware…" (the alpha flow in
- * `$lib/firmware/firmware-update.svelte`). The flow is available on request
+ * `#lib/firmware/firmware-update.svelte.js`). The flow is available on request
  * either way.
  */
 
-import { classifyFirmwareBuild } from '$lib/wasm/de1_wasm.js';
-import { FirmwareBuildStatus, type FirmwareBuildReport } from '$lib/core/crema-core';
+import { classifyFirmwareBuild } from '#lib/wasm/de1_wasm.js';
+import { FirmwareBuildStatus, type FirmwareBuildReport } from '#lib/core/crema-core.js';
 
 /** Classify an installed build (MMR `0x800010`; `null` = not read yet). */
 export function firmwareBuildReport(build: number | null | undefined): FirmwareBuildReport {

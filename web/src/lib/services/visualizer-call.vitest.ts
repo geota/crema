@@ -1,5 +1,5 @@
 /**
- * `$lib/services/visualizer-call.vitest` — the consolidated Visualizer call
+ * `#lib/services/visualizer-call.vitest.js` — the consolidated Visualizer call
  * seam (the deepening that pulled the duplicated `call` + taxonomy + policy out
  * of `ShotSync` / `BeanSync` / `UploadQueue`).
  *
@@ -24,7 +24,7 @@ import {
 	visualizerCall,
 	type VisualizerCallError
 } from './visualizer-call.ts';
-import { initTestWasm } from '$lib/testing/test-init';
+import { initTestWasm } from '#lib/testing/test-init.js';
 
 // `isRecoverable` now delegates the retry policy to the wasm core (CORE5).
 beforeAll(async () => {

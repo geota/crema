@@ -1,5 +1,5 @@
 /**
- * `$lib/services/bean-sync-runsync.vitest` — vitest for `BeanSync.runSync`, the
+ * `#lib/services/bean-sync-runsync.vitest` — vitest for `BeanSync.runSync`, the
  * bidirectional bean/roaster sync ported off `bean/visualizer-sync.ts` so
  * token-store can be retired. This orchestration had zero automated coverage.
  *
@@ -17,7 +17,7 @@
 import { Effect, Layer } from 'effect';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('$lib/visualizer/shot-sync-signatures', () => ({
+vi.mock('#lib/visualizer/shot-sync-signatures.js', () => ({
 	signatureForRoaster: ({ name }: { name: string }) => `rs:${name.trim().toLowerCase()}`,
 	signatureForBean: ({ name }: { name: string }) => `bs:${(name ?? '').trim().toLowerCase()}`,
 	signatureForShot: () => '',
@@ -29,10 +29,10 @@ import { BeanSync, BeanSyncLive } from './bean-sync.ts';
 import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import { HttpStatusError } from '../effect/errors.ts';
-import { blankBean, blankRoaster, type Bean, type Roaster } from '$lib/bean';
-import type { BeanLibraryStore } from '$lib/bean/store.svelte';
+import { blankBean, blankRoaster, type Bean, type Roaster } from '#lib/bean/index.js';
+import type { BeanLibraryStore } from '#lib/bean/store.svelte.js';
 import type { TokenSet } from '../visualizer/oauth.ts';
-import { initTestWasm } from '$lib/testing/test-init';
+import { initTestWasm } from '#lib/testing/test-init.js';
 
 // `runSync` decodes each remote row through the wasm-backed `beanFromWire` /
 // `roasterFromWire` and encodes pushes through `beanToWire` (CORE1), so the

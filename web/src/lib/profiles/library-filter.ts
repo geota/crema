@@ -1,5 +1,5 @@
 /**
- * `$lib/profiles/library-filter` — the `/profiles` filter rail as two
+ * `#lib/profiles/library-filter` — the `/profiles` filter rail as two
  * independent axes (geota/crema#124).
  *
  * The rail used to be one single-select value, so picking **Hidden** (the

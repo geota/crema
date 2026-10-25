@@ -1,11 +1,11 @@
 /**
- * `$lib/history/series-store` — IndexedDB-backed per-shot telemetry series.
+ * `#lib/history/series-store.js` — IndexedDB-backed per-shot telemetry series.
  *
  * A `StoredShot`'s sample series is ~100–500 KB of JSON; keeping it inside
  * the localStorage history blob exhausted the ~5 MB quota after ~15–25
  * shots, at which point EVERY history save (new shots, ratings, notes)
  * failed silently forever (review #27). The series now lives here — same
- * IndexedDB posture as `$lib/capture/store` — while the history blob keeps
+ * IndexedDB posture as `#lib/capture/store.js` — while the history blob keeps
  * only the small summary/metadata rows, so the 300-shot cap is actually
  * reachable.
  *
@@ -15,7 +15,7 @@
  * with an error surface, mirroring the capture store.
  */
 
-import type { TimedSample } from '$lib/core';
+import type { TimedSample } from '#lib/core/index.js';
 
 /** IndexedDB database name. */
 const DB_NAME = 'crema-history-series';

@@ -1,5 +1,5 @@
 /**
- * `$lib/brew/staircase` — the "planned vs poured" overlay's geometry
+ * `#lib/brew/staircase` — the "planned vs poured" overlay's geometry
  * (issue #10, spec §5 "Brew charts").
  *
  * Each {@link StageMark} carries the step's cumulative planned water
@@ -11,8 +11,8 @@
  * only turns it into SVG path data, so the chart stays a thin renderer.
  */
 
-import type { StageMark, StairSegment } from '$lib/core/crema-core';
-import { maxPlannedTargetJson, plannedStaircaseJson } from '$lib/wasm/de1_wasm';
+import type { StageMark, StairSegment } from '#lib/core/crema-core.js';
+import { maxPlannedTargetJson, plannedStaircaseJson } from '#lib/wasm/de1_wasm.js';
 
 export type { StairSegment };
 

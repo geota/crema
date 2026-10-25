@@ -1,5 +1,5 @@
 /**
- * `$lib/profiles/bounds` — wire-protocol bounds for DE1 profile fields.
+ * `#lib/profiles/bounds.js` — wire-protocol bounds for DE1 profile fields.
  *
  * Sourced from `de1_wasm::profile_bounds_json` so the web shell, the Android
  * shell, and any profile validator reach for the same numbers. These are the
@@ -19,7 +19,7 @@
  * See `core/de1-domain/src/profile_bounds.rs` for the canonical declarations.
  */
 
-import { profile_bounds_json } from '$lib/wasm/de1_wasm';
+import { profile_bounds_json } from '#lib/wasm/de1_wasm.js';
 
 interface RawProfileBounds {
 	max_profile_steps: number;

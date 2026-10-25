@@ -1,5 +1,5 @@
 /**
- * `$lib/ble/connect-exit` — interpret a BLE connect program's `Exit`.
+ * `#lib/ble/connect-exit` — interpret a BLE connect program's `Exit`.
  *
  * `De1Manager` and `ScaleManager` run their connect sequences as Effect programs
  * (`de1ConnectProgram` / `scaleConnectProgram`) that fail with a step-tagged

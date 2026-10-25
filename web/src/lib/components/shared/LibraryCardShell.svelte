@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	/**
 	 * `LibraryCardShell` — shared chrome for the `/beans` library cards.
 	 *
@@ -79,7 +79,7 @@
 		/** Tile min-height — sets the baseline so a row of cards aligns. */
 		minHeight?: number;
 		/**
-		 * Stable item id for scroll memory (`$lib/state/scroll-memory`): a
+		 * Stable item id for scroll memory (`#lib/state/scroll-memory`): a
 		 * list restores to this card, not just to a pixel offset (#123).
 		 */
 		scrollKey?: string;

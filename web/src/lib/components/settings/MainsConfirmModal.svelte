@@ -36,8 +36,8 @@
 	 * disabled until the input matches.
 	 */
 	import { onMount } from 'svelte';
-	import { detectCountry } from '$lib/utils/country-detect';
-	import { POWER_STANDARDS, countryName } from '$lib/utils/power-standards';
+	import { detectCountry } from '#lib/utils/country-detect.js';
+	import { POWER_STANDARDS, countryName } from '#lib/utils/power-standards.js';
 
 	let {
 		kind,

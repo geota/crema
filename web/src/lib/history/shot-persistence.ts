@@ -1,5 +1,5 @@
 /**
- * `$lib/history/shot-persistence` — the commit-side of a finished espresso shot.
+ * `#lib/history/shot-persistence.js` — the commit-side of a finished espresso shot.
  *
  * Lifts the orchestrator's `ShotCompleted` arm out of `applyCoreOutput` so
  * the steps a shot's completion runs — record the history row, debit the
@@ -17,21 +17,21 @@
  */
 
 import { Effect } from 'effect';
-import { brew_ratio } from '$lib/wasm/de1_wasm';
-import type { CaptureEntry } from '$lib/capture';
-import { getCaptureStore } from '$lib/capture';
-import { getBeanStore } from '$lib/bean';
-import { getSettingsStore } from '$lib/settings';
-import { toast } from '$lib/components/shared/toast.svelte';
-import { promptBagEmpty } from '$lib/bean/bag-empty-prompt';
-import { getProfileStore, toCoreProfile } from '$lib/profiles';
-import { getActiveShotStore, type ActiveShotData } from '$lib/state/active-shot.svelte';
-import { appendSyncLog, directionPushes, readSyncConfig } from '$lib/visualizer';
-import { liveMachineIdentity, pushShotToDecent } from '$lib/decent/upload';
-import { isDecentLinked, readDecentAccount } from '$lib/decent/account';
-import { hasStoredVisualizerTokens } from '$lib/services/token-vault';
+import { brew_ratio } from '#lib/wasm/de1_wasm.js';
+import type { CaptureEntry } from '#lib/capture/index.js';
+import { getCaptureStore } from '#lib/capture/index.js';
+import { getBeanStore } from '#lib/bean/index.js';
+import { getSettingsStore } from '#lib/settings/index.js';
+import { toast } from '#lib/components/shared/toast.svelte.js';
+import { promptBagEmpty } from '#lib/bean/bag-empty-prompt.js';
+import { getProfileStore, toCoreProfile } from '#lib/profiles/index.js';
+import { getActiveShotStore, type ActiveShotData } from '#lib/state/active-shot.svelte.js';
+import { appendSyncLog, directionPushes, readSyncConfig } from '#lib/visualizer/index.js';
+import { liveMachineIdentity, pushShotToDecent } from '#lib/decent/upload.js';
+import { isDecentLinked, readDecentAccount } from '#lib/decent/account.js';
+import { hasStoredVisualizerTokens } from '#lib/services/token-vault.js';
 import { registerUploadBatch, reportUploadOutcome } from './upload-toast';
-import type { AppRuntime } from '$lib/effect/runtime';
+import type { AppRuntime } from '#lib/effect/runtime.js';
 import type {
 	HttpStatusError,
 	NetworkError,
@@ -40,19 +40,19 @@ import type {
 	TokenRefreshFailedError,
 	VisualizerNotFoundError,
 	VisualizerPremiumGatedError
-} from '$lib/effect/errors';
-import { ShotSync } from '$lib/services/shot-sync';
+} from '#lib/effect/errors.js';
+import { ShotSync } from '#lib/services/shot-sync.js';
 import {
 	isRateLimited,
 	isRecoverable as isRecoverableCallError,
 	quotaLimit,
 	quotaNotice,
 	retryDelayMs
-} from '$lib/services/visualizer-call';
-import { UploadQueue } from '$lib/services/upload-queue';
+} from '#lib/services/visualizer-call.js';
+import { UploadQueue } from '#lib/services/upload-queue.js';
 import { getHistoryStore } from './store.svelte';
 import { isBrewLog } from './model';
-import type { UiSnapshot } from '$lib/state/ui-state.svelte';
+import type { UiSnapshot } from '#lib/state/ui-state.svelte.js';
 
 /**
  * How far before `ShotStarted` to begin the persisted capture slice. The
@@ -81,7 +81,7 @@ export interface ShotCompletedEvent {
 /**
  * Everything the commit needs from the orchestrator that isn't a Svelte
  * store. Stores are read directly inside the commit (matching the rest
- * of `$lib`); this carries the cross-references the orchestrator owns.
+ * of `#lib`); this carries the cross-references the orchestrator owns.
  */
 export interface ShotCompletionContext {
 	/** UI snapshot at commit time — telemetry series, `activeProfileName`. */

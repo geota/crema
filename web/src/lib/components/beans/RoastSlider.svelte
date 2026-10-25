@@ -20,7 +20,7 @@
 	 * `--hairline`, etc.) — the design's espresso/ink tokens map cleanly
 	 * to Crema's via the surface-level CSS-var pass.
 	 */
-	import { roastBand5 } from '$lib/bean';
+	import { roastBand5 } from '#lib/bean/index.js';
 
 	let {
 		value,

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
-	import { pinActiveThenFavourite } from '$lib/library-order';
+	import Icon from '#lib/icons/Icon.svelte';
+	import { pinActiveThenFavourite } from '#lib/library-order.js';
 	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 	import CoffeeBeanIcon from 'phosphor-svelte/lib/CoffeeBeanIcon';
 	import FunnelXIcon from 'phosphor-svelte/lib/FunnelXIcon';
@@ -33,7 +33,7 @@
 	 * design's tile + drawer + dedicated editor route replaces it.
 	 */
 	import { goto } from '$app/navigation';
-	import { openEditor, toQuery, type Query } from '$lib/beans/editor-nav';
+	import { openEditor, toQuery, type Query } from '#lib/beans/editor-nav.js';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import {
@@ -42,26 +42,26 @@
 		mintBeanId,
 		mintRoasterId,
 		type Bean,
-		type Roaster, activateBean } from '$lib/bean';
-	import { searchBeans, searchRoasters } from '$lib/bean/search';
-	import { filterBeans, type BeanStatusFilter } from '$lib/bean/filter';
-	import { detectRoasterDuplicates, planRoasterMerge } from '$lib/bean/roaster-duplicates';
-	import BeanTile from '$lib/components/beans/BeanTile.svelte';
-	import RoasterCard from '$lib/components/beans/RoasterCard.svelte';
-	import BeanDrawer from '$lib/components/beans/BeanDrawer.svelte';
-	import LogBrewDialog from '$lib/components/brewlog/LogBrewDialog.svelte';
-	import BeanQuickAdd from '$lib/components/beans/BeanQuickAdd.svelte';
-	import BeanImportDialog from '$lib/components/beans/BeanImportDialog.svelte';
-	import { exportCrema, exportBeanconqueror } from '$lib/bean/export';
-	import { getHistoryStore } from '$lib/history';
-	import BeansEmptyState from '$lib/components/beans/BeansEmptyState.svelte';
-	import SortPill from '$lib/components/shared/SortPill.svelte';
-	import FilterPills from '$lib/components/shared/FilterPills.svelte';
-	import SplitButton from '$lib/components/shared/SplitButton.svelte';
-	import { toast } from '$lib/components/shared/toast.svelte';
-	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
-	import { recallView } from '$lib/state/view-memory';
-	import { persistView, useScrollMemory } from '$lib/state/use-view-memory.svelte';
+		type Roaster, activateBean } from '#lib/bean/index.js';
+	import { searchBeans, searchRoasters } from '#lib/bean/search.js';
+	import { filterBeans, type BeanStatusFilter } from '#lib/bean/filter.js';
+	import { detectRoasterDuplicates, planRoasterMerge } from '#lib/bean/roaster-duplicates.js';
+	import BeanTile from '#lib/components/beans/BeanTile.svelte';
+	import RoasterCard from '#lib/components/beans/RoasterCard.svelte';
+	import BeanDrawer from '#lib/components/beans/BeanDrawer.svelte';
+	import LogBrewDialog from '#lib/components/brewlog/LogBrewDialog.svelte';
+	import BeanQuickAdd from '#lib/components/beans/BeanQuickAdd.svelte';
+	import BeanImportDialog from '#lib/components/beans/BeanImportDialog.svelte';
+	import { exportCrema, exportBeanconqueror } from '#lib/bean/export.js';
+	import { getHistoryStore } from '#lib/history/index.js';
+	import BeansEmptyState from '#lib/components/beans/BeansEmptyState.svelte';
+	import SortPill from '#lib/components/shared/SortPill.svelte';
+	import FilterPills from '#lib/components/shared/FilterPills.svelte';
+	import SplitButton from '#lib/components/shared/SplitButton.svelte';
+	import { toast } from '#lib/components/shared/toast.svelte.js';
+	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { recallView } from '#lib/state/view-memory.js';
+	import { persistView, useScrollMemory } from '#lib/state/use-view-memory.svelte.js';
 
 	const library = getBeanStore();
 	const history = getHistoryStore();
@@ -113,15 +113,10 @@
 	 *  than stacking one, as before; only opening a shelf pushes. */
 	function selectTab(next: Tab): void {
 		if (next === tab && !page.url.searchParams.has('roaster')) return;
-		goto(resolve(`/beans${beansQuery(next)}`), { replaceState: true, noScroll: true, keepFocus: true });
+		goto(resolve(`beans${beansQuery(next)}`), { replaceState: true, reset: false });
 	}
 
-	type StatusFilter =
-		| 'all'
-		| 'active'
-		| 'frozen'
-		| 'archived'
-		| 'favourite';
+	type StatusFilter = 'all' | 'active' | 'frozen' | 'archived' | 'favourite';
 	type RoastFilter = 'light' | 'medium' | 'dark';
 
 	let status = $state<StatusFilter>('all');
@@ -413,7 +408,7 @@
 			// Re-click the active region pill → reset to `all` (the
 			// catch-all that already represents "no region filter"). `all`
 			// itself stays pinned on re-click.
-			const next = id.slice('region:'.length);
+			const next = id.slice(('region:').length);
 			roasterRegion = roasterRegion === next && next !== 'all' ? 'all' : next;
 		}
 	}
@@ -625,27 +620,27 @@
 	 *  Forward re-opens the shelf. */
 	function openRoasterShelf(id: string): void {
 		status = 'all';
-		goto(resolve(`/beans${beansQuery('bags', id)}`), { noScroll: true });
+		goto(resolve(`beans${beansQuery('bags', id)}`), { reset: false });
 	}
 	/** Scope pill ✕ → the unscoped Bags tab, replacing the shelf's entry so a
 	 *  reload (or Back then Forward) doesn't bring the dismissed scope back. */
 	function clearRoasterScope(): void {
-		goto(resolve(`/beans${beansQuery('bags')}`), { replaceState: true, noScroll: true, keepFocus: true });
+		goto(resolve(`beans${beansQuery('bags')}`), { replaceState: true, reset: false });
 	}
 	function gotoNew(): void {
-		void openEditor(resolve('/beans/new'));
+		void openEditor(resolve('beans/new'));
 	}
 	function gotoEdit(id: string): void {
 		// Carry the roaster scope through the editor so saving or backing
 		// out lands on the same shelf rather than the unscoped library (#86).
 		const scope = toQuery(new URLSearchParams(scopeId ? { roaster: scopeId } : {}));
-		void openEditor(resolve(`/beans/${encodeURIComponent(id)}/edit${scope}`));
+		void openEditor(resolve(`beans/${encodeURIComponent(id)}/edit${scope}`));
 	}
 	function gotoNewRoaster(): void {
-		void openEditor(resolve('/beans/roasters/new'));
+		void openEditor(resolve('beans/roasters/new'));
 	}
 	function gotoEditRoaster(id: string): void {
-		void openEditor(resolve(`/beans/roasters/${encodeURIComponent(id)}/edit`));
+		void openEditor(resolve(`beans/roasters/${encodeURIComponent(id)}/edit`));
 	}
 	function setActive(id: string): void {
 		activateBean(id);
@@ -732,13 +727,12 @@
 		const plan = planRoasterMerge(allRoasters, allBeans, canonical.id, dupe.id);
 		if (!plan) return;
 		const moveCount = plan.beanIds.length;
-		if (
-			!(await confirmDialog({
-				message: `Move ${moveCount} bag(s) from "${dupe.name}" to "${canonical.name}" and tag "${dupe.name}" as a duplicate of "${canonical.name}"?`,
-				confirmLabel: 'Merge'
-			}))
-		)
-			return;
+
+		if (!await confirmDialog({
+			message: `Move ${moveCount} bag(s) from "${dupe.name}" to "${canonical.name}" and tag "${dupe.name}" as a duplicate of "${canonical.name}"?`,
+			confirmLabel: 'Merge'
+		})) return;
+
 		for (const id of plan.beanIds) {
 			library.updateBean(id, { roasterId: canonical.id });
 		}
@@ -760,11 +754,8 @@
 	}
 </script>
 
-<svelte:head>
-	<title>Crema — Beans</title>
-</svelte:head>
-
-<svelte:window onclick={closeMenusOnDocClick} />
+<svelte:head><title>Crema — Beans</title></svelte:head>
+<svelte:window onclick={closeMenusOnDocClick}></svelte:window>
 
 <div class="bn-page">
 	<!-- Header -->
@@ -785,7 +776,7 @@
 				{#if q}
 					<button
 						class="bn-search-clear"
-						onclick={() => (q = '')}
+						onclick={() => q = ''}
 						aria-label="Clear"
 					>
 						<XIcon aria-hidden="true" />
@@ -794,7 +785,7 @@
 			</label>
 			<button
 				class="bn-btn bn-btn-ghost"
-				onclick={() => (importOpen = true)}
+				onclick={() => importOpen = true}
 				title="Import a Crema .jsonl or Beanconqueror .zip"
 			>
 				<UploadSimpleIcon aria-hidden="true" /> Import
@@ -990,9 +981,10 @@
 				</div>
 			{/if}
 			{#if roasterRegion !== 'all'}
-				<button class="bn-chip-clear" onclick={() => (roasterRegion = 'all')}>
-					<XIcon aria-hidden="true" /> Clear
-				</button>
+				<button
+					class="bn-chip-clear"
+					onclick={() => roasterRegion = 'all'}
+				><XIcon aria-hidden="true" />Clear</button>
 			{/if}
 			<div class="bn-toolbar-r">
 				<!-- "Show duplicates" toggle — surfaces canonical-tagged rows in
@@ -1002,7 +994,7 @@
 					<button
 						class="bn-chip-clear bn-chip-toggle"
 						class:is-on={showDuplicates}
-						onclick={() => (showDuplicates = !showDuplicates)}
+						onclick={() => showDuplicates = !showDuplicates}
 						title={showDuplicates ? 'Hide merged duplicates' : 'Show merged duplicates'}
 					>
 						<Icon cls={showDuplicates ? 'ph-fill ph-eye' : 'ph ph-eye-slash'} />
@@ -1035,9 +1027,9 @@
 	{#if tab === 'bags'}
 		{#if allBeans.length === 0}
 			<BeansEmptyState
-				onQuickAdd={() => (quickAddOpen = true)}
+				onQuickAdd={() => quickAddOpen = true}
 				onFullEditor={gotoNew}
-				onImport={() => (importOpen = true)}
+				onImport={() => importOpen = true}
 			/>
 		{:else}
 			<div class="bn-grid-scroll">
@@ -1060,7 +1052,11 @@
 								hit={bagHits.byId.get(b.id)}
 							/>
 						{/each}
-						<button class="bn-tile-new" onclick={() => (quickAddOpen = true)}>
+
+						<button
+							class="bn-tile-new"
+							onclick={() => quickAddOpen = true}
+						>
 							<div class="bn-tile-new-glyph"><PlusIcon aria-hidden="true" /></div>
 							<div class="bn-tile-new-label">Add a bean</div>
 							<div class="bn-tile-new-sub">
@@ -1123,10 +1119,10 @@
 							? library.getRoaster(roaster.canonicalRoasterId)
 							: null}
 						<RoasterCard
-							{roaster}
-							{count}
-							{archivedCount}
-							{dupOf}
+							roaster={roaster}
+							count={count}
+							archivedCount={archivedCount}
+							dupOf={dupOf}
 							onOpen={openRoasterShelf}
 							onEdit={editRoaster}
 							onDuplicate={duplicateRoaster}
@@ -1174,9 +1170,8 @@
 		}}
 		onToggleArchived={toggleArchived}
 		onToggleFavourite={toggleFavourite}
-		onOpenShot={(shotId) => void goto(resolve(`/history?shot=${encodeURIComponent(shotId)}`))}
-		onSeeAllShots={() =>
-			void goto(resolve(`/history?bean=${encodeURIComponent(drawerBean?.id ?? '')}`))}
+		onOpenShot={(shotId) => void goto(resolve(`history?shot=${encodeURIComponent(shotId)}`))}
+		onSeeAllShots={() => void goto(resolve(`history?bean=${encodeURIComponent(drawerBean?.id ?? '')}`))}
 		onLogBrew={(beanId) => {
 			logBrewBeanId = beanId;
 			logBrewOpen = true;
@@ -1187,9 +1182,9 @@
 {#if logBrewOpen}
 	<LogBrewDialog
 		prefill={{ beanId: logBrewBeanId }}
-		onClose={() => (logBrewOpen = false)}
+		onClose={() => logBrewOpen = false}
 		onSaved={(record) => {
-			void goto(resolve(`/history?shot=${encodeURIComponent(record.id)}`));
+			void goto(resolve(`history?shot=${encodeURIComponent(record.id)}`));
 		}}
 	/>
 {/if}
@@ -1197,7 +1192,7 @@
 <!-- Quick add -->
 {#if quickAddOpen}
 	<BeanQuickAdd
-		onClose={() => (quickAddOpen = false)}
+		onClose={() => quickAddOpen = false}
 		onOpenFull={() => {
 			quickAddOpen = false;
 			gotoNew();
@@ -1207,7 +1202,7 @@
 
 <!-- Import -->
 {#if importOpen}
-	<BeanImportDialog onClose={() => (importOpen = false)} />
+	<BeanImportDialog onClose={() => importOpen = false} />
 {/if}
 
 <style>

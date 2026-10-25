@@ -1,17 +1,17 @@
 /**
- * `$lib/firmware/flash-copy` — English copy for the firmware-update flow:
+ * `#lib/firmware/flash-copy.js` — English copy for the firmware-update flow:
  * phases, blockers, failures and the ETA. The Android shell's
  * `FirmwareFlashCopy.kt` carries the same strings.
  */
 
-import type { De1State } from '$lib/ble';
+import type { De1State } from '#lib/ble/index.js';
 import {
 	DecentFirmwareChannel,
 	FlashPhase,
 	type FlashBlocker,
 	type FlashFailure,
 	type FlashStatus
-} from '$lib/core';
+} from '#lib/core/index.js';
 
 /** The alpha warning, one point per line. */
 export const ALPHA_POINTS: readonly string[] = [

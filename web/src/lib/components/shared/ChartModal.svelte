@@ -10,7 +10,7 @@
 	 * `aria-modal`, Escape / scrim-click / close-button to dismiss.
 	 */
 	import type { Snippet } from 'svelte';
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 
 	let { onclose, children }: { onclose: () => void; children: Snippet } = $props();
 

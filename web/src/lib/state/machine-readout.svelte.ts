@@ -1,5 +1,5 @@
 /**
- * `$lib/state/machine-readout` — a typed view over the orchestrator's
+ * `#lib/state/machine-readout` — a typed view over the orchestrator's
  * `UiSnapshot.de1MachineInfo` MMR-keyed map plus the sibling
  * `de1Firmware` / `de1Calibration` fields.
  *
@@ -17,7 +17,7 @@
  * four.
  */
 
-import { MmrRegister } from '$lib/core/crema-core';
+import { MmrRegister } from '#lib/core/crema-core.js';
 import {
 	getCremaUiState,
 	type CremaUiState,

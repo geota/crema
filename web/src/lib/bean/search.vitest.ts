@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/search.vitest` — the web side of the core bean matcher
+ * `#lib/bean/search.vitest.js` — the web side of the core bean matcher
  * (issue 62). The ranking itself is covered by the Rust unit tests in
  * `de1_domain::bean_search`; what needs proving here is that the wasm
  * bridge round-trips, that the corpus memo does not go stale, and that a
@@ -8,7 +8,7 @@
  */
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { initTestWasm } from '$lib/testing/test-init';
+import { initTestWasm } from '#lib/testing/test-init.js';
 import { blankBean, blankRoaster, type Bean, type Roaster } from './model.ts';
 import {
 	SearchField,

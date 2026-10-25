@@ -1,5 +1,5 @@
 /**
- * `$lib/ble/launch-reconnect` — reconnect the DE1 and scale the user last
+ * `#lib/ble/launch-reconnect.js` — reconnect the DE1 and scale the user last
  * connected, automatically, when the app starts.
  *
  * Web Bluetooth only opens its device chooser from a click, so a PWA can't
@@ -17,14 +17,14 @@
  *
  * Every successful connect stores the device's identity (`BluetoothDevice.id`
  * + name) per device under {@link LAST_DEVICES_KEY}, through the shared
- * `$lib/utils/storage` helpers. It's device-local (the browser's id is
+ * `#lib/utils/storage` helpers. It's device-local (the browser's id is
  * per-origin, per-profile), so it is not part of a backup. A deliberate
  * disconnect (rail menu, Settings) clears `auto` so the next launch leaves
  * that device alone until the user connects it again; an unexpected drop
  * keeps it eligible.
  */
 
-import { isJsonObject, readJson, writeJson } from '$lib/utils/storage';
+import { isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
 
 /** The two devices the app connects. */
 export type DeviceKind = 'de1' | 'scale';

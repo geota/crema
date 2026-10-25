@@ -1,5 +1,5 @@
 /**
- * `$lib/visualizer/oauth.test` — node:test suite for the PKCE helpers.
+ * `#lib/visualizer/oauth.test` — node:test suite for the PKCE helpers.
  *
  * The web shell does not (yet) wire vitest into the build — these tests
  * are runnable with the platform's built-in test runner:

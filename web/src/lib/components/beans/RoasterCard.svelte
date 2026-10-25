@@ -23,8 +23,8 @@
 	 *   • Optional un-merge (visible on canonical-tagged dupes) + the
 	 *     standard duplicate / edit / delete trio in the actions slot.
 	 */
-	import { roasterMarkTone, type Roaster } from '$lib/bean';
-	import LibraryCardShell from '$lib/components/shared/LibraryCardShell.svelte';
+	import { roasterMarkTone, type Roaster } from '#lib/bean/index.js';
+	import LibraryCardShell from '#lib/components/shared/LibraryCardShell.svelte';
 	import RoasterDeleteSplit from './RoasterDeleteSplit.svelte';
 
 	let {

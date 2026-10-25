@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/visualizer-sync.vitest` — round-trip coverage for the Crema⇄Visualizer
+ * `#lib/bean/visualizer-sync.vitest.js` — round-trip coverage for the Crema⇄Visualizer
  * bean / roaster wire converters + the roast-level banding (GEN11; the
  * roast-level half is the GEN1 regression guard).
  *
@@ -10,7 +10,7 @@
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { initTestWasm } from '$lib/testing/test-init';
+import { initTestWasm } from '#lib/testing/test-init.js';
 import { blankBean, blankRoaster } from './model.ts';
 import {
 	beanFromWire,

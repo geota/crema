@@ -1,5 +1,5 @@
 /**
- * `$lib/utils/error` — shared error helpers.
+ * `#lib/utils/error.js` — shared error helpers.
  *
  * `catch` binds an `unknown`, and a thrown value need not be an `Error`. This
  * is the one place that turns any caught value into a human-readable string,

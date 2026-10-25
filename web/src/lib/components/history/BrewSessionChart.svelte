@@ -10,8 +10,8 @@
 	 * series is ≤200 stored samples with no cursor interactions, so
 	 * uPlot would be overkill.
 	 */
-	import type { BrewSeries } from '$lib/core/crema-core';
-	import { maxPlannedTarget, plannedStaircase, staircasePath } from '$lib/brew/staircase';
+	import type { BrewSeries } from '#lib/core/crema-core.js';
+	import { maxPlannedTarget, plannedStaircase, staircasePath } from '#lib/brew/staircase.js';
 
 	let {
 		series,

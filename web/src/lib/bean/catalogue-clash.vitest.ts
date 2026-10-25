@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/catalogue-clash.vitest` — the catalogue clash prompt end to end:
+ * `#lib/bean/catalogue-clash.vitest.js` — the catalogue clash prompt end to end:
  * the core clash list (real wasm), the "Keep mine" / "Use catalogue" /
  * dismiss dialog (the shared `ConfirmDialog` host, mounted), and what each
  * answer applies — for a bag pick (incl. the roaster it resolves to) and a
@@ -8,8 +8,8 @@
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
-import { initTestWasm } from '$lib/testing/test-init';
-import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+import { initTestWasm } from '#lib/testing/test-init.js';
+import ConfirmDialog from '#lib/components/shared/ConfirmDialog.svelte';
 import { blankBean, blankRoaster, type Bean, type Roaster } from './model.ts';
 import {
 	CatalogueField,

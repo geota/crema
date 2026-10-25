@@ -8,9 +8,9 @@
 	 * Disconnect, so disconnecting is two deliberate taps. The menu takes focus
 	 * on open; Esc, a click outside or tabbing away closes it.
 	 */
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	import { tick } from 'svelte';
-	import type { BleConnectionState } from '$lib/ble/connection-state';
+	import type { BleConnectionState } from '#lib/ble/connection-state.js';
 	import {
 		railAction,
 		railCtaIcon,

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	/**
 	 * `PowerButton` — a compact circular power control for the DE1.
 	 *
@@ -20,9 +20,9 @@
 	 * Lives inline at the leftmost slot of the brew dashboard's foot-meta
 	 * strip, next to the Machine label.
 	 */
-	import type { CremaApp } from '$lib/state';
-	import { MachineState } from '$lib/core/crema-core';
-	import type { De1State } from '$lib/ble';
+	import type { CremaApp } from '#lib/state/index.js';
+	import { MachineState } from '#lib/core/crema-core.js';
+	import type { De1State } from '#lib/ble/index.js';
 
 	let { app }: { app: CremaApp | null } = $props();
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	/**
 	 * `StMaintenanceRow` — one upkeep item as a full-width settings row: glyph,
 	 * title (with a "Due" pill when overdue), note, the tracked metric, its

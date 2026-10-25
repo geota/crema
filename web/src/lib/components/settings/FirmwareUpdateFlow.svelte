@@ -14,12 +14,12 @@
 	 * itself is the core's state machine. Every step has one footer row: the
 	 * way back on the left, the actions on the right.
 	 */
-	import Icon from '$lib/icons/Icon.svelte';
-	import { FlashPhase } from '$lib/core';
-	import { FirmwareBuildStatus } from '$lib/core/crema-core';
-	import { firmwareBuildReport } from '$lib/firmware/build-copy';
-	import type { De1State } from '$lib/ble';
-	import type { FirmwareUpdateController } from '$lib/firmware/firmware-update.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
+	import { FlashPhase } from '#lib/core/index.js';
+	import { FirmwareBuildStatus } from '#lib/core/crema-core.js';
+	import { firmwareBuildReport } from '#lib/firmware/build-copy.js';
+	import type { De1State } from '#lib/ble/index.js';
+	import type { FirmwareUpdateController } from '#lib/firmware/firmware-update.svelte.js';
 	import {
 		ALPHA_POINTS,
 		ERASE_SETTLING,
@@ -35,7 +35,7 @@
 		phaseLabel,
 		powerCycleLinkAction,
 		waitingText
-	} from '$lib/firmware/flash-copy';
+	} from '#lib/firmware/flash-copy.js';
 
 	let {
 		flow,

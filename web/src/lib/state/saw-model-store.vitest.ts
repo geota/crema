@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { SawModelLoad } from '$lib/core/crema-core';
+import type { SawModelLoad } from '#lib/core/crema-core.js';
 import {
 	SAW_MODEL_KEY,
 	SAW_MODEL_QUARANTINE_AT_KEY,

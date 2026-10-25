@@ -1,5 +1,5 @@
 /**
- * `$lib/history/model` — the shot-history record shape.
+ * `#lib/history/model.js` — the shot-history record shape.
  *
  * The core does not persist finished shots — `Event::ShotCompleted` only
  * reports a duration and a sample count, nothing it stores. So the web shell
@@ -17,24 +17,24 @@
  * `StoredShot` on both halves of the split.
  */
 
-import type { Bean, Roaster } from '$lib/bean';
+import type { Bean, Roaster } from '#lib/bean/index.js';
 import type {
 	HistoryStats,
 	RustShotMetadata,
 	RustStoredShot,
 	ShotStatInput,
 	TimedSample
-} from '$lib/core';
-import type { ShotMachine as CoreShotMachine } from '$lib/core/crema-core';
-import type { BrewHistoryStats, BrewSeries, BrewStatInput } from '$lib/core/crema-core';
+} from '#lib/core/index.js';
+import type { ShotMachine as CoreShotMachine } from '#lib/core/crema-core.js';
+import type { BrewHistoryStats, BrewSeries, BrewStatInput } from '#lib/core/crema-core.js';
 import {
 	peaksForShot as wasmPeaksForShot,
 	historyStats as wasmHistoryStats,
 	brewHistoryStats as wasmBrewHistoryStats,
 	ratioForMethod as wasmRatioForMethod
-} from '$lib/wasm/de1_wasm';
-import type { TelemetrySample } from '$lib/state';
-import { filenameStamp } from '$lib/utils/download';
+} from '#lib/wasm/de1_wasm.js';
+import type { TelemetrySample } from '#lib/state/index.js';
+import { filenameStamp } from '#lib/utils/download.js';
 import { fromWire } from './telemetry-wire';
 
 /**

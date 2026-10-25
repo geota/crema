@@ -22,7 +22,7 @@
  * // read: viz.connected   ·   optimistic local sign-out: viz.connected = false
  */
 import { onMount } from 'svelte';
-import { getCremaAppContext } from '$lib/shell/app-context';
+import { getCremaAppContext } from '#lib/shell/app-context.js';
 
 export interface VisualizerConnection {
 	/** `true` once a Visualizer token set is stored. See module doc for the

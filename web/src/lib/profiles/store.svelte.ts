@@ -1,11 +1,11 @@
 /**
- * `$lib/profiles/store` — the profile library store.
+ * `#lib/profiles/store` — the profile library store.
  *
  * Backs the `/profiles` library grid and the editor. Two sources merge into
  * one reactive list:
  *
  *  1. **Built-in profiles** — *real*. Pulled from the wasm core via the
- *     `$lib/core` facade's `builtinProfiles()` and adapted with
+ *     `#lib/core` facade's `builtinProfiles()` and adapted with
  *     `fromCoreProfile`. Read-only: the built-in corpus is fixed at compile
  *     time in the Rust core. Editing a built-in duplicates it to a custom
  *     profile.
@@ -25,9 +25,9 @@
 
 import { SvelteSet } from 'svelte/reactivity';
 
-import { loadCore } from '$lib/core';
-import { refreshStopTargetsProjection } from '$lib/state/ui-state.svelte';
-import { isIdOrNull, isJsonObject, readJson, writeJson } from '$lib/utils/storage';
+import { loadCore } from '#lib/core/index.js';
+import { refreshStopTargetsProjection } from '#lib/state/ui-state.svelte.js';
+import { isIdOrNull, isJsonObject, readJson, writeJson } from '#lib/utils/storage.js';
 import {
 	builtinCremaProfiles,
 	toCoreProfile,
@@ -123,7 +123,7 @@ export class ProfileStore {
 	 * Optional hook fired from {@link delete} after a profile is removed,
 	 * passing its id. The orchestrator registers this at boot to clear any
 	 * bean linked-profile references (the bean store can't be imported here
-	 * — `$lib/bean/activate` imports this module, so a static import would
+	 * — `#lib/bean/activate.js` imports this module, so a static import would
 	 * cycle).
 	 */
 	onDeleted?: (id: string) => void;

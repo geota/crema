@@ -1,5 +1,5 @@
 /**
- * `$lib/services/queue-store.test` — node:test for the pure upload-queue
+ * `#lib/services/queue-store.test` — node:test for the pure upload-queue
  * persistence (docs/53 T-14/T-16).
  *
  * `queue-store.ts` is the durable layer the `UploadQueue` service wraps and the

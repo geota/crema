@@ -1,5 +1,5 @@
 /**
- * `$lib/shell/storage-notices` — turns `$lib/utils/storage` notices into toasts.
+ * `#lib/shell/storage-notices` — turns `$lib/utils/storage` notices into toasts.
  *
  * Stores load at module init, before the root layout mounts, so a corrupt
  * value found then is queued; {@link installStorageNotices} drains the queue
@@ -7,15 +7,15 @@
  * notices as they happen. A corrupt store's toast stays until dismissed and
  * offers "Save copy", which downloads the kept-aside raw values.
  */
-import { toast } from '$lib/components/shared/toast.svelte';
-import { downloadBlob } from '$lib/utils/download';
+import { toast } from '#lib/components/shared/toast.svelte.js';
+import { downloadBlob } from '#lib/utils/download.js';
 import {
 	corruptKeyOf,
 	onStorageNotice,
 	storageNoticeMessage,
 	takeStorageNotices,
 	type StorageNotice
-} from '$lib/utils/storage';
+} from '#lib/utils/storage.js';
 
 type Corrupt = Extract<StorageNotice, { kind: 'corrupt' }>;
 

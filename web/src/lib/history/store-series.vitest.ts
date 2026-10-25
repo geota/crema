@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StoredShot } from './model';
-import type { TimedSample } from '$lib/core';
+import type { TimedSample } from '#lib/core/index.js';
 
 const putSeries = vi.fn(async () => {});
 vi.mock('./series-store', () => ({

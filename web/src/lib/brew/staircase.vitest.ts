@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { StageMark } from "$lib/core/crema-core";
+import type { StageMark } from "#lib/core/crema-core.js";
 import { maxPlannedTarget, plannedStaircase, staircasePath } from "./staircase";
 
 /*

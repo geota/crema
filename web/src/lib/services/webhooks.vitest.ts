@@ -1,7 +1,7 @@
 /**
- * `$lib/services/webhooks.vitest` — vitest for the `Webhooks` service (docs/53
+ * `#lib/services/webhooks.vitest` — vitest for the `Webhooks` service (docs/53
  * T-15). Previously verified only by the docs/55 "webhook Send test + a live
- * event to a webhook.site URL" manual step; `webhooks.ts` reads `$lib/settings`
+ * event to a webhook.site URL" manual step; `webhooks.ts` reads `#lib/settings/index.js`
  * so it's unreachable under node:test.
  *
  * Covers: the `fire` settings gate (enabled + non-empty URL + per-event toggle),
@@ -21,7 +21,7 @@ const state = vi.hoisted(() => ({
 		webhookEvents: { shotCompleted: true } as Record<string, boolean>
 	}
 }));
-vi.mock('$lib/settings', () => ({ getSettingsStore: () => ({ current: state.prefs }) }));
+vi.mock('#lib/settings/index.js', () => ({ getSettingsStore: () => ({ current: state.prefs }) }));
 
 import { Webhooks, WebhooksLive } from './webhooks.ts';
 import { HttpClient, type HttpRequest } from './http-client.ts';

@@ -10,8 +10,8 @@
 	 */
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
-	import type { CustomBrewMethod } from '$lib/core/crema-core';
-	import { BrewMethodStyle } from '$lib/core/crema-core';
+	import type { CustomBrewMethod } from '#lib/core/crema-core.js';
+	import { BrewMethodStyle } from '#lib/core/crema-core.js';
 	import {
 		CUSTOM_METHOD_LABEL_MAX,
 		METHOD_ICON_KEYS,
@@ -20,7 +20,7 @@
 		getCustomMethodStore,
 		labelErrorText,
 		styleSeeds
-	} from '$lib/brew/custom-methods.svelte';
+	} from '#lib/brew/custom-methods.svelte.js';
 	import MethodMark from './MethodMark.svelte';
 
 	let {

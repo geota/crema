@@ -1,5 +1,5 @@
 /**
- * `$lib/bean/model` — the bean library types.
+ * `#lib/bean/model.js` — the bean library types.
  *
  * One bag of coffee is a {@link Bean}; the roastery that produced it is a
  * {@link Roaster}; and a snapshot frozen onto each completed shot is a
@@ -13,7 +13,7 @@
  * on {@link BeanLibraryStore} in `./store.svelte`.
  */
 
-import type { Roast } from '$lib/profiles';
+import type { Roast } from '#lib/profiles/index.js';
 import {
 	roast_band as wasmRoastBand,
 	roast_band5 as wasmRoastBand5,
@@ -21,7 +21,7 @@ import {
 	roast_freshness as wasmRoastFreshness,
 	coerceBean as wasmCoerceBean,
 	coerceRoaster as wasmCoerceRoaster
-} from '$lib/wasm/de1_wasm';
+} from '#lib/wasm/de1_wasm.js';
 
 // ── Wire types (mirrored from de1_domain::bean) ─────────────────────────
 
@@ -124,7 +124,7 @@ export interface Bean {
 	grinderSetting: string;
 	/**
 	 * Free-form user tags — `["daily-driver", "comp"]`. Defaults to `[]`.
-	 * Mirrors the profile tag pattern (`$lib/profiles`'s `CremaProfile.tags`)
+	 * Mirrors the profile tag pattern (`#lib/profiles`'s `CremaProfile.tags`)
 	 * so the filter / chip UI behaves consistently across the two libraries.
 	 */
 	tags: string[];

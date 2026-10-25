@@ -1,5 +1,5 @@
 /**
- * `$lib/utils/ratio` — the single brew-ratio formatter.
+ * `#lib/utils/ratio.js` — the single brew-ratio formatter.
  *
  * Both the History page (ratio per recorded shot) and the Profile library
  * (ratio per profile target) need a `1:N`-style label from a `(dose,
@@ -13,7 +13,7 @@
  * History fallback to the 18 g pref is decided at the call site.
  */
 
-import { brew_ratio } from '$lib/wasm/de1_wasm';
+import { brew_ratio } from '#lib/wasm/de1_wasm.js';
 
 /** Format a brew ratio as `1:N` with one decimal, or `1:—` when undefined. */
 export function formatRatio(

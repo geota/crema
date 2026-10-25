@@ -20,7 +20,7 @@
 	 * no-Web-Bluetooth path the wasm module may not have loaded. */
 	let coreVer = $state('—');
 	$effect(() => {
-		void import('$lib/wasm/de1_wasm')
+		void import('#lib/wasm/de1_wasm.js')
 			.then((m) => {
 				coreVer = m.coreVersion();
 			})

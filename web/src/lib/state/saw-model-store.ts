@@ -11,7 +11,7 @@
  * save cannot overwrite the only copy. Newest capture wins, as in Decenza.
  * No UI: the bytes are kept for manual recovery and a warning is logged.
  */
-import type { SawModelLoad } from '$lib/core/crema-core';
+import type { SawModelLoad } from '#lib/core/crema-core.js';
 
 /** localStorage key for the persisted model blob. */
 export const SAW_MODEL_KEY = 'crema.saw-model.v1';

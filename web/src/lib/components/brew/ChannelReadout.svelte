@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Icon from '$lib/icons/Icon.svelte';
+	import Icon from '#lib/icons/Icon.svelte';
 	/**
 	 * `ChannelReadout` — one telemetry-channel tile, ported from the design's
 	 * `ChannelReadout` in `ds/web-components.jsx`. Reuses the `.crema-readout*`

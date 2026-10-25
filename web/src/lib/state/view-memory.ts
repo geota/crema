@@ -1,5 +1,5 @@
 /**
- * `$lib/state/view-memory` — where list pages keep their place (#123).
+ * `#lib/state/view-memory.js` — where list pages keep their place (#123).
  *
  * Leaving a list for a detail, an editor or another page and coming back used
  * to reset it: the filters, search and sort were component state (gone when
@@ -22,7 +22,7 @@
  * Both live in a module-level map (survives route changes for the session)
  * mirrored to `sessionStorage` (survives a reload / the PWA being evicted).
  * The Svelte glue — persisting on change, restoring after navigation — is
- * `$lib/state/use-view-memory.svelte`.
+ * `#lib/state/use-view-memory.svelte.js`.
  */
 
 /** One visible item: its key and its top edge relative to the viewport top. */

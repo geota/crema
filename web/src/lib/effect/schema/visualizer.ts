@@ -1,5 +1,5 @@
 /**
- * `$lib/effect/schema/visualizer` — `Schema`s for the Visualizer HTTP wire
+ * `#lib/effect/schema/visualizer` — `Schema`s for the Visualizer HTTP wire
  * shapes the web app consumes (docs/53 §1.5).
  *
  * These validate **untrusted** JSON coming back from the network. Each schema

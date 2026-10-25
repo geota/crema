@@ -6,10 +6,10 @@
 	 * connected; was Visualizer-only inside `BeanSyncSection`.
 	 */
 	import { onMount } from 'svelte';
-	import Icon from '$lib/icons/Icon.svelte';
-	import { onSyncConfigChange, readSyncConfig } from '$lib/visualizer';
-	import type { SyncLogEntry } from '$lib/visualizer/sync-config';
-	import { syncTimeLabel } from '$lib/utils/relative-time';
+	import Icon from '#lib/icons/Icon.svelte';
+	import { onSyncConfigChange, readSyncConfig } from '#lib/visualizer/index.js';
+	import type { SyncLogEntry } from '#lib/visualizer/sync-config.js';
+	import { syncTimeLabel } from '#lib/utils/relative-time.js';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 

@@ -1,13 +1,13 @@
 <script lang="ts" module>
 	import BooksIcon from 'phosphor-svelte/lib/BooksIcon';
-	import { pinActiveThenFavourite } from '$lib/library-order';
+	import { pinActiveThenFavourite } from '#lib/library-order.js';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import LinkSimpleIcon from 'phosphor-svelte/lib/LinkSimpleIcon';
 	import StarIcon from 'phosphor-svelte/lib/StarIcon';
-	import type { ProfileSegment } from '$lib/profiles';
+	import type { ProfileSegment } from '#lib/profiles/index.js';
 
 	/** One row in a header picker — a profile or a bean, normalised. */
 	export type PickerItem = {
@@ -39,7 +39,7 @@
 	 * and a `[+ Add] [Open library]` footer. Presentational; the parent owns the
 	 * data + the activate/route handlers and the open state.
 	 */
-	import ProfilePreview from '$lib/components/profiles/ProfilePreview.svelte';
+	import ProfilePreview from '#lib/components/profiles/ProfilePreview.svelte';
 
 	let {
 		open = false,

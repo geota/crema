@@ -19,7 +19,7 @@
 	 * same treatment, so "this one is selected" reads identically across
 	 * profile and bean chips.
 	 */
-	import { roasterMarkTone, type Bean, type Roaster } from '$lib/bean';
+	import { roasterMarkTone, type Bean, type Roaster } from '#lib/bean/index.js';
 
 	let {
 		bean,

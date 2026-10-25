@@ -24,8 +24,8 @@
  * @param beanIds   Visualizer ids of bags to delete (empty for a roaster-only detach)
  * @param roasterId Visualizer id of the roaster to delete last, if any
  */
-import { readSyncSettings } from '$lib/bean';
-import type { CremaServices } from '$lib/effect/crema-services';
+import { readSyncSettings } from '#lib/bean/index.js';
+import type { CremaServices } from '#lib/effect/crema-services.js';
 
 export async function bestEffortRemoteDelete(
 	services: CremaServices | null,

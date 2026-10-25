@@ -1,5 +1,5 @@
 /**
- * `$lib/effect/crema-services` — the `Promise`-shaped facade over the Visualizer
+ * `#lib/effect/crema-services` — the `Promise`-shaped facade over the Visualizer
  * sync services, the deep seam between the Svelte component world and the Effect
  * service world (architecture review #1).
  *
@@ -40,12 +40,12 @@ import {
 } from '../services/shot-sync.ts';
 import { BeanSync, type ConnectionTestResult, type VisualizerAccount } from '../services/bean-sync.ts';
 import { UploadQueue, type DrainResult, type EnqueueInput } from '../services/upload-queue.ts';
-import type { TokenSet } from '$lib/visualizer/oauth';
-import type { SyncResult } from '$lib/bean/visualizer-sync';
-import type { HistoryStore } from '$lib/history/store.svelte';
-import { pushShotToVisualizer } from '$lib/history/shot-persistence.ts';
-import type { BeanLibraryStore } from '$lib/bean/store.svelte';
-import type { CataloguePage, CatalogueRoasterPage } from '$lib/bean/catalogue';
+import type { TokenSet } from '#lib/visualizer/oauth.js';
+import type { SyncResult } from '#lib/bean/visualizer-sync.js';
+import type { HistoryStore } from '#lib/history/store.svelte.js';
+import { pushShotToVisualizer } from '#lib/history/shot-persistence.ts';
+import type { BeanLibraryStore } from '#lib/bean/store.svelte.js';
+import type { CataloguePage, CatalogueRoasterPage } from '#lib/bean/catalogue.js';
 import { describeVisualizerError } from '../services/visualizer-call.ts';
 
 /**
