@@ -130,7 +130,18 @@ export default defineConfig(({ command }) => ({
 		...command === 'build'
 			? [
 				SvelteKitPWA({
-					registerType: 'autoUpdate',
+					// `prompt`, not `autoUpdate`: the auto client reloads the page the moment
+			// a new build activates, which would drop the DE1 link mid-shot. With
+			// `prompt` the new worker waits; `#lib/pwa/register.ts` offers the reload
+			// only while the machine is idle (and registers the worker at all —
+			// SvelteKit never runs the HTML hook the plugin's auto-inject relies on).
+			registerType: 'prompt',
+			// SPA mode for the precache: adapter-static's fallback page is the app
+			// shell for every route, so it goes in the precache (revisioned from
+			// _app/version.json) and the worker answers any navigation with it —
+			// without this, nothing precaches the page and the app cannot open
+			// offline even with the worker registered.
+			kit: { adapterFallback: 'index.html', spa: true },
 					// Full web app manifest. `theme_color` / `background_color` match the
 					// daisyUI `coffee` theme's base so the splash and chrome blend in.
 					manifest: {
@@ -172,6 +183,11 @@ export default defineConfig(({ command }) => ({
 						]
 					},
 					workbox: {
+				// `prompt` strategy: the new worker waits until the shell posts
+				// SKIP_WAITING (see registerType above), then claims the open tabs so
+				// their `controllerchange` fires and the shell reloads them once.
+				skipWaiting: false,
+				clientsClaim: true,
 						// Precache the app shell + the wasm core (`**/*.wasm` caches the
 						// de1-wasm binary for offline / instant-load). Icons are inline SVG
 						// (phosphor-svelte) bundled into the JS chunks, so there's no icon
