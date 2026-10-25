@@ -9,6 +9,18 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Restored and pulled shots lost their charts (web)** — a backup restore, a
+  Visualizer pull and a Beanconqueror import stored each shot's summary row
+  but never its telemetry series, so every such shot showed an empty chart
+  and 0 samples after the next page load. The series is now written with the
+  row.
+- **History kept showing a shot the filter had hidden (web)** — with a search
+  or a profile / bean / tag filter active, the detail pane stayed on the
+  previously picked shot even once it no longer appeared in the list. It now
+  follows the tablet's rule and shows the first matching shot.
+
+### Fixed
+
 - **A bag's "Shots" list showed "—" for every non-espresso brew** — the
   bean profile's recent-shots rows only ever read the espresso profile name,
   so a logged V60 or a custom-method brew (an "ORB recipe", say) had no
