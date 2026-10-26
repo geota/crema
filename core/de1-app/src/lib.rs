@@ -1800,13 +1800,18 @@ impl CremaCore {
     /// `volts` **must** be `120` or `230` — any other value is rejected with
     /// [`AppError::InvalidArg`]. MMR `0x803834`, 4-byte little-endian.
     ///
-    /// The wire payload is `volts + 1000` — the firmware uses the `+1000`
-    /// offset as a "user-committed" marker (so `120` / `230` read back as
-    /// `1120` / `1230`); a raw value of `0` means the firmware has not yet
-    /// been told and is detecting from the heater dB. We never write `0`
-    /// ourselves — only `1120` or `1230`. See reaprime
-    /// `de1.models.dart:301 heaterV` ("Nominal Heater Voltage (0, 120V or
-    /// 230V). +1000 if it's a set value.").
+    /// The wire payload is the plain voltage, `120` or `230`, exactly as
+    /// de1app (`set_heater_voltage "120"` / `"230"`,
+    /// `skins/default/de1_skin_settings.tcl:2424-2425`, written verbatim by
+    /// `de1_comms.tcl:1666-1668`), reaprime (`setHeaterVoltage` writes
+    /// `De1HeaterVoltage.voltage`, `unified_de1.dart:827-830`) and Decenza
+    /// (`de1device.cpp` `setHeaterVoltage`) write it. The **firmware** adds
+    /// the `+1000` "user-committed" marker, so a value set this way reads
+    /// back as `1120` / `1230`; a raw `0` means the firmware has not been
+    /// told and is detecting from the heater dB. The read side
+    /// ([`heater_voltage_from_raw`]) therefore subtracts 1000 once. We never
+    /// write the `+1000` ourselves: a firmware that adds it again would store
+    /// `2120` / `2230`, which no reference decoder classifies.
     ///
     /// **Damaging if mis-set** — wrong voltage on the wrong mains can
     /// permanently damage the heater. The shell is responsible for the
@@ -1827,9 +1832,13 @@ impl CremaCore {
                 reason: "must be 120 or 230 V".to_owned(),
             });
         }
-        // +1000 user-committed marker; encoded as 4-byte LE on the wire.
-        let wire = u32::from(volts) + 1000;
-        Ok(mmr_write_command(MmrRegister::HeaterVoltage, wire, 4))
+        // Plain volts, 4-byte LE on the wire; the firmware adds the +1000
+        // user-committed marker itself (see the doc comment).
+        Ok(mmr_write_command(
+            MmrRegister::HeaterVoltage,
+            u32::from(volts),
+            4,
+        ))
     }
 
     /// Reset 8 machine settings to factory baseline (legacy reaprime
@@ -5197,7 +5206,7 @@ fn mmr_write_command(register: MmrRegister, value: u32, byte_len: u8) -> CoreOut
 mod tests {
     use super::*;
     use de1_domain::ShotPhase;
-    use de1_protocol::{MachineState, SubState};
+    use de1_protocol::{MachineState, SubState, heater_voltage_from_raw};
     // Per-scale protocol modules used by the tests; the production lib
     // no longer reaches into these directly (the capability-driven
     // refactor consolidated everything through `Scale::*_command`).
@@ -9396,29 +9405,26 @@ mod tests {
     }
 
     #[test]
-    fn set_heater_voltage_encodes_plus_1000_as_four_byte_le() {
-        // Per reaprime de1.models.dart:301 heaterV "Nominal Heater
-        // Voltage (0, 120V or 230V). +1000 if it's a set value." —
-        // the user-committed marker is the +1000 offset, encoded as
-        // 4-byte little-endian on the wire.
-        //   120 + 1000 = 1120 = 0x460 → bytes [0x60, 0x04, 0x00, 0x00]
-        //   230 + 1000 = 1230 = 0x4CE → bytes [0xCE, 0x04, 0x00, 0x00]
+    fn set_heater_voltage_writes_plain_volts_as_four_byte_le() {
+        // de1app `set_heater_voltage "120"` writes the plain voltage
+        // (`de1_comms.tcl:1666-1668`, `mmr_write "803834" "04" ...`);
+        // reaprime writes `De1HeaterVoltage.voltage` = 120 / 230
+        // (`unified_de1.dart:827-830`); Decenza writes 120 / 230 unchanged.
+        // The firmware adds +1000 itself. Full 20-byte WriteToMMR frame:
+        //   [Len=4][addr 80 38 34 BE][data 78 00 00 00 LE][zero pad to 20]
         let core = CremaCore::new();
 
         let out120 = core
             .set_heater_voltage(120)
             .expect("120 V should be accepted");
+        assert_eq!(out120.commands.len(), 1);
         let Some(Command::WriteCharacteristic { target, data }) = out120.commands.first() else {
             panic!("expected a WriteCharacteristic for 120 V");
         };
         assert_eq!(*target, WriteTarget::De1MmrWrite);
-        assert_eq!(data[0], 4, "HeaterVoltage is a 4-byte register");
-        assert_eq!(&data[1..4], &[0x80, 0x38, 0x34], "address 0x803834 LE");
-        assert_eq!(
-            &data[4..8],
-            &[0x60, 0x04, 0x00, 0x00],
-            "wire payload = 120 + 1000 = 1120, LE"
-        );
+        let mut want120 = vec![0x04, 0x80, 0x38, 0x34, 0x78, 0x00, 0x00, 0x00];
+        want120.resize(20, 0);
+        assert_eq!(data, &want120, "120 V = 0x78, plain, LE");
 
         let out230 = core
             .set_heater_voltage(230)
@@ -9426,12 +9432,22 @@ mod tests {
         let Some(Command::WriteCharacteristic { data, .. }) = out230.commands.first() else {
             panic!("expected a WriteCharacteristic for 230 V");
         };
-        assert_eq!(data[0], 4, "HeaterVoltage is a 4-byte register");
-        assert_eq!(
-            &data[4..8],
-            &[0xCE, 0x04, 0x00, 0x00],
-            "wire payload = 230 + 1000 = 1230, LE"
-        );
+        let mut want230 = vec![0x04, 0x80, 0x38, 0x34, 0xE6, 0x00, 0x00, 0x00];
+        want230.resize(20, 0);
+        assert_eq!(data, &want230, "230 V = 0xE6, plain, LE");
+    }
+
+    #[test]
+    fn heater_voltage_read_side_strips_the_firmware_marker_once() {
+        // reaprime `De1HeaterVoltage.fromInt` subtracts 1000 once, then
+        // buckets 90..=150 as 120 V and 180..=260 as 230 V.
+        assert_eq!(heater_voltage_from_raw(1120), Some(120));
+        assert_eq!(heater_voltage_from_raw(1230), Some(230));
+        assert_eq!(heater_voltage_from_raw(120), Some(120));
+        assert_eq!(heater_voltage_from_raw(230), Some(230));
+        assert_eq!(heater_voltage_from_raw(0), None, "0 = not set, auto-detect");
+        assert_eq!(heater_voltage_from_raw(2120), None, "double marker is unset");
+        assert_eq!(heater_voltage_from_raw(170), None);
     }
 
     // ---- Range-clamp safety audit -------------------------------------

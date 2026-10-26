@@ -87,6 +87,27 @@ pub const fn is_bengle_model(raw: u32) -> bool {
     raw >= 128
 }
 
+/// Decode a raw `HeaterVoltage` MMR word (`0x803834`) to the nominal mains
+/// voltage, `Some(120)` or `Some(230)`, or `None` when the firmware has not
+/// been told (raw `0`) or the word is outside both bands.
+///
+/// The app writes the plain voltage (120 / 230); the firmware adds `+1000`
+/// to mark a user-committed value, so a set machine reads back `1120` /
+/// `1230`. This strips the marker **once** and buckets like reaprime
+/// `De1HeaterVoltage.fromInt` (`de1_interface.dart:118-123`: `90..=150` →
+/// 120 V, `180..=260` → 230 V). A doubled marker (`2120`) stays `None`.
+#[must_use]
+pub const fn heater_voltage_from_raw(raw: u32) -> Option<u16> {
+    let v = if raw > 1000 { raw - 1000 } else { raw };
+    if v >= 90 && v <= 150 {
+        Some(120)
+    } else if v >= 180 && v <= 260 {
+        Some(230)
+    } else {
+        None
+    }
+}
+
 /// Whether the connected machine has the Bengle cup-warmer plate hardware —
 /// a capability gate the shell uses to show / hide the cup-warmer card.
 /// The plate is Bengle-only, so this is exactly [`is_bengle_model`]
