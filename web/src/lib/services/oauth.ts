@@ -195,7 +195,8 @@ export const OAuthLive = Layer.effect(
 				url: TOKEN_URL,
 				method: 'POST',
 				headers: FORM_HEADERS,
-				body: body.toString()
+				body: body.toString(),
+				timeoutMs: TOKEN_TIMEOUT_MS
 			});
 			return yield* parseTokenResponse(res);
 		});
@@ -229,7 +230,13 @@ export const OAuthLive = Layer.effect(
 			Effect.gen(function* () {
 				if (!isConfigured()) return;
 				const body = new URLSearchParams({ token, client_id: clientId() }).toString();
-				yield* http.request({ url: REVOKE_URL, method: 'POST', headers: FORM_HEADERS, body });
+				yield* http.request({
+					url: REVOKE_URL,
+					method: 'POST',
+					headers: FORM_HEADERS,
+					body,
+					timeoutMs: TOKEN_TIMEOUT_MS
+				});
 			}).pipe(Effect.ignore);
 
 		return OAuth.of({ startLogin, exchangeCode, refreshToken, revokeToken });

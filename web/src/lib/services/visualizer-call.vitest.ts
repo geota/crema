@@ -13,7 +13,8 @@
  * HttpStatusError on non-2xx, so the fake does too).
  */
 
-import { Cause, Effect, Exit, Layer } from 'effect';
+import { Cause, Duration, Effect, Exit, Fiber, Layer } from 'effect';
+import { TestClock } from 'effect/testing';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
 	describeVisualizerError,
@@ -21,6 +22,7 @@ import {
 	quotaLimit,
 	quotaNotice,
 	retryDelayMs,
+	VISUALIZER_TIMEOUT_MS,
 	visualizerCall,
 	type VisualizerCallError
 } from './visualizer-call.ts';
@@ -252,5 +254,25 @@ describe('describeVisualizerError', () => {
 	});
 	it('gives an actionable message for not-authenticated', () => {
 		expect(describeVisualizerError(new NotAuthenticatedError())).toBe('Sign in to Visualizer first.');
+	});
+});
+
+describe('visualizerCall — timeout (review 03 P3-5)', () => {
+	it('fails a request that never answers as a recoverable NetworkError', async () => {
+		const hung = Layer.succeed(HttpClient, HttpClient.of({ request: () => Effect.never }));
+		const program = Effect.gen(function* () {
+			const fiber = yield* Effect.forkChild(Effect.exit(visualizerCall('/shots/upload', { method: 'POST', body: {} })));
+			yield* TestClock.adjust(Duration.millis(VISUALIZER_TIMEOUT_MS - 1));
+			const early = fiber.pollUnsafe();
+			yield* TestClock.adjust(Duration.millis(1));
+			return { early, exit: yield* Fiber.join(fiber) };
+		}).pipe(Effect.provide(Layer.merge(hung, mkVault(aToken))), Effect.provide(TestClock.layer()));
+		const { early, exit } = await Effect.runPromise(program);
+		expect(early).toBeUndefined();
+		expect(Exit.isFailure(exit)).toBe(true);
+		const err = Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : undefined;
+		const value = err?._tag === 'Some' ? (err.value as VisualizerCallError) : undefined;
+		expect(value?._tag).toBe('NetworkError');
+		expect(value && isRecoverable(value)).toBe(true);
 	});
 });

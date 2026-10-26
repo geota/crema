@@ -11,10 +11,9 @@
  * fiber's `AbortSignal`, so an interrupt or timeout actually cancels the
  * in-flight request — mirroring today's `AbortSignal.timeout(…)` usage.
  *
- * Timeout is **opt-in per request** (`timeoutMs`), not a global default: the
- * only caller that times out today is the webhook fan-out (5 s). Shot uploads
- * currently have no timeout, and imposing one here would be a silent behavior
- * change when this client is wired into ShotSync (T-12).
+ * Timeout is **opt-in per request** (`timeoutMs`), not a global default. The
+ * webhook fan-out sets 5 s and the OAuth token requests 30 s; `visualizerCall`
+ * bounds a whole Visualizer call (fetch plus body read) at 60 s itself.
  */
 
 import { Context, Effect, Layer } from 'effect';

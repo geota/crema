@@ -46,6 +46,15 @@ import {
 /** Visualizer API base. */
 export const API_BASE = 'https://visualizer.coffee/api';
 
+/**
+ * Upper bound on one Visualizer call (including a refresh-and-retry), after
+ * which it fails as a recoverable `NetworkError`. Without it a request that
+ * never answers holds the upload queue's single-flight drain for the rest of
+ * the session (review 03 P3-5). Generous so a large shot upload on a slow
+ * link still finishes.
+ */
+export const VISUALIZER_TIMEOUT_MS = 60_000;
+
 /** The closed error union every {@link visualizerCall} can surface. */
 export type VisualizerCallError =
 	| NetworkError
@@ -117,7 +126,17 @@ export const visualizerCall = (
 								try: () => res.json(),
 								catch: (cause) => new NetworkError({ cause, url: `${API_BASE}${path}` })
 							})
-				)
+				),
+				Effect.timeoutOrElse({
+					duration: VISUALIZER_TIMEOUT_MS,
+					orElse: () =>
+						Effect.fail(
+							new NetworkError({
+								cause: new Error(`Visualizer did not answer within ${VISUALIZER_TIMEOUT_MS / 1000} s`),
+								url: `${API_BASE}${path}`
+							})
+						)
+				})
 			);
 	});
 
