@@ -12,8 +12,8 @@
  *    single-flight (a concurrent drain still coalesces to `deferred` without
  *    blocking — a plain `Semaphore.withPermits` would serialise + re-drain,
  *    which changes behavior);
- *  - the 5-min foreground tick becomes `Schedule.spaced("5 minutes")` under
- *    `Effect.forkDetach` (matching the old never-cleared `setInterval`);
+ *  - the 5-min foreground tick becomes `Schedule.spaced("5 minutes")` forked
+ *    into the layer's scope, so `runtime.dispose()` stops it (review 03 P3-8);
  *  - `runEntry` calls the new `ShotSync` / `BeanSync` services;
  *  - **intentional behavior change (the one in the plan)**: `attempts` now
  *    counts *attempts made*, not *attempts queued*. The old `enqueue()` bumped
@@ -30,7 +30,7 @@
  * deterministically).
  */
 
-import { Context, Effect, Layer, Ref, Schedule } from 'effect';
+import { Context, Effect, Layer, Ref, Schedule, Scope } from 'effect';
 import { ShotSync } from './shot-sync.ts';
 import { BeanSync } from './bean-sync.ts';
 import type { ResponseDecodeError } from '../effect/errors.ts';
@@ -106,6 +106,9 @@ export const UploadQueueLive = Layer.effect(
 		const beanSync = yield* BeanSync;
 		const draining = yield* Ref.make(false);
 		const lifecycleArmed = yield* Ref.make(false);
+		// The layer's own scope: closed by `ManagedRuntime.dispose()`, which
+		// interrupts whatever was forked into it.
+		const layerScope = yield* Scope.Scope;
 
 		const enqueue = (input: EnqueueInput): Effect.Effect<void> =>
 			Effect.sync(() => enqueueEntry(input));
@@ -222,12 +225,13 @@ export const UploadQueueLive = Layer.effect(
 			// launch (EF4) — dropped. (Lone nuance: the startup flush now rides
 			// `tick`, which skips while the tab is hidden/offline; at app launch the
 			// tab is visible, and the `online` event + each sync tail still drain, so
-			// a backlog is never stranded.) `forkDetach` matches the old never-cleared
-			// `setInterval` lifetime (lives until the runtime is disposed). The
+			// a backlog is never stranded.) The loop is forked into the layer scope,
+			// so it lives exactly as long as the runtime: `dispose()` (shell unmount,
+			// HMR) interrupts it. A detached fork would outlive the runtime. The
 			// `online` / `visibilitychange` DOM listeners are wired at the call site
 			// at T-16, where the runtime is in scope — bridging DOM events into a
 			// fiber needs the runtime handle (D-07).
-			yield* Effect.forkDetach(Effect.repeat(tick, Schedule.spaced('5 minutes')));
+			yield* Effect.forkIn(Effect.repeat(tick, Schedule.spaced('5 minutes')), layerScope);
 		});
 
 		return UploadQueue.of({

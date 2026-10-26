@@ -14,7 +14,7 @@
  */
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Effect, Layer } from 'effect';
+import { Effect, Layer, ManagedRuntime } from 'effect';
 
 // runEntry reaches the history store via `#lib/history/index.js`; mock it so no real
 // rune store is instantiated and we can observe the bind / purge calls.
@@ -267,5 +267,42 @@ describe('UploadQueue.drain — offline guard', () => {
 		expect(result.deferred).toBe(1);
 		expect(result.processed).toBe(0);
 		expect(readQueue().entries).toHaveLength(1); // untouched
+	});
+});
+
+describe('UploadQueue.armLifecycle — runtime lifetime (review 03 P3-8)', () => {
+	it('stops the 5-minute drain loop when the runtime is disposed', async () => {
+		vi.useFakeTimers();
+		try {
+			vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+			mockHistory.get.mockReturnValue({ id: 's1', visualizerId: undefined });
+			enqueueEntry({ entity: 'shot', id: 's1', op: 'create' });
+			let uploads = 0;
+			const layer = Layer.provide(
+				UploadQueueLive,
+				Layer.merge(
+					fakeShotSync({
+						uploadShot: () => {
+							uploads += 1;
+							return Effect.fail(new HttpStatusError({ status: 503, url: '/u' }));
+						}
+					}),
+					fakeBeanSync({})
+				)
+			);
+			const runtime = ManagedRuntime.make(layer);
+			await runtime.runPromise(UploadQueue.pipe(Effect.flatMap((q) => q.armLifecycle)));
+			await vi.advanceTimersByTimeAsync(10);
+			expect(uploads).toBe(1); // the startup flush
+
+			await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+			expect(uploads).toBe(2); // the loop is alive while the runtime is
+
+			await runtime.dispose();
+			await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+			expect(uploads).toBe(2); // and dead once it is disposed
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
