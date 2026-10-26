@@ -67,6 +67,15 @@ pub enum Source {
     /// received. The orchestrator's ack matcher reads byte 0 (`FrameToWrite`)
     /// to confirm each frame applied.
     De1FrameAck,
+    /// The shell's confirmation that a profile `HeaderWrite` (`cuuid_0F`)
+    /// write succeeded. Like [`De1FrameAck`](Self::De1FrameAck) this is
+    /// synthesised by the shell from the bytes it just wrote (the DE1 sends
+    /// only an ATT write response); the core requires it before any frame
+    /// ack, so a header write that failed fails the upload instead of
+    /// leaving the DE1 with the previous profile's frame count under the new
+    /// frames (reaprime awaits the header write the same way,
+    /// `unified_de1.profile.dart`).
+    De1HeaderAck,
     /// The connected scale's on-scale button characteristic — today only the
     /// Skale II's `EF82` (`ScaleUuids::button_notify`). The shell subscribes
     /// when the core reports the characteristic and forwards presses here;
@@ -617,9 +626,8 @@ pub enum Event {
         /// Espresso group target temperature, °C.
         group_temp: f32,
     },
-    /// A profile upload has begun. Carries the total number of acks the
-    /// orchestrator expects (frames + extensions + tail; the header is
-    /// not acked separately).
+    /// A profile upload has begun. Carries the frame counts the orchestrator
+    /// expects acks for (the header ack, then frames + extensions + tail).
     ProfileUploadStarted {
         /// Title of the profile being uploaded — propagated for the
         /// shell's UI ("Uploading <title>…") and for the active-profile
@@ -653,10 +661,28 @@ pub enum Event {
     },
     /// The profile upload failed. The core has discarded its in-progress
     /// state; the shell may retry by calling `upload_profile` again.
+    ///
+    /// Once the header was dispatched, what the DE1 holds is **unknown**:
+    /// frames are indexed slot writes with no commit step, so an interrupted
+    /// upload can leave the new header's frame count over a mix of new and
+    /// old frames (Decenza `aa8232e6`). The shell must forget any "the DE1
+    /// holds profile X" cache on this event; the core asks for a re-upload
+    /// with [`ProfileReuploadNeeded`](Self::ProfileReuploadNeeded) once the
+    /// machine is Idle.
     ProfileUploadFailed {
         /// Why the upload failed.
         reason: ProfileUploadFailure,
     },
+    /// The DE1's loaded profile is unknown after a failed upload and the
+    /// machine is Idle, so the shell should upload the active profile now.
+    /// Emitted when a failure lands while the machine is Idle, or on the
+    /// next transition into Idle (after the flow that interrupted the
+    /// upload, never during it). Bounded to
+    /// [`MAX_PROFILE_REUPLOAD_REQUESTS`](crate::MAX_PROFILE_REUPLOAD_REQUESTS)
+    /// consecutive requests until an upload completes; cleared by a
+    /// completed upload or a reset (the reconnect path owns the re-upload).
+    /// Decenza's `ReArm` follow-up (`aa8232e6`).
+    ProfileReuploadNeeded,
     /// An incoming notification could not be decoded.
     DecodeError {
         /// Human-readable description of the failure.
@@ -690,6 +716,12 @@ pub enum ProfileUploadFailure {
         /// The `FrameToWrite` byte the ack actually carried.
         got: u8,
     },
+    /// A frame ack arrived before the shell confirmed the header write, or
+    /// the header confirmation never arrived within
+    /// [`PROFILE_UPLOAD_ACK_TIMEOUT`](crate::PROFILE_UPLOAD_ACK_TIMEOUT).
+    /// The header write failed, so the DE1 may hold the previous profile's
+    /// frame count.
+    HeaderNotAcked,
     /// No ack arrived within
     /// [`PROFILE_UPLOAD_ACK_TIMEOUT`](crate::PROFILE_UPLOAD_ACK_TIMEOUT) of
     /// the most recent ack (or upload start, for the first ack).

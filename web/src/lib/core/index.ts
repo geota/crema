@@ -276,6 +276,7 @@ export type NotificationSource =
 	| 'De1ShotSettings'
 	| 'De1ProfileHeader'
 	| 'De1FrameAck'
+	| 'De1HeaderAck'
 	| 'ScaleButton';
 
 /**
@@ -974,6 +975,8 @@ async function createCore(): Promise<CremaCore> {
 				return wasm.NotificationSource.De1ProfileHeader;
 			case 'De1FrameAck':
 				return wasm.NotificationSource.De1FrameAck;
+			case 'De1HeaderAck':
+				return wasm.NotificationSource.De1HeaderAck;
 			case 'ScaleButton':
 				return wasm.NotificationSource.ScaleButton;
 		}

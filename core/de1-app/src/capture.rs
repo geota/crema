@@ -292,6 +292,7 @@ fn source_name(source: Source) -> &'static str {
         Source::De1ShotSettings => "DE1_SHOT_SETTINGS",
         Source::De1ProfileHeader => "DE1_PROFILE_HEADER",
         Source::De1FrameAck => "DE1_FRAME_ACK",
+        Source::De1HeaderAck => "DE1_HEADER_ACK",
         Source::ScaleWeight => "SCALE_WEIGHT",
         Source::ScaleCommand => "SCALE_FF12",
         Source::ScaleButton => "SCALE_BUTTON",

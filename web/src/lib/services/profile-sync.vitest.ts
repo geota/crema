@@ -26,7 +26,7 @@
 import { describe, expect, it } from 'vitest';
 import { Deferred, Duration, Effect, Fiber } from 'effect';
 import { TestClock } from 'effect/testing';
-import { ProfileSync, ProfileSyncLive } from './profile-sync.ts';
+import { ProfileSync, ProfileSyncLive, profileWriteAck } from './profile-sync.ts';
 
 const noop = () => {};
 
@@ -253,5 +253,22 @@ describe('ProfileSync.profileDownloadGuard (TestClock)', () => {
 		);
 		expect(result.waitingAtStart).toBe(true);
 		expect(result.waitingAt499).toBe(true);
+	});
+});
+
+describe('profileWriteAck (cohort review 02 P0-2)', () => {
+	it('acks a delivered header as De1HeaderAck and a delivered frame as De1FrameAck', () => {
+		expect(profileWriteAck('De1ProfileHeader', true)).toBe('De1HeaderAck');
+		expect(profileWriteAck('De1ProfileFrame', true)).toBe('De1FrameAck');
+	});
+
+	it('never acks a write that did not reach the DE1', () => {
+		expect(profileWriteAck('De1ProfileHeader', false)).toBeNull();
+		expect(profileWriteAck('De1ProfileFrame', false)).toBeNull();
+	});
+
+	it('acks nothing for other targets', () => {
+		expect(profileWriteAck('De1RequestedState', true)).toBeNull();
+		expect(profileWriteAck('De1MmrWrite', true)).toBeNull();
 	});
 });

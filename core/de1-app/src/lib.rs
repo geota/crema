@@ -49,7 +49,7 @@ use de1_domain::{
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
-    ShotHeader, ShotSample, ShotSettings, StateInfo, SubState, Version, WaterLevels, mmr, profile,
+    SHOT_HEADER_LEN, ShotHeader, ShotSample, ShotSettings, StateInfo, SubState, Version, WaterLevels, mmr, profile,
     requested_state,
 };
 
@@ -60,6 +60,12 @@ use de1_protocol::{
 /// A 5-second margin is ~100× the typical real-DE1 round-trip and clears
 /// Web Bluetooth's worst-case back-pressure window.
 pub const PROFILE_UPLOAD_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Consecutive [`Event::ProfileReuploadNeeded`] requests the core makes after
+/// failed uploads before it waits for the shell to upload on its own (the
+/// next shot start or reconnect). Reset by a completed upload. Bounds a link
+/// that fails every upload to a few attempts, like Decenza's capped retry.
+pub const MAX_PROFILE_REUPLOAD_REQUESTS: u8 = 3;
 use de1_scale::decent_hds::HdsNegotiation;
 use de1_scale::{Scale, ScaleCapabilities, ScaleConfigUpdate, ScaleUuids, TimerCommand};
 #[cfg(test)]
@@ -611,6 +617,14 @@ pub struct CremaCore {
     /// "active profile on the DE1" identity the brew page surfaces. `None`
     /// at cold start; cleared by [`reset`](Self::reset) on disconnect.
     last_active_profile_title: Option<String>,
+    /// What the DE1 holds is unknown after a failed upload, and no
+    /// [`Event::ProfileReuploadNeeded`] has been sent for it yet. Set on every
+    /// [`Event::ProfileUploadFailed`]; cleared by a completed upload, by the
+    /// request itself, and by [`reset`](Self::reset).
+    profile_reupload_pending: bool,
+    /// Consecutive [`Event::ProfileReuploadNeeded`] requests since the last
+    /// completed upload — capped at [`MAX_PROFILE_REUPLOAD_REQUESTS`].
+    profile_reupload_requests: u8,
     /// Per-step weight exits of the active profile (issue 11): sends
     /// `SkipToNext` when the projected weight reaches the current frame's
     /// step `weight`. Follows the ACTIVE profile: set by
@@ -836,9 +850,14 @@ struct ProfileUpload {
     /// The uploaded profile's step-weight arbiter; latched into
     /// [`step_weight`](CremaCore::step_weight) on success.
     step_weight: StepWeightExit,
-    /// The full sequence of `FrameToWrite` bytes the orchestrator expects,
-    /// in upload order: `[0, 1, …, frame_count-1, 32+ext0, 32+ext1, …,
-    /// frame_count]`. The header is not acked separately.
+    /// The header packet as written; the shell's
+    /// [`Source::De1HeaderAck`] must echo it before any frame ack counts.
+    header: [u8; SHOT_HEADER_LEN],
+    /// Whether the shell has confirmed the header write.
+    header_acked: bool,
+    /// The full sequence of `FrameToWrite` bytes the orchestrator expects
+    /// after the header ack, in upload order: `[0, 1, …, frame_count-1,
+    /// 32+ext0, 32+ext1, …, frame_count]`.
     expected_acks: Vec<u8>,
     /// Index into [`expected_acks`](Self::expected_acks) of the next ack
     /// the orchestrator is waiting for. Starts at `0`; on the final ack,
@@ -899,6 +918,8 @@ impl CremaCore {
             scale_config_queried: false,
             profile_upload: None,
             last_active_profile_title: None,
+            profile_reupload_pending: false,
+            profile_reupload_requests: 0,
             step_weight: StepWeightExit::default(),
             active_beverage_type: BeverageType::default(),
             last_profile_header: None,
@@ -2880,6 +2901,7 @@ impl CremaCore {
             Source::De1ShotSettings => self.handle_shot_settings_read(data, &mut out),
             Source::De1ProfileHeader => self.handle_profile_header_read(data, &mut out),
             Source::De1FrameAck => self.handle_profile_frame_ack(data, now, &mut out),
+            Source::De1HeaderAck => self.handle_profile_header_ack(data, now),
             Source::ScaleButton => {
                 if let Some(button) = self.scale.as_ref().and_then(|s| s.parse_button(data)) {
                     out.events.push(Event::ScaleButtonPressed { button });
@@ -2925,11 +2947,14 @@ impl CremaCore {
         if let Some(upload) = &self.profile_upload
             && now.saturating_sub(upload.last_progress) >= PROFILE_UPLOAD_ACK_TIMEOUT
         {
-            let awaiting = upload.expected_acks[upload.next_idx];
-            self.profile_upload = None;
-            out.events.push(Event::ProfileUploadFailed {
-                reason: ProfileUploadFailure::AckTimeout { awaiting },
-            });
+            let reason = if upload.header_acked {
+                ProfileUploadFailure::AckTimeout {
+                    awaiting: upload.expected_acks[upload.next_idx],
+                }
+            } else {
+                ProfileUploadFailure::HeaderNotAcked
+            };
+            self.fail_profile_upload(reason, &mut out);
         }
         self.update_machine_error(now, &mut out);
         self.update_maintenance(now, &mut out);
@@ -3202,6 +3227,12 @@ impl CremaCore {
                 state: info.state,
                 substate: info.substate,
             });
+            // A failed upload left the DE1's profile unknown: put it back
+            // once the machine is Idle again, after the flow that cut the
+            // upload short, never during it (Decenza `aa8232e6` ReArm).
+            if prev_state != Some(MachineState::Idle) && info.state == MachineState::Idle {
+                self.request_profile_reupload_if_idle(out);
+            }
             // Reactive scale auto-policy on state-entry. Capability-driven:
             // for each transition we ask the connected scale for the bytes
             // (via `lcd_enable_command` / `lcd_disable_command` /
@@ -4230,17 +4261,14 @@ impl CremaCore {
         let mut out = CoreOutput::default();
 
         // Abort any prior upload before arming the new one.
-        if let Some(prior) = self.profile_upload.take() {
-            let _ = prior; // value only matters for clearing the slot
-            out.events.push(Event::ProfileUploadFailed {
-                reason: ProfileUploadFailure::Aborted,
-            });
+        if self.profile_upload.is_some() {
+            self.fail_profile_upload(ProfileUploadFailure::Aborted, &mut out);
         }
 
-        // Build the expected-ack sequence: normal frames in order, then
-        // extension frames (each carrying its step index + 32 on the wire),
-        // then the tail (whose FrameToWrite == frame_count). The header is
-        // not acked separately.
+        // Build the expected-ack sequence: the header ack first (tracked by
+        // `header_acked`), then normal frames in order, then extension
+        // frames (each carrying its step index + 32 on the wire), then the
+        // tail (whose FrameToWrite == frame_count).
         let frame_count = assembled.header.frame_count;
         let extension_count = u8::try_from(assembled.extension_frames.len()).unwrap_or(u8::MAX);
         let mut expected_acks =
@@ -4255,9 +4283,10 @@ impl CremaCore {
 
         // Emit the BLE writes in upload order: header, then every
         // `frame_packets()` entry (frames → extensions → tail).
+        let header = assembled.header_packet();
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1ProfileHeader,
-            data: assembled.header_packet().to_vec(),
+            data: header.to_vec(),
         });
         for packet in assembled.frame_packets() {
             out.commands.push(Command::WriteCharacteristic {
@@ -4279,6 +4308,8 @@ impl CremaCore {
             title: profile.title.clone(),
             beverage_type: profile.beverage_type,
             step_weight: StepWeightExit::for_profile(profile),
+            header,
+            header_acked: false,
             expected_acks,
             next_idx: 0,
             last_progress: now,
@@ -4292,12 +4323,61 @@ impl CremaCore {
     /// an empty [`CoreOutput`].
     pub fn cancel_profile_upload(&mut self) -> CoreOutput {
         let mut out = CoreOutput::default();
-        if self.profile_upload.take().is_some() {
-            out.events.push(Event::ProfileUploadFailed {
-                reason: ProfileUploadFailure::Aborted,
-            });
+        if self.profile_upload.is_some() {
+            self.fail_profile_upload(ProfileUploadFailure::Aborted, &mut out);
         }
         out
+    }
+
+    /// End the in-flight upload with `reason`: emit
+    /// [`Event::ProfileUploadFailed`], mark the DE1's profile unknown, and
+    /// ask for a re-upload at once when the machine is already Idle.
+    ///
+    /// An [`Aborted`](ProfileUploadFailure::Aborted) upload only marks the
+    /// profile unknown: it is a supersession (a new upload follows at once)
+    /// or a shell cancel, so an immediate request would race the new upload;
+    /// the next Idle entry still re-arms it if nothing else uploads.
+    fn fail_profile_upload(&mut self, reason: ProfileUploadFailure, out: &mut CoreOutput) {
+        self.profile_upload = None;
+        let aborted = reason == ProfileUploadFailure::Aborted;
+        out.events.push(Event::ProfileUploadFailed { reason });
+        self.profile_reupload_pending = true;
+        if !aborted {
+            self.request_profile_reupload_if_idle(out);
+        }
+    }
+
+    /// Emit [`Event::ProfileReuploadNeeded`] when a failed upload left the
+    /// DE1's profile unknown, nothing is uploading, the machine is Idle, and
+    /// the request budget is not spent.
+    fn request_profile_reupload_if_idle(&mut self, out: &mut CoreOutput) {
+        let idle = self
+            .last_state
+            .is_some_and(|info| info.state == MachineState::Idle);
+        if self.profile_reupload_pending
+            && self.profile_upload.is_none()
+            && idle
+            && self.profile_reupload_requests < MAX_PROFILE_REUPLOAD_REQUESTS
+        {
+            self.profile_reupload_pending = false;
+            self.profile_reupload_requests += 1;
+            out.events.push(Event::ProfileReuploadNeeded);
+        }
+    }
+
+    /// Process the shell's [`Source::De1HeaderAck`]: the header write of the
+    /// in-flight upload succeeded. A confirmation that does not match the
+    /// header this upload wrote (a superseded upload's late write) or that
+    /// repeats one already counted is ignored.
+    fn handle_profile_header_ack(&mut self, data: &[u8], now: Duration) {
+        let Some(upload) = self.profile_upload.as_mut() else {
+            return;
+        };
+        if upload.header_acked || data != upload.header.as_slice() {
+            return;
+        }
+        upload.header_acked = true;
+        upload.last_progress = now;
     }
 
     /// `true` from the moment [`upload_profile`](Self::upload_profile)
@@ -4396,15 +4476,21 @@ impl CremaCore {
             return;
         };
 
+        if !upload.header_acked {
+            // A frame landed but the header write never confirmed: the DE1
+            // may run these frames under the previous profile's count.
+            self.fail_profile_upload(ProfileUploadFailure::HeaderNotAcked, out);
+            return;
+        }
         let expected = upload.expected_acks[upload.next_idx];
         if byte != expected {
-            self.profile_upload = None;
-            out.events.push(Event::ProfileUploadFailed {
-                reason: ProfileUploadFailure::UnexpectedAck {
+            self.fail_profile_upload(
+                ProfileUploadFailure::UnexpectedAck {
                     expected,
                     got: byte,
                 },
-            });
+                out,
+            );
             return;
         }
 
@@ -4432,6 +4518,8 @@ impl CremaCore {
             let beverage_type = upload.beverage_type;
             let step_weight = std::mem::take(&mut upload.step_weight);
             self.profile_upload = None;
+            self.profile_reupload_pending = false;
+            self.profile_reupload_requests = 0;
             self.last_active_profile_title = Some(title.clone());
             self.active_beverage_type = beverage_type;
             self.step_weight.adopt_weights(step_weight);
@@ -10260,14 +10348,16 @@ mod tests {
             }
         }
 
-        /// Helper: walk the writes-to-FrameWrite commands and feed each back
-        /// as a `De1FrameAck` notification. Returns the events emitted for the
-        /// last ack.
+        /// Helper: confirm the header write (`De1HeaderAck`, as both shells
+        /// synthesise it), then walk the writes-to-FrameWrite commands and
+        /// feed each back as a `De1FrameAck` notification. Returns the events
+        /// emitted for the last ack.
         fn ack_every_frame(
             core: &mut CremaCore,
             commands: &[Command],
             now_ms_step: u64,
         ) -> Vec<Event> {
+            ack_header(core, commands, 0);
             let mut last_events = Vec::new();
             let frames: Vec<&[u8]> = commands
                 .iter()
@@ -10285,6 +10375,23 @@ mod tests {
                 last_events = out.events;
             }
             last_events
+        }
+
+        /// Helper: feed the upload's header write back as the shell's
+        /// `De1HeaderAck`. Returns the events it produced.
+        fn ack_header(core: &mut CremaCore, commands: &[Command], now_ms: u64) -> Vec<Event> {
+            let header = commands
+                .iter()
+                .find_map(|c| match c {
+                    Command::WriteCharacteristic {
+                        target: WriteTarget::De1ProfileHeader,
+                        data,
+                    } => Some(data.clone()),
+                    _ => None,
+                })
+                .expect("upload emits a header write");
+            core.on_notification(Source::De1HeaderAck, &header, now_ms)
+                .events
         }
 
         /// Upload a one-step profile carrying `volume` and return the tail
@@ -10552,7 +10659,8 @@ mod tests {
                     step("b", Pump::Pressure, None),
                 ],
             );
-            let _ = core.upload_profile(&p, Duration::ZERO).unwrap();
+            let up = core.upload_profile(&p, Duration::ZERO).unwrap();
+            ack_header(&mut core, &up.commands, 5);
             // First expected ack carries FrameToWrite = 0; feed back a 5 instead.
             let mut bogus = [0u8; 8];
             bogus[0] = 5;
@@ -10635,8 +10743,9 @@ mod tests {
                     step("b", Pump::Pressure, None),
                 ],
             );
-            let _ = core.upload_profile(&p, Duration::ZERO).unwrap();
-            // Tick at 5 seconds (the timeout); no acks have arrived.
+            let up = core.upload_profile(&p, Duration::ZERO).unwrap();
+            ack_header(&mut core, &up.commands, 0);
+            // Tick at 5 seconds (the timeout); no frame acks have arrived.
             let tick = core
                 .on_tick(u64::try_from(PROFILE_UPLOAD_ACK_TIMEOUT.as_millis()).unwrap_or(u64::MAX));
             assert!(tick.events.iter().any(|e| matches!(
@@ -10658,7 +10767,8 @@ mod tests {
                     step("b", Pump::Pressure, None),
                 ],
             );
-            let _ = core.upload_profile(&p, Duration::ZERO).unwrap();
+            let up = core.upload_profile(&p, Duration::ZERO).unwrap();
+            ack_header(&mut core, &up.commands, 0);
             // Ack frame 0 at t=4s (just under the timeout).
             let mut ack0 = [0u8; 8];
             ack0[0] = 0;
@@ -10693,6 +10803,171 @@ mod tests {
             assert!(!core.profile_upload_in_progress());
             // reset() also drops the last-active title.
             assert_eq!(core.active_profile_title(), None);
+        }
+
+        fn two_step() -> Profile {
+            profile(
+                "Two",
+                vec![
+                    step("a", Pump::Pressure, None),
+                    step("b", Pump::Pressure, None),
+                ],
+            )
+        }
+
+        fn reupload_requests(events: &[Event]) -> usize {
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::ProfileReuploadNeeded))
+                .count()
+        }
+
+        #[test]
+        fn a_frame_ack_before_the_header_ack_fails_the_upload() {
+            // Cohort review 02 P0-2: a failed header write must fail the
+            // upload; the DE1 would otherwise run the new frames under the
+            // previous profile's frame count.
+            let mut core = CremaCore::new();
+            let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let first_frame = up
+                .commands
+                .iter()
+                .find_map(|c| match c {
+                    Command::WriteCharacteristic {
+                        target: WriteTarget::De1ProfileFrame,
+                        data,
+                    } => Some(data.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            let out = core.on_notification(Source::De1FrameAck, &first_frame, 10);
+            assert!(out.events.contains(&Event::ProfileUploadFailed {
+                reason: ProfileUploadFailure::HeaderNotAcked
+            }));
+            assert!(!core.profile_upload_in_progress());
+        }
+
+        #[test]
+        fn a_missing_header_ack_times_out_as_header_not_acked() {
+            let mut core = CremaCore::new();
+            let _ = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let tick = core
+                .on_tick(u64::try_from(PROFILE_UPLOAD_ACK_TIMEOUT.as_millis()).unwrap_or(u64::MAX));
+            assert!(tick.events.contains(&Event::ProfileUploadFailed {
+                reason: ProfileUploadFailure::HeaderNotAcked
+            }));
+        }
+
+        #[test]
+        fn a_header_ack_for_other_bytes_is_ignored() {
+            // A superseded upload's late header write must not stand in for
+            // this upload's header.
+            let mut core = CremaCore::new();
+            let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let out = core.on_notification(Source::De1HeaderAck, &[1, 7, 0, 0, 0x60], 1);
+            assert!(out.events.is_empty());
+            // Still waiting on the real header: a frame ack fails the upload.
+            let events = ack_every_frame_without_header(&mut core, &up.commands);
+            assert!(events.contains(&Event::ProfileUploadFailed {
+                reason: ProfileUploadFailure::HeaderNotAcked
+            }));
+        }
+
+        fn ack_every_frame_without_header(core: &mut CremaCore, commands: &[Command]) -> Vec<Event> {
+            let mut events = Vec::new();
+            for c in commands {
+                if let Command::WriteCharacteristic {
+                    target: WriteTarget::De1ProfileFrame,
+                    data,
+                } = c
+                {
+                    events.extend(core.on_notification(Source::De1FrameAck, data, 2).events);
+                }
+            }
+            events
+        }
+
+        #[test]
+        fn a_failure_while_idle_asks_for_a_reupload_at_once() {
+            // Report 08 M3 / Decenza aa8232e6: after a failed upload the
+            // DE1's profile is unknown; with the machine Idle, re-upload now.
+            let mut core = CremaCore::new();
+            core.on_notification(Source::De1State, &[2, 0], 1); // Idle
+            let _ = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let tick = core.on_tick(5_000);
+            assert!(tick.events.contains(&Event::ProfileUploadFailed {
+                reason: ProfileUploadFailure::HeaderNotAcked
+            }));
+            assert_eq!(reupload_requests(&tick.events), 1);
+        }
+
+        #[test]
+        fn a_failure_during_a_flow_waits_for_idle_then_asks_once() {
+            let mut core = CremaCore::new();
+            core.on_notification(Source::De1State, &[4, 5], 1); // Espresso pouring
+            let _ = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let tick = core.on_tick(5_000);
+            assert_eq!(reupload_requests(&tick.events), 0, "never during the flow");
+            let idle = core.on_notification(Source::De1State, &[2, 0], 6_000);
+            assert_eq!(reupload_requests(&idle.events), 1);
+            // A later Idle entry with nothing failed in between asks nothing.
+            core.on_notification(Source::De1State, &[0, 0], 7_000); // Sleep
+            let again = core.on_notification(Source::De1State, &[2, 0], 8_000);
+            assert_eq!(reupload_requests(&again.events), 0);
+        }
+
+        #[test]
+        fn an_abort_does_not_race_the_superseding_upload() {
+            let mut core = CremaCore::new();
+            core.on_notification(Source::De1State, &[2, 0], 1); // Idle
+            let _ = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let out = core.cancel_profile_upload();
+            assert_eq!(reupload_requests(&out.events), 0);
+            // The superseding upload completes: nothing left to re-arm.
+            let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let done = ack_every_frame(&mut core, &up.commands, 10);
+            assert!(done.iter().any(|e| matches!(e, Event::ProfileUploadCompleted { .. })));
+            core.on_notification(Source::De1State, &[0, 0], 1_000);
+            let idle = core.on_notification(Source::De1State, &[2, 0], 2_000);
+            assert_eq!(reupload_requests(&idle.events), 0);
+        }
+
+        #[test]
+        fn reupload_requests_are_capped_until_an_upload_completes() {
+            let mut core = CremaCore::new();
+            core.on_notification(Source::De1State, &[2, 0], 1); // Idle
+            let mut requests = 0;
+            let mut now = 0u64;
+            for _ in 0..(MAX_PROFILE_REUPLOAD_REQUESTS + 2) {
+                let _ = core
+                    .upload_profile(&two_step(), Duration::from_millis(now))
+                    .unwrap();
+                now += 5_000;
+                requests += reupload_requests(&core.on_tick(now).events);
+            }
+            assert_eq!(requests, usize::from(MAX_PROFILE_REUPLOAD_REQUESTS));
+            // A completed upload restores the budget.
+            let up = core
+                .upload_profile(&two_step(), Duration::from_millis(now))
+                .unwrap();
+            ack_every_frame(&mut core, &up.commands, now + 1);
+            let _ = core
+                .upload_profile(&two_step(), Duration::from_millis(now + 100))
+                .unwrap();
+            let tick = core.on_tick(now + 100 + 5_000);
+            assert_eq!(reupload_requests(&tick.events), 1);
+        }
+
+        #[test]
+        fn a_reset_drops_the_reupload_request() {
+            // The reconnect path owns the re-upload after a link drop.
+            let mut core = CremaCore::new();
+            core.on_notification(Source::De1State, &[4, 5], 1);
+            let _ = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let _ = core.on_tick(5_000);
+            core.reset();
+            let idle = core.on_notification(Source::De1State, &[2, 0], 6_000);
+            assert_eq!(reupload_requests(&idle.events), 0);
         }
 
         #[test]
@@ -10747,16 +11022,24 @@ mod tests {
             core
         }
 
-        /// Upload `profile` and ack every frame.
+        /// Upload `profile` and ack the header and every frame.
         fn upload(core: &mut CremaCore, profile: &Profile) {
             let out = core.upload_profile(profile, Duration::ZERO).unwrap();
             for c in &out.commands {
-                if let Command::WriteCharacteristic {
-                    target: WriteTarget::De1ProfileFrame,
-                    data,
-                } = c
-                {
-                    core.on_notification(Source::De1FrameAck, data, 1);
+                match c {
+                    Command::WriteCharacteristic {
+                        target: WriteTarget::De1ProfileHeader,
+                        data,
+                    } => {
+                        core.on_notification(Source::De1HeaderAck, data, 1);
+                    }
+                    Command::WriteCharacteristic {
+                        target: WriteTarget::De1ProfileFrame,
+                        data,
+                    } => {
+                        core.on_notification(Source::De1FrameAck, data, 1);
+                    }
+                    _ => {}
                 }
             }
             assert_eq!(core.active_profile_title(), Some(profile.title.as_str()));

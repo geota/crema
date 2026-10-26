@@ -48,6 +48,9 @@ pub enum NotificationSource {
     /// The DE1 `FrameWrite` characteristic — per-frame ack echoes during a
     /// profile upload.
     De1FrameAck,
+    /// The shell's synthesised confirmation of a successful profile header
+    /// write — mirrors `de1_app::Source::De1HeaderAck`.
+    De1HeaderAck,
     /// The scale's on-scale button characteristic (Skale II `EF82`) —
     /// mirrors `de1_app::Source::ScaleButton`.
     ScaleButton,
@@ -67,6 +70,7 @@ impl From<NotificationSource> for Source {
             NotificationSource::De1ShotSettings => Source::De1ShotSettings,
             NotificationSource::De1ProfileHeader => Source::De1ProfileHeader,
             NotificationSource::De1FrameAck => Source::De1FrameAck,
+            NotificationSource::De1HeaderAck => Source::De1HeaderAck,
             NotificationSource::ScaleButton => Source::ScaleButton,
         }
     }
@@ -3654,7 +3658,7 @@ mod tests {
 
     /// Every `NotificationSource` the wasm enum can name — used to fuzz the
     /// bridge against malformed input on every characteristic.
-    fn every_source() -> [NotificationSource; 11] {
+    fn every_source() -> [NotificationSource; 12] {
         [
             NotificationSource::De1State,
             NotificationSource::De1ShotSample,
@@ -3667,6 +3671,7 @@ mod tests {
             NotificationSource::De1ShotSettings,
             NotificationSource::De1ProfileHeader,
             NotificationSource::De1FrameAck,
+            NotificationSource::De1HeaderAck,
         ]
     }
 

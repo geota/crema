@@ -1925,9 +1925,8 @@ sealed class Event {
 	@Serializable
 	@SerialName("ShotSettingsRead")
 	data class ShotSettingsRead(val content: EventShotSettingsReadInner): Event()
-	/// A profile upload has begun. Carries the total number of acks the
-	/// orchestrator expects (frames + extensions + tail; the header is
-	/// not acked separately).
+	/// A profile upload has begun. Carries the frame counts the orchestrator
+	/// expects acks for (the header ack, then frames + extensions + tail).
 	@Serializable
 	@SerialName("ProfileUploadStarted")
 	data class ProfileUploadStarted(val content: EventProfileUploadStartedInner): Event()
@@ -1943,9 +1942,29 @@ sealed class Event {
 	data class ProfileUploadCompleted(val content: EventProfileUploadCompletedInner): Event()
 	/// The profile upload failed. The core has discarded its in-progress
 	/// state; the shell may retry by calling `upload_profile` again.
+	/// 
+	/// Once the header was dispatched, what the DE1 holds is **unknown**:
+	/// frames are indexed slot writes with no commit step, so an interrupted
+	/// upload can leave the new header's frame count over a mix of new and
+	/// old frames (Decenza `aa8232e6`). The shell must forget any "the DE1
+	/// holds profile X" cache on this event; the core asks for a re-upload
+	/// with [`ProfileReuploadNeeded`](Self::ProfileReuploadNeeded) once the
+	/// machine is Idle.
 	@Serializable
 	@SerialName("ProfileUploadFailed")
 	data class ProfileUploadFailed(val content: EventProfileUploadFailedInner): Event()
+	/// The DE1's loaded profile is unknown after a failed upload and the
+	/// machine is Idle, so the shell should upload the active profile now.
+	/// Emitted when a failure lands while the machine is Idle, or on the
+	/// next transition into Idle (after the flow that interrupted the
+	/// upload, never during it). Bounded to
+	/// [`MAX_PROFILE_REUPLOAD_REQUESTS`](crate::MAX_PROFILE_REUPLOAD_REQUESTS)
+	/// consecutive requests until an upload completes; cleared by a
+	/// completed upload or a reset (the reconnect path owns the re-upload).
+	/// Decenza's `ReArm` follow-up (`aa8232e6`).
+	@Serializable
+	@SerialName("ProfileReuploadNeeded")
+	object ProfileReuploadNeeded: Event()
 	/// An incoming notification could not be decoded.
 	@Serializable
 	@SerialName("DecodeError")
@@ -4367,6 +4386,14 @@ sealed class ProfileUploadFailure {
 	@Serializable
 	@SerialName("UnexpectedAck")
 	data class UnexpectedAck(val details: ProfileUploadFailureUnexpectedAckInner): ProfileUploadFailure()
+	/// A frame ack arrived before the shell confirmed the header write, or
+	/// the header confirmation never arrived within
+	/// [`PROFILE_UPLOAD_ACK_TIMEOUT`](crate::PROFILE_UPLOAD_ACK_TIMEOUT).
+	/// The header write failed, so the DE1 may hold the previous profile's
+	/// frame count.
+	@Serializable
+	@SerialName("HeaderNotAcked")
+	object HeaderNotAcked: ProfileUploadFailure()
 	/// No ack arrived within
 	/// [`PROFILE_UPLOAD_ACK_TIMEOUT`](crate::PROFILE_UPLOAD_ACK_TIMEOUT) of
 	/// the most recent ack (or upload start, for the first ack).
