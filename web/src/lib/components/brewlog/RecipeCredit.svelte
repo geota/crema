@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { safeExternalUrl } from '#lib/utils/safe-url.js';
 	/**
 	 * `RecipeCredit` — a recipe's attribution line: who it's by, plus a
 	 * link to the primary source (opens in a new tab). Small, secondary
@@ -19,7 +20,7 @@
 		compact?: boolean;
 	} = $props();
 
-	const href = $derived(sourceUrl && /^https?:\/\//i.test(sourceUrl.trim()) ? sourceUrl.trim() : null);
+	const href = $derived(safeExternalUrl(sourceUrl));
 </script>
 
 {#if credit?.trim() || href}

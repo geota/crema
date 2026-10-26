@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { safeExternalUrl } from '#lib/utils/safe-url.js';
 	import Icon from '#lib/icons/Icon.svelte';
 	import StarRating from '#lib/components/common/StarRating.svelte';
 	import CoffeeIcon from 'phosphor-svelte/lib/CoffeeIcon';
@@ -499,10 +500,15 @@
 					<div class="bn-row">
 						<div class="bn-row-label">URL</div>
 						<div class="bn-row-val">
-							{#if bean.url}
-								<a class="bn-link" href={bean.url} target="_blank" rel="noopener noreferrer"
-									>{bean.url.replace(/^https?:\/\//, '')}</a
+							{#if bean.url && safeExternalUrl(bean.url)}
+								<a
+									class="bn-link"
+									href={safeExternalUrl(bean.url)}
+									target="_blank"
+									rel="noopener noreferrer">{bean.url.replace(/^https?:\/\//, '')}</a
 								>
+							{:else if bean.url}
+								{bean.url}
 							{:else}
 								—
 							{/if}
