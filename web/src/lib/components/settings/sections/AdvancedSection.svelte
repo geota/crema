@@ -42,6 +42,7 @@
 	import { onMount } from 'svelte';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import { factoryResetLocalData } from '#lib/security/factory-reset.js';
+	import { isAllowedWebhookUrl } from '#lib/services/webhook-url.js';
 	import { revokeVisualizerToken } from '#lib/bean/index.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
@@ -316,21 +317,8 @@
 	// that surfaces errors to the user — live fires are silent and log
 	// to the BLE event panel).
 
-	/** True for `https://…` and for `http://localhost…` (dev convenience). */
-	const webhookUrlValid = $derived.by(() => {
-		const url = prefs.webhookUrl.trim();
-		if (url.length === 0) return false;
-		if (url.startsWith('https://')) return true;
-		// Allow http://localhost / http://127.0.0.1 / http://[::1] for dev.
-		if (
-			url.startsWith('http://localhost') ||
-			url.startsWith('http://127.0.0.1') ||
-			url.startsWith('http://[::1]')
-		) {
-			return true;
-		}
-		return false;
-	});
+	/** True for `https://…` and for `http://localhost` / loopback (dev convenience). */
+	const webhookUrlValid = $derived(isAllowedWebhookUrl(prefs.webhookUrl));
 
 	/** Inline status for the most-recent "Send test" press; cleared after ~4 s. */
 	let webhookTestFeedback = $state<{ ok: boolean; message: string } | null>(null);
