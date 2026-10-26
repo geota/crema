@@ -81,12 +81,15 @@
 			return;
 		}
 
-		// Dedicated short-lived runtime — independent of the app shell's runtime
-		// (this page runs at redirect time before the shell has mounted). It
+		// Dedicated short-lived runtime, independent of the app shell's. This
+		// page renders inside the root layout, but the layout builds its runtime
+		// in its own (async) onMount, so it may not exist yet when this runs. It
 		// carries OAuth (-> HttpClient) for the exchange AND TokenVault for
 		// persistence: TokenVault.storeTokens writes the shared localStorage key,
-		// so the shell's TokenVault reads it fresh on the next navigation. BeanSync
-		// runs the post-sign-in Premium probe (its flag lives in localStorage too).
+		// and the shell's TokenVault syncs its `changes` mirror from storage on its
+		// next read, so the shell's connection state follows (review 03 P3-4).
+		// BeanSync runs the post-sign-in Premium probe (its flag lives in
+		// localStorage too).
 		const base = Layer.provide(OAuthLive, HttpClientLive);
 		const vault = Layer.provide(TokenVaultLive, base);
 		const runtime = ManagedRuntime.make(

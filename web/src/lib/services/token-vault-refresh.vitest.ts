@@ -12,7 +12,7 @@
  *  - a refresh that loses to a newer stored set never clears it.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Cause, Effect, Exit, Layer, SubscriptionRef } from 'effect';
+import { Cause, Effect, Exit, Layer, ManagedRuntime, Stream, SubscriptionRef } from 'effect';
 
 // Identity secret box: these tests are about refresh, not wrapping, and must
 // not depend on IndexedDB (absent under jsdom).
@@ -227,5 +227,56 @@ describe('TokenVault single-flight refresh (review 03 P1-2)', () => {
 		if (!Exit.isSuccess(exit)) return;
 		expect(exit.value.token).toBe('OTHER');
 		expect(exit.value.stored).toMatchObject({ accessToken: 'OTHER', refreshToken: 'RT-OTHER' });
+	});
+});
+
+describe('TokenVault across runtimes (review 03 P3-4)', () => {
+	/** A vault on its own runtime, like the shell's and the OAuth callback's. */
+	const vaultRuntime = () =>
+		ManagedRuntime.make(Layer.provide(TokenVaultLive, Layer.provide(OAuthLive, endpoint([400]).layer)));
+
+	it("a sign-in stored through another runtime reaches this vault's changes on the next read", async () => {
+		const shell = vaultRuntime();
+		const callback = vaultRuntime();
+		const seen: boolean[] = [];
+		const sub = shell.runFork(
+			Effect.flatMap(TokenVault, (v) =>
+				Stream.runForEach(SubscriptionRef.changes(v.changes), (t) => Effect.sync(() => seen.push(t !== null)))
+			)
+		);
+		await shell.runPromise(Effect.flatMap(TokenVault, (v) => v.getTokens)); // the shell starts signed out
+		await callback.runPromise(Effect.flatMap(TokenVault, (v) => v.storeTokens(tokens('NEW', 'RT', FAR()))));
+		// The shell's next read (e.g. isConnected) syncs its mirror.
+		const read = await shell.runPromise(Effect.flatMap(TokenVault, (v) => v.getTokens));
+		const mirror = await shell.runPromise(Effect.flatMap(TokenVault, (v) => SubscriptionRef.get(v.changes)));
+		await new Promise((r) => setTimeout(r, 0));
+		expect(read?.accessToken).toBe('NEW');
+		expect(mirror?.accessToken).toBe('NEW');
+		expect(seen.at(-1)).toBe(true);
+		// A sign-out elsewhere propagates the same way.
+		await callback.runPromise(Effect.flatMap(TokenVault, (v) => v.clearTokens));
+		await shell.runPromise(Effect.flatMap(TokenVault, (v) => v.getTokens));
+		await new Promise((r) => setTimeout(r, 0));
+		expect(seen.at(-1)).toBe(false);
+		sub.interruptUnsafe();
+		await Promise.all([shell.dispose(), callback.dispose()]);
+	});
+
+	it('does not emit when nothing changed', async () => {
+		const shell = vaultRuntime();
+		await shell.runPromise(Effect.flatMap(TokenVault, (v) => v.storeTokens(tokens('A', 'RT', FAR()))));
+		const seen: unknown[] = [];
+		const sub = shell.runFork(
+			Effect.flatMap(TokenVault, (v) =>
+				Stream.runForEach(SubscriptionRef.changes(v.changes), (t) => Effect.sync(() => seen.push(t)))
+			)
+		);
+		await new Promise((r) => setTimeout(r, 0));
+		await shell.runPromise(Effect.flatMap(TokenVault, (v) => v.getTokens));
+		await shell.runPromise(Effect.flatMap(TokenVault, (v) => v.getTokens));
+		await new Promise((r) => setTimeout(r, 0));
+		expect(seen).toHaveLength(1); // only the initial emission
+		sub.interruptUnsafe();
+		await shell.dispose();
 	});
 });

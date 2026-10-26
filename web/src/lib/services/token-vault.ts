@@ -26,7 +26,7 @@
  * `visualizer/token-store.ts` remains the live implementation.
  */
 
-import { Context, Effect, Layer, Semaphore, SubscriptionRef } from 'effect';
+import { Context, Effect, Layer, Option, Semaphore, SubscriptionRef } from 'effect';
 import { readJson, writeJson } from '../utils/storage.ts';
 import { decodeOr } from '../effect/schema/decode.ts';
 import { TokenSetSchema } from '../effect/schema/tokens.ts';
@@ -178,9 +178,30 @@ export const TokenVaultLive = Layer.effect(
 		 * `storeTokens` / `clearTokens`); once token-store is deleted next phase the
 		 * ref can become the sole source again.
 		 */
-		const getTokens: Effect.Effect<TokenSet | null> = Effect.suspend(() =>
-			typeof localStorage !== 'undefined' ? Effect.promise(loadTokens) : SubscriptionRef.get(ref)
-		);
+		const getTokens: Effect.Effect<TokenSet | null> = Effect.suspend(() => {
+			if (typeof localStorage === 'undefined') return SubscriptionRef.get(ref);
+			const rawBefore = localStorage.getItem(TOKENS_KEY);
+			return Effect.promise(loadTokens).pipe(Effect.tap((loaded) => syncRef(rawBefore, loaded)));
+		});
+
+		/**
+		 * Bring the reactive mirror in line with what `getTokens` just read
+		 * (review 03 P3-4). Storage can change behind this vault: the OAuth
+		 * callback stores the new session through its own runtime, and another
+		 * tab can refresh or sign out. Without this, `changes` keeps emitting the
+		 * stale state and the shell's connection gate shows "disconnected" after
+		 * a sign-in. Skipped when the stored item changed while it was being
+		 * unwrapped: a `storeTokens` / `clearTokens` in between already set the
+		 * ref to something newer than `loaded`. The check runs inside the ref's
+		 * own update, so it is atomic with those writes' ref updates.
+		 */
+		const syncRef = (rawBefore: string | null, loaded: TokenSet | null) =>
+			SubscriptionRef.updateSome(ref, (current) => {
+				if (localStorage.getItem(TOKENS_KEY) !== rawBefore) return Option.none();
+				const same =
+					current === null || loaded === null ? current === loaded : sameTokens(current, loaded);
+				return same ? Option.none() : Option.some(loaded);
+			});
 
 		const storeTokens = (t: TokenSet) =>
 			Effect.andThen(
