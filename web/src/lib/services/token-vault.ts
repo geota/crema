@@ -13,18 +13,29 @@
  *  - proactive refresh when the token is within 5 min of expiry,
  *  - one-shot forced refresh + retry on a 401,
  *  - clear-tokens + NotAuthenticatedError when there's no refresh token,
- *  - clear-tokens + TokenRefreshFailedError when a refresh fails,
+ *  - clear-tokens + TokenRefreshFailedError ONLY when the token endpoint
+ *    definitively rejects the refresh token (`invalid_grant`); a network
+ *    failure, timeout or 5xx keeps the stored set and fails retryably
+ *    (`NetworkError` / `HttpStatusError`) — review 03 P1-1,
+ *  - single-flight refresh: concurrent callers share one refresh, so a rotating
+ *    refresh token is spent once, and a caller never clears a set another
+ *    caller (or tab) stored in the meantime — review 03 P1-2,
  *  - Doorkeeper rotation: keep the old refresh token if the server omits one.
  *
  * The service is wired behind the existing Promise facade in T-16; until then
  * `visualizer/token-store.ts` remains the live implementation.
  */
 
-import { Context, Effect, Layer, SubscriptionRef } from 'effect';
+import { Context, Effect, Layer, Semaphore, SubscriptionRef } from 'effect';
 import { readJson, writeJson } from '../utils/storage.ts';
 import { decodeOr } from '../effect/schema/decode.ts';
 import { TokenSetSchema } from '../effect/schema/tokens.ts';
-import { HttpStatusError, NotAuthenticatedError, TokenRefreshFailedError } from '../effect/errors.ts';
+import {
+	HttpStatusError,
+	NetworkError,
+	NotAuthenticatedError,
+	TokenRefreshFailedError
+} from '../effect/errors.ts';
 import { OAuth } from './oauth.ts';
 import type { TokenSet } from '../visualizer/oauth.ts';
 import { secretBox } from '../security/secret-box.ts';
@@ -32,6 +43,37 @@ import { secretBox } from '../security/secret-box.ts';
 const TOKENS_KEY = 'crema.visualizer.tokens.v1';
 /** Refresh proactively when the access token has < 5 minutes left. */
 const EXPIRY_SAFETY_MS = 5 * 60 * 1000;
+/** Web Locks name that serialises refreshes across tabs and runtimes. */
+const REFRESH_LOCK = 'crema.visualizer.token-refresh';
+
+/** Same session? (Access + refresh token; the rest is derived from them.) */
+const sameTokens = (a: TokenSet, b: TokenSet) =>
+	a.accessToken === b.accessToken && a.refreshToken === b.refreshToken;
+
+/**
+ * Run `eff` holding the cross-tab refresh lock when the Web Locks API exists
+ * (every browser the app supports; absent under jsdom). Each tab and each
+ * `TokenVault` instance (the OAuth callback builds its own) re-reads storage
+ * once it holds the lock, so a refresh token another tab just rotated is not
+ * spent again. A lock request that is refused (e.g. an opaque origin) falls
+ * back to running unlocked; the in-process semaphore still applies.
+ */
+function withCrossTabLock<A, E, R>(eff: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
+	const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+	if (!locks) return eff;
+	return Effect.acquireUseRelease(
+		Effect.promise(
+			() =>
+				new Promise<() => void>((granted) => {
+					locks
+						.request(REFRESH_LOCK, () => new Promise<void>((release) => granted(release)))
+						.catch(() => granted(() => {}));
+				})
+		),
+		() => eff,
+		(release) => Effect.sync(release)
+	);
+}
 
 /**
  * Set when the last read found a stored token set it could not unwrap (the
@@ -106,7 +148,10 @@ export class TokenVault extends Context.Service<
 		 */
 		readonly withFreshToken: <A, E>(
 			req: (token: string) => Effect.Effect<A, E | HttpStatusError>
-		) => Effect.Effect<A, E | HttpStatusError | NotAuthenticatedError | TokenRefreshFailedError>;
+		) => Effect.Effect<
+			A,
+			E | HttpStatusError | NetworkError | NotAuthenticatedError | TokenRefreshFailedError
+		>;
 		/** Live token state; `SubscriptionRef.changes` is a Stream for reactive consumers. */
 		readonly changes: SubscriptionRef.SubscriptionRef<TokenSet | null>;
 	}
@@ -156,10 +201,22 @@ export const TokenVaultLive = Layer.effect(
 
 		const isExpiringSoon = (t: TokenSet) => t.expiresAt - Date.now() <= EXPIRY_SAFETY_MS;
 
-		/** Force a refresh + persist; clear + fail on no-refresh-token or failure. */
-		const refreshOnce = (
+		/** One refresh at a time per vault; {@link withCrossTabLock} extends it across tabs. */
+		const refreshLock = yield* Semaphore.make(1);
+
+		/**
+		 * Refresh the STORED set and persist the result. Runs under the refresh
+		 * lock. Only a definitive grant rejection clears the tokens, and only
+		 * when the stored refresh token is still the one that was rejected —
+		 * if another tab or a fresh sign-in stored a newer set meanwhile, that
+		 * set wins. Transient failures propagate and leave storage untouched.
+		 */
+		const refreshStored = (
 			t: TokenSet
-		): Effect.Effect<TokenSet, NotAuthenticatedError | TokenRefreshFailedError> => {
+		): Effect.Effect<
+			TokenSet,
+			NotAuthenticatedError | TokenRefreshFailedError | NetworkError | HttpStatusError
+		> => {
 			if (!t.refreshToken) {
 				return clearTokens.pipe(Effect.andThen(Effect.fail(new NotAuthenticatedError())));
 			}
@@ -168,25 +225,45 @@ export const TokenVaultLive = Layer.effect(
 				// Doorkeeper rotates refresh tokens; keep the old one if omitted.
 				Effect.map((fresh): TokenSet => ({ ...fresh, refreshToken: fresh.refreshToken ?? rt })),
 				Effect.tap(storeTokens),
-				Effect.catch((cause) =>
-					clearTokens.pipe(
-						Effect.andThen(
-							Effect.fail(
-								cause instanceof TokenRefreshFailedError
-									? cause
-									: new TokenRefreshFailedError({ cause })
-							)
-						)
-					)
+				Effect.catchTag('TokenRefreshFailedError', (err) =>
+					Effect.gen(function* () {
+						const now = yield* getTokens;
+						if (now !== null && now.refreshToken !== rt) return now;
+						yield* clearTokens;
+						return yield* Effect.fail(err);
+					})
 				)
 			);
 		};
+
+		/**
+		 * Single-flight refresh, starting from the set the caller `observed`.
+		 * Once it holds the lock it re-reads storage: if another caller already
+		 * replaced that set, it uses the newer one (refreshing only if that one
+		 * is itself expiring and the caller wanted a merely-fresh token). So N
+		 * concurrent callers holding the same expiring set make one request.
+		 * `rejected` marks the 401 path: the server refused `observed`'s access
+		 * token, so any different stored set is worth a retry as it stands.
+		 */
+		const refreshFrom = (observed: TokenSet, rejected: boolean) =>
+			refreshLock.withPermits(1)(
+				withCrossTabLock(
+					Effect.gen(function* () {
+						const current = yield* getTokens;
+						if (current === null) return yield* Effect.fail(new NotAuthenticatedError());
+						if (!sameTokens(current, observed) && (rejected || !isExpiringSoon(current))) {
+							return current;
+						}
+						return yield* refreshStored(current);
+					})
+				)
+			);
 
 		/** A known-fresh token: refresh first if it's within the expiry buffer. */
 		const fresh = Effect.gen(function* () {
 			const tokens = yield* getTokens;
 			if (tokens === null) return yield* Effect.fail(new NotAuthenticatedError());
-			return isExpiringSoon(tokens) ? yield* refreshOnce(tokens) : tokens;
+			return isExpiringSoon(tokens) ? yield* refreshFrom(tokens, false) : tokens;
 		});
 
 		const withFreshToken = <A, E>(req: (token: string) => Effect.Effect<A, E | HttpStatusError>) =>
@@ -197,7 +274,7 @@ export const TokenVaultLive = Layer.effect(
 					// (catchTag alone leaves a phantom `{ _tag }` member).
 					Effect.catchTag('HttpStatusError', (err) =>
 						err instanceof HttpStatusError && err.status === 401
-							? refreshOnce(tokens).pipe(Effect.flatMap((t) => req(t.accessToken)))
+							? refreshFrom(tokens, true).pipe(Effect.flatMap((t) => req(t.accessToken)))
 							: Effect.fail(err)
 					)
 				);

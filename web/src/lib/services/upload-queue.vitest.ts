@@ -28,7 +28,13 @@ vi.mock('#lib/history/index.js', () => ({ getHistoryStore: () => mockHistory }))
 import { UploadQueue, UploadQueueLive } from './upload-queue.ts';
 import { ShotSync } from './shot-sync.ts';
 import { BeanSync } from './bean-sync.ts';
-import { HttpStatusError, NetworkError, VisualizerPremiumGatedError } from '../effect/errors.ts';
+import {
+	HttpStatusError,
+	NetworkError,
+	NotAuthenticatedError,
+	TokenRefreshFailedError,
+	VisualizerPremiumGatedError
+} from '../effect/errors.ts';
 import { enqueueEntry, readQueue } from './queue-store.ts';
 import { initTestWasm } from '#lib/testing/test-init.js';
 
@@ -209,6 +215,44 @@ describe('UploadQueue.drain — shot delete + bean/roaster delete', () => {
 		const result = await drainWith({}, { deleteBean });
 		expect(deleteBean).toHaveBeenCalledWith('vb-1');
 		expect(result.succeeded).toBe(1);
+	});
+});
+
+describe('UploadQueue.drain — remote deletes survive auth trouble (review 03 P1-1)', () => {
+	it('keeps a delete queued when the token refresh fails transiently', async () => {
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'delete', visualizerId: 'viz-9' });
+		// A refresh that hit the network now surfaces as NetworkError, not as a
+		// sign-out: the entry is retried, not dropped.
+		const result = await drainWith({
+			deleteShot: () =>
+				Effect.fail(new NetworkError({ cause: new TypeError('Failed to fetch'), url: '/oauth/token' }))
+		});
+		expect(result.dropped).toBe(0);
+		expect(readQueue().entries).toHaveLength(1);
+		expect(readQueue().entries[0]?.attempts).toBe(1);
+	});
+
+	it.each([
+		['TokenRefreshFailedError', () => new TokenRefreshFailedError({ cause: 'invalid_grant' })],
+		['NotAuthenticatedError', () => new NotAuthenticatedError()]
+	])('parks a delete on %s without spending an attempt', async (_tag, err) => {
+		enqueueEntry({ entity: 'bean', id: 'b1', op: 'delete', visualizerId: 'vb-1' });
+		const result = await drainWith({}, { deleteBean: () => Effect.fail(err()) });
+		expect(result.dropped).toBe(0);
+		expect(result.deferred).toBe(1);
+		const [entry] = readQueue().entries;
+		expect(entry?.attempts).toBe(0);
+		expect(entry?.nextAttemptAt).toBeGreaterThan(Date.now() + 60_000);
+	});
+
+	it('still drops a shot create on a sign-out (the unsynced pass re-offers it)', async () => {
+		mockHistory.get.mockReturnValue({ id: 's1', visualizerId: undefined });
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'create' });
+		const result = await drainWith({
+			uploadShot: () => Effect.fail(new TokenRefreshFailedError({ cause: 'invalid_grant' }))
+		});
+		expect(result.dropped).toBe(1);
+		expect(readQueue().entries).toHaveLength(0);
 	});
 });
 

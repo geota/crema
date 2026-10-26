@@ -64,6 +64,18 @@ export interface DrainResult {
 
 const DEFERRED: DrainResult = { processed: 0, succeeded: 0, dropped: 0, deferred: 1 };
 
+/** How long a remote delete parked on a signed-out session waits between checks. */
+const AUTH_PARK_MS = 5 * 60 * 1000;
+
+/**
+ * The session is gone (no tokens, or the refresh token was definitively
+ * rejected). Only signing in again fixes it. A transient refresh failure is a
+ * `NetworkError` / 5xx `HttpStatusError` instead, and retries on the normal
+ * schedule (review 03 P1-1).
+ */
+const isSignedOut = (e: UploadError): boolean =>
+	e._tag === 'NotAuthenticatedError' || e._tag === 'TokenRefreshFailedError';
+
 /**
  * Every failure `runEntry` can surface (from ShotSync / BeanSync). The shared
  * `isRecoverable` (which of these is worth a timed retry) and
@@ -151,6 +163,16 @@ export const UploadQueueLive = Layer.effect(
 						yield* dequeue(entry.entity, entry.id, entry.op);
 						out.dropped += 1;
 						break;
+					}
+					if (entry.op === 'delete' && isSignedOut(e)) {
+						// A remote delete has no other path to the server: the local row
+						// is already gone, so nothing re-offers it later. Park it, without
+						// spending an attempt, until the user signs in again.
+						yield* Effect.sync(() =>
+							persistRetry(entry, entry.attempts, describeVisualizerError(e), AUTH_PARK_MS)
+						);
+						out.deferred += 1;
+						continue;
 					}
 					if (!isRecoverable(e) || made >= MAX_ATTEMPTS) {
 						yield* dequeue(entry.entity, entry.id, entry.op);
