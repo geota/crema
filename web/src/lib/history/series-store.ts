@@ -18,7 +18,7 @@
 import type { TimedSample } from '#lib/core/index.js';
 
 /** IndexedDB database name. */
-const DB_NAME = 'crema-history-series';
+export const DB_NAME = 'crema-history-series';
 /** Schema version — bump when the object-store layout changes. */
 const DB_VERSION = 1;
 /** The single object store: shot-id → TimedSample[]. */

@@ -28,7 +28,7 @@
  */
 
 const PREFIX = 'sb1:';
-const DB_NAME = 'crema-keys';
+export const DB_NAME = 'crema-keys';
 const DB_VERSION = 1;
 const STORE = 'keys';
 const KEY_ID = 'secret-box-v1';

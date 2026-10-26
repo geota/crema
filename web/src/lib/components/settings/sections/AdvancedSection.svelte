@@ -13,8 +13,11 @@
 	 * shared `UiSnapshot.eventLog` already exists). "Reset preferences" is real
 	 * — it calls `SettingsStore.reset()`; profiles and history are untouched.
 	 *
-	 * **Factory reset** — destructive; wipes every `crema.*` localStorage
-	 * key and reloads. Gated behind a confirm. DE1 firmware is untouched.
+	 * **Factory reset** — destructive; revokes the Visualizer and Drive
+	 * grants (best-effort), deletes every Crema IndexedDB database and every
+	 * `crema.*` localStorage / sessionStorage key, then reloads
+	 * (`#lib/security/factory-reset.js`). Gated behind a typed confirm. DE1
+	 * firmware is untouched.
 	 *
 	 * **Webhooks** — implemented: outbound POSTs from the browser to a
 	 * user-supplied URL when chosen events fire (subject to CORS). The
@@ -38,6 +41,10 @@
 	import MainsConfirmModal from '../MainsConfirmModal.svelte';
 	import { onMount } from 'svelte';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { factoryResetLocalData } from '#lib/security/factory-reset.js';
+	import { revokeVisualizerToken } from '#lib/bean/index.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
 	import { compactLine, reconnectTimelines, type ReconnectTimeline } from '#lib/ble/index.js';
 
 	/** The shared orchestrator, or `null` while the wasm core is still loading. */
@@ -45,6 +52,7 @@
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
+	const appCtx = getCremaAppContext();
 
 	// ---- Reconnect timelines ----------------------------------------------
 	// The last reconnects (newest first): what started each one and where the
@@ -240,22 +248,28 @@
 	}
 
 	/**
-	 * Factory reset for the **Crema app** — wipes every `crema.*` key from
-	 * `localStorage` and reloads. Does NOT touch the DE1: profiles
-	 * uploaded to the machine, calibration, etc. stay on the firmware.
-	 * Gated behind a `window.confirm` so a stray tap doesn't nuke user
-	 * data. Documented in the row's sub-copy.
+	 * Factory reset for the **Crema app** on this device: revoke the
+	 * Visualizer and Google Drive grants (best-effort — a failed or slow
+	 * revoke never blocks the wipe), delete every Crema IndexedDB database
+	 * (captures, telemetry series, bag photos, the secret-box key) and every
+	 * `crema.*` localStorage / sessionStorage key, then reload. Does NOT
+	 * touch the DE1: profiles uploaded to the machine, calibration, etc.
+	 * stay on the firmware. Gated behind a type-to-confirm.
 	 */
+	let resetting = $state(false);
 	async function factoryReset(): Promise<void> {
-		if (typeof window === 'undefined') return;
+		if (typeof window === 'undefined' || resetting) return;
 		const ok = await confirmDialog({
 			title: 'Reset the Crema app on this device?',
 			message:
-				'This permanently erases:\n' +
+				'This permanently erases from this browser:\n' +
 				'  • custom profiles + library overrides\n' +
-				'  • shot history + per-shot captures\n' +
-				'  • bean library + roasters\n' +
-				'  • all app preferences\n\n' +
+				'  • shot history, telemetry + per-shot captures\n' +
+				'  • bean library, roasters + bag photos\n' +
+				'  • brew recipes + all app preferences\n' +
+				'  • Visualizer, Decent and Google Drive sign-ins\n' +
+				'    (Visualizer and Drive access is revoked too)\n\n' +
+				'Backups you saved to files or Google Drive are not deleted.\n' +
 				'Your DE1 is NOT affected — uploaded profiles, calibration, and\n' +
 				'machine settings stay on the firmware. The page will reload.',
 			confirmLabel: 'Reset app',
@@ -265,16 +279,32 @@
 			requireTyped: 'ERASE'
 		});
 		if (!ok) return;
-		const keys: string[] = [];
-		for (let i = 0; i < localStorage.length; i++) {
-			const k = localStorage.key(i);
-			if (k && k.startsWith('crema.')) keys.push(k);
+		resetting = true;
+		const services = appCtx().services;
+		const drive = getDriveAuthStore();
+		const result = await factoryResetLocalData({
+			revoke: [
+				async () => {
+					const tokens = services ? await services.tokens.getTokens() : null;
+					if (tokens?.accessToken) await revokeVisualizerToken(tokens.accessToken);
+				},
+				() => drive.signOut()
+			]
+		});
+		if (result.databasesFailed.length > 0) {
+			await confirmDialog({
+				title: 'Some data is still in use',
+				message:
+					'Crema is open in another tab or window, so part of the stored data ' +
+					'(shot telemetry, captures or bag photos) could not be deleted. ' +
+					'Close the other Crema tabs, then run Factory reset again.',
+				confirmLabel: 'Reload',
+				cancelLabel: 'Reload'
+			});
 		}
-		for (const k of keys) localStorage.removeItem(k);
 		// Hard reload so every $state / module-singleton re-initialises
-		// from the now-empty store. `location.reload()` is enough — the
-		// PWA service worker will still serve cached assets, which is
-		// fine; the data layer is what's being reset.
+		// from the now-empty stores. The PWA service worker still serves
+		// cached app assets, which is fine; the data layer is what's reset.
 		window.location.reload();
 	}
 
@@ -637,7 +667,7 @@
 	</StRow>
 	<StRow
 		title="Factory reset"
-		sub="Resets the Crema app on this device — profiles, history, settings, beans. Does NOT change DE1 machine settings (those stay on the firmware)."
+		sub="Erases the Crema app's data in this browser — profiles, history, beans and photos, settings and sign-ins. Does NOT change DE1 machine settings (those stay on the firmware)."
 	>
 		{#snippet control()}
 			<button type="button" class="st-btn st-btn-danger" onclick={factoryReset}>
