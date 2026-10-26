@@ -136,6 +136,9 @@ export default defineConfig(({ command }) => ({
 			// only while the machine is idle (and registers the worker at all —
 			// SvelteKit never runs the HTML hook the plugin's auto-inject relies on).
 			registerType: 'prompt',
+			// `register.ts` does the registration, so the plugin must not emit (and
+			// precache) its own unused `registerSW.js` (review 03 P3-2).
+			injectRegister: false,
 			// SPA mode for the precache: adapter-static's fallback page is the app
 			// shell for every route, so it goes in the precache (revisioned from
 			// _app/version.json) and the worker answers any navigation with it —
