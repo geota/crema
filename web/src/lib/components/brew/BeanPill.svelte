@@ -91,7 +91,7 @@
 	   (not mono) because roaster names aren't tabular data. */
 	.bp-roaster {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		max-width: 120px;
 		overflow: hidden;
 		text-overflow: ellipsis;

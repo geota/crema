@@ -56,6 +56,6 @@
 		justify-content: center;
 		min-height: 50vh;
 		font-family: var(--font-sans);
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 </style>

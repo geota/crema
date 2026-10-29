@@ -1031,7 +1031,7 @@
 	.bd-close {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		cursor: pointer;
 		padding: 4px;
 	}
@@ -1049,7 +1049,7 @@
 	}
 	.bd-status :global(svg) {
 		font-size: 24px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.bd-status-err :global(svg) {
 		color: var(--danger);
@@ -1108,7 +1108,7 @@
 	.bd-stat-label {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		text-transform: uppercase;
 		letter-spacing: var(--track-allcaps);
 	}

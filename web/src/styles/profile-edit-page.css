@@ -36,7 +36,7 @@
 }
 .pe-btn-text {
   background: transparent; border: 0;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
   font-family: var(--font-sans);
   font-size: 12px;
   cursor: pointer;
@@ -80,7 +80,7 @@
 }
 .pe-name:hover { border-bottom-color: rgba(var(--tint-rgb), 0.1); }
 .pe-name:focus { border-bottom-color: var(--copper-500); }
-.pe-name::placeholder { color: rgba(var(--tint-rgb), 0.3); }
+.pe-name::placeholder { color: var(--fg-muted); }
 
 /* ───────────────────────────── Section */
 .pe-section {
@@ -100,7 +100,7 @@
 .pe-section-sub {
   font-family: var(--font-sans);
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
   margin-top: 2px;
 }
 .pe-section-actions {
@@ -113,7 +113,7 @@
   gap: 4px;
 }
 .pe-field .t-eyebrow {
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
 }
 .pe-input {
   background: rgba(var(--tint-rgb), 0.03);
@@ -168,7 +168,7 @@
   background: rgba(193,116,75,0.10);
   border: 1px solid rgba(193,116,75,0.35);
   border-radius: var(--radius-pill);
-  color: var(--copper-400);
+  color: var(--fg-accent);
   font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 500;
@@ -177,7 +177,7 @@
   display: inline-flex; align-items: center; justify-content: center;
   width: 16px; height: 16px;
   background: transparent; border: 0;
-  color: var(--copper-400);
+  color: var(--fg-accent);
   border-radius: 50%;
   font-size: 10px;
   cursor: pointer;
@@ -190,7 +190,7 @@
   background: transparent;
   border: 1px dashed rgba(var(--tint-rgb), 0.18);
   border-radius: var(--radius-pill);
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
   font-family: var(--font-sans);
   font-size: 11px;
   padding: 5px 12px;
@@ -222,7 +222,7 @@
 .pe-pin span:first-child, .pe-tog span:first-child { margin-top: 1px; flex: 0 0 30px; }
 .pe-tog-sub {
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
   margin-top: 2px;
 }
 
@@ -247,13 +247,13 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 22px;
-  color: var(--copper-400);
+  color: var(--fg-accent);
   font-weight: 500;
 }
 .pe-readout-sub {
   font-family: var(--font-sans);
   font-size: 10px;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
   text-transform: uppercase;
   letter-spacing: var(--track-allcaps);
 }
@@ -283,7 +283,7 @@
   font-size: 20px;
   color: var(--fg-1);
 }
-.pe-num-unit { font-size: 11px; color: rgba(var(--tint-rgb), 0.5); }
+.pe-num-unit { font-size: 11px; color: var(--fg-muted); }
 
 /* ───────────────────────────── Curve editor */
 .pe-curve {
@@ -302,7 +302,7 @@
   font-weight: 600;
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
-  color: rgba(var(--tint-rgb), 0.45);
+  color: var(--fg-muted);
 }
 .pe-curve-legend {
   display: flex; gap: 14px;
@@ -319,7 +319,7 @@
   font-size: 11px;
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
-  color: rgba(var(--tint-rgb), 0.45);
+  color: var(--fg-muted);
 }
 .pe-curve-foot-val {
   font-family: var(--font-mono);
@@ -327,7 +327,7 @@
   font-size: 16px;
   letter-spacing: 0;
   text-transform: none;
-  color: var(--copper-400);
+  color: var(--fg-accent);
 }
 
 /* ───────────────────────────── Segments */
@@ -356,7 +356,7 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
   text-align: center;
 }
 .pe-seg-name {
@@ -373,7 +373,7 @@
   font-size: 9px;
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
 }
 .pe-seg-field-label {
   font-family: var(--font-sans);
@@ -381,7 +381,7 @@
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
   font-weight: 600;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
   margin-bottom: 2px;
 }
 .pe-seg-field-val {
@@ -393,7 +393,7 @@
 .pe-seg-field-val em {
   font-style: normal;
   font-size: 10px;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
   margin-left: 2px;
 }
 .pe-seg-ramp {
@@ -411,7 +411,7 @@
   width: 30px; height: 30px;
   background: transparent;
   border: 0;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
   border-radius: 6px;
   cursor: pointer;
   font-size: 14px;

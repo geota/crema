@@ -141,7 +141,7 @@
 	<title>Connecting to Visualizer · Crema</title>
 </svelte:head>
 
-<main class="cb-shell">
+<div class="cb-shell">
 	<div class="cb-card">
 		{#if status.kind === 'working'}
 			<SpinnerGapIcon class="cb-spinner" aria-hidden="true" />
@@ -154,7 +154,7 @@
 			<p class="t-body-sm">Returning to {status.returnTo}…</p>
 		{:else if status.kind === 'already'}
 			<PlugsConnectedIcon aria-hidden="true"
-				style="color: var(--copper-400); font-size: 32px" />
+				style="color: var(--fg-accent); font-size: 32px" />
 			<h1 class="t-h3">Already connected</h1>
 			<p class="t-body-sm">
 				You're already signed in to Visualizer. Open
@@ -174,7 +174,7 @@
 			<a class="cb-link" href="/settings">Try again</a>
 		{/if}
 	</div>
-</main>
+</div>
 
 <style>
 	.cb-shell {
@@ -199,7 +199,7 @@
 	}
 	:global(.cb-spinner) {
 		font-size: 32px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		animation: cb-spin 1.1s linear infinite;
 	}
 	@keyframes cb-spin {
@@ -209,7 +209,7 @@
 	.cb-link {
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		text-decoration: underline;
 		margin-top: var(--space-2);
 	}

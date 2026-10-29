@@ -29,6 +29,9 @@
 		roasters,
 		placeholder = '',
 		invalid = false,
+		id,
+		required = false,
+		describedby,
 		onChange,
 		onResolve,
 		onCommitTyped
@@ -47,6 +50,12 @@
 		 * participates in the editor's save-attempt validation).
 		 */
 		invalid?: boolean;
+		/** Input id, so the parent's `<label for>` names the field. */
+		id?: string;
+		/** Mark the field required for assistive tech (`aria-required`). */
+		required?: boolean;
+		/** Id(s) of the parent's error / hint text (`aria-describedby`). */
+		describedby?: string;
 		/** Fires on every keystroke with the new free-text value. */
 		onChange: (next: string) => void;
 		/**
@@ -164,8 +173,12 @@
 <div class="ra-wrap">
 	<input
 		bind:this={inputEl}
+		{id}
 		class="ra-input"
 		class:is-invalid={invalid}
+		aria-required={required || undefined}
+		aria-invalid={invalid}
+		aria-describedby={describedby}
 		type="text"
 		{value}
 		{placeholder}
@@ -285,14 +298,14 @@
 	}
 	.ra-item :global(svg) {
 		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 	.ra-item.is-active {
 		background: rgba(193, 124, 79, 0.16);
-		color: var(--copper-300);
+		color: var(--fg-accent);
 	}
 	.ra-item.is-active :global(svg) {
-		color: var(--copper-300);
+		color: var(--fg-accent);
 	}
 	.ra-hint {
 		display: flex;
@@ -300,7 +313,7 @@
 		gap: 8px;
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		padding: 7px 10px;
 		border-top: 1px solid rgba(var(--tint-rgb), 0.08);
 		margin-top: 2px;
@@ -309,7 +322,7 @@
 		font-size: 12px;
 	}
 	.ra-hint strong {
-		color: var(--copper-300);
+		color: var(--fg-accent);
 		font-weight: 600;
 	}
 </style>

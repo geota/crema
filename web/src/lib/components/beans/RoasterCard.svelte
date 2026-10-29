@@ -270,7 +270,7 @@
 	.rcd-loc {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		margin-top: 2px;
 	}
 	.rcd-meta {
@@ -280,18 +280,18 @@
 		margin-top: 4px;
 		font-family: var(--font-sans);
 		font-size: 10.5px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		align-items: center;
 	}
 	.rcd-site {
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		text-decoration: none;
 	}
 	.rcd-site:hover {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		text-decoration: underline;
 	}
 	.rcd-site :global(svg) {
@@ -299,6 +299,6 @@
 	}
 	.rcd-count {
 		font-family: var(--font-mono);
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 </style>

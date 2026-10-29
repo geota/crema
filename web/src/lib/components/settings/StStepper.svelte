@@ -221,11 +221,11 @@
 		align-items: center;
 	}
 	.st-stepper-num:hover {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.st-stepper-unit {
 		font-family: var(--font-sans);
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		white-space: nowrap;
 	}
 	.st-stepper-input {
@@ -335,6 +335,6 @@
 	}
 	.st-stepper-row.is-off .st-stepper-num,
 	.st-stepper-row.is-off .st-stepper-unit {
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 	}
 </style>

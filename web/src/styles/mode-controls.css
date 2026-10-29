@@ -114,7 +114,7 @@
 	gap: 1px;
 }
 .mc-chip-sub {
-	color: rgba(var(--tint-rgb), 0.55);
+	color: var(--fg-3);
 	font-size: 10.5px;
 	font-family: var(--font-mono);
 	font-variant-numeric: tabular-nums;
@@ -332,4 +332,29 @@
 	align-items: center;
 	margin-left: auto;
 	margin-right: 14px;
+}
+
+/* ── Reduced motion (cohort review 07 #12) ───────────────────────────────
+   One app-wide rule: with `prefers-reduced-motion: reduce`, transitions and
+   animations collapse to an instant change. State still changes visibly
+   (the Quick Sheet and drawers appear without sliding, toggles flip, the
+   History pulse stops on its first frame); only the movement goes. A tiny
+   non-zero duration keeps `transitionend` / `animationend` firing for code
+   that waits on them. Hover lifts are dropped. This sheet is imported last
+   (app.css), so the rule sits after every component transition. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+  .pp-card:hover,
+  .crema-bigbtn:hover:not(:disabled) {
+    transform: none;
+  }
 }

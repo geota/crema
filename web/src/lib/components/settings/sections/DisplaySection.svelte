@@ -12,7 +12,12 @@
 	 * units feed the rest of the app's value formatting; density and screensaver
 	 * are persisted app preferences.
 	 */
-	import { brewCueHapticsOn, brewCueSoundOn, getSettingsStore } from '#lib/settings/index.js';
+	import {
+		brewCueHapticsOn,
+		brewCueSoundOn,
+		getSettingsStore,
+		type ThemePref
+	} from '#lib/settings/index.js';
 	import { wakeLockSupported } from '#lib/shell/wake-lock.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import StSectionHead from '../StSectionHead.svelte';
@@ -56,16 +61,17 @@
 <StGroup title="Appearance">
 	<StRow
 		title="Theme"
-		sub="Crema is designed for low-light cafés. A light theme is available for bright rooms."
+		sub="Crema is designed for low-light cafés. A light theme is available for bright rooms; System follows the device's light or dark setting."
 	>
 		{#snippet control()}
 			<StSegment
 				value={prefs.theme}
 				options={[
 					{ value: 'dark', label: 'Dark' },
-					{ value: 'light', label: 'Light' }
+					{ value: 'light', label: 'Light' },
+					{ value: 'system', label: 'System' }
 				]}
-				onChange={(v) => settings.set('theme', v as 'dark' | 'light')}
+				onChange={(v) => settings.set('theme', v as ThemePref)}
 			/>
 		{/snippet}
 	</StRow>

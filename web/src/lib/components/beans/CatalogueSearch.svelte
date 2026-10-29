@@ -194,14 +194,14 @@
 		position: absolute;
 		left: 10px;
 		font-size: 14px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		pointer-events: none;
 	}
 	.cs-field :global(.cs-spin) {
 		position: absolute;
 		right: 10px;
 		font-size: 14px;
-		color: var(--copper-300);
+		color: var(--fg-accent);
 		animation: cs-spin 1s linear infinite;
 	}
 	@keyframes cs-spin {
@@ -266,18 +266,18 @@
 	}
 	.cs-sub {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	.cs-item.is-active {
 		background: rgba(193, 124, 79, 0.16);
 	}
 	.cs-item.is-active .cs-name {
-		color: var(--copper-300);
+		color: var(--fg-accent);
 	}
 	.cs-hint {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		padding: 7px 10px;
 	}
 	.cs-hint.is-error {
@@ -297,7 +297,7 @@
 		max-width: 100%;
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: var(--copper-300);
+		color: var(--fg-accent);
 		background: rgba(193, 124, 79, 0.12);
 		border: 1px solid rgba(193, 124, 79, 0.28);
 		border-radius: 999px;
@@ -324,6 +324,6 @@
 		margin-top: 6px;
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 </style>

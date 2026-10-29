@@ -365,7 +365,7 @@
 				<ArrowLeftIcon aria-hidden="true" /> Profiles
 			</button>
 			<div class="pe-trail">
-				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.45)">{heading}</span>
+				<span class="t-eyebrow" style="color:var(--fg-muted)">{heading}</span>
 			</div>
 		</div>
 		<div class="pe-topbar-r">
@@ -686,7 +686,7 @@
 	.pe-btn-text {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		cursor: pointer;
@@ -737,7 +737,7 @@
 
 	.pe-loading {
 		padding: 60px 32px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-family: var(--font-sans);
 		font-size: 14px;
 	}
@@ -803,7 +803,7 @@
 		border-bottom-color: var(--copper-500);
 	}
 	.pe-name::placeholder {
-		color: rgba(var(--tint-rgb), 0.3);
+		color: var(--fg-muted);
 	}
 
 	/* Section */
@@ -827,7 +827,7 @@
 	.pe-section-sub {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-top: 2px;
 	}
 	.pe-section-actions {
@@ -842,7 +842,7 @@
 		gap: 4px;
 	}
 	.pe-field :global(.t-eyebrow) {
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	.pe-input {
 		background: rgba(var(--tint-rgb), 0.03);
@@ -952,7 +952,7 @@
 		gap: 8px;
 	}
 	.pe-readout :global(.t-eyebrow) {
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-size: 10px;
 		letter-spacing: 0.04em;
 		white-space: nowrap;
@@ -961,7 +961,7 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 22px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-weight: 500;
 		min-height: 28px;
 		display: flex;
@@ -970,7 +970,7 @@
 	.pe-readout-sub {
 		font-family: var(--font-sans);
 		font-size: 9px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 		white-space: nowrap;

@@ -50,7 +50,7 @@
 		font-family: var(--font-sans);
 		font-size: 11.5px;
 		line-height: 1.35;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		min-width: 0;
 	}
 	.rc.is-compact {
@@ -74,7 +74,7 @@
 		border-radius: var(--radius-sm);
 	}
 	.rc-link:hover {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		text-decoration-color: currentColor;
 	}
 	.rc-link:focus-visible {

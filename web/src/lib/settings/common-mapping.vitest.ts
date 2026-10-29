@@ -14,6 +14,7 @@ import {
 	DEFAULT_SETTINGS,
 	brewCueSoundOn,
 	brewCueHapticsOn,
+	resolveTheme,
 	type Settings
 } from './store.svelte';
 
@@ -74,12 +75,25 @@ describe('common-settings mapping', () => {
 		expect(back.showWeightFlow).toBe(false);
 	});
 
-	it('coerces an Android-only themeMode "system" to dark', () => {
+	it('keeps themeMode "system" (follow the device) and reads unknown values as dark', () => {
 		const back = applyCommonToSettings(
 			{ ...settingsToCommon(DEFAULT_SETTINGS), themeMode: 'system' },
 			DEFAULT_SETTINGS
 		);
-		expect(back.theme).toBe('dark');
+		expect(back.theme).toBe('system');
+		expect(settingsToCommon(back).themeMode).toBe('system');
+		const odd = applyCommonToSettings(
+			{ ...settingsToCommon(DEFAULT_SETTINGS), themeMode: 'sepia' },
+			DEFAULT_SETTINGS
+		);
+		expect(odd.theme).toBe('dark');
+	});
+
+	it('resolves the system theme from the OS preference', () => {
+		expect(resolveTheme('system', true)).toBe('light');
+		expect(resolveTheme('system', false)).toBe('dark');
+		expect(resolveTheme('light', false)).toBe('light');
+		expect(resolveTheme('dark', true)).toBe('dark');
 	});
 
 	it('preserves the web-only platform extras through a common overlay', () => {

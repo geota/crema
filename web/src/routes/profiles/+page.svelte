@@ -228,7 +228,7 @@
 				id: 'pinned',
 				label: 'Pinned',
 				icon: 'ph-fill ph-star',
-				iconStyle: 'font-size:11px;color:var(--copper-400)',
+				iconStyle: 'font-size:11px;color:var(--fg-accent)',
 				count: statusCounts.pinned,
 				selected: status === 'pinned'
 			}
@@ -755,8 +755,8 @@
 	<!-- Header -->
 	<div class="pp-head">
 		<div class="pp-head-l">
-			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Library</div>
-			<div class="t-page-title pp-title">Profiles</div>
+			<div class="t-eyebrow" style="color:var(--fg-3)">Library</div>
+			<h1 class="t-page-title pp-title">Profiles</h1>
 			<div class="pp-sub">
 				{#if store.loaded}
 					{profiles.length} saved · {pinnedCount} pinned to favorites
@@ -768,7 +768,7 @@
 		<div class="pp-head-r">
 			<div class="pp-search">
 				<MagnifyingGlassIcon aria-hidden="true" />
-				<input bind:value={q} placeholder="Search profiles, beans, notes…" />
+				<input bind:value={q} aria-label="Search profiles" placeholder="Search profiles, beans, notes…" />
 				{#if q}
 					<button
 						class="pp-search-clear"
@@ -911,7 +911,7 @@
 		<div class="pp-recipes">
 			<div class="pp-recipes-head">
 				<div>
-					<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Guided brews</div>
+					<div class="t-eyebrow" style="color:var(--fg-3)">Guided brews</div>
 					<div class="pp-recipes-title">Brew recipes</div>
 					<div class="pp-sub">
 						Step plans you follow by hand — run them from the Scale page's Brew tab.
@@ -1115,7 +1115,7 @@
 	.pp-sub {
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		margin-top: 2px;
 	}
 	.pp-head-r {
@@ -1138,7 +1138,7 @@
 		border-color: rgba(var(--tint-rgb), 0.2);
 	}
 	.pp-search :global(svg) {
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		font-size: 14px;
 	}
 	.pp-search input {
@@ -1153,13 +1153,13 @@
 		padding: 9px 8px;
 	}
 	.pp-search input::placeholder {
-		color: rgba(var(--tint-rgb), 0.35);
+		color: var(--fg-muted);
 	}
 	.pp-search-clear {
 		background: transparent;
 		border: 0;
 		padding: 4px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		cursor: pointer;
 	}
 
@@ -1272,7 +1272,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		font-size: 22px;
 		margin-bottom: 4px;
 		transition: all var(--dur-1) var(--ease);
@@ -1287,21 +1287,21 @@
 	}
 	.pp-card-new-sub {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 
 	.pp-empty {
 		grid-column: 1 / -1;
 		text-align: center;
 		padding: 40px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-family: var(--font-sans);
 		font-size: 13px;
 	}
 	.pp-empty-link {
 		background: transparent;
 		border: 0;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		cursor: pointer;
 		font-size: 13px;
 		text-decoration: underline;
@@ -1350,7 +1350,7 @@
 		font-size: 9px;
 		font-weight: 700;
 		letter-spacing: 0.06em;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		border: 1px solid var(--copper-400);
 		border-radius: var(--radius-pill);
 		padding: 2px 8px;
@@ -1363,12 +1363,12 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 11.5px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.pp-recipe-steps {
 		font-family: var(--font-sans);
 		font-size: 11.5px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	.pp-recipe-actions {
 		display: flex;
@@ -1382,7 +1382,7 @@
 		background: transparent;
 		border: 0;
 		padding: 2px 0;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-family: var(--font-sans);
 		font-size: 12.5px;
 		text-decoration: underline;
@@ -1407,7 +1407,7 @@
 		margin-left: auto;
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		cursor: pointer;
 		padding: 4px;
 	}
@@ -1458,7 +1458,7 @@
 	}
 	.pp-method-meta {
 		font-size: 11.5px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.pp-method-actions {
 		display: inline-flex;
@@ -1484,7 +1484,7 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		margin-bottom: 10px;
 	}
 	.pp-recipe-badges {
@@ -1497,7 +1497,7 @@
 		font-size: 9px;
 		font-weight: 700;
 		letter-spacing: 0.06em;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		border: 1px solid rgba(var(--tint-rgb), 0.2);
 		border-radius: var(--radius-pill);
 		padding: 2px 8px;
@@ -1508,11 +1508,11 @@
 	.pp-recipe-btn-quiet {
 		margin-left: auto;
 		background: transparent;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 	}
 	.pp-recipes-empty {
 		padding: 26px 0 8px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-family: var(--font-sans);
 		font-size: 13px;
 	}

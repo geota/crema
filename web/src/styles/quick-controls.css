@@ -18,7 +18,7 @@
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
   font-weight: 600;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
 }
 .qcs-row {
   display: flex; align-items: stretch;
@@ -55,12 +55,12 @@
 }
 .qcs-unit {
   font-size: 12px;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
 }
 .qcs-suffix {
   font-family: var(--font-sans);
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
   margin-top: -2px;
   text-align: center;
 }
@@ -91,7 +91,10 @@
   border-color: var(--copper-500);
   color: var(--fg-on-accent);
 }
-.qchip-unit { font-size: 10px; opacity: 0.6; }
+/* The unit is quieter than the number through a text token, not opacity:
+   `opacity: .6` measured 2.9:1 (light) and 2.7:1 on the selected chip. */
+.qchip-unit { font-size: 10px; color: var(--fg-muted); }
+.qchip.is-active .qchip-unit { color: inherit; }
 
 /* ───────────────────────────────────────────────── Quick pill (variant A trigger) */
 .qcpill {
@@ -136,6 +139,9 @@
   transition: transform var(--dur-3, 320ms) cubic-bezier(0.32, 0.72, 0, 1);
 }
 .qsheet.is-open { transform: translateY(0); }
+/* The panel takes focus when it opens (it is the dialog); the global focus
+   ring would outline the whole sheet, so keep only its own shadow. */
+.qsheet[tabindex]:focus-visible { box-shadow: 0 -24px 64px rgba(0,0,0,0.4); outline: none; }
 .qsheet-head {
   display: flex; align-items: flex-end; justify-content: space-between;
   margin-bottom: 18px;
@@ -151,7 +157,7 @@
 .qsheet-sub {
   font-family: var(--font-sans);
   font-size: 12px;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
 }
 .qsheet-grid {
   display: grid;
@@ -241,4 +247,8 @@
 }
 
 /* Helper: invisible click intercept inside dashboards */
-.qcontain { position: relative; height: 100%; overflow: hidden; }
+/* `overflow: clip`, not `hidden`: a `hidden` box is still a scroll container
+   that focus and scrollIntoView can scroll, which left the Brew dashboard
+   stuck 364 px up when Tab reached the docked sheet (cohort review 07 #2).
+   `clip` clips the same way but cannot be scrolled at all. */
+.qcontain { position: relative; height: 100%; overflow: hidden; overflow: clip; }

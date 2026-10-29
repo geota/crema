@@ -261,7 +261,7 @@
 		flex: 0 0 auto;
 		align-self: center;
 		font-size: 14px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		margin-right: 4px;
 	}
 </style>

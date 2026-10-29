@@ -90,7 +90,7 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.bl-bean-name {
 		font-family: var(--font-sans);
@@ -102,13 +102,13 @@
 	}
 	.bl-bean-none {
 		font-weight: 400;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.bl-bean-side {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		font-size: 12px;
 		flex: none;
 	}

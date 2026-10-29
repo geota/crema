@@ -518,7 +518,7 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 	.pe-curve-legend {
 		display: flex;
@@ -616,7 +616,7 @@
 		font-size: 11px;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 	.pe-curve-foot-val {
 		font-family: var(--font-mono);
@@ -624,6 +624,6 @@
 		font-size: 16px;
 		letter-spacing: 0;
 		text-transform: none;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 </style>

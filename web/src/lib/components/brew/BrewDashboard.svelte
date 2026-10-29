@@ -1688,6 +1688,9 @@
 					{tankText}{#if refillSoon}
 						· refill soon{/if}
 				</span>
+				<!-- Announce the threshold crossing once (cohort review 07 #16):
+				     the region is empty until the tank runs low. -->
+				<span class="sr-only" role="status">{refillSoon ? 'Water tank low, refill soon' : ''}</span>
 			</div>
 			<!-- Right cluster: three service-mode chips + a subtle vertical
 			     hairline + the big Start button. Wrapped in one element so

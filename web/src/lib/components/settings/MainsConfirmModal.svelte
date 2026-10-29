@@ -367,7 +367,7 @@
 	}
 	.mc-field-sub {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 	}
 	.mc-field input {
 		margin-top: 6px;
@@ -396,7 +396,7 @@
 
 	.mc-detect-status {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		text-align: right;
 	}
 </style>

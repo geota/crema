@@ -27,7 +27,7 @@
 	<title>Crema — {title}</title>
 </svelte:head>
 
-<main class="placeholder">
+<section class="placeholder">
 	<section class="panel">
 		<Icon cls={'ph-duotone ph-' + icon} aria-hidden="true" />
 		<h1 class="t-h2">{title}</h1>
@@ -43,7 +43,7 @@
 			{/if}
 		</div>
 	</section>
-</main>
+</section>
 
 <style>
 	.placeholder {

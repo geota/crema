@@ -195,11 +195,17 @@
 
 	<!-- Right cluster: Quick Controls pill (Add / Edit live in the pickers). -->
 	<div class="crema-dash-head-r bh-actions">
-		{#if !quickSheetOpen}
-			<button class="qcpill is-dark" onclick={onOpenQuick}>
-				<SlidersHorizontalIcon aria-hidden="true" />
-				<span>Quick Controls</span>
-			</button>
-		{/if}
+		<!-- Stays mounted while the sheet is open (it sits under the sheet's
+		     scrim) so the sheet can hand focus back to it on close. -->
+		<button
+			type="button"
+			class="qcpill is-dark"
+			aria-haspopup="dialog"
+			aria-expanded={quickSheetOpen}
+			onclick={onOpenQuick}
+		>
+			<SlidersHorizontalIcon aria-hidden="true" />
+			<span>Quick Controls</span>
+		</button>
 	</div>
 </div>

@@ -385,8 +385,8 @@
 	<!-- Header strip -->
 	<div class="sc-head">
 		<div>
-			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Connected scale</div>
-			<div class="t-page-title sc-head-name">{scaleName}</div>
+			<div class="t-eyebrow" style="color:var(--fg-3)">Connected scale</div>
+			<h1 class="t-page-title sc-head-name">{scaleName}</h1>
 			<div class="sc-head-meta">
 				<span
 					class="sc-dot"
@@ -510,7 +510,7 @@
 	<div class="sc-dose">
 		<div class="sc-dose-head">
 			<div>
-				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Dose helper</div>
+				<div class="t-eyebrow" style="color:var(--fg-3)">Dose helper</div>
 				<div class="sc-dose-title">
 					{#if targetProfileName}
 						Weighing for <strong>{targetProfileName}</strong> · target {formatWeight(targetDose, settings.current.weightUnit)}
@@ -815,7 +815,7 @@
 		background: transparent;
 		border: 0;
 		border-radius: var(--radius-pill);
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		font-family: var(--font-sans);
 		font-size: 12.5px;
 		font-weight: 600;
@@ -849,14 +849,14 @@
 		gap: 10px;
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		margin-top: 6px;
 	}
 	.sc-head-meta :global(svg) {
 		font-size: 14px;
 	}
 	.sc-sep {
-		color: rgba(var(--tint-rgb), 0.2);
+		color: var(--fg-muted);
 	}
 	.sc-head-r {
 		display: flex;
@@ -884,7 +884,7 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 		font-weight: 500;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		padding: 5px 12px;
 		border-radius: 999px;
 		cursor: pointer;
@@ -928,7 +928,7 @@
 		transition: color 240ms var(--ease);
 	}
 	.sc-readout-num.is-tare {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.sc-sign {
 		font-size: 80px;
@@ -938,7 +938,7 @@
 	.sc-readout-num .sc-unit {
 		font-size: 32px;
 		font-weight: 400;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		letter-spacing: 0;
 	}
 	.sc-readout-sub {
@@ -947,11 +947,11 @@
 		font-weight: 500;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		margin-top: 18px;
 	}
 	.sc-sub-sep {
-		color: rgba(var(--tint-rgb), 0.2);
+		color: var(--fg-muted);
 		margin: 0 2px;
 	}
 
@@ -1105,7 +1105,7 @@
 		font-size: 10px;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-weight: 600;
 	}
 	.sc-dose-status {
@@ -1123,7 +1123,7 @@
 		font-size: 16px;
 	}
 	.sc-dose-warn {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.sc-dose-bad {
 		color: var(--warning);
@@ -1162,7 +1162,7 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		letter-spacing: 0;
 	}
 	.sc-activity-search {
@@ -1189,13 +1189,13 @@
 		background: rgba(var(--tint-rgb), 0.06);
 	}
 	.sc-activity-search input::placeholder {
-		color: rgba(var(--tint-rgb), 0.35);
+		color: var(--fg-muted);
 	}
 	:global(.sc-activity-search-icon) {
 		position: absolute;
 		left: 9px;
 		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		pointer-events: none;
 	}
 	.sc-activity-search-clear {
@@ -1209,7 +1209,7 @@
 		border: 0;
 		border-radius: 6px;
 		background: transparent;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		cursor: pointer;
 		font-size: 13px;
 		transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
@@ -1247,7 +1247,7 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 		line-height: 1.5;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-top: 2px;
 	}
 	.qmini-tog:disabled {
@@ -1274,7 +1274,7 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 	}
 	.sc-arow-detail {
 		font-family: var(--font-sans);
@@ -1288,21 +1288,21 @@
 		border-left-color: var(--copper-500);
 	}
 	.sc-arow.is-hl .sc-arow-detail {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-weight: 500;
 	}
 	/* Routine state-transition noise recedes — dim text, no rail. */
 	.sc-arow.is-muted .sc-arow-detail {
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 	.sc-arow.is-muted .sc-arow-t {
-		color: rgba(var(--tint-rgb), 0.28);
+		color: var(--fg-muted);
 	}
 	.sc-activity-empty {
 		padding: 20px 0;
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 	}
 	/* Quick-settings empty state — centred icon + line, reads as deliberate
 	   (not a failed load) when the scale exposes no adjustable settings. */
@@ -1316,11 +1316,11 @@
 		font-family: var(--font-sans);
 		font-size: 12.5px;
 		line-height: 1.5;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 	.sc-settings-empty :global(svg) {
 		font-size: 24px;
-		color: rgba(var(--tint-rgb), 0.3);
+		color: var(--fg-muted);
 	}
 	.sc-settings-empty span {
 		max-width: 32ch;

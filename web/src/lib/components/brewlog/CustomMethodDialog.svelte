@@ -294,7 +294,7 @@
 	.cm-x {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		padding: 4px;
 		cursor: pointer;
 		border-radius: var(--radius-sm);
@@ -323,7 +323,7 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.cm-input {
 		background: rgba(var(--tint-rgb), 0.04);
@@ -389,7 +389,7 @@
 	}
 	.cm-style-hint {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.cm-icons {
 		display: flex;
@@ -421,7 +421,7 @@
 	.cm-hint {
 		margin: -4px 0 0;
 		font-size: 11.5px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.cm-foot {
 		flex-shrink: 0;

@@ -536,7 +536,7 @@
 	}
 	.bl-offer-title {
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 	}
 	.bl-offer-q {
 		font-family: var(--font-serif);
@@ -545,7 +545,7 @@
 	}
 	.bl-offer-hint {
 		font-size: 12.5px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 	}
 	.bl-scrim {
 		position: fixed;
@@ -589,7 +589,7 @@
 	.bl-x {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		font-size: 16px;
 		padding: 4px;
 		cursor: pointer;
@@ -642,7 +642,7 @@
 		font-weight: 600;
 	}
 	.bl-chip-more {
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 	}
 	.bl-grid {
 		display: grid;
@@ -671,7 +671,7 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.bl-input {
 		background: rgba(var(--tint-rgb), 0.04);
@@ -709,7 +709,7 @@
 		background: transparent;
 		border: 0;
 		padding: 2px 0;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		font-family: var(--font-sans);
 		font-size: 12.5px;
 		cursor: pointer;
@@ -721,7 +721,7 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 12px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.bl-journal {
 		display: flex;

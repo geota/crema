@@ -70,7 +70,7 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps, 0.06em);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		background: rgba(var(--tint-rgb), 0.08);
 		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		border-radius: 999px;
@@ -81,7 +81,7 @@
 		opacity: 0.5;
 	}
 	.st-row-pill-conn {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		background: rgba(var(--copper-rgb), 0.08);
 		border-color: rgba(var(--copper-rgb), 0.22);
 	}

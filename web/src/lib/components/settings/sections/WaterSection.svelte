@@ -631,7 +631,7 @@
 		flex-shrink: 0;
 		font-size: 18px;
 		margin-top: 1px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.cyc-actions {
 		display: flex;

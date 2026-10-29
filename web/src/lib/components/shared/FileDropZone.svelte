@@ -122,7 +122,7 @@
 	}
 	.fdz > :global(svg) {
 		font-size: 48px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.fdz-title {
 		font-family: var(--font-sans);
@@ -133,7 +133,7 @@
 	.fdz-sub {
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		max-width: 380px;
 		margin: 0 auto;
 		line-height: 1.5;

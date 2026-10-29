@@ -50,8 +50,18 @@ let rawBrewDefaults: RawBrewDefaults | null = null;
 const brewDefaults = (): RawBrewDefaults =>
 	(rawBrewDefaults ??= JSON.parse(defaultBrewDefaults()) as RawBrewDefaults);
 
-/** Light/dark theme. The design ships dark; dark stays the default. */
-export type ThemePref = 'dark' | 'light';
+/**
+ * Light/dark theme. The design ships dark; dark stays the default. `system`
+ * follows the device's `prefers-color-scheme` (a kitchen tablet that dims to
+ * dark at night), the same value the Android shell stores (report 07 #19).
+ */
+export type ThemePref = 'dark' | 'light' | 'system';
+
+/** The concrete theme for a preference, given whether the OS prefers light. */
+export function resolveTheme(pref: ThemePref, prefersLight: boolean): 'dark' | 'light' {
+	if (pref === 'system') return prefersLight ? 'light' : 'dark';
+	return pref;
+}
 
 /** Unit choices, one per measured quantity. */
 export type WeightUnit = 'g' | 'oz';
@@ -516,8 +526,8 @@ export function settingsToCommon(s: Settings): CommonSettings {
 }
 
 /** Overlay a restored {@link CommonSettings} onto a flat `Settings`, preserving
- *  the web-only platform fields. `themeMode: "system"` (Android-only) coerces to
- *  `dark` since the web shell has just light/dark. */
+ *  the web-only platform fields. `themeMode` keeps `light` / `system`; anything
+ *  else reads as the default `dark`. */
 export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Settings {
 	// Forward-compat: tolerate a partial blob (an older backup predating a field)
 	// by filling any missing field from the canonical web defaults.
@@ -525,7 +535,7 @@ export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Setting
 	const on = new Set(c.chartChannels);
 	return {
 		...s,
-		theme: c.themeMode === 'light' ? 'light' : 'dark',
+		theme: c.themeMode === 'light' || c.themeMode === 'system' ? c.themeMode : 'dark',
 		maxShotDurationS: c.maxShotDurationS,
 		autoTareOnShotStart: c.autoTare,
 		stopOnWeight: c.stopOnWeight,
@@ -630,9 +640,15 @@ function loadSettings(): Settings {
  * leaves) `data-theme` on `<html>`. Called once at module load so a reload
  * paints the right theme before the first frame, and again on every change.
  */
+const PREFERS_LIGHT = '(prefers-color-scheme: light)';
+
+function prefersLight(): boolean {
+	return typeof matchMedia === 'function' && matchMedia(PREFERS_LIGHT).matches;
+}
+
 function applyTheme(theme: ThemePref): void {
 	if (typeof document === 'undefined') return;
-	document.documentElement.setAttribute('data-theme', theme);
+	document.documentElement.setAttribute('data-theme', resolveTheme(theme, prefersLight()));
 }
 
 /**
@@ -651,6 +667,13 @@ export class SettingsStore {
 		// Paint the persisted theme straight away — the store is created the
 		// first time any page reads it, which on `/settings` is at module init.
 		applyTheme(this.current.theme);
+		// `system` follows the OS live: re-apply when the device flips between
+		// light and dark (the store is an app-lifetime singleton).
+		if (typeof matchMedia === 'function') {
+			matchMedia(PREFERS_LIGHT).addEventListener('change', () => {
+				if (this.current.theme === 'system') applyTheme('system');
+			});
+		}
 	}
 
 	/** Persist the preference bundle to localStorage in the nested cross-shell

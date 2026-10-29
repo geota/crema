@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import ArrowSquareOutIcon from 'phosphor-svelte/lib/ArrowSquareOutIcon';
 	import ChatsCircleIcon from 'phosphor-svelte/lib/ChatsCircleIcon';
 	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
@@ -327,12 +328,16 @@
 
 	/** Open the file picker for a restore. A REPLACE (wipe) is gated by a
 	 *  confirm first — it deletes everything before loading the backup. */
-	function pickRestore(mode: RestoreMode): void {
+	async function pickRestore(mode: RestoreMode): Promise<void> {
 		if (
 			mode === 'wipe' &&
-			!window.confirm(
-				"Replace everything on this device with a backup? Your current profiles, beans, roasters and shots are deleted first. This can't be undone."
-			)
+			!(await confirmDialog({
+				title: 'Replace everything?',
+				message:
+					"Replace everything on this device with a backup? Your current profiles, beans, roasters and shots are deleted first. This can't be undone.",
+				confirmLabel: 'Choose backup',
+				danger: true
+			}))
 		) {
 			return;
 		}
@@ -427,9 +432,13 @@
 	async function driveRestore(mode: RestoreMode): Promise<void> {
 		if (
 			mode === 'wipe' &&
-			!window.confirm(
-				"Replace everything on this device with your latest Google Drive backup? Your current profiles, beans, roasters and shots are deleted first. This can't be undone."
-			)
+			!(await confirmDialog({
+				title: 'Replace from Drive?',
+				message:
+					"Replace everything on this device with your latest Google Drive backup? Your current profiles, beans, roasters and shots are deleted first. This can't be undone.",
+				confirmLabel: 'Replace',
+				danger: true
+			}))
 		) {
 			return;
 		}
@@ -653,7 +662,7 @@
 			"Add anything from a backup you don't already have; keeps your current data."}
 	>
 		{#snippet control()}
-			<StButton label="Merge" icon="upload-simple" onClick={() => pickRestore('merge')} />
+			<StButton label="Merge" icon="upload-simple" onClick={() => void pickRestore('merge')} />
 		{/snippet}
 	</StRow>
 	<StRow
@@ -661,7 +670,7 @@
 		sub={restoreNote ?? "Wipe this device, then restore fully from a backup. Can't be undone."}
 	>
 		{#snippet control()}
-			<StButton label="Replace" icon="trash" onClick={() => pickRestore('wipe')} />
+			<StButton label="Replace" icon="trash" onClick={() => void pickRestore('wipe')} />
 		{/snippet}
 	</StRow>
 </StGroup>

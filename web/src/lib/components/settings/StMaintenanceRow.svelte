@@ -116,7 +116,7 @@
 	}
 	.st-maintrow-icon {
 		display: inline-flex;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		font-size: 20px;
 	}
 	.st-maintrow-due {
@@ -147,7 +147,7 @@
 		font-size: 10px;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-inline-start: 3px;
 	}
 	.st-maintrow-actions {

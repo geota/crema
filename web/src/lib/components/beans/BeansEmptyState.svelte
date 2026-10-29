@@ -91,7 +91,7 @@
 	.bn-empty-sub {
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		max-width: 460px;
 		line-height: 1.55;
 		margin-bottom: 14px;
@@ -128,7 +128,7 @@
 	}
 	.bn-empty-card :global(svg) {
 		font-size: 26px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		flex-shrink: 0;
 	}
 	.bn-empty-card-l {
@@ -145,7 +145,7 @@
 	.bn-empty-card-sub {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		line-height: 1.45;
 	}
 	.bn-empty-card-sub code {

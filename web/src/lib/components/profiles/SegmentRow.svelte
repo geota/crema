@@ -480,7 +480,7 @@
 		background: transparent;
 		border: 0;
 		border-radius: 4px;
-		color: rgba(var(--tint-rgb), 0.35);
+		color: var(--fg-muted);
 		cursor: grab;
 		font-size: 13px;
 		transition: all var(--dur-1) var(--ease);
@@ -501,7 +501,7 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		text-align: center;
 		outline: 0;
 		transition: border-color var(--dur-1) var(--ease);
@@ -579,11 +579,11 @@
 		font-size: 15px;
 		font-weight: 600;
 		line-height: 1;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		transition: color var(--dur-1) var(--ease);
 	}
 	.pe-seg-cmp:hover {
-		color: var(--copper-300);
+		color: var(--fg-accent);
 	}
 
 	.pe-seg-del {
@@ -591,7 +591,7 @@
 		height: 30px;
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		border-radius: 6px;
 		cursor: pointer;
 		font-size: 14px;
@@ -612,7 +612,7 @@
 		align-items: center;
 	}
 	.pe-seg :global(.qsplit-prefix) {
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 	}
 	/* Every stepper bar fills its (equal-width) cell. */
 	.pe-seg :global(.qcs) {

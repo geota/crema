@@ -17,6 +17,7 @@ export {
 	settingsPlatformExtras,
 	brewCueSoundOn,
 	brewCueHapticsOn,
+	resolveTheme,
 	type Settings,
 	type ThemePref,
 	type WeightUnit,

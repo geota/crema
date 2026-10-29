@@ -265,13 +265,13 @@
 	.bn-qadd-sub {
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		max-width: 360px;
 	}
 	.bn-qadd-x {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		font-size: 16px;
 		padding: 4px;
 		cursor: pointer;
@@ -308,10 +308,10 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.bn-fld-req {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.bn-fld-input {
 		background: rgba(var(--tint-rgb), 0.04);
@@ -343,7 +343,7 @@
 	.bn-fld-date-hint {
 		font-family: var(--font-mono);
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.bn-fld-bag {
 		display: flex;
@@ -403,7 +403,7 @@
 	}
 	.bn-preset em {
 		font-style: normal;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.bn-preset:hover {
 		background: rgba(var(--tint-rgb), 0.08);
@@ -411,10 +411,10 @@
 	.bn-preset.is-on {
 		background: rgba(var(--copper-rgb), 0.16);
 		border-color: var(--copper-400);
-		color: var(--copper-300);
+		color: var(--fg-accent);
 	}
 	.bn-preset.is-on em {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.bn-qadd-hint {
 		display: inline-flex;
@@ -422,7 +422,7 @@
 		gap: 8px;
 		font-family: var(--font-sans);
 		font-size: 11.5px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		background: rgba(var(--tint-rgb), 0.04);
 		border: 1px solid rgba(var(--tint-rgb), 0.06);
 		padding: 8px 10px;
@@ -431,7 +431,7 @@
 	}
 	.bn-qadd-hint :global(svg) {
 		font-size: 13px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		margin-top: 1px;
 	}
 	.bn-qadd-foot {

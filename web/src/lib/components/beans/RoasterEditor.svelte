@@ -222,7 +222,7 @@
 		</div>
 	</header>
 
-	<main class="rd-main">
+	<div class="rd-main">
 		<!-- Hero — the same gradient avatar as the bean editor's photo slot,
 		     but using the live logo URL when present (falls back to the
 		     deterministic mark on null / load error). -->
@@ -441,7 +441,7 @@
 				Save
 			</button>
 		</div>
-	</main>
+	</div>
 </div>
 
 <style>
@@ -602,7 +602,7 @@
 	.rd-hero-sub {
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 
 	/* Form rows — mirror BeanEditPage's `.be-frow` so the two pages have
@@ -643,7 +643,7 @@
 	.rd-frow-sub {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		line-height: 1.4;
 	}
 	.rd-req {

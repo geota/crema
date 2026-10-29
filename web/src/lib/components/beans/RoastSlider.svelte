@@ -165,7 +165,7 @@
 		font-family: var(--font-sans);
 		font-size: 10px;
 		font-weight: 500;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		text-align: center;
 		letter-spacing: 0.02em;
 	}
@@ -184,12 +184,12 @@
 	}
 	.bn-rlevel-val em {
 		font-style: normal;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		font-size: 11px;
 		margin-left: 1px;
 	}
 	.bn-rlevel-band {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 </style>

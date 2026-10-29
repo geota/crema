@@ -125,7 +125,7 @@
 		padding: 0;
 		border: none;
 		background: transparent;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		border-radius: 6px;
 		cursor: pointer;
 		font-size: 14px;
