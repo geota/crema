@@ -57,8 +57,15 @@ class MachineCommandCodecTest {
     }
 
     @Test
-    fun `machine states are distinct intents`() {
-        assertEquals(MachineCommand.StartEspresso, ok("machineState", "ESPRESSO").command)
+    fun `local-only commands have no wire form`() {
+        val localOnly = samples.filterIsInstance<MachineCommand.LocalOnly>()
+        assertEquals(listOf<MachineCommand>(MachineCommand.RawEspresso), localOnly)
+        assertTrue(localOnly.none { it is MachineCommand.Relayable })
+    }
+
+    @Test
+    fun `machine states are distinct intents, and Espresso only starts a shot`() {
+        assertEquals(MachineCommand.StartShot, ok("machineState", "ESPRESSO").command)
         assertEquals(MachineCommand.Stop, ok("machineState", "IDLE").command)
         assertEquals(MachineCommand.Sleep, ok("machineState", "SLEEP").command)
         assertEquals(MachineCommand.StartSteam, ok("machineState", "STEAM").command)

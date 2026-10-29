@@ -39,7 +39,7 @@ class ControlVerbGoldenTest {
      */
     @Test
     fun `every relayable command has a sample that round-trips`() {
-        val decoded = RELAYED_VERB_SAMPLES.map { s ->
+        val decoded = RELAYED_VERB_SAMPLES.filter { it.send != null }.map { s ->
             val cmd = assertIs<MachineCommandCodec.Decoded.Valid>(MachineCommandCodec.decode(s.method, s.args), s.fixture).command
             assertEquals(MachineCommandCodec.Wire(s.method, s.args), MachineCommandCodec.encode(cmd), "${s.fixture} re-encodes")
             cmd::class

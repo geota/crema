@@ -2946,7 +2946,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Wake the DE1 / return to idle (also stops a running shot). */
+    /** Wake a sleeping DE1 (the request also stops anything running, so a
+     *  mirror sends it only while it shows the machine asleep). */
     fun wake() = machine.execute(MachineCommand.Wake)
 
     /** Put the DE1 to sleep. Marked here too, for a mirror's own screensaver. */
@@ -2955,8 +2956,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         machine.execute(MachineCommand.Sleep)
     }
 
-    /** Start an espresso shot. */
-    fun startEspresso() = machine.execute(MachineCommand.StartEspresso)
+    /** The debug panel's raw Espresso request, skipping the start sequence.
+     *  Not available while mirroring. */
+    fun startEspresso() = machine.execute(MachineCommand.RawEspresso)
 
     /** Stop a running shot (return to idle). */
     fun stopShot() = machine.execute(MachineCommand.Stop)

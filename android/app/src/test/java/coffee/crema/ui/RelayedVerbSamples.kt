@@ -1,10 +1,11 @@
 package coffee.crema.ui
 
 /**
- * One relayed control as the Android UI sends it today. [fixture] names the
+ * One relayed control as a secondary puts it on the wire. [fixture] names the
  * golden wire file `proxy-golden/v3/control/<fixture>.json`, which holds
  * `Frame.Control(id = 1, method, args)` as encoded; [send] is the
- * [MainViewModel] call that produces it on a secondary.
+ * [MainViewModel] call that produces it on a secondary, or null for a form
+ * only older builds send, which a primary must still accept.
  *
  * The list is the characterisation of every method in
  * [coffee.crema.machine.MachineCommandCodec.METHODS] (every machine state the
@@ -17,7 +18,7 @@ internal data class RelayedVerbSample(
     val fixture: String,
     val method: String,
     val args: String,
-    val send: (MainViewModel) -> Unit,
+    val send: ((MainViewModel) -> Unit)?,
 )
 
 /** A built-in profile (core/de1-domain/profiles/builtin.json), so the primary
@@ -28,7 +29,10 @@ internal val RELAYED_VERB_SAMPLES: List<RelayedVerbSample> = listOf(
     // Machine control (MachineCommand.Control): forwarded, nothing applied locally.
     RelayedVerbSample("machineState.SLEEP", "machineState", "SLEEP") { it.sleep() },
     RelayedVerbSample("machineState.IDLE", "machineState", "IDLE") { it.stopShot() },
-    RelayedVerbSample("machineState.ESPRESSO", "machineState", "ESPRESSO") { it.startEspresso() },
+    // The debug panel's raw Espresso before the command seam. This build keeps
+    // it on the device holding the machine; a primary runs an older build's
+    // as a guarded StartShot.
+    RelayedVerbSample("machineState.ESPRESSO", "machineState", "ESPRESSO", send = null),
     RelayedVerbSample("machineState.STEAM", "machineState", "STEAM") { it.steam() },
     RelayedVerbSample("machineState.HOT_WATER", "machineState", "HOT_WATER") { it.hotWater() },
     RelayedVerbSample("machineState.FLUSH", "machineState", "FLUSH") { it.flush() },

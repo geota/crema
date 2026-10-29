@@ -12,7 +12,7 @@ import kotlin.test.assertTrue
 
 /** A mirror's relay policy: Control is forwarded with nothing applied here,
  *  Config is shown, forwarded, and undone only when it surely didn't apply,
- *  and nothing is ever resent. */
+ *  LocalOnly is refused here, and nothing is ever resent. */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class RelayMachineTest {
 
@@ -21,10 +21,12 @@ class RelayMachineTest {
     private val sent = CopyOnWriteArrayList<MachineCommandCodec.Wire>()
     private val notices = CopyOnWriteArrayList<String>()
     private var reply: ControlReply = ControlReply.Ok
+    private var machineState: String? = "Idle"
 
     private val relay = RelayMachine(
         send = { method, args -> sent += MachineCommandCodec.Wire(method, args); reply },
         showConfig = actions::showConfig,
+        machineStateName = { machineState },
         scope = CoroutineScope(StandardTestDispatcher(scheduler)),
         notify = { notices += it },
         log = {},
@@ -103,5 +105,32 @@ class RelayMachineTest {
         assertEquals(listOf(RelayMachine.UNKNOWN_CONTROL), notices.toList())
         assertTrue("may not have been applied" in notices.single())
         assertEquals(1, sent.size, "never resent")
+    }
+
+    @Test
+    fun `a local-only command is refused on a mirror`() {
+        assertEquals(CommandOutcome.Refused(RelayMachine.NOT_ON_MIRROR), run(MachineCommand.RawEspresso))
+        assertTrue(sent.isEmpty() && actions.applied.isEmpty())
+        assertEquals(listOf(RelayMachine.NOT_ON_MIRROR), notices.toList())
+    }
+
+    @Test
+    fun `wake is sent only while this mirror shows the machine asleep`() {
+        machineState = "Idle"
+        assertIs<CommandOutcome.Refused>(run(MachineCommand.Wake))
+        assertTrue(sent.isEmpty(), "an awake machine's IDLE would stop whatever runs")
+
+        machineState = "Sleep"
+        assertEquals(CommandOutcome.Accepted, run(MachineCommand.Wake))
+        assertEquals(listOf(MachineCommandCodec.Wire("machineState", "IDLE")), sent.toList())
+    }
+
+    @Test
+    fun `stop is always sent`() {
+        for (state in listOf("Sleep", "Idle", "Espresso", null)) {
+            machineState = state
+            assertEquals(CommandOutcome.Accepted, run(MachineCommand.Stop))
+        }
+        assertEquals(4, sent.size)
     }
 }

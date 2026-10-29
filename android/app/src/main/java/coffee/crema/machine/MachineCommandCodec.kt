@@ -1,5 +1,7 @@
 package coffee.crema.machine
 
+import coffee.crema.core.MachineRequest
+
 /**
  * The relay's wire vocabulary for [MachineCommand]: today's `Frame.Control`
  * method names and argument strings, byte for byte (the golden fixtures in
@@ -7,9 +9,13 @@ package coffee.crema.machine
  * [MachineCommand.Relayable], so a new relayable command without a wire form
  * doesn't compile; [MachineCommand.LocalOnly] has none.
  *
- * One wire form stands for two commands until the protocol can say more:
- * `machineState IDLE` is both [MachineCommand.Stop] and [MachineCommand.Wake].
- * It decodes as [MachineCommand.Stop], which applies the same write.
+ * Two wire forms stand for more than one command until the protocol can say
+ * more:
+ * - `machineState IDLE` is both [MachineCommand.Stop] and [MachineCommand.Wake].
+ *   It decodes as [MachineCommand.Stop], which applies the same write.
+ * - `machineState ESPRESSO` (an older build's debug button) decodes as
+ *   [MachineCommand.StartShot], so a relayed shot always goes through the start
+ *   sequence. Nothing encodes to it any more.
  */
 object MachineCommandCodec {
 
@@ -62,10 +68,11 @@ object MachineCommandCodec {
         buildMap {
             // Wake shares Stop's IDLE and is left out: IDLE decodes as Stop.
             for (cmd in listOf(
-                MachineCommand.Stop, MachineCommand.Sleep, MachineCommand.StartEspresso, MachineCommand.StartSteam,
-                MachineCommand.StartHotWater, MachineCommand.StartFlush, MachineCommand.StartSteamRinse,
-                MachineCommand.StartDescale, MachineCommand.StartClean,
+                MachineCommand.Stop, MachineCommand.Sleep, MachineCommand.StartSteam, MachineCommand.StartHotWater,
+                MachineCommand.StartFlush, MachineCommand.StartSteamRinse, MachineCommand.StartDescale,
+                MachineCommand.StartClean,
             )) put(cmd.request.name, cmd)
+            put(MachineRequest.ESPRESSO.name, MachineCommand.StartShot)
         }
     }
 

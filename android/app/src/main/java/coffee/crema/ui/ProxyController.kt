@@ -835,6 +835,7 @@ class ProxyController(
         relayMachine = RelayMachine(
             send = { method, args -> proxy.sendControl(method, args) },
             showConfig = { machineActions.showConfig(it) },
+            machineStateName = machineStateName,
             scope = scope,
             notify = notify,
             log = appendLog,

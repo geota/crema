@@ -93,6 +93,7 @@ class LocalMachine(
             actions.showConfig(cmd)
             actions.commitConfig(cmd)
         }
+        MachineCommand.RawEspresso -> accepted { actions.applyMachineState(MachineRequest.ESPRESSO) }
     }
 
     /** Why a peer's [cmd] names something this device doesn't have (a profile

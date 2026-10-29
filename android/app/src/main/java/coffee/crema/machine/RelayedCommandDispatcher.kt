@@ -68,7 +68,7 @@ class RelayedCommandDispatcher(
 
     /** The predicate of "<who> …" for a command worth announcing, else null. */
     private fun phrase(cmd: MachineCommand.Relayable): String? = when (cmd) {
-        MachineCommand.StartShot, MachineCommand.StartEspresso -> "started a shot"
+        MachineCommand.StartShot -> "started a shot"
         MachineCommand.Stop -> if (machineIdle()) "woke the machine" else "stopped the machine"
         MachineCommand.Wake -> "woke the machine"
         MachineCommand.Sleep -> "put the machine to sleep"

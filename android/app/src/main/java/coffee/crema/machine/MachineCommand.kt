@@ -30,7 +30,11 @@ sealed interface MachineCommand {
     sealed interface Relayable : MachineCommand
 
     /** Machine control: a mirror forwards it, authority first. */
-    sealed interface Control : Relayable
+    sealed interface Control : Relayable {
+        /** Why a mirror must not send this, judged from its own (possibly
+         *  stale) view of the machine state, or null to send it. */
+        fun senderRefusal(machineState: String?): String? = null
+    }
 
     /** Primary-owned session config: a mirror applies it optimistically. */
     sealed interface Config : Relayable
@@ -44,22 +48,20 @@ sealed interface MachineCommand {
     }
 
     /** Start a shot through the owned start sequence (profile upload, guard,
-     *  pre-flush). */
+     *  pre-flush). The only way a relayed command reaches Espresso. */
     data object StartShot : Control
-
-    /** The debug panel's raw Espresso request: skips the start sequence. */
-    data object StartEspresso : StateRequest {
-        override val request get() = MachineRequest.ESPRESSO
-    }
 
     /** End whatever the machine is doing (shot, steam, hot water, flush). */
     data object Stop : StateRequest {
         override val request get() = MachineRequest.IDLE
     }
 
-    /** Wake a sleeping machine. The same DE1 request as [Stop]. */
+    /** Wake a sleeping machine. The same DE1 request as [Stop], so a mirror
+     *  sends it only while its view shows the machine asleep. */
     data object Wake : StateRequest {
         override val request get() = MachineRequest.IDLE
+        override fun senderRefusal(machineState: String?): String? =
+            if (machineState in ASLEEP) null else "The machine isn’t asleep"
     }
 
     data object Sleep : StateRequest {
@@ -132,6 +134,10 @@ sealed interface MachineCommand {
 
     /** Drop the brew override: the active profile's recipe applies again. */
     data object ResetBrew : Config
+
+    /** The debug panel's raw Espresso request: skips the start sequence, so it
+     *  never leaves the device holding the machine. */
+    data object RawEspresso : LocalOnly
 }
 
 /** The Quick-Controls values a mirror may set, each with its stepper's bounds. */
@@ -156,6 +162,7 @@ enum class QcField(private val label: String, private val range: ClosedFloatingP
     }
 }
 
+private val ASLEEP = setOf("Sleep", "GoingToSleep")
 private const val MAX_ID_LENGTH = 128
 private const val MAX_DOSE_G = 100.0
 private const val MAX_YIELD_G = 2_000.0

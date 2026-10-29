@@ -21,6 +21,8 @@ class RelayMachine(
     private val send: suspend (method: String, args: String) -> ControlReply,
     /** The VM's optimistic half of a config change; returns its undo. */
     private val showConfig: (MachineCommand.Config) -> (() -> Unit),
+    /** This mirror's view of the machine state (`MachineState.string`). */
+    private val machineStateName: () -> String?,
     /** Where the round trips run (the VM's scope: Main). */
     private val scope: CoroutineScope,
     private val notify: (String) -> Unit,
@@ -34,6 +36,12 @@ class RelayMachine(
                 onOutcome(CommandOutcome.Refused(NOT_ON_MIRROR))
             }
             is MachineCommand.Control -> {
+                cmd.senderRefusal(machineStateName())?.let { reason ->
+                    log("Not relaying $cmd: $reason")
+                    notify(reason)
+                    onOutcome(CommandOutcome.Refused(reason))
+                    return
+                }
                 scope.launch {
                     val outcome = forward(cmd)
                     report(cmd, outcome, config = false)

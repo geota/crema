@@ -87,6 +87,12 @@ class RelayedCommandDispatcherTest {
     }
 
     @Test
+    fun `an older build's raw espresso runs the guarded start`() {
+        assertEquals(CommandOutcome.Accepted, dispatch("machineState", "ESPRESSO"))
+        assertEquals(listOf("startShot"), actions.applied.toList())
+    }
+
+    @Test
     fun `a relayed idle reads as a wake on an idle machine and a stop otherwise`() {
         machineIdle = false
         dispatch("machineState", "IDLE")
