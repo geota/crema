@@ -4,6 +4,13 @@ import android.app.Service
 import android.content.Intent
 import android.os.Handler
 import android.os.IBinder
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -18,10 +25,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  *  1. **[MainViewModel.onCleared]** — a swipe destroys the activity
  *     gracefully ~400 ms before the OS kills the process, so the VM's
- *     teardown is the PRIMARY hook. It fires before `super.onCleared()`
- *     cancels `viewModelScope`: the scope's `Main.immediate` dispatch runs
- *     the sleep write synchronously to its first suspension, handing the
- *     GATT op to the system Bluetooth stack (which outlives our process).
+ *     teardown is the PRIMARY hook. `viewModelScope` is ALREADY cancelled
+ *     when `onCleared` runs (lifecycle 2.x closes it first), so the Sleep
+ *     write goes out on [coffee.crema.ProcessScope] instead, bounded by
+ *     [QUIT_WRITE_BUDGET_MS], and the VM defers its BLE teardown until the
+ *     write settles ([teardownAfterQuitWrite]). (Until the 2026-10-25 cohort
+ *     review this path launched on the dead scope and never wrote anything.)
  *  2. **[QuitSleepService.onTaskRemoved]** — the fallback for devices that
  *     kill the task without destroying the activity. On the emulator the
  *     process died 4 ms after this callback, so it is strictly a backup;
@@ -39,30 +48,94 @@ import java.util.concurrent.atomic.AtomicBoolean
  * flight (`quitSleepAllowed`).
  */
 object QuitSleep {
+    /** Returns the in-flight Sleep write (true = it went out), or null when a
+     *  gate declined — a deliberate "don't sleep" that stays latched. */
     @Volatile
-    private var handler: (() -> Unit)? = null
+    private var handler: (() -> Deferred<Boolean>?)? = null
 
-    /** One quit = one fire, whichever signal lands first. */
+    /** One quit = one fire, whichever signal lands first — but only a fire
+     *  that SENT (or deliberately declined) holds the latch: a write that
+     *  failed or never went out re-arms it so the other signal can retry. */
     private val fired = AtomicBoolean(false)
 
     /** Install the quit handler — called once from [MainViewModel]'s init.
      *  The handler re-checks every gate (pref, machine idle, primary role)
      *  at fire time, so installation is unconditional. */
-    fun install(handler: () -> Unit) {
+    fun install(handler: () -> Deferred<Boolean>?) {
         this.handler = handler
         fired.set(false)
     }
 
-    /** Drop the handler — [MainViewModel.onCleared], after its own fire.
-     *  After this a late task-removal is a no-op. */
+    /** Drop the handler — from [MainViewModel.onCleared]'s deferred teardown,
+     *  once its own write settled. After this a late task-removal is a no-op. */
     fun clear() {
         handler = null
     }
 
-    /** Invoke the installed handler at most once per install. Main thread. */
-    fun fire() {
-        if (fired.getAndSet(true)) return
-        handler?.invoke()
+    /** Invoke the installed handler at most once per successful send. Main
+     *  thread. Returns the in-flight write, or null when nothing was started
+     *  (no handler installed — which does NOT latch — already fired, or a
+     *  gate declined). */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun fire(): Deferred<Boolean>? {
+        val h = handler ?: return null
+        if (fired.getAndSet(true)) return null
+        val write = h() ?: return null
+        write.invokeOnCompletion { cause ->
+            val sent = cause == null && write.getCompleted()
+            if (!sent) fired.set(false)
+        }
+        return write
+    }
+}
+
+/** Ceiling on the quit Sleep write (connect-interval + one retry fit easily);
+ *  the VM's BLE teardown waits at most this (plus slack) for it. */
+const val QUIT_WRITE_BUDGET_MS = 1_500L
+
+/**
+ * Send the quit Sleep [writes] in order within [budgetMs]. True only when
+ * every write completed; a throw, a timeout or an empty list is false (the
+ * latch then re-arms). Cancellation of the caller still propagates.
+ */
+internal suspend fun sendQuitWrites(writes: List<suspend () -> Unit>, budgetMs: Long): Boolean {
+    if (writes.isEmpty()) return false
+    return try {
+        withTimeoutOrNull(budgetMs) {
+            writes.forEach { it() }
+            true
+        } ?: false
+    } catch (t: TimeoutCancellationException) {
+        false // a write's own timeout, not ours
+    } catch (c: CancellationException) {
+        throw c
+    } catch (e: Exception) {
+        false
+    }
+}
+
+/**
+ * Run [teardown] once [pending] settles or [budgetMs] passes — on [scope],
+ * which must outlive the caller (the VM's own scope is already cancelled in
+ * `onCleared`). With nothing pending it runs synchronously, exactly as
+ * before sleep-on-quit had to wait for anything.
+ */
+internal fun teardownAfterQuitWrite(
+    scope: CoroutineScope,
+    pending: Deferred<Boolean>?,
+    budgetMs: Long,
+    teardown: () -> Unit,
+) {
+    if (pending == null || pending.isCompleted) {
+        teardown()
+        return
+    }
+    scope.launch {
+        try {
+            withTimeoutOrNull(budgetMs) { pending.join() }
+        } finally {
+            teardown()
+        }
     }
 }
 
@@ -83,14 +156,14 @@ class QuitSleepService : Service() {
         // place this path can leave a trace for field debugging.
         android.util.Log.i(TAG, "task removed — firing sleep-on-quit")
         QuitSleep.fire()
-        // The sleep request is an async GATT write on the BLE manager's
-        // scope; the process survives while this service runs, so hold on
-        // briefly for the write to flush before letting go.
+        // The sleep request is an async GATT write on ProcessScope, bounded
+        // by QUIT_WRITE_BUDGET_MS; the process survives while this service
+        // runs, so hold on that long for the write to flush before letting go.
         Handler(mainLooper).postDelayed({ stopSelf() }, FLUSH_MS)
     }
 
     private companion object {
         const val TAG = "QuitSleep"
-        const val FLUSH_MS = 1_500L
+        const val FLUSH_MS = QUIT_WRITE_BUDGET_MS
     }
 }

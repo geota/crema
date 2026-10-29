@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import android.os.SystemClock
 import android.util.Log
+import coffee.crema.ProcessScope
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import android.content.Context
@@ -75,6 +76,8 @@ import coffee.crema.profiles.profileIdOf
 import coffee.crema.profiles.SegmentEdit
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.update
@@ -2297,12 +2300,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Logcat, not appendLog: the in-app event log dies with the task.
             if (s.sleepOnQuit && sleepable && primary && notDoubled) {
                 Log.i("QuitSleep", "quit while idle — putting the DE1 to sleep")
-                sleep()
+                launchQuitSleepWrite()
             } else {
                 Log.i(
                     "QuitSleep",
                     "quit — sleep skipped (on=${s.sleepOnQuit} state=${s.machineStateName} role=${s.proxyRole} idleSleepPending=${!notDoubled})",
                 )
+                null
             }
         }
         // Multi-device (M2): arm the recorder gate, start NSD peer discovery +
@@ -3532,6 +3536,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         onCoreOutputJson(raw)
+    }
+
+    /**
+     * Sleep-on-quit's write. NOT [sleep]: that routes through the core lane
+     * and [executeCommand], both on [viewModelScope], which is already
+     * cancelled when [onCleared] fires the quit. The core output is computed
+     * synchronously here and its DE1 writes go out on [ProcessScope], bounded
+     * by [QUIT_WRITE_BUDGET_MS]. The result is true only when every write
+     * completed on a live link, so [QuitSleep]'s latch re-arms otherwise.
+     * The output's events are dropped: the UI they would update is going away.
+     */
+    private fun launchQuitSleepWrite(): Deferred<Boolean> {
+        appSleepRequestedAtMs = SystemClock.elapsedRealtime()
+        val writes = runCatching {
+            json.decodeFromString(CoreOutput.serializer(), bridge.requestMachineState(MachineRequest.SLEEP))
+                .commands.filterIsInstance<Command.WriteCharacteristic>()
+        }.getOrElse {
+            Log.w("QuitSleep", "sleep request failed", it)
+            emptyList()
+        }
+        if (ble.connectedAddress == null) return CompletableDeferred(false)
+        return ProcessScope.main.async {
+            sendQuitWrites(
+                writes.map { cmd ->
+                    suspend {
+                        ble.writeCharacteristic(cmd.content.target, cmd.content.data.map { it.toByte() }.toByteArray())
+                    }
+                },
+                QUIT_WRITE_BUDGET_MS,
+            ).also { sent -> Log.i("QuitSleep", if (sent) "sleep write sent" else "sleep write did not go out") }
+        }
     }
 
     /** Wake the DE1 / return to idle (also stops a running shot). */
@@ -6034,25 +6069,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         // Quit path (sleep-on-quit): a swipe-away destroys the activity —
         // and clears this VM — ~400 ms before the OS kills the process, so
-        // this is the reliable place to fire. It MUST run before
-        // `super.onCleared()`: the handler's sleep() write launches on
-        // viewModelScope, whose Main.immediate dispatch runs it to the first
-        // suspension synchronously — the GATT op reaches the system BT stack
-        // (which outlives us) before the scope cancellation lands.
-        QuitSleep.fire()
-        QuitSleep.clear()
+        // this is the reliable place to fire. viewModelScope is ALREADY
+        // cancelled here (lifecycle 2.x closes it before calling onCleared),
+        // so the handler's write runs on ProcessScope, and the BLE teardown
+        // below waits (bounded) for it: closing the link first would drop it.
+        val quitWrite = QuitSleep.fire()
         // Unregister the power receiver + stop the keep-alive service (#65).
         bgConnection.close()
-        super.onCleared()
-        // Adapter watcher off, scans cancelled, both device links down…
-        connection.close()
-        // The recorder is process-scoped: don't let it pin this VM.
-        coffee.crema.diag.ReconnectTimelines.recorder.onFinished = {}
-        // Close the transport last — it unregisters the Nordic environment's
-        // Bluetooth receiver and tears down the central manager. The managers'
-        // disconnect() calls above are fire-and-forget coroutines; closing the
-        // transport also cancels its scope, so any in-flight disconnect ends.
-        proxy.close()
+        teardownAfterQuitWrite(ProcessScope.main, quitWrite, QUIT_WRITE_BUDGET_MS + QUIT_TEARDOWN_SLACK_MS) {
+            QuitSleep.clear()
+            // Adapter watcher off, scans cancelled, both device links down…
+            connection.close()
+            // The recorder is process-scoped: don't let it pin this VM.
+            coffee.crema.diag.ReconnectTimelines.recorder.onFinished = {}
+            // Close the transport last — it unregisters the Nordic environment's
+            // Bluetooth receiver and tears down the central manager. The managers'
+            // disconnect() calls above are fire-and-forget coroutines; closing the
+            // transport also cancels its scope, so any in-flight disconnect ends.
+            proxy.close()
+        }
         // The HTTP clients (viewModelScope is already cancelled, so no
         // Visualizer / Decent call is still in flight). They sit on the
         // shared, process-lifetime OkHttp engine, which stays up.
@@ -6066,6 +6101,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         /** How long a Sleep state report is still attributable to our own
          *  request (BLE write → firmware → notify, plus a GoingToSleep dwell). */
         const val APP_SLEEP_WINDOW_MS = 15_000L
+
+        /** Grace past [QUIT_WRITE_BUDGET_MS] before onCleared's deferred BLE
+         *  teardown runs anyway (the write's own timeout normally fires first). */
+        const val QUIT_TEARDOWN_SLACK_MS = 250L
 
         /**
          * Wait after `ProfileUploadCompleted` before requesting Espresso — the
