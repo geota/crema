@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import Icon from '#lib/icons/Icon.svelte';
+	import { scrollBehavior } from '#lib/a11y/motion.js';
 	/**
 	 * `PhaseIndicatorCard` — the left-column "where in the shot are we" card.
 	 *
@@ -200,13 +201,13 @@
 		if (!c) return;
 		const el = c.querySelector('.crema-phase-row.is-active') as HTMLElement | null;
 		if (!el) {
-			c.scrollTo({ top: 0, behavior: 'smooth' });
+			c.scrollTo({ top: 0, behavior: scrollBehavior() });
 			return;
 		}
 		const cRect = c.getBoundingClientRect();
 		const eRect = el.getBoundingClientRect();
 		const target = c.scrollTop + (eRect.top - cRect.top) - (c.clientHeight - eRect.height) / 2;
-		c.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+		c.scrollTo({ top: Math.max(0, target), behavior: scrollBehavior() });
 	});
 </script>
 

@@ -8,6 +8,7 @@
 	import DropHalfIcon from 'phosphor-svelte/lib/DropHalfIcon';
 	import InfoIcon from 'phosphor-svelte/lib/InfoIcon';
 	import StarIcon from 'phosphor-svelte/lib/StarIcon';
+	import { scrollBehavior } from '#lib/a11y/motion.js';
 	/**
 	 * `BeanEditPage` — full-page bean editor. Replaces the old drawer-style
 	 * `BeanEditor` for both create and edit flows. Layout follows the
@@ -401,30 +402,30 @@
 		// fields. Scroll the URL field into view + bounce out.
 		if (isBuyUrlInvalid) {
 			const el = document.getElementById(urlInputId) as HTMLInputElement | null;
-			el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			el?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
 			el?.focus();
 			return;
 		}
 		// Opened-before-roasted is invalid for both new bags and live edits.
 		if (isOpenedBeforeRoasted) {
 			const el = document.getElementById('be-opened-input') as HTMLInputElement | null;
-			el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			el?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
 			el?.focus();
 			return;
 		}
 		if (isNew) {
 			if (isNameMissing) {
-				nameInputEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				nameInputEl?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
 				nameInputEl?.focus();
 				return;
 			}
 			if (isRoasterMissing) {
-				roasterRowEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				roasterRowEl?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
 				roasterRowEl?.querySelector('input')?.focus();
 				return;
 			}
 			if (isRoastedOnMissing) {
-				roastedDateInputEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				roastedDateInputEl?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
 				roastedDateInputEl?.focus();
 				return;
 			}
@@ -505,7 +506,7 @@
 
 	function scrollToSection(id: string): void {
 		const el = document.getElementById(`be-${id}`);
-		if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+		if (el) el.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
 	}
 
 	// Bag-size presets, ordered ascending — covers the most common retail

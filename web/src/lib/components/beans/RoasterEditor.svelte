@@ -1,6 +1,7 @@
 <script lang="ts">
 	import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeftIcon';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
+	import { scrollBehavior } from '#lib/a11y/motion.js';
 	/**
 	 * `RoasterEditor` — standalone page editor for a {@link Roaster} row.
 	 *
@@ -156,7 +157,7 @@
 
 		// Required-field gate: Name must be filled.
 		if (isNameMissing) {
-			nameInputEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			nameInputEl?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
 			nameInputEl?.focus();
 			return;
 		}
@@ -164,7 +165,7 @@
 		if (isWebsiteInvalid || isLogoInvalid) {
 			const id = isWebsiteInvalid ? 'rd-website-input' : 'rd-logo-input';
 			const el = document.getElementById(id) as HTMLInputElement | null;
-			el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			el?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
 			el?.focus();
 			return;
 		}
