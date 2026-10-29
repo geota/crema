@@ -212,10 +212,12 @@
      onMount), and the connect actions guard themselves on unsupported browsers. -->
 <CremaSidebar {app} />
 <DebugPanel {app} />
-<div class="shell-content">
+<!-- The one <main> landmark for every screen (cohort review 07 #13): pages
+     render their own content inside it, never a nested <main>. -->
+<main class="shell-content">
 	<ReconnectStrip {app} />
 	{@render children?.()}
-</div>
+</main>
 <!-- App-wide in-app dialog + toast hosts (FD4) — replace native
      confirm/alert/prompt. Single instances, driven by the shared stores. -->
 <ConfirmDialog />

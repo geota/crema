@@ -755,7 +755,7 @@
 	<div class="pp-head">
 		<div class="pp-head-l">
 			<div class="t-eyebrow" style="color:var(--fg-3)">Library</div>
-			<div class="t-page-title pp-title">Profiles</div>
+			<h1 class="t-page-title pp-title">Profiles</h1>
 			<div class="pp-sub">
 				{#if store.loaded}
 					{profiles.length} saved · {pinnedCount} pinned to favorites

@@ -386,7 +386,7 @@
 	<div class="sc-head">
 		<div>
 			<div class="t-eyebrow" style="color:var(--fg-3)">Connected scale</div>
-			<div class="t-page-title sc-head-name">{scaleName}</div>
+			<h1 class="t-page-title sc-head-name">{scaleName}</h1>
 			<div class="sc-head-meta">
 				<span
 					class="sc-dot"

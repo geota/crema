@@ -222,7 +222,7 @@
 		</div>
 	</header>
 
-	<main class="rd-main">
+	<div class="rd-main">
 		<!-- Hero — the same gradient avatar as the bean editor's photo slot,
 		     but using the live logo URL when present (falls back to the
 		     deterministic mark on null / load error). -->
@@ -441,7 +441,7 @@
 				Save
 			</button>
 		</div>
-	</main>
+	</div>
 </div>
 
 <style>

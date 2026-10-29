@@ -26,6 +26,9 @@
 	<title>Crema — Brew</title>
 </svelte:head>
 
+<!-- The dashboard has no visible page title; this names the screen for
+     heading navigation (cohort review 07 #13). -->
+<h1 class="sr-only">Brew</h1>
 <BrewDashboard {ui} />
 
 <style>

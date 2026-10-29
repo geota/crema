@@ -138,7 +138,7 @@
 	<title>Connecting to Visualizer · Crema</title>
 </svelte:head>
 
-<main class="cb-shell">
+<div class="cb-shell">
 	<div class="cb-card">
 		{#if status.kind === 'working'}
 			<SpinnerGapIcon class="cb-spinner" aria-hidden="true" />
@@ -171,7 +171,7 @@
 			<a class="cb-link" href="/settings">Try again</a>
 		{/if}
 	</div>
-</main>
+</div>
 
 <style>
 	.cb-shell {

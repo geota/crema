@@ -55,7 +55,7 @@
 </script>
 
 <div class="st-shead">
-	<div class="t-page-title st-shead-title">About</div>
+	<h1 class="t-page-title st-shead-title">About</h1>
 	<div class="st-shead-sub">
 		Crema is built with care for the moments before the first sip.
 	</div>

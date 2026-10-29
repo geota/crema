@@ -616,7 +616,7 @@
 		</aside>
 
 		<!-- Right: form -->
-		<main class="be-main">
+		<div class="be-main">
 			<!-- Identity -->
 			<section class="be-block" id="be-identity">
 				<header class="be-block-head">
@@ -1520,7 +1520,7 @@
 					Save
 				</button>
 			</div>
-		</main>
+		</div>
 	</div>
 </div>
 
