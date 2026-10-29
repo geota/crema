@@ -64,9 +64,15 @@ export const toast = {
 	info: (message: string, durationMs = 4000): void => void show(message, 'info', durationMs),
 	success: (message: string, durationMs = 4000): void => void show(message, 'success', durationMs),
 	error: (message: string, durationMs = 7000): void => void show(message, 'error', durationMs),
-	/** An info toast with one action button (e.g. "Undo") — lingers longer
+	/** A toast with one action button (e.g. "Undo") — info unless `kind`
+	 *  says otherwise (an `error` reads as `role="alert"`); lingers longer
 	 *  so the user has time to react; the action runs, then dismisses.
 	 *  Returns the toast's id, for {@link dismissToast}. */
-	action: (message: string, label: string, run: () => void, durationMs = 8000): number =>
-		show(message, 'info', durationMs, { label, run })
+	action: (
+		message: string,
+		label: string,
+		run: () => void,
+		durationMs = 8000,
+		kind: ToastKind = 'info'
+	): number => show(message, kind, durationMs, { label, run })
 };

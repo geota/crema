@@ -62,3 +62,30 @@ export function canReloadNow(inputs: ReloadInputs): boolean {
 	if (inputs.link === 'down') return true;
 	return inputs.machineStateName !== null && PARKED_STATES.has(inputs.machineStateName);
 }
+
+/** The slice of the UI snapshot {@link reloadInputsOf} reads. */
+export interface ReloadSnapshot {
+	readonly de1State?: BleConnectionState | null;
+	readonly machineStateName?: MachineState | null;
+	readonly shotInProgress?: boolean;
+}
+
+/**
+ * Assemble {@link ReloadInputs} from the shell's live state — one place for
+ * both reload offers (the service-worker update and the engine-reset notice),
+ * so they gate on the same things.
+ */
+export function reloadInputsOf(
+	snapshot: ReloadSnapshot | null | undefined,
+	guidedBrewPhase: string,
+	firmwareRunning: boolean
+): ReloadInputs {
+	return {
+		link: reloadLinkOf(snapshot?.de1State),
+		machineStateName: snapshot?.machineStateName ?? null,
+		shotInProgress: snapshot?.shotInProgress ?? false,
+		guidedBrewLive:
+			guidedBrewPhase === 'armed' || guidedBrewPhase === 'running' || guidedBrewPhase === 'paused',
+		firmwareBusy: firmwareRunning
+	};
+}

@@ -633,8 +633,8 @@ export class De1Manager {
 
 	/**
 	 * Watch the ready link for silence (`de1-liveness`, Android's rule): a
-	 * quiet link gets a passive StateInfo probe, and three failed probes drop
-	 * it into the reconnect loop.
+	 * link quiet for 5 s gets a passive StateInfo probe, and two failed probes
+	 * in a row drop it into the reconnect loop (~10 s from the last notification).
 	 */
 	private startLiveness(device: De1Transport): void {
 		this.stopLiveness();

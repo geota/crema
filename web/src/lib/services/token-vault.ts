@@ -26,7 +26,7 @@
  * `visualizer/token-store.ts` remains the live implementation.
  */
 
-import { Context, Effect, Layer, Option, Semaphore, SubscriptionRef } from 'effect';
+import { Context, Effect, Fiber, Layer, Option, Scope, Semaphore, SubscriptionRef } from 'effect';
 import { readJson, writeJson } from '../utils/storage.ts';
 import { decodeOr } from '../effect/schema/decode.ts';
 import { TokenSetSchema } from '../effect/schema/tokens.ts';
@@ -240,6 +240,25 @@ export const TokenVaultLive = Layer.effect(
 		/** One refresh at a time per vault; {@link withCrossTabLock} extends it across tabs. */
 		const refreshLock = yield* Semaphore.make(1);
 
+		/** The vault's own lifetime: a refresh runs here, not on its caller's fiber. */
+		const layerScope = yield* Scope.Scope;
+
+		/**
+		 * Run `refresh` to completion whatever happens to the caller (final
+		 * review 03 P3-1). Doorkeeper rotates the refresh token on use, so once
+		 * the request is out its answer must be stored: a caller interrupted in
+		 * between — a Visualizer call's 60 s timeout, a sibling failing in a
+		 * concurrent `forEach` — would otherwise abort the fetch or skip the
+		 * store, and the next refresh would present a revoked token and sign the
+		 * user out. The refresh is forked into the vault's scope (still
+		 * interruptible itself, so the token request's own 30 s timeout bounds
+		 * it) and joined uninterruptibly, so the caller keeps holding the
+		 * refresh locks until the new set is stored and only then sees its own
+		 * interruption.
+		 */
+		const runToCompletion = <A, E>(refresh: Effect.Effect<A, E>): Effect.Effect<A, E> =>
+			Effect.uninterruptible(Effect.flatMap(Effect.forkIn(refresh, layerScope), Fiber.join));
+
 		/**
 		 * Refresh the STORED set and persist the result. Runs under the refresh
 		 * lock. Only a definitive grant rejection clears the tokens, and only
@@ -290,7 +309,7 @@ export const TokenVaultLive = Layer.effect(
 						if (!sameTokens(current, observed) && (rejected || !isExpiringSoon(current))) {
 							return current;
 						}
-						return yield* refreshStored(current);
+						return yield* runToCompletion(refreshStored(current));
 					})
 				)
 			);

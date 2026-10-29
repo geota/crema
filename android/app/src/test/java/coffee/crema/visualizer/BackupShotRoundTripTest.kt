@@ -102,14 +102,32 @@ class BackupShotRoundTripTest {
     }
 
     @Test
-    fun `the edit PATCH always carries the barista, empty once cleared (cohort review 06 #8)`() {
+    fun `the edit PATCH carries the barista only after a barista edit, empty once cleared (final review 06 #1)`() {
         val cleared = StoredShot(id = "shot:p", completedAtMs = 1, durationMs = 1, barista = null)
-        assertEquals("", shotPatchInputs(cleared, includeNotes = true, defaultPrivacy = "unlisted", settingsGrinderModel = null).barista)
-        val set = cleared.copy(barista = "Ana", grinderModel = "Niche Zero")
-        val inputs = shotPatchInputs(set, includeNotes = false, defaultPrivacy = "unlisted", settingsGrinderModel = "EK43")
+        // Any other edit leaves the remote barista alone (null = omitted by the core).
+        assertNull(shotPatchInputs(cleared, includeNotes = true, defaultPrivacy = "unlisted", settingsGrinderModel = null).barista)
+        // A barista edit that cleared it still reaches Visualizer as "".
+        assertEquals(
+            "",
+            shotPatchInputs(cleared, includeNotes = true, defaultPrivacy = "unlisted", settingsGrinderModel = null, sendBarista = true).barista,
+        )
+        val set = cleared.copy(barista = " Ana ", grinderModel = "Niche Zero")
+        val inputs = shotPatchInputs(set, includeNotes = false, defaultPrivacy = "unlisted", settingsGrinderModel = "EK43", sendBarista = true)
         assertEquals("Ana", inputs.barista)
         assertEquals("Niche Zero", inputs.grinderModel)
         assertNull(inputs.notes)
+        assertNull(shotPatchInputs(set, includeNotes = false, defaultPrivacy = "unlisted", settingsGrinderModel = null).barista)
+    }
+
+    @Test
+    fun `a pull fills a blank local barista and never overwrites a set one (final review 06 #1)`() {
+        val blank = StoredShot(id = "shot:q", completedAtMs = 1, durationMs = 1)
+        assertEquals("Ana", baristaToFill(blank, " Ana "))
+        assertEquals("Ana", baristaToFill(blank.copy(barista = "  "), "Ana"))
+        assertNull(baristaToFill(blank.copy(barista = "Bo"), "Ana"))
+        assertNull(baristaToFill(blank, null))
+        assertNull(baristaToFill(blank, "  "))
+        assertNull(baristaToFill(null, "Ana"))
     }
 
     @Test

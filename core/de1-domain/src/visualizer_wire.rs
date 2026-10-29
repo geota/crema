@@ -529,6 +529,10 @@ pub fn wire_shot_from_detail(
     };
     let bean = (bean != WireShotBean::default()).then_some(bean);
 
+    // Who made the shot — a free-account field on both variants. Blank
+    // collapses to `None` like the journal fields (final review 06 #1).
+    let barista = bean_field("barista");
+
     WireShot {
         id: summary_id.to_owned(),
         clock: summary_clock_sec * 1000,
@@ -540,6 +544,7 @@ pub fn wire_shot_from_detail(
         updated_at_ms: Some(summary_updated_at_sec * 1000),
         tag_list,
         bean,
+        barista,
     }
 }
 
@@ -937,8 +942,11 @@ pub struct ShotPatchInputs {
     pub grinder_setting: Option<String>,
     /// Who made the shot → `barista` (editable on free accounts too).
     /// `None` = leave the remote value alone; a blank string is sent as
-    /// `""`, which clears it (the shells pass the shot's barista, empty
-    /// once cleared, so a cleared name reaches Visualizer).
+    /// `""`, which clears it. The shells pass `Some` only when the barista
+    /// was edited locally (the name, or `""` once cleared) and `None` for
+    /// any other edit, so a rating change never overwrites — or, for a shot
+    /// whose barista was set elsewhere, wipes — the remote barista (final
+    /// review 06 #1).
     pub barista: Option<String>,
 }
 
@@ -2005,6 +2013,46 @@ mod tests {
         );
         let absent = visualizer_shot_patch(&ShotPatchInputs::default());
         assert!(absent.get("barista").is_none());
+    }
+
+    #[test]
+    fn a_pulled_detail_carries_its_barista_trimmed_and_blank_as_none() {
+        // Final review 06 #1: the pull dropped the barista, so the local shot
+        // never had one and an edit in Crema wiped the remote value.
+        let w = wire_shot_from_detail("r-1", 1, 2, &serde_json::json!({ "barista": " Ana " }));
+        assert_eq!(w.barista.as_deref(), Some("Ana"));
+        let blank = wire_shot_from_detail("r-1", 1, 2, &serde_json::json!({ "barista": "  " }));
+        assert_eq!(blank.barista, None);
+        let absent = wire_shot_from_detail("r-1", 1, 2, &serde_json::json!({}));
+        assert_eq!(absent.barista, None);
+        // The Beanconqueror variant nests its fields under meta.visualizer.
+        let bc = wire_shot_from_detail(
+            "bc-1",
+            1,
+            2,
+            &serde_json::json!({ "meta": { "visualizer": { "barista": "Bo" } } }),
+        );
+        assert_eq!(bc.barista.as_deref(), Some("Bo"));
+        // And it rides the JSON bridge the shells call.
+        let out = wire_shot_from_detail_json(
+            r#"{"summary":{"id":"r-2","clock":1,"updated_at":2},"detail":{"barista":"Ana"}}"#,
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["barista"], "Ana");
+    }
+
+    #[test]
+    fn an_edit_that_did_not_touch_the_barista_leaves_the_remote_one_alone() {
+        // Final review 06 #1: a rating edit carries no barista (None), so the
+        // patch has no `barista` key, on either account tier.
+        let body = visualizer_shot_patch(&ShotPatchInputs {
+            rating: Some(4),
+            ..ShotPatchInputs::default()
+        });
+        assert!(body.get("barista").is_none());
+        let free = visualizer_shot_patch_for_account(body, Some(false));
+        assert!(free.is_none_or(|b| b.get("barista").is_none()));
     }
 
     #[test]

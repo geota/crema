@@ -34,6 +34,7 @@ import { runtimePromise } from './bridge.ts';
 import { TokenVault } from '../services/token-vault.ts';
 import {
 	ShotSync,
+	type EditPatchOptions,
 	type PullOptions,
 	type ShotPatch,
 	type UnsyncedUploadResult
@@ -124,8 +125,12 @@ export interface CremaServices {
 		uploadOne(shotId: string): Promise<void>;
 		/** PATCH an already-uploaded shot (rating / notes / privacy / …). */
 		patch(visualizerId: string, patch: ShotPatch): Promise<void>;
-		/** Push a local shot's edited fields to its uploaded copy (no-op when unsynced). */
-		patchEdited(history: HistoryStore, id: string): Promise<void>;
+		/**
+		 * Push a local shot's edited fields to its uploaded copy (no-op when
+		 * unsynced). Pass `{ baristaChanged: true }` for a barista edit: only
+		 * then is the barista sent.
+		 */
+		patchEdited(history: HistoryStore, id: string, opts?: EditPatchOptions): Promise<void>;
 	};
 	/** The persistent retry queue (the `UploadQueue` service). */
 	readonly queue: {
@@ -202,8 +207,8 @@ export function createCremaServices(runtime: AppRuntime): CremaServices {
 			uploadOne: (shotId) => run(pushShotToVisualizer(shotId, { manual: true })),
 			patch: (visualizerId, patch) =>
 				run(Effect.flatMap(ShotSync, (s) => s.patchShot(visualizerId, patch))),
-			patchEdited: (history, id) =>
-				run(Effect.flatMap(ShotSync, (s) => s.patchEditedShot(history, id)))
+			patchEdited: (history, id, opts) =>
+				run(Effect.flatMap(ShotSync, (s) => s.patchEditedShot(history, id, opts)))
 		},
 		queue: {
 			enqueue: (input) => run(Effect.flatMap(UploadQueue, (q) => q.enqueue(input))),

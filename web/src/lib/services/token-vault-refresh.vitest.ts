@@ -231,6 +231,51 @@ describe('TokenVault single-flight refresh (review 03 P1-2)', () => {
 	});
 });
 
+describe('TokenVault refresh survives its caller (final review 03 P3-1)', () => {
+	// Doorkeeper rotates the refresh token on use: once the server answered,
+	// the new set MUST be stored, or the next refresh presents a revoked token
+	// (invalid_grant) and signs the user out.
+	it('a caller timed out mid-refresh still stores the rotated set', async () => {
+		const { bodies, layer } = endpoint([{ access: 'NEW', refresh: 'RT2' }, 400], { delayMs: 200 });
+		const exit = await run(layer, (v) =>
+			Effect.gen(function* () {
+				yield* v.storeTokens(tokens('OLD', 'RT1', SOON()));
+				return yield* v.withFreshToken(echo).pipe(Effect.timeout(50));
+			})
+		);
+		expect(bodies).toHaveLength(1);
+		// The caller's own outcome may be the timeout; what matters is storage.
+		void exit;
+		const after = await run(layer, (v) => v.getTokens);
+		expect(Exit.isSuccess(after) && after.value).toMatchObject({ accessToken: 'NEW', refreshToken: 'RT2' });
+	});
+
+	it('a sibling failure in a concurrent batch does not lose the rotated set', async () => {
+		const { bodies, layer } = endpoint([{ access: 'NEW', refresh: 'RT2' }, 400], { delayMs: 200 });
+		const exit = await run(layer, (v) =>
+			Effect.gen(function* () {
+				yield* v.storeTokens(tokens('OLD', 'RT1', SOON()));
+				return yield* Effect.forEach(
+					[0, 1],
+					(i) =>
+						i === 0
+							? v.withFreshToken(echo)
+							: Effect.sleep(20).pipe(Effect.andThen(Effect.fail(new NetworkError({ cause: 'x', url: 'u' })))),
+					{ concurrency: 4 }
+				);
+			})
+		);
+		expect(Exit.isFailure(exit)).toBe(true);
+		expect(bodies).toHaveLength(1);
+		const after = await run(layer, (v) => v.getTokens);
+		expect(Exit.isSuccess(after) && after.value).toMatchObject({ accessToken: 'NEW', refreshToken: 'RT2' });
+		// And the next call uses it without another refresh.
+		const next = await run(layer, (v) => v.withFreshToken(echo));
+		expect(Exit.isSuccess(next) && next.value).toBe('NEW');
+		expect(bodies).toHaveLength(1);
+	});
+});
+
 describe('TokenVault across runtimes (review 03 P3-4)', () => {
 	/** A vault on its own runtime, like the shell's and the OAuth callback's. */
 	const vaultRuntime = () =>

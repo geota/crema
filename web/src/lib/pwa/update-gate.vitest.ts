@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MachineState } from '#lib/core/crema-core.js';
-import { canReloadNow, reloadLinkOf, type ReloadInputs } from './update-gate.js';
+import { canReloadNow, reloadInputsOf, reloadLinkOf, type ReloadInputs } from './update-gate.js';
 
 const parked: ReloadInputs = {
 	link: 'up',
@@ -49,5 +49,27 @@ describe('canReloadNow', () => {
 		expect(canReloadNow({ ...parked, shotInProgress: true })).toBe(false);
 		expect(canReloadNow({ ...parked, link: 'down', guidedBrewLive: true })).toBe(false);
 		expect(canReloadNow({ ...parked, firmwareBusy: true })).toBe(false);
+	});
+});
+
+describe('reloadInputsOf', () => {
+	it('maps the snapshot, the guided-brew phase and the firmware flag', () => {
+		expect(
+			reloadInputsOf(
+				{ de1State: 'ready', machineStateName: MachineState.Idle, shotInProgress: false },
+				'idle',
+				false
+			)
+		).toEqual({
+			link: 'up',
+			machineStateName: MachineState.Idle,
+			shotInProgress: false,
+			guidedBrewLive: false,
+			firmwareBusy: false
+		});
+		for (const phase of ['armed', 'running', 'paused']) {
+			expect(reloadInputsOf(null, phase, false).guidedBrewLive).toBe(true);
+		}
+		expect(reloadInputsOf(null, 'done', true)).toMatchObject({ link: 'down', guidedBrewLive: false, firmwareBusy: true });
 	});
 });

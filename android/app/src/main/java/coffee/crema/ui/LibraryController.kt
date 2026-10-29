@@ -1270,6 +1270,29 @@ class LibraryController(
         scope.launch { historyStore.save(snapshot) }
     }
 
+    /**
+     * Fill a pulled shot's blank barista from Visualizer (final review 06 #1).
+     * A barista already set here is kept. Persisted.
+     */
+    fun fillShotBarista(localId: String, barista: String) {
+        var changed = false
+        updateUi { st ->
+            st.copy(
+                history = st.history.map {
+                    if (it.id == localId && it.barista.isNullOrBlank()) {
+                        changed = true
+                        it.copy(barista = barista)
+                    } else {
+                        it
+                    }
+                },
+            )
+        }
+        if (!changed) return
+        val snapshot = uiState().history
+        scope.launch { historyStore.save(snapshot) }
+    }
+
     /** Stamp a successful Decent shot-history upload onto the local shot (#84). Persisted. */
     fun markShotDecentUploaded(localId: String, decentId: String, machine: ShotMachine? = null) {
         updateUi { st ->
@@ -2246,7 +2269,11 @@ class LibraryController(
         }
         val snapshot = uiState().history
         scope.launch { historyStore.save(snapshot) }
-        if (field == "barista") schedulePatchEdited(id)
+        if (field == "barista") {
+            // Only a barista edit sends the barista (final review 06 #1).
+            visualizer.markBaristaEdited(id)
+            schedulePatchEdited(id)
+        }
         onShotAnnotationsEdited(id)
     }
 

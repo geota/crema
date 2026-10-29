@@ -35,7 +35,7 @@
 	import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { installServiceWorker, type Handle as ServiceWorkerHandle } from '#lib/pwa/register.js';
-	import { canReloadNow, reloadLinkOf, type ReloadInputs } from '#lib/pwa/update-gate.js';
+	import { canReloadNow, reloadInputsOf, type ReloadInputs } from '#lib/pwa/update-gate.js';
 	import CoreLoadFailed from '#lib/shell/CoreLoadFailed.svelte';
 	import type { LayoutProps } from './$types';
 
@@ -77,15 +77,11 @@
 	 * parked update offer.
 	 */
 	function reloadInputs(): ReloadInputs {
-		const snapshot = app?.state.current ?? null;
-		const brewPhase = getGuidedBrewStore().phase;
-		return {
-			link: reloadLinkOf(snapshot?.de1State),
-			machineStateName: snapshot?.machineStateName ?? null,
-			shotInProgress: snapshot?.shotInProgress ?? false,
-			guidedBrewLive: brewPhase === 'armed' || brewPhase === 'running' || brewPhase === 'paused',
-			firmwareBusy: app?.firmware.running ?? false
-		};
+		return reloadInputsOf(
+			app?.state.current ?? null,
+			getGuidedBrewStore().phase,
+			app?.firmware.running ?? false
+		);
 	}
 
 	onMount(async () => {
@@ -205,11 +201,13 @@
 		setBrewWakeLock(on);
 	});
 
-	// A parked update offer (the machine was busy when the build arrived) is
-	// retried whenever the inputs change — reading them here is what subscribes.
+	// A parked update offer (the machine was busy when the build arrived) and
+	// a parked engine-reset reload are retried whenever the inputs change —
+	// reading them here is what subscribes.
 	$effect(() => {
 		reloadInputs();
 		serviceWorker?.onStateChange();
+		app?.coreResetNotice.onStateChange();
 	});
 
 	// Tear the runtime's fibers + finalizers down when the shell unmounts

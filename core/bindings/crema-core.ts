@@ -3521,8 +3521,11 @@ export interface ShotPatchInputs {
 	/**
 	 * Who made the shot → `barista` (editable on free accounts too).
 	 * `None` = leave the remote value alone; a blank string is sent as
-	 * `""`, which clears it (the shells pass the shot's barista, empty
-	 * once cleared, so a cleared name reaches Visualizer).
+	 * `""`, which clears it. The shells pass `Some` only when the barista
+	 * was edited locally (the name, or `""` once cleared) and `None` for
+	 * any other edit, so a rating change never overwrites — or, for a shot
+	 * whose barista was set elsewhere, wipes — the remote barista (final
+	 * review 06 #1).
 	 */
 	barista?: string;
 }
@@ -3855,6 +3858,15 @@ export interface WireShot {
 	 * down from Visualizer lost its bean info).
 	 */
 	bean?: WireShotBean;
+	/**
+	 * Who made the shot (Visualizer `barista`), or `None` when the remote
+	 * has none (blank collapses to `None`). Mutable metadata — NOT part of
+	 * the de-dup signature. The shells fill a local shot's barista from it
+	 * on pull (final review 06 #1: it was dropped, so an edit in Crema sent
+	 * `barista: ""` and wiped the remote one). `#[serde(default)]` so older
+	 * cached payloads without the field still deserialise.
+	 */
+	barista?: string;
 }
 
 /**

@@ -5,30 +5,47 @@
  *
  * A dead link does not always deliver a disconnect: Decenza measured a link
  * Qt kept reporting connected for 22.5 s while stop presses were discarded,
- * and reaprime forces a reconnect after 10 s without a push frame. A healthy
- * connected DE1 streams water-level notifications about twice a second, so
- * while inbound traffic is recent this does nothing (and so never reads
- * mid-shot, when ShotSamples keep the link busy). Only after
- * {@link LIVENESS_QUIET_MS} of silence does it issue a passive StateInfo read,
- * which the DE1 answers even while asleep — it never wakes the machine. After
- * {@link LIVENESS_MAX_FAILURES} failed probes in a row the owner drops the
- * link into the ordinary reconnect loop.
+ * and tears down after an abandoned write plus 5 s of silence; reaprime forces
+ * a reconnect after 10 s without a push frame. A healthy connected DE1 streams
+ * water-level notifications about twice a second (ShotSamples ~4/s during a
+ * shot), so while inbound traffic is recent this does nothing (and so never
+ * reads mid-shot). After {@link LIVENESS_QUIET_MS} of silence it issues a
+ * passive StateInfo read, which the DE1 answers even while asleep — it never
+ * wakes the machine — and a success counts as traffic. Only
+ * {@link LIVENESS_MAX_FAILURES} failed probes in a row (with no traffic in
+ * between) drop the link into the ordinary reconnect loop, so one slow or
+ * refused read never drops a live machine. A dead link is dropped about 10 s
+ * after its last notification (final review 02 N8: the old 30 s / 15 s / 3
+ * rule took 60–75 s, during which a stop press reached nothing).
  *
  * Paused while a firmware flash holds the link (the flash owns its I/O and
  * its own link-loss handling). Timers and the clock are injected for tests.
  */
 
+import { withTimeout } from '#lib/utils/timeout.js';
+
 /** How often the check runs, ms (Android `LIVENESS_CHECK_INTERVAL_MS`). */
-export const LIVENESS_CHECK_INTERVAL_MS = 15_000;
+export const LIVENESS_CHECK_INTERVAL_MS = 1_000;
 
 /** Inbound silence before a probe read, ms (Android `LIVENESS_QUIET_MS`). */
-export const LIVENESS_QUIET_MS = 30_000;
+export const LIVENESS_QUIET_MS = 5_000;
 
-/** Failed probes in a row before the link is presumed dead (Android: 3). */
-export const LIVENESS_MAX_FAILURES = 3;
+/** Failed probes in a row before the link is presumed dead (Android `LIVENESS_MAX_FAILURES`). */
+export const LIVENESS_MAX_FAILURES = 2;
 
-/** One probe read's ceiling, ms (Android's 5 s write/read timeout). */
-export const LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+/** One probe read's ceiling, ms (Android `LIVENESS_PROBE_TIMEOUT_MS`). */
+export const LIVENESS_PROBE_TIMEOUT_MS = 2_000;
+
+/**
+ * The worst case from the last notification to the drop: the quiet window
+ * plus one check interval of tick phase, each probe's time limit, and the
+ * wait for the next tick between probes. 11 s with the numbers above.
+ */
+export const LIVENESS_DEAD_WITHIN_MS =
+	LIVENESS_QUIET_MS +
+	LIVENESS_CHECK_INTERVAL_MS +
+	LIVENESS_MAX_FAILURES * LIVENESS_PROBE_TIMEOUT_MS +
+	(LIVENESS_MAX_FAILURES - 1) * LIVENESS_CHECK_INTERVAL_MS;
 
 export interface LivenessDeps {
 	/** Monotonic clock, ms (`performance.now()`, the notification stamp clock). */
@@ -93,9 +110,13 @@ export class De1Liveness {
 			return;
 		}
 		this.#probing = true;
+		const probeStartedAtMs = now;
 		let ok: boolean;
 		try {
-			await this.#withTimeout(this.#deps.probe());
+			await withTimeout(this.#deps.probe(), LIVENESS_PROBE_TIMEOUT_MS, 'liveness probe timed out', {
+				setTimeout: this.#deps.setTimeout,
+				clearTimeout: this.#deps.clearTimeout
+			});
 			ok = true;
 		} catch {
 			ok = false;
@@ -103,6 +124,13 @@ export class De1Liveness {
 			this.#probing = false;
 		}
 		if (this.#stopped) return;
+		// Traffic that arrived while the probe was out proves the link alive
+		// (the read lost to a busy GATT queue, not to a dead link); a flash
+		// that took the link meanwhile owns it now. Neither counts.
+		if (!ok && (this.#deps.lastInboundAtMs() > probeStartedAtMs || this.#deps.paused())) {
+			this.#failures = 0;
+			return;
+		}
 		if (ok) {
 			this.#lastProbeOkAtMs = this.#deps.now();
 			this.#failures = 0;
@@ -115,25 +143,5 @@ export class De1Liveness {
 			this.stop();
 			this.#deps.onDead();
 		}
-	}
-
-	#withTimeout<T>(p: Promise<T>): Promise<T> {
-		const setT = this.#deps.setTimeout ?? ((fn, ms) => globalThis.setTimeout(fn, ms));
-		const clearT =
-			this.#deps.clearTimeout ??
-			((h) => globalThis.clearTimeout(h as ReturnType<typeof setTimeout>));
-		return new Promise<T>((resolve, reject) => {
-			const timer = setT(() => reject(new Error('liveness probe timed out')), LIVENESS_PROBE_TIMEOUT_MS);
-			p.then(
-				(v) => {
-					clearT(timer);
-					resolve(v);
-				},
-				(e: unknown) => {
-					clearT(timer);
-					reject(e);
-				}
-			);
-		});
 	}
 }

@@ -27,6 +27,7 @@ import { DB_NAME as CAPTURES_DB } from '#lib/capture/store.js';
 import { DB_NAME as SERIES_DB } from '#lib/history/series-store.js';
 import { DB_NAME as BEAN_IMAGES_DB } from '#lib/bean/image-storage.js';
 import { DB_NAME as KEYS_DB } from '#lib/security/secret-box.js';
+import { withTimeout } from '#lib/utils/timeout.js';
 
 /** Every IndexedDB database the web app creates. */
 export const CREMA_DATABASES: readonly string[] = [CAPTURES_DB, SERIES_DB, BEAN_IMAGES_DB, KEYS_DB];
@@ -57,22 +58,6 @@ export interface FactoryResetResult {
 	storageKeysRemoved: number;
 	/** Revocations that threw or timed out. The local wipe ran regardless. */
 	revokeFailures: number;
-}
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-	return new Promise<T>((resolve, reject) => {
-		const t = setTimeout(() => reject(new Error('timed out')), ms);
-		p.then(
-			(v) => {
-				clearTimeout(t);
-				resolve(v);
-			},
-			(e) => {
-				clearTimeout(t);
-				reject(e);
-			}
-		);
-	});
 }
 
 function deleteDatabase(idb: IDBFactory, name: string, timeoutMs: number): Promise<boolean> {
