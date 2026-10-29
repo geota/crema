@@ -465,6 +465,9 @@ export class CremaApp {
 		});
 		this.#coreRecovery = new CoreRecoveryWatch(core.panicRecoveries?.bind(core), (count) => {
 			this.state.log(`Core reset after an internal error (reset #${count})`);
+			// The fresh core runs no upload and numbers uploads from 1 again:
+			// no old batch may write, ack or report into it (C2 P3-1).
+			this.#profileWrites.supersede();
 			this.coreResetNotice.onReset();
 		});
 		// Logged once with the bridge's own message as context; the per-call
@@ -1249,8 +1252,13 @@ export class CremaApp {
 						// re-upload does not wait for the ack watchdog.
 						this.state.log('Profile write failed — stopping this upload');
 						// Named by its upload, so a report that lands after a
-						// newer upload started leaves that one alone (V3 #1).
-						if (profileBatch.uploadId !== null) {
+						// newer upload started leaves that one alone (V3 #1);
+						// not sent once superseded (a newer header, or a core
+						// rebuilt after a panic, C2 P3-1).
+						if (
+							profileBatch.uploadId !== null &&
+							this.#profileWrites.isCurrent(profileBatch)
+						) {
 							this.applyCoreOutput(
 								await this.core.profileWriteFailed(performance.now(), profileBatch.uploadId)
 							);

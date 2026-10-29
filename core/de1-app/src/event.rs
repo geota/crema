@@ -654,8 +654,10 @@ pub enum Event {
         /// This upload's number, unique for the core's lifetime (kept across
         /// [`reset`](crate::CremaCore::reset)). The shell records it with
         /// the upload's writes and passes it back to
-        /// [`profile_write_failed`](crate::CremaCore::profile_write_failed),
-        /// so a late failure report cannot fail a newer upload.
+        /// [`profile_write_failed`](crate::CremaCore::profile_write_failed)
+        /// and `on_profile_write_ack`, so a late report or ack cannot reach a
+        /// newer upload. A wasm bridge that rebuilds its core after a panic
+        /// starts again at 1: the web shell then supersedes every open batch.
         upload_id: u32,
     },
     /// An upload is waiting for the DE1's machine model before it writes

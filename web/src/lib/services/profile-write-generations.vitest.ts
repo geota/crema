@@ -66,6 +66,34 @@ describe('ProfileWriteGenerations', () => {
 		expect(a.uploadId, 'the older batch keeps its own number').toBe(7);
 	});
 
+	it('a core rebuilt after a panic supersedes every open batch (C2 P3-1)', () => {
+		// The fresh core numbers uploads from 1 again: batch A (id 1, old core)
+		// must not write, ack or report into the fresh core's upload 1.
+		const g = new ProfileWriteGenerations();
+		const a = g.begin(upload(), 1)!;
+		expect(g.settle(a, true)).toBe('ack');
+		g.supersede();
+		expect(g.mayWrite(a)).toBe(false);
+		expect(g.isCurrent(a)).toBe(false);
+		expect(g.settle(a, true)).toBe('drop');
+		expect(g.settle(a, false)).toBe('drop');
+		// Frames without a header after the rebuild join no old upload.
+		expect(g.begin([write('De1ProfileFrame')])!.uploadId).toBeNull();
+		const b = g.begin(upload(), 1)!;
+		expect(g.mayWrite(b)).toBe(true);
+		expect(g.settle(b, true)).toBe('ack');
+	});
+
+	it('a failed batch stays current until superseded', () => {
+		const g = new ProfileWriteGenerations();
+		const a = g.begin(upload(), 3)!;
+		expect(g.settle(a, false)).toBe('failed');
+		expect(g.mayWrite(a)).toBe(false);
+		expect(g.isCurrent(a), 'its failure may still be reported').toBe(true);
+		g.begin(upload(), 4);
+		expect(g.isCurrent(a)).toBe(false);
+	});
+
 	it('reads the upload number from the output that starts it', () => {
 		const started = {
 			type: 'ProfileUploadStarted',

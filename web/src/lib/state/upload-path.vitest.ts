@@ -259,3 +259,93 @@ describe('profile-write generations in the app executor (#2 N2)', () => {
 		expect(written).toEqual(['H2', 'H2', 'F0', 'F1', 'F32', 'F33', 'F2']);
 	});
 });
+
+describe('a core rebuilt after a panic (round-3 clean check C2 P3-1)', () => {
+	/**
+	 * The bridge's reset count, under the test's control: the rebuilt core
+	 * numbers uploads from 1 again, which a test cannot make the real bridge
+	 * do, so these check the shell drops everything of the old batches.
+	 */
+	async function recoverable() {
+		const { loadCore } = await import('#lib/core/index.js');
+		const core = await loadCore();
+		let resets = 0;
+		vi.spyOn(core, 'panicRecoveries').mockImplementation(() => resets);
+		return {
+			core,
+			/** Count a reset and let the app notice it, as its next core call would. */
+			reset: (h: Harness) => {
+				resets += 1;
+				h.feed({ events: [], commands: [] });
+			}
+		};
+	}
+
+	it("an open upload's queued writes and acks never reach the rebuilt core", async () => {
+		const r = await recoverable();
+		const written: string[] = [];
+		let released = 0;
+		let started = 0;
+		const waiters: (() => void)[] = [];
+		let chain: Promise<unknown> = Promise.resolve();
+		const h = await harness((target, data, guard, settled) => {
+			const index = started++;
+			const op = chain.then(async () => {
+				if (index >= released) await new Promise<void>((res) => waiters.push(res));
+				if (guard && !guard()) return false;
+				record(written, target, data);
+				settled?.(true);
+				return true;
+			});
+			chain = op;
+			return op;
+		});
+		const acks = vi.spyOn(r.core, 'onProfileWriteAck');
+		h.onState('ready');
+		await knowModel(h);
+		await h.app.uploadProfile(twoStepProfile('A'));
+		released = 1; // A's header lands and is acked
+		while (waiters.length > 0) waiters.shift()?.();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(acks).toHaveBeenCalledTimes(1);
+
+		r.reset(h);
+		released = 100;
+		while (waiters.length > 0) waiters.shift()?.();
+		await vi.advanceTimersByTimeAsync(10);
+		expect(written, "nothing of A after the rebuild").toEqual(['H2']);
+		expect(acks, 'no ack of A reaches the rebuilt core').toHaveBeenCalledTimes(1);
+	});
+
+	it('a failure settled before the rebuild is not reported to the rebuilt core', async () => {
+		// The window C2 P3-1 describes: A's write fails, the core is rebuilt
+		// before the report goes out, and the report would name the fresh
+		// core's first upload.
+		const r = await recoverable();
+		let chain: Promise<unknown> = Promise.resolve();
+		let failedOnce = false;
+		const h: Harness = await harness((target, data, guard, settled) => {
+			const op = chain.then(async () => {
+				if (guard && !guard()) return false;
+				if (!failedOnce && target === 'De1ProfileFrame' && data[0] === 0) {
+					failedOnce = true;
+					settled?.(false);
+					r.reset(h);
+					return false;
+				}
+				settled?.(true);
+				return true;
+			});
+			chain = op;
+			return op;
+		});
+		const reports = vi.spyOn(r.core, 'profileWriteFailed');
+		h.onState('ready');
+		await knowModel(h);
+		await h.app.uploadProfile(twoStepProfile('A'));
+		await vi.advanceTimersByTimeAsync(10);
+		expect(failedOnce).toBe(true);
+		expect(reports).not.toHaveBeenCalled();
+		expect(h.log().some((l) => l.includes('Core reset after an internal error'))).toBe(true);
+	});
+});

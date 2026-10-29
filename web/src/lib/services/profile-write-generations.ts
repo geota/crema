@@ -24,6 +24,10 @@
  *   current upload). The failure report passes it back, so a report that
  *   arrives after a newer upload started cannot fail the newer one
  *   (round-2 verification V3 #1).
+ * - The generation is the shell's own count and the upload id the core's;
+ *   both are kept. Upload ids restart at 1 when the wasm bridge rebuilds its
+ *   core after a panic, so the generation is what supersedes a batch then
+ *   ({@link ProfileWriteGenerations.supersede}).
  *
  * Android's `ProfileWriteGenerations` applies the same rule.
  */
@@ -87,6 +91,26 @@ export class ProfileWriteGenerations {
 	/** Whether a write of `batch` may go out now. */
 	mayWrite(batch: ProfileWriteBatch): boolean {
 		return batch.generation === this.#current && !batch.failed;
+	}
+
+	/**
+	 * Whether `batch` is still the live generation, failed or not: a failure
+	 * report for it may still go to the core.
+	 */
+	isCurrent(batch: ProfileWriteBatch): boolean {
+		return batch.generation === this.#current;
+	}
+
+	/**
+	 * Supersede every open batch without starting a new one. For a wasm core
+	 * rebuilt after a panic (`CoreRecoveryWatch`): the fresh core runs
+	 * no upload and numbers its uploads from 1 again, so an old batch's id
+	 * could name the fresh core's first upload (round-3 clean check C2 P3-1).
+	 * Its queued writes, acks and failure report are dropped instead.
+	 */
+	supersede(): void {
+		this.#current += 1;
+		this.#currentUploadId = null;
 	}
 
 	/**
