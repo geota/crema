@@ -66,20 +66,41 @@ class MultiDeviceCopyTest {
         assertFalse(MainUiState(proxyRole = "normal").canConnectDirectly())
     }
 
-    /** AC-6 and AC-8: Hub mode is disabled while another hub holds the DE1 —
-     *  this remote's hub, or one NSD lists to a normal device — and not
-     *  otherwise. */
+    /** AC-6: Hub mode is disabled on a remote whose hub (which proved its
+     *  pairing) holds the DE1, and not otherwise. */
     @Test
-    fun `hub mode is disabled while another hub holds the machine`() {
+    fun `hub mode is disabled on a remote whose hub holds the machine`() {
         assertEquals("Turn off hub mode on Kitchen tablet first", remote().hubModeBlockedReason())
         assertNull(remote(hasMachine = false).hubModeBlockedReason(), "a hub without the machine")
         assertNull(remote(reconnecting = true).hubModeBlockedReason(), "a hub that's gone")
-        assertEquals(
-            "Turn off hub mode on Kitchen tablet first",
-            MainUiState(proxyRole = "normal", hubHoldingMachine = kitchen).hubModeBlockedReason(),
-        )
         assertNull(MainUiState(proxyRole = "normal").hubModeBlockedReason())
         assertNull(MainUiState(proxyRole = "primary", hubHoldingMachine = kitchen).hubModeBlockedReason(), "a hub can always turn it off")
+    }
+
+    /** Security review: a discovered hub's advertisement is unauthenticated, so
+     *  on a normal device it only warns (deviation from AC-6's "disabled"). It
+     *  is named only when it is the paired, pinned target; anything else is
+     *  "a device on this network". */
+    @Test
+    fun `a discovered hub only warns, and is named only when paired and pinned`() {
+        val unpaired = MainUiState(proxyRole = "normal", hubHoldingMachine = kitchen)
+        assertNull(unpaired.hubModeBlockedReason(), "an advertisement never blocks Hub mode")
+        assertEquals(
+            "A device on this network says it's the hub — turning on Hub mode here will fail to connect while it holds the machine",
+            unpaired.discoveredHubWarning(),
+        )
+        assertEquals(unpaired.discoveredHubWarning(), unpaired.hubModeSubtitle("tablet"))
+        // A pin for another address, or an address without a pin, isn't verified.
+        assertFalse(unpaired.copy(pairedHubPinned = true, proxyPrimaryHost = "192.168.1.99").isVerifiedHub(kitchen))
+        assertFalse(unpaired.copy(pairedHubPinned = false, proxyPrimaryHost = kitchen.host).isVerifiedHub(kitchen))
+
+        val pinned = unpaired.copy(pairedHubPinned = true, proxyPrimaryHost = kitchen.host)
+        assertTrue(pinned.isVerifiedHub(kitchen))
+        assertEquals(
+            "Kitchen tablet is already the hub for this machine — turning on Hub mode here will fail to connect while it holds the machine",
+            pinned.discoveredHubWarning(),
+        )
+        assertNull(MainUiState(proxyRole = "primary", hubHoldingMachine = kitchen).discoveredHubWarning())
     }
 
     /** AC-6: the switch's subtitle says that turning it off frees the machine. */
@@ -92,11 +113,18 @@ class MultiDeviceCopyTest {
         assertTrue("connect through" in MainUiState().hubModeSubtitle("tablet"))
     }
 
-    /** AC-8: what a normal device's connect surfaces say while a hub holds the DE1. */
+    /** AC-8: what a normal device's connect surfaces say while a hub holds the
+     *  DE1: named for a paired, pinned hub, unverified for any other. */
     @Test
     fun `the turn-off-hub copy offers to connect through the hub`() {
-        assertEquals("Turn off hub mode on Kitchen tablet to connect this device", turnOffHubToConnect(kitchen.name))
-        assertEquals("Connect through Kitchen tablet", connectThroughLabel(kitchen.name))
+        assertEquals("Turn off hub mode on Kitchen tablet to connect this device", turnOffHubToConnect(kitchen, verified = true))
+        assertEquals("Connect through Kitchen tablet", connectThroughLabel(kitchen, verified = true))
+        assertEquals(
+            "A device on this network says it's the hub (“Kitchen tablet”, unverified) — turn off hub mode there to connect this device",
+            turnOffHubToConnect(kitchen, verified = false),
+        )
+        assertEquals("Connect through it", connectThroughLabel(kitchen, verified = false))
+        assertEquals(turnOffHubToConnect(kitchen, verified = false), MainUiState(hubHoldingMachine = kitchen).turnOffHubCopy())
     }
 
     /** AC-37: the picker's restart sub is gone (the debug role selector it

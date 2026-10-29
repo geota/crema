@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelStore
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.proxy.DeviceInfo
 import coffee.crema.ble.proxy.MockWsServerLink
+import coffee.crema.ble.proxy.PairingCrypto
 import coffee.crema.ble.proxy.Peer
 import coffee.crema.ble.proxy.RelayHub
 import coffee.crema.settings.AppPrefs
@@ -26,6 +27,7 @@ import java.io.File
 import java.net.InetAddress
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -109,7 +111,7 @@ class HubRemoteRolesTest {
     }
 
     /** AC-8: a normal device sees another device's hub holding the DE1 — not
-     *  itself, not a hub without the machine — and Hub mode is refused. */
+     *  itself, not a hub without the machine. */
     @Test
     fun `a discovered hub holding the machine is the normal device's hub`() {
         val vm = build()
@@ -129,12 +131,56 @@ class HubRemoteRolesTest {
         peers.value = listOf(kitchen)
         VmHarness.idle()
         assertEquals(kitchen, vm.ui.value.hubHoldingMachine)
-        assertEquals("Turn off hub mode on Kitchen tablet first", vm.ui.value.hubModeBlockedReason())
+    }
+
+    /** Security review: an unpaired device advertising itself as the hub
+     *  doesn't block Hub mode. The switch warns in unverified words, a plain
+     *  "on" stops at the warning, and "Turn on anyway" makes this the hub. */
+    @Test
+    fun `an unpaired advertiser warns but doesn't block hub mode`() {
+        val vm = build()
+        val proxy = VmHarness.proxyController(vm)
+        proxy.overridePeers(MutableStateFlow(listOf(Peer("nsd-x", "Kitchen tablet", "primary", holdsDe1 = true, host = "192.168.1.66", port = 8765))))
+        VmHarness.idle()
+        assertNull(vm.ui.value.hubModeBlockedReason(), "the switch stays enabled")
+        val warning = assertNotNull(vm.ui.value.discoveredHubWarning())
+        assertTrue(warning.startsWith("A device on this network says it's the hub"), warning)
 
         vm.setHubMode(true)
         VmHarness.advance(MODE_SWITCH_SETTLE_MS)
-        assertEquals("normal", role(vm), "a second hub without the machine would only confuse remotes")
-        assertTrue(vm.ui.value.userMessages.any { "Turn off hub mode on Kitchen tablet first" in it }, "${vm.ui.value.userMessages}")
+        assertEquals("normal", role(vm), "a plain on asks first")
+        assertTrue(vm.ui.value.userMessages.any { it == warning }, "${vm.ui.value.userMessages}")
+
+        vm.setHubMode(true, anyway = true)
+        VmHarness.advance(MODE_SWITCH_SETTLE_MS)
+        assertEquals("primary", role(vm), "Turn on anyway")
+    }
+
+    /** Security review: a hub this device has paired with and pinned (its
+     *  saved target, with a held secret) is named in the warning. */
+    @Test
+    fun `a paired and pinned hub is named in the warning`() {
+        // Paired and pinned before this launch: the saved target, a held
+        // secret for its pinned host. (Robolectric has no keystore to seal
+        // with, so the secret is stored the way a pre-keystore build did,
+        // which the store still opens.)
+        File(VmHarness.app().filesDir, "proxy-pairing.json").writeText(
+            """{"hostId":"this-device","held":{"host-1":"${PairingCrypto.newSecret()}"},"pinnedHost":"host-1"}""",
+        )
+        VmHarness.persistRole("normal", host = "192.168.1.20")
+        val vm = VmHarness.build(store)
+        VmHarness.idle()
+        VmHarness.awaitPrefsLoaded(vm)
+        val proxy = VmHarness.proxyController(vm)
+        proxy.overridePeers(MutableStateFlow(listOf(Peer("nsd-k", "Kitchen tablet", "primary", holdsDe1 = true, host = "192.168.1.20", port = 8765))))
+        VmHarness.idle()
+        assertTrue(vm.ui.value.pairedHubPinned)
+        assertEquals(
+            "Kitchen tablet is already the hub for this machine — turning on Hub mode here will fail to connect while it holds the machine",
+            vm.ui.value.discoveredHubWarning(),
+        )
+        assertEquals("Turn off hub mode on Kitchen tablet to connect this device", vm.ui.value.turnOffHubCopy())
+        assertNull(vm.ui.value.hubModeBlockedReason(), "still advisory")
     }
 
     /** AC-8: a remote doesn't get the normal device's "hub holds the machine". */

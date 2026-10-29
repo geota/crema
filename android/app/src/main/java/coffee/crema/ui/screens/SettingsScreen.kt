@@ -223,7 +223,7 @@ fun SettingsScreen(
                             ReconnectingNotice("DE1", onRetry = { vm.retryReconnectNow(true) })
                         }
                         // Another hub holds the machine: say how to get it here.
-                        if (!connected) HubHoldsMachineNotice(ui.hubHoldingMachine, onConnectThrough = vm::switchToSecondary)
+                        if (!connected) HubHoldsMachineNotice(ui, onConnectThrough = vm::switchToSecondary)
                         SetGroup("Connection") {
                             // The one reconnect control: the remembered DE1 and
                             // Forget (replaces the Auto-connect switch and the

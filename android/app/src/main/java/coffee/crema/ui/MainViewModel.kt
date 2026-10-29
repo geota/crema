@@ -1667,6 +1667,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         } else {
                             null
                         },
+                        pairedHubPinned = proxy.hasPinnedHub(),
                         changedHost = ps.changedHost,
                     )
                 }
@@ -3202,10 +3203,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * The Hub mode switch (Settings ▸ Multi-device). On makes this device the
      * hub; on a remote whose hub is gone it leaves the remote role first. Off
      * frees the machine: the hub steps down without reconnecting, so another
-     * device can connect. Refused while another hub holds the DE1
+     * device can connect. Refused on a remote whose hub holds the DE1
      * ([hubModeBlockedReason]) and, by the controller, during a firmware flash.
+     * A discovered hub's advertisement only warns ([discoveredHubWarning]):
+     * the switch asks first, and [anyway] is the user's "Turn on anyway".
      */
-    fun setHubMode(on: Boolean) {
+    fun setHubMode(on: Boolean, anyway: Boolean = false) {
         val role = proxy.state.value.role
         if (!on) {
             if (role == "primary") proxy.setHubMode(false)
@@ -3214,6 +3217,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.value.hubModeBlockedReason()?.let { reason ->
             notifyUser(reason)
             return
+        }
+        if (!anyway) {
+            _ui.value.discoveredHubWarning()?.let { warning ->
+                notifyUser(warning)
+                return
+            }
         }
         when (role) {
             "primary" -> Unit

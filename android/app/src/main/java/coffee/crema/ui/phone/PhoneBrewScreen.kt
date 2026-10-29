@@ -855,7 +855,7 @@ private fun RestingBody(
                     )
                 }
                 // Another hub holds the machine: say how to get it here.
-                if (!connected) HubHoldsMachineNotice(ui.hubHoldingMachine, onConnectThrough = onConnectThrough)
+                if (!connected) HubHoldsMachineNotice(ui, onConnectThrough = onConnectThrough)
                 // Target line: dose → yield, ratio.
                 val (dose, yieldOut) = ui.effectiveBrew()
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

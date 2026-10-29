@@ -370,7 +370,7 @@ private fun MachineSection(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 // Another hub holds the machine: say how to get it here.
-                if (!connected) HubHoldsMachineNotice(ui.hubHoldingMachine, onConnectThrough = vm::switchToSecondary)
+                if (!connected) HubHoldsMachineNotice(ui, onConnectThrough = vm::switchToSecondary)
             }
         }
         if (!connected && ui.de1Reconnecting) {

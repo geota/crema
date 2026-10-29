@@ -34,7 +34,7 @@ import coffee.crema.ui.WaterMode
 import coffee.crema.ui.YieldRatioMode
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.effectiveBrew
-import coffee.crema.ui.turnOffHubToConnect
+import coffee.crema.ui.turnOffHubCopy
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.CremaEdge
 import coffee.crema.ui.theme.CremaTheme
@@ -603,7 +603,7 @@ fun DevicesPanel(
                     listOfNotNull("Connected", ui.de1Firmware).joinToString(" · ")
                 } else {
                     when {
-                        ui.hubHoldingMachine != null -> turnOffHubToConnect(ui.hubHoldingMachine.name)
+                        ui.hubHoldingMachine != null -> ui.turnOffHubCopy().orEmpty()
                         ui.de1Reconnecting -> "Reconnecting…"
                         ui.bleState == De1BleManager.State.SCANNING -> "Scanning…"
                         ui.bleState == De1BleManager.State.CONNECTING || ui.bleState == De1BleManager.State.DISCOVERING || ui.bleState == De1BleManager.State.SUBSCRIBING -> "Connecting…"
@@ -618,7 +618,7 @@ fun DevicesPanel(
                 remembered = ui.rememberedDe1Address != null,
                 onForget = onForgetDe1,
             )
-            if (!connected) HubHoldsMachineNotice(ui.hubHoldingMachine, onConnectThrough = onMirrorFrom)
+            if (!connected) HubHoldsMachineNotice(ui, onConnectThrough = onMirrorFrom)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             DeviceRow(
                 kind = "Scale",
@@ -730,7 +730,7 @@ fun DevicesPanelWide(
     val machineStat = if (connected) {
         listOfNotNull("Connected", ui.de1Firmware).joinToString(" · ")
     } else if (ui.hubHoldingMachine != null) {
-        turnOffHubToConnect(ui.hubHoldingMachine.name)
+        ui.turnOffHubCopy().orEmpty()
     } else if (ui.de1Reconnecting) {
         "Reconnecting…"
     } else when (ui.bleState) {
@@ -837,7 +837,7 @@ fun DevicesPanelWide(
                 }
             }
         }
-        if (!connected) HubHoldsMachineNotice(ui.hubHoldingMachine, onConnectThrough = onMirrorFrom)
+        if (!connected) HubHoldsMachineNotice(ui, onConnectThrough = onMirrorFrom)
         // Three across when there's room; on a narrow sheet (a 7" tablet in portrait,
         // ~600dp) Machine + Scale share a row and Other devices spans below — otherwise
         // the third column crushes the mirroring text to one character per line.

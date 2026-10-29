@@ -471,11 +471,14 @@ data class MainUiState(
     /** Remotes connected through THIS device while it's the hub: the
      *  read-only "Remotes connected" list. */
     val remotes: List<RemoteClient> = emptyList(),
-    /** On a normal device: a discovered hub (not this device) that holds the
-     *  DE1. This device can't connect the machine until that hub turns hub
-     *  mode off; the connect surfaces say so and offer "Connect through". Null
-     *  in the other roles. */
+    /** On a normal device: a discovered hub (not this device) whose NSD
+     *  advertisement says it holds the DE1. Unauthenticated, so only advice:
+     *  the connect surfaces and the Hub mode switch warn, and name it only
+     *  when [isVerifiedHub]. Null in the other roles. */
     val hubHoldingMachine: Peer? = null,
+    /** This device holds a pairing secret for its pinned hub (the target at
+     *  [proxyPrimaryHost]): what [isVerifiedHub] checks a discovered hub against. */
+    val pairedHubPinned: Boolean = false,
     /** A host whose identity changed (it couldn't prove this device's pairing),
      *  as (host id, name): non-null ⟺ the Activity offers to forget it. */
     val changedHost: Pair<String, String>? = null,

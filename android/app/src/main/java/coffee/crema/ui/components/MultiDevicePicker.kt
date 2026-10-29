@@ -10,11 +10,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -26,7 +32,9 @@ import coffee.crema.ui.MainUiState
 import coffee.crema.ui.connectThroughLabel
 import coffee.crema.ui.turnOffHubToConnect
 import coffee.crema.ui.canConnectDirectly
+import coffee.crema.ui.discoveredHubWarning
 import coffee.crema.ui.hubModeBlockedReason
+import coffee.crema.ui.isVerifiedHub
 import coffee.crema.ui.hubModeSubtitle
 import coffee.crema.ui.remoteHubLabel
 import coffee.crema.ui.remoteStatus
@@ -133,9 +141,11 @@ fun MultiDeviceSection(
         return
     }
     sources.forEach { peer ->
+        // An advertisement is unauthenticated: only a paired, pinned hub is
+        // called one. Connecting to any other asks to pair first.
         MirrorRow(
             title = peer.name,
-            sub = "Hub · holds the DE1 · ${peer.host}",
+            sub = if (ui.isVerifiedHub(peer)) "Hub · holds the DE1 · ${peer.host}" else "Says it's a hub · unverified · ${peer.host}",
             action = "Connect through",
             onClick = { onMirrorFrom(peer.host, peer.port) },
         )
@@ -152,40 +162,62 @@ fun MultiDeviceSection(
 
 /**
  * The Hub mode switch (Settings ▸ Multi-device, both shells), applied live.
- * Off frees the machine for another device; disabled while another hub holds
- * the DE1. [device] names this device in the subtitle ("tablet" / "phone").
+ * Off frees the machine for another device. Disabled on a remote whose hub
+ * holds the DE1. While a discovered hub says it holds the machine, turning
+ * it on asks first, with "Turn on anyway": an advertisement can't block it.
+ * [device] names this device in the subtitle ("tablet" / "phone").
+ * [onHubMode] gets (on, anyway).
  */
 @Composable
-fun HubModeRow(ui: MainUiState, device: String, onHubMode: (Boolean) -> Unit, last: Boolean = false) {
+fun HubModeRow(ui: MainUiState, device: String, onHubMode: (on: Boolean, anyway: Boolean) -> Unit, last: Boolean = false) {
     val blocked = ui.hubModeBlockedReason()
+    val warning = ui.discoveredHubWarning()
+    var confirming by remember { mutableStateOf(false) }
     CremaSettingsRow("Hub mode", ui.hubModeSubtitle(device), last = last) {
-        CremaSwitch(checked = ui.proxyRole == "primary", onCheckedChange = onHubMode, enabled = blocked == null)
+        CremaSwitch(
+            checked = ui.proxyRole == "primary",
+            onCheckedChange = { on -> if (on && warning != null) confirming = true else onHubMode(on, false) },
+            enabled = blocked == null,
+        )
+    }
+    if (confirming && warning != null) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text("Turn on Hub mode?") },
+            text = { Text(warning) },
+            confirmButton = {
+                TextButton(onClick = { confirming = false; onHubMode(true, true) }) { Text("Turn on anyway") }
+            },
+            dismissButton = { TextButton(onClick = { confirming = false }) { Text("Cancel") } },
+        )
     }
 }
 
 /**
- * On a normal device while another hub holds the DE1 ([hub] non-null): why
- * this device can't connect the machine, and "Connect through <hub>" to use
- * it from here anyway. The DE1 scan keeps running, so this device connects
- * once that hub turns hub mode off.
+ * On a normal device while a discovered hub says it holds the DE1
+ * ([MainUiState.hubHoldingMachine]): why this device may not get the
+ * machine, and "Connect through" to use it from here anyway. Named only for
+ * a paired, pinned hub ([isVerifiedHub]). The DE1 scan keeps running, so this
+ * device connects once that hub turns hub mode off.
  */
 @Composable
-fun HubHoldsMachineNotice(hub: Peer?, onConnectThrough: (host: String, port: Int) -> Unit, modifier: Modifier = Modifier) {
-    if (hub == null) return
+fun HubHoldsMachineNotice(ui: MainUiState, onConnectThrough: (host: String, port: Int) -> Unit, modifier: Modifier = Modifier) {
+    val hub = ui.hubHoldingMachine ?: return
+    val verified = ui.isVerifiedHub(hub)
     Row(
         modifier.fillMaxWidth().padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
-            turnOffHubToConnect(hub.name),
+            turnOffHubToConnect(hub, verified),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
         OutlinedButton(onClick = { onConnectThrough(hub.host, hub.port) }, shape = RoundedCornerShape(999.dp)) {
             Text(
-                connectThroughLabel(hub.name),
+                connectThroughLabel(hub, verified),
                 style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
             )
         }

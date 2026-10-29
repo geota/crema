@@ -384,6 +384,10 @@ class ProxyController(
         applyMode("secondary", host, port, trust = MirrorTrust.UNATTENDED)
     }
 
+    /** Whether this device holds a pairing secret for the host its target is
+     *  pinned to: a discovered hub at that target is one it has paired with. */
+    fun hasPinnedHub(): Boolean = pairing.pinnedHost?.let { pairing.heldSecret(it) != null } ?: false
+
     /** The pairing store, for tests. */
     @androidx.annotation.VisibleForTesting
     internal val pairingStore: PairingStore get() = pairing
