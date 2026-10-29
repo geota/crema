@@ -84,6 +84,7 @@ import { CoreTicker } from './core-ticker';
 import { stepCapRefusal } from '#lib/profiles/step-cap.js';
 import {
 	ESPRESSO_ENTRY_TIMEOUT_MS,
+	NOT_STARTED_NOTICE,
 	PRESHOT_FLUSH_TIMEOUT_MS,
 	StartSequence,
 	type StartToken
@@ -2411,9 +2412,8 @@ export class CremaApp {
 	private scheduleAutoPurge(): void {
 		// Auto-purge and the pre-shot flush both fire `HotWaterRinse`. If a user
 		// steams and immediately presses "Brew" within the 1.5 s defer window,
-		// both paths can race to request the same state. The `rinsePending`
-		// flag (shared with `startShot`) lets whichever path acquires it first
-		// proceed; the other bails out cleanly.
+		// the start wins: the purge checks for a pending start when it fires.
+		// `rinsePending` only keeps two purges from being scheduled at once.
 		if (this.rinsePending) return;
 		this.rinsePending = true;
 		window.setTimeout(() => {
@@ -2429,12 +2429,8 @@ export class CremaApp {
 		}, 1500);
 	}
 
-	/**
-	 * Shared in-flight guard for `HotWaterRinse` requests. Set by either the
-	 * post-steam auto-purge path or the pre-shot flush path while their rinse
-	 * is pending; the other path checks it and bails out so two rinses cannot
-	 * race when a user steams then immediately starts a shot.
-	 */
+	/** A post-steam auto-purge is scheduled (one at a time). A shot start
+	 *  is kept apart by `startSequence.active`, checked when the purge fires. */
 	private rinsePending = false;
 
 	/**
@@ -2517,6 +2513,8 @@ export class CremaApp {
 		const live = () => this.startSequence.isLive(start);
 		const profiles = getProfileStore();
 		await profiles.ensureLoaded();
+		// Stopped before the library loaded: no toasts, upload or errors for it.
+		if (!live()) return;
 		const id = profiles.activeId;
 		if (id === null) {
 			throw new NoActiveProfileError();
@@ -2576,32 +2574,23 @@ export class CremaApp {
 			);
 		}
 		if (getSettingsStore().current.groupFlushBeforeShot) {
-			// Pre-shot group flush. Hold the shared `rinsePending` guard so a
-			// just-scheduled auto-purge (within its 1.5 s defer) bails out
-			// instead of racing this flush. Kick off the rinse, then wait for
-			// its completion (or the 30 s ceiling) before requesting Espresso.
-			this.rinsePending = true;
-			try {
-				// Arm the waiter BEFORE the state request: the flush's Started
-				// notification could otherwise beat it and the correlation
-				// marker would be missed (review #34).
-				start.flushArmed = true;
-				await this.writeMachineState(MachineState.HotWaterRinse, live);
-				const released = await start.waitFor(
-					() => start.flushEnded,
-					PRESHOT_FLUSH_TIMEOUT_MS
-				);
-				if (!live()) return;
-				// The flush ended but the machine went somewhere else (a
-				// group-head button mid-flush): that is not ours to override.
-				const state = this.state.current.machineStateName;
-				if (released && state !== MachineState.Idle) {
-					this.state.log(`Pre-shot flush ended in ${state ?? 'an unknown state'} — shot not started.`);
-					toast.error('Shot not started — the machine left the flush');
-					return;
-				}
-			} finally {
-				this.rinsePending = false;
+			// Pre-shot group flush: kick off the rinse, then wait for its
+			// completion (or the 30 s ceiling) before requesting Espresso. A
+			// just-scheduled auto-purge stands down while the start is pending.
+			// Arm the waiter BEFORE the state request: the flush's Started
+			// notification could otherwise beat it and the correlation marker
+			// would be missed (review #34).
+			start.flushArmed = true;
+			await this.writeMachineState(MachineState.HotWaterRinse, live);
+			const released = await start.waitFor(() => start.flushEnded, PRESHOT_FLUSH_TIMEOUT_MS);
+			if (!live()) return;
+			// The flush ended but the machine went somewhere else (a
+			// group-head button mid-flush): that is not ours to override.
+			const state = this.state.current.machineStateName;
+			if (released && state !== MachineState.Idle) {
+				this.state.log(`Pre-shot flush ended in ${state ?? 'an unknown state'} — shot not started.`);
+				toast.error('Shot not started — the machine left the flush');
+				return;
 			}
 		}
 		if (!live()) return;
@@ -2609,8 +2598,15 @@ export class CremaApp {
 		await this.writeMachineState(MachineState.Espresso, live);
 		// Stay pending until the machine reports Espresso, so a Start in the
 		// gap is refused rather than starting a second chain.
-		if (this.state.current.machineStateName !== MachineState.Espresso) {
-			await start.waitFor(() => start.espressoEntered, ESPRESSO_ENTRY_TIMEOUT_MS);
+		if (this.state.current.machineStateName === MachineState.Espresso) return;
+		const entered = await start.waitFor(() => start.espressoEntered, ESPRESSO_ENTRY_TIMEOUT_MS);
+		if (!entered && live()) {
+			// A machine that only starts from the group head (GHC required)
+			// ignores the app's request.
+			this.state.log(
+				`The machine did not enter Espresso within ${ESPRESSO_ENTRY_TIMEOUT_MS / 1000} s of the request.`
+			);
+			toast.info(NOT_STARTED_NOTICE, 7000);
 		}
 	}
 

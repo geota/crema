@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CremaCore } from '#lib/core/index.js';
 import type { CoreOutput } from '#lib/core/crema-core.js';
 import { MachineState } from '#lib/core/crema-core.js';
-import { StartSequence } from './start-sequence';
+import { NOT_STARTED_NOTICE, StartSequence } from './start-sequence';
+import { toast } from '#lib/components/shared/toast.svelte.js';
 
 // DE1 state bytes (de1_protocol::MachineState).
 const IDLE = 2;
@@ -35,7 +36,7 @@ interface Harness {
 	onState(state: string): void;
 }
 
-async function harness(opts: { preFlush: boolean }): Promise<Harness> {
+async function harness(opts: { preFlush: boolean; autoPurge?: boolean }): Promise<Harness> {
 	const { loadCore } = await import('#lib/core/index.js');
 	const { CremaApp } = await import('#lib/state/app.svelte.js');
 	const { De1Manager } = await import('#lib/ble/index.js');
@@ -64,6 +65,7 @@ async function harness(opts: { preFlush: boolean }): Promise<Harness> {
 	const settings = getSettingsStore();
 	settings.set('stopOnWeight', false);
 	settings.set('groupFlushBeforeShot', opts.preFlush);
+	settings.set('autoPurgeAfterSteam', opts.autoPurge ?? false);
 	// The DE1 already holds this profile, so the start skips the upload.
 	app.state.patch({ activeProfileFingerprint: profileFingerprint(profile, {}) });
 	const h: Harness = {
@@ -203,6 +205,69 @@ describe('one owned shot start in the app (05 F2)', () => {
 		await vi.advanceTimersByTimeAsync(60_000);
 		expect(h.requested).toEqual([FLUSH]);
 		expect(h.app.state.current.shotStarting).toBe(false);
+	});
+});
+
+describe('PR #197 review fixes', () => {
+	it('a Stop before the library loads ends the start quietly (#3)', async () => {
+		const h = await harness({ preFlush: false });
+		const { getProfileStore } = await import('#lib/profiles/index.js');
+		getProfileStore().setActive(null); // would throw NoActiveProfileError
+		const start = h.app.startShot();
+		void h.app.stopShot(); // before the ensureLoaded await resumes
+		await expect(start).resolves.toBeUndefined();
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(h.requested).toEqual([IDLE]);
+	});
+
+	it('a machine that ignores the Espresso request says so (#8)', async () => {
+		const info = vi.spyOn(toast, 'info');
+		const h = await harness({ preFlush: false });
+		const start = h.app.startShot();
+		await settle();
+		expect(h.requested).toEqual([ESPRESSO]);
+		await vi.advanceTimersByTimeAsync(5_001);
+		await start;
+		expect(info).toHaveBeenCalledWith(NOT_STARTED_NOTICE, 7000);
+		expect(h.app.state.current.shotStarting).toBe(false);
+	});
+
+	it('no not-started notice when the shot starts (#8)', async () => {
+		const info = vi.spyOn(toast, 'info');
+		const h = await harness({ preFlush: false });
+		const start = h.app.startShot();
+		await settle();
+		await h.report(ESPRESSO, POURING);
+		await start;
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(info).not.toHaveBeenCalledWith(NOT_STARTED_NOTICE, 7000);
+	});
+
+	it('with no start, the post-steam purge fires (control for #11)', async () => {
+		const h = await harness({ preFlush: false, autoPurge: true });
+		await h.report(STEAM);
+		await vi.advanceTimersByTimeAsync(10_000);
+		await h.report(IDLE);
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(h.requested).toEqual([FLUSH]);
+	});
+
+	it('a start during the post-steam purge defer wins the group (#11)', async () => {
+		const h = await harness({ preFlush: true, autoPurge: true });
+		await h.report(STEAM);
+		await vi.advanceTimersByTimeAsync(10_000);
+		await h.report(IDLE); // steam released: a purge is scheduled for 1.5 s
+		const start = h.app.startShot();
+		await settle();
+		expect(h.requested).toEqual([FLUSH]); // the start's own flush
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(h.requested, 'the purge stood down').toEqual([FLUSH]);
+		await h.report(FLUSH);
+		await vi.advanceTimersByTimeAsync(4_000);
+		await h.report(IDLE);
+		await h.report(ESPRESSO, POURING);
+		await start;
+		expect(h.requested).toEqual([FLUSH, ESPRESSO]);
 	});
 });
 

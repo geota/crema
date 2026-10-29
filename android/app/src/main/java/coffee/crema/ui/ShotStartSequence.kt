@@ -28,6 +28,9 @@ const val PRESHOT_FLUSH_TIMEOUT_MS = 30_000L
  *  (a GHC-only machine refuses app starts) frees the button after this. */
 const val ESPRESSO_ENTRY_TIMEOUT_MS = 5_000L
 
+/** Shown when the machine ignored the Espresso request (web twin: the same text). */
+const val NOT_STARTED_NOTICE = "The machine didn’t start the shot — start it on the machine"
+
 /**
  * The one shot start in flight (cohort review 2026-10-29, 05 F2): Coffee →
  * profile upload → the firmware's profile-download guard → optional pre-shot
@@ -104,17 +107,26 @@ internal class ShotStartSequence(
     /** Cancel the pending start, if any. Returns it, so the caller can drop
      *  its own state for that start; null when nothing was pending. */
     fun cancel(): Start? {
-        val start = current.getAndSet(null) ?: return null
+        val start = current.get() ?: return null
+        return if (cancelIfCurrent(start)) start else cancel()
+    }
+
+    /** The one cancel path: [start] stops being pending and its stages stop. */
+    private fun cancelIfCurrent(start: Start): Boolean {
+        if (!current.compareAndSet(start, null)) return false
         start.cancelled = true
         start.job?.cancel()
         onActiveChanged()
-        return start
+        return true
     }
 
     /** [start] is over without a cancel (its upload failed, or it reached
-     *  Espresso). A no-op when it is no longer the pending start. */
-    fun end(start: Start) {
+     *  Espresso). Returns whether it was still the live start, so a failure
+     *  is told to the user only for a start nobody cancelled. */
+    fun end(start: Start): Boolean {
+        val live = isLive(start)
         if (current.compareAndSet(start, null)) onActiveChanged()
+        return live
     }
 
     /** The DE1 holds the profile: run the guard, the optional pre-flush and
@@ -151,7 +163,12 @@ internal class ShotStartSequence(
         start.espressoRequested = true
         request(MachineRequest.ESPRESSO)
         if (machineState() == MachineState.Espresso) return
-        withTimeoutOrNull(espressoEntryTimeoutMs) { start.espressoEntered.await() }
+        if (withTimeoutOrNull(espressoEntryTimeoutMs) { start.espressoEntered.await() } == null && isLive(start)) {
+            // A machine that only starts from the group head (GHC required)
+            // ignores the app's request.
+            log("The machine did not enter Espresso within ${espressoEntryTimeoutMs / 1000} s of the request")
+            notifyUser(NOT_STARTED_NOTICE)
+        }
     }
 
     /** Feed every `MachineStateChanged`. Espresso after our request ends the
@@ -162,11 +179,8 @@ internal class ShotStartSequence(
         val start = current.get() ?: return
         if (start.espressoRequested) {
             start.espressoEntered.complete(Unit)
-        } else if (current.compareAndSet(start, null)) {
-            start.cancelled = true
-            start.job?.cancel()
+        } else if (cancelIfCurrent(start)) {
             log("Shot started on the machine — app start dropped")
-            onActiveChanged()
         }
     }
 

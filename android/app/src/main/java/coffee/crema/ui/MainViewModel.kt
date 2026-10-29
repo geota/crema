@@ -1033,7 +1033,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val startSequence: ShotStartSequence = ShotStartSequence(
         scope = viewModelScope,
-        request = ::writeMachineState,
+        request = { state ->
+            // Records whether this shot came from Crema or from the machine's
+            // GHC — the distinction that hid geota/crema#56. Set at the
+            // Espresso request, so a start that was stopped first leaves the
+            // next (group-head) shot attributed to the machine.
+            if (state == MachineRequest.ESPRESSO) shotStartedByApp = true
+            writeMachineState(state)
+        },
         machineState = { _ui.value.machineStateName },
         onActiveChanged = { _ui.update { it.copy(shotStarting = startSequence.active) } },
         log = ::appendLog,
@@ -3176,7 +3183,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         val start = startSequence.begin() ?: run {
-            notifyUser("A shot is already starting")
+            notifyUser(if (startSequence.active) "A shot is already starting" else "A shot is already running")
             return
         }
         // The heavy chain below — several bridge calls including the full
@@ -3188,9 +3195,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun startShotOnCoreLane(cremaJson: String, start: ShotStartSequence.Start) {
         // Stopped before the lane got to it.
         if (!startSequence.isLive(start)) return
-        // Records whether this shot came from Crema or from the machine's
-        // GHC — the distinction that hid geota/crema#56.
-        shotStartedByApp = true
         // Make sure the core's stop-at-weight / volume targets are current before
         // the shot arms its AutoStop \u2014 covers a profile restored at startup that
         // never went through setActiveProfile (otherwise SAW silently never arms).
@@ -3265,10 +3269,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 runCatching { applyCoreOutputJson(bridge.cancelProfileUpload()) }
                 pendingBrew = false
                 pendingBrewStart = null
-                startSequence.end(start)
+                val live = startSequence.end(start)
                 pendingUploadFingerprint = null
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
-                notifyUser("Profile upload timed out \u2014 shot not started")
+                // A start that was stopped, or overtaken by a group-head
+                // shot, needs no toast (mid-shot it would be wrong).
+                if (live) notifyUser("Profile upload timed out \u2014 shot not started")
+                else appendLog("Profile upload timed out after its start was cancelled")
             }
         }
     }
@@ -3296,20 +3303,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return true
     }
 
-    /**
-     * Auto-purge after a steam session (issue 15): a short deferred group flush
-     * that clears the steam plumbing. Deferred so a user who immediately starts a
-     * shot (a pending [startSequence]) wins — the purge stands down rather than
-     * racing the shot's own flush. DE1-gated.
-     */
-    private fun scheduleAutoPurge() {
-        viewModelScope.launch {
-            delay(AUTO_PURGE_DELAY_MS)
-            // Bail if a shot start grabbed the group during the defer.
-            if (startSequence.active) return@launch
-            writeMachineState(MachineRequest.FLUSH)
-        }
-    }
+    /** The post-steam auto-purge (issue 15). Only the device holding the DE1
+     *  runs it, and it stands down for a pending shot start. */
+    private val autoPurge = AutoPurge(
+        scope = viewModelScope,
+        authoritative = { proxy.state.value.role != "secondary" },
+        startPending = { startSequence.active },
+        flush = { writeMachineState(MachineRequest.FLUSH) },
+    )
 
     /** Scan for and connect to a DE1 — delegate of [ConnectionController.connect].
      *  Called from the UI once the BLE runtime permissions have been granted. */
@@ -3631,25 +3632,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  cancels a pending shot start first (05 F2): a Stop, or another mode,
      *  during the guard or the pre-flush must not end in Espresso. */
     private fun requestMachineState(state: MachineRequest) {
-        cancelStartSequence(state.name)
-        writeMachineState(state)
-    }
-
-    /** Drop the pending shot start, if any, and the upload hand-off armed for it. */
-    private fun cancelStartSequence(why: String) {
-        val start = startSequence.cancel() ?: return
-        appendLog("Shot start cancelled ($why)")
-        onCoreLane {
-            if (pendingBrewStart === start) {
-                pendingBrew = false
-                pendingBrewStart = null
-            }
-        }
-    }
-
-    /** The machine write behind [requestMachineState], also used by the shot
-     *  start's own steps and the auto-purge, which must not cancel the start. */
-    private fun writeMachineState(state: MachineRequest) {
         // A sleep the app asked for is deliberate, not idle: mark it so the
         // Sleep state report that follows doesn't raise the screensaver (see
         // [appAskedForSleep]). Marked before the relay so both ends of a
@@ -3657,6 +3639,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // writes) treat it the same.
         if (state == MachineRequest.SLEEP) appSleepRequestedAtMs = SystemClock.elapsedRealtime()
         if (relayIfSecondary("machineState", state.name)) return
+        cancelStartSequence(state.name)
+        writeMachineState(state)
+    }
+
+    /** Drop the pending shot start, if any. Its upload runs on, and the
+     *  upload hand-off stays armed so the backstop still ends a stuck one;
+     *  the hand-off's proceed is a no-op for a cancelled start. */
+    private fun cancelStartSequence(why: String) {
+        if (startSequence.cancel() != null) appendLog("Shot start cancelled ($why)")
+    }
+
+    /** The machine write behind [requestMachineState], also used by the shot
+     *  start's own steps and the auto-purge, which must not cancel the start.
+     *  Never relayed: an automated write on a mirror is not a user's intent,
+     *  and the primary would run it as one (a relayed Flush cancels its
+     *  pending start). A mirror's read-only core drops the write. */
+    private fun writeMachineState(state: MachineRequest) {
         val raw = runCatching { bridge.requestMachineState(state) }.getOrElse {
             appendLog("requestMachineState failed: ${it.message}")
             return
@@ -6132,7 +6131,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // "Steam purge"). A short group flush clears the plumbing once the
                 // user releases steam; gated on the pref + stands down if a shot
                 // flush already owns the group. DE1-gated.
-                if (_ui.value.steamPurge) scheduleAutoPurge()
+                if (_ui.value.steamPurge) autoPurge.schedule()
             }
             is Event.SteamClogSuspected ->
                 appendLog("Steam clog suspected: ${event.content.reason.string}")
@@ -6347,10 +6346,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Abort a pending gated-start brew if the upload never completes. */
         const val PROFILE_UPLOAD_TIMEOUT_MS = 15_000L
-
-        /** Defer before a post-steam auto-purge so an immediate shot wins the
-         *  group (issue 15). */
-        const val AUTO_PURGE_DELAY_MS = 1_500L
 
         /** Grace after the core's ScaleStale (itself 1 s of silence) before
          *  the scale link is presumed dead and torn down for the reconnect

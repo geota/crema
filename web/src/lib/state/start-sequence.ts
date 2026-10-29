@@ -33,6 +33,9 @@ export const PRESHOT_FLUSH_TIMEOUT_MS = 30_000;
  *  (a GHC-only machine refuses app starts) frees the button after this. */
 export const ESPRESSO_ENTRY_TIMEOUT_MS = 5_000;
 
+/** Shown when the machine ignored the Espresso request (Android: the same text). */
+export const NOT_STARTED_NOTICE = 'The machine didn’t start the shot — start it on the machine';
+
 /** One start. Its identity is the sequence token. */
 export class StartToken {
 	cancelled = false;

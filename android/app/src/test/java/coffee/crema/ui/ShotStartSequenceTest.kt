@@ -232,7 +232,36 @@ class ShotStartSequenceTest {
         advanceTimeBy(ESPRESSO_ENTRY_TIMEOUT_MS)
         runCurrent()
         assertFalse(rig.shotStarting)
+        assertEquals(listOf(NOT_STARTED_NOTICE), rig.notes, "says to start it on the machine")
         assertNotNull(rig.seq.begin())
+    }
+
+    @Test
+    fun `Stop while waiting for Espresso gives no not-started notice`() = runTest {
+        val rig = Rig(this)
+        val start = assertNotNull(rig.seq.begin())
+        rig.seq.proceed(start, preFlush = false)
+        advanceTimeBy(PROFILE_DOWNLOAD_GUARD_MS + 1_000)
+        rig.stop()
+        advanceTimeBy(ESPRESSO_ENTRY_TIMEOUT_MS * 2)
+        runCurrent()
+        assertEquals(emptyList(), rig.notes)
+        assertEquals(listOf(ESPRESSO, IDLE), rig.requested)
+    }
+
+    @Test
+    fun `end reports a live start only, so a cancelled one gets no failure toast`() = runTest {
+        val rig = Rig(this)
+        val stopped = assertNotNull(rig.seq.begin())
+        rig.stop()
+        assertFalse(rig.seq.end(stopped), "stopped by the user")
+        val overtaken = assertNotNull(rig.seq.begin())
+        rig.report(ESPRESSO, POURING) // a group-head shot during the upload
+        assertFalse(rig.seq.end(overtaken), "overtaken by a group-head shot")
+        rig.report(IDLE)
+        val live = assertNotNull(rig.seq.begin())
+        assertTrue(rig.seq.end(live))
+        assertFalse(rig.shotStarting)
     }
 
     @Test

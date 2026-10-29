@@ -542,13 +542,6 @@
 
 	let quickSheetOpen = $state(false);
 	/**
-	 * Whether a `startShot()` call we made is still running (sync, pre-shot
-	 * flush, Espresso). The button reads Stop meanwhile (`stoppable`), so
-	 * this only keeps a second tap from starting a second call; the
-	 * orchestrator refuses one anyway (05 F2).
-	 */
-	let stateTransitionPending = $state(false);
-	/**
 	 * Whether the DE1 is currently running an espresso shot — strict
 	 * equality on the typed state name covers every Espresso substate
 	 * (Heating, Stabilising, Preinfusion, Pouring, Ending). Honest,
@@ -1377,8 +1370,8 @@
 			await app.stopShot();
 			return;
 		}
-		if (stateTransitionPending) return;
-		stateTransitionPending = true;
+		// `startShot` claims the start synchronously, so the button reads Stop
+		// before this returns; the orchestrator refuses a second start anyway.
 		shotStartError = null;
 		try {
 			// Freeze the live Quick Sheet snapshot onto the orchestrator
@@ -1420,8 +1413,6 @@
 			} else {
 				throw e;
 			}
-		} finally {
-			stateTransitionPending = false;
 		}
 	}
 
@@ -1746,7 +1737,7 @@
 					class="crema-bigbtn"
 					class:running={stoppable}
 					class:is-syncing={profileSyncing && !stoppable}
-					disabled={(stateTransitionPending && !stoppable) || !modeReady}
+					disabled={!modeReady}
 					onclick={toggleRun}
 				>
 					{#if profileSyncing && !stoppable}

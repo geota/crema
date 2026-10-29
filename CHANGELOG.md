@@ -70,7 +70,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   to the shot. After the pre-flush, the shot now starts only if the machine is
   back in Idle (a group-head button pressed mid-flush wins), and an Espresso
   request while the machine is already pulling a shot is ignored instead of
-  passing through Idle. Web, tablet and phone.
+  passing through Idle. If the machine doesn't start the shot (one set to
+  start only from the group head), Crema now says to start it on the machine.
+  A mirroring tablet no longer sends its own post-steam purge to the primary,
+  where it ran a second flush and could cancel the primary's shot start. Web,
+  tablet and phone.
 - **The heater voltage is written the way every Decent app writes it** — the
   mains voltage is now sent as 120 or 230; earlier builds sent 1120 or 1230,
   which no other DE1 app does. Web, tablet and phone.
