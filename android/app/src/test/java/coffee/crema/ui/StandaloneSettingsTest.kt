@@ -23,6 +23,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /** Normal devices and hubs keep today's settings behaviour (spec §7.4, AC-16, AC-32). */
 @RunWith(RobolectricTestRunner::class)
@@ -91,6 +92,25 @@ class StandaloneSettingsTest {
             VmHarness.idle()
             assertEquals(VmHarness.ownState(vm), vm.ui.value, "$role: the screen is the own state")
             assertEquals(VmHarness.ownState(vm).connectSweepSettings(90f, 50), vm.ui.value.connectSweepSettings(90f, 50))
+            store.clear()
+            VmHarness.idle()
+        }
+    }
+
+    /** AC-20: a hub (and a normal device) drops a config frame: it has no
+     *  mirror slice, so nothing it shows or saves changes. */
+    @Test
+    fun `a hub drops a config frame`() {
+        for (role in listOf("primary", "normal")) {
+            val vm = build(role)
+            val shown = vm.ui.value
+            val saved = savedPrefs()
+            vm.deliverConfigForTest(coreJson.encodeToString(coffee.crema.settings.ConfigSnapshot.serializer(), RemoteFixture.S))
+            VmHarness.idle()
+            assertEquals(null, VmHarness.ownState(vm).mirror, "$role: no slice")
+            assertEquals(abOf(saved), abOf(savedPrefs()), "$role: prefs.json unchanged")
+            for (e in edits) assertEquals(e.ui(shown), e.ui(vm.ui.value), "$role ${e.name} unchanged")
+            assertTrue(VmHarness.log(vm).any { "Config snapshot dropped: not a remote" in it }, role)
             store.clear()
             VmHarness.idle()
         }
