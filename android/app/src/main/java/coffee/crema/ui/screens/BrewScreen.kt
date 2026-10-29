@@ -397,14 +397,15 @@ fun BrewScreen(
                 waterLevelUnit = ui.waterLevelUnit,
                 connected = connected,
                 scaleConnected = scaleConnected,
-                espressoActive = espressoActive,
+                showStop = espressoActive || ui.shotStarting,
                 onPower = { if (ui.machineStateName == MachineState.Sleep) vm.wake() else vm.sleep() },
                 onSteam = { if (ui.machineStateName == MachineState.Steam) vm.stopShot() else vm.steam() },
                 onHotWater = { if (ui.machineStateName == MachineState.HotWater) vm.stopShot() else vm.hotWater() },
                 onFlush = vm::flush,
                 // Gated start: upload the active profile, await completion, guard,
-                // then Espresso (vm.startShot). Stop is a direct Idle request.
-                onCoffee = { if (espressoActive) vm.stopShot() else vm.startShot() },
+                // then Espresso (vm.startShot). Stop is a direct Idle request,
+                // and also cancels a start still pending (05 F2).
+                onCoffee = { if (espressoActive || ui.shotStarting) vm.stopShot() else vm.startShot() },
             )
             if (quickOpen) {
                 QuickControlsSheet(
@@ -1799,7 +1800,8 @@ private fun BrewFoot(
     waterLevelUnit: String,
     connected: Boolean,
     scaleConnected: Boolean,
-    espressoActive: Boolean,
+    /** The Coffee button reads Stop: a shot runs or a start is pending. */
+    showStop: Boolean,
     onPower: () -> Unit,
     onSteam: () -> Unit,
     onHotWater: () -> Unit,
@@ -1867,7 +1869,7 @@ private fun BrewFoot(
                 ModeChip("Steam", steamSub, "cloud", CremaTheme.telemetry.modeSteam, active = steaming, enabled = connected, atTemperature = steamHot, onTap = onSteam)
                 ModeChip("Hot water", waterSub, "drop", CremaTheme.telemetry.modeWater, active = dispensing, enabled = connected, atTemperature = groupHot, onTap = onHotWater)
                 ModeChip("Flush", flushSub, "sparkle", CremaTheme.telemetry.modeFlush, active = flushing, enabled = connected, atTemperature = groupHot, onTap = onFlush)
-                CoffeeButton(running = espressoActive, uploading = profileUploading, enabled = connected, onClick = onCoffee)
+                CoffeeButton(running = showStop, uploading = profileUploading, enabled = connected, onClick = onCoffee)
             }
         }
     }
@@ -2006,8 +2008,9 @@ private fun CoffeeButton(running: Boolean, uploading: Boolean, enabled: Boolean,
     val stopColor = Color(0xFFD26456)
     val bg = if (running) stopColor else MaterialTheme.colorScheme.primary
     val fg = if (running) Color(0xFF2A0B07) else MaterialTheme.colorScheme.onPrimary
-    // Tappable to start (Coffee) or stop (Stop); inert while a profile uploads.
-    val clickable = enabled && !uploading
+    // Tappable to start (Coffee) or stop (Stop); inert while a profile uploads
+    // outside a start. Stop always stays tappable.
+    val clickable = enabled && (running || !uploading)
     val label = when { running -> "Stop"; uploading -> "Uploading…"; else -> "Coffee" }
     val icon = when { running -> "stop"; uploading -> "arrows-clockwise"; else -> "coffee" }
     Row(

@@ -60,6 +60,17 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A second Start can no longer stop and restart a running shot, and Stop
+  during the pre-shot flush no longer starts the shot** — a shot start is now
+  one sequence: while it runs (profile upload, pre-flush, waiting for the
+  machine) the Coffee button reads Stop, a second Start is ignored, and Stop,
+  any other mode, or a disconnect cancels it. Before, a second Start during the
+  pre-flush made a second sequence whose late Espresso request stopped the
+  shot and restarted it on the spent puck, and stopping the pre-flush went on
+  to the shot. After the pre-flush, the shot now starts only if the machine is
+  back in Idle (a group-head button pressed mid-flush wins), and an Espresso
+  request while the machine is already pulling a shot is ignored instead of
+  passing through Idle. Web, tablet and phone.
 - **The heater voltage is written the way every Decent app writes it** — the
   mains voltage is now sent as 120 or 230; earlier builds sent 1120 or 1230,
   which no other DE1 app does. Web, tablet and phone.

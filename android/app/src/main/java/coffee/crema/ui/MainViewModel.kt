@@ -549,6 +549,12 @@ data class MainUiState(
      * gated shot start.
      */
     val profileUploading: Boolean = false,
+    /**
+     * True while a shot start is pending (05 F2): from the Coffee tap through
+     * the upload, the guard and the pre-flush until the machine reports
+     * Espresso. The Coffee button offers Stop meanwhile, which cancels it.
+     */
+    val shotStarting: Boolean = false,
     /** Upload progress as `"received/total"` acks while uploading, or null. */
     val profileUploadProgress: String? = null,
     /**
@@ -1015,8 +1021,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var pendingBrew = false
 
-    /** Which start armed [pendingBrew] — its backstop acts only on its own start. */
-    private var pendingBrewToken = 0L
+    /** Which start armed [pendingBrew]: its backstop and its upload's
+     *  outcome act only on that start. Lane-owned, like [pendingBrew]. */
+    private var pendingBrewStart: ShotStartSequence.Start? = null
+
+    /**
+     * The one shot start in flight (05 F2): a second Start is refused while it
+     * runs, and a user's machine request (Stop above all) cancels it rather
+     * than letting the pre-flush release it to Espresso. Its writes go through
+     * [writeMachineState], so they don't cancel it.
+     */
+    private val startSequence: ShotStartSequence = ShotStartSequence(
+        scope = viewModelScope,
+        request = ::writeMachineState,
+        machineState = { _ui.value.machineStateName },
+        onActiveChanged = { _ui.update { it.copy(shotStarting = startSequence.active) } },
+        log = ::appendLog,
+        notifyUser = ::notifyUser,
+    )
 
     /**
      * Profile-upload-skip cache (issue 11, mirrors the web shell). The djb2
@@ -1046,14 +1068,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  disconnect. One dip never nags twice. */
     private var waterLowWarned = false
     private var pendingUploadFingerprint: String? = null
-
-    /** Resolved by `Event.WaterSessionCompleted(Flush)` to release the pre-shot
-     *  flush waiter in [proceedToEspresso] (issue 15). Null when no pre-shot
-     *  flush is in flight. */
-    private var pendingPreshotFlush: (() -> Unit)? = null
-    /** True while a shot/flush sequence owns the group, so a just-finished steam
-     *  session's auto-purge bails instead of racing it (issue 15). */
-    private var rinsePending: Boolean = false
 
     /** The machine's last-reported steam/hot-water settings (from
      *  `Event.ShotSettingsRead`). Used to read-modify-write QC steam/water
@@ -3108,6 +3122,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun startShot() {
         if (relayIfSecondary("startShot")) return
+        // One start at a time (05 F2): a second chain's late Espresso request
+        // would land mid-shot. Stop is how to end or cancel either.
+        if (startSequence.active) {
+            notifyUser("A shot is already starting")
+            return
+        }
+        if (_ui.value.machineStateName == MachineState.Espresso) {
+            notifyUser("A shot is already running")
+            return
+        }
         val cremaJson = _ui.value.activeProfileId?.let { library.profileJson(it) }
         if (cremaJson == null) {
             notifyUser("Can\u2019t start shot \u2014 no profile selected")
@@ -3151,13 +3175,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 else "No scale connected \u2014 stop-at-weight is off for this shot"
             )
         }
+        val start = startSequence.begin() ?: run {
+            notifyUser("A shot is already starting")
+            return
+        }
         // The heavy chain below — several bridge calls including the full
         // profile-frame build in Rust — runs on the core lane instead of
         // the Main tap handler (review #28).
-        viewModelScope.launch(coreDispatcher) { startShotOnCoreLane(cremaJson) }
+        viewModelScope.launch(coreDispatcher) { startShotOnCoreLane(cremaJson, start) }
     }
 
-    private fun startShotOnCoreLane(cremaJson: String) {
+    private fun startShotOnCoreLane(cremaJson: String, start: ShotStartSequence.Start) {
+        // Stopped before the lane got to it.
+        if (!startSequence.isLive(start)) return
         // Records whether this shot came from Crema or from the machine's
         // GHC — the distinction that hid geota/crema#56.
         shotStartedByApp = true
@@ -3207,14 +3237,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
         ) {
             appendLog("Profile unchanged on DE1 (fingerprint match) — skipping re-upload")
-            proceedToEspresso()
+            startSequence.proceed(start, _ui.value.preFlush)
             return
         }
         val wireJson = runCatching { cremaProfileToWire(effectiveJson) }.getOrElse {
+            startSequence.end(start)
             notifyUser("Can\u2019t start shot \u2014 profile conversion failed")
             return
         }
         if (!startUploadOnLane(wireJson, fingerprint)) {
+            startSequence.end(start)
             notifyUser("Can\u2019t start shot \u2014 profile upload failed")
             return
         }
@@ -3222,16 +3254,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // for the upload it superseded (often the automatic re-upload) used
         // to clear this flag and drop the start silently (#2 N2).
         pendingBrew = true
-        val token = ++pendingBrewToken
+        pendingBrewStart = start
         // Backstop: if no ProfileUploadCompleted arrives, cancel the core
         // upload (so it fails like any other: fingerprint forgotten, re-upload
         // armed) and clear the pending brew so the UI doesn't hang in
         // "uploading". On the core lane so pendingBrew stays single-threaded.
         viewModelScope.launch(coreDispatcher) {
             delay(PROFILE_UPLOAD_TIMEOUT_MS)
-            if (pendingBrew && pendingBrewToken == token) {
+            if (pendingBrew && pendingBrewStart === start) {
                 runCatching { applyCoreOutputJson(bridge.cancelProfileUpload()) }
                 pendingBrew = false
+                pendingBrewStart = null
+                startSequence.end(start)
                 pendingUploadFingerprint = null
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 notifyUser("Profile upload timed out \u2014 shot not started")
@@ -3263,49 +3297,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Issue the Espresso state request, optionally preceded by a pre-shot group
-     * flush (issue 15 — Quick Controls / Settings "Pre-flush"). Mirrors the web
-     * orchestration: observe the firmware's profile-download guard, then — when
-     * pre-flush is on — request a FLUSH and wait for its `WaterSessionCompleted
-     * (Flush)` (or a ceiling) before Espresso; otherwise go straight to Espresso.
-     * The shot sequence owns the group while this runs (`rinsePending`) so a
-     * concurrent steam auto-purge stands down. The machine writes are DE1-gated.
-     */
-    private fun proceedToEspresso() {
-        viewModelScope.launch {
-            delay(PROFILE_DOWNLOAD_GUARD_MS)
-            if (!_ui.value.preFlush) {
-                requestMachineState(MachineRequest.ESPRESSO)
-                return@launch
-            }
-            rinsePending = true
-            try {
-                val flushed = CompletableDeferred<Unit>()
-                pendingPreshotFlush = { flushed.complete(Unit) }
-                requestMachineState(MachineRequest.FLUSH)
-                // Wait out the flush (the WaterSessionCompleted(Flush) event
-                // resolves the waiter); the ceiling is the backstop if missed.
-                withTimeoutOrNull(PRESHOT_FLUSH_TIMEOUT_MS) { flushed.await() }
-            } finally {
-                pendingPreshotFlush = null
-                rinsePending = false
-            }
-            requestMachineState(MachineRequest.ESPRESSO)
-        }
-    }
-
-    /**
      * Auto-purge after a steam session (issue 15): a short deferred group flush
      * that clears the steam plumbing. Deferred so a user who immediately starts a
-     * shot (which sets `rinsePending`) wins — the purge stands down rather than
+     * shot (a pending [startSequence]) wins — the purge stands down rather than
      * racing the shot's own flush. DE1-gated.
      */
     private fun scheduleAutoPurge() {
         viewModelScope.launch {
             delay(AUTO_PURGE_DELAY_MS)
-            // Bail if a shot/flush sequence grabbed the group during the defer.
-            if (rinsePending || pendingBrew) return@launch
-            requestMachineState(MachineRequest.FLUSH)
+            // Bail if a shot start grabbed the group during the defer.
+            if (startSequence.active) return@launch
+            writeMachineState(MachineRequest.FLUSH)
         }
     }
 
@@ -3340,8 +3342,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  values. Wired as [ConnectionController]'s onDe1SessionClosed. */
     private fun clearDe1SessionUi() {
         machineInfoJob?.cancel() // stop any in-flight connect-time register sweep
+        // A start never resumes on a later connection (Decenza cancels its
+        // deferred start on disconnect too).
+        cancelStartSequence("disconnected")
         onCoreLane {
             pendingBrew = false
+            pendingBrewStart = null
             // Next connection's first low-water report warns afresh (#33).
             waterLowWarned = false
         }
@@ -3621,7 +3627,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistPrefs()
     }
 
+    /** A user's machine request (a control, or one relayed from a peer). It
+     *  cancels a pending shot start first (05 F2): a Stop, or another mode,
+     *  during the guard or the pre-flush must not end in Espresso. */
     private fun requestMachineState(state: MachineRequest) {
+        cancelStartSequence(state.name)
+        writeMachineState(state)
+    }
+
+    /** Drop the pending shot start, if any, and the upload hand-off armed for it. */
+    private fun cancelStartSequence(why: String) {
+        val start = startSequence.cancel() ?: return
+        appendLog("Shot start cancelled ($why)")
+        onCoreLane {
+            if (pendingBrewStart === start) {
+                pendingBrew = false
+                pendingBrewStart = null
+            }
+        }
+    }
+
+    /** The machine write behind [requestMachineState], also used by the shot
+     *  start's own steps and the auto-purge, which must not cancel the start. */
+    private fun writeMachineState(state: MachineRequest) {
         // A sleep the app asked for is deliberate, not idle: mark it so the
         // Sleep state report that follows doesn't raise the screensaver (see
         // [appAskedForSleep]). Marked before the relay so both ends of a
@@ -5668,6 +5696,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 updateModeTicker()
                 appendLog("MachineState -> ${c.state.string} / ${c.substate.string}")
+                // After the UI state, so a start that ends here hands the
+                // Coffee button straight to Stop.
+                startSequence.onMachineState(c.state)
             }
             is Event.IdleSleepRequested -> {
                 lastIdleSleepAtMs = SystemClock.elapsedRealtime()
@@ -6026,6 +6057,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // dt-tracker so its first telemetry sample adds no Δ, then accumulate.
                 lastTelemetryMs = null
                 appendLog("Water session started: ${event.content.kind.string}")
+                if (event.content.kind == WaterSessionKind.Flush) startSequence.onFlushStarted()
             }
             is Event.WaterSessionCompleted -> {
                 appendLog("Water session completed: ${event.content.kind.string}")
@@ -6034,7 +6066,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // Release the pre-shot flush waiter so the shot can proceed to
                 // Espresso (issue 15) — only for a group flush, not a hot-water pour.
                 if (event.content.kind == WaterSessionKind.Flush) {
-                    pendingPreshotFlush?.invoke()
+                    startSequence.onFlushCompleted()
                 }
             }
             is Event.BrewSessionStarted -> {
@@ -6224,11 +6256,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // then request Espresso (issue 15).
                 if (pendingBrew) {
                     pendingBrew = false
-                    proceedToEspresso()
+                    pendingBrewStart?.let { startSequence.proceed(it, _ui.value.preFlush) }
+                    pendingBrewStart = null
                 }
             }
             is Event.ProfileUploadFailed -> {
+                // The start waiting on this upload is over (the user taps
+                // Coffee again).
+                if (pendingBrew) pendingBrewStart?.let(startSequence::end)
                 pendingBrew = false
+                pendingBrewStart = null
                 pendingUploadFingerprint = null
                 // What the DE1 holds after a failed upload is unknown: frames
                 // are slot writes with no commit step, so an interrupted upload
@@ -6308,20 +6345,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
          *  teardown runs anyway (the write's own timeout normally fires first). */
         const val QUIT_TEARDOWN_SLACK_MS = 250L
 
-        /**
-         * Wait after `ProfileUploadCompleted` before requesting Espresso — the
-         * firmware's profile-download guard window. A state request inside it is
-         * aborted to HeaterDown (BC 9788201734); the web uses the same 500 ms.
-         */
-        const val PROFILE_DOWNLOAD_GUARD_MS = 500L
-
         /** Abort a pending gated-start brew if the upload never completes. */
         const val PROFILE_UPLOAD_TIMEOUT_MS = 15_000L
-
-        /** Ceiling on the pre-shot group flush before proceeding to Espresso
-         *  anyway (issue 15) — the backstop if WaterSessionCompleted is missed.
-         *  Matches the web shell's 30 s. */
-        const val PRESHOT_FLUSH_TIMEOUT_MS = 30_000L
 
         /** Defer before a post-steam auto-purge so an immediate shot wins the
          *  group (issue 15). */

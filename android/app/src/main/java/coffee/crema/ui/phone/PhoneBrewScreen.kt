@@ -219,11 +219,13 @@ fun PhoneBrewScreen(
                 steamTemp = ui.steamTemp,
                 machineSubstate = ui.machineSubstate,
             )
+            // Stop also cancels a start still pending (05 F2).
+            val stoppable = espressoActive || ui.shotStarting
             CoffeeCta(
-                running = espressoActive,
+                running = stoppable,
                 uploading = ui.profileUploading,
                 enabled = connected,
-                onClick = { if (espressoActive) vm.stopShot() else vm.startShot() },
+                onClick = { if (stoppable) vm.stopShot() else vm.startShot() },
             )
         }
     }
@@ -1422,7 +1424,7 @@ private fun CoffeeCta(running: Boolean, uploading: Boolean, enabled: Boolean, on
     val stopColor = Color(0xFFD26456)
     val bg = if (running) stopColor else MaterialTheme.colorScheme.primary
     val fg = if (running) Color(0xFF2A0B07) else MaterialTheme.colorScheme.onPrimary
-    val clickable = enabled && !uploading
+    val clickable = enabled && (running || !uploading)
     val label = when { running -> "Stop"; uploading -> "Uploading…"; else -> "Coffee" }
     val icon = when { running -> "stop"; uploading -> "arrows-clockwise"; else -> "coffee" }
     Surface(

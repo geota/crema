@@ -396,6 +396,13 @@ export interface UiSnapshot {
 	 * the brew page shows "Uploading … (acks/total)" while this is set.
 	 */
 	readonly profileUploadProgress: ProfileUploadProgress | null;
+	/**
+	 * True while a shot start is pending (05 F2): from the Coffee tap
+	 * through the sync and the pre-flush until the machine reports
+	 * Espresso. The Coffee button offers Stop meanwhile, which cancels it.
+	 * Set by `CremaApp.startShot`'s start sequence.
+	 */
+	readonly shotStarting: boolean;
 
 	// ---- DE1 diagnostics — READ side of doc 11 (R1, R3, R5) --------------
 	//
@@ -678,6 +685,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	lastStopReason: null,
 	loadedProfileShape: null,
 	profileUploadProgress: null,
+	shotStarting: false,
 	de1MachineInfo: {},
 	de1Calibration: EMPTY_DE1_CALIBRATION,
 	de1ShotSettings: null,

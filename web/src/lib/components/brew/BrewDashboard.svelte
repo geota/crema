@@ -542,11 +542,10 @@
 
 	let quickSheetOpen = $state(false);
 	/**
-	 * Whether a state-request transition we initiated is still in flight.
-	 * Used to debounce double-clicks on the big Start button while a
-	 * pre-shot flush + Espresso sequence is in progress, since the
-	 * orchestrator's `startShot()` awaits the flush completion before
-	 * issuing the espresso request.
+	 * Whether a `startShot()` call we made is still running (sync, pre-shot
+	 * flush, Espresso). The button reads Stop meanwhile (`stoppable`), so
+	 * this only keeps a second tap from starting a second call; the
+	 * orchestrator refuses one anyway (05 F2).
 	 */
 	let stateTransitionPending = $state(false);
 	/**
@@ -558,6 +557,12 @@
 	 * it.
 	 */
 	const running = $derived(ui.machineStateName === MachineState.Espresso);
+	/**
+	 * The big button reads Stop: a shot runs, or a start is still pending
+	 * (sync, pre-shot flush, waiting for Espresso). Stop then cancels the
+	 * start, so a stopped pre-flush never ends in a shot (05 F2).
+	 */
+	const stoppable = $derived(running || ui.shotStarting);
 
 	const p = $derived(params.current);
 
@@ -1366,14 +1371,16 @@
 	}
 
 	async function toggleRun(): Promise<void> {
-		if (!app || stateTransitionPending) return;
+		if (!app) return;
+		if (stoppable) {
+			shotStartError = null;
+			await app.stopShot();
+			return;
+		}
+		if (stateTransitionPending) return;
 		stateTransitionPending = true;
 		shotStartError = null;
 		try {
-			if (running) {
-				await app.stopShot();
-				return;
-			}
 			// Freeze the live Quick Sheet snapshot onto the orchestrator
 			// so the next `ShotCompleted` can persist it onto the
 			// `StoredShot` (yield target, brew temp, pre-infuse, stop-
@@ -1737,12 +1744,12 @@
 				<span class="mc-foot-rule" aria-hidden="true"></span>
 				<button
 					class="crema-bigbtn"
-					class:running
-					class:is-syncing={profileSyncing && !running}
-					disabled={stateTransitionPending || !modeReady}
+					class:running={stoppable}
+					class:is-syncing={profileSyncing && !stoppable}
+					disabled={(stateTransitionPending && !stoppable) || !modeReady}
 					onclick={toggleRun}
 				>
-					{#if profileSyncing && !running}
+					{#if profileSyncing && !stoppable}
 						<!-- Sync pip — visible only while a profile upload
 						     is in flight on the Coffee leg (not while the
 						     shot is already running). Spinner glyph + the
@@ -1753,10 +1760,10 @@
 						<span>Syncing to DE1…</span>
 					{:else}
 						<Icon
-							cls={'ph-fill ph-' + (running ? 'stop' : 'coffee')}
+							cls={'ph-fill ph-' + (stoppable ? 'stop' : 'coffee')}
 							aria-hidden="true"
 						 />
-						<span>{running ? 'Stop' : 'Coffee'}</span>
+						<span>{stoppable ? 'Stop' : 'Coffee'}</span>
 					{/if}
 				</button>
 			</div>

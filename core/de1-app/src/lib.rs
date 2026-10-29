@@ -1432,6 +1432,15 @@ impl CremaCore {
     /// refuses app starts by design (UL compliance; de1app shows READY, not
     /// START), so the write could only ever defeat that control or do nothing.
     ///
+    /// An Espresso request while the machine already reports Espresso is
+    /// ignored (no command): the bounce would write Idle, which stops the
+    /// running shot, then Espresso, which restarts it on a spent puck. Only a
+    /// duplicate start can send it (a second start sequence, a relay retry;
+    /// cohort review 2026-10-29, 05 F2), and dropping it is the safe failure:
+    /// a start that really was wanted is one more tap. reaprime sends a plain
+    /// state write and never bounces; de1app bounces only with the off-by-default
+    /// `go_idle_before_all_operations`; Decenza bounces whatever the state.
+    ///
     /// Maintenance requests (Descale / Clean / AirPurge) on firmware that
     /// drops them while cold (< 1356, or unknown) go through the
     /// cold-maintenance workaround instead of a plain write — see
@@ -1453,6 +1462,10 @@ impl CremaCore {
         } else {
             self.idle_sleep.note_activity();
         }
+        let current = self.last_state.map(|info| info.state);
+        if state == MachineState::Espresso && current == Some(MachineState::Espresso) {
+            return CoreOutput::default();
+        }
         let mut out = CoreOutput::default();
         self.supersede_held_maintenance(&mut out);
         if self.begin_cold_maintenance(state, &mut out) {
@@ -1465,16 +1478,11 @@ impl CremaCore {
                 | MachineState::HotWater
                 | MachineState::HotWaterRinse
         );
-        if starting_flow {
-            let known_idle = self
-                .last_state
-                .is_some_and(|info| info.state == MachineState::Idle);
-            if !known_idle {
-                out.commands.push(Command::WriteCharacteristic {
-                    target: WriteTarget::De1RequestedState,
-                    data: vec![requested_state(MachineState::Idle)],
-                });
-            }
+        if starting_flow && current != Some(MachineState::Idle) {
+            out.commands.push(Command::WriteCharacteristic {
+                target: WriteTarget::De1RequestedState,
+                data: vec![requested_state(MachineState::Idle)],
+            });
         }
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1RequestedState,
@@ -8845,6 +8853,41 @@ mod tests {
                 "{state:?} is one state write, no GhcMode MMR"
             );
         }
+    }
+
+    #[test]
+    fn an_espresso_request_while_in_espresso_writes_nothing() {
+        // 05 F2: a duplicate start must not bounce through Idle, which would
+        // stop the running shot and restart it.
+        let mut core = CremaCore::new();
+        for substate in [1, 4, 5] {
+            core.on_notification(Source::De1State, &[4, substate], 0);
+            let out = core.request_machine_state(MachineState::Espresso);
+            assert!(out.commands.is_empty(), "substate {substate}: {out:?}");
+            assert!(out.events.is_empty(), "substate {substate}: {out:?}");
+        }
+        // Stop still goes out mid-shot, and so do the other flow starts.
+        assert_eq!(
+            core.request_machine_state(MachineState::Idle)
+                .commands
+                .len(),
+            1
+        );
+        assert_eq!(
+            core.request_machine_state(MachineState::Steam)
+                .commands
+                .len(),
+            2
+        );
+        // Once the machine is back in Idle, Espresso is one write again.
+        core.on_notification(Source::De1State, &[2, 0], 1_000);
+        assert_eq!(
+            core.request_machine_state(MachineState::Espresso).commands,
+            vec![Command::WriteCharacteristic {
+                target: WriteTarget::De1RequestedState,
+                data: vec![requested_state(MachineState::Espresso)],
+            }]
+        );
     }
 
     #[test]
