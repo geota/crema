@@ -18,6 +18,7 @@ import coffee.crema.ui.availabilityNote
 import coffee.crema.ui.components.RowGate
 import coffee.crema.ui.coreJson
 import coffee.crema.ui.gate
+import coffee.crema.ui.resetPreferencesTitle
 import coffee.crema.ui.withEchoes
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -173,5 +174,13 @@ class SettingsAvailabilityTest {
         assertEquals(setOf(Setting.SCALE_VOLUME, Setting.SCALE_FLOW_SMOOTHING), one)
         assertSame(one, one.withEchoes(volume = true, standby = false, smoothing = false, autoStop = false), "nothing new: the same set")
         assertEquals(echoed, one.withEchoes(volume = false, standby = true, smoothing = false, autoStop = true))
+    }
+
+    /** §7.6: on a remote, Reset resets only this device's own preferences, and says so. */
+    @Test
+    fun `reset preferences names whose they are`() {
+        assertEquals("Reset preferences", resetPreferencesTitle(MainUiState()))
+        assertEquals("Reset preferences", resetPreferencesTitle(MainUiState(proxyRole = "primary")))
+        assertEquals("Reset this device's preferences", resetPreferencesTitle(remote()))
     }
 }

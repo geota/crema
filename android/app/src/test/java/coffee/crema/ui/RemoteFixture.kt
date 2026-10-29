@@ -55,6 +55,9 @@ internal class RemoteFixture(private val store: ViewModelStore) {
      *  dispatcher, say). */
     @Volatile var dispatch: (suspend (method: String, args: String) -> Result<Unit>)? = null
 
+    /** The hub holds the DE1 (its roster lists it). */
+    var hubHoldsDe1 = true
+
     /** The NSD peers the remote sees, when the test drives them. */
     var peers: MutableStateFlow<List<Peer>>? = null
 
@@ -99,6 +102,7 @@ internal class RemoteFixture(private val store: ViewModelStore) {
         val (e, h) = TestHubServer.relay(
             "host-1", "Kitchen tablet", secret,
             clientId = { VmHarness.proxyController(vm).deviceId },
+            roster = { if (hubHoldsDe1) listOf(coffee.crema.ble.proxy.DeviceInfo("AA:BB", "DE1", "de1", "CONNECTED")) else emptyList() },
             configSource = { hubConfig },
             controlHandler = { method, args, _, _ ->
                 handled += method to args

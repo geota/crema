@@ -1,5 +1,7 @@
 package coffee.crema.ui
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import coffee.crema.ble.proxy.Peer
 import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.settings.AppPrefs
@@ -208,9 +210,11 @@ class RemoteToStandaloneTest {
         VmHarness.advance(200)
         VmHarness.idle()
         assertNull(vm.ui.value.adoptPrompt)
+        assertTrue(VmHarness.log(vm).any { "Leaving the hub cancelled" in it }, "the Denied's switch cancelled it")
         vm.resolveAdoption(useHub = true) // too late: nothing to resolve
         VmHarness.advance(200)
         VmHarness.idle()
+        assertTrue(VmHarness.log(vm).none { "Mode switch to normal skipped" in it }, "no stale commit was even attempted")
         assertEquals(abOf(P), abOf(savedPrefs()), "no adoption")
         assertEquals(listOf("normal"), switches.map { it.first }, "one switch")
     }
@@ -285,5 +289,71 @@ class RemoteToStandaloneTest {
         VmHarness.advance(400)
         VmHarness.idle()
         assertEquals(listOf("normal"), switches.map { it.first }, "one switch")
+    }
+
+    /** AC-36: a Denied that arrives during the commit for Hub mode on (while
+     *  it awaits its saves) leaves the device a hub: the Denied's
+     *  epoch-checked switch does nothing. */
+    @Test
+    fun `a Denied during the commit can't undo hub mode`() {
+        fixture.hubHoldsDe1 = false // so this remote may turn hub mode on
+        val vm = remoteWithPendingEdit()
+        vm.setHubMode(true)
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt)
+        vm.resolveAdoption(useHub = true) // the commit is queued first
+        fixture.revoke() // the Denied's switch queues behind it
+        VmHarness.idleUntil("the Denied") { VmHarness.log(vm).any { "Mirror denied by host" in it } }
+        waitRole(vm, "primary")
+        Thread.sleep(200)
+        VmHarness.advance(400)
+        VmHarness.idle()
+        assertEquals("primary", role(vm), "still the hub")
+        assertEquals(listOf("primary"), switches.map { it.first }, "one switch")
+        assertTrue(VmHarness.log(vm).any { "Mode switch to normal skipped" in it }, "the Denied's switch was stale")
+    }
+
+    /** AC-25: a re-find candidate (the hub restarted elsewhere) arriving while
+     *  the confirmation is open changes nothing: no switch, the prompt and
+     *  the frozen slice stay. */
+    @Test
+    fun `a re-find candidate while the confirmation is open changes nothing`() {
+        fixture.peers = MutableStateFlow(emptyList<Peer>())
+        val vm = remoteWithPendingEdit()
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt)
+        fixture.restart()
+        // Past the re-find delay, letting the socket threads post back.
+        repeat(((REFIND_DELAY_MS + 2_000) / 250).toInt()) {
+            VmHarness.advance(250)
+            Thread.sleep(5)
+        }
+        assertTrue(switches.isEmpty(), "no re-find switch: $switches")
+        assertNotNull(vm.ui.value.adoptPrompt, "the confirmation stays")
+        assertEquals(S.qcSteamTempC, vm.ui.value.qcSteamTempC)
+        assertTrue(VmHarness.ownState(vm).mirror!!.frozen)
+        assertTrue(fixture.endpoint.received.none { "\"type\":\"hello\"" in it }, "never dialed the candidate")
+        vm.resolveAdoption(useHub = false)
+        waitRole(vm, "normal")
+        assertEquals(listOf("normal"), switches.map { it.first })
+    }
+
+    /** §7.5 step 2: while the confirmation is open the slice is frozen, so a
+     *  relayed edit is refused here: nothing shown, nothing sent. */
+    @Test
+    fun `an edit while the confirmation is open is refused`() {
+        val vm = remoteWithPendingEdit()
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt)
+        val sent = fixture.handled.size
+        val messages = vm.ui.value.userMessages.size
+        vm.setStopOnWeight(false)
+        Thread.sleep(200)
+        VmHarness.idle()
+        assertEquals(S.stopOnWeight, vm.ui.value.stopOnWeight, "nothing shown")
+        assertEquals(sent, fixture.handled.size, "nothing sent")
+        assertEquals(listOf("Leaving Kitchen tablet"), vm.ui.value.userMessages.drop(messages))
     }
 }
