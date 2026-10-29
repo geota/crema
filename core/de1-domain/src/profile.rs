@@ -1,14 +1,41 @@
 //! The espresso [`Profile`] model and its assembly into protocol packets.
 
 use de1_protocol::{
-    ExtensionFrame, FrameFlags, SHOT_FRAME_LEN, SHOT_HEADER_LEN, ShotFrame, ShotHeader, ShotTail,
+    ExtensionFrame, FrameEncoding, FrameFlags, SHOT_FRAME_LEN, SHOT_HEADER_LEN, ShotFrame,
+    ShotHeader, ShotTail,
 };
 use typeshare::typeshare;
 
 use crate::error::DomainError;
 
-/// The most steps a profile may have — the DE1's frame-index limit.
-const MAX_STEPS: usize = 32;
+/// The most steps a profile may have: 20, "the maximum number of steps that
+/// the espresso machine can handle" (de1app `vars.tcl` refuses a 21st step;
+/// pyDE1 `_MAX_SHOT_FRAMES = 20`). At 32 the tail's `FrameToWrite` (= the
+/// step count) would also read as an extension frame (`>= 32`).
+const MAX_STEPS: usize = crate::profile_bounds::MAX_PROFILE_STEPS as usize;
+
+/// The flow limit (ml/s) every pressure step without one is uploaded with —
+/// de1app `default_pressure_flow_limit 8` (`profile.tcl`
+/// `apply_default_flow_limit_to_pressure_steps`, fdd091f), ported by Decenza
+/// 0dbcc442 "so the same profile brews the same way" on a DE1 (7–8 ml/s) and
+/// a Bengle (~20 ml/s). Applied at assembly only, so a stored profile reads
+/// back exactly as authored.
+pub const DEFAULT_PRESSURE_FLOW_LIMIT: f32 = 8.0;
+/// The limiter range used with [`DEFAULT_PRESSURE_FLOW_LIMIT`] — de1app's
+/// fallback `maximum_flow_range_default` (1.0).
+pub const DEFAULT_PRESSURE_FLOW_LIMIT_RANGE: f32 = 1.0;
+
+/// Header `MinimumPressure` sent on every upload — de1app `binary.tcl`
+/// hard-codes 0 (reaprime too). Every frame sets `IgnoreLimit`, so the header
+/// limits are inert; sending constants removes any dependency on imported
+/// data.
+const HEADER_MINIMUM_PRESSURE: f32 = 0.0;
+/// Header `MaximumFlow` sent on a classic DE1 — de1app `binary.tcl` (6.0).
+const HEADER_MAXIMUM_FLOW: f32 = 6.0;
+/// Header `MaximumFlow` sent on a Bengle (BLE v2) — de1app and reaprime
+/// both send 12.0; de1app notes that keeping 6.0 "left the Bengle refusing
+/// to pour".
+const HEADER_MAXIMUM_FLOW_V2: f32 = 12.0;
 
 /// Which quantity a step holds at its target. Serializes as lowercase
 /// (`"pressure"` / `"flow"`) to match the community v2 JSON contract.
@@ -203,6 +230,8 @@ impl ProfileStep {
                 // The legacy app always sets IgnoreLimit: the header limits are
                 // advisory, and the per-step limiter is the real control.
                 ignore_limit: true,
+                // BLE protocol v2 only (de1app refuses it on v1).
+                compare_power: false,
             },
             set_value: self.target,
             temperature: self.temperature_c,
@@ -277,12 +306,13 @@ pub struct Profile {
     /// `#[serde(default)]` → `Espresso` for older serialized profiles.
     #[serde(default)]
     pub beverage_type: BeverageType,
-    /// Target tank temperature, °C. Some advanced profiles change the
-    /// tank setpoint mid-shot; most are 0.0 (no override).
+    /// Target tank temperature, °C; 0.0 = no override (most profiles).
     ///
     /// Matches reaprime's `Profile.tankTemperature` + the community v2
-    /// `tank_temperature` field. App-side metadata only — the DE1
-    /// protocol has no per-profile tank-temp frame field.
+    /// `tank_temperature` field. Not a frame field: the core writes it to
+    /// the tank-threshold MMR (`0x80380C`) once the upload's tail is acked,
+    /// as de1app and reaprime do after every upload (see
+    /// `CremaCore::upload_profile`).
     #[serde(default)]
     pub tank_temperature: f32,
     /// Community v2 profile schema version. Reaprime serializes this as
@@ -372,8 +402,21 @@ impl Profile {
     /// # Errors
     ///
     /// - [`DomainError::NoSteps`] if the profile has no steps.
-    /// - [`DomainError::TooManySteps`] if it has more than 32.
+    /// - [`DomainError::TooManySteps`] if it has more than 20 (the DE1's
+    ///   frame limit, de1app / pyDE1).
     pub fn assemble(&self) -> Result<AssembledProfile, DomainError> {
+        self.assemble_for(FrameEncoding::V1)
+    }
+
+    /// Assemble this profile for a machine that takes `encoding` — V1 for a
+    /// classic DE1, V2 for a Bengle (pressure / flow bytes in tenths,
+    /// `HeaderV` 2, header `MaximumFlow` 12; de1app `de1_packed_shot`,
+    /// reaprime `_writeHeader` / `_writeSteps`).
+    ///
+    /// # Errors
+    ///
+    /// As [`assemble`](Self::assemble).
+    pub fn assemble_for(&self, encoding: FrameEncoding) -> Result<AssembledProfile, DomainError> {
         let count = self.steps.len();
         if count == 0 {
             return Err(DomainError::NoSteps);
@@ -381,22 +424,35 @@ impl Profile {
         if count > MAX_STEPS {
             return Err(DomainError::TooManySteps { count });
         }
-        // `count` is 1..=MAX_STEPS (32), checked above, so this fits a u8.
+        // `count` is 1..=MAX_STEPS (20), checked above, so this fits a u8.
         let frame_count = u8::try_from(count).unwrap_or(u8::MAX);
 
+        // The profile's own `minimum_pressure` / `maximum_flow` stay on the
+        // profile for export; the wire header carries de1app's constants.
         let header = ShotHeader {
             frame_count,
             preinfuse_frame_count: self.preinfuse_step_count,
-            minimum_pressure: self.minimum_pressure,
-            maximum_flow: self.maximum_flow,
+            minimum_pressure: HEADER_MINIMUM_PRESSURE,
+            maximum_flow: match encoding {
+                FrameEncoding::V1 => HEADER_MAXIMUM_FLOW,
+                FrameEncoding::V2 => HEADER_MAXIMUM_FLOW_V2,
+            },
         };
 
         let mut frames = Vec::with_capacity(count);
         let mut extension_frames = Vec::new();
-        // `0u8..` zipped with at most 32 steps never overflows the index.
+        // `0u8..` zipped with at most 20 steps never overflows the index.
         for (index, step) in (0u8..).zip(&self.steps) {
             frames.push(step.to_shot_frame(index));
-            if let Some(limiter) = step.limiter {
+            // An unlimited pressure step gets de1app's default flow limit; a
+            // flow step's limiter is a pressure limit, where "off" stays legal.
+            let limiter = step.limiter.or_else(|| {
+                (step.pump == Pump::Pressure).then_some(Limiter {
+                    value: DEFAULT_PRESSURE_FLOW_LIMIT,
+                    range: DEFAULT_PRESSURE_FLOW_LIMIT_RANGE,
+                })
+            });
+            if let Some(limiter) = limiter {
                 extension_frames.push(ExtensionFrame {
                     index,
                     max_flow_or_pressure: limiter.value,
@@ -406,6 +462,7 @@ impl Profile {
         }
 
         Ok(AssembledProfile {
+            encoding,
             header,
             frames,
             extension_frames,
@@ -420,6 +477,8 @@ impl Profile {
 /// A [`Profile`] assembled into protocol packets, ready to upload.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssembledProfile {
+    /// How the packets encode pressure / flow (classic DE1 or Bengle).
+    pub encoding: FrameEncoding,
     /// The profile header.
     pub header: ShotHeader,
     /// The normal frames, one per step, in order.
@@ -433,15 +492,19 @@ pub struct AssembledProfile {
 impl AssembledProfile {
     /// The encoded `HeaderWrite` packet.
     pub fn header_packet(&self) -> [u8; SHOT_HEADER_LEN] {
-        self.header.encode()
+        self.header.encode_with(self.encoding)
     }
 
     /// The encoded `FrameWrite` packets in upload order: normal frames, then
     /// extension frames, then the tail (protocol §5.6).
     pub fn frame_packets(&self) -> Vec<[u8; SHOT_FRAME_LEN]> {
         let mut packets = Vec::with_capacity(self.frames.len() + self.extension_frames.len() + 1);
-        packets.extend(self.frames.iter().map(ShotFrame::encode));
-        packets.extend(self.extension_frames.iter().map(ExtensionFrame::encode));
+        packets.extend(self.frames.iter().map(|f| f.encode_with(self.encoding)));
+        packets.extend(
+            self.extension_frames
+                .iter()
+                .map(|e| e.encode_with(self.encoding)),
+        );
         packets.push(self.tail.encode());
         packets
     }
@@ -564,15 +627,71 @@ mod tests {
     }
 
     #[test]
+    fn a_bengle_profile_encodes_pressure_and_flow_in_tenths() {
+        // Report 02 P1-3. Expected bytes from de1app `de1_packed_shot` /
+        // `convert_float_to_U8D1` (round(v × 10)) and reaprime `_writeHeader`
+        // / `_writeSteps` (scale 10): HeaderV 2, MaximumFlow 12 → 120,
+        // SetVal 9.0 → 90, TriggerVal 4.0 → 40, limiter 3.5 / 0.5 → 35 / 5.
+        let mut s = step("pour", Pump::Pressure);
+        s.exit = Some(ExitCondition {
+            metric: ExitMetric::Flow,
+            compare: Compare::Over,
+            threshold: 4.0,
+        });
+        s.limiter = Some(Limiter {
+            value: 3.5,
+            range: 0.5,
+        });
+        let v2 = profile(vec![s.clone()])
+            .assemble_for(FrameEncoding::V2)
+            .unwrap();
+        assert_eq!(v2.header_packet(), [2, 1, 1, 0, 120]);
+        let packets = v2.frame_packets();
+        // flags: DoCompare 0x02 | DC_GT 0x04 | DC_CompF 0x08 | IgnoreLimit
+        // 0x40 = 0x4E; 92 °C → 184; 20 s → 20 | 0x80; MaxVol 0 | 0x400.
+        assert_eq!(packets[0], [0, 0x4E, 90, 184, 0x94, 40, 0x04, 0x00]);
+        assert_eq!(packets[1], [32, 35, 5, 0, 0, 0, 0, 0]);
+        assert_eq!(packets[2], [1, 0, 0, 0, 0, 0, 0, 0]);
+        // The same profile on a classic DE1: U8P4, HeaderV 1, MaximumFlow 6.
+        let v1 = profile(vec![s]).assemble().unwrap();
+        assert_eq!(v1.header_packet(), [1, 1, 1, 0, 96]);
+        assert_eq!(v1.frame_packets()[0][2], 144, "9.0 × 16");
+        assert_eq!(v1.frame_packets()[1][1], 56, "3.5 × 16");
+    }
+
+    #[test]
+    fn unlimited_pressure_steps_get_the_default_flow_limit_at_assembly() {
+        // de1app fdd091f / Decenza 0dbcc442 (report 08 S1): every pressure
+        // step without a limiter goes out capped at 8 ml/s (range 1.0); an
+        // authored limiter and a flow step are left alone.
+        let mut limited = step("limited", Pump::Pressure);
+        limited.limiter = Some(Limiter {
+            value: 3.0,
+            range: 0.6,
+        });
+        let assembled = profile(vec![
+            step("open", Pump::Pressure),
+            limited,
+            step("flow", Pump::Flow),
+        ])
+        .assemble()
+        .unwrap();
+        let ext: Vec<(u8, f32, f32)> = assembled
+            .extension_frames
+            .iter()
+            .map(|e| (e.index, e.max_flow_or_pressure, e.max_fop_range))
+            .collect();
+        assert_eq!(ext, vec![(0, 8.0, 1.0), (1, 3.0, 0.6)]);
+    }
+
+    #[test]
     fn frame_packets_are_ordered_frames_then_extensions_then_tail() {
         let mut s = step("a", Pump::Pressure);
         s.limiter = Some(Limiter {
             value: 8.0,
             range: 0.5,
         });
-        let assembled = profile(vec![s, step("b", Pump::Pressure)])
-            .assemble()
-            .unwrap();
+        let assembled = profile(vec![s, step("b", Pump::Flow)]).assemble().unwrap();
         // 2 normal frames + 1 extension frame + 1 tail
         assert_eq!(assembled.frame_packets().len(), 4);
         assert_eq!(assembled.header_packet().len(), SHOT_HEADER_LEN);
@@ -679,16 +798,22 @@ mod tests {
     }
 
     #[test]
-    fn a_thirty_two_step_profile_assembles_without_overflow() {
-        let steps = (0..32).map(|_| step("x", Pump::Pressure)).collect();
+    fn a_twenty_step_profile_assembles_and_a_21st_step_is_rejected() {
+        // de1app vars.tcl / pyDE1 `_MAX_SHOT_FRAMES = 20`. The tail's
+        // FrameToWrite (= the step count) stays below the extension marker 32.
+        let steps = (0..20).map(|_| step("x", Pump::Pressure)).collect();
         let assembled = profile(steps).assemble().unwrap();
-        assert_eq!(assembled.header.frame_count, 32);
-        assert_eq!(assembled.tail.frame_count, 32);
-        assert_eq!(assembled.frames.len(), 32);
-        // Frame indices go 0..=31, fitting a u8 without wrap.
+        assert_eq!(assembled.header.frame_count, 20);
+        assert_eq!(assembled.tail.frame_count, 20);
+        assert_eq!(assembled.frames.len(), 20);
         for (i, frame) in assembled.frames.iter().enumerate() {
             assert_eq!(frame.index as usize, i);
         }
+        let steps = (0..21).map(|_| step("x", Pump::Pressure)).collect();
+        assert_eq!(
+            profile(steps).assemble(),
+            Err(DomainError::TooManySteps { count: 21 })
+        );
     }
 
     #[test]

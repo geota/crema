@@ -100,6 +100,9 @@ pub enum NotificationSource {
     /// The DE1 `FrameWrite` characteristic — per-frame ack echoes during a
     /// profile upload.
     De1FrameAck,
+    /// The shell's synthesised confirmation of a successful profile header
+    /// write — mirrors `de1_app::Source::De1HeaderAck`.
+    De1HeaderAck,
     /// The scale's on-scale button characteristic (Skale II `EF82`) —
     /// mirrors `de1_app::Source::ScaleButton`.
     ScaleButton,
@@ -119,6 +122,7 @@ impl From<NotificationSource> for Source {
             NotificationSource::De1ShotSettings => Source::De1ShotSettings,
             NotificationSource::De1ProfileHeader => Source::De1ProfileHeader,
             NotificationSource::De1FrameAck => Source::De1FrameAck,
+            NotificationSource::De1HeaderAck => Source::De1HeaderAck,
             NotificationSource::ScaleButton => Source::ScaleButton,
         }
     }
@@ -2736,6 +2740,19 @@ impl CremaBridge {
             .to_json()
     }
 
+    /// Bring back a flash whose verify window was still open when the
+    /// process died (from the deadline the shell persisted).
+    pub fn firmware_flash_restore_verifying(
+        &self,
+        build: u32,
+        hold_ms_left: u64,
+        now_ms: u64,
+    ) -> String {
+        self.core()
+            .firmware_flash_restore_verifying(build, hold_ms_left, now_ms)
+            .to_json()
+    }
+
     /// Bring back the lock of an erase that may still be running when the
     /// process died (from the deadline the shell persisted).
     pub fn firmware_flash_restore_erase_hold(
@@ -3592,6 +3609,8 @@ mod tests {
     #[test]
     fn read_calibration_produces_a_write_command() {
         let bridge = CremaBridge::new();
+        // Calibration writes need a Sleep / Idle machine (calibration_guard).
+        bridge.on_notification(NotificationSource::De1State, vec![2, 0], 0);
         for json in [
             bridge.read_calibration(CalSensor::Pressure),
             bridge.read_factory_calibration(CalSensor::Flow),
@@ -3612,7 +3631,7 @@ mod tests {
 
     /// Every `NotificationSource` the FFI enum can name — used to fuzz the
     /// bridge against malformed input on every characteristic.
-    fn every_source() -> [NotificationSource; 11] {
+    fn every_source() -> [NotificationSource; 12] {
         [
             NotificationSource::De1State,
             NotificationSource::De1ShotSample,
@@ -3625,6 +3644,7 @@ mod tests {
             NotificationSource::De1ShotSettings,
             NotificationSource::De1ProfileHeader,
             NotificationSource::De1FrameAck,
+            NotificationSource::De1HeaderAck,
         ]
     }
 

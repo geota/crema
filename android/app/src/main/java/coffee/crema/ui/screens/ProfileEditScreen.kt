@@ -352,6 +352,8 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Eyebrow("Segments", Modifier.weight(1f))
                     CremaButton(
+                        // The DE1 runs at most MAX_PROFILE_STEPS (20) frames.
+                        enabled = segs.size < ProfileBounds.INSTANCE.maxProfileSteps,
                         onClick = {
                             val last = segs.lastOrNull()
                             segs.add(

@@ -70,6 +70,7 @@ function deps(over: {
 	store?: MarkerStore | null;
 	restore?: FlashStep;
 	restoreHold?: FlashStep;
+	restoreVerify?: FlashStep;
 	onRelease?: () => void;
 	machineId?: string | null;
 	linkUp?: boolean;
@@ -100,7 +101,8 @@ function deps(over: {
 			firmwareFlashExit: vi.fn(async () => true),
 			firmwareFlashStatus: async () => over.status ?? { actions: [] },
 			firmwareFlashRestoreAwaiting: vi.fn(async () => over.restore ?? { actions: [] }),
-			firmwareFlashRestoreEraseHold: vi.fn(async () => over.restoreHold ?? { actions: [] })
+			firmwareFlashRestoreEraseHold: vi.fn(async () => over.restoreHold ?? { actions: [] }),
+			firmwareFlashRestoreVerifying: vi.fn(async () => over.restoreVerify ?? { actions: [] })
 		},
 		io,
 		conditions: async () => ({ connected: true, ready: true, guidedBrewActive: false, powerOk: true }),
@@ -374,6 +376,40 @@ describe('FirmwareUpdateController', () => {
 		await new FirmwareUpdateController(d2).restore();
 		expect(d2.core.firmwareFlashRestoreEraseHold).not.toHaveBeenCalled();
 		expect(stale.data.has(AWAITING_KEY)).toBe(false);
+	});
+
+	it('a reload inside the verify window restores verifying, not the power-cycle (report 06 #7)', async () => {
+		expect(
+			markerFor(status(FlashPhase.Verifying, { canCancel: false, verifyHoldMsLeft: 90_000 }), 'dev', 100_000)
+		).toEqual({ build: 1358, unconfirmed: true, verifyHoldUntil: 190_000, machine: 'dev' });
+		const store = memoryStore();
+		store.setItem(AWAITING_KEY, JSON.stringify({ build: 1358, unconfirmed: true, verifyHoldUntil: 1_090_000 }));
+		const verifying = status(FlashPhase.Verifying, { canCancel: false, verifyHoldMsLeft: 90_000 });
+		const d = deps({
+			store,
+			restoreVerify: { actions: [], status: verifying },
+			status: { actions: [], status: verifying }
+		});
+		const flow = new FirmwareUpdateController(d);
+		await flow.restore();
+		expect(d.core.firmwareFlashRestoreVerifying).toHaveBeenCalledWith(1358, 90_000, expect.any(Number));
+		expect(d.core.firmwareFlashRestoreAwaiting).not.toHaveBeenCalled();
+		expect(flow.holdsLink).toBe(true);
+		flow.dispose();
+		// Window over (or a wall clock that jumped forward): the unconfirmed
+		// power-cycle wait, as before.
+		const late = memoryStore();
+		late.setItem(AWAITING_KEY, JSON.stringify({ build: 1358, unconfirmed: true, verifyHoldUntil: 999_000 }));
+		const d2 = deps({ store: late });
+		await new FirmwareUpdateController(d2).restore();
+		expect(d2.core.firmwareFlashRestoreVerifying).not.toHaveBeenCalled();
+		expect(d2.core.firmwareFlashRestoreAwaiting).toHaveBeenCalledWith(1358, true, expect.any(Number));
+		// A clock that jumped back can't stretch the window past 120 s.
+		const back = memoryStore();
+		back.setItem(AWAITING_KEY, JSON.stringify({ build: 1358, unconfirmed: true, verifyHoldUntil: 1_000_000 + 3_600_000 }));
+		const d3 = deps({ store: back });
+		await new FirmwareUpdateController(d3).restore();
+		expect(d3.core.firmwareFlashRestoreVerifying).toHaveBeenCalledWith(1358, 120_000, expect.any(Number));
 	});
 
 	it('the marker covers verify, the erase hold and the power-cycle wait (audit r2 LOW 2)', () => {

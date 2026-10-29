@@ -101,6 +101,9 @@ pub enum NotificationSource {
     /// The DE1 `FrameWrite` characteristic — per-frame ack echoes during a
     /// profile upload.
     De1FrameAck,
+    /// The shell's synthesised confirmation of a successful profile header
+    /// write — mirrors `de1_app::Source::De1HeaderAck`.
+    De1HeaderAck,
     /// The scale's on-scale button characteristic (Skale II `EF82`) —
     /// mirrors `de1_app::Source::ScaleButton`.
     ScaleButton,
@@ -120,6 +123,7 @@ impl From<NotificationSource> for Source {
             NotificationSource::De1ShotSettings => Source::De1ShotSettings,
             NotificationSource::De1ProfileHeader => Source::De1ProfileHeader,
             NotificationSource::De1FrameAck => Source::De1FrameAck,
+            NotificationSource::De1HeaderAck => Source::De1HeaderAck,
             NotificationSource::ScaleButton => Source::ScaleButton,
         }
     }
@@ -2797,6 +2801,19 @@ impl CremaBridge {
             .to_json()
     }
 
+    /// Bring back a flash whose verify window was still open when the tab
+    /// reloaded (from the deadline the shell persisted).
+    pub fn firmware_flash_restore_verifying(
+        &mut self,
+        build: u32,
+        hold_ms_left: f64,
+        now_ms: f64,
+    ) -> String {
+        self.live_core()
+            .firmware_flash_restore_verifying(build, hold_ms_left as u64, now_ms as u64)
+            .to_json()
+    }
+
     /// Bring back the lock of an erase that may still be running when the
     /// tab closed (from the deadline the shell persisted).
     pub fn firmware_flash_restore_erase_hold(
@@ -3404,7 +3421,9 @@ mod tests {
 
     #[test]
     fn write_and_reset_calibration_produce_write_commands() {
-        let bridge = CremaBridge::new();
+        let mut bridge = CremaBridge::new();
+        // Calibration writes need a Sleep / Idle machine (calibration_guard).
+        bridge.on_notification(NotificationSource::De1State, vec![2, 0], 0.0);
         for json in [
             bridge.write_calibration(CalSensor::Temperature, 92.5, 93.0),
             bridge.reset_calibration_to_factory(CalSensor::Pressure),
@@ -3983,7 +4002,7 @@ mod tests {
 
     /// Every `NotificationSource` the wasm enum can name — used to fuzz the
     /// bridge against malformed input on every characteristic.
-    fn every_source() -> [NotificationSource; 11] {
+    fn every_source() -> [NotificationSource; 12] {
         [
             NotificationSource::De1State,
             NotificationSource::De1ShotSample,
@@ -3996,6 +4015,7 @@ mod tests {
             NotificationSource::De1ShotSettings,
             NotificationSource::De1ProfileHeader,
             NotificationSource::De1FrameAck,
+            NotificationSource::De1HeaderAck,
         ]
     }
 

@@ -1544,6 +1544,16 @@ data class EventCalibrationInner (
 	val measured: Float
 )
 
+/// Generated type representing the anonymous struct variant `CalibrationRefused` of the `Event` Rust enum
+@Serializable
+data class EventCalibrationRefusedInner (
+	/// The sensor the refused request targeted; `None` for the
+	/// firmware's error reply, which does not say.
+	val target: CalTarget? = null,
+	/// Why it was refused.
+	val reason: CalibrationRefusal
+)
+
 /// Generated type representing the anonymous struct variant `FirmwareLockoutHit` of the `Event` Rust enum
 @Serializable
 data class EventFirmwareLockoutHitInner (
@@ -1896,6 +1906,13 @@ sealed class Event {
 	@Serializable
 	@SerialName("Calibration")
 	data class Calibration(val content: EventCalibrationInner): Event()
+	/// A calibration write or factory reset was refused — by the core's
+	/// guards before anything reached the wire, or by the DE1's own error
+	/// reply ([`CalibrationRefusal::FirmwareRejected`](crate::CalibrationRefusal::FirmwareRejected)).
+	/// See [`calibration_guard`](crate::calibration_guard).
+	@Serializable
+	@SerialName("CalibrationRefused")
+	data class CalibrationRefused(val content: EventCalibrationRefusedInner): Event()
 	/// A write was refused because a firmware upload is locking out other
 	/// writes. v1 carries the lockout guard as a stub
 	/// ([`firmware_locks_writes`](crate::CremaCore::firmware_locks_writes))
@@ -1925,9 +1942,8 @@ sealed class Event {
 	@Serializable
 	@SerialName("ShotSettingsRead")
 	data class ShotSettingsRead(val content: EventShotSettingsReadInner): Event()
-	/// A profile upload has begun. Carries the total number of acks the
-	/// orchestrator expects (frames + extensions + tail; the header is
-	/// not acked separately).
+	/// A profile upload has begun. Carries the frame counts the orchestrator
+	/// expects acks for (the header ack, then frames + extensions + tail).
 	@Serializable
 	@SerialName("ProfileUploadStarted")
 	data class ProfileUploadStarted(val content: EventProfileUploadStartedInner): Event()
@@ -1943,9 +1959,29 @@ sealed class Event {
 	data class ProfileUploadCompleted(val content: EventProfileUploadCompletedInner): Event()
 	/// The profile upload failed. The core has discarded its in-progress
 	/// state; the shell may retry by calling `upload_profile` again.
+	/// 
+	/// Once the header was dispatched, what the DE1 holds is **unknown**:
+	/// frames are indexed slot writes with no commit step, so an interrupted
+	/// upload can leave the new header's frame count over a mix of new and
+	/// old frames (Decenza `aa8232e6`). The shell must forget any "the DE1
+	/// holds profile X" cache on this event; the core asks for a re-upload
+	/// with [`ProfileReuploadNeeded`](Self::ProfileReuploadNeeded) once the
+	/// machine is Idle.
 	@Serializable
 	@SerialName("ProfileUploadFailed")
 	data class ProfileUploadFailed(val content: EventProfileUploadFailedInner): Event()
+	/// The DE1's loaded profile is unknown after a failed upload and the
+	/// machine is Idle, so the shell should upload the active profile now.
+	/// Emitted when a failure lands while the machine is Idle, or on the
+	/// next transition into Idle (after the flow that interrupted the
+	/// upload, never during it). Bounded to
+	/// [`MAX_PROFILE_REUPLOAD_REQUESTS`](crate::MAX_PROFILE_REUPLOAD_REQUESTS)
+	/// consecutive requests until an upload completes; cleared by a
+	/// completed upload or a reset (the reconnect path owns the re-upload).
+	/// Decenza's `ReArm` follow-up (`aa8232e6`).
+	@Serializable
+	@SerialName("ProfileReuploadNeeded")
+	object ProfileReuploadNeeded: Event()
 	/// An incoming notification could not be decoded.
 	@Serializable
 	@SerialName("DecodeError")
@@ -2593,7 +2629,13 @@ data class FlashStatus (
 	val identityUnknown: Boolean,
 	/// How long the DE1 may still be erasing (during the erase, or after an
 	/// interrupted one): the shells persist it so a restart keeps the lock.
-	val eraseHoldMsLeft: UInt? = null
+	val eraseHoldMsLeft: UInt? = null,
+	/// While verifying: how long until [`VERIFY_TIMEOUT_MS`] after the verify
+	/// request, i.e. how long the DE1 may still be checking the image. The
+	/// shells persist it so a page reload or process restart inside the
+	/// window comes back as "still verifying, don't switch it off" rather
+	/// than as the power-cycle step ([`FirmwareFlash::restore_verifying`]).
+	val verifyHoldMsLeft: UInt? = null
 )
 
 /// Generated type representing the anonymous struct variant `Write` of the `FlashAction` Rust enum
@@ -3802,6 +3844,54 @@ enum class CalTarget(val string: String) {
 	Temperature("Temperature"),
 }
 
+/// Generated type representing the anonymous struct variant `OutOfRange` of the `CalibrationRefusal` Rust enum
+@Serializable
+data class CalibrationRefusalOutOfRangeInner (
+	/// The rejected value.
+	val value: Float,
+	/// Band minimum.
+	val min: Float,
+	/// Band maximum.
+	val max: Float
+)
+
+/// Generated type representing the anonymous struct variant `MachineNotIdle` of the `CalibrationRefusal` Rust enum
+@Serializable
+data class CalibrationRefusalMachineNotIdleInner (
+	/// The state the machine last reported.
+	val state: MachineState
+)
+
+/// Why a calibration write or reset was refused.
+@Serializable
+sealed class CalibrationRefusal {
+	/// A value was NaN or infinite.
+	@Serializable
+	@SerialName("NonFinite")
+	object NonFinite: CalibrationRefusal()
+	/// The reported value encodes as zero on a ratio sensor (flow, pressure).
+	@Serializable
+	@SerialName("ZeroReported")
+	object ZeroReported: CalibrationRefusal()
+	/// A value fell outside the sensor's band.
+	@Serializable
+	@SerialName("OutOfRange")
+	data class OutOfRange(val details: CalibrationRefusalOutOfRangeInner): CalibrationRefusal()
+	/// The machine is not in Sleep or Idle.
+	@Serializable
+	@SerialName("MachineNotIdle")
+	data class MachineNotIdle(val details: CalibrationRefusalMachineNotIdleInner): CalibrationRefusal()
+	/// No machine state has been reported yet (fail closed).
+	@Serializable
+	@SerialName("MachineStateUnknown")
+	object MachineStateUnknown: CalibrationRefusal()
+	/// The DE1 answered the request with its calibration error reply
+	/// (target byte 255).
+	@Serializable
+	@SerialName("FirmwareRejected")
+	object FirmwareRejected: CalibrationRefusal()
+}
+
 /// The direction of an exit comparison. Lowercase wire spelling
 /// (`"over"` / `"under"`) per the v2 contract.
 @Serializable
@@ -4192,6 +4282,12 @@ enum class MachineState(val string: String) {
 	/// Scheduled-wake idle; firmware v1293 and later only.
 	@SerialName("SchedIdle")
 	SchedIdle("SchedIdle"),
+	/// Firmware-upgrade mode, `0x16` (de1app `machine.tcl` `22 FWUpgrade`;
+	/// reaprime `fwUpgrade(0x16)`, `3ab190b6`). Requested by reaprime's
+	/// Bengle flash path; decoded so a machine reporting it does not freeze
+	/// the state display behind a decode error.
+	@SerialName("FwUpgrade")
+	FwUpgrade("FwUpgrade"),
 }
 
 /// Where a maintenance cycle the core is following stands — carried by
@@ -4239,7 +4335,10 @@ enum class MmrRegister(val string: String) {
 	/// Firmware build number.
 	@SerialName("FirmwareVersion")
 	FirmwareVersion("FirmwareVersion"),
-	/// Group Head Controller info bitmask (bit 0: present, bit 1: active).
+	/// Group Head Controller info bitmask: `0x1` LED controller present,
+	/// `0x2` touch controller present, `0x4` active (reaprime
+	/// `de1.models.dart` `ghcInfo`; pyDE1 `c_api.py`). de1app treats any
+	/// value outside `{0, 1, 2, 4}` as "start at the group head only".
 	@SerialName("GhcInfo")
 	GhcInfo("GhcInfo"),
 	/// Tank desired water-temperature threshold, °C.
@@ -4375,7 +4474,7 @@ sealed class ProfileUploadFailure {
 	@Serializable
 	@SerialName("Empty")
 	object Empty: ProfileUploadFailure()
-	/// The profile had more than 32 steps.
+	/// The profile had more than 20 steps (the DE1 frame limit).
 	@Serializable
 	@SerialName("TooManySteps")
 	data class TooManySteps(val details: ProfileUploadFailureTooManyStepsInner): ProfileUploadFailure()
@@ -4384,6 +4483,14 @@ sealed class ProfileUploadFailure {
 	@Serializable
 	@SerialName("UnexpectedAck")
 	data class UnexpectedAck(val details: ProfileUploadFailureUnexpectedAckInner): ProfileUploadFailure()
+	/// A frame ack arrived before the shell confirmed the header write, or
+	/// the header confirmation never arrived within
+	/// [`PROFILE_UPLOAD_ACK_TIMEOUT`](crate::PROFILE_UPLOAD_ACK_TIMEOUT).
+	/// The header write failed, so the DE1 may hold the previous profile's
+	/// frame count.
+	@Serializable
+	@SerialName("HeaderNotAcked")
+	object HeaderNotAcked: ProfileUploadFailure()
 	/// No ack arrived within
 	/// [`PROFILE_UPLOAD_ACK_TIMEOUT`](crate::PROFILE_UPLOAD_ACK_TIMEOUT) of
 	/// the most recent ack (or upload start, for the first ack).

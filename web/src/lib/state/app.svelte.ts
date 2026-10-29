@@ -58,7 +58,8 @@ import type { AppRuntime } from '#lib/effect/runtime.js';
 import { runtimePromise } from '#lib/effect/bridge.js';
 import { UploadQueue } from '#lib/services/upload-queue.js';
 import { Webhooks } from '#lib/services/webhooks.js';
-import { ProfileSync } from '#lib/services/profile-sync.js';
+import { ProfileSync, profileWriteAck } from '#lib/services/profile-sync.js';
+import { CalibrationRefusedError, calibrationRefusalIn } from '#lib/calibration/refusal.js';
 import { replayCaptureProgram } from '#lib/services/replay.js';
 import {
 	CremaUiState,
@@ -827,11 +828,28 @@ export class CremaApp {
 				}
 			}
 			if (event.type === 'ProfileUploadFailed') {
-				// The DE1 still runs whatever it had before the failed upload, so
-				// the cached fingerprint is unchanged — `ProfileSync.failed`
+				// What the DE1 holds after a failed upload is unknown: frames
+				// are indexed slot writes with no commit step, so an
+				// interrupted upload can leave the new header's frame count
+				// over a mix of new and old frames (Decenza aa8232e6). Forget
+				// the "already loaded" fingerprint (snapshot + localStorage)
+				// so no later sync skips the upload. `ProfileSync.failed`
 				// resolves the waiter `false` and clears the pending entry so
 				// `syncActiveProfile` surfaces the problem to its caller (T-21).
 				this.runtime?.runSync(ProfileSync.pipe(Effect.flatMap((ps) => ps.failed)));
+				if (this.state.current.activeProfileFingerprint !== null) {
+					this.state.patch({ activeProfileFingerprint: null });
+				}
+				writeJson(LAST_FINGERPRINT_KEY, null);
+			}
+			if (event.type === 'ProfileReuploadNeeded') {
+				// The core saw the machine Idle with an unknown profile after
+				// a failed upload — put the active profile back now, so a
+				// group-head start can't brew the mix (Decenza ReArm).
+				if (this.state.current.de1State === 'ready' && !(this.firmware?.holdsLink ?? false)) {
+					this.state.log('Profile on the DE1 is unknown after a failed upload — re-uploading.');
+					this.ensureLoadedMatches();
+				}
 			}
 			if (
 				event.type === 'WaterSessionStarted' &&
@@ -1075,11 +1093,12 @@ export class CremaApp {
 					break;
 				}
 				if (isStopWrite) this.#stopWriteInFlight = true;
+				let delivered = false;
 				try {
 					const data = new Uint8Array(command.content.data);
 					const hex = [...data].map((b) => b.toString(16).padStart(2, '0')).join('');
 					this.state.log(`→ DE1 write ${command.content.target} ${hex}`);
-					await this.de1.writeCharacteristic(command.content.target, data);
+					delivered = await this.de1.writeCharacteristic(command.content.target, data);
 				} finally {
 					if (isStopWrite) this.#stopWriteInFlight = false;
 				}
@@ -1092,13 +1111,15 @@ export class CremaApp {
 				//
 				// To keep the core's per-frame upload state machine the
 				// canonical source of truth without a phantom notification
-				// stream, synthesize a De1FrameAck from the data we just
-				// successfully wrote — byte 0 (FrameToWrite) is all the
-				// core matches on. Profile-header writes are not acked by
-				// the orchestrator, so they're skipped here.
-				if (command.content.target === 'De1ProfileFrame') {
+				// stream, synthesize a De1HeaderAck / De1FrameAck from the
+				// data we just wrote — but ONLY when the write succeeded.
+				// A failed header or frame write gets no ack, so the core
+				// fails the upload rather than report a half-written
+				// profile as loaded (cohort review 02 P0-2).
+				const ack = profileWriteAck(command.content.target, delivered);
+				if (ack !== null) {
 					const ackOut = await this.core.onNotification(
-						'De1FrameAck',
+						ack,
 						new Uint8Array(command.content.data),
 						performance.now()
 					);
@@ -2146,7 +2167,12 @@ export class CremaApp {
 		reported: number,
 		measured: number
 	): Promise<void> {
-		this.applyCoreOutput(await this.core.writeCalibration(sensor, reported, measured));
+		const out = await this.core.writeCalibration(sensor, reported, measured);
+		this.applyCoreOutput(out);
+		// The core's guard (Sleep / Idle only, finite in-band values) refused
+		// it: nothing was written, so say why instead of re-reading.
+		const refusal = calibrationRefusalIn(out);
+		if (refusal !== null) throw new CalibrationRefusedError(refusal);
 		await this.readCalibration(sensor, false);
 	}
 
@@ -2157,7 +2183,10 @@ export class CremaApp {
 	 * brought up to date).
 	 */
 	async resetCalibrationToFactory(sensor: import('#lib/core/index.js').CalTarget): Promise<void> {
-		this.applyCoreOutput(await this.core.resetCalibrationToFactory(sensor));
+		const out = await this.core.resetCalibrationToFactory(sensor);
+		this.applyCoreOutput(out);
+		const refusal = calibrationRefusalIn(out);
+		if (refusal !== null) throw new CalibrationRefusedError(refusal);
 		await this.readCalibration(sensor, false);
 		await this.readCalibration(sensor, true);
 	}

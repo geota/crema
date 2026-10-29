@@ -27,8 +27,9 @@ use crate::profile::{
     TempSensor, Transition,
 };
 
-/// The DE1 frame-index limit; a profile may hold at most this many steps.
-const MAX_STEPS: usize = 32;
+/// The DE1's frame limit (de1app, pyDE1): a profile may hold at most this
+/// many steps. Longer imports are rejected, never truncated.
+const MAX_STEPS: usize = crate::profile_bounds::MAX_PROFILE_STEPS as usize;
 
 // ---------------------------------------------------------------------------
 // v2 JSON import
@@ -192,7 +193,8 @@ where
 ///
 /// - [`ImportError::Json`] if `json` is not valid v2 JSON.
 /// - [`ImportError::NoSteps`] if the profile has no steps.
-/// - [`ImportError::TooManySteps`] if it has more than 32.
+/// - [`ImportError::TooManySteps`] if it has more than 20 (the DE1's frame
+///   limit; never truncated).
 pub fn import_v2_json(json: &str) -> Result<Profile, ImportError> {
     let raw: V2Profile =
         serde_json::from_str(json).map_err(|e| ImportError::Json(e.to_string()))?;
@@ -478,7 +480,8 @@ fn legacy_beverage_type(raw: &str) -> BeverageType {
 ///
 /// - [`ImportError::Tcl`] if `tcl` is not a well-formed Tcl dictionary.
 /// - [`ImportError::NoSteps`] if the resulting profile has no steps.
-/// - [`ImportError::TooManySteps`] if it has more than 32.
+/// - [`ImportError::TooManySteps`] if it has more than 20 (the DE1's frame
+///   limit; never truncated).
 pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
     let dict = TclDict::parse_profile(tcl)?;
 
@@ -796,17 +799,20 @@ fn pressure_to_advanced_list(dict: &TclDict) -> (Vec<ProfileStep>, u16) {
     }
 
     // The hold (rise-and-hold) stage. A hold longer than 3 s is preceded by a
-    // 3-second un-limited forced rise; that 3 s is then subtracted.
+    // 3-second forced rise; that 3 s is then subtracted. The rise carries the
+    // profile's flow limit like the hold and decline (de1app fdd091f, Decenza
+    // 0dbcc442): it was "forced rise", which let a high-flow
+    // machine push unlimited flow during the rise.
     let mut hold_time = dict.get_f32("espresso_hold_time").unwrap_or(0.0);
     if hold_time > 0.0 {
         if hold_time > 3.0 {
             steps.push(pressure_frame(
-                "forced rise without limit",
+                "forced rise",
                 temps.hold,
                 pressure,
                 3.0,
                 Transition::Fast,
-                None,
+                max_flow,
             ));
             count += 1;
             hold_time -= 3.0;
@@ -827,12 +833,12 @@ fn pressure_to_advanced_list(dict: &TclDict) -> (Vec<ProfileStep>, u16) {
     if decline_time > 0.0 {
         if hold_time < 3.0 && decline_time > 3.0 {
             steps.push(pressure_frame(
-                "forced rise without limit",
+                "forced rise",
                 temps.decline,
                 pressure,
                 3.0,
                 Transition::Fast,
-                None,
+                max_flow,
             ));
             count += 1;
             decline_time -= 3.0;
@@ -1476,6 +1482,29 @@ mod tests {
         ]
     }"#;
 
+    /// `V2_ADVANCED` with its "pour" step repeated so it has `count` steps.
+    fn v2_with_steps(count: usize) -> String {
+        let mut v: serde_json::Value = serde_json::from_str(V2_ADVANCED).unwrap();
+        let pour = v["steps"][1].clone();
+        let steps = v["steps"].as_array_mut().unwrap();
+        steps.truncate(1);
+        while steps.len() < count {
+            steps.push(pour.clone());
+        }
+        v.to_string()
+    }
+
+    #[test]
+    fn v2_json_accepts_20_steps_and_rejects_21() {
+        // The DE1 runs at most 20 frames (de1app, pyDE1); a longer import is
+        // rejected, never truncated (cohort review 02 P1-1).
+        assert_eq!(import_v2_json(&v2_with_steps(20)).unwrap().steps.len(), 20);
+        assert!(matches!(
+            import_v2_json(&v2_with_steps(21)),
+            Err(ImportError::TooManySteps { count: 21 })
+        ));
+    }
+
     #[test]
     fn v2_json_maps_title_and_notes() {
         let p = import_v2_json(V2_ADVANCED).unwrap();
@@ -1959,7 +1988,7 @@ final_desired_shot_volume 0
         assert_eq!(p.steps[0].name, "preinfusion");
         assert_eq!(p.steps[0].pump, Pump::Flow);
         assert_eq!(p.steps[0].duration_seconds, 20.0);
-        assert_eq!(p.steps[1].name, "forced rise without limit");
+        assert_eq!(p.steps[1].name, "forced rise");
         assert_eq!(p.steps[2].name, "rise and hold");
         // 10 s hold minus the 3 s forced-rise prelude.
         assert_eq!(p.steps[2].duration_seconds, 7.0);
@@ -2037,17 +2066,14 @@ maximum_flow 2.5
 maximum_flow_range_default 1.0
 "#;
         let p = import_legacy_tcl(tcl).unwrap();
-        // The "rise and hold" frame carries the limiter; the forced rise does not.
+        // The "rise and hold" frame and, since de1app fdd091f, the forced rise
+        // carry the limiter (report 08 S1).
         let hold = p.steps.iter().find(|s| s.name == "rise and hold").unwrap();
         let limiter = hold.limiter.unwrap();
         assert_eq!(limiter.value, 2.5);
         assert_eq!(limiter.range, 1.0);
-        let forced = p
-            .steps
-            .iter()
-            .find(|s| s.name == "forced rise without limit")
-            .unwrap();
-        assert!(forced.limiter.is_none());
+        let forced = p.steps.iter().find(|s| s.name == "forced rise").unwrap();
+        assert_eq!(forced.limiter, Some(limiter));
     }
 
     // -- simple flow -> advanced conversion -------------------------------
@@ -2190,9 +2216,9 @@ espresso_decline_time 20
             [
                 "preinfusion temp boost",
                 "preinfusion",
-                "forced rise without limit",
+                "forced rise",
                 "rise and hold",
-                "forced rise without limit",
+                "forced rise",
                 "decline",
             ]
         );
@@ -2242,12 +2268,7 @@ espresso_decline_time 20
         let names: Vec<&str> = p.steps.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
             names,
-            [
-                "preinfusion",
-                "forced rise without limit",
-                "rise and hold",
-                "decline"
-            ]
+            ["preinfusion", "forced rise", "rise and hold", "decline"]
         );
         assert_eq!(p.preinfuse_step_count, 2);
     }
@@ -2261,7 +2282,7 @@ espresso_decline_time 20
         );
         let p = import_legacy_tcl(&tcl).unwrap();
         let names: Vec<&str> = p.steps.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["forced rise without limit", "decline"]);
+        assert_eq!(names, ["forced rise", "decline"]);
         assert_eq!(p.preinfuse_step_count, 1);
     }
 

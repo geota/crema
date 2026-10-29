@@ -1851,6 +1851,21 @@ export type Event =
 	measured: number;
 }}
 	/**
+	 * A calibration write or factory reset was refused — by the core's
+	 * guards before anything reached the wire, or by the DE1's own error
+	 * reply ([`CalibrationRefusal::FirmwareRejected`](crate::CalibrationRefusal::FirmwareRejected)).
+	 * See [`calibration_guard`](crate::calibration_guard).
+	 */
+	| { type: "CalibrationRefused", content: {
+	/**
+	 * The sensor the refused request targeted; `None` for the
+	 * firmware's error reply, which does not say.
+	 */
+	target?: CalTarget;
+	/** Why it was refused. */
+	reason: CalibrationRefusal;
+}}
+	/**
 	 * A write was refused because a firmware upload is locking out other
 	 * writes. v1 carries the lockout guard as a stub
 	 * ([`firmware_locks_writes`](crate::CremaCore::firmware_locks_writes))
@@ -1910,9 +1925,8 @@ export type Event =
 	group_temp: number;
 }}
 	/**
-	 * A profile upload has begun. Carries the total number of acks the
-	 * orchestrator expects (frames + extensions + tail; the header is
-	 * not acked separately).
+	 * A profile upload has begun. Carries the frame counts the orchestrator
+	 * expects acks for (the header ack, then frames + extensions + tail).
 	 */
 	| { type: "ProfileUploadStarted", content: {
 	/**
@@ -1956,11 +1970,31 @@ export type Event =
 	/**
 	 * The profile upload failed. The core has discarded its in-progress
 	 * state; the shell may retry by calling `upload_profile` again.
+	 * 
+	 * Once the header was dispatched, what the DE1 holds is **unknown**:
+	 * frames are indexed slot writes with no commit step, so an interrupted
+	 * upload can leave the new header's frame count over a mix of new and
+	 * old frames (Decenza `aa8232e6`). The shell must forget any "the DE1
+	 * holds profile X" cache on this event; the core asks for a re-upload
+	 * with [`ProfileReuploadNeeded`](Self::ProfileReuploadNeeded) once the
+	 * machine is Idle.
 	 */
 	| { type: "ProfileUploadFailed", content: {
 	/** Why the upload failed. */
 	reason: ProfileUploadFailure;
 }}
+	/**
+	 * The DE1's loaded profile is unknown after a failed upload and the
+	 * machine is Idle, so the shell should upload the active profile now.
+	 * Emitted when a failure lands while the machine is Idle, or on the
+	 * next transition into Idle (after the flow that interrupted the
+	 * upload, never during it). Bounded to
+	 * [`MAX_PROFILE_REUPLOAD_REQUESTS`](crate::MAX_PROFILE_REUPLOAD_REQUESTS)
+	 * consecutive requests until an upload completes; cleared by a
+	 * completed upload or a reset (the reconnect path owns the re-upload).
+	 * Decenza's `ReArm` follow-up (`aa8232e6`).
+	 */
+	| { type: "ProfileReuploadNeeded", content?: undefined }
 	/** An incoming notification could not be decoded. */
 	| { type: "DecodeError", content: {
 	/** Human-readable description of the failure. */
@@ -2562,6 +2596,14 @@ export interface FlashStatus {
 	 * interrupted one): the shells persist it so a restart keeps the lock.
 	 */
 	eraseHoldMsLeft?: number;
+	/**
+	 * While verifying: how long until [`VERIFY_TIMEOUT_MS`] after the verify
+	 * request, i.e. how long the DE1 may still be checking the image. The
+	 * shells persist it so a page reload or process restart inside the
+	 * window comes back as "still verifying, don't switch it off" rather
+	 * than as the power-cycle step ([`FirmwareFlash::restore_verifying`]).
+	 */
+	verifyHoldMsLeft?: number;
 }
 
 /**
@@ -3890,6 +3932,34 @@ export enum CalTarget {
 	Temperature = "Temperature",
 }
 
+/** Why a calibration write or reset was refused. */
+export type CalibrationRefusal = 
+	/** A value was NaN or infinite. */
+	| { kind: "NonFinite", details?: undefined }
+	/** The reported value encodes as zero on a ratio sensor (flow, pressure). */
+	| { kind: "ZeroReported", details?: undefined }
+	/** A value fell outside the sensor's band. */
+	| { kind: "OutOfRange", details: {
+	/** The rejected value. */
+	value: number;
+	/** Band minimum. */
+	min: number;
+	/** Band maximum. */
+	max: number;
+}}
+	/** The machine is not in Sleep or Idle. */
+	| { kind: "MachineNotIdle", details: {
+	/** The state the machine last reported. */
+	state: MachineState;
+}}
+	/** No machine state has been reported yet (fail closed). */
+	| { kind: "MachineStateUnknown", details?: undefined }
+	/**
+	 * The DE1 answered the request with its calibration error reply
+	 * (target byte 255).
+	 */
+	| { kind: "FirmwareRejected", details?: undefined };
+
 /**
  * The direction of an exit comparison. Lowercase wire spelling
  * (`"over"` / `"under"`) per the v2 contract.
@@ -4156,6 +4226,13 @@ export enum MachineState {
 	AirPurge = "AirPurge",
 	/** Scheduled-wake idle; firmware v1293 and later only. */
 	SchedIdle = "SchedIdle",
+	/**
+	 * Firmware-upgrade mode, `0x16` (de1app `machine.tcl` `22 FWUpgrade`;
+	 * reaprime `fwUpgrade(0x16)`, `3ab190b6`). Requested by reaprime's
+	 * Bengle flash path; decoded so a machine reporting it does not freeze
+	 * the state display behind a decode error.
+	 */
+	FwUpgrade = "FwUpgrade",
 }
 
 /**
@@ -4205,7 +4282,12 @@ export enum MmrRegister {
 	MachineModel = "MachineModel",
 	/** Firmware build number. */
 	FirmwareVersion = "FirmwareVersion",
-	/** Group Head Controller info bitmask (bit 0: present, bit 1: active). */
+	/**
+	 * Group Head Controller info bitmask: `0x1` LED controller present,
+	 * `0x2` touch controller present, `0x4` active (reaprime
+	 * `de1.models.dart` `ghcInfo`; pyDE1 `c_api.py`). de1app treats any
+	 * value outside `{0, 1, 2, 4}` as "start at the group head only".
+	 */
 	GhcInfo = "GhcInfo",
 	/** Tank desired water-temperature threshold, °C. */
 	TankTempThreshold = "TankTempThreshold",
@@ -4294,7 +4376,7 @@ export enum MmrRegister {
 export type ProfileUploadFailure = 
 	/** The profile had no steps. */
 	| { kind: "Empty", details?: undefined }
-	/** The profile had more than 32 steps. */
+	/** The profile had more than 20 steps (the DE1 frame limit). */
 	| { kind: "TooManySteps", details: {
 	/** How many steps the rejected profile had. */
 	count: number;
@@ -4312,6 +4394,14 @@ export type ProfileUploadFailure =
 	/** The `FrameToWrite` byte the ack actually carried. */
 	got: number;
 }}
+	/**
+	 * A frame ack arrived before the shell confirmed the header write, or
+	 * the header confirmation never arrived within
+	 * [`PROFILE_UPLOAD_ACK_TIMEOUT`](crate::PROFILE_UPLOAD_ACK_TIMEOUT).
+	 * The header write failed, so the DE1 may hold the previous profile's
+	 * frame count.
+	 */
+	| { kind: "HeaderNotAcked", details?: undefined }
 	/**
 	 * No ack arrived within
 	 * [`PROFILE_UPLOAD_ACK_TIMEOUT`](crate::PROFILE_UPLOAD_ACK_TIMEOUT) of

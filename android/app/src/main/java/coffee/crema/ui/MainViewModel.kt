@@ -5388,7 +5388,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         output.events.forEach(::applyEvent)
-        output.commands.forEach(::executeCommand)
+        // DE1 writes of one output go out IN ORDER on one coroutine (cohort
+        // review 02 P2-2): a write retried after a failure must not land
+        // after the writes that followed it — an Idle bounce retried behind
+        // its Espresso would stop the shot that just started, and a retried
+        // profile frame would arrive out of order. Scale writes are another
+        // device and keep their own coroutines.
+        val de1Writes = output.commands.filterIsInstance<Command.WriteCharacteristic>()
+        output.commands.filterIsInstance<Command.WriteScale>().forEach(::executeCommand)
+        if (de1Writes.isNotEmpty()) executeDe1Writes(de1Writes)
     }
 
     /**
@@ -5422,56 +5430,74 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             }
-            is Command.WriteCharacteristic -> {
-                // The core hands the exact bytes + which DE1 characteristic to
-                // write them to. The BLE manager maps the target to a UUID and
-                // writes; a profile-frame write also gets a synthesized
-                // De1FrameAck. This is the machine-control path (AND5).
-                val bytes = command.content.data
-                    .map { it.toByte() }
-                    .toByteArray()
-                // A machine-state write during a shot IS the stop (issue #15) —
-                // time it, so a field log shows exactly how long the stop took
-                // to reach the machine (queue contention, retries, a wedged
-                // link all show up here as milliseconds).
-                val stopWrite = command.content.target == WriteTarget.De1RequestedState &&
-                    _ui.value.shotInProgress
-                // Coalesce stop writes: if one is already queued/waiting, a
-                // second copy of the same Idle byte buys nothing — and every
-                // extra copy is a stale-write risk after the machine stops.
-                if (stopWrite && pendingStopWrite.get()?.isActive == true) {
-                    appendLog("Stop write already in flight — not stacking another")
-                    return
-                }
-                val queuedAt = if (stopWrite) SystemClock.elapsedRealtime() else 0L
-                // Same guard: a failed machine write (e.g. the keep-alive poke as
-                // the DE1 drops) must not become an uncaught crash.
-                val job = viewModelScope.launch {
-                    try {
-                        // Stop writes ride the urgent lane (issue #15): they
-                        // preempt any in-flight non-critical GATT op instead
-                        // of queuing behind it on the global op mutex.
-                        ble.writeCharacteristic(command.content.target, bytes, urgent = stopWrite)
-                        if (stopWrite) {
-                            appendLog("Stop write delivered in ${SystemClock.elapsedRealtime() - queuedAt} ms")
-                        }
-                    } catch (ce: kotlinx.coroutines.CancellationException) {
-                        throw ce
-                    } catch (e: Exception) {
-                        appendLog(
-                            if (stopWrite) {
-                                "STOP WRITE FAILED after ${SystemClock.elapsedRealtime() - queuedAt} ms: ${e.message}"
-                            } else {
-                                "DE1 write failed (${command.content.target}): ${e.message}"
-                            },
-                        )
-                    }
-                }
-                if (stopWrite) {
-                    pendingStopWrite.set(job)
-                    job.invokeOnCompletion { pendingStopWrite.compareAndSet(job, null) }
-                }
+            is Command.WriteCharacteristic -> executeDe1Writes(listOf(command))
+        }
+    }
+
+    /**
+     * Write [writes] (the DE1 commands of ONE `CoreOutput`) in order on a single
+     * coroutine — each waits for the previous, including its one retry — so a
+     * retry can never reorder them (cohort review 02 P2-2; reaprime awaits
+     * each write in sequence, de1app runs one FIFO). A failed write is logged
+     * and the rest still go out, as before. The BLE manager maps each target
+     * to a UUID and writes; a profile header / frame write also gets its
+     * synthesized ack. This is the machine-control path (AND5).
+     */
+    private fun executeDe1Writes(writes: List<Command.WriteCharacteristic>) {
+        // A machine-state write during a shot IS the stop (issue #15).
+        val shotRunning = _ui.value.shotInProgress
+        fun isStop(c: Command.WriteCharacteristic) =
+            c.content.target == WriteTarget.De1RequestedState && shotRunning
+        // Coalesce stop writes: if one is already queued/waiting, a second
+        // copy of the same Idle byte buys nothing — and every extra copy is a
+        // stale-write risk after the machine stops.
+        val batch = writes.filter { c ->
+            if (isStop(c) && pendingStopWrite.get()?.isActive == true) {
+                appendLog("Stop write already in flight — not stacking another")
+                false
+            } else {
+                true
             }
+        }
+        if (batch.isEmpty()) return
+        val job = viewModelScope.launch {
+            executeInOrder(batch) { c -> deliverDe1Write(c, stopWrite = isStop(c)) }
+        }
+        if (batch.any(::isStop)) {
+            pendingStopWrite.set(job)
+            job.invokeOnCompletion { pendingStopWrite.compareAndSet(job, null) }
+        }
+    }
+
+    /** One DE1 write from [executeDe1Writes]; failures are logged, never thrown. */
+    private suspend fun deliverDe1Write(command: Command.WriteCharacteristic, stopWrite: Boolean) {
+        val bytes = command.content.data
+            .map { it.toByte() }
+            .toByteArray()
+        // Time a stop write, so a field log shows exactly how long the stop
+        // took to reach the machine (queue contention, retries, a wedged link
+        // all show up here as milliseconds).
+        val queuedAt = if (stopWrite) SystemClock.elapsedRealtime() else 0L
+        // A failed machine write (e.g. the keep-alive poke as the DE1 drops)
+        // must not become an uncaught crash.
+        try {
+            // Stop writes ride the urgent lane (issue #15): they preempt any
+            // in-flight non-critical GATT op instead of queuing behind it on
+            // the global op mutex.
+            ble.writeCharacteristic(command.content.target, bytes, urgent = stopWrite)
+            if (stopWrite) {
+                appendLog("Stop write delivered in ${SystemClock.elapsedRealtime() - queuedAt} ms")
+            }
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            appendLog(
+                if (stopWrite) {
+                    "STOP WRITE FAILED after ${SystemClock.elapsedRealtime() - queuedAt} ms: ${e.message}"
+                } else {
+                    "DE1 write failed (${command.content.target}): ${e.message}"
+                },
+            )
         }
     }
 
@@ -6085,8 +6111,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.ProfileUploadFailed -> {
                 pendingBrew = false
                 pendingUploadFingerprint = null
+                // What the DE1 holds after a failed upload is unknown: frames
+                // are slot writes with no commit step, so an interrupted upload
+                // can leave the new header's frame count over a mix of new and
+                // old frames (Decenza aa8232e6). Never skip the next upload.
+                lastUploadedFingerprint = null
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 appendLog("Profile upload failed: ${event.content.reason}")
+            }
+            is Event.ProfileReuploadNeeded -> {
+                // The core saw the machine Idle with an unknown profile after a
+                // failed upload: put the active profile back now, so a
+                // group-head start can't brew the mix (Decenza ReArm).
+                appendLog("Profile on the DE1 is unknown after a failed upload — re-uploading")
+                reuploadActiveProfile()
             }
             // Shot-settings-read events surface in the real screens (M5), not this
             // Phase-0 debug readout. An explicit else keeps the sealed `when`
@@ -6200,6 +6238,15 @@ internal fun pushActiveProfile(
     }
     runCatching { setActiveProfile(wire) }
         .onFailure { log("Push active profile failed: ${it.message}") }
+}
+
+/**
+ * Run [write] for each of [items] strictly one after another — the next starts
+ * only when the previous returned (its retry included). The DE1 write lane of
+ * one `CoreOutput` (cohort review 02 P2-2). Top-level for JUnit.
+ */
+internal suspend fun <T> executeInOrder(items: List<T>, write: suspend (T) -> Unit) {
+    for (item in items) write(item)
 }
 
 /**

@@ -10,6 +10,7 @@
 //! [`Command`]s in a [`CoreOutput`] envelope. It is sans-IO and holds no clock
 //! — every notification carries a monotonic `now_ms` from the shell.
 
+pub mod calibration_guard;
 mod capture;
 pub mod de1_uuids;
 pub mod error;
@@ -24,6 +25,7 @@ mod maintenance_run;
 mod scale_robustness_tests;
 mod sweep;
 
+pub use calibration_guard::CalibrationRefusal;
 pub use de1_domain::{FirmwareBuildReport, FirmwareBuildStatus};
 pub use de1_uuids::{
     De1Uuids, de1_uuids, de1_uuids_json, de1_write_target_uuid, de1_write_target_uuid_by_name,
@@ -39,6 +41,7 @@ use capture::{CaptureRecorder, slice_to_jsonl};
 
 use std::time::Duration;
 
+use de1_domain::connect_sweep::MAX_TANK_TEMP_C;
 use de1_domain::saw_learning::{SawLearningModel, SawModelLoad};
 use de1_domain::{
     AUTO_TARE_HOLDOFF_MS, AUTO_TARE_THRESHOLD_G, AutoStop, BeverageType, BrewRecipe,
@@ -51,8 +54,8 @@ use de1_domain::{
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
-    ShotHeader, ShotSample, ShotSettings, StateInfo, SubState, Version, WaterLevels, mmr, profile,
-    requested_state,
+    SHOT_HEADER_LEN, ShotHeader, ShotSample, ShotSettings, StateInfo, SubState, Version,
+    WaterLevels, mmr, profile, requested_state,
 };
 
 /// Maximum gap between profile-upload acks before the orchestrator fails the
@@ -62,6 +65,16 @@ use de1_protocol::{
 /// A 5-second margin is ~100× the typical real-DE1 round-trip and clears
 /// Web Bluetooth's worst-case back-pressure window.
 pub const PROFILE_UPLOAD_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Consecutive [`Event::ProfileReuploadNeeded`] requests the core makes after
+/// failed uploads before it waits for the shell to upload on its own (the
+/// next shot start or reconnect). Reset by a completed upload. Bounds a link
+/// that fails every upload to a few attempts, like Decenza's capped retry.
+pub const MAX_PROFILE_REUPLOAD_REQUESTS: u8 = 3;
+
+/// The steam timeout sent in place of 0 (de1app `binary.tcl`: 0 means "stop
+/// steam immediately", so it sends the U8P0 maximum).
+const STEAM_TIMEOUT_MAX_S: f32 = 255.0;
 use de1_scale::decent_hds::HdsNegotiation;
 use de1_scale::{Scale, ScaleCapabilities, ScaleConfigUpdate, ScaleUuids, TimerCommand};
 #[cfg(test)]
@@ -617,6 +630,14 @@ pub struct CremaCore {
     /// "active profile on the DE1" identity the brew page surfaces. `None`
     /// at cold start; cleared by [`reset`](Self::reset) on disconnect.
     last_active_profile_title: Option<String>,
+    /// What the DE1 holds is unknown after a failed upload, and no
+    /// [`Event::ProfileReuploadNeeded`] has been sent for it yet. Set on every
+    /// [`Event::ProfileUploadFailed`]; cleared by a completed upload, by the
+    /// request itself, and by [`reset`](Self::reset).
+    profile_reupload_pending: bool,
+    /// Consecutive [`Event::ProfileReuploadNeeded`] requests since the last
+    /// completed upload — capped at [`MAX_PROFILE_REUPLOAD_REQUESTS`].
+    profile_reupload_requests: u8,
     /// Per-step weight exits of the active profile (issue 11): sends
     /// `SkipToNext` when the projected weight reaches the current frame's
     /// step `weight`. Follows the ACTIVE profile: set by
@@ -842,9 +863,17 @@ struct ProfileUpload {
     /// The uploaded profile's step-weight arbiter; latched into
     /// [`step_weight`](CremaCore::step_weight) on success.
     step_weight: StepWeightExit,
-    /// The full sequence of `FrameToWrite` bytes the orchestrator expects,
-    /// in upload order: `[0, 1, …, frame_count-1, 32+ext0, 32+ext1, …,
-    /// frame_count]`. The header is not acked separately.
+    /// The tank-temperature threshold to write once the tail is acked, °C
+    /// (`None` = no write). See [`CremaCore::upload_profile`].
+    tank_temp_c: Option<u8>,
+    /// The header packet as written; the shell's
+    /// [`Source::De1HeaderAck`] must echo it before any frame ack counts.
+    header: [u8; SHOT_HEADER_LEN],
+    /// Whether the shell has confirmed the header write.
+    header_acked: bool,
+    /// The full sequence of `FrameToWrite` bytes the orchestrator expects
+    /// after the header ack, in upload order: `[0, 1, …, frame_count-1,
+    /// 32+ext0, 32+ext1, …, frame_count]`.
     expected_acks: Vec<u8>,
     /// Index into [`expected_acks`](Self::expected_acks) of the next ack
     /// the orchestrator is waiting for. Starts at `0`; on the final ack,
@@ -906,6 +935,8 @@ impl CremaCore {
             scale_config_queried: false,
             profile_upload: None,
             last_active_profile_title: None,
+            profile_reupload_pending: false,
+            profile_reupload_requests: 0,
             step_weight: StepWeightExit::default(),
             active_beverage_type: BeverageType::default(),
             last_profile_header: None,
@@ -1289,13 +1320,22 @@ impl CremaCore {
     /// [`MachineState::Espresso`] to start a shot, [`MachineState::Idle`] to
     /// stop one or wake from sleep.
     ///
-    /// Flow-mode starts (Espresso / Steam / HotWater / HotWaterRinse) get the
-    /// start-operation interlock the reference apps use (Decenza
-    /// `de1device.cpp:796-830`; de1app writes the same GHC mode before
-    /// starts): first `GhcMode = 1` so a GHC-equipped machine accepts
-    /// app-initiated starts, then an `Idle` bounce when the machine isn't
-    /// known to be Idle — the firmware accepts flow-state requests reliably
-    /// only from Idle. Plain Idle / Sleep requests stay a single write.
+    /// Flow-mode starts (Espresso / Steam / HotWater / HotWaterRinse) get an
+    /// `Idle` bounce first when the machine isn't known to be Idle — the
+    /// firmware accepts flow-state requests reliably only from Idle (de1app
+    /// `go_idle_before_all_operations`, Decenza `startEspresso`). Plain Idle /
+    /// Sleep requests stay a single write.
+    ///
+    /// No `GhcMode` (MMR `0x803820`) write precedes a start. de1app's
+    /// `start_espresso` / `start_steam` / `start_water` / `start_flush` send
+    /// only the state request and nothing calls its `set_ghc_mode`; reaprime
+    /// never models the register; pyDE1 keeps it out of its writable set as
+    /// "not fully implemented" and notes that touching it froze firmware ≤ 1260.
+    /// Decenza's per-start write was an experiment while debugging a machine
+    /// that refused app starts (`docs/headless-mode-investigation.md`), and its
+    /// log shows the machine still refused afterwards. A GHC-required machine
+    /// refuses app starts by design (UL compliance; de1app shows READY, not
+    /// START), so the write could only ever defeat that control or do nothing.
     ///
     /// Maintenance requests (Descale / Clean / AirPurge) on firmware that
     /// drops them while cold (< 1356, or unknown) go through the
@@ -1331,10 +1371,6 @@ impl CremaCore {
                 | MachineState::HotWaterRinse
         );
         if starting_flow {
-            // 4-byte write like every other MMR register (Decenza writes
-            // GHC_MODE as a full word too).
-            out.commands
-                .extend(mmr_write_command(MmrRegister::GhcMode, 1, 4).commands);
             let known_idle = self
                 .last_state
                 .is_some_and(|info| info.state == MachineState::Idle);
@@ -1421,11 +1457,19 @@ impl CremaCore {
 
     /// Write a new sensor calibration: the DE1 reported `reported` while
     /// the externally-measured true value was `measured`. The firmware
-    /// stores the pair as a `WriteKey 0xCAFEF00D` packet on `cuuid_12`
-    /// and from then on applies `measured / reported` as a multiplier on
-    /// that sensor. The caller is expected to follow up with
+    /// stores the pair as a `WriteKey 0xCAFEF00D` packet on `cuuid_12`. For
+    /// flow and pressure it applies `measured / reported` as a ratio; for
+    /// temperature the correction is an offset, `measured − reported` in °C
+    /// (pyDE1 `CalTargets`: flow and pressure "ratiometric", temperature
+    /// "differential, degrees C"). The caller is expected to follow up with
     /// [`read_calibration`](Self::read_calibration) to surface the value
     /// the DE1 now reports as current.
+    ///
+    /// Refused — one [`Event::CalibrationRefused`] and no command — unless
+    /// the machine is in Sleep or Idle and both values pass
+    /// [`calibration_guard::check_values`] (finite, a non-zero reported
+    /// value for flow / pressure, inside the sensor's band). See
+    /// [`calibration_guard`].
     ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
@@ -1435,6 +1479,15 @@ impl CremaCore {
             return out;
         }
         let mut out = CoreOutput::default();
+        let verdict = calibration_guard::check_state(self.last_state.map(|s| s.state))
+            .and_then(|()| calibration_guard::check_values(target, reported, measured));
+        if let Err(reason) = verdict {
+            out.events.push(Event::CalibrationRefused {
+                target: Some(target),
+                reason,
+            });
+            return out;
+        }
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1Calibration,
             data: Calibration::write(target, reported, measured)
@@ -1452,6 +1505,9 @@ impl CremaCore {
     /// [`read_factory_calibration`](Self::read_factory_calibration)) to
     /// confirm the in-use value.
     ///
+    /// Refused outside Sleep / Idle like a write — one
+    /// [`Event::CalibrationRefused`] and no command.
+    ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
     /// one [`Event::FirmwareLockoutHit`] and no command.
@@ -1460,6 +1516,13 @@ impl CremaCore {
             return out;
         }
         let mut out = CoreOutput::default();
+        if let Err(reason) = calibration_guard::check_state(self.last_state.map(|s| s.state)) {
+            out.events.push(Event::CalibrationRefused {
+                target: Some(target),
+                reason,
+            });
+            return out;
+        }
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1Calibration,
             data: Calibration::reset_to_factory(target).encode().to_vec(),
@@ -1500,9 +1563,9 @@ impl CremaCore {
     ///
     /// The `*_timeout_s` and `*_volume_ml` fields are not clamped here
     /// — they encode to a `u8` (capped at 255 in the protocol layer
-    /// via `u8p0_encode`) and a stale or zero value has no firmware-
-    /// damaging effect (`0` is interpreted as "use machine default"
-    /// per legacy `binary.tcl`).
+    /// via `u8p0_encode`). A steam timeout of 0 would stop steam at once,
+    /// so it goes out as 255 s, as de1app sends it (`binary.tcl`); the
+    /// retained settings keep the user's 0.
     pub fn set_steam_hotwater_settings(&mut self, settings: ShotSettings) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_steam_hotwater_settings") {
             return out;
@@ -1633,7 +1696,7 @@ impl CremaCore {
     /// Set the tank desired water-temperature threshold, in °C (legacy
     /// `set_tank_temperature_threshold` — the immediate value only; the
     /// legacy "preheat with 60 °C for 4 s" dance is a shell-side concern).
-    /// MMR `0x80380C`, 1-byte.
+    /// MMR `0x80380C`, 4-byte LE word.
     pub fn set_tank_threshold(&self, temp_c: u8) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_tank_threshold") {
             return out;
@@ -1691,7 +1754,11 @@ impl CremaCore {
     }
 
     /// Set the group-head-control mode (legacy `set_ghc_mode`). `mode` is the
-    /// raw mode id (`0`–`3`). MMR `0x803820`, 1-byte.
+    /// raw mode id (`0`–`3`). MMR `0x803820`, 4-byte LE word.
+    ///
+    /// An explicit user action only — nothing in the core writes this
+    /// register on its own (no reference app does; pyDE1 keeps it out of its
+    /// writable set). See [`request_machine_state`](Self::request_machine_state).
     pub fn set_ghc_mode(&self, mode: u8) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_ghc_mode") {
             return out;
@@ -1810,13 +1877,18 @@ impl CremaCore {
     /// `volts` **must** be `120` or `230` — any other value is rejected with
     /// [`AppError::InvalidArg`]. MMR `0x803834`, 4-byte little-endian.
     ///
-    /// The wire payload is `volts + 1000` — the firmware uses the `+1000`
-    /// offset as a "user-committed" marker (so `120` / `230` read back as
-    /// `1120` / `1230`); a raw value of `0` means the firmware has not yet
-    /// been told and is detecting from the heater dB. We never write `0`
-    /// ourselves — only `1120` or `1230`. See reaprime
-    /// `de1.models.dart:301 heaterV` ("Nominal Heater Voltage (0, 120V or
-    /// 230V). +1000 if it's a set value.").
+    /// The wire payload is the plain voltage, `120` or `230`, exactly as
+    /// de1app (`set_heater_voltage "120"` / `"230"`,
+    /// `skins/default/de1_skin_settings.tcl:2424-2425`, written verbatim by
+    /// `de1_comms.tcl:1666-1668`), reaprime (`setHeaterVoltage` writes
+    /// `De1HeaterVoltage.voltage`, `unified_de1.dart:827-830`) and Decenza
+    /// (`de1device.cpp` `setHeaterVoltage`) write it. The **firmware** adds
+    /// the `+1000` "user-committed" marker, so a value set this way reads
+    /// back as `1120` / `1230`; a raw `0` means the firmware has not been
+    /// told and is detecting from the heater dB. The read side
+    /// ([`heater_voltage_from_raw`]) therefore subtracts 1000 once. We never
+    /// write the `+1000` ourselves: a firmware that adds it again would store
+    /// `2120` / `2230`, which no reference decoder classifies.
     ///
     /// **Damaging if mis-set** — wrong voltage on the wrong mains can
     /// permanently damage the heater. The shell is responsible for the
@@ -1837,9 +1909,13 @@ impl CremaCore {
                 reason: "must be 120 or 230 V".to_owned(),
             });
         }
-        // +1000 user-committed marker; encoded as 4-byte LE on the wire.
-        let wire = u32::from(volts) + 1000;
-        Ok(mmr_write_command(MmrRegister::HeaterVoltage, wire, 4))
+        // Plain volts, 4-byte LE on the wire; the firmware adds the +1000
+        // user-committed marker itself (see the doc comment).
+        Ok(mmr_write_command(
+            MmrRegister::HeaterVoltage,
+            u32::from(volts),
+            4,
+        ))
     }
 
     /// Reset 8 machine settings to factory baseline (legacy reaprime
@@ -1941,9 +2017,13 @@ impl CremaCore {
     }
 
     /// Set the cup-warmer plate temperature, in °C (Bengle models only).
-    /// MMR `0x803874`, 2-byte. The bridge layer is responsible for gating
-    /// this on the model — the firmware accepts the write on any DE1, but it
-    /// is a no-op outside Bengles.
+    /// MMR `0x803874`, 4-byte LE word.
+    ///
+    /// Writes nothing unless the machine is known to be a Bengle
+    /// ([`is_bengle_model`](de1_protocol::is_bengle_model)): de1app's
+    /// `set_cupwarmer_temperature` returns early on any other model
+    /// (`de1_comms.tcl`), and the plate exists only on Bengles. The shells
+    /// hide the card on other machines too; this is the core's own guard.
     ///
     /// Clamped to 0..=80 °C — matches the web shell's
     /// `MachineSection.svelte` stepper (`min=0, max=80`); neither legacy
@@ -1963,6 +2043,12 @@ impl CremaCore {
     pub fn set_cup_warmer_temperature(&self, temp_c: u8) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_cup_warmer_temperature") {
             return out;
+        }
+        if !self
+            .de1_machine_model
+            .is_some_and(de1_protocol::is_bengle_model)
+        {
+            return CoreOutput::default();
         }
         // Range 0..=80 °C — matches shell stepper bounds.
         let clamped = temp_c.min(80);
@@ -2174,6 +2260,13 @@ impl CremaCore {
         }
         if self.scale.is_some() && settings.hot_water_volume_ml > 0.0 {
             settings.hot_water_volume_ml = HOT_WATER_STOP_ON_SCALE_ML;
+        }
+        // A steam timeout of 0 tells the DE1 to stop steam immediately, so
+        // de1app sends the maximum instead (`binary.tcl`: "a setting of zero
+        // would mean, turn off steam immediately, so we set it instead to the
+        // maximum allowed"). Wire-only, like the overrides above.
+        if settings.steam_timeout_s.is_nan() || settings.steam_timeout_s.round() < 1.0 {
+            settings.steam_timeout_s = STEAM_TIMEOUT_MAX_S;
         }
         settings
     }
@@ -2898,6 +2991,7 @@ impl CremaCore {
             Source::De1ShotSettings => self.handle_shot_settings_read(data, &mut out),
             Source::De1ProfileHeader => self.handle_profile_header_read(data, &mut out),
             Source::De1FrameAck => self.handle_profile_frame_ack(data, now, &mut out),
+            Source::De1HeaderAck => self.handle_profile_header_ack(data, now),
             Source::ScaleButton => {
                 if let Some(button) = self.scale.as_ref().and_then(|s| s.parse_button(data)) {
                     out.events.push(Event::ScaleButtonPressed { button });
@@ -2943,11 +3037,14 @@ impl CremaCore {
         if let Some(upload) = &self.profile_upload
             && now.saturating_sub(upload.last_progress) >= PROFILE_UPLOAD_ACK_TIMEOUT
         {
-            let awaiting = upload.expected_acks[upload.next_idx];
-            self.profile_upload = None;
-            out.events.push(Event::ProfileUploadFailed {
-                reason: ProfileUploadFailure::AckTimeout { awaiting },
-            });
+            let reason = if upload.header_acked {
+                ProfileUploadFailure::AckTimeout {
+                    awaiting: upload.expected_acks[upload.next_idx],
+                }
+            } else {
+                ProfileUploadFailure::HeaderNotAcked
+            };
+            self.fail_profile_upload(reason, &mut out);
         }
         self.update_machine_error(now, &mut out);
         self.update_maintenance(now, &mut out);
@@ -3220,6 +3317,12 @@ impl CremaCore {
                 state: info.state,
                 substate: info.substate,
             });
+            // A failed upload left the DE1's profile unknown: put it back
+            // once the machine is Idle again, after the flow that cut the
+            // upload short, never during it (Decenza `aa8232e6` ReArm).
+            if prev_state != Some(MachineState::Idle) && info.state == MachineState::Idle {
+                self.request_profile_reupload_if_idle(out);
+            }
             // Reactive scale auto-policy on state-entry. Capability-driven:
             // for each transition we ask the connected scale for the bytes
             // (via `lcd_enable_command` / `lcd_disable_command` /
@@ -3322,6 +3425,9 @@ impl CremaCore {
                 return;
             }
         };
+        // The mixed-frame skip deferral reads the live pressure / flow.
+        self.step_weight
+            .on_sensors(sample.group_pressure, sample.group_flow);
         for event in self.monitor.on_sample(&sample, now) {
             self.map_shot_event(event, now, out);
         }
@@ -4157,6 +4263,25 @@ impl CremaCore {
         self.flash_step(Vec::new(), now_ms)
     }
 
+    /// Bring back a flash whose verify window was still open when the shell
+    /// went away (reload / restart inside [`firmware_flash::VERIFY_TIMEOUT_MS`]
+    /// of the verify request), from the deadline the shell persisted: it
+    /// stays in Verifying until the window closes, then asks for the
+    /// power-cycle. A no-op when a flash already exists, `build` is not
+    /// pinned or the window is over. See [`FirmwareFlash::restore_verifying`].
+    pub fn firmware_flash_restore_verifying(
+        &mut self,
+        build: u32,
+        hold_ms_left: u64,
+        now_ms: u64,
+    ) -> FlashStep {
+        self.advance_clock(now_ms);
+        if self.firmware_flash.is_none() {
+            self.firmware_flash = FirmwareFlash::restore_verifying(build, hold_ms_left, now_ms);
+        }
+        self.flash_step(Vec::new(), now_ms)
+    }
+
     /// Bring back the lock of an erase that may still be running when the
     /// shell went away (tab closed or process killed during the erase or its
     /// hold), from the deadline the shell persisted. A no-op when a flash
@@ -4219,6 +4344,15 @@ impl CremaCore {
     /// `now` stamps the upload start so the ack-timeout watchdog can fire
     /// from [`on_tick`](Self::on_tick) after [`PROFILE_UPLOAD_ACK_TIMEOUT`].
     ///
+    /// When the tail is acked the output that carries
+    /// [`Event::ProfileUploadCompleted`] also writes the tank-temperature
+    /// threshold (MMR `0x80380C`), as de1app (`de1_send_shot_frames`) and
+    /// reaprime (`setProfile` → `tankTemperature`) do after every upload:
+    /// the profile's own `tank_temperature` when it sets one (capped at
+    /// [`MAX_TANK_TEMP_C`](de1_domain::connect_sweep::MAX_TANK_TEMP_C)), otherwise the user's tank setting from the
+    /// connect sweep, so a profile without a tank target restores it. The
+    /// cold-maintenance profile writes 0.
+    ///
     /// # Errors
     ///
     /// [`AppError::ProfileUpload`] wrapping a
@@ -4234,7 +4368,18 @@ impl CremaCore {
         if let Some(out) = self.refuse_if_firmware_locked("upload_profile") {
             return Ok(out);
         }
-        let mut assembled = profile.assemble()?;
+        // A Bengle takes the BLE v2 frame encoding (pressure / flow in
+        // tenths, HeaderV 2); de1app switches on the model MMR the same way
+        // (`detect_ble_protocol_version`). Until the model is read, classic.
+        let encoding = if self
+            .de1_machine_model
+            .is_some_and(de1_protocol::is_bengle_model)
+        {
+            de1_protocol::FrameEncoding::V2
+        } else {
+            de1_protocol::FrameEncoding::V1
+        };
+        let mut assembled = profile.assemble_for(encoding)?;
         // NEVER arm the firmware-side dispensed-volume stop: the tail's
         // max_total_volume_ml drives the DE1's own (flow-integrated) volume
         // estimate, which mis-fires — reaprime: "not compatible with active
@@ -4248,17 +4393,14 @@ impl CremaCore {
         let mut out = CoreOutput::default();
 
         // Abort any prior upload before arming the new one.
-        if let Some(prior) = self.profile_upload.take() {
-            let _ = prior; // value only matters for clearing the slot
-            out.events.push(Event::ProfileUploadFailed {
-                reason: ProfileUploadFailure::Aborted,
-            });
+        if self.profile_upload.is_some() {
+            self.fail_profile_upload(ProfileUploadFailure::Aborted, &mut out);
         }
 
-        // Build the expected-ack sequence: normal frames in order, then
-        // extension frames (each carrying its step index + 32 on the wire),
-        // then the tail (whose FrameToWrite == frame_count). The header is
-        // not acked separately.
+        // Build the expected-ack sequence: the header ack first (tracked by
+        // `header_acked`), then normal frames in order, then extension
+        // frames (each carrying its step index + 32 on the wire), then the
+        // tail (whose FrameToWrite == frame_count).
         let frame_count = assembled.header.frame_count;
         let extension_count = u8::try_from(assembled.extension_frames.len()).unwrap_or(u8::MAX);
         let mut expected_acks =
@@ -4273,9 +4415,10 @@ impl CremaCore {
 
         // Emit the BLE writes in upload order: header, then every
         // `frame_packets()` entry (frames → extensions → tail).
+        let header = assembled.header_packet();
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1ProfileHeader,
-            data: assembled.header_packet().to_vec(),
+            data: header.to_vec(),
         });
         for packet in assembled.frame_packets() {
             out.commands.push(Command::WriteCharacteristic {
@@ -4297,6 +4440,12 @@ impl CremaCore {
             title: profile.title.clone(),
             beverage_type: profile.beverage_type,
             step_weight: StepWeightExit::for_profile(profile),
+            tank_temp_c: profile
+                .tank_temperature_opt()
+                .map(|t| sweep::whole_degrees(t, MAX_TANK_TEMP_C))
+                .or(self.tank_temp_threshold_c),
+            header,
+            header_acked: false,
             expected_acks,
             next_idx: 0,
             last_progress: now,
@@ -4310,12 +4459,61 @@ impl CremaCore {
     /// an empty [`CoreOutput`].
     pub fn cancel_profile_upload(&mut self) -> CoreOutput {
         let mut out = CoreOutput::default();
-        if self.profile_upload.take().is_some() {
-            out.events.push(Event::ProfileUploadFailed {
-                reason: ProfileUploadFailure::Aborted,
-            });
+        if self.profile_upload.is_some() {
+            self.fail_profile_upload(ProfileUploadFailure::Aborted, &mut out);
         }
         out
+    }
+
+    /// End the in-flight upload with `reason`: emit
+    /// [`Event::ProfileUploadFailed`], mark the DE1's profile unknown, and
+    /// ask for a re-upload at once when the machine is already Idle.
+    ///
+    /// An [`Aborted`](ProfileUploadFailure::Aborted) upload only marks the
+    /// profile unknown: it is a supersession (a new upload follows at once)
+    /// or a shell cancel, so an immediate request would race the new upload;
+    /// the next Idle entry still re-arms it if nothing else uploads.
+    fn fail_profile_upload(&mut self, reason: ProfileUploadFailure, out: &mut CoreOutput) {
+        self.profile_upload = None;
+        let aborted = reason == ProfileUploadFailure::Aborted;
+        out.events.push(Event::ProfileUploadFailed { reason });
+        self.profile_reupload_pending = true;
+        if !aborted {
+            self.request_profile_reupload_if_idle(out);
+        }
+    }
+
+    /// Emit [`Event::ProfileReuploadNeeded`] when a failed upload left the
+    /// DE1's profile unknown, nothing is uploading, the machine is Idle, and
+    /// the request budget is not spent.
+    fn request_profile_reupload_if_idle(&mut self, out: &mut CoreOutput) {
+        let idle = self
+            .last_state
+            .is_some_and(|info| info.state == MachineState::Idle);
+        if self.profile_reupload_pending
+            && self.profile_upload.is_none()
+            && idle
+            && self.profile_reupload_requests < MAX_PROFILE_REUPLOAD_REQUESTS
+        {
+            self.profile_reupload_pending = false;
+            self.profile_reupload_requests += 1;
+            out.events.push(Event::ProfileReuploadNeeded);
+        }
+    }
+
+    /// Process the shell's [`Source::De1HeaderAck`]: the header write of the
+    /// in-flight upload succeeded. A confirmation that does not match the
+    /// header this upload wrote (a superseded upload's late write) or that
+    /// repeats one already counted is ignored.
+    fn handle_profile_header_ack(&mut self, data: &[u8], now: Duration) {
+        let Some(upload) = self.profile_upload.as_mut() else {
+            return;
+        };
+        if upload.header_acked || data != upload.header.as_slice() {
+            return;
+        }
+        upload.header_acked = true;
+        upload.last_progress = now;
     }
 
     /// `true` from the moment [`upload_profile`](Self::upload_profile)
@@ -4414,15 +4612,21 @@ impl CremaCore {
             return;
         };
 
+        if !upload.header_acked {
+            // A frame landed but the header write never confirmed: the DE1
+            // may run these frames under the previous profile's count.
+            self.fail_profile_upload(ProfileUploadFailure::HeaderNotAcked, out);
+            return;
+        }
         let expected = upload.expected_acks[upload.next_idx];
         if byte != expected {
-            self.profile_upload = None;
-            out.events.push(Event::ProfileUploadFailed {
-                reason: ProfileUploadFailure::UnexpectedAck {
+            self.fail_profile_upload(
+                ProfileUploadFailure::UnexpectedAck {
                     expected,
                     got: byte,
                 },
-            });
+                out,
+            );
             return;
         }
 
@@ -4449,7 +4653,15 @@ impl CremaCore {
             let title = std::mem::take(&mut upload.title);
             let beverage_type = upload.beverage_type;
             let step_weight = std::mem::take(&mut upload.step_weight);
+            let tank_temp_c = upload.tank_temp_c;
             self.profile_upload = None;
+            if let Some(tank) = tank_temp_c {
+                out.commands.extend(
+                    mmr_write_command(MmrRegister::TankTempThreshold, u32::from(tank), 4).commands,
+                );
+            }
+            self.profile_reupload_pending = false;
+            self.profile_reupload_requests = 0;
             self.last_active_profile_title = Some(title.clone());
             self.active_beverage_type = beverage_type;
             self.step_weight.adopt_weights(step_weight);
@@ -4534,6 +4746,15 @@ impl CremaCore {
     /// a `ReadFactory` reply is the factory slot, anything else the current
     /// one (de1app's mapping).
     fn handle_calibration(data: &[u8], out: &mut CoreOutput) {
+        // The firmware's "bad request" reply (target 255): a refusal of our
+        // write, not an undecodable packet.
+        if Calibration::is_error_reply(data) {
+            out.events.push(Event::CalibrationRefused {
+                target: None,
+                reason: CalibrationRefusal::FirmwareRejected,
+            });
+            return;
+        }
         let (cal, write_key) = match Calibration::decode_reply(data) {
             Ok(cal) => cal,
             Err(e) => {
@@ -5224,7 +5445,7 @@ fn mmr_write_command(register: MmrRegister, value: u32, byte_len: u8) -> CoreOut
 mod tests {
     use super::*;
     use de1_domain::ShotPhase;
-    use de1_protocol::{MachineState, SubState};
+    use de1_protocol::{MachineState, SubState, heater_voltage_from_raw};
     // Per-scale protocol modules used by the tests; the production lib
     // no longer reaches into these directly (the capability-driven
     // refactor consolidated everything through `Scale::*_command`).
@@ -7173,7 +7394,8 @@ mod tests {
         // `write_encodes_to_the_exact_wire_bytes` test in
         // `core/de1-protocol/src/calibration.rs`: a temperature write,
         // de1_reported = 92.5, measured = 93.0.
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[0, 0], 0); // Sleep
         let out = core.write_calibration(CalTarget::Temperature, 92.5, 93.0);
         let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
             panic!("expected a WriteCharacteristic");
@@ -7199,7 +7421,8 @@ mod tests {
         // Same shape: command targets De1Calibration; the encoded packet
         // carries the WriteKey + ResetToFactory + target tuple with zero
         // value fields. Fixture: pressure sensor.
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[2, 0], 0); // Idle
         let out = core.reset_calibration_to_factory(CalTarget::Pressure);
         let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
             panic!("expected a WriteCharacteristic");
@@ -7214,6 +7437,90 @@ mod tests {
                 0x00, 0x00, 0x00, 0x00, // de1_reported = 0.0
                 0x00, 0x00, 0x00, 0x00, // measured = 0.0
             ],
+        );
+    }
+
+    #[test]
+    fn calibration_writes_are_refused_outside_sleep_and_idle() {
+        // Cohort review 02 P1-2 / docs/18 §3.
+        let mut core = CremaCore::new();
+        let unknown = core.write_calibration(CalTarget::Pressure, 9.0, 9.1);
+        assert!(unknown.commands.is_empty(), "fail closed before any state");
+        assert_eq!(
+            unknown.events,
+            vec![Event::CalibrationRefused {
+                target: Some(CalTarget::Pressure),
+                reason: CalibrationRefusal::MachineStateUnknown,
+            }]
+        );
+        core.on_notification(Source::De1State, &[4, 5], 0); // Espresso pouring
+        for out in [
+            core.write_calibration(CalTarget::Pressure, 9.0, 9.1),
+            core.reset_calibration_to_factory(CalTarget::Pressure),
+        ] {
+            assert!(out.commands.is_empty());
+            assert_eq!(
+                out.events,
+                vec![Event::CalibrationRefused {
+                    target: Some(CalTarget::Pressure),
+                    reason: CalibrationRefusal::MachineNotIdle {
+                        state: MachineState::Espresso
+                    },
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn calibration_writes_with_bad_values_are_refused() {
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[2, 0], 0); // Idle
+        for (target, reported, measured, reason) in [
+            (
+                CalTarget::Flow,
+                f32::NAN,
+                2.0,
+                CalibrationRefusal::NonFinite,
+            ),
+            (CalTarget::Flow, 0.0, 2.0, CalibrationRefusal::ZeroReported),
+            (
+                CalTarget::Pressure,
+                9.0,
+                130.0,
+                CalibrationRefusal::OutOfRange {
+                    value: 130.0,
+                    min: 2.0,
+                    max: 10.0,
+                },
+            ),
+        ] {
+            let out = core.write_calibration(target, reported, measured);
+            assert!(out.commands.is_empty(), "{reason:?}");
+            assert_eq!(
+                out.events,
+                vec![Event::CalibrationRefused {
+                    target: Some(target),
+                    reason,
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn the_firmware_calibration_error_reply_is_a_refusal() {
+        // pyDE1 CalTargets.CalError = 255: "return value indicating bad
+        // request" — not a decode error (cohort review 02 P3-6).
+        let mut core = CremaCore::new();
+        let mut reply = [0u8; 14];
+        reply[4] = 1; // Write
+        reply[5] = 255;
+        let out = core.on_notification(Source::De1Calibration, &reply, 0);
+        assert_eq!(
+            out.events,
+            vec![Event::CalibrationRefused {
+                target: None,
+                reason: CalibrationRefusal::FirmwareRejected,
+            }]
         );
     }
 
@@ -8046,32 +8353,24 @@ mod tests {
     }
 
     #[test]
-    fn a_flow_start_writes_ghc_mode_and_bounces_to_idle() {
+    fn a_flow_start_bounces_to_idle_without_a_ghc_mode_write() {
+        // Cohort review 02 P2-1: de1app and reaprime send only the state
+        // requests; no MMR write (GhcMode 0x803820) precedes a start.
         let mut core = CremaCore::new();
-        // Machine known to be in Steam: GhcMode word + Idle bounce + target.
-        core.on_notification(Source::De1State, &[5, 7], 0);
+        core.on_notification(Source::De1State, &[5, 7], 0); // Steam
         let out = core.request_machine_state(MachineState::Espresso);
-        assert_eq!(out.commands.len(), 3);
-        assert!(matches!(
-            &out.commands[0],
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1MmrWrite,
-                ..
-            }
-        ));
         assert_eq!(
-            out.commands[1],
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                data: vec![requested_state(MachineState::Idle)],
-            }
-        );
-        assert_eq!(
-            out.commands[2],
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                data: vec![requested_state(MachineState::Espresso)],
-            }
+            out.commands,
+            vec![
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1RequestedState,
+                    data: vec![requested_state(MachineState::Idle)],
+                },
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1RequestedState,
+                    data: vec![requested_state(MachineState::Espresso)],
+                },
+            ]
         );
     }
 
@@ -8079,22 +8378,22 @@ mod tests {
     fn a_flow_start_from_idle_skips_the_idle_bounce() {
         let mut core = CremaCore::new();
         core.on_notification(Source::De1State, &[2, 0], 0);
-        let out = core.request_machine_state(MachineState::Steam);
-        assert_eq!(out.commands.len(), 2);
-        assert!(matches!(
-            &out.commands[0],
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1MmrWrite,
-                ..
-            }
-        ));
-        assert_eq!(
-            out.commands[1],
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                data: vec![requested_state(MachineState::Steam)],
-            }
-        );
+        for state in [
+            MachineState::Steam,
+            MachineState::HotWater,
+            MachineState::HotWaterRinse,
+            MachineState::Espresso,
+        ] {
+            let out = core.request_machine_state(state);
+            assert_eq!(
+                out.commands,
+                vec![Command::WriteCharacteristic {
+                    target: WriteTarget::De1RequestedState,
+                    data: vec![requested_state(state)],
+                }],
+                "{state:?} is one state write, no GhcMode MMR"
+            );
+        }
     }
 
     #[test]
@@ -9405,6 +9704,37 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_steam_timeout_goes_out_as_255() {
+        // de1app binary.tcl maps steam_timeout 0 to 255; 0 on the wire
+        // stops steam at once (cohort review 02 P3-1). Byte 2 of the
+        // 9-byte ShotSettings packet is TargetSteamLength.
+        let mut core = CremaCore::new();
+        let out = core.set_steam_hotwater_settings(ShotSettings {
+            steam_temp_c: 150.0,
+            steam_timeout_s: 0.0,
+            ..ShotSettings::default()
+        });
+        let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
+            panic!("expected the ShotSettings write");
+        };
+        assert_eq!(data[2], 255);
+        // The user's value is what the shells see.
+        assert!(out.events.iter().any(|e| matches!(
+            e,
+            Event::ShotSettingsRead { steam_timeout, .. } if *steam_timeout == 0.0
+        )));
+        let out = core.set_steam_hotwater_settings(ShotSettings {
+            steam_temp_c: 150.0,
+            steam_timeout_s: 90.0,
+            ..ShotSettings::default()
+        });
+        let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
+            panic!("expected the ShotSettings write");
+        };
+        assert_eq!(data[2], 90);
+    }
+
+    #[test]
     fn set_heater_voltage_rejects_values_outside_120_or_230() {
         // The firmware accepts only 120 or 230 as user-committed
         // values. Anything else is a clamp failure at the
@@ -9423,29 +9753,26 @@ mod tests {
     }
 
     #[test]
-    fn set_heater_voltage_encodes_plus_1000_as_four_byte_le() {
-        // Per reaprime de1.models.dart:301 heaterV "Nominal Heater
-        // Voltage (0, 120V or 230V). +1000 if it's a set value." —
-        // the user-committed marker is the +1000 offset, encoded as
-        // 4-byte little-endian on the wire.
-        //   120 + 1000 = 1120 = 0x460 → bytes [0x60, 0x04, 0x00, 0x00]
-        //   230 + 1000 = 1230 = 0x4CE → bytes [0xCE, 0x04, 0x00, 0x00]
+    fn set_heater_voltage_writes_plain_volts_as_four_byte_le() {
+        // de1app `set_heater_voltage "120"` writes the plain voltage
+        // (`de1_comms.tcl:1666-1668`, `mmr_write "803834" "04" ...`);
+        // reaprime writes `De1HeaterVoltage.voltage` = 120 / 230
+        // (`unified_de1.dart:827-830`); Decenza writes 120 / 230 unchanged.
+        // The firmware adds +1000 itself. Full 20-byte WriteToMMR frame:
+        //   [Len=4][addr 80 38 34 BE][data 78 00 00 00 LE][zero pad to 20]
         let core = CremaCore::new();
 
         let out120 = core
             .set_heater_voltage(120)
             .expect("120 V should be accepted");
+        assert_eq!(out120.commands.len(), 1);
         let Some(Command::WriteCharacteristic { target, data }) = out120.commands.first() else {
             panic!("expected a WriteCharacteristic for 120 V");
         };
         assert_eq!(*target, WriteTarget::De1MmrWrite);
-        assert_eq!(data[0], 4, "HeaterVoltage is a 4-byte register");
-        assert_eq!(&data[1..4], &[0x80, 0x38, 0x34], "address 0x803834 LE");
-        assert_eq!(
-            &data[4..8],
-            &[0x60, 0x04, 0x00, 0x00],
-            "wire payload = 120 + 1000 = 1120, LE"
-        );
+        let mut want120 = vec![0x04, 0x80, 0x38, 0x34, 0x78, 0x00, 0x00, 0x00];
+        want120.resize(20, 0);
+        assert_eq!(data, &want120, "120 V = 0x78, plain, LE");
 
         let out230 = core
             .set_heater_voltage(230)
@@ -9453,12 +9780,26 @@ mod tests {
         let Some(Command::WriteCharacteristic { data, .. }) = out230.commands.first() else {
             panic!("expected a WriteCharacteristic for 230 V");
         };
-        assert_eq!(data[0], 4, "HeaterVoltage is a 4-byte register");
+        let mut want230 = vec![0x04, 0x80, 0x38, 0x34, 0xE6, 0x00, 0x00, 0x00];
+        want230.resize(20, 0);
+        assert_eq!(data, &want230, "230 V = 0xE6, plain, LE");
+    }
+
+    #[test]
+    fn heater_voltage_read_side_strips_the_firmware_marker_once() {
+        // reaprime `De1HeaterVoltage.fromInt` subtracts 1000 once, then
+        // buckets 90..=150 as 120 V and 180..=260 as 230 V.
+        assert_eq!(heater_voltage_from_raw(1120), Some(120));
+        assert_eq!(heater_voltage_from_raw(1230), Some(230));
+        assert_eq!(heater_voltage_from_raw(120), Some(120));
+        assert_eq!(heater_voltage_from_raw(230), Some(230));
+        assert_eq!(heater_voltage_from_raw(0), None, "0 = not set, auto-detect");
         assert_eq!(
-            &data[4..8],
-            &[0xCE, 0x04, 0x00, 0x00],
-            "wire payload = 230 + 1000 = 1230, LE"
+            heater_voltage_from_raw(2120),
+            None,
+            "double marker is unset"
         );
+        assert_eq!(heater_voltage_from_raw(170), None);
     }
 
     // ---- Range-clamp safety audit -------------------------------------
@@ -9604,9 +9945,28 @@ mod tests {
     }
 
     #[test]
+    fn set_cup_warmer_temperature_is_bengle_only() {
+        // de1app set_cupwarmer_temperature returns early unless
+        // is_bengle_model (cohort review 02 P3-4).
+        let mut core = CremaCore::new();
+        assert!(
+            core.set_cup_warmer_temperature(60).commands.is_empty(),
+            "model unknown"
+        );
+        core.de1_machine_model = Some(3); // DE1PRO
+        assert!(
+            core.set_cup_warmer_temperature(60).commands.is_empty(),
+            "classic DE1"
+        );
+        core.de1_machine_model = Some(128); // Bengle
+        assert_eq!(core.set_cup_warmer_temperature(60).commands.len(), 1);
+    }
+
+    #[test]
     fn set_cup_warmer_temperature_clamps_above_80c() {
         // Shell stepper bounds 0..80; core mirrors.
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
+        core.de1_machine_model = Some(128); // Bengle
         let in_range = core.set_cup_warmer_temperature(60);
         // CupWarmer is 2-byte but mmr_write_payload reads the first 4;
         // the low byte carries the value, the rest are zero.
@@ -10271,14 +10631,16 @@ mod tests {
             }
         }
 
-        /// Helper: walk the writes-to-FrameWrite commands and feed each back
-        /// as a `De1FrameAck` notification. Returns the events emitted for the
-        /// last ack.
+        /// Helper: confirm the header write (`De1HeaderAck`, as both shells
+        /// synthesise it), then walk the writes-to-FrameWrite commands and
+        /// feed each back as a `De1FrameAck` notification. Returns the events
+        /// emitted for the last ack.
         fn ack_every_frame(
             core: &mut CremaCore,
             commands: &[Command],
             now_ms_step: u64,
         ) -> Vec<Event> {
+            ack_header(core, commands, 0);
             let mut last_events = Vec::new();
             let frames: Vec<&[u8]> = commands
                 .iter()
@@ -10296,6 +10658,23 @@ mod tests {
                 last_events = out.events;
             }
             last_events
+        }
+
+        /// Helper: feed the upload's header write back as the shell's
+        /// `De1HeaderAck`. Returns the events it produced.
+        fn ack_header(core: &mut CremaCore, commands: &[Command], now_ms: u64) -> Vec<Event> {
+            let header = commands
+                .iter()
+                .find_map(|c| match c {
+                    Command::WriteCharacteristic {
+                        target: WriteTarget::De1ProfileHeader,
+                        data,
+                    } => Some(data.clone()),
+                    _ => None,
+                })
+                .expect("upload emits a header write");
+            core.on_notification(Source::De1HeaderAck, &header, now_ms)
+                .events
         }
 
         /// Upload a one-step profile carrying `volume` and return the tail
@@ -10322,7 +10701,7 @@ mod tests {
         #[test]
         fn minimum_profile_emits_header_one_frame_and_tail() {
             let mut core = CremaCore::new();
-            let p = profile("Minimum", vec![step("a", Pump::Pressure, None)]);
+            let p = profile("Minimum", vec![step("a", Pump::Flow, None)]);
             let out = core.upload_profile(&p, Duration::ZERO).unwrap();
             // 1 header + 1 frame + 0 extensions + 1 tail = 3 writes.
             assert_eq!(out.commands.len(), 3);
@@ -10359,9 +10738,9 @@ mod tests {
             let p = profile(
                 "Triple",
                 vec![
-                    step("a", Pump::Pressure, None),
-                    step("b", Pump::Pressure, None),
-                    step("c", Pump::Pressure, None),
+                    step("a", Pump::Flow, None),
+                    step("b", Pump::Flow, None),
+                    step("c", Pump::Flow, None),
                 ],
             );
             let started = core.upload_profile(&p, Duration::ZERO).unwrap();
@@ -10440,12 +10819,45 @@ mod tests {
         }
 
         #[test]
+        fn an_unlimited_pressure_step_uploads_with_the_8_ml_s_default_limit() {
+            // de1app apply_default_flow_limit_to_pressure_steps / Decenza
+            // 0dbcc442 (report 08 S1): extension frame [32+i][U8P4 8.0 =
+            // 0x80][U8P4 1.0 = 0x10][0 …]. A flow step stays unlimited.
+            let mut core = CremaCore::new();
+            let p = profile(
+                "Default",
+                vec![
+                    step("pour", Pump::Pressure, None),
+                    step("f", Pump::Flow, None),
+                ],
+            );
+            let out = core.upload_profile(&p, Duration::ZERO).unwrap();
+            let frames: Vec<&Vec<u8>> = out
+                .commands
+                .iter()
+                .filter_map(|c| match c {
+                    Command::WriteCharacteristic {
+                        target: WriteTarget::De1ProfileFrame,
+                        data,
+                    } => Some(data),
+                    _ => None,
+                })
+                .collect();
+            // 2 frames, 1 extension (step 0 only), tail.
+            assert_eq!(frames.len(), 4);
+            assert_eq!(frames[2].as_slice(), &[32, 0x80, 0x10, 0, 0, 0, 0, 0]);
+            assert_eq!(frames[3][0], 2, "tail");
+            // The stored profile is untouched.
+            assert_eq!(p.steps[0].limiter, None);
+        }
+
+        #[test]
         fn middle_step_limiter_places_extension_after_frames() {
             let mut core = CremaCore::new();
             let p = profile(
                 "MidLimiter",
                 vec![
-                    step("a", Pump::Pressure, None),
+                    step("a", Pump::Flow, None),
                     step(
                         "b",
                         Pump::Pressure,
@@ -10454,7 +10866,7 @@ mod tests {
                             range: 0.5,
                         }),
                     ),
-                    step("c", Pump::Pressure, None),
+                    step("c", Pump::Flow, None),
                 ],
             );
             let started = core.upload_profile(&p, Duration::ZERO).unwrap();
@@ -10515,17 +10927,80 @@ mod tests {
         }
 
         #[test]
-        fn thirty_two_step_profile_is_at_the_boundary() {
+        fn twenty_step_profile_is_at_the_boundary() {
+            // de1app and pyDE1 cap a profile at 20 frames (cohort review 02
+            // P1-1).
             let mut core = CremaCore::new();
             let p = profile(
                 "Max",
-                (0..32)
-                    .map(|i| step(&format!("s{i}"), Pump::Pressure, None))
+                (0..20)
+                    .map(|i| step(&format!("s{i}"), Pump::Flow, None))
                     .collect(),
             );
             let started = core.upload_profile(&p, Duration::ZERO).unwrap();
-            // 1 header + 32 frames + 0 extensions + 1 tail = 34 writes.
-            assert_eq!(started.commands.len(), 34);
+            // 1 header + 20 frames + 0 extensions + 1 tail = 22 writes.
+            assert_eq!(started.commands.len(), 22);
+        }
+
+        #[test]
+        fn a_21_step_profile_is_rejected_and_writes_nothing() {
+            let mut core = CremaCore::new();
+            let p = profile(
+                "TwentyOne",
+                (0..21)
+                    .map(|i| step(&format!("s{i}"), Pump::Pressure, None))
+                    .collect(),
+            );
+            assert!(matches!(
+                core.upload_profile(&p, Duration::ZERO),
+                Err(AppError::ProfileUpload(
+                    de1_domain::DomainError::TooManySteps { count: 21 }
+                ))
+            ));
+            assert!(!core.profile_upload_in_progress());
+        }
+
+        #[test]
+        fn a_bengle_gets_the_v2_frame_encoding() {
+            // Report 02 P1-3: de1app / reaprime send HeaderV 2 with U8D1
+            // pressure / flow to a Bengle (model >= 128).
+            let mut core = CremaCore::new();
+            core.de1_machine_model = Some(128);
+            let p = profile("Bengle", vec![step("a", Pump::Flow, None)]);
+            let out = core.upload_profile(&p, Duration::ZERO).unwrap();
+            let Command::WriteCharacteristic { data, .. } = &out.commands[0] else {
+                panic!("header first");
+            };
+            assert_eq!(data.as_slice(), &[2, 1, 1, 0, 120]);
+            // The upload still completes on the header + frame acks.
+            let done = ack_every_frame(&mut core, &out.commands, 10);
+            assert!(
+                done.iter()
+                    .any(|e| matches!(e, Event::ProfileUploadCompleted { .. }))
+            );
+            // A classic DE1 keeps HeaderV 1.
+            core.de1_machine_model = Some(3);
+            let out = core.upload_profile(&p, Duration::ZERO).unwrap();
+            let Command::WriteCharacteristic { data, .. } = &out.commands[0] else {
+                panic!("header first");
+            };
+            assert_eq!(data[0], 1);
+        }
+
+        #[test]
+        fn the_header_carries_de1app_constant_limits() {
+            // de1app binary.tcl sends MinimumPressure 0 / MaximumFlow 6.0 on a
+            // classic DE1 whatever the profile says (cohort review 02 P3-2).
+            let mut core = CremaCore::new();
+            let mut p = profile("Limits", vec![step("a", Pump::Pressure, None)]);
+            p.minimum_pressure = 4.0;
+            p.maximum_flow = 9.0;
+            let out = core.upload_profile(&p, Duration::ZERO).unwrap();
+            let Command::WriteCharacteristic { data, .. } = &out.commands[0] else {
+                panic!("header first");
+            };
+            // [HeaderV 1][frames 1][preinfuse 1][MinPressure U8P4 0][MaxFlow U8P4 6.0 = 96]
+            assert_eq!(data.as_slice(), &[1, 1, 1, 0, 96]);
         }
 
         #[test]
@@ -10563,7 +11038,8 @@ mod tests {
                     step("b", Pump::Pressure, None),
                 ],
             );
-            let _ = core.upload_profile(&p, Duration::ZERO).unwrap();
+            let up = core.upload_profile(&p, Duration::ZERO).unwrap();
+            ack_header(&mut core, &up.commands, 5);
             // First expected ack carries FrameToWrite = 0; feed back a 5 instead.
             let mut bogus = [0u8; 8];
             bogus[0] = 5;
@@ -10646,8 +11122,9 @@ mod tests {
                     step("b", Pump::Pressure, None),
                 ],
             );
-            let _ = core.upload_profile(&p, Duration::ZERO).unwrap();
-            // Tick at 5 seconds (the timeout); no acks have arrived.
+            let up = core.upload_profile(&p, Duration::ZERO).unwrap();
+            ack_header(&mut core, &up.commands, 0);
+            // Tick at 5 seconds (the timeout); no frame acks have arrived.
             let tick = core
                 .on_tick(u64::try_from(PROFILE_UPLOAD_ACK_TIMEOUT.as_millis()).unwrap_or(u64::MAX));
             assert!(tick.events.iter().any(|e| matches!(
@@ -10669,7 +11146,8 @@ mod tests {
                     step("b", Pump::Pressure, None),
                 ],
             );
-            let _ = core.upload_profile(&p, Duration::ZERO).unwrap();
+            let up = core.upload_profile(&p, Duration::ZERO).unwrap();
+            ack_header(&mut core, &up.commands, 0);
             // Ack frame 0 at t=4s (just under the timeout).
             let mut ack0 = [0u8; 8];
             ack0[0] = 0;
@@ -10704,6 +11182,232 @@ mod tests {
             assert!(!core.profile_upload_in_progress());
             // reset() also drops the last-active title.
             assert_eq!(core.active_profile_title(), None);
+        }
+
+        /// The TankTempThreshold MMR word written by `commands`, if any.
+        fn tank_write(commands: &[Command]) -> Option<u8> {
+            commands.iter().find_map(|c| match c {
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1MmrWrite,
+                    data,
+                } if data[1..4] == [0x80, 0x38, 0x0C] => Some(data[4]),
+                _ => None,
+            })
+        }
+
+        /// Upload `p`, ack everything, and return the completion's commands.
+        fn completion_commands(core: &mut CremaCore, p: &Profile) -> Vec<Command> {
+            let up = core.upload_profile(p, Duration::ZERO).unwrap();
+            assert_eq!(tank_write(&up.commands), None, "not before the tail ack");
+            ack_header(core, &up.commands, 0);
+            let mut last = Vec::new();
+            for c in &up.commands {
+                if let Command::WriteCharacteristic {
+                    target: WriteTarget::De1ProfileFrame,
+                    data,
+                } = c
+                {
+                    last = core.on_notification(Source::De1FrameAck, data, 1).commands;
+                }
+            }
+            last
+        }
+
+        #[test]
+        fn the_tail_ack_writes_the_profiles_tank_temperature() {
+            // de1app de1_send_shot_frames / reaprime setProfile write the tank
+            // threshold after every upload (cohort review 02 P2-3).
+            let mut core = CremaCore::new();
+            let mut p = profile("Tank", vec![step("a", Pump::Pressure, None)]);
+            p.tank_temperature = 38.0;
+            assert_eq!(tank_write(&completion_commands(&mut core, &p)), Some(38));
+            // Capped like the user setting (de1app range 0..45).
+            p.tank_temperature = 70.0;
+            assert_eq!(tank_write(&completion_commands(&mut core, &p)), Some(45));
+        }
+
+        #[test]
+        fn a_profile_without_a_tank_target_restores_the_user_setting() {
+            let mut core = CremaCore::new();
+            let p = profile("NoTank", vec![step("a", Pump::Pressure, None)]);
+            assert_eq!(
+                tank_write(&completion_commands(&mut core, &p)),
+                None,
+                "no setting known yet: leave the register alone"
+            );
+            core.tank_temp_threshold_c = Some(30);
+            assert_eq!(tank_write(&completion_commands(&mut core, &p)), Some(30));
+        }
+
+        fn two_step() -> Profile {
+            profile(
+                "Two",
+                vec![
+                    step("a", Pump::Pressure, None),
+                    step("b", Pump::Pressure, None),
+                ],
+            )
+        }
+
+        fn reupload_requests(events: &[Event]) -> usize {
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::ProfileReuploadNeeded))
+                .count()
+        }
+
+        #[test]
+        fn a_frame_ack_before_the_header_ack_fails_the_upload() {
+            // Cohort review 02 P0-2: a failed header write must fail the
+            // upload; the DE1 would otherwise run the new frames under the
+            // previous profile's frame count.
+            let mut core = CremaCore::new();
+            let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let first_frame = up
+                .commands
+                .iter()
+                .find_map(|c| match c {
+                    Command::WriteCharacteristic {
+                        target: WriteTarget::De1ProfileFrame,
+                        data,
+                    } => Some(data.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            let out = core.on_notification(Source::De1FrameAck, &first_frame, 10);
+            assert!(out.events.contains(&Event::ProfileUploadFailed {
+                reason: ProfileUploadFailure::HeaderNotAcked
+            }));
+            assert!(!core.profile_upload_in_progress());
+        }
+
+        #[test]
+        fn a_missing_header_ack_times_out_as_header_not_acked() {
+            let mut core = CremaCore::new();
+            let _ = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let tick = core
+                .on_tick(u64::try_from(PROFILE_UPLOAD_ACK_TIMEOUT.as_millis()).unwrap_or(u64::MAX));
+            assert!(tick.events.contains(&Event::ProfileUploadFailed {
+                reason: ProfileUploadFailure::HeaderNotAcked
+            }));
+        }
+
+        #[test]
+        fn a_header_ack_for_other_bytes_is_ignored() {
+            // A superseded upload's late header write must not stand in for
+            // this upload's header.
+            let mut core = CremaCore::new();
+            let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let out = core.on_notification(Source::De1HeaderAck, &[1, 7, 0, 0, 0x60], 1);
+            assert!(out.events.is_empty());
+            // Still waiting on the real header: a frame ack fails the upload.
+            let events = ack_every_frame_without_header(&mut core, &up.commands);
+            assert!(events.contains(&Event::ProfileUploadFailed {
+                reason: ProfileUploadFailure::HeaderNotAcked
+            }));
+        }
+
+        fn ack_every_frame_without_header(
+            core: &mut CremaCore,
+            commands: &[Command],
+        ) -> Vec<Event> {
+            let mut events = Vec::new();
+            for c in commands {
+                if let Command::WriteCharacteristic {
+                    target: WriteTarget::De1ProfileFrame,
+                    data,
+                } = c
+                {
+                    events.extend(core.on_notification(Source::De1FrameAck, data, 2).events);
+                }
+            }
+            events
+        }
+
+        #[test]
+        fn a_failure_while_idle_asks_for_a_reupload_at_once() {
+            // Report 08 M3 / Decenza aa8232e6: after a failed upload the
+            // DE1's profile is unknown; with the machine Idle, re-upload now.
+            let mut core = CremaCore::new();
+            core.on_notification(Source::De1State, &[2, 0], 1); // Idle
+            let _ = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let tick = core.on_tick(5_000);
+            assert!(tick.events.contains(&Event::ProfileUploadFailed {
+                reason: ProfileUploadFailure::HeaderNotAcked
+            }));
+            assert_eq!(reupload_requests(&tick.events), 1);
+        }
+
+        #[test]
+        fn a_failure_during_a_flow_waits_for_idle_then_asks_once() {
+            let mut core = CremaCore::new();
+            core.on_notification(Source::De1State, &[4, 5], 1); // Espresso pouring
+            let _ = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let tick = core.on_tick(5_000);
+            assert_eq!(reupload_requests(&tick.events), 0, "never during the flow");
+            let idle = core.on_notification(Source::De1State, &[2, 0], 6_000);
+            assert_eq!(reupload_requests(&idle.events), 1);
+            // A later Idle entry with nothing failed in between asks nothing.
+            core.on_notification(Source::De1State, &[0, 0], 7_000); // Sleep
+            let again = core.on_notification(Source::De1State, &[2, 0], 8_000);
+            assert_eq!(reupload_requests(&again.events), 0);
+        }
+
+        #[test]
+        fn an_abort_does_not_race_the_superseding_upload() {
+            let mut core = CremaCore::new();
+            core.on_notification(Source::De1State, &[2, 0], 1); // Idle
+            let _ = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let out = core.cancel_profile_upload();
+            assert_eq!(reupload_requests(&out.events), 0);
+            // The superseding upload completes: nothing left to re-arm.
+            let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let done = ack_every_frame(&mut core, &up.commands, 10);
+            assert!(
+                done.iter()
+                    .any(|e| matches!(e, Event::ProfileUploadCompleted { .. }))
+            );
+            core.on_notification(Source::De1State, &[0, 0], 1_000);
+            let idle = core.on_notification(Source::De1State, &[2, 0], 2_000);
+            assert_eq!(reupload_requests(&idle.events), 0);
+        }
+
+        #[test]
+        fn reupload_requests_are_capped_until_an_upload_completes() {
+            let mut core = CremaCore::new();
+            core.on_notification(Source::De1State, &[2, 0], 1); // Idle
+            let mut requests = 0;
+            let mut now = 0u64;
+            for _ in 0..(MAX_PROFILE_REUPLOAD_REQUESTS + 2) {
+                let _ = core
+                    .upload_profile(&two_step(), Duration::from_millis(now))
+                    .unwrap();
+                now += 5_000;
+                requests += reupload_requests(&core.on_tick(now).events);
+            }
+            assert_eq!(requests, usize::from(MAX_PROFILE_REUPLOAD_REQUESTS));
+            // A completed upload restores the budget.
+            let up = core
+                .upload_profile(&two_step(), Duration::from_millis(now))
+                .unwrap();
+            ack_every_frame(&mut core, &up.commands, now + 1);
+            let _ = core
+                .upload_profile(&two_step(), Duration::from_millis(now + 100))
+                .unwrap();
+            let tick = core.on_tick(now + 100 + 5_000);
+            assert_eq!(reupload_requests(&tick.events), 1);
+        }
+
+        #[test]
+        fn a_reset_drops_the_reupload_request() {
+            // The reconnect path owns the re-upload after a link drop.
+            let mut core = CremaCore::new();
+            core.on_notification(Source::De1State, &[4, 5], 1);
+            let _ = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let _ = core.on_tick(5_000);
+            core.reset();
+            let idle = core.on_notification(Source::De1State, &[2, 0], 6_000);
+            assert_eq!(reupload_requests(&idle.events), 0);
         }
 
         #[test]
@@ -10758,16 +11462,24 @@ mod tests {
             core
         }
 
-        /// Upload `profile` and ack every frame.
+        /// Upload `profile` and ack the header and every frame.
         fn upload(core: &mut CremaCore, profile: &Profile) {
             let out = core.upload_profile(profile, Duration::ZERO).unwrap();
             for c in &out.commands {
-                if let Command::WriteCharacteristic {
-                    target: WriteTarget::De1ProfileFrame,
-                    data,
-                } = c
-                {
-                    core.on_notification(Source::De1FrameAck, data, 1);
+                match c {
+                    Command::WriteCharacteristic {
+                        target: WriteTarget::De1ProfileHeader,
+                        data,
+                    } => {
+                        core.on_notification(Source::De1HeaderAck, data, 1);
+                    }
+                    Command::WriteCharacteristic {
+                        target: WriteTarget::De1ProfileFrame,
+                        data,
+                    } => {
+                        core.on_notification(Source::De1FrameAck, data, 1);
+                    }
+                    _ => {}
                 }
             }
             assert_eq!(core.active_profile_title(), Some(profile.title.as_str()));

@@ -469,28 +469,35 @@ export class De1Manager {
 	 * the core emits. Unrecognised / unmapped targets are dropped with a
 	 * status log — the caller is not penalised, but the failure is visible
 	 * in diagnostics so a forgotten UUID mapping does not silently disappear.
+	 *
+	 * Resolves `true` only when the GATT write succeeded. Every skip and
+	 * failure resolves `false` (never throws), so the caller can refuse to
+	 * synthesise a profile header / frame ack for bytes that never reached
+	 * the DE1 (cohort review 02 P0-2).
 	 */
-	async writeCharacteristic(target: WriteTarget, data: Uint8Array): Promise<void> {
+	async writeCharacteristic(target: WriteTarget, data: Uint8Array): Promise<boolean> {
 		if (this.firmwareExclusive) {
 			this.callbacks.onStatus(`DE1 write skipped: firmware update in progress (${target})`);
-			return;
+			return false;
 		}
 		const uuid = uuidForWriteTarget(target);
 		if (uuid === null) {
 			this.callbacks.onStatus(`DE1 write skipped: no UUID for target ${target}`);
-			return;
+			return false;
 		}
 		const device = this.device;
 		if (device === null) {
 			this.callbacks.onStatus(`DE1 write skipped: not connected (${target})`);
-			return;
+			return false;
 		}
 		try {
 			await device.write(De1Uuids.SERVICE, uuid, data);
+			return true;
 		} catch (error) {
 			this.callbacks.onStatus(
 				`DE1 write to ${target} failed: ${describeError(error)}`
 			);
+			return false;
 		}
 	}
 

@@ -34,6 +34,11 @@ pub enum MachineState {
     AirPurge = 20,
     /// Scheduled-wake idle; firmware v1293 and later only.
     SchedIdle = 21,
+    /// Firmware-upgrade mode, `0x16` (de1app `machine.tcl` `22 FWUpgrade`;
+    /// reaprime `fwUpgrade(0x16)`, `3ab190b6`). Requested by reaprime's
+    /// Bengle flash path; decoded so a machine reporting it does not freeze
+    /// the state display behind a decode error.
+    FwUpgrade = 22,
 }
 
 impl MachineState {
@@ -83,6 +88,7 @@ impl TryFrom<u8> for MachineState {
             19 => InBootLoader,
             20 => AirPurge,
             21 => SchedIdle,
+            22 => FwUpgrade,
             other => return Err(ProtocolError::UnknownMachineState(other)),
         })
     }
@@ -422,6 +428,18 @@ mod tests {
             assert_eq!(MachineState::try_from(0), Ok(MachineState::Sleep));
             assert_eq!(MachineState::try_from(4), Ok(MachineState::Espresso));
             assert_eq!(MachineState::try_from(21), Ok(MachineState::SchedIdle));
+        }
+
+        #[test]
+        fn state_22_is_firmware_upgrade() {
+            // de1app machine.tcl `22 FWUpgrade`; reaprime 3ab190b6 (cohort
+            // review 02 P3-5 / 08 S4).
+            assert_eq!(MachineState::try_from(22), Ok(MachineState::FwUpgrade));
+            assert_eq!(MachineState::FwUpgrade as u8, 0x16);
+            assert_eq!(
+                StateInfo::parse(&[22, 0]).map(|i| i.state),
+                Ok(MachineState::FwUpgrade)
+            );
         }
 
         #[test]

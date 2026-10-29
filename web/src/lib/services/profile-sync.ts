@@ -44,6 +44,27 @@ import { ProfileUploadTimeoutError } from '../effect/errors.ts';
  */
 export const PROFILE_DOWNLOAD_GUARD_MS = 500;
 
+/**
+ * The ack the shell synthesises for a profile write, or `null` for none.
+ *
+ * The DE1 answers a `HeaderWrite` / `FrameWrite` with only an ATT write
+ * response, so the shell confirms each one to the core itself: the header as
+ * `De1HeaderAck`, every frame as `De1FrameAck`. A write that did not reach
+ * the DE1 (`delivered === false`) is never acknowledged, so the core fails
+ * the upload instead of reporting a half-written profile as loaded (cohort
+ * review 02 P0-2). Android's `De1BleManager.writeCharacteristic` applies the
+ * same rule.
+ */
+export function profileWriteAck(
+	target: string,
+	delivered: boolean
+): 'De1HeaderAck' | 'De1FrameAck' | null {
+	if (!delivered) return null;
+	if (target === 'De1ProfileHeader') return 'De1HeaderAck';
+	if (target === 'De1ProfileFrame') return 'De1FrameAck';
+	return null;
+}
+
 /** Backstop for a never-arriving Completed/Failed — comfortably beyond a
  *  healthy ~1-2 s upload. On timeout the caller proceeds with `false`. */
 const UPLOAD_TIMEOUT = Duration.seconds(15);
@@ -99,9 +120,10 @@ export class ProfileSync extends Context.Service<
 		readonly completed: Effect.Effect<string | null>;
 		/**
 		 * Called by the `ProfileUploadFailed` fold. Resolves the in-flight waiter
-		 * with `false` and clears the pending entry; the DE1 keeps whatever it had
-		 * before, so the snapshot fingerprint is intentionally left unchanged.
-		 * Fully synchronous.
+		 * with `false` and clears the pending entry. What the DE1 holds after a
+		 * failed upload is unknown (frames are slot writes with no commit step,
+		 * Decenza `aa8232e6`), so the fold also clears the snapshot fingerprint
+		 * and its persisted copy. Fully synchronous.
 		 */
 		readonly failed: Effect.Effect<void>;
 		/**

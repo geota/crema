@@ -688,11 +688,14 @@ class De1BleManager(
      * Write a core-issued `Command.WriteCharacteristic` to the DE1: map the
      * [target] to its GATT characteristic and write [bytes].
      *
-     * The DE1 emits NO notification on a `FrameWrite` (it only ACKs the ATT
-     * write), so after a [WriteTarget.De1ProfileFrame] write we synthesize a
+     * The DE1 emits NO notification on a `HeaderWrite` / `FrameWrite` (it only
+     * ACKs the ATT write), so after a successful [WriteTarget.De1ProfileHeader]
+     * or [WriteTarget.De1ProfileFrame] write we synthesize a `De1HeaderAck` /
      * `De1FrameAck` by feeding the just-written bytes back into the core — that
-     * is what advances the core's profile-upload state machine. Mirrors the web
-     * shell's `De1FrameAck` synthesis.
+     * is what advances the core's profile-upload state machine
+     * ([profileWriteAckSource]). A failed write throws before the ack, so the
+     * core fails the upload (cohort review 02 P0-2). Mirrors the web shell's
+     * `profileWriteAck`.
      */
     suspend fun writeCharacteristic(
         target: WriteTarget,
@@ -726,10 +729,10 @@ class De1BleManager(
                     // sacrificed (each dropped write logs its own side too).
                     onStatus("Urgent $target write preempted: ${dropped.joinToString(", ")}")
                 }
-                writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes)
+                writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes, retriesAfterTimeout(target))
             } else {
                 UrgentWriteGate.preemptible(coroutineContext[Job], "DE1 $target write") {
-                    writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes)
+                    writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes, retriesAfterTimeout(target))
                 }
             }
             consecutiveWriteFailures = 0
@@ -750,8 +753,8 @@ class De1BleManager(
         } finally {
             nonFlashWritesInFlight.decrementAndGet()
         }
-        if (target == WriteTarget.De1ProfileFrame) {
-            feedCore(NotificationSource.DE1_FRAME_ACK, bytes, SystemClock.elapsedRealtime(), "DE1 frame-ACK")
+        profileWriteAckSource(target)?.let { source ->
+            feedCore(source, bytes, SystemClock.elapsedRealtime(), "DE1 $target ACK")
         }
     }
 
@@ -866,18 +869,26 @@ class De1BleManager(
      * outage). de1app double-sends DE1 command writes and Decenza retries up
      * to 10 × 500 ms; one retry covers the common transient without the full
      * ladder — a second failure surfaces to the caller AND the dead-link
-     * counter. Safe to repeat: state requests, MMR writes, and profile-frame
-     * writes are all idempotent (same bytes to the same target).
+     * counter. Safe to repeat: MMR writes and profile header / frame writes
+     * are idempotent (same bytes to the same target).
+     *
+     * A state request that TIMED OUT is not retried ([retryOnTimeout] false,
+     * see [retriesAfterTimeout]): it may still land, and a copy sent 500 ms
+     * later can arrive after a newer request — a late Idle stops the shot
+     * that just started (cohort review 02 P2-2). A state write that failed
+     * outright is retried as before.
      */
     private suspend fun writeWithOneRetry(
         d: BleTransport.DeviceHandle,
         characteristic: UUID,
         bytes: ByteArray,
+        retryOnTimeout: Boolean,
     ) {
         val first = try {
             withTimeout(WRITE_TIMEOUT_MS) { transport.write(d, De1Uuids.SERVICE, characteristic, bytes) }
             return
         } catch (t: TimeoutCancellationException) {
+            if (!retryOnTimeout) throw t
             t
         } catch (c: CancellationException) {
             throw c
@@ -1002,3 +1013,24 @@ internal class FwMapSubscription(
         job = null
     }
 }
+
+/**
+ * The ack the shell synthesises after a SUCCESSFUL profile write, or null:
+ * the header confirms as `De1HeaderAck`, every frame as `De1FrameAck`. The
+ * core requires the header ack before any frame counts, so a header write
+ * that failed fails the upload (cohort review 02 P0-2). Pure, for JUnit.
+ */
+internal fun profileWriteAckSource(target: WriteTarget): NotificationSource? = when (target) {
+    WriteTarget.De1ProfileHeader -> NotificationSource.DE1_HEADER_ACK
+    WriteTarget.De1ProfileFrame -> NotificationSource.DE1_FRAME_ACK
+    else -> null
+}
+
+/**
+ * Whether a write that timed out gets the one spaced retry. Not a state
+ * request: a timed-out request may still land, and its copy could arrive
+ * after a newer request (cohort review 02 P2-2; reaprime awaits each write in
+ * sequence, de1app runs one FIFO). Pure, for JUnit.
+ */
+internal fun retriesAfterTimeout(target: WriteTarget): Boolean =
+    target != WriteTarget.De1RequestedState

@@ -21,7 +21,7 @@ fn append(out: &mut CoreOutput, more: CoreOutput) {
 
 /// `value` rounded into `0..=max`, as an MMR byte value.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn whole_degrees(value: f32, max: f32) -> u8 {
+pub(crate) fn whole_degrees(value: f32, max: f32) -> u8 {
     if value.is_finite() {
         value.round().clamp(0.0, max) as u8
     } else {

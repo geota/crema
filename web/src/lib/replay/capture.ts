@@ -164,6 +164,10 @@ export function sourceFromName(name: string): NotificationSource | undefined {
 			return 'De1ProfileHeader';
 		case 'DE1_FRAME_ACK':
 			return 'De1FrameAck';
+		case 'DE1_HEADER_ACK':
+			// The shell's synthesised header-write confirmation (the core's
+			// `capture.rs` name): without it a replayed upload fails.
+			return 'De1HeaderAck';
 		case 'SCALE_WEIGHT':
 			return 'ScaleWeight';
 		case 'SCALE_FF12':

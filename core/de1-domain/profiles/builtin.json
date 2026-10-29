@@ -39,7 +39,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 7.5,
         "temperature_c": 90.0,
@@ -48,7 +48,10 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null,
+        "limiter": {
+          "value": 6.0,
+          "range": 1.0
+        },
         "weight": null
       },
       {
@@ -776,7 +779,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 8.4,
         "temperature_c": 88.0,
@@ -785,7 +788,10 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null,
+        "limiter": {
+          "value": 3.5,
+          "range": 1.0
+        },
         "weight": null
       },
       {
@@ -1080,7 +1086,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 9.0,
         "temperature_c": 94.0,
@@ -1089,7 +1095,10 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null,
+        "limiter": {
+          "value": 4.5,
+          "range": 1.0
+        },
         "weight": null
       },
       {
@@ -2414,7 +2423,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 6.0,
         "temperature_c": 88.0,
@@ -2423,7 +2432,10 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null,
+        "limiter": {
+          "value": 4.0,
+          "range": 1.0
+        },
         "weight": null
       },
       {
@@ -2664,7 +2676,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 8.4,
         "temperature_c": 89.5,
@@ -3011,7 +3023,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 8.7,
         "temperature_c": 88.0,
@@ -3191,7 +3203,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 6.0,
         "temperature_c": 94.0,
@@ -3432,7 +3444,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 7.8,
         "temperature_c": 0.0,
@@ -4218,7 +4230,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 9.0,
         "temperature_c": 92.0,
@@ -4308,7 +4320,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 6.0,
         "temperature_c": 92.0,
@@ -4610,7 +4622,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 9.0,
         "temperature_c": 94.0,
@@ -6059,7 +6071,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 8.6,
         "temperature_c": 88.0,
@@ -6085,7 +6097,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 8.6,
         "temperature_c": 88.0,
@@ -6145,7 +6157,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 9.0,
         "temperature_c": 92.0,
@@ -6222,7 +6234,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 9.0,
         "temperature_c": 92.0,
@@ -6248,7 +6260,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 9.0,
         "temperature_c": 92.0,
@@ -6325,7 +6337,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 10.0,
         "temperature_c": 92.0,
@@ -6402,7 +6414,7 @@
         "weight": null
       },
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 9.0,
         "temperature_c": 92.0,
@@ -7069,7 +7081,7 @@
     "notes": "For use with machines that have a group head controller (GHC).  Hold your finger on the GHC for the pressure you want.",
     "steps": [
       {
-        "name": "forced rise without limit",
+        "name": "forced rise",
         "pump": "pressure",
         "target": 0.0,
         "temperature_c": 88.0,

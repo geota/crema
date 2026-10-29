@@ -276,6 +276,7 @@ export type NotificationSource =
 	| 'De1ShotSettings'
 	| 'De1ProfileHeader'
 	| 'De1FrameAck'
+	| 'De1HeaderAck'
 	| 'ScaleButton';
 
 /**
@@ -376,6 +377,8 @@ export interface CremaCore {
 	): Promise<FlashStep>;
 	/** Bring back the lock of an erase that may still be running after a reload. */
 	firmwareFlashRestoreEraseHold(build: number, holdMsLeft: number, nowMs: number): Promise<FlashStep>;
+	/** Bring back a flash whose verify window was still open at the reload. */
+	firmwareFlashRestoreVerifying(build: number, holdMsLeft: number, nowMs: number): Promise<FlashStep>;
 	/** Whether a flash (or its erase / reboot window) holds the DE1 link. */
 	firmwareLocksWrites(): Promise<boolean>;
 	firmwareFlashStatus(nowMs: number): Promise<FlashStep>;
@@ -974,6 +977,8 @@ async function createCore(): Promise<CremaCore> {
 				return wasm.NotificationSource.De1ProfileHeader;
 			case 'De1FrameAck':
 				return wasm.NotificationSource.De1FrameAck;
+			case 'De1HeaderAck':
+				return wasm.NotificationSource.De1HeaderAck;
 			case 'ScaleButton':
 				return wasm.NotificationSource.ScaleButton;
 		}
@@ -1081,6 +1086,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async firmwareFlashRestoreEraseHold(build, holdMsLeft, nowMs) {
 			return parseStep(bridge.firmware_flash_restore_erase_hold(build, holdMsLeft, nowMs));
+		},
+		async firmwareFlashRestoreVerifying(build, holdMsLeft, nowMs) {
+			return parseStep(bridge.firmware_flash_restore_verifying(build, holdMsLeft, nowMs));
 		},
 		async firmwareLocksWrites() {
 			return bridge.firmware_locks_writes();
@@ -1458,6 +1466,7 @@ export type {
 } from './crema-core';
 export { FlashPhase, DecentFirmwareChannel } from './crema-core';
 export type { Event, Command, ModeInfo, RangeCapability } from './crema-core';
+export type { CalibrationRefusal } from './crema-core';
 // Telemetry wire types — now typeshare-generated (review #01 F24); replaced the
 // hand-written `RustShotSample` / `RustTimedSample`.
 export type { TimedSample, ShotSample, WireShotBean } from './crema-core';
