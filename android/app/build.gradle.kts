@@ -331,7 +331,10 @@ dependencies {
     // libjnidispatch.so ships 16 KB ELF page alignment, required by Android 15+ /
     // API 36+ devices + emulators (16 KB pages); older JNA fails to dlopen there.
     implementation("net.java.dev.jna:jna:5.19.1@aar")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.12.0")
+    // 1.11.0, not 1.12.0: dependabot #175 bumped to 1.12.0, which is not
+    // published on Maven Central or Google Maven (latest is 1.11.0), so
+    // nothing resolved. Keep -android and -test on the same version.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
     // The generated `core/bindings/crema-core.kt` types are @Serializable.
@@ -393,7 +396,7 @@ dependencies {
     // HTTP clients' request shape + status mapping (tracks the Ktor version),
     // and a real HTTP stub for the retry policy / sent signal over real
     // OkHttp (tracks the OkHttp version ktor-client-okhttp brings).
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.12.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("io.ktor:ktor-client-mock:$ktor")
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
     // The desktop JNA jar (same version as the @aar above) carries the host
