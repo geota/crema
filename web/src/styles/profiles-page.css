@@ -12,6 +12,8 @@
 .pp-head {
   display: flex; align-items: flex-end; justify-content: space-between;
   gap: 24px;
+  flex-wrap: wrap;
+  row-gap: 12px;
   padding: 32px 40px 18px;
   flex: 0 0 auto;
 }

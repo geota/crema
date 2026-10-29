@@ -1599,7 +1599,9 @@
 	}
 	.bn-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+		/* min(): a 340 px card floor, but never wider than the column, so a
+		   phone-width viewport does not scroll sideways (report 07 #14). */
+		grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
 		gap: 14px;
 	}
 	.bn-tile-new {
