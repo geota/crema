@@ -567,7 +567,45 @@ class ProxyControllerModeTest {
         peers.value = peers.value + peer("a-again", 15)
         advance(200)
         assertFalse(controller.state.value.refindGaveUp, "a new port on the saved host resumes the re-find")
-        assertEquals("127.0.0.1:12", dials().last(), "the first listed port is tried")
+        assertEquals("127.0.0.1:15", dials().last(), "the port not tried yet goes first")
+    }
+
+    /** Validation P1b R2: the least recently tried port on the saved host
+     *  goes first, so an advertisement that sorts first can't take every
+     *  attempt. */
+    @Test
+    fun `the least recently tried port goes first`() {
+        remoteOnDeadHub(peer("a-bad", 12), peer("b-hub", 13))
+        advance(REFIND_DELAY_MS + 200)
+        assertEquals("127.0.0.1:12", dials().last(), "NSD's order for ports never tried")
+        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        advance(REFIND_BACKOFF_MS[0] + REFIND_DELAY_MS)
+        assertEquals("127.0.0.1:13", dials().last(), "the other port next")
+        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        advance(REFIND_BACKOFF_MS[1] + REFIND_DELAY_MS)
+        assertEquals("127.0.0.1:12", dials().last(), "then the one tried longest ago")
+    }
+
+    /** Validation P1b R3: after a give-up with the saved target refused,
+     *  the hub back on its saved port under a new instance resumes the
+     *  re-find, and the saved target is dialed again. */
+    @Test
+    fun `a hub back on its saved port resumes after a give-up`() {
+        val peers = remoteOnDeadHub(peer("hub-before", 9))
+        repeat(3) {
+            controller.refuseCurrentSessionForTest(DenyReason.BUSY, byHost = true, hostProved = false)
+            advance(REFIND_BACKOFF_MS[it] + 200)
+        }
+        assertTrue(controller.state.value.refindGaveUp, "three unproven refusals: ${dials()}")
+        val dialed = dials().size
+        advance(120_000)
+        assertEquals(dialed, dials().size, "stopped")
+
+        peers.value = listOf(peer("hub-restarted", 9))
+        advance(200)
+        assertFalse(controller.state.value.refindGaveUp, "a new instance on the saved port resumes")
+        assertEquals(dialed + 1, dials().size)
+        assertEquals("127.0.0.1:9", dials().last())
     }
 
     /** Validation P1b S1/S3: the re-find never dials another address, so an
