@@ -69,6 +69,9 @@ class TappingBleTransport(
     override suspend fun awaitAdvertisement(device: BleTransport.DeviceHandle, timeoutMs: Long): Boolean =
         delegate.awaitAdvertisement(device, timeoutMs)
 
+    override fun isLinkHeldByStack(device: BleTransport.DeviceHandle): Boolean =
+        delegate.isLinkHeldByStack(device)
+
     override val supportsPendingConnect: Boolean get() = delegate.supportsPendingConnect
 
     override suspend fun connectWhenAvailable(device: BleTransport.DeviceHandle, onLinkUp: () -> Unit) {
