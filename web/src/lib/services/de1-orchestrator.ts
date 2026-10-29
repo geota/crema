@@ -147,12 +147,24 @@ export const de1SeedProgram = (
 		yield* readSeed('De1ShotSettings', De1Uuids.SHOT_SETTINGS, 'shot-settings');
 	});
 
-export const de1ConnectProgram = (d: De1ConnectDeps): Effect.Effect<void, De1ConnectStepFailed> =>
+/**
+ * The machine-identity reads: the FirmwareVersion MMR (build number for the
+ * update check), then {@link CONNECT_MMR_SWEEP} serially (CPU board, model,
+ * GHC, refill kit, serial, heater voltage, flush temp, flow multiplier). All
+ * best-effort; each read is dispatched and its reply lands later as an
+ * `MmrValue`.
+ *
+ * Step 5 of {@link de1ConnectProgram}, and run again by the manager after the
+ * first healthy re-seed when a first connect handed off before reaching it (a
+ * hollow first connect, or a link that dropped as the program finished):
+ * without it that session never learns the model (Bengle frame encoding), the
+ * serial (stolen-machine check) or the firmware build (cohort review
+ * 2026-10-28, #3 P1).
+ */
+export const de1MachineInfoProgram = (
+	d: Pick<De1ConnectDeps, 'core' | 'onStatus' | 'onCoreOutput'>
+): Effect.Effect<void> =>
 	Effect.gen(function* () {
-		/** A fatal transport step — failure carries the step name for attribution. */
-		const fatal = (step: string, thunk: () => Promise<unknown>) =>
-			Effect.tryPromise({ try: thunk, catch: (cause) => new De1ConnectStepFailed({ step, cause }) });
-
 		/** A non-fatal MMR read: dispatch → fold. Logs on skip; optional success line. */
 		const readMmr = (reg: MmrRegister, ok?: string) =>
 			Effect.gen(function* () {
@@ -164,6 +176,18 @@ export const de1ConnectProgram = (d: De1ConnectDeps): Effect.Effect<void, De1Con
 					Effect.sync(() => d.onStatus(`DE1 MMR read ${reg} skipped: ${describeError(e)}`))
 				)
 			);
+		yield* readMmr(MmrRegister.FirmwareVersion, 'DE1 firmware-build MMR read dispatched ✓');
+		yield* Effect.forEach(CONNECT_MMR_SWEEP, (reg) => readMmr(reg), {
+			concurrency: 1,
+			discard: true
+		});
+	});
+
+export const de1ConnectProgram = (d: De1ConnectDeps): Effect.Effect<void, De1ConnectStepFailed> =>
+	Effect.gen(function* () {
+		/** A fatal transport step — failure carries the step name for attribution. */
+		const fatal = (step: string, thunk: () => Promise<unknown>) =>
+			Effect.tryPromise({ try: thunk, catch: (cause) => new De1ConnectStepFailed({ step, cause }) });
 
 		// 1) GATT connect (fatal).
 		yield* fatal('GATT connect', () => d.device.connectGatt());
@@ -201,11 +225,7 @@ export const de1ConnectProgram = (d: De1ConnectDeps): Effect.Effect<void, De1Con
 
 		// 5) FirmwareVersion MMR (build number for the update check), then the sweep
 		//    serially in declaration order. All best-effort.
-		yield* readMmr(MmrRegister.FirmwareVersion, 'DE1 firmware-build MMR read dispatched ✓');
-		yield* Effect.forEach(CONNECT_MMR_SWEEP, (reg) => readMmr(reg), {
-			concurrency: 1,
-			discard: true
-		});
+		yield* de1MachineInfoProgram(d);
 
 		d.onStatus('Ready — receiving DE1 notifications');
 	});

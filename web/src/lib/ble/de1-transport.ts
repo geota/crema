@@ -111,6 +111,25 @@ export interface De1Transport {
 	write(serviceUuid: string, characteristicUuid: string, data: Uint8Array): Promise<void>;
 
 	/**
+	 * Write `data` only if `guard()` still holds when the write reaches the
+	 * head of the serial GATT queue. Resolves `true` once written, `false`
+	 * when the guard refused (nothing was sent); rejects like {@link write}.
+	 * `settled`, when given, hears the result (`true` written, `false`
+	 * failed) inside the same queued step, before the next queued write's
+	 * guard runs. The profile upload uses both so a superseded or failed
+	 * upload's queued frames never reach the DE1 (cohort review 2026-10-28,
+	 * #2 N2). Optional: without it the caller checks the guard before
+	 * queueing.
+	 */
+	writeIf?(
+		serviceUuid: string,
+		characteristicUuid: string,
+		data: Uint8Array,
+		guard: () => boolean,
+		settled?: (written: boolean) => void
+	): Promise<boolean>;
+
+	/**
 	 * One-shot read of `(serviceUuid, characteristicUuid)`. Returns
 	 * the raw bytes the device responded with.
 	 */

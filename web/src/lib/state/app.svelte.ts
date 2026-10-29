@@ -76,6 +76,14 @@ import {
 import { getActiveShotStore, type ActiveShotData } from './active-shot.svelte';
 import { ConnectSweepRunner, readBatteryPercent } from './connect-sweep';
 import { IdleSleepRunner } from './idle-sleep';
+import { CoreTicker } from './core-ticker';
+import { stepCapRefusal } from '#lib/profiles/step-cap.js';
+import {
+	ProfileWriteGenerations,
+	isProfileWriteTarget,
+	type ProfileWriteBatch,
+	type ProfileWriteOutcome
+} from '#lib/services/profile-write-generations.js';
 import { FirmwareUpdateController } from '#lib/firmware/firmware-update.svelte.js';
 import { readPowerOk } from '#lib/firmware/power.js';
 import { setFirmwareWakeLock } from '#lib/shell/wake-lock.js';
@@ -134,9 +142,10 @@ export class NoActiveProfileError extends Error {
 
 /**
  * Thrown by {@link CremaApp.startShot} when the lazy profile-sync upload
- * fails (or times out) before the Espresso state request goes out. The
- * DE1 still holds whatever profile it had before the failed upload, so
- * the shot is refused — the caller can offer "try again" via a banner.
+ * fails (or times out) before the Espresso state request goes out, or when
+ * the profile has more steps than the DE1 runs. What the DE1 holds after a
+ * failed upload is unknown (the core re-uploads at Idle), so the shot is
+ * refused — the caller can offer "try again" via a banner.
  */
 export class ProfileSyncFailedError extends Error {
 	constructor(message: string) {
@@ -272,6 +281,10 @@ export class CremaApp {
 
 	/** One outstanding stop write at a time (issue #15 follow-up). */
 	#stopWriteInFlight = false;
+	/** Which profile writes may still go out and be acked (#2 N2). */
+	readonly #profileWrites = new ProfileWriteGenerations();
+	/** The 1 s core clock while the DE1 link is up or recovering (#2 N1). */
+	private readonly ticker: CoreTicker;
 	private readonly de1: De1Manager;
 	private readonly scale: ScaleManager;
 	/** Reconnect the last DE1 / scale on launch; a user action cancels its wait. */
@@ -421,7 +434,16 @@ export class CremaApp {
 				return (id !== null ? profiles.get(id)?.tankTemperatureC : undefined) ?? 0;
 			},
 			battery: readBatteryPercent,
-			apply: (out) => this.applyCoreOutput(out)
+			apply: (out) => this.applyCoreOutput(out),
+			// The core's clock is the notification clock (performance.now());
+			// a wall-clock stamp here pushed it decades ahead and every
+			// watchdog then compared against the wrong epoch.
+			now: () => performance.now()
+		});
+		this.ticker = new CoreTicker({
+			core,
+			apply: (out) => this.applyCoreOutput(out),
+			now: () => performance.now()
 		});
 		this.idleSleep = new IdleSleepRunner({
 			core,
@@ -487,6 +509,9 @@ export class CremaApp {
 				// The idle-sleep timer learns the link state (a reconnect is not
 				// presence: no poke here — the core pokes on real activity only).
 				this.idleSleep.onDe1State(de1State);
+				// The core's watchdogs (upload acks, machine-model wait, re-upload
+				// repeat, lost scale, steam eco) run on this clock.
+				this.ticker.onDe1State(de1State);
 				// The connect sweep: every machine setting Crema owns a
 				// preference for, re-asserted because the DE1 forgets them
 				// across a power cycle. The list is core-owned
@@ -863,7 +888,10 @@ export class CremaApp {
 			if (event.type === 'ProfileReuploadNeeded') {
 				// The core saw the machine Idle with an unknown profile after
 				// a failed upload — put the active profile back now, so a
-				// group-head start can't brew the mix (Decenza ReArm).
+				// group-head start can't brew the mix (Decenza ReArm). The
+				// request stays outstanding in the core until an upload starts
+				// and is repeated every 5 s, so a link that is not ready yet is
+				// asked again rather than dropped (#6 #8).
 				if (this.state.current.de1State === 'ready' && !(this.firmware?.holdsLink ?? false)) {
 					this.state.log('Profile on the DE1 is unknown after a failed upload — re-uploading.');
 					this.ensureLoadedMatches();
@@ -927,8 +955,11 @@ export class CremaApp {
 				this.brewParamsAtShotStart = null;
 			}
 		}
+		// The profile writes of this output form one batch: a header write
+		// supersedes every earlier upload's queued writes (#2 N2).
+		const batch = this.#profileWrites.begin(output.commands);
 		for (const command of output.commands) {
-			void this.executeCommand(command);
+			void this.executeCommand(command, batch);
 		}
 	}
 
@@ -1082,7 +1113,10 @@ export class CremaApp {
 		};
 	}
 
-	private async executeCommand(command: Command): Promise<void> {
+	private async executeCommand(
+		command: Command,
+		batch: ProfileWriteBatch | null = null
+	): Promise<void> {
 		switch (command.type) {
 			case 'WriteScale': {
 				const data = new Uint8Array(command.content.data);
@@ -1111,14 +1145,59 @@ export class CremaApp {
 					break;
 				}
 				if (isStopWrite) this.#stopWriteInFlight = true;
+				// A profile write goes out only while its upload is the live one
+				// and none of its earlier writes failed — checked when it reaches
+				// the head of the GATT queue, since every command of an output is
+				// queued at once (#2 N2).
+				const profileBatch = isProfileWriteTarget(command.content.target) ? batch : null;
+				let skipped = false;
+				const guard =
+					profileBatch === null
+						? undefined
+						: () => {
+								skipped = !this.#profileWrites.mayWrite(profileBatch);
+								return !skipped;
+							};
+				// The result is recorded inside the queued step (`settled`), so a
+				// failure stops this batch before its next write checks the guard.
+				let outcome: ProfileWriteOutcome | null = null;
+				const settled =
+					profileBatch === null
+						? undefined
+						: (written: boolean) => {
+								outcome = this.#profileWrites.settle(profileBatch, written);
+							};
 				let delivered = false;
 				try {
 					const data = new Uint8Array(command.content.data);
 					const hex = [...data].map((b) => b.toString(16).padStart(2, '0')).join('');
-					this.state.log(`→ DE1 write ${command.content.target} ${hex}`);
-					delivered = await this.de1.writeCharacteristic(command.content.target, data);
+					if (profileBatch === null || this.#profileWrites.mayWrite(profileBatch)) {
+						this.state.log(`→ DE1 write ${command.content.target} ${hex}`);
+					}
+					delivered = await this.de1.writeCharacteristic(
+						command.content.target,
+						data,
+						guard,
+						settled
+					);
 				} finally {
 					if (isStopWrite) this.#stopWriteInFlight = false;
+				}
+				if (profileBatch !== null) {
+					if (skipped) break;
+					// A skip before the queue (no link, firmware lock) never reached
+					// the step: settle it here.
+					outcome ??= this.#profileWrites.settle(profileBatch, delivered);
+					if (outcome === 'failed') {
+						// Stop the rest of this upload and fail it now, so the
+						// re-upload does not wait for the ack watchdog.
+						this.state.log('Profile write failed — stopping this upload');
+						this.applyCoreOutput(await this.core.profileWriteFailed(performance.now()));
+						break;
+					}
+					// Superseded between the write and now: its ack must not reach
+					// the newer upload.
+					if (outcome === 'drop' || !this.#profileWrites.mayWrite(profileBatch)) break;
 				}
 				// The DE1 does *not* emit Handle Value Notifications on
 				// FrameWrite (cuuid_10) — confirmed by the 2026-05-21
@@ -1960,7 +2039,8 @@ export class CremaApp {
 		}
 		this.state.log(`Sync on connect: ${profile.name}`);
 		try {
-			await this.syncActiveProfile(profile, {});
+			// Background: a user's start already uploading wins (#2 N2).
+			await this.syncActiveProfile(profile, {}, { background: true });
 		} catch (e) {
 			// `syncActiveProfile` already logs failure detail through
 			// the `ProfileUploadFailed` event fold; swallow the
@@ -1991,7 +2071,8 @@ export class CremaApp {
 	 */
 	async syncActiveProfile(
 		profile: CremaProfile,
-		qc: ProfileFingerprintOverrides
+		qc: ProfileFingerprintOverrides,
+		opts: { background?: boolean } = {}
 	): Promise<boolean> {
 		const desired = profileFingerprint(profile, qc);
 		const alreadyLoaded = this.state.current.activeProfileFingerprint === desired;
@@ -2014,7 +2095,8 @@ export class CremaApp {
 						alreadyLoaded,
 						upload: Effect.promise(() => this.uploadProfile(toCoreProfile(profile))),
 						cancel: Effect.promise(() => this.cancelProfileUpload()),
-						log: (line) => this.state.log(line)
+						log: (line) => this.state.log(line),
+						background: opts.background
 					})
 				)
 			)
@@ -2361,6 +2443,12 @@ export class CremaApp {
 				() => void this.connectScale()
 			);
 		}
+		// A profile saved before the 20-step limit can't upload: say so, rather
+		// than fail the sync and blame the DE1 (#6 #6).
+		const overLimit = stepCapRefusal(profile.name, profile.segments.length);
+		if (overLimit !== null) {
+			throw new ProfileSyncFailedError(overLimit);
+		}
 		// Lazy profile sync — compare the desired fingerprint against the
 		// cached "what's on the DE1" fingerprint. `syncActiveProfile` is
 		// a no-op when they match (cheap djb2 + one snapshot read).
@@ -2369,7 +2457,7 @@ export class CremaApp {
 			// `ProfileUploadFailed`'s fold already logged the cause; the
 			// dashboard's machine-error / log banner will pick it up.
 			throw new ProfileSyncFailedError(
-				'Profile sync failed — DE1 still holds the previous profile. ' +
+				'The profile did not upload, so the shot was not started. ' +
 					'Try Coffee again, or reload the profile from the Profiles page.'
 			);
 		}

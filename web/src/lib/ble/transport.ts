@@ -802,6 +802,38 @@ export class BleDevice implements De1Transport {
 	}
 
 	/**
+	 * Write `data` only if `guard()` still holds when the write's queued step
+	 * starts — see {@link De1Transport.writeIf}. Resolves `false` (nothing
+	 * sent) when the guard refuses.
+	 */
+	writeIf(
+		serviceUuid: string,
+		characteristicUuid: string,
+		data: Uint8Array,
+		guard: () => boolean,
+		settled?: (written: boolean) => void
+	): Promise<boolean> {
+		return this.gattQueue.enqueue(async () => {
+			if (!guard()) return false;
+			try {
+				await this.bounded('write', async () => {
+					this.assertLive();
+					let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
+					if (characteristic === undefined) {
+						characteristic = await this.resolveCharacteristic(serviceUuid, characteristicUuid);
+					}
+					await characteristic.writeValueWithResponse(data.slice().buffer);
+				});
+			} catch (error) {
+				settled?.(false);
+				throw error;
+			}
+			settled?.(true);
+			return true;
+		});
+	}
+
+	/**
 	 * Read a characteristic's current value. Used for the DE1 `Version`
 	 * characteristic, which is a one-shot Read (not a Notify) — there is no
 	 * value-change stream, so the manager reads it once after connecting.

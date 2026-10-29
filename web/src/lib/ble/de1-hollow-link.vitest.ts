@@ -9,15 +9,20 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { Exit } from 'effect';
+import { Effect, Exit } from 'effect';
 import type { AppRuntime } from '#lib/effect/runtime.js';
 import type { CremaCore } from '#lib/core/index.js';
 
-vi.mock('#lib/services/de1-orchestrator.js', () => ({
-	STATE_SEED_STEP: 'machine state read',
-	de1ConnectProgram: () => ({}),
-	de1SeedProgram: () => ({})
-}));
+vi.mock('#lib/services/de1-orchestrator.js', async (importOriginal) => {
+	const real = await importOriginal<typeof import('#lib/services/de1-orchestrator.js')>();
+	return {
+		STATE_SEED_STEP: 'machine state read',
+		de1ConnectProgram: () => ({}),
+		de1SeedProgram: () => ({}),
+		// The real identity program, so the test sees the reads it dispatches.
+		de1MachineInfoProgram: real.de1MachineInfoProgram
+	};
+});
 vi.mock('#lib/wasm/de1_wasm.js', () => ({ de1WriteTargetUuid: () => null }));
 vi.mock('./de1-uuids', () => ({
 	De1Uuids: { SERVICE: 'a000', STATE_INFO: 'a00e', FW_MAP_REQUEST: 'a009' }
@@ -49,25 +54,40 @@ function fakeDevice(releaseResult = false) {
 function setup(exits: Exit.Exit<void, unknown>[]) {
 	const states: string[] = [];
 	const lines: string[] = [];
+	/** Identity reads dispatched and states reported, in order. */
+	const timeline: string[] = [];
 	const runtime = {
-		runPromiseExit: vi.fn(async () => exits.shift() ?? Exit.void)
+		// The mocked connect / seed programs are plain objects and take the
+		// scripted exits; a real Effect (the identity program) really runs.
+		runPromiseExit: vi.fn(async (program: unknown) =>
+			Effect.isEffect(program)
+				? Effect.runPromiseExit(program as Effect.Effect<void>)
+				: (exits.shift() ?? Exit.void)
+		)
 	} as unknown as AppRuntime;
 	const manager = new De1Manager(
 		{
 			de1LinkLost: async () => ({ actions: [] }),
-			reset: async () => ({ actions: [] })
+			reset: async () => ({ actions: [] }),
+			readMmr: async (reg: string) => ({ events: [], commands: [], reg })
 		} as unknown as CremaCore,
 		{
-			onCoreOutput: () => undefined,
+			onCoreOutput: (out) => {
+				const reg = (out as unknown as { reg?: string }).reg;
+				if (reg !== undefined) timeline.push(`read ${reg}`);
+			},
 			onStatus: (l) => lines.push(l),
-			onState: (s) => states.push(s),
+			onState: (s) => {
+				states.push(s);
+				timeline.push(`state ${s}`);
+			},
 			onDiagnostics: () => undefined
 		},
 		runtime
 	);
 	const attach = (d: De1Transport) =>
 		(manager as unknown as { attach(d: De1Transport): Promise<void> }).attach(d);
-	return { manager, states, lines, attach };
+	return { manager, states, lines, timeline, attach };
 }
 
 const hollow = Exit.fail({ _tag: 'De1ConnectStepFailed', step: 'machine state read', cause: new Error('timed out') });
@@ -111,6 +131,35 @@ describe('De1Manager hollow first connect', () => {
 		await attach(f.transport);
 		expect(states).not.toContain('ready');
 		expect(states[states.length - 1]).toBe('reconnecting');
+	});
+});
+
+describe('De1Manager identity reads after a hollow first connect (cohort review 2026-10-28, #3 P1)', () => {
+	it('the first healthy re-seed reads the model, serial and firmware build before ready', async () => {
+		const { timeline, attach, manager } = setup([hollow, Exit.void]);
+		const f = fakeDevice(true);
+		await attach(f.transport);
+		expect(timeline).not.toContain('state ready');
+		f.cbs.reconnected?.();
+		await vi.waitFor(() => expect(timeline).toContain('state ready'));
+		const ready = timeline.indexOf('state ready');
+		for (const reg of ['FirmwareVersion', 'MachineModel', 'SerialNumber', 'HeaterVoltage', 'GhcInfo']) {
+			const at = timeline.indexOf(`read ${reg}`);
+			expect(at, reg).toBeGreaterThanOrEqual(0);
+			expect(at, reg).toBeLessThan(ready);
+		}
+		await manager.disconnect();
+	});
+
+	it('a later re-seed on a link that already read its identity does not re-read it', async () => {
+		const { timeline, attach, manager } = setup([Exit.void, Exit.void]);
+		const f = fakeDevice(true);
+		await attach(f.transport);
+		timeline.length = 0;
+		f.cbs.reconnected?.();
+		await vi.waitFor(() => expect(timeline).toContain('state ready'));
+		expect(timeline.filter((t) => t.startsWith('read '))).toEqual([]);
+		await manager.disconnect();
 	});
 });
 

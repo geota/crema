@@ -1341,6 +1341,14 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					`Uploading profile: ${event.content.title}`
 				)
 			};
+		case 'ProfileUploadWaitingForModel':
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Waiting for the machine model before uploading ${event.content.title}`
+				)
+			};
 		case 'ProfileUploadProgress':
 			return {
 				...snapshot,
