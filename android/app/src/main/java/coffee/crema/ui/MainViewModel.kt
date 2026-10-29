@@ -2301,17 +2301,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             qcFlushTempC = p.qcFlushTempC,
             qcGrind = p.qcGrind,
         ) }
-        runCatching { bridge.setMaxShotDuration(p.maxShotDurationS) }
-        runCatching { bridge.setAutoTare(p.autoTare) }
-        runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
-        runCatching { bridge.setVolumeStopWithScale(p.volumeStopWithScale) }
+        // On a remote the core keeps following the hub's values (§7.4).
+        pushCoreInputs(effectiveState())
         // Re-run the connect sweep with the restored prefs — machine registers
         // plus the Quick-Controls steam / hot-water / flush params — so a
         // restore takes effect without waiting for the next connect or QC edit
         // (a no-op when disconnected or off-primary).
         seedMachineSettings()
-        idleSleep.configure(_ui.value.idleSleepMin)
-        persistPrefs()
+        persistPrefs() // pushes the hub's snapshot too
     }
 
     /** Request that History select [id] when it next opens (the Brew "Last shot"
@@ -2780,7 +2777,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val m = s.mirror?.takeUnless { it.frozen } ?: return@update s
             s.copy(mirror = m.applied(cfg, overlay, cfg.activeProfileJson))
         }
-        pushStopTargets()
+        // The remote's core follows the hub's values (§7.4).
+        pushCoreInputs(effectiveState())
         appendLog("Config from the hub applied (profile ${cfg.activeProfileId})")
     }
 
@@ -2797,6 +2795,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * one, and every other role drops it.
      */
     private fun onRoleStarting(role: String, refind: Boolean) {
+        val wasRemote = _ui.value.mirror != null
         _ui.update { s ->
             when {
                 role != "secondary" -> s.copy(mirror = null)
@@ -2804,6 +2803,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 else -> s.copy(mirror = MirroredSettings(hubName = s.mirroringPrimaryName))
             }
         }
+        // Leaving the remote role: the core goes back to this device's own values.
+        if (wasRemote && role != "secondary") pushCoreInputs(effectiveState())
+    }
+
+    /**
+     * The core inputs that follow settings, from [state] (spec §7.4): the
+     * stop-on-weight, auto-tare, max-duration and volume-stop flags, the stop
+     * targets, and the idle-sleep timer. Called with [effectiveState]: after
+     * each applied snapshot on a remote, at the end of every own-state writer
+     * ([loadPrefs], [applyRestoredSettings], [resetPreferences], [eraseAll])
+     * in every role, and on leaving the remote role.
+     */
+    private fun pushCoreInputs(state: MainUiState) {
+        runCatching { bridge.setStopOnWeight(state.stopOnWeight) }.onFailure { appendLog("Set stop-on-weight failed: ${it.message}") }
+        runCatching { bridge.setAutoTare(state.autoTare) }.onFailure { appendLog("Set auto-tare failed: ${it.message}") }
+        runCatching { bridge.setMaxShotDuration(state.maxShotDurationS) }.onFailure { appendLog("Set max shot duration failed: ${it.message}") }
+        runCatching { bridge.setVolumeStopWithScale(state.volumeStopWithScale) }.onFailure { appendLog("Set volume-stop-with-scale failed: ${it.message}") }
+        pushStopTargets(state)
+        idleSleep.configure(state.idleSleepMin)
     }
 
     /**
@@ -3860,15 +3878,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         ) }
         // Prime the background keep-alive with the resolved setting (#65).
         bgConnection.setEnabled(p.keepConnectedScreenOff ?: isTablet)
-        // Push the persisted cap + behaviour toggles to the core so they're live
-        // from launch (the core doesn't echo these back as events).
-        runCatching { bridge.setMaxShotDuration(p.maxShotDurationS) }
-        runCatching { bridge.setAutoTare(p.autoTare) }
-        runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
-        runCatching { bridge.setVolumeStopWithScale(p.volumeStopWithScale) }
         prefsLoaded = true
-        // The idle-sleep timer starts counting once it knows the setting.
-        idleSleep.configure(_ui.value.idleSleepMin)
+        // The cap, behaviour toggles, stop targets and idle-sleep timer go
+        // to the core now (it doesn't echo them back). On a remote that is
+        // the hub's values: a snapshot that landed before the load finished
+        // isn't clobbered by this device's own (§7.4).
+        pushCoreInputs(effectiveState())
         // The Brew setup opens on the most recent method, now it's known.
         resolveGuidedSetup()
         // Hydrate the remembered addresses, arm each manager's reconnect loop,
@@ -4289,10 +4304,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistPrefs()
     }
 
-    /** Reset Crema's preferences (theme, max shot duration) to defaults. Persisted. */
+    /**
+     * Reset Crema's preferences (theme, units, shot behaviour, brew defaults)
+     * to defaults. Only those fields: the role, the hub target, paired
+     * devices and the DE1 / scale bindings stay (review-v2 6; it used to save
+     * a blank AppPrefs wholesale). Persisted through [persistPrefs], which
+     * also pushes the hub's snapshot.
+     */
     fun resetPreferences() {
         val def = AppPrefs()
-        viewModelScope.launch { settingsStore.save(def) }
         _ui.update { it.copy(
             themeMode = def.themeMode,
             maxShotDurationS = def.maxShotDurationS,
@@ -4314,7 +4334,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             defaultBrewTempC = def.defaultBrewTempC,
             defaultPreinfuseS = def.defaultPreinfuseS,
         ) }
-        runCatching { bridge.setMaxShotDuration(def.maxShotDurationS) }
+        pushCoreInputs(effectiveState())
+        persistPrefs()
     }
 
     /**

@@ -187,6 +187,49 @@ class RemoteSettingsTest {
         assertTrue(vm.ui.value.userMessages.any { it == "That profile is only on Kitchen tablet" }, "${vm.ui.value.userMessages}")
     }
 
+    /** AC-31: the remote's core (its stop-target projection) follows the
+     *  hub's values, also after a restore or a reset, and this device's own
+     *  once it stops being a remote. */
+    @Test
+    fun `the remote core follows the hub`() {
+        val vm = fixture.start()
+        fixture.push()
+        fun weight() = vm.ui.value.stopTargets?.weightConfiguredG
+        VmHarness.idleUntil("the hub's stop target") { weight() == 40f }
+        val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
+        runBlocking { vm.restoreBackupBytes(backup, MainViewModel.RestoreMode.MERGE) }
+        VmHarness.idle()
+        assertEquals(40f, weight(), "after a restore")
+        vm.resetPreferences()
+        VmHarness.idle()
+        assertEquals(40f, weight(), "after a reset")
+        vm.switchToNormal()
+        VmHarness.advance(200)
+        VmHarness.idleUntil("normal") { VmHarness.proxyController(vm).state.value.role == "normal" }
+        val ownYield = vm.ui.value.profiles.first { it.id == RemoteFixture.PROFILE_P }.yieldOut.takeIf { it > 0f }
+        assertEquals(ownYield, weight(), "this device's own profile, no override")
+    }
+
+    /** AC-32: restore, reset and erase on a remote change own values only;
+     *  the screens keep showing the hub's. */
+    @Test
+    fun `own-state writers leave the mirror alone`() {
+        val vm = fixture.start()
+        fixture.push()
+        val shown = abOfUi(vm.ui.value)
+        val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
+        runBlocking { vm.restoreBackupBytes(backup, MainViewModel.RestoreMode.MERGE) }
+        VmHarness.idle()
+        assertEquals(shown, abOfUi(vm.ui.value), "after a restore")
+        vm.resetPreferences()
+        VmHarness.idle()
+        assertEquals(shown, abOfUi(vm.ui.value), "after a reset")
+        assertEquals(coffee.crema.settings.AppPrefs().stopOnWeight, VmHarness.ownState(vm).stopOnWeight, "the own value was reset")
+        vm.eraseAll()
+        VmHarness.idle()
+        assertEquals(shown, abOfUi(vm.ui.value), "after erase")
+    }
+
     private fun abOfUi(ui: MainUiState): Map<String, Any?> = abOf(
         P.copy(
             maxShotDurationS = ui.maxShotDurationS, autoTare = ui.autoTare, stopOnWeight = ui.stopOnWeight,
