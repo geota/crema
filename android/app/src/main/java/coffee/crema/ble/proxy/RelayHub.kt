@@ -80,10 +80,11 @@ class RelayHub(
     private val clientCapacity: Int = DEFAULT_CLIENT_CAPACITY,
     /**
      * Dispatch a relayed user-intent [Frame.Control] from a secondary to the
-     * primary's command router (the VM's machine-control methods in production):
-     * `success` once dispatched on the real link — the effect returns to the
-     * secondary over the [Frame.Notify] stream — `failure` to reply
-     * [Frame.ControlErr]. The default rejects every control; the real handler is
+     * primary's command router (the machine command seam in production):
+     * `success` when accepted — the effect returns to the secondary over the
+     * [Frame.Notify] stream — `failure` with the reason to reply
+     * [Frame.ControlErr]. Called one control at a time per session, in arrival
+     * order. The default rejects every control; the real handler is
      * wired only on the primary (a normal/loopback relay has no machine to
      * drive), so M1 and the unit tests keep a read-only mirror by construction.
      */
@@ -316,29 +317,39 @@ class RelayHub(
 
     /** The session's read loop: handshake frames inline, then requests. */
     private suspend fun readFrames(session: ClientSession, link: FrameLink): Unit = coroutineScope {
-        link.incoming().collect { frame ->
-            // The handshake is handled INLINE (suspending the collect loop) so
-            // the pairing decision lands before any later frame from this
-            // client is served (issue 02).
-            if (frame is Frame.Hello) { handleHello(session, frame); return@collect }
-            if (frame is Frame.Auth) { handleAuth(session, frame); return@collect }
-            // Pre-pairing gate (issue 03): until a Hello has been APPROVED, an
-            // unapproved peer may not attach, read, or observe. A peer that skips
-            // Hello (or was denied) gets no attach, snapshot, read or stream —
-            // only an error reply to each request, so it fails fast.
-            if (!session.approved) {
-                Log.w(TAG, "Refusing ${frame::class.simpleName} from unapproved peer (no approved Hello)")
-                refuseUnapproved(session, frame)
-                return@collect
+        // This session's controls run one at a time, in the order they
+        // arrived: a setting then a Start must not swap. Off the read loop, so
+        // reads aren't held up behind a control.
+        val controls = Channel<Frame.Control>(CONTROL_QUEUE_CAPACITY)
+        launch { for (frame in controls) handleControl(session, frame) }
+        try {
+            link.incoming().collect { frame ->
+                // The handshake is handled INLINE (suspending the collect loop) so
+                // the pairing decision lands before any later frame from this
+                // client is served (issue 02).
+                if (frame is Frame.Hello) { handleHello(session, frame); return@collect }
+                if (frame is Frame.Auth) { handleAuth(session, frame); return@collect }
+                // Pre-pairing gate (issue 03): until a Hello has been APPROVED, an
+                // unapproved peer may not attach, read, or observe. A peer that skips
+                // Hello (or was denied) gets no attach, snapshot, read or stream —
+                // only an error reply to each request, so it fails fast.
+                if (!session.approved) {
+                    Log.w(TAG, "Refusing ${frame::class.simpleName} from unapproved peer (no approved Hello)")
+                    refuseUnapproved(session, frame)
+                    return@collect
+                }
+                // Reads are suspend (they hit the real link): run them off the
+                // collect loop so they don't head-of-line-block later frames.
+                // Controls join the session's ordered queue.
+                when (frame) {
+                    is Frame.Read -> launch { handleRead(session, frame) }
+                    is Frame.Control ->
+                        if (!controls.trySend(frame).isSuccess) deliver(session, Frame.ControlErr(frame.id, CONTROLS_BUSY))
+                    else -> handle(session, frame)
+                }
             }
-            // Reads and controls are suspend (they hit the real link / drive the
-            // machine); run them off the collect loop so they don't head-of-line-
-            // block later frames.
-            when (frame) {
-                is Frame.Read -> launch { handleRead(session, frame) }
-                is Frame.Control -> launch { handleControl(session, frame) }
-                else -> handle(session, frame)
-            }
+        } finally {
+            controls.close()
         }
     }
 
@@ -489,9 +500,9 @@ class RelayHub(
     }
 
     /** Dispatch a secondary's relayed user intent to the primary's command router
-     *  and reply [Frame.ControlOk] / [Frame.ControlErr]. The action drives the
-     *  primary's real link; its effect returns to every secondary as machine
-     *  state over the [Frame.Notify] stream, so the reply only confirms dispatch. */
+     *  and reply [Frame.ControlOk] (accepted) / [Frame.ControlErr] (refused, with
+     *  the reason). The action drives the primary's real link; its effect
+     *  returns to every secondary as machine state over the [Frame.Notify] stream. */
     private suspend fun handleControl(session: ClientSession, frame: Frame.Control) {
         // Scope gate (issue 02): a view-only (mirror-only) peer may observe but not
         // drive — refuse every Control/Handoff/config verb it sends.
@@ -606,5 +617,8 @@ class RelayHub(
         const val DEFAULT_CLIENT_CAPACITY = 1024
         const val MAX_SESSIONS = 8
         const val HANDSHAKE_DEADLINE_MS = 5_000L
+        /** Controls one session may have waiting; more are refused. */
+        const val CONTROL_QUEUE_CAPACITY = 64
+        const val CONTROLS_BUSY = "too many controls waiting"
     }
 }

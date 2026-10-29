@@ -4,12 +4,15 @@ import coffee.crema.core.MachineRequest
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * [MachineActions] that records what ran: the verb bodies a test's
- * [LocalMachine] or [RelayMachine] reached.
+ * [MachineActions] that records what ran, and on which thread: the verb bodies
+ * a test's [LocalMachine] or [RelayMachine] reached.
  */
 internal class RecordingMachineActions : MachineActions {
     /** Verb bodies that ran, in order. */
     val applied = CopyOnWriteArrayList<String>()
+
+    /** The thread each one ran on. */
+    val threads = CopyOnWriteArrayList<String>()
 
     /** Config shown (the optimistic half) and undone. */
     val shown = CopyOnWriteArrayList<MachineCommand.Config>()
@@ -19,6 +22,8 @@ internal class RecordingMachineActions : MachineActions {
 
     private fun ran(what: String) {
         applied += what
+        // Coroutine debug mode appends " @coroutine#N" to the thread name.
+        threads += Thread.currentThread().name.substringBefore(" @")
     }
 
     override fun applyStartShot() = ran("startShot")

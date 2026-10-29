@@ -36,7 +36,7 @@ import kotlin.test.assertTrue
  *
  * Everything runs on the Robolectric main looper, so the test is
  * deterministic: no socket, no sleeps. (In production the hub runs on the
- * relay server's threads.)
+ * relay server's threads and the dispatcher moves each command onto Main.)
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])

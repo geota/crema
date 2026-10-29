@@ -1,16 +1,23 @@
 package coffee.crema.machine
 
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-/** A primary's relayed-control entry: decode and check, run the command, and
- *  announce only accepted commands. */
+/** A primary's relayed-control entry: decode and check, run on the lane in
+ *  order, and announce only accepted commands. */
 class RelayedCommandDispatcherTest {
 
+    /** Stands in for Main: one named thread. */
+    private val laneExecutor = Executors.newSingleThreadExecutor { Thread(it, LANE) }
     private val actions = RecordingMachineActions()
     private val announced = CopyOnWriteArrayList<String>()
     private var machineIdle = false
@@ -21,10 +28,30 @@ class RelayedCommandDispatcherTest {
         machineIdle = { machineIdle },
         announce = { text, _ -> announced += text },
         log = {},
+        lane = laneExecutor.asCoroutineDispatcher(),
     )
+
+    @AfterTest
+    fun tearDown() {
+        laneExecutor.shutdownNow()
+    }
 
     private fun dispatch(method: String, args: String = "", origin: CommandOrigin = phone) =
         runBlocking { dispatcher.dispatch(method, args, origin) }
+
+    @Test
+    fun `commands run on the lane in the order they were dispatched`() {
+        runBlocking {
+            // Each caller reaches the lane's queue before the next starts, as
+            // the hub's per-session queue hands them over.
+            val jobs = (1..20).map { i ->
+                launch(start = CoroutineStart.UNDISPATCHED) { dispatcher.dispatch("setQcGrind", "$i.0", phone) }
+            }
+            jobs.forEach { it.join() }
+        }
+        assertEquals((1..20).map { "commit(${MachineCommand.SetQc(QcField.GRIND, it.toFloat())})" }, actions.applied.toList())
+        assertEquals(setOf(LANE), actions.threads.toSet(), "every command ran on the lane")
+    }
 
     @Test
     fun `a malformed control is refused before anything runs`() {
@@ -58,5 +85,9 @@ class RelayedCommandDispatcherTest {
         dispatch("cancelMaintenance")
         assertTrue(announced.isEmpty(), "$announced")
         assertEquals(3, actions.peerActivity)
+    }
+
+    private companion object {
+        const val LANE = "main-lane"
     }
 }

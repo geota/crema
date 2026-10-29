@@ -39,6 +39,7 @@ import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -53,6 +54,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
+import kotlin.coroutines.CoroutineContext
 
 /** This device's human label — the name peers see in the multi-device picker
  *  and the label stamped into backup envelopes. */
@@ -145,6 +147,9 @@ class ProxyController(
     private val firmwareHoldsLink: () -> Boolean = { false },
     /** Seals the pairing secrets at rest (tests pass a fake cipher). */
     secretBox: SecretBox = DeviceSecretBox.instance,
+    /** Where a primary runs relayed commands: Main, like its own UI (tests
+     *  pass a test dispatcher). */
+    commandLane: CoroutineContext = Dispatchers.Main.immediate,
 ) {
 
     /** The proxy slice of the UI snapshot — the VM mirrors this into MainUiState. */
@@ -211,6 +216,7 @@ class ProxyController(
             notify(text)
         },
         log = { appendLog(it) },
+        lane = commandLane,
     )
 
     /** Where the VM's verbs send their commands: the relay while mirroring,
@@ -350,7 +356,8 @@ class ProxyController(
     // ── A secondary's relayed control, on this primary ───────────────────────
 
     /** Run a secondary's relayed control through [relayedCommands]: decoded,
-     *  checked, then run by the same [LocalMachine] the primary's own UI uses, so `startShot` runs the full shot orchestration and that
+     *  checked, then run on Main by the same [LocalMachine] the primary's own
+     *  UI uses, so `startShot` runs the full shot orchestration and that
      *  complexity never crosses the wire. Wired into the [RelayHub] by
      *  [startPrimaryMode]. */
     internal suspend fun handleRelayedControl(
