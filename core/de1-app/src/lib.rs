@@ -10663,7 +10663,7 @@ mod tests {
         #[test]
         fn minimum_profile_emits_header_one_frame_and_tail() {
             let mut core = CremaCore::new();
-            let p = profile("Minimum", vec![step("a", Pump::Pressure, None)]);
+            let p = profile("Minimum", vec![step("a", Pump::Flow, None)]);
             let out = core.upload_profile(&p, Duration::ZERO).unwrap();
             // 1 header + 1 frame + 0 extensions + 1 tail = 3 writes.
             assert_eq!(out.commands.len(), 3);
@@ -10700,9 +10700,9 @@ mod tests {
             let p = profile(
                 "Triple",
                 vec![
-                    step("a", Pump::Pressure, None),
-                    step("b", Pump::Pressure, None),
-                    step("c", Pump::Pressure, None),
+                    step("a", Pump::Flow, None),
+                    step("b", Pump::Flow, None),
+                    step("c", Pump::Flow, None),
                 ],
             );
             let started = core.upload_profile(&p, Duration::ZERO).unwrap();
@@ -10781,12 +10781,45 @@ mod tests {
         }
 
         #[test]
+        fn an_unlimited_pressure_step_uploads_with_the_8_ml_s_default_limit() {
+            // de1app apply_default_flow_limit_to_pressure_steps / Decenza
+            // 0dbcc442 (report 08 S1): extension frame [32+i][U8P4 8.0 =
+            // 0x80][U8P4 1.0 = 0x10][0 …]. A flow step stays unlimited.
+            let mut core = CremaCore::new();
+            let p = profile(
+                "Default",
+                vec![
+                    step("pour", Pump::Pressure, None),
+                    step("f", Pump::Flow, None),
+                ],
+            );
+            let out = core.upload_profile(&p, Duration::ZERO).unwrap();
+            let frames: Vec<&Vec<u8>> = out
+                .commands
+                .iter()
+                .filter_map(|c| match c {
+                    Command::WriteCharacteristic {
+                        target: WriteTarget::De1ProfileFrame,
+                        data,
+                    } => Some(data),
+                    _ => None,
+                })
+                .collect();
+            // 2 frames, 1 extension (step 0 only), tail.
+            assert_eq!(frames.len(), 4);
+            assert_eq!(frames[2].as_slice(), &[32, 0x80, 0x10, 0, 0, 0, 0, 0]);
+            assert_eq!(frames[3][0], 2, "tail");
+            // The stored profile is untouched.
+            assert_eq!(p.steps[0].limiter, None);
+        }
+
+        #[test]
         fn middle_step_limiter_places_extension_after_frames() {
             let mut core = CremaCore::new();
             let p = profile(
                 "MidLimiter",
                 vec![
-                    step("a", Pump::Pressure, None),
+                    step("a", Pump::Flow, None),
                     step(
                         "b",
                         Pump::Pressure,
@@ -10795,7 +10828,7 @@ mod tests {
                             range: 0.5,
                         }),
                     ),
-                    step("c", Pump::Pressure, None),
+                    step("c", Pump::Flow, None),
                 ],
             );
             let started = core.upload_profile(&p, Duration::ZERO).unwrap();
@@ -10863,7 +10896,7 @@ mod tests {
             let p = profile(
                 "Max",
                 (0..20)
-                    .map(|i| step(&format!("s{i}"), Pump::Pressure, None))
+                    .map(|i| step(&format!("s{i}"), Pump::Flow, None))
                     .collect(),
             );
             let started = core.upload_profile(&p, Duration::ZERO).unwrap();

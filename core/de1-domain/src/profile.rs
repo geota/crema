@@ -13,6 +13,17 @@ use crate::error::DomainError;
 /// step count) would also read as an extension frame (`>= 32`).
 const MAX_STEPS: usize = crate::profile_bounds::MAX_PROFILE_STEPS as usize;
 
+/// The flow limit (ml/s) every pressure step without one is uploaded with —
+/// de1app `default_pressure_flow_limit 8` (`profile.tcl`
+/// `apply_default_flow_limit_to_pressure_steps`, fdd091f), ported by Decenza
+/// 0dbcc442 "so the same profile brews the same way" on a DE1 (7–8 ml/s) and
+/// a Bengle (~20 ml/s). Applied at assembly only, so a stored profile reads
+/// back exactly as authored.
+pub const DEFAULT_PRESSURE_FLOW_LIMIT: f32 = 8.0;
+/// The limiter range used with [`DEFAULT_PRESSURE_FLOW_LIMIT`] — de1app's
+/// fallback `maximum_flow_range_default` (1.0).
+pub const DEFAULT_PRESSURE_FLOW_LIMIT_RANGE: f32 = 1.0;
+
 /// Header `MinimumPressure` sent on every upload — de1app `binary.tcl`
 /// hard-codes 0 (reaprime too). Every frame sets `IgnoreLimit`, so the header
 /// limits are inert; sending constants removes any dependency on imported
@@ -414,7 +425,15 @@ impl Profile {
         // `0u8..` zipped with at most 20 steps never overflows the index.
         for (index, step) in (0u8..).zip(&self.steps) {
             frames.push(step.to_shot_frame(index));
-            if let Some(limiter) = step.limiter {
+            // An unlimited pressure step gets de1app's default flow limit; a
+            // flow step's limiter is a pressure limit, where "off" stays legal.
+            let limiter = step.limiter.or_else(|| {
+                (step.pump == Pump::Pressure).then_some(Limiter {
+                    value: DEFAULT_PRESSURE_FLOW_LIMIT,
+                    range: DEFAULT_PRESSURE_FLOW_LIMIT_RANGE,
+                })
+            });
+            if let Some(limiter) = limiter {
                 extension_frames.push(ExtensionFrame {
                     index,
                     max_flow_or_pressure: limiter.value,
@@ -582,15 +601,38 @@ mod tests {
     }
 
     #[test]
+    fn unlimited_pressure_steps_get_the_default_flow_limit_at_assembly() {
+        // de1app fdd091f / Decenza 0dbcc442 (report 08 S1): every pressure
+        // step without a limiter goes out capped at 8 ml/s (range 1.0); an
+        // authored limiter and a flow step are left alone.
+        let mut limited = step("limited", Pump::Pressure);
+        limited.limiter = Some(Limiter {
+            value: 3.0,
+            range: 0.6,
+        });
+        let assembled = profile(vec![
+            step("open", Pump::Pressure),
+            limited,
+            step("flow", Pump::Flow),
+        ])
+        .assemble()
+        .unwrap();
+        let ext: Vec<(u8, f32, f32)> = assembled
+            .extension_frames
+            .iter()
+            .map(|e| (e.index, e.max_flow_or_pressure, e.max_fop_range))
+            .collect();
+        assert_eq!(ext, vec![(0, 8.0, 1.0), (1, 3.0, 0.6)]);
+    }
+
+    #[test]
     fn frame_packets_are_ordered_frames_then_extensions_then_tail() {
         let mut s = step("a", Pump::Pressure);
         s.limiter = Some(Limiter {
             value: 8.0,
             range: 0.5,
         });
-        let assembled = profile(vec![s, step("b", Pump::Pressure)])
-            .assemble()
-            .unwrap();
+        let assembled = profile(vec![s, step("b", Pump::Flow)]).assemble().unwrap();
         // 2 normal frames + 1 extension frame + 1 tail
         assert_eq!(assembled.frame_packets().len(), 4);
         assert_eq!(assembled.header_packet().len(), SHOT_HEADER_LEN);

@@ -782,17 +782,20 @@ fn pressure_to_advanced_list(dict: &TclDict) -> (Vec<ProfileStep>, u16) {
     }
 
     // The hold (rise-and-hold) stage. A hold longer than 3 s is preceded by a
-    // 3-second un-limited forced rise; that 3 s is then subtracted.
+    // 3-second forced rise; that 3 s is then subtracted. The rise carries the
+    // profile's flow limit like the hold and decline (de1app fdd091f, Decenza
+    // 0dbcc442): it was "forced rise", which let a high-flow
+    // machine push unlimited flow during the rise.
     let mut hold_time = dict.get_f32("espresso_hold_time").unwrap_or(0.0);
     if hold_time > 0.0 {
         if hold_time > 3.0 {
             steps.push(pressure_frame(
-                "forced rise without limit",
+                "forced rise",
                 temps.hold,
                 pressure,
                 3.0,
                 Transition::Fast,
-                None,
+                max_flow,
             ));
             count += 1;
             hold_time -= 3.0;
@@ -813,12 +816,12 @@ fn pressure_to_advanced_list(dict: &TclDict) -> (Vec<ProfileStep>, u16) {
     if decline_time > 0.0 {
         if hold_time < 3.0 && decline_time > 3.0 {
             steps.push(pressure_frame(
-                "forced rise without limit",
+                "forced rise",
                 temps.decline,
                 pressure,
                 3.0,
                 Transition::Fast,
-                None,
+                max_flow,
             ));
             count += 1;
             decline_time -= 3.0;
@@ -1945,7 +1948,7 @@ final_desired_shot_volume 0
         assert_eq!(p.steps[0].name, "preinfusion");
         assert_eq!(p.steps[0].pump, Pump::Flow);
         assert_eq!(p.steps[0].duration_seconds, 20.0);
-        assert_eq!(p.steps[1].name, "forced rise without limit");
+        assert_eq!(p.steps[1].name, "forced rise");
         assert_eq!(p.steps[2].name, "rise and hold");
         // 10 s hold minus the 3 s forced-rise prelude.
         assert_eq!(p.steps[2].duration_seconds, 7.0);
@@ -2023,17 +2026,14 @@ maximum_flow 2.5
 maximum_flow_range_default 1.0
 "#;
         let p = import_legacy_tcl(tcl).unwrap();
-        // The "rise and hold" frame carries the limiter; the forced rise does not.
+        // The "rise and hold" frame and, since de1app fdd091f, the forced rise
+        // carry the limiter (report 08 S1).
         let hold = p.steps.iter().find(|s| s.name == "rise and hold").unwrap();
         let limiter = hold.limiter.unwrap();
         assert_eq!(limiter.value, 2.5);
         assert_eq!(limiter.range, 1.0);
-        let forced = p
-            .steps
-            .iter()
-            .find(|s| s.name == "forced rise without limit")
-            .unwrap();
-        assert!(forced.limiter.is_none());
+        let forced = p.steps.iter().find(|s| s.name == "forced rise").unwrap();
+        assert_eq!(forced.limiter, Some(limiter));
     }
 
     // -- simple flow -> advanced conversion -------------------------------
@@ -2176,9 +2176,9 @@ espresso_decline_time 20
             [
                 "preinfusion temp boost",
                 "preinfusion",
-                "forced rise without limit",
+                "forced rise",
                 "rise and hold",
-                "forced rise without limit",
+                "forced rise",
                 "decline",
             ]
         );
@@ -2228,12 +2228,7 @@ espresso_decline_time 20
         let names: Vec<&str> = p.steps.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
             names,
-            [
-                "preinfusion",
-                "forced rise without limit",
-                "rise and hold",
-                "decline"
-            ]
+            ["preinfusion", "forced rise", "rise and hold", "decline"]
         );
         assert_eq!(p.preinfuse_step_count, 2);
     }
@@ -2247,7 +2242,7 @@ espresso_decline_time 20
         );
         let p = import_legacy_tcl(&tcl).unwrap();
         let names: Vec<&str> = p.steps.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["forced rise without limit", "decline"]);
+        assert_eq!(names, ["forced rise", "decline"]);
         assert_eq!(p.preinfuse_step_count, 1);
     }
 
