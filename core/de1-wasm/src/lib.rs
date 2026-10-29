@@ -2804,12 +2804,13 @@ impl CremaBridge {
     /// Bring back a flash whose verify window was still open when the tab
     /// reloaded (from the deadline the shell persisted).
     pub fn firmware_flash_restore_verifying(
-        &mut self,
+        &self,
         build: u32,
         hold_ms_left: f64,
         now_ms: f64,
     ) -> String {
-        self.live_core()
+        self.state()
+            .live_core()
             .firmware_flash_restore_verifying(build, hold_ms_left as u64, now_ms as u64)
             .to_json()
     }
@@ -3421,7 +3422,7 @@ mod tests {
 
     #[test]
     fn write_and_reset_calibration_produce_write_commands() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         // Calibration writes need a Sleep / Idle machine (calibration_guard).
         bridge.on_notification(NotificationSource::De1State, vec![2, 0], 0.0);
         for json in [
