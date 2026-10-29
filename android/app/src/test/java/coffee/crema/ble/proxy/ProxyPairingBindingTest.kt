@@ -31,7 +31,7 @@ class ProxyPairingBindingTest {
     private val confirmed = Channel<String>(Channel.UNLIMITED)
 
     private suspend fun <T> scripted(
-        allowRepair: Boolean = false,
+        allowRepair: Boolean = true,
         pinned: String? = null,
         block: suspend (server: FrameLink, rx: Channel<Frame>, proxy: ProxyTransport) -> T,
     ): T {
@@ -173,6 +173,47 @@ class ProxyPairingBindingTest {
             assertTrue(held.isEmpty(), "nothing stored")
             assertTrue(confirmed.tryReceive().isFailure, "no host confirmed")
             assertTrue(proxy.control("tareScale").isFailure)
+        }
+    }
+
+    @Test
+    fun `an unattended session refuses a host this device holds no secret for`() = runBlocking {
+        scripted(allowRepair = false) { server, rx, proxy ->
+            rx.next<Frame.Hello>()
+            server.send(Frame.Challenge("host-7", "Tablet", PairingCrypto.newNonce()))
+            assertEquals(DenyReason.HOST_UNVERIFIED, denied.await())
+            assertTrue(rx.tryReceive().getOrNull() !is Frame.Auth, "no pairing request without the user")
+            assertTrue(confirmed.tryReceive().isFailure, "pin unchanged")
+            assertTrue(proxy.control("tareScale").isFailure)
+        }
+    }
+
+    @Test
+    fun `an unattended session refuses a host other than the pinned one, even one it holds a secret for`() = runBlocking {
+        held["host-2"] = PairingCrypto.newSecret()
+        scripted(allowRepair = false, pinned = "host-1") { server, rx, _ ->
+            rx.next<Frame.Hello>()
+            server.send(Frame.Challenge("host-2", "Tablet", PairingCrypto.newNonce()))
+            assertEquals(DenyReason.HOST_MISMATCH, denied.await())
+            assertTrue(rx.tryReceive().getOrNull() !is Frame.Auth)
+            assertTrue(confirmed.tryReceive().isFailure, "pin unchanged")
+        }
+    }
+
+    @Test
+    fun `an unattended session connects to the pinned host when it proves the secret`() = runBlocking {
+        val secret = PairingCrypto.newSecret()
+        held["host-1"] = secret
+        scripted(allowRepair = false, pinned = "host-1") { server, rx, _ ->
+            val hello = rx.next<Frame.Hello>()
+            val hn = PairingCrypto.newNonce()
+            server.send(Frame.Challenge("host-1", "Tablet", hn, PairingCrypto.hostProof(secret, "host-1", "phone-1", hello.nonce!!, hn)))
+            val auth = rx.next<Frame.Auth>()
+            assertTrue(PairingCrypto.verifyClient(secret, "host-1", "phone-1", hello.nonce!!, hn, auth.proof))
+            server.send(welcome("host-1", null))
+            welcomed.await()
+            assertEquals("host-1", confirmed.receive())
+            assertTrue(!denied.isCompleted)
         }
     }
 

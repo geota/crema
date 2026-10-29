@@ -95,10 +95,13 @@ class ProxyTransport(
     private val pinnedHostId: () -> String? = { null },
     /** A session completed with this host id: the caller pins the target to it. */
     private val onHostConfirmed: (primaryId: String) -> Unit = {},
-    /** Whether the user chose to pair again: only then does a host that can't
-     *  prove the secret this device holds get a pairing request (else the
-     *  session is refused). */
-    private val allowRepair: Boolean = false,
+    /** Whether the user picked this target just now: only then may the session
+     *  ask to pair (a new host, or one that can't prove the secret this device
+     *  holds). An unattended session (restored target, automatic re-mirror)
+     *  connects only to a host that proves a secret this device already holds,
+     *  and refuses anything else. Production passes it per session; the default
+     *  serves the loopback and tests. */
+    private val allowRepair: Boolean = true,
 ) : BleTransport {
 
     /** Devices the primary holds, from [Frame.Welcome] / [Frame.Roster]; drives [scan]. */
@@ -280,22 +283,21 @@ class ProxyTransport(
                     return
                 }
                 // Prove our secret only to a host that proved it first, over our
-                // nonce. A host without the secret gets a pairing request only if
-                // the user chose to pair again; otherwise the session is refused.
+                // nonce. Asking to pair (no secret held, or the host can't prove
+                // ours) needs the user's own pick of this target; an unattended
+                // session refuses instead.
                 val held = pairingSecretFor(frame.primaryId)
                 val hostProved = held != null &&
                     PairingCrypto.verifyHost(held, frame.primaryId, clientId, current.clientNonce, frame.nonce, frame.hostProof)
                 val proof = if (held != null && hostProved) {
                     runCatching { PairingCrypto.clientProof(held, frame.primaryId, clientId, current.clientNonce, frame.nonce) }.getOrNull()
                 } else {
-                    if (held != null) {
-                        if (!allowRepair) {
-                            Log.w(TAG, "Host ${frame.primaryName} didn't prove our pairing secret — refusing")
-                            refuse(DenyReason.HOST_UNVERIFIED, IllegalStateException("Proxy host refused: ${DenyReason.HOST_UNVERIFIED}"))
-                            return
-                        }
-                        Log.w(TAG, "Host ${frame.primaryName} didn't prove our pairing secret — asking to pair again")
+                    if (!allowRepair) {
+                        Log.w(TAG, "Host ${frame.primaryName} isn't one this device can verify, and the user didn't pick it — refusing")
+                        refuse(DenyReason.HOST_UNVERIFIED, IllegalStateException("Proxy host refused: ${DenyReason.HOST_UNVERIFIED}"))
+                        return
                     }
+                    if (held != null) Log.w(TAG, "Host ${frame.primaryName} didn't prove our pairing secret — asking to pair again")
                     null
                 }
                 current.askedToPair = proof == null

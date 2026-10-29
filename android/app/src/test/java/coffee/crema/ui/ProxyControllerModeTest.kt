@@ -333,6 +333,23 @@ class ProxyControllerModeTest {
     }
 
     @Test
+    fun `only the user's pick clears the pin, an unattended re-mirror keeps it`() {
+        assertEquals(ProxyController.MirrorTrust(repin = false, allowRepair = false), ProxyController.MirrorTrust.UNATTENDED)
+        controller.pairingStore.pinHost("host-1")
+
+        controller.remirrorUnattended("127.0.0.1", 9)
+        scheduler.advanceTimeBy(1_000)
+        scheduler.runCurrent()
+        assertEquals("applied:secondary", events.last())
+        assertEquals("host-1", controller.pairingStore.pinnedHost, "an unattended re-mirror leaves the pin alone")
+
+        controller.switchToSecondary("127.0.0.1", 9)
+        scheduler.advanceTimeBy(1_000)
+        scheduler.runCurrent()
+        assertEquals(null, controller.pairingStore.pinnedHost, "the user's pick starts a new pin")
+    }
+
+    @Test
     fun `denied reasons map to what the secondary shows`() {
         assertTrue(deniedMessage(DenyReason.PAIRING_CLOSED).contains("Pair a device"))
         assertTrue(deniedMessage(DenyReason.VERSION_MISMATCH).contains("Update Crema"))
@@ -341,7 +358,7 @@ class ProxyControllerModeTest {
         assertTrue(deniedMessage(DenyReason.BUSY).contains("busy"))
         assertTrue(deniedMessage(DenyReason.ALREADY_PAIRED).contains("Forget"))
         assertTrue(deniedMessage(DenyReason.HOST_MISMATCH).contains("Other devices"))
-        assertTrue(deniedMessage(DenyReason.HOST_UNVERIFIED).contains("pair again"))
+        assertTrue(deniedMessage(DenyReason.HOST_UNVERIFIED).contains("Other devices"))
         assertEquals("The host hasn't allowed this device", deniedMessage(DenyReason.NOT_AUTHORIZED))
     }
 

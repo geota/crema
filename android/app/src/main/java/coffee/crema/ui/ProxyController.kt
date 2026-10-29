@@ -230,11 +230,17 @@ class ProxyController(
     /** Rate limit for the "needs an update" notice. */
     @Volatile private var outdatedNoticeCooling = false
 
-    /** How the next secondary session may treat its host: a mirror target the
-     *  user just picked is not pinned yet and may pair again; a restored or
-     *  automatic target is pinned to the host it last completed with and may
-     *  not. Consumed by [startSecondaryMode]. */
-    private class MirrorTrust(val repin: Boolean, val allowRepair: Boolean)
+    /** How the next secondary session may treat its host. Only the user's own
+     *  pick ([USER_PICK]) clears the pin and may pair. Anything unattended — a
+     *  restored target, a re-mirror after a handoff or reclaim — keeps the pin
+     *  and connects only to a host that proves a secret this device already
+     *  holds ([UNATTENDED]). Consumed by [startSecondaryMode]. */
+    internal data class MirrorTrust(val repin: Boolean, val allowRepair: Boolean) {
+        companion object {
+            val USER_PICK = MirrorTrust(repin = true, allowRepair = true)
+            val UNATTENDED = MirrorTrust(repin = false, allowRepair = false)
+        }
+    }
 
     @Volatile private var nextMirrorTrust: MirrorTrust? = null
 
@@ -488,9 +494,20 @@ class ProxyController(
             return
         }
         appendLog("Re-mirror: auto-mirroring ${host.name} (${host.host}:${host.port})")
-        nextMirrorTrust = MirrorTrust(repin = true, allowRepair = false)
-        applyMode("secondary", host.host, host.port)
+        remirrorUnattended(host.host, host.port)
     }
+
+    /** Mirror [host]:[port] without the user picking it: the pin stays, and only
+     *  a host that proves a secret this device holds is accepted. Anything
+     *  else is refused and stays in the picker for the user. */
+    internal fun remirrorUnattended(host: String, port: Int) {
+        nextMirrorTrust = MirrorTrust.UNATTENDED
+        applyMode("secondary", host, port)
+    }
+
+    /** The pairing store, for tests. */
+    @androidx.annotation.VisibleForTesting
+    internal val pairingStore: PairingStore get() = pairing
 
     /** Secondary side of an M3 handoff (the picker's "Take over"): ask the primary
      *  to release the DE1, and on grant become the host ourselves. Idle-only — the
@@ -803,7 +820,7 @@ class ProxyController(
         // collectors AND the ProxyTransport's own init collectors), so applyMode can
         // cancel them ALL on the next switch instead of leaking ~4 coroutines + a dead
         // ProxyTransport/link per secondary→x→secondary cycle (issue 10).
-        val trust = nextMirrorTrust ?: MirrorTrust(repin = false, allowRepair = false)
+        val trust = nextMirrorTrust ?: MirrorTrust.UNATTENDED
         nextMirrorTrust = null
         if (trust.repin) pairing.pinHost(null)
         val modeScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
@@ -871,7 +888,7 @@ class ProxyController(
     fun switchToSecondary(host: String, port: Int) {
         // The user picked this target: it may be a new host, or the same host
         // after a reset that needs pairing again.
-        nextMirrorTrust = MirrorTrust(repin = true, allowRepair = true)
+        nextMirrorTrust = MirrorTrust.USER_PICK
         applyMode("secondary", host, port)
     }
 
@@ -1055,7 +1072,7 @@ internal fun deniedMessage(reason: String): String = when {
         "The host already has a pairing for this device — on the host, Forget it under Paired devices, then pair again"
     reason == DenyReason.HOST_MISMATCH -> "This isn't the host this device mirrors — choose a host under Other devices"
     reason == DenyReason.HOST_UNVERIFIED ->
-        "The host couldn't confirm this device's pairing — choose it under Other devices to pair again"
+        "Couldn't verify this host for this device — choose it under Other devices to connect"
     reason.startsWith(DenyReason.VERSION_MISMATCH) -> "Update Crema on both devices to connect"
     else -> "The host hasn't allowed this device"
 }
