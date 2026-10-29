@@ -1230,3 +1230,54 @@
     grid-column: 1 / -1;
   }
 }
+
+/* ── Touch targets (cohort review 07 #11) ─────────────────────────────────
+   The Quick Sheet is used mid-shot with damp hands at arm's length, so its
+   controls get a 44 px floor where the layout allows and an invisible hit
+   area (::before) where the visual has to stay small. The sheet had ~290 px
+   of headroom at 1024x768, so the extra height fits; it scrolls on shorter
+   screens instead of running off the top. */
+.qsheet {
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.qsheet .qsplit-opt::before {
+  content: '';
+  position: absolute;
+  inset: -14px -4px;
+}
+.qsheet .qcs-dot { position: relative; }
+.qsheet .qcs-dot::before {
+  content: '';
+  position: absolute;
+  inset: -18px;
+  border-radius: 50%;
+}
+.qsheet .qcs-btn { min-height: 44px; }
+.qsheet-g-grid.is-six .qcs-btn { width: 36px; flex-basis: 36px; }
+@media (min-width: 1200px) {
+  .qsheet-g-grid.is-six .qcs-btn { width: 44px; flex-basis: 44px; }
+}
+.qsheet .qchip { min-height: 40px; align-items: center; }
+.qsheet .qsheet-tog,
+.qsheet .qsheet-ch-tog { min-height: 44px; }
+/* The value is itself a button (tap to type a number): fill the stepper row. */
+.qsheet .qcs-num-btn { min-height: 44px; min-width: 32px; }
+/* The search pill is 44 px tall; let its input fill it so a tap anywhere
+   on the pill focuses the field. */
+.qsheet .qfstrip-search-inline input { align-self: stretch; }
+.qsheet .qfstrip-arrow { width: 36px; height: 44px; }
+/* Preset chips: the "°C" unit clipped by 2 px in the six-column grid
+   (report 07 #18); a tighter unit gap and side padding make room. */
+.qsheet .qchip { gap: 2px; }
+.qsheet-g-grid.is-six .qchipr { gap: 4px; }
+.qsheet-g-grid.is-six .qchipr .qchip { padding-left: 1px; padding-right: 1px; letter-spacing: -0.03em; }
+.qsheet-g-grid.is-six .qchipr .qchip-unit { font-size: 9px; }
+/* In the one-row six-column layout (wide tablets) a chip row is ~180 px:
+   five "88.0 °C" chips cannot fit, so the units drop there. The stepper
+   directly above shows the unit for the whole column. */
+.qsheet-g-grid .qchipr { container-type: inline-size; }
+@container (max-width: 200px) {
+  .qchip-unit { display: none; }
+}
