@@ -331,11 +331,11 @@ dependencies {
     // libjnidispatch.so ships 16 KB ELF page alignment, required by Android 15+ /
     // API 36+ devices + emulators (16 KB pages); older JNA fails to dlopen there.
     implementation("net.java.dev.jna:jna:5.19.1@aar")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.12.0")
 
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
     // The generated `core/bindings/crema-core.kt` types are @Serializable.
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
 
     // Charts are hand-rolled Compose Canvas (CanvasShotChart, ProfileCurveChart) —
     // a faithful port of the web PWA's uPlot design (shared 0–10 scale, temp/weight
@@ -393,9 +393,9 @@ dependencies {
     // HTTP clients' request shape + status mapping (tracks the Ktor version),
     // and a real HTTP stub for the retry policy / sent signal over real
     // OkHttp (tracks the OkHttp version ktor-client-okhttp brings).
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.12.0")
     testImplementation("io.ktor:ktor-client-mock:$ktor")
-    testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
     // The desktop JNA jar (same version as the @aar above) carries the host
     // libjnidispatch, so JVM tests can load the HOST build of the Rust core
     // (cargoBuildHostCore below) — MainUiState's defaults and MainViewModel
