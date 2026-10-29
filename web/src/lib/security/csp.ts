@@ -8,7 +8,11 @@
  * policy (`csp.vitest.ts`).
  */
 
-import type { CspDirectives } from '@sveltejs/kit';
+import type { sveltekit } from '@sveltejs/kit/vite';
+
+/** SvelteKit's CSP directive map, as its Vite plugin options declare it. */
+type KitOptions = NonNullable<Parameters<typeof sveltekit>[0]>;
+type CspDirectives = NonNullable<NonNullable<KitOptions['csp']>['directives']>;
 
 /** The GIS client library, loaded on demand by `#lib/drive/oauth.js`. */
 export const GIS_CLIENT_SCRIPT = 'https://accounts.google.com/gsi/client';
