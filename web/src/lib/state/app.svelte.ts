@@ -243,7 +243,10 @@ const WATER_WARN_REARM_ML = 55;
  * connected (or a quick reconnect) skip the defensive auto-upload when
  * the machine still has the bytes we last sent.
  */
-const LAST_FINGERPRINT_KEY = 'crema.profile-sync.lastFingerprint.v1';
+// v2 (2026-10-29): uploads now wait for the machine model, so a fingerprint a
+// Bengle cached for a classic-encoded upload (v1, cohort review 2026-10-28
+// #2 N3) must not skip the next upload. The bump re-uploads once per browser.
+const LAST_FINGERPRINT_KEY = 'crema.profile-sync.lastFingerprint.v2';
 
 /**
  * The DE1 top-level states whose group flow counts toward the water-filter /
