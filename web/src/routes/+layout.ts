@@ -27,8 +27,25 @@ export const prerender = false;
 // Top-level await is an ES2022 feature; Vite + SvelteKit support it natively.
 // Because `ssr = false`, this code only ever runs in the browser, which is
 // the only environment where the wasm module exists at all.
+//
+// A failed load (the wasm fetch dropped, a corrupt cached copy, a browser that
+// cannot instantiate it) must not reject this module or the `load`: SvelteKit's
+// root error page re-runs the root layout, so a rejection here ends on Kit's
+// unstyled fallback page. The failure is passed to the layout through `data`,
+// which renders the "Failed to load the core" screen instead (review 03 P3-7).
 import { loadCore } from '#lib/core/index.js';
-await loadCore();
+import { describeError } from '#lib/utils/error.js';
+import type { LayoutLoad } from './$types';
+
+let coreError: string | null = null;
+try {
+	await loadCore();
+} catch (err) {
+	coreError = describeError(err);
+	console.error('[Crema] The wasm core failed to load:', err);
+}
+
+export const load: LayoutLoad = () => ({ coreError });
 
 // ─── One-shot Visualizer Basic-auth → OAuth migration ──────────────────
 //

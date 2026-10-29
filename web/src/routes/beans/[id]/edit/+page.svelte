@@ -5,12 +5,13 @@
 	 * Reads `id` from the route, resolves it via the library store, and
 	 * passes the live record to {@link BeanEditPage} (which writes each
 	 * patch through to the store). If the id is unknown the user is
-	 * bounced back to `/beans`.
+	 * bounced back to `/beans` (only on arrival, not after a delete here).
 	 */
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { getBeanStore } from '#lib/bean/index.js';
+	import { missingRecordRedirect } from '#lib/beans/missing-record-redirect.js';
 	import BeanEditPage from '#lib/components/beans/BeanEditPage.svelte';
 
 	const library = getBeanStore();
@@ -21,8 +22,11 @@
 	const id = $derived(page.params.id ?? '');
 	const bean = $derived(id ? library.getBean(id) : null);
 
+	// Bounce an unknown id to the list, but not after the editor deletes the
+	// bean it was showing: the editor's own exit navigates then (review 03 P3-6).
+	const shouldRedirect = missingRecordRedirect();
 	$effect(() => {
-		if (id && !bean) {
+		if (shouldRedirect(id, bean != null)) {
 			// Defer one tick so the navigation isn't fighting the route load.
 			queueMicrotask(() => goto(resolve('beans'), { replaceState: true }));
 		}
