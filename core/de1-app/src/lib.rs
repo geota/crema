@@ -4966,14 +4966,7 @@ impl CremaCore {
                 self.tank_temp_threshold_c = Some(tank_temp_c);
             }
             if encoding == de1_protocol::FrameEncoding::V2 {
-                out.commands.push(Command::WriteCharacteristic {
-                    target: WriteTarget::De1MmrWrite,
-                    data: mmr::write_request(
-                        mmr::END_OF_SHOT_WEIGHT_ADDRESS,
-                        &END_OF_SHOT_WEIGHT_CLEARED.to_le_bytes(),
-                    )
-                    .to_vec(),
-                });
+                out.commands.push(end_of_shot_weight_clear());
             }
             self.profile_reupload_pending = false;
             self.profile_reupload_requests = 0;
@@ -5048,6 +5041,17 @@ impl CremaCore {
                 let write = self.bengle_sleep_timeout_write();
                 out.events.extend(write.events);
                 out.commands.extend(write.commands);
+                // A Bengle's end-of-shot weight is cleared as soon as the
+                // model is known, not only after an upload: a session whose
+                // upload a fingerprint match skips would otherwise keep a
+                // target another app left persisted in the firmware (round-2
+                // verification V1 P3-4; see END_OF_SHOT_WEIGHT_CLEARED).
+                if de1_protocol::is_bengle_model(value) {
+                    match self.refuse_if_firmware_locked("end_of_shot_weight") {
+                        Some(locked) => out.events.extend(locked.events),
+                        None => out.commands.push(end_of_shot_weight_clear()),
+                    }
+                }
                 // A cup-warmer change made before the model was known.
                 if let Some(temp_c) = self.pending_cup_warmer_c.take() {
                     let write = self.set_cup_warmer_temperature(temp_c);
@@ -5759,6 +5763,19 @@ const STOP_REENFORCE_MAX: u32 = 30;
 /// the Bengle's integrated scale, so it always clears the register: a machine
 /// stop it cannot attribute must not end a Crema shot.
 const END_OF_SHOT_WEIGHT_CLEARED: u32 = 0;
+
+/// The MMR write that clears a Bengle's end-of-shot weight register (see
+/// [`END_OF_SHOT_WEIGHT_CLEARED`]).
+fn end_of_shot_weight_clear() -> Command {
+    Command::WriteCharacteristic {
+        target: WriteTarget::De1MmrWrite,
+        data: mmr::write_request(
+            mmr::END_OF_SHOT_WEIGHT_ADDRESS,
+            &END_OF_SHOT_WEIGHT_CLEARED.to_le_bytes(),
+        )
+        .to_vec(),
+    }
+}
 
 /// Assemble `profile` for `encoding`, with or without the default flow limit.
 fn assemble(
@@ -11778,6 +11795,27 @@ mod tests {
             expected.resize(de1_protocol::MMR_PACKET_LEN, 0);
             assert_eq!(end_of_shot_weight_write(&last), Some(expected));
             assert!(!core.profile_upload_in_progress());
+        }
+
+        #[test]
+        fn a_bengle_model_reply_clears_the_end_of_shot_weight_without_an_upload() {
+            // Round-2 verification V1 P3-4: with the upload skipped on a
+            // fingerprint match, the register was never written, so a target
+            // another app persisted could still end a Crema shot.
+            let mut core = CremaCore::new();
+            let out = core.on_notification(Source::De1MmrRead, &machine_model_packet(128), 10);
+            let mut expected = vec![0x04, 0x80, 0x38, 0x64, 0, 0, 0, 0];
+            expected.resize(de1_protocol::MMR_PACKET_LEN, 0);
+            assert_eq!(end_of_shot_weight_write(&out.commands), Some(expected));
+            // A classic DE1 has no such register.
+            let mut classic = CremaCore::new();
+            let out = classic.on_notification(Source::De1MmrRead, &machine_model_packet(1), 10);
+            assert_eq!(end_of_shot_weight_write(&out.commands), None);
+            // Not while a firmware flash holds the link.
+            let mut flashing = CremaCore::new();
+            flashing.firmware_lock_override = true;
+            let out = flashing.on_notification(Source::De1MmrRead, &machine_model_packet(128), 10);
+            assert_eq!(end_of_shot_weight_write(&out.commands), None);
         }
 
         #[test]
