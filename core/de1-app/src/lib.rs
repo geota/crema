@@ -10739,17 +10739,53 @@ mod tests {
         }
 
         #[test]
-        fn thirty_two_step_profile_is_at_the_boundary() {
+        fn twenty_step_profile_is_at_the_boundary() {
+            // de1app and pyDE1 cap a profile at 20 frames (cohort review 02
+            // P1-1).
             let mut core = CremaCore::new();
             let p = profile(
                 "Max",
-                (0..32)
+                (0..20)
                     .map(|i| step(&format!("s{i}"), Pump::Pressure, None))
                     .collect(),
             );
             let started = core.upload_profile(&p, Duration::ZERO).unwrap();
-            // 1 header + 32 frames + 0 extensions + 1 tail = 34 writes.
-            assert_eq!(started.commands.len(), 34);
+            // 1 header + 20 frames + 0 extensions + 1 tail = 22 writes.
+            assert_eq!(started.commands.len(), 22);
+        }
+
+        #[test]
+        fn a_21_step_profile_is_rejected_and_writes_nothing() {
+            let mut core = CremaCore::new();
+            let p = profile(
+                "TwentyOne",
+                (0..21)
+                    .map(|i| step(&format!("s{i}"), Pump::Pressure, None))
+                    .collect(),
+            );
+            assert!(matches!(
+                core.upload_profile(&p, Duration::ZERO),
+                Err(AppError::ProfileUpload(
+                    de1_domain::DomainError::TooManySteps { count: 21 }
+                ))
+            ));
+            assert!(!core.profile_upload_in_progress());
+        }
+
+        #[test]
+        fn the_header_carries_de1app_constant_limits() {
+            // de1app binary.tcl sends MinimumPressure 0 / MaximumFlow 6.0 on a
+            // classic DE1 whatever the profile says (cohort review 02 P3-2).
+            let mut core = CremaCore::new();
+            let mut p = profile("Limits", vec![step("a", Pump::Pressure, None)]);
+            p.minimum_pressure = 4.0;
+            p.maximum_flow = 9.0;
+            let out = core.upload_profile(&p, Duration::ZERO).unwrap();
+            let Command::WriteCharacteristic { data, .. } = &out.commands[0] else {
+                panic!("header first");
+            };
+            // [HeaderV 1][frames 1][preinfuse 1][MinPressure U8P4 0][MaxFlow U8P4 6.0 = 96]
+            assert_eq!(data.as_slice(), &[1, 1, 1, 0, 96]);
         }
 
         #[test]

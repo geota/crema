@@ -7,8 +7,20 @@ use typeshare::typeshare;
 
 use crate::error::DomainError;
 
-/// The most steps a profile may have — the DE1's frame-index limit.
-const MAX_STEPS: usize = 32;
+/// The most steps a profile may have: 20, "the maximum number of steps that
+/// the espresso machine can handle" (de1app `vars.tcl` refuses a 21st step;
+/// pyDE1 `_MAX_SHOT_FRAMES = 20`). At 32 the tail's `FrameToWrite` (= the
+/// step count) would also read as an extension frame (`>= 32`).
+const MAX_STEPS: usize = crate::profile_bounds::MAX_PROFILE_STEPS as usize;
+
+/// Header `MinimumPressure` sent on every upload — de1app `binary.tcl`
+/// hard-codes 0 (reaprime too). Every frame sets `IgnoreLimit`, so the header
+/// limits are inert; sending constants removes any dependency on imported
+/// data.
+const HEADER_MINIMUM_PRESSURE: f32 = 0.0;
+/// Header `MaximumFlow` sent on every upload — de1app's classic-DE1 value
+/// (`binary.tcl`, 6.0; 12 only on Bengle).
+const HEADER_MAXIMUM_FLOW: f32 = 6.0;
 
 /// Which quantity a step holds at its target. Serializes as lowercase
 /// (`"pressure"` / `"flow"`) to match the community v2 JSON contract.
@@ -372,7 +384,8 @@ impl Profile {
     /// # Errors
     ///
     /// - [`DomainError::NoSteps`] if the profile has no steps.
-    /// - [`DomainError::TooManySteps`] if it has more than 32.
+    /// - [`DomainError::TooManySteps`] if it has more than 20 (the DE1's
+    ///   frame limit, de1app / pyDE1).
     pub fn assemble(&self) -> Result<AssembledProfile, DomainError> {
         let count = self.steps.len();
         if count == 0 {
@@ -381,19 +394,21 @@ impl Profile {
         if count > MAX_STEPS {
             return Err(DomainError::TooManySteps { count });
         }
-        // `count` is 1..=MAX_STEPS (32), checked above, so this fits a u8.
+        // `count` is 1..=MAX_STEPS (20), checked above, so this fits a u8.
         let frame_count = u8::try_from(count).unwrap_or(u8::MAX);
 
+        // The profile's own `minimum_pressure` / `maximum_flow` stay on the
+        // profile for export; the wire header carries de1app's constants.
         let header = ShotHeader {
             frame_count,
             preinfuse_frame_count: self.preinfuse_step_count,
-            minimum_pressure: self.minimum_pressure,
-            maximum_flow: self.maximum_flow,
+            minimum_pressure: HEADER_MINIMUM_PRESSURE,
+            maximum_flow: HEADER_MAXIMUM_FLOW,
         };
 
         let mut frames = Vec::with_capacity(count);
         let mut extension_frames = Vec::new();
-        // `0u8..` zipped with at most 32 steps never overflows the index.
+        // `0u8..` zipped with at most 20 steps never overflows the index.
         for (index, step) in (0u8..).zip(&self.steps) {
             frames.push(step.to_shot_frame(index));
             if let Some(limiter) = step.limiter {
@@ -679,16 +694,22 @@ mod tests {
     }
 
     #[test]
-    fn a_thirty_two_step_profile_assembles_without_overflow() {
-        let steps = (0..32).map(|_| step("x", Pump::Pressure)).collect();
+    fn a_twenty_step_profile_assembles_and_a_21st_step_is_rejected() {
+        // de1app vars.tcl / pyDE1 `_MAX_SHOT_FRAMES = 20`. The tail's
+        // FrameToWrite (= the step count) stays below the extension marker 32.
+        let steps = (0..20).map(|_| step("x", Pump::Pressure)).collect();
         let assembled = profile(steps).assemble().unwrap();
-        assert_eq!(assembled.header.frame_count, 32);
-        assert_eq!(assembled.tail.frame_count, 32);
-        assert_eq!(assembled.frames.len(), 32);
-        // Frame indices go 0..=31, fitting a u8 without wrap.
+        assert_eq!(assembled.header.frame_count, 20);
+        assert_eq!(assembled.tail.frame_count, 20);
+        assert_eq!(assembled.frames.len(), 20);
         for (i, frame) in assembled.frames.iter().enumerate() {
             assert_eq!(frame.index as usize, i);
         }
+        let steps = (0..21).map(|_| step("x", Pump::Pressure)).collect();
+        assert_eq!(
+            profile(steps).assemble(),
+            Err(DomainError::TooManySteps { count: 21 })
+        );
     }
 
     #[test]

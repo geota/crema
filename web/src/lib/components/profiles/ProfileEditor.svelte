@@ -206,8 +206,12 @@
 		dirty = true;
 	}
 
+	/** The DE1 runs at most this many frames (core `MAX_PROFILE_STEPS`). */
+	const atStepLimit = $derived(draft.segments.length >= ProfileBounds.MAX_PROFILE_STEPS);
+
 	/** Append a new segment after the last one. */
 	function addSegment(): void {
+		if (atStepLimit) return;
 		const last = draft.segments[draft.segments.length - 1];
 		const seg: ProfileSegment = {
 			id: uid('seg'),
@@ -605,7 +609,14 @@
 				<div class="pe-section">
 					<div class="pe-section-head">
 						<div class="pe-section-title">Segments</div>
-						<button class="pe-btn-ghost" onclick={addSegment}>
+						<button
+							class="pe-btn-ghost"
+							onclick={addSegment}
+							disabled={atStepLimit}
+							title={atStepLimit
+								? `The DE1 runs at most ${ProfileBounds.MAX_PROFILE_STEPS} segments`
+								: undefined}
+						>
 							<PlusIcon aria-hidden="true" /> Add segment
 						</button>
 					</div>

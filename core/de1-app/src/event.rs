@@ -713,7 +713,7 @@ pub enum Event {
 pub enum ProfileUploadFailure {
     /// The profile had no steps.
     Empty,
-    /// The profile had more than 32 steps.
+    /// The profile had more than 20 steps (the DE1 frame limit).
     TooManySteps {
         /// How many steps the rejected profile had.
         count: u32,

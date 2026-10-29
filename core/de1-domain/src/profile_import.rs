@@ -27,8 +27,9 @@ use crate::profile::{
     TempSensor, Transition,
 };
 
-/// The DE1 frame-index limit; a profile may hold at most this many steps.
-const MAX_STEPS: usize = 32;
+/// The DE1's frame limit (de1app, pyDE1): a profile may hold at most this
+/// many steps. Longer imports are rejected, never truncated.
+const MAX_STEPS: usize = crate::profile_bounds::MAX_PROFILE_STEPS as usize;
 
 // ---------------------------------------------------------------------------
 // v2 JSON import
@@ -192,7 +193,8 @@ where
 ///
 /// - [`ImportError::Json`] if `json` is not valid v2 JSON.
 /// - [`ImportError::NoSteps`] if the profile has no steps.
-/// - [`ImportError::TooManySteps`] if it has more than 32.
+/// - [`ImportError::TooManySteps`] if it has more than 20 (the DE1's frame
+///   limit; never truncated).
 pub fn import_v2_json(json: &str) -> Result<Profile, ImportError> {
     let raw: V2Profile =
         serde_json::from_str(json).map_err(|e| ImportError::Json(e.to_string()))?;
@@ -464,7 +466,8 @@ fn step_to_v2(step: &ProfileStep) -> V2StepOut {
 ///
 /// - [`ImportError::Tcl`] if `tcl` is not a well-formed Tcl dictionary.
 /// - [`ImportError::NoSteps`] if the resulting profile has no steps.
-/// - [`ImportError::TooManySteps`] if it has more than 32.
+/// - [`ImportError::TooManySteps`] if it has more than 20 (the DE1's frame
+///   limit; never truncated).
 pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
     let dict = TclDict::parse_profile(tcl)?;
 
@@ -1435,6 +1438,29 @@ mod tests {
             }
         ]
     }"#;
+
+    /// `V2_ADVANCED` with its "pour" step repeated so it has `count` steps.
+    fn v2_with_steps(count: usize) -> String {
+        let mut v: serde_json::Value = serde_json::from_str(V2_ADVANCED).unwrap();
+        let pour = v["steps"][1].clone();
+        let steps = v["steps"].as_array_mut().unwrap();
+        steps.truncate(1);
+        while steps.len() < count {
+            steps.push(pour.clone());
+        }
+        v.to_string()
+    }
+
+    #[test]
+    fn v2_json_accepts_20_steps_and_rejects_21() {
+        // The DE1 runs at most 20 frames (de1app, pyDE1); a longer import is
+        // rejected, never truncated (cohort review 02 P1-1).
+        assert_eq!(import_v2_json(&v2_with_steps(20)).unwrap().steps.len(), 20);
+        assert!(matches!(
+            import_v2_json(&v2_with_steps(21)),
+            Err(ImportError::TooManySteps { count: 21 })
+        ));
+    }
 
     #[test]
     fn v2_json_maps_title_and_notes() {
