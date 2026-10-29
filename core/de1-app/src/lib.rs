@@ -49,8 +49,8 @@ use de1_domain::{
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
-    SHOT_HEADER_LEN, ShotHeader, ShotSample, ShotSettings, StateInfo, SubState, Version, WaterLevels, mmr, profile,
-    requested_state,
+    SHOT_HEADER_LEN, ShotHeader, ShotSample, ShotSettings, StateInfo, SubState, Version,
+    WaterLevels, mmr, profile, requested_state,
 };
 
 /// Maximum gap between profile-upload acks before the orchestrator fails the
@@ -3340,6 +3340,9 @@ impl CremaCore {
                 return;
             }
         };
+        // The mixed-frame skip deferral reads the live pressure / flow.
+        self.step_weight
+            .on_sensors(sample.group_pressure, sample.group_flow);
         for event in self.monitor.on_sample(&sample, now) {
             self.map_shot_event(event, now, out);
         }
@@ -9531,7 +9534,11 @@ mod tests {
         assert_eq!(heater_voltage_from_raw(120), Some(120));
         assert_eq!(heater_voltage_from_raw(230), Some(230));
         assert_eq!(heater_voltage_from_raw(0), None, "0 = not set, auto-detect");
-        assert_eq!(heater_voltage_from_raw(2120), None, "double marker is unset");
+        assert_eq!(
+            heater_voltage_from_raw(2120),
+            None,
+            "double marker is unset"
+        );
         assert_eq!(heater_voltage_from_raw(170), None);
     }
 
@@ -10870,7 +10877,10 @@ mod tests {
             }));
         }
 
-        fn ack_every_frame_without_header(core: &mut CremaCore, commands: &[Command]) -> Vec<Event> {
+        fn ack_every_frame_without_header(
+            core: &mut CremaCore,
+            commands: &[Command],
+        ) -> Vec<Event> {
             let mut events = Vec::new();
             for c in commands {
                 if let Command::WriteCharacteristic {
@@ -10923,7 +10933,10 @@ mod tests {
             // The superseding upload completes: nothing left to re-arm.
             let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
             let done = ack_every_frame(&mut core, &up.commands, 10);
-            assert!(done.iter().any(|e| matches!(e, Event::ProfileUploadCompleted { .. })));
+            assert!(
+                done.iter()
+                    .any(|e| matches!(e, Event::ProfileUploadCompleted { .. }))
+            );
             core.on_notification(Source::De1State, &[0, 0], 1_000);
             let idle = core.on_notification(Source::De1State, &[2, 0], 2_000);
             assert_eq!(reupload_requests(&idle.events), 0);
