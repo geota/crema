@@ -84,6 +84,7 @@ import { CoreTicker } from './core-ticker';
 import { stepCapRefusal } from '#lib/profiles/step-cap.js';
 import {
 	ProfileWriteGenerations,
+	UNNAMED_PROFILE_BATCH_LOG,
 	isProfileWriteTarget,
 	startedUploadId,
 	type ProfileWriteBatch,
@@ -1017,6 +1018,7 @@ export class CremaApp {
 		// The profile writes of this output form one batch: a header write
 		// supersedes every earlier upload's queued writes (#2 N2).
 		const batch = this.#profileWrites.begin(output.commands, startedUploadId(output.events));
+		if (this.#profileWrites.unnamed(batch)) this.state.log(UNNAMED_PROFILE_BATCH_LOG);
 		for (const command of output.commands) {
 			void this.executeCommand(command, batch);
 		}

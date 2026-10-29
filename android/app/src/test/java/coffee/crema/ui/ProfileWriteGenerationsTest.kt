@@ -81,6 +81,28 @@ class ProfileWriteGenerationsTest {
         commands.filterIsInstance<Command.WriteCharacteristic>().map { it.content.target }
 
     @Test
+    fun `only a batch without an upload id is flagged, and real uploads always carry one`() {
+        // Round-3 clean check C3 #3: the shell does not guess an id for such a
+        // batch (its acks could reach the wrong upload); it logs
+        // UNNAMED_PROFILE_BATCH_LOG and leaves the upload to the ack watchdog.
+        val g = ProfileWriteGenerations()
+        assertFalse(g.unnamed(null))
+        assertTrue(g.unnamed(g.begin(upload)))
+        // Through the host core, an immediate and a parked-then-released upload
+        // both pair their header with `ProfileUploadStarted`.
+        val bridge = CremaBridge()
+        val parked = json.decodeFromString(CoreOutput.serializer(), bridge.uploadProfile(profile("P"), 0uL))
+        assertTrue(WriteTarget.De1ProfileHeader !in parked.writeTargets(), "waits for the model")
+        val released = json.decodeFromString(
+            CoreOutput.serializer(),
+            bridge.onNotification(NotificationSource.DE1_MMR_READ, modelReply(1), 10uL),
+        )
+        assertFalse(g.unnamed(g.begin(released.writeTargets(), startedUploadId(released.events))))
+        val now = json.decodeFromString(CoreOutput.serializer(), bridge.uploadProfile(profile("N"), 20uL))
+        assertFalse(g.unnamed(g.begin(now.writeTargets(), startedUploadId(now.events))))
+    }
+
+    @Test
     fun `a late failure report for a superseded upload leaves the shot start's upload running`() {
         // Round-2 verification V3 #1, through the host core: upload N's frame
         // write fails on the Main-thread batch coroutine; before it reports,

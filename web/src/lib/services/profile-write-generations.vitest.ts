@@ -84,6 +84,14 @@ describe('ProfileWriteGenerations', () => {
 		expect(g.settle(b, true)).toBe('ack');
 	});
 
+	it('flags a batch with no upload id (C3 #3)', () => {
+		const g = new ProfileWriteGenerations();
+		expect(g.unnamed(null), 'no profile writes, nothing to flag').toBe(false);
+		expect(g.unnamed(g.begin(upload(), 5))).toBe(false);
+		expect(g.unnamed(g.begin([write('De1ProfileFrame')])), 'joins upload 5').toBe(false);
+		expect(g.unnamed(g.begin(upload()))).toBe(true);
+	});
+
 	it('a failed batch stays current until superseded', () => {
 		const g = new ProfileWriteGenerations();
 		const a = g.begin(upload(), 3)!;

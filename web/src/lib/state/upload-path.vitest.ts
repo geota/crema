@@ -260,6 +260,25 @@ describe('profile-write generations in the app executor (#2 N2)', () => {
 	});
 });
 
+describe('profile writes without an upload id (round-3 clean check C3 #3)', () => {
+	it('are logged, and their acks are not fed to the core', async () => {
+		const h = await harness(async (_target, _data, guard, settled) => {
+			if (guard && !guard()) return false;
+			settled?.(true);
+			return true;
+		});
+		const acks = vi.spyOn(h.core, 'onProfileWriteAck');
+		h.onState('ready');
+		// A header write with no `ProfileUploadStarted` beside it: the core
+		// never emits this, so the shell says so instead of guessing an id.
+		const header = { type: 'WriteCharacteristic', content: { target: 'De1ProfileHeader', data: [1, 1, 1, 0, 0] } };
+		h.feed({ events: [], commands: [header] } as unknown as CoreOutput);
+		await vi.advanceTimersByTimeAsync(10);
+		expect(h.log().some((l) => l.includes('Profile writes without an upload id'))).toBe(true);
+		expect(acks).not.toHaveBeenCalled();
+	});
+});
+
 describe('a core rebuilt after a panic (round-3 clean check C2 P3-1)', () => {
 	/**
 	 * The bridge's reset count, under the test's control: the rebuilt core
