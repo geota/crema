@@ -218,6 +218,14 @@ pub struct WireShot {
     /// down from Visualizer lost its bean info).
     #[serde(default)]
     pub bean: Option<WireShotBean>,
+    /// Who made the shot (Visualizer `barista`), or `None` when the remote
+    /// has none (blank collapses to `None`). Mutable metadata — NOT part of
+    /// the de-dup signature. The shells fill a local shot's barista from it
+    /// on pull (final review 06 #1: it was dropped, so an edit in Crema sent
+    /// `barista: ""` and wiped the remote one). `#[serde(default)]` so older
+    /// cached payloads without the field still deserialise.
+    #[serde(default)]
+    pub barista: Option<String>,
 }
 
 /// The bean / grinder journal fields Visualizer's native detail flattens
@@ -1216,7 +1224,28 @@ mod tests {
             updated_at_ms: None,
             tag_list: Vec::new(),
             bean: None,
+            barista: None,
         }
+    }
+
+    #[test]
+    fn reconcile_passes_the_remote_barista_through_and_old_payloads_still_parse() {
+        // Final review 06 #1: the shells fill a local barista from the
+        // action's remote, so it must survive the JSON facade.
+        let payload = serde_json::json!({
+            "local": [],
+            "remote": [{
+                "id": "r-1", "clock": 1, "duration_ms": 2, "profile_title": null,
+                "final_weight_g": null, "barista": "Ana"
+            }, {
+                "id": "r-2", "clock": 3, "duration_ms": 4, "profile_title": null,
+                "final_weight_g": null
+            }]
+        });
+        let out = reconcile_shots_json(&payload.to_string()).unwrap();
+        let actions: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(actions[0]["remote"]["barista"], "Ana");
+        assert!(actions[1]["remote"]["barista"].is_null());
     }
 
     fn local_shot(id: &str, visualizer_id: Option<&str>) -> LocalShotRef {
@@ -1303,6 +1332,7 @@ mod tests {
                 updated_at_ms: None,
                 tag_list: Vec::new(),
                 bean: None,
+                barista: None,
             },
             WireShot {
                 id: "r-bind".to_owned(),
@@ -1315,6 +1345,7 @@ mod tests {
                 updated_at_ms: None,
                 tag_list: Vec::new(),
                 bean: None,
+                barista: None,
             },
         ];
         let actions = reconcile_shots(&[bound, unbound], &remotes);

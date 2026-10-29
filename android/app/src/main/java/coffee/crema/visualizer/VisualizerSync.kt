@@ -73,6 +73,8 @@ class VisualizerSync(
     private val onPulledShots: (List<StoredShot>) -> Unit = {},
     /** Backfill a bound local's telemetry from a pull (no-op when it has a curve). */
     private val onBackfillTelemetry: (localId: String, samples: List<coffee.crema.ui.TelemetrySample>, durationMs: Long) -> Unit = { _, _, _ -> },
+    /** Fill a bound local's blank barista from a pull (final review 06 #1). */
+    private val onFillBarista: (localId: String, barista: String) -> Unit = { _, _ -> },
     /** Sign-in just completed — the moment to offer a catch-up of existing shots. */
     private val onSignedIn: () -> Unit = {},
     /** The shot as history holds it now (null = deleted) — re-read before a backlog POST. */
@@ -670,11 +672,17 @@ class VisualizerSync(
         val vid = shot.visualizerId ?: return
         if (persisted.tokens == null) return
         if (!directionPushes(persisted.prefs.shotsDirection)) return
+        // The barista rides only after a barista edit (final review 06 #1): a
+        // shot pulled before the barista was read has none locally, and
+        // sending "" with a rating change wiped the one on Visualizer.
+        val sendBarista = shot.id in baristaPending
+        val sentBarista = baristaOf(shot)
         val inputs = shotPatchInputs(
             shot,
             includeNotes = persisted.prefs.includeNotes,
             defaultPrivacy = persisted.prefs.privacy,
             settingsGrinderModel = grinderModel(),
+            sendBarista = sendBarista,
         )
         // Fitted to the account tier in core: a free account — or one whose tier
         // isn't probed yet — silently loses the Premium-only fields
@@ -687,8 +695,28 @@ class VisualizerSync(
         }.getOrElse { notify("Visualizer update failed: ${it.message}"); return } ?: return
         scope.launch {
             runCatchingCancellable { withFreshToken { client.patchShot(it, vid, body) } }
+                .onSuccess {
+                    // Landed: stop sending it, unless the barista was edited
+                    // again while this PATCH was out.
+                    if (sendBarista && (currentShot(shot.id)?.let(::baristaOf) ?: sentBarista) == sentBarista) {
+                        baristaPending.remove(shot.id)
+                    }
+                }
                 .onFailure { notify("Visualizer update failed: ${it.message}") }
         }
+    }
+
+    /**
+     * Shots whose barista was edited here and has not reached Visualizer yet:
+     * only these PATCHes carry `barista` (the name, or "" once cleared, so a
+     * clear still reaches Visualizer). A failed PATCH leaves the shot pending,
+     * so the next edit's PATCH carries it (this session).
+     */
+    private val baristaPending: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** The History barista edit — call before [patchEditedShot] for that shot. */
+    fun markBaristaEdited(localId: String) {
+        baristaPending += localId
     }
 
     /** Called on `ShotCompleted` — uploads when auto-sync is armed, signed in,
@@ -824,11 +852,14 @@ class VisualizerSync(
                     val localId = fld("localId") ?: continue
                     val vid = fld("visualizerId") ?: continue
                     onShotSynced(localId, vid)
+                    fillBarista(localId, action["remote"] as? JsonObject)
                     logSync("pull", localId, "Shot (bound)")
                 }
                 "update" -> {
                     val localId = fld("localId") ?: continue
                     val remote = action["remote"] as? JsonObject ?: continue
+                    // A shot pulled before the barista was read gets it now.
+                    fillBarista(localId, remote)
                     val vid = (remote["id"] as? JsonPrimitive)?.contentOrNull
                     val durationMs = (remote["duration_ms"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toLong() ?: 0L
                     vid?.let { samplesById[it] }?.let { samplesJson ->
@@ -840,6 +871,12 @@ class VisualizerSync(
         }
         if (stubs.isNotEmpty()) onPulledShots(stubs)
         return pulled
+    }
+
+    /** Fill [localId]'s barista from a pulled remote when it has none (final review 06 #1). */
+    private fun fillBarista(localId: String, remote: JsonObject?) {
+        val remoteBarista = (remote?.get("barista") as? JsonPrimitive)?.contentOrNull
+        baristaToFill(currentShot(localId), remoteBarista)?.let { onFillBarista(localId, it) }
     }
 
     // ── Bean / roaster sync (web BeanSync.runSync) ────────────────────────────
@@ -1055,6 +1092,7 @@ internal fun shotPatchInputs(
     includeNotes: Boolean,
     defaultPrivacy: String?,
     settingsGrinderModel: String?,
+    sendBarista: Boolean = false,
 ): ShotPatchInputs = ShotPatchInputs(
     rating = shot.rating?.toUByte(),
     notes = if (includeNotes) (shot.notes ?: "") else null,
@@ -1073,10 +1111,25 @@ internal fun shotPatchInputs(
     // (issue #16: a grind edit must reach the uploaded copy).
     grinderSetting = shot.effectiveGrindSetting,
     // Who made it → `barista` (a free-account field; no drinker field).
-    // Always sent, empty once cleared, so a cleared name reaches
-    // Visualizer (the core sends "" for a blank barista).
-    barista = shot.barista ?: "",
+    // Only after a barista edit ([sendBarista]); null = the core leaves the
+    // remote value alone. Empty once cleared, so a clear reaches Visualizer.
+    barista = if (sendBarista) baristaOf(shot) else null,
 )
+
+/** A shot's barista as the PATCH sends it: trimmed, "" when unset or cleared. */
+internal fun baristaOf(shot: StoredShot): String = shot.barista?.trim().orEmpty()
+
+/**
+ * The barista to fill into [local] from a pulled remote one (final review
+ * 06 #1), or null for no change: only when the local shot has none, so a name
+ * set or edited here is never overwritten by a pull. Mirrors the web
+ * `baristaToFill`.
+ */
+internal fun baristaToFill(local: StoredShot?, remoteBarista: String?): String? {
+    val pulled = remoteBarista?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    if (local == null || !local.barista.isNullOrBlank()) return null
+    return pulled
+}
 
 /** What a `crema://visualizer/callback` intent means for the pending handshake. */
 internal enum class CallbackOutcome { NotOurs, Cancelled, NoCode, Expired, Exchange }

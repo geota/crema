@@ -1172,6 +1172,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         grinderModel = { _ui.value.grinderModel.trim().takeIf { it.isNotEmpty() } },
         onPulledShots = { stubs -> library.insertPulledShots(stubs) },
         onBackfillTelemetry = { localId, samples, durationMs -> library.backfillShotTelemetry(localId, samples, durationMs) },
+        onFillBarista = { localId, barista -> library.fillShotBarista(localId, barista) },
         onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
         currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
         beanLibrary = { _ui.value.let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },

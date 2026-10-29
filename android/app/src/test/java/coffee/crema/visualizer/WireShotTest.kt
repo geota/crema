@@ -92,4 +92,18 @@ class WireShotTest {
         assertEquals("Londinium Lever", wire["profileName"]!!.jsonPrimitive.content)
         assertEquals("Niche Zero", wire["grinderModel"]!!.jsonPrimitive.content)
     }
+
+    @Test
+    fun `a pulled shot carries its Visualizer barista, blank as absent (final review 06 #1)`() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        fun wire(barista: String?) = kotlinx.serialization.json.buildJsonObject {
+            put("id", kotlinx.serialization.json.JsonPrimitive("r-1"))
+            put("clock", kotlinx.serialization.json.JsonPrimitive(1_700_000_000_000L))
+            put("duration_ms", kotlinx.serialization.json.JsonPrimitive(30_000))
+            put("barista", barista?.let { kotlinx.serialization.json.JsonPrimitive(it) } ?: JsonNull)
+        }
+        assertEquals("Ana", storedShotFromWire(wire(" Ana "), null, json)!!.barista)
+        assertNull(storedShotFromWire(wire("  "), null, json)!!.barista)
+        assertNull(storedShotFromWire(wire(null), null, json)!!.barista)
+    }
 }

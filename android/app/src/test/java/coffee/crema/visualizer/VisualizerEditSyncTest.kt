@@ -91,8 +91,12 @@ class VisualizerEditSyncTest {
             (i["notes"] as? JsonPrimitive)?.contentOrNull?.let { put("private_notes", "<p>$it</p>") }
             str("grinderModel")?.let { put("grinder_model", it) }
             str("privacy")?.let { put("privacy", it) }
+            // Barista: absent (null) = omitted; blank = "" (a clear). A free field.
+            (i["barista"] as? JsonPrimitive)?.contentOrNull?.let { put("barista", it.trim()) }
         }.filterKeys { premium == true || it !in premiumOnly }
-        val applies = body.keys.any { it == "grinder_model" || (premium == true && it in premiumOnly) }
+        val applies = body.keys.any {
+            it == "grinder_model" || it == "barista" || (premium == true && it in premiumOnly)
+        }
         if (applies) JsonObject(body).toString() else null
     }
 
@@ -229,6 +233,35 @@ class VisualizerEditSyncTest {
         val body = shotBody()
         assertEquals("EG-1", body["grinder_model"]!!.jsonPrimitive.content)
         for (key in premiumOnly) assertFalse("$key leaked: $body", key in body)
+    }
+
+    @Test
+    fun `a rating edit never sends the barista, so one set on Visualizer survives (final review 06 #1)`() {
+        seed(premium = true)
+        val s = sync().also { runBlocking { it.load() } }
+        // A shot pulled before the barista was read: none locally.
+        s.patchEditedShot(edited.copy(barista = null))
+        settle()
+        assertEquals(1, patches().size)
+        assertFalse("barista must not ride a rating edit: ${shotBody()}", "barista" in shotBody())
+    }
+
+    @Test
+    fun `a barista edit sends it, cleared as empty, and stops once it landed`() {
+        seed(premium = false)
+        val s = sync().also { runBlocking { it.load() } }
+        s.markBaristaEdited(edited.id)
+        s.patchEditedShot(edited.copy(barista = null))
+        settle()
+        assertEquals("", shotBody(0)["barista"]!!.jsonPrimitive.content)
+        s.markBaristaEdited(edited.id)
+        s.patchEditedShot(edited.copy(barista = " Ana "))
+        settle()
+        assertEquals("Ana", shotBody(1)["barista"]!!.jsonPrimitive.content)
+        // Landed: a later rating edit on a free account has nothing left to send.
+        s.patchEditedShot(edited.copy(barista = "Ana"))
+        settle()
+        assertEquals(2, patches().size)
     }
 
     @Test

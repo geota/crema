@@ -339,7 +339,7 @@
 	 * a no-op for never-uploaded shots; success and failure both land in
 	 * the sync activity log.
 	 */
-	function syncEditToVisualizer(id: string): void {
+	function syncEditToVisualizer(id: string, opts?: { baristaChanged?: boolean }): void {
 		if (!canPushShots) return;
 		const shot = store.all.find((s) => s.id === id);
 		if (!shot?.visualizerId) return;
@@ -347,7 +347,7 @@
 		if (!api) return;
 		const name = shot.profileName ?? 'Shot';
 		void api.shots
-			.patchEdited(store, id)
+			.patchEdited(store, id, opts)
 			.then(() =>
 				appendSyncLog({ direction: 'push', entity: 'shot', id, name, at: Date.now() })
 			)
@@ -1439,7 +1439,7 @@
 							store.setPerson(selected.id, field, name);
 							// Visualizer has a barista field but no drinker;
 							// the Decent record carries both.
-							if (field === 'barista') syncEditToVisualizer(selected.id);
+							if (field === 'barista') syncEditToVisualizer(selected.id, { baristaChanged: true });
 							scheduleDecentReplaceAfterEdit(selected.id);
 						}}
 						{baristaSuggestions}

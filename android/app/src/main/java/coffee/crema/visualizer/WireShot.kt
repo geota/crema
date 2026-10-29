@@ -234,6 +234,8 @@ fun storedShotFromWire(wire: JsonObject, samplesJson: String?, json: kotlinx.ser
         bean = bean,
         rating = num("rating")?.toInt()?.takeIf { it > 0 },
         notes = str("notes"),
+        // Final review 06 #1: dropped before, so an edit wiped the remote one.
+        barista = str("barista")?.trim()?.takeIf { it.isNotEmpty() },
         samples = coffee.crema.history.downsampleForStorage(samples),
         visualizerId = vid,
     )

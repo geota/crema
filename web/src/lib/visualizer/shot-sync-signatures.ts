@@ -82,6 +82,12 @@ export interface WireShot {
 	 * pull, so a synced shot lost its bean info).
 	 */
 	bean?: WireShotBean | null;
+	/**
+	 * Who made the shot (Visualizer `barista`), blank as absent. Mutable
+	 * metadata, NOT part of `signatureForShot`. Filled into the local shot on
+	 * pull (final review 06 #1).
+	 */
+	barista?: string | null;
 }
 
 /**
@@ -254,7 +260,9 @@ export function storedShotFromWire(
 			dose: null,
 			yieldOut: remote.final_weight_g ?? null,
 			rating: remote.rating ?? null,
-			notes: remote.notes ?? null
+			notes: remote.notes ?? null,
+			// Final review 06 #1: dropped before, so an edit wiped the remote one.
+			...(remote.barista?.trim() ? { barista: remote.barista.trim() } : {})
 		},
 		record: { duration: remote.duration_ms, samples: samples ? [...samples] : [] },
 		bean,
