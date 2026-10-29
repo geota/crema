@@ -646,9 +646,18 @@ function prefersLight(): boolean {
 	return typeof matchMedia === 'function' && matchMedia(PREFERS_LIGHT).matches;
 }
 
+/**
+ * The browser chrome colour (`<meta name="theme-color">`, the Android / PWA
+ * status bar) per resolved theme. `static/theme-boot.js` applies the same
+ * values before first paint (final cohort review 07 N11).
+ */
+export const THEME_COLOR = { dark: '#1e1b16', light: '#faf7f1' } as const;
+
 function applyTheme(theme: ThemePref): void {
 	if (typeof document === 'undefined') return;
-	document.documentElement.setAttribute('data-theme', resolveTheme(theme, prefersLight()));
+	const resolved = resolveTheme(theme, prefersLight());
+	document.documentElement.setAttribute('data-theme', resolved);
+	document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_COLOR[resolved]);
 }
 
 /**
