@@ -30,7 +30,11 @@ import androidx.core.content.ContextCompat
  * Single-threaded: every mutator is called on the main thread from
  * `MainViewModel`, and the power receiver is delivered on the main thread too.
  */
-class BackgroundConnectionController(private val context: Context) {
+class BackgroundConnectionController(
+    private val context: Context,
+    /** The service seam — the real [De1ConnectionService] by default; a fake in tests. */
+    private val service: KeepAliveService = AndroidKeepAliveService(context),
+) {
 
     private var enabled = false
     private var de1Active = false
@@ -43,13 +47,20 @@ class BackgroundConnectionController(private val context: Context) {
 
     private val powerReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
-            plugged = when (intent?.action) {
-                Intent.ACTION_POWER_CONNECTED -> true
-                Intent.ACTION_POWER_DISCONNECTED -> false
-                else -> plugged
-            }
-            reconcile()
+            onPowerChanged(
+                when (intent?.action) {
+                    Intent.ACTION_POWER_CONNECTED -> true
+                    Intent.ACTION_POWER_DISCONNECTED -> false
+                    else -> plugged
+                },
+            )
         }
+    }
+
+    /** External power came or went (the receiver above; tests call it directly). */
+    internal fun onPowerChanged(value: Boolean) {
+        plugged = value
+        reconcile()
     }
 
     /** Register the power-state watcher and evaluate once. */
@@ -104,8 +115,12 @@ class BackgroundConnectionController(private val context: Context) {
     fun setFirmwareFlashActive(value: Boolean) {
         if (firmwareFlashActive != value) {
             firmwareFlashActive = value
-            // Restart a running service so its notification text switches.
-            if (running) startService()
+            // Switch a running service's notification text IN PLACE. Never by
+            // restarting it: a flash ends 15–25 min in, often with the app in
+            // the background, where a second startForegroundService is refused
+            // and the failure path used to forget a service that was still
+            // running with its wake lock (cohort review 2026-10-25, P2-2).
+            if (running) service.updateNotification(firmware = value)
             reconcile()
         }
     }
@@ -141,17 +156,15 @@ class BackgroundConnectionController(private val context: Context) {
 
     private fun startService() {
         running = true
-        De1ConnectionService.wanted = true
-        runCatching {
-            ContextCompat.startForegroundService(
-                context,
-                Intent(context, De1ConnectionService::class.java)
-                    .putExtra(De1ConnectionService.EXTRA_FIRMWARE, firmwareFlashActive),
-            )
-        }.onFailure {
-            running = false
-            De1ConnectionService.wanted = false
-            Log.w(TAG, "could not start background-connection service", it)
+        service.wanted = true
+        if (!service.start(firmware = firmwareFlashActive)) {
+            // A refused start only means "not running" when no earlier
+            // instance is still foreground; otherwise keep tracking it, so a
+            // later gate change still stops it (and releases its wake lock).
+            if (!service.inForeground) {
+                running = false
+                service.wanted = false
+            }
         }
     }
 
@@ -164,12 +177,12 @@ class BackgroundConnectionController(private val context: Context) {
      */
     private fun stopService() {
         running = false
-        De1ConnectionService.wanted = false
-        if (!De1ConnectionService.inForeground) return
-        runCatching { context.stopService(Intent(context, De1ConnectionService::class.java)) }
+        service.wanted = false
+        if (!service.inForeground) return
+        service.stop()
     }
 
-    private companion object {
+    internal companion object {
         const val TAG = "BgConnController"
 
         /** Whether the device is currently on external power (AC / USB / wireless). */
@@ -178,4 +191,45 @@ class BackgroundConnectionController(private val context: Context) {
             return (status?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
         }
     }
+}
+
+/** What [BackgroundConnectionController] needs from the keep-alive service. */
+interface KeepAliveService {
+    /** The controller still wants the service (read by it on start). */
+    var wanted: Boolean
+
+    /** The running service has called startForeground(). */
+    val inForeground: Boolean
+
+    /** Ask for a foreground start; false when the platform refused it. */
+    fun start(firmware: Boolean): Boolean
+
+    fun stop()
+
+    /** Swap the running service's notification text in place. */
+    fun updateNotification(firmware: Boolean)
+}
+
+/** The real [De1ConnectionService]. */
+private class AndroidKeepAliveService(private val context: Context) : KeepAliveService {
+    override var wanted: Boolean
+        get() = De1ConnectionService.wanted
+        set(value) { De1ConnectionService.wanted = value }
+
+    override val inForeground: Boolean get() = De1ConnectionService.inForeground
+
+    override fun start(firmware: Boolean): Boolean = runCatching {
+        ContextCompat.startForegroundService(
+            context,
+            Intent(context, De1ConnectionService::class.java)
+                .putExtra(De1ConnectionService.EXTRA_FIRMWARE, firmware),
+        )
+    }.onFailure { Log.w(BackgroundConnectionController.TAG, "could not start background-connection service", it) }
+        .isSuccess
+
+    override fun stop() {
+        runCatching { context.stopService(Intent(context, De1ConnectionService::class.java)) }
+    }
+
+    override fun updateNotification(firmware: Boolean) = De1ConnectionService.updateNotification(context, firmware)
 }
