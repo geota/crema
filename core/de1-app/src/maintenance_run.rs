@@ -735,17 +735,7 @@ mod tests {
         let mut core = heating_core(Some(1355));
         core.tank_temp_threshold_c = Some(30);
         let start = core.request_machine_state(MachineState::Descale);
-        let mut last = CoreOutput::default();
-        for c in &start.commands {
-            if let Command::WriteCharacteristic { target, data } = c {
-                let source = match target {
-                    WriteTarget::De1ProfileHeader => Source::De1HeaderAck,
-                    WriteTarget::De1ProfileFrame => Source::De1FrameAck,
-                    _ => continue,
-                };
-                last = core.on_notification(source, data, 1_000);
-            }
-        }
+        let last = ack_profile_writes(&mut core, &start, 1_000);
         assert!(
             last.events
                 .iter()
@@ -833,17 +823,6 @@ mod tests {
         assert_eq!(core.tank_temp_threshold_c, Some(30));
     }
 
-    /// The `upload_id` of the upload `out` started.
-    fn started_upload_id(out: &CoreOutput) -> u32 {
-        out.events
-            .iter()
-            .find_map(|e| match e {
-                Event::ProfileUploadStarted { upload_id, .. } => Some(*upload_id),
-                _ => None,
-            })
-            .expect("the output starts an upload")
-    }
-
     #[test]
     fn a_cold_profile_loaded_while_still_heating_waits_for_preheat_to_end() {
         let mut core = heating_core(Some(1355));
@@ -920,7 +899,7 @@ mod tests {
         // A write that never reached the DE1.
         let mut core = heating_core(Some(1355));
         let start = core.request_machine_state(MachineState::Descale);
-        let out = core.profile_write_failed(1_500, started_upload_id(&start));
+        let out = core.profile_write_failed(1_500, start.started_upload_id());
         assert_eq!(progress(&out), vec![(MaintenancePhase::Failed, 0, 0, true)]);
         assert_eq!(
             failures(&out),

@@ -12063,7 +12063,7 @@ mod tests {
             let mut core = CremaCore::new_with_model(1);
             let _ = core.on_notification(Source::De1State, &[2, 0], 0); // Idle
             let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
-            let id = started_upload_id(&up);
+            let id = up.started_upload_id();
             let out = core.profile_write_failed(100, id);
             assert!(out.events.iter().any(|e| matches!(
                 e,
@@ -12086,7 +12086,7 @@ mod tests {
             let mut core = CremaCore::new_with_model(1);
             let _ = core.on_notification(Source::De1State, &[2, 0], 0); // Idle
             let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
-            let first = core.profile_write_failed(1_000, started_upload_id(&up));
+            let first = core.profile_write_failed(1_000, up.started_upload_id());
             assert_eq!(reupload_requests(&first.events), 1);
             assert_eq!(reupload_requests(&core.on_tick(3_000).events), 0, "not yet");
             assert_eq!(
@@ -12124,7 +12124,7 @@ mod tests {
             let n_plus_1 = core
                 .upload_profile(&two_step(), Duration::from_millis(50))
                 .unwrap();
-            let (old, new) = (started_upload_id(&n), started_upload_id(&n_plus_1));
+            let (old, new) = (n.started_upload_id(), n_plus_1.started_upload_id());
             assert_ne!(old, new);
             let late = core.profile_write_failed(100, old);
             assert!(late.events.is_empty(), "the report is about another upload");
@@ -12149,7 +12149,7 @@ mod tests {
             let b = core
                 .upload_profile(&two_step(), Duration::from_millis(10))
                 .unwrap();
-            let (a_id, b_id) = (started_upload_id(&a), started_upload_id(&b));
+            let (a_id, b_id) = (a.started_upload_id(), b.started_upload_id());
             let header = |out: &CoreOutput| {
                 out.commands
                     .iter()
@@ -12212,12 +12212,14 @@ mod tests {
             // A report about an upload from before a reconnect must not match
             // the first upload after it.
             let mut core = CremaCore::new_with_model(1);
-            let before =
-                started_upload_id(&core.upload_profile(&two_step(), Duration::ZERO).unwrap());
+            let before = core
+                .upload_profile(&two_step(), Duration::ZERO)
+                .unwrap()
+                .started_upload_id();
             core.reset();
             core.de1_machine_model = Some(1);
             let after = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
-            assert_ne!(before, started_upload_id(&after));
+            assert_ne!(before, after.started_upload_id());
             assert!(core.profile_write_failed(10, before).events.is_empty());
             assert!(core.profile_upload_in_progress());
         }
@@ -12232,7 +12234,7 @@ mod tests {
             let _ = core.on_notification(Source::De1State, &[2, 0], 0); // Idle
             let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
             let mut sent_at = Vec::new();
-            let first = core.profile_write_failed(1_000, started_upload_id(&up));
+            let first = core.profile_write_failed(1_000, up.started_upload_id());
             if reupload_requests(&first.events) == 1 {
                 sent_at.push(1_000);
             }
@@ -12252,7 +12254,7 @@ mod tests {
             let up = core
                 .upload_profile(&two_step(), Duration::from_millis(603_000))
                 .unwrap();
-            let again = core.profile_write_failed(603_100, started_upload_id(&up));
+            let again = core.profile_write_failed(603_100, up.started_upload_id());
             assert_eq!(reupload_requests(&again.events), 1);
         }
 
@@ -12298,7 +12300,7 @@ mod tests {
             let mut core = CremaCore::new_with_model(1);
             let _ = core.on_notification(Source::De1State, &[2, 0], 0); // Idle
             let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
-            let _ = core.profile_write_failed(100, started_upload_id(&up));
+            let _ = core.profile_write_failed(100, up.started_upload_id());
             assert!(core.profile_reupload_pending);
             core.de1_machine_model = None;
             let _ = core
@@ -12328,17 +12330,6 @@ mod tests {
                     step("b", Pump::Pressure, None),
                 ],
             )
-        }
-
-        /// The `upload_id` of the upload `out` started.
-        fn started_upload_id(out: &CoreOutput) -> u32 {
-            out.events
-                .iter()
-                .find_map(|e| match e {
-                    Event::ProfileUploadStarted { upload_id, .. } => Some(*upload_id),
-                    _ => None,
-                })
-                .expect("the output starts an upload")
         }
 
         fn reupload_requests(events: &[Event]) -> usize {

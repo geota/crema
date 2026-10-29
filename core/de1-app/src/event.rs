@@ -893,6 +893,24 @@ pub struct CoreOutput {
     pub commands: Vec<Command>,
 }
 
+#[cfg(test)]
+impl CoreOutput {
+    /// The `upload_id` of the upload this output started (tests only).
+    ///
+    /// # Panics
+    ///
+    /// When the output starts no upload.
+    pub(crate) fn started_upload_id(&self) -> u32 {
+        self.events
+            .iter()
+            .find_map(|e| match e {
+                Event::ProfileUploadStarted { upload_id, .. } => Some(*upload_id),
+                _ => None,
+            })
+            .expect("the output starts an upload")
+    }
+}
+
 impl CoreOutput {
     /// Serialize to JSON — the form the FFI bridges hand to the native shells.
     ///
