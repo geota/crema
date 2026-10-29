@@ -688,6 +688,10 @@ pub struct CremaCore {
     /// A cup-warmer temperature set before the machine model was known —
     /// written when the model reply says Bengle (the plate is Bengle-only).
     pending_cup_warmer_c: Option<u8>,
+    /// A Bengle's end-of-shot weight clear was refused because a firmware
+    /// flash held the link when the model reply came in: sent on the first
+    /// tick after the lock lets go (round-3 clean check C3 #1).
+    end_of_shot_clear_pending: bool,
     /// Per-step weight exits of the active profile (issue 11): sends
     /// `SkipToNext` when the projected weight reaches the current frame's
     /// step `weight`. Follows the ACTIVE profile: set by
@@ -1027,6 +1031,7 @@ impl CremaCore {
             next_upload_id: 1,
             parked_upload: None,
             pending_cup_warmer_c: None,
+            end_of_shot_clear_pending: false,
             step_weight: StepWeightExit::default(),
             active_beverage_type: BeverageType::default(),
             last_profile_header: None,
@@ -3147,6 +3152,7 @@ impl CremaCore {
             self.fail_profile_upload(reason, &mut out);
         }
         self.tick_parked_upload(now, &mut out);
+        self.send_pending_end_of_shot_clear(&mut out);
         // An outstanding re-upload request nobody acted on is repeated.
         self.request_profile_reupload_if_idle(&mut out);
         self.update_machine_error(now, &mut out);
@@ -3193,6 +3199,15 @@ impl CremaCore {
     /// [`reset`](Self::reset), which wipes everything.
     pub fn capture_clear(&mut self) {
         self.capture.clear();
+    }
+
+    /// Send a Bengle end-of-shot weight clear that a firmware flash refused
+    /// at the model reply, once the flash no longer holds the link.
+    fn send_pending_end_of_shot_clear(&mut self, out: &mut CoreOutput) {
+        if self.end_of_shot_clear_pending && !self.firmware_locks_writes() {
+            self.end_of_shot_clear_pending = false;
+            out.commands.push(end_of_shot_weight_clear());
+        }
     }
 
     /// The DE1's BLE link dropped unexpectedly (the shells' auto-reconnect is
@@ -4992,6 +5007,7 @@ impl CremaCore {
             }
             if encoding == de1_protocol::FrameEncoding::V2 {
                 out.commands.push(end_of_shot_weight_clear());
+                self.end_of_shot_clear_pending = false;
             }
             self.profile_reupload_pending = false;
             self.profile_reupload_requests = 0;
@@ -5071,10 +5087,18 @@ impl CremaCore {
                 // upload a fingerprint match skips would otherwise keep a
                 // target another app left persisted in the firmware (round-2
                 // verification V1 P3-4; see END_OF_SHOT_WEIGHT_CLEARED).
+                // Refused while a firmware flash holds the link, it waits for
+                // the lock to let go (`send_pending_end_of_shot_clear`).
                 if de1_protocol::is_bengle_model(value) {
                     match self.refuse_if_firmware_locked("end_of_shot_weight") {
-                        Some(locked) => out.events.extend(locked.events),
-                        None => out.commands.push(end_of_shot_weight_clear()),
+                        Some(locked) => {
+                            out.events.extend(locked.events);
+                            self.end_of_shot_clear_pending = true;
+                        }
+                        None => {
+                            out.commands.push(end_of_shot_weight_clear());
+                            self.end_of_shot_clear_pending = false;
+                        }
                     }
                 }
                 // A cup-warmer change made before the model was known.
@@ -11902,6 +11926,40 @@ mod tests {
             flashing.firmware_lock_override = true;
             let out = flashing.on_notification(Source::De1MmrRead, &machine_model_packet(128), 10);
             assert_eq!(end_of_shot_weight_write(&out.commands), None);
+        }
+
+        #[test]
+        fn a_clear_refused_during_a_flash_goes_out_once_the_lock_lets_go() {
+            // Round-3 clean check C3 #1: the model reply lands while a flash
+            // still holds the link (reconnect during its power-cycle wait), and
+            // a fingerprint match then skips the upload whose tail ack is the
+            // only other clear. The refused clear must not be lost.
+            let mut expected = vec![0x04, 0x80, 0x38, 0x64, 0, 0, 0, 0];
+            expected.resize(de1_protocol::MMR_PACKET_LEN, 0);
+            let mut core = CremaCore::new();
+            core.firmware_lock_override = true;
+            let out = core.on_notification(Source::De1MmrRead, &machine_model_packet(128), 10);
+            assert_eq!(end_of_shot_weight_write(&out.commands), None);
+            let out = core.on_tick(1_000);
+            assert_eq!(
+                end_of_shot_weight_write(&out.commands),
+                None,
+                "still locked"
+            );
+            core.firmware_lock_override = false;
+            let out = core.on_tick(2_000);
+            assert_eq!(end_of_shot_weight_write(&out.commands), Some(expected));
+            let out = core.on_tick(3_000);
+            assert_eq!(end_of_shot_weight_write(&out.commands), None, "once");
+            // A classic DE1 never queues one.
+            let mut classic = CremaCore::new();
+            classic.firmware_lock_override = true;
+            let _ = classic.on_notification(Source::De1MmrRead, &machine_model_packet(1), 10);
+            classic.firmware_lock_override = false;
+            assert_eq!(
+                end_of_shot_weight_write(&classic.on_tick(1_000).commands),
+                None
+            );
         }
 
         #[test]
