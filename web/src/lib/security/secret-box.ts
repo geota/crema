@@ -15,7 +15,7 @@
  *
  * What it does NOT protect against: script running on this origin. Any
  * such script can call `unwrap` just like the app does. The defence for
- * that is the CSP (`web/svelte.config.js`) and keeping third-party script
+ * that is the CSP (`sveltekit({ csp })` in `web/vite.config.ts`) and keeping third-party script
  * out of the page — this module is the second layer, not the first.
  *
  * Degrades honestly: with no Web Crypto or no IndexedDB (node tests, some

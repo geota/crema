@@ -84,6 +84,7 @@
 	import PowerButton from '#lib/components/PowerButton.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { beanEditPath } from '#lib/beans/editor-path.js';
 	import { promptDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 
 	let { ui
@@ -1219,7 +1220,7 @@
 	}
 	function editActiveBean(): void {
 		const id = beanLibrary.activeBeanId;
-		void goto(id ? `${resolve('/beans/[id]/edit', { id })}?from=brew` : resolve('beans'));
+		void goto(id ? resolve(beanEditPath(id, '?from=brew')) : resolve('beans'));
 	}
 	/**
 	 * Water-tank volume (ml) for the foot readout — the DE1's `WaterLevel`

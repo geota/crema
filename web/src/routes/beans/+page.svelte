@@ -984,7 +984,7 @@
 				<button
 					class="bn-chip-clear"
 					onclick={() => roasterRegion = 'all'}
-				><XIcon aria-hidden="true" />Clear</button>
+				><XIcon aria-hidden="true" /> Clear</button>
 			{/if}
 			<div class="bn-toolbar-r">
 				<!-- "Show duplicates" toggle — surfaces canonical-tagged rows in
