@@ -1,5 +1,8 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.UNKNOWN_VALUE
+import coffee.crema.ui.awaitingHubValues
+import coffee.crema.ui.gate
 import coffee.crema.ui.fmt
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -277,7 +280,8 @@ fun BrewScreen(
                             },
                             elapsedMs = ui.modeElapsedMs,
                             targetS = modeTargetSeconds(ui.machineStateName, t) ?: 0f,
-                            target = when (ui.machineStateName) {
+                            // A remote before the hub's first snapshot doesn't know the targets.
+                            target = if (ui.awaitingHubValues) Measurement(UNKNOWN_VALUE, "") else when (ui.machineStateName) {
                                 MachineState.Steam -> convertTemp(t.steamTempC, ui.tempUnit)
                                 MachineState.HotWater -> convertVolume(t.hotWaterVolumeMl, ui.volumeUnit)
                                 else -> convertTemp(t.flushTempC, ui.tempUnit)
@@ -313,6 +317,7 @@ fun BrewScreen(
                         // source now — no scalePresent / volumeStopWithScale /
                         // active-yield re-derivation (geota/crema#56).
                         stopTargets = ui.stopTargets,
+                        targetsKnown = !ui.awaitingHubValues,
                         scaleWeightG = ui.scaleWeightG,
                         dispensedVolume = ui.dispensedVolume,
                         shotElapsedMs = ui.shotElapsedMs,
@@ -392,6 +397,7 @@ fun BrewScreen(
                 modeElapsedMs = ui.modeElapsedMs,
                 profileUploading = ui.profileUploading,
                 targets = rememberModeTargets(ui),
+                targetsKnown = !ui.awaitingHubValues,
                 tempUnit = ui.tempUnit,
                 volumeUnit = ui.volumeUnit,
                 waterLevelUnit = ui.waterLevelUnit,
@@ -454,6 +460,7 @@ fun BrewScreen(
                     onSaveGrindToBean = vm::saveQuickGrindToBean,
                     onToggleChannel = vm::toggleChartChannel,
                     onDismiss = { quickOpen = false },
+                    gate = ui::gate,
                 )
             }
         }
@@ -1353,6 +1360,9 @@ private fun LimitsCard(
      *  a shot, the prospective picture between them. Null until the core has
      *  reported once. */
     stopTargets: StopTargetsView?,
+    /** False on a remote before the hub's first snapshot: the targets above
+     *  come from this device's own settings, so they show as "—". */
+    targetsKnown: Boolean,
     // Narrow, stable params (review #43d / deferred #37) — taking the whole
     // MainUiState made this card re-execute on every telemetry tick even
     // while idle; with only the fields it renders, Compose skips it unless
@@ -1373,6 +1383,15 @@ private fun LimitsCard(
     // yield target the core had never armed. That is exactly what it did in
     // geota/crema#56: a confident "Yield 0.0 / 36.0 g" while the core's weight
     // leg was None and nothing stopped the shot at all.
+    if (!targetsKnown) {
+        CremaCard(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                Eyebrow("Stop conditions")
+                Eyebrow("\u00b7 $UNKNOWN_VALUE")
+            }
+        }
+        return
+    }
     val rows = buildList {
         stopTargets?.weightG?.let { target ->
             // Unit-aware (issue 44): live + target convert to the chosen weight unit;
@@ -1795,6 +1814,8 @@ private fun BrewFoot(
     modeElapsedMs: Long,
     profileUploading: Boolean,
     targets: ModeTargets,
+    /** False on a remote before the hub's first snapshot ("—" subs). */
+    targetsKnown: Boolean,
     tempUnit: String,
     volumeUnit: String,
     waterLevelUnit: String,
@@ -1854,12 +1875,15 @@ private fun BrewFoot(
                 val flushing = machineStateName == MachineState.HotWaterRinse
                 val steamSub =
                     if (steaming) modeRunningSub(modeElapsedMs, targets.steamTimeoutS)
+                    else if (!targetsKnown) UNKNOWN_VALUE
                     else "${formatTempCompact(targets.steamTempC, tempUnit)} · ${targets.steamTimeoutS.toInt()} s"
                 val waterSub =
                     if (dispensing) modeRunningSub(modeElapsedMs, targets.hotWaterTimeoutS)
+                    else if (!targetsKnown) UNKNOWN_VALUE
                     else "${formatTempCompact(targets.hotWaterTempC, tempUnit)} · ${formatVolume(targets.hotWaterVolumeMl, volumeUnit)}"
                 val flushSub =
                     if (flushing) modeRunningSub(modeElapsedMs, targets.flushTimeS)
+                    else if (!targetsKnown) UNKNOWN_VALUE
                     else "${formatTempCompact(targets.flushTempC, tempUnit)} · ${targets.flushTimeS.toInt()} s"
                 // Glyph lit once the heater each mode draws on is up to
                 // temperature. Steam has its own boiler; Coffee, Hot water and

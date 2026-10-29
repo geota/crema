@@ -1,5 +1,7 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.settings.Setting
+import coffee.crema.ui.gate
 import coffee.crema.ui.fmt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -397,20 +399,20 @@ fun ScaleCapabilityRows(
     // The remembered scale and Forget — the scale-side twin of the DE1's
     // (Settings → Machine → Connection). Not capability-gated.
     coffee.crema.ui.components.RememberedDeviceRow("scale", ui.rememberedScaleAddress != null, vm::forgetScale)
-    if (caps.flow_smoothing) CremaSettingsRow("Flow smoothing", "Smooths the live mass-flow readout.") {
+    if (caps.flow_smoothing) CremaSettingsRow("Flow smoothing", "Smooths the live mass-flow readout.", gate = ui.gate(Setting.SCALE_FLOW_SMOOTHING)) {
         CremaSwitch(ui.scaleFlowSmoothing, vm::setScaleFlowSmoothing)
     }
-    if (caps.anti_mistouch) CremaSettingsRow("Anti-mistouch", "Ignore accidental taps on the scale.") {
+    if (caps.anti_mistouch) CremaSettingsRow("Anti-mistouch", "Ignore accidental taps on the scale.", gate = ui.gate(Setting.SCALE_ANTI_MISTOUCH)) {
         CremaSwitch(ui.scaleAntiMistouch, vm::setScaleAntiMistouch)
     }
-    if (caps.auto_stop) CremaSettingsRow("Auto-stop", "How the scale's built-in timer ends.") {
+    if (caps.auto_stop) CremaSettingsRow("Auto-stop", "How the scale's built-in timer ends.", gate = ui.gate(Setting.SCALE_AUTO_STOP)) {
         CremaSegmentedButton(
             options = listOf(SegOption("0", "Flow"), SegOption("1", "Cup")),
             value = (ui.scaleAutoStop ?: 0).toString(),
             onChange = { vm.setScaleAutoStop(it.toInt()) },
         )
     }
-    if (showDisplayMode && caps.modes.isNotEmpty()) CremaSettingsRow("Display mode", "What the on-scale display reads out.") {
+    if (showDisplayMode && caps.modes.isNotEmpty()) CremaSettingsRow("Display mode", "What the on-scale display reads out.", gate = ui.gate(Setting.SCALE_MODE)) {
         CremaSegmentedButton(
             options = caps.modes.map { SegOption(it.id.toInt().toString(), it.name) },
             value = (ui.scaleActiveMode ?: caps.modes.first().id.toInt()).toString(),
@@ -418,7 +420,7 @@ fun ScaleCapabilityRows(
         )
     }
     caps.standby?.let { standby ->
-        CremaSettingsRow("Auto-sleep", "Minutes of inactivity before the scale sleeps.") {
+        CremaSettingsRow("Auto-sleep", "Minutes of inactivity before the scale sleeps.", gate = ui.gate(Setting.SCALE_STANDBY)) {
             CremaStepper(
                 value = ui.scaleStandbyMinutes.toDouble(),
                 unit = "min",
@@ -431,7 +433,7 @@ fun ScaleCapabilityRows(
         }
     }
     caps.volume?.let { vol ->
-        CremaSettingsRow("Beeper volume", "Button & target tone loudness.") {
+        CremaSettingsRow("Beeper volume", "Button & target tone loudness.", gate = ui.gate(Setting.SCALE_VOLUME)) {
             CremaSegmentedButton(
                 options = (vol.min.toInt()..vol.max.toInt()).map { SegOption(it.toString(), it.toString()) },
                 value = ui.scaleVolume.toString(),

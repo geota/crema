@@ -2214,7 +2214,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * profile recipe wins). Safe while disconnected — pure core state, no BLE.
      */
     private fun pushStopTargets(s: MainUiState = effectiveState()) {
-        val active = s.profiles.firstOrNull { it.id == s.activeProfileId }
+        // On a remote, a hub's custom profile this library lacks is the overlay.
+        val active = s.activeProfile()
         val profileYield = active?.yieldOut?.takeIf { it.isFinite() && it > 0f }
         val volumeLimit = active?.maxTotalVolumeMl?.takeIf { it > 0 }?.toFloat()
         val shotYield = s.brewParams?.yieldOut?.toFloat()?.takeIf { it.isFinite() && it > 0f }
@@ -2231,7 +2232,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // after an app restart the DE1 still holds the profile and startShot
         // skips it on the fingerprint match.
         pushActiveProfile(
-            activeCremaJson = active?.id?.let { library.profileJson(it) },
+            activeCremaJson = active?.id?.let { library.profileJson(it) } ?: s.mirroredProfileJson,
             toWire = ::cremaProfileToWire,
             setActiveProfile = { bridge.setActiveProfile(it) },
             log = { appendLog(it) },
@@ -4601,6 +4602,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             scaleAutoStop = null,
             scaleAntiMistouch = false,
             scaleActiveMode = null,
+            scaleEchoed = emptySet(),
             // Drop the scale's identity so the card clears for the next scale.
             scaleBatteryPercent = null,
             scaleName = null,
@@ -5264,6 +5266,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         ?: it.scaleFlowSmoothing,
                     scaleAutoStop = r.device_auto_stop?.toInt()
                         ?: it.scaleAutoStop,
+                    scaleEchoed = it.scaleEchoed.withEchoes(
+                        r.device_volume != null, r.device_standby != null, r.device_flow_smoothing != null, r.device_auto_stop != null,
+                    ),
                 ) }
                 // Weight is high-rate; do not flood the log with every reading.
                 // Low-battery warning (issue #29): one snackbar per connection

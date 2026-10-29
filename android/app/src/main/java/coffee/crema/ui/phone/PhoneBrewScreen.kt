@@ -1,5 +1,8 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.ui.UNKNOWN_VALUE
+import coffee.crema.ui.awaitingHubValues
+import coffee.crema.ui.Measurement
 import coffee.crema.ui.fmt
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -213,6 +216,7 @@ fun PhoneBrewScreen(
                 machineStateName = ui.machineStateName,
                 modeElapsedMs = ui.modeElapsedMs,
                 targets = rememberModeTargets(ui),
+                targetsKnown = !ui.awaitingHubValues,
                 tempUnit = ui.tempUnit,
                 connected = connected,
                 onSteam = { if (ui.machineStateName == MachineState.Steam) vm.stopShot() else vm.steam() },
@@ -634,7 +638,7 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Eyebrow("Yield · ${formatRatio(dose, weight)}")
                         val wNow = convertWeight(weight, ui.weightUnit)
-                        val wTarget = convertWeight(target, ui.weightUnit)
+                        val wTarget = if (ui.awaitingHubValues) Measurement(UNKNOWN_VALUE, "") else convertWeight(target, ui.weightUnit)
                         Text(
                             "${wNow.value} / ${wTarget.value} ${wNow.unit}",
                             style = TextStyle(fontFamily = JetBrainsMono, fontSize = 14.sp, fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum"),
@@ -859,16 +863,18 @@ private fun RestingBody(
                 // Target line: dose → yield, ratio.
                 val (dose, yieldOut) = ui.effectiveBrew()
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    TargetNumber(dose, ui.weightUnit)
+                    // A remote before the hub's first snapshot shows "—".
+                    val known = !ui.awaitingHubValues
+                    TargetNumber(dose, ui.weightUnit, known)
                     PhIcon(
                         "arrow-right", sizeDp = 18,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 8.dp),
                     )
-                    TargetNumber(yieldOut, ui.weightUnit)
+                    TargetNumber(yieldOut, ui.weightUnit, known)
                     Spacer(Modifier.weight(1f))
                     Text(
-                        formatRatio(dose, yieldOut),
+                        if (known) formatRatio(dose, yieldOut) else UNKNOWN_VALUE,
                         style = TextStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium, fontSize = 20.sp, fontFeatureSettings = "tnum"),
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(bottom = 6.dp),
@@ -900,7 +906,7 @@ private fun RestingBody(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     val readyTemp = convertTemp(ui.effectiveBrew().brewTemp.toFloat(), ui.tempUnit)
                     val readyPress = convertPressure(peakBar?.toFloat(), ui.pressureUnit)
-                    ReadyParam("TEMP", readyTemp.value, readyTemp.unit, Modifier.weight(1f))
+                    ReadyParam("TEMP", if (ui.awaitingHubValues) UNKNOWN_VALUE else readyTemp.value, if (ui.awaitingHubValues) "" else readyTemp.unit, Modifier.weight(1f))
                     ReadyParam("PRE-INF", "${active?.preinfuseSeconds ?: 0}", "s", Modifier.weight(1f))
                     ReadyParam("PRESSURE", if (peakBar != null) readyPress.value else "—", if (peakBar != null) readyPress.unit else "", Modifier.weight(1f))
                     ReadyParam("EST. TIME", estTime?.let { "~$it" } ?: "—", if (estTime != null) "s" else "", Modifier.weight(1f))
@@ -1070,8 +1076,8 @@ private fun RestingBody(
 }
 
 @Composable
-private fun TargetNumber(value: Double, weightUnit: String) {
-    val w = convertWeight(value.toFloat(), weightUnit)
+private fun TargetNumber(value: Double, weightUnit: String, known: Boolean = true) {
+    val w = if (known) convertWeight(value.toFloat(), weightUnit) else Measurement(UNKNOWN_VALUE, "")
     Row(verticalAlignment = Alignment.Bottom) {
         Text(
             w.value,
@@ -1265,6 +1271,8 @@ private fun ModeCluster(
     machineStateName: MachineState?,
     modeElapsedMs: Long,
     targets: ModeTargets,
+    /** False on a remote before the hub's first snapshot ("—" subs). */
+    targetsKnown: Boolean,
     tempUnit: String,
     connected: Boolean,
     onSteam: () -> Unit,
@@ -1290,6 +1298,7 @@ private fun ModeCluster(
         ModePill(
             "Steam",
             if (steaming) modeRunningSub(modeElapsedMs, targets.steamTimeoutS)
+            else if (!targetsKnown) UNKNOWN_VALUE
             else "${deg(targets.steamTempC)} · ${targets.steamTimeoutS.toInt()}s",
             "cloud", tel.modeSteam,
             active = steaming,
@@ -1298,6 +1307,7 @@ private fun ModeCluster(
         ModePill(
             "Water",
             if (dispensing) modeRunningSub(modeElapsedMs, targets.hotWaterTimeoutS)
+            else if (!targetsKnown) UNKNOWN_VALUE
             else "${targets.hotWaterVolumeMl.toInt()}ml · ${deg(targets.hotWaterTempC)}",
             "drop", tel.modeWater,
             active = dispensing,
@@ -1306,6 +1316,7 @@ private fun ModeCluster(
         ModePill(
             "Flush",
             if (flushing) modeRunningSub(modeElapsedMs, targets.flushTimeS)
+            else if (!targetsKnown) UNKNOWN_VALUE
             else "${targets.flushTimeS.toInt()}s purge",
             "sparkle", tel.modeFlush,
             active = flushing,

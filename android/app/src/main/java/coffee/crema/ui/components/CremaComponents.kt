@@ -1310,11 +1310,13 @@ fun CremaSplitLabel(
     // When set, a leading icon stands in for the text [prefix] — saves width in
     // tight cells (e.g. the 7" profile-segment row's Temp/Exit headers).
     icon: String? = null,
+    // The gate of the setting the dot toggles (spec §7.6).
+    dotGate: RowGate = RowGate.Open,
 ) {
     val style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
     val copper = MaterialTheme.colorScheme.primary
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (dot) CremaDotToggle(dotOn, { onDot?.invoke() })
+        if (dot) CremaDotToggle(dotOn, { onDot?.invoke() }, Modifier.gated(dotGate))
         // A leading icon (when given) replaces the text prefix; otherwise the prefix
         // carries the same 3dp bottom padding the options use to clear their
         // underline, so prefix + options share a baseline (no high options). Blank
@@ -1783,7 +1785,11 @@ fun CremaStepper(
     chips: List<Double>? = null,
     compareSymbol: String? = null,
     onCompare: (() -> Unit)? = null,
+    // A machine or session setting's gate (spec §7.6): locks the bar and chips
+    // (the header stays live) and shows "—" for an unknown value.
+    gate: RowGate = RowGate.Open,
 ) {
+    val fmt = gate.fmt(fmt)
     fun snap(x: Double) = (kotlin.math.round(x * 100) / 100).coerceIn(min, max)
     val dec = { onChange(snap(value - step)) }
     val inc = { onChange(snap(value + step)) }
@@ -1792,7 +1798,7 @@ fun CremaStepper(
     if (style.tonalButtons) {
         Column(modifier) {
             if (label != null) Eyebrow(label, Modifier.padding(bottom = 6.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(Modifier.gated(gate), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 FilledTonalIconButton(onClick = dec) { PhIcon("minus") }
                 Row(verticalAlignment = Alignment.Bottom) {
                     TapToEditValue(
@@ -1821,7 +1827,7 @@ fun CremaStepper(
             header != null -> header()
             label != null -> Eyebrow(label)
         }
-        Column(Modifier.alpha(if (enabled) 1f else 0.4f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.alpha(if (enabled) 1f else 0.4f).gated(gate), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             var barMod: Modifier = if (style.fillWidth) Modifier.fillMaxWidth() else Modifier
             if (style.box != StepperFill.None) {
                 val fill = if (style.box == StepperFill.High) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerHighest

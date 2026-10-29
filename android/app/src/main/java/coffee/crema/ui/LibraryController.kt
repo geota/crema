@@ -1976,7 +1976,7 @@ class LibraryController(
         // The selections on screen: on a remote, the hub's (02 F2 — a remote
         // still records the shot it watched).
         val s = effectiveState()
-        val profile = s.profiles.firstOrNull { it.id == s.activeProfileId }
+        val profile = s.activeProfile()
         // The core classified this completion (review #40 —
         // `de1_domain::shot_disposition`, same rule on web). SkipCleaning:
         // machine maintenance runs in the DE1's Espresso state, so a

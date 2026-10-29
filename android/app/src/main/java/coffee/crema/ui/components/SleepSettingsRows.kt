@@ -24,9 +24,9 @@ const val WAKE_WITH_SAVER_HINT =
  * Decenza's auto-sleep, default 30.
  */
 @Composable
-fun IdleSleepRow(minutes: Int, onChange: (Int) -> Unit, style: CremaStepperStyle) {
+fun IdleSleepRow(minutes: Int, onChange: (Int) -> Unit, style: CremaStepperStyle, gate: RowGate = RowGate.Open) {
     val choices = remember { idleSleepChoices() }
-    CremaSettingsRow("Sleep after", IDLE_SLEEP_HINT) {
+    CremaSettingsRow("Sleep after", IDLE_SLEEP_HINT, gate = gate) {
         CremaStepper(
             value = idleSleepIndex(minutes, choices).toDouble(),
             step = 1.0,

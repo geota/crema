@@ -44,7 +44,9 @@ val LocalSettingsRowDense = staticCompositionLocalOf { false }
  * [needsConnection] shows a copper "Connect DE1" pill. Paddings/gap follow
  * [LocalSettingsRowDense]. Set [dot] for a 0-sentinel setting: a leading enable
  * dot ([dotOn]/[onDot]) toggles the feature and greys the [trailing] control
- * when off, instead of making the user dial the value down to 0.
+ * when off, instead of making the user dial the value down to 0. A machine or
+ * session setting passes its [gate] (spec §7.6): on a remote it may dim and
+ * lock the control and its dot, show "—" for an unknown value, and add a note.
  */
 @Composable
 fun CremaSettingsRow(
@@ -57,6 +59,7 @@ fun CremaSettingsRow(
     dot: Boolean = false,
     dotOn: Boolean = false,
     onDot: (() -> Unit)? = null,
+    gate: RowGate = RowGate.Open,
     trailing: @Composable () -> Unit = {},
 ) {
     val dense = LocalSettingsRowDense.current
@@ -71,7 +74,7 @@ fun CremaSettingsRow(
             // Optional leading enable dot — flips a 0-sentinel setting on/off
             // (the trailing control greys out below) instead of forcing the user
             // to dial the value to 0. Mirrors the PWA's StStepper dot.
-            if (dot) CremaDotToggle(dotOn, { onDot?.invoke() })
+            if (dot) CremaDotToggle(dotOn, { onDot?.invoke() }, Modifier.gated(gate))
             if (title.isNotEmpty()) Text(
                 title,
                 style = MaterialTheme.typography.bodyLarge,
@@ -86,6 +89,13 @@ fun CremaSettingsRow(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 2.dp),
         )
+        GateNote(gate)
+    }
+    // An unknown value shows "—" instead of its control (nothing to edit).
+    val control: @Composable () -> Unit = if (gate.unknown) {
+        { CremaMonoReadout("—", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    } else {
+        trailing
     }
     val hPad = if (dense) 16.dp else 20.dp
     val vPad = if (dense) 13.dp else 16.dp
@@ -98,7 +108,7 @@ fun CremaSettingsRow(
             verticalArrangement = Arrangement.spacedBy(if (dense) 10.dp else 12.dp),
         ) {
             Column { titleBlock() }
-            Box(Modifier.fillMaxWidth().alpha(if (notImplemented) 0.5f else if (dot && !dotOn) 0.4f else 1f)) { trailing() }
+            Box(Modifier.fillMaxWidth().alpha(if (notImplemented) 0.5f else if (dot && !dotOn) 0.4f else 1f).gated(gate)) { control() }
         }
     } else {
         Row(
@@ -107,7 +117,7 @@ fun CremaSettingsRow(
             horizontalArrangement = Arrangement.spacedBy(if (dense) 12.dp else 16.dp),
         ) {
             Column(Modifier.weight(1f)) { titleBlock() }
-            Box(Modifier.alpha(if (notImplemented) 0.5f else if (dot && !dotOn) 0.4f else 1f)) { trailing() }
+            Box(Modifier.alpha(if (notImplemented) 0.5f else if (dot && !dotOn) 0.4f else 1f).gated(gate)) { control() }
         }
     }
     if (!last) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

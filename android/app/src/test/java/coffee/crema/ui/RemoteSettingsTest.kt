@@ -2,7 +2,10 @@ package coffee.crema.ui
 
 import android.app.Application
 import androidx.lifecycle.ViewModelStore
+import coffee.crema.ble.proxy.Peer
+import coffee.crema.settings.OnRemote
 import coffee.crema.settings.Setting
+import kotlinx.coroutines.flow.MutableStateFlow
 import coffee.crema.settings.SettingGroup
 import coffee.crema.ui.RemoteFixture.Companion.BEAN_P
 import coffee.crema.ui.RemoteFixture.Companion.BEAN_S
@@ -240,6 +243,35 @@ class RemoteSettingsTest {
         assertEquals(ownYield to ownCap, core(), "this device's own values, no override")
     }
 
+    /** AC-31's loadPrefs clause (the P2a validation's P3-1): a snapshot that
+     *  lands before this device's prefs finish loading still drives the core
+     *  once they have. */
+    @Test
+    fun `the remote core follows a snapshot that beat loadPrefs`() {
+        var early = false
+        val vm = fixture.start(onBuilt = {
+            early = !MainViewModel::class.java.getDeclaredField("prefsLoaded").apply { isAccessible = true }.getBoolean(it)
+            it.deliverConfigForTest(coreJson.encodeToString(coffee.crema.settings.ConfigSnapshot.serializer(), S))
+        })
+        assertTrue(early, "the snapshot landed before loadPrefs finished")
+        VmHarness.idle()
+        assertEquals(40f to 44f, vm.ui.value.stopTargets?.let { it.weightConfiguredG to it.maxTimeS })
+    }
+
+    /** The P2a validation's P3-2: a hub custom profile this library lacks
+     *  still drives the remote core's stop targets (through the overlay). */
+    @Test
+    fun `a hub-only profile drives the remote core`() {
+        val vm = fixture.start()
+        fixture.push()
+        val custom = vm.ui.value.profiles.first { it.id == RemoteFixture.PROFILE_S }.copy(id = "custom-on-the-hub", source = "custom", yieldOut = 37f)
+        val customJson = coreJson.encodeToString(coffee.crema.profiles.CremaProfile.serializer(), custom)
+        fixture.push(S.copy(activeProfileId = "custom-on-the-hub", activeProfileJson = customJson, brewDoseG = null, brewYieldG = null, brewTempC = null, brewPreinfuseS = null, rev = 2))
+        VmHarness.idle()
+        assertEquals("custom-on-the-hub", vm.ui.value.activeProfileId)
+        assertEquals(37f, vm.ui.value.stopTargets?.weightConfiguredG, "the overlay's yield")
+    }
+
     /** AC-32: restore, reset and erase on a remote change own values only;
      *  the screens keep showing the hub's. */
     @Test
@@ -258,6 +290,79 @@ class RemoteSettingsTest {
         vm.eraseAll()
         VmHarness.idle()
         assertEquals(shown, abOfUi(vm.ui.value), "after erase")
+    }
+
+    /** Advance the main looper's clock in steps, letting socket threads
+     *  post back, until [done] holds (the re-find waits on that clock). */
+    private fun untilClock(what: String, done: () -> Boolean) {
+        val deadline = System.nanoTime() + 20_000_000_000L
+        while (!done()) {
+            check(System.nanoTime() < deadline) { "timed out waiting for $what" }
+            VmHarness.advance(250)
+            Thread.sleep(10)
+        }
+    }
+
+    /** AC-26: the hub restarts with this remote attached. Until it reattaches
+     *  the remote keeps the last values, marked reconnecting (relayed rows
+     *  OFFLINE); its own prefs never change. The restarted hub's snapshot
+     *  applies although its rev started over: the Welcome reset it. */
+    @Test
+    fun `hub restart keeps the last view until reattach`() {
+        fixture.peers = MutableStateFlow(emptyList<Peer>())
+        val vm = fixture.start()
+        fixture.push(S.copy(rev = 5))
+        val shown = abOfUi(vm.ui.value)
+        val after = S.copy(stopOnWeight = false, qcGrind = 9f, grinderModel = "After the restart", rev = 0)
+        fixture.hubConfig = coreJson.encodeToString(coffee.crema.settings.ConfigSnapshot.serializer(), after)
+        fixture.restart()
+        VmHarness.idleUntil("the remote to notice") { vm.ui.value.mirrorReconnecting }
+        assertEquals(shown, abOfUi(vm.ui.value), "the last values stay")
+        assertTrue(VmHarness.ownState(vm).mirror!!.reconnecting)
+        for (setting in Setting.entries.filter { it.group != SettingGroup.C_PERSONAL && vm.ui.value.knownOnRemote(it) }) {
+            val expected = if (setting.onRemote == OnRemote.RELAYED) SettingAvailability.OFFLINE else SettingAvailability.READ_ONLY
+            assertEquals(expected, vm.ui.value.availability(setting), "$setting while the hub is down")
+        }
+        assertEquals(abOf(P), abOf(savedPrefs()))
+        untilClock("the reattach") { fixture.hub.remotes().isNotEmpty() && !vm.ui.value.mirrorReconnecting }
+        VmHarness.idleUntil("the restarted hub's snapshot") { vm.ui.value.grinderModel == "After the restart" }
+        assertEquals(9f, vm.ui.value.qcGrind)
+        assertEquals(false, vm.ui.value.stopOnWeight)
+        assertEquals(SettingAvailability.VIA_HUB, vm.ui.value.availability(Setting.STOP_ON_WEIGHT))
+        assertEquals(abOf(P), abOf(savedPrefs()))
+    }
+
+    /** AC-27: a remote that attaches while the hub's DE1 is mid-shot (its
+     *  state stream says Espresso throughout) shows S from the attach
+     *  snapshot. The JVM harness can't run a real shot (spec §8), so the
+     *  shot is the hub's live state stream. */
+    @Test
+    fun `attach mid-shot`() {
+        fixture.hubConfig = coreJson.encodeToString(coffee.crema.settings.ConfigSnapshot.serializer(), S)
+        val streaming = java.util.concurrent.atomic.AtomicBoolean(true)
+        val stream = Thread {
+            var t = 0L
+            while (streaming.get()) {
+                // Espresso (4), pouring (5).
+                fixture.hub.onInbound("AA:BB", coffee.crema.ble.De1Uuids.SERVICE, coffee.crema.ble.De1Uuids.STATE_INFO, byteArrayOf(4, 5), t++)
+                Thread.sleep(20)
+            }
+        }
+        try {
+            val vm = fixture.start(onBuilt = { stream.start() })
+            vm.connect() // the remote's DE1, through the hub
+            untilClock("the attach") { fixture.endpoint.received.any { "\"type\":\"attach\"" in it } }
+            VmHarness.idleUntil("the attach snapshot") { VmHarness.ownState(vm).mirror?.snapshot == S }
+            assertTrue(stream.isAlive, "the shot was still streaming")
+            assertEquals(S.qcGrind, vm.ui.value.qcGrind)
+            assertEquals(S.stopOnWeight, vm.ui.value.stopOnWeight)
+            assertEquals(S.activeProfileId, vm.ui.value.activeProfileId)
+            assertEquals(SettingAvailability.VIA_HUB, vm.ui.value.availability(Setting.STOP_ON_WEIGHT))
+            assertEquals(abOf(P), abOf(savedPrefs()))
+        } finally {
+            streaming.set(false)
+            stream.join(1_000)
+        }
     }
 
     private fun abOfUi(ui: MainUiState): Map<String, Any?> = abOf(
