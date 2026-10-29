@@ -154,6 +154,9 @@ class ProxyController(
     /** A re-find attempt was welcomed: the remote's saved target is now
      *  [host]:[port]. The VM shows and persists it (the role is unchanged). */
     private val onTargetMoved: (host: String, port: Int) -> Unit = { _, _ -> },
+    /** Returns once the VM's prefs are loaded: [pairedDevices] is empty until
+     *  then, so a hub that served earlier would deny every paired remote. */
+    private val prefsReady: suspend () -> Unit = {},
 ) {
 
     /** The proxy slice of the UI snapshot — the VM mirrors this into MainUiState. */
@@ -912,6 +915,10 @@ class ProxyController(
         relayServer = server
         scope.launch {
             runCatching {
+                // Not before the paired devices are known: a remote that dials
+                // a restarting hub meets a closed port and redials, rather
+                // than a Denied.
+                prefsReady()
                 relayPort = server.start()
                 appendLog("LAN relay listening on :$relayPort")
                 if (relayPort != wantedPort) {

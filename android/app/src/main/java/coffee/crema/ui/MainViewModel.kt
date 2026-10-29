@@ -1205,6 +1205,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _ui.update { it.copy(proxyPrimaryHost = host, proxyPrimaryPort = port) }
             persistPrefs()
         },
+        prefsReady = { prefsReady.await() },
     )
 
     /**
@@ -1483,6 +1484,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  erase the restored activeProfileId during boot). */
     @Volatile private var prefsLoaded = false
 
+    /** Completes with [prefsLoaded] (or when the startup load ends without
+     *  it): the hub's relay waits for it, so it never serves before the
+     *  paired devices are known. */
+    private val prefsReady = kotlinx.coroutines.CompletableDeferred<Unit>()
+
     /** The pending "nearby" setup after a DE1 connects (see [setUpNearby]). */
     private var nearbySetupJob: kotlinx.coroutines.Job? = null
 
@@ -1759,6 +1765,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             drive.autoBackupIfDue(_ui.value.autoDriveBackup)
             // Daily automatic release check (opt-in, default off).
             maybeAutoUpdateCheck()
+        }.invokeOnCompletion {
+            // A load that failed before the prefs still lets a hub serve.
+            prefsReady.complete(Unit)
         }
         startScreensaverClock()
         // Mirror the Visualizer controller's state into the UI snapshot.
@@ -3856,6 +3865,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
         runCatching { bridge.setVolumeStopWithScale(p.volumeStopWithScale) }
         prefsLoaded = true
+        prefsReady.complete(Unit)
         // The idle-sleep timer starts counting once it knows the setting.
         idleSleep.configure(_ui.value.idleSleepMin)
         // The Brew setup opens on the most recent method, now it's known.

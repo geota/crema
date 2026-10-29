@@ -705,6 +705,63 @@ class ProxyControllerModeTest {
         }
     }
 
+    /** P2a validation: a restarting hub doesn't serve before its prefs (the
+     *  paired devices) are loaded, so a paired remote that dials at once meets
+     *  a closed port and redials, and is admitted once loading finishes: no
+     *  Denied, so nothing for it to count or demote on. */
+    @Test
+    fun `a loading hub doesn't refuse a paired remote`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val port = java.net.ServerSocket(0).use { it.localPort }
+        java.io.File(app.filesDir, "relayPort").writeText("$port")
+        val paired = CopyOnWriteArrayList<PairedDevice>()
+        val loaded = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val hub = ProxyController(
+            app = app, json = Json { ignoreUnknownKeys = true }, scope = scope,
+            setCoreReadOnly = {}, setRecorderEnabled = {}, notify = {}, appendLog = { log += it }, connect = {}, disconnect = {},
+            disconnectDevices = {}, connectScale = {}, scaleAttachWanted = { false }, de1Connected = { false },
+            machineStateName = { null }, machineActions = RecordingMachineActions(), snapshotConfig = { "" }, applyConfig = {},
+            roster = { emptyList() }, isSnapshotChar = { _, _ -> false }, pairedDevices = { paired.toList() },
+            rememberPaired = { _, _, _ -> }, onModeApplied = { _, _, _ -> }, secretBox = box,
+            prefsReady = { loaded.await() },
+        )
+        val secret = PairingCrypto.newSecret()
+        hub.pairingStore.putIssued("phone-1", secret)
+        val remoteScope = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        val refusals = CopyOnWriteArrayList<String>()
+        val welcomed = java.util.concurrent.atomic.AtomicBoolean(false)
+        try {
+            hub.setHubMode(true)
+            advance(1_000)
+            // The remote dials the hub's saved port straight away.
+            val link = coffee.crema.ble.proxy.ReconnectingClientLink("ws://127.0.0.1:$port${coffee.crema.ble.proxy.LanRelayServer.PATH}", remoteScope)
+            coffee.crema.ble.proxy.ProxyTransport(
+                link, remoteScope, "phone-1", "Phone",
+                pairingSecretFor = { secret }, allowRepair = false,
+                onRefused = { reason, _, _ -> refusals += reason },
+                onWelcome = { _, _ -> welcomed.set(true) },
+            )
+            val until = System.nanoTime() + 1_500_000_000L
+            while (System.nanoTime() < until) {
+                scheduler.runCurrent()
+                Thread.sleep(10)
+            }
+            assertTrue(log.none { "LAN relay listening" in it }, "not serving while loading: $log")
+            assertEquals(emptyList(), refusals.toList(), "no Denied while loading")
+            assertFalse(welcomed.get())
+
+            // Loading finishes: the paired devices are known, the relay serves.
+            paired += PairedDevice("phone-1", "Phone", canControl = true)
+            loaded.complete(Unit)
+            runUntil("the relay") { log.any { "LAN relay listening on :$port" in it } }
+            runUntil("the remote's welcome") { welcomed.get() }
+            assertEquals(emptyList(), refusals.toList(), "no refusal at any point")
+        } finally {
+            remoteScope.cancel()
+            hub.close()
+        }
+    }
+
     /** A user's switch queued before the re-find's own wins: the re-find
      *  never moves a device the user just took out of the remote role. */
     @Test
