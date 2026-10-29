@@ -100,6 +100,11 @@ class FirmwareUpdateControllerTest {
             holdRestores += build to holdMsLeft
             return now()
         }
+        val verifyRestores = mutableListOf<Pair<UInt, Long>>()
+        override fun restoreVerifying(build: UInt, holdMsLeft: Long, nowMs: Long): FlashStep {
+            verifyRestores += build to holdMsLeft
+            return now()
+        }
     }
 
     private object NoIo : FlashIoPort {
@@ -421,6 +426,33 @@ class FirmwareUpdateControllerTest {
         controller(core = core2, markers = stale, wall = { 1_000_000L }).restore(); runCurrent()
         assertTrue(core2.holdRestores.isEmpty())
         assertNull(stale.value)
+    }
+
+    @Test
+    fun aRestartInsideTheVerifyWindowRestoresVerifyingNotThePowerCycle() = runTest {
+        // Report 06 #7: the power-cycle step told the user to switch the DE1
+        // off while it may still be checking the image.
+        val verifying = status(FlashPhase.Verifying, canCancel = false).copy(verifyHoldMsLeft = 90_000u)
+        assertEquals(
+            FlashMarker(1358u, true, verifyHoldUntil = 190_000L, machine = "AA"),
+            markerFor(verifying, "AA", 100_000),
+        )
+        val core = StubCore(current = verifying)
+        controller(core = core, markers = MemoryMarkers(FlashMarker(1358u, true, verifyHoldUntil = 1_090_000L)), wall = { 1_000_000L })
+            .restore(); runCurrent()
+        assertEquals(listOf(1358u to 90_000L), core.verifyRestores)
+        assertTrue(core.restores.isEmpty())
+        // Window over: the unconfirmed power-cycle wait, as before.
+        val core2 = StubCore()
+        controller(core = core2, markers = MemoryMarkers(FlashMarker(1358u, true, verifyHoldUntil = 999_000L)), wall = { 1_000_000L })
+            .restore(); runCurrent()
+        assertTrue(core2.verifyRestores.isEmpty())
+        assertEquals(listOf(1358u to true), core2.restores)
+        // A clock that jumped back can't stretch the window past 120 s.
+        val core3 = StubCore(current = verifying)
+        controller(core = core3, markers = MemoryMarkers(FlashMarker(1358u, true, verifyHoldUntil = 1_000_000L + 3_600_000L)), wall = { 1_000_000L })
+            .restore(); runCurrent()
+        assertEquals(listOf(1358u to 120_000L), core3.verifyRestores)
     }
 
     @Test

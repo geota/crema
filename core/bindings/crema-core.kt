@@ -2629,7 +2629,13 @@ data class FlashStatus (
 	val identityUnknown: Boolean,
 	/// How long the DE1 may still be erasing (during the erase, or after an
 	/// interrupted one): the shells persist it so a restart keeps the lock.
-	val eraseHoldMsLeft: UInt? = null
+	val eraseHoldMsLeft: UInt? = null,
+	/// While verifying: how long until [`VERIFY_TIMEOUT_MS`] after the verify
+	/// request, i.e. how long the DE1 may still be checking the image. The
+	/// shells persist it so a page reload or process restart inside the
+	/// window comes back as "still verifying, don't switch it off" rather
+	/// than as the power-cycle step ([`FirmwareFlash::restore_verifying`]).
+	val verifyHoldMsLeft: UInt? = null
 )
 
 /// Generated type representing the anonymous struct variant `Write` of the `FlashAction` Rust enum

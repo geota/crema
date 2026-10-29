@@ -2559,6 +2559,19 @@ impl CremaBridge {
             .to_json()
     }
 
+    /// Bring back a flash whose verify window was still open when the tab
+    /// reloaded (from the deadline the shell persisted).
+    pub fn firmware_flash_restore_verifying(
+        &mut self,
+        build: u32,
+        hold_ms_left: f64,
+        now_ms: f64,
+    ) -> String {
+        self.live_core()
+            .firmware_flash_restore_verifying(build, hold_ms_left as u64, now_ms as u64)
+            .to_json()
+    }
+
     /// Bring back the lock of an erase that may still be running when the
     /// tab closed (from the deadline the shell persisted).
     pub fn firmware_flash_restore_erase_hold(

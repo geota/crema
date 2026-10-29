@@ -2596,6 +2596,14 @@ export interface FlashStatus {
 	 * interrupted one): the shells persist it so a restart keeps the lock.
 	 */
 	eraseHoldMsLeft?: number;
+	/**
+	 * While verifying: how long until [`VERIFY_TIMEOUT_MS`] after the verify
+	 * request, i.e. how long the DE1 may still be checking the image. The
+	 * shells persist it so a page reload or process restart inside the
+	 * window comes back as "still verifying, don't switch it off" rather
+	 * than as the power-cycle step ([`FirmwareFlash::restore_verifying`]).
+	 */
+	verifyHoldMsLeft?: number;
 }
 
 /**

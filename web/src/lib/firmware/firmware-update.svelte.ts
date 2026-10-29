@@ -29,6 +29,8 @@ export type FlowStep = 'closed' | 'warning' | 'choose' | 'source' | 'confirm' | 
 
 /** The longest an erase can still be running (the core's `ERASE_TIMEOUT_MS`). */
 const ERASE_HOLD_MAX_MS = 60_000;
+/** The longest the DE1 can still be verifying (the core's `VERIFY_TIMEOUT_MS`). */
+const VERIFY_HOLD_MAX_MS = 120_000;
 
 /** localStorage key of the flash marker. */
 export const AWAITING_KEY = 'crema.firmware.flashMarker.v2';
@@ -39,6 +41,12 @@ export interface FlashMarker {
 	unconfirmed: boolean;
 	/** Wall-clock ms until which the DE1 may still be erasing; absent = power-cycle wait. */
 	eraseHoldUntil?: number;
+	/**
+	 * Wall-clock ms until which the DE1 may still be verifying the image. A
+	 * reload before then restores the verify step ("don't switch it off"),
+	 * not the power-cycle step (report 06 #7).
+	 */
+	verifyHoldUntil?: number;
 	/** The DE1's Web Bluetooth device id, when known (this browser session only). */
 	machine?: string | null;
 	/** The DE1's serial number (survives browser restarts), when known. */
@@ -60,7 +68,12 @@ export function markerFor(
 	if (s.phase === FlashPhase.AwaitingPowerCycle) {
 		return { build: s.targetBuild, unconfirmed: s.verifyUnconfirmed, ...id };
 	}
-	if (s.phase === FlashPhase.Verifying) return { build: s.targetBuild, unconfirmed: true, ...id };
+	if (s.phase === FlashPhase.Verifying) {
+		const left = s.verifyHoldMsLeft;
+		return typeof left === 'number' && left > 0
+			? { build: s.targetBuild, unconfirmed: true, verifyHoldUntil: nowWallMs + left, ...id }
+			: { build: s.targetBuild, unconfirmed: true, ...id };
+	}
 	if (s.eraseHoldMsLeft !== undefined && s.eraseHoldMsLeft !== null) {
 		return {
 			build: s.targetBuild,
@@ -230,6 +243,15 @@ export class FirmwareUpdateController {
 			// A wall clock that jumped back can't stretch the hold past what
 			// an erase can take (audit r3 LOW-1; the core clamps too).
 			status = await this.driver.restoreEraseHold(marker.build, Math.min(left, ERASE_HOLD_MAX_MS));
+		} else if (
+			typeof marker.verifyHoldUntil === 'number' &&
+			Number.isFinite(marker.verifyHoldUntil - this.wallNow()) &&
+			marker.verifyHoldUntil - this.wallNow() > 0
+		) {
+			// The DE1 may still be checking the image: wait out the rest of the
+			// window before asking for the power-cycle (report 06 #7).
+			const left = marker.verifyHoldUntil - this.wallNow();
+			status = await this.driver.restoreVerifying(marker.build, Math.min(left, VERIFY_HOLD_MAX_MS));
 		} else {
 			status = await this.driver.restoreAwaiting(marker.build, marker.unconfirmed === true);
 		}
@@ -239,7 +261,7 @@ export class FirmwareUpdateController {
 		// one, so it is not bound (never "a different DE1" for that alone).
 		await this.driver.bindMachine(typeof marker.serial === 'number' ? marker.serial : 0, '');
 		this.deps.log(
-			`Firmware: restored the lock for build ${marker.build} (${typeof marker.eraseHoldUntil === 'number' ? 'erase may still run' : 'waiting for a restart'}, DE1 ${marker.machine ?? 'unknown'})`
+			`Firmware: restored the lock for build ${marker.build} (${typeof marker.eraseHoldUntil === 'number' ? 'erase may still run' : status.phase === FlashPhase.Verifying ? 'may still be verifying' : 'waiting for a restart'}, DE1 ${marker.machine ?? 'unknown'})`
 		);
 		this.step = 'flash';
 		if (this.deps.linkUp?.()) await this.onLinkUp(this.deps.machineId?.() ?? null);

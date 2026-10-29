@@ -4236,6 +4236,25 @@ impl CremaCore {
         self.flash_step(Vec::new(), now_ms)
     }
 
+    /// Bring back a flash whose verify window was still open when the shell
+    /// went away (reload / restart inside [`firmware_flash::VERIFY_TIMEOUT_MS`]
+    /// of the verify request), from the deadline the shell persisted: it
+    /// stays in Verifying until the window closes, then asks for the
+    /// power-cycle. A no-op when a flash already exists, `build` is not
+    /// pinned or the window is over. See [`FirmwareFlash::restore_verifying`].
+    pub fn firmware_flash_restore_verifying(
+        &mut self,
+        build: u32,
+        hold_ms_left: u64,
+        now_ms: u64,
+    ) -> FlashStep {
+        self.advance_clock(now_ms);
+        if self.firmware_flash.is_none() {
+            self.firmware_flash = FirmwareFlash::restore_verifying(build, hold_ms_left, now_ms);
+        }
+        self.flash_step(Vec::new(), now_ms)
+    }
+
     /// Bring back the lock of an erase that may still be running when the
     /// shell went away (tab closed or process killed during the erase or its
     /// hold), from the deadline the shell persisted. A no-op when a flash

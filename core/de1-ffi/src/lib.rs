@@ -2728,6 +2728,19 @@ impl CremaBridge {
             .to_json()
     }
 
+    /// Bring back a flash whose verify window was still open when the
+    /// process died (from the deadline the shell persisted).
+    pub fn firmware_flash_restore_verifying(
+        &self,
+        build: u32,
+        hold_ms_left: u64,
+        now_ms: u64,
+    ) -> String {
+        self.core()
+            .firmware_flash_restore_verifying(build, hold_ms_left, now_ms)
+            .to_json()
+    }
+
     /// Bring back the lock of an erase that may still be running when the
     /// process died (from the deadline the shell persisted).
     pub fn firmware_flash_restore_erase_hold(

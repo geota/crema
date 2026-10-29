@@ -377,6 +377,8 @@ export interface CremaCore {
 	): Promise<FlashStep>;
 	/** Bring back the lock of an erase that may still be running after a reload. */
 	firmwareFlashRestoreEraseHold(build: number, holdMsLeft: number, nowMs: number): Promise<FlashStep>;
+	/** Bring back a flash whose verify window was still open at the reload. */
+	firmwareFlashRestoreVerifying(build: number, holdMsLeft: number, nowMs: number): Promise<FlashStep>;
 	/** Whether a flash (or its erase / reboot window) holds the DE1 link. */
 	firmwareLocksWrites(): Promise<boolean>;
 	firmwareFlashStatus(nowMs: number): Promise<FlashStep>;
@@ -1084,6 +1086,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async firmwareFlashRestoreEraseHold(build, holdMsLeft, nowMs) {
 			return parseStep(bridge.firmware_flash_restore_erase_hold(build, holdMsLeft, nowMs));
+		},
+		async firmwareFlashRestoreVerifying(build, holdMsLeft, nowMs) {
+			return parseStep(bridge.firmware_flash_restore_verifying(build, holdMsLeft, nowMs));
 		},
 		async firmwareLocksWrites() {
 			return bridge.firmware_locks_writes();
