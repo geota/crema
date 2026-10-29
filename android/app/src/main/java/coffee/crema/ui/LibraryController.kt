@@ -1355,6 +1355,13 @@ class LibraryController(
         scope.launch { library.save(lib) }
     }
 
+    /** [persistLibrary], awaited: the remote → standalone commit saves the
+     *  adopted bean before the role switch starts (spec §7.5, I3). */
+    suspend fun persistLibraryNow() {
+        val s = uiState()
+        library.save(BeanLibrary(s.beans, s.roasters, s.activeBeanId))
+    }
+
     /**
      * Find a roaster by name (case-insensitive) or mint one. Returns the roaster
      * id (null for a blank name) and the possibly-extended roaster directory.

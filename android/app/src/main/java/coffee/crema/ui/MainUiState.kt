@@ -495,6 +495,9 @@ data class MainUiState(
      * persists only the own values.
      */
     val mirror: MirroredSettings? = null,
+    /** The remote → standalone confirmation (T6, spec §7.5), while it's open:
+     *  "Use <hub>'s machine and brew settings on this device?". */
+    val adoptPrompt: AdoptPrompt? = null,
     /**
      * Mirror overlay (issue 05), projected from [mirror] by [effective] and
      * never held in the own state: the hub's active profile, decoded for

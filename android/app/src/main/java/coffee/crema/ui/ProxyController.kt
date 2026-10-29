@@ -326,6 +326,12 @@ class ProxyController(
      *  Switches run one at a time, in the order they were requested. */
     private val modeMutex = Mutex()
 
+    /** Bumped by every mode switch ([applyModeLocked]): a switch planned
+     *  against one mode runs only if no other ran in between
+     *  ([applyModeIfEpoch]). */
+    @Volatile var modeEpoch = 0L
+        private set
+
     /** Test seam: runs at the top of every [applyModeLocked], under the mode
      *  lock, before anything is torn down. */
     @androidx.annotation.VisibleForTesting
@@ -589,13 +595,15 @@ class ProxyController(
     internal fun refuseCurrentSessionForTest(reason: String, byHost: Boolean, hostProved: Boolean) =
         handleSessionRefused(session, reason, byHost, hostProved)
 
-    /** The host refused this device: stop being a remote, with the reason. */
+    /** The host refused this device: stop being a remote, with the reason.
+     *  Only from the mode it refused (R1): a switch that ran first — a
+     *  remote → standalone commit above all — already took this device out
+     *  of the remote role, and must not be undone by a second switch. */
     private fun demote(reason: String) {
-        scope.launch {
-            appendLog("Mirror denied by host: $reason")
-            notify(deniedMessage(reason))
-            switchToNormal()
-        }
+        val epoch = modeEpoch
+        appendLog("Mirror denied by host: $reason")
+        notify(deniedMessage(reason))
+        applyModeIfEpoch("normal", epoch)
     }
 
     /** NSD says the address this remote dials now belongs to a device that
@@ -1075,6 +1083,33 @@ class ProxyController(
         }
     }
 
+    /**
+     * Switch to [role] (`"normal"` or `"primary"`) only if no other switch ran
+     * since the caller saw [epoch], running [before] first under the same
+     * mode lock (spec §7.5 step 4): the remote → standalone commit adopts and
+     * saves there, so nothing can interleave. Stale (or refused during a
+     * firmware flash): neither [before] nor the switch runs, and [onStale] is
+     * told.
+     */
+    fun applyModeIfEpoch(role: String, epoch: Long, before: suspend () -> Unit = {}, onStale: () -> Unit = {}) {
+        resetRefind()
+        scope.launch {
+            modeMutex.withLock {
+                if (modeEpoch != epoch) {
+                    appendLog("Mode switch to $role skipped: another switch ran first")
+                    onStale()
+                    return@withLock
+                }
+                if (refusedForFirmware(role)) {
+                    onStale()
+                    return@withLock
+                }
+                before()
+                applyModeLocked(role, "", 0, reconnect = true, trust = MirrorTrust.UNATTENDED)
+            }
+        }
+    }
+
     /** True (logged, user told) when a firmware flash holds the DE1, so a
      *  switch to [role] must not move the radio. */
     private fun refusedForFirmware(role: String): Boolean {
@@ -1092,7 +1127,10 @@ class ProxyController(
         trust: MirrorTrust,
         refind: RefindSwitch? = null,
     ) {
+        modeEpoch++
         modeSwitchProbe?.invoke(role)
+        // Off the remote role nothing holds the re-find.
+        if (role != "secondary") refindHeld = false
         closePairingWindow()
         // Not reconnecting (Hub mode off): a full user disconnect, which also
         // drops a DE1 scan still waiting for the machine, so nothing re-grabs it.

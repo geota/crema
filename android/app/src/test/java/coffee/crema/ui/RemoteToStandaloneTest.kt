@@ -1,0 +1,289 @@
+package coffee.crema.ui
+
+import android.app.Application
+import androidx.lifecycle.ViewModelStore
+import coffee.crema.settings.AppPrefs
+import coffee.crema.settings.ConfigSnapshot
+import coffee.crema.ui.RemoteFixture.Companion.BEAN_S
+import coffee.crema.ui.RemoteFixture.Companion.P
+import coffee.crema.ui.RemoteFixture.Companion.S
+import coffee.crema.ui.RemoteFixture.Companion.savedPrefs
+import org.junit.After
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/** Remote → standalone (T6, spec §7.5): the confirmation, adoption and the
+ *  serialized commit. A real remote against a real hub. */
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class, sdk = [35])
+class RemoteToStandaloneTest {
+
+    private val store = ViewModelStore()
+    private val fixture = RemoteFixture(store)
+
+    @After
+    fun tearDown() {
+        store.clear()
+        VmHarness.idle()
+        fixture.kill()
+    }
+
+    /** Mode switches the controller ran, by role, and prefs.json as each began. */
+    private val switches = CopyOnWriteArrayList<Pair<String, AppPrefs>>()
+
+    private fun role(vm: MainViewModel) = VmHarness.proxyController(vm).state.value.role
+
+    /** Wait for the role, moving the virtual clock (the switch's settle
+     *  delay) while the commit's saves finish on their real threads; the
+     *  VM's log goes in a failure. */
+    private fun waitRole(vm: MainViewModel, expected: String) {
+        val deadline = System.nanoTime() + 10_000_000_000L
+        while (role(vm) != expected) {
+            if (System.nanoTime() > deadline) {
+                throw AssertionError("still ${role(vm)}; log: ${VmHarness.log(vm).take(25).joinToString(" | ")}")
+            }
+            VmHarness.advance(50)
+            Thread.sleep(5)
+        }
+    }
+
+    /** A remote with P that received S (with a custom profile) and has an
+     *  edit still pending at the hub. */
+    private fun remoteWithPendingEdit(): MainViewModel {
+        val vm = fixture.start()
+        val profile = vm.ui.value.profiles.first { it.id == RemoteFixture.PROFILE_S }
+        // A full profile, as a hub sends it (every field, defaults included).
+        val custom = kotlinx.serialization.json.Json(coreJson) { encodeDefaults = true }
+            .encodeToString(coffee.crema.profiles.CremaProfile.serializer(), profile.copy(id = "custom-on-the-hub", name = "Hub custom", source = "custom"))
+        fixture.push(S.copy(activeProfileId = "custom-on-the-hub", activeProfileJson = custom))
+        fixture.holdReplies = true
+        vm.setQcGrind(18f) // pending: never answered
+        VmHarness.idleUntil("the edit at the hub") { fixture.handled.isNotEmpty() }
+        assertEquals(18f, vm.ui.value.qcGrind)
+        VmHarness.proxyController(vm).modeSwitchProbe = { r -> switches += r to savedPrefs() }
+        return vm
+    }
+
+    private fun assertAdoptedS(vm: MainViewModel, next: String) {
+        val saved = savedPrefs()
+        val s = S.copy(activeProfileId = "custom-on-the-hub")
+        val expected = abOf(
+            P.copy(
+                maxShotDurationS = s.maxShotDurationS, autoTare = s.autoTare, stopOnWeight = s.stopOnWeight,
+                volumeStopWithScale = s.volumeStopWithScale!!, requireScale = s.requireScale!!, steamEco = s.steamEco!!,
+                steamTwoTap = s.steamTwoTap!!, fanThresholdC = s.fanThresholdC!!, preFlush = s.preFlush!!, steamPurge = s.steamPurge!!,
+                idleSleepMin = s.idleSleepMin, grinderModel = s.grinderModel, qcSteamTimeS = s.qcSteamTimeS,
+                qcSteamFlowMlS = s.qcSteamFlowMlS, qcSteamTempC = s.qcSteamTempC, qcHotWaterTempC = s.qcHotWaterTempC,
+                qcHotWaterVolumeMl = s.qcHotWaterVolumeMl, qcFlushTimeS = s.qcFlushTimeS, qcFlushTempC = s.qcFlushTempC,
+                qcGrind = s.qcGrind, activeProfileId = s.activeProfileId, waterRefillPointMm = s.waterRefillPointMm,
+            ),
+        )
+        assertEquals(expected, abOf(saved), "own A1–A11 and B1–B13 are S's (the snapshot, not the pending 18)")
+        val own = VmHarness.ownState(vm)
+        assertEquals(BEAN_S, own.activeBeanId, "the bean is in this library")
+        assertEquals(BrewParams(20.0, 40.0, 94.0, 6.0), own.brewParams)
+        assertTrue(own.profiles.any { it.id == "custom-on-the-hub" }, "the hub's custom profile is in the library now")
+        // The switch saw the adopted prefs on disk when it began (I3).
+        val (switchedTo, atSwitch) = switches.single()
+        assertEquals(next, switchedTo)
+        assertEquals(expected, abOf(atSwitch))
+        // And the first sweep after it writes S's machine values (A only;
+        // the tank temperature and battery are inputs, not settings).
+        assertEquals(
+            buildConnectSweepSettings(58f, true, 8f, 150f, 30f, 85f, 200f, 1.6f, 6f, 93f, true, own.usbChargingMode, 0f, null),
+            own.connectSweepSettings(0f, null),
+        )
+    }
+
+    /** AC-24: Stop adopts on confirm. */
+    @Test
+    fun `stop adopts the hub's settings on confirm`() {
+        val vm = remoteWithPendingEdit()
+        vm.switchToNormal()
+        VmHarness.idle()
+        val prompt = assertNotNull(vm.ui.value.adoptPrompt)
+        assertEquals("Kitchen tablet", prompt.hubName)
+        assertTrue(VmHarness.ownState(vm).mirror!!.frozen)
+        assertEquals(S.qcSteamTempC, vm.ui.value.qcSteamTempC, "the screen keeps showing S while it asks")
+        vm.setThemeMode("dark") // a save launched just before the commit
+        vm.resolveAdoption(useHub = true)
+        VmHarness.advance(200)
+        waitRole(vm, "normal")
+        VmHarness.idle()
+        assertAdoptedS(vm, "normal")
+        assertEquals("dark", savedPrefs().themeMode, "the earlier save didn't land after the adoption save")
+    }
+
+    /** AC-24: Connect directly adopts on confirm. */
+    @Test
+    fun `connect directly adopts the hub's settings on confirm`() {
+        val vm = remoteWithPendingEdit()
+        vm.connectDirectly()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt)
+        vm.resolveAdoption(useHub = true)
+        VmHarness.advance(200)
+        waitRole(vm, "normal")
+        VmHarness.idle()
+        assertAdoptedS(vm, "normal")
+    }
+
+    /** AC-24: Hub mode on with the hub gone adopts on confirm, then becomes the hub. */
+    @Test
+    fun `hub mode on with the hub gone adopts the hub's settings on confirm`() {
+        val vm = remoteWithPendingEdit()
+        fixture.kill()
+        VmHarness.idleUntil("the hub gone") { vm.ui.value.mirrorReconnecting }
+        vm.setHubMode(true)
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt)
+        vm.resolveAdoption(useHub = true)
+        VmHarness.advance(200)
+        waitRole(vm, "primary")
+        VmHarness.idle()
+        assertAdoptedS(vm, "primary")
+    }
+
+    /** AC-25: Keep mine (and dismissing, which is the same call) leaves own == P. */
+    @Test
+    fun `keep mine leaves this device's own settings`() {
+        val vm = remoteWithPendingEdit()
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt)
+        vm.resolveAdoption(useHub = false)
+        VmHarness.advance(200)
+        waitRole(vm, "normal")
+        assertEquals(abOf(P), abOf(savedPrefs()))
+        assertEquals(1, switches.size)
+    }
+
+    /** AC-25: no confirmation without a snapshot, or when nothing differs. */
+    @Test
+    fun `no confirmation without a snapshot or a difference`() {
+        val vm = fixture.start()
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNull(vm.ui.value.adoptPrompt, "no snapshot arrived")
+        VmHarness.advance(200)
+        waitRole(vm, "normal")
+        assertEquals(abOf(P), abOf(savedPrefs()))
+    }
+
+    @Test
+    fun `no confirmation when the hub's values are this device's own`() {
+        val vm = fixture.start()
+        val own = VmHarness.ownState(vm)
+        fixture.push(
+            ConfigSnapshot(
+                activeProfileId = own.activeProfileId, activeBeanId = own.activeBeanId, stopOnWeight = own.stopOnWeight, autoTare = own.autoTare,
+                maxShotDurationS = own.maxShotDurationS, grinderModel = own.grinderModel, qcSteamTimeS = own.qcSteamTimeS,
+                qcSteamFlowMlS = own.qcSteamFlowMlS, qcSteamTempC = own.qcSteamTempC, qcHotWaterTempC = own.qcHotWaterTempC,
+                qcHotWaterVolumeMl = own.qcHotWaterVolumeMl, qcFlushTimeS = own.qcFlushTimeS, qcFlushTempC = own.qcFlushTempC,
+                qcGrind = own.qcGrind,
+            ),
+        )
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNull(vm.ui.value.adoptPrompt, "nothing differs")
+    }
+
+    /** AC-25: a Denied makes the device normal without asking; one arriving
+     *  while the confirmation is open cancels it (no adoption, one switch). */
+    @Test
+    fun `a denied cancels the confirmation`() {
+        val vm = remoteWithPendingEdit()
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertNotNull(vm.ui.value.adoptPrompt)
+        fixture.revoke()
+        waitRole(vm, "normal")
+        VmHarness.advance(200)
+        VmHarness.idle()
+        assertNull(vm.ui.value.adoptPrompt)
+        vm.resolveAdoption(useHub = true) // too late: nothing to resolve
+        VmHarness.advance(200)
+        VmHarness.idle()
+        assertEquals(abOf(P), abOf(savedPrefs()), "no adoption")
+        assertEquals(listOf("normal"), switches.map { it.first }, "one switch")
+    }
+
+    /** AC-25: a Config frame arriving while the confirmation is open changes nothing. */
+    @Test
+    fun `a snapshot while the confirmation is open changes nothing`() {
+        val vm = remoteWithPendingEdit()
+        vm.switchToNormal()
+        VmHarness.idle()
+        val shown = vm.ui.value.qcSteamTempC
+        fixture.hubConfig = coreJson.encodeToString(ConfigSnapshot.serializer(), S.copy(qcSteamTempC = 120f))
+        fixture.hub.pushConfig(fixture.hubConfig)
+        Thread.sleep(200)
+        VmHarness.idle()
+        assertEquals(shown, vm.ui.value.qcSteamTempC)
+        assertEquals(S.qcSteamTempC, VmHarness.ownState(vm).mirror!!.snapshot!!.qcSteamTempC, "the frozen slice")
+    }
+
+    /** AC-25: with a pre-P2 hub, only the keys it sent are adopted, and the
+     *  confirmation names the rest. */
+    @Test
+    fun `with a legacy hub only known keys are adopted`() {
+        val vm = fixture.start()
+        val legacy = S.copy(
+            settingsSchema = null, steamEco = null, steamTwoTap = null, fanThresholdC = null, waterRefillPointMm = null,
+            heaterVoltage = null, flowMultiplier = null, lineFrequencyHz = null, lineFrequencyOverride = null, cupWarmerTempC = null,
+            volumeStopWithScale = null, requireScale = null, preFlush = null, steamPurge = null, idleSleepMin = null,
+        )
+        fixture.push(legacy)
+        vm.switchToNormal()
+        VmHarness.idle()
+        assertEquals(9, assertNotNull(vm.ui.value.adoptPrompt).legacyUnknown)
+        vm.resolveAdoption(useHub = true)
+        VmHarness.advance(200)
+        waitRole(vm, "normal")
+        VmHarness.idle()
+        val saved = savedPrefs()
+        assertEquals(S.qcSteamTempC, saved.qcSteamTempC, "a key the hub sent")
+        assertEquals(P.steamEco, saved.steamEco, "a key it didn't")
+        assertEquals(P.fanThresholdC, saved.fanThresholdC)
+    }
+
+    /** AC-36: a switch queued between the confirmation and the commit wins:
+     *  the commit runs neither the adoption nor a second switch. */
+    @Test
+    fun `a switch during the prompt wins`() {
+        val vm = remoteWithPendingEdit()
+        vm.switchToNormal()
+        VmHarness.idle()
+        fixture.revoke() // the Denied's switch, queued before the answer
+        vm.resolveAdoption(useHub = true)
+        VmHarness.advance(400)
+        waitRole(vm, "normal")
+        VmHarness.advance(400)
+        VmHarness.idle()
+        assertEquals(listOf("normal"), switches.map { it.first }, "one switch")
+    }
+
+    /** AC-36 / R1: a Denied that arrives while the commit holds the mode lock
+     *  doesn't queue a second switch after it. */
+    @Test
+    fun `a denied during the commit doesn't switch again`() {
+        val vm = remoteWithPendingEdit()
+        vm.switchToNormal()
+        VmHarness.idle()
+        vm.resolveAdoption(useHub = true) // the commit starts (its saves are awaited)
+        fixture.revoke()
+        VmHarness.advance(400)
+        waitRole(vm, "normal")
+        Thread.sleep(200)
+        VmHarness.advance(400)
+        VmHarness.idle()
+        assertEquals(listOf("normal"), switches.map { it.first }, "one switch")
+    }
+}

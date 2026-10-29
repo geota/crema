@@ -45,6 +45,20 @@ class RemoteSettingsTest {
         fixture.kill()
     }
 
+    /** Stop, answering the T6 confirmation (if any) with "Keep mine", and
+     *  wait for the normal role. */
+    private fun stopKeepingMine(vm: MainViewModel) {
+        vm.switchToNormal()
+        VmHarness.idle()
+        if (vm.ui.value.adoptPrompt != null) vm.resolveAdoption(useHub = false)
+        val deadline = System.nanoTime() + 10_000_000_000L
+        while (VmHarness.proxyController(vm).state.value.role != "normal") {
+            check(System.nanoTime() < deadline) { "still a remote" }
+            VmHarness.advance(50)
+            Thread.sleep(5)
+        }
+    }
+
     private fun idleRelays(count: Int) = VmHarness.idleUntil("$count controls at the hub") { fixture.handled.size >= count }
 
     /** AC-17. */
@@ -60,9 +74,7 @@ class RemoteSettingsTest {
         VmHarness.idleUntil("the theme saved") { savedPrefs().themeMode == "dark" && savedPrefs().weightUnit == "g" }
         assertEquals(abOf(P), abOf(savedPrefs()), "mid-session")
 
-        vm.switchToNormal() // Stop
-        VmHarness.advance(200)
-        VmHarness.idleUntil("normal") { VmHarness.proxyController(vm).state.value.role == "normal" }
+        stopKeepingMine(vm)
         VmHarness.idleUntil("the role saved") { savedPrefs().proxyRole == "normal" }
         val saved = savedPrefs()
         assertEquals(abOf(P), abOf(saved), "the remote's own machine and session settings")
@@ -125,8 +137,7 @@ class RemoteSettingsTest {
         assertEquals(P.stopOnWeight.toString(), settings["stopOnWeight"]?.jsonPrimitive?.content)
         assertEquals(P.grinderModel, settings["grinderModel"]?.jsonPrimitive?.content)
         // The mode switch.
-        vm.switchToNormal()
-        VmHarness.advance(200)
+        stopKeepingMine(vm)
         VmHarness.idleUntil("the role saved") { savedPrefs().proxyRole == "normal" }
         assertEquals(abOf(P), abOf(savedPrefs()), "mode switch")
     }
@@ -147,9 +158,7 @@ class RemoteSettingsTest {
         fixture.push()
         assertTrue(!VmHarness.ownState(vm).awaitingHubValues)
         assertTrue(VmHarness.ownState(vm).knownOnRemote(Setting.QC_STEAM_TEMP))
-        vm.switchToNormal()
-        VmHarness.advance(200)
-        VmHarness.idleUntil("normal") { VmHarness.proxyController(vm).state.value.role == "normal" }
+        stopKeepingMine(vm)
         assertNull(VmHarness.ownState(vm).mirror, "no slice off the remote role")
     }
 
@@ -158,9 +167,7 @@ class RemoteSettingsTest {
     fun `late config frames are dropped`() {
         val vm = fixture.start()
         fixture.push()
-        vm.switchToNormal()
-        VmHarness.advance(200)
-        VmHarness.idleUntil("normal") { VmHarness.proxyController(vm).state.value.role == "normal" }
+        stopKeepingMine(vm)
         val before = vm.ui.value
         vm.deliverConfigForTest(coreJson.encodeToString(coffee.crema.settings.ConfigSnapshot.serializer(), S))
         VmHarness.idle()
@@ -227,9 +234,7 @@ class RemoteSettingsTest {
         vm.resetPreferences()
         VmHarness.idle()
         assertEquals(40f to 44f, core(), "after a reset")
-        vm.switchToNormal()
-        VmHarness.advance(200)
-        VmHarness.idleUntil("normal") { VmHarness.proxyController(vm).state.value.role == "normal" }
+        stopKeepingMine(vm)
         val ownYield = vm.ui.value.profiles.first { it.id == RemoteFixture.PROFILE_P }.yieldOut.takeIf { it > 0f }
         val ownCap = VmHarness.ownState(vm).maxShotDurationS.takeIf { it > 0f }
         assertEquals(ownYield to ownCap, core(), "this device's own values, no override")

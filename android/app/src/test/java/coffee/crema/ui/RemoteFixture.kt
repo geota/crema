@@ -39,6 +39,9 @@ internal class RemoteFixture(private val store: ViewModelStore) {
      *  it before replying, as a real hub does (§7.3). */
     var echoEdits = false
 
+    /** The hub holds its replies (an edit stays pending on the remote). */
+    @Volatile var holdReplies = false
+
     /** The hub's current snapshot, when [echoEdits] is on. */
     @Volatile var current: ConfigSnapshot = S
 
@@ -55,6 +58,7 @@ internal class RemoteFixture(private val store: ViewModelStore) {
             configSource = { hubConfig },
             controlHandler = { method, args, _, _ ->
                 handled += method to args
+                while (holdReplies) kotlinx.coroutines.delay(10)
                 if (method in refused) {
                     Result.failure(IllegalStateException("refused by the hub"))
                 } else {
@@ -83,6 +87,9 @@ internal class RemoteFixture(private val store: ViewModelStore) {
     }
 
     fun kill() = runCatching { endpoint.kill() }
+
+    /** The hub forgets this remote: it gets a Denied (revoked). */
+    fun revoke() = hub.revoke(VmHarness.proxyController(vm).deviceId)
 
     /** Apply a relayed edit to [current] and push it (on the hub's thread, before the reply). */
     private fun echo(method: String, args: String) {

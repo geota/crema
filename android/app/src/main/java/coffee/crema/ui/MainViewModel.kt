@@ -2841,9 +2841,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun onRoleStarting(role: String, refind: Boolean) {
         val wasRemote = _ui.value.mirror != null
+        // Any switch cancels an open T6 confirmation (a Denied, a re-find):
+        // nothing is adopted (spec §7.5 step 3).
+        if (pendingLeave != null) {
+            pendingLeave = null
+            appendLog("Leaving the hub cancelled: another mode switch ran")
+        }
         _ui.update { s ->
             when {
-                role != "secondary" -> s.copy(mirror = null)
+                role != "secondary" -> s.copy(mirror = null, adoptPrompt = null)
                 refind && s.mirror != null -> s.copy(mirror = s.mirror.reconnectingNow())
                 else -> s.copy(mirror = MirroredSettings(hubName = s.mirroringPrimaryName))
             }
@@ -2875,6 +2881,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * returned echo settles it with the hub's answer.
      */
     private fun showPending(cmd: MachineCommand.Config): ConfigEcho {
+        _ui.value.mirror?.takeIf { it.frozen }?.let { return ConfigEcho.refused("Leaving ${_ui.value.remoteHubLabel()}") }
         var generation = 0L
         _ui.update { s ->
             val m = s.mirror?.takeUnless { it.frozen } ?: return@update s
@@ -3314,10 +3321,89 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Leave the remote role for [next] (`"normal"` or `"primary"`): Stop,
-     *  Connect directly and Hub mode on with the hub gone all end here. */
+    /** A remote → standalone in progress, waiting on [adoptPrompt]'s answer. */
+    private class PendingLeave(val next: String, val epoch: Long, val snapshot: ConfigSnapshot, val changes: Set<Setting>)
+
+    private var pendingLeave: PendingLeave? = null
+
+    /**
+     * Leave the remote role for [next] (`"normal"` or `"primary"`): Stop,
+     * Connect directly and Hub mode on with the hub gone all end here (T6,
+     * spec §7.5).
+     *
+     * 1. Freeze the slice: it stays on screen, but frames, edits and the
+     *    re-find stop. Only its last applied snapshot can be adopted.
+     * 2. If that snapshot differs from this device's own adoptable values,
+     *    ask ([adoptPrompt]); else go on with "keep mine".
+     * 3. Commit under the mode lock, only if no other switch ran meanwhile
+     *    (a `Denied`, a re-find): adopt and save, awaited, then drop the slice,
+     *    re-push the core inputs and switch, so the first sweep writes the
+     *    chosen values (I3).
+     */
     private fun leaveRemote(next: String) {
-        if (next == "primary") proxy.setHubMode(true) else proxy.switchToNormal()
+        val m = _ui.value.mirror
+        if (m == null) {
+            if (next == "primary") proxy.setHubMode(true) else proxy.switchToNormal()
+            return
+        }
+        if (m.frozen) return // already leaving
+        val epoch = proxy.modeEpoch
+        proxy.holdRefind(true)
+        _ui.update { s -> s.copy(mirror = s.mirror?.copy(frozen = true)) }
+        val snapshot = m.snapshot
+        val changes = snapshot?.let { adoptableChanges(_ui.value, it) }.orEmpty()
+        if (snapshot == null || changes.isEmpty()) {
+            commitLeave(next, epoch, adopt = null, changes = emptySet())
+            return
+        }
+        pendingLeave = PendingLeave(next, epoch, snapshot, changes)
+        _ui.update { it.copy(adoptPrompt = AdoptPrompt(it.remoteHubLabel(), changes.size, legacyUnknownCount(snapshot))) }
+    }
+
+    /** The T6 confirmation's answer: "Use <hub>'s" ([useHub]) or "Keep mine"
+     *  (also what dismissing it means). */
+    fun resolveAdoption(useHub: Boolean) {
+        val leave = pendingLeave ?: return
+        pendingLeave = null
+        _ui.update { it.copy(adoptPrompt = null) }
+        commitLeave(leave.next, leave.epoch, if (useHub) leave.snapshot else null, leave.changes)
+    }
+
+    private fun commitLeave(next: String, epoch: Long, adopt: ConfigSnapshot?, changes: Set<Setting>) {
+        val hub = _ui.value.remoteHubLabel()
+        proxy.applyModeIfEpoch(
+            next, epoch,
+            before = {
+                if (adopt != null) {
+                    adoptHubSettings(adopt, changes)
+                    persistPrefsNow()
+                    library.persistLibraryNow()
+                }
+                _ui.update { it.copy(mirror = null) }
+                pushCoreInputs(effectiveState())
+            },
+            onStale = {
+                // Another switch ran first (R2): this device may still be a remote.
+                proxy.holdRefind(false)
+                _ui.update { s -> s.copy(mirror = s.mirror?.copy(frozen = false)) }
+                if (proxy.state.value.role == "secondary") notifyUser("Couldn't leave $hub — try again")
+            },
+        )
+    }
+
+    /** Take the hub's [changes] from [cfg] as this device's own (spec §7.5
+     *  step 4): a custom profile into the library first, the bean only if
+     *  this library has it. */
+    private fun adoptHubSettings(cfg: ConfigSnapshot, changes: Set<Setting>) {
+        if (Setting.ACTIVE_PROFILE in changes) {
+            val id = cfg.activeProfileId
+            val json = _ui.value.mirror?.profileJson
+            if (id != null && !library.hasProfile(id) && json != null) library.adoptCustomProfile(json)
+        }
+        val profileKnown = cfg.activeProfileId?.let { library.hasProfile(it) } ?: true
+        val take = if (profileKnown) changes else changes - Setting.ACTIVE_PROFILE
+        _ui.update { s -> adopt(s, cfg, take, hasBean = { id -> s.beans.any { it.id == id } }) }
+        appendLog("Adopted ${take.size} settings from the hub")
     }
 
     /** Build a full AppPrefs from the current UI state so each setter persists
@@ -3387,6 +3473,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         replayPrimary = _ui.value.replayPrimary,
         pairedDevices = _ui.value.pairedDevices,
     )
+
+    /** [persistPrefs], awaited: the T6 commit saves the adopted values before
+     *  the role switch starts (I3). Numbered like every save, so an earlier
+     *  fire-and-forget one can never land after it. */
+    private suspend fun persistPrefsNow() {
+        val snapshot = currentPrefs()
+        val generation = ++prefsGeneration
+        settingsStore.save(snapshot, generation)
+    }
 
     /** The last [persistPrefs] snapshot's number (Main only). */
     private var prefsGeneration = 0L

@@ -48,6 +48,7 @@ class OwnStateReadsTest {
         ),
         "LibraryController.kt" to mapOf(
             "persistLibrary" to setOf("activeBeanId"),
+            "persistLibraryNow" to setOf("activeBeanId"),
             "exportBeansLibrary" to setOf("activeBeanId"),
             "beansLibraryJson" to setOf("activeBeanId"),
             "deleteRoaster" to setOf("activeBeanId"),

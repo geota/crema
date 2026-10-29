@@ -13,9 +13,19 @@ import kotlinx.coroutines.launch
 fun interface ConfigEcho {
     fun settle(outcome: CommandOutcome)
 
+    /** Set when the edit can't be shown now (the remote is leaving its hub):
+     *  it is refused with this reason and not sent. */
+    val refusedReason: String? get() = null
+
     companion object {
         /** Shows nothing and settles nothing. */
         val NONE = ConfigEcho {}
+
+        /** Refuses the edit with [reason]. */
+        fun refused(reason: String): ConfigEcho = object : ConfigEcho {
+            override fun settle(outcome: CommandOutcome) = Unit
+            override val refusedReason: String = reason
+        }
     }
 }
 
@@ -74,6 +84,7 @@ class RelayMachine(
                 // A machine setting is read-only here: nothing shown, nothing sent.
                 if (!cmd.sentByRemotes()) return refuse(cmd, "Change on ${hubName()}", onOutcome)
                 val echo = showConfig(cmd)
+                echo.refusedReason?.let { return refuse(cmd, it, onOutcome) }
                 scope.launch {
                     val outcome = forward(cmd)
                     echo.settle(outcome)
