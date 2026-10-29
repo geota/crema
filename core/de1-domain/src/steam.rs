@@ -197,9 +197,10 @@ pub struct SteamMonitor {
     puffing: bool,
     /// Whether eco mode is currently engaged.
     eco_mode: bool,
-    /// Timestamp the machine was last steaming (session start or end), against
-    /// which the eco-mode idle delay is measured. `None` until the first
-    /// session, the eco timer being un-armed before any steaming.
+    /// Timestamp the machine was last steaming (session start or end) or the
+    /// user last touched the app, against which the eco-mode idle delay is
+    /// measured. `None` until the first session or activity, the eco timer
+    /// being un-armed before then.
     last_steam: Option<Duration>,
     /// Eco-mode idle delay — [`STEAM_ECO_DELAY`] by default; configurable via
     /// [`with_eco_delay`](Self::with_eco_delay).
@@ -245,6 +246,25 @@ impl SteamMonitor {
         // pending eco transition further out.
         if enabled && !was_enabled {
             self.last_steam = Some(now);
+        }
+        events
+    }
+
+    /// The user did something in the app (a touch, key, navigation…): re-arm
+    /// the eco idle clock from `now` and, if eco mode is engaged, return the
+    /// steam target to normal — de1app re-arms its eco alarm and leaves eco
+    /// on every UI interaction (`gui.tcl` `delay_screen_saver`). Without it,
+    /// eco engaged 600 s after the last steam even while the user was pulling
+    /// shots (round-2 verification V1 P3-5b). Nothing while eco is disabled.
+    pub fn on_activity(&mut self, now: Duration) -> Vec<SteamEvent> {
+        let mut events = Vec::new();
+        if !self.eco_enabled {
+            return events;
+        }
+        self.last_steam = Some(now);
+        if self.eco_mode {
+            self.eco_mode = false;
+            events.push(SteamEvent::EcoModeChanged(false));
         }
         events
     }
@@ -682,5 +702,29 @@ mod tests {
         // A very long session: eco mode must not engage while steaming.
         assert!(monitor.on_tick(ms(10_000_000)).is_empty());
         assert!(!monitor.is_eco_mode());
+    }
+
+    #[test]
+    fn activity_rearms_the_eco_delay_and_lifts_eco() {
+        let mut m = SteamMonitor::new();
+        let _ = m.on_eco_enabled(true, ms(0));
+        assert!(m.on_activity(ms(400_000)).is_empty());
+        assert!(
+            m.on_tick(ms(600_000)).is_empty(),
+            "counted from the activity"
+        );
+        assert_eq!(
+            m.on_tick(ms(1_000_000)),
+            vec![SteamEvent::EcoModeChanged(true)]
+        );
+        assert_eq!(
+            m.on_activity(ms(1_000_500)),
+            vec![SteamEvent::EcoModeChanged(false)]
+        );
+        assert!(!m.is_eco_mode());
+        // Eco disabled: activity changes nothing.
+        let mut off = SteamMonitor::new();
+        assert!(off.on_activity(ms(1)).is_empty());
+        assert!(off.on_tick(ms(10_000_000)).is_empty());
     }
 }

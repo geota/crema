@@ -9625,6 +9625,67 @@ mod tests {
     }
 
     #[test]
+    fn user_activity_rearms_steam_eco_and_lifts_it() {
+        // Round-2 verification V1 P3-5b / de1app `delay_screen_saver`: the
+        // 600 s eco delay counts from the last UI interaction, and an
+        // interaction while eco is engaged returns steam to normal.
+        use de1_domain::idle_sleep::{IdleActivity, IdleSleepInput};
+        let touch = IdleSleepInput::Activity {
+            kind: IdleActivity::Touch,
+        };
+        let mut core = CremaCore::new();
+        core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        core.enable_steam_eco_mode(true, 0);
+        // The user is busy at 500 s (core clock): no eco at 600 s.
+        let _ = core.on_tick(500_000);
+        let _ = core.idle_sleep(touch, 1);
+        assert!(
+            core.on_tick(600_000).events.is_empty(),
+            "the touch re-armed it"
+        );
+        let out = core.on_tick(1_100_000);
+        assert!(
+            out.events
+                .contains(&Event::SteamEcoModeChanged { eco: true })
+        );
+        // A touch while eco is on restores the normal 150 °C target.
+        let out = core.idle_sleep(touch, 2);
+        assert!(
+            out.events
+                .contains(&Event::SteamEcoModeChanged { eco: false })
+        );
+        let Some(Command::WriteCharacteristic { data, .. }) = out.commands.iter().find(|c| {
+            matches!(
+                c,
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1ShotSettings,
+                    ..
+                }
+            )
+        }) else {
+            panic!("expected the ShotSettings write");
+        };
+        assert_eq!(data[1], 150);
+    }
+
+    #[test]
+    fn user_activity_does_nothing_to_steam_while_eco_is_off() {
+        use de1_domain::idle_sleep::{IdleActivity, IdleSleepInput};
+        let mut core = CremaCore::new();
+        let out = core.idle_sleep(
+            IdleSleepInput::Activity {
+                kind: IdleActivity::Touch,
+            },
+            1,
+        );
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::SteamEcoModeChanged { .. }))
+        );
+    }
+
+    #[test]
     fn builtin_profiles_json_is_a_non_empty_profile_array() {
         let core = CremaCore::new();
         let json = core.builtin_profiles_json();
