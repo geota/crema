@@ -36,7 +36,7 @@ class ProxyHandshakeTest {
     private val stateChar = UUID.fromString("0000a00e-0000-1000-8000-00805f9b34fb")
 
     /** Holds [Frame.Hello] until [gate] opens; records every frame in send order
-     *  and fails if a non-Hello frame goes out before a Welcome came back. */
+     *  and notes any non-handshake frame that goes out before a Welcome came back. */
     private class HelloGate(private val inner: FrameLink) : FrameLink {
         val gate = CompletableDeferred<Unit>()
         val sent = CopyOnWriteArrayList<Frame>()
@@ -44,7 +44,7 @@ class ProxyHandshakeTest {
         @Volatile private var welcomed = false
 
         override suspend fun send(frame: Frame) {
-            if (frame is Frame.Hello) gate.await() else if (!welcomed) earlyFrames += frame
+            if (frame is Frame.Hello) gate.await() else if (frame !is Frame.Auth && !welcomed) earlyFrames += frame
             sent += frame
             inner.send(frame)
         }
@@ -55,7 +55,8 @@ class ProxyHandshakeTest {
 
     private fun hub(
         relayed: MutableList<String>,
-        authorize: suspend (String, String) -> PairingDecision = { _, _ -> PairingDecision.Allowed(true) },
+        pairingSecretFor: (String) -> String? = { null },
+        authorize: suspend (PairingRequest) -> PairingDecision = { PairingDecision.Allowed(true) },
     ) = RelayHub(
         primaryId = "p",
         primaryName = "P",
@@ -64,6 +65,7 @@ class ProxyHandshakeTest {
         isSnapshotChar = { _, c -> c == stateChar },
         controlHandler = { method, _, _, _ -> relayed += method; Result.success(Unit) },
         authorize = authorize,
+        pairingSecretFor = pairingSecretFor,
     )
 
     @Test
@@ -126,7 +128,7 @@ class ProxyHandshakeTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val (clientEnd, serverEnd) = InMemoryFrameLink.pair()
-            scope.launch { hub(CopyOnWriteArrayList()) { _, _ -> PairingDecision.Denied("no") }.serve(serverEnd) }
+            scope.launch { hub(CopyOnWriteArrayList()) { PairingDecision.Denied("no") }.serve(serverEnd) }
             val proxy = ProxyTransport(clientEnd, scope, "phone-1", "Phone", requestTimeoutMs = 60_000)
 
             val result = withTimeout(2_000) { proxy.control("tareScale") }
@@ -189,17 +191,29 @@ class ProxyHandshakeTest {
         val port = ServerSocket(0).use { it.localPort }
         val relayed = CopyOnWriteArrayList<String>()
         val hellos = AtomicInteger(0)
-        // The second session's approval is slow, so its Welcome comes well after
-        // the socket is back: anything sent on CONNECTED alone would be early.
-        val h = hub(relayed) { _, _ ->
+        // A real host: it pairs the device on first contact and proves the
+        // secret on the redial. The second session's approval is slow, so its
+        // Welcome comes well after the socket is back: anything sent on
+        // CONNECTED alone would be early.
+        val issued = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val held = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val h = hub(relayed, pairingSecretFor = { issued[it] }) { req ->
             if (hellos.incrementAndGet() > 1) delay(300)
-            PairingDecision.Allowed(true)
+            val known = issued[req.clientId]
+            if (known != null && req.proves(known)) {
+                PairingDecision.Allowed(true)
+            } else {
+                PairingDecision.Allowed(true, PairingCrypto.newSecret().also { issued[req.clientId] = it })
+            }
         }
         var server = LanRelayServer(h, requestedPort = port)
         server.start()
         try {
             val link = ReconnectingClientLink("ws://127.0.0.1:$port${LanRelayServer.PATH}", scope)
-            val proxy = ProxyTransport(link, scope, "phone-1", "Phone", requestTimeoutMs = 4_000)
+            val proxy = ProxyTransport(
+                link, scope, "phone-1", "Phone", requestTimeoutMs = 4_000,
+                pairingSecretFor = { held[it] }, onPaired = { id, _, secret -> held[id] = secret },
+            )
             assertTrue(withTimeout(5_000) { proxy.control("tareScale") }.isSuccess)
 
             server.stop()

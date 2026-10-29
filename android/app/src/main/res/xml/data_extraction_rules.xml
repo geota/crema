@@ -18,6 +18,8 @@
   copies cannot be named here, so the stores delete them on the next save.
   The firmware-flash marker (crema.firmware prefs) is tied to one DE1 and one
   install's update in progress; another device must not inherit its lock.
+  proxy-pairing.json holds the LAN pairing secrets and this install's host id:
+  a copy on another device must pair again rather than reuse them.
 -->
 <data-extraction-rules>
     <cloud-backup>
@@ -30,6 +32,9 @@
         <exclude domain="file" path="drive.json" />
         <exclude domain="file" path="drive.json.bak" />
         <exclude domain="file" path="drive.json.tmp" />
+        <exclude domain="file" path="proxy-pairing.json" />
+        <exclude domain="file" path="proxy-pairing.json.bak" />
+        <exclude domain="file" path="proxy-pairing.json.tmp" />
         <exclude domain="sharedpref" path="crema.firmware.xml" />
     </cloud-backup>
     <device-transfer>
@@ -42,6 +47,9 @@
         <exclude domain="file" path="drive.json" />
         <exclude domain="file" path="drive.json.bak" />
         <exclude domain="file" path="drive.json.tmp" />
+        <exclude domain="file" path="proxy-pairing.json" />
+        <exclude domain="file" path="proxy-pairing.json.bak" />
+        <exclude domain="file" path="proxy-pairing.json.tmp" />
         <exclude domain="sharedpref" path="crema.firmware.xml" />
     </device-transfer>
 </data-extraction-rules>

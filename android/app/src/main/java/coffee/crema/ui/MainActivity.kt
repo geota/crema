@@ -572,6 +572,13 @@ class MainActivity : ComponentActivity() {
                     PairingDialog(prompt = prompt, onChoice = viewModel::resolvePairing)
                 }
                 // Push handoff (issue 07) — a primary is offering us the machine.
+                ui.changedHost?.let { (hostId, hostName) ->
+                    ChangedHostDialog(
+                        hostName = hostName,
+                        onForget = { viewModel.forgetHost(hostId) },
+                        onDismiss = viewModel::dismissChangedHost,
+                    )
+                }
                 ui.pendingHandoffOffer?.let { fromName ->
                     HandoffOfferDialog(
                         fromName = fromName,
@@ -1227,6 +1234,27 @@ private fun PairingDialog(prompt: PairingPrompt, onChoice: (PairingChoice) -> Un
                 TextButton(onClick = { onChoice(PairingChoice.DENY) }) { Text("Deny") }
             }
         },
+    )
+}
+
+/**
+ * A host this device paired with couldn't prove that pairing (it was reset or
+ * reinstalled, or it isn't the same host). The held pairing is never replaced
+ * silently: forgetting it here is what allows pairing again.
+ */
+@Composable
+private fun ChangedHostDialog(hostName: String, onForget: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("This host's identity changed") },
+        text = {
+            Text(
+                "“$hostName” couldn't confirm the pairing this device has with it. If you reset or reinstalled " +
+                    "Crema on it, forget it here, then choose it under Other devices to pair again.",
+            )
+        },
+        confirmButton = { TextButton(onClick = onForget) { Text("Forget host") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep") } },
     )
 }
 

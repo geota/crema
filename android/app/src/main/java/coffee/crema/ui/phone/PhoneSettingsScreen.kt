@@ -1257,15 +1257,34 @@ private fun AdvancedSection(
         }
     }
     SettingsGroup("Paired devices") {
-        // Devices this host has allowed to mirror it (issue 02). Forget → the peer
-        // is re-prompted on its next connect.
+        // Devices this host has allowed to mirror it (issue 02). A new device can
+        // ask only while the pairing window is open. Forget → its session ends and
+        // it has to pair again.
+        if (ui.proxyRole == "primary") {
+            val open = ui.pairingSecondsLeft > 0
+            CremaSettingsRow(
+                if (open) "Pairing open · ${fmt("%d:%02d", ui.pairingSecondsLeft / 60, ui.pairingSecondsLeft % 60)}" else "Pair a device",
+                if (open) "On the other device, choose this machine under Other devices, then allow it here."
+                else "Lets a new phone or tablet connect for the next 2 minutes.",
+            ) {
+                CremaButton(
+                    onClick = { if (open) vm.closePairingWindow() else vm.openPairingWindow() },
+                    variant = CremaButtonVariant.Text,
+                    label = if (open) "Stop" else "Pair",
+                )
+            }
+        }
         if (ui.pairedDevices.isEmpty()) {
             CremaSettingsRow("No paired devices", "Devices you allow to mirror this machine appear here.", last = true) {}
         } else {
             ui.pairedDevices.forEachIndexed { i, d ->
                 CremaSettingsRow(
                     d.name,
-                    if (d.canControl) "Mirror + control" else "Mirror only",
+                    when {
+                        d.id !in ui.pairedWithSecret -> "Needs to pair again — use Pair a device"
+                        d.canControl -> "Mirror + control"
+                        else -> "Mirror only"
+                    },
                     last = i == ui.pairedDevices.lastIndex,
                 ) {
                     CremaButton(onClick = { vm.forgetPairedDevice(d.id) }, variant = CremaButtonVariant.Text, label = "Forget")

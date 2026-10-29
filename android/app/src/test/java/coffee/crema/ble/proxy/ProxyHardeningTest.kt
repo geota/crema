@@ -39,7 +39,7 @@ class ProxyHardeningTest {
 
     private fun hub(
         capacity: Int = kotlinx.coroutines.channels.Channel.UNLIMITED,
-        authorize: suspend (String, String) -> PairingDecision = { _, _ -> PairingDecision.Allowed(true) },
+        authorize: suspend (PairingRequest) -> PairingDecision = { PairingDecision.Allowed(true) },
     ) = RelayHub(
         primaryId = "p",
         primaryName = "P",
@@ -60,8 +60,7 @@ class ProxyHardeningTest {
     }
 
     private suspend fun handshakeAndAttach(client: FrameLink, rx: MutableList<Frame>) {
-        client.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
-        withTimeout(2_000) { while (rx.none { it is Frame.Welcome }) delay(10) }
+        handshake(client, rx)
         client.send(Frame.Attach(1L, addr))
         withTimeout(2_000) { while (rx.none { it is Frame.Attached }) delay(10) }
     }
@@ -135,18 +134,21 @@ class ProxyHardeningTest {
         try {
             val (client, server) = InMemoryFrameLink.pair()
             val authCalls = AtomicInteger(0)
-            val h = hub { _, _ -> authCalls.incrementAndGet(); PairingDecision.Allowed(true) }
+            val h = hub { authCalls.incrementAndGet(); PairingDecision.Allowed(true) }
             scope.launch { h.serve(server) }
             val rx = CopyOnWriteArrayList<Frame>()
             scope.launch { client.incoming().collect { rx.add(it) } }
 
+            handshake(client, rx)
             client.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
-            withTimeout(2_000) { while (rx.none { it is Frame.Welcome }) delay(10) }
-            client.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
-            delay(200)
+            client.send(Frame.Auth(null))
+            // A round trip drains the session's frames past the repeats.
+            client.send(Frame.Detach(9L, addr))
+            withTimeout(2_000) { while (rx.none { it is Frame.Detached }) delay(5) }
 
-            assertEquals(1, authCalls.get(), "an approved session's duplicate Hello is ignored")
+            assertEquals(1, authCalls.get(), "an approved session's repeated handshake is ignored")
             assertEquals(1, rx.count { it is Frame.Welcome }, "no second Welcome")
+            assertEquals(1, rx.count { it is Frame.Challenge }, "no second Challenge")
         } finally {
             scope.cancel()
         }
@@ -162,8 +164,7 @@ class ProxyHardeningTest {
             val rx = CopyOnWriteArrayList<Frame>()
             scope.launch { client.incoming().collect { rx.add(it) } }
 
-            client.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
-            withTimeout(2_000) { while (rx.none { it is Frame.Welcome }) delay(10) }
+            handshake(client, rx)
             // No onConnState was ever fed for this address.
             client.send(Frame.Attach(1L, "11:22:33:44:55:66"))
             withTimeout(2_000) { while (rx.none { it is Frame.Attached }) delay(10) }
@@ -225,6 +226,67 @@ class ProxyHardeningTest {
             a.cancel(); b.cancel()
             withTimeout(2_000) { while (proxy.observerCount(addr, stateChar) > 0) delay(5) }
             assertEquals(0, proxy.observerCount(addr, stateChar))
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `the default outbox is bounded, so a client that stops reading is dropped`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val (client, serverEnd) = InMemoryFrameLink.pair()
+            val server = StallableLink(serverEnd)
+            val h = RelayHub(
+                primaryId = "p",
+                primaryName = "P",
+                roster = { listOf(DeviceInfo(addr, "DE1", "de1", "CONNECTED")) },
+                readSource = { _, _, _ -> error("unused") },
+                isSnapshotChar = { _, _ -> false },
+            )
+            scope.launch { h.serve(server) }
+            val rx = CopyOnWriteArrayList<Frame>()
+            val ended = CompletableDeferred<Unit>()
+            scope.launch { client.incoming().collect { rx.add(it) }; ended.complete(Unit) }
+            handshakeAndAttach(client, rx)
+
+            val stall = CompletableDeferred<Unit>().also { server.stall = it }
+            repeat(5_000) { i -> h.onInbound(addr, service, stateChar, byteArrayOf(i.toByte()), atMs = i.toLong()) }
+            stall.complete(Unit)
+
+            withTimeout(3_000) { ended.await() }
+            assertTrue(rx.count { it is Frame.Notify } < 5_000, "the backlog was cut, not delivered in full")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `a session that only claims an id doesn't count as that client`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val h = hub()
+            // The real taker: approved.
+            val (taker, takerServer) = InMemoryFrameLink.pair()
+            scope.launch { h.serve(takerServer) }
+            val takerRx = CopyOnWriteArrayList<Frame>()
+            scope.launch { taker.incoming().collect { takerRx.add(it) } }
+            handshake(taker, takerRx, clientId = "phone-1")
+            // A second session that sends Hello with the same id but never completes.
+            val (claimant, claimantServer) = InMemoryFrameLink.pair()
+            scope.launch { h.serve(claimantServer) }
+            val claimantRx = CopyOnWriteArrayList<Frame>()
+            scope.launch { claimant.incoming().collect { claimantRx.add(it) } }
+            claimant.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
+            withTimeout(2_000) { while (claimantRx.none { it is Frame.Challenge }) delay(5) }
+
+            assertTrue(h.hasClient("phone-1"))
+            taker.close() // the taker's mode switch closes its link
+            assertTrue(
+                withTimeout(2_000) { h.awaitClientGone("phone-1", 3_000) },
+                "the unapproved claimant doesn't hold the handoff release",
+            )
+            assertTrue(!h.hasClient("phone-1"))
         } finally {
             scope.cancel()
         }
