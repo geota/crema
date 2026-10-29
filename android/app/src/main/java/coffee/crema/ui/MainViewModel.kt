@@ -3446,9 +3446,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 quickAdjustBrew(p[0].toDouble(), p[1].toDouble(), p[2].toDouble(), p.getOrNull(3)?.toDoubleOrNull())
             }
             "resetBrew" -> resetBrewParams()
-            // M3 handoff: a secondary asks to take the DE1. Idle-only; on grant we
-            // step down so the taker can acquire the radio.
-            "handoff" -> proxy.grantHandoff()
+            // "handoff" never reaches this router: ProxyController grants it with
+            // the taker's identity (the release waits for the taker's disconnect).
             else -> error("unknown relayed control: $method")
         }
     }

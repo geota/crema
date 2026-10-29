@@ -12,7 +12,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.launch
@@ -45,10 +47,12 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * ## Lifecycle
  *
- * On construction it sends [Frame.Hello] and collects the link; `scan`/`connect`
- * await the primary's [Frame.Welcome]. The link's own reconnection (NSD
- * re-resolve, redial, re-attach, re-snapshot) is a layer above this class and is
- * added with the WebSocket binding; here a closed link simply ends the flows.
+ * On construction it sends [Frame.Hello] and collects the link. Every request
+ * (attach, detach, read, write, control) waits for the current session's
+ * [Frame.Welcome] before it is sent, so nothing reaches the primary ahead of the
+ * handshake; on [Frame.Denied] requests fail at once. A redial (from
+ * [ReconnectingClientLink]) starts a new session: a fresh `Hello`, then the
+ * re-attach. Here a closed link simply ends the flows.
  */
 class ProxyTransport(
     private val link: FrameLink,
@@ -100,8 +104,15 @@ class ProxyTransport(
     /** Per-`(address, char)` lossless inbound notification channels. */
     private val streams = ConcurrentHashMap<String, ConcurrentHashMap<String, Channel<Frame.Notify>>>()
 
+    /** Live collectors per `"address|char"` — the double-observe tripwire. */
+    private val observerCounts = ConcurrentHashMap<String, Int>()
+
     private val nextId = AtomicLong(1L)
-    private val welcomed = CompletableDeferred<Unit>()
+
+    /** The current session's handshake: completes on its [Frame.Welcome], fails on
+     *  [Frame.Denied] or a version mismatch. Replaced when the link redials. */
+    @Volatile
+    private var handshake = CompletableDeferred<Unit>()
 
     init {
         link.incoming().onEach { dispatch(it) }.launchIn(scope)
@@ -112,9 +123,11 @@ class ProxyTransport(
     /** Re-run the attach handshake after the link redials (issue 03): a fresh
      *  [Frame.Hello] (the primary may have restarted), then re-[Frame.Attach] every
      *  device the managers had attached — each re-attach triggers the relay's
-     *  snapshot burst, so the secondary's core re-converges and `observe` resumes. */
+     *  snapshot burst, so the secondary's core re-converges and `observe` resumes.
+     *  The re-attach (like every request) waits for the new session's Welcome. */
     private suspend fun onReconnect() {
         Log.i(TAG, "Link reconnected — re-handshaking (re-attach ${attached.size} device(s))")
+        if (handshake.isCompleted) handshake = CompletableDeferred()
         runCatching { link.send(Frame.Hello(PROXY_PROTOCOL_VERSION, ROLE_SECONDARY, clientId, clientName)) }
         for (address in attached.toList()) {
             val id = nextId.getAndIncrement()
@@ -131,15 +144,13 @@ class ProxyTransport(
                 // to, so the secondary refuses here and surfaces "please update".
                 if (frame.v != PROXY_PROTOCOL_VERSION) {
                     onDenied("version mismatch — update Crema on both devices")
-                    if (!welcomed.isCompleted) {
-                        welcomed.completeExceptionally(
-                            IllegalStateException("Proxy version mismatch: primary v${frame.v} != v$PROXY_PROTOCOL_VERSION"),
-                        )
-                    }
+                    handshake.completeExceptionally(
+                        IllegalStateException("Proxy version mismatch: primary v${frame.v} != v$PROXY_PROTOCOL_VERSION"),
+                    )
                 } else {
                     applyRoster(frame.roster)
                     onWelcome(frame.scope)
-                    if (!welcomed.isCompleted) welcomed.complete(Unit)
+                    handshake.complete(Unit)
                 }
             }
             is Frame.Roster -> applyRoster(frame.devices)
@@ -160,7 +171,7 @@ class ProxyTransport(
             is Frame.Event -> onEvent(frame.text)
             is Frame.Denied -> {
                 onDenied(frame.reason)
-                if (!welcomed.isCompleted) welcomed.completeExceptionally(IllegalStateException("Proxy denied: ${frame.reason}"))
+                handshake.completeExceptionally(IllegalStateException("Proxy denied: ${frame.reason}"))
             }
             is Frame.HandoffOffer -> onHandoffOffer(frame.fromName)
             else -> Log.w(TAG, "Secondary ignoring unexpected server frame: $frame")
@@ -182,9 +193,11 @@ class ProxyTransport(
         }
 
     override suspend fun connect(device: BleTransport.DeviceHandle) {
-        welcomed.await()
+        // The first handshake may wait on the host's pairing prompt: no timeout.
+        handshake.await()
         val id = nextId.getAndIncrement()
         val reply = request(id) { Frame.Attach(id, device.address) }
+        if (reply is Frame.ControlErr) error("attach refused: ${reply.reason}")
         check(reply is Frame.Attached) { "Unexpected reply to attach: $reply" }
         attached.add(device.address) // remember for re-attach on reconnect (issue 03)
     }
@@ -204,10 +217,24 @@ class ProxyTransport(
         device: BleTransport.DeviceHandle,
         service: UUID,
         characteristic: UUID,
-    ): Flow<BleTransport.Notification> =
-        channelFor(device.address, characteristic.toString()).receiveAsFlow().map { n ->
-            BleTransport.Notification(characteristic, Hex.decode(n.hex), n.t)
-        }
+    ): Flow<BleTransport.Notification> {
+        val key = "${device.address}|$characteristic"
+        return channelFor(device.address, characteristic.toString()).receiveAsFlow()
+            // The per-char channel is SINGLE-consumer: two concurrent collectors
+            // would each steal a share of the frames — silent sample loss for
+            // both (and corrupted core sample counters). The managers subscribe
+            // once per char; if that invariant ever breaks, say so loudly.
+            .onStart {
+                val n = observerCounts.merge(key, 1, Int::plus) ?: 1
+                if (n > 1) Log.e(TAG, "DOUBLE observe on $key ($n collectors) — the stream is being split; samples will be lost")
+            }
+            .onCompletion { observerCounts.merge(key, -1, Int::plus) }
+            .map { n -> BleTransport.Notification(characteristic, Hex.decode(n.hex), n.t) }
+    }
+
+    /** Live [observe] collectors for one characteristic (the tripwire's count). */
+    internal fun observerCount(address: String, characteristic: UUID): Int =
+        observerCounts["$address|$characteristic"] ?: 0
 
     override suspend fun write(
         device: BleTransport.DeviceHandle,
@@ -275,7 +302,10 @@ class ProxyTransport(
             // neither succeed, fail, nor be able to revert (issue 06). Bounding the
             // whole round-trip makes a control/read fail fast so the optimistic
             // apply can be rolled back and surfaced.
+            // The handshake wait is inside the timeout too: a request never goes
+            // out before this session's Welcome (the primary would refuse it).
             withTimeout(requestTimeoutMs) {
+                handshake.await()
                 link.send(build())
                 deferred.await()
             }

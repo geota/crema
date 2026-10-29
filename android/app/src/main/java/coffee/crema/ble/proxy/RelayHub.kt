@@ -2,12 +2,16 @@ package coffee.crema.ble.proxy
 
 import android.util.Log
 import coffee.crema.ble.BleTransport
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The host's verdict on a secondary's [Frame.Hello] (issue 02 — TOFU pairing):
@@ -105,11 +109,25 @@ class RelayHub(
 ) {
     private val clients = CopyOnWriteArrayList<ClientSession>()
 
+    /** A cached snapshot value with the global sequence it was assigned on the
+     *  primary — the per-client monotonic guard's key to never regressing a
+     *  characteristic to a stale value (snapshot-vs-live attach race). */
+    private class CachedNotify(val seq: Long, val frame: Frame.Notify)
+
     /** Last-value cache of snapshot characteristics, keyed `"address|char"`. */
-    private val cache = ConcurrentHashMap<String, Frame.Notify>()
+    private val cache = ConcurrentHashMap<String, CachedNotify>()
+
+    /** Global, monotonically increasing notify sequence — assigned at [onInbound],
+     *  compared per client per characteristic in [deliverNotify]. */
+    private val seqGen = AtomicLong(0L)
 
     /** Latest connection state per device address (a [BleTransport.ConnState] name). */
     private val connStates = ConcurrentHashMap<String, String>()
+
+    /** Whether [clientId] currently has a live session — the handoff release
+     *  gate: the granting primary waits for the taker's disconnect (its mode
+     *  switch closes the link) instead of a blind timer. */
+    fun hasClient(clientId: String): Boolean = clients.any { it.clientId == clientId }
 
     // ---- Tap: fed by the primary's notification path ----------------------
 
@@ -125,8 +143,14 @@ class RelayHub(
         src: String? = null,
     ) {
         val frame = Frame.Notify(address, service.toString(), char.toString(), Hex.encode(data), atMs, src)
-        if (isSnapshotChar(service, char)) cache[cacheKey(address, char)] = frame
-        for (c in clients) if (c.approved && c.isAttached(address)) deliver(c, frame)
+        val key = cacheKey(address, char)
+        val seq = seqGen.incrementAndGet()
+        // Keep the newest by seq: two overlapping calls for one characteristic
+        // must not leave the older value cached for later attaches.
+        if (isSnapshotChar(service, char)) {
+            cache.merge(key, CachedNotify(seq, frame)) { old, new -> if (new.seq > old.seq) new else old }
+        }
+        for (c in clients) if (c.approved && c.isAttached(address)) deliverNotify(c, key, seq, frame)
     }
 
     /** A device's connection state changed: fan a [Frame.State] out to attached
@@ -193,8 +217,15 @@ class RelayHub(
         val session = ClientSession(link, clientCapacity)
         clients += session
         // One writer drains the outbox to the link, so the primary's notification
-        // path (onInbound) and request handlers never block on the socket.
-        val pump = launch { for (frame in session.outbox) link.send(frame) }
+        // path (onInbound) and request handlers never block on the socket. When
+        // the outbox is CLOSED (a lag-drop or a denial), the pump drains what's
+        // queued and then closes the LINK — so the peer actually observes the
+        // drop (its incoming() completes → its reconnect machinery resyncs)
+        // instead of a half-dead session that streams nothing forever.
+        val pump = launch {
+            for (frame in session.outbox) link.send(frame)
+            runCatching { link.close() }
+        }
         try {
             link.incoming().collect { frame ->
                 // Hello is handled INLINE (suspending the collect loop) so the TOFU
@@ -203,10 +234,11 @@ class RelayHub(
                 if (frame is Frame.Hello) { handleHello(session, frame); return@collect }
                 // Pre-pairing gate (issue 03): until a Hello has been APPROVED, an
                 // unapproved peer may not attach, read, or observe. A peer that skips
-                // Hello (or whose prompt is still pending, or that was denied) gets
-                // nothing — no attach, no snapshot, no read, no stream.
+                // Hello (or was denied) gets no attach, snapshot, read or stream —
+                // only an error reply to each request, so it fails fast.
                 if (!session.approved) {
-                    Log.w(TAG, "Ignoring ${frame::class.simpleName} from unapproved peer (no approved Hello)")
+                    Log.w(TAG, "Refusing ${frame::class.simpleName} from unapproved peer (no approved Hello)")
+                    refuseUnapproved(session, frame)
                     return@collect
                 }
                 // Reads and controls are suspend (they hit the real link / drive the
@@ -222,6 +254,11 @@ class RelayHub(
             clients.remove(session)
             session.outbox.close()
             pump.cancel()
+            // Belt-and-braces: make sure the socket dies with the session even
+            // when the collect ended abnormally (the pump's drain-then-close
+            // covers the outbox-close paths). Bounded, so a stuck flush can't
+            // hold this coroutine past the server's stop.
+            withContext(NonCancellable) { withTimeoutOrNull(CLOSE_TIMEOUT_MS) { runCatching { link.close() } } }
             onClientsChanged()
         }
     }
@@ -230,6 +267,12 @@ class RelayHub(
      *  scope) or Denied. On denial we close the outbox so the session ends — an
      *  unapproved client gets no roster, snapshot, or stream. */
     private suspend fun handleHello(session: ClientSession, frame: Frame.Hello) {
+        // A duplicate Hello on an already-approved session must not re-run TOFU
+        // (a reconnect race can repeat it; the host must not be prompted twice).
+        if (session.approved) {
+            Log.w(TAG, "Ignoring duplicate Hello from ${frame.clientName} (already approved)")
+            return
+        }
         // Refuse a protocol-version skew up front (issue 05): ignoreUnknownKeys
         // already absorbs additive changes, so a different PROXY_PROTOCOL_VERSION
         // means a structurally breaking change — deny rather than risk mis-decoding a
@@ -258,16 +301,52 @@ class RelayHub(
         }
     }
 
+    /** Reply to a request from a peer without an approved Hello. Every request
+     *  gets exactly one reply, in every state, so a peer that sent early fails
+     *  at once instead of waiting out its timeout. Nothing is served. */
+    private fun refuseUnapproved(session: ClientSession, frame: Frame) {
+        val reply = when (frame) {
+            is Frame.Read -> Frame.ReadErr(frame.id, NOT_PAIRED)
+            is Frame.Write -> Frame.WriteErr(frame.id, NOT_PAIRED)
+            is Frame.Control -> Frame.ControlErr(frame.id, NOT_PAIRED)
+            // The protocol has no attach error frame; a secondary completes a
+            // pending request on any reply that carries its id.
+            is Frame.Attach -> Frame.ControlErr(frame.id, NOT_PAIRED)
+            // Nothing is attached, so a detach is trivially done.
+            is Frame.Detach -> Frame.Detached(frame.id, frame.address)
+            else -> null
+        }
+        if (reply != null) deliver(session, reply)
+    }
+
     private fun handle(session: ClientSession, frame: Frame) {
         when (frame) {
             is Frame.Attach -> {
+                // A (re-)attach means the peer's core is converging afresh: clear
+                // its per-char seq marks for this device FIRST so the snapshot
+                // burst is delivered even for chars it saw in a previous attach.
+                // (No live frames can interleave here — fan-out for this device
+                // only starts once attach() registers below.)
+                val prefix = frame.address + "|"
+                session.seenSeq.keys.removeIf { it.startsWith(prefix) }
                 session.attach(frame.address)
-                val state = connStates[frame.address] ?: BleTransport.ConnState.CONNECTED.name
+                // A device the hub has never seen a state change for is NOT
+                // assumed connected: fall back to the roster's live state (the
+                // primary's transport truth), and only then to an honest
+                // DISCONNECTED — never a fabricated CONNECTED the State stream
+                // would have to walk back.
+                val state = connStates[frame.address]
+                    ?: roster().firstOrNull { it.address == frame.address }?.state
+                    ?: BleTransport.ConnState.DISCONNECTED.name
                 deliver(session, Frame.Attached(frame.id, frame.address, state))
                 // Snapshot burst: replay every cached state/identity char for this
-                // device so the secondary converges to current machine state.
-                val prefix = frame.address + "|"
-                for ((key, cached) in cache) if (key.startsWith(prefix)) deliver(session, cached)
+                // device so the secondary converges to current machine state. The
+                // per-client seq guard in [deliverNotify] makes this race-proof
+                // against concurrent live fan-out: a cached value older than one
+                // already delivered live is skipped, never regressing the mirror.
+                for ((key, cached) in cache) if (key.startsWith(prefix)) {
+                    deliverNotify(session, key, cached.seq, cached.frame)
+                }
                 // Config snapshot: the secondary snaps to the primary's session
                 // config (active profile/bean, SAW, QC, units) — the drift fix.
                 configSource().takeIf { it.isNotEmpty() }?.let { deliver(session, Frame.Config(it)) }
@@ -315,9 +394,28 @@ class RelayHub(
         deliver(session, reply)
     }
 
+    /**
+     * Enqueue a [Frame.Notify] for [session] behind its per-char monotonic seq
+     * guard: only a seq NEWER than the last one delivered for that char wins.
+     * This closes the attach-time snapshot-vs-live race in BOTH orders — a
+     * cached value can't be enqueued after a fresher live one (stale-regression),
+     * and an equal-seq replay of an already-delivered live frame is skipped
+     * (no duplicate). Counted sample streams pass untouched: their seq is
+     * strictly increasing per char and they are never snapshotted.
+     */
+    private fun deliverNotify(session: ClientSession, key: String, seq: Long, frame: Frame.Notify) {
+        var wins = false
+        session.seenSeq.compute(key) { _, cur ->
+            if (cur == null || seq > cur) { wins = true; seq } else cur
+        }
+        if (wins) deliver(session, frame)
+    }
+
     /** Enqueue a frame for [session]. If its outbox is full (a lagging client on a
      *  bounded queue), drop the client — it reconnects and resyncs via snapshot,
-     *  rather than stalling the primary. */
+     *  rather than stalling the primary. Closing the outbox ends the pump, which
+     *  drains what's queued and then closes the LINK (see [serve]) so the peer
+     *  actually observes the drop. */
     private fun deliver(session: ClientSession, frame: Frame) {
         if (!session.offer(frame)) {
             Log.w(TAG, "Client outbox full — dropping client (will resync on reconnect)")
@@ -339,6 +437,9 @@ class RelayHub(
         /** Peer identity from [Frame.Hello], for push-handoff targeting (issue 07). */
         @Volatile var clientId: String? = null
         @Volatile var clientName: String? = null
+        /** Highest notify seq delivered per `"address|char"` — the monotonic guard
+         *  behind [deliverNotify]; cleared per device on (re-)attach. */
+        val seenSeq = ConcurrentHashMap<String, Long>()
         private val attached = ConcurrentHashMap.newKeySet<String>()
         fun isAttached(address: String): Boolean = attached.contains(address)
         fun attach(address: String) { attached.add(address) }
@@ -351,5 +452,7 @@ class RelayHub(
         const val AUTHORITY_PRIMARY = "primary"
         const val SCOPE_CONTROL = "control"
         const val SCOPE_MIRROR = "mirror"
+        const val NOT_PAIRED = "not-paired"
+        const val CLOSE_TIMEOUT_MS = 1_000L
     }
 }

@@ -7,7 +7,10 @@ import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSockets
+import io.ktor.server.websocket.pingPeriod
+import io.ktor.server.websocket.timeout
 import io.ktor.server.websocket.webSocket
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * The primary-side LAN WebSocket server: it accepts secondary connections and
@@ -24,6 +27,10 @@ class LanRelayServer(
     private val hub: RelayHub,
     private val requestedPort: Int = 0,
     private val path: String = PATH,
+    /** Liveness: ping every [pingPeriodMs], close a session whose pong is
+     *  [pingTimeoutMs] late. Tests shorten both. */
+    private val pingPeriodMs: Long = PING_PERIOD_MS,
+    private val pingTimeoutMs: Long = PING_TIMEOUT_MS,
 ) {
     private var server: EmbeddedServer<*, *>? = null
 
@@ -32,7 +39,15 @@ class LanRelayServer(
      *  immediately after this returns. */
     suspend fun start(): Int {
         val s = embeddedServer(CIO, port = requestedPort) {
-            install(WebSockets) { maxFrameSize = PROXY_MAX_FRAME_BYTES }
+            install(WebSockets) {
+                maxFrameSize = PROXY_MAX_FRAME_BYTES
+                // Liveness: a TCP that dies without FIN (phone doze, wifi
+                // power-save, AP roam) must not leave a "connected" zombie —
+                // ping every 15 s, close after 10 s of silence, so a dead peer's
+                // session ends and the hub sheds it instead of queueing forever.
+                pingPeriod = pingPeriodMs.milliseconds
+                timeout = pingTimeoutMs.milliseconds
+            }
             routing {
                 webSocket(path) {
                     // `this` is a DefaultWebSocketServerSession (a WebSocketSession).
@@ -57,6 +72,8 @@ class LanRelayServer(
     companion object {
         private const val TAG = "LanRelayServer"
         private const val STOP_TIMEOUT_MS = 500L
+        private const val PING_PERIOD_MS = 15_000L
+        private const val PING_TIMEOUT_MS = 10_000L
 
         /** The WebSocket path secondaries (and the future PWA) dial. */
         const val PATH = "/de1-bridge"

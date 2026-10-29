@@ -80,22 +80,30 @@ object HttpClients {
     /** The shared REST engine (timeouts come per client from HttpTimeout). */
     private val restEngine: HttpClientEngine by lazy { okHttpEngine(base) }
 
+    /** How often the proxy WebSocket client pings the relay. */
+    const val WS_PING_INTERVAL_MS = 15_000L
+
+    /** The shared WebSocket engine (see [webSocketOkHttp]). */
+    private val webSocketEngine: HttpClientEngine by lazy { okHttpEngine(webSocketOkHttp(base)) }
+
     /**
-     * The shared WebSocket engine: the same base (pool + dispatcher) with no
-     * read / write timeout — a quiet proxy link must not be dropped — and no
-     * ping — unchanged from the previous engine (neither end pings; the relay
-     * protocol and the link's redial loop cover liveness).
+     * The WebSocket variant of [from]: same pool + dispatcher, no read / write
+     * timeout (a quiet proxy link must not be dropped), and a ping every
+     * [pingIntervalMs]. The ping is the client's liveness check: the relay
+     * protocol has no heartbeat frame, and the link's redial loop only runs
+     * once the session ends. OkHttp fails the socket when a pong is late, so a
+     * half-open link (no FIN: doze, a power-saving radio, an AP roam) ends the
+     * session and the redial loop takes over. It has to be set here: Ktor's
+     * OkHttp engine takes the interval from the OkHttpClient and ignores the
+     * `WebSockets { pingIntervalMillis }` plugin setting.
      */
-    private val webSocketEngine: HttpClientEngine by lazy {
-        okHttpEngine(
-            base.newBuilder()
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.MILLISECONDS)
-                .writeTimeout(0, TimeUnit.MILLISECONDS)
-                .pingInterval(0, TimeUnit.MILLISECONDS)
-                .build(),
-        )
-    }
+    fun webSocketOkHttp(from: OkHttpClient, pingIntervalMs: Long = WS_PING_INTERVAL_MS): OkHttpClient =
+        from.newBuilder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .writeTimeout(0, TimeUnit.MILLISECONDS)
+            .pingInterval(pingIntervalMs, TimeUnit.MILLISECONDS)
+            .build()
 
     /** A fresh base like [base]; tests derive variants (e.g. a custom SocketFactory) from it. */
     fun newBaseOkHttp(): OkHttpClient = OkHttpClient.Builder()

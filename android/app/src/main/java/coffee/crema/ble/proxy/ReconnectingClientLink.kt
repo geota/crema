@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
@@ -39,10 +40,15 @@ enum class LinkState { CONNECTING, CONNECTED }
  *
  * The **protocol** half (re-`Hello` → re-`Attach` → re-snapshot on a reconnect)
  * lives in [ProxyTransport], driven by [reconnects] — the link can't re-establish
- * protocol state alone.
+ * protocol state alone. The link does keep one protocol rule per session: until
+ * that session's handshake reply ([Frame.Welcome] or [Frame.Denied]) arrives,
+ * only [Frame.Hello] goes out. Any other frame waits for the reply, so a request
+ * sent during a redial can never reach the primary ahead of the new session's
+ * `Hello` (the primary would refuse it).
  *
  * The socket is Ktor's OkHttp engine ([HttpClients.webSocketClient]: no retry
- * plugin, no read timeout, no ping). OkHttp can't cap the frame size, so each
+ * plugin, no read timeout, a ping every [HttpClients.WS_PING_INTERVAL_MS], so a
+ * half-open socket ends the session). OkHttp can't cap the frame size, so each
  * session's [KtorWsFrameLink] enforces [PROXY_MAX_FRAME_BYTES] itself. The
  * engine is shared and outlives this link, so teardown cancels the live
  * session explicitly rather than relying on closing the client.
@@ -69,6 +75,10 @@ class ReconnectingClientLink(
     @Volatile
     private var live: KtorWsFrameLink? = null
 
+    /** The live session once its handshake reply has arrived; null before that
+     *  and while (re)connecting. Every frame except [Frame.Hello] waits for it. */
+    private val ready = MutableStateFlow<KtorWsFrameLink?>(null)
+
     private val loop = scope.launch {
         var attempt = 0
         var first = true
@@ -82,13 +92,20 @@ class ReconnectingClientLink(
                 Log.i(TAG, "Connected to primary at $url")
                 if (!first) _reconnects.emit(Unit) // re-attach trigger (not the first connect)
                 first = false
-                // Pump this session until the socket ends, then fall through to redial.
-                link.incoming().collect { inbox.trySend(it) }
+                // Pump this session until the socket ends, then fall through to
+                // redial. The handshake reply opens the session to requests; it is
+                // queued to the consumer first, so the Welcome is handled before
+                // any reply to a request it let through.
+                link.incoming().collect { frame ->
+                    inbox.trySend(frame)
+                    if (frame is Frame.Welcome || frame is Frame.Denied) ready.value = link
+                }
                 Log.i(TAG, "Primary link dropped — will redial")
             } catch (e: Exception) {
                 Log.i(TAG, "Primary not reachable at $url (attempt ${attempt + 1}): ${e.message}")
             } finally {
                 // Also on cancellation: the session isn't a child of this loop.
+                ready.value = null
                 live?.cancel()
                 live = null
                 if (isActive) _state.value = LinkState.CONNECTING
@@ -99,9 +116,15 @@ class ReconnectingClientLink(
     }
 
     override suspend fun send(frame: Frame) {
-        // Use the live session; if mid-redial, wait for it. A frame sent during a
-        // blip may be dropped — the re-handshake resyncs, so this is best-effort.
-        val link = live ?: run { state.first { it == LinkState.CONNECTED }; live }
+        // Hello opens a session, so it goes out on the live socket (waiting for
+        // one while redialing). Everything else waits until the session has
+        // answered the Hello. A frame sent during a blip may still be lost with
+        // the socket; callers bound their wait (ProxyTransport's request timeout).
+        val link = if (frame is Frame.Hello) {
+            live ?: run { state.first { it == LinkState.CONNECTED }; live }
+        } else {
+            ready.filterNotNull().first()
+        }
         link?.send(frame)
     }
 

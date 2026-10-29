@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
 /**
  * Pre-pairing gate (issue 03): an unapproved peer — one that skips `Hello`, or whose
  * `Hello` is DENIED — must get nothing: no attach/snapshot, no read, and no
- * roster/config/event/notify fan-out. Before the fix only `handleControl` checked
+ * roster/config/event/notify fan-out. Its requests are answered with errors only. Before the fix only `handleControl` checked
  * approval; `Attach`/`Read`/`onInbound` and the push-fan-out methods served any socket.
  */
 class RelayHubPairingGateTest {
@@ -55,7 +55,11 @@ class RelayHubPairingGateTest {
             delay(150)
 
             assertTrue(rx.none { it is Frame.Attached }, "no attach without an approved Hello")
-            assertTrue(rx.none { it is Frame.ReadOk || it is Frame.ReadErr }, "no read served or attempted")
+            assertTrue(rx.none { it is Frame.ReadOk }, "no read served")
+            assertTrue(
+                rx.filterIsInstance<Frame.ReadErr>().single().reason == "not-paired",
+                "the read is refused, not left unanswered (readSource would throw if called)",
+            )
             assertTrue(rx.none { it is Frame.Notify }, "no snapshot / stream")
             assertTrue(rx.none { it is Frame.Roster || it is Frame.Config || it is Frame.Event }, "no push fan-out")
             obs.cancel()

@@ -3,15 +3,18 @@ package coffee.crema.ble.proxy
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 
 /** Another Crema instance on the LAN, discovered via NSD. */
@@ -150,7 +153,15 @@ class PeerDiscovery(
             override fun onResolveFailed(s: NsdServiceInfo, code: Int) { deferred.complete(null) }
             override fun onServiceResolved(s: NsdServiceInfo) { deferred.complete(s) }
         }
-        return runCatching { nsd.resolveService(info, listener); deferred.await() }.getOrNull()
+        return awaitNsdResolve(
+            start = { nsd.resolveService(info, listener) },
+            result = deferred,
+            cancel = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    runCatching { nsd.stopServiceResolution(listener) }
+                }
+            },
+        )
     }
 
     private fun publish() {
@@ -162,4 +173,33 @@ class PeerDiscovery(
         const val SERVICE_TYPE = "_crema._tcp."
         const val PLACEHOLDER_PORT = 1
     }
+}
+
+/** Bound on one NSD resolve — it holds the discovery's resolve lock, so it must never hang. */
+internal const val NSD_RESOLVE_TIMEOUT_MS = 5_000L
+
+/**
+ * Start one NSD resolve and wait for its [result], at most [timeoutMs]. NSD
+ * occasionally calls back NEITHER success nor failure, and the caller holds a
+ * lock that serializes resolves, so without a bound one hung resolve would wedge
+ * every later peer resolution for the life of the process. On timeout the
+ * resolve is [cancel]led (possible on API 34+; before that it stays registered
+ * and NSD may refuse the next one, which then fails instead of hanging).
+ * Null on failure or timeout; cancellation propagates.
+ */
+internal suspend fun <T : Any> awaitNsdResolve(
+    start: () -> Unit,
+    result: Deferred<T?>,
+    cancel: () -> Unit,
+    timeoutMs: Long = NSD_RESOLVE_TIMEOUT_MS,
+): T? {
+    try {
+        start()
+    } catch (e: Exception) {
+        Log.w("PeerDiscovery", "resolveService threw", e)
+        return null
+    }
+    val resolved = withTimeoutOrNull(timeoutMs) { result.await() }
+    if (resolved == null && !result.isCompleted) cancel()
+    return resolved
 }
