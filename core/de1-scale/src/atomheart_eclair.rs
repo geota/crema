@@ -37,11 +37,11 @@ const WEIGHT_FRAME_LEN: usize = 10;
 // Commands are an ASCII-mnemonic scheme, one letter + `01 01`: 'T'are,
 // 'S'tart, 'E'nd, 'R'eset — per Decenza `atomhearteclairscale.cpp:247-262`,
 // which cites de1app PR #349 (the Eclair gained a DEDICATED timer-reset
-// opcode, distinct from tare). The previous constants here followed
-// reaprime's `0x43`-multiplexed scheme (start `43 01 01`, stop `43 00 00`,
-// reset = tare), which disagrees on every byte except tare — aligned to
-// Decenza 2026-07-07 (see the local review notes); hardware-verify on a
-// real Eclair when one is on the bench.
+// opcode, distinct from tare). de1app (`bluetooth.tcl:604-652`) and reaprime
+// (`atomheart_scale.dart:136-159`) now send the same `54/53/45/52 01 01`
+// bytes. The older `0x43`-multiplexed scheme (start `43 01 01`, stop
+// `43 00 00`, reset = tare) these constants once followed is gone from every
+// upstream. Hardware-verify on a real Eclair when one is on the bench.
 /// Command: tare — `'T' 01 01`.
 pub const TARE: [u8; 3] = [0x54, 0x01, 0x01];
 /// Command: start the timer — `'S' 01 01`.

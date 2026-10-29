@@ -405,9 +405,17 @@ dependencies {
 // android/README.md).
 //
 // Native-lib build profile: "debug" (fast — local dev default) or "release"
-// (LTO + codegen-units=1 + opt-3, per core's [profile.release]). CI's release
-// job passes -PcargoProfile=release so shippable APKs carry a fully optimized .so.
-val cargoProfile = (project.findProperty("cargoProfile") as String?) ?: "debug"
+// (LTO + codegen-units=1 + opt-3, per core's [profile.release]). An explicit
+// -PcargoProfile wins. Otherwise any build that asks for a Nightly or Release
+// task defaults to "release": the debug cargo profile has overflow checks and
+// debug assertions on, so a user-facing APK built with it crashes where web and
+// stable wrap silently (cohort review 2026-10-25, report 01 P1-3). CI's
+// release and nightly jobs also pass -PcargoProfile=release explicitly.
+val shippableTaskRequested = gradle.startParameter.taskNames.any { task ->
+    task.contains("Nightly", ignoreCase = true) || task.contains("Release", ignoreCase = true)
+}
+val cargoProfile = (project.findProperty("cargoProfile") as String?)
+    ?: if (shippableTaskRequested) "release" else "debug"
 
 cargo {
     // Path from this module to the Rust workspace member.

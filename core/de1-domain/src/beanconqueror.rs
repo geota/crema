@@ -1451,13 +1451,16 @@ fn iso_date_opt(s: &str) -> Option<String> {
     if t.is_empty() {
         return None;
     }
-    // BC may carry an ISO-8601 timestamp or just a date. Slice the
-    // first 10 chars (`yyyy-mm-dd`) if it looks ISO-shaped; else
-    // return as-is and let downstream validate.
-    if t.len() >= 10 && t.chars().nth(4) == Some('-') && t.chars().nth(7) == Some('-') {
-        Some(t[..10].to_owned())
-    } else {
-        Some(t.to_owned())
+    // BC may carry an ISO-8601 timestamp or just a date. Keep the first 10
+    // bytes (`yyyy-mm-dd`) if it looks ISO-shaped; else return as-is and let
+    // downstream validate. The shape check is byte-wise and the slice is
+    // `get`, so a multibyte character in the first 10 bytes falls through to
+    // the as-is branch instead of panicking on a char boundary (cohort
+    // review 2026-10-25, 01 P2-2).
+    let b = t.as_bytes();
+    match t.get(..10) {
+        Some(date) if b[4] == b'-' && b[7] == b'-' => Some(date.to_owned()),
+        _ => Some(t.to_owned()),
     }
 }
 
@@ -1636,6 +1639,25 @@ fn bc_brew_time_parts(dur_ms: u64) -> (u64, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Cohort review 2026-10-25, 01 P2-2: the ISO-shape check counted chars
+    /// but the slice counted bytes, so a multibyte character in the first 10
+    /// bytes panicked ("end byte index 10 is not a char boundary"). The
+    /// reviewer's trigger now imports, keeping the date text as-is.
+    #[test]
+    fn multibyte_date_does_not_panic() {
+        let json = r#"{"BEANS":[{"name":"x","roastingDate":"éaaa-bb-éé"}]}"#;
+        assert!(import_beanconqueror_json(json, 0).is_ok());
+        assert_eq!(iso_date_opt("éaaa-bb-éé").as_deref(), Some("éaaa-bb-éé"));
+        // Shapes that used to work are unchanged.
+        assert_eq!(
+            iso_date_opt("2024-03-05T10:00:00.000Z").as_deref(),
+            Some("2024-03-05")
+        );
+        assert_eq!(iso_date_opt("2024-03-05").as_deref(), Some("2024-03-05"));
+        assert_eq!(iso_date_opt("05.03.2024").as_deref(), Some("05.03.2024"));
+        assert_eq!(iso_date_opt("  ").as_deref(), None);
+    }
 
     #[test]
     fn grind_size_accepts_number_or_string() {

@@ -78,7 +78,13 @@ fn identity_key(source: Source, data: &[u8]) -> Option<IdentityKey> {
         return None;
     }
     if matches!(source, Source::De1MmrRead) && data.len() >= 4 {
-        Some(IdentityKey::Mmr {
+        // Only a register Crema knows gets a bucket: the address is echoed
+        // straight off the wire, so a broken or hostile peripheral cycling
+        // addresses could otherwise grow this map to 2^24 entries (cohort
+        // review 2026-10-25, 01 P3-1). An unknown reply still lands in the
+        // rolling buffer; it just isn't kept past the trim.
+        let addr = u32::from_be_bytes([0, data[1], data[2], data[3]]);
+        MmrRegister::from_address(addr).map(|_| IdentityKey::Mmr {
             addr_bytes: [data[1], data[2], data[3]],
         })
     } else {
@@ -421,6 +427,30 @@ pub(crate) fn slice_to_jsonl(
 mod tests {
     use super::*;
 
+    /// 01 P3-1: MMR replies with unknown, cycling addresses must not grow the
+    /// identity map; known registers still get their own bucket.
+    #[test]
+    fn unknown_mmr_addresses_get_no_identity_bucket() {
+        let mut rec = CaptureRecorder::default();
+        for i in 0..1_000u32 {
+            let [_, a, b, c] = (0x00F0_0000 + i).to_be_bytes();
+            rec.record(Source::De1MmrRead, &[4, a, b, c, 0, 0, 0, 0], u64::from(i));
+        }
+        assert!(
+            rec.identity_latest.is_empty(),
+            "{}",
+            rec.identity_latest.len()
+        );
+        let [_, a, b, c] = MmrRegister::FirmwareVersion.address().to_be_bytes();
+        rec.record(Source::De1MmrRead, &[4, a, b, c, 1, 0, 0, 0], 2_000);
+        assert_eq!(rec.identity_latest.len(), 1);
+        assert_eq!(
+            rec.buf.len(),
+            1_001,
+            "every reply still lands in the buffer"
+        );
+    }
+
     /// One parsed line, the shape the replay parser produces.
     #[derive(Debug, serde::Deserialize)]
     struct ParsedLine {
@@ -509,8 +539,12 @@ mod tests {
         // Two MMR replies for different register addresses — both must
         // survive the rolling-buffer dropoff and re-emerge as identity
         // entries for any future slice.
-        let machine_model = vec![0x0c, 0x00, 0x80, 0x04, 0x01, 0, 0, 0];
-        let serial_number = vec![0x30, 0x38, 0x80, 0x04, 0x42, 0, 0, 0];
+        // `[len, addr u24 BE, data…]`, as `MmrReadReply::decode` reads it:
+        // MachineModel 0x80000C and SerialNumber 0x803830. (The fixture used
+        // to carry made-up address bytes; identity buckets now require a
+        // register Crema knows — 01 P3-1.)
+        let machine_model = vec![0x04, 0x80, 0x00, 0x0C, 0x01, 0, 0, 0];
+        let serial_number = vec![0x04, 0x80, 0x38, 0x30, 0x42, 0, 0, 0];
         rec.record(Source::De1MmrRead, &machine_model, 0);
         rec.record(Source::De1MmrRead, &serial_number, 1);
         // Fill the buffer with a bunch of late shot samples to slice past.

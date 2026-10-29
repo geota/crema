@@ -158,16 +158,15 @@ pub const COMMAND_UUID: &str = "0000ff12-0000-1000-8000-00805f9b34fb";
 /// of the module docs. Every constant and builder in this module is defined in
 /// terms of this function; checksums are never hand-typed.
 ///
-/// # Why Crema's XOR is the source of truth — not legacy de1app or reaprime
+/// # Why Crema's XOR is the source of truth — not legacy de1app
 ///
-/// **Both upstream apps ship the wrong XOR for the three timer commands.**
-/// Legacy de1app hand-types `0A`/`0D`/`0C` for `TIMER_START`/`TIMER_STOP`/
-/// `TIMER_RESET` (`de1plus/bluetooth.tcl:471-503`), and reaprime mirrors the
-/// same wrong bytes (`reaprime/lib/src/models/device/impl/bookoo/miniscale.dart:131-149`).
-/// The structurally-correct XOR per this builder is `0D`/`0C`/`0F`. The
-/// Bookoo's firmware appears to either ignore the XOR or has been silently
-/// dropping the timer commands in both apps for years (the documented
-/// open question for years).
+/// **Legacy de1app ships the wrong XOR for the three timer commands.** It
+/// hand-types `0A`/`0D`/`0C` for `TIMER_START`/`TIMER_STOP`/`TIMER_RESET`
+/// (`de1plus/bluetooth.tcl:499, 515, 531`), and Decenza copies those bytes
+/// (`bookooscale.cpp:184-194`). reaprime now computes the XOR
+/// (`miniscale.dart:154-173`) and agrees with Crema. The structurally-correct
+/// XOR per this builder is `0D`/`0C`/`0F`. Whether the Bookoo checks the XOR
+/// at all is still unverified on hardware.
 ///
 /// Crema's `const fn command()` derives the XOR structurally — see the test
 /// `timer_constants_match_the_captured_bytes`. Crema is the source of truth

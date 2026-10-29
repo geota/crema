@@ -452,6 +452,20 @@ fn step_to_v2(step: &ProfileStep) -> V2StepOut {
 // Legacy Tcl-dict import
 // ---------------------------------------------------------------------------
 
+/// Map de1app's `beverage_type` to [`BeverageType`], the way reaprime's
+/// `TclProfileParser._beverageTypeAliases` does (reaprime 44a1e72b):
+/// `cleaning` and `descale` are Cleaning, `calibrate` is Calibrate, `manual`
+/// is Manual, and `pourover`, `filter`, `tea` and `tea_portafilter` are
+/// Pourover. Empty or unknown values stay Espresso — lenient, where reaprime
+/// rejects them, matching [`BeverageType::from_str_lenient`].
+fn legacy_beverage_type(raw: &str) -> BeverageType {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "cleaning" | "descale" => BeverageType::Cleaning,
+        "pourover" | "filter" | "tea" | "tea_portafilter" => BeverageType::Pourover,
+        other => BeverageType::from_str_lenient(other),
+    }
+}
+
 /// Import a legacy **Tcl-dict** profile (a `*.tcl` profile file) into a Crema
 /// [`Profile`].
 ///
@@ -511,11 +525,14 @@ pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
         _ => pressure_to_advanced_list(&dict),
     };
 
-    // Legacy TCL profiles carry an `author` field; `beverage_type` is
-    // typically absent (TCL is v1/v2 transitional, predates the field)
-    // — default to Espresso. `tank_temperature` is also absent in TCL
+    // Legacy TCL profiles carry an `author` field and, in most of de1app's
+    // own files, a `beverage_type` (70 of its 86 profiles, including the
+    // three `Cleaning/…` ones) — read it rather than assume Espresso, or a
+    // built-in forward flush is recorded as a shot (cohort review
+    // 2026-10-25, report 08 M1). `tank_temperature` is absent in TCL
     // profiles; default to 0. Version is always the string "2".
     let author = dict.get("author").unwrap_or("").to_string();
+    let beverage_type = legacy_beverage_type(dict.get("beverage_type").unwrap_or(""));
     let tank_temperature = dict.get_f32("tank_temperature").unwrap_or(0.0);
 
     let (target_weight, target_volume) = stop_targets(&dict, advanced);
@@ -539,7 +556,7 @@ pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
         target_volume,
         dose,
         author,
-        BeverageType::Espresso,
+        beverage_type,
         tank_temperature,
         "2".to_string(),
     )
@@ -1393,6 +1410,29 @@ fn tcl_words(text: &str, prose_keys: &[&str]) -> Result<Vec<String>, ImportError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Report 08 M1: de1app's `beverage_type` maps the way reaprime does;
+    /// empty and unknown values stay Espresso.
+    #[test]
+    fn legacy_beverage_type_follows_de1app() {
+        use crate::profile::BeverageType as B;
+        for (raw, want) in [
+            ("cleaning", B::Cleaning),
+            ("descale", B::Cleaning),
+            ("calibrate", B::Calibrate),
+            ("manual", B::Manual),
+            ("pourover", B::Pourover),
+            ("filter", B::Pourover),
+            ("tea", B::Pourover),
+            ("tea_portafilter", B::Pourover),
+            (" Cleaning ", B::Cleaning),
+            ("espresso", B::Espresso),
+            ("", B::Espresso),
+            ("kombucha", B::Espresso),
+        ] {
+            assert_eq!(legacy_beverage_type(raw), want, "{raw:?}");
+        }
+    }
 
     // -- v2 JSON ----------------------------------------------------------
 
