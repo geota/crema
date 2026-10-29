@@ -11,9 +11,21 @@ import coffee.crema.ble.proxy.Peer
 
 /** The remote's status line: "Connected through <hub>", "Reconnecting to
  *  <hub>…" while its link redials, or "<hub> isn't connected to the machine"
- *  while the link is up but the hub's roster has no DE1. */
-internal fun remoteStatusLine(hub: String, reconnecting: Boolean, hubHasMachine: Boolean, viewOnly: Boolean = false): String =
+ *  while the link is up but the hub's roster has no DE1. While redialing,
+ *  "Couldn't verify <hub>" once the re-find gave up ([refindGaveUp]), and
+ *  "<hub> isn't a hub any more" when NSD lists its address as a device that
+ *  turned Hub mode off ([hubStoppedHosting]). */
+internal fun remoteStatusLine(
+    hub: String,
+    reconnecting: Boolean,
+    hubHasMachine: Boolean,
+    viewOnly: Boolean = false,
+    refindGaveUp: Boolean = false,
+    hubStoppedHosting: Boolean = false,
+): String =
     when {
+        reconnecting && refindGaveUp -> "Couldn't verify $hub"
+        reconnecting && hubStoppedHosting -> "$hub isn't a hub any more"
         reconnecting -> "Reconnecting to $hub…"
         !hubHasMachine -> "$hub isn't connected to the machine"
         viewOnly -> "Connected through $hub · view-only"
@@ -28,12 +40,12 @@ internal fun MainUiState.remoteHubLabel(): String =
 /** The status line while this device is a remote, else null. */
 internal fun MainUiState.remoteStatus(): String? =
     if (proxyRole != "secondary") null
-    else remoteStatusLine(remoteHubLabel(), mirrorReconnecting, remoteHubHasMachine, mirrorViewOnly)
+    else remoteStatusLine(remoteHubLabel(), mirrorReconnecting, remoteHubHasMachine, mirrorViewOnly, refindGaveUp, hubStoppedHosting)
 
-/** A remote may connect the machine itself when its hub is unreachable or no
- *  longer holds the DE1. */
+/** A remote may connect the machine itself when its hub is unreachable, no
+ *  longer holds the DE1, or couldn't be verified. */
 internal fun MainUiState.canConnectDirectly(): Boolean =
-    proxyRole == "secondary" && (mirrorReconnecting || !remoteHubHasMachine)
+    proxyRole == "secondary" && (mirrorReconnecting || !remoteHubHasMachine || refindGaveUp)
 
 /** Why Hub mode can't be turned on here, or null: this device is a remote
  *  and its hub, which proved the pairing this device holds, has the DE1. */

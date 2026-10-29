@@ -3,6 +3,7 @@ package coffee.crema.ui
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import coffee.crema.ble.proxy.DenyReason
+import coffee.crema.ble.proxy.Peer
 import coffee.crema.ble.proxy.PairingCrypto
 import coffee.crema.ble.proxy.PairingDecision
 import coffee.crema.ble.proxy.PairingRequest
@@ -17,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -29,6 +31,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -84,10 +87,36 @@ class ProxyControllerModeTest {
         isSnapshotChar = { _, _ -> false },
         pairedDevices = { remembered.toList() },
         rememberPaired = { id, name, canControl -> remembered += PairedDevice(id, name, canControl) },
-        onModeApplied = { role, _, _ -> events += "applied:$role" },
+        onModeApplied = { role, host, port -> events += "applied:$role"; targets += "$role $host:$port" },
         firmwareHoldsLink = { flashing },
         secretBox = box,
     )
+
+    /** Every applied mode with its target, in order. */
+    private val targets = CopyOnWriteArrayList<String>()
+
+    private fun advance(ms: Long) {
+        scheduler.advanceTimeBy(ms)
+        scheduler.runCurrent()
+    }
+
+    /** An NSD peer. */
+    private fun peer(id: String, port: Int, role: String = "primary", de1: Boolean = true, host: String = "127.0.0.1") =
+        Peer(id, "Kitchen tablet", role, de1, host, port)
+
+    /** A remote on 127.0.0.1:9 (nothing listens there: its link stays
+     *  CONNECTING), restored unattended with the pin "host-1". Returns the
+     *  peers flow the test drives. */
+    private fun remoteOnDeadHub(vararg peers: Peer): MutableStateFlow<List<Peer>> {
+        controller.pairingStore.pinHost("host-1")
+        controller.remirrorUnattended("127.0.0.1", 9)
+        advance(200)
+        assertEquals("secondary 127.0.0.1:9", targets.last())
+        val flow = MutableStateFlow(peers.toList())
+        controller.overridePeers(flow)
+        scheduler.runCurrent()
+        return flow
+    }
 
     @After
     fun tearDown() {
@@ -445,5 +474,166 @@ class ProxyControllerModeTest {
         assertEquals("normal", controller.state.value.role)
         assertTrue(events.isEmpty(), "$events")
         assertTrue(log.any { it.contains("refused") && it.contains(FIRMWARE_BUSY_REASON) }, "$log")
+    }
+
+    /** AC-9: once the link has been CONNECTING for refindDelayMs, a remote
+     *  dials a hub NSD lists at another address — with or without the DE1 —
+     *  unattended, so the pin stays. Itself, its own target, a normal device
+     *  and a port-less advertisement are not candidates. */
+    @Test
+    fun `a lost hub is re-found unattended`() {
+        remoteOnDeadHub(
+            peer(controller.instanceId, 10),
+            peer("same-target", 9),
+            peer("a-normal-device", 11, role = "normal"),
+            peer("no-relay", 0),
+            peer("nsd-restarted", 12, de1 = false),
+        )
+        advance(REFIND_DELAY_MS - 1_000)
+        assertEquals("secondary 127.0.0.1:9", targets.last(), "not before the delay")
+        advance(1_500)
+        assertEquals("secondary 127.0.0.1:12", targets.last())
+        assertEquals("host-1", controller.pairingStore.pinnedHost, "unattended: the pin is kept")
+        assertEquals("secondary", controller.state.value.role)
+    }
+
+    /** AC-9: a held re-find (P2's frozen slice) starts nothing; a release
+     *  re-checks. */
+    @Test
+    fun `no re-find runs while it is held`() {
+        controller.holdRefind(true)
+        remoteOnDeadHub(peer("nsd-restarted", 12))
+        advance(REFIND_DELAY_MS * 3)
+        assertEquals("secondary 127.0.0.1:9", targets.last())
+        controller.holdRefind(false)
+        advance(200)
+        assertEquals("secondary 127.0.0.1:12", targets.last())
+    }
+
+    /**
+     * AC-9: a candidate refused for a trust reason is skipped by instance id
+     * and the previous target is re-applied (a refused link never redials),
+     * after 5 s, then 15 s, then 60 s. After three refusals with no other
+     * candidate the remote gives up ("Couldn't verify <hub>") and stays a
+     * remote, until NSD shows a new instance.
+     */
+    @Test
+    fun `an unattended refusal keeps the remote role`() {
+        val peers = remoteOnDeadHub(peer("a", 12), peer("b", 13), peer("c", 14))
+        advance(REFIND_DELAY_MS + 200)
+        assertEquals("secondary 127.0.0.1:12", targets.last())
+
+        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        advance(200)
+        assertEquals("secondary 127.0.0.1:9", targets.last(), "the previous target is re-applied")
+        assertEquals("secondary", controller.state.value.role)
+        advance(REFIND_DELAY_MS - 400)
+        assertEquals("secondary 127.0.0.1:9", targets.last(), "5 s back-off")
+        advance(600)
+        assertEquals("secondary 127.0.0.1:13", targets.last(), "a is skipped")
+
+        controller.refuseCurrentSessionForTest(DenyReason.HOST_CHANGED, byHost = false, hostProved = false)
+        advance(200)
+        assertEquals("secondary 127.0.0.1:9", targets.last())
+        advance(14_000)
+        assertEquals("secondary 127.0.0.1:9", targets.last(), "15 s back-off")
+        advance(1_200)
+        assertEquals("secondary 127.0.0.1:14", targets.last(), log.filter { "Re-find" in it || "SECONDARY" in it }.joinToString("\n"))
+
+        // A host's Denied before it proved the pairing is just as unverified.
+        controller.refuseCurrentSessionForTest(DenyReason.REVOKED, byHost = true, hostProved = false)
+        advance(200)
+        assertEquals("secondary 127.0.0.1:9", targets.last())
+        assertFalse(controller.state.value.refindGaveUp, "not before the 60 s back-off")
+        advance(60_000)
+        assertTrue(controller.state.value.refindGaveUp, "three refusals and no other candidate")
+        assertEquals("secondary", controller.state.value.role)
+        assertEquals("host-1", controller.pairingStore.pinnedHost)
+        advance(120_000)
+        assertEquals("secondary 127.0.0.1:9", targets.last(), "it stops trying")
+
+        peers.value = peers.value + peer("d", 15)
+        advance(200)
+        assertFalse(controller.state.value.refindGaveUp, "a new instance resumes the re-find")
+        assertEquals("secondary 127.0.0.1:15", targets.last())
+    }
+
+    /** An instance id leaves the skip set once NSD stops listing it, so the
+     *  same hub restarted under a fresh id can be tried again. */
+    @Test
+    fun `a skipped instance is forgotten when NSD drops it`() {
+        val peers = remoteOnDeadHub(peer("a", 12))
+        advance(REFIND_DELAY_MS + 200)
+        controller.refuseCurrentSessionForTest(DenyReason.HOST_UNVERIFIED, byHost = false, hostProved = false)
+        advance(REFIND_DELAY_MS + 400)
+        assertEquals("secondary 127.0.0.1:9", targets.last(), "a is skipped")
+        peers.value = emptyList()
+        scheduler.runCurrent()
+        peers.value = listOf(peer("a", 12))
+        advance(200)
+        assertEquals("secondary 127.0.0.1:12", targets.last())
+    }
+
+    /** AC-9: only a Denied from a host that proved the pairing, a refused
+     *  user pick, or a host's Denied on the current target make a remote
+     *  normal. A trust refusal on the current target keeps the role. */
+    @Test
+    fun `only a denied or a refused user pick makes a remote normal`() {
+        remoteOnDeadHub()
+        controller.refuseCurrentSessionForTest(DenyReason.HOST_UNVERIFIED, byHost = false, hostProved = false)
+        advance(1_000)
+        assertEquals("secondary", controller.state.value.role, "the restored target refused for trust: still a remote")
+
+        // A re-find candidate that proved the pairing and then refused us.
+        val peers = MutableStateFlow(listOf(peer("a", 12)))
+        controller.overridePeers(peers)
+        advance(200)
+        assertEquals("secondary 127.0.0.1:12", targets.last(), "the trust refusal is a re-find trigger")
+        controller.refuseCurrentSessionForTest(DenyReason.REVOKED, byHost = true, hostProved = true)
+        advance(1_000)
+        assertEquals("normal", controller.state.value.role)
+
+        controller.switchToSecondary("127.0.0.1", 9) // the user's pick
+        advance(200)
+        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        advance(1_000)
+        assertEquals("normal", controller.state.value.role, "a refused user pick")
+
+        controller.remirrorUnattended("127.0.0.1", 9)
+        advance(200)
+        controller.refuseCurrentSessionForTest(DenyReason.PAIRING_CLOSED, byHost = true, hostProved = false)
+        advance(1_000)
+        assertEquals("normal", controller.state.value.role, "the host's own Denied on the current target")
+    }
+
+    /** A user's switch queued before the re-find's own wins: the re-find
+     *  never moves a device the user just took out of the remote role. */
+    @Test
+    fun `a user's switch beats a queued re-find`() {
+        remoteOnDeadHub(peer("a", 12))
+        // The CONNECTING clock started 150 ms into remoteOnDeadHub's 200 ms:
+        // it fires at 5 150 ms, inside the user's switch's settle delay.
+        advance(REFIND_DELAY_MS - 100)
+        controller.switchToNormal()
+        advance(1_000)
+        assertEquals("normal", controller.state.value.role)
+        advance(REFIND_DELAY_MS * 2)
+        assertEquals("normal", controller.state.value.role)
+        assertTrue(targets.none { it == "secondary 127.0.0.1:12" }, "$targets")
+        assertTrue(log.any { "a newer switch ran first" in it }, "the re-find was queued and skipped: $log")
+    }
+
+    /** T7: NSD listing the hub's address as a device that isn't a hub (it
+     *  turned Hub mode off) is what "<hub> isn't a hub any more" shows. */
+    @Test
+    fun `NSD showing the hub's address as a normal device marks it stopped hosting`() {
+        val peers = remoteOnDeadHub()
+        assertFalse(controller.state.value.hubStoppedHosting)
+        peers.value = listOf(peer("ex-hub", 0, role = "normal"))
+        scheduler.runCurrent()
+        assertTrue(controller.state.value.hubStoppedHosting)
+        peers.value = listOf(peer("ex-hub", 0, role = "normal", host = "192.168.1.30"))
+        scheduler.runCurrent()
+        assertFalse(controller.state.value.hubStoppedHosting, "another address")
     }
 }

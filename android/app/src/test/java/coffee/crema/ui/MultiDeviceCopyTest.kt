@@ -41,6 +41,22 @@ class MultiDeviceCopyTest {
         assertEquals("Connected through Kitchen tablet · view-only", remote(viewOnly = true).remoteStatus())
     }
 
+    /** P1b: while the link redials, the re-find's verdicts take the line:
+     *  "Couldn't verify <hub>" once it gave up, "<hub> isn't a hub any more"
+     *  when NSD lists the hub's address as a device that turned Hub mode off.
+     *  A link that is up still says "Connected through". */
+    @Test
+    fun `the re-find's verdicts while the link redials`() {
+        val gaveUp = remote(reconnecting = true).copy(refindGaveUp = true)
+        assertEquals("Couldn't verify Kitchen tablet", gaveUp.remoteStatus())
+        assertTrue(gaveUp.canConnectDirectly())
+        val stopped = remote(reconnecting = true).copy(hubStoppedHosting = true)
+        assertEquals("Kitchen tablet isn't a hub any more", stopped.remoteStatus())
+        assertTrue(stopped.canConnectDirectly())
+        assertEquals("Couldn't verify Kitchen tablet", stopped.copy(refindGaveUp = true).remoteStatus(), "the give-up comes first")
+        assertEquals("Connected through Kitchen tablet", remote().copy(hubStoppedHosting = true, refindGaveUp = true).remoteStatus())
+    }
+
     /** AC-7: before the Welcome names the hub, the line names the address it
      *  dials; the VM fills the name from the Welcome ([HubRemoteRolesTest]). */
     @Test

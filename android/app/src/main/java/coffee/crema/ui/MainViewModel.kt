@@ -1662,6 +1662,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         // The Welcome names the hub before its first snapshot does.
                         mirroringPrimaryName = ps.hubName.ifBlank { it.mirroringPrimaryName },
                         remoteHubHasMachine = ps.hubHasMachine,
+                        refindGaveUp = ps.refindGaveUp,
+                        hubStoppedHosting = ps.hubStoppedHosting,
                         hubHoldingMachine = if (ps.role == "normal") {
                             ps.peers.firstOrNull { p -> p.isMirrorSource && p.id != proxy.instanceId }
                         } else {
