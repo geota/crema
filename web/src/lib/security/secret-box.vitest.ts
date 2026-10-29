@@ -1,5 +1,15 @@
-import { describe, expect, it } from 'vitest';
-import { createIndexedDbKeyProvider, createSecretBox, isWrapped, type KeyProvider } from './secret-box';
+import { beforeEach, describe, expect, it } from 'vitest';
+import {
+	KEYED_MARKER,
+	SecretBoxUnavailableError,
+	createIndexedDbKeyProvider,
+	createSecretBox,
+	isWrapped,
+	type KeyProvider
+} from './secret-box';
+import { credentialsStoredUnencrypted } from './credential-status';
+
+beforeEach(() => localStorage.clear());
 
 // vitest's jsdom has Web Crypto but no IndexedDB, so the tests drive the box
 // with an in-memory key and separately check the no-key degradation.
@@ -25,11 +35,27 @@ describe('secret-box', () => {
 		expect(await a.unwrap('legacy-plain')).toBe('legacy-plain');
 		expect(await b.unwrap(await a.wrap('secret'))).toBeNull();
 	});
-	it('degrades to plaintext when no key is available', async () => {
+	it('degrades to plaintext only when this origin never had a key', async () => {
 		const box = createSecretBox(noKey);
 		expect(await box.wrap('tok')).toBe('tok');
 		expect(await box.unwrap('tok')).toBe('tok');
 		expect(await box.unwrap('sb1:AAAA:BBBB')).toBeNull();
+		expect(localStorage.getItem(KEYED_MARKER)).toBeNull();
+	});
+	// Review 05 P3-6: no silent plaintext once a key has existed.
+	it('refuses to return plaintext once a key has existed on this origin', async () => {
+		await createSecretBox(withKey(memKey())).wrap('first');
+		expect(localStorage.getItem(KEYED_MARKER)).toBe('1');
+		await expect(createSecretBox(noKey).wrap('tok')).rejects.toBeInstanceOf(SecretBoxUnavailableError);
+	});
+	it('reports stored plaintext sign-ins so Settings can show it', async () => {
+		expect(credentialsStoredUnencrypted()).toBe(false);
+		const box = createSecretBox(withKey(memKey()));
+		localStorage.setItem('crema.decent.v1', JSON.stringify({ token: await box.wrap('t') }));
+		localStorage.setItem('crema.visualizer.tokens.v1', JSON.stringify({ accessToken: await box.wrap('a') }));
+		expect(credentialsStoredUnencrypted()).toBe(false);
+		localStorage.setItem('crema.decent.v1', JSON.stringify({ token: 'plain-token' }));
+		expect(credentialsStoredUnencrypted()).toBe(true);
 	});
 });
 

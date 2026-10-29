@@ -78,4 +78,14 @@ describe('TokenVault wrapping', () => {
 		await run((v) => v.storeTokens(tokens));
 		expect(hasStoredVisualizerTokens()).toBe(true);
 	});
+
+	// Review 05 P3-6: once a key existed, a missing key never means plaintext.
+	it('does not store plaintext when a key existed but is unreachable', async () => {
+		await run((v) => v.storeTokens(tokens)); // a key existed (marker set)
+		key = Promise.resolve(null); // IndexedDB momentarily unavailable
+		await run((v) => v.storeTokens({ ...tokens, accessToken: 'AT-new-secret' }));
+		expect(localStorage.getItem(TOKENS_KEY)).toBeNull();
+		expect(JSON.stringify({ ...localStorage })).not.toContain('secret');
+		expect(hasStoredVisualizerTokens()).toBe(false);
+	});
 });

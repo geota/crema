@@ -59,6 +59,7 @@
 	} from '#lib/backup/index.js';
 	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
 	import { readImportBytes } from '#lib/utils/import-limits.js';
+	import { credentialsStoredUnencrypted } from '#lib/security/credential-status.js';
 	import {
 		describeDecentDrain,
 		isDecentLinked,
@@ -116,6 +117,15 @@
 	const decentLinked = $derived(isDecentLinked(decent));
 	const liveSerial = $derived(machine.serialNumber);
 	onMount(() => onDecentAccountChange((next) => (decent = next)));
+
+	/** A stored sign-in sits in localStorage unencrypted (no Web Crypto key in
+	 *  this browser) — said out loud rather than silently (review 05 P3-6).
+	 *  Re-read whenever either account changes. */
+	const signInsUnencrypted = $derived.by(() => {
+		void viz.connected;
+		void decent;
+		return credentialsStoredUnencrypted();
+	});
 
 	// ── Catch-up offer ──────────────────────────────────────────────────
 	// The moment a destination becomes able to receive shots is when the
@@ -422,6 +432,12 @@
 	title="Sharing"
 	sub="Crema is local-only — there's no Crema account. Shots and profiles live on this device. Connect Visualizer if you want to back up, share, or compare shots online."
 />
+{#if signInsUnencrypted}
+	<p class="st-signin-unencrypted" role="status">
+		This browser can't encrypt saved sign-ins, so your Visualizer or Decent sign-in is stored
+		unencrypted on this device. Sign out on shared devices.
+	</p>
+{/if}
 
 <!-- Visualizer card — owns the full connection life-cycle (sign in / out,
      account identity, Test). Once `connected`, BeanSyncSection below

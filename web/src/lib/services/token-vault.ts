@@ -27,7 +27,7 @@ import { TokenSetSchema } from '../effect/schema/tokens.ts';
 import { HttpStatusError, NotAuthenticatedError, TokenRefreshFailedError } from '../effect/errors.ts';
 import { OAuth } from './oauth.ts';
 import type { TokenSet } from '../visualizer/oauth.ts';
-import { secretBox } from '../security/secret-box.ts';
+import { SecretBoxUnavailableError, secretBox } from '../security/secret-box.ts';
 
 const TOKENS_KEY = 'crema.visualizer.tokens.v1';
 /** Refresh proactively when the access token has < 5 minutes left. */
@@ -62,7 +62,8 @@ export function visualizerTokensUnreadable(): boolean {
  * Read + validate the persisted token set (null when absent / invalid), then
  * unwrap the two secrets. The access + refresh tokens sit in localStorage
  * wrapped by the secret box (AES-GCM under a non-extractable IndexedDB key)
- * so a storage dump does not hand out a live session; a set written before
+ * so a localStorage-only dump does not hand out a live session (a full
+ * profile copy holds the key too); a set written before
  * wrapping existed still reads (plaintext passes through) and is re-wrapped
  * on the next `storeTokens`. A wrapped set whose key is gone reads as null —
  * disconnected, so the user is asked to sign in again — and flips
@@ -140,7 +141,21 @@ export const TokenVaultLive = Layer.effect(
 		const storeTokens = (t: TokenSet) =>
 			Effect.andThen(
 				Effect.promise(async () => {
-					writeJson(TOKENS_KEY, await wrapTokens(t));
+					let wrapped: TokenSet;
+					try {
+						wrapped = await wrapTokens(t);
+					} catch (e) {
+						if (!(e instanceof SecretBoxUnavailableError)) throw e;
+						// A key existed but is unreachable: never fall back to
+						// plaintext. Drop the stored set (it is stale now — the
+						// refresh token may have rotated) so the app reads as
+						// signed out and offers Sign in, rather than failing later.
+						console.error('[Crema] Visualizer sign-in not saved:', e.message);
+						if (typeof localStorage !== 'undefined') localStorage.removeItem(TOKENS_KEY);
+						storedButUnreadable = false;
+						return;
+					}
+					writeJson(TOKENS_KEY, wrapped);
 					storedButUnreadable = false;
 				}),
 				SubscriptionRef.set(ref, t)
