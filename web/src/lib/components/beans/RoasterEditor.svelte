@@ -663,7 +663,7 @@
 
 	.rd-input {
 		background: var(--bg-page);
-		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border: 1px solid var(--field-border);
 		border-radius: var(--radius-sm);
 		padding: 9px 12px;
 		font-family: var(--font-sans);

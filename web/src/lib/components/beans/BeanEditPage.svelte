@@ -1912,14 +1912,13 @@
 	}
 	.be-input {
 		background: rgba(var(--tint-rgb), 0.04);
-		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border: 1px solid var(--field-border);
 		border-radius: var(--radius-sm);
 		color: var(--fg-1);
 		font-family: var(--font-sans);
 		font-size: 13px;
 		padding: 8px 10px;
 		outline: 0;
-		color-scheme: dark;
 		width: 100%;
 		box-sizing: border-box;
 		/* Match the QuickStepper's `.qcs-row` height (4px padding + 36px

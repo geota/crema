@@ -77,8 +77,11 @@
 		padding: 2px 8px;
 		white-space: nowrap;
 	}
+	/* "Soon" rows stay operable, so they must stay readable: opacity 0.5
+	   measured 2.3:1 (final review 07 N10). The "Soon" pill carries the
+	   not-yet-wired state; plain text in the control is muted, not faded. */
 	.st-row-not-impl .st-row-control {
-		opacity: 0.5;
+		color: var(--fg-muted);
 	}
 	.st-row-pill-conn {
 		color: var(--fg-accent);

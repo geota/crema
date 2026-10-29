@@ -203,15 +203,19 @@
 }
 .qsheet-scrim.is-open { opacity: 1; pointer-events: auto; }
 
-/* Mini switch for toggles */
+/* Mini switch for toggles. Track and knob colours are per-theme tokens so
+   the off state reaches 3:1 in light (final review 07 N4). `flex: none`:
+   in a flex label row the switch was squeezed to 18-22 px wide (N12c). */
 .qmini-tog {
+  flex: none;
   width: 30px; height: 18px; border-radius: 999px;
-  background: rgba(var(--tint-rgb), 0.15);
+  background: var(--switch-off);
   position: relative; transition: background var(--dur-1) var(--ease);
 }
 .qmini-tog::after {
   content: ''; position: absolute; left: 2px; top: 2px;
-  width: 14px; height: 14px; border-radius: 50%; background: var(--ink-50);
+  width: 14px; height: 14px; border-radius: 50%; background: var(--switch-knob);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
   transition: transform var(--dur-1) var(--ease);
 }
 .qmini-tog.on { background: var(--copper-500); }

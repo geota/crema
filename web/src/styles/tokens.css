@@ -21,6 +21,7 @@
    -------------------------------------------------------------------------- */
 
 :root {
+  color-scheme: light;
   /* ========================================================================
      COLOR — raw scales
      ======================================================================== */
@@ -145,6 +146,14 @@
                                            below collapses to the same
                                            ink-900 value so dark mode is
                                            unchanged. */
+
+  /* Control edges (WCAG 1.4.11, final cohort review 07 N4): the parts that
+     identify a control reach 3:1 against the page, card and sunken
+     surfaces. Light: the off switch track measured 1.35:1 and its knob
+     1.04:1 against the page; field borders 1.27:1 against the card. */
+  --switch-off:     #8C7B66;            /* 3.5-4.1:1 on paper / card */
+  --switch-knob:    #FFFFFF;            /* 4.1:1 on the off track, 3.4:1 on copper */
+  --field-border:   #94836D;            /* 3.2-3.7:1 on paper / card */
 
   --hairline:       rgba(31, 24, 18, 0.08); /* 1px borders on light */
   --hairline-strong:rgba(31, 24, 18, 0.16);
@@ -278,6 +287,12 @@
    ancestor. The Dashboard view sets this by default.
    ============================================================================ */
 [data-theme="dark"] {
+  /* Native controls (date pickers, scrollbars) follow the theme; light is
+     the :root default below. */
+  color-scheme: dark;
+  --switch-off:   rgba(var(--tint-rgb), 0.15);
+  --switch-knob:  var(--ink-50);
+  --field-border: #7A6B5C;              /* 3.1-3.7:1 on espresso page / card */
   --bg-page:      var(--espresso-950);
   --bg-surface:   var(--espresso-900);
   --bg-surface-2: var(--espresso-850);
