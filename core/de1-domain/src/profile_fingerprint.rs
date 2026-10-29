@@ -23,9 +23,22 @@
 //! hash from the cached one and triggers exactly one redundant upload —
 //! the cache self-heals on the upload's `ProfileUploadCompleted` fold.
 //! See `docs/42-shell-to-core-audit.md` finding #6.
+//!
+//! The same one-shot re-upload is how a change to the bytes a profile
+//! assembles to reaches a DE1 that already holds the old ones: bump
+//! [`ASSEMBLY_VERSION`] and every cached fingerprint stops matching.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// The generation of the profile → frame assembly, hashed into every
+/// fingerprint. Bump it when the same profile JSON starts assembling to
+/// different bytes, so a DE1 holding the old bytes gets them re-sent once.
+///
+/// - 1: the original key (implicit, not serialized).
+/// - 2: the default 8 ml/s limiter on Cleaning and Calibrate profiles and
+///   the forced-rise limiter (round-3 clean check C3 #6).
+const ASSEMBLY_VERSION: u32 = 2;
 
 /// The fingerprint-relevant subset of a shell `CremaProfile`. Mirrors the
 /// camelCase JSON shape the web shell ships.
@@ -95,6 +108,8 @@ struct FingerprintKey<'a> {
     #[serde(rename = "beverageType")]
     beverage_type: &'a str,
     segments: &'a [Value],
+    /// [`ASSEMBLY_VERSION`].
+    assembly: u32,
 }
 
 /// Compute the effective-profile fingerprint. `qc_json` is optional —
@@ -122,6 +137,7 @@ pub fn profile_fingerprint(profile_json: &str, qc_json: Option<&str>) -> Result<
         tank_temperature_c: p.tank_temperature_c,
         beverage_type: &p.beverage_type,
         segments: &p.segments,
+        assembly: ASSEMBLY_VERSION,
     };
     let s = serde_json::to_string(&key).map_err(|e| e.to_string())?;
     Ok(djb2_base36(&s))
@@ -237,10 +253,10 @@ mod tests {
         // signal, not a rewrite-target — the cache invalidation note
         // in the module docstring covers the one-shot consequence.
         let got = profile_fingerprint(minimal_profile_json(), None).unwrap();
-        // Recorded 2026-05-26 from this implementation. A change here
-        // means the canonical form drifted; intentional change → bump
-        // this string + note the cache-invalidation impact in the PR.
-        assert_eq!(got, "1xwseiv");
+        // Recorded 2026-10-29 (ASSEMBLY_VERSION 2; was "1xwseiv"). A
+        // change here means the canonical form drifted; intentional change
+        // → bump this string + note the cache-invalidation impact in the PR.
+        assert_eq!(got, "1e2qpgj");
     }
 
     #[test]

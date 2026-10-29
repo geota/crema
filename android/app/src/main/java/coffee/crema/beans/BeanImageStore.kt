@@ -49,6 +49,16 @@ object BeanImageStore {
         SafeFile.writeBytes(beanImageFile(context, beanId), bytes)
     }
 
+    /** Delete every stored bag photo (Settings ▸ Erase all data). */
+    fun deleteAll(context: Context) {
+        deleteAllIn(File(context.filesDir, DIR))
+    }
+
+    /** Delete the photo directory [dir] and everything in it (pure file I/O, unit-tested). */
+    internal fun deleteAllIn(dir: File) {
+        dir.deleteRecursively()
+    }
+
     /** Drop a bean's photo, if any. */
     fun delete(context: Context, beanId: String) {
         beanImageFile(context, beanId).delete()

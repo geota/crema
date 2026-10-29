@@ -131,8 +131,14 @@ fun ProfilesScreen(
     // Hidden facet falls back to All when nothing is archived; both the chips and
     // the grid key off effectiveFilter (issue 28).
     val effectiveFilter = effectiveProfileFilter(filter, ui.hiddenProfileIds)
-    val sorted = filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter, sort, sortDesc, ui.activeProfileId)
-    val chipCounts = profileChipCounts(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter)
+    // Memoized: the screen recomposes on every UI-state emission (telemetry
+    // included); only these inputs change the list.
+    val sorted = remember(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter, sort, sortDesc, ui.activeProfileId) {
+        filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter, sort, sortDesc, ui.activeProfileId)
+    }
+    val chipCounts = remember(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter) {
+        profileChipCounts(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter)
+    }
 
     // ── Brew recipes — the guided-brew library section (issue #10). A
     // separate section, not rows in the machine grid: loading a profile
@@ -170,7 +176,7 @@ fun ProfilesScreen(
             // (collapsing it to a 1-char column), so they switch to icon-only and the
             // search flexes — everything still fits one row.
             val pinned = ui.profiles.count { it.pinned }
-            val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 840
+            val narrowBar = coffee.crema.ui.windowContentDpSize().width.value < 840
             Row(
                 Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -453,11 +459,14 @@ private fun ProfileCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // Saved before the DE1's 20-step limit: the sub-line says what
+                // to change instead (cohort review 2026-10-28, #6 #6).
+                val stepNote = coffee.crema.profiles.StepCap.note(profile.segments.size)
                 Text(
-                    if (isCustom) "Custom profile" else "Built-in profile",
+                    stepNote ?: if (isCustom) "Custom profile" else "Built-in profile",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    color = if (stepNote != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }

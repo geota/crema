@@ -11,6 +11,7 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import { SvelteKitPWA } from '@katama-labs/vite-pwa-sveltekit';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
+import { CSP_DIRECTIVES } from './src/lib/security/csp.ts';
 
 /**
  * Resolve an HTTPS cert pair for `pnpm dev`. Returns `undefined` (Vite falls
@@ -77,47 +78,7 @@ export default defineConfig(({ command }) => ({
 			// static/_headers (served by Cloudflare Pages) instead.
 			csp: {
 				mode: 'hash',
-				directives: {
-					'default-src': ['self'],
-					// SvelteKit appends the inline-bootstrap hash here automatically.
-					// `accounts.google.com` serves the Google Identity Services (GIS)
-					// client library used by the Drive backup OAuth (token model).
-					'script-src': ['self', 'wasm-unsafe-eval', 'https://accounts.google.com'],
-					// GIS opens a popup AND (for the silent re-grant) a hidden iframe to
-					// accounts.google.com; frame-src otherwise inherits default-src 'self'
-					// and would block it. Drive backup only.
-					'frame-src': ['self', 'https://accounts.google.com'],
-					// 'unsafe-inline' covers static style="" attributes (e.g. the
-					// `display: contents` body wrapper); googleapis serves the
-					// Newsreader/Hanken/JetBrains @font-face stylesheet (see app.html).
-					'style-src': ['self', 'unsafe-inline', 'https://fonts.googleapis.com'],
-					// 'self' → self-hosted Phosphor icon fonts; gstatic → Google Fonts files.
-					'font-src': ['self', 'https://fonts.gstatic.com'],
-					// `blob:` is required for bean bag photos: the bytes live in
-					// IndexedDB and are rendered through `URL.createObjectURL`
-					// (`#lib/components/beans/BeanImage`). Without it EVERY bag photo
-					// is blocked and silently falls back to the roaster mark — which
-					// is exactly what issue 61 reported as "photos can't be viewed".
-					// A blob: URL is same-origin and minted by this app's own code, so
-					// allowing it grants no reach an attacker did not already have
-					// under `script-src`.
-					// `https:` covers roaster logos, which are arbitrary user- or
-					// Visualizer-supplied URLs (`Roaster.imageUrl`, and the favicon
-					// fallback in `RoasterAvatar`) and so cannot be enumerated.
-					// Plaintext http: stays blocked.
-					'img-src': ['self', 'data:', 'blob:', 'https:'],
-					// 'self' covers the wasm/app bundle and same-origin (incl. the
-					// dev server). `https:` is required by the user-configurable
-					// webhook feature, which POSTs shot/connection events to an
-					// ARBITRARY user-supplied URL (settings.webhookUrl) — those
-					// hosts can't be enumerated, so the scheme is allowed wholesale.
-					// It also subsumes Visualizer (OAuth token exchange + shot sync,
-					// https://visualizer.coffee). Tradeoff: an XSS could exfiltrate
-					// over any HTTPS host; acceptable for a no-server, local-first
-					// app with no third-party scripts. Plaintext http: stays blocked.
-					'connect-src': ['self', 'https:'],
-					'base-uri': ['self']
-				}
+				directives: CSP_DIRECTIVES
 			}
 		}),
 
@@ -136,6 +97,9 @@ export default defineConfig(({ command }) => ({
 			// only while the machine is idle (and registers the worker at all —
 			// SvelteKit never runs the HTML hook the plugin's auto-inject relies on).
 			registerType: 'prompt',
+			// `register.ts` does the registration, so the plugin must not emit (and
+			// precache) its own unused `registerSW.js` (review 03 P3-2).
+			injectRegister: false,
 			// SPA mode for the precache: adapter-static's fallback page is the app
 			// shell for every route, so it goes in the precache (revisioned from
 			// _app/version.json) and the worker answers any navigation with it —

@@ -309,6 +309,23 @@ export class BleDevice implements De1Transport {
 	/** `true` while the auto-reconnect backoff loop is running. */
 	private reconnecting = false;
 
+	/**
+	 * `true` while the owner checks a fresh link — its connect or re-seed
+	 * program is running (see {@link holdReconnect}). A drop meanwhile is
+	 * noted, not acted on, until {@link releaseReconnect}.
+	 */
+	private held = false;
+
+	/**
+	 * The ladder position a loop started by {@link releaseReconnect} resumes
+	 * from when the held link turned out hollow — the attempt that recovered
+	 * it. 0 for a first connect.
+	 */
+	private heldCarry = 0;
+
+	/** The attempt number that last recovered the link (0 = kicked / none). */
+	private lastRecoveredAttempt = 0;
+
 	/** Aborts the reconnect loop's current backoff / lurk wait — see {@link kick}. */
 	private waitAbort: AbortController | null = null;
 
@@ -373,6 +390,14 @@ export class BleDevice implements De1Transport {
 			return;
 		}
 		this.connectionState = 'reconnecting';
+		// The owner's program is still running on this link: it fails on its
+		// own, and releaseReconnect() starts the one loop afterwards. Starting
+		// it here would race the program (a second seed pass over a link the
+		// loop is replacing).
+		if (this.held) {
+			this.notifyStateChanged();
+			return;
+		}
 		this.notifyStateChanged();
 		void this.runReconnectLoop();
 	};
@@ -754,14 +779,53 @@ export class BleDevice implements De1Transport {
 		data: Uint8Array,
 		withResponse = true
 	): Promise<void> {
-		return this.gattQueue.enqueue(() => this.bounded('write', async () => {
+		return this.gattQueue.enqueue(() =>
+			this.writeNow(serviceUuid, characteristicUuid, data, withResponse)
+		);
+	}
+
+	/**
+	 * Write `data` only if `guard()` still holds when the write's queued step
+	 * starts — see {@link De1Transport.writeIf}. Resolves `false` (nothing
+	 * sent) when the guard refuses.
+	 */
+	writeIf(
+		serviceUuid: string,
+		characteristicUuid: string,
+		data: Uint8Array,
+		guard: () => boolean,
+		settled?: (written: boolean) => void
+	): Promise<boolean> {
+		return this.gattQueue.enqueue(async () => {
+			if (!guard()) return false;
+			try {
+				await this.writeNow(serviceUuid, characteristicUuid, data, true);
+			} catch (error) {
+				settled?.(false);
+				throw error;
+			}
+			settled?.(true);
+			return true;
+		});
+	}
+
+	/**
+	 * The un-queued body of {@link write} and {@link writeIf}: resolve the
+	 * characteristic (cached after the first lookup) and write, bounded like
+	 * every GATT step. Callers run it inside one queued step (V3 #10: the two
+	 * had separate copies that could drift).
+	 */
+	private writeNow(
+		serviceUuid: string,
+		characteristicUuid: string,
+		data: Uint8Array,
+		withResponse: boolean
+	): Promise<void> {
+		return this.bounded('write', async () => {
 			this.assertLive();
 			let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
 			if (characteristic === undefined) {
-				characteristic = await this.resolveCharacteristic(
-					serviceUuid,
-					characteristicUuid
-				);
+				characteristic = await this.resolveCharacteristic(serviceUuid, characteristicUuid);
 			}
 			// `writeValueWithResponse` is the equivalent of the Android
 			// transport's acknowledged write; copy into a fresh buffer for a
@@ -773,7 +837,7 @@ export class BleDevice implements De1Transport {
 			} else {
 				await characteristic.writeValueWithoutResponse(buffer);
 			}
-		}));
+		});
 	}
 
 	/**
@@ -812,23 +876,77 @@ export class BleDevice implements De1Transport {
 	}
 
 	/**
-	 * Disconnect the GATT server and drop the device's listeners. Idempotent.
-	 *
-	 * Marks the teardown *deliberate*, which suppresses the auto-reconnect loop
-	 * — a user-initiated disconnect must stay disconnected.
-	 */
-	/**
 	 * Drop the GATT link *without* marking a user disconnect: the browser's
 	 * `gattserverdisconnected` then arms the ordinary reconnect loop. For a
-	 * link that came up hollow — connected and subscribed, yet the StateInfo
-	 * read never answers (a connect at the edge of range). A no-op while
-	 * already reconnecting or after {@link disconnect}.
+	 * link that stopped answering mid-session (the owner's liveness check).
+	 * A no-op while already reconnecting or after {@link disconnect}. A link
+	 * judged hollow while held goes through {@link releaseReconnect} instead,
+	 * which keeps the backoff ladder's place.
 	 */
 	recycle(): void {
 		if (this.userDisconnected || this.reconnecting) return;
 		this.device.gatt?.disconnect();
 	}
 
+	/**
+	 * Hold the auto-reconnect loop while the owner checks a fresh link: its
+	 * connect program (first connect) or the re-seed after a reconnect. A
+	 * drop during the hold — including one {@link bounded} forces on a hung
+	 * read — is noted, not acted on, so no loop races the owner's program.
+	 * Call it synchronously from the `onReconnected` listener so nothing can
+	 * slip in between the recovery and the hold. Always end it with
+	 * {@link releaseReconnect}.
+	 */
+	holdReconnect(): void {
+		this.held = true;
+		// A first connect starts the ladder from the bottom; a re-seed resumes
+		// where the loop that recovered this link left off.
+		this.heldCarry = this.lastRecoveredAttempt;
+		this.lastRecoveredAttempt = 0;
+	}
+
+	/**
+	 * End a {@link holdReconnect}. `healthy`: the owner's program succeeded on
+	 * this link. Returns true when the link is up and healthy — the owner may
+	 * report ready. Otherwise the link goes to the reconnect loop now (it is
+	 * dropped first if still up): one loop, started here. A hollow link
+	 * resumes the backoff ladder from the attempt that recovered it, so a
+	 * link that keeps coming up hollow backs off, reaches the stuck-link hint
+	 * and the lurk tier, instead of retrying at attempt 1 forever. A no-op
+	 * (false) after {@link disconnect}.
+	 */
+	releaseReconnect(healthy: boolean): boolean {
+		const wasHeld = this.held;
+		const carry = this.heldCarry;
+		this.heldCarry = 0;
+		if (this.userDisconnected) {
+			this.held = false;
+			return false;
+		}
+		const gatt = this.device.gatt;
+		const up = gatt?.connected === true && this.connectionState === 'connected';
+		if (healthy && up) {
+			this.held = false;
+			return true;
+		}
+		// Still held while dropping: a synchronous `gattserverdisconnected`
+		// is only noted, so the loop below is the only one.
+		if (gatt?.connected) gatt.disconnect();
+		this.held = false;
+		if (!this.reconnecting) {
+			this.connectionState = 'reconnecting';
+			this.notifyStateChanged();
+			void this.runReconnectLoop(wasHeld ? carry : 0);
+		}
+		return false;
+	}
+
+	/**
+	 * Disconnect the GATT server and drop the device's listeners. Idempotent.
+	 *
+	 * Marks the teardown *deliberate*, which suppresses the auto-reconnect loop
+	 * — a user-initiated disconnect must stay disconnected.
+	 */
 	disconnect(): void {
 		this.userDisconnected = true;
 		if (this.reconnecting && this.timelineLabel !== null) {
@@ -874,17 +992,20 @@ export class BleDevice implements De1Transport {
 	 * de1app retries continuously). Attempt notifications stop after the burst
 	 * so the status line isn't spammed every cycle; the `reconnecting` state
 	 * (and its pip) persists. Only a deliberate disconnect ends the loop.
+	 *
+	 * `startAttempt` > 0 resumes the ladder after a hollow link (see
+	 * {@link releaseReconnect}); that outage was already announced.
 	 */
-	private async runReconnectLoop(): Promise<void> {
+	private async runReconnectLoop(startAttempt = 0): Promise<void> {
 		this.reconnecting = true;
 		const label = this.timelineLabel;
 		if (label !== null) this.timeline.begin(label, 'drop');
 		// Clamped so days of slow retries can't grow the counter without bound.
-		let attempt = 0;
+		let attempt = Math.min(startAttempt, RECONNECT_MAX_ATTEMPTS + 1);
 		// Whether this outage has been announced (attempt 1 tells the core
 		// the link was lost) — a kick before the first backoff ends must not
 		// skip that.
-		let announced = false;
+		let announced = attempt > 0;
 		// Lurk cycles in a row that watched for the device and heard nothing.
 		let quietCycles = 0;
 		while (true) {
@@ -947,6 +1068,7 @@ export class BleDevice implements De1Transport {
 				// Recovered.
 				this.reconnecting = false;
 				this.resetRequested = false;
+				this.lastRecoveredAttempt = attempt;
 				this.connectionState = 'connected';
 				if (label !== null) this.timeline.ready(label, this.timelineExpectsPostConnect);
 				this.notifyStateChanged();
@@ -991,12 +1113,16 @@ export class BleDevice implements De1Transport {
 		const listening = watchAdverts && typeof device.watchAdvertisements === 'function';
 		if (listening) {
 			device.addEventListener('advertisementreceived', onAdvert);
-			try {
-				await device.watchAdvertisements({ signal: stopWatch.signal });
-				watching = true;
-			} catch {
-				// Not permitted or not supported here: a plain timed wait.
-			}
+			// Started alongside the sleep, not awaited before it: a watch that
+			// never settles must not hold the loop (and with it every kick).
+			device.watchAdvertisements({ signal: stopWatch.signal }).then(
+				() => {
+					watching = true;
+				},
+				() => {
+					// Not permitted or not supported here: a plain timed wait.
+				}
+			);
 		}
 		let watched = false;
 		try {
@@ -1085,6 +1211,23 @@ export function shortUuid(uuid: string): string {
 	return /^0000[0-9a-f]{4}-0000-1000-8000-00805f9b34fb$/i.test(uuid)
 		? uuid.slice(4, 8).toUpperCase()
 		: uuid;
+}
+
+/**
+ * The status line for an advertisement heard while reconnecting — shared by
+ * the DE1 and scale managers. `label` is the device as the user knows it.
+ */
+export function advertisingStatus(label: string, rssi: number | null): string {
+	return `${label} is advertising${rssi === null ? '' : ` (${rssi} dBm)`} — reconnecting`;
+}
+
+/** The status line for notifications the browser dropped under load (Safari / Beacio). */
+export function droppedNotificationsStatus(
+	label: string,
+	characteristic: string,
+	evicted: number
+): string {
+	return `${label}: the browser dropped ${evicted} notification${evicted === 1 ? '' : 's'} (${shortUuid(characteristic)})`;
 }
 
 /**

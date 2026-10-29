@@ -364,7 +364,7 @@
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
 		font-weight: 600;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -385,7 +385,7 @@
 	.bn-tile-meta {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		margin-top: 2px;
 	}
 	.bn-tile-origin {
@@ -416,7 +416,7 @@
 		font-weight: 600;
 		text-transform: uppercase;
 		letter-spacing: var(--track-allcaps);
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 	:global(.bn-tile-why-text) {
 		min-width: 0;
@@ -448,17 +448,17 @@
 	}
 	.bn-tile-roastpill {
 		background: rgba(var(--copper-rgb), 0.14);
-		color: var(--copper-300);
+		color: var(--fg-accent);
 		border: 1px solid rgba(var(--copper-rgb), 0.28);
 	}
 	.bn-tile-pill {
 		background: rgba(var(--tint-rgb), 0.06);
-		color: rgba(var(--tint-rgb), 0.62);
+		color: var(--fg-3);
 		border: 1px solid rgba(var(--tint-rgb), 0.1);
 	}
 	.bn-tile-pill-tag {
 		background: rgba(var(--copper-rgb), 0.08);
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		border-color: rgba(var(--copper-rgb), 0.22);
 		text-transform: none;
 		font-weight: 500;
@@ -478,7 +478,7 @@
 	.bn-tile-stat-empty {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.25);
+		color: var(--fg-muted);
 	}
 	.bn-tile-stat {
 		display: inline-flex;
@@ -488,7 +488,7 @@
 	}
 	.bn-tile-stat :global(svg) {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 	.bn-tile-stat-dot {
 		width: 6px;
@@ -510,21 +510,21 @@
 	}
 	.bn-tile-stat-lab {
 		font-size: 9px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		text-transform: uppercase;
 		letter-spacing: var(--track-allcaps);
 	}
 	.bn-tile-stat-rating {
 		gap: 1px;
 		font-size: 10px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		justify-self: end;
 	}
 	.bn-tile-stat-rating :global(svg) {
 		font-size: 10px;
 	}
 	.bn-tile-stat-rating :global(svg) {
-		color: rgba(var(--tint-rgb), 0.2);
+		color: var(--fg-muted);
 	}
 
 	/* Burn-down bar. Always renders so the slot is reserved even when no
@@ -561,11 +561,11 @@
 	.bn-tile-burn-rem em,
 	.bn-tile-burn-total em {
 		font-style: normal;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-size: 9px;
 		margin-left: 1px;
 	}
 	.bn-tile-burn-total {
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 </style>

@@ -39,6 +39,21 @@ fn xor_of_body(frame: &[u8]) -> u8 {
     frame[..frame.len() - 1].iter().fold(0u8, |acc, &b| acc ^ b)
 }
 
+/// Whether the last byte of `frame` is the XOR of the bytes before it.
+///
+/// openscale (the HDS firmware) builds it as `0x03 ^ data[1] ^ … ^ data[5]`
+/// (`decentXor`, `include/decent_protocol.h:40-46`); with the `0x03` header
+/// byte every accepted frame carries, that is the XOR of bytes 0-5.
+fn has_valid_xor(frame: &[u8]) -> bool {
+    !frame.is_empty() && xor_of_body(frame) == frame[frame.len() - 1]
+}
+
+/// Consecutive 7-byte weight frames with a bad XOR after which
+/// [`DecentScale`] stops checking it for the connection: the scale is then
+/// behaving like original v1.0/v1.1 firmware. Decenza uses the same
+/// threshold (`kChecksumFailureThreshold`, `decentscale.cpp`, issue #630).
+const XOR_FAILURE_LIMIT: u8 = 5;
+
 /// One decoded weight notification.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WeightFrame {
@@ -67,11 +82,18 @@ pub fn parse_weight_frame(data: &[u8]) -> Option<WeightFrame> {
     if data[0] != PACKET_HEADER || (data[1] != 0xCE && data[1] != 0xCA) {
         return None;
     }
-    // The packet carries a trailing XOR of every byte before it — byte 6 of
-    // a 7-byte frame, byte 9 of a 10-byte frame. Verify it before trusting
-    // the value: a corrupted frame whose type byte still reads as weight
-    // must not inject a spurious spike into stop-at-weight (review #32).
-    if xor_of_body(data) != data[data.len() - 1] {
+    // The v1.2 frame carries a trailing XOR of every byte before it at byte
+    // 9; verify it so a corrupted frame whose type byte still reads as
+    // weight cannot inject a spike into stop-at-weight (review #32).
+    //
+    // The 7-byte frame is NOT checked here: original v1.0/v1.1 firmware does
+    // not compute that checksum correctly, so requiring it dropped every
+    // weight frame from those scales (cohort review 2026-10-25, scales
+    // appendix F-01), and a lone frame cannot say which scale sent it. The
+    // HDS (openscale `buildWeightPacket` / `decentXor`) does send a valid
+    // XOR, so the per-connection [`DecentScale::parse_weight_frame`] checks
+    // it unless the scale says or shows it is v1.0/v1.1 — see there.
+    if timestamped && !has_valid_xor(data) {
         return None;
     }
     // Weight is a big-endian signed 16-bit value in units of 0.1 g, at bytes
@@ -86,7 +108,8 @@ pub fn parse_weight_frame(data: &[u8]) -> Option<WeightFrame> {
 }
 
 /// Decode a weight notification into grams — [`parse_weight_frame`]
-/// without the frame shape.
+/// without the frame shape (and so without the per-connection 7-byte XOR
+/// check [`DecentScale::parse_weight_frame`] adds).
 pub fn parse_weight(data: &[u8]) -> Option<f32> {
     parse_weight_frame(data).map(|frame| frame.weight_g)
 }
@@ -174,7 +197,10 @@ pub const POWER_OFF: [u8; 7] = [0x03, 0x0A, 0x02, 0x00, 0x00, 0x00, 0x0B];
 /// Command: heartbeat write.
 ///
 /// The Decent Scale's spec allows up to 5 s between heartbeats; the legacy
-/// app ships one every 1 s and reaprime every 4 s. Crema uses
+/// app ships one every 1 s (`bluetooth.tcl:1014`). reaprime sends none: its
+/// LCD-on sets byte 5 to `00`, which turns the heartbeat requirement off
+/// (`scale.dart:558-566`; its 4 s timer only runs a watchdog). Crema keeps
+/// de1app's heartbeat-required LCD-on and sends the heartbeat every
 /// [`HEARTBEAT_INTERVAL_MS`] (2 s), comfortably under the spec ceiling and
 /// quieter than the legacy 1 s cadence.
 pub const HEARTBEAT: [u8; 7] = [0x03, 0x0A, 0x03, 0xFF, 0xFF, 0x00, 0x0A];
@@ -193,13 +219,13 @@ pub const HEARTBEAT_INTERVAL_MS: u64 = 2_000;
 /// useful as a connection-info field and for future telemetry. Older
 /// firmware versions silently no-op on commands they don't understand.
 ///
-/// (The legacy app *also* double-sends every command write regardless of
-/// firmware version — the original `bluetooth.tcl:1327-1330` comment
-/// pinned that on a v1.0 bug, but a closer read of every Decent-Scale
-/// proc shows the duplicate is applied uniformly because the scale's
-/// command buffer occasionally drops the next write when the previous
-/// hasn't finished. The double-send therefore happens unconditionally in
-/// [`crate::Scale`] / `de1-app`; it is *not* gated on this enum.)
+/// The version does gate one behaviour: while it is unknown or v1.0 (and
+/// the scale has not identified as an HDS), tare and timer commands are
+/// sent twice — see [`DecentScale::drops_commands`]. de1app double-sends
+/// every Decent tare and timer write (`bluetooth.tcl:1438-1444`, and
+/// :1358-1420 for the timer) because v1.0 firmware "occasionally drops
+/// commands"; reaprime sends a second copy 50 ms later while its profile is
+/// conservative (unknown scale or v1.0 marker, `profile.dart:26-31`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DecentScaleFirmwareVersion {
     /// v1.0 — original firmware; no remote power-off.
@@ -377,8 +403,16 @@ pub struct DecentScale {
     /// one. Diagnostic only — see [`CommandResponse::LcdAck::hds_firmware`].
     hds_firmware: Option<HdsFirmwareVersion>,
     /// Counter byte for the next [`tare`] frame — starts at 0 and wraps,
-    /// like decaid's `_tareCounter`.
+    /// like decaid's `_tareCounter`. The core re-seeds it on every connect
+    /// ([`set_tare_counter`](Self::set_tare_counter)) so it keeps counting
+    /// across reconnects, as de1app's app-lifetime counter does.
     tare_counter: u8,
+    /// Consecutive 7-byte weight frames whose XOR did not match.
+    xor_failures: u8,
+    /// Set after [`XOR_FAILURE_LIMIT`] bad 7-byte frames in a row: the
+    /// scale behaves like v1.0/v1.1 firmware, so the check stays off until
+    /// the next connect builds a fresh state.
+    xor_check_off: bool,
 }
 
 impl DecentScale {
@@ -389,7 +423,41 @@ impl DecentScale {
             firmware_version: None,
             hds_firmware: None,
             tare_counter: 0,
+            xor_failures: 0,
+            xor_check_off: false,
         }
+    }
+
+    /// The counter byte the next [`next_tare`](Self::next_tare) will carry.
+    #[must_use]
+    pub fn tare_counter(&self) -> u8 {
+        self.tare_counter
+    }
+
+    /// Continue the rolling tare counter from `counter` — the core carries
+    /// it across reconnects, because the scale is rebuilt on every connect
+    /// and a counter restarting at 0 could repeat the previous session's
+    /// last counter, which the original scale treats as the same request
+    /// (cohort review 2026-10-25, scales appendix F-14). de1app seeds 253
+    /// and keeps the counter for the life of the app
+    /// (`bluetooth.tcl:1264-1270`).
+    pub fn set_tare_counter(&mut self, counter: u8) {
+        self.tare_counter = counter;
+    }
+
+    /// Whether this scale may silently drop a command, so tare and timer
+    /// writes should go twice: true until the firmware is known to be v1.1
+    /// or later, or the scale has identified as an HDS (reaprime's
+    /// conservative profile, `profile.dart:26-31, 172-177`; de1app
+    /// double-sends unconditionally). The duplicate is the same frame — a
+    /// retry never advances the tare counter.
+    #[must_use]
+    pub fn drops_commands(&self) -> bool {
+        self.hds_firmware.is_none()
+            && matches!(
+                self.firmware_version,
+                None | Some(DecentScaleFirmwareVersion::Unknown | DecentScaleFirmwareVersion::V1_0)
+            )
     }
 
     /// The frame for the next logical tare, advancing the rolling counter.
@@ -404,12 +472,53 @@ impl DecentScale {
     /// Decode a weight notification ([`parse_weight_frame`]) and note the
     /// v1.2 firmware a timestamped frame proves (decaid
     /// `DecentScaleProfile.fromEvidence`: a timestamped frame → `1.2`).
+    ///
+    /// A 7-byte frame must also carry a valid XOR, so a corrupted frame
+    /// whose type byte still reads as weight cannot reach stop-at-weight —
+    /// unless the scale is original v1.0/v1.1 firmware, which does not
+    /// compute that checksum correctly (cohort review 2026-10-25, scales
+    /// appendix F-01; final review 2026-10-28, 06 #10). The firmware is known
+    /// from the `0x0A` reply's marker ([`Self::absorb_command_response`]);
+    /// before that reply, or if the marker is ambiguous, [`XOR_FAILURE_LIMIT`]
+    /// bad frames in a row turn the check off for the connection, as Decenza
+    /// does (issue #630). So an HDS, which sends a valid XOR (openscale
+    /// `buildWeightPacket`), keeps the check; a v1.0/v1.1 scale loses at most
+    /// the first few frames of a connection. reaprime skips the 7-byte check
+    /// outright and de1app never checks; both trade the HDS's protection for
+    /// v1.0/v1.1 compatibility, which the fallback keeps without that trade.
     pub fn parse_weight_frame(&mut self, data: &[u8]) -> Option<WeightFrame> {
         let frame = parse_weight_frame(data)?;
         if frame.timestamp_ms.is_some() {
             self.firmware_version = Some(DecentScaleFirmwareVersion::V1_2);
+        } else if self.checks_short_frame_xor() {
+            if has_valid_xor(data) {
+                self.xor_failures = 0;
+            } else {
+                self.xor_failures = self.xor_failures.saturating_add(1);
+                if self.xor_failures < XOR_FAILURE_LIMIT {
+                    return None;
+                }
+                // Too many in a row for line noise: this scale does not
+                // compute the XOR. Keep this frame and stop checking.
+                self.xor_check_off = true;
+            }
         }
         Some(frame)
+    }
+
+    /// Whether a 7-byte weight frame's XOR is checked: not for a scale whose
+    /// `0x0A` marker says v1.0/v1.1, and not once [`XOR_FAILURE_LIMIT`] bad
+    /// frames in a row showed it does not compute the XOR. The v1.1 marker
+    /// `0x02` is also what an HDS with major version 2 sends, so such an HDS
+    /// goes unchecked too; current HDS firmware (major 3) reads as v1.2 and
+    /// is checked.
+    #[must_use]
+    pub fn checks_short_frame_xor(&self) -> bool {
+        !self.xor_check_off
+            && !matches!(
+                self.firmware_version,
+                Some(DecentScaleFirmwareVersion::V1_0 | DecentScaleFirmwareVersion::V1_1)
+            )
     }
 
     /// Absorb a `0x0A` reply (see [`parse_command_response`]): record its
@@ -471,8 +580,129 @@ mod tests {
             parse_weight(&[0x03, 0xCE, 0x00, 0xC8, 0, 0, 0x05]),
             Some(20.0)
         );
-        // A corrupted frame with a stale checksum is rejected, not decoded.
-        assert_eq!(parse_weight(&[0x03, 0xCE, 0x00, 0xC8, 0, 0, 0x00]), None);
+    }
+
+    /// Cohort review 2026-10-25, scales appendix F-01: original v1.0/v1.1
+    /// firmware does not compute the 7-byte frame's XOR correctly, so the old
+    /// strict check dropped every weight frame from those scales. A 7-byte
+    /// frame with a wrong XOR decodes through the stateless decoder;
+    /// [`DecentScale::parse_weight_frame`] applies the per-connection check
+    /// (`an_hds_frame_with_a_bad_xor_is_dropped`). The 10-byte v1.2 frame
+    /// keeps its check (`rejects_a_corrupt_v12_frame`).
+    #[test]
+    fn a_seven_byte_frame_with_a_bad_xor_still_decodes() {
+        assert_eq!(
+            parse_weight(&[0x03, 0xCE, 0x00, 0xC8, 0, 0, 0x00]),
+            Some(20.0)
+        );
+        assert_eq!(
+            parse_weight(&[0x03, 0xCA, 0xFF, 0x38, 0, 0, 0x77]),
+            Some(-20.0)
+        );
+        // An HDS frame as openscale builds it (`buildWeightPacket`: model
+        // byte 0x03, `decentXor`) still decodes too.
+        let mut hds = [0x03, 0xCE, 0x01, 0x2C, 0x00, 0x00, 0x00];
+        hds[6] = 0x03 ^ hds[1..6].iter().fold(0, |a, b| a ^ b);
+        assert_eq!(parse_weight(&hds), Some(30.0));
+    }
+
+    /// A 7-byte weight frame with a valid XOR, as openscale's
+    /// `buildWeightPacket` sends it (model byte 0x03, `decentXor`).
+    fn hds_frame(deci_grams: i16) -> [u8; 7] {
+        let [hi, lo] = deci_grams.to_be_bytes();
+        let mut frame = [0x03, 0xCE, hi, lo, 0x00, 0x00, 0x00];
+        frame[6] = 0x03 ^ frame[1..6].iter().fold(0, |a, b| a ^ b);
+        frame
+    }
+
+    /// An `0x0A` reply whose byte 5 is `marker`.
+    fn lcd_ack(marker: u8) -> CommandResponse {
+        parse_command_response(&[0x03, 0x0A, 0x01, 0x01, 0x50, marker, 0x1E]).unwrap()
+    }
+
+    /// Final cohort review 2026-10-28, 06 #10: round 1 dropped the 7-byte
+    /// XOR check for every Decent scale, so a corrupted weight byte from an
+    /// HDS — which sends a valid XOR — reached stop-at-weight. A scale that
+    /// is not v1.0/v1.1 keeps the check.
+    #[test]
+    fn an_hds_frame_with_a_bad_xor_is_dropped() {
+        let mut hds = DecentScale::new();
+        // HDS 3.1.14: byte 5 `0x03` (also the v1.2 marker), byte 6 `0x1E`.
+        hds.absorb_command_response(lcd_ack(0x03));
+        assert_eq!(
+            hds.parse_weight_frame(&hds_frame(180)).map(|f| f.weight_g),
+            Some(18.0)
+        );
+        let mut flipped = hds_frame(180);
+        flipped[2] ^= 0x01; // 18.0 g → 43.6 g
+        assert_eq!(hds.parse_weight_frame(&flipped), None);
+        // Before any 0x0A reply the check is on too.
+        let mut fresh = DecentScale::new();
+        assert_eq!(fresh.parse_weight_frame(&flipped), None);
+        assert_eq!(
+            fresh
+                .parse_weight_frame(&hds_frame(180))
+                .map(|f| f.weight_g),
+            Some(18.0)
+        );
+        assert!(fresh.checks_short_frame_xor());
+    }
+
+    /// The F-01 frames: a scale whose marker says v1.0 (`0xFE`) or v1.1
+    /// (`0x02`) is not XOR-checked at all.
+    #[test]
+    fn v10_and_v11_frames_skip_the_xor_check() {
+        for marker in [0xFE, 0x02] {
+            let mut scale = DecentScale::new();
+            scale.absorb_command_response(lcd_ack(marker));
+            assert!(!scale.checks_short_frame_xor(), "marker {marker:#x}");
+            assert_eq!(
+                scale
+                    .parse_weight_frame(&[0x03, 0xCE, 0x00, 0xC8, 0, 0, 0x00])
+                    .map(|f| f.weight_g),
+                Some(20.0),
+                "marker {marker:#x}"
+            );
+        }
+    }
+
+    /// A v1.0/v1.1 scale whose marker has not arrived yet (or never does)
+    /// loses only the first few frames: after [`XOR_FAILURE_LIMIT`] bad
+    /// XORs in a row the check is off for the connection (Decenza #630).
+    #[test]
+    fn an_unknown_scale_stops_checking_after_repeated_bad_xors() {
+        let bad = [0x03, 0xCE, 0x00, 0xC8, 0, 0, 0x00];
+        let mut scale = DecentScale::new();
+        for i in 1..XOR_FAILURE_LIMIT {
+            assert_eq!(scale.parse_weight_frame(&bad), None, "bad frame {i}");
+        }
+        assert_eq!(
+            scale.parse_weight_frame(&bad).map(|f| f.weight_g),
+            Some(20.0)
+        );
+        assert!(!scale.checks_short_frame_xor());
+        assert_eq!(
+            scale.parse_weight_frame(&bad).map(|f| f.weight_g),
+            Some(20.0)
+        );
+        // A fresh connection starts checking again.
+        assert!(DecentScale::new().checks_short_frame_xor());
+    }
+
+    /// Isolated corruption on a scale that sends valid XORs never adds up
+    /// to the limit: each valid frame resets the count.
+    #[test]
+    fn a_valid_xor_resets_the_failure_count() {
+        let mut scale = DecentScale::new();
+        let mut bad = hds_frame(180);
+        bad[6] ^= 0xFF;
+        for _ in 0..3 {
+            for _ in 1..XOR_FAILURE_LIMIT {
+                assert_eq!(scale.parse_weight_frame(&bad), None);
+            }
+            assert!(scale.parse_weight_frame(&hds_frame(181)).is_some());
+        }
+        assert!(scale.checks_short_frame_xor());
     }
 
     #[test]

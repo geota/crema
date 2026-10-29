@@ -25,6 +25,11 @@ const WRITE_KEY_READ: u32 = 1;
 /// `REPLY_VALUE_KEY`).
 pub const REPLY_VALUE_KEY: u32 = 0;
 
+/// The `CalTarget` byte of the DE1's error reply to a bad calibration
+/// request (pyDE1 `CalTargets.CalError = 255`, "return value indicating bad
+/// request"; `Calibration.is_error_response`).
+pub const CAL_ERROR_TARGET: u8 = 255;
+
 /// Which sensor a calibration applies to.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -174,6 +179,14 @@ impl Calibration {
         packet
     }
 
+    /// Whether `data` is the DE1's calibration error reply: target byte
+    /// [`CAL_ERROR_TARGET`] (pyDE1 `is_error_response`). Such a packet is a
+    /// refusal, not a value, and [`decode`](Self::decode) rejects it.
+    #[must_use]
+    pub fn is_error_reply(data: &[u8]) -> bool {
+        data.get(5) == Some(&CAL_ERROR_TARGET)
+    }
+
     /// Decode a calibration packet, dropping its `WriteKey`. Trailing bytes
     /// are ignored. Use [`decode_reply`](Self::decode_reply) for a packet
     /// received from the DE1 — the key is what says whether it carries a
@@ -316,5 +329,15 @@ mod tests {
             Calibration::decode(&packet),
             Err(ProtocolError::UnknownCalTarget(9)),
         );
+    }
+
+    #[test]
+    fn target_255_is_the_error_reply() {
+        let mut reply = Calibration::write(CalTarget::Pressure, 9.0, 9.1).encode();
+        assert!(!Calibration::is_error_reply(&reply));
+        reply[5] = 255;
+        assert!(Calibration::is_error_reply(&reply));
+        assert!(Calibration::decode(&reply).is_err(), "not a value");
+        assert!(!Calibration::is_error_reply(&[0, 0, 0]));
     }
 }

@@ -20,11 +20,13 @@
  * public *Android* OAuth client, also secret-less) — this module is web-only.
  */
 
+import { GIS_CLIENT_SCRIPT } from '#lib/security/csp.js';
+
 /** Per-file Drive access — the app sees only the backups it creates. */
 export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
-/** The GIS client library. */
-const GIS_SRC = 'https://accounts.google.com/gsi/client';
+/** The GIS client library — the one script URL the CSP allows by exact path. */
+const GIS_SRC = GIS_CLIENT_SCRIPT;
 
 /** A short-lived Drive access token (the GIS token model issues no refresh token). */
 export interface DriveToken {

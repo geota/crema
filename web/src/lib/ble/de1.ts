@@ -27,17 +27,25 @@ import type { CremaCore, NotificationSource } from '#lib/core/index.js';
 import { WriteTarget } from '#lib/core/crema-core.js';
 import { de1WriteTargetUuid as wasmDe1WriteTargetUuid } from '#lib/wasm/de1_wasm.js';
 import { describeError } from '#lib/utils/error.js';
+import { isCoreStopped } from '#lib/core/stopped-guard.js';
 import type { AppRuntime } from '#lib/effect/runtime.js';
 import { Effect } from 'effect';
-import { de1ConnectProgram, de1SeedProgram } from '#lib/services/de1-orchestrator.js';
+import {
+	de1ConnectProgram,
+	de1MachineInfoProgram,
+	de1SeedProgram,
+	STATE_SEED_STEP
+} from '#lib/services/de1-orchestrator.js';
+import { De1Liveness } from './de1-liveness';
 import { HOLLOW_LINK_STATUS, stuckLinkHint } from './stuck-link';
 import type { BleConnectionState } from './connection-state';
 import { De1Uuids } from './de1-uuids';
 import {
+	advertisingStatus,
 	BleDevice,
+	droppedNotificationsStatus,
 	isChooserCancelled,
 	requestDevice,
-	shortUuid,
 	type ConnState,
 	type KickResult
 } from './transport';
@@ -153,6 +161,20 @@ export class De1Manager {
 
 	/** The newest arrival stamp, carried into the next throttled publish. */
 	private pendingNotificationStamp = 0;
+
+	/** Arrival stamp of the last notification from the current DE1 (liveness). */
+	private lastInboundAtMs = 0;
+
+	/** The mid-session dead-link check while the link is ready (`de1-liveness`). */
+	private liveness: De1Liveness | null = null;
+	/**
+	 * This device's identity reads (FirmwareVersion + the MMR sweep) have not
+	 * run over a healthy link yet: the first connect handed off to the
+	 * reconnect loop before finishing (hollow), or the link dropped as the
+	 * program ended. The first healthy re-seed runs them, then clears this
+	 * (cohort review 2026-10-28, #3 P1).
+	 */
+	private identityPending = false;
 
 	/**
 	 * While a firmware flash holds the link, every write except the flash's
@@ -284,6 +306,7 @@ export class De1Manager {
 		// A terminal disconnect of the current device.
 		device.onDisconnected(() => {
 			if (this.device !== device) return;
+			this.stopLiveness();
 			this.notifyLinkLost();
 			for (const l of this.linkListeners) l.lost();
 			this.callbacks.onState('disconnected');
@@ -291,6 +314,7 @@ export class De1Manager {
 		});
 		device.onReconnectAttempt((attempt) => {
 			if (this.device !== device) return;
+			this.stopLiveness();
 			// The link is gone; the core keeps the session for a resume but
 			// stops the scale's timer if a shot had it running (once per
 			// outage — the core latches it).
@@ -309,18 +333,17 @@ export class De1Manager {
 		device.onAdvertisement?.((rssi) => {
 			if (this.device !== device) return;
 			this.patchDiagnostics({ rssi });
-			this.callbacks.onStatus(
-				`DE1 is advertising${rssi === null ? '' : ` (${rssi} dBm)`} — reconnecting`
-			);
+			this.callbacks.onStatus(advertisingStatus('DE1', rssi));
 		});
 		device.onNotificationOverflow?.((characteristic, evicted) => {
 			if (this.device !== device) return;
-			this.callbacks.onStatus(
-				`DE1: the browser dropped ${evicted} notification${evicted === 1 ? '' : 's'} (${shortUuid(characteristic)})`
-			);
+			this.callbacks.onStatus(droppedNotificationsStatus('DE1', characteristic, evicted));
 		});
 		device.onReconnected(() => {
 			if (this.device !== device) return;
+			// Hold the reconnect loop synchronously, before anything can drop
+			// the link again: the re-seed below judges this link first.
+			device.holdReconnect?.();
 			void this.reseedAfterReconnect(device);
 		});
 		// One sink for all characteristics — preserves arrival order + tallies
@@ -341,6 +364,7 @@ export class De1Manager {
 			// shot) just for an advisory counter, doubling reactive churn.
 			this.notificationCounts[source] += 1;
 			this.pendingNotificationStamp = notification.atMs;
+			this.lastInboundAtMs = notification.atMs;
 			const now = performance.now();
 			if (now - this.lastDiagnosticsPublishMs >= DIAGNOSTICS_PUBLISH_INTERVAL_MS) {
 				this.lastDiagnosticsPublishMs = now;
@@ -359,6 +383,10 @@ export class De1Manager {
 				.onNotification(source, notification.data, notification.atMs)
 				.then(this.callbacks.onCoreOutput)
 				.catch((error: unknown) => {
+					// A stopped core refuses every call: the stop is logged once
+					// with its context, so a line per notification would only push
+					// it out of the diagnostics log (V2 P3-2).
+					if (isCoreStopped(error)) return;
 					// A rejection here — a wasm panic or a bad-packet JSON parse
 					// error — would otherwise silently kill the notification
 					// pipeline. Surface it instead.
@@ -382,6 +410,11 @@ export class De1Manager {
 		// The program's reports count only while this is still the current
 		// device (its GATT I/O already refuses once the device is dropped).
 		const current = () => this.device === device;
+		// No reconnect loop while the program runs: a read that times out
+		// drops the link (transport `bounded`), and a loop started then would
+		// race the program. The outcome below decides what happens next.
+		device.holdReconnect?.();
+		this.identityPending = true;
 		const exit = await this.runtime.runPromiseExit(
 			de1ConnectProgram({
 				device,
@@ -408,6 +441,17 @@ export class De1Manager {
 			return;
 		}
 		const outcome = parseConnectExit(exit);
+		if (!outcome.ok && outcome.step === STATE_SEED_STEP && device.releaseReconnect) {
+			// Hollow: GATT, services and subscriptions all came up, the
+			// StateInfo read never answered (edge of range). That is a DE1 we
+			// can't hear yet, not a failed connect — hand the link to the
+			// reconnect loop, as a re-seed does, instead of giving up.
+			this.patchDiagnostics({ gattVerified: false });
+			this.callbacks.onState('reconnecting');
+			this.callbacks.onStatus(HOLLOW_LINK_STATUS);
+			device.releaseReconnect(false);
+			return;
+		}
 		if (!outcome.ok) {
 			// Disconnect before nulling — nulling alone leaves the transport's
 			// auto-reconnect loop running on a half-dead device.
@@ -421,7 +465,17 @@ export class De1Manager {
 			);
 			return;
 		}
+		// The program finished, but a late read or write may have dropped the
+		// link meanwhile: then the reconnect loop takes over (and re-seeds),
+		// and `ready` waits for it.
+		if (device.releaseReconnect && !device.releaseReconnect(true)) {
+			this.callbacks.onState('reconnecting');
+			this.callbacks.onStatus('DE1 link dropped while connecting — reconnecting…');
+			return;
+		}
+		this.identityPending = false;
 		this.callbacks.onState('ready');
+		this.startLiveness(device);
 	}
 
 	/**
@@ -431,28 +485,55 @@ export class De1Manager {
 	 * the core emits. Unrecognised / unmapped targets are dropped with a
 	 * status log — the caller is not penalised, but the failure is visible
 	 * in diagnostics so a forgotten UUID mapping does not silently disappear.
+	 *
+	 * Resolves `true` only when the GATT write succeeded. Every skip and
+	 * failure resolves `false` (never throws), so the caller can refuse to
+	 * synthesise a profile header / frame ack for bytes that never reached
+	 * the DE1 (cohort review 02 P0-2).
+	 *
+	 * `guard`, when given, is checked when the write reaches the head of the
+	 * GATT queue; a refusal sends nothing and resolves `false` (the caller's
+	 * guard knows it refused). `settled` hears the write's result inside the
+	 * same queued step, so a failure is recorded before the next queued write
+	 * checks its guard. The profile upload passes its generation rule through
+	 * both (cohort review 2026-10-28, #2 N2).
 	 */
-	async writeCharacteristic(target: WriteTarget, data: Uint8Array): Promise<void> {
+	async writeCharacteristic(
+		target: WriteTarget,
+		data: Uint8Array,
+		guard?: () => boolean,
+		settled?: (written: boolean) => void
+	): Promise<boolean> {
 		if (this.firmwareExclusive) {
 			this.callbacks.onStatus(`DE1 write skipped: firmware update in progress (${target})`);
-			return;
+			return false;
 		}
 		const uuid = uuidForWriteTarget(target);
 		if (uuid === null) {
 			this.callbacks.onStatus(`DE1 write skipped: no UUID for target ${target}`);
-			return;
+			return false;
 		}
 		const device = this.device;
 		if (device === null) {
 			this.callbacks.onStatus(`DE1 write skipped: not connected (${target})`);
-			return;
+			return false;
 		}
 		try {
+			if (guard === undefined) {
+				await device.write(De1Uuids.SERVICE, uuid, data);
+				return true;
+			}
+			if (device.writeIf) {
+				return await device.writeIf(De1Uuids.SERVICE, uuid, data, guard, settled);
+			}
+			if (!guard()) return false;
 			await device.write(De1Uuids.SERVICE, uuid, data);
+			return true;
 		} catch (error) {
 			this.callbacks.onStatus(
 				`DE1 write to ${target} failed: ${describeError(error)}`
 			);
+			return false;
 		}
 	}
 
@@ -509,6 +590,7 @@ export class De1Manager {
 	 * is where a deliberate teardown reports the loss.
 	 */
 	private dropDevice(): void {
+		this.stopLiveness();
 		const device = this.device;
 		if (device === null) return;
 		this.device = null;
@@ -535,8 +617,10 @@ export class De1Manager {
 	 * connect-time seed reads, so the dashboard would come back `ready` over
 	 * whatever state it held before the drop. Re-seed first: `ready` only once
 	 * the DE1 has reported a state on *this* link. A StateInfo read that fails
-	 * twice means the link is hollow (edge of range) — recycle it so the
-	 * transport's reconnect loop tries again, rather than report ready.
+	 * twice means the link is hollow (edge of range) — hand it back to the
+	 * transport's reconnect loop, which resumes its backoff ladder, rather
+	 * than report ready. The caller has already put the link on hold
+	 * (`holdReconnect`), so a timed-out read can't start a second loop.
 	 */
 	private async reseedAfterReconnect(device: De1Transport): Promise<void> {
 		this.callbacks.onState('subscribing');
@@ -556,10 +640,15 @@ export class De1Manager {
 			this.runtime === null
 				? await Effect.runPromiseExit(program)
 				: await this.runtime.runPromiseExit(program);
-		if (!current()) return;
+		if (!current()) {
+			device.releaseReconnect?.(false);
+			return;
+		}
 		if (!parseConnectExit(exit).ok) {
 			this.callbacks.onStatus(HOLLOW_LINK_STATUS);
-			if (device.recycle) {
+			if (device.releaseReconnect) {
+				device.releaseReconnect(false);
+			} else if (device.recycle) {
 				device.recycle();
 			} else {
 				this.dropDevice();
@@ -567,11 +656,75 @@ export class De1Manager {
 			}
 			return;
 		}
+		// The first connect never got to the identity reads over a healthy
+		// link: run them now, before `ready`, so this session learns the model
+		// (frame encoding), serial, firmware build and heater voltage.
+		if (this.identityPending) {
+			this.callbacks.onStatus('Reading machine identity…');
+			const info = de1MachineInfoProgram({
+				core: this.core,
+				onStatus: (line) => {
+					if (current()) this.callbacks.onStatus(line);
+				},
+				onCoreOutput: (output) => {
+					if (current()) this.callbacks.onCoreOutput(output);
+				}
+			});
+			if (this.runtime === null) await Effect.runPromiseExit(info);
+			else await this.runtime.runPromiseExit(info);
+			if (!current()) {
+				device.releaseReconnect?.(false);
+				return;
+			}
+			this.identityPending = false;
+		}
+		// A read or write may have dropped the link after the seed: the loop
+		// that release starts reconnects (and re-seeds) again.
+		if (device.releaseReconnect && !device.releaseReconnect(true)) return;
 		// The firmware flash hears link-up from the app's transition into
 		// `ready` (every connect path, audit r2 M-A), not from here.
 		for (const l of this.linkListeners) l.restored?.();
 		this.callbacks.onState('ready');
 		this.callbacks.onStatus('Reconnected — receiving DE1 notifications');
+		this.startLiveness(device);
+	}
+
+	/**
+	 * Watch the ready link for silence (`de1-liveness`, Android's rule): a
+	 * link quiet for 5 s gets a passive StateInfo probe, and two failed probes
+	 * in a row drop it into the reconnect loop (~10 s from the last notification).
+	 */
+	private startLiveness(device: De1Transport): void {
+		this.stopLiveness();
+		this.lastInboundAtMs = performance.now();
+		const liveness = new De1Liveness({
+			now: () => performance.now(),
+			lastInboundAtMs: () => this.lastInboundAtMs,
+			probe: () => device.readCharacteristic(De1Uuids.SERVICE, De1Uuids.STATE_INFO),
+			paused: () => this.firmwareExclusive || device.connectionState !== 'connected',
+			onProbeFailed: (failures, quietMs) => {
+				if (this.device !== device) return;
+				this.callbacks.onStatus(
+					`DE1 liveness probe failed (${failures}) after ${Math.round(quietMs / 1000)} s quiet`
+				);
+			},
+			onDead: () => {
+				if (this.device !== device) return;
+				this.callbacks.onStatus('DE1 link went quiet — reconnecting…');
+				if (device.recycle) device.recycle();
+				else {
+					this.dropDevice();
+					this.callbacks.onState('failed');
+				}
+			}
+		});
+		this.liveness = liveness;
+		liveness.start();
+	}
+
+	private stopLiveness(): void {
+		this.liveness?.stop();
+		this.liveness = null;
 	}
 
 	/**

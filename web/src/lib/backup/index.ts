@@ -19,7 +19,11 @@
  * (the cross-shell DATA still restores either way).
  */
 
-import { exportBackupJsonl, importBackupJsonl } from '#lib/wasm/de1_wasm.js';
+import {
+	exportBackupJsonl,
+	guardRestoredVisualizerPrefs,
+	importBackupJsonl
+} from '#lib/wasm/de1_wasm.js';
 import { getBeanStore } from '#lib/bean/index.js';
 import { getHistoryStore } from '#lib/history/index.js';
 import {
@@ -36,8 +40,10 @@ import { getCustomMethodStore } from '#lib/brew/custom-methods.svelte.js';
 import { getMaintenanceStore } from '#lib/maintenance/index.js';
 import { visualizerSyncPrefs, applyVisualizerSyncPrefs } from '#lib/visualizer/sync-config.js';
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
-import { strToU8, strFromU8, zipSync, unzipSync } from 'fflate';
+import { strToU8, strFromU8, zipSync } from 'fflate';
+import { assertImportSize, unzipImportSync } from '#lib/utils/import-limits.js';
 import { readJson } from '#lib/utils/storage.js';
+import { isAllowedWebhookUrl } from '#lib/services/webhook-url.js';
 import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
 import type { Bean, Roaster } from '#lib/bean/model.js';
 import type { StoredShot } from '#lib/history/index.js';
@@ -46,6 +52,7 @@ import type {
 	BrewRecipe,
 	CommonSettings,
 	CustomBrewMethod,
+	GuardedVisualizerPrefs,
 	MaintenanceState,
 	VisualizerSyncPrefs
 } from '#lib/core/crema-core.js';
@@ -247,6 +254,129 @@ export interface RestoreSummary {
 	recipes: number;
 	customMethods: number;
 	settingsApplied: boolean;
+	/** Changes the restore did NOT apply because they need the user's OK. */
+	held: HeldRestoreChanges | null;
+}
+
+/**
+ * Settings a backup carries that change where this device's data goes. A
+ * backup can come from someone else, so a restore never applies these on its
+ * own (review 05 P3-1): the caller shows them ({@link describeHeldRestoreChanges})
+ * and applies them only on an explicit OK ({@link applyHeldRestoreChanges}).
+ */
+export interface HeldRestoreChanges {
+	/** The backup's webhook settings, when they differ from this device's. */
+	webhook: Pick<Settings, 'webhookEnabled' | 'webhookUrl' | 'webhookEvents'> | null;
+	/** Visualizer prefs that would share more, with the backup's values. */
+	visualizer: { fields: string[]; incoming: VisualizerSyncPrefs } | null;
+}
+
+/** The webhook settings — never applied by a restore without confirmation. */
+const WEBHOOK_KEYS = ['webhookEnabled', 'webhookUrl', 'webhookEvents'] as const;
+
+/**
+ * A backup's webhook URL in the form it may be offered and stored: the
+ * parsed `href`, `''` for a blank URL, or `null` when it must not be offered
+ * at all (final review 05 N-4b). The WHATWG parser silently drops tabs and
+ * newlines, so a raw string padded with them could read as one host in the
+ * dialog while the parsed host is another; any control or format character
+ * therefore rejects the URL, as does anything {@link isAllowedWebhookUrl}
+ * refuses. Storing the `href` means the value applied is exactly the one shown.
+ */
+export function restorableWebhookUrl(raw: string): string | null {
+	const trimmed = raw.trim();
+	if (trimmed === '') return '';
+	if (/[\p{Cc}\p{Cf}]/u.test(raw)) return null;
+	if (!isAllowedWebhookUrl(trimmed)) return null;
+	return new URL(trimmed).href;
+}
+
+/** Pick the backup's webhook settings when they would change this device's. */
+function heldWebhook(
+	incoming: Record<string, unknown>,
+	current: Settings
+): HeldRestoreChanges['webhook'] {
+	if (!WEBHOOK_KEYS.some((k) => k in incoming)) return null;
+	const incomingUrl =
+		typeof incoming.webhookUrl === 'string' ? restorableWebhookUrl(incoming.webhookUrl) : current.webhookUrl;
+	// A URL that cannot be shown honestly is never offered, nor is the rest of
+	// the backup's webhook block (switching on a webhook it could not name).
+	if (incomingUrl === null) return null;
+	const next = {
+		webhookEnabled:
+			typeof incoming.webhookEnabled === 'boolean' ? incoming.webhookEnabled : current.webhookEnabled,
+		webhookUrl: incomingUrl,
+		webhookEvents:
+			incoming.webhookEvents && typeof incoming.webhookEvents === 'object'
+				? { ...current.webhookEvents, ...(incoming.webhookEvents as Settings['webhookEvents']) }
+				: current.webhookEvents
+	};
+	const unchanged =
+		next.webhookEnabled === current.webhookEnabled &&
+		next.webhookUrl === current.webhookUrl &&
+		JSON.stringify(next.webhookEvents) === JSON.stringify(current.webhookEvents);
+	// Nothing would be sent anywhere new: no need to ask.
+	if (unchanged || (!next.webhookEnabled && !current.webhookEnabled && next.webhookUrl.trim() === '')) {
+		return null;
+	}
+	return next;
+}
+
+const VISUALIZER_FIELD_LABELS: Record<string, (p: VisualizerSyncPrefs) => string> = {
+	privacy: (p) => `make Visualizer uploads ${p.privacy}`,
+	includeNotes: () => 'include your tasting notes in Visualizer uploads',
+	autoUpload: () => 'upload every new shot to Visualizer automatically',
+	includeProfile: () => 'include the profile in Visualizer uploads',
+	autoSync: () => 'sync shots, beans and roasters to Visualizer in the background',
+	shotsDirection: (p) => `upload shots to Visualizer (shot sync: ${p.shotsDirection})`,
+	beansDirection: (p) => `upload your beans to Visualizer (bean sync: ${p.beansDirection})`,
+	roastersDirection: (p) => `upload your roasters to Visualizer (roaster sync: ${p.roastersDirection})`
+};
+
+/** The webhook lines: the parsed host on its own line first, then the full address. */
+function describeWebhook(webhook: NonNullable<HeldRestoreChanges['webhook']>): string {
+	let host: string | null = null;
+	let href = webhook.webhookUrl.trim();
+	try {
+		const url = new URL(href);
+		// `host` is the ASCII (punycode) form, so a lookalike name shows as `xn--…`.
+		host = url.host;
+		href = url.href;
+	} catch {
+		// A blank URL: nothing would be sent.
+	}
+	if (host === null) return '• Clear the webhook URL';
+	return webhook.webhookEnabled
+		? `• Send shot and machine events to a webhook at:\n    ${host}\n    Full address: ${href}`
+		: `• Set the webhook address to ${host} (left switched off)\n    Full address: ${href}`;
+}
+
+/** Plain-language list of what applying `held` would change, for a confirm dialog. */
+export function describeHeldRestoreChanges(held: HeldRestoreChanges): string {
+	const lines: string[] = [];
+	if (held.webhook) lines.push(describeWebhook(held.webhook));
+	if (held.visualizer) {
+		for (const f of held.visualizer.fields) {
+			const label = VISUALIZER_FIELD_LABELS[f];
+			if (label) lines.push(`• ${label(held.visualizer.incoming)}`);
+		}
+	}
+	return lines.join('\n');
+}
+
+/** Apply the changes a restore held back — only after the user confirmed them. */
+export function applyHeldRestoreChanges(held: HeldRestoreChanges): void {
+	if (held.webhook) {
+		const settingsStore = getSettingsStore();
+		settingsStore.replaceAll({ ...settingsStore.current, ...held.webhook });
+	}
+	if (held.visualizer) {
+		const current = visualizerSyncPrefs() as unknown as Record<string, unknown>;
+		const incoming = held.visualizer.incoming as unknown as Record<string, unknown>;
+		const next = { ...current };
+		for (const f of held.visualizer.fields) if (f in incoming) next[f] = incoming[f];
+		applyVisualizerSyncPrefs(next as unknown as VisualizerSyncPrefs);
+	}
 }
 
 /**
@@ -338,6 +468,8 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 	// `_shell:'web'` bundle). A pre-unification line had no `common` key — fall back
 	// to the old flat-apply, still web-tagged.
 	let settingsApplied = false;
+	// The webhook settings are never applied here (see HeldRestoreChanges).
+	let heldWebhookChange: HeldRestoreChanges['webhook'] = null;
 	if (settings) {
 		if (settings.common) {
 			// Assemble the full target Settings, then write once (replaceAll) rather
@@ -349,8 +481,9 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 			) as unknown as Record<string, unknown>;
 			if (settings._shell === 'web') {
 				for (const key of Object.keys(settingsPlatformExtras(settingsStore.current))) {
-					if (key in settings) next[key] = settings[key];
+					if (key in settings && !isWebhookKey(key)) next[key] = settings[key];
 				}
+				heldWebhookChange = heldWebhook(settings, settingsStore.current);
 			}
 			settingsStore.replaceAll(next as unknown as typeof settingsStore.current);
 			settingsApplied = true;
@@ -358,8 +491,9 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 			// Pre-unification flat line — overlay the recognised keys, write once.
 			const next = { ...settingsStore.current } as Record<string, unknown>;
 			for (const key of Object.keys(settingsStore.current)) {
-				if (key in settings) next[key] = settings[key];
+				if (key in settings && !isWebhookKey(key)) next[key] = settings[key];
 			}
+			heldWebhookChange = heldWebhook(settings, settingsStore.current);
 			settingsStore.replaceAll(next as unknown as typeof settingsStore.current);
 			settingsApplied = true;
 		}
@@ -387,11 +521,28 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 	if (maintenance) {
 		getMaintenanceStore().replaceAll(maintenance as unknown as MaintenanceState);
 	}
-	// Visualizer sync prefs — a shared core type, applied verbatim either shell
-	// (no per-shell tag); never the OAuth token (re-authorise after a restore).
+	// Visualizer sync prefs — a shared core type, either shell (no per-shell
+	// tag); never the OAuth token (re-authorise after a restore). Fields that
+	// would share more (privacy, notes, profile, auto-upload, background sync,
+	// a direction that starts pushing) are held for the user's OK
+	// by the core's guard; the rest apply now.
+	let heldVisualizer: HeldRestoreChanges['visualizer'] = null;
 	if (visualizerPrefs) {
-		applyVisualizerSyncPrefs(visualizerPrefs as unknown as VisualizerSyncPrefs);
+		const guarded = JSON.parse(
+			guardRestoredVisualizerPrefs(JSON.stringify(visualizerSyncPrefs()), JSON.stringify(visualizerPrefs))
+		) as GuardedVisualizerPrefs;
+		applyVisualizerSyncPrefs(guarded.apply);
+		if (guarded.held.length > 0) {
+			// The backup's values with any missing field filled from the core
+			// defaults (guarding a blob against itself holds nothing).
+			const incoming = JSON.parse(
+				guardRestoredVisualizerPrefs(JSON.stringify(visualizerPrefs), JSON.stringify(visualizerPrefs))
+			) as GuardedVisualizerPrefs;
+			heldVisualizer = { fields: guarded.held, incoming: incoming.apply };
+		}
 	}
+	const held: HeldRestoreChanges | null =
+		heldWebhookChange || heldVisualizer ? { webhook: heldWebhookChange, visualizer: heldVisualizer } : null;
 
 	return {
 		profiles: addedProfiles,
@@ -400,8 +551,13 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 		shots: addedShots,
 		recipes: recipesAdded,
 		customMethods: methodsAdded,
-		settingsApplied
+		settingsApplied,
+		held
 	};
+}
+
+function isWebhookKey(key: string): boolean {
+	return (WEBHOOK_KEYS as readonly string[]).includes(key);
 }
 
 /** Local-file `.crema.zip` magic: `PK\x03\x04`. */
@@ -427,9 +583,15 @@ export async function restoreBackupData(
 ): Promise<RestoreSummary> {
 	if (typeof data === 'string') return restoreBackup(data, mode);
 	const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+	// Size caps (review 05 P3-2): a crafted file or zip bomb fails with a clear
+	// error instead of exhausting memory. Only the backup members are inflated.
+	assertImportSize(bytes.length, 'The backup');
 	if (!isZip(bytes)) return restoreBackup(strFromU8(bytes), mode);
 
-	const files = unzipSync(bytes);
+	const files = unzipImportSync(
+		bytes,
+		(name) => name === BACKUP_JSONL_MEMBER || name === 'crema.jsonl' || name.startsWith('images/')
+	);
 	const jsonl = files[BACKUP_JSONL_MEMBER] ?? files['crema.jsonl'];
 	if (!jsonl) throw new Error('Not a Crema backup zip (no backup.jsonl inside).');
 	const summary = restoreBackup(strFromU8(jsonl), mode);

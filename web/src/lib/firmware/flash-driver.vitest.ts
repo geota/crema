@@ -129,7 +129,8 @@ function scriptedCore(script: Partial<Record<keyof FlashCore, FlashStep[]>>) {
 		firmwareFlashExit: vi.fn(async () => true),
 		firmwareFlashStatus: vi.fn(next('firmwareFlashStatus')),
 		firmwareFlashRestoreAwaiting: vi.fn(next('firmwareFlashRestoreAwaiting')),
-		firmwareFlashRestoreEraseHold: vi.fn(next('firmwareFlashRestoreEraseHold'))
+		firmwareFlashRestoreEraseHold: vi.fn(next('firmwareFlashRestoreEraseHold')),
+		firmwareFlashRestoreVerifying: vi.fn(next('firmwareFlashRestoreVerifying'))
 	} satisfies FlashCore;
 	return core;
 }
@@ -404,7 +405,9 @@ function realCore(bridge: CremaBridge): FlashCore {
 		firmwareFlashRestoreAwaiting: async (b, u, now) =>
 			p(bridge.firmware_flash_restore_awaiting(b, u, now)),
 		firmwareFlashRestoreEraseHold: async (b, left, now) =>
-			p(bridge.firmware_flash_restore_erase_hold(b, left, now))
+			p(bridge.firmware_flash_restore_erase_hold(b, left, now)),
+		firmwareFlashRestoreVerifying: async (b, left, now) =>
+			p(bridge.firmware_flash_restore_verifying(b, left, now))
 	};
 }
 

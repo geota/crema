@@ -1,8 +1,8 @@
 //! Wire-protocol bounds for DE1 profile fields.
 //!
 //! These are the **hard** limits the firmware will accept — driven by the
-//! DE1's wire-format encodings (10-bit volume, u8 step count, 4-bit
-//! `u4p4` pressure / flow / temperature precision-pairs etc.). Editorial /
+//! DE1's wire-format encodings (10-bit volume, the 20-frame limit, `U8P4`
+//! pressure / flow, `U8P1` temperature, `F8_1_7` frame time). Editorial /
 //! UX-friendly ranges (e.g. "warn above 95 °C brew temp") stay in each
 //! shell; this module is the canonical reject-or-accept truth.
 //!
@@ -11,15 +11,19 @@
 
 // ── Step count ──────────────────────────────────────────────────────────
 
-/// Maximum step count in a profile — the DE1 firmware accepts `0..=32`
-/// frames. Mirrors `profile::MAX_STEPS`.
-pub const MAX_PROFILE_STEPS: u8 = 32;
+/// Maximum step count in a profile: 20, "the maximum number of steps that
+/// the espresso machine can handle" (de1app `vars.tcl` refuses a 21st step;
+/// pyDE1 `_MAX_SHOT_FRAMES = 20`). `profile::MAX_STEPS` and the importer use
+/// this value; both reject a longer profile rather than truncate it.
+pub const MAX_PROFILE_STEPS: u8 = 20;
 
 // ── Volume ──────────────────────────────────────────────────────────────
 
-/// Maximum total volume (ml) the DE1 will dispense in one shot. The
-/// limit is the 10-bit wire field used in `HeaderWrite` (`cuuid_0F`,
-/// `max_total_volume`), so writes above this saturate at 1023.
+/// Maximum total volume (ml) a profile may carry. The limit is the 10-bit
+/// `MaxTotalVolume` field of the profile's tail frame (`FrameWrite`), so
+/// values above this saturate at 1023. Crema zeroes the field on the wire
+/// (no firmware volume stop, like every reference app) and stops by volume
+/// app-side; the value stays on the profile for SAV and export.
 pub const MAX_TOTAL_VOLUME_ML: u16 = 1023;
 
 /// Minimum volume — `0` disables the volume-stop.
@@ -56,7 +60,7 @@ pub const MIN_TEMPERATURE_C: f32 = 0.0;
 
 /// Upper bound for any temperature setpoint (°C). The DE1's heater
 /// hardware tops out around 120 °C (Steam Eco) but the wire format
-/// accepts up to 127.99 (`u8p4` signed); we use the same conservative
+/// accepts up to 127.5 (`U8P1`, half-degree steps); we use the same conservative
 /// ceiling the legacy de1app applies for brew + tank fields. Steam
 /// targets above 100 °C are normal — see [`MAX_STEAM_TEMPERATURE_C`].
 pub const MAX_TEMPERATURE_C: f32 = 100.0;
@@ -67,10 +71,11 @@ pub const MAX_STEAM_TEMPERATURE_C: f32 = 170.0;
 
 // ── Time ────────────────────────────────────────────────────────────────
 
-/// Maximum profile-frame duration (seconds). Wire encoding is `u8p4`
-/// (4-bit fractional), so 25.5 s is the actual ceiling — but a single
-/// 25 s frame is already extreme; most frames are <10 s.
-pub const MAX_FRAME_SECONDS: f32 = 25.5;
+/// Maximum profile-frame duration (seconds). The wire encoding is `F8_1_7`
+/// (tenths below 12.75 s, whole seconds with the high bit set above), whose
+/// ceiling is 127 s (de1app `convert_float_to_F8_1_7`). Pour steps of
+/// 30–60 s are common.
+pub const MAX_FRAME_SECONDS: f32 = 127.0;
 
 /// Minimum profile-frame duration. Zero-second frames are legal (used
 /// for instantaneous setpoint changes) but a real frame is ≥ 0.1 s.
@@ -135,5 +140,16 @@ mod tests {
         assert_eq!(v["max_temperature_c"], MAX_TEMPERATURE_C);
         assert_eq!(v["max_frame_seconds"], MAX_FRAME_SECONDS);
         assert_eq!(v.as_object().map(|o| o.len()), Some(13));
+    }
+
+    #[test]
+    fn the_caps_match_the_reference_apps() {
+        // Cohort review 02 P1-1 / P2-4: de1app and pyDE1 cap a profile at 20
+        // frames; F8_1_7 frame time reaches 127 s.
+        assert_eq!(MAX_PROFILE_STEPS, 20);
+        assert!((MAX_FRAME_SECONDS - 127.0).abs() < f32::EPSILON);
+        // The frame-time ceiling round-trips through the wire codec.
+        let encoded = de1_protocol::fixed_point::f8_1_7_encode(MAX_FRAME_SECONDS);
+        assert_eq!(encoded, 0x80 | 127);
     }
 }

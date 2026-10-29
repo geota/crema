@@ -17,6 +17,7 @@
  * then just applies the returned snapshot.
  */
 
+import { calibrationRefusalMessage } from '#lib/calibration/refusal.js';
 import type {
 	Event,
 	MachineState,
@@ -26,6 +27,7 @@ import type {
 	SubState
 } from '#lib/core/index.js';
 import type { StopReason } from '#lib/core/crema-core.js';
+import { MaintenanceFailure } from '#lib/core/crema-core.js';
 import type { De1State, De1Diagnostics } from '#lib/ble/de1.js';
 import { EMPTY_DE1_DIAGNOSTICS } from '#lib/ble/de1.js';
 import type { ScaleState } from '#lib/ble/scale.js';
@@ -433,7 +435,7 @@ export interface UiSnapshot {
 	 * The maintenance cycle (Descale / Clean / AirPurge) the core is
 	 * following, from `Event::MaintenanceProgress` — held for preheat on old
 	 * firmware, requested, or running (with the descale countdown). `null`
-	 * when none is, including once it finishes or is cancelled. Drives the
+	 * when none is, including once it finishes, is cancelled or fails. Drives the
 	 * progress line + Cancel on Settings → Water.
 	 */
 	readonly maintenance: MaintenanceView | null;
@@ -486,6 +488,64 @@ export interface UiSnapshot {
  */
 /** The payload of a core `MaintenanceProgress` event. */
 export type MaintenanceView = Extract<Event, { type: 'MaintenanceProgress' }>['content'];
+
+/**
+ * Whether a `MaintenanceProgress` phase ends the cycle: it finished, was
+ * cancelled, or (old firmware) never started because the cold-start profile
+ * did not load (`Failed`).
+ */
+export function isMaintenanceTerminal(phase: string): boolean {
+	return phase === 'Finished' || phase === 'Cancelled' || phase === 'Failed';
+}
+
+/**
+ * The user-facing name of a maintenance `state` — Settings → Water's progress
+ * row and the failure notice share it (C3 #11). Android `maintenanceTitle`.
+ */
+export function maintenanceTitle(state: string): string {
+	return state === 'Clean' ? 'Clean cycle' : state === 'AirPurge' ? 'Air purge' : state;
+}
+
+/**
+ * The progress row's subtitle for a cycle the core follows, e.g.
+ * `42% · Step 4 of 5 · 7 min 0 s left` (Decenza's descale readout from the
+ * firmware's fixed 720 s schedule). Android `maintenanceRunText`.
+ */
+export function maintenanceProgressText(view: MaintenanceView): string {
+	// The held request waits for the cold profile's upload AND the end of
+	// preheat, whichever is last (C3 #7).
+	if (view.phase === 'WaitingForPreheat') {
+		return 'Loading the cold-start profile and waiting for heating to stop (older firmware workaround)…';
+	}
+	if (view.phase === 'Requested') return 'Starting…';
+	if (view.step_count > 0 && view.step_index > 0) {
+		const pct = Math.floor(view.progress * 100);
+		const min = Math.floor(view.seconds_remaining / 60);
+		const sec = view.seconds_remaining % 60;
+		const cycle = view.cycle > 1 ? ` · pass ${view.cycle}` : '';
+		return `${pct}% · Step ${view.step_index} of ${view.step_count} · ${min} min ${sec} s left${cycle}`;
+	}
+	return 'Running…';
+}
+
+/**
+ * The notice for a cycle the core never started (core
+ * `MaintenancePhase::Failed`, round-2 verification V3 #4), worded by the
+ * core's `failure`: another profile loaded while the machine was still
+ * heating (the user picked one or started a shot), or the cold-start profile
+ * did not load (round-3 clean check C1 P3-1). Android `maintenanceFailedText`
+ * uses the same copy.
+ */
+export function maintenanceFailedMessage(
+	state: string,
+	failure: MaintenanceFailure | null | undefined
+): string {
+	const title = maintenanceTitle(state);
+	if (failure === MaintenanceFailure.ProfileReplaced) {
+		return `${title} didn't start: another profile was loaded before the cycle could start. Start it again when you're ready.`;
+	}
+	return `${title} didn't start: the cold-start profile older DE1 firmware needs could not be loaded. Try again.`;
+}
 
 export type De1MachineInfo = Partial<Record<MmrRegister, number>>;
 
@@ -800,7 +860,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 		}
 		case 'MaintenanceProgress': {
 			const m = event.content;
-			const terminal = m.phase === 'Finished' || m.phase === 'Cancelled';
+			const terminal = isMaintenanceTerminal(m.phase);
 			// Log the phase changes, not every countdown second.
 			const phaseChanged = snapshot.maintenance?.phase !== m.phase;
 			return {
@@ -1165,9 +1225,12 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				scaleFirmware: c.firmware ?? snapshot.scaleFirmware,
 				scaleSerial: c.serial ?? snapshot.scaleSerial
 			};
-			if (c.anti_mistouch !== undefined) {
-				const serial = c.serial !== undefined ? `, serial=${c.serial}` : '';
-				const fw = c.firmware !== undefined ? `, fw=${c.firmware}` : '';
+			// The core sends an absent field as `null` (its `Option` has no
+			// `skip_serializing_if`), though the generated type says `?:`, so
+			// test both with `!= null` (round-3 clean check C1 P3-2).
+			if (c.anti_mistouch != null) {
+				const serial = c.serial != null ? `, serial=${c.serial}` : '';
+				const fw = c.firmware != null ? `, fw=${c.firmware}` : '';
 				return {
 					...next,
 					eventLog: appendLog(
@@ -1176,7 +1239,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					)
 				};
 			}
-			if (c.active_mode !== undefined) {
+			if (c.active_mode != null) {
 				return {
 					...next,
 					eventLog: appendLog(
@@ -1241,6 +1304,19 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				)
 			};
 		}
+		case 'ProfileReuploadNeeded':
+			// The app's fold starts the re-upload; nothing to show here.
+			return snapshot;
+		case 'CalibrationRefused':
+			// The core's calibration guard, or the DE1's error reply. The
+			// modal shows the sentence; the log keeps the record.
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Calibration refused${event.content.target ? ` (${event.content.target})` : ''}: ${calibrationRefusalMessage(event.content.reason)}`
+				)
+			};
 		case 'FirmwareLockoutHit':
 			// v1 stub never fires this in practice. Logged so the data is
 			// visible when v2 lands, without a dedicated UI surface yet.
@@ -1325,6 +1401,14 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				eventLog: appendLog(
 					snapshot.eventLog,
 					`Uploading profile: ${event.content.title}`
+				)
+			};
+		case 'ProfileUploadWaitingForModel':
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Waiting for the machine model before uploading ${event.content.title}`
 				)
 			};
 		case 'ProfileUploadProgress':

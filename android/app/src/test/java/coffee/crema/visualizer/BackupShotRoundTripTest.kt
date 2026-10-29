@@ -91,6 +91,48 @@ class BackupShotRoundTripTest {
     }
 
     @Test
+    fun `a shot's own grinder model survives a backup round trip and wins over the Settings grinder`() {
+        val s = StoredShot(id = "shot:g", completedAtMs = 1, durationMs = 1, grinderModel = "Niche Zero")
+        val restored = storedShotFromBackupJson(wireShotJson(s, forBackup = true), json)!!
+        assertEquals("Niche Zero", restored.grinderModel)
+        assertEquals("Niche Zero", wireShotJson(s, grinderModel = "EK43")["grinderModel"]!!.jsonPrimitive.content)
+        // A shot captured here carries none: the Settings grinder fills in.
+        val local = StoredShot(id = "shot:h", completedAtMs = 1, durationMs = 1)
+        assertEquals("EK43", wireShotJson(local, grinderModel = "EK43")["grinderModel"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `the edit PATCH carries the barista only after a barista edit, empty once cleared (final review 06 #1)`() {
+        val cleared = StoredShot(id = "shot:p", completedAtMs = 1, durationMs = 1, barista = null)
+        // Any other edit leaves the remote barista alone (null = omitted by the core).
+        assertNull(shotPatchInputs(cleared, includeNotes = true, defaultPrivacy = "unlisted", settingsGrinderModel = null).barista)
+        // A barista edit that cleared it still reaches Visualizer as "".
+        assertEquals(
+            "",
+            shotPatchInputs(cleared, includeNotes = true, defaultPrivacy = "unlisted", settingsGrinderModel = null, sendBarista = true).barista,
+        )
+        val set = cleared.copy(barista = " Ana ", grinderModel = "Niche Zero")
+        val inputs = shotPatchInputs(set, includeNotes = false, defaultPrivacy = "unlisted", settingsGrinderModel = "EK43", sendBarista = true)
+        assertEquals("Ana", inputs.barista)
+        assertEquals("Niche Zero", inputs.grinderModel)
+        assertNull(inputs.notes)
+        assertNull(shotPatchInputs(set, includeNotes = false, defaultPrivacy = "unlisted", settingsGrinderModel = null).barista)
+    }
+
+    @Test
+    fun `a pull fills a blank local barista and never overwrites a set one (final review 06 #1)`() {
+        val blank = StoredShot(id = "shot:q", completedAtMs = 1, durationMs = 1)
+        assertEquals("Ana", baristaToFill(blank, " Ana "))
+        assertEquals("Ana", baristaToFill(blank.copy(barista = "  "), "Ana"))
+        assertNull(baristaToFill(blank.copy(barista = "Bo"), "Ana"))
+        assertNull(baristaToFill(blank, null))
+        assertNull(baristaToFill(blank, "  "))
+        assertNull(baristaToFill(null, "Ana"))
+        // A barista edited here and not yet on Visualizer is never filled (V3 #6).
+        assertNull(baristaToFill(blank, "Ana", editedLocally = true))
+    }
+
+    @Test
     fun `null rating round-trips to unrated and a beanless shot stays beanless`() {
         val s = StoredShot(id = "shot:2", completedAtMs = 1, durationMs = 1, rating = null, bean = null)
         val restored = storedShotFromBackupJson(wireShotJson(s), json)!!

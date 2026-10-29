@@ -23,7 +23,7 @@ import {
 	type CremaCore
 } from '#lib/core/index.js';
 import { MachineState, MmrRegister } from '#lib/core/crema-core.js';
-import type { BrewRecipe } from '#lib/core/crema-core.js';
+import type { BrewRecipe, MaintenanceFailure } from '#lib/core/crema-core.js';
 import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
 import { playBrewCue } from '#lib/brew/cues.js';
 import {
@@ -49,7 +49,10 @@ import { readJson, writeJson } from '#lib/utils/storage.js';
 import { isSerialStolen } from '#lib/decent/stolen-serials.js';
 import { SAW_MODEL_KEY, seedSawModel } from './saw-model-store';
 import { getSettingsStore } from '#lib/settings/index.js';
-import { toast } from '#lib/components/shared/toast.svelte.js';
+import { dismissToast, toast } from '#lib/components/shared/toast.svelte.js';
+import { CoreRecoveryWatch } from '#lib/core/recovery-watch.js';
+import { CoreResetNotice } from '#lib/core/reset-notice.js';
+import { canReloadNow, reloadInputsOf } from '#lib/pwa/update-gate.js';
 import { getMaintenanceStore } from '#lib/maintenance/index.js';
 import { parseCaptureFile } from '#lib/replay/index.js';
 import { describeError } from '#lib/utils/error.js';
@@ -58,7 +61,8 @@ import type { AppRuntime } from '#lib/effect/runtime.js';
 import { runtimePromise } from '#lib/effect/bridge.js';
 import { UploadQueue } from '#lib/services/upload-queue.js';
 import { Webhooks } from '#lib/services/webhooks.js';
-import { ProfileSync } from '#lib/services/profile-sync.js';
+import { ProfileSync, profileWriteAck } from '#lib/services/profile-sync.js';
+import { CalibrationRefusedError, calibrationRefusalIn } from '#lib/calibration/refusal.js';
 import { replayCaptureProgram } from '#lib/services/replay.js';
 import {
 	CremaUiState,
@@ -67,6 +71,8 @@ import {
 	EMPTY_DE1_CALIBRATION,
 	getCremaUiState,
 	defaultRefillPointMm,
+	isMaintenanceTerminal,
+	maintenanceFailedMessage,
 	waterTankMl,
 	waterTankPercent,
 	type UiSnapshot
@@ -74,6 +80,16 @@ import {
 import { getActiveShotStore, type ActiveShotData } from './active-shot.svelte';
 import { ConnectSweepRunner, readBatteryPercent } from './connect-sweep';
 import { IdleSleepRunner } from './idle-sleep';
+import { CoreTicker } from './core-ticker';
+import { stepCapRefusal } from '#lib/profiles/step-cap.js';
+import {
+	ProfileWriteGenerations,
+	UNNAMED_PROFILE_BATCH_LOG,
+	isProfileWriteTarget,
+	startedUploadId,
+	type ProfileWriteBatch,
+	type ProfileWriteOutcome
+} from '#lib/services/profile-write-generations.js';
 import { FirmwareUpdateController } from '#lib/firmware/firmware-update.svelte.js';
 import { readPowerOk } from '#lib/firmware/power.js';
 import { setFirmwareWakeLock } from '#lib/shell/wake-lock.js';
@@ -88,6 +104,7 @@ import {
 import { installIosBridge, isBridgedBluetooth } from '#lib/ble/ios-bridge.js';
 import { watchBluetoothAvailability } from '#lib/ble/availability.js';
 import { connectBlocker } from '#lib/ble/connect-blocker.js';
+import { readImportText } from '#lib/utils/import-limits.js';
 
 /** `navigator.bluetooth` as it is now (the iOS bridge may install it late). */
 function currentBluetooth(): Bluetooth | undefined {
@@ -131,9 +148,10 @@ export class NoActiveProfileError extends Error {
 
 /**
  * Thrown by {@link CremaApp.startShot} when the lazy profile-sync upload
- * fails (or times out) before the Espresso state request goes out. The
- * DE1 still holds whatever profile it had before the failed upload, so
- * the shot is refused — the caller can offer "try again" via a banner.
+ * fails (or times out) before the Espresso state request goes out, or when
+ * the profile has more steps than the DE1 runs. What the DE1 holds after a
+ * failed upload is unknown (the core re-uploads at Idle), so the shot is
+ * refused — the caller can offer "try again" via a banner.
  */
 export class ProfileSyncFailedError extends Error {
 	constructor(message: string) {
@@ -231,7 +249,10 @@ const WATER_WARN_REARM_ML = 55;
  * connected (or a quick reconnect) skip the defensive auto-upload when
  * the machine still has the bytes we last sent.
  */
-const LAST_FINGERPRINT_KEY = 'crema.profile-sync.lastFingerprint.v1';
+// v2 (2026-10-29): uploads now wait for the machine model, so a fingerprint a
+// Bengle cached for a classic-encoded upload (v1, cohort review 2026-10-28
+// #2 N3) must not skip the next upload. The bump re-uploads once per browser.
+const LAST_FINGERPRINT_KEY = 'crema.profile-sync.lastFingerprint.v2';
 
 /**
  * The DE1 top-level states whose group flow counts toward the water-filter /
@@ -269,10 +290,31 @@ export class CremaApp {
 
 	/** One outstanding stop write at a time (issue #15 follow-up). */
 	#stopWriteInFlight = false;
+	/** Which profile writes may still go out and be acked (#2 N2). */
+	readonly #profileWrites = new ProfileWriteGenerations();
+	/** The 1 s core clock while the DE1 link is up or recovering (#2 N1). */
+	private readonly ticker: CoreTicker;
 	private readonly de1: De1Manager;
 	private readonly scale: ScaleManager;
 	/** Reconnect the last DE1 / scale on launch; a user action cancels its wait. */
 	readonly #launch = new LaunchReconnect();
+	/**
+	 * Notices a core reset after a panic (batch 03's bridge recovery) and
+	 * offers a reload: a fresh core has lost the shell's behaviour settings
+	 * (stop on weight, auto-tare, targets) until the app reloads.
+	 */
+	readonly #coreRecovery: CoreRecoveryWatch;
+	/** The engine-reset reload offer; the shell feeds it state changes. */
+	readonly coreResetNotice: CoreResetNotice;
+
+	/**
+	 * Devices the user took over this session with a Connect tap that has not
+	 * reached ready yet (chooser dismissed, a non-DE1 picked, a failed
+	 * connect). Tab-return / Bluetooth-on kicks must not silently reconnect
+	 * the remembered device behind that choice; a connect that reaches ready
+	 * clears it, and the next app launch starts fresh.
+	 */
+	readonly #userTookOver: Record<DeviceKind, boolean> = { de1: false, scale: false };
 
 	/**
 	 * The fiber running an in-progress capture replay, or `null` when none is
@@ -383,6 +425,61 @@ export class CremaApp {
 		 */
 		private readonly runtime: AppRuntime | null = null
 	) {
+		// The Reload goes through the update offer's idle gate (final review
+		// 03 P3-2): never mid-shot, mid-steam, mid-brew or mid-flash.
+		this.coreResetNotice = new CoreResetNotice({
+			canReload: () =>
+				canReloadNow(
+					reloadInputsOf(this.state.current, getGuidedBrewStore().phase, this.firmware?.running ?? false)
+				),
+			show: (apply, closed) => {
+				const id = toast.action(
+					'Crema hit an internal error and restarted its engine. Stop-at-weight and other ' +
+						'shot settings are off until you reload.',
+					'Reload',
+					apply,
+					0,
+					// Assertive (`role="alert"`, 07 P2 #7): stop-at-weight is off.
+					'error',
+					// Closed with ×: a later reset offers it again (V3 #3).
+					{ onDismiss: closed }
+				);
+				return () => dismissToast(id);
+			},
+			// Past the bridge's reset cap every core call fails until a reload
+			// (final cohort review 2026-10-28, 01 P3-1). Nothing works on a
+			// stopped core, so this notice replaces the reset notice and its
+			// Reload is not gated: there is no recording or live control left to
+			// protect (V3 #7). Assertive, like the reset notice (V2 P3-1).
+			showStopped: (reload) => {
+				toast.action(
+					'Crema hit repeated internal errors and stopped its engine. Reload to start it again.',
+					'Reload',
+					reload,
+					0,
+					'error'
+				);
+			},
+			onDeferred: () =>
+				toast.info('The machine is busy — the reload will be offered again once it is idle.', 6000),
+			reload: () => location.reload()
+		});
+		this.#coreRecovery = new CoreRecoveryWatch(core.panicRecoveries?.bind(core), (count) => {
+			this.state.log(`Core reset after an internal error (reset #${count})`);
+			// The fresh core runs no upload and numbers uploads from 1 again:
+			// no old batch may write, ack or report into it (C2 P3-1).
+			this.#profileWrites.supersede();
+			this.coreResetNotice.onReset();
+		});
+		// Logged once with the bridge's own message as context; the per-call
+		// failures that follow are not logged (V2 P3-2), so this line and the
+		// panic before it stay in the diagnostics export.
+		core.onCoreStopped?.((reason) => {
+			this.state.log(
+				`Core stopped after repeated internal errors; reload required${reason ? ` (${reason})` : ''}`
+			);
+			this.coreResetNotice.onCoreStopped();
+		});
 		this.sweep = new ConnectSweepRunner({
 			core,
 			settings: () => getSettingsStore().current,
@@ -393,7 +490,16 @@ export class CremaApp {
 				return (id !== null ? profiles.get(id)?.tankTemperatureC : undefined) ?? 0;
 			},
 			battery: readBatteryPercent,
-			apply: (out) => this.applyCoreOutput(out)
+			apply: (out) => this.applyCoreOutput(out),
+			// The core's clock is the notification clock (performance.now());
+			// a wall-clock stamp here pushed it decades ahead and every
+			// watchdog then compared against the wrong epoch.
+			now: () => performance.now()
+		});
+		this.ticker = new CoreTicker({
+			core,
+			apply: (out) => this.applyCoreOutput(out),
+			now: () => performance.now()
 		});
 		this.idleSleep = new IdleSleepRunner({
 			core,
@@ -459,6 +565,9 @@ export class CremaApp {
 				// The idle-sleep timer learns the link state (a reconnect is not
 				// presence: no poke here — the core pokes on real activity only).
 				this.idleSleep.onDe1State(de1State);
+				// The core's watchdogs (upload acks, machine-model wait, re-upload
+				// repeat, lost scale, steam eco) run on this clock.
+				this.ticker.onDe1State(de1State);
 				// The connect sweep: every machine setting Crema owns a
 				// preference for, re-asserted because the DE1 forgets them
 				// across a power cycle. The list is core-owned
@@ -615,6 +724,7 @@ export class CremaApp {
 	 * after the fold yields the complete series to persist.
 	 */
 	private applyCoreOutput(output: CoreOutput): void {
+		this.#coreRecovery.check();
 		for (const event of output.events) {
 			// Stash the prior error text so we can detect a `null → text`
 			// transition into an `Error*` substate after the fold below.
@@ -776,7 +886,11 @@ export class CremaApp {
 				}
 			}
 			if (event.type === 'MaintenanceProgress' && event.content.cold_workaround) {
-				this.onColdMaintenanceProgress(event.content.phase);
+				this.onColdMaintenanceProgress(
+					event.content.phase,
+					event.content.state,
+					event.content.failure
+				);
 			}
 			if (event.type === 'ProfileUploadCompleted') {
 				// Hand the completion to the `ProfileSync` service (T-21): it
@@ -817,11 +931,31 @@ export class CremaApp {
 				}
 			}
 			if (event.type === 'ProfileUploadFailed') {
-				// The DE1 still runs whatever it had before the failed upload, so
-				// the cached fingerprint is unchanged — `ProfileSync.failed`
+				// What the DE1 holds after a failed upload is unknown: frames
+				// are indexed slot writes with no commit step, so an
+				// interrupted upload can leave the new header's frame count
+				// over a mix of new and old frames (Decenza aa8232e6). Forget
+				// the "already loaded" fingerprint (snapshot + localStorage)
+				// so no later sync skips the upload. `ProfileSync.failed`
 				// resolves the waiter `false` and clears the pending entry so
 				// `syncActiveProfile` surfaces the problem to its caller (T-21).
 				this.runtime?.runSync(ProfileSync.pipe(Effect.flatMap((ps) => ps.failed)));
+				if (this.state.current.activeProfileFingerprint !== null) {
+					this.state.patch({ activeProfileFingerprint: null });
+				}
+				writeJson(LAST_FINGERPRINT_KEY, null);
+			}
+			if (event.type === 'ProfileReuploadNeeded') {
+				// The core saw the machine Idle with an unknown profile after
+				// a failed upload — put the active profile back now, so a
+				// group-head start can't brew the mix (Decenza ReArm). The
+				// request stays outstanding in the core until an upload starts
+				// and is repeated every 5 s, so a link that is not ready yet is
+				// asked again rather than dropped (#6 #8).
+				if (this.state.current.de1State === 'ready' && !(this.firmware?.holdsLink ?? false)) {
+					this.state.log('Profile on the DE1 is unknown after a failed upload — re-uploading.');
+					this.ensureLoadedMatches();
+				}
 			}
 			if (
 				event.type === 'WaterSessionStarted' &&
@@ -881,8 +1015,12 @@ export class CremaApp {
 				this.brewParamsAtShotStart = null;
 			}
 		}
+		// The profile writes of this output form one batch: a header write
+		// supersedes every earlier upload's queued writes (#2 N2).
+		const batch = this.#profileWrites.begin(output.commands, startedUploadId(output.events));
+		if (this.#profileWrites.unnamed(batch)) this.state.log(UNNAMED_PROFILE_BATCH_LOG);
 		for (const command of output.commands) {
-			void this.executeCommand(command);
+			void this.executeCommand(command, batch);
 		}
 	}
 
@@ -1036,7 +1174,10 @@ export class CremaApp {
 		};
 	}
 
-	private async executeCommand(command: Command): Promise<void> {
+	private async executeCommand(
+		command: Command,
+		batch: ProfileWriteBatch | null = null
+	): Promise<void> {
 		switch (command.type) {
 			case 'WriteScale': {
 				const data = new Uint8Array(command.content.data);
@@ -1065,13 +1206,70 @@ export class CremaApp {
 					break;
 				}
 				if (isStopWrite) this.#stopWriteInFlight = true;
+				// A profile write goes out only while its upload is the live one
+				// and none of its earlier writes failed — checked when it reaches
+				// the head of the GATT queue, since every command of an output is
+				// queued at once (#2 N2).
+				const profileBatch = isProfileWriteTarget(command.content.target) ? batch : null;
+				let skipped = false;
+				const guard =
+					profileBatch === null
+						? undefined
+						: () => {
+								skipped = !this.#profileWrites.mayWrite(profileBatch);
+								return !skipped;
+							};
+				// The result is recorded inside the queued step (`settled`), so a
+				// failure stops this batch before its next write checks the guard.
+				let outcome: ProfileWriteOutcome | null = null;
+				const settled =
+					profileBatch === null
+						? undefined
+						: (written: boolean) => {
+								outcome = this.#profileWrites.settle(profileBatch, written);
+							};
+				let delivered = false;
 				try {
 					const data = new Uint8Array(command.content.data);
 					const hex = [...data].map((b) => b.toString(16).padStart(2, '0')).join('');
-					this.state.log(`→ DE1 write ${command.content.target} ${hex}`);
-					await this.de1.writeCharacteristic(command.content.target, data);
+					if (profileBatch === null || this.#profileWrites.mayWrite(profileBatch)) {
+						this.state.log(`→ DE1 write ${command.content.target} ${hex}`);
+					}
+					delivered = await this.de1.writeCharacteristic(
+						command.content.target,
+						data,
+						guard,
+						settled
+					);
 				} finally {
 					if (isStopWrite) this.#stopWriteInFlight = false;
+				}
+				if (profileBatch !== null) {
+					if (skipped) break;
+					// A skip before the queue (no link, firmware lock) never reached
+					// the step: settle it here.
+					outcome ??= this.#profileWrites.settle(profileBatch, delivered);
+					if (outcome === 'failed') {
+						// Stop the rest of this upload and fail it now, so the
+						// re-upload does not wait for the ack watchdog.
+						this.state.log('Profile write failed — stopping this upload');
+						// Named by its upload, so a report that lands after a
+						// newer upload started leaves that one alone (V3 #1);
+						// not sent once superseded (a newer header, or a core
+						// rebuilt after a panic, C2 P3-1).
+						if (
+							profileBatch.uploadId !== null &&
+							this.#profileWrites.isCurrent(profileBatch)
+						) {
+							this.applyCoreOutput(
+								await this.core.profileWriteFailed(performance.now(), profileBatch.uploadId)
+							);
+						}
+						break;
+					}
+					// Superseded between the write and now: its ack must not reach
+					// the newer upload.
+					if (outcome === 'drop' || !this.#profileWrites.mayWrite(profileBatch)) break;
 				}
 				// The DE1 does *not* emit Handle Value Notifications on
 				// FrameWrite (cuuid_10) — confirmed by the 2026-05-21
@@ -1082,15 +1280,20 @@ export class CremaApp {
 				//
 				// To keep the core's per-frame upload state machine the
 				// canonical source of truth without a phantom notification
-				// stream, synthesize a De1FrameAck from the data we just
-				// successfully wrote — byte 0 (FrameToWrite) is all the
-				// core matches on. Profile-header writes are not acked by
-				// the orchestrator, so they're skipped here.
-				if (command.content.target === 'De1ProfileFrame') {
-					const ackOut = await this.core.onNotification(
-						'De1FrameAck',
+				// stream, synthesize a De1HeaderAck / De1FrameAck from the
+				// data we just wrote — but ONLY when the write succeeded.
+				// A failed header or frame write gets no ack, so the core
+				// fails the upload rather than report a half-written
+				// profile as loaded (cohort review 02 P0-2).
+				const ack = profileWriteAck(command.content.target, delivered);
+				// Named by its upload, so the core drops it if a newer upload
+				// started meanwhile (round-2 V1 P3-1).
+				if (ack !== null && profileBatch?.uploadId != null) {
+					const ackOut = await this.core.onProfileWriteAck(
+						ack,
 						new Uint8Array(command.content.data),
-						performance.now()
+						performance.now(),
+						profileBatch.uploadId
 					);
 					this.applyCoreOutput(ackOut);
 				}
@@ -1113,6 +1316,7 @@ export class CremaApp {
 	async connectDe1(): Promise<void> {
 		if (refuseConnect()) return;
 		this.#launch.cancel('de1');
+		this.#userTookOver.de1 = true;
 		this.state.patch({ ...CLEARED_DE1_READOUT });
 		await this.de1.connect();
 	}
@@ -1132,14 +1336,21 @@ export class CremaApp {
 	 * "already loaded" fingerprint at once, and put the active profile back
 	 * when the cycle ends (Decenza re-uploads it on leaving its descale page).
 	 */
-	private onColdMaintenanceProgress(phase: string): void {
+	private onColdMaintenanceProgress(
+		phase: string,
+		state: string,
+		failure: MaintenanceFailure | null | undefined
+	): void {
 		if (this.state.current.activeProfileFingerprint !== null) {
 			writeJson(LAST_FINGERPRINT_KEY, null);
 			this.state.patch({ activeProfileFingerprint: null });
 		}
-		if (phase === 'Finished' || phase === 'Cancelled') {
+		if (isMaintenanceTerminal(phase)) {
 			if (this.state.current.de1State === 'ready') this.ensureLoadedMatches();
 		}
+		// The cold profile never loaded (or was replaced), so the core did not
+		// send the request.
+		if (phase === 'Failed') toast.error(maintenanceFailedMessage(state, failure));
 	}
 
 	/**
@@ -1186,6 +1397,7 @@ export class CremaApp {
 
 	/** A device reached ready: remember it for the next launch. */
 	#rememberConnected(kind: DeviceKind): void {
+		this.#userTookOver[kind] = false;
 		const id = kind === 'de1' ? this.de1.identity() : this.scale.identity();
 		if (id !== null) rememberDevice(kind, id);
 	}
@@ -1200,6 +1412,7 @@ export class CremaApp {
 		await this.#launch.run({
 			bluetooth,
 			isIdle: (kind) => {
+				if (this.#userTookOver[kind]) return false;
 				const s = kind === 'de1' ? this.state.current.de1State : this.state.current.scaleState;
 				return s === 'idle' || s === 'disconnected' || s === 'failed';
 			},
@@ -1272,6 +1485,7 @@ export class CremaApp {
 	async connectScale(): Promise<void> {
 		if (refuseConnect()) return;
 		this.#launch.cancel('scale');
+		this.#userTookOver.scale = true;
 		await this.scale.connect();
 	}
 
@@ -1758,7 +1972,7 @@ export class CremaApp {
 	): Promise<{ profile: import('#lib/core/index.js').Profile | null; error: string | null }> {
 		let content: string;
 		try {
-			content = await file.text();
+			content = await readImportText(file);
 		} catch (e) {
 			return {
 				profile: null,
@@ -1799,7 +2013,7 @@ export class CremaApp {
 	): Promise<{ record: ReturnType<ReturnType<typeof getHistoryStore>['addImported']>; error: string | null }> {
 		let content: string;
 		try {
-			content = await file.text();
+			content = await readImportText(file);
 		} catch (e) {
 			return {
 				record: null,
@@ -1907,7 +2121,8 @@ export class CremaApp {
 		}
 		this.state.log(`Sync on connect: ${profile.name}`);
 		try {
-			await this.syncActiveProfile(profile, {});
+			// Background: a user's start already uploading wins (#2 N2).
+			await this.syncActiveProfile(profile, {}, { background: true });
 		} catch (e) {
 			// `syncActiveProfile` already logs failure detail through
 			// the `ProfileUploadFailed` event fold; swallow the
@@ -1938,7 +2153,8 @@ export class CremaApp {
 	 */
 	async syncActiveProfile(
 		profile: CremaProfile,
-		qc: ProfileFingerprintOverrides
+		qc: ProfileFingerprintOverrides,
+		opts: { background?: boolean } = {}
 	): Promise<boolean> {
 		const desired = profileFingerprint(profile, qc);
 		const alreadyLoaded = this.state.current.activeProfileFingerprint === desired;
@@ -1961,7 +2177,8 @@ export class CremaApp {
 						alreadyLoaded,
 						upload: Effect.promise(() => this.uploadProfile(toCoreProfile(profile))),
 						cancel: Effect.promise(() => this.cancelProfileUpload()),
-						log: (line) => this.state.log(line)
+						log: (line) => this.state.log(line),
+						background: opts.background
 					})
 				)
 			)
@@ -2132,7 +2349,12 @@ export class CremaApp {
 		reported: number,
 		measured: number
 	): Promise<void> {
-		this.applyCoreOutput(await this.core.writeCalibration(sensor, reported, measured));
+		const out = await this.core.writeCalibration(sensor, reported, measured);
+		this.applyCoreOutput(out);
+		// The core's guard (Sleep / Idle only, finite in-band values) refused
+		// it: nothing was written, so say why instead of re-reading.
+		const refusal = calibrationRefusalIn(out);
+		if (refusal !== null) throw new CalibrationRefusedError(refusal);
 		await this.readCalibration(sensor, false);
 	}
 
@@ -2143,7 +2365,10 @@ export class CremaApp {
 	 * brought up to date).
 	 */
 	async resetCalibrationToFactory(sensor: import('#lib/core/index.js').CalTarget): Promise<void> {
-		this.applyCoreOutput(await this.core.resetCalibrationToFactory(sensor));
+		const out = await this.core.resetCalibrationToFactory(sensor);
+		this.applyCoreOutput(out);
+		const refusal = calibrationRefusalIn(out);
+		if (refusal !== null) throw new CalibrationRefusedError(refusal);
 		await this.readCalibration(sensor, false);
 		await this.readCalibration(sensor, true);
 	}
@@ -2300,6 +2525,12 @@ export class CremaApp {
 				() => void this.connectScale()
 			);
 		}
+		// A profile saved before the 20-step limit can't upload: say so, rather
+		// than fail the sync and blame the DE1 (#6 #6).
+		const overLimit = stepCapRefusal(profile.name, profile.segments.length);
+		if (overLimit !== null) {
+			throw new ProfileSyncFailedError(overLimit);
+		}
 		// Lazy profile sync — compare the desired fingerprint against the
 		// cached "what's on the DE1" fingerprint. `syncActiveProfile` is
 		// a no-op when they match (cheap djb2 + one snapshot read).
@@ -2308,7 +2539,7 @@ export class CremaApp {
 			// `ProfileUploadFailed`'s fold already logged the cause; the
 			// dashboard's machine-error / log banner will pick it up.
 			throw new ProfileSyncFailedError(
-				'Profile sync failed — DE1 still holds the previous profile. ' +
+				'The profile did not upload, so the shot was not started. ' +
 					'Try Coffee again, or reload the profile from the Profiles page.'
 			);
 		}

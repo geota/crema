@@ -13,6 +13,7 @@
 
 import { Effect, Exit, Layer } from 'effect';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { BaristaPending } from '#lib/visualizer/barista-pending.js';
 
 // Controllable settings + the wasm signature / v2 export, all hoisted so the
 // mock factories can close over them.
@@ -26,7 +27,8 @@ const h = vi.hoisted(() => ({
 		privacy: 'unlisted'
 	} as Record<string, unknown>,
 	exportJson: JSON.stringify({ profile: { title: 'P' }, metadata: { notes: 'tasty' } }),
-	beanVisualizerId: null as string | null
+	beanVisualizerId: null as string | null,
+	actions: [] as unknown[]
 }));
 
 vi.mock('#lib/settings/index.js', () => ({ getSettingsStore: () => ({ current: h.settings }) }));
@@ -42,11 +44,11 @@ vi.mock('#lib/visualizer/shot-sync-signatures.js', () => ({
 	signatureForShot: () => 'SIG-FIXED',
 	signatureForBean: () => 'b',
 	signatureForRoaster: () => 'r',
-	reconcileShots: () => [],
+	reconcileShots: () => h.actions,
 	storedShotFromWire: () => null
 }));
 
-import { ShotSync, ShotSyncLive } from './shot-sync.ts';
+import { baristaToFill, ShotSync, ShotSyncLive } from './shot-sync.ts';
 import { writeSyncSettings } from '#lib/bean/visualizer-sync.js';
 
 /** Seed the bean-sync premium flag the edit sync reads (`undefined` = never written → null). */
@@ -212,17 +214,30 @@ describe('ShotSync.patchEditedShot — Premium-only fields by account tier', () 
 			...over
 		}) as unknown as StoredShot;
 	const historyOf = (s: StoredShot) => ({ all: [s] }) as unknown as HistoryStore;
-	const patchEdited = (s: StoredShot, layer: Layer.Layer<HttpClient>) =>
-		run(ShotSync.pipe(Effect.flatMap((sync) => sync.patchEditedShot(historyOf(s), s.id))), layer);
+	const patchEdited = (
+		s: StoredShot,
+		layer: Layer.Layer<HttpClient>,
+		opts?: { baristaChanged?: boolean },
+		history: HistoryStore = historyOf(s)
+	) => run(ShotSync.pipe(Effect.flatMap((sync) => sync.patchEditedShot(history, s.id, opts))), layer);
+	const patchBodies = (calls: { method?: string; body?: unknown }[]) =>
+		calls
+			.filter((c) => c.method === 'PATCH')
+			.map((c) => (JSON.parse(c.body as string) as { shot: Record<string, unknown> }).shot);
 	const bean = { name: 'Kenya AA', roasterName: 'Sey' } as unknown as StoredShot['bean'];
 
 	for (const premium of [false, null, undefined]) {
-		it(`a ${premium === false ? 'free' : 'not-yet-probed'} account sends no request for a rating/notes/tags-only edit`, async () => {
+		it(`a ${premium === false ? 'free' : 'not-yet-probed'} account's rating/notes/tags-only edit sends no Premium-only field and no barista`, async () => {
+			// Final review 06 #1: the barista rides only a barista edit, so a
+			// rating edit never wipes a barista set on Visualizer.
 			setPremium(premium);
-			const { layer, calls } = mkHttp(() => ({ ok: false, status: 400 }));
+			const { layer, calls } = mkHttp(() => ({ ok: true, json: {} }));
 			const exit = await patchEdited(edited(), layer);
 			expect(Exit.isSuccess(exit)).toBe(true);
-			expect(calls).toHaveLength(0);
+			for (const body of patchBodies(calls)) {
+				for (const key of PREMIUM_ONLY) expect(body).not.toHaveProperty(key);
+				expect(body).not.toHaveProperty('barista');
+			}
 		});
 
 		it(`a ${premium === false ? 'free' : 'not-yet-probed'} account PATCHes the rest without the Premium-only fields`, async () => {
@@ -236,11 +251,198 @@ describe('ShotSync.patchEditedShot — Premium-only fields by account tier', () 
 		});
 	}
 
+	it('a barista edit sends it: cleared as an empty string, set trimmed', async () => {
+		setPremium(false);
+		const { layer, calls } = mkHttp(() => ({ ok: true, json: {} }));
+		const edit = { baristaChanged: true };
+		await patchEdited(edited({ metadata: { rating: 4, barista: null } } as Partial<StoredShot>), layer, edit);
+		await patchEdited(edited({ metadata: { rating: 4, barista: ' Ana ' } } as Partial<StoredShot>), layer, edit);
+		expect(patchBodies(calls).map((b) => b.barista)).toEqual(['', 'Ana']);
+	});
+
+	it('a rating edit on a shot whose barista lives only on Visualizer does not wipe it (final review 06 #1)', async () => {
+		setPremium(true);
+		const { layer, calls } = mkHttp(() => ({ ok: true, json: {} }));
+		await patchEdited(edited({ metadata: { rating: 5 } } as Partial<StoredShot>), layer);
+		const [body] = patchBodies(calls);
+		expect(body).toMatchObject({ flavor: 15 });
+		expect(body).not.toHaveProperty('barista');
+	});
+
+	it('a barista edit whose PATCH failed rides the next edit, then stops once it landed', async () => {
+		setPremium(true);
+		let fail = true;
+		const { layer, calls } = mkHttp(() => (fail ? { ok: false, status: 500 } : { ok: true, json: {} }));
+		const shot = edited({ metadata: { rating: 4, barista: 'Ana' } } as Partial<StoredShot>);
+		// One layer, so the pending set survives between calls like in the app.
+		const exits = await run(
+			ShotSync.pipe(
+				Effect.flatMap((sync) =>
+					Effect.gen(function* () {
+						const history = historyOf(shot);
+						const first = yield* Effect.exit(sync.patchEditedShot(history, shot.id, { baristaChanged: true }));
+						fail = false;
+						yield* sync.patchEditedShot(history, shot.id); // a later rating edit
+						yield* sync.patchEditedShot(history, shot.id); // and another
+						return first;
+					})
+				)
+			),
+			layer
+		);
+		expect(Exit.isSuccess(exits)).toBe(true);
+		expect(patchBodies(calls).map((b) => b.barista)).toEqual(['Ana', 'Ana', undefined]);
+	});
+
 	it('a premium account still sends private_notes, flavor and tag_list', async () => {
 		setPremium(true);
 		const { layer, calls } = mkHttp(() => ({ ok: true, json: {} }));
 		await patchEdited(edited(), layer);
 		const body = (JSON.parse(patchCall(calls)!.body as string) as { shot: Record<string, unknown> }).shot;
 		expect(body).toMatchObject({ flavor: 12, private_notes: '<p>juicy</p>', tag_list: ['crema'] });
+	});
+});
+
+describe('ShotSync pull fills the barista (final review 06 #1)', () => {
+	const local = (id: string, barista?: string | null): StoredShot =>
+		({ id, visualizerId: null, metadata: { barista }, tags: [] }) as unknown as StoredShot;
+	const remote = (id: string, barista?: string | null) =>
+		({ id, clock: 1, duration_ms: 1, profile_title: null, final_weight_g: null, notes: null, rating: null, updated_at_ms: null, tag_list: [], barista }) as never;
+
+	it('fills a blank local barista from the remote, never overwrites a set one', () => {
+		expect(baristaToFill(local('a'), remote('r', ' Ana '))).toBe('Ana');
+		expect(baristaToFill(local('a', ''), remote('r', 'Ana'))).toBe('Ana');
+		expect(baristaToFill(local('a', 'Bo'), remote('r', 'Ana'))).toBeNull();
+		expect(baristaToFill(local('a'), remote('r', null))).toBeNull();
+		expect(baristaToFill(local('a'), remote('r', '  '))).toBeNull();
+		expect(baristaToFill(undefined, remote('r', 'Ana'))).toBeNull();
+	});
+
+	it('the update and bind reconcile actions fill it on the bound local shot', async () => {
+		const shots = [local('pulled-before'), local('recorded', null), local('named', 'Bo')];
+		const setPerson = vi.fn((id: string, field: string, name: string | null) => {
+			const s = shots.find((x) => x.id === id)!;
+			(s.metadata as Record<string, unknown>)[field] = name;
+		});
+		const history = {
+			get all() {
+				return shots;
+			},
+			setTags: vi.fn(),
+			bindVisualizerId: vi.fn(),
+			backfillTelemetry: vi.fn(),
+			insertPulled: vi.fn(),
+			setPerson
+		} as unknown as HistoryStore;
+		h.actions = [
+			{ kind: 'update', localId: 'pulled-before', remote: remote('r1', 'Ana') },
+			{ kind: 'bind', localId: 'recorded', visualizerId: 'r2', remote: remote('r2', 'Cy') },
+			{ kind: 'update', localId: 'named', remote: remote('r3', 'Ana') }
+		];
+		const { layer } = mkHttp(() => ({ ok: true, json: {} }));
+		// The pending set is read once per pull, not once per shot (C3 #10).
+		const snapshot = vi.spyOn(BaristaPending.prototype, 'snapshot');
+		const has = vi.spyOn(BaristaPending.prototype, 'has');
+		const exit = await run(
+			ShotSync.pipe(Effect.flatMap((sync) => sync.applyShotReconciliation(history, []))),
+			layer
+		);
+		h.actions = [];
+		expect(Exit.isSuccess(exit)).toBe(true);
+		expect(setPerson.mock.calls).toEqual([
+			['pulled-before', 'barista', 'Ana'],
+			['recorded', 'barista', 'Cy']
+		]);
+		expect(snapshot).toHaveBeenCalledTimes(1);
+		expect(has).not.toHaveBeenCalled();
+		snapshot.mockRestore();
+		has.mockRestore();
+	});
+
+	it('does not fill a barista the user edited here that has not reached Visualizer (V3 #6)', () => {
+		expect(baristaToFill(local('a'), remote('r', 'Ana'), true)).toBeNull();
+		expect(baristaToFill(local('a', ''), remote('r', 'Ana'), true)).toBeNull();
+	});
+});
+
+describe('ShotSync: an offline barista clear survives the next pull (V3 #6, V2 P3-4)', () => {
+	const remote = (id: string, barista: string) =>
+		({ id, clock: 1, duration_ms: 1, profile_title: null, final_weight_g: null, notes: null, rating: null, updated_at_ms: null, tag_list: [], barista }) as never;
+
+	function cleared() {
+		const shot = {
+			id: 's1',
+			visualizerId: 'viz-1',
+			bean: null,
+			tags: [],
+			grinderModel: null,
+			metadata: { rating: 4, barista: null }
+		} as unknown as StoredShot;
+		const setPerson = vi.fn((_id: string, field: string, name: string | null) => {
+			(shot.metadata as unknown as Record<string, unknown>)[field] = name;
+		});
+		const history = {
+			all: [shot],
+			setTags: vi.fn(),
+			bindVisualizerId: vi.fn(),
+			backfillTelemetry: vi.fn(),
+			insertPulled: vi.fn(),
+			setPerson
+		} as unknown as HistoryStore;
+		return { shot, history, setPerson };
+	}
+	const patchBaristas = (calls: HttpRequest[]) =>
+		calls
+			.filter((c) => c.method === 'PATCH')
+			.map((c) => (JSON.parse(c.body as string) as { shot: Record<string, unknown> }).shot.barista);
+
+	it('a failed clear is not refilled by a pull, in this session or the next, and is sent by the next edit', async () => {
+		setPremium(true);
+		const t = cleared();
+		let fail = true;
+		const { layer, calls } = mkHttp(() => (fail ? { ok: false, status: 503 } : { ok: true, json: {} }));
+		// The clear's PATCH fails (offline).
+		const first = await run(
+			ShotSync.pipe(
+				Effect.flatMap((sync) =>
+					Effect.gen(function* () {
+						const exit = yield* Effect.exit(sync.patchEditedShot(t.history, 's1', { baristaChanged: true }));
+						// A pull in the same session: the remote still has "Ana".
+						h.actions = [{ kind: 'update', localId: 's1', remote: remote('viz-1', 'Ana') }];
+						yield* sync.applyShotReconciliation(t.history, []);
+						return exit;
+					})
+				)
+			),
+			layer
+		);
+		expect(Exit.isSuccess(first) && Exit.isFailure(first.value)).toBe(true);
+		expect(t.setPerson).not.toHaveBeenCalled();
+
+		// A restart (a fresh layer): the mark was persisted, so the pull still
+		// leaves the clear alone, and the next rating edit carries it.
+		fail = false;
+		await run(
+			ShotSync.pipe(
+				Effect.flatMap((sync) =>
+					Effect.gen(function* () {
+						yield* sync.applyShotReconciliation(t.history, []);
+						yield* sync.patchEditedShot(t.history, 's1');
+					})
+				)
+			),
+			layer
+		);
+		expect(t.setPerson).not.toHaveBeenCalled();
+		expect(t.shot.metadata.barista).toBeNull();
+		expect(patchBaristas(calls)).toEqual(['', '']);
+
+		// The clear landed: the mark is gone and the fill rule applies again.
+		await run(
+			ShotSync.pipe(Effect.flatMap((sync) => sync.applyShotReconciliation(t.history, []))),
+			layer
+		);
+		h.actions = [];
+		expect(t.setPerson.mock.calls).toEqual([['s1', 'barista', 'Ana']]);
 	});
 });

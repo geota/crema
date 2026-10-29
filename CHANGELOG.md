@@ -7,29 +7,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
-
-- **The web app now works offline and opens instantly** — the offline app
-  shell (including the wasm core) had been built on every deploy but never
-  switched on: nothing registered the service worker. It is registered now,
-  so a return visit loads from the device even without Wi-Fi. A new release
-  is never applied behind your back: an "updated — Reload" notice appears
-  once the machine is idle (never mid-shot, mid-brew or during a firmware
-  update), and the next launch picks it up regardless.
-
-### Changed
-
-- **The web app shell now runs on SvelteKit 3** — no visible change; routes,
-  deep links, offline caching and the install prompt behave as before. For
-  maintainers: `svelte.config.js` is gone (configuration lives in the
-  `sveltekit()` plugin in `web/vite.config.ts`), imports use `#lib/...` with
-  explicit extensions, and the service worker is built with
-  `@katama-labs/vite-pwa-sveltekit`, a published copy of the pending upstream
-  SvelteKit 3 support for `@vite-pwa/sveltekit` (#172 tracks switching back;
-  a weekly workflow watches npm for the official release).
-
 ### Added
 
+- **Bengle machines receive profiles in their own encoding** — Crema waits for
+  the machine model before uploading, and a stop-at-weight target another app
+  saved in a Bengle is cleared on connect, even when no upload is needed.
+- **The web app notices a DE1 link that has gone silent mid-session** and
+  reconnects it, as Android already did.
+- **A System theme** that follows the device's light or dark setting. Web.
 - **Barista and drinker on each shot** — the History detail has Barista and
   Drinker fields, with the names you've used before offered as you type
   (most recent first). Settings → Brew defaults → Barista fills in the
@@ -48,11 +33,171 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Basic pressure profiles limit flow during the forced rise**, and pressure
+  steps without a flow limit — cleaning and calibration profiles included — are
+  capped at 8 ml/s, matching de1app and Decenza. A profile an earlier version
+  already loaded is sent once more after the update so it picks these up. Web,
+  tablet and phone.
+- **A dead DE1 Bluetooth link is detected in about 10 s** instead of about a
+  minute. Web and Android.
+- **Steam eco mode waits for 10 minutes without any app activity**, as in
+  de1app; touching the app returns steam to its normal temperature.
+- **Larger Quick Controls touch targets, all bean filters visible on tablets,
+  and animations respect the reduced-motion setting.** Web.
+- **Less CPU and battery while the screensaver is up**, and smoother History
+  and Profiles lists. Android.
+- **The web app no longer ships the PWA plugin's unused registration script.**
+- **The web app shell now runs on SvelteKit 3** — no visible change; routes,
+  deep links, offline caching and the install prompt behave as before. For
+  maintainers: `svelte.config.js` is gone (configuration lives in the
+  `sveltekit()` plugin in `web/vite.config.ts`), imports use `#lib/...` with
+  explicit extensions, and the service worker is built with
+  `@katama-labs/vite-pwa-sveltekit`, a published copy of the pending upstream
+  SvelteKit 3 support for `@vite-pwa/sveltekit` (#172 tracks switching back;
+  a weekly workflow watches npm for the official release).
 - **History search finds more** — it now also matches the coffee's name and
   roaster, the grinder, and the barista and drinker. Web, tablet and phone.
 
 ### Fixed
 
+- **The heater voltage is written the way every Decent app writes it** — the
+  mains voltage is now sent as 120 or 230; earlier builds sent 1120 or 1230,
+  which no other DE1 app does. Web, tablet and phone.
+- **An interrupted or stalled profile upload is no longer reported as loaded** —
+  a Bluetooth error part-way through could leave the DE1 holding a mix of two
+  profiles, which the next start or a group-head press brewed. A failed or
+  stalled upload is now treated as failed, and Crema re-uploads your profile
+  once the machine is idle (asking for about half a minute at most when
+  nothing can answer). Switching profiles quickly, or starting a shot while
+  Crema re-uploads, no longer fails the upload or drops the start, and a late
+  report from a replaced upload can no longer fail the new one. Web, tablet and
+  phone.
+- **A step that ends on weight and also has its own pressure or flow exit no
+  longer skips the step after it.** Web, tablet and phone.
+- **Calibration changes are refused unless the machine is idle or asleep**, and
+  implausible values (zero, not a number, out of range for the sensor) are
+  rejected with a reason. Web, tablet and phone.
+- **No more group-head-controller mode write before every shot** — the
+  register is treated as unsafe by other DE1 apps. Steps can run up to 127 s,
+  a profile's tank temperature is sent to the machine (and a profile without
+  one no longer keeps the previous profile's tank target), and a steam timeout
+  of 0 no longer stops steam immediately. Web, tablet and phone.
+- **Profiles longer than the DE1's 20-step limit are flagged** with how many
+  steps to remove instead of failing at Start, and recipes in pulled shots stay
+  readable. A cup-warmer change made right after connecting is applied once the
+  machine is identified, and an unrecognised heater-voltage reading says so
+  instead of showing a wrong voltage. Web, tablet and phone.
+- **On Android, a retried "stop" can no longer land after the next shot has
+  started**, a write that times out no longer cancels the writes queued behind
+  it, and a stop cancels only the write in progress.
+- **Reloading during the firmware update's offline check no longer tells you
+  to power-cycle early.** Web.
+- **Android no longer drops the DE1 link during a quiet stretch of a firmware
+  update.**
+- **The built-in cleaning profiles are no longer saved to history as shots** —
+  forward flush and Weber Spring Clean were typed as espresso, so they were
+  recorded, debited from the bag and uploaded. Tea, pour-over, calibration and
+  manual built-ins now carry their real type too. Web, tablet and phone.
+- **On older DE1 firmware, Descale, Clean and Air purge wait for the cold-start
+  profile to load** before they start; if it cannot load, or you load another
+  profile while the machine is still heating, the cycle does not run and the
+  app says which. Web, tablet and phone.
+- **Original Decent Scales (firmware v1.0/v1.1) show weight again**, so
+  stop-at-weight works with them, while Half Decent Scale frames with a bad
+  checksum are still dropped. Also: Acaia scales that miss the first handshake
+  start streaming without a reconnect; Eureka Precisa and Solo Barista commands
+  use the write type those scales expect; a Decent Scale tare after a reconnect
+  is no longer ignored; Hiroia Jimmy negative weights were 0.1 g off; Difluid
+  timer stop also resets the on-scale timer; Timemore Dot stop-at-weight uses
+  de1app's 0.5 s sensor lag.
+- **Corrupt values no longer break the web app** — importing a shot file with a
+  huge time value, or restoring corrupt flush or warm-up timeouts, could stop
+  machine and scale processing until reload or break every DE1 connect (on
+  Android, the connect-time settings were dropped); a corrupt duration no
+  longer shows a 24-hour shot ending a day later. If the web app's engine ever
+  crashes, it recovers and asks you to reload once the machine is idle,
+  because shot settings such as stop-at-weight are off until you do (closing
+  that notice no longer hides a later one); after repeated crashes it stops the
+  engine, says so in an alert whose Reload works even mid-shot, and logs the
+  stop once instead of an error per Bluetooth notification.
+- **Nightly Android builds no longer crash on conditions that stable builds
+  tolerate**, and `./gradlew assemble` / `build` package the optimized Rust
+  library in release and nightly APKs.
+- **A DE1 at the edge of range no longer fails its first connect outright** — a
+  link that keeps coming up silent now backs off and shows the stuck-link hint,
+  Crema still reads the machine's model, serial, firmware build and heater
+  voltage after a shaky first connection, and Android no longer shows "Ready"
+  before the DE1 has reported its state. Returning to the tab no longer
+  reconnects a device you had just switched away from. Web, tablet and phone.
+- **The update notice's "Reload" waits if a shot has started**, a newer update
+  replaces an older offer, the offer comes back if Reload was tapped while the
+  machine was busy, and the web app can be installed as a PWA again (the
+  manifest link was missing). Pinned notices no longer cover the Coffee or
+  Flush buttons, and their buttons are easier to tap. Web.
+- **Clearing a shot's barista now clears it on Visualizer too** — even when
+  Visualizer was unreachable at the time — and editing a shot in Crema (even its
+  rating) no longer erases a barista stored on Visualizer; shots pulled from
+  Visualizer show their barista. Web, tablet and phone.
+- **Android barista and drinker names save when you stop typing**, not on every
+  keystroke; search finds a shot's own grinder model; untitled shots read
+  "Untitled shot" on every platform. The bean editor opens for bean ids with
+  special characters, and three buttons got their icon spacing back.
+- **A Visualizer outage or a dropped connection no longer signs you out** —
+  only a refused sign-in does. Requests firing at once no longer race each other
+  into a sign-out, a refresh cut short by a timeout no longer loses the rotated
+  token, a request that never answers no longer stalls syncing, and pending
+  Visualizer deletes are kept until you sign in again. Web.
+- **If the web app's engine fails to download, Crema says so** with a Reload
+  button instead of a bare error page. Deleting a bag from an editor opened from
+  a roaster's shelf returns to that shelf.
+- **"Sleep on quit" now puts the DE1 to sleep when you swipe Crema away** (and
+  reopening right after no longer turns it off for the new session), and
+  backing up — including the daily Google Drive backup at launch — no longer
+  freezes the app on a large history. After a firmware update the
+  background-connection notification no longer lingers with its wake lock, and
+  tablet layouts follow the real window size in split screen and on foldables.
+  Android.
+- **The Brew start button is fully visible on 1024x768 tablets** (the DE1
+  tablet's size) and other tablet sizes; short and phone-size screens scroll
+  instead of hiding it, and the Quick Controls sheet works at phone width.
+  Web.
+- **Keyboard, screen-reader and light-theme fixes** — Quick Controls opens as a
+  dialog that Escape closes, with its hidden controls out of the tab order;
+  keyboard actions on bean and roaster cards do what they say instead of
+  opening the drawer; the Profile and Bean pickers return focus when closed;
+  screen readers hear which mode, preset and Settings option is selected; text
+  meets WCAG AA contrast in light and dark themes, switches and text fields
+  have visible edges, and the light theme paints from the first frame; bean
+  editor fields, searches, filters, menus, ratings and charts are announced
+  correctly; reduced-motion users no longer get animated scrolling. Web.
+- **Factory reset erases everything** — on the web it removes shot telemetry,
+  captures, bag photos and sign-ins, revokes Visualizer and Google Drive access,
+  and stops other open Crema tabs from writing data back. Android "Erase all
+  data" deletes every copy of your data, including backup copies, bag photos,
+  recipes, sign-ins, the Visualizer and Decent activity logs and sync settings,
+  and Bluetooth session captures; Android keeps at most 10 captures, none older
+  than 14 days, and disconnecting Google Drive now revokes access at Google.
+- **The privacy policy lists every service Crema contacts**, including the
+  Decent shot upload, Google Fonts and the Google favicon lookup for roaster
+  websites.
+- **Restoring a backup asks before applying a webhook URL, wider Visualizer
+  sharing, or turning on uploads, background sync or profile sharing** (web),
+  showing a webhook's real host, and keeps the device's sharing settings
+  (Android). Very large or malformed backup and import files are refused with a
+  clear message, and bean and roaster links open only when they are web
+  addresses.
+- **Security hardening** — a narrower Content-Security-Policy for Google
+  sign-in, a stricter webhook URL check, no leftover copies of Android sign-in
+  files, no silent unencrypted storage of web sign-ins, and a Visualizer
+  sign-in that cannot be stored encrypted now fails with a clear message
+  instead of showing "Connected".
+- **The web app now works offline and opens instantly** — the offline app
+  shell (including the wasm core) had been built on every deploy but never
+  switched on: nothing registered the service worker. It is registered now,
+  so a return visit loads from the device even without Wi-Fi. A new release
+  is never applied behind your back: an "updated — Reload" notice appears
+  once the machine is idle (never mid-shot, mid-brew or during a firmware
+  update), and the next launch picks it up regardless.
 - **Restored and pulled shots lost their charts (web)** — a backup restore, a
   Visualizer pull and a Beanconqueror import stored each shot's summary row
   but never its telemetry series, so every such shot showed an empty chart
@@ -61,7 +206,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 - **History kept showing a shot the filter had hidden (web)** — with a search
   or a profile / bean / tag filter active, the detail pane stayed on the
   previously picked shot even once it no longer appeared in the list. It now
-  follows the tablet's rule and shows the first matching shot.
+  shows the first matching shot, except that a shot you were sent to (a
+  link, or a brew log you just saved) always opens, even when a remembered
+  filter hides it.
 - **A bag's "Shots" list showed "—" for every non-espresso brew** — the
   bean profile's recent-shots rows only ever read the espresso profile name,
   so a logged V60 or a custom-method brew (an "ORB recipe", say) had no

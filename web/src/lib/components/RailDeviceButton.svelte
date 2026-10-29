@@ -209,7 +209,7 @@
 		text-overflow: ellipsis;
 	}
 	.cside-menu-state {
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		margin-left: auto;
 		padding-left: 8px;
 	}
@@ -234,6 +234,6 @@
 	}
 	.cside-menu-item :global(svg) {
 		font-size: 16px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 </style>

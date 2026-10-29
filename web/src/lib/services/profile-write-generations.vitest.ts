@@ -1,0 +1,113 @@
+/**
+ * The profile-write generation rule (cohort review 2026-10-28, #2 N2 / #6 #3):
+ * a header write opens a generation; a superseded or failed batch's writes are
+ * neither sent nor acked; the live batch's first failure is reported once.
+ */
+
+import { describe, expect, it } from 'vitest';
+import type { Command } from '#lib/core/crema-core.js';
+import { ProfileWriteGenerations, startedUploadId } from './profile-write-generations.ts';
+
+const write = (target: string): Command =>
+	({ type: 'WriteCharacteristic', content: { target, data: [0] } }) as unknown as Command;
+const upload = (): Command[] => [
+	write('De1ProfileHeader'),
+	write('De1ProfileFrame'),
+	write('De1ProfileFrame')
+];
+
+describe('ProfileWriteGenerations', () => {
+	it('opens no batch for an output without profile writes', () => {
+		const g = new ProfileWriteGenerations();
+		expect(g.begin([write('De1RequestedState'), write('De1MmrWrite')])).toBeNull();
+		expect(g.current).toBe(0);
+	});
+
+	it('a new header supersedes the older batch: its writes are skipped and never acked', () => {
+		const g = new ProfileWriteGenerations();
+		const a = g.begin(upload())!;
+		expect(g.mayWrite(a)).toBe(true);
+		expect(g.settle(a, true)).toBe('ack');
+		const b = g.begin(upload())!;
+		expect(b.generation).toBe(a.generation + 1);
+		expect(g.mayWrite(a)).toBe(false);
+		expect(g.settle(a, true), 'a late write of A acks nothing').toBe('drop');
+		expect(g.settle(a, false), 'nor reports a failure').toBe('drop');
+		expect(g.settle(b, true)).toBe('ack');
+	});
+
+	it('the first failure of the live batch is reported once and stops the batch', () => {
+		const g = new ProfileWriteGenerations();
+		const a = g.begin(upload())!;
+		expect(g.settle(a, true)).toBe('ack');
+		expect(g.settle(a, false)).toBe('failed');
+		expect(g.mayWrite(a)).toBe(false);
+		expect(g.settle(a, true)).toBe('drop');
+		expect(g.settle(a, false)).toBe('drop');
+		// The re-upload starts clean.
+		const b = g.begin(upload())!;
+		expect(g.mayWrite(b)).toBe(true);
+	});
+
+	it('frames without a header join the live generation', () => {
+		const g = new ProfileWriteGenerations();
+		const a = g.begin(upload())!;
+		const more = g.begin([write('De1ProfileFrame')])!;
+		expect(more.generation).toBe(a.generation);
+	});
+
+	it("each batch carries its upload's number; frames without a header keep the current one", () => {
+		const g = new ProfileWriteGenerations();
+		const a = g.begin(upload(), 7)!;
+		expect(a.uploadId).toBe(7);
+		expect(g.begin([write('De1ProfileFrame')])!.uploadId).toBe(7);
+		const b = g.begin(upload(), 8)!;
+		expect(b.uploadId).toBe(8);
+		expect(a.uploadId, 'the older batch keeps its own number').toBe(7);
+	});
+
+	it('a core rebuilt after a panic supersedes every open batch (C2 P3-1)', () => {
+		// The fresh core numbers uploads from 1 again: batch A (id 1, old core)
+		// must not write, ack or report into the fresh core's upload 1.
+		const g = new ProfileWriteGenerations();
+		const a = g.begin(upload(), 1)!;
+		expect(g.settle(a, true)).toBe('ack');
+		g.supersede();
+		expect(g.mayWrite(a)).toBe(false);
+		expect(g.isCurrent(a)).toBe(false);
+		expect(g.settle(a, true)).toBe('drop');
+		expect(g.settle(a, false)).toBe('drop');
+		// Frames without a header after the rebuild join no old upload.
+		expect(g.begin([write('De1ProfileFrame')])!.uploadId).toBeNull();
+		const b = g.begin(upload(), 1)!;
+		expect(g.mayWrite(b)).toBe(true);
+		expect(g.settle(b, true)).toBe('ack');
+	});
+
+	it('flags a batch with no upload id (C3 #3)', () => {
+		const g = new ProfileWriteGenerations();
+		expect(g.unnamed(null), 'no profile writes, nothing to flag').toBe(false);
+		expect(g.unnamed(g.begin(upload(), 5))).toBe(false);
+		expect(g.unnamed(g.begin([write('De1ProfileFrame')])), 'joins upload 5').toBe(false);
+		expect(g.unnamed(g.begin(upload()))).toBe(true);
+	});
+
+	it('a failed batch stays current until superseded', () => {
+		const g = new ProfileWriteGenerations();
+		const a = g.begin(upload(), 3)!;
+		expect(g.settle(a, false)).toBe('failed');
+		expect(g.mayWrite(a)).toBe(false);
+		expect(g.isCurrent(a), 'its failure may still be reported').toBe(true);
+		g.begin(upload(), 4);
+		expect(g.isCurrent(a)).toBe(false);
+	});
+
+	it('reads the upload number from the output that starts it', () => {
+		const started = {
+			type: 'ProfileUploadStarted',
+			content: { title: 'A', frame_count: 2, extension_frame_count: 0, upload_id: 41 }
+		} as unknown as Parameters<typeof startedUploadId>[0][number];
+		expect(startedUploadId([started])).toBe(41);
+		expect(startedUploadId([])).toBeNull();
+	});
+});

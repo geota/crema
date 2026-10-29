@@ -23,7 +23,13 @@
 	 * skipped. Brews whose preparation isn't ESPRESSO are counted +
 	 * skipped (V60 / AeroPress / etc. — no Crema surface for them).
 	 */
-	import { unzip, strFromU8 } from 'fflate';
+	import { strFromU8 } from 'fflate';
+	import {
+		assertImportSize,
+		readImportBytes,
+		readImportText,
+		unzipImport
+	} from '#lib/utils/import-limits.js';
 	import {
 		importBeanconquerorJson as wasmImportBeanconquerorJson,
 		importCremaJsonl as wasmImportCremaJsonl
@@ -194,11 +200,14 @@
 		// Branch zip vs zip: a Crema bundle holds `crema.jsonl` + an
 		// `images/` folder; BC ships `Beanconqueror.json` + per-chunk
 		// JSONs. Peek inside before committing the parse path.
-		const buf = new Uint8Array(await zip.arrayBuffer());
-		const entries = await new Promise<Record<string, Uint8Array>>(
-			(resolve, reject) =>
-				unzip(buf, (err, data) => (err ? reject(err) : resolve(data)))
-		);
+		let entries: Record<string, Uint8Array>;
+		try {
+			entries = await unzipImport(await readImportBytes(zip), isWantedArchiveEntry);
+		} catch (e) {
+			step = 'error';
+			errorMessage = e instanceof Error ? e.message : 'Could not read the archive.';
+			return;
+		}
 		const cremaJsonlKey = Object.keys(entries).find(
 			(k) => k.toLowerCase().endsWith('crema.jsonl')
 		);
@@ -263,7 +272,7 @@
 		step = 'parsing';
 		errorMessage = '';
 		try {
-			const text = await file.text();
+			const text = await readImportText(file);
 			let planJson: string;
 			try {
 				planJson = wasmImportCremaJsonl(text);
@@ -286,11 +295,7 @@
 		step = 'parsing';
 		errorMessage = '';
 		try {
-			const buf = new Uint8Array(await file.arrayBuffer());
-			const entries = await new Promise<Record<string, Uint8Array>>(
-				(resolve, reject) =>
-					unzip(buf, (err, data) => (err ? reject(err) : resolve(data)))
-			);
+			const entries = await unzipImport(await readImportBytes(file), isWantedArchiveEntry);
 			const mergedJson = mergeBcArchive(entries);
 			if (mergedJson === null) {
 				step = 'error';
@@ -333,8 +338,11 @@
 		errorMessage = '';
 		try {
 			const entries: Record<string, Uint8Array> = {};
+			let total = 0;
 			for (const f of jsonFiles) {
-				entries[f.name] = new Uint8Array(await f.arrayBuffer());
+				total += f.size;
+				assertImportSize(total, 'The selected files together');
+				entries[f.name] = await readImportBytes(f);
 			}
 			let mergedJson = mergeBcArchive(entries);
 			if (mergedJson === null && jsonFiles.length === 1) {
@@ -381,6 +389,15 @@
 	 * into chunk files; the merge here is the inverse — concatenate
 	 * the chunk arrays back onto the main entries.
 	 */
+	/**
+	 * The archive members an import reads: a Crema bundle's JSONL + `images/`,
+	 * or Beanconqueror's JSON files. Nothing else is inflated (review 05 P3-2).
+	 */
+	function isWantedArchiveEntry(name: string): boolean {
+		const lower = name.toLowerCase();
+		return lower.endsWith('.jsonl') || lower.endsWith('.json') || /^images\//i.test(name);
+	}
+
 	function mergeBcArchive(entries: Record<string, Uint8Array>): string | null {
 		// Locate the main file. BC names it `Beanconqueror.json`; tolerate
 		// case variation for archives produced by hand-edited tooling.
@@ -1014,7 +1031,7 @@
 	.bd-close {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		cursor: pointer;
 		padding: 4px;
 	}
@@ -1032,7 +1049,7 @@
 	}
 	.bd-status :global(svg) {
 		font-size: 24px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.bd-status-err :global(svg) {
 		color: var(--danger);
@@ -1091,7 +1108,7 @@
 	.bd-stat-label {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		text-transform: uppercase;
 		letter-spacing: var(--track-allcaps);
 	}

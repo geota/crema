@@ -53,7 +53,9 @@
 		shotCoffee,
 		recentNames,
 		COFFEE_FILTER_PREFIX,
-		selectedShot
+		selectedShot,
+		filterScopeKey,
+		type SelectionPin
 	} from '#lib/history/index.js';
 	import type { StoredShot } from '#lib/history/index.js';
 	import { ShotRow, ShotDetail, CompareOverlay } from '#lib/components/history/index.js';
@@ -297,7 +299,12 @@
 		const beanParam = url.searchParams.get('bean');
 		if (beanParam) filterBean = beanParam;
 		const shotParam = url.searchParams.get('shot');
-		if (shotParam) selectedId = shotParam;
+		if (shotParam) {
+			// An explicit selection: it wins over a filter remembered from the
+			// last visit until the user changes a filter (see selectedShot).
+			selectedId = shotParam;
+			pin = { id: shotParam, scope: filterScope };
+		}
 	});
 	/**
 	 * Pip for the per-row indicator, across every enabled destination: on
@@ -332,7 +339,7 @@
 	 * a no-op for never-uploaded shots; success and failure both land in
 	 * the sync activity log.
 	 */
-	function syncEditToVisualizer(id: string): void {
+	function syncEditToVisualizer(id: string, opts?: { baristaChanged?: boolean }): void {
 		if (!canPushShots) return;
 		const shot = store.all.find((s) => s.id === id);
 		if (!shot?.visualizerId) return;
@@ -340,7 +347,7 @@
 		if (!api) return;
 		const name = shot.profileName ?? 'Shot';
 		void api.shots
-			.patchEdited(store, id)
+			.patchEdited(store, id, opts)
 			.then(() =>
 				appendSyncLog({ direction: 'push', entity: 'shot', id, name, at: Date.now() })
 			)
@@ -569,6 +576,11 @@
 	let range = $state<'30d' | 'all'>('all');
 	/** The selected shot's id. */
 	let selectedId = $state<string | null>(null);
+	/**
+	 * Set when the selection was explicit (a `?shot=` deep link, a just-saved
+	 * brew log) rather than browsed — see {@link selectedShot}.
+	 */
+	let pin = $state<SelectionPin | null>(null);
 
 	// ── Keep this view across round trips (#123) ─────────────────────────
 	// Search, filters, sort and the selected shot come back after leaving for
@@ -922,11 +934,25 @@
 		return arr;
 	});
 
+	/** The filter inputs as one key: an explicit selection holds while it is unchanged. */
+	const filterScope = $derived(
+		filterScopeKey({
+			q,
+			profile: filterProfile,
+			bean: filterBean,
+			method: filterMethod,
+			tags: selectedTags,
+			range
+		})
+	);
 	/**
 	 * The selected shot record — the picked one while the filtered list
-	 * still shows it, else the first filtered shot ({@link selectedShot}).
+	 * still shows it, an explicit pick until a filter changes, else the first
+	 * filtered shot ({@link selectedShot}).
 	 */
-	const selected = $derived(selectedShot(filtered, selectedId));
+	const selected = $derived(
+		selectedShot(filtered, selectedId, { pin, scope: filterScope, lookup: (id) => store.get(id) })
+	);
 
 	// ── Stats (issue 48) ──────────────────────────────────────────────────
 	// Scoped to the FILTERED set (reflects the active filter/range, not all-time).
@@ -979,6 +1005,7 @@
 	/** Select a shot. */
 	function select(id: string): void {
 		selectedId = id;
+		pin = null;
 	}
 
 	// ── Compare state ────────────────────────────────────────────────────
@@ -1046,8 +1073,8 @@
 	<!-- Header -->
 	<div class="hi-head">
 		<div>
-			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Library</div>
-			<div class="t-page-title hi-title">{rowNoun === 'brew' ? 'Brew history' : 'Shot history'}</div>
+			<div class="t-eyebrow" style="color:var(--fg-3)">Library</div>
+			<h1 class="t-page-title hi-title">{rowNoun === 'brew' ? 'Brew history' : 'Shot history'}</h1>
 			<div class="hi-sub">
 				{shots.length}
 				{shots.length === 1 ? rowNoun : `${rowNoun}s`} on this device
@@ -1056,7 +1083,7 @@
 		<div class="hi-head-r">
 			<div class="hi-search">
 				<MagnifyingGlassIcon aria-hidden="true" />
-				<input bind:value={q} placeholder="Search profile, notes…" />
+				<input bind:value={q} aria-label="Search shots" placeholder="Search profile, notes…" />
 			</div>
 			<!-- Log brew — the Brew Log's manual-entry door (issue #10). -->
 			<button
@@ -1269,7 +1296,7 @@
 				</button>
 			{/if}
 			<div class="pp-sort hi-range">
-				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.45)">Range</span>
+				<span class="t-eyebrow" style="color:var(--fg-muted)">Range</span>
 				<button
 					class="pp-sort-opt"
 					class:is-active={range === '30d'}
@@ -1412,7 +1439,7 @@
 							store.setPerson(selected.id, field, name);
 							// Visualizer has a barista field but no drinker;
 							// the Decent record carries both.
-							if (field === 'barista') syncEditToVisualizer(selected.id);
+							if (field === 'barista') syncEditToVisualizer(selected.id, { baristaChanged: true });
 							scheduleDecentReplaceAfterEdit(selected.id);
 						}}
 						{baristaSuggestions}
@@ -1484,6 +1511,7 @@
 		onClose={() => (logBrewOpen = false)}
 		onSaved={(record) => {
 			selectedId = record.id;
+			pin = { id: record.id, scope: filterScope };
 		}}
 	/>
 {/if}
@@ -1516,7 +1544,7 @@
 	.hi-sub {
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-top: 4px;
 	}
 	/* "esp" scope tag on the mixed-view espresso-scoped average tiles. */
@@ -1524,7 +1552,7 @@
 		font-style: normal;
 		font-size: 9px;
 		font-weight: 600;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		margin-left: 5px;
 		letter-spacing: 0.06em;
 		text-transform: lowercase;
@@ -1548,7 +1576,7 @@
 		border-color: rgba(var(--tint-rgb), 0.2);
 	}
 	.hi-search :global(svg) {
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		font-size: 13px;
 	}
 	.hi-search input {
@@ -1563,7 +1591,7 @@
 		padding: 8px 6px;
 	}
 	.hi-search input::placeholder {
-		color: rgba(var(--tint-rgb), 0.35);
+		color: var(--fg-muted);
 	}
 
 	/* The .st-btn family is shared globally — see settings-page.css. */
@@ -1589,7 +1617,7 @@
 		font-weight: 700;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 	.hi-stat-val {
 		display: flex;
@@ -1605,7 +1633,7 @@
 		font-style: normal;
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-left: 1px;
 	}
 
@@ -1634,7 +1662,7 @@
 	.pp-sort-opt {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		cursor: pointer;
@@ -1661,7 +1689,7 @@
 		gap: 4px;
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		cursor: pointer;
@@ -1699,7 +1727,7 @@
 		text-align: center;
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 	}
 	.hi-detail-empty {
 		display: flex;
@@ -1708,7 +1736,7 @@
 		background: var(--bg-surface);
 		border: 1px solid rgba(var(--tint-rgb), 0.05);
 		border-radius: var(--radius-lg, 14px);
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		font-family: var(--font-sans);
 		font-size: 13px;
 		min-height: 200px;
@@ -1723,7 +1751,7 @@
 		border-radius: var(--radius-sm, 6px);
 		background: rgba(var(--copper-rgb), 0.1);
 		border: 1px solid rgba(var(--copper-rgb), 0.22);
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		align-self: flex-start;
@@ -1744,7 +1772,7 @@
 	}
 	.hi-compare-staging-sub {
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	.hi-compare-list {
 		list-style: none;
@@ -1776,7 +1804,7 @@
 	.hi-compare-list-x {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		cursor: pointer;
 		padding: 2px 6px;
 		border-radius: 4px;
@@ -1805,7 +1833,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-size: 30px;
 		margin-bottom: 6px;
 	}
@@ -1818,7 +1846,7 @@
 		font-family: var(--font-sans);
 		font-size: 13px;
 		line-height: 1.55;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		max-width: 420px;
 	}
 

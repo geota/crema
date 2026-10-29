@@ -18,7 +18,7 @@
  * is wired end-to-end.
  */
 
-const DB_NAME = 'crema-bean-images';
+export const DB_NAME = 'crema-bean-images';
 const DB_VERSION = 1;
 const STORE = 'images';
 
@@ -63,7 +63,18 @@ export class BeanImageStore {
 	private dbPromise: Promise<IDBDatabase> | undefined;
 
 	private getDb(): Promise<IDBDatabase> {
-		if (!this.dbPromise) this.dbPromise = openDb();
+		if (!this.dbPromise) {
+			const opening = openDb().then((db) => {
+				// Factory reset deletes this database: close on request so the
+				// delete is not blocked by this tab's cached connection.
+				db.onversionchange = () => {
+					db.close();
+					if (this.dbPromise === opening) this.dbPromise = undefined;
+				};
+				return db;
+			});
+			this.dbPromise = opening;
+		}
 		return this.dbPromise;
 	}
 

@@ -40,11 +40,12 @@ pub use firmware::{
     FW_MAP_REQUEST_LEN, FWMapRequest, VERSION_LEN, Version, VersionBlock, firmware_write_frame,
 };
 pub use mmr::{
-    MMR_PACKET_LEN, MmrReadReply, MmrRegister, has_cup_warmer, is_bengle_model, machine_model_name,
+    MMR_PACKET_LEN, MmrReadReply, MmrRegister, has_cup_warmer, heater_voltage_from_raw,
+    is_bengle_model, machine_model_name,
 };
 pub use profile::{
-    EXTENSION_FRAME_INDEX_OFFSET, ExtensionFrame, FrameFlags, SHOT_FRAME_LEN, SHOT_HEADER_LEN,
-    ShotFrame, ShotHeader, ShotTail, ack_frame_byte,
+    EXTENSION_FRAME_INDEX_OFFSET, ExtensionFrame, FrameEncoding, FrameFlags, SHOT_FRAME_LEN,
+    SHOT_HEADER_LEN, ShotFrame, ShotHeader, ShotTail, ack_frame_byte,
 };
 pub use shot_sample::{SHOT_SAMPLE_LEN, ShotSample};
 pub use state::{

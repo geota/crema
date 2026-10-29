@@ -1,5 +1,15 @@
-import { describe, expect, it } from 'vitest';
-import { createIndexedDbKeyProvider, createSecretBox, isWrapped, type KeyProvider } from './secret-box';
+import { beforeEach, describe, expect, it } from 'vitest';
+import {
+	KEYED_MARKER,
+	SecretBoxUnavailableError,
+	createIndexedDbKeyProvider,
+	createSecretBox,
+	isWrapped,
+	type KeyProvider
+} from './secret-box';
+import { credentialsStoredUnencrypted } from './credential-status';
+
+beforeEach(() => localStorage.clear());
 
 // vitest's jsdom has Web Crypto but no IndexedDB, so the tests drive the box
 // with an in-memory key and separately check the no-key degradation.
@@ -25,11 +35,27 @@ describe('secret-box', () => {
 		expect(await a.unwrap('legacy-plain')).toBe('legacy-plain');
 		expect(await b.unwrap(await a.wrap('secret'))).toBeNull();
 	});
-	it('degrades to plaintext when no key is available', async () => {
+	it('degrades to plaintext only when this origin never had a key', async () => {
 		const box = createSecretBox(noKey);
 		expect(await box.wrap('tok')).toBe('tok');
 		expect(await box.unwrap('tok')).toBe('tok');
 		expect(await box.unwrap('sb1:AAAA:BBBB')).toBeNull();
+		expect(localStorage.getItem(KEYED_MARKER)).toBeNull();
+	});
+	// Review 05 P3-6: no silent plaintext once a key has existed.
+	it('refuses to return plaintext once a key has existed on this origin', async () => {
+		await createSecretBox(withKey(memKey())).wrap('first');
+		expect(localStorage.getItem(KEYED_MARKER)).toBe('1');
+		await expect(createSecretBox(noKey).wrap('tok')).rejects.toBeInstanceOf(SecretBoxUnavailableError);
+	});
+	it('reports stored plaintext sign-ins so Settings can show it', async () => {
+		expect(credentialsStoredUnencrypted()).toBe(false);
+		const box = createSecretBox(withKey(memKey()));
+		localStorage.setItem('crema.decent.v1', JSON.stringify({ token: await box.wrap('t') }));
+		localStorage.setItem('crema.visualizer.tokens.v1', JSON.stringify({ accessToken: await box.wrap('a') }));
+		expect(credentialsStoredUnencrypted()).toBe(false);
+		localStorage.setItem('crema.decent.v1', JSON.stringify({ token: 'plain-token' }));
+		expect(credentialsStoredUnencrypted()).toBe(true);
 	});
 });
 
@@ -168,11 +194,44 @@ describe('createSecretBox key caching', () => {
 			}
 		};
 		const box = createSecretBox(flaky);
-		expect(await box.wrap('t')).toBe('t'); // no key yet → plaintext
-		expect(await box.wrap('t')).toBe('t'); // provider threw → plaintext, not cached
+		expect(await box.wrap('t')).toBe('t'); // no Web Crypto / IndexedDB → plaintext
+		// Provider threw → refused, never plaintext; not cached.
+		await expect(box.wrap('t')).rejects.toBeInstanceOf(SecretBoxUnavailableError);
 		const w = await box.wrap('t');
 		expect(isWrapped(w)).toBe(true);
 		await box.wrap('t');
 		expect(calls).toBe(3); // a real key is cached
+	});
+});
+
+// Final review 05 N-6: a transient failure on the very first sign-in (no key
+// was ever made, so no marker yet) must not store the credential in plaintext.
+describe('first-use key failure', () => {
+	it('throws instead of returning plaintext when the provider fails', async () => {
+		expect(localStorage.getItem(KEYED_MARKER)).toBeNull();
+		const failing: KeyProvider = {
+			getKey: async () => {
+				throw new DOMException('open failed', 'UnknownError');
+			}
+		};
+		await expect(createSecretBox(failing).wrap('tok')).rejects.toBeInstanceOf(SecretBoxUnavailableError);
+		expect(await createSecretBox(failing).unwrap('sb1:AAAA:BBBB')).toBeNull();
+		expect(await createSecretBox(failing).unwrap('legacy-plain')).toBe('legacy-plain');
+	});
+
+	it('the IndexedDB provider rejects when IndexedDB exists but the open fails', async () => {
+		const broken = {
+			open: () => {
+				const req = {} as IDBOpenDBRequest & { error: DOMException };
+				queueMicrotask(() => {
+					Object.defineProperty(req, 'error', { value: new DOMException('busy', 'UnknownError') });
+					req.onerror?.(new Event('error') as never);
+				});
+				return req;
+			}
+		} as unknown as IDBFactory;
+		await expect(createIndexedDbKeyProvider(() => broken).getKey()).rejects.toBeDefined();
+		// No IndexedDB at all is an absence, not a failure.
+		expect(await createIndexedDbKeyProvider(() => undefined).getKey()).toBeNull();
 	});
 });

@@ -5,6 +5,7 @@
 	import ListBulletsIcon from 'phosphor-svelte/lib/ListBulletsIcon';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
+	import { scrollBehavior } from '#lib/a11y/motion.js';
 	/**
 	 * `FavoritesStrip` — the unified pinned-favourites strip at the top of the
 	 * Quick Sheet. Renders **both** pinned profiles and pinned beans as
@@ -153,7 +154,7 @@
 
 	/** Nudge the strip one card-group left (`-1`) or right (`+1`). */
 	function nudge(dir: number): void {
-		scrollEl?.scrollBy({ left: dir * 240, behavior: 'smooth' });
+		scrollEl?.scrollBy({ left: dir * 240, behavior: scrollBehavior() });
 	}
 </script>
 
@@ -261,7 +262,7 @@
 		flex: 0 0 auto;
 		align-self: center;
 		font-size: 14px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		margin-right: 4px;
 	}
 </style>

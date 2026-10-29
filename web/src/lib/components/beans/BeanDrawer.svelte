@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { safeExternalUrl } from '#lib/utils/safe-url.js';
 	import Icon from '#lib/icons/Icon.svelte';
 	import StarRating from '#lib/components/common/StarRating.svelte';
 	import CoffeeIcon from 'phosphor-svelte/lib/CoffeeIcon';
@@ -29,6 +30,7 @@
 	} from '#lib/bean/index.js';
 	import { getHistoryStore, effectiveGrindSetting, yieldOf } from '#lib/history/index.js';
 	import { getProfileStore } from '#lib/profiles/index.js';
+	import { restoreFocus, trapTab } from '#lib/a11y/focus.js';
 	import { shotTitle } from '#lib/brew/methods.js';
 	import BeanImage from './BeanImage.svelte';
 	import BeanPhotoViewer from './BeanPhotoViewer.svelte';
@@ -139,10 +141,24 @@
 	}
 
 	function onKey(e: KeyboardEvent): void {
-		if (e.key === 'Escape') {
+		// A dialog stacked on top (ConfirmDialog) handles its own Escape first.
+		if (e.key === 'Escape' && !e.defaultPrevented) {
 			e.preventDefault();
 			onClose();
 		}
+	}
+
+	/*
+	 * Modal focus handling (cohort review 07 #10): the drawer takes focus when
+	 * it mounts, Tab stays inside it, and closing hands focus back to the
+	 * card that opened it (when that card still exists).
+	 */
+	function modalFocus(node: HTMLElement): () => void {
+		const opener = document.activeElement;
+		node.focus({ preventScroll: true });
+		return () => {
+			restoreFocus(opener);
+		};
 	}
 
 </script>
@@ -156,15 +172,19 @@
 	aria-label="Close detail"
 ></div>
 
-<!-- The drawer uses `<aside>` for landmark semantics but presents as a
-     modal dialog, which Svelte's a11y linter (correctly) flags as a
-     conflict. Drop the role; the scrim + `aria-modal` semantics on the
-     wrapping `<div role="button">` already establish focus management.
-     The dialog name is conveyed by `aria-labelledby` on the inner
-     content. The Escape key is intercepted at the window level via
-     {@link svelte:window} below — no per-element listener needed. -->
+<!-- The drawer is a modal dialog: the scrim covers the page, focus moves in
+     on open and is trapped, Escape (window-level, below) closes it, and focus
+     returns to the opening card. -->
 <svelte:window onkeydown={onKey} />
-<aside class="bn-drawer" aria-labelledby="bn-drawer-name">
+<div
+	{@attach modalFocus}
+	class="bn-drawer"
+	role="dialog"
+	aria-modal="true"
+	aria-labelledby="bn-drawer-name"
+	tabindex="-1"
+	onkeydown={(e) => trapTab(e, e.currentTarget)}
+>
 	<header class="bn-drawer-head">
 		<div class="bn-drawer-roaster">
 			<span class="bn-drawer-roaster-mark" style="--tone: {mt.tone}">{mt.mark}</span>
@@ -499,10 +519,15 @@
 					<div class="bn-row">
 						<div class="bn-row-label">URL</div>
 						<div class="bn-row-val">
-							{#if bean.url}
-								<a class="bn-link" href={bean.url} target="_blank" rel="noopener noreferrer"
-									>{bean.url.replace(/^https?:\/\//, '')}</a
+							{#if bean.url && safeExternalUrl(bean.url)}
+								<a
+									class="bn-link"
+									href={safeExternalUrl(bean.url)}
+									target="_blank"
+									rel="noopener noreferrer">{bean.url.replace(/^https?:\/\//, '')}</a
 								>
+							{:else if bean.url}
+								{bean.url}
 							{:else}
 								—
 							{/if}
@@ -607,7 +632,7 @@
 			{/if}
 		</div>
 	</div>
-</aside>
+</div>
 
 {#if photoOpen}
 	<BeanPhotoViewer
@@ -623,6 +648,12 @@
 		inset: 0;
 		background: rgba(var(--scrim-rgb, 0, 0, 0), 0.4);
 		z-index: 68;
+	}
+	/* The panel takes focus as the dialog; keep its own shadow rather than
+	   the global focus ring around the whole drawer. */
+	.bn-drawer:focus-visible {
+		outline: none;
+		box-shadow: -16px 0 48px rgba(0, 0, 0, 0.18);
 	}
 	.bn-drawer {
 		position: fixed;
@@ -706,7 +737,7 @@
 	.bn-drawer-icon {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		font-size: 14px;
 		padding: 6px;
 		border-radius: var(--radius-sm);
@@ -821,7 +852,7 @@
 	.bn-drawer-origin {
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 	}
 	.bn-drawer-pills {
 		display: flex;
@@ -839,7 +870,7 @@
 		padding: 2px 7px;
 		border-radius: var(--radius-pill);
 		background: rgba(var(--copper-rgb), 0.14);
-		color: var(--copper-300);
+		color: var(--fg-accent);
 		border: 1px solid rgba(var(--copper-rgb), 0.28);
 		letter-spacing: 0.02em;
 	}
@@ -851,13 +882,13 @@
 		padding: 2px 7px;
 		border-radius: var(--radius-pill);
 		background: rgba(var(--tint-rgb), 0.06);
-		color: rgba(var(--tint-rgb), 0.62);
+		color: var(--fg-3);
 		border: 1px solid rgba(var(--tint-rgb), 0.1);
 		letter-spacing: 0.02em;
 	}
 	.bn-tile-pill-tag {
 		background: rgba(var(--copper-rgb), 0.08);
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		border-color: rgba(var(--copper-rgb), 0.22);
 		font-weight: 500;
 	}
@@ -866,10 +897,10 @@
 		gap: 1px;
 		margin-left: 4px;
 		font-size: 11px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.bn-drawer-rating :global(svg) {
-		color: rgba(var(--tint-rgb), 0.2);
+		color: var(--fg-muted);
 	}
 
 	/* Status strip */
@@ -899,7 +930,7 @@
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
 		font-weight: 600;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	.bn-cell-val {
 		font-family: var(--font-mono);
@@ -913,7 +944,7 @@
 	}
 	.bn-cell-val em {
 		font-style: normal;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		font-size: 11px;
 	}
 	.bn-status-dot {
@@ -924,7 +955,7 @@
 	.bn-cell-sub {
 		font-family: var(--font-sans);
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -972,14 +1003,14 @@
 	.bn-group-count {
 		font-family: var(--font-mono);
 		font-size: 9px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-left: 4px;
 		font-weight: 500;
 	}
 	.bn-group-toggle {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		cursor: pointer;
 		font-size: 11px;
 		padding: 4px;
@@ -1005,7 +1036,7 @@
 		grid-template-columns: 1fr;
 	}
 	.bn-row-label {
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		font-size: 11px;
 		font-weight: 500;
 	}
@@ -1022,10 +1053,10 @@
 	.bn-row-rating {
 		display: inline-flex;
 		gap: 1px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.bn-row-rating :global(svg) {
-		color: rgba(var(--tint-rgb), 0.2);
+		color: var(--fg-muted);
 	}
 	.bn-row-notes {
 		white-space: pre-wrap;
@@ -1033,7 +1064,7 @@
 		padding: 8px 0 0;
 	}
 	.bn-link {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		text-decoration: none;
 	}
 	.bn-link:hover {
@@ -1080,7 +1111,7 @@
 		min-width: 0;
 	}
 	.bn-shotrow-dial {
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		font-size: 10px;
 		white-space: nowrap;
 		overflow: hidden;
@@ -1112,7 +1143,7 @@
 	}
 	.bn-shotrow-time {
 		font-family: var(--font-mono);
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		font-variant-numeric: tabular-nums;
 	}
 	.bn-shotrow-profile {
@@ -1122,11 +1153,11 @@
 	.bn-shotrow-rating {
 		display: inline-flex;
 		gap: 1px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-size: 10px;
 	}
 	.bn-shotrow-rating :global(svg) {
-		color: rgba(var(--tint-rgb), 0.2);
+		color: var(--fg-muted);
 	}
 
 	/* Footer */

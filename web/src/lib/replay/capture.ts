@@ -19,6 +19,7 @@
 
 import type { NotificationSource } from '#lib/core/index.js';
 import { foldReplayMetaJsonl as wasmFoldReplayMetaJsonl } from '#lib/wasm/de1_wasm.js';
+import { readImportText } from '#lib/utils/import-limits.js';
 
 /**
  * One raw capture line — the JSON Lines schema the Android `BleSessionRecorder`
@@ -163,6 +164,10 @@ export function sourceFromName(name: string): NotificationSource | undefined {
 			return 'De1ProfileHeader';
 		case 'DE1_FRAME_ACK':
 			return 'De1FrameAck';
+		case 'DE1_HEADER_ACK':
+			// The shell's synthesised header-write confirmation (the core's
+			// `capture.rs` name): without it a replayed upload fails.
+			return 'De1HeaderAck';
 		case 'SCALE_WEIGHT':
 			return 'ScaleWeight';
 		case 'SCALE_FF12':
@@ -252,7 +257,7 @@ export function parseCapture(text: string): ParsedCapture {
 
 /** Read a `File` (e.g. from an `<input type="file">`) and {@link parseCapture} it. */
 export async function parseCaptureFile(file: File): Promise<ParsedCapture> {
-	return parseCapture(await file.text());
+	return parseCapture(await readImportText(file));
 }
 
 /**

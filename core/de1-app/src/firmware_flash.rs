@@ -339,6 +339,12 @@ pub struct FlashStatus {
     /// How long the DE1 may still be erasing (during the erase, or after an
     /// interrupted one): the shells persist it so a restart keeps the lock.
     pub erase_hold_ms_left: Option<u32>,
+    /// While verifying: how long until [`VERIFY_TIMEOUT_MS`] after the verify
+    /// request, i.e. how long the DE1 may still be checking the image. The
+    /// shells persist it so a page reload or process restart inside the
+    /// window comes back as "still verifying, don't switch it off" rather
+    /// than as the power-cycle step ([`FirmwareFlash::restore_verifying`]).
+    pub verify_hold_ms_left: Option<u32>,
 }
 
 /// Why [`CremaCore::firmware_flash_start`] refused.
@@ -508,6 +514,13 @@ pub struct FirmwareFlash {
     /// The lock is held until this time after a failure / cancel mid-erase
     /// (cleared early by an erase-complete frame).
     erase_hold_until: Option<u64>,
+    /// How long after the verify request the DE1 may still be checking:
+    /// [`VERIFY_TIMEOUT_MS`], or what was left of it when a verify was
+    /// restored ([`Self::restore_verifying`]).
+    verify_window_ms: u64,
+    /// Whether the verify window was restored after a reload, so
+    /// [`Self::verify_window_ms`] counts from the restore, not the request.
+    verify_restored: bool,
     /// The latest time the flash has seen (every input carries one).
     clock_ms: u64,
     /// Diagnostic lines not yet handed to the shell ([`Self::take_log`]).
@@ -592,6 +605,8 @@ impl FirmwareFlash {
             build_reads_until: 0,
             erase_started_ms: None,
             erase_hold_until: None,
+            verify_window_ms: VERIFY_TIMEOUT_MS,
+            verify_restored: false,
             clock_ms: now_ms,
             log: Vec::new(),
             last_frame_logged: None,
@@ -754,6 +769,48 @@ impl FirmwareFlash {
         Some(flash)
     }
 
+    /// Re-create a flash whose verify window was still open when the shell
+    /// went away (page reload, process restart): the DE1 may still be
+    /// checking the image without Bluetooth, so the flash comes back in
+    /// [`FlashPhase::Verifying`] for the `hold_ms_left` that remained (capped
+    /// at [`VERIFY_TIMEOUT_MS`]), polling for the verdict once the link is up.
+    /// When the window closes it moves to the unconfirmed power-cycle step,
+    /// exactly as a link drop mid-verify does. Restoring straight to the
+    /// power-cycle step instead would tell the user to switch the DE1 off
+    /// while it may still be verifying. `None` if `build` is not pinned or
+    /// the window is over (the shell then restores the power-cycle wait).
+    #[must_use]
+    pub fn restore_verifying(build: u32, hold_ms_left: u64, now_ms: u64) -> Option<Self> {
+        let hold_ms_left = hold_ms_left.min(VERIFY_TIMEOUT_MS);
+        if hold_ms_left == 0 {
+            return None;
+        }
+        let artifact = firmware_manifest().into_iter().find(|a| a.build == build)?;
+        let chunks = artifact.chunk_count;
+        let mut flash = Self::blank(Vec::new(), artifact, now_ms);
+        flash.chunk_count = chunks;
+        flash.chunks_acked = chunks;
+        // The request may or may not have reached the DE1 before the shell
+        // went away, so a verdict now is unconfirmed (as after a link drop).
+        flash.stage = Stage::Verify {
+            acked_at: None,
+            sent_at: now_ms,
+            write_lost: true,
+        };
+        flash.verify_window_ms = hold_ms_left;
+        flash.verify_restored = true;
+        flash.machine_restarted = true;
+        flash.link_up = false;
+        flash.note(
+            now_ms,
+            format!(
+                "restored: the DE1 may still be verifying build {build} for {} s",
+                hold_ms_left.div_ceil(1000)
+            ),
+        );
+        Some(flash)
+    }
+
     /// Re-create the lock of an erase that may still be running when the
     /// shell went away (tab closed or process killed within
     /// [`ERASE_TIMEOUT_MS`] of the erase request): a stopped flash whose lock
@@ -819,6 +876,16 @@ impl FirmwareFlash {
             Stage::Failed | Stage::Cancelled if self.erase_settling() => self
                 .erase_hold_until
                 .map(|t| t.saturating_sub(self.clock_ms)),
+            _ => None,
+        }
+    }
+
+    /// How long the DE1 may still be checking the image (Verify stage only).
+    fn verify_hold_ms_left(&self) -> Option<u64> {
+        match self.stage {
+            Stage::Verify { sent_at, .. } => {
+                Some((sent_at + self.verify_window_ms).saturating_sub(self.clock_ms))
+            }
             _ => None,
         }
     }
@@ -1279,11 +1346,19 @@ impl FirmwareFlash {
                 sent_at,
                 write_lost,
             } if acked_at.is_some() || write_lost => {
-                if now_ms.saturating_sub(sent_at) >= VERIFY_TIMEOUT_MS {
-                    self.note(
-                        now_ms,
-                        "no verdict 120 s after the verify request: unconfirmed",
-                    );
+                if now_ms.saturating_sub(sent_at) >= self.verify_window_ms {
+                    // Say which window closed: a restored one counts from the
+                    // restore and is only what was left of the 120 s (final
+                    // cohort review 2026-10-28, 06 #16).
+                    let window_s = self.verify_window_ms.div_ceil(1000);
+                    let line = if self.verify_restored {
+                        format!(
+                            "no verdict in the {window_s} s of the verify window left at the restore: unconfirmed"
+                        )
+                    } else {
+                        format!("no verdict {window_s} s after the verify request: unconfirmed")
+                    };
+                    self.note(now_ms, line);
                     return self.unconfirmed(now_ms);
                 }
                 self.poll(now_ms)
@@ -1539,6 +1614,9 @@ impl FirmwareFlash {
             identity_unknown: self.identity_unknown,
             erase_hold_ms_left: self
                 .erase_hold_ms_left()
+                .map(|ms| u32::try_from(ms).unwrap_or(u32::MAX)),
+            verify_hold_ms_left: self
+                .verify_hold_ms_left()
                 .map(|ms| u32::try_from(ms).unwrap_or(u32::MAX)),
         }
     }
@@ -1815,6 +1893,69 @@ pub(crate) mod tests {
         assert!(!r.locks_writes(), "released when the hold ends");
         assert!(FirmwareFlash::restore_erase_hold(1358, 0, 5_000).is_none());
         assert!(FirmwareFlash::restore_erase_hold(1234, 9_000, 5_000).is_none());
+    }
+
+    #[test]
+    fn the_verify_window_left_is_reported() {
+        let (f, acked) = to_verify(4);
+        let sent = acked - 40;
+        assert_eq!(f.phase(), FlashPhase::Verifying);
+        assert_eq!(
+            f.status(acked).verify_hold_ms_left,
+            Some(u32::try_from(sent + VERIFY_TIMEOUT_MS - acked).unwrap())
+        );
+        let (u, _) = to_upload(4);
+        assert_eq!(u.status(3_000).verify_hold_ms_left, None);
+    }
+
+    #[test]
+    fn a_reload_inside_the_verify_window_restores_verifying_not_the_power_cycle() {
+        // Report 06 #7: restoring straight to AwaitPowerCycle told the user to
+        // switch the DE1 off while it may still be checking the image.
+        let mut r = FirmwareFlash::restore_verifying(1358, 30_000, 5_000).expect("pinned");
+        assert_eq!(r.phase(), FlashPhase::Verifying);
+        assert!(r.locks_writes());
+        assert!(!r.can_exit(), "no exit while the DE1 may be verifying");
+        let st = r.status(5_000);
+        assert!(!st.link_up);
+        assert_eq!(st.verify_hold_ms_left, Some(30_000));
+        assert!(
+            r.on_tick(6_000).is_empty(),
+            "no polls while the link is down"
+        );
+        // The link comes back inside the window: poll for the verdict.
+        r.on_link_restored(10_000);
+        assert_eq!(
+            r.on_tick(10_000 + FW_MAP_POLL_INTERVAL_MS),
+            vec![FlashAction::ReadFwMap]
+        );
+        // The window closes with no verdict: the unconfirmed power-cycle step.
+        r.on_tick(5_000 + 30_000 - 1);
+        assert_eq!(r.phase(), FlashPhase::Verifying);
+        r.on_link_lost(5_000 + 30_000 - 1);
+        let _ = r.take_log();
+        r.on_tick(5_000 + 30_000);
+        assert_eq!(r.phase(), FlashPhase::AwaitingPowerCycle);
+        assert!(r.status(35_000).verify_unconfirmed);
+        // Final cohort review 2026-10-28, 06 #16: the note names the 30 s
+        // that were left at the restore, not the full 120 s from the request.
+        let log = r.take_log().join("\n");
+        assert!(
+            log.contains("no verdict in the 30 s of the verify window left at the restore"),
+            "{log}"
+        );
+        assert!(!log.contains("120 s"), "{log}");
+    }
+
+    #[test]
+    fn a_restored_verify_window_is_capped_and_needs_time_left() {
+        let r = FirmwareFlash::restore_verifying(1358, u64::MAX, 0).expect("pinned");
+        assert_eq!(
+            r.status(0).verify_hold_ms_left,
+            Some(u32::try_from(VERIFY_TIMEOUT_MS).unwrap())
+        );
+        assert!(FirmwareFlash::restore_verifying(1358, 0, 5_000).is_none());
+        assert!(FirmwareFlash::restore_verifying(1234, 9_000, 5_000).is_none());
     }
 
     #[test]
@@ -2107,10 +2248,16 @@ pub(crate) mod tests {
         let sent = now - 40;
         f.on_tick(sent + VERIFY_TIMEOUT_MS - 1);
         assert_eq!(f.phase(), FlashPhase::Verifying);
+        let _ = f.take_log();
         f.on_tick(sent + VERIFY_TIMEOUT_MS);
         assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle);
         assert!(f.status(now).verify_unconfirmed);
         assert!(f.locks_writes());
+        let log = f.take_log().join("\n");
+        assert!(
+            log.contains("no verdict 120 s after the verify request"),
+            "{log}"
+        );
     }
 
     #[test]

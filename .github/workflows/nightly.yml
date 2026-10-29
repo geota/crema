@@ -101,8 +101,10 @@ jobs:
             echo "::warning::No KEYSTORE_BASE64 set — nightly APK is DEBUG-signed (a new key each run, so users must reinstall rather than update between nightlies). Set the secret so the nightly shares the stable signature."
           fi
 
-      # Debug cargo profile => fast per-commit CI. Add `-PcargoProfile=release` for
-      # an optimized (slower-to-build) nightly if runtime perf matters more.
+      # Release cargo profile: the nightly ships to users (Obtainium prerelease,
+      # same package and signature as stable), and the debug profile's overflow
+      # checks turn any wrapped integer into a crash only nightly users see
+      # (cohort review 2026-10-25, report 01 P1-3).
       - name: Build nightly APK
         working-directory: android
         env:
@@ -118,7 +120,7 @@ jobs:
           VERSION_NAME: ${{ steps.v.outputs.name }}
           VERSION_CODE: ${{ steps.v.outputs.code }}
         run: |
-          ./gradlew :app:assembleNightly \
+          ./gradlew :app:assembleNightly -PcargoProfile=release \
             -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" \
             --no-daemon --stacktrace
 

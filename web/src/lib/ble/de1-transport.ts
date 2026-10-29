@@ -111,6 +111,25 @@ export interface De1Transport {
 	write(serviceUuid: string, characteristicUuid: string, data: Uint8Array): Promise<void>;
 
 	/**
+	 * Write `data` only if `guard()` still holds when the write reaches the
+	 * head of the serial GATT queue. Resolves `true` once written, `false`
+	 * when the guard refused (nothing was sent); rejects like {@link write}.
+	 * `settled`, when given, hears the result (`true` written, `false`
+	 * failed) inside the same queued step, before the next queued write's
+	 * guard runs. The profile upload uses both so a superseded or failed
+	 * upload's queued frames never reach the DE1 (cohort review 2026-10-28,
+	 * #2 N2). Optional: without it the caller checks the guard before
+	 * queueing.
+	 */
+	writeIf?(
+		serviceUuid: string,
+		characteristicUuid: string,
+		data: Uint8Array,
+		guard: () => boolean,
+		settled?: (written: boolean) => void
+	): Promise<boolean>;
+
+	/**
 	 * One-shot read of `(serviceUuid, characteristicUuid)`. Returns
 	 * the raw bytes the device responded with.
 	 */
@@ -121,11 +140,25 @@ export interface De1Transport {
 
 	/**
 	 * Drop the GATT link *without* marking a user disconnect, so the ordinary
-	 * reconnect loop runs — for a link that came up hollow (connected,
-	 * subscribed, not answering). Optional: a transport without it is dropped
+	 * reconnect loop runs — for a link that stopped answering mid-session
+	 * (the liveness check). Optional: a transport without it is dropped
 	 * outright instead.
 	 */
 	recycle?(): void;
+
+	/**
+	 * Hold the auto-reconnect loop while the owner's connect or re-seed
+	 * program judges a fresh link: a drop meanwhile is noted, not acted on.
+	 * Optional, paired with {@link releaseReconnect}.
+	 */
+	holdReconnect?(): void;
+
+	/**
+	 * End the hold. `healthy` = the program succeeded. Returns true when the
+	 * link is up and healthy; otherwise the link goes to the reconnect loop
+	 * (a hollow one resuming the backoff ladder where it was).
+	 */
+	releaseReconnect?(healthy: boolean): boolean;
 
 	/**
 	 * Cut a pending auto-reconnect wait short and attempt now (the tab came

@@ -1168,7 +1168,10 @@ data class EventMaintenanceProgressInner (
 	/// Descale pass, from 1 (`0` when not descaling).
 	val cycle: UByte,
 	/// The 1 °C cold-maintenance profile was loaded for this cycle.
-	val cold_workaround: Boolean
+	val cold_workaround: Boolean,
+	/// Why the cycle never started; set only on
+	/// [`MaintenancePhase::Failed`].
+	val failure: MaintenanceFailure? = null
 )
 
 /// Generated type representing the anonymous struct variant `IdleSleepRequested` of the `Event` Rust enum
@@ -1544,6 +1547,16 @@ data class EventCalibrationInner (
 	val measured: Float
 )
 
+/// Generated type representing the anonymous struct variant `CalibrationRefused` of the `Event` Rust enum
+@Serializable
+data class EventCalibrationRefusedInner (
+	/// The sensor the refused request targeted; `None` for the
+	/// firmware's error reply, which does not say.
+	val target: CalTarget? = null,
+	/// Why it was refused.
+	val reason: CalibrationRefusal
+)
+
 /// Generated type representing the anonymous struct variant `FirmwareLockoutHit` of the `Event` Rust enum
 @Serializable
 data class EventFirmwareLockoutHitInner (
@@ -1594,7 +1607,22 @@ data class EventProfileUploadStartedInner (
 	/// Number of normal frames the profile has.
 	val frame_count: UByte,
 	/// Number of extension frames (one per step that has a limiter).
-	val extension_frame_count: UByte
+	val extension_frame_count: UByte,
+	/// This upload's number, unique for the core's lifetime (kept across
+	/// [`reset`](crate::CremaCore::reset)). The shell records it with
+	/// the upload's writes and passes it back to
+	/// [`profile_write_failed`](crate::CremaCore::profile_write_failed)
+	/// and `on_profile_write_ack`, so a late report or ack cannot reach a
+	/// newer upload. A wasm bridge that rebuilds its core after a panic
+	/// starts again at 1: the web shell then supersedes every open batch.
+	val upload_id: UInt
+)
+
+/// Generated type representing the anonymous struct variant `ProfileUploadWaitingForModel` of the `Event` Rust enum
+@Serializable
+data class EventProfileUploadWaitingForModelInner (
+	/// Title of the profile waiting to upload.
+	val title: String
 )
 
 /// Generated type representing the anonymous struct variant `ProfileUploadProgress` of the `Event` Rust enum
@@ -1896,6 +1924,13 @@ sealed class Event {
 	@Serializable
 	@SerialName("Calibration")
 	data class Calibration(val content: EventCalibrationInner): Event()
+	/// A calibration write or factory reset was refused — by the core's
+	/// guards before anything reached the wire, or by the DE1's own error
+	/// reply ([`CalibrationRefusal::FirmwareRejected`](crate::CalibrationRefusal::FirmwareRejected)).
+	/// See [`calibration_guard`](crate::calibration_guard).
+	@Serializable
+	@SerialName("CalibrationRefused")
+	data class CalibrationRefused(val content: EventCalibrationRefusedInner): Event()
 	/// A write was refused because a firmware upload is locking out other
 	/// writes. v1 carries the lockout guard as a stub
 	/// ([`firmware_locks_writes`](crate::CremaCore::firmware_locks_writes))
@@ -1925,12 +1960,21 @@ sealed class Event {
 	@Serializable
 	@SerialName("ShotSettingsRead")
 	data class ShotSettingsRead(val content: EventShotSettingsReadInner): Event()
-	/// A profile upload has begun. Carries the total number of acks the
-	/// orchestrator expects (frames + extensions + tail; the header is
-	/// not acked separately).
+	/// A profile upload has begun. Carries the frame counts the orchestrator
+	/// expects acks for (the header ack, then frames + extensions + tail).
 	@Serializable
 	@SerialName("ProfileUploadStarted")
 	data class ProfileUploadStarted(val content: EventProfileUploadStartedInner): Event()
+	/// An upload is waiting for the DE1's machine model before it writes
+	/// anything: the model picks the frame encoding (classic DE1 or Bengle
+	/// BLE v2), so no upload goes out on a guess. The core has asked for the
+	/// MachineModel register; the upload starts when the reply lands
+	/// ([`ProfileUploadStarted`](Self::ProfileUploadStarted)) or fails with
+	/// [`ProfileUploadFailure::MachineModelUnknown`] after
+	/// [`MACHINE_MODEL_WAIT`](crate::MACHINE_MODEL_WAIT).
+	@Serializable
+	@SerialName("ProfileUploadWaitingForModel")
+	data class ProfileUploadWaitingForModel(val content: EventProfileUploadWaitingForModelInner): Event()
 	/// One profile frame was acknowledged by the DE1.
 	@Serializable
 	@SerialName("ProfileUploadProgress")
@@ -1943,9 +1987,33 @@ sealed class Event {
 	data class ProfileUploadCompleted(val content: EventProfileUploadCompletedInner): Event()
 	/// The profile upload failed. The core has discarded its in-progress
 	/// state; the shell may retry by calling `upload_profile` again.
+	/// 
+	/// Once the header was dispatched, what the DE1 holds is **unknown**:
+	/// frames are indexed slot writes with no commit step, so an interrupted
+	/// upload can leave the new header's frame count over a mix of new and
+	/// old frames (Decenza `aa8232e6`). The shell must forget any "the DE1
+	/// holds profile X" cache on this event; the core asks for a re-upload
+	/// with [`ProfileReuploadNeeded`](Self::ProfileReuploadNeeded) once the
+	/// machine is Idle.
 	@Serializable
 	@SerialName("ProfileUploadFailed")
 	data class ProfileUploadFailed(val content: EventProfileUploadFailedInner): Event()
+	/// The DE1's loaded profile is unknown after a failed upload and the
+	/// machine is Idle, so the shell should upload the active profile now.
+	/// Emitted when a failure lands while the machine is Idle, on the next
+	/// transition into Idle (after the flow that interrupted the upload,
+	/// never during it), or on a tick. The request stays outstanding until a
+	/// shell starts an upload: it is repeated every
+	/// [`PROFILE_REUPLOAD_REPEAT`](crate::PROFILE_REUPLOAD_REPEAT) while the
+	/// machine stays Idle, so a shell that could not act at once (link not
+	/// ready yet) is asked again. At most
+	/// [`MAX_PROFILE_REUPLOAD_REQUESTS`](crate::MAX_PROFILE_REUPLOAD_REQUESTS)
+	/// uploads are started in answer until one completes; cleared by a
+	/// completed upload or a reset (the reconnect path owns the re-upload).
+	/// Decenza's `ReArm` follow-up (`aa8232e6`).
+	@Serializable
+	@SerialName("ProfileReuploadNeeded")
+	object ProfileReuploadNeeded: Event()
 	/// An incoming notification could not be decoded.
 	@Serializable
 	@SerialName("DecodeError")
@@ -2593,7 +2661,13 @@ data class FlashStatus (
 	val identityUnknown: Boolean,
 	/// How long the DE1 may still be erasing (during the erase, or after an
 	/// interrupted one): the shells persist it so a restart keeps the lock.
-	val eraseHoldMsLeft: UInt? = null
+	val eraseHoldMsLeft: UInt? = null,
+	/// While verifying: how long until [`VERIFY_TIMEOUT_MS`] after the verify
+	/// request, i.e. how long the DE1 may still be checking the image. The
+	/// shells persist it so a page reload or process restart inside the
+	/// window comes back as "still verifying, don't switch it off" rather
+	/// than as the power-cycle step ([`FirmwareFlash::restore_verifying`]).
+	val verifyHoldMsLeft: UInt? = null
 )
 
 /// Generated type representing the anonymous struct variant `Write` of the `FlashAction` Rust enum
@@ -2720,6 +2794,66 @@ data class FrameExitSpec (
 	val threshold: Double,
 	/// Configured max frame duration, seconds; `<= 0` when unknown.
 	val maxDurationS: Double
+)
+
+/// The user's Visualizer sync **preferences** — the portable, cross-shell
+/// subset a whole-app backup carries. One shared `#[typeshare]` shape so web
+/// and Android serialise byte-identical JSON: a backup's `visualizerPrefs`
+/// line restores on either shell (no per-shell tag), and the two devices can
+/// converge on one set of choices.
+/// 
+/// NOT here: OAuth tokens, the cached account, the in-flight PKCE handshake,
+/// pull cursors, the premium-tier cache, last-sync timestamps, and the sync
+/// activity log — those are per-device runtime state, kept shell-local and
+/// never backed up.
+/// 
+/// Two distinct auto gates (the web shell has both; Android today only honours
+/// `auto_upload`):
+/// - `auto_upload` — auto-push a shot to Visualizer as it completes.
+/// - `auto_sync` — fire background library (bean/roaster/shot) pushes on
+/// mutation; manual "Sync now" always works regardless.
+/// 
+/// `#[serde(default)]` on the whole struct (via [`Default`]) so a partial blob
+/// deserialises to the canonical defaults rather than failing — a shell that
+/// doesn't own a field (Android doesn't drive `beans_direction`) round-trips it
+/// untouched, and an older/partial line fills gaps from the defaults below.
+@Serializable
+data class VisualizerSyncPrefs (
+	/// Auto-push a finished shot to Visualizer (web `visualizerAutoUpload`;
+	/// Android's single auto gate). Default: true.
+	val autoUpload: Boolean,
+	/// Fire background bean/roaster/shot pushes on mutation (web sync-config
+	/// `autoSync`). Android doesn't background-sync the library yet, so it
+	/// carries the field but doesn't act on it. Default: true.
+	val autoSync: Boolean,
+	/// Upload privacy: `"public" | "unlisted" | "private"`. Default: unlisted.
+	val privacy: String,
+	/// Include the profile block in uploads. Default: true.
+	val includeProfile: Boolean,
+	/// Include tasting notes in uploads. Default: false.
+	val includeNotes: Boolean,
+	/// Shots sync direction: `"off" | "backup" | "pull" | "two-way"`. Default: backup.
+	val shotsDirection: String,
+	/// Beans sync direction. Web-driven; Android carries the default only. Default: two-way.
+	val beansDirection: String,
+	/// Roasters sync direction. Web-driven; Android carries the default only. Default: two-way.
+	val roastersDirection: String
+)
+
+/// The outcome of restoring a backup's [`VisualizerSyncPrefs`] over the
+/// device's current ones: what to apply now, and which fields were HELD
+/// because the backup would widen what Crema shares (review 05 P3-1).
+@Serializable
+data class GuardedVisualizerPrefs (
+	/// The prefs to apply without asking: the incoming values, except that
+	/// every held field keeps its current value.
+	val apply: VisualizerSyncPrefs,
+	/// The camelCase names of the fields the backup would widen
+	/// (`"privacy"`, `"includeNotes"`, `"autoUpload"`, `"includeProfile"`,
+	/// `"autoSync"`, `"shotsDirection"`, `"beansDirection"`,
+	/// `"roastersDirection"`). A shell either asks the user before applying
+	/// the incoming value or keeps the current one.
+	val held: List<String>
 )
 
 /// Summary metrics over a (filter/range-scoped) set of shots — the
@@ -3371,6 +3505,12 @@ data class ShotPatchInputs (
 	/// Inline bean: the bean's recorded dial → `grinder_setting`.
 	val grinderSetting: String? = null,
 	/// Who made the shot → `barista` (editable on free accounts too).
+	/// `None` = leave the remote value alone; a blank string is sent as
+	/// `""`, which clears it. The shells pass `Some` only when the barista
+	/// was edited locally (the name, or `""` once cleared) and `None` for
+	/// any other edit, so a rating change never overwrites — or, for a shot
+	/// whose barista was set elsewhere, wipes — the remote barista (final
+	/// review 06 #1).
 	val barista: String? = null
 )
 
@@ -3587,50 +3727,6 @@ data class TimedSample (
 	val resistanceWeight: Float? = null
 )
 
-/// The user's Visualizer sync **preferences** — the portable, cross-shell
-/// subset a whole-app backup carries. One shared `#[typeshare]` shape so web
-/// and Android serialise byte-identical JSON: a backup's `visualizerPrefs`
-/// line restores on either shell (no per-shell tag), and the two devices can
-/// converge on one set of choices.
-/// 
-/// NOT here: OAuth tokens, the cached account, the in-flight PKCE handshake,
-/// pull cursors, the premium-tier cache, last-sync timestamps, and the sync
-/// activity log — those are per-device runtime state, kept shell-local and
-/// never backed up.
-/// 
-/// Two distinct auto gates (the web shell has both; Android today only honours
-/// `auto_upload`):
-/// - `auto_upload` — auto-push a shot to Visualizer as it completes.
-/// - `auto_sync` — fire background library (bean/roaster/shot) pushes on
-/// mutation; manual "Sync now" always works regardless.
-/// 
-/// `#[serde(default)]` on the whole struct (via [`Default`]) so a partial blob
-/// deserialises to the canonical defaults rather than failing — a shell that
-/// doesn't own a field (Android doesn't drive `beans_direction`) round-trips it
-/// untouched, and an older/partial line fills gaps from the defaults below.
-@Serializable
-data class VisualizerSyncPrefs (
-	/// Auto-push a finished shot to Visualizer (web `visualizerAutoUpload`;
-	/// Android's single auto gate). Default: true.
-	val autoUpload: Boolean,
-	/// Fire background bean/roaster/shot pushes on mutation (web sync-config
-	/// `autoSync`). Android doesn't background-sync the library yet, so it
-	/// carries the field but doesn't act on it. Default: true.
-	val autoSync: Boolean,
-	/// Upload privacy: `"public" | "unlisted" | "private"`. Default: unlisted.
-	val privacy: String,
-	/// Include the profile block in uploads. Default: true.
-	val includeProfile: Boolean,
-	/// Include tasting notes in uploads. Default: false.
-	val includeNotes: Boolean,
-	/// Shots sync direction: `"off" | "backup" | "pull" | "two-way"`. Default: backup.
-	val shotsDirection: String,
-	/// Beans sync direction. Web-driven; Android carries the default only. Default: two-way.
-	val beansDirection: String,
-	/// Roasters sync direction. Web-driven; Android carries the default only. Default: two-way.
-	val roastersDirection: String
-)
-
 /// The bean / grinder journal fields Visualizer's native detail flattens
 /// onto the shot row (`bean_brand`, `bean_type`, …). All optional — the
 /// pull materialises a local bean snapshot only from what's present.
@@ -3694,7 +3790,14 @@ data class WireShot (
 	/// shells / cached payloads without the field still deserialise
 	/// (issue #44: these used to be dropped on pull, so a shot synced
 	/// down from Visualizer lost its bean info).
-	val bean: WireShotBean? = null
+	val bean: WireShotBean? = null,
+	/// Who made the shot (Visualizer `barista`), or `None` when the remote
+	/// has none (blank collapses to `None`). Mutable metadata — NOT part of
+	/// the de-dup signature. The shells fill a local shot's barista from it
+	/// on pull (final review 06 #1: it was dropped, so an edit in Crema sent
+	/// `barista: ""` and wiped the remote one). `#[serde(default)]` so older
+	/// cached payloads without the field still deserialise.
+	val barista: String? = null
 )
 
 /// What kind of beverage a profile produces. Mirrors reaprime's
@@ -3783,6 +3886,54 @@ enum class CalTarget(val string: String) {
 	/// The temperature sensor.
 	@SerialName("Temperature")
 	Temperature("Temperature"),
+}
+
+/// Generated type representing the anonymous struct variant `OutOfRange` of the `CalibrationRefusal` Rust enum
+@Serializable
+data class CalibrationRefusalOutOfRangeInner (
+	/// The rejected value.
+	val value: Float,
+	/// Band minimum.
+	val min: Float,
+	/// Band maximum.
+	val max: Float
+)
+
+/// Generated type representing the anonymous struct variant `MachineNotIdle` of the `CalibrationRefusal` Rust enum
+@Serializable
+data class CalibrationRefusalMachineNotIdleInner (
+	/// The state the machine last reported.
+	val state: MachineState
+)
+
+/// Why a calibration write or reset was refused.
+@Serializable
+sealed class CalibrationRefusal {
+	/// A value was NaN or infinite.
+	@Serializable
+	@SerialName("NonFinite")
+	object NonFinite: CalibrationRefusal()
+	/// The reported value encodes as zero on a ratio sensor (flow, pressure).
+	@Serializable
+	@SerialName("ZeroReported")
+	object ZeroReported: CalibrationRefusal()
+	/// A value fell outside the sensor's band.
+	@Serializable
+	@SerialName("OutOfRange")
+	data class OutOfRange(val details: CalibrationRefusalOutOfRangeInner): CalibrationRefusal()
+	/// The machine is not in Sleep or Idle.
+	@Serializable
+	@SerialName("MachineNotIdle")
+	data class MachineNotIdle(val details: CalibrationRefusalMachineNotIdleInner): CalibrationRefusal()
+	/// No machine state has been reported yet (fail closed).
+	@Serializable
+	@SerialName("MachineStateUnknown")
+	object MachineStateUnknown: CalibrationRefusal()
+	/// The DE1 answered the request with its calibration error reply
+	/// (target byte 255).
+	@Serializable
+	@SerialName("FirmwareRejected")
+	object FirmwareRejected: CalibrationRefusal()
 }
 
 /// The direction of an exit comparison. Lowercase wire spelling
@@ -4175,14 +4326,36 @@ enum class MachineState(val string: String) {
 	/// Scheduled-wake idle; firmware v1293 and later only.
 	@SerialName("SchedIdle")
 	SchedIdle("SchedIdle"),
+	/// Firmware-upgrade mode, `0x16` (de1app `machine.tcl` `22 FWUpgrade`;
+	/// reaprime `fwUpgrade(0x16)`, `3ab190b6`). Requested by reaprime's
+	/// Bengle flash path; decoded so a machine reporting it does not freeze
+	/// the state display behind a decode error.
+	@SerialName("FwUpgrade")
+	FwUpgrade("FwUpgrade"),
+}
+
+/// Why a held cold-maintenance request ended [`MaintenancePhase::Failed`] —
+/// carried by `Event::MaintenanceProgress` so the shells can say what
+/// happened.
+@Serializable
+enum class MaintenanceFailure(val string: String) {
+	/// The 1 °C profile's upload failed or was cancelled.
+	@SerialName("ColdProfileNotLoaded")
+	ColdProfileNotLoaded("ColdProfileNotLoaded"),
+	/// Another upload (the user picked a profile or started a shot) replaced
+	/// the 1 °C profile before the cycle could start (while the machine was
+	/// still heating, or while the cold profile was still loading).
+	@SerialName("ProfileReplaced")
+	ProfileReplaced("ProfileReplaced"),
 }
 
 /// Where a maintenance cycle the core is following stands — carried by
 /// `Event::MaintenanceProgress`.
 @Serializable
 enum class MaintenancePhase(val string: String) {
-	/// Old firmware, machine heating: the 1 °C profile is loaded and the
-	/// request is held until the machine reports it has left preheat.
+	/// Old firmware, machine heating: the 1 °C profile is uploading and the
+	/// request is held until that upload has completed AND the machine
+	/// reports it has left preheat.
 	@SerialName("WaitingForPreheat")
 	WaitingForPreheat("WaitingForPreheat"),
 	/// The held request has been sent; waiting for the machine to enter the
@@ -4198,6 +4371,13 @@ enum class MaintenancePhase(val string: String) {
 	/// Cancelled by the user, by another state request, or by a DE1 link drop.
 	@SerialName("Cancelled")
 	Cancelled("Cancelled"),
+	/// The 1 °C cold-maintenance profile did not load (its upload failed,
+	/// was cancelled, or another upload replaced it), so the held request
+	/// was never sent: running the cycle on the brew profile is what the
+	/// workaround exists to prevent. The user can start it again. Why is in
+	/// the event's [`MaintenanceFailure`].
+	@SerialName("Failed")
+	Failed("Failed"),
 }
 
 /// Known MMR register addresses.
@@ -4222,7 +4402,10 @@ enum class MmrRegister(val string: String) {
 	/// Firmware build number.
 	@SerialName("FirmwareVersion")
 	FirmwareVersion("FirmwareVersion"),
-	/// Group Head Controller info bitmask (bit 0: present, bit 1: active).
+	/// Group Head Controller info bitmask: `0x1` LED controller present,
+	/// `0x2` touch controller present, `0x4` active (reaprime
+	/// `de1.models.dart` `ghcInfo`; pyDE1 `c_api.py`). de1app treats any
+	/// value outside `{0, 1, 2, 4}` as "start at the group head only".
 	@SerialName("GhcInfo")
 	GhcInfo("GhcInfo"),
 	/// Tank desired water-temperature threshold, °C.
@@ -4358,7 +4541,7 @@ sealed class ProfileUploadFailure {
 	@Serializable
 	@SerialName("Empty")
 	object Empty: ProfileUploadFailure()
-	/// The profile had more than 32 steps.
+	/// The profile had more than 20 steps (the DE1 frame limit).
 	@Serializable
 	@SerialName("TooManySteps")
 	data class TooManySteps(val details: ProfileUploadFailureTooManyStepsInner): ProfileUploadFailure()
@@ -4367,6 +4550,14 @@ sealed class ProfileUploadFailure {
 	@Serializable
 	@SerialName("UnexpectedAck")
 	data class UnexpectedAck(val details: ProfileUploadFailureUnexpectedAckInner): ProfileUploadFailure()
+	/// A frame ack arrived before the shell confirmed the header write, or
+	/// the header confirmation never arrived within
+	/// [`PROFILE_UPLOAD_ACK_TIMEOUT`](crate::PROFILE_UPLOAD_ACK_TIMEOUT).
+	/// The header write failed, so the DE1 may hold the previous profile's
+	/// frame count.
+	@Serializable
+	@SerialName("HeaderNotAcked")
+	object HeaderNotAcked: ProfileUploadFailure()
 	/// No ack arrived within
 	/// [`PROFILE_UPLOAD_ACK_TIMEOUT`](crate::PROFILE_UPLOAD_ACK_TIMEOUT) of
 	/// the most recent ack (or upload start, for the first ack).
@@ -4375,10 +4566,23 @@ sealed class ProfileUploadFailure {
 	data class AckTimeout(val details: ProfileUploadFailureAckTimeoutInner): ProfileUploadFailure()
 	/// The shell called
 	/// [`cancel_profile_upload`](crate::CremaCore::cancel_profile_upload)
-	/// mid-upload.
+	/// mid-upload, or a new upload superseded this one.
 	@Serializable
 	@SerialName("Aborted")
 	object Aborted: ProfileUploadFailure()
+	/// A profile write of this upload did not reach the DE1 (the shell
+	/// reported it through
+	/// [`profile_write_failed`](crate::CremaCore::profile_write_failed)).
+	/// The shell stops the upload's remaining writes.
+	@Serializable
+	@SerialName("WriteFailed")
+	object WriteFailed: ProfileUploadFailure()
+	/// The machine model never arrived within
+	/// [`MACHINE_MODEL_WAIT`](crate::MACHINE_MODEL_WAIT), so the frame
+	/// encoding (classic DE1 or Bengle) is unknown and nothing was written.
+	@Serializable
+	@SerialName("MachineModelUnknown")
+	object MachineModelUnknown: ProfileUploadFailure()
 	/// An unexpected [`AppError`] variant — the bridge couldn't classify it.
 	/// The `message` carries the `AppError`'s `Display` output so the shell
 	/// can surface it in a toast / log without losing the underlying cause.

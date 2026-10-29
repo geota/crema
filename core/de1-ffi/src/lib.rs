@@ -100,6 +100,9 @@ pub enum NotificationSource {
     /// The DE1 `FrameWrite` characteristic — per-frame ack echoes during a
     /// profile upload.
     De1FrameAck,
+    /// The shell's synthesised confirmation of a successful profile header
+    /// write — mirrors `de1_app::Source::De1HeaderAck`.
+    De1HeaderAck,
     /// The scale's on-scale button characteristic (Skale II `EF82`) —
     /// mirrors `de1_app::Source::ScaleButton`.
     ScaleButton,
@@ -119,6 +122,7 @@ impl From<NotificationSource> for Source {
             NotificationSource::De1ShotSettings => Source::De1ShotSettings,
             NotificationSource::De1ProfileHeader => Source::De1ProfileHeader,
             NotificationSource::De1FrameAck => Source::De1FrameAck,
+            NotificationSource::De1HeaderAck => Source::De1HeaderAck,
             NotificationSource::ScaleButton => Source::ScaleButton,
         }
     }
@@ -407,6 +411,18 @@ pub fn resettle_remaining(
 #[uniffi::export]
 pub fn brews_remaining_estimate(remaining_g: f32, recent_doses: Vec<f32>) -> u32 {
     de1_domain::brews_remaining_estimate(remaining_g, &recent_doses)
+}
+
+/// Restore a backup's Visualizer prefs over the current ones without silently
+/// widening sharing; returns `GuardedVisualizerPrefs` JSON. Mirrors the wasm
+/// `guardRestoredVisualizerPrefs`; see [`de1_domain::guard_restored_visualizer_prefs`].
+#[uniffi::export]
+pub fn guard_restored_visualizer_prefs(
+    current_json: String,
+    incoming_json: String,
+) -> Result<String, CremaError> {
+    de1_domain::guard_restored_visualizer_prefs_json(&current_json, &incoming_json)
+        .map_err(crema_err)
 }
 
 /// Derive the History stat strip over a JSON array of light per-shot
@@ -1152,6 +1168,14 @@ pub fn stolen_serials_url() -> String {
 #[uniffi::export]
 pub fn has_cup_warmer(raw: u32) -> bool {
     de1_protocol::has_cup_warmer(raw)
+}
+
+/// Decode a raw `HeaterVoltage` MMR word to 120 / 230 V, or `None` for 0 (not
+/// set) and any word outside both bands (e.g. a doubled +1000 marker). Mirrors
+/// the wasm `heaterVoltageFromRaw`; see [`de1_protocol::heater_voltage_from_raw`].
+#[uniffi::export]
+pub fn heater_voltage_from_raw(raw: u32) -> Option<u16> {
+    de1_protocol::heater_voltage_from_raw(raw)
 }
 
 // ── Visualizer bean / roaster wire converters ────────────────────────────
@@ -1909,7 +1933,8 @@ pub fn wire_shot_from_detail(payload_json: String) -> Result<String, CremaError>
 /// [`CremaError`] when `content` is not a valid v2 profile.
 #[uniffi::export]
 pub fn parse_v2_profile(content: String) -> Result<String, CremaError> {
-    de1_domain::import_v2_json(&content)
+    // A shot's embedded recipe: up to 32 steps stay readable (#6 #6).
+    de1_domain::import_v2_json_embedded(&content)
         .map_err(crema_err)
         .and_then(|p| serde_json::to_string(&p).map_err(crema_err))
 }
@@ -2154,6 +2179,23 @@ impl CremaBridge {
         now_ms: u64,
     ) -> String {
         self.emit(self.core().on_notification(source.into(), &data, now_ms))
+    }
+
+    /// The synthesised ack for a profile write of upload `upload_id` (its
+    /// `ProfileUploadStarted` number). Ignored unless that upload is still
+    /// running. See
+    /// [`CremaCore::on_profile_write_ack`](de1_app::CremaCore::on_profile_write_ack).
+    pub fn on_profile_write_ack(
+        &self,
+        source: NotificationSource,
+        data: Vec<u8>,
+        now_ms: u64,
+        upload_id: u32,
+    ) -> String {
+        self.emit(
+            self.core()
+                .on_profile_write_ack(source.into(), &data, now_ms, upload_id),
+        )
     }
 
     /// Feed a periodic clock tick. Returns a JSON-encoded [`CoreOutput`].
@@ -2724,6 +2766,19 @@ impl CremaBridge {
             .to_json()
     }
 
+    /// Bring back a flash whose verify window was still open when the
+    /// process died (from the deadline the shell persisted).
+    pub fn firmware_flash_restore_verifying(
+        &self,
+        build: u32,
+        hold_ms_left: u64,
+        now_ms: u64,
+    ) -> String {
+        self.core()
+            .firmware_flash_restore_verifying(build, hold_ms_left, now_ms)
+            .to_json()
+    }
+
     /// Bring back the lock of an erase that may still be running when the
     /// process died (from the deadline the shell persisted).
     pub fn firmware_flash_restore_erase_hold(
@@ -3011,19 +3066,12 @@ impl CremaBridge {
     /// `espresso_warmup_timeout`). MMR `0x803838`, 4-byte LE. `seconds`
     /// is scaled to deciseconds on the wire (`int(10 × seconds)`).
     pub fn set_espresso_warmup_timeout(&self, seconds: f32) -> String {
-        // 1-hour domain ceiling (ms), replacing the old `u64::MAX as f32` clamp.
-        // Far above any real DE1 warmup; it only bounds the conversion below.
-        const MAX_WARMUP_TIMEOUT_MS: f32 = 60.0 * 60.0 * 1000.0;
-        let dur = if seconds.is_finite() && seconds > 0.0 {
-            // Round to whole ms (compensates f32 error, e.g. 5.1 s → 5100 ms),
-            // clamp to the ceiling, then widen to f64: `from_secs_f64` rounds to
-            // the nearest nanosecond and recovers the integer ms — no float→int
-            // cast, hence no `cast_*` allow.
-            let ms = (seconds * 1000.0).round().clamp(0.0, MAX_WARMUP_TIMEOUT_MS);
-            std::time::Duration::from_secs_f64(f64::from(ms) / 1000.0)
-        } else {
-            std::time::Duration::ZERO
-        };
+        // Whole ms, clamped to the 1-hour machine-timeout ceiling the connect
+        // sweep shares (one helper, so the two paths cannot disagree).
+        let dur = de1_domain::duration::secs_clamped_whole_ms(
+            seconds,
+            de1_domain::duration::MAX_MACHINE_TIMEOUT_S,
+        );
         self.emit(self.core().set_espresso_warmup_timeout(dur))
     }
 
@@ -3076,6 +3124,14 @@ impl CremaBridge {
     /// Cancel an in-progress profile upload.
     pub fn cancel_profile_upload(&self) -> String {
         self.emit(self.core().cancel_profile_upload())
+    }
+
+    /// A profile write of upload `upload_id` (its `ProfileUploadStarted`
+    /// number) did not reach the DE1: fail that upload now
+    /// (`ProfileUploadFailure::WriteFailed`) if it is still the running one.
+    /// See [`CremaCore::profile_write_failed`](de1_app::CremaCore::profile_write_failed).
+    pub fn profile_write_failed(&self, now_ms: u64, upload_id: u32) -> String {
+        self.emit(self.core().profile_write_failed(now_ms, upload_id))
     }
 
     /// `true` from `upload_profile` until the tail-ack / a failure /
@@ -3587,6 +3643,8 @@ mod tests {
     #[test]
     fn read_calibration_produces_a_write_command() {
         let bridge = CremaBridge::new();
+        // Calibration writes need a Sleep / Idle machine (calibration_guard).
+        bridge.on_notification(NotificationSource::De1State, vec![2, 0], 0);
         for json in [
             bridge.read_calibration(CalSensor::Pressure),
             bridge.read_factory_calibration(CalSensor::Flow),
@@ -3607,7 +3665,7 @@ mod tests {
 
     /// Every `NotificationSource` the FFI enum can name — used to fuzz the
     /// bridge against malformed input on every characteristic.
-    fn every_source() -> [NotificationSource; 11] {
+    fn every_source() -> [NotificationSource; 12] {
         [
             NotificationSource::De1State,
             NotificationSource::De1ShotSample,
@@ -3620,6 +3678,7 @@ mod tests {
             NotificationSource::De1ShotSettings,
             NotificationSource::De1ProfileHeader,
             NotificationSource::De1FrameAck,
+            NotificationSource::De1HeaderAck,
         ]
     }
 

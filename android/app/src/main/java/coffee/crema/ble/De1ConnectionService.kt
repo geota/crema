@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
@@ -55,7 +56,7 @@ class De1ConnectionService : Service() {
         // crashes the app on Android 14+ (ForegroundServiceDidNotStartInTime).
         startForeground(
             NOTIF_ID,
-            buildNotification(firmware),
+            buildNotification(this, firmware),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
         )
         inForeground = true
@@ -84,33 +85,11 @@ class De1ConnectionService : Service() {
         super.onDestroy()
     }
 
-    private fun buildNotification(firmware: Boolean): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_bluetooth)
-            .setContentTitle(if (firmware) "Updating DE1 firmware" else "Crema is keeping your DE1 connected")
-            .setContentText(
-                if (firmware) {
-                    "Keep the DE1 nearby. If it stops, the DE1 keeps its current firmware."
-                } else {
-                    "Reconnects the machine even while the screen is off."
-                },
-            )
-            .setContentIntent(
-                packageManager.getLaunchIntentForPackage(packageName)?.let { launch ->
-                    android.app.PendingIntent.getActivity(
-                        this,
-                        0,
-                        launch,
-                        android.app.PendingIntent.FLAG_IMMUTABLE,
-                    )
-                },
-            )
-            .setOngoing(true)
-            .setShowWhen(false)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .build()
-
+    // No timeout on purpose: the lock lives exactly as long as this service
+    // (released in onDestroy), and the controller stops the service whenever
+    // its gates drop (setting, DE1 link, external power). A timeout would
+    // silently end the keep-alive on a wall tablet mid-day.
+    @android.annotation.SuppressLint("WakelockTimeout")
     private fun acquireWakeLock() {
         if (wakeLock?.isHeld == true) return
         // A denied WAKE_LOCK (OEM AppOps quirk) must degrade to "no wake lock",
@@ -148,6 +127,51 @@ class De1ConnectionService : Service() {
          *  the controller stop it directly. */
         @Volatile
         internal var inForeground = false
+
+        /**
+         * Swap the RUNNING service's notification text (firmware flash on/off)
+         * in place — same id, so it replaces the foreground notification. A
+         * no-op when the service isn't foreground (its next start reads the
+         * flag from the start intent instead).
+         */
+        // Crema doesn't request POST_NOTIFICATIONS; without it Android 13+
+        // silently drops this post, exactly as it hides the notification
+        // startForeground() shows. The service keeps running either way.
+        @android.annotation.SuppressLint("NotificationPermission")
+        fun updateNotification(context: Context, firmware: Boolean) {
+            if (!inForeground) return
+            runCatching {
+                context.getSystemService(NotificationManager::class.java)
+                    .notify(NOTIF_ID, buildNotification(context, firmware))
+            }.onFailure { Log.w(TAG, "notification update failed", it) }
+        }
+
+        internal fun buildNotification(context: Context, firmware: Boolean): Notification =
+            NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_stat_bluetooth)
+                .setContentTitle(if (firmware) "Updating DE1 firmware" else "Crema is keeping your DE1 connected")
+                .setContentText(
+                    if (firmware) {
+                        "Keep the DE1 nearby. If it stops, the DE1 keeps its current firmware."
+                    } else {
+                        "Reconnects the machine even while the screen is off."
+                    },
+                )
+                .setContentIntent(
+                    context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { launch ->
+                        android.app.PendingIntent.getActivity(
+                            context,
+                            0,
+                            launch,
+                            android.app.PendingIntent.FLAG_IMMUTABLE,
+                        )
+                    },
+                )
+                .setOngoing(true)
+                .setShowWhen(false)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setCategory(NotificationCompat.CATEGORY_SERVICE)
+                .build()
 
         /** `true` while a firmware flash runs — switches the notification text. */
         const val EXTRA_FIRMWARE = "coffee.crema.extra.FIRMWARE"

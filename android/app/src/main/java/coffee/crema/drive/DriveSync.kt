@@ -48,8 +48,9 @@ class DriveSync(
     private val clientId: String,
     /** Surface a user-facing message (the VM's snackbar channel). */
     private val notify: (String) -> Unit,
-    /** Produce the `.crema.zip` backup bytes, or null (+ its own notice) when empty. */
-    private val backupZip: () -> ByteArray?,
+    /** Produce the `.crema.zip` backup bytes, or null (+ its own notice) when
+     *  empty. Suspends: the build runs off Main (LibraryController). */
+    private val backupZip: suspend () -> ByteArray?,
     /** A suggested backup filename (the VM's `backupFileName()`). */
     private val backupFileName: () -> String,
     /** Apply a downloaded backup's raw bytes (a `.crema.zip` or legacy text).
@@ -175,12 +176,34 @@ class DriveSync(
         }
     }
 
-    /** Forget the token (best-effort — Google has no public revoke for `drive.file`). */
-    fun disconnect() {
+    /**
+     * Forget the token, then revoke the grant at Google (best-effort, from the
+     * in-memory copy so a slow or failed revoke never leaves it on disk).
+     * Revoking the refresh token ends the whole grant (final review 05 N-5).
+     */
+    fun disconnect(quiet: Boolean = false) {
         scope.launch {
+            val tokens = persisted.tokens
             persist { it.copy(tokens = null) }
-            notify("Disconnected from Google Drive")
+            if (!quiet) notify("Disconnected from Google Drive")
+            tokens?.let { revokeDriveGrant(it) }
         }
+    }
+
+    /**
+     * Erase all data: reset everything this store keeps (the token, a pending
+     * handshake, the backup timestamps), delete its file, then revoke the old
+     * grant from the in-memory copy.
+     */
+    suspend fun eraseAll() {
+        val tokens = persistMutex.withLock {
+            val t = persisted.tokens
+            persisted = DriveState()
+            store.erase()
+            t
+        }
+        fold()
+        tokens?.let { scope.launch { revokeDriveGrant(it) } }
     }
 
     /** A valid access token, refreshing within 60 s of expiry; null when signed out
@@ -207,8 +230,13 @@ class DriveSync(
     fun backupNow() {
         scope.launch {
             val token = freshToken() ?: run { notify("Connect Google Drive first"); return@launch }
-            val zip = backupZip() ?: return@launch // backupZip already notified "nothing to back up"
+            // Busy from the start: building the zip takes a while on a big
+            // history (it runs off Main, so the UI stays live meanwhile).
             _state.update { it.copy(busy = true) }
+            val zip = backupZip() ?: run {
+                _state.update { it.copy(busy = false) } // backupZip already notified "nothing to back up"
+                return@launch
+            }
             runCatching { driveUploadBackup(token, backupFileName(), zip, json) }
                 .onSuccess {
                     persist { it.copy(lastBackupSuccessAtMs = System.currentTimeMillis()) }

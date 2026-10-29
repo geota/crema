@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { storedChartSummary } from '#lib/a11y/chart-summary.js';
 	/**
 	 * `StaticShotChart` — a static render of a stored shot's 4-channel telemetry
 	 * curve, for the History page's `ShotDetail`.
@@ -294,7 +295,8 @@
 	class="staticchart"
 	style="height:{height}px"
 	bind:this={plotEl}
-	aria-label="Stored shot telemetry chart"
+	role="img"
+	aria-label={storedChartSummary(series)}
 ></div>
 
 <style>

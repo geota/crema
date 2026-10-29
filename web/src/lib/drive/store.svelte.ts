@@ -56,12 +56,13 @@ export class DriveAuthStore {
 		writeToken(token);
 	}
 
-	/** Forget the token locally + revoke the grant (best-effort). */
-	signOut(): void {
+	/** Forget the token locally, then revoke the grant (best-effort; resolves
+	 *  once Google has answered or the revoke failed — never rejects). */
+	async signOut(): Promise<void> {
 		const t = this.token;
 		this.token = null;
 		writeToken(null);
-		if (t) void revokeDriveToken(t.accessToken);
+		if (t) await revokeDriveToken(t.accessToken).catch(() => undefined);
 	}
 
 	/**

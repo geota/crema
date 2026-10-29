@@ -65,6 +65,59 @@ object SafeFile {
     fun write(target: File, text: String, keepBackup: Boolean = true) =
         writeBytes(target, text.toByteArray(Charsets.UTF_8), keepBackup)
 
+    /**
+     * Atomically replace a CREDENTIAL file (sealed sign-in tokens): no `.bak`
+     * of the previous version is kept, and any leftover `.bak`, `.tmp` or
+     * `.corrupt-*` copy is deleted afterwards. Old tokens must not linger in
+     * copies the backup / device-transfer rules cannot name (review 05 P3-5):
+     * the previous session after a sign-out, or the plaintext token right
+     * after the SecretBox migration re-save.
+     */
+    fun writeCredential(target: File, text: String) {
+        writeBytes(target, text.toByteArray(Charsets.UTF_8), keepBackup = false)
+        purgeCopies(target, keptAside = true)
+    }
+
+    /**
+     * Delete [target]'s `.bak` and `.tmp` siblings, and with [keptAside] its
+     * `.corrupt-*` copies too. For credential stores, called after loading
+     * (`.bak` / `.tmp` only, so a just-reported corrupt copy is still there
+     * when the notice names it) and by [writeCredential].
+     */
+    fun purgeCopies(target: File, keptAside: Boolean = false) {
+        backupOf(target).delete()
+        tmpOf(target).delete()
+        if (keptAside) keptAside(target).forEach { it.delete() }
+    }
+
+    /**
+     * Delete [target] and EVERY copy of it: the `.bak` of the previous save, a
+     * leftover `.tmp`, and all `.corrupt-*` copies kept aside. For Erase all
+     * data (final review 05 N-1): saving an empty value instead would rename
+     * the full old file to `.bak`, where [load] could even bring it back.
+     * Also lifts a save block on [target] (the unreadable file is gone).
+     * Returns true when nothing of [target] remains on disk.
+     */
+    fun erase(target: File): Boolean {
+        val copies = listOf(target, backupOf(target), tmpOf(target)) + keptAside(target)
+        copies.forEach { it.delete() }
+        blocked -= target.path
+        return copies.none { it.exists() }
+    }
+
+    /**
+     * Delete every `.bak`, `.tmp` and `.corrupt-*` copy directly inside [dir]
+     * (not recursive). The last step of Erase all data: a store saved while
+     * the erase ran (an in-flight write of the empty state) leaves no copy of
+     * the old file behind. Returns the names it could not delete.
+     */
+    fun eraseCopiesIn(dir: File): List<String> =
+        (dir.listFiles { f -> f.isFile && isCopyName(f.name) } ?: emptyArray())
+            .filterNot { it.delete() }
+            .map { it.name }
+
+    private fun isCopyName(name: String) = name.endsWith(BAK) || name.endsWith(TMP) || CORRUPT in name
+
     /** Atomically replace [target] with [bytes]. Throws on failure; the old target stays intact. */
     fun writeBytes(target: File, bytes: ByteArray, keepBackup: Boolean = false) {
         if (target.path in blocked) {

@@ -83,6 +83,7 @@ class FirmwareFlashDriverTest {
         override fun status(nowMs: Long) = next("status")
         override fun restoreAwaiting(build: UInt, unconfirmed: Boolean, nowMs: Long) = next("restore")
         override fun restoreEraseHold(build: UInt, holdMsLeft: Long, nowMs: Long) = next("restoreHold")
+        override fun restoreVerifying(build: UInt, holdMsLeft: Long, nowMs: Long) = next("restoreVerify")
 
         /** Throw from these call names (a driver / core bug). */
         val throwOn = mutableSetOf<String>()

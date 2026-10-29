@@ -55,12 +55,12 @@
   position: relative;
 }
 .st-nav-item:hover { background: rgba(var(--tint-rgb), 0.03); color: var(--fg-1); }
-.st-nav-item :is(i, svg) { font-size: 16px; color: rgba(var(--tint-rgb), 0.5); flex: 0 0 auto; }
+.st-nav-item :is(i, svg) { font-size: 16px; color: var(--fg-muted); flex: 0 0 auto; }
 .st-nav-item.is-active {
   background: rgba(var(--tint-rgb), 0.05);
   color: var(--fg-1);
 }
-.st-nav-item.is-active :is(i, svg) { color: var(--copper-400); }
+.st-nav-item.is-active :is(i, svg) { color: var(--fg-accent); }
 .st-nav-item.is-active::before {
   content: '';
   position: absolute;
@@ -79,13 +79,13 @@
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.1em;
-  color: rgba(var(--tint-rgb), 0.35);
+  color: var(--fg-muted);
   text-transform: uppercase;
 }
 .st-nav-foot-btn {
   display: inline-flex; align-items: center; gap: 6px;
   background: transparent; border: 0;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
   font-family: var(--font-sans);
   font-size: 12px;
   padding: 4px 0;
@@ -111,7 +111,7 @@
   font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.5;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
   margin-top: 8px;
   max-width: 580px;
 }
@@ -129,12 +129,12 @@
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
   font-weight: 700;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
 }
 .st-group-sub {
   font-family: var(--font-sans);
   font-size: 12px;
-  color: rgba(var(--tint-rgb), 0.45);
+  color: var(--fg-muted);
   margin-top: 3px;
 }
 .st-group-rows {
@@ -168,7 +168,7 @@
   font-family: var(--font-sans);
   font-size: 11px;
   line-height: 1.45;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
 }
 .st-row-control {
   display: flex; align-items: center; gap: 10px;
@@ -177,7 +177,7 @@
 .st-row-hint {
   font-family: var(--font-sans);
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
 }
 
 /* ───────────────────────────── Controls */
@@ -201,7 +201,7 @@
   position: absolute;
   right: 8px; top: 50%;
   transform: translateY(-50%);
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
   font-size: 12px;
   pointer-events: none;
 }
@@ -227,7 +227,7 @@
   font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 500;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
   padding: 5px 12px;
   border-radius: 999px;
   cursor: pointer;
@@ -282,7 +282,7 @@
   transition: all var(--dur-1) var(--ease);
 }
 .st-valuechip:hover { background: rgba(var(--tint-rgb), 0.08); border-color: rgba(var(--tint-rgb), 0.18); }
-.st-valuechip :is(i, svg) { color: rgba(var(--tint-rgb), 0.4); font-size: 11px; }
+.st-valuechip :is(i, svg) { color: var(--fg-muted); font-size: 11px; }
 
 .st-statusdot {
   display: inline-flex; align-items: center; gap: 8px;
@@ -331,7 +331,7 @@
   display: flex; gap: 14px; flex-wrap: wrap;
   font-family: var(--font-sans);
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
 }
 .st-machinecard-meta strong { color: var(--fg-1); font-weight: 500; }
 .st-machinecard-actions {
@@ -356,7 +356,7 @@
   font-family: var(--font-sans);
   font-size: 11px;
   line-height: 1.5;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
   margin-bottom: 4px;
 }
 /* "Update firmware…" — pushed to the bottom-right of the card. */
@@ -373,6 +373,15 @@
   line-height: 1.5;
   color: var(--warning, #c7873b);
   margin-top: 4px;
+}
+
+/* Sharing: a stored sign-in could not be encrypted (no Web Crypto key). */
+.st-signin-unencrypted {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--warning, #c7873b);
+  margin: 0 0 12px;
 }
 
 /* ───────────────────────────── Maintenance
@@ -422,7 +431,7 @@
   font-family: var(--font-sans);
   font-size: 12px;
   line-height: 1.5;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
   margin-top: 4px;
 }
 .st-visualizer-meta strong { color: var(--fg-1); font-weight: 500; }
@@ -433,7 +442,7 @@
   display: inline-flex; align-items: center; gap: 4px;
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--copper-400);
+  color: var(--fg-accent);
   text-decoration: none;
   cursor: pointer;
 }
@@ -466,15 +475,15 @@
   display: flex; flex-direction: column; gap: 3px;
   font-family: var(--font-sans);
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.6);
+  color: var(--fg-3);
 }
 .dc-warn { color: var(--warning); }
 .dc-warn svg, .dc-state svg { vertical-align: -2px; }
 /* Account status: text + icon carry it; colour only reinforces. */
 .dc-state { display: inline-flex; align-items: center; gap: 4px; }
-.dc-state-ok { color: var(--copper-400); }
+.dc-state-ok { color: var(--fg-accent); }
 .dc-state-reauth { color: var(--warning); }
-.dc-state-off { color: rgba(var(--tint-rgb), 0.5); }
+.dc-state-off { color: var(--fg-muted); }
 .cu-actions { display: flex; gap: 8px; align-items: center; }
 
 /* ───────────────────────────── Other integration cards */
@@ -497,7 +506,7 @@
 }
 .st-otherint-card > :is(i, svg):first-child {
   font-size: 22px;
-  color: var(--copper-400);
+  color: var(--fg-accent);
 }
 .st-otherint-title {
   font-family: var(--font-sans);
@@ -509,7 +518,7 @@
   font-family: var(--font-sans);
   font-size: 11px;
   line-height: 1.5;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
   flex: 1 1 auto;
 }
 .st-otherint-card .st-btn {
@@ -529,7 +538,7 @@
 .st-about-line {
   font-family: var(--font-sans);
   font-size: 12px;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
   line-height: 1.6;
 }
 .st-about-line strong {

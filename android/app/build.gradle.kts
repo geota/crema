@@ -1,5 +1,6 @@
 import java.util.Properties
 import javax.inject.Inject
+import net.mullvad.androidrust.CargoBuildTask
 import org.gradle.process.ExecOperations
 
 plugins {
@@ -78,12 +79,15 @@ android {
         manifestPlaceholders["googleRedirectScheme"] = "com.googleusercontent.apps.unconfigured"
     }
 
-    // JVM unit tests (`./gradlew :app:testDebugUnitTest`) for the pure shell logic
-    // — wire assembly, fingerprint-skip decisions, formatters. They never touch the
-    // BLE/DE1 or the native FFI (those need a device), so stubbed android.* calls
-    // return defaults rather than throwing.
+    // JVM unit tests (`./gradlew :app:testDebugUnitTest`) for the shell logic
+    // — wire assembly, fingerprint-skip decisions, formatters. They never touch
+    // BLE (that needs a device); the few that need the core load its HOST build
+    // (cargoBuildHostCore). Stubbed android.* calls return defaults rather than
+    // throwing; the MainViewModel smoke test runs under Robolectric instead.
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Robolectric (MainViewModelSmokeTest) needs the merged resources.
+        unitTests.isIncludeAndroidResources = true
     }
 
     // Visualizer Doorkeeper application client_id (a PUBLIC client — PKCE, no
@@ -328,7 +332,10 @@ dependencies {
     // libjnidispatch.so ships 16 KB ELF page alignment, required by Android 15+ /
     // API 36+ devices + emulators (16 KB pages); older JNA fails to dlopen there.
     implementation("net.java.dev.jna:jna:5.19.1@aar")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.12.0")
+    // 1.11.0, not 1.12.0: dependabot #175 bumped to 1.12.0, which is not
+    // published on Maven Central or Google Maven (latest is 1.11.0), so
+    // nothing resolved. Keep -android and -test on the same version.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
     // The generated `core/bindings/crema-core.kt` types are @Serializable.
@@ -390,9 +397,18 @@ dependencies {
     // HTTP clients' request shape + status mapping (tracks the Ktor version),
     // and a real HTTP stub for the retry policy / sent signal over real
     // OkHttp (tracks the OkHttp version ktor-client-okhttp brings).
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.12.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("io.ktor:ktor-client-mock:$ktor")
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
+    // The desktop JNA jar (same version as the @aar above) carries the host
+    // libjnidispatch, so JVM tests can load the HOST build of the Rust core
+    // (cargoBuildHostCore below) — MainUiState's defaults and MainViewModel
+    // construction both call into it.
+    testImplementation("net.java.dev.jna:jna:5.19.1")
+    // Robolectric: a real Application/Looper for the MainViewModel
+    // construct-and-clear smoke test (cohort review 2026-10-25, P3-2).
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("androidx.test:core:1.7.0")
 }
 
 // ---------------------------------------------------------------------------
@@ -405,9 +421,39 @@ dependencies {
 // android/README.md).
 //
 // Native-lib build profile: "debug" (fast — local dev default) or "release"
-// (LTO + codegen-units=1 + opt-3, per core's [profile.release]). CI's release
-// job passes -PcargoProfile=release so shippable APKs carry a fully optimized .so.
-val cargoProfile = (project.findProperty("cargoProfile") as String?) ?: "debug"
+// (LTO + codegen-units=1 + opt-3, per core's [profile.release]). An explicit
+// -PcargoProfile wins. Otherwise it follows the variants being built: when the
+// task graph merges the JNI libs of any non-debuggable build type (release,
+// nightly) the profile is "release". The debug cargo profile has overflow
+// checks and debug assertions on, so a user-facing APK built with it crashes
+// where web and stable wrap silently (cohort review 2026-10-25, report 01
+// P1-3). Matching requested task NAMES missed `./gradlew assemble` and `build`,
+// which build the shippable APKs too (final cohort review 2026-10-28, 06 #13).
+// The plugin has one cargoBuild for every variant, so a mixed build (e.g.
+// `assemble`) puts the release library in the debug APK as well; that only
+// costs build time. CI's release and nightly jobs also pass
+// -PcargoProfile=release explicitly.
+val explicitCargoProfile = project.findProperty("cargoProfile") as String?
+var cargoProfile: String = explicitCargoProfile ?: "debug"
+gradle.taskGraph.whenReady {
+    val graph = this
+    if (graph.allTasks.none { it.project == project && it is CargoBuildTask }) return@whenReady
+    val shippableJniMerges = android.buildTypes
+        .filter { !it.isDebuggable }
+        .map { "${it.name.replaceFirstChar(Char::titlecase)}JniLibFolders" }
+    val shippable = graph.allTasks
+        .filter { it.project == project && it.name.startsWith("merge") }
+        .map { it.name }
+        .filter { name -> shippableJniMerges.any { name.endsWith(it) } }
+    cargoProfile = explicitCargoProfile ?: if (shippable.isNotEmpty()) "release" else "debug"
+    tasks.withType<CargoBuildTask>().configureEach { profile.set(cargoProfile) }
+    val why = when {
+        explicitCargoProfile != null -> "-PcargoProfile"
+        shippable.isNotEmpty() -> "shippable variant: ${shippable.joinToString()}"
+        else -> "no shippable variant in this build"
+    }
+    logger.lifecycle("Rust core for the APK: cargo profile '$cargoProfile' ($why)")
+}
 
 cargo {
     // Path from this module to the Rust workspace member.
@@ -513,9 +559,10 @@ val generateUniffiBindings =
         cargoCommand.set(cargoExecutable)
         crateSource.set(layout.projectDirectory.dir("../../core/de1-ffi/src"))
         workspaceDir.set(layout.projectDirectory.dir("../../core"))
+        // Read at execution, after the task graph picked the profile.
         library.set(
             layout.projectDirectory.file(
-                "../../core/target/aarch64-linux-android/$cargoProfile/libde1_ffi.so",
+                provider { "../../core/target/aarch64-linux-android/$cargoProfile/libde1_ffi.so" },
             ),
         )
         outputDirectory.set(layout.buildDirectory.dir("generated/uniffi"))
@@ -532,5 +579,53 @@ androidComponents {
             generateUniffiBindings,
             GenerateUniffiBindings::outputDirectory,
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Host build of the Rust core for JVM unit tests
+// ---------------------------------------------------------------------------
+// The APK carries the Android cdylib; JVM tests run on the build machine, so
+// they need the same crate built for the HOST (libde1_ffi.dylib / .so). JNA
+// finds it through jna.library.path. Incremental: a no-op when unchanged.
+//
+// The library is the build's output and every Test task's input, so a
+// Rust-only change re-runs the unit tests instead of leaving them UP-TO-DATE
+// or served from the build cache (final cohort review 2026-10-28, 04 P3-2).
+// Its directory comes from `cargo metadata`, which honours CARGO_TARGET_DIR
+// and a cargo `build.target-dir`, instead of a hard-coded core/target/debug.
+val coreDir = layout.projectDirectory.dir("../../core")
+val hostCoreLibrary: Provider<RegularFile> =
+    providers.exec {
+        workingDir = coreDir.asFile
+        commandLine(cargoExecutable, "metadata", "--format-version", "1", "--no-deps")
+    }.standardOutput.asText.map { json ->
+        val targetDir = (groovy.json.JsonSlurper().parseText(json) as Map<*, *>)["target_directory"] as String
+        layout.projectDirectory.file("$targetDir/debug/${System.mapLibraryName("de1_ffi")}")
+    }
+val cargoBuildHostCore =
+    tasks.register<Exec>("cargoBuildHostCore") {
+        description = "Build de1-ffi for the host, for JVM unit tests."
+        group = "rust"
+        workingDir = coreDir.asFile
+        commandLine(cargoExecutable, "build", "--package", "de1-ffi", "--lib")
+        outputs.file(hostCoreLibrary).withPropertyName("hostCoreLibrary")
+        // Cargo knows what is stale; Gradle has no view of the Rust sources.
+        outputs.upToDateWhen { false }
+    }
+
+tasks.withType<Test>().configureEach {
+    dependsOn(cargoBuildHostCore)
+    inputs.files(cargoBuildHostCore.map { it.outputs.files })
+        .withPropertyName("hostCoreLibrary")
+        .withPathSensitivity(PathSensitivity.NONE)
+    // Unit tests run on a Java 21 JVM: the Nordic BLE library ships Java 21
+    // bytecode, which MainViewModelSmokeTest loads under Robolectric. The
+    // app itself still compiles to Java 17 (compileOptions above).
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+    // Set at execution: the library's content is the input above, so its
+    // machine-specific path stays out of the cache key.
+    doFirst {
+        systemProperty("jna.library.path", hostCoreLibrary.get().asFile.parentFile.absolutePath)
     }
 }

@@ -44,8 +44,9 @@ class ShotTitleTest {
 
     @Test fun machineEspressoIsNamedByItsProfile() {
         assertEquals("Best of Decent", shotTitle(shot(profileName = "Best of Decent")))
-        assertEquals("Shot", shotTitle(shot()))
-        assertEquals("Shot", shotTitle(shot(profileName = "  ")))
+        // Same words as the web's shotTitle (cohort review 2026-10-25, 06 #14).
+        assertEquals("Untitled shot", shotTitle(shot()))
+        assertEquals("Untitled shot", shotTitle(shot(profileName = "  ")))
     }
 
     @Test fun guidedBrewsCarryTheirRecipeName() {

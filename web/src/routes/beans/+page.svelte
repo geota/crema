@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '#lib/icons/Icon.svelte';
+	import { menuKeyboard } from '#lib/a11y/focus.js';
 	import { pinActiveThenFavourite } from '#lib/library-order.js';
 	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 	import CoffeeBeanIcon from 'phosphor-svelte/lib/CoffeeBeanIcon';
@@ -156,6 +157,7 @@
 
 	// Add-button split
 	let addMenuOpen = $state(false);
+	let addMenuTrigger = $state<HTMLButtonElement>();
 
 	let drawerBeanId = $state<string | null>(null);
 	let quickAddOpen = $state(false);
@@ -770,6 +772,7 @@
 				<MagnifyingGlassIcon aria-hidden="true" />
 				<input
 					bind:value={q}
+					aria-label="Search beans"
 					placeholder="Search beans, roasters, origin, notes…"
 					title="Searches every field you've recorded — origin, process, tasting notes, grinder, tags — and tolerates typos."
 				/>
@@ -827,6 +830,7 @@
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div class="bn-split" onclick={(e) => e.stopPropagation()}>
 				<button
+					bind:this={addMenuTrigger}
 					class="bn-btn bn-btn-primary bn-split-main bn-split-solo"
 					onclick={(e) => {
 						e.stopPropagation();
@@ -840,8 +844,13 @@
 					<CaretDownIcon class="bn-split-caret" aria-hidden="true" />
 				</button>
 				{#if addMenuOpen}
-					<div class="bn-split-menu" role="menu">
-						<div class="bn-split-menu-head">Add</div>
+					<div
+						class="bn-split-menu"
+						role="menu"
+						aria-label="Add"
+						{@attach menuKeyboard({ onClose: () => (addMenuOpen = false), trigger: () => addMenuTrigger })}
+					>
+						<div class="bn-split-menu-head" aria-hidden="true">Add</div>
 						<button
 							class="bn-split-menu-item"
 							role="menuitem"
@@ -918,10 +927,11 @@
 	     the sort pill on the far right. The filter-pill region scrolls
 	     horizontally if needed so tabs and sort stay anchored. -->
 	<div class="bn-tabs">
-		<div class="bn-tabs-l">
+		<div class="bn-tabs-l" role="group" aria-label="Library view">
 			<button
 				class="bn-tab"
 				class:is-active={tab === 'bags'}
+				aria-pressed={tab === 'bags'}
 				onclick={() => selectTab('bags')}
 			>
 				<CoffeeBeanIcon weight="duotone" aria-hidden="true" />
@@ -931,6 +941,7 @@
 			<button
 				class="bn-tab"
 				class:is-active={tab === 'roasters'}
+				aria-pressed={tab === 'roasters'}
 				onclick={() => selectTab('roasters')}
 			>
 				<StorefrontIcon weight="duotone" aria-hidden="true" />
@@ -984,7 +995,7 @@
 				<button
 					class="bn-chip-clear"
 					onclick={() => roasterRegion = 'all'}
-				><XIcon aria-hidden="true" />Clear</button>
+				><XIcon aria-hidden="true" /> Clear</button>
 			{/if}
 			<div class="bn-toolbar-r">
 				<!-- "Show duplicates" toggle — surfaces canonical-tagged rows in
@@ -1233,7 +1244,7 @@
 	.bn-head-sub {
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.bn-head-r {
 		display: flex;
@@ -1256,7 +1267,7 @@
 		border-color: rgba(var(--tint-rgb), 0.2);
 	}
 	.bn-search :global(svg) {
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		font-size: 14px;
 	}
 	.bn-search input {
@@ -1271,13 +1282,13 @@
 		padding: 9px 8px;
 	}
 	.bn-search input::placeholder {
-		color: rgba(var(--tint-rgb), 0.35);
+		color: var(--fg-muted);
 	}
 	.bn-search-clear {
 		background: transparent;
 		border: 0;
 		padding: 4px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		cursor: pointer;
 	}
 
@@ -1355,7 +1366,7 @@
 		font-weight: 700;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		padding: 6px 8px 4px;
 	}
 	.bn-split-menu-item {
@@ -1378,7 +1389,7 @@
 	}
 	.bn-split-menu-item :global(svg) {
 		font-size: 18px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		margin-top: 2px;
 	}
 	.bn-split-menu-text {
@@ -1396,7 +1407,7 @@
 	.bn-split-menu-sub {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		line-height: 1.4;
 	}
 	.bn-split-menu-sub code {
@@ -1435,19 +1446,33 @@
 		margin-block: 6px;
 		flex-shrink: 0;
 	}
+	/* The Status / Roast / tag pills (about 1100 px of them) wrap onto extra
+	   rows instead of hiding in a horizontal scroller: on a 1024 px tablet
+	   the scroller showed 416 px, cut "Archived" mid-word and hid every Roast
+	   filter with no hint that more existed (cohort review 07 #18). */
 	.bn-tabs-filters {
-		flex: 1 1 0;
+		flex: 1 1 320px;
 		min-width: 0;
 		display: flex;
 		align-items: center;
-		overflow: hidden;
 	}
-	/* The shared FilterPills container (`.pp-tags`) already enables
-	   horizontal overflow scroll; just make sure it can shrink inside our
-	   flex slot. */
 	.bn-tabs-filters :global(.pp-tags) {
 		flex: 1 1 auto;
 		min-width: 0;
+		flex-wrap: wrap;
+		overflow: visible;
+		row-gap: 4px;
+	}
+	/* Narrower tablets: tabs, clear and sort share the first row and the
+	   pills get a full-width row of their own beneath. */
+	@media (max-width: 1199px) {
+		.bn-tabs-filters {
+			order: 3;
+			flex-basis: 100%;
+		}
+		.bn-tabs-divider {
+			display: none;
+		}
 	}
 	.bn-toolbar-r {
 		margin-left: auto;
@@ -1462,7 +1487,7 @@
 		padding: 8px 14px;
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		font-family: var(--font-sans);
 		font-size: 13px;
 		font-weight: 500;
@@ -1483,7 +1508,7 @@
 	.bn-tab-count {
 		font-family: var(--font-mono);
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		padding: 1px 6px;
 		background: rgba(var(--tint-rgb), 0.06);
 		border-radius: 999px;
@@ -1501,7 +1526,7 @@
 		gap: 4px;
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		cursor: pointer;
@@ -1564,7 +1589,7 @@
 	.bn-section-count {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-weight: 500;
 	}
 	.bn-section-rule {
@@ -1574,7 +1599,9 @@
 	}
 	.bn-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+		/* min(): a 340 px card floor, but never wider than the column, so a
+		   phone-width viewport does not scroll sideways (report 07 #14). */
+		grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
 		gap: 14px;
 	}
 	.bn-tile-new {
@@ -1605,7 +1632,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		font-size: 20px;
 		transition: all var(--dur-1) var(--ease);
 	}
@@ -1619,7 +1646,7 @@
 	}
 	.bn-tile-new-sub {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		text-align: center;
 		max-width: 240px;
 		line-height: 1.4;
@@ -1635,11 +1662,11 @@
 		text-align: center;
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.bn-empty-filter :global(svg) {
 		font-size: 48px;
-		color: rgba(var(--tint-rgb), 0.3);
+		color: var(--fg-muted);
 		margin-bottom: 4px;
 	}
 
@@ -1676,7 +1703,7 @@
 	.bn-merge-banner-sub {
 		font-family: var(--font-sans);
 		font-size: 11.5px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		margin-top: 2px;
 		line-height: 1.4;
 	}
@@ -1722,7 +1749,7 @@
 	}
 	.bn-roaster-tile-new .bn-tile-new-sub {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		text-align: center;
 		max-width: 220px;
 		line-height: 1.4;
@@ -1731,7 +1758,7 @@
 	/* "Show dupes" toggle in the tab toolbar — reuses `.bn-chip-clear`
 	   geometry but adds an on-state colour so the active filter reads. */
 	.bn-chip-toggle.is-on {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		background: rgba(var(--copper-rgb), 0.08);
 	}
 </style>

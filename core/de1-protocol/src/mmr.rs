@@ -87,6 +87,34 @@ pub const fn is_bengle_model(raw: u32) -> bool {
     raw >= 128
 }
 
+/// The Bengle end-of-shot weight register (`0x803864`): grams × 100, 0 = off;
+/// the firmware persists it and stops a shot there with its integrated scale.
+/// Bengle-only, write-only from Crema's side (de1app `set_end_of_shot_weight`,
+/// `de1_comms.tcl`; reaprime `integrated_scale_capability.dart`), so it is an
+/// address rather than an [`MmrRegister`] the shells would read and label.
+pub const END_OF_SHOT_WEIGHT_ADDRESS: u32 = 0x80_3864;
+
+/// Decode a raw `HeaterVoltage` MMR word (`0x803834`) to the nominal mains
+/// voltage, `Some(120)` or `Some(230)`, or `None` when the firmware has not
+/// been told (raw `0`) or the word is outside both bands.
+///
+/// The app writes the plain voltage (120 / 230); the firmware adds `+1000`
+/// to mark a user-committed value, so a set machine reads back `1120` /
+/// `1230`. This strips the marker **once** and buckets like reaprime
+/// `De1HeaterVoltage.fromInt` (`de1_interface.dart:118-123`: `90..=150` →
+/// 120 V, `180..=260` → 230 V). A doubled marker (`2120`) stays `None`.
+#[must_use]
+pub const fn heater_voltage_from_raw(raw: u32) -> Option<u16> {
+    let v = if raw > 1000 { raw - 1000 } else { raw };
+    if v >= 90 && v <= 150 {
+        Some(120)
+    } else if v >= 180 && v <= 260 {
+        Some(230)
+    } else {
+        None
+    }
+}
+
 /// Whether the connected machine has the Bengle cup-warmer plate hardware —
 /// a capability gate the shell uses to show / hide the cup-warmer card.
 /// The plate is Bengle-only, so this is exactly [`is_bengle_model`]
@@ -157,7 +185,10 @@ pub enum MmrRegister {
     MachineModel,
     /// Firmware build number.
     FirmwareVersion,
-    /// Group Head Controller info bitmask (bit 0: present, bit 1: active).
+    /// Group Head Controller info bitmask: `0x1` LED controller present,
+    /// `0x2` touch controller present, `0x4` active (reaprime
+    /// `de1.models.dart` `ghcInfo`; pyDE1 `c_api.py`). de1app treats any
+    /// value outside `{0, 1, 2, 4}` as "start at the group head only".
     GhcInfo,
     /// Tank desired water-temperature threshold, °C.
     TankTempThreshold,

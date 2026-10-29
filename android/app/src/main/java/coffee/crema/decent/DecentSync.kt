@@ -244,6 +244,21 @@ class DecentSync(
         _state.update { it.copy(signInError = null) }
     }
 
+    /**
+     * Erase all data: forget the account AND everything else this store keeps
+     * (the activity log, the upload settings, the retry list) and delete its
+     * file (final review 04 P3-3). Decent has no revoke endpoint.
+     */
+    suspend fun eraseAll() {
+        forgetNotOnAccount()
+        persistMutex.withLock {
+            persisted = DecentState()
+            store.erase()
+        }
+        fold()
+        _state.update { it.copy(signInError = null) }
+    }
+
     fun setAutoUpload(enabled: Boolean) = scope.launch { setAutoUploadNow(enabled) }
 
     override suspend fun setAutoUploadNow(enabled: Boolean) {

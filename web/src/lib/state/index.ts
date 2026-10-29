@@ -15,6 +15,8 @@ export {
 	defaultRefillPointMm,
 	waterRefillSoon,
 	machineErrorText,
+	maintenanceTitle,
+	maintenanceProgressText,
 	EMPTY_DE1_CALIBRATION,
 	INITIAL_SNAPSHOT,
 	DEFAULT_SCALE_VOLUME,

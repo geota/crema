@@ -28,6 +28,7 @@
 //! `localStorage` constructors. Only the pure-data fns move.
 
 use crate::bean::{Bean, Roaster};
+use crate::bean_sync::sync_direction_pushes;
 use crate::visualizer_wire::RoasterWire;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -97,6 +98,114 @@ impl Default for VisualizerSyncPrefs {
     }
 }
 
+/// The outcome of restoring a backup's [`VisualizerSyncPrefs`] over the
+/// device's current ones: what to apply now, and which fields were HELD
+/// because the backup would widen what Crema shares (review 05 P3-1).
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuardedVisualizerPrefs {
+    /// The prefs to apply without asking: the incoming values, except that
+    /// every held field keeps its current value.
+    pub apply: VisualizerSyncPrefs,
+    /// The camelCase names of the fields the backup would widen
+    /// (`"privacy"`, `"includeNotes"`, `"autoUpload"`, `"includeProfile"`,
+    /// `"autoSync"`, `"shotsDirection"`, `"beansDirection"`,
+    /// `"roastersDirection"`). A shell either asks the user before applying
+    /// the incoming value or keeps the current one.
+    pub held: Vec<String>,
+}
+
+/// How widely an upload privacy value shares: `private` < `unlisted` <
+/// `public`. An unknown value ranks as `public` so it is never applied
+/// silently.
+fn privacy_rank(privacy: &str) -> u8 {
+    match privacy {
+        "private" => 0,
+        "unlisted" => 1,
+        _ => 2,
+    }
+}
+
+/// Restore `incoming` (a backup's Visualizer prefs, possibly from someone
+/// else) over `current` without silently sharing more. Held back (current
+/// value kept in `apply`, name listed in `held`):
+///  - a more public `privacy`;
+///  - `includeNotes`, `includeProfile`, `autoUpload` or `autoSync` turning on;
+///  - a shots, beans or roasters direction that starts pushing (`off` or
+///    `pull` becoming `backup` or `two-way`) — the shot auto-upload gate is
+///    `pushes(shotsDirection) && autoUpload`, so a direction change alone can
+///    switch uploads on (final review 05 N-4a).
+///
+/// Narrowing changes and the remaining fields apply as-is.
+#[must_use]
+pub fn guard_restored_visualizer_prefs(
+    current: &VisualizerSyncPrefs,
+    incoming: &VisualizerSyncPrefs,
+) -> GuardedVisualizerPrefs {
+    let mut apply = incoming.clone();
+    let mut held = Vec::new();
+    if privacy_rank(&incoming.privacy) > privacy_rank(&current.privacy) {
+        apply.privacy.clone_from(&current.privacy);
+        held.push("privacy".to_owned());
+    }
+    if incoming.include_notes && !current.include_notes {
+        apply.include_notes = false;
+        held.push("includeNotes".to_owned());
+    }
+    if incoming.auto_upload && !current.auto_upload {
+        apply.auto_upload = false;
+        held.push("autoUpload".to_owned());
+    }
+    if incoming.include_profile && !current.include_profile {
+        apply.include_profile = false;
+        held.push("includeProfile".to_owned());
+    }
+    if incoming.auto_sync && !current.auto_sync {
+        apply.auto_sync = false;
+        held.push("autoSync".to_owned());
+    }
+    let directions = [
+        (
+            "shotsDirection",
+            &mut apply.shots_direction,
+            &current.shots_direction,
+        ),
+        (
+            "beansDirection",
+            &mut apply.beans_direction,
+            &current.beans_direction,
+        ),
+        (
+            "roastersDirection",
+            &mut apply.roasters_direction,
+            &current.roasters_direction,
+        ),
+    ];
+    for (name, applied, now) in directions {
+        if sync_direction_pushes(applied) && !sync_direction_pushes(now) {
+            applied.clone_from(now);
+            held.push(name.to_owned());
+        }
+    }
+    GuardedVisualizerPrefs { apply, held }
+}
+
+/// JSON form of [`guard_restored_visualizer_prefs`] for the shells: two
+/// `VisualizerSyncPrefs` JSON objects in (partial objects fill from the
+/// defaults), `GuardedVisualizerPrefs` JSON out.
+///
+/// # Errors
+/// When either input is not a JSON object of the prefs shape.
+pub fn guard_restored_visualizer_prefs_json(
+    current_json: &str,
+    incoming_json: &str,
+) -> Result<String, serde_json::Error> {
+    let current: VisualizerSyncPrefs = serde_json::from_str(current_json)?;
+    let incoming: VisualizerSyncPrefs = serde_json::from_str(incoming_json)?;
+    serde_json::to_string(&guard_restored_visualizer_prefs(&current, &incoming))
+}
+
 /// The fields the planner reads from a remote shot row. Visualizer's
 /// API returns a superset; we only care about identity + the de-dup
 /// hash inputs + editable annotations. Mirrors the TS `WireShot` in
@@ -149,6 +258,14 @@ pub struct WireShot {
     /// down from Visualizer lost its bean info).
     #[serde(default)]
     pub bean: Option<WireShotBean>,
+    /// Who made the shot (Visualizer `barista`), or `None` when the remote
+    /// has none (blank collapses to `None`). Mutable metadata — NOT part of
+    /// the de-dup signature. The shells fill a local shot's barista from it
+    /// on pull (final review 06 #1: it was dropped, so an edit in Crema sent
+    /// `barista: ""` and wiped the remote one). `#[serde(default)]` so older
+    /// cached payloads without the field still deserialise.
+    #[serde(default)]
+    pub barista: Option<String>,
 }
 
 /// The bean / grinder journal fields Visualizer's native detail flattens
@@ -880,6 +997,123 @@ pub fn reconcile_beans_json(payload: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    // ── guard_restored_visualizer_prefs (review 05 P3-1) ─────────────
+
+    fn prefs(privacy: &str, notes: bool, auto: bool) -> VisualizerSyncPrefs {
+        VisualizerSyncPrefs {
+            privacy: privacy.to_owned(),
+            include_notes: notes,
+            auto_upload: auto,
+            ..VisualizerSyncPrefs::default()
+        }
+    }
+
+    #[test]
+    fn restore_holds_every_widening_field() {
+        let current = prefs("private", false, false);
+        let incoming = VisualizerSyncPrefs {
+            shots_direction: "two-way".to_owned(),
+            ..prefs("public", true, true)
+        };
+        let g = guard_restored_visualizer_prefs(&current, &incoming);
+        assert_eq!(g.held, vec!["privacy", "includeNotes", "autoUpload"]);
+        assert_eq!(g.apply.privacy, "private");
+        assert!(!g.apply.include_notes);
+        assert!(!g.apply.auto_upload);
+        // Non-sharing fields still restore.
+        assert_eq!(g.apply.shots_direction, "two-way");
+    }
+
+    #[test]
+    fn restore_applies_narrowing_and_equal_changes_without_holding() {
+        let current = prefs("public", true, true);
+        let g = guard_restored_visualizer_prefs(&current, &prefs("unlisted", false, false));
+        assert!(g.held.is_empty());
+        assert_eq!(g.apply, prefs("unlisted", false, false));
+        let same = guard_restored_visualizer_prefs(&current, &current);
+        assert!(same.held.is_empty());
+    }
+
+    // Final review 05 N-4a: every field that starts sending data is held.
+    #[test]
+    fn restore_holds_a_direction_that_starts_pushing() {
+        let current = VisualizerSyncPrefs {
+            shots_direction: "off".to_owned(),
+            beans_direction: "pull".to_owned(),
+            roasters_direction: "off".to_owned(),
+            ..prefs("private", false, true)
+        };
+        let incoming = VisualizerSyncPrefs {
+            shots_direction: "backup".to_owned(),
+            beans_direction: "two-way".to_owned(),
+            roasters_direction: "pull".to_owned(),
+            ..current.clone()
+        };
+        let g = guard_restored_visualizer_prefs(&current, &incoming);
+        assert_eq!(g.held, vec!["shotsDirection", "beansDirection"]);
+        assert_eq!(g.apply.shots_direction, "off");
+        assert_eq!(g.apply.beans_direction, "pull");
+        // Pull-only never sends anything: applies as-is.
+        assert_eq!(g.apply.roasters_direction, "pull");
+    }
+
+    #[test]
+    fn restore_applies_a_direction_that_keeps_or_stops_pushing() {
+        let current = VisualizerSyncPrefs {
+            shots_direction: "two-way".to_owned(),
+            beans_direction: "backup".to_owned(),
+            ..VisualizerSyncPrefs::default()
+        };
+        let incoming = VisualizerSyncPrefs {
+            shots_direction: "backup".to_owned(),
+            beans_direction: "off".to_owned(),
+            ..current.clone()
+        };
+        let g = guard_restored_visualizer_prefs(&current, &incoming);
+        assert!(g.held.is_empty());
+        assert_eq!(g.apply, incoming);
+    }
+
+    #[test]
+    fn restore_holds_include_profile_and_auto_sync_turning_on() {
+        let current = VisualizerSyncPrefs {
+            include_profile: false,
+            auto_sync: false,
+            ..VisualizerSyncPrefs::default()
+        };
+        let g = guard_restored_visualizer_prefs(&current, &VisualizerSyncPrefs::default());
+        assert_eq!(g.held, vec!["includeProfile", "autoSync"]);
+        assert!(!g.apply.include_profile);
+        assert!(!g.apply.auto_sync);
+        // Turning them off applies.
+        let off = guard_restored_visualizer_prefs(&VisualizerSyncPrefs::default(), &current);
+        assert!(off.held.is_empty());
+        assert_eq!(off.apply, current);
+    }
+
+    #[test]
+    fn restore_treats_unknown_privacy_as_widest() {
+        let g = guard_restored_visualizer_prefs(
+            &prefs("unlisted", false, true),
+            &prefs("everyone", false, true),
+        );
+        assert_eq!(g.held, vec!["privacy"]);
+        assert_eq!(g.apply.privacy, "unlisted");
+    }
+
+    #[test]
+    fn restore_guard_json_round_trips_and_fills_partial_input() {
+        let out = guard_restored_visualizer_prefs_json(
+            r#"{"privacy":"private","includeNotes":false,"autoUpload":false}"#,
+            r#"{"privacy":"public"}"#,
+        )
+        .expect("valid input");
+        let g: GuardedVisualizerPrefs = serde_json::from_str(&out).expect("valid output");
+        // The partial incoming blob fills autoUpload=true from the defaults: held too.
+        assert_eq!(g.held, vec!["privacy", "autoUpload"]);
+        assert!(guard_restored_visualizer_prefs_json("42", "{}").is_err());
+    }
+
     // ── signature_for_shot ────────────────────────────────────────────
 
     /// The TS `signatureForShot` would emit hex string `H` for the
@@ -1087,7 +1321,28 @@ mod tests {
             updated_at_ms: None,
             tag_list: Vec::new(),
             bean: None,
+            barista: None,
         }
+    }
+
+    #[test]
+    fn reconcile_passes_the_remote_barista_through_and_old_payloads_still_parse() {
+        // Final review 06 #1: the shells fill a local barista from the
+        // action's remote, so it must survive the JSON facade.
+        let payload = serde_json::json!({
+            "local": [],
+            "remote": [{
+                "id": "r-1", "clock": 1, "duration_ms": 2, "profile_title": null,
+                "final_weight_g": null, "barista": "Ana"
+            }, {
+                "id": "r-2", "clock": 3, "duration_ms": 4, "profile_title": null,
+                "final_weight_g": null
+            }]
+        });
+        let out = reconcile_shots_json(&payload.to_string()).unwrap();
+        let actions: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(actions[0]["remote"]["barista"], "Ana");
+        assert!(actions[1]["remote"]["barista"].is_null());
     }
 
     fn local_shot(id: &str, visualizer_id: Option<&str>) -> LocalShotRef {
@@ -1174,6 +1429,7 @@ mod tests {
                 updated_at_ms: None,
                 tag_list: Vec::new(),
                 bean: None,
+                barista: None,
             },
             WireShot {
                 id: "r-bind".to_owned(),
@@ -1186,6 +1442,7 @@ mod tests {
                 updated_at_ms: None,
                 tag_list: Vec::new(),
                 bean: None,
+                barista: None,
             },
         ];
         let actions = reconcile_shots(&[bound, unbound], &remotes);

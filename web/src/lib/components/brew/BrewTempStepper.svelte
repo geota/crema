@@ -53,6 +53,7 @@
 	{#if p.brewMode === 'temp'}
 		<QuickStepper
 			value={p.brewTemp}
+			name="Brew temperature"
 			dimension="temp"
 			min={80}
 			max={100}
@@ -65,6 +66,7 @@
 		<QuickChipRow
 			options={[88, 91, 93, 95, 97]}
 			value={p.brewTemp}
+			name="Brew temperature"
 			dimension="temp"
 			onChange={(v) => params.set('brewTemp', v)}
 		/>
@@ -72,6 +74,7 @@
 		<div class="bts-preinf" class:is-off={p.preinf === 0}>
 			<QuickStepper
 				value={p.preinf}
+				name="Pre-infusion"
 				unit="s"
 				min={0}
 				max={30}
@@ -85,6 +88,7 @@
 			<QuickChipRow
 				options={[0, 4, 8, 12, 16]}
 				value={p.preinf}
+				name="Pre-infusion"
 				unit="s"
 				onChange={(v) => params.set('preinf', v)}
 			/>

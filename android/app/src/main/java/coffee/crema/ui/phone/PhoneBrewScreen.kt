@@ -22,7 +22,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -388,7 +387,7 @@ private fun SwapDropdown(
     onAllBeans: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val ddWidth = LocalConfiguration.current.screenWidthDp.dp - CremaEdge * 2
+    val ddWidth = coffee.crema.ui.windowContentDpSize().width - CremaEdge * 2
     CremaAnchoredPopup(expanded = true, onDismiss = onDismiss) {
         Surface(
             shape = RoundedCornerShape(CremaCardSpec.phoneRadius),
@@ -797,11 +796,11 @@ private fun RestingBody(
     scaleConnected: Boolean,
     onOpenLastShot: (String?) -> Unit,
     onRate: (String, Int) -> Unit,
+    modifier: Modifier = Modifier,
     /** Prefill Brew from a stored shot — the dial-in card's button. */
     onStartFromShot: (String) -> Unit = {},
     /** Tap-to-tare for the Scale stat tile (issue #37). */
     onTareScale: () -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val tel = CremaTheme.telemetry
     Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {

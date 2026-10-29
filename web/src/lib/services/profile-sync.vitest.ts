@@ -26,7 +26,7 @@
 import { describe, expect, it } from 'vitest';
 import { Deferred, Duration, Effect, Fiber } from 'effect';
 import { TestClock } from 'effect/testing';
-import { ProfileSync, ProfileSyncLive } from './profile-sync.ts';
+import { ProfileSync, ProfileSyncLive, profileWriteAck } from './profile-sync.ts';
 
 const noop = () => {};
 
@@ -194,7 +194,122 @@ describe('ProfileSync.sync — supersession', () => {
 	});
 });
 
+describe('ProfileSync.sync — background syncs never displace an upload (cohort review 2026-10-28, #2 N2)', () => {
+	it('an automatic re-upload waits on the user start in flight instead of cancelling it', async () => {
+		const result = await run(
+			Effect.gen(function* () {
+				const ps = yield* ProfileSync;
+				const startedUser = yield* Deferred.make<void>();
+				let cancelled = false;
+				let autoUploaded = false;
+				const user = yield* Effect.forkChild(
+					ps.sync({
+						desired: 'fp-with-qc',
+						alreadyLoaded: false,
+						upload: signalUpload(startedUser),
+						cancel: Effect.void,
+						log: noop
+					})
+				);
+				yield* Deferred.await(startedUser);
+				const auto = yield* Effect.forkChild(
+					ps.sync({
+						desired: 'fp-no-qc',
+						alreadyLoaded: false,
+						upload: Effect.sync(() => {
+							autoUploaded = true;
+						}),
+						cancel: Effect.sync(() => {
+							cancelled = true;
+						}),
+						log: noop,
+						background: true
+					})
+				);
+				yield* Effect.sleep(Duration.millis(5));
+				const committed = yield* ps.completed;
+				return {
+					committed,
+					user: yield* Fiber.join(user),
+					auto: yield* Fiber.join(auto),
+					cancelled,
+					autoUploaded
+				};
+			})
+		);
+		expect(result.cancelled).toBe(false);
+		expect(result.autoUploaded).toBe(false);
+		expect(result.user).toBe(true);
+		expect(result.auto).toBe(true);
+		expect(result.committed).toBe('fp-with-qc');
+	});
+
+	it('a user start still supersedes an automatic upload', async () => {
+		const result = await run(
+			Effect.gen(function* () {
+				const ps = yield* ProfileSync;
+				const startedAuto = yield* Deferred.make<void>();
+				const startedUser = yield* Deferred.make<void>();
+				const auto = yield* Effect.forkChild(
+					ps.sync({
+						desired: 'fp-no-qc',
+						alreadyLoaded: false,
+						upload: signalUpload(startedAuto),
+						cancel: Effect.void,
+						log: noop,
+						background: true
+					})
+				);
+				yield* Deferred.await(startedAuto);
+				const user = yield* Effect.forkChild(
+					ps.sync({
+						desired: 'fp-with-qc',
+						alreadyLoaded: false,
+						upload: signalUpload(startedUser),
+						cancel: ps.failed,
+						log: noop
+					})
+				);
+				yield* Deferred.await(startedUser);
+				const committed = yield* ps.completed;
+				return { committed, auto: yield* Fiber.join(auto), user: yield* Fiber.join(user) };
+			})
+		);
+		expect(result.auto).toBe(false);
+		expect(result.user).toBe(true);
+		expect(result.committed).toBe('fp-with-qc');
+	});
+});
+
 describe('ProfileSync.sync — timeout (TestClock)', () => {
+	it('cancels the core upload when the backstop fires (cohort review 2026-10-28, #2 N1)', async () => {
+		const result = await runTest(
+			Effect.gen(function* () {
+				const ps = yield* ProfileSync;
+				const started = yield* Deferred.make<void>();
+				let cancels = 0;
+				const fiber = yield* Effect.forkChild(
+					ps.sync({
+						desired: 'fp1',
+						alreadyLoaded: false,
+						upload: signalUpload(started),
+						// The core's ProfileUploadFailed{Aborted} fold runs `failed`.
+						cancel: Effect.sync(() => {
+							cancels += 1;
+						}).pipe(Effect.andThen(ps.failed)),
+						log: noop
+					})
+				);
+				yield* Deferred.await(started);
+				yield* TestClock.adjust(Duration.seconds(15));
+				const ok = yield* Fiber.join(fiber);
+				return { ok, cancels };
+			})
+		);
+		expect(result.ok).toBe(false);
+		expect(result.cancels).toBe(1);
+	});
+
 	it('resolves false + logs when no completion arrives within 15s', async () => {
 		const result = await runTest(
 			Effect.gen(function* () {
@@ -253,5 +368,22 @@ describe('ProfileSync.profileDownloadGuard (TestClock)', () => {
 		);
 		expect(result.waitingAtStart).toBe(true);
 		expect(result.waitingAt499).toBe(true);
+	});
+});
+
+describe('profileWriteAck (cohort review 02 P0-2)', () => {
+	it('acks a delivered header as De1HeaderAck and a delivered frame as De1FrameAck', () => {
+		expect(profileWriteAck('De1ProfileHeader', true)).toBe('De1HeaderAck');
+		expect(profileWriteAck('De1ProfileFrame', true)).toBe('De1FrameAck');
+	});
+
+	it('never acks a write that did not reach the DE1', () => {
+		expect(profileWriteAck('De1ProfileHeader', false)).toBeNull();
+		expect(profileWriteAck('De1ProfileFrame', false)).toBeNull();
+	});
+
+	it('acks nothing for other targets', () => {
+		expect(profileWriteAck('De1RequestedState', true)).toBeNull();
+		expect(profileWriteAck('De1MmrWrite', true)).toBeNull();
 	});
 });

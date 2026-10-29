@@ -3,8 +3,8 @@
 
 use de1_domain::idle_sleep::IdleSleepBlock;
 use de1_domain::{
-    BrewCue, BrewSessionSummary, MaintenancePhase, ShotDisposition, ShotPhase, SteamClogReason,
-    StopReason, WaterSessionKind,
+    BrewCue, BrewSessionSummary, MaintenanceFailure, MaintenancePhase, ShotDisposition, ShotPhase,
+    SteamClogReason, StopReason, WaterSessionKind,
 };
 use de1_protocol::{CalCommand, CalTarget, MachineState, MmrRegister, SubState};
 use serde::{Deserialize, Serialize};
@@ -67,6 +67,15 @@ pub enum Source {
     /// received. The orchestrator's ack matcher reads byte 0 (`FrameToWrite`)
     /// to confirm each frame applied.
     De1FrameAck,
+    /// The shell's confirmation that a profile `HeaderWrite` (`cuuid_0F`)
+    /// write succeeded. Like [`De1FrameAck`](Self::De1FrameAck) this is
+    /// synthesised by the shell from the bytes it just wrote (the DE1 sends
+    /// only an ATT write response); the core requires it before any frame
+    /// ack, so a header write that failed fails the upload instead of
+    /// leaving the DE1 with the previous profile's frame count under the new
+    /// frames (reaprime awaits the header write the same way,
+    /// `unified_de1.profile.dart`).
+    De1HeaderAck,
     /// The connected scale's on-scale button characteristic — today only the
     /// Skale II's `EF82` (`ScaleUuids::button_notify`). The shell subscribes
     /// when the core reports the characteristic and forwards presses here;
@@ -146,6 +155,9 @@ pub enum Event {
         cycle: u8,
         /// The 1 °C cold-maintenance profile was loaded for this cycle.
         cold_workaround: bool,
+        /// Why the cycle never started; set only on
+        /// [`MaintenancePhase::Failed`].
+        failure: Option<MaintenanceFailure>,
     },
     /// The idle-sleep timer ("Sleep after") sent Sleep — see
     /// [`de1_domain::idle_sleep`]. `attempt` is 1 for the episode's send, 2
@@ -566,6 +578,17 @@ pub enum Event {
         /// every reference app reads.
         measured: f32,
     },
+    /// A calibration write or factory reset was refused — by the core's
+    /// guards before anything reached the wire, or by the DE1's own error
+    /// reply ([`CalibrationRefusal::FirmwareRejected`](crate::CalibrationRefusal::FirmwareRejected)).
+    /// See [`calibration_guard`](crate::calibration_guard).
+    CalibrationRefused {
+        /// The sensor the refused request targeted; `None` for the
+        /// firmware's error reply, which does not say.
+        target: Option<CalTarget>,
+        /// Why it was refused.
+        reason: crate::CalibrationRefusal,
+    },
     /// A write was refused because a firmware upload is locking out other
     /// writes. v1 carries the lockout guard as a stub
     /// ([`firmware_locks_writes`](crate::CremaCore::firmware_locks_writes))
@@ -617,9 +640,8 @@ pub enum Event {
         /// Espresso group target temperature, °C.
         group_temp: f32,
     },
-    /// A profile upload has begun. Carries the total number of acks the
-    /// orchestrator expects (frames + extensions + tail; the header is
-    /// not acked separately).
+    /// A profile upload has begun. Carries the frame counts the orchestrator
+    /// expects acks for (the header ack, then frames + extensions + tail).
     ProfileUploadStarted {
         /// Title of the profile being uploaded — propagated for the
         /// shell's UI ("Uploading <title>…") and for the active-profile
@@ -629,6 +651,25 @@ pub enum Event {
         frame_count: u8,
         /// Number of extension frames (one per step that has a limiter).
         extension_frame_count: u8,
+        /// This upload's number, unique for the core's lifetime (kept across
+        /// [`reset`](crate::CremaCore::reset)). The shell records it with
+        /// the upload's writes and passes it back to
+        /// [`profile_write_failed`](crate::CremaCore::profile_write_failed)
+        /// and `on_profile_write_ack`, so a late report or ack cannot reach a
+        /// newer upload. A wasm bridge that rebuilds its core after a panic
+        /// starts again at 1: the web shell then supersedes every open batch.
+        upload_id: u32,
+    },
+    /// An upload is waiting for the DE1's machine model before it writes
+    /// anything: the model picks the frame encoding (classic DE1 or Bengle
+    /// BLE v2), so no upload goes out on a guess. The core has asked for the
+    /// MachineModel register; the upload starts when the reply lands
+    /// ([`ProfileUploadStarted`](Self::ProfileUploadStarted)) or fails with
+    /// [`ProfileUploadFailure::MachineModelUnknown`] after
+    /// [`MACHINE_MODEL_WAIT`](crate::MACHINE_MODEL_WAIT).
+    ProfileUploadWaitingForModel {
+        /// Title of the profile waiting to upload.
+        title: String,
     },
     /// One profile frame was acknowledged by the DE1.
     ProfileUploadProgress {
@@ -653,10 +694,32 @@ pub enum Event {
     },
     /// The profile upload failed. The core has discarded its in-progress
     /// state; the shell may retry by calling `upload_profile` again.
+    ///
+    /// Once the header was dispatched, what the DE1 holds is **unknown**:
+    /// frames are indexed slot writes with no commit step, so an interrupted
+    /// upload can leave the new header's frame count over a mix of new and
+    /// old frames (Decenza `aa8232e6`). The shell must forget any "the DE1
+    /// holds profile X" cache on this event; the core asks for a re-upload
+    /// with [`ProfileReuploadNeeded`](Self::ProfileReuploadNeeded) once the
+    /// machine is Idle.
     ProfileUploadFailed {
         /// Why the upload failed.
         reason: ProfileUploadFailure,
     },
+    /// The DE1's loaded profile is unknown after a failed upload and the
+    /// machine is Idle, so the shell should upload the active profile now.
+    /// Emitted when a failure lands while the machine is Idle, on the next
+    /// transition into Idle (after the flow that interrupted the upload,
+    /// never during it), or on a tick. The request stays outstanding until a
+    /// shell starts an upload: it is repeated every
+    /// [`PROFILE_REUPLOAD_REPEAT`](crate::PROFILE_REUPLOAD_REPEAT) while the
+    /// machine stays Idle, so a shell that could not act at once (link not
+    /// ready yet) is asked again. At most
+    /// [`MAX_PROFILE_REUPLOAD_REQUESTS`](crate::MAX_PROFILE_REUPLOAD_REQUESTS)
+    /// uploads are started in answer until one completes; cleared by a
+    /// completed upload or a reset (the reconnect path owns the re-upload).
+    /// Decenza's `ReArm` follow-up (`aa8232e6`).
+    ProfileReuploadNeeded,
     /// An incoming notification could not be decoded.
     DecodeError {
         /// Human-readable description of the failure.
@@ -676,7 +739,7 @@ pub enum Event {
 pub enum ProfileUploadFailure {
     /// The profile had no steps.
     Empty,
-    /// The profile had more than 32 steps.
+    /// The profile had more than 20 steps (the DE1 frame limit).
     TooManySteps {
         /// How many steps the rejected profile had.
         count: u32,
@@ -690,6 +753,12 @@ pub enum ProfileUploadFailure {
         /// The `FrameToWrite` byte the ack actually carried.
         got: u8,
     },
+    /// A frame ack arrived before the shell confirmed the header write, or
+    /// the header confirmation never arrived within
+    /// [`PROFILE_UPLOAD_ACK_TIMEOUT`](crate::PROFILE_UPLOAD_ACK_TIMEOUT).
+    /// The header write failed, so the DE1 may hold the previous profile's
+    /// frame count.
+    HeaderNotAcked,
     /// No ack arrived within
     /// [`PROFILE_UPLOAD_ACK_TIMEOUT`](crate::PROFILE_UPLOAD_ACK_TIMEOUT) of
     /// the most recent ack (or upload start, for the first ack).
@@ -700,8 +769,17 @@ pub enum ProfileUploadFailure {
     },
     /// The shell called
     /// [`cancel_profile_upload`](crate::CremaCore::cancel_profile_upload)
-    /// mid-upload.
+    /// mid-upload, or a new upload superseded this one.
     Aborted,
+    /// A profile write of this upload did not reach the DE1 (the shell
+    /// reported it through
+    /// [`profile_write_failed`](crate::CremaCore::profile_write_failed)).
+    /// The shell stops the upload's remaining writes.
+    WriteFailed,
+    /// The machine model never arrived within
+    /// [`MACHINE_MODEL_WAIT`](crate::MACHINE_MODEL_WAIT), so the frame
+    /// encoding (classic DE1 or Bengle) is unknown and nothing was written.
+    MachineModelUnknown,
     /// An unexpected [`AppError`] variant — the bridge couldn't classify it.
     /// The `message` carries the `AppError`'s `Display` output so the shell
     /// can surface it in a toast / log without losing the underlying cause.
@@ -815,6 +893,24 @@ pub struct CoreOutput {
     pub events: Vec<Event>,
     /// BLE writes the shell should perform, in order.
     pub commands: Vec<Command>,
+}
+
+#[cfg(test)]
+impl CoreOutput {
+    /// The `upload_id` of the upload this output started (tests only).
+    ///
+    /// # Panics
+    ///
+    /// When the output starts no upload.
+    pub(crate) fn started_upload_id(&self) -> u32 {
+        self.events
+            .iter()
+            .find_map(|e| match e {
+                Event::ProfileUploadStarted { upload_id, .. } => Some(*upload_id),
+                _ => None,
+            })
+            .expect("the output starts an upload")
+    }
 }
 
 impl CoreOutput {

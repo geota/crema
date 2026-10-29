@@ -11,12 +11,17 @@ import kotlinx.serialization.json.Json
 import java.util.UUID
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -76,6 +81,8 @@ class De1BleManager(
     private val onStatus: (String) -> Unit,
     /** Per-episode reconnect timelines (Settings → Advanced, diagnostics). */
     private val timeline: ReconnectTimelineRecorder? = null,
+    /** Where the manager's jobs run; a test dispatcher in the JVM tests. */
+    dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
     enum class State { IDLE, SCANNING, CONNECTING, DISCOVERING, SUBSCRIBING, READY, DISCONNECTED }
 
@@ -89,11 +96,14 @@ class De1BleManager(
      *  process. (handleNotification catches its own FFI call so the stream
      *  survives; this only catches what it doesn't.) */
     private val scope = CoroutineScope(
-        SupervisorJob() +
+        SupervisorJob() + dispatcher +
             CoroutineExceptionHandler { _, e -> Log.e(TAG, "Uncaught in DE1 BLE scope", e) },
     )
 
     /** The connected DE1, or null when not connected. */
+    // Written by connect/disconnect on Main and by the session on the
+    // manager scope; read from both.
+    @Volatile
     private var device: BleTransport.DeviceHandle? = null
 
     /** The connected DE1's Bluetooth address (for the Settings "BLE" row), or null. */
@@ -179,9 +189,6 @@ class De1BleManager(
      */
     @Volatile
     private var lastInboundMs = 0L
-
-    /** Consecutive failed liveness probe reads; teardown at [MAX_CONSECUTIVE_WRITE_FAILURES]. */
-    private var consecutiveLivenessFailures = 0
 
     // ---- Connect ----------------------------------------------------------
 
@@ -269,15 +276,9 @@ class De1BleManager(
             onConnected = {
                 _state.value = State.READY
                 onStatus("Ready — receiving DE1 notifications")
-                // Connect-time one-shot seed reads (firmware / machine-state /
-                // shot-settings): the DE1 answers them on a direct GATT read but
-                // does NOT notify them at connect, so subscribing alone leaves
-                // those rows blank. Re-seeded on every (re)connect so a reconnect
-                // re-syncs state. Best-effort, off the loop.
-                scope.launch {
-                    seedReads(device)
-                    timeline?.postConnectDone(TIMELINE_DEVICE)
-                }
+                // The seed reads already ran inside establish (READY only once
+                // the DE1 has reported a state on this link).
+                timeline?.postConnectDone(TIMELINE_DEVICE)
                 // Watch for a silent drop even on the idle screensaver (#65).
                 startLivenessLoop(device)
             },
@@ -362,6 +363,7 @@ class De1BleManager(
             timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.DISCOVER)
         }
         afterLinked(device)
+        seedReads(device)
     }
 
     /**
@@ -380,6 +382,7 @@ class De1BleManager(
             timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.DISCOVER)
         }
         afterLinked(device)
+        seedReads(device)
     }
 
     /** Linked + discovered: join the recording and (re)subscribe. */
@@ -425,6 +428,18 @@ class De1BleManager(
             .onFailure { Log.e(TAG, "core reset output failed", it) }
         _state.value = State.DISCONNECTED
         onStatus("Disconnected")
+    }
+
+    /**
+     * End this manager for good — from `ConnectionController.close()` on VM
+     * teardown, after [disconnect]. Cancels [scope] so no session, liveness or
+     * observation child outlives the VM (cohort review 2026-10-25, P3-3); a
+     * transport disconnect [disconnect] launched may be cut short, which is
+     * fine: the transport's own close (right after) tears the GATT link down.
+     * Not reusable afterwards.
+     */
+    fun close() {
+        scope.cancel()
     }
 
     // ---- Observation ------------------------------------------------------
@@ -475,36 +490,33 @@ class De1BleManager(
      * **StateInfo is required.** The DE1 answers it on a direct read even while
      * asleep, so a link that can't produce it in two tries is hollow — up at
      * the GATT level, dead for data (a connect at the edge of range). Rather
-     * than sit READY with no state behind it, the link is torn down and the
-     * supervisor reconnects ([HOLLOW_LINK_STATUS]). The web connect program
-     * applies the same rule. The read bytes are fed to the core through the
-     * same seam as a notification, so they decode and record identically.
+     * than sit READY with no state behind it, the link is torn down and this
+     * throws, so the supervisor counts a failed attempt and backs off before
+     * the next ([HOLLOW_LINK_STATUS]). The web connect program applies the
+     * same rule. The read bytes are fed to the core through the same seam as
+     * a notification, so they decode and record identically.
+     *
+     * Runs inside [establish] — before READY is published, and in the session
+     * coroutine, so a [disconnect] or a replacement [connect] cancels it and
+     * a stale judgement can never tear down the next link (cohort review
+     * 2026-10-25: report 04 P2-1, report 06 #12).
      */
     private suspend fun seedReads(device: BleTransport.DeviceHandle) {
         val seeds = listOf(
-            Triple(VERSION, NotificationSource.DE1_VERSION, "firmware version"),
-            Triple(De1Uuids.STATE_INFO, NotificationSource.DE1_STATE, "machine state"),
-            Triple(De1Uuids.SHOT_SETTINGS, NotificationSource.DE1_SHOT_SETTINGS, "shot-settings"),
+            SeedSpec(Triple(VERSION, NotificationSource.DE1_VERSION, "firmware version"), "firmware version", required = false),
+            SeedSpec(Triple(De1Uuids.STATE_INFO, NotificationSource.DE1_STATE, "machine state"), "machine state", required = true),
+            SeedSpec(Triple(De1Uuids.SHOT_SETTINGS, NotificationSource.DE1_SHOT_SETTINGS, "shot-settings"), "shot-settings", required = false),
         )
-        for ((char, source, label) in seeds) {
-            val required = char == De1Uuids.STATE_INFO
-            val attempts = if (required) SEED_READ_ATTEMPTS_REQUIRED else 1
-            var failure: Throwable? = null
-            for (attempt in 1..attempts) {
-                failure = seedRead(device, char, source, label).exceptionOrNull() ?: break
-                if (attempt < attempts) delay(SEED_READ_RETRY_DELAY_MS)
-            }
-            if (failure == null) continue
-            if (!required) {
-                onStatus("DE1 $label seed read skipped: ${failure.message}")
-                continue
-            }
-            Log.w(TAG, "DE1 machine-state seed read failed $attempts× (${failure.message}) — hollow link, tearing down")
-            onStatus(HOLLOW_LINK_STATUS)
-            runCatching { transport.disconnect(device) }
-                .onFailure { Log.w(TAG, "Forced DE1 teardown (hollow link) failed", it) }
-            return
-        }
+        runSeedReads(
+            seeds,
+            read = { seed -> val (char, source, label) = seed.key; seedRead(device, char, source, label) },
+            onStatus = onStatus,
+            teardown = {
+                Log.w(TAG, "DE1 machine-state seed read failed twice — hollow link, tearing down")
+                runCatching { transport.disconnect(device) }
+                    .onFailure { Log.w(TAG, "Forced DE1 teardown (hollow link) failed", it) }
+            },
+        )
     }
 
     /** One time-boxed seed read, fed to the core on success. */
@@ -513,7 +525,7 @@ class De1BleManager(
         char: UUID,
         source: NotificationSource,
         label: String,
-    ): Result<Unit> = runCatching {
+    ): Result<Unit> = try {
         val bytes = kotlinx.coroutines.withTimeoutOrNull(SEED_READ_TIMEOUT_MS) {
             transport.read(device, De1Uuids.SERVICE, char)
         } ?: error("read timed out")
@@ -522,6 +534,13 @@ class De1BleManager(
         val json = bridge.onNotification(source, bytes, tMs.toULong())
         onCoreOutput(json)
         onStatus("DE1 $label read ✓")
+        Result.success(Unit)
+    } catch (c: CancellationException) {
+        // The session ended (disconnect / replacement connect): never judge
+        // a link we no longer own.
+        throw c
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
     // ---- Core integration -------------------------------------------------
@@ -552,25 +571,28 @@ class De1BleManager(
         // the passive [livenessLoop] holds off its active probe read (#65).
         lastInboundMs = tMs
         recorder.recordInbound(source, notification.data, tMs)
-        feedCore(source, notification.data, tMs, "DE1 ${source.name}")
+        feedCore(notification.data, "DE1 ${source.name}", "notification") {
+            bridge.onNotification(source, notification.data, tMs.toULong())
+        }
     }
 
     /**
-     * Hand [bytes] to the core under [source] and forward the `CoreOutput` JSON.
-     * The FFI call can throw — a UniFFI-rethrown Rust panic from anywhere in the
-     * core would otherwise escape this flow collector uncaught and crash the
-     * process. Catch it, log the offending bytes ([what] names the stream; the
-     * Rust panic hook has already written file:line to the diagnostics log), and
-     * drop just this one notification so the stream survives a single bad packet.
+     * Run one core [call] on [bytes] and forward its `CoreOutput` JSON. The FFI
+     * call can throw — a UniFFI-rethrown Rust panic from anywhere in the core
+     * would otherwise escape this flow collector uncaught and crash the process.
+     * Catch it, log the offending bytes ([what] names the stream, [item] the kind
+     * of input; the Rust panic hook has already written file:line to the
+     * diagnostics log), and drop just this one input so the stream survives a
+     * single bad packet. Notifications and synthesized profile acks share it.
      */
-    private fun feedCore(source: NotificationSource, bytes: ByteArray, tMs: Long, what: String) {
+    private inline fun feedCore(bytes: ByteArray, what: String, item: String, call: () -> String) {
         // Guard decode AND the onCoreOutput forward together: a failure in either
-        // skips only THIS notification — feedCore returns normally, so the onEach
+        // skips only THIS input — feedCore returns normally, so the onEach
         // collector continues with the NEXT packet. It is not a permanent stop.
         runCatching {
-            onCoreOutput(bridge.onNotification(source, bytes, tMs.toULong()))
+            onCoreOutput(call())
         }.onFailure {
-            Log.e(TAG, "$what failed — skipping this notification (${Hex.encode(bytes)})", it)
+            Log.e(TAG, "$what failed — skipping this $item (${Hex.encode(bytes)})", it)
             onStatus("$what error — skipped (see diagnostics)")
         }
     }
@@ -668,11 +690,18 @@ class De1BleManager(
      * Write a core-issued `Command.WriteCharacteristic` to the DE1: map the
      * [target] to its GATT characteristic and write [bytes].
      *
-     * The DE1 emits NO notification on a `FrameWrite` (it only ACKs the ATT
-     * write), so after a [WriteTarget.De1ProfileFrame] write we synthesize a
+     * The DE1 emits NO notification on a `HeaderWrite` / `FrameWrite` (it only
+     * ACKs the ATT write), so after a successful [WriteTarget.De1ProfileHeader]
+     * or [WriteTarget.De1ProfileFrame] write we synthesize a `De1HeaderAck` /
      * `De1FrameAck` by feeding the just-written bytes back into the core — that
-     * is what advances the core's profile-upload state machine. Mirrors the web
-     * shell's `De1FrameAck` synthesis.
+     * is what advances the core's profile-upload state machine
+     * ([profileWriteAckSource]). A failed write throws before the ack, so the
+     * core fails the upload (cohort review 02 P0-2). Mirrors the web shell's
+     * `profileWriteAck`.
+     *
+     * Returns `true` once written, `false` when skipped (no link, firmware
+     * lock); a failed, timed-out or preempted write throws
+     * [De1WriteFailedException] or the transport's exception.
      */
     suspend fun writeCharacteristic(
         target: WriteTarget,
@@ -683,7 +712,13 @@ class De1BleManager(
          *  would otherwise make the shot-stop wait — and itself skips
          *  registration so stops never preempt stops. */
         urgent: Boolean = false,
-    ) {
+        /** Asked after a successful profile header / frame write: the core's
+         *  number for the upload it belongs to, or null once a newer upload
+         *  superseded it (cohort review 2026-10-28, #2 N2). The synthesized
+         *  ack names that upload, so the core drops it if a newer upload was
+         *  armed in between (round-2 verification V1 P3-1). */
+        ackUploadId: () -> UInt? = { null },
+    ): Boolean {
         // Count the write BEFORE checking the gate (audit r2 LOW 3): a write
         // that passes the check is then always visible to the flash's drain,
         // which runs after the gate closes.
@@ -691,38 +726,40 @@ class De1BleManager(
         if (firmwareExclusive) {
             nonFlashWritesInFlight.decrementAndGet()
             onStatus("DE1 $target write skipped — firmware update in progress")
-            return
+            return false
         }
         val d = device ?: run {
             nonFlashWritesInFlight.decrementAndGet()
             onStatus("Write ignored — DE1 not connected")
-            return
+            return false
         }
         try {
-            if (urgent) {
-                val dropped = UrgentWriteGate.preempt("an urgent DE1 $target write")
-                if (dropped.isNotEmpty()) {
-                    // Field-log visibility: exactly which writes the stop
-                    // sacrificed (each dropped write logs its own side too).
-                    onStatus("Urgent $target write preempted: ${dropped.joinToString(", ")}")
-                }
-                writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes)
-            } else {
-                UrgentWriteGate.preemptible(coroutineContext[Job], "DE1 $target write") {
-                    writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes)
+            asDe1WriteFailure(
+                "$target write",
+                onTimeout = { onWriteFailure(d) },
+                // Dropped, not failed: deliberately NOT re-queued (see
+                // UrgentWriteGate's header) — say so where a field report
+                // can see it. Only this write was cancelled; the batch goes on.
+                onPreempted = { reason -> onStatus("DE1 $target write dropped — $reason") },
+            ) {
+                if (urgent) {
+                    val dropped = UrgentWriteGate.preempt("an urgent DE1 $target write")
+                    if (dropped.isNotEmpty()) {
+                        // Field-log visibility: exactly which writes the stop
+                        // sacrificed (each dropped write logs its own side too).
+                        onStatus("Urgent $target write preempted: ${dropped.joinToString(", ")}")
+                    }
+                    writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes, retriesAfterTimeout(target))
+                } else {
+                    UrgentWriteGate.preemptible(coroutineContext[Job], "DE1 $target write") {
+                        writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes, retriesAfterTimeout(target))
+                    }
                 }
             }
             consecutiveWriteFailures = 0
-        } catch (t: TimeoutCancellationException) {
-            onWriteFailure(d)
-            throw t // callers log per-write context (executeCommand's guard)
+        } catch (e: De1WriteFailedException) {
+            throw e // already counted (timeout) or not a failure (preempted)
         } catch (c: CancellationException) {
-            if (c is UrgentWriteGate.WritePreempted) {
-                // Dropped, not failed: deliberately NOT re-queued (see
-                // UrgentWriteGate's header) — say so where a field report
-                // can see it.
-                onStatus("DE1 $target write dropped — ${c.message}")
-            }
             throw c // the caller's scope is going away — never swallow
         } catch (e: Exception) {
             onWriteFailure(d)
@@ -730,9 +767,13 @@ class De1BleManager(
         } finally {
             nonFlashWritesInFlight.decrementAndGet()
         }
-        if (target == WriteTarget.De1ProfileFrame) {
-            feedCore(NotificationSource.DE1_FRAME_ACK, bytes, SystemClock.elapsedRealtime(), "DE1 frame-ACK")
+        profileWriteAckSource(target)?.let { source ->
+            ackUploadId()?.let { uploadId ->
+                val tMs = SystemClock.elapsedRealtime().toULong()
+                feedCore(bytes, "DE1 $target ACK", "ack") { bridge.onProfileWriteAck(source, bytes, tMs, uploadId) }
+            }
         }
+        return true
     }
 
     /**
@@ -759,6 +800,7 @@ class De1BleManager(
      * Decenza's write-retry-exhaustion → `de1LinkFault` and reaprime's
      * consecutive-op-timeout teardown.
      */
+    @Volatile // writes complete on any caller thread
     private var consecutiveWriteFailures = 0
 
     private suspend fun onWriteFailure(d: BleTransport.DeviceHandle) {
@@ -776,7 +818,6 @@ class De1BleManager(
     private fun startLivenessLoop(device: BleTransport.DeviceHandle) {
         livenessJob?.cancel()
         lastInboundMs = SystemClock.elapsedRealtime()
-        consecutiveLivenessFailures = 0
         livenessJob = scope.launch { livenessLoop(device) }
     }
 
@@ -793,47 +834,36 @@ class De1BleManager(
      * only other silent-drop detector there, so a DE1 that power-cycled under us
      * (a power outage, the reported case) went unnoticed and never reconnected.
      *
-     * This loop closes that gap WITHOUT waking the machine. A healthy connected
-     * DE1 streams water-level notifications ~2/s, so while inbound traffic is
-     * recent ([lastInboundMs]) it does nothing — and it therefore never issues a
-     * read mid-shot (ShotSamples keep the link busy). Only once the link has been
-     * silent for [LIVENESS_QUIET_MS] does it issue a passive GATT READ of
-     * StateInfo, which succeeds even while the DE1 is asleep (a firmware state;
-     * the BLE link stays up) but times out on a truly dead link. After
-     * [MAX_CONSECUTIVE_WRITE_FAILURES] failed probes it tears the link down at the
+     * This loop closes that gap WITHOUT waking the machine: once a second it runs
+     * one [De1LivenessCheck] (quiet for 5 s → a passive StateInfo read; two failed
+     * reads in a row → dead). On a dead link it tears the link down at the
      * transport level; the [reconnectingSession] supervisor then rescans and
-     * reconnects.
+     * reconnects. The check is paused while a firmware flash holds the link
+     * ([firmwareExclusive]), as on the web.
      */
     private suspend fun livenessLoop(device: BleTransport.DeviceHandle) {
+        val check = De1LivenessCheck(
+            now = SystemClock::elapsedRealtime,
+            lastInboundMs = { lastInboundMs },
+            paused = { firmwareExclusive },
+            probe = { transport.read(device, De1Uuids.SERVICE, De1Uuids.STATE_INFO) },
+        )
         while (true) {
-            delay(LIVENESS_CHECK_INTERVAL_MS)
-            val quietForMs = SystemClock.elapsedRealtime() - lastInboundMs
-            if (quietForMs < LIVENESS_QUIET_MS) {
-                consecutiveLivenessFailures = 0
-                continue
-            }
-            val ok = runCatching {
-                withTimeout(WRITE_TIMEOUT_MS) {
-                    transport.read(device, De1Uuids.SERVICE, De1Uuids.STATE_INFO)
+            delay(De1LivenessCheck.CHECK_INTERVAL_MS)
+            when (check.check()) {
+                De1LivenessCheck.Verdict.PROBE_FAILED -> Log.w(
+                    TAG,
+                    "DE1 liveness probe failed (${check.failures}/${De1LivenessCheck.MAX_FAILURES}) " +
+                        "after ${check.quietMs}ms quiet",
+                )
+                De1LivenessCheck.Verdict.DEAD -> {
+                    Log.w(TAG, "DE1 liveness: ${De1LivenessCheck.MAX_FAILURES} probes failed after ${check.quietMs}ms quiet")
+                    onStatus("DE1 link went quiet — reconnecting…")
+                    runCatching { transport.disconnect(device) }
+                        .onFailure { Log.w(TAG, "Forced DE1 teardown (liveness) failed", it) }
+                    return
                 }
-            }.isSuccess
-            if (ok) {
-                lastInboundMs = SystemClock.elapsedRealtime()
-                consecutiveLivenessFailures = 0
-                continue
-            }
-            consecutiveLivenessFailures++
-            Log.w(
-                TAG,
-                "DE1 liveness probe failed ($consecutiveLivenessFailures/$MAX_CONSECUTIVE_WRITE_FAILURES) " +
-                    "after ${quietForMs}ms quiet",
-            )
-            if (consecutiveLivenessFailures >= MAX_CONSECUTIVE_WRITE_FAILURES) {
-                consecutiveLivenessFailures = 0
-                onStatus("DE1 link went quiet — reconnecting…")
-                runCatching { transport.disconnect(device) }
-                    .onFailure { Log.w(TAG, "Forced DE1 teardown (liveness) failed", it) }
-                return
+                else -> Unit
             }
         }
     }
@@ -845,18 +875,26 @@ class De1BleManager(
      * outage). de1app double-sends DE1 command writes and Decenza retries up
      * to 10 × 500 ms; one retry covers the common transient without the full
      * ladder — a second failure surfaces to the caller AND the dead-link
-     * counter. Safe to repeat: state requests, MMR writes, and profile-frame
-     * writes are all idempotent (same bytes to the same target).
+     * counter. Safe to repeat: MMR writes and profile header / frame writes
+     * are idempotent (same bytes to the same target).
+     *
+     * A state request that TIMED OUT is not retried ([retryOnTimeout] false,
+     * see [retriesAfterTimeout]): it may still land, and a copy sent 500 ms
+     * later can arrive after a newer request — a late Idle stops the shot
+     * that just started (cohort review 02 P2-2). A state write that failed
+     * outright is retried as before.
      */
     private suspend fun writeWithOneRetry(
         d: BleTransport.DeviceHandle,
         characteristic: UUID,
         bytes: ByteArray,
+        retryOnTimeout: Boolean,
     ) {
         val first = try {
             withTimeout(WRITE_TIMEOUT_MS) { transport.write(d, De1Uuids.SERVICE, characteristic, bytes) }
             return
         } catch (t: TimeoutCancellationException) {
+            if (!retryOnTimeout) throw t
             t
         } catch (c: CancellationException) {
             throw c
@@ -896,11 +934,6 @@ class De1BleManager(
         /** One connect-time seed read's ceiling. */
         private const val SEED_READ_TIMEOUT_MS = 3_000L
 
-        /** StateInfo tries before the link counts as hollow (see [seedReads]). */
-        private const val SEED_READ_ATTEMPTS_REQUIRED = 2
-
-        private const val SEED_READ_RETRY_DELAY_MS = 500L
-
         /** Every Nth consecutive advertisement miss falls back to one direct
          *  connect (see [establish]). */
         private const val DIRECT_FALLBACK_EVERY_N_MISSES = 3
@@ -908,14 +941,7 @@ class De1BleManager(
         /** The reconnect-timeline device key — matches the supervisor label. */
         const val TIMELINE_DEVICE = "DE1"
 
-        /** How often the passive liveness loop wakes to check link activity (#65). */
-        private const val LIVENESS_CHECK_INTERVAL_MS = 15_000L
-
-        /** Inbound-notification silence tolerated before the liveness loop issues
-         *  an active probe read. A healthy connected DE1 streams water levels well
-         *  inside this window, so an active read only ever happens on a link that
-         *  has genuinely gone quiet — never mid-shot, and it doesn't wake the DE1. */
-        private const val LIVENESS_QUIET_MS = 30_000L
+        // The liveness numbers live with the rule: see [De1LivenessCheck].
 
         /**
          * The DE1 `Version` (`A001`) and `Calibration` (`A012`) characteristic
@@ -986,3 +1012,61 @@ internal class FwMapSubscription(
         job = null
     }
 }
+
+/**
+ * A DE1 write that did not happen: it timed out, or a stop preempted it. An
+ * [java.io.IOException], not a cancellation, so the caller's write batch logs
+ * it and carries on (cohort review 2026-10-28, Android P2-1) — a
+ * `TimeoutCancellationException` escaping as a cancellation used to end the
+ * batch silently, dropping every later write and the stop's failure line.
+ */
+class De1WriteFailedException(message: String, cause: Throwable) :
+    java.io.IOException(message, cause)
+
+/**
+ * Run one DE1 write ([block]) and turn the write's own timeout or preemption
+ * into [De1WriteFailedException] — never into a cancellation of the caller,
+ * whose batch goes on with its next write (cohort review 2026-10-28, Android
+ * P2-1 / #6 #4). [onTimeout] runs for a timeout (the dead-link counter),
+ * [onPreempted] for a stop that dropped this write. A cancellation of the
+ * caller itself still propagates. Top-level for JUnit.
+ */
+internal suspend fun <T> asDe1WriteFailure(
+    label: String,
+    onTimeout: suspend () -> Unit,
+    onPreempted: (reason: String) -> Unit,
+    block: suspend () -> T,
+): T = try {
+    block()
+} catch (t: TimeoutCancellationException) {
+    onTimeout()
+    throw De1WriteFailedException("$label timed out", t)
+} catch (c: CancellationException) {
+    if (c is UrgentWriteGate.WritePreempted && currentCoroutineContext().isActive) {
+        val reason = c.message ?: "preempted"
+        onPreempted(reason)
+        throw De1WriteFailedException("$label dropped — $reason", c)
+    }
+    throw c
+}
+
+/**
+ * The ack the shell synthesises after a SUCCESSFUL profile write, or null:
+ * the header confirms as `De1HeaderAck`, every frame as `De1FrameAck`. The
+ * core requires the header ack before any frame counts, so a header write
+ * that failed fails the upload (cohort review 02 P0-2). Pure, for JUnit.
+ */
+internal fun profileWriteAckSource(target: WriteTarget): NotificationSource? = when (target) {
+    WriteTarget.De1ProfileHeader -> NotificationSource.DE1_HEADER_ACK
+    WriteTarget.De1ProfileFrame -> NotificationSource.DE1_FRAME_ACK
+    else -> null
+}
+
+/**
+ * Whether a write that timed out gets the one spaced retry. Not a state
+ * request: a timed-out request may still land, and its copy could arrive
+ * after a newer request (cohort review 02 P2-2; reaprime awaits each write in
+ * sequence, de1app runs one FIFO). Pure, for JUnit.
+ */
+internal fun retriesAfterTimeout(target: WriteTarget): Boolean =
+    target != WriteTarget.De1RequestedState

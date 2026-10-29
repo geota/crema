@@ -54,6 +54,7 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.MmrRegister
 import coffee.crema.core.hasCupWarmer
+import coffee.crema.core.heaterVoltageFromRaw
 import coffee.crema.core.machineModelName
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.rememberScrollMemoryState
@@ -871,7 +872,7 @@ fun SettingsScreen(
                         }
                         SetGroup("Backup & restore") {
                             CremaSettingsRow("Back up everything", "All custom profiles, beans, roasters, shots, settings and bag photos in one .crema.zip.") {
-                                CremaButton(onClick = { confirm.launchSaveBytes(vm.backupFileName(), vm.buildBackupZipBytes()) }, variant = CremaButtonVariant.Filled, icon = "download-simple", label = "Back up")
+                                BackUpEverythingButton(vm, confirm.launchSaveBytes)
                             }
                             CremaSettingsRow("Restore — merge", "Add anything from a backup you don't already have; keeps your current data.") {
                                 CremaButton(onClick = { confirm.launchRestore(MainViewModel.RestoreMode.MERGE) }, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Merge")
@@ -1252,7 +1253,7 @@ fun SettingsScreen(
                             CremaSettingsRow("Terms of Service", "License, hardware-risk disclaimer, limitation of liability.") {
                                 CremaButton(onClick = { openLink("https://crema.maceiras.dev/terms") }, variant = CremaButtonVariant.Outlined, icon = "arrow-square-out", label = "Read")
                             }
-                            CremaSettingsRow("Privacy Policy", "Crema is local-only. No analytics, no tracking.", last = true) {
+                            CremaSettingsRow("Privacy Policy", "No analytics or tracking. What Crema stores and which services it contacts.", last = true) {
                                 CremaButton(onClick = { openLink("https://crema.maceiras.dev/privacy") }, variant = CremaButtonVariant.Outlined, icon = "arrow-square-out", label = "Read")
                             }
                         }
@@ -1385,7 +1386,7 @@ private fun MachineHeroCard(
         // "CONNECTED \u00b7 ES\u2026" truncated and the BLE address rendered one
         // character per line, issue #35's 8" reports). Compact stacks the two
         // panels full-width and drops the artwork well.
-        val compactHero = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1100
+        val compactHero = coffee.crema.ui.windowContentDpSize().width.value < 1100
         if (compactHero) {
             Column(
                 Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 20.dp),
@@ -1922,28 +1923,22 @@ internal fun serialLabel(info: Map<MmrRegister, UInt>): String =
     info[MmrRegister.SerialNumber]?.let { "$it" } ?: "—"
 
 /**
- * Decode the raw HeaterVoltage MMR word (0x803834) to actual mains volts. The
- * firmware stamps `+1000` on user-committed writes, but a raw read can come back
- * as the actual volts (e.g. 120, not 1120) — so only un-stamp words ≥ 1000.
- * Mirrors the web readout (`v >= 1000 ? v - 1000 : v`); blindly subtracting 1000
- * turned a 120 V read into "−880 V". 0 = firmware not told yet; null = unread.
+ * Decode the raw HeaterVoltage MMR word (0x803834) through the core's
+ * `heaterVoltageFromRaw` (cohort review 2026-10-28, #2 N7). The firmware stamps
+ * `+1000` on a user-committed value (1120 / 1230); the core strips it once and
+ * buckets like reaprime, so a doubled marker (2120 — a machine set by an older
+ * Crema build) is not recognised instead of reading "1120 V". 0 = firmware not
+ * told yet; null = unread. Mirrors the web `heater-voltage.ts`.
  */
-private fun heaterVoltageVolts(info: Map<MmrRegister, UInt>): Int? {
-    val raw = info[MmrRegister.HeaterVoltage]?.toInt() ?: return null
-    return if (raw >= 1000) raw - 1000 else raw
+internal fun heaterVoltageLabel(info: Map<MmrRegister, UInt>): String {
+    val raw = info[MmrRegister.HeaterVoltage] ?: return "\u2014"
+    if (raw == 0u) return "Not set"
+    return heaterVoltageFromRaw(raw)?.let { "$it V" } ?: "Not recognised \u2014 set it again"
 }
 
-/** Heater mains voltage readout — "120 V" / "230 V", "Not set" (auto-detect), or "—" (unread). */
-internal fun heaterVoltageLabel(info: Map<MmrRegister, UInt>): String =
-    when (val v = heaterVoltageVolts(info)) {
-        null -> "—"
-        0 -> "Not set"
-        else -> "$v V"
-    }
-
-/** The current heater-voltage selection ("120" / "230") for the segmented control; null when unread or auto-detect (0). */
+/** The current heater-voltage selection ("120" / "230") for the segmented control; null when unread, not set or not recognised. */
 internal fun heaterVoltageValue(info: Map<MmrRegister, UInt>): String? =
-    heaterVoltageVolts(info)?.takeIf { it > 0 }?.toString()
+    info[MmrRegister.HeaterVoltage]?.takeIf { it != 0u }?.let { heaterVoltageFromRaw(it) }?.toString()
 
 /** The one-line Settings notice for a DE1 on Decent's stolen-machine list. */
 internal const val STOLEN_SERIAL_NOTICE = "This DE1's serial is on Decent's stolen-machine list"

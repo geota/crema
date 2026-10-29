@@ -7,8 +7,8 @@ pub enum DomainError {
     /// A profile had no steps; at least one is required.
     #[error("profile has no steps")]
     NoSteps,
-    /// A profile had more steps than the DE1 can hold (32).
-    #[error("profile has {count} steps; the DE1 supports at most 32")]
+    /// A profile had more steps than the DE1 can hold (20).
+    #[error("profile has {count} steps; the DE1 supports at most 20")]
     TooManySteps {
         /// The number of steps the rejected profile had.
         count: usize,
@@ -39,8 +39,8 @@ pub enum ImportError {
     /// The imported profile had no steps; at least one is required.
     #[error("imported profile has no steps")]
     NoSteps,
-    /// The imported profile had more steps than the DE1 can hold (32).
-    #[error("imported profile has {count} steps; the DE1 supports at most 32")]
+    /// The imported profile had more steps than the DE1 can hold (20).
+    #[error("imported profile has {count} steps; the DE1 supports at most 20")]
     TooManySteps {
         /// The number of steps the rejected profile had.
         count: usize,

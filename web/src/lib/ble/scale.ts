@@ -26,6 +26,7 @@
 import { parseConnectExit } from './connect-exit.ts';
 import type { CoreOutput, CremaCore, NotificationSource, ScaleUuids } from '#lib/core/index.js';
 import { describeError } from '#lib/utils/error.js';
+import { isCoreStopped } from '#lib/core/stopped-guard.js';
 import type { AppRuntime } from '#lib/effect/runtime.js';
 import { scaleConnectProgram } from '#lib/services/scale-orchestrator.js';
 import type { BleConnectionState } from './connection-state';
@@ -33,7 +34,8 @@ import {
 	BleDevice,
 	isChooserCancelled,
 	requestDevice,
-	shortUuid,
+	advertisingStatus,
+	droppedNotificationsStatus,
 	type ConnState,
 	type KickResult
 } from './transport';
@@ -221,15 +223,11 @@ export class ScaleManager {
 		});
 		device.onAdvertisement((rssi) => {
 			if (!current()) return;
-			this.callbacks.onStatus(
-				`Scale is advertising${rssi === null ? '' : ` (${rssi} dBm)`} — reconnecting`
-			);
+			this.callbacks.onStatus(advertisingStatus('Scale', rssi));
 		});
 		device.onNotificationOverflow((characteristic, evicted) => {
 			if (!current()) return;
-			this.callbacks.onStatus(
-				`Scale: the browser dropped ${evicted} notification${evicted === 1 ? '' : 's'} (${shortUuid(characteristic)})`
-			);
+			this.callbacks.onStatus(droppedNotificationsStatus('Scale', characteristic, evicted));
 		});
 		device.onReconnected(() => {
 			if (!current()) return;
@@ -286,6 +284,8 @@ export class ScaleManager {
 							.onNotification(source, notification.data, notification.atMs)
 							.then(this.callbacks.onCoreOutput)
 							.catch((error: unknown) => {
+								// Logged once when the core stopped (V2 P3-2).
+								if (isCoreStopped(error)) return;
 								this.callbacks.onStatus(
 									`Scale notification processing failed: ${describeError(error)}`
 								);

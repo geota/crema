@@ -81,12 +81,15 @@
 			return;
 		}
 
-		// Dedicated short-lived runtime — independent of the app shell's runtime
-		// (this page runs at redirect time before the shell has mounted). It
+		// Dedicated short-lived runtime, independent of the app shell's. This
+		// page renders inside the root layout, but the layout builds its runtime
+		// in its own (async) onMount, so it may not exist yet when this runs. It
 		// carries OAuth (-> HttpClient) for the exchange AND TokenVault for
 		// persistence: TokenVault.storeTokens writes the shared localStorage key,
-		// so the shell's TokenVault reads it fresh on the next navigation. BeanSync
-		// runs the post-sign-in Premium probe (its flag lives in localStorage too).
+		// and the shell's TokenVault syncs its `changes` mirror from storage on its
+		// next read, so the shell's connection state follows (review 03 P3-4).
+		// BeanSync runs the post-sign-in Premium probe (its flag lives in
+		// localStorage too).
 		const base = Layer.provide(OAuthLive, HttpClientLive);
 		const vault = Layer.provide(TokenVaultLive, base);
 		const runtime = ManagedRuntime.make(
@@ -111,7 +114,10 @@
 			);
 			if (Exit.isFailure(exit)) throw Cause.squash(exit.cause);
 			const tokens = exit.value;
-			await runtime.runPromise(completeVisualizerSignIn(tokens));
+			// Fails when the tokens could not be stored encrypted (the grant
+			// is revoked); its message says so instead of "Connected".
+			const saved = await runtime.runPromiseExit(completeVisualizerSignIn(tokens));
+			if (Exit.isFailure(saved)) throw Cause.squash(saved.cause);
 			// Settings offers the catch-up upload once, on arrival.
 			markVisualizerJustConnected();
 			const returnTo = takeReturnPath('/settings');
@@ -138,7 +144,7 @@
 	<title>Connecting to Visualizer · Crema</title>
 </svelte:head>
 
-<main class="cb-shell">
+<div class="cb-shell">
 	<div class="cb-card">
 		{#if status.kind === 'working'}
 			<SpinnerGapIcon class="cb-spinner" aria-hidden="true" />
@@ -151,7 +157,7 @@
 			<p class="t-body-sm">Returning to {status.returnTo}…</p>
 		{:else if status.kind === 'already'}
 			<PlugsConnectedIcon aria-hidden="true"
-				style="color: var(--copper-400); font-size: 32px" />
+				style="color: var(--fg-accent); font-size: 32px" />
 			<h1 class="t-h3">Already connected</h1>
 			<p class="t-body-sm">
 				You're already signed in to Visualizer. Open
@@ -171,7 +177,7 @@
 			<a class="cb-link" href="/settings">Try again</a>
 		{/if}
 	</div>
-</main>
+</div>
 
 <style>
 	.cb-shell {
@@ -196,7 +202,7 @@
 	}
 	:global(.cb-spinner) {
 		font-size: 32px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		animation: cb-spin 1.1s linear infinite;
 	}
 	@keyframes cb-spin {
@@ -206,7 +212,7 @@
 	.cb-link {
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		text-decoration: underline;
 		margin-top: var(--space-2);
 	}

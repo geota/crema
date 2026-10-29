@@ -71,6 +71,8 @@ interface FlashCorePort {
     fun status(nowMs: Long): FlashStep
     fun restoreAwaiting(build: UInt, unconfirmed: Boolean, nowMs: Long): FlashStep
     fun restoreEraseHold(build: UInt, holdMsLeft: Long, nowMs: Long): FlashStep
+    /** Bring back a flash whose verify window was still open (report 06 #7). */
+    fun restoreVerifying(build: UInt, holdMsLeft: Long, nowMs: Long): FlashStep
 }
 
 /** The DE1 link surface the driver needs ([coffee.crema.ble.De1BleManager]). */
@@ -128,6 +130,8 @@ class BridgeFlashCore(private val bridge: CremaBridge) : FlashCorePort {
         step(bridge.firmwareFlashRestoreAwaiting(build, unconfirmed, nowMs.toULong()))
     override fun restoreEraseHold(build: UInt, holdMsLeft: Long, nowMs: Long) =
         step(bridge.firmwareFlashRestoreEraseHold(build, holdMsLeft.toULong(), nowMs.toULong()))
+    override fun restoreVerifying(build: UInt, holdMsLeft: Long, nowMs: Long) =
+        step(bridge.firmwareFlashRestoreVerifying(build, holdMsLeft.toULong(), nowMs.toULong()))
 }
 
 /** Phases during which the flash must not be interrupted. */
@@ -232,6 +236,15 @@ class FirmwareFlashDriver(
     /** Bring back a power-cycle step persisted before a process restart. */
     suspend fun restoreAwaiting(build: UInt, unconfirmed: Boolean): FlashStatus? {
         lock.withLock { apply(core.restoreAwaiting(build, unconfirmed, clock()), force = true) }
+        return refresh()
+    }
+
+    /**
+     * Bring back a flash whose verify window was still open (persisted
+     * deadline): it stays Verifying until the window closes (report 06 #7).
+     */
+    suspend fun restoreVerifying(build: UInt, holdMsLeft: Long): FlashStatus? {
+        lock.withLock { apply(core.restoreVerifying(build, holdMsLeft, clock()), force = true) }
         return refresh()
     }
 

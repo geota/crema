@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { MachineState } from '#lib/core/crema-core.js';
-import { canReloadNow, type ReloadInputs } from './update-gate.js';
+import { canReloadNow, reloadInputsOf, reloadLinkOf, type ReloadInputs } from './update-gate.js';
 
 const parked: ReloadInputs = {
-	connected: true,
+	link: 'up',
 	machineStateName: MachineState.Idle,
 	shotInProgress: false,
 	guidedBrewLive: false,
@@ -17,7 +17,7 @@ describe('canReloadNow', () => {
 	});
 
 	it('allows a reload with no machine connected', () => {
-		expect(canReloadNow({ ...parked, connected: false, machineStateName: null })).toBe(true);
+		expect(canReloadNow({ ...parked, link: 'down', machineStateName: null })).toBe(true);
 	});
 
 	it('refuses while the DE1 is doing anything', () => {
@@ -30,9 +30,46 @@ describe('canReloadNow', () => {
 		expect(canReloadNow({ ...parked, machineStateName: null })).toBe(false);
 	});
 
+	it('refuses while the link is coming back, whatever the last state was (cohort review 06 #11)', () => {
+		expect(canReloadNow({ ...parked, link: 'transient', machineStateName: null })).toBe(false);
+		expect(canReloadNow({ ...parked, link: 'transient' })).toBe(false);
+	});
+
+	it('maps reconnecting, subscribing and connecting to a transient link', () => {
+		expect(reloadLinkOf('ready')).toBe('up');
+		for (const s of ['reconnecting', 'subscribing', 'connecting'] as const) {
+			expect(reloadLinkOf(s)).toBe('transient');
+		}
+		for (const s of ['idle', 'disconnected', 'failed', null, undefined] as const) {
+			expect(reloadLinkOf(s)).toBe('down');
+		}
+	});
+
 	it('refuses during a shot, a guided brew or a firmware update even when the state looks parked', () => {
 		expect(canReloadNow({ ...parked, shotInProgress: true })).toBe(false);
-		expect(canReloadNow({ ...parked, connected: false, guidedBrewLive: true })).toBe(false);
+		expect(canReloadNow({ ...parked, link: 'down', guidedBrewLive: true })).toBe(false);
 		expect(canReloadNow({ ...parked, firmwareBusy: true })).toBe(false);
+	});
+});
+
+describe('reloadInputsOf', () => {
+	it('maps the snapshot, the guided-brew phase and the firmware flag', () => {
+		expect(
+			reloadInputsOf(
+				{ de1State: 'ready', machineStateName: MachineState.Idle, shotInProgress: false },
+				'idle',
+				false
+			)
+		).toEqual({
+			link: 'up',
+			machineStateName: MachineState.Idle,
+			shotInProgress: false,
+			guidedBrewLive: false,
+			firmwareBusy: false
+		});
+		for (const phase of ['armed', 'running', 'paused']) {
+			expect(reloadInputsOf(null, phase, false).guidedBrewLive).toBe(true);
+		}
+		expect(reloadInputsOf(null, 'done', true)).toMatchObject({ link: 'down', guidedBrewLive: false, firmwareBusy: true });
 	});
 });

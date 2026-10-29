@@ -3,6 +3,8 @@ package coffee.crema.ble
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -60,15 +62,25 @@ object UrgentWriteGate {
      *  from ordinary scope teardown and log it to the app's event log. */
     class WritePreempted(reason: String) : CancellationException("preempted by $reason")
 
-    /** Register [job] (a non-critical write's coroutine) as preemptible while
-     *  [block] runs. No-op registration when the context has no job. */
+    /** Run [block] (one non-critical write) as preemptible. No registration
+     *  when the caller has no job ([job] null).
+     *
+     *  Only the write itself is registered — a child job around [block] —
+     *  never the caller's job: an Android `CoreOutput` runs all its DE1 writes
+     *  on one coroutine, and a stop must drop the in-flight write, not every
+     *  write queued behind it (cohort review 2026-10-28, #6 #4). A preempted
+     *  write surfaces to the caller as [WritePreempted] while the caller
+     *  itself stays active, so the caller can log it and go on. */
     suspend fun <T> preemptible(job: Job?, label: String, block: suspend () -> T): T {
         if (job == null) return block()
-        inFlight[job] = label
-        return try {
-            block()
-        } finally {
-            inFlight.remove(job)
+        return coroutineScope {
+            val write = async { block() }
+            inFlight[write] = label
+            try {
+                write.await()
+            } finally {
+                inFlight.remove(write)
+            }
         }
     }
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { stepCapNote } from '#lib/profiles/step-cap.js';
 	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
 	import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeftIcon';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
@@ -206,8 +207,14 @@
 		dirty = true;
 	}
 
+	/** The DE1 runs at most this many frames (core `MAX_PROFILE_STEPS`). */
+	const atStepLimit = $derived(draft.segments.length >= ProfileBounds.MAX_PROFILE_STEPS);
+	/** A profile saved before the limit: how many segments to remove (#6 #6). */
+	const stepNote = $derived(stepCapNote(draft.segments.length));
+
 	/** Append a new segment after the last one. */
 	function addSegment(): void {
+		if (atStepLimit) return;
 		const last = draft.segments[draft.segments.length - 1];
 		const seg: ProfileSegment = {
 			id: uid('seg'),
@@ -365,7 +372,7 @@
 				<ArrowLeftIcon aria-hidden="true" /> Profiles
 			</button>
 			<div class="pe-trail">
-				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.45)">{heading}</span>
+				<span class="t-eyebrow" style="color:var(--fg-muted)">{heading}</span>
 			</div>
 		</div>
 		<div class="pe-topbar-r">
@@ -605,10 +612,20 @@
 				<div class="pe-section">
 					<div class="pe-section-head">
 						<div class="pe-section-title">Segments</div>
-						<button class="pe-btn-ghost" onclick={addSegment}>
+						<button
+							class="pe-btn-ghost"
+							onclick={addSegment}
+							disabled={atStepLimit}
+							title={atStepLimit
+								? `The DE1 runs at most ${ProfileBounds.MAX_PROFILE_STEPS} segments`
+								: undefined}
+						>
 							<PlusIcon aria-hidden="true" /> Add segment
 						</button>
 					</div>
+					{#if stepNote}
+						<p class="pe-step-cap" role="alert">{stepNote}</p>
+					{/if}
 					<!-- Every per-segment field — including the exit condition and
 					     the limiter — lives on a single (wide) `SegmentRow`. The
 					     row outgrows a narrow viewport, so the list scrolls
@@ -686,7 +703,7 @@
 	.pe-btn-text {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		cursor: pointer;
@@ -737,7 +754,7 @@
 
 	.pe-loading {
 		padding: 60px 32px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-family: var(--font-sans);
 		font-size: 14px;
 	}
@@ -803,7 +820,7 @@
 		border-bottom-color: var(--copper-500);
 	}
 	.pe-name::placeholder {
-		color: rgba(var(--tint-rgb), 0.3);
+		color: var(--fg-muted);
 	}
 
 	/* Section */
@@ -827,7 +844,7 @@
 	.pe-section-sub {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-top: 2px;
 	}
 	.pe-section-actions {
@@ -842,7 +859,7 @@
 		gap: 4px;
 	}
 	.pe-field :global(.t-eyebrow) {
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	.pe-input {
 		background: rgba(var(--tint-rgb), 0.03);
@@ -952,7 +969,7 @@
 		gap: 8px;
 	}
 	.pe-readout :global(.t-eyebrow) {
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-size: 10px;
 		letter-spacing: 0.04em;
 		white-space: nowrap;
@@ -961,7 +978,7 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 22px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-weight: 500;
 		min-height: 28px;
 		display: flex;
@@ -970,7 +987,7 @@
 	.pe-readout-sub {
 		font-family: var(--font-sans);
 		font-size: 9px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 		white-space: nowrap;
@@ -1006,5 +1023,10 @@
 	}
 	.pe-btn-ghost :global(svg) {
 		font-size: 13px;
+	}
+	.pe-step-cap {
+		margin: 0 0 8px;
+		font-size: 13px;
+		color: var(--warning);
 	}
 </style>

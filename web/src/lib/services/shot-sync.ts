@@ -69,6 +69,7 @@ import {
 	type WireShot
 } from '#lib/visualizer/shot-sync-signatures.js';
 import { appendSyncLog, readSyncConfig } from '#lib/visualizer/sync-config.js';
+import { BaristaPending } from '#lib/visualizer/barista-pending.js';
 import {
 	samplesFromVisualizerDetail as wasmSamplesFromVisualizerDetail,
 	wireShotFromDetail as wasmWireShotFromDetail,
@@ -190,6 +191,28 @@ function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot 
  */
 function samplesFromVisualizerDetail(detail: ShotDetail): TimedSample[] {
 	return JSON.parse(wasmSamplesFromVisualizerDetail(JSON.stringify(detail))) as TimedSample[];
+}
+
+/** A shot's barista as the PATCH sends it: trimmed, `""` when unset or cleared. */
+function baristaOf(shot: StoredShot): string {
+	return shot.metadata.barista?.trim() ?? '';
+}
+
+/**
+ * Fill a local shot's barista from a pulled remote one (final review 06 #1),
+ * only when the local shot has none: a name set or edited in Crema is never
+ * overwritten by a pull. `editedLocally` is true while a barista edit made
+ * here has not reached Visualizer: a blank barista is then the user's clear,
+ * not a gap to fill (V3 #6). Returns the name to store, or `null` for no change.
+ */
+export function baristaToFill(
+	local: StoredShot | undefined,
+	remote: WireShot,
+	editedLocally = false
+): string | null {
+	const pulled = remote.barista?.trim();
+	if (!local || !pulled || editedLocally) return null;
+	return local.metadata.barista?.trim() ? null : pulled;
 }
 
 // ── PATCH-body resolvers ──────────────────────────────────────────────────
@@ -414,6 +437,12 @@ export interface PullResult {
 	truncated: boolean;
 }
 
+/** What a History edit changed, for {@link ShotSync.patchEditedShot}. */
+export interface EditPatchOptions {
+	/** The barista itself was edited (set, changed or cleared). */
+	readonly baristaChanged?: boolean;
+}
+
 /** Internal iteration state for the `pullAllShotsSince` `iterate` walk. */
 interface PullState {
 	page: number;
@@ -459,7 +488,17 @@ export class ShotSync extends Context.Service<
 		 * setting), effective privacy, bean binding, tags, grinder model.
 		 * No-op when the shot has no `visualizerId`.
 		 */
-		readonly patchEditedShot: (history: HistoryStore, id: string) => Effect.Effect<void, VisualizerCallError>;
+		/**
+		 * Mirror a History edit onto the shot's Visualizer copy. `baristaChanged`
+		 * marks an edit of the barista itself: only then (or while an earlier
+		 * barista edit has not reached Visualizer yet) does the PATCH carry
+		 * `barista`, so any other edit leaves the remote barista alone.
+		 */
+		readonly patchEditedShot: (
+			history: HistoryStore,
+			id: string,
+			opts?: EditPatchOptions
+		) => Effect.Effect<void, VisualizerCallError>;
 		readonly pullShots: (
 			page?: number,
 			itemsPerPage?: number
@@ -489,6 +528,15 @@ export const ShotSyncLive = Layer.effect(
 	Effect.gen(function* () {
 		const http = yield* HttpClient;
 		const vault = yield* TokenVault;
+
+		/**
+		 * Shots whose barista was edited here and has not reached Visualizer
+		 * yet: a failed barista PATCH is carried by the next edit's PATCH, and
+		 * a pull does not fill a barista into them (V3 #6). Persisted, so a
+		 * restart keeps the mark (V2 P3-4); cleared once a PATCH carrying the
+		 * current value lands.
+		 */
+		const baristaPending = new BaristaPending();
 
 		/** Early bail mirroring the old `if (!isConnected())` guard. */
 		const requireConnected: Effect.Effect<void, NotAuthenticatedError> = vault.getTokens.pipe(
@@ -765,6 +813,17 @@ export const ShotSyncLive = Layer.effect(
 			Effect.sync(() => {
 				const local = history.all;
 				const actions = reconcileShots(local, remote);
+				// Read once for the whole pull, not per shot (C3 #10): nothing
+				// edits a barista inside this synchronous pass.
+				const pending = baristaPending.snapshot();
+				const fillBarista = (localId: string, wire: WireShot): void => {
+					const name = baristaToFill(
+						history.all.find((s) => s.id === localId),
+						wire,
+						pending.has(localId)
+					);
+					if (name !== null) history.setPerson(localId, 'barista', name);
+				};
 				for (const action of actions) {
 					if (action.kind === 'add') {
 						const stored = storedShotFromWire(action.remote, samplesById?.get(action.remote.id));
@@ -783,6 +842,7 @@ export const ShotSyncLive = Layer.effect(
 						});
 					} else if (action.kind === 'bind') {
 						history.bindVisualizerId(action.localId, action.visualizerId);
+						fillBarista(action.localId, action.remote);
 						appendSyncLog({
 							direction: 'pull',
 							entity: 'shot',
@@ -795,6 +855,8 @@ export const ShotSyncLive = Layer.effect(
 						// idempotent — re-applying an empty list to a local with none is a
 						// no-op write.
 						history.setTags(action.localId, action.remote.tag_list ?? []);
+						// A shot pulled before the barista was read gets it now.
+						fillBarista(action.localId, action.remote);
 						// Heal pre-telemetry-import stubs: if this bound row has no curve
 						// locally but the pull carries one, backfill it (no-op otherwise).
 						const samples = samplesById?.get(action.remote.id);
@@ -954,14 +1016,13 @@ export const ShotSyncLive = Layer.effect(
 		 * Privacy sends the EFFECTIVE value (per-shot override, else the
 		 * settings default) so the server always matches what the user sees.
 		 */
-		const buildEditPatch = (shot: StoredShot): ShotPatch => {
+		const buildEditPatch = (shot: StoredShot, sendBarista: boolean): ShotPatch => {
 			const settings = getSettingsStore().current;
 			const cfg = readSyncConfig();
 			const coffeeBagId = resolveCoffeeBagId(shot);
 			const tagList = resolveTagList(shot);
 			const grinderModel = resolveGrinderModel(shot, settings.grinderModel);
 			const grinderSetting = effectiveGrindSetting(shot);
-			const barista = shot.metadata.barista?.trim();
 			return {
 				rating: (shot.metadata.rating ?? 0) > 0 ? (shot.metadata.rating ?? null) : null,
 				...(cfg.includeNotes ? { notes: shot.metadata.notes ?? '' } : {}),
@@ -971,18 +1032,32 @@ export const ShotSyncLive = Layer.effect(
 				...(shot.bean != null ? { bean: shot.bean } : {}),
 				...(grinderModel != null ? { grinderModel } : {}),
 				...(grinderSetting != null ? { grinderSetting } : {}),
-				...(barista ? { barista } : {})
+				// Only when the barista itself was edited (final review 06 #1):
+				// a shot pulled before the barista was read has none locally,
+				// and sending "" with a rating change wiped the remote one.
+				// An edit sends the name, or "" once cleared, so a clear
+				// still reaches Visualizer.
+				...(sendBarista ? { barista: baristaOf(shot) } : {})
 			};
 		};
 
 		const patchEditedShot = Effect.fn('ShotSync.patchEditedShot')(function* (
 			history: HistoryStore,
-			id: string
+			id: string,
+			opts: EditPatchOptions = {}
 		) {
+			if (opts.baristaChanged) baristaPending.add(id);
 			const shot = history.all.find((s) => s.id === id);
 			const vid = shot?.visualizerId;
 			if (!shot || !vid) return;
-			yield* patchShot(vid, buildEditPatch(shot));
+			const sendBarista = baristaPending.has(id);
+			const sent = baristaOf(shot);
+			yield* patchShot(vid, buildEditPatch(shot, sendBarista));
+			// A newer barista edit made while this PATCH was out stays pending.
+			if (sendBarista) {
+				const now = history.all.find((s) => s.id === id);
+				if (now === undefined || baristaOf(now) === sent) baristaPending.delete(id);
+			}
 		});
 
 		return ShotSync.of({

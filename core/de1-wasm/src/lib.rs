@@ -6,15 +6,114 @@
 //! every CoreOutput crosses as one JSON string) and marshals simple
 //! typed values for inputs.
 //!
-//! No mutex: wasm is single-threaded, so the wrapped core uses ordinary
-//! `&mut self` methods. `unsafe` is unavoidable — wasm-bindgen generates the
+//! No mutex: wasm is single-threaded. Every bridge method takes `&self` and
+//! reaches the core through a take/put slot, so a panic (a trap on wasm)
+//! cannot wedge later calls — see "Surviving a panic" on [`CremaBridge`].
+//! `unsafe` is unavoidable — wasm-bindgen generates the
 //! binding glue — so this crate opts out of the workspace's
 //! `unsafe_code = "forbid"` lint (see `Cargo.toml`).
 
 use de1_app::{CoreOutput, CremaCore, Event, ProfileUploadFailure, Source};
 use de1_domain::Profile;
 use de1_protocol::{CalTarget, MachineState, MmrRegister, ShotSettings};
+use std::cell::Cell;
+
 use wasm_bindgen::prelude::*;
+
+// ── Panic reporting ─────────────────────────────────────────────────
+//
+// A panic on wasm32-unknown-unknown is a trap whose only trace used to be
+// `RuntimeError: unreachable` — the Rust message and location were lost
+// (cohort review 2026-10-25, report 01 P2-3). The hook below runs before the
+// trap, logs the message to `console.error` and keeps it for the shell.
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console, js_name = error)]
+    fn console_error(message: &str);
+}
+
+/// Log `message` where a developer will see it: `console.error` on wasm,
+/// stderr natively (tests).
+fn report_error(message: &str) {
+    #[cfg(target_arch = "wasm32")]
+    console_error(message);
+    #[cfg(not(target_arch = "wasm32"))]
+    eprintln!("{message}");
+}
+
+thread_local! {
+    /// The most recent panic's message and location, for [`last_panic_message`].
+    static LAST_PANIC: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// How many panics the hook has seen since the module loaded.
+    static PANIC_COUNT: Cell<u64> = const { Cell::new(0) };
+    /// Whether [`install_panic_hook`] has run, so [`PANIC_COUNT`] is live.
+    static HOOK_INSTALLED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Install the panic hook. wasm-bindgen runs this once when the module is
+/// instantiated (`#[wasm_bindgen(start)]`); calling it again just replaces
+/// the hook. Each panic's message and location go to `console.error` and are
+/// kept for [`last_panic_message`]; the hook also counts panics, so the
+/// bridge can tell a trapped call from a bug (see [`CremaBridge::state`]).
+#[wasm_bindgen(start)]
+pub fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        PANIC_COUNT.with(|count| count.set(count.get().wrapping_add(1)));
+        let message = format!("crema core panicked: {info}");
+        report_error(&message);
+        LAST_PANIC.with(|last| *last.borrow_mut() = Some(message));
+    }));
+    HOOK_INSTALLED.with(|installed| installed.set(true));
+}
+
+/// Panics the hook has counted, or `None` when the hook is not installed.
+fn panics_recorded() -> Option<u64> {
+    HOOK_INSTALLED
+        .with(Cell::get)
+        .then(|| PANIC_COUNT.with(Cell::get))
+}
+
+/// How many panicked calls one [`CremaBridge`] survives by resetting its
+/// core. The next one stops the bridge for good: every later call throws
+/// [`CORE_STOPPED_MESSAGE`] until the page reloads.
+///
+/// Each reset leaks what the trap skipped (see "Surviving a panic" on
+/// [`CremaBridge`]): the abandoned core, about 1.2 MB with a full capture
+/// ring, and the shadow stack of the frames that were live, about 100 bytes
+/// for the shallowest trap. Unbounded, a panic on a recurring input (a scale
+/// notification at 10 Hz) reset the core on every packet and, after about
+/// 10,900 traps, left an instance where every call failed with "memory
+/// access out of bounds" (final cohort review 2026-10-28, 01 P3-1). A
+/// lifetime cap, rather than a rate, bounds the total leak however the
+/// panics are spread out. Five resets is enough for a rare panic to cost
+/// only the call that hit it while the user finishes what they are doing;
+/// the shell offers a reload on the first one.
+pub const MAX_PANIC_RECOVERIES: u32 = 5;
+
+/// What every call on a stopped bridge throws (see [`MAX_PANIC_RECOVERIES`]).
+pub const CORE_STOPPED_MESSAGE: &str = "crema core stopped: it hit an internal error too many \
+     times (the last panic message is in last_panic_message()); reload Crema to start a fresh core";
+
+/// Fail a call on a stopped bridge. On wasm a JS `Error` is thrown, not a
+/// trap: the shell can tell it from a panic, and [`CremaBridge::state`]
+/// throws before it takes anything, so no frame of the core is live.
+#[cold]
+fn fail_stopped() -> ! {
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen::throw_str(CORE_STOPPED_MESSAGE);
+    #[cfg(not(target_arch = "wasm32"))]
+    panic!("{CORE_STOPPED_MESSAGE}");
+}
+
+/// The most recent panic's message and location, or `undefined` if the core
+/// has not panicked since the module loaded. The shell can attach it to a
+/// bug report after [`CremaBridge::panic_recoveries`] grows.
+#[wasm_bindgen]
+pub fn last_panic_message() -> Option<String> {
+    LAST_PANIC.with(|last| last.borrow().clone())
+}
 
 /// Which BLE characteristic an incoming notification came from — mirrors
 /// [`de1_app::Source`] across the wasm boundary.
@@ -48,6 +147,9 @@ pub enum NotificationSource {
     /// The DE1 `FrameWrite` characteristic — per-frame ack echoes during a
     /// profile upload.
     De1FrameAck,
+    /// The shell's synthesised confirmation of a successful profile header
+    /// write — mirrors `de1_app::Source::De1HeaderAck`.
+    De1HeaderAck,
     /// The scale's on-scale button characteristic (Skale II `EF82`) —
     /// mirrors `de1_app::Source::ScaleButton`.
     ScaleButton,
@@ -67,6 +169,7 @@ impl From<NotificationSource> for Source {
             NotificationSource::De1ShotSettings => Source::De1ShotSettings,
             NotificationSource::De1ProfileHeader => Source::De1ProfileHeader,
             NotificationSource::De1FrameAck => Source::De1FrameAck,
+            NotificationSource::De1HeaderAck => Source::De1HeaderAck,
             NotificationSource::ScaleButton => Source::ScaleButton,
         }
     }
@@ -309,6 +412,18 @@ pub fn brew_ratio(dose: f32, yield_out: f32) -> Option<f32> {
 /// tuples (`ShotStatInput`); returns `HistoryStats` JSON. One
 /// derivation for every shell (review #41). See
 /// `de1_domain::history_stats`.
+/// Restore a backup's Visualizer prefs over the current ones without silently
+/// widening sharing; returns `GuardedVisualizerPrefs` JSON. See
+/// `de1_domain::guard_restored_visualizer_prefs`.
+#[wasm_bindgen(js_name = guardRestoredVisualizerPrefs)]
+pub fn guard_restored_visualizer_prefs(
+    current_json: &str,
+    incoming_json: &str,
+) -> Result<String, String> {
+    de1_domain::guard_restored_visualizer_prefs_json(current_json, incoming_json)
+        .map_err(|e| e.to_string())
+}
+
 #[wasm_bindgen(js_name = historyStats)]
 pub fn history_stats(shots_json: &str) -> Result<String, String> {
     let shots: Vec<de1_domain::ShotStatInput> =
@@ -796,7 +911,8 @@ pub fn crema_profile_from_wire(wire_json: &str) -> Result<String, String> {
 /// Returns the error string when `content` is not a valid v2 profile.
 #[wasm_bindgen(js_name = parseV2Profile)]
 pub fn parse_v2_profile(content: &str) -> Result<String, String> {
-    de1_domain::import_v2_json(content)
+    // A shot's embedded recipe: up to 32 steps stay readable (#6 #6).
+    de1_domain::import_v2_json_embedded(content)
         .map_err(|e| e.to_string())
         .and_then(|p| serde_json::to_string(&p).map_err(|e| e.to_string()))
 }
@@ -1428,6 +1544,15 @@ pub fn has_cup_warmer(raw: u32) -> bool {
     de1_protocol::has_cup_warmer(raw)
 }
 
+/// Decode a raw `HeaterVoltage` MMR word to 120 / 230 V, or `undefined` for 0
+/// (not set) and any word outside both bands (e.g. a doubled +1000 marker).
+/// Mirrors [`de1_protocol::heater_voltage_from_raw`].
+#[wasm_bindgen(js_name = heaterVoltageFromRaw)]
+#[must_use]
+pub fn heater_voltage_from_raw(raw: u32) -> Option<u16> {
+    de1_protocol::heater_voltage_from_raw(raw)
+}
+
 /// Human-readable English message for an error substate name (the
 /// wire-side variant the FFI emits, e.g. `"ErrorTSensor"`). Returns
 /// `null` for non-error substates and unknown names. Mirrors
@@ -1879,14 +2004,175 @@ pub fn profile_bounds_json() -> String {
 /// Methods that produce a [`CoreOutput`] return it as a JSON string; the shell
 /// parses it into types generated by `typeshare`. Timestamps are `f64`
 /// milliseconds — the natural type for the browser's `performance.now()`.
+/// The Crema core, exposed to the web shell.
+///
+/// Methods that produce a [`CoreOutput`] return it as a JSON string; the shell
+/// parses it into types generated by `typeshare`. Timestamps are `f64`
+/// milliseconds — the natural type for the browser's `performance.now()`.
+///
+/// # Surviving a panic
+///
+/// On `wasm32-unknown-unknown` a Rust panic is a trap: nothing unwinds, no
+/// destructor runs, and wasm-bindgen never releases the borrow it took on
+/// this object for the call. With `&mut self` methods that left the object
+/// mutably borrowed forever, so every later call — `on_notification`
+/// included — threw "recursive use of an object detected" until the page
+/// reloaded (cohort review 2026-10-25, report 01 P2-3). So:
+///
+/// - Every method takes `&self`. wasm-bindgen's stuck *shared* borrow does
+///   not block later shared borrows.
+/// - The core lives out of line in a take/put slot ([`BridgeState`] via
+///   [`state`](Self::state)). A call takes it out and its guard puts it
+///   back on return. A trapped call never puts it back, so the next call
+///   finds the slot empty and installs a fresh state. The old state is
+///   abandoned, never read or dropped again: a trap can leave it
+///   half-updated, past any drop guard, so touching it would not be sound.
+/// - A panic hook ([`install_panic_hook`]) sends the message to
+///   `console.error` and keeps it for [`last_panic_message`];
+///   [`panic_recoveries`](Self::panic_recoveries) counts resets so the shell
+///   can re-push its settings.
+///
+/// A reset drops the live session (connected scale, shot in progress); the
+/// shell's reconnect and connect sweep rebuild it. That is the price of a
+/// panic; before, it cost the whole session.
+///
+/// Recovery is best-effort and bounded. A trap also skips every function
+/// epilogue, so state outside the slot is not reset: the shadow stack
+/// pointer is never restored, the abandoned core's memory is never freed,
+/// std's panic count stays raised (`std::thread::panicking()` is true from
+/// then on), and a `OnceLock` caught mid-initialisation stays poisoned, so
+/// every later use of it panics again. Only re-instantiating the module
+/// resets all of that, and every JS handle into the old memory would then
+/// dangle, so the shell reloads the page instead. To keep a panic loop from
+/// leaking until the instance breaks, the bridge resets at most
+/// [`MAX_PANIC_RECOVERIES`] times; after that it is stopped
+/// ([`core_stopped`](Self::core_stopped)) and every call throws
+/// [`CORE_STOPPED_MESSAGE`], which the shell turns into a reload notice.
 #[wasm_bindgen]
 pub struct CremaBridge {
+    slot: Cell<Option<Box<BridgeState>>>,
+    recoveries: Cell<u32>,
+    /// Set once a panicked call finds [`MAX_PANIC_RECOVERIES`] used up.
+    stopped: Cell<bool>,
+    /// [`panics_recorded`] when the state was last taken: an empty slot with
+    /// no panic since then was not left by a panic.
+    panics_at_take: Cell<Option<u64>>,
+    /// Test-only: the next empty-slot recovery is an expected simulated trap.
+    #[cfg(test)]
+    trap_simulated: Cell<bool>,
+}
+
+/// Everything a [`CremaBridge`] call may touch — see "Surviving a panic".
+struct BridgeState {
     core: CremaCore,
     /// Stashed live core during replay. `None` outside replay mode;
     /// `Some(prev)` after `begin_replay()` until `end_replay()` swaps
     /// it back. See docs/48-replay-architecture-problem-statement.md
     /// §4 for the design.
     stashed: Option<CremaCore>,
+}
+
+impl BridgeState {
+    fn new() -> Self {
+        Self {
+            core: CremaCore::new(),
+            stashed: None,
+        }
+    }
+
+    /// The live core: the stashed one during a replay — a flash talks to the
+    /// real machine, never to a replayed one.
+    fn live_core(&mut self) -> &mut CremaCore {
+        self.stashed.as_mut().unwrap_or(&mut self.core)
+    }
+}
+
+/// Exclusive access to a [`CremaBridge`]'s state for one call; puts the state
+/// back into the slot when dropped. A trap skips the drop, which is the point.
+struct StateGuard<'a> {
+    bridge: &'a CremaBridge,
+    state: Option<Box<BridgeState>>,
+}
+
+impl std::ops::Deref for StateGuard<'_> {
+    type Target = BridgeState;
+    fn deref(&self) -> &BridgeState {
+        self.state
+            .as_deref()
+            .unwrap_or_else(|| unreachable!("state taken"))
+    }
+}
+
+impl std::ops::DerefMut for StateGuard<'_> {
+    fn deref_mut(&mut self) -> &mut BridgeState {
+        self.state
+            .as_deref_mut()
+            .unwrap_or_else(|| unreachable!("state taken"))
+    }
+}
+
+impl Drop for StateGuard<'_> {
+    fn drop(&mut self) {
+        self.bridge.slot.set(self.state.take());
+    }
+}
+
+impl CremaBridge {
+    /// Take the state for this call. An empty slot means the previous call
+    /// trapped while holding it: install a fresh state and count the reset.
+    ///
+    /// Each bridge method takes the guard once, for one statement at a time
+    /// (a temporary), never two at once: off wasm a panic unwinds and the
+    /// guard puts the state back, so there an empty slot can only mean a
+    /// nested borrow — a bug, which panics loudly in the native tests.
+    fn state(&self) -> StateGuard<'_> {
+        let state = self.slot.take().unwrap_or_else(|| self.recover());
+        self.panics_at_take.set(panics_recorded());
+        StateGuard {
+            bridge: self,
+            state: Some(state),
+        }
+    }
+
+    /// The empty-slot path of [`state`](Self::state): reset the core, or,
+    /// with [`MAX_PANIC_RECOVERIES`] used up, stop the bridge.
+    #[cold]
+    fn recover(&self) -> Box<BridgeState> {
+        if self.stopped.get() {
+            fail_stopped();
+        }
+        if self.recoveries.get() >= MAX_PANIC_RECOVERIES {
+            self.stopped.set(true);
+            report_error(&format!(
+                "crema core: another call panicked after {MAX_PANIC_RECOVERIES} resets; \
+                 the core is stopped and every call now fails until Crema reloads"
+            ));
+            fail_stopped();
+        }
+        if cfg!(not(target_arch = "wasm32")) {
+            #[cfg(test)]
+            let expected = self.trap_simulated.replace(false);
+            #[cfg(not(test))]
+            let expected = false;
+            assert!(expected, "nested CremaBridge state borrow");
+        } else if let (Some(now), Some(then)) = (panics_recorded(), self.panics_at_take.get())
+            && now == then
+        {
+            // On wasm a nested borrow cannot panic here (that would trap with
+            // the slot empty and be taken for a recovery), so say it loudly.
+            report_error(
+                "crema core: the core state was missing but no panic was recorded since \
+                 the last call: a nested CremaBridge state borrow (a bridge bug) or a trap \
+                 that was not a panic (out of memory, stack overflow)",
+            );
+        }
+        self.recoveries.set(self.recoveries.get().saturating_add(1));
+        report_error(
+            "crema core: a previous call panicked; the core was reset to a fresh state \
+             (the last panic message is in last_panic_message())",
+        );
+        Box::new(BridgeState::new())
+    }
 }
 
 impl Default for CremaBridge {
@@ -1901,9 +2187,40 @@ impl CremaBridge {
     #[wasm_bindgen(constructor)]
     pub fn new() -> CremaBridge {
         CremaBridge {
-            core: CremaCore::new(),
-            stashed: None,
+            slot: Cell::new(Some(Box::new(BridgeState::new()))),
+            recoveries: Cell::new(0),
+            stopped: Cell::new(false),
+            panics_at_take: Cell::new(None),
+            #[cfg(test)]
+            trap_simulated: Cell::new(false),
         }
+    }
+
+    /// How many times this bridge has reset its core after a panicked call
+    /// (see "Surviving a panic" on [`CremaBridge`]). The shell can compare it
+    /// with the value it last saw and, when it grew, re-push its settings and
+    /// reconnect.
+    pub fn panic_recoveries(&self) -> u32 {
+        self.recoveries.get()
+    }
+
+    /// Whether the bridge is stopped: a call panicked after
+    /// [`MAX_PANIC_RECOVERIES`] resets, and every call that needs the core
+    /// now throws [`CORE_STOPPED_MESSAGE`] until the page reloads.
+    /// [`panic_recoveries`](Self::panic_recoveries) stays at the cap. Safe to
+    /// call at any time: it never touches the core.
+    pub fn core_stopped(&self) -> bool {
+        self.stopped.get()
+    }
+
+    /// Test hook: panic while holding the bridge state, exactly as a bug in a
+    /// bridge method would. On wasm this traps (`RuntimeError: unreachable`)
+    /// and the next call recovers; the web shell's test suite drives it to
+    /// prove that. Not for production use.
+    #[doc(hidden)]
+    pub fn debug_trap(&self) {
+        let _state = self.state();
+        panic!("CremaBridge::debug_trap");
     }
 
     /// Begin replay mode: stash the live core into a hidden slot, install
@@ -1918,11 +2235,13 @@ impl CremaBridge {
     /// bytes via `on_notification(...)`.
     ///
     /// `end_replay()` discards the replay core and restores the live one.
-    pub fn begin_replay(&mut self) -> Result<(), String> {
-        if self.stashed.is_some() {
+    pub fn begin_replay(&self) -> Result<(), String> {
+        let mut state = self.state();
+        if state.stashed.is_some() {
             return Err("already in replay mode".to_owned());
         }
-        self.stashed = Some(std::mem::replace(&mut self.core, CremaCore::new()));
+        let live = std::mem::replace(&mut state.core, CremaCore::new());
+        state.stashed = Some(live);
         Ok(())
     }
 
@@ -1930,34 +2249,54 @@ impl CremaBridge {
     /// previously-stashed live core. Idempotent: a no-op outside replay
     /// mode, so exception-path callers can call it unconditionally in
     /// their `finally` blocks.
-    pub fn end_replay(&mut self) {
-        if let Some(prev) = self.stashed.take() {
-            self.core = prev;
+    pub fn end_replay(&self) {
+        let mut state = self.state();
+        if let Some(prev) = state.stashed.take() {
+            state.core = prev;
         }
     }
 
     /// True while the replay shadow core is installed (i.e. between
     /// `begin_replay()` and `end_replay()`).
     pub fn in_replay(&self) -> bool {
-        self.stashed.is_some()
+        self.state().stashed.is_some()
+    }
+
+    /// The synthesised ack for a profile write of upload `upload_id` (its
+    /// `ProfileUploadStarted` number). Ignored unless that upload is still
+    /// running. See
+    /// [`CremaCore::on_profile_write_ack`](de1_app::CremaCore::on_profile_write_ack).
+    pub fn on_profile_write_ack(
+        &self,
+        source: NotificationSource,
+        data: Vec<u8>,
+        now_ms: f64,
+        upload_id: u32,
+    ) -> String {
+        json(
+            self.state()
+                .core
+                .on_profile_write_ack(source.into(), &data, now_ms as u64, upload_id),
+        )
     }
 
     /// Feed a raw GATT notification. Returns a JSON-encoded [`CoreOutput`].
     pub fn on_notification(
-        &mut self,
+        &self,
         source: NotificationSource,
         data: Vec<u8>,
         now_ms: f64,
     ) -> String {
         json(
-            self.core
+            self.state()
+                .core
                 .on_notification(source.into(), &data, now_ms as u64),
         )
     }
 
     /// Feed a periodic clock tick. Returns a JSON-encoded [`CoreOutput`].
-    pub fn on_tick(&mut self, now_ms: f64) -> String {
-        json(self.core.on_tick(now_ms as u64))
+    pub fn on_tick(&self, now_ms: f64) -> String {
+        json(self.state().core.on_tick(now_ms as u64))
     }
 
     // ── Guided brew sessions (issue #10) ─────────────────────────
@@ -1965,51 +2304,55 @@ impl CremaBridge {
     /// Arm a guided brew session for a JSON-encoded `BrewRecipe`.
     /// `start_on_pour` starts the clock at the first sustained pour.
     /// Returns a JSON-encoded [`CoreOutput`].
-    pub fn brew_session_arm(&mut self, recipe_json: &str, start_on_pour: bool) -> String {
-        json(self.core.brew_session_arm(recipe_json, start_on_pour))
+    pub fn brew_session_arm(&self, recipe_json: &str, start_on_pour: bool) -> String {
+        json(
+            self.state()
+                .core
+                .brew_session_arm(recipe_json, start_on_pour),
+        )
     }
 
     /// Start an armed session's clock (the Start tap).
-    pub fn brew_session_begin(&mut self, now_ms: f64) -> String {
-        json(self.core.brew_session_begin(now_ms as u64))
+    pub fn brew_session_begin(&self, now_ms: f64) -> String {
+        json(self.state().core.brew_session_begin(now_ms as u64))
     }
 
     /// Freeze a running session's clock.
-    pub fn brew_session_pause(&mut self, now_ms: f64) -> String {
-        json(self.core.brew_session_pause(now_ms as u64))
+    pub fn brew_session_pause(&self, now_ms: f64) -> String {
+        json(self.state().core.brew_session_pause(now_ms as u64))
     }
 
     /// Resume a paused session.
-    pub fn brew_session_resume(&mut self, now_ms: f64) -> String {
-        json(self.core.brew_session_resume(now_ms as u64))
+    pub fn brew_session_resume(&self, now_ms: f64) -> String {
+        json(self.state().core.brew_session_resume(now_ms as u64))
     }
 
     /// Advance to the next recipe step.
-    pub fn brew_session_skip(&mut self, now_ms: f64) -> String {
-        json(self.core.brew_session_skip(now_ms as u64))
+    pub fn brew_session_skip(&self, now_ms: f64) -> String {
+        json(self.state().core.brew_session_skip(now_ms as u64))
     }
 
     /// End the session now; the output carries `BrewSessionCompleted`.
-    pub fn brew_session_finish(&mut self, now_ms: f64) -> String {
-        json(self.core.brew_session_finish(now_ms as u64))
+    pub fn brew_session_finish(&self, now_ms: f64) -> String {
+        json(self.state().core.brew_session_finish(now_ms as u64))
     }
 
     /// Drop the session without a summary.
-    pub fn brew_session_cancel(&mut self) -> String {
-        json(self.core.brew_session_cancel())
+    pub fn brew_session_cancel(&self) -> String {
+        json(self.state().core.brew_session_cancel())
     }
 
     /// Discard all session state — e.g. on disconnect. Returns the teardown's
     /// `CoreOutput` JSON: a scale-timer stop when the DE1 went away mid-shot.
-    pub fn reset(&mut self) -> String {
-        json(self.core.reset())
+    pub fn reset(&self) -> String {
+        json(self.state().core.reset())
     }
 
     /// The DE1 link dropped unexpectedly (auto-reconnect starting). Keeps the
     /// session, stops the scale's timer if a shot had it running. See
     /// [`CremaCore::de1_link_lost`].
-    pub fn de1_link_lost(&mut self) -> String {
-        json(self.core.de1_link_lost())
+    pub fn de1_link_lost(&self) -> String {
+        json(self.state().core.de1_link_lost())
     }
 
     /// Slice the rolling BLE-capture buffer to JSONL covering
@@ -2018,13 +2361,15 @@ impl CremaBridge {
     /// `CaptureEntry[]` for IndexedDB persistence. See
     /// [`CremaCore::capture_slice_jsonl`].
     pub fn capture_slice_jsonl(&self, from_ms: f64, to_ms: f64) -> String {
-        self.core.capture_slice_jsonl(from_ms as u64, to_ms as u64)
+        self.state()
+            .core
+            .capture_slice_jsonl(from_ms as u64, to_ms as u64)
     }
 
     /// Drop every recorded entry — called by the shell on BLE disconnect.
     /// Distinct from [`reset`](Self::reset), which wipes the whole core.
-    pub fn capture_clear(&mut self) {
-        self.core.capture_clear();
+    pub fn capture_clear(&self) {
+        self.state().core.capture_clear();
     }
 
     /// Identify and connect a scale from its discovered GATT `service_uuids`
@@ -2033,11 +2378,13 @@ impl CremaBridge {
     /// over the name (Acaia generation, rebrand, mixed-case); pass an empty
     /// array for name-only identification.
     pub fn connect_scale(
-        &mut self,
+        &self,
         advertised_name: String,
         service_uuids: Vec<String>,
     ) -> Option<String> {
-        self.core.connect_scale(&advertised_name, &service_uuids)
+        self.state()
+            .core
+            .connect_scale(&advertised_name, &service_uuids)
     }
 
     /// Disconnect the scale: reset the core's scale slice (the identified
@@ -2045,18 +2392,18 @@ impl CremaBridge {
     /// shot / profile config. The web shell calls this when the scale's BLE
     /// link drops (the wasm twin of the ffi `disconnect_scale`, AND4 follow-up).
     /// See `de1_app::CremaCore::disconnect_scale`.
-    pub fn disconnect_scale(&mut self) {
-        self.core.disconnect_scale();
+    pub fn disconnect_scale(&self) {
+        self.state().core.disconnect_scale();
     }
 
     /// Enable or disable auto-tare on shot start.
-    pub fn set_auto_tare(&mut self, enabled: bool) {
-        self.core.set_auto_tare(enabled);
+    pub fn set_auto_tare(&self, enabled: bool) {
+        self.state().core.set_auto_tare(enabled);
     }
 
     /// Enable or disable stop-at-weight (SAW).
-    pub fn set_stop_on_weight(&mut self, enabled: bool) {
-        self.core.set_stop_on_weight(enabled);
+    pub fn set_stop_on_weight(&self, enabled: bool) {
+        self.state().core.set_stop_on_weight(enabled);
     }
 
     /// Per-shot kill switch for the weight target. Independent of
@@ -2067,25 +2414,25 @@ impl CremaBridge {
     /// `CremaCore::stop_targets_projection` (geota/crema#56).
     #[wasm_bindgen]
     pub fn stop_targets_projection(&self) -> String {
-        self.core.stop_targets_projection_json()
+        self.state().core.stop_targets_projection_json()
     }
 
-    pub fn set_weight_target_disabled(&mut self, disabled: bool) {
-        self.core.set_weight_target_disabled(disabled);
+    pub fn set_weight_target_disabled(&self, disabled: bool) {
+        self.state().core.set_weight_target_disabled(disabled);
     }
 
     /// Opt-in: arm the profile's volume limit (stop-at-volume) even while a
     /// scale is registered. Default off — volume is a no-scale fallback,
     /// never a competitor to stop-at-weight.
-    pub fn set_volume_stop_with_scale(&mut self, enabled: bool) {
-        self.core.set_volume_stop_with_scale(enabled);
+    pub fn set_volume_stop_with_scale(&self, enabled: bool) {
+        self.state().core.set_volume_stop_with_scale(enabled);
     }
 
     /// The learned SAW drip model as a JSON blob — the shell persists it
     /// in localStorage and re-seeds it at startup via
     /// [`load_saw_model_json`](Self::load_saw_model_json).
     pub fn saw_model_json(&self) -> String {
-        self.core.saw_model_json()
+        self.state().core.saw_model_json()
     }
 
     /// Seed the learned SAW drip model from its persisted blob (`None` when
@@ -2094,8 +2441,8 @@ impl CremaBridge {
     /// `{"type":"Corrupt","content":{"raw":…,"error":…}}`. On `Corrupt`
     /// the model starts fresh and the shell must quarantine `raw` before its
     /// next save (Decenza 95146a0c). See `de1_domain::saw_learning`.
-    pub fn load_saw_model_json(&mut self, json: Option<String>) -> String {
-        let outcome = self.core.load_saw_model_json(json.as_deref());
+    pub fn load_saw_model_json(&self, json: Option<String>) -> String {
+        let outcome = self.state().core.load_saw_model_json(json.as_deref());
         serde_json::to_string(&outcome).unwrap_or_else(|_| r#"{"type":"Absent"}"#.to_owned())
     }
 
@@ -2125,52 +2472,56 @@ impl CremaBridge {
 
     /// Clear the running scale-derived peaks (peak weight + final
     /// weight). The Scale page's "Reset peak" button.
-    pub fn reset_scale_peaks(&mut self) {
-        self.core.reset_scale_peaks();
+    pub fn reset_scale_peaks(&self) {
+        self.state().core.reset_scale_peaks();
     }
 
     /// Set the active profile's recipe target weight, in grams.
     /// `None` (or a non-finite / non-positive value) means "no target."
-    pub fn set_profile_target_weight(&mut self, grams: Option<f32>) {
-        self.core.set_profile_target_weight(grams);
+    pub fn set_profile_target_weight(&self, grams: Option<f32>) {
+        self.state().core.set_profile_target_weight(grams);
     }
 
     /// Set the per-shot dial override weight, in grams. `None` clears the
     /// override (falls back to the profile recipe target).
-    pub fn set_shot_target_weight(&mut self, grams: Option<f32>) {
-        self.core.set_shot_target_weight(grams);
+    pub fn set_shot_target_weight(&self, grams: Option<f32>) {
+        self.state().core.set_shot_target_weight(grams);
     }
 
     /// Set the active profile's volume limit (SAV), in millilitres.
     /// `None` means "no limit."
-    pub fn set_profile_volume_limit(&mut self, milliliters: Option<f32>) {
-        self.core.set_profile_volume_limit(milliliters);
+    pub fn set_profile_volume_limit(&self, milliliters: Option<f32>) {
+        self.state().core.set_profile_volume_limit(milliliters);
     }
 
     /// Set the global maximum shot duration, in seconds. `None` means
     /// "no max." Legacy default is 60 s.
-    pub fn set_max_shot_duration(&mut self, seconds: Option<f32>) {
-        self.core.set_max_shot_duration(seconds);
+    pub fn set_max_shot_duration(&self, seconds: Option<f32>) {
+        self.state().core.set_max_shot_duration(seconds);
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command asks the DE1 to enter
     /// `state`.
-    pub fn request_machine_state(&mut self, state: MachineRequest) -> String {
-        json(self.core.request_machine_state(state.into()))
+    pub fn request_machine_state(&self, state: MachineRequest) -> String {
+        json(self.state().core.request_machine_state(state.into()))
     }
 
     /// Cancel the maintenance cycle the core is following (a Descale / Clean
     /// / AirPurge held for preheat on old firmware, or one running) — see
     /// `CremaCore::cancel_maintenance`. Returns a `CoreOutput` JSON string.
-    pub fn cancel_maintenance(&mut self) -> String {
-        json(self.core.cancel_maintenance())
+    pub fn cancel_maintenance(&self) -> String {
+        json(self.state().core.cancel_maintenance())
     }
 
     /// Run the DE1 connect sweep — every machine setting Crema owns a
     /// preference for, re-asserted once the link is ready. `settings_json` is
     /// a camelCase `ConnectSweepSettings`. Returns a `CoreOutput` JSON string.
-    pub fn connect_sweep(&mut self, settings_json: &str, now_ms: f64) -> String {
-        json(self.core.connect_sweep_json(settings_json, now_ms as u64))
+    pub fn connect_sweep(&self, settings_json: &str, now_ms: f64) -> String {
+        json(
+            self.state()
+                .core
+                .connect_sweep_json(settings_json, now_ms as u64),
+        )
     }
 
     /// Feed the idle-sleep timer ("Sleep after") one input — a JSON
@@ -2180,16 +2531,16 @@ impl CremaBridge {
     /// `now_ms` (`Date.now()`). Returns a `CoreOutput` JSON string: the Sleep
     /// write when the timer fires, a throttled presence poke on activity.
     /// See `CremaCore::idle_sleep`.
-    pub fn idle_sleep(&mut self, input_json: &str, now_ms: f64) -> String {
-        json(self.core.idle_sleep_json(input_json, now_ms as u64))
+    pub fn idle_sleep(&self, input_json: &str, now_ms: f64) -> String {
+        json(self.state().core.idle_sleep_json(input_json, now_ms as u64))
     }
 
     /// The once-a-minute USB-charger check (Decenza `BatteryManager`):
     /// `mode` is the persisted `UsbChargingMode` spelling (`"alwaysOn"` /
     /// `"smart"` / `"smartHigh"`; anything else is `"alwaysOn"`); `battery_percent` is the tablet battery,
     /// `undefined` when unreadable. Returns a `CoreOutput` JSON string.
-    pub fn usb_charger_tick(&mut self, mode: &str, battery_percent: Option<u8>) -> String {
-        json(self.core.usb_charger_tick(
+    pub fn usb_charger_tick(&self, mode: &str, battery_percent: Option<u8>) -> String {
+        json(self.state().core.usb_charger_tick(
             de1_domain::UsbChargingMode::from_str_lenient(mode),
             battery_percent,
         ))
@@ -2199,20 +2550,20 @@ impl CremaBridge {
     /// register. The DE1 answers with a notification on the `De1MmrRead`
     /// characteristic, which decodes to an `MmrValue` event.
     pub fn read_mmr(&self, register: MmrReg) -> String {
-        json(self.core.read_mmr(register.into()))
+        json(self.state().core.read_mmr(register.into()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads `sensor`'s current
     /// (in-use) calibration. The DE1 answers on the `De1Calibration`
     /// characteristic, which decodes to a `Calibration` event.
     pub fn read_calibration(&self, sensor: CalSensor) -> String {
-        json(self.core.read_calibration(sensor.into()))
+        json(self.state().core.read_calibration(sensor.into()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads `sensor`'s factory
     /// calibration — the calibration the machine shipped with.
     pub fn read_factory_calibration(&self, sensor: CalSensor) -> String {
-        json(self.core.read_factory_calibration(sensor.into()))
+        json(self.state().core.read_factory_calibration(sensor.into()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command writes a new calibration
@@ -2223,7 +2574,8 @@ impl CremaBridge {
     /// a multiplier on that sensor.
     pub fn write_calibration(&self, sensor: CalSensor, reported: f32, measured: f32) -> String {
         json(
-            self.core
+            self.state()
+                .core
                 .write_calibration(sensor.into(), reported, measured),
         )
     }
@@ -2233,39 +2585,41 @@ impl CremaBridge {
     /// the shell should follow up with a `read_calibration` to surface the new
     /// in-use value.
     pub fn reset_calibration_to_factory(&self, sensor: CalSensor) -> String {
-        json(self.core.reset_calibration_to_factory(sensor.into()))
+        json(
+            self.state()
+                .core
+                .reset_calibration_to_factory(sensor.into()),
+        )
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command tares the connected scale.
     ///
-    /// `&mut self` (unlike the `set_scale_*` siblings): taring bumps the
-    /// Decent scale's command sequence counter via `Scale::tare`, so this
-    /// genuinely mutates the connected-scale state. The FFI twin is `&self`
-    /// only because it wraps the core in a `Mutex`; the WASM bridge owns the
-    /// core directly and JS is single-threaded, so `&mut self` is honest here.
-    pub fn tare_scale(&mut self) -> String {
-        json(self.core.tare_scale())
+    /// Taring bumps the Decent scale's command sequence counter via
+    /// `Scale::tare`, so this mutates the connected-scale state — through
+    /// the state slot, like every bridge method (see [`CremaBridge`]).
+    pub fn tare_scale(&self) -> String {
+        json(self.state().core.tare_scale())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command starts the connected
     /// scale's built-in timer. Capability-gated to scales that support
     /// software timer commands (the Bookoo today); empty otherwise.
     pub fn start_timer(&self) -> String {
-        json(self.core.start_timer())
+        json(self.state().core.start_timer())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command stops the connected
     /// scale's built-in timer. Capability-gated like
     /// [`start_timer`](Self::start_timer).
     pub fn stop_timer(&self) -> String {
-        json(self.core.stop_timer())
+        json(self.state().core.stop_timer())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command resets the connected
     /// scale's built-in timer to zero. Capability-gated like
     /// [`start_timer`](Self::start_timer).
     pub fn reset_timer(&self) -> String {
-        json(self.core.reset_timer())
+        json(self.state().core.reset_timer())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command enables a connected
@@ -2286,7 +2640,8 @@ impl CremaBridge {
     pub fn enable_scale_lcd(&self, unit: &str) -> Result<String, String> {
         let unit = de1_domain::WeightUnit::from_str_lower(unit)
             .ok_or_else(|| format!("unknown weight unit: {unit}"))?;
-        self.core
+        self.state()
+            .core
             .enable_scale_lcd(unit)
             .map(json)
             .map_err(|e| e.to_string())
@@ -2297,7 +2652,8 @@ impl CremaBridge {
     /// `Scale::lcd_disable_command`. Returns an error when no scale or
     /// the scale has no LCD-disable command.
     pub fn disable_scale_lcd(&self) -> Result<String, String> {
-        self.core
+        self.state()
+            .core
             .disable_scale_lcd()
             .map(json)
             .map_err(|e| e.to_string())
@@ -2309,7 +2665,8 @@ impl CremaBridge {
     /// Capability-driven — returns an error when the scale doesn't need
     /// a heartbeat (`ScaleCapabilities::heartbeat_interval_ms == None`).
     pub fn scale_heartbeat(&self) -> Result<String, String> {
-        self.core
+        self.state()
+            .core
             .scale_heartbeat()
             .map(json)
             .map_err(|e| e.to_string())
@@ -2321,7 +2678,8 @@ impl CremaBridge {
     /// the scale lacks a host-driven power-off (Decent / Eureka / Solo
     /// support it).
     pub fn power_off_scale(&self) -> Result<String, String> {
-        self.core
+        self.state()
+            .core
             .power_off_scale()
             .map(json)
             .map_err(|e| e.to_string())
@@ -2331,10 +2689,10 @@ impl CremaBridge {
     /// auto-policy (triggered on the DE1's Idle entry) picks the right
     /// wire packet. `unit` is the same lowercase string the web settings
     /// store keeps (`"grams"` / `"ounces"`).
-    pub fn set_weight_unit_pref(&mut self, unit: &str) -> Result<(), String> {
+    pub fn set_weight_unit_pref(&self, unit: &str) -> Result<(), String> {
         let unit = de1_domain::WeightUnit::from_str_lower(unit)
             .ok_or_else(|| format!("unknown weight unit: {unit}"))?;
-        self.core.set_weight_unit_pref(unit);
+        self.state().core.set_weight_unit_pref(unit);
         Ok(())
     }
 
@@ -2347,19 +2705,23 @@ impl CremaBridge {
     /// the active profile. Also latched by every completed upload. Errors
     /// (and changes nothing) on a JSON parse failure.
     #[wasm_bindgen(js_name = setActiveProfile)]
-    pub fn set_active_profile(&mut self, profile_json: Option<String>) -> Result<(), String> {
+    pub fn set_active_profile(&self, profile_json: Option<String>) -> Result<(), String> {
         let profile: Option<Profile> = profile_json
             .map(|j| serde_json::from_str(&j))
             .transpose()
             .map_err(|e| format!("profile JSON parse failed: {e}"))?;
-        self.core.set_active_profile(profile.as_ref());
+        self.state().core.set_active_profile(profile.as_ref());
         Ok(())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command fires a beep on the
     /// connected scale. Capability-driven — Eureka / Solo support it.
     pub fn scale_beep(&self) -> Result<String, String> {
-        self.core.scale_beep().map(json).map_err(|e| e.to_string())
+        self.state()
+            .core
+            .scale_beep()
+            .map(json)
+            .map_err(|e| e.to_string())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command sets the connected
@@ -2368,7 +2730,8 @@ impl CremaBridge {
     /// bytes (Decent / Skale) return an error; scales with only a
     /// toggle (Hiroia) want `toggle_scale_unit` instead.
     pub fn set_scale_unit_grams(&self) -> Result<String, String> {
-        self.core
+        self.state()
+            .core
             .set_scale_unit_grams()
             .map(json)
             .map_err(|e| e.to_string())
@@ -2378,7 +2741,8 @@ impl CremaBridge {
     /// scale's display unit. Capability-driven — Hiroia is the only
     /// scale that exposes a toggle today.
     pub fn toggle_scale_unit(&self) -> Result<String, String> {
-        self.core
+        self.state()
+            .core
             .toggle_scale_unit()
             .map(json)
             .map_err(|e| e.to_string())
@@ -2389,14 +2753,14 @@ impl CremaBridge {
     /// reactive auto-policy fires `power_off_command` on Sleep when this
     /// is true and the scale exposes a power-off (Decent / Eureka /
     /// Solo today).
-    pub fn set_auto_off_scale_on_sleep(&mut self, enabled: bool) {
-        self.core.set_auto_off_scale_on_sleep(enabled);
+    pub fn set_auto_off_scale_on_sleep(&self, enabled: bool) {
+        self.state().core.set_auto_off_scale_on_sleep(enabled);
     }
 
     /// Whether the connected scale is configured to power off on machine
     /// Sleep entry.
     pub fn auto_off_scale_on_sleep(&self) -> bool {
-        self.core.auto_off_scale_on_sleep()
+        self.state().core.auto_off_scale_on_sleep()
     }
 
     /// What the currently-connected scale can do beyond reporting a bare
@@ -2411,7 +2775,8 @@ impl CremaBridge {
         // RS1: never panic at the boundary (a panic aborts the whole wasm
         // module). Plain data always serializes, but on the unreachable error
         // degrade to `None` (no caps) rather than crashing.
-        self.core
+        self.state()
+            .core
             .scale_capabilities()
             .and_then(|caps| serde_json::to_string(&caps).ok())
     }
@@ -2426,7 +2791,8 @@ impl CremaBridge {
     /// consistent with the rest of the bridge's JSON surface.
     pub fn scale_uuids(&self) -> Option<String> {
         // RS1: degrade to `None` on the (unreachable) serialize error, never panic.
-        self.core
+        self.state()
+            .core
             .scale_uuids()
             .and_then(|uuids| serde_json::to_string(&uuids).ok())
     }
@@ -2437,7 +2803,7 @@ impl CremaBridge {
     /// traffic. The status is `Unknown` until the DE1's FirmwareVersion MMR
     /// reply (`0x800010`) has been routed through `on_notification`.
     pub fn firmware_build_report(&self) -> String {
-        serde_json::to_string(&self.core.firmware_build_report())
+        serde_json::to_string(&self.state().core.firmware_build_report())
             .unwrap_or_else(|_| r#"{"status":"Unknown"}"#.to_string())
     }
 
@@ -2448,122 +2814,143 @@ impl CremaBridge {
     // replay the calls go to the stashed live core — a flash talks to the
     // real machine, never to a replayed one. See `de1_app::firmware_flash`.
 
-    fn live_core(&mut self) -> &mut CremaCore {
-        self.stashed.as_mut().unwrap_or(&mut self.core)
-    }
-
     /// Every precondition blocking a flash now, as a JSON array of
     /// `FlashBlocker`. `conditions_json` is a `FlashShellConditions`; an
     /// unparsable one is treated as "not connected, power unknown".
-    pub fn firmware_flash_blockers(&mut self, conditions_json: &str) -> String {
+    pub fn firmware_flash_blockers(&self, conditions_json: &str) -> String {
         let conditions = parse_flash_conditions(conditions_json);
-        serde_json::to_string(&self.live_core().firmware_flash_blockers(conditions))
+        serde_json::to_string(&self.state().live_core().firmware_flash_blockers(conditions))
             .unwrap_or_else(|_| "[]".to_string())
     }
 
     /// Validate `image` against the pinned manifest and the preconditions,
     /// then start the flash.
     pub fn firmware_flash_start(
-        &mut self,
+        &self,
         image: Vec<u8>,
         conditions_json: &str,
         now_ms: f64,
     ) -> String {
         let conditions = parse_flash_conditions(conditions_json);
-        self.live_core()
+        self.state()
+            .live_core()
             .firmware_flash_start(image, conditions, now_ms as u64)
             .to_json()
     }
 
     /// The flash's pending write was acknowledged.
-    pub fn firmware_flash_on_write_ack(&mut self, now_ms: f64) -> String {
-        self.live_core()
+    pub fn firmware_flash_on_write_ack(&self, now_ms: f64) -> String {
+        self.state()
+            .live_core()
             .firmware_flash_on_write_ack(now_ms as u64)
             .to_json()
     }
 
     /// The flash's pending write failed.
-    pub fn firmware_flash_on_write_failed(&mut self, message: &str, now_ms: f64) -> String {
-        self.live_core()
+    pub fn firmware_flash_on_write_failed(&self, message: &str, now_ms: f64) -> String {
+        self.state()
+            .live_core()
             .firmware_flash_on_write_failed(message, now_ms as u64)
             .to_json()
     }
 
     /// An `FWMapRequest` (A009) frame arrived.
-    pub fn firmware_flash_on_fw_map(&mut self, data: Vec<u8>, now_ms: f64) -> String {
-        self.live_core()
+    pub fn firmware_flash_on_fw_map(&self, data: Vec<u8>, now_ms: f64) -> String {
+        self.state()
+            .live_core()
             .firmware_flash_on_fw_map(&data, now_ms as u64)
             .to_json()
     }
 
     /// A `ReadFwMap` poll read failed.
-    pub fn firmware_flash_on_read_failed(&mut self, now_ms: f64) -> String {
-        self.live_core()
+    pub fn firmware_flash_on_read_failed(&self, now_ms: f64) -> String {
+        self.state()
+            .live_core()
             .firmware_flash_on_read_failed(now_ms as u64)
             .to_json()
     }
 
     /// The flash clock (~250 ms while a flash exists).
-    pub fn firmware_flash_tick(&mut self, now_ms: f64) -> String {
-        self.live_core()
+    pub fn firmware_flash_tick(&self, now_ms: f64) -> String {
+        self.state()
+            .live_core()
             .firmware_flash_tick(now_ms as u64)
             .to_json()
     }
 
     /// The DE1 link came back.
-    pub fn firmware_flash_link_restored(&mut self, now_ms: f64, machine: String) -> String {
-        self.live_core()
+    pub fn firmware_flash_link_restored(&self, now_ms: f64, machine: String) -> String {
+        self.state()
+            .live_core()
             .firmware_flash_link_restored(now_ms as u64, &machine)
             .to_json()
     }
 
     /// Tie the current flash to the DE1 it is for: serial (0 = unknown) and
     /// Web Bluetooth id ("" = unknown; never one from an earlier session).
-    pub fn firmware_flash_bind_machine(&mut self, serial: u32, link_id: String) {
-        self.live_core()
+    pub fn firmware_flash_bind_machine(&self, serial: u32, link_id: String) {
+        self.state()
+            .live_core()
             .firmware_flash_bind_machine(serial, &link_id);
     }
 
     /// Cancel while still harmless.
-    pub fn firmware_flash_cancel(&mut self, now_ms: f64) -> String {
-        self.live_core()
+    pub fn firmware_flash_cancel(&self, now_ms: f64) -> String {
+        self.state()
+            .live_core()
             .firmware_flash_cancel(now_ms as u64)
             .to_json()
     }
 
     /// Forget a finished flash; `false` while one still holds the link.
-    pub fn firmware_flash_dismiss(&mut self) -> bool {
-        self.live_core().firmware_flash_dismiss()
+    pub fn firmware_flash_dismiss(&self) -> bool {
+        self.state().live_core().firmware_flash_dismiss()
     }
 
     /// The user's explicit exit from the power-cycle step; `false` while a
     /// transfer or an interrupted erase holds the link.
-    pub fn firmware_flash_exit(&mut self) -> bool {
-        self.live_core().firmware_flash_exit()
+    pub fn firmware_flash_exit(&self) -> bool {
+        self.state().live_core().firmware_flash_exit()
     }
 
     /// Bring back a flash that was waiting for the power-cycle before a page
     /// reload (from what the shell persisted).
     pub fn firmware_flash_restore_awaiting(
-        &mut self,
+        &self,
         build: u32,
         unconfirmed: bool,
         now_ms: f64,
     ) -> String {
-        self.live_core()
+        self.state()
+            .live_core()
             .firmware_flash_restore_awaiting(build, unconfirmed, now_ms as u64)
+            .to_json()
+    }
+
+    /// Bring back a flash whose verify window was still open when the tab
+    /// reloaded (from the deadline the shell persisted).
+    pub fn firmware_flash_restore_verifying(
+        &self,
+        build: u32,
+        hold_ms_left: f64,
+        now_ms: f64,
+    ) -> String {
+        self.state()
+            .live_core()
+            .firmware_flash_restore_verifying(build, hold_ms_left as u64, now_ms as u64)
             .to_json()
     }
 
     /// Bring back the lock of an erase that may still be running when the
     /// tab closed (from the deadline the shell persisted).
     pub fn firmware_flash_restore_erase_hold(
-        &mut self,
+        &self,
         build: u32,
         hold_ms_left: f64,
         now_ms: f64,
     ) -> String {
-        self.live_core()
+        self.state()
+            .live_core()
             .firmware_flash_restore_erase_hold(build, hold_ms_left as u64, now_ms as u64)
             .to_json()
     }
@@ -2571,13 +2958,14 @@ impl CremaBridge {
     /// Whether a firmware flash (or its erase / reboot window) holds the DE1
     /// link. The shells refuse takeover, handoff and proxy-mode switches
     /// while it does.
-    pub fn firmware_locks_writes(&mut self) -> bool {
-        self.live_core().firmware_locks_writes()
+    pub fn firmware_locks_writes(&self) -> bool {
+        self.state().live_core().firmware_locks_writes()
     }
 
     /// The current snapshot.
-    pub fn firmware_flash_status(&mut self, now_ms: f64) -> String {
-        self.live_core()
+    pub fn firmware_flash_status(&self, now_ms: f64) -> String {
+        self.state()
+            .live_core()
             .firmware_flash_status(now_ms as u64)
             .to_json()
     }
@@ -2589,7 +2977,7 @@ impl CremaBridge {
     /// exposes a configurable setting. Empty otherwise. Wired exactly like
     /// [`tare_scale`](Self::tare_scale).
     pub fn query_scale_settings(&self) -> String {
-        json(self.core.query_scale_settings())
+        json(self.state().core.query_scale_settings())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command sets the connected scale's
@@ -2600,7 +2988,7 @@ impl CremaBridge {
     /// the connected scale exposes a settable volume. Empty otherwise. Wired
     /// exactly like [`tare_scale`](Self::tare_scale).
     pub fn set_scale_volume(&self, level: u8) -> String {
-        json(self.core.set_scale_volume(level))
+        json(self.state().core.set_scale_volume(level))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command sets the connected scale's
@@ -2612,7 +3000,7 @@ impl CremaBridge {
     /// configurable auto-standby. Empty otherwise. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
     pub fn set_scale_standby(&self, minutes: u8) -> String {
-        json(self.core.set_scale_standby(minutes))
+        json(self.state().core.set_scale_standby(minutes))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command enables or disables the
@@ -2622,7 +3010,7 @@ impl CremaBridge {
     /// supports flow smoothing. Empty otherwise. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
     pub fn set_scale_flow_smoothing(&self, enabled: bool) -> String {
-        json(self.core.set_scale_flow_smoothing(enabled))
+        json(self.state().core.set_scale_flow_smoothing(enabled))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command enables or disables the
@@ -2632,7 +3020,7 @@ impl CremaBridge {
     /// supports anti-mistouch. Empty otherwise. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
     pub fn set_scale_anti_mistouch(&self, enabled: bool) -> String {
-        json(self.core.set_scale_anti_mistouch(enabled))
+        json(self.state().core.set_scale_anti_mistouch(enabled))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose commands switch the connected scale
@@ -2644,7 +3032,7 @@ impl CremaBridge {
     /// order — the shell must perform them in that order. Empty otherwise.
     /// Wired exactly like [`set_scale_volume`](Self::set_scale_volume).
     pub fn set_scale_mode(&self, mode_id: u8) -> String {
-        json(self.core.set_scale_mode(mode_id))
+        json(self.state().core.set_scale_mode(mode_id))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command selects the connected
@@ -2655,7 +3043,7 @@ impl CremaBridge {
     /// out-of-range `mode_id` yields an empty `CoreOutput`. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
     pub fn set_scale_auto_stop(&self, mode_id: u8) -> String {
-        json(self.core.set_scale_auto_stop(mode_id))
+        json(self.state().core.set_scale_auto_stop(mode_id))
     }
 
     /// Write the DE1's steam / hot-water settings. The fields are passed as
@@ -2665,7 +3053,7 @@ impl CremaBridge {
     /// the legacy hot-water volume override when a scale is connected).
     #[allow(clippy::too_many_arguments)]
     pub fn set_steam_hotwater_settings(
-        &mut self,
+        &self,
         steam_flags: u8,
         steam_temp_c: f32,
         steam_timeout_s: f32,
@@ -2685,46 +3073,54 @@ impl CremaBridge {
             espresso_volume_ml,
             group_temp_c,
         };
-        json(self.core.set_steam_hotwater_settings(settings))
+        json(self.state().core.set_steam_hotwater_settings(settings))
     }
 
     /// Enable or disable steam eco mode (the legacy `eco_steam` setting).
     /// Returns a JSON-encoded [`CoreOutput`].
-    pub fn enable_steam_eco_mode(&mut self, enabled: bool, now_ms: f64) -> String {
-        json(self.core.enable_steam_eco_mode(enabled, now_ms as u64))
+    pub fn enable_steam_eco_mode(&self, enabled: bool, now_ms: f64) -> String {
+        json(
+            self.state()
+                .core
+                .enable_steam_eco_mode(enabled, now_ms as u64),
+        )
     }
 
     /// Write the DE1's water-tank refill threshold (`cuuid_11`). `threshold_mm`
     /// is the level at or below which the DE1 should ask for a refill.
     /// Returns a JSON-encoded [`CoreOutput`].
     pub fn set_refill_threshold(&self, threshold_mm: f32) -> String {
-        json(self.core.set_refill_threshold(threshold_mm))
+        json(self.state().core.set_refill_threshold(threshold_mm))
     }
 
     /// Write one DE1 memory-mapped register. `value` is the raw little-endian
     /// word the register expects, already scaled. `byte_len` is 1, 2, or 4 —
     /// the wire `Len` byte of the resulting `WriteToMMR` packet.
     pub fn write_mmr(&self, register: MmrReg, value: u32, byte_len: u8) -> String {
-        json(self.core.write_mmr(register.into(), value, byte_len))
+        json(
+            self.state()
+                .core
+                .write_mmr(register.into(), value, byte_len),
+        )
     }
 
     /// Set the fan-on temperature threshold, °C. Legacy
     /// `set_fan_temperature_threshold`; MMR `0x803808`, 1-byte.
     pub fn set_fan_threshold(&self, temp_c: u8) -> String {
-        json(self.core.set_fan_threshold(temp_c))
+        json(self.state().core.set_fan_threshold(temp_c))
     }
 
     /// Set the tank desired water-temperature threshold, °C. Legacy
     /// `set_tank_temperature_threshold` (immediate value only); MMR
     /// `0x80380C`, 1-byte.
     pub fn set_tank_threshold(&self, temp_c: u8) -> String {
-        json(self.core.set_tank_threshold(temp_c))
+        json(self.state().core.set_tank_threshold(temp_c))
     }
 
     /// Set the steam flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x803828`, 1-byte.
     pub fn set_steam_flow(&self, ml_per_s: f32) -> String {
-        json(self.core.set_steam_flow(ml_per_s))
+        json(self.state().core.set_steam_flow(ml_per_s))
     }
 
     /// Set the seconds of high-flow steam at the start of a steam cycle.
@@ -2732,38 +3128,39 @@ impl CremaBridge {
     /// `seconds` is `f32` so sub-second precision survives (legacy
     /// default 0.7s = wire 70).
     pub fn set_steam_highflow_start(&self, seconds: f32) -> String {
-        json(self.core.set_steam_highflow_start(seconds))
+        json(self.state().core.set_steam_highflow_start(seconds))
     }
 
     /// Set the group-head-control mode. MMR `0x803820`, 1-byte.
     pub fn set_ghc_mode(&self, mode: u8) -> String {
-        json(self.core.set_ghc_mode(mode))
+        json(self.state().core.set_ghc_mode(mode))
     }
 
     /// Set the hot-water flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x80384C`, 2-byte.
     pub fn set_hot_water_flow_rate(&self, ml_per_s: f32) -> String {
-        json(self.core.set_hot_water_flow_rate(ml_per_s))
+        json(self.state().core.set_hot_water_flow_rate(ml_per_s))
     }
 
     /// Set the flush flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x803840`, 2-byte.
     pub fn set_flush_flow_rate(&self, ml_per_s: f32) -> String {
-        json(self.core.set_flush_flow_rate(ml_per_s))
+        json(self.state().core.set_flush_flow_rate(ml_per_s))
     }
 
     /// Set the flush water target temperature, °C — the temperature the
     /// DE1 holds during a group-flush cycle. Wire value is `°C × 10`;
     /// MMR `0x803844`, 4-byte.
     pub fn set_flush_temp(&self, temp_c: f32) -> String {
-        json(self.core.set_flush_temp(temp_c))
+        json(self.state().core.set_flush_temp(temp_c))
     }
 
     /// Set the flush timeout. `ms` is milliseconds; the wire scale is
     /// `int(10 × seconds)`. MMR `0x803848`, 2-byte.
     pub fn set_flush_timeout(&self, ms: u32) -> String {
         json(
-            self.core
+            self.state()
+                .core
                 .set_flush_timeout(std::time::Duration::from_millis(u64::from(ms))),
         )
     }
@@ -2771,26 +3168,26 @@ impl CremaBridge {
     /// Enable / disable the tablet's USB charging output. MMR `0x803854`,
     /// 1-byte.
     pub fn set_usb_charger_on(&self, enabled: bool) -> String {
-        json(self.core.set_usb_charger_on(enabled))
+        json(self.state().core.set_usb_charger_on(enabled))
     }
 
     /// Tell the firmware whether the user is currently present at the
     /// machine. **Distinct register** from `set_feature_flags`. MMR
     /// `0x803860`, 1-byte.
     pub fn set_user_present(&self, present: bool) -> String {
-        json(self.core.set_user_present(present))
+        json(self.state().core.set_user_present(present))
     }
 
     /// Set the firmware feature-flag bitmask. **Distinct register** from
     /// `set_user_present`. MMR `0x803858`, 2-byte.
     pub fn set_feature_flags(&self, flags: u16) -> String {
-        json(self.core.set_feature_flags(flags))
+        json(self.state().core.set_feature_flags(flags))
     }
 
     /// Override the refill-kit presence flag (`0`/`1`/`2`). MMR `0x80385C`,
     /// 4-byte.
     pub fn set_refill_kit_present(&self, state: u8) -> String {
-        json(self.core.set_refill_kit_present(state))
+        json(self.state().core.set_refill_kit_present(state))
     }
 
     /// Set the mains heater voltage. **Damaging if mis-set** — the shell
@@ -2807,7 +3204,8 @@ impl CremaBridge {
     /// Returns the [`AppError`](de1_app::AppError) display string when the
     /// core rejects `volts` for being out of `{120, 230}`.
     pub fn set_heater_voltage(&self, volts: u8) -> Result<String, String> {
-        self.core
+        self.state()
+            .core
             .set_heater_voltage(volts)
             .map(json)
             .map_err(|e| e.to_string())
@@ -2831,7 +3229,8 @@ impl CremaBridge {
     /// Returns the [`AppError`](de1_app::AppError) display string when
     /// the core rejects the request (none today).
     pub fn reset_machine_defaults(&self) -> Result<String, String> {
-        self.core
+        self.state()
+            .core
             .reset_machine_defaults()
             .map(json)
             .map_err(|e| e.to_string())
@@ -2840,61 +3239,58 @@ impl CremaBridge {
     /// Set the cup-warmer temperature, °C (Bengle models only). MMR
     /// `0x803874`, 2-byte.
     pub fn set_cup_warmer_temperature(&self, temp_c: u8) -> String {
-        json(self.core.set_cup_warmer_temperature(temp_c))
+        json(self.state().core.set_cup_warmer_temperature(temp_c))
     }
 
     /// Set the flow-calibration multiplier. Scaled `int(1000 × multiplier)`;
     /// MMR `0x80383C`, 2-byte.
     pub fn set_calibration_flow_multiplier(&self, multiplier: f32) -> String {
-        json(self.core.set_calibration_flow_multiplier(multiplier))
+        json(
+            self.state()
+                .core
+                .set_calibration_flow_multiplier(multiplier),
+        )
     }
 
     /// Set the hot-water phase-1 flow rate (legacy `heater_tweaks`
     /// `phase_1_flow_rate`). Scaled `int(10 × rate)`; MMR `0x803810`,
     /// 4-byte LE.
     pub fn set_phase_1_flow_rate(&self, rate_ml_per_s: f32) -> String {
-        json(self.core.set_phase_1_flow_rate(rate_ml_per_s))
+        json(self.state().core.set_phase_1_flow_rate(rate_ml_per_s))
     }
 
     /// Set the hot-water phase-2 flow rate (legacy `heater_tweaks`
     /// `phase_2_flow_rate`). Scaled `int(10 × rate)`; MMR `0x803814`,
     /// 4-byte LE.
     pub fn set_phase_2_flow_rate(&self, rate_ml_per_s: f32) -> String {
-        json(self.core.set_phase_2_flow_rate(rate_ml_per_s))
+        json(self.state().core.set_phase_2_flow_rate(rate_ml_per_s))
     }
 
     /// Set the hot-water boiler idle target temperature, °C (legacy
     /// `heater_tweaks` `hot_water_idle_temp`). MMR `0x803818`, 4-byte LE.
     /// Wire value is `°C × 10` (per reaprime `writeScale: 10.0`).
     pub fn set_hot_water_idle_temp(&self, temp_c: f32) -> String {
-        json(self.core.set_hot_water_idle_temp(temp_c))
+        json(self.state().core.set_hot_water_idle_temp(temp_c))
     }
 
     /// Set the espresso group warmup timeout (legacy `heater_tweaks`
     /// `espresso_warmup_timeout`). MMR `0x803838`, 4-byte LE. `seconds`
     /// is scaled to deciseconds on the wire (`int(10 × seconds)`).
     pub fn set_espresso_warmup_timeout(&self, seconds: f32) -> String {
-        // 1-hour domain ceiling (ms), replacing the old `u64::MAX as f32` clamp.
-        // Far above any real DE1 warmup; it only bounds the conversion below.
-        const MAX_WARMUP_TIMEOUT_MS: f32 = 60.0 * 60.0 * 1000.0;
-        let dur = if seconds.is_finite() && seconds > 0.0 {
-            // Round to whole ms (compensates f32 error, e.g. 5.1 s → 5100 ms),
-            // clamp to the ceiling, then widen to f64: `from_secs_f64` rounds to
-            // the nearest nanosecond and recovers the integer ms — no float→int
-            // cast, hence no `cast_*` allow.
-            let ms = (seconds * 1000.0).round().clamp(0.0, MAX_WARMUP_TIMEOUT_MS);
-            std::time::Duration::from_secs_f64(f64::from(ms) / 1000.0)
-        } else {
-            std::time::Duration::ZERO
-        };
-        json(self.core.set_espresso_warmup_timeout(dur))
+        // Whole ms, clamped to the 1-hour machine-timeout ceiling the connect
+        // sweep shares (one helper, so the two paths cannot disagree).
+        let dur = de1_domain::duration::secs_clamped_whole_ms(
+            seconds,
+            de1_domain::duration::MAX_MACHINE_TIMEOUT_S,
+        );
+        json(self.state().core.set_espresso_warmup_timeout(dur))
     }
 
     /// Set the steam two-tap-stop (legacy `heater_tweaks`
     /// `steam_two_tap_stop`; reaprime `steamPurgeMode`). MMR `0x803850`,
     /// 4-byte LE int. `0` disables, `1` enables.
     pub fn set_steam_two_tap_stop(&self, value: u8) -> String {
-        json(self.core.set_steam_two_tap_stop(value))
+        json(self.state().core.set_steam_two_tap_stop(value))
     }
 
     /// The standard DE1 profiles Crema ships built in, as a JSON array string.
@@ -2902,7 +3298,7 @@ impl CremaBridge {
     /// Each element is a `Profile`; the shell parses the array into its own
     /// profile type, consistent with the rest of the JSON-string surface.
     pub fn builtin_profiles_json(&self) -> String {
-        self.core.builtin_profiles_json()
+        self.state().core.builtin_profiles_json()
     }
 
     /// Start uploading the profile in `profile_json` to the DE1.
@@ -2916,10 +3312,11 @@ impl CremaBridge {
     ///   carries one `ProfileUploadFailed` and `commands` is empty.
     /// - On a JSON parse failure, `events` carries one `DecodeError`.
     ///
-    /// Subsequent acks arrive via `on_notification(De1FrameAck, …)`; the
+    /// The shell confirms each write it made with
+    /// `on_profile_write_ack(De1HeaderAck | De1FrameAck, …, upload_id)`; the
     /// core emits `ProfileUploadProgress` / `ProfileUploadCompleted` /
     /// `ProfileUploadFailed` from those.
-    pub fn upload_profile(&mut self, profile_json: String, now_ms: f64) -> String {
+    pub fn upload_profile(&self, profile_json: String, now_ms: f64) -> String {
         let profile: Profile = match serde_json::from_str(&profile_json) {
             Ok(p) => p,
             Err(e) => {
@@ -2931,7 +3328,7 @@ impl CremaBridge {
             }
         };
         let now = std::time::Duration::from_millis(now_ms as u64);
-        match self.core.upload_profile(&profile, now) {
+        match self.state().core.upload_profile(&profile, now) {
             Ok(out) => json(out),
             Err(err) => {
                 let mut out = CoreOutput::default();
@@ -2945,21 +3342,33 @@ impl CremaBridge {
     /// Cancel an in-progress profile upload. Returns the
     /// `ProfileUploadFailed { Aborted }` `CoreOutput`, or an empty one if
     /// no upload is in flight.
-    pub fn cancel_profile_upload(&mut self) -> String {
-        json(self.core.cancel_profile_upload())
+    pub fn cancel_profile_upload(&self) -> String {
+        json(self.state().core.cancel_profile_upload())
+    }
+
+    /// A profile write of upload `upload_id` (its `ProfileUploadStarted`
+    /// number) did not reach the DE1: fail that upload now
+    /// (`ProfileUploadFailure::WriteFailed`) if it is still the running one.
+    /// See [`CremaCore::profile_write_failed`](de1_app::CremaCore::profile_write_failed).
+    pub fn profile_write_failed(&self, now_ms: f64, upload_id: u32) -> String {
+        json(
+            self.state()
+                .core
+                .profile_write_failed(now_ms as u64, upload_id),
+        )
     }
 
     /// `true` from `upload_profile` until the tail-ack / a failure /
     /// `cancel_profile_upload`.
     pub fn profile_upload_in_progress(&self) -> bool {
-        self.core.profile_upload_in_progress()
+        self.state().core.profile_upload_in_progress()
     }
 
     /// Title of the profile most recently uploaded successfully — the
     /// "active profile on the DE1" identity the brew page surfaces.
     /// `null` until the first successful upload; cleared by a reset.
     pub fn active_profile_title(&self) -> Option<String> {
-        self.core.active_profile_title().map(str::to_owned)
+        self.state().core.active_profile_title().map(str::to_owned)
     }
 
     /// The effective AC mains frequency the volume integrator uses, Hz.
@@ -2967,7 +3376,7 @@ impl CremaBridge {
     /// [`set_line_frequency_override`](Self::set_line_frequency_override)
     /// or the auto-detector locks (1+ second of telemetry into a shot).
     pub fn line_frequency_hz(&self) -> Option<f32> {
-        self.core.line_frequency_hz()
+        self.state().core.line_frequency_hz()
     }
 
     /// Pin the AC mains frequency the volume integrator uses. Accepts
@@ -2983,7 +3392,7 @@ impl CremaBridge {
     /// # Errors
     ///
     /// Returns an error string when `hz` is not `0.0`, `50.0`, or `60.0`.
-    pub fn set_line_frequency_override(&mut self, hz: f32) -> Result<(), String> {
+    pub fn set_line_frequency_override(&self, hz: f32) -> Result<(), String> {
         // Round, don't truncate: a stray `50.9` must reject (rounds to 51), not
         // silently pass as 50 the way a bare `hz as i32` truncation would.
         let override_hz = match hz.round() as i32 {
@@ -2996,7 +3405,7 @@ impl CremaBridge {
                 ));
             }
         };
-        self.core.set_line_frequency_override(override_hz);
+        self.state().core.set_line_frequency_override(override_hz);
         Ok(())
     }
 
@@ -3083,7 +3492,7 @@ mod tests {
         assert!(manifest.contains("fast.decentespresso.com/download/sync/de1nightly"));
         let check = validate_firmware_image(&[0u8; 8]);
         assert!(check.contains(r#""ok":false"#) && check.contains("TooShort"));
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         let blockers = bridge.firmware_flash_blockers("not json");
         assert!(blockers.contains("NotConnected") && blockers.contains("LowPower"));
         let step = bridge.firmware_flash_start(
@@ -3115,7 +3524,7 @@ mod tests {
 
     #[test]
     fn on_notification_returns_core_output_json() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         let json = bridge.on_notification(NotificationSource::De1State, vec![4, 5], 1_000.0);
         assert!(json.contains("\"events\""));
         assert!(json.contains("\"ShotStarted\""));
@@ -3123,7 +3532,7 @@ mod tests {
 
     #[test]
     fn request_machine_state_produces_a_write_command() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         let json = bridge.request_machine_state(MachineRequest::Idle);
         assert!(json.contains("\"commands\""));
         assert!(json.contains("WriteCharacteristic"));
@@ -3153,6 +3562,8 @@ mod tests {
     #[test]
     fn write_and_reset_calibration_produce_write_commands() {
         let bridge = CremaBridge::new();
+        // Calibration writes need a Sleep / Idle machine (calibration_guard).
+        bridge.on_notification(NotificationSource::De1State, vec![2, 0], 0.0);
         for json in [
             bridge.write_calibration(CalSensor::Temperature, 92.5, 93.0),
             bridge.reset_calibration_to_factory(CalSensor::Pressure),
@@ -3164,7 +3575,7 @@ mod tests {
 
     #[test]
     fn set_line_frequency_override_rounds_rather_than_truncates() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         // The three valid mains settings pass and actually pin the value.
         assert!(bridge.set_line_frequency_override(50.0).is_ok());
         assert_eq!(bridge.line_frequency_hz(), Some(50.0));
@@ -3220,7 +3631,7 @@ mod tests {
 
     #[test]
     fn connect_scale_identifies_a_known_scale() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         assert_eq!(
             bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]),
             Some("Bookoo".to_owned())
@@ -3232,7 +3643,7 @@ mod tests {
     /// must be untouched by the begin/end-replay round-trip.
     #[test]
     fn replay_swap_preserves_live_core_state() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         // Establish some live-core state.
         let scale = bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         assert_eq!(scale, Some("Bookoo".to_owned()));
@@ -3257,9 +3668,138 @@ mod tests {
         assert!(bridge.scale_capabilities().is_some(), "live scale restored");
     }
 
+    // ── Panic recovery (cohort review 2026-10-25, report 01 P2-3) ─────
+
+    /// What a wasm trap does to the bridge: the call's guard is never
+    /// dropped, so the state never goes back into the slot.
+    fn simulate_trap(bridge: &CremaBridge) {
+        bridge.trap_simulated.set(true);
+        std::mem::forget(bridge.state());
+    }
+
+    /// A DE1 `StateInfo` notification for Idle.
+    fn idle_state_events(bridge: &CremaBridge) -> String {
+        bridge.on_notification(NotificationSource::De1State, vec![2, 0], 1_000.0)
+    }
+
+    #[test]
+    fn a_trapped_call_does_not_wedge_the_bridge() {
+        let bridge = CremaBridge::new();
+        bridge.begin_replay().unwrap();
+        assert!(bridge.in_replay());
+        assert_eq!(bridge.panic_recoveries(), 0);
+
+        simulate_trap(&bridge);
+
+        // The next call works on a fresh state instead of throwing — the old,
+        // possibly half-updated state (here: mid-replay) is abandoned.
+        let out = idle_state_events(&bridge);
+        assert!(out.contains("events"), "{out}");
+        assert_eq!(bridge.panic_recoveries(), 1);
+        assert!(!bridge.in_replay(), "fresh state, not the trapped one");
+        // And every call after that is ordinary.
+        assert!(idle_state_events(&bridge).contains("events"));
+        assert_eq!(bridge.panic_recoveries(), 1);
+    }
+
+    /// The panic message of a call that must fail, as a string.
+    fn panic_message(call: impl FnOnce()) -> String {
+        let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(call))
+            .expect_err("the call must fail");
+        err.downcast_ref::<String>()
+            .cloned()
+            .or_else(|| err.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+            .unwrap_or_default()
+    }
+
+    /// Final cohort review 2026-10-28, 01 P3-1: every reset leaks what the
+    /// trap skipped, so a panic loop used to reset forever and end in an
+    /// instance where every call failed with "memory access out of bounds".
+    /// The bridge now resets at most MAX_PANIC_RECOVERIES times, then stops:
+    /// every call fails fast with one clear error.
+    #[test]
+    fn the_bridge_stops_after_the_recovery_cap() {
+        let bridge = CremaBridge::new();
+        for i in 1..=MAX_PANIC_RECOVERIES {
+            simulate_trap(&bridge);
+            assert!(idle_state_events(&bridge).contains("events"), "reset {i}");
+            assert_eq!(bridge.panic_recoveries(), i);
+            assert!(!bridge.core_stopped());
+        }
+        // One panic too many: the next call stops the bridge instead of
+        // resetting it.
+        simulate_trap(&bridge);
+        let message = panic_message(|| {
+            idle_state_events(&bridge);
+        });
+        assert_eq!(message, CORE_STOPPED_MESSAGE);
+        assert!(bridge.core_stopped());
+        assert_eq!(
+            bridge.panic_recoveries(),
+            MAX_PANIC_RECOVERIES,
+            "no reset past the cap"
+        );
+        // Every later call fails the same way, and the counters hold still.
+        for _ in 0..3 {
+            let message = panic_message(|| {
+                bridge.in_replay();
+            });
+            assert_eq!(message, CORE_STOPPED_MESSAGE);
+        }
+        assert!(bridge.core_stopped());
+        assert_eq!(bridge.panic_recoveries(), MAX_PANIC_RECOVERIES);
+        // A new bridge (what a reload builds) starts afresh.
+        let fresh = CremaBridge::new();
+        assert!(!fresh.core_stopped());
+        assert!(idle_state_events(&fresh).contains("events"));
+    }
+
+    #[test]
+    fn a_native_panic_unwinds_and_keeps_the_state() {
+        // Off wasm a panic unwinds, so the guard puts the state back and no
+        // recovery is needed (the FFI-like path the native tests exercise).
+        let bridge = CremaBridge::new();
+        bridge.begin_replay().unwrap();
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| bridge.debug_trap()));
+        assert!(caught.is_err());
+        assert!(bridge.in_replay(), "state survived the unwind");
+        assert_eq!(bridge.panic_recoveries(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "nested CremaBridge state borrow")]
+    fn a_nested_state_borrow_is_a_loud_bug() {
+        let bridge = CremaBridge::new();
+        let _outer = bridge.state();
+        let _inner = bridge.state();
+    }
+
+    #[test]
+    fn the_panic_hook_keeps_the_message() {
+        install_panic_hook();
+        let bridge = CremaBridge::new();
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| bridge.debug_trap()));
+        // Back to the default hook so other tests' panics print normally.
+        drop(std::panic::take_hook());
+        assert!(caught.is_err());
+        let message = last_panic_message().expect("hook recorded the panic");
+        assert!(message.contains("CremaBridge::debug_trap"), "{message}");
+        assert!(message.contains("lib.rs"), "location kept: {message}");
+    }
+
+    /// The reviewer's two web triggers (01 P1-1, P1-2) no longer panic at all.
+    #[test]
+    fn the_reviewers_triggers_no_longer_panic() {
+        let bridge = CremaBridge::new();
+        let _ = bridge.connect_sweep(r#"{"flushTimeoutS":1e30}"#, 1_000.0);
+        let _ = bridge.import_v2_json_shot(r#"{"clock":1700000000,"meta":{"time":1e30}}"#);
+        assert_eq!(bridge.panic_recoveries(), 0);
+        assert!(idle_state_events(&bridge).contains("events"));
+    }
+
     #[test]
     fn replay_swap_double_begin_errors() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         bridge.begin_replay().expect("first begin");
         let err = bridge.begin_replay().expect_err("second begin must error");
         assert!(err.contains("already in replay"));
@@ -3270,7 +3810,7 @@ mod tests {
 
     #[test]
     fn replay_swap_end_is_idempotent() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         // End without a prior begin: must not panic and must leave state sane.
         bridge.end_replay();
         assert!(!bridge.in_replay());
@@ -3282,14 +3822,14 @@ mod tests {
     }
 
     /// Apply representative steam / hot-water settings to `bridge`.
-    fn set_steam_settings(bridge: &mut CremaBridge) -> String {
+    fn set_steam_settings(bridge: &CremaBridge) -> String {
         bridge.set_steam_hotwater_settings(0, 150.0, 120.0, 85.0, 50.0, 30.0, 36.0, 92.0)
     }
 
     #[test]
     fn set_steam_hotwater_settings_produces_a_write_command() {
-        let mut bridge = CremaBridge::new();
-        let json = set_steam_settings(&mut bridge);
+        let bridge = CremaBridge::new();
+        let json = set_steam_settings(&bridge);
         assert!(json.contains("\"commands\""));
         assert!(json.contains("WriteCharacteristic"));
         assert!(json.contains("De1ShotSettings"));
@@ -3297,8 +3837,8 @@ mod tests {
 
     #[test]
     fn enable_steam_eco_mode_returns_core_output_json() {
-        let mut bridge = CremaBridge::new();
-        set_steam_settings(&mut bridge);
+        let bridge = CremaBridge::new();
+        set_steam_settings(&bridge);
         bridge.enable_steam_eco_mode(true, 0.0);
         // After the idle delay a tick engages eco mode and rewrites the target.
         let json = bridge.on_tick(600_000.0);
@@ -3387,7 +3927,7 @@ mod tests {
 
     #[test]
     fn scale_capabilities_reports_a_bookoo_as_first_class() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         let json = bridge.scale_capabilities().expect("a connected scale");
         let caps: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -3405,7 +3945,7 @@ mod tests {
 
     #[test]
     fn scale_uuids_reports_the_connected_scales_gatt_uuids() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         let json = bridge.scale_uuids().expect("a connected scale");
         let uuids: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -3416,7 +3956,7 @@ mod tests {
 
     #[test]
     fn set_scale_volume_produces_a_write_scale_command_for_a_capable_scale() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         let json = bridge.set_scale_volume(3);
         assert!(json.contains("\"commands\""));
@@ -3425,7 +3965,7 @@ mod tests {
 
     #[test]
     fn set_scale_mode_produces_three_write_scale_commands_for_a_capable_scale() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         let json = bridge.set_scale_mode(1);
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -3435,7 +3975,7 @@ mod tests {
 
     #[test]
     fn query_scale_settings_produces_a_write_scale_command_for_a_capable_scale() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         let json = bridge.query_scale_settings();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -3449,7 +3989,7 @@ mod tests {
         // Felicita: no config surface at all. (A Decent Scale is no longer
         // silent on query_scale_settings — the connect hook lights its LCD;
         // see the de1-app scale_connect_* tests.)
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         bridge.connect_scale("FELICITA".to_owned(), vec![]);
         for json in [
             bridge.set_scale_volume(3),
@@ -3467,7 +4007,7 @@ mod tests {
 
     #[test]
     fn scale_lcd_and_heartbeat_bridge_methods_produce_a_write_for_a_decent_scale() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         bridge.connect_scale("Decent Scale ABC".to_owned(), vec![]);
         for json in [
             bridge.enable_scale_lcd("grams").unwrap(),
@@ -3485,7 +4025,7 @@ mod tests {
     fn scale_lcd_and_heartbeat_bridge_methods_error_for_a_scale_without_those_capabilities() {
         // Bookoo has no settable LCD and doesn't need a heartbeat — every
         // capability call surfaces an UnsupportedOnHardware error string.
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         for err in [
             bridge.enable_scale_lcd("grams").unwrap_err(),
@@ -3501,7 +4041,7 @@ mod tests {
 
     #[test]
     fn enable_scale_lcd_on_decent_in_ounces_emits_the_ounces_packet() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         bridge.connect_scale("Decent Scale ABC".to_owned(), vec![]);
         let json = bridge.enable_scale_lcd("ounces").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -3525,14 +4065,14 @@ mod tests {
 
     #[test]
     fn enable_scale_lcd_with_unknown_unit_errors() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         bridge.connect_scale("Decent Scale ABC".to_owned(), vec![]);
         assert!(bridge.enable_scale_lcd("kilograms").is_err());
     }
 
     #[test]
     fn power_off_scale_on_decent_emits_the_power_off_packet() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         bridge.connect_scale("Decent Scale ABC".to_owned(), vec![]);
         // Power-off is sent unconditionally on a Decent Scale; older
         // firmware silently no-ops on the byte sequence.
@@ -3555,7 +4095,7 @@ mod tests {
 
     #[test]
     fn power_off_scale_errors_for_a_scale_without_power_off() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         let err = bridge.power_off_scale().unwrap_err();
         assert!(
@@ -3566,7 +4106,7 @@ mod tests {
 
     #[test]
     fn set_weight_unit_pref_validates_and_caches() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         assert!(bridge.set_weight_unit_pref("ounces").is_ok());
         assert!(bridge.set_weight_unit_pref("grams").is_ok());
         assert!(bridge.set_weight_unit_pref("kilograms").is_err());
@@ -3654,7 +4194,7 @@ mod tests {
 
     /// Every `NotificationSource` the wasm enum can name — used to fuzz the
     /// bridge against malformed input on every characteristic.
-    fn every_source() -> [NotificationSource; 11] {
+    fn every_source() -> [NotificationSource; 12] {
         [
             NotificationSource::De1State,
             NotificationSource::De1ShotSample,
@@ -3667,13 +4207,14 @@ mod tests {
             NotificationSource::De1ShotSettings,
             NotificationSource::De1ProfileHeader,
             NotificationSource::De1FrameAck,
+            NotificationSource::De1HeaderAck,
         ]
     }
 
     #[test]
     fn on_notification_does_not_panic_on_an_empty_slice() {
         for source in every_source() {
-            let mut bridge = CremaBridge::new();
+            let bridge = CremaBridge::new();
             // A scale is connected so the ScaleWeight decode path is exercised
             // rather than being skipped for want of a scale.
             bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
@@ -3689,7 +4230,7 @@ mod tests {
     fn on_notification_does_not_panic_on_garbage_bytes() {
         let garbage = vec![0xFF, 0x00, 0xAB, 0xCD, 0xEF, 0x13, 0x37];
         for source in every_source() {
-            let mut bridge = CremaBridge::new();
+            let bridge = CremaBridge::new();
             bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
             let out = bridge.on_notification(source, garbage.clone(), 2_000.0);
             let parsed: serde_json::Value =
@@ -3700,7 +4241,7 @@ mod tests {
 
     #[test]
     fn on_notification_reports_a_decode_error_for_a_truncated_state_packet() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         // A one-byte StateInfo packet cannot be decoded — the bridge must
         // surface a DecodeError event, not panic or drop the input silently.
         let out = bridge.on_notification(NotificationSource::De1State, vec![0x01], 1_000.0);
@@ -3796,7 +4337,7 @@ mod tests {
 
     #[test]
     fn on_notification_reports_a_decode_error_for_a_truncated_water_levels_packet() {
-        let mut bridge = CremaBridge::new();
+        let bridge = CremaBridge::new();
         let out = bridge.on_notification(NotificationSource::De1WaterLevels, vec![0x00], 1_000.0);
         assert!(out.contains("DecodeError"));
     }

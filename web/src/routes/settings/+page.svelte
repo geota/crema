@@ -113,7 +113,7 @@
 		<!-- Left section nav -->
 		<nav class="st-nav" aria-label="Settings sections">
 			<div class="st-nav-head">
-				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Preferences</div>
+				<div class="t-eyebrow" style="color:var(--fg-3)">Preferences</div>
 				<div class="st-nav-title">Settings</div>
 			</div>
 			<div class="st-nav-items">
@@ -230,7 +230,7 @@
 	}
 	.st-nav-item :global(svg) {
 		font-size: 16px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		flex: 0 0 auto;
 	}
 	.st-nav-item.is-active {
@@ -238,7 +238,7 @@
 		color: var(--fg-1);
 	}
 	.st-nav-item.is-active :global(svg) {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.st-nav-item.is-active::before {
 		content: '';
@@ -263,7 +263,7 @@
 		font-family: var(--font-mono);
 		font-size: 10px;
 		letter-spacing: 0.1em;
-		color: rgba(var(--tint-rgb), 0.35);
+		color: var(--fg-muted);
 		text-transform: uppercase;
 	}
 
@@ -289,7 +289,7 @@
 		font-family: var(--font-sans);
 		font-size: 13px;
 		line-height: 1.5;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		margin-top: 8px;
 		max-width: 580px;
 	}
@@ -307,12 +307,12 @@
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
 		font-weight: 700;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	:global(.st-content .st-group-sub) {
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		margin-top: 3px;
 	}
 	:global(.st-content .st-group-rows) {
@@ -349,7 +349,7 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 		line-height: 1.45;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	:global(.st-content .st-row-control) {
 		display: flex;
@@ -360,7 +360,7 @@
 	:global(.st-content .st-row-hint) {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 	}
 	/* When a hint snippet renders no content (the only thing inside it
 	   was conditionally hidden), drop the wrapper from the layout
@@ -394,7 +394,7 @@
 		right: 8px;
 		top: 50%;
 		transform: translateY(-50%);
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		font-size: 12px;
 		pointer-events: none;
 	}
@@ -411,7 +411,7 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 		font-weight: 500;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		padding: 5px 12px;
 		border-radius: 999px;
 		cursor: pointer;
@@ -491,7 +491,7 @@
 		border-color: rgba(var(--tint-rgb), 0.18);
 	}
 	:global(.st-content .st-valuechip i) {
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		font-size: 11px;
 	}
 	/* The inline-edit input the value chip swaps to — same metrics as the chip. */
@@ -580,7 +580,7 @@
 		gap: 12px;
 	}
 	:global(.st-content .st-machinecard-info-key) {
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	:global(.st-content .st-machinecard-info-val) {
 		color: var(--fg-1);
@@ -608,7 +608,7 @@
 		font-family: var(--font-sans);
 		font-weight: 400;
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	:global(.st-content .st-machinecard-info-actions) {
 		margin-top: auto;
@@ -639,7 +639,7 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 		line-height: 1.5;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		margin-bottom: 4px;
 	}
 	/* Push the Firmware card's button to the bottom of its flex box so it
@@ -700,7 +700,7 @@
 		font-family: var(--font-sans);
 		font-size: 12px;
 		line-height: 1.5;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-top: 4px;
 	}
 	:global(.st-content .st-visualizer-meta strong) {
@@ -716,7 +716,7 @@
 		gap: 4px;
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		text-decoration: none;
 		cursor: pointer;
 	}
@@ -750,7 +750,7 @@
 	}
 	:global(.st-content .st-otherint-card > :is(i, svg):first-child) {
 		font-size: 22px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	:global(.st-content .st-otherint-title) {
 		font-family: var(--font-sans);
@@ -762,7 +762,7 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 		line-height: 1.5;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		flex: 1 1 auto;
 	}
 	:global(.st-content .st-otherint-card .st-btn) {
@@ -790,7 +790,7 @@
 	:global(.st-content .st-about-line) {
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		line-height: 1.6;
 	}
 	:global(.st-content .st-about-line strong) {

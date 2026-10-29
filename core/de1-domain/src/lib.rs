@@ -74,6 +74,7 @@ pub mod crema_jsonl;
 pub mod crema_profile;
 pub mod decent_shot_record;
 pub mod decent_wire;
+pub mod duration;
 pub mod error;
 pub mod filter;
 pub mod firmware_builds;
@@ -177,8 +178,8 @@ pub use brew_session::{
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use cold_maintenance::{
     COLD_MAINTENANCE_MIN_FIRMWARE_BUILD, DESCALE_SCHEDULE, DESCALE_TOTAL_SECONDS, DescaleProgress,
-    DescaleTracker, MaintenancePhase, cold_maintenance_profile, firmware_drops_cold_requests,
-    is_machine_heating, is_maintenance_state, needs_cold_workaround,
+    DescaleTracker, MaintenanceFailure, MaintenancePhase, cold_maintenance_profile,
+    firmware_drops_cold_requests, is_machine_heating, is_maintenance_state, needs_cold_workaround,
 };
 pub use connect_sweep::{
     ConnectSweepSettings, USB_CHARGER_CHECK_INTERVAL_MS, UsbChargingMode, usb_charger_decision,
@@ -236,7 +237,9 @@ pub use profile::{
     ProfileStep, Pump, TempSensor, Transition,
 };
 pub use profile_fingerprint::profile_fingerprint;
-pub use profile_import::{export_v2_json, import_legacy_tcl, import_v2_json};
+pub use profile_import::{
+    export_v2_json, import_legacy_tcl, import_v2_json, import_v2_json_embedded,
+};
 pub use profile_roast::roast_from_profile;
 pub use replay::{ReplayMeta, ReplayMetaBean, fold_meta_jsonl, fold_meta_jsonl_json};
 pub use session::SessionTimer;
@@ -281,10 +284,11 @@ pub use visualizer_error::{
     visualizer_quota_limit,
 };
 pub use visualizer_sync::{
-    BeanReconcileAction, LocalShotRef, PulledBag, ReconcileAction, RoasterReconcileAction,
-    WireShot, reconcile_beans, reconcile_beans_json, reconcile_pulled_bags, reconcile_roasters,
-    reconcile_roasters_json, reconcile_shots, reconcile_shots_json, signature_for_bean,
-    signature_for_roaster, signature_for_shot,
+    BeanReconcileAction, GuardedVisualizerPrefs, LocalShotRef, PulledBag, ReconcileAction,
+    RoasterReconcileAction, WireShot, guard_restored_visualizer_prefs,
+    guard_restored_visualizer_prefs_json, reconcile_beans, reconcile_beans_json,
+    reconcile_pulled_bags, reconcile_roasters, reconcile_roasters_json, reconcile_shots,
+    reconcile_shots_json, signature_for_bean, signature_for_roaster, signature_for_shot,
 };
 pub use visualizer_wire::{
     BagWire, RoasterWire, ShotPatchInputs, VISUALIZER_PREMIUM_SHOT_FIELDS, VISUALIZER_SHOT_FIELDS,

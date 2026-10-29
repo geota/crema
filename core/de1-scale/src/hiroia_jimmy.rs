@@ -48,21 +48,20 @@ pub fn is_non_grams_mode(data: &[u8]) -> Option<bool> {
 
 /// Decode a weight notification into grams.
 ///
-/// Bytes 4–6 are a 24-bit little-endian value; values `>= 0x800000` are a
-/// negative weight. The sign correction reproduces the legacy app's formula
-/// exactly (`raw - 0xFFFFFF`), which differs by one count from textbook 24-bit
-/// two's complement — kept as-is pending hardware verification.
+/// Bytes 4–6 are a 24-bit little-endian two's-complement value in tenths of
+/// a gram. The legacy app's sign correction (`raw - 0xFFFFFF`,
+/// `bluetooth.tcl:738-739`) is one count off two's complement, so every
+/// negative reading was 0.1 g too small in magnitude; reaprime decodes true
+/// two's complement (`hiroia_scale.dart:152-160`: `FF FF` = -1 count) — cohort
+/// review 2026-10-25, scales appendix F-11.
 pub fn parse_weight(data: &[u8]) -> Option<f32> {
     if data.len() < 7 {
         return None;
     }
-    let raw = u32::from(data[4]) | (u32::from(data[5]) << 8) | (u32::from(data[6]) << 16);
-    let weight: i32 = if raw >= 0x80_0000 {
-        -((0xFF_FFFF - raw) as i32)
-    } else {
-        raw as i32
-    };
-    Some(weight as f32 / 10.0)
+    // Sign-extend the 24-bit value through an i32.
+    let raw = i32::from_le_bytes([data[4], data[5], data[6], 0]) << 8 >> 8;
+    #[allow(clippy::cast_precision_loss)] // |raw| < 2^23, exact in an f32
+    Some(raw as f32 / 10.0)
 }
 
 #[cfg(test)]
@@ -77,8 +76,11 @@ mod tests {
 
     #[test]
     fn decodes_a_negative_weight() {
-        // 0xFFFF38 -> -(0xFFFFFF - 0xFFFF38) = -199 -> -19.9 g.
-        assert_eq!(parse_weight(&[0, 0, 0, 0, 0x38, 0xFF, 0xFF]), Some(-19.9));
+        // 0xFFFF38 is -200 counts in 24-bit two's complement -> -20.0 g
+        // (F-11: the legacy formula gave -19.9 g).
+        assert_eq!(parse_weight(&[0, 0, 0, 0, 0x38, 0xFF, 0xFF]), Some(-20.0));
+        // 0xFFFFFF is -1 count -> -0.1 g (reaprime `FF FF` = -1).
+        assert_eq!(parse_weight(&[0, 0, 0, 0, 0xFF, 0xFF, 0xFF]), Some(-0.1));
     }
 
     #[test]
@@ -97,11 +99,11 @@ mod tests {
 
     #[test]
     fn treats_the_value_at_the_sign_threshold_as_negative() {
-        // 0x800000 is the first value the codec reads as negative; the legacy
-        // formula `-(0xFFFFFF - raw)` makes it -0x7FFFFF counts.
+        // 0x800000 is the first value the codec reads as negative: -0x800000
+        // counts in two's complement.
         assert_eq!(
             parse_weight(&[0, 0, 0, 0, 0x00, 0x00, 0x80]),
-            Some(-(0x7F_FFFF as f32) / 10.0)
+            Some(-(0x80_0000 as f32) / 10.0)
         );
     }
 

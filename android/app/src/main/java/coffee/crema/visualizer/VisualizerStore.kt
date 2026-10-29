@@ -107,6 +107,13 @@ data class VisualizerState(
     val shotPullCursor: Long? = null,
     /** Recent sync activity — capped at 20 entries, newest first. */
     val log: List<SyncLogEntry> = emptyList(),
+    /**
+     * Shots whose barista was edited here and has not reached Visualizer yet
+     * (see [VisualizerSync.markBaristaEdited]). Persisted so a pull after a
+     * restart does not refill a cleared barista (round-2 verification V2 P3-4);
+     * the web keeps the same set in `crema.visualizer.baristaPending.v1`.
+     */
+    val baristaPending: Set<String> = emptySet(),
 )
 
 /** The canonical default sync prefs — mirrors the core `VisualizerSyncPrefs::default`. */
@@ -175,6 +182,8 @@ class VisualizerStore(
                 state
             }
         }.valueOrNull() ?: return@withContext VisualizerState()
+        // A `.bak` left by an older build may hold a previous (or plaintext) token.
+        SafeFile.purgeCopies(file)
         val (state, resave) = raw.openedWith(box)
         if (resave) write(state)
         state
@@ -200,8 +209,12 @@ class VisualizerStore(
     /** Write [state]; false (logged) when it could not be stored. */
     suspend fun save(state: VisualizerState): Boolean = withContext(Dispatchers.IO) { write(state) }
 
+    /** Delete the file and every copy (Erase all data); true when nothing remains. */
+    suspend fun erase(): Boolean = withContext(Dispatchers.IO) { SafeFile.erase(file) }
+
     private fun write(state: VisualizerState): Boolean = try {
-        SafeFile.write(file, json.encodeToString(VisualizerState.serializer(), state.sealedWith(box)))
+        // No `.bak` copies of sealed tokens (review 05 P3-5).
+        SafeFile.writeCredential(file, json.encodeToString(VisualizerState.serializer(), state.sealedWith(box)))
         true
     } catch (e: Exception) {
         // Includes a keystore failure while sealing: never fall back to plaintext.

@@ -327,6 +327,8 @@
 	// placeholder shows the current settings default so the user can see
 	// what the upload *would* use today without committing to an override.
 	const settingsDefaultGrinder = $derived(settings.current.grinderModel?.trim() ?? '');
+	const detailUid = $props.id();
+	const grinderInputId = `${detailUid}-grinder`;
 	const grinderPlaceholder = $derived(
 		settingsDefaultGrinder ? settingsDefaultGrinder : 'No default set'
 	);
@@ -865,7 +867,7 @@
 	{#if quality}
 		<div class="hi-quality">
 			<div class="hi-quality-head">
-				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Shot quality</span>
+				<span class="t-eyebrow" style="color:var(--fg-3)">Shot quality</span>
 				<div class="hi-quality-chips">
 					{#each qualityChips as chip (chip.label)}
 						<span class="hi-quality-chip is-{chip.tone}">{chip.label}</span>
@@ -1026,13 +1028,13 @@
 	     debounces behind it. -->
 	<div class="hi-rating-row">
 		<div class="hi-rating">
-			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Rating</span>
+			<span class="t-eyebrow" style="color:var(--fg-3)">Rating</span>
 			<div class="hi-stars">
 				<StarRating rating={rating} interactive onRate={setStar} size={18} emptyColor="rgba(var(--tint-rgb), 0.3)" />
 			</div>
 		</div>
 		<div class="hi-grind">
-			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Grind</span>
+			<span class="t-eyebrow" style="color:var(--fg-3)">Grind</span>
 			<QuickStepper
 				value={grindValue}
 				min={0}
@@ -1049,7 +1051,7 @@
 	     `resolveTagList` reads `shot.tags` and rides as Visualizer's
 	     `tag_list` on the next PATCH. -->
 	<div class="hi-tags">
-		<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Tags</span>
+		<span class="t-eyebrow" style="color:var(--fg-3)">Tags</span>
 		<TagInput
 			tags={shot.tags ?? []}
 			suggestions={tagSuggestions}
@@ -1062,8 +1064,9 @@
 	     cascade re-engages. The placeholder shows the current default so
 	     the user knows what the upload *would* use today. -->
 	<div class="hi-grinder">
-		<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Grinder model</span>
+		<label class="t-eyebrow" style="color:var(--fg-3)" for={grinderInputId}>Grinder model</label>
 		<input
+			id={grinderInputId}
 			class="hi-grinder-input"
 			type="text"
 			placeholder={grinderPlaceholder}
@@ -1086,7 +1089,7 @@
 		{#each [{ field: 'barista', label: 'Barista', names: baristaSuggestions }, { field: 'drinker', label: 'Drinker', names: drinkerSuggestions }] as p (p.field)}
 			{@const field = p.field as 'barista' | 'drinker'}
 			<label class="hi-person">
-				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">{p.label}</span>
+				<span class="t-eyebrow" style="color:var(--fg-3)">{p.label}</span>
 				<input
 					class="hi-grinder-input"
 					type="text"
@@ -1109,7 +1112,7 @@
 	<!-- Notes -->
 	<div class="hi-notes">
 		<div class="hi-notes-head">
-			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Tasting notes</span>
+			<span class="t-eyebrow" style="color:var(--fg-3)">Tasting notes</span>
 			{#if editing}
 				<button class="hi-notes-edit" onclick={saveNotes}>
 					<CheckIcon aria-hidden="true" /> Save
@@ -1139,7 +1142,7 @@
 	     bag is next selected. -->
 	<div class="hi-notes">
 		<div class="hi-notes-head">
-			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Next time</span>
+			<span class="t-eyebrow" style="color:var(--fg-3)">Next time</span>
 			{#if planEditing}
 				<button class="hi-notes-edit" onclick={savePlan}>
 					<CheckIcon aria-hidden="true" /> Save
@@ -1174,12 +1177,13 @@
 	<!-- Brew Log rows never upload (issue #10): no Visualizer privacy. -->
 	{#if !isBrew}
 	<div class="hi-privacy">
-		<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Privacy</span>
-		<div class="hi-privacy-chips">
+		<span class="t-eyebrow" style="color:var(--fg-3)">Privacy</span>
+		<div class="hi-privacy-chips" role="group" aria-label="Visualizer privacy">
 			{#each ['public', 'unlisted', 'private'] as const as p (p)}
 				<button
 					class="hi-privacy-chip"
 					class:is-on={shot.privacy === p || (shot.privacy == null && defaultPrivacy === p)}
+					aria-pressed={shot.privacy === p || (shot.privacy == null && defaultPrivacy === p)}
 					onclick={() => onPrivacyChange(shot.privacy === p ? null : p)}
 					title={shot.privacy == null && defaultPrivacy === p
 						? 'Following the Settings → Sharing default'
@@ -1286,7 +1290,7 @@
 	}
 	:global(.hi-leg-icon) {
 		font-size: 14px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	.hi-leg-item {
 		display: inline-flex;
@@ -1336,12 +1340,12 @@
 		font-weight: 600;
 	}
 	.hi-metric-method :global(svg) {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		flex: none;
 	}
 	.hi-fact-input {
 		background: rgba(var(--tint-rgb), 0.05);
-		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border: 1px solid var(--field-border);
 		border-radius: var(--radius-xs);
 		color: var(--fg-1);
 		font-family: var(--font-mono);
@@ -1372,7 +1376,7 @@
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
 		font-weight: 700;
-		color: rgba(var(--tint-rgb), 0.42);
+		color: var(--fg-muted);
 	}
 	.hi-metric-v {
 		font-family: var(--font-mono);
@@ -1383,7 +1387,7 @@
 	.hi-metric-v em {
 		font-style: normal;
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-left: 2px;
 	}
 
@@ -1501,7 +1505,7 @@
 	.hi-privacy-chip {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		background: transparent;
 		border: 1px solid rgba(var(--tint-rgb), 0.14);
 		border-radius: 999px;
@@ -1510,7 +1514,7 @@
 		text-transform: capitalize;
 	}
 	.hi-privacy-chip.is-on {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		border-color: rgba(193, 116, 75, 0.55);
 		background: rgba(193, 116, 75, 0.1);
 	}
@@ -1575,13 +1579,13 @@
 		border-color: rgba(var(--tint-rgb), 0.4);
 	}
 	.hi-grinder-input::placeholder {
-		color: rgba(var(--tint-rgb), 0.35);
+		color: var(--fg-muted);
 		font-style: italic;
 	}
 	.hi-grinder-hint {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 	.hi-notes-head {
 		display: flex;
@@ -1591,7 +1595,7 @@
 	.hi-notes-edit {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		cursor: pointer;
@@ -1609,13 +1613,13 @@
 		color: var(--fg-1);
 	}
 	.hi-notes-body.is-empty {
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		font-style: italic;
 	}
 	.hi-notes-input {
 		width: 100%;
 		background: rgba(var(--tint-rgb), 0.04);
-		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border: 1px solid var(--field-border);
 		border-radius: var(--radius-sm);
 		color: var(--fg-1);
 		font-family: var(--font-sans);

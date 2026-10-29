@@ -287,8 +287,9 @@ impl DescaleTracker {
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MaintenancePhase {
-    /// Old firmware, machine heating: the 1 °C profile is loaded and the
-    /// request is held until the machine reports it has left preheat.
+    /// Old firmware, machine heating: the 1 °C profile is uploading and the
+    /// request is held until that upload has completed AND the machine
+    /// reports it has left preheat.
     WaitingForPreheat,
     /// The held request has been sent; waiting for the machine to enter the
     /// state.
@@ -299,6 +300,26 @@ pub enum MaintenancePhase {
     Finished,
     /// Cancelled by the user, by another state request, or by a DE1 link drop.
     Cancelled,
+    /// The 1 °C cold-maintenance profile did not load (its upload failed,
+    /// was cancelled, or another upload replaced it), so the held request
+    /// was never sent: running the cycle on the brew profile is what the
+    /// workaround exists to prevent. The user can start it again. Why is in
+    /// the event's [`MaintenanceFailure`].
+    Failed,
+}
+
+/// Why a held cold-maintenance request ended [`MaintenancePhase::Failed`] —
+/// carried by `Event::MaintenanceProgress` so the shells can say what
+/// happened.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MaintenanceFailure {
+    /// The 1 °C profile's upload failed or was cancelled.
+    ColdProfileNotLoaded,
+    /// Another upload (the user picked a profile or started a shot) replaced
+    /// the 1 °C profile before the cycle could start (while the machine was
+    /// still heating, or while the cold profile was still loading).
+    ProfileReplaced,
 }
 
 #[cfg(test)]

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { liveChartSummary } from '#lib/a11y/chart-summary.js';
 	/**
 	 * `LiveChart` — the 4-channel telemetry chart.
 	 *
@@ -718,7 +719,12 @@
 	});
 </script>
 
-<div class="livechart" bind:this={plotEl} aria-label="Live shot telemetry chart"></div>
+<div
+	class="livechart"
+	bind:this={plotEl}
+	role="img"
+	aria-label={liveChartSummary(series)}
+></div>
 
 <style>
 	.livechart {

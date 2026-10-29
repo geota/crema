@@ -101,7 +101,7 @@
 	<div class="bp-modal">
 		<div class="bp-head">
 			<div>
-				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Library</div>
+				<div class="t-eyebrow" style="color:var(--fg-3)">Library</div>
 				<div class="bp-title">Choose a bean</div>
 			</div>
 			<button class="bp-close" onclick={onClose} aria-label="Close">
@@ -113,6 +113,7 @@
 			<MagnifyingGlassIcon aria-hidden="true" />
 			<input
 				bind:value={query}
+				aria-label="Search bags or roasters"
 				placeholder="Search bag or roaster…"
 				autocomplete="off"
 			/>
@@ -193,7 +194,7 @@
 	.bp-close {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		cursor: pointer;
 		font-size: 18px;
 		padding: 4px;
@@ -214,7 +215,7 @@
 		border-color: rgba(var(--tint-rgb), 0.25);
 	}
 	.bp-search :global(svg) {
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		font-size: 13px;
 	}
 	.bp-search input {
@@ -280,10 +281,10 @@
 	.bp-row-sub {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	:global(.bp-row-current) {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-size: 14px;
 	}
 	.bp-empty {
@@ -291,7 +292,7 @@
 		text-align: center;
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 	.bp-foot {
 		display: flex;
@@ -307,7 +308,7 @@
 		gap: 6px;
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		cursor: pointer;

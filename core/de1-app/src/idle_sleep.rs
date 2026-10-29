@@ -59,6 +59,18 @@ impl CremaCore {
                 {
                     out = self.set_user_present(true);
                 }
+                // Activity re-arms steam eco and lifts it (de1app
+                // `delay_screen_saver`). On the core's own clock: `now_ms` is
+                // the idle-sleep clock, which is wall time on the web. Not on
+                // a read-only mirror: its ShotSettings write is stripped, so
+                // lifting eco here would show normal steam while the machine,
+                // driven by the primary, stays in eco (C3 #4).
+                if !self.read_only && !self.firmware_locks_writes() {
+                    let now = self.clock;
+                    for event in self.steam.on_activity(now) {
+                        self.map_steam_event(event, &mut out);
+                    }
+                }
             }
             IdleSleepInput::Link { ready } => self.idle_sleep.link(ready),
             IdleSleepInput::Tick => {
@@ -106,7 +118,7 @@ impl CremaCore {
         self.firmware_locks_writes()
             || self.shot_started.is_some()
             || self.post_shot_settle.is_some()
-            || self.profile_upload.is_some()
+            || self.profile_upload_in_progress()
             || self.brew_session.as_ref().is_some_and(|session| {
                 matches!(
                     session.phase(),

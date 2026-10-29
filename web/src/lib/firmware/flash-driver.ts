@@ -69,6 +69,7 @@ export type FlashCore = Pick<
 	| 'firmwareFlashStatus'
 	| 'firmwareFlashRestoreAwaiting'
 	| 'firmwareFlashRestoreEraseHold'
+	| 'firmwareFlashRestoreVerifying'
 >;
 
 /** The DE1 link surface the driver needs (`De1Manager`). */
@@ -224,6 +225,15 @@ export class FlashDriver {
 	/** Bring back a power-cycle wait persisted before a reload. */
 	async restoreAwaiting(build: number, unconfirmed: boolean): Promise<FlashStatus | null> {
 		this.apply(await this.core.firmwareFlashRestoreAwaiting(build, unconfirmed, this.now()), true);
+		return this.refresh();
+	}
+
+	/**
+	 * Bring back a flash whose verify window was still open (persisted
+	 * deadline): it stays Verifying until the window closes (report 06 #7).
+	 */
+	async restoreVerifying(build: number, holdMsLeft: number): Promise<FlashStatus | null> {
+		this.apply(await this.core.firmwareFlashRestoreVerifying(build, holdMsLeft, this.now()), true);
 		return this.refresh();
 	}
 

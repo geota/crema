@@ -25,6 +25,7 @@ import type { CoreOutput, ScaleCapabilities, ScaleUuids, TimedSample } from './c
 import type { CalTarget, MmrRegister } from './crema-core';
 import type { ShotQualityInput, ShotQualityReport, SawModelLoad } from './crema-core';
 import type { FlashBlocker, FlashShellConditions, FlashStep } from './crema-core';
+import { guardStoppedBridge } from './stopped-guard';
 
 /** Parse a bridge `FlashStep` JSON; `status: null` reads as "no flash". */
 function parseStep(raw: string): FlashStep {
@@ -276,6 +277,7 @@ export type NotificationSource =
 	| 'De1ShotSettings'
 	| 'De1ProfileHeader'
 	| 'De1FrameAck'
+	| 'De1HeaderAck'
 	| 'ScaleButton';
 
 /**
@@ -308,6 +310,17 @@ export interface CremaCore {
 	 */
 	onNotification(source: NotificationSource, data: Uint8Array, nowMs: number): Promise<CoreOutput>;
 	/**
+	 * The synthesised ack for a profile write of upload `uploadId` (its
+	 * `ProfileUploadStarted` number); the core ignores it unless that upload is
+	 * still running. `source` is `De1HeaderAck` or `De1FrameAck`.
+	 */
+	onProfileWriteAck(
+		source: NotificationSource,
+		data: Uint8Array,
+		nowMs: number,
+		uploadId: number
+	): Promise<CoreOutput>;
+	/**
 	 * The `nowMs` of the most recent `onNotification` call, or `null` before
 	 * the first call. Lets the shell pin shot-slice bounds to the same
 	 * timebase the rolling capture buffer uses — `performance.now()` during
@@ -317,6 +330,21 @@ export interface CremaCore {
 	readonly lastNotificationAtMs: number | null;
 	/** Feed a periodic clock tick. Resolves to the parsed `CoreOutput`. */
 	onTick(nowMs: number): Promise<CoreOutput>;
+	/**
+	 * How many times the bridge reset its core after a panicked call
+	 * (`CremaBridge::panic_recoveries`). Optional so test doubles need not
+	 * implement it; see `#lib/core/recovery-watch.js`.
+	 */
+	panicRecoveries?(): number;
+	/**
+	 * Register `listener` to run once when the bridge stops: a call panicked
+	 * after the bridge's last allowed reset (`MAX_PANIC_RECOVERIES` in
+	 * de1-wasm), so every core call now fails with `CoreStoppedError` until
+	 * the page reloads. `reason` is the bridge's stop message (the context
+	 * the shell logs once). Optional so test doubles need not implement it;
+	 * see `#lib/core/stopped-guard.js`.
+	 */
+	onCoreStopped?(listener: (reason: string) => void): void;
 	/**
 	 * Arm a guided brew session for a JSON-encoded `BrewRecipe`
 	 * (issue #10). `startOnPour` starts the clock at the first
@@ -376,6 +404,8 @@ export interface CremaCore {
 	): Promise<FlashStep>;
 	/** Bring back the lock of an erase that may still be running after a reload. */
 	firmwareFlashRestoreEraseHold(build: number, holdMsLeft: number, nowMs: number): Promise<FlashStep>;
+	/** Bring back a flash whose verify window was still open at the reload. */
+	firmwareFlashRestoreVerifying(build: number, holdMsLeft: number, nowMs: number): Promise<FlashStep>;
 	/** Whether a flash (or its erase / reboot window) holds the DE1 link. */
 	firmwareLocksWrites(): Promise<boolean>;
 	firmwareFlashStatus(nowMs: number): Promise<FlashStep>;
@@ -452,6 +482,13 @@ export interface CremaCore {
 	uploadProfile(profile: unknown, nowMs: number): Promise<CoreOutput>;
 	/** Cancel an in-progress upload; emits `ProfileUploadFailed { Aborted }`. */
 	cancelProfileUpload(): Promise<CoreOutput>;
+	/**
+	 * A profile write of upload `uploadId` (its `ProfileUploadStarted`
+	 * number) did not reach the DE1: the core fails that upload at once
+	 * (`ProfileUploadFailed { WriteFailed }`). A no-op unless it is still the
+	 * running upload. `nowMs` is a `performance.now()` time.
+	 */
+	profileWriteFailed(nowMs: number, uploadId: number): Promise<CoreOutput>;
 	/** `true` from `uploadProfile` until the tail ack / failure / cancel. */
 	profileUploadInProgress(): Promise<boolean>;
 	/**
@@ -942,7 +979,12 @@ async function createCore(): Promise<CremaCore> {
 	if (typeof window !== 'undefined') {
 		(window as { __cremaWasmCore?: typeof wasm }).__cremaWasmCore = wasm;
 	}
-	const bridge = new wasm.CremaBridge();
+	// Once the bridge stops (too many panics), the guard answers every call
+	// itself instead of entering the wasm, and tells the shell once.
+	const stoppedListeners: ((reason: string) => void)[] = [];
+	const bridge = guardStoppedBridge(new wasm.CremaBridge(), (reason) => {
+		for (const listener of stoppedListeners) listener(reason);
+	});
 
 	/**
 	 * Map a facade `NotificationSource` string onto the wasm numeric enum.
@@ -974,6 +1016,8 @@ async function createCore(): Promise<CremaCore> {
 				return wasm.NotificationSource.De1ProfileHeader;
 			case 'De1FrameAck':
 				return wasm.NotificationSource.De1FrameAck;
+			case 'De1HeaderAck':
+				return wasm.NotificationSource.De1HeaderAck;
 			case 'ScaleButton':
 				return wasm.NotificationSource.ScaleButton;
 		}
@@ -1007,11 +1051,22 @@ async function createCore(): Promise<CremaCore> {
 			lastNotificationAtMs = nowMs;
 			return parseOutput(bridge.on_notification(toWasmSource(source), data, nowMs));
 		},
+		async onProfileWriteAck(source, data, nowMs, uploadId) {
+			return parseOutput(
+				bridge.on_profile_write_ack(toWasmSource(source), data, nowMs, uploadId)
+			);
+		},
 		get lastNotificationAtMs(): number | null {
 			return lastNotificationAtMs;
 		},
 		async onTick(nowMs) {
 			return parseOutput(bridge.on_tick(nowMs));
+		},
+		panicRecoveries() {
+			return bridge.panic_recoveries();
+		},
+		onCoreStopped(listener) {
+			stoppedListeners.push(listener);
 		},
 		async brewSessionArm(recipeJson, startOnPour) {
 			return parseOutput(bridge.brew_session_arm(recipeJson, startOnPour));
@@ -1082,6 +1137,9 @@ async function createCore(): Promise<CremaCore> {
 		async firmwareFlashRestoreEraseHold(build, holdMsLeft, nowMs) {
 			return parseStep(bridge.firmware_flash_restore_erase_hold(build, holdMsLeft, nowMs));
 		},
+		async firmwareFlashRestoreVerifying(build, holdMsLeft, nowMs) {
+			return parseStep(bridge.firmware_flash_restore_verifying(build, holdMsLeft, nowMs));
+		},
 		async firmwareLocksWrites() {
 			return bridge.firmware_locks_writes();
 		},
@@ -1122,6 +1180,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async cancelProfileUpload() {
 			return parseOutput(bridge.cancel_profile_upload());
+		},
+		async profileWriteFailed(nowMs, uploadId) {
+			return parseOutput(bridge.profile_write_failed(nowMs, uploadId));
 		},
 		async profileUploadInProgress() {
 			return bridge.profile_upload_in_progress();
@@ -1458,6 +1519,7 @@ export type {
 } from './crema-core';
 export { FlashPhase, DecentFirmwareChannel } from './crema-core';
 export type { Event, Command, ModeInfo, RangeCapability } from './crema-core';
+export type { CalibrationRefusal } from './crema-core';
 // Telemetry wire types — now typeshare-generated (review #01 F24); replaced the
 // hand-written `RustShotSample` / `RustTimedSample`.
 export type { TimedSample, ShotSample, WireShotBean } from './crema-core';
@@ -1465,6 +1527,7 @@ export type { TimedSample, ShotSample, WireShotBean } from './crema-core';
 // to deep-import from `./crema-core`. These are the discriminant strings
 // produced by typeshare; values matter (consumers `===` them).
 export { MachineState, SubState, ShotPhase } from './crema-core';
+export { CoreStoppedError } from './stopped-guard';
 export { CalCommand, CalTarget, MmrRegister } from './crema-core';
 // Shot-quality analysis wire types — the argument / result shapes of the
 // facade's `analyzeShotQuality` (see `de1_domain::shot_quality`).

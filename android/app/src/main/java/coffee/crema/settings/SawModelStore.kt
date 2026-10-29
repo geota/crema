@@ -41,6 +41,14 @@ class SawModelStore(private val dir: File) {
         }
     }
 
+    /** Delete the model, its backup and any quarantined copy (Erase all data). */
+    suspend fun erase() {
+        withContext(Dispatchers.IO) {
+            SafeFile.erase(file)
+            SafeFile.erase(quarantine)
+        }
+    }
+
     /**
      * Load the stored blob into the core via [loadIntoCore] (the bridge's
      * `loadSawModelJson`, which returns a JSON `SawModelLoad`) and quarantine

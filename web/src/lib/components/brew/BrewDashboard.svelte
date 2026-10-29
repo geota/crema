@@ -65,6 +65,7 @@
 	import { scoreMap, searchBeans } from '#lib/bean/search.js';
 	import { getMaintenanceStore } from '#lib/maintenance/index.js';
 	import { toast } from '#lib/components/shared/toast.svelte.js';
+	import { keepToastsAbove } from '#lib/components/shared/toast-inset.svelte.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { getActiveShotStore, getBrewContext, getMachineReadout } from '#lib/state/index.js';
 	import { BrewParamState, DEFAULT_BREW_PARAMS, type BrewParamSeed } from './brew-params.svelte';
@@ -84,6 +85,7 @@
 	import PowerButton from '#lib/components/PowerButton.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { beanEditPath } from '#lib/beans/editor-path.js';
 	import { promptDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 
 	let { ui
@@ -1219,7 +1221,7 @@
 	}
 	function editActiveBean(): void {
 		const id = beanLibrary.activeBeanId;
-		void goto(id ? `${resolve('/beans/[id]/edit', { id })}?from=brew` : resolve('beans'));
+		void goto(id ? resolve(beanEditPath(id, '?from=brew')) : resolve('beans'));
 	}
 	/**
 	 * Water-tank volume (ml) for the foot readout — the DE1's `WaterLevel`
@@ -1652,7 +1654,9 @@
 		     just gets the prominent copper pill. A subtle vertical hairline
 		     separates the chip cluster from Start so they don't read as
 		     one row of buttons. -->
-		<div class="crema-dash-foot is-split">
+		<!-- `keepToastsAbove`: the toast stack sits above this band, so a
+		     pinned toast never covers Start / Flush (final review 07 N1). -->
+		<div class="crema-dash-foot is-split" {@attach keepToastsAbove}>
 			<div class="crema-foot-meta">
 				<!-- Sleep / wake the DE1 — rendered inline as the leftmost
 				     foot-meta item. Moved here from the layout's fixed
@@ -1687,6 +1691,9 @@
 					{tankText}{#if refillSoon}
 						· refill soon{/if}
 				</span>
+				<!-- Announce the threshold crossing once (cohort review 07 #16):
+				     the region is empty until the tank runs low. -->
+				<span class="sr-only" role="status">{refillSoon ? 'Water tank low, refill soon' : ''}</span>
 			</div>
 			<!-- Right cluster: three service-mode chips + a subtle vertical
 			     hairline + the big Start button. Wrapped in one element so

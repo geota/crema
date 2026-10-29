@@ -61,6 +61,9 @@ class VisualizerEditSyncTest {
 
     /** What the server answers the premium probe with. */
     private var probeStatus = HttpStatusCode.UnprocessableEntity
+
+    /** What the server answers a shot PATCH with (an error = the edit did not land). */
+    private var patchStatus = HttpStatusCode.OK
     private val requests = mutableListOf<Pair<String, String>>()
     private val engine = MockEngine { req ->
         val path = req.url.encodedPath
@@ -69,6 +72,7 @@ class VisualizerEditSyncTest {
             path.endsWith("/me") -> HttpStatusCode.OK to """{"id":"u1","name":"Ada","public":true}"""
             req.method.value == "POST" && path.endsWith("/roasters") ->
                 probeStatus to (if (probeStatus.value < 300) """{"id":"r-sentinel"}""" else """{"error":"x"}""")
+            req.method.value == "PATCH" -> patchStatus to "{}"
             else -> HttpStatusCode.OK to "{}"
         }
         respond(body, status, headersOf(HttpHeaders.ContentType, "application/json"))
@@ -91,14 +95,24 @@ class VisualizerEditSyncTest {
             (i["notes"] as? JsonPrimitive)?.contentOrNull?.let { put("private_notes", "<p>$it</p>") }
             str("grinderModel")?.let { put("grinder_model", it) }
             str("privacy")?.let { put("privacy", it) }
+            // Barista: absent (null) = omitted; blank = "" (a clear). A free field.
+            (i["barista"] as? JsonPrimitive)?.contentOrNull?.let { put("barista", it.trim()) }
         }.filterKeys { premium == true || it !in premiumOnly }
-        val applies = body.keys.any { it == "grinder_model" || (premium == true && it in premiumOnly) }
+        val applies = body.keys.any {
+            it == "grinder_model" || it == "barista" || (premium == true && it in premiumOnly)
+        }
         if (applies) JsonObject(body).toString() else null
     }
 
     private var clock = 1_000_000_000_000L
 
+    /** The local history the pull's barista fill reads, and the fills it made. */
+    private val history = mutableMapOf<String, StoredShot>()
+    private val fills = mutableListOf<Pair<String, String>>()
+
     private fun sync(grinder: String? = null) = VisualizerSync(
+        currentShot = { history[it] },
+        onFillBarista = { id, name -> fills += id to name },
         store = store,
         client = client,
         json = json,
@@ -232,6 +246,35 @@ class VisualizerEditSyncTest {
     }
 
     @Test
+    fun `a rating edit never sends the barista, so one set on Visualizer survives (final review 06 #1)`() {
+        seed(premium = true)
+        val s = sync().also { runBlocking { it.load() } }
+        // A shot pulled before the barista was read: none locally.
+        s.patchEditedShot(edited.copy(barista = null))
+        settle()
+        assertEquals(1, patches().size)
+        assertFalse("barista must not ride a rating edit: ${shotBody()}", "barista" in shotBody())
+    }
+
+    @Test
+    fun `a barista edit sends it, cleared as empty, and stops once it landed`() {
+        seed(premium = false)
+        val s = sync().also { runBlocking { it.load() } }
+        s.markBaristaEdited(edited.id)
+        s.patchEditedShot(edited.copy(barista = null))
+        settle()
+        assertEquals("", shotBody(0)["barista"]!!.jsonPrimitive.content)
+        s.markBaristaEdited(edited.id)
+        s.patchEditedShot(edited.copy(barista = " Ana "))
+        settle()
+        assertEquals("Ana", shotBody(1)["barista"]!!.jsonPrimitive.content)
+        // Landed: a later rating edit on a free account has nothing left to send.
+        s.patchEditedShot(edited.copy(barista = "Ana"))
+        settle()
+        assertEquals(2, patches().size)
+    }
+
+    @Test
     fun `a premium account found at start keeps private_notes and flavor`() {
         seed(premium = null)
         probeStatus = HttpStatusCode.Created
@@ -305,5 +348,72 @@ class VisualizerEditSyncTest {
         assertEquals(true, stored.premium)
         assertEquals(5L, stored.premiumCheckedAt)
         assertTrue(requests.none { it.first.startsWith("PATCH /api/shots") })
+    }
+
+    @Test
+    fun `a barista clear that failed to reach Visualizer is not refilled by a pull, even after a restart (V3 #6, V2 P3-4)`() {
+        seed(premium = false)
+        val cleared = edited.copy(barista = null)
+        history[cleared.id] = cleared
+        val remote = buildJsonObject { put("id", "v-1"); put("barista", "Ana") }
+
+        // The clear's PATCH fails (Visualizer unreachable).
+        patchStatus = HttpStatusCode.UnprocessableEntity
+        val s = sync().also { runBlocking { it.load() } }
+        s.markBaristaEdited(cleared.id)
+        s.patchEditedShot(cleared)
+        settle()
+        assertEquals("", shotBody(0)["barista"]!!.jsonPrimitive.content)
+        // A pull this session: the remote still says "Ana", the local is blank.
+        s.fillBarista(cleared.id, remote)
+        assertEquals(emptyList<Pair<String, String>>(), fills)
+
+        // A restart: the pending mark was stored, so the pull still leaves the
+        // clear alone, and the next edit carries it.
+        patchStatus = HttpStatusCode.OK
+        val restarted = sync().also { runBlocking { it.load() } }
+        restarted.fillBarista(cleared.id, remote)
+        assertEquals(emptyList<Pair<String, String>>(), fills)
+        restarted.patchEditedShot(cleared)
+        settle()
+        assertEquals("", shotBody(1)["barista"]!!.jsonPrimitive.content)
+
+        // The clear landed: the mark is gone (also on disk) and the fill rule applies again.
+        assertEquals(emptySet<String>(), runBlocking { store.load() }.baristaPending)
+        restarted.fillBarista(cleared.id, remote)
+        assertEquals(listOf(cleared.id to "Ana"), fills)
+    }
+
+    @Test
+    fun `a barista edit made before load keeps its mark and the stored sign-in (C3 #9)`() {
+        seed(premium = false)
+        val cleared = edited.copy(barista = null)
+        history[cleared.id] = cleared
+        // The clear lands right after launch, before load() has read the file.
+        val s = sync()
+        s.markBaristaEdited(cleared.id)
+        settle()
+        runBlocking { s.load() }
+        settle()
+        // The pull leaves the clear alone, and the mark is on disk next to
+        // the stored state (the early store did not overwrite it with defaults).
+        s.fillBarista(cleared.id, buildJsonObject { put("id", "v-1"); put("barista", "Ana") })
+        assertEquals(emptyList<Pair<String, String>>(), fills)
+        val stored = runBlocking { store.load() }
+        assertEquals(setOf(cleared.id), stored.baristaPending)
+        assertTrue("still signed in", stored.tokens != null)
+    }
+
+    @Test
+    fun `erasing all data forgets pending barista edits`() {
+        seed(premium = false)
+        val s = sync().also { runBlocking { it.load() } }
+        s.markBaristaEdited(edited.id)
+        settle()
+        assertEquals(setOf(edited.id), runBlocking { store.load() }.baristaPending)
+        runBlocking { s.eraseAll() }
+        history[edited.id] = edited.copy(barista = null)
+        s.fillBarista(edited.id, buildJsonObject { put("barista", "Ana") })
+        assertEquals(listOf(edited.id to "Ana"), fills)
     }
 }

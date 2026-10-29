@@ -233,10 +233,16 @@ fun HistoryScreen(
     // Bean filter: a coffee (every bag of it) or, from the bean detail's deep
     // link, one bag. The coffee resolves through the live library.
     val liveCoffee = remember(ui.beans, ui.roasters) { liveCoffeeLookup(ui.beans, ui.roasters) }
-    val shots = filterAndSortShots(
-        ui.history, query, range, profileFilter, sort, sortDesc, System.currentTimeMillis(), beanFilter, methodFilter,
-        coffeeOf = { shotCoffee(it, liveCoffee)?.key },
-    )
+    // Memoized: the screen recomposes on every UI-state emission (telemetry
+    // included), and re-filtering + re-sorting the whole log each time is the
+    // expensive part. `now` is minute-bucketed so it doesn't bust the cache.
+    val nowBucket = coffee.crema.history.minuteBucket(System.currentTimeMillis())
+    val shots = remember(ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter, liveCoffee) {
+        filterAndSortShots(
+            ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter,
+            coffeeOf = { shotCoffee(it, liveCoffee)?.key },
+        )
+    }
     // Default the detail to the newest (top) shot until the user picks one.
     val selected = shots.firstOrNull { it.id == selectedId } ?: shots.firstOrNull()
 
@@ -254,7 +260,7 @@ fun HistoryScreen(
             // ~700dp-tall window before the list. Below 800dp of height the
             // title drops to one compact line (the shot count lives in the
             // Shots stat tile anyway) and the stat tiles slim down.
-            val shortWindow = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 800
+            val shortWindow = coffee.crema.ui.windowContentDpSize().height.value < 800
             Row(
                 Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = if (shortWindow) 12.dp else 20.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -283,7 +289,7 @@ fun HistoryScreen(
                 // to icon buttons whenever the window is narrow OR short
                 // (the compact-header variant already trades chrome for the
                 // list), so the serif title never wraps a letter at a time.
-                val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1000 || shortWindow
+                val narrowBar = coffee.crema.ui.windowContentDpSize().width.value < 1000 || shortWindow
                 if (ui.history.isNotEmpty()) {
                     Spacer(Modifier.width(12.dp))
                     CremaSearchPill(
@@ -514,7 +520,7 @@ fun HistoryScreen(
                         // Narrow 7" tablet: a slimmer shot list leaves the detail
                         // panel (7-metric row + chart) a usable width; 10" keeps 480.
                         modifier = Modifier
-                            .width(if (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1100) 320.dp else 480.dp)
+                            .width(if (coffee.crema.ui.windowContentDpSize().width.value < 1100) 320.dp else 480.dp)
                             .fillMaxHeight(),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                         contentPadding = PaddingValues(top = 4.dp, bottom = 12.dp),
@@ -555,8 +561,9 @@ fun HistoryScreen(
                             pressureUnit = ui.pressureUnit,
                             onRate = { r, n -> vm.updateShot(selected.id, r, n) },
                             onNextPlanChange = { p -> vm.setShotNextPlan(selected.id, p) },
-                            baristaNames = recentNames(ui.history, "barista"),
-                            drinkerNames = recentNames(ui.history, "drinker"),
+                            // Sorted once per history change, not per recomposition.
+                            baristaNames = remember(ui.history) { recentNames(ui.history, "barista") },
+                            drinkerNames = remember(ui.history) { recentNames(ui.history, "drinker") },
                             onPersonChange = { field, name -> vm.setShotPerson(selected.id, field, name) },
                             onStartFromShot = { vm.startFromShot(selected.id) },
                             onLoadOnBrew = { vm.loadProfileOnBrew(selected.profileName) },
@@ -775,10 +782,7 @@ private fun ShotRow(
         // Main — profile name over the bean (PWA .hi-row-main). Brew rows show
         // the recipe / method name with a quiet "logged" provenance tag.
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            val rowName = shot.profileName
-                ?: shot.recipeName
-                ?: shot.methodOf?.let { methodLabel(it) }
-                ?: "Shot"
+            val rowName = coffee.crema.history.shotTitle(shot)
             Text(
                 if (shot.isManualLog) "$rowName · logged" else rowName,
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.Medium),
@@ -973,7 +977,7 @@ private fun ShotDetail(
                     eyebrowBelow = if (narrow) stamp else null,
                     title = when {
                         isBrew -> (shot.recipeName ?: methodLabel(method)) + if (manual) " · logged" else ""
-                        else -> shot.profileName ?: "Shot"
+                        else -> shot.profileName?.trim()?.takeIf { it.isNotEmpty() } ?: coffee.crema.history.UNTITLED_SHOT
                     },
                     // A shot's profile is a historical fact — no picker, no caret.
                     showCaret = false,

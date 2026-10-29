@@ -47,6 +47,14 @@ object ShotDiag {
         }
     }
 
+    /** Delete the stored record (Settings ▸ Erase all data). */
+    fun clear(ctx: Context) {
+        runCatching {
+            File(ctx.filesDir, FILE_NAME).delete()
+            File(ctx.filesDir, "$FILE_NAME.tmp").delete()
+        }
+    }
+
     /** The stored record, or null when no shot has completed on this install. */
     fun snapshot(ctx: Context): String? =
         runCatching {

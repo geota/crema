@@ -9,11 +9,15 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.components.CremaButton
+import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaConfirmDialog
+import kotlinx.coroutines.launch
 
 /**
  * The staged destructive-action confirm state, shared by the tablet
@@ -123,7 +127,7 @@ fun SettingsConfirmDialogs(state: SettingsConfirmState, vm: MainViewModel, ui: M
     )
     if (state.confirmErase) CremaConfirmDialog(
         title = "Erase all data?",
-        body = "Every bean, roaster, shot and custom profile will be permanently deleted. Built-in profiles remain. This can't be undone.",
+        body = "Every bean, bag photo, roaster, shot, recipe and custom profile, all preferences, Bluetooth session captures, and your Visualizer, Decent and Google Drive sign-ins with their sync settings and activity will be permanently deleted from this device. Built-in profiles and backups you saved remain. This can't be undone.",
         confirmLabel = "Erase everything",
         icon = "trash",
         danger = true,
@@ -222,4 +226,35 @@ fun SettingsConfirmDialogs(state: SettingsConfirmState, vm: MainViewModel, ui: M
             onDismiss = { state.pendingRestoreWipe = null },
         )
     }
+}
+
+/**
+ * "Back up" — builds the `.crema.zip` (off the main thread, see
+ * [MainViewModel.buildBackupZipBytes]) and hands the bytes to the SAF save
+ * picker. Disabled while a build runs so a double tap can't queue a second
+ * full serialisation. Shared by the tablet and phone Settings screens.
+ */
+@Composable
+fun BackUpEverythingButton(
+    vm: MainViewModel,
+    launchSaveBytes: (name: String, bytes: ByteArray?) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var building by remember { mutableStateOf(false) }
+    CremaButton(
+        onClick = {
+            building = true
+            scope.launch {
+                try {
+                    launchSaveBytes(vm.backupFileName(), vm.buildBackupZipBytes())
+                } finally {
+                    building = false
+                }
+            }
+        },
+        variant = CremaButtonVariant.Filled,
+        icon = "download-simple",
+        enabled = !building,
+        label = if (building) "Backing up…" else "Back up",
+    )
 }

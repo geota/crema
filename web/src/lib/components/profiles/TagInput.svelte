@@ -67,6 +67,7 @@
 		<!-- svelte-ignore a11y_autofocus -->
 		<input
 			class="pe-tag-input"
+			aria-label="New tag"
 			bind:value={draft}
 			autofocus
 			placeholder="New tag…"
@@ -101,7 +102,7 @@
 		background: rgba(193, 116, 75, 0.1);
 		border: 1px solid rgba(193, 116, 75, 0.35);
 		border-radius: var(--radius-pill);
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		font-weight: 500;
@@ -114,7 +115,7 @@
 		height: 16px;
 		background: transparent;
 		border: 0;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		border-radius: 50%;
 		font-size: 10px;
 		cursor: pointer;
@@ -134,7 +135,7 @@
 		background: transparent;
 		border: 1px dashed rgba(var(--tint-rgb), 0.18);
 		border-radius: var(--radius-pill);
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		padding: 5px 12px;

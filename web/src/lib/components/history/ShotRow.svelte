@@ -149,6 +149,8 @@
 	class:is-active={active && !selectable}
 	class:is-selected={selectable && selected}
 	class:is-selectmode={selectable}
+	aria-current={active && !selectable ? 'true' : undefined}
+	aria-pressed={selectable ? selected : undefined}
 	disabled={selectable && selectionDisabled && !selected}
 	{onclick}
 >
@@ -262,11 +264,11 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-size: 18px;
 	}
 	.hi-row.is-selected .hi-row-check {
-		color: var(--copper-500);
+		color: var(--fg-accent);
 	}
 	.hi-row-time {
 		display: flex;
@@ -282,7 +284,7 @@
 	.hi-row-time-d {
 		font-family: var(--font-sans);
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 	.hi-row-spark {
 		display: flex;
@@ -308,12 +310,12 @@
 	.hi-row-logged {
 		font-weight: 400;
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	.hi-row-bean {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -339,7 +341,7 @@
 	.hi-row-metric-val em {
 		font-style: normal;
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-left: 1px;
 	}
 	.hi-row-metric-l {
@@ -347,18 +349,18 @@
 		font-size: 9px;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 	}
 	.hi-row-stars {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		letter-spacing: -1px;
 		white-space: nowrap;
 	}
 	/* An unrated shot still shows five (dim) glyphs, keeping the column rhythm. */
 	.hi-row-stars.is-unrated {
-		color: rgba(var(--tint-rgb), 0.25);
+		color: var(--fg-muted);
 	}
 
 	/* Visualizer sync status pip — a tiny dot at the row's trailing edge. */

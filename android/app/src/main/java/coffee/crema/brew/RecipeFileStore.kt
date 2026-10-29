@@ -2,6 +2,7 @@ package coffee.crema.brew
 
 import android.content.Context
 import coffee.crema.core.BrewRecipe
+import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +45,11 @@ class RecipeFileStore(private val context: Context, private val json: Json) {
         withContext(Dispatchers.IO) {
             saveStore(file, json.encodeToString(Envelope.serializer(), envelope))
         }
+    }
+
+    /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
+    suspend fun erase() {
+        withContext(Dispatchers.IO) { eraseStore(file) }
     }
 
     private companion object {

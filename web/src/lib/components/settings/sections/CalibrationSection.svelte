@@ -52,6 +52,7 @@
 	import { onMount } from 'svelte';
 	import { getMachineReadout, type CremaApp } from '#lib/state/index.js';
 	import { CalTarget, MmrRegister } from '#lib/core/index.js';
+	import { CALIBRATION_BANDS, CalibrationRefusedError } from '#lib/calibration/refusal.js';
 	import { INITIAL_SNAPSHOT } from '#lib/state/index.js';
 
 	const machine = getMachineReadout();
@@ -181,6 +182,8 @@
 	let typed = $state('');
 	/** Submission spinner — disables the Confirm button while in-flight. */
 	let applying = $state(false);
+	/** Why the core refused the last Confirm (Sleep / Idle gate, value bands). */
+	let refusal = $state<string | null>(null);
 
 	const expectedTyped = $derived(editing ? nameOf(editing.target) : '');
 	const typedMatches = $derived(typed.trim().toLowerCase() === expectedTyped);
@@ -191,12 +194,14 @@
 		editReported = Number(displayed.toFixed(decimalsFor(target)));
 		editMeasured = editReported;
 		typed = '';
+		refusal = null;
 		editing = { target, mode: 'apply' };
 	}
 
 	function openReset(target: CalTarget): void {
 		if (!connected) return;
 		typed = '';
+		refusal = null;
 		editing = { target, mode: 'reset' };
 	}
 
@@ -210,6 +215,7 @@
 		if (editing == null || !app || !connected || !typedMatches) return;
 		const { target, mode } = editing;
 		applying = true;
+		refusal = null;
 		try {
 			if (mode === 'apply') {
 				const reported = toCanonical(target, editReported);
@@ -220,9 +226,10 @@
 			}
 			editing = null;
 			typed = '';
-		} catch {
-			// The orchestrator logs failures via the event stream; leave the
-			// modal open so the user sees nothing visibly happened.
+		} catch (e) {
+			// A core refusal says why in the modal; other failures are logged
+			// via the event stream. The modal stays open either way.
+			refusal = e instanceof CalibrationRefusedError ? e.message : null;
 		} finally {
 			applying = false;
 		}
@@ -240,9 +247,23 @@
 		}
 	}
 
-	/** Caption explaining the effect of the multiplier. */
-	const applyCaption =
-		'After saving, the DE1 will use (measured / reported) as a multiplier on this sensor.';
+	/**
+	 * Caption explaining the effect of the write. Pressure (and flow) are
+	 * ratiometric; temperature is an offset in °C (pyDE1 `CalTargets`).
+	 */
+	function applyCaption(target: CalTarget): string {
+		return target === CalTarget.Temperature
+			? 'After saving, the DE1 will offset this sensor by (measured − reported).'
+			: 'After saving, the DE1 will use (measured / reported) as a multiplier on this sensor.';
+	}
+
+	/** Input bounds in the display unit, mirroring the core's bands. */
+	function boundsFor(target: CalTarget): { min: number; max: number } {
+		const [lo, hi] = CALIBRATION_BANDS[target];
+		const a = toDisplay(target, lo) ?? lo;
+		const b = toDisplay(target, hi) ?? hi;
+		return { min: Math.min(a, b), max: Math.max(a, b) };
+	}
 
 	// ---- Flow-calibration multiplier (MMR 0x80383C) ----------------------
 	//
@@ -603,6 +624,8 @@
 							<input
 								type="number"
 								step="any"
+								min={boundsFor(target).min}
+								max={boundsFor(target).max}
 								bind:value={editReported}
 								disabled={applying}
 							/>
@@ -617,6 +640,8 @@
 							<input
 								type="number"
 								step="any"
+								min={boundsFor(target).min}
+								max={boundsFor(target).max}
 								bind:value={editMeasured}
 								disabled={applying}
 							/>
@@ -624,7 +649,7 @@
 						</div>
 					</label>
 
-					<p class="cal-modal-caption">{applyCaption}</p>
+					<p class="cal-modal-caption">{applyCaption(target)}</p>
 				{/if}
 
 				<label class="cal-field">
@@ -654,6 +679,10 @@
 						/>
 					</div>
 				</label>
+
+				{#if refusal}
+					<p class="cal-modal-refusal" role="alert">{refusal}</p>
+				{/if}
 			</div>
 
 			<div class="cal-modal-actions">
@@ -831,7 +860,7 @@
 	.cal-refresh-label {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 
 	/* ---- Flow-multiplier row -------------------------------------------- */
@@ -938,7 +967,7 @@
 	}
 	.cal-field-sub {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 	}
 	.cal-field-input {
 		margin-top: 6px;
@@ -963,7 +992,13 @@
 	.cal-field-unit {
 		font-family: var(--font-mono);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
+	}
+	.cal-modal-refusal {
+		margin: 0;
+		font-size: 13px;
+		line-height: 1.4;
+		color: var(--warning);
 	}
 	.cal-modal-caption {
 		margin: 0;

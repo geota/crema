@@ -129,7 +129,7 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps, 0.06em);
 		text-transform: uppercase;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
@@ -137,13 +137,13 @@
 	.dbg-meta {
 		font-family: var(--font-mono);
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-left: auto;
 	}
 	.dbg-x {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		cursor: pointer;
 		padding: 2px 4px;
 		border-radius: 4px;
@@ -169,7 +169,7 @@
 		border-bottom: 0;
 	}
 	.dbg-empty {
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		text-align: center;
@@ -192,7 +192,7 @@
 		border: 1px solid var(--hairline-strong);
 		border-right: 0;
 		border-radius: var(--radius-md, 10px) 0 0 var(--radius-md, 10px);
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-size: 16px;
 		cursor: pointer;
 		box-shadow: var(--shadow-md, 0 2px 6px rgba(0, 0, 0, 0.18));

@@ -6,8 +6,13 @@
 	 * root layout (FD4). Bottom-right stack; each toast auto-dismisses (the
 	 * store owns the timer) or can be closed with its × button. Errors announce
 	 * as `role="alert"` (assertive); info / success as `role="status"`.
+	 *
+	 * The stack lifts above any band registered with `keepToastsAbove` (the
+	 * Brew foot), so a pinned toast never covers the Coffee button (final
+	 * cohort review 07, new finding 1). Its buttons have 44 px hit areas.
 	 */
 	import { getToasts, dismissToast, type ToastKind } from './toast.svelte';
+	import { getToastBottomInset } from './toast-inset.svelte';
 
 	const ICON: Record<ToastKind, string> = {
 		info: 'info',
@@ -16,7 +21,7 @@
 	};
 </script>
 
-<div class="toast-host">
+<div class="toast-host" style:--toast-inset="{getToastBottomInset()}px">
 	{#each getToasts() as t (t.id)}
 		<div class={['toast', `toast-${t.kind}`]} role={t.kind === 'error' ? 'alert' : 'status'}>
 			<Icon name={ICON[t.kind]} aria-hidden="true" />
@@ -48,7 +53,7 @@
 <style>
 	.toast-host {
 		position: fixed;
-		bottom: 16px;
+		bottom: calc(16px + var(--toast-inset, 0px));
 		right: 16px;
 		z-index: 1100;
 		display: flex;
@@ -100,35 +105,47 @@
 		color: var(--fg-accent);
 	}
 	.toast-action {
+		position: relative;
 		flex: none;
+		align-self: center;
+		min-height: 32px;
 		border: 1px solid rgba(var(--tint-rgb), 0.25);
 		background: transparent;
 		color: var(--fg-1);
 		font: inherit;
 		font-weight: 600;
 		font-size: 0.85em;
-		padding: 3px 10px;
+		padding: 4px 12px;
 		border-radius: 999px;
 		cursor: pointer;
+	}
+	/* 44 px tall hit area around the 32 px pill. */
+	.toast-action::before {
+		content: '';
+		position: absolute;
+		inset: -6px -4px;
 	}
 	.toast-action:hover {
 		background: rgba(var(--tint-rgb), 0.1);
 	}
+	/* A full 44 px target (pinned toasts stay until this is tapped); the
+	   negative margins keep the toast as compact as the old 22 px button. */
 	.toast-close {
 		flex-shrink: 0;
+		align-self: center;
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		width: 22px;
-		height: 22px;
-		margin: -2px -4px -2px 0;
+		width: 44px;
+		height: 44px;
+		margin: -12px -12px -12px -6px;
 		padding: 0;
 		border: none;
 		background: transparent;
-		color: rgba(var(--tint-rgb), 0.6);
-		border-radius: 6px;
+		color: var(--fg-3);
+		border-radius: 8px;
 		cursor: pointer;
-		font-size: 14px;
+		font-size: 16px;
 	}
 	.toast-close:hover {
 		color: var(--fg-1);

@@ -178,11 +178,14 @@ pub fn import_v2_json_shot(content: &str) -> Result<StoredShot, ImportError> {
     );
     // Prefer the explicit `meta.time` flow-window duration (what the
     // exporter writes); fall back to the last sample's elapsed for
-    // documents that omit it.
+    // documents that omit it, or whose value is not a plausible shot time
+    // (NaN, infinite, non-positive, or over a day). Clamping a garbage value
+    // instead invented a 24 h shot ending a day after it started (final
+    // cohort review 2026-10-28, 01 P3-2).
     let duration = raw
         .meta
         .time
-        .filter(|t| *t > 0.0)
+        .filter(|t| t.is_finite() && *t > 0.0 && *t <= crate::duration::MAX_IMPORTED_SHOT_TIME_S)
         .map(duration_from_seconds)
         .unwrap_or_else(|| samples.last().map_or(Duration::ZERO, |t| t.elapsed));
 
@@ -319,14 +322,13 @@ fn derive_resistance(pressure: f32, flow: f32) -> Option<f32> {
 }
 
 fn duration_from_seconds(s: f32) -> Duration {
-    // Total over hostile input (review #31): `from_secs_f32` PANICS on a
-    // non-finite value, and both import paths accept the token "inf" from
-    // f32::from_str — one corrupt .shot file must not abort the whole
-    // import (wasm trap / FFI panic). NaN and negatives coerce to zero.
-    if !s.is_finite() {
-        return Duration::ZERO;
-    }
-    Duration::from_secs_f32(s.max(0.0))
+    // Total over hostile input (review #31; cohort review 2026-10-25 01
+    // P1-1): `from_secs_f32` PANICS on a non-finite value and on any finite
+    // value above ~1.8e19 s, and both import paths accept such tokens from
+    // f32::from_str — one corrupt .shot file must not abort the whole import
+    // (wasm trap / FFI panic). NaN, infinities and negatives coerce to zero;
+    // a huge finite time clamps to one day.
+    crate::duration::secs_clamped(s, crate::duration::MAX_IMPORTED_SHOT_TIME_S)
 }
 
 /// Profile frame indices from a v2 `state_change` series — the inverse of
@@ -672,14 +674,16 @@ fn v2_metadata(raw: &V2ShotJson) -> ShotMetadata {
     }
 }
 
-/// Reuse `import_v2_json` to re-decode the embedded profile when one is
-/// present. Returns `None` if the profile block is absent or malformed —
-/// a v2 shot without a profile is still a valid history entry, the
-/// shot's telemetry stands on its own.
+/// Re-decode the embedded profile when one is present
+/// ([`import_v2_json_embedded`](crate::profile_import::import_v2_json_embedded):
+/// a recipe of up to 32 steps stays readable even though the DE1 runs at most
+/// 20). Returns `None` if the profile block is absent or malformed — a v2
+/// shot without a profile is still a valid history entry, the shot's
+/// telemetry stands on its own.
 fn v2_profile(raw: &V2ShotJson) -> Option<Profile> {
     let value = raw.profile.as_ref()?;
     let json = value.to_string();
-    crate::profile_import::import_v2_json(&json).ok()
+    crate::profile_import::import_v2_json_embedded(&json).ok()
 }
 
 #[cfg(test)]
@@ -798,6 +802,71 @@ settings {
         // Out-of-range values clamp.
         assert_eq!(enjoyment_to_rating(-10.0), None);
         assert_eq!(enjoyment_to_rating(500.0), Some(5));
+    }
+
+    /// Cohort review 2026-10-25, 01 P1-1: a huge FINITE time used to panic
+    /// in `Duration::from_secs_f32` (it only guarded non-finite values), and
+    /// on web the trap wedged the whole core. Each of the reviewer's three
+    /// triggers now imports, with the time clamped to one day.
+    #[test]
+    fn huge_finite_times_import_instead_of_panicking() {
+        let one_day = Duration::from_secs(86_400);
+        assert_eq!(duration_from_seconds(1e30), one_day);
+
+        // v2 JSON `meta.time`.
+        let meta_time = import_v2_json_shot(r#"{"clock":1700000000,"meta":{"time":1e30}}"#);
+        assert!(meta_time.is_ok(), "meta.time 1e30 imports: {meta_time:?}");
+
+        // v2 JSON `elapsed[i]`, with the other seven series non-empty.
+        let elapsed =
+            V2_JSON_FIXTURE.replace(r#""elapsed": [0.0, 1.0]"#, r#""elapsed": [0.0, 1e30]"#);
+        assert_ne!(elapsed, V2_JSON_FIXTURE, "fixture edit applied");
+        let shot = import_v2_json_shot(&elapsed).expect("elapsed 1e30 imports");
+        assert_eq!(shot.record.samples[1].elapsed, one_day);
+
+        // Legacy Tcl `espresso_elapsed`, with the other series present.
+        let tcl =
+            LEGACY_FIXTURE.replace("espresso_elapsed {0.0 1.0}", "espresso_elapsed {0.0 1e30}");
+        assert_ne!(tcl, LEGACY_FIXTURE, "fixture edit applied");
+        let shot = import_legacy_tcl_shot(&tcl).expect("Tcl elapsed 1e30 imports");
+        assert_eq!(shot.record.samples[1].elapsed, one_day);
+    }
+
+    /// Final cohort review 2026-10-28, 01 P3-2: an out-of-range `meta.time`
+    /// used to clamp to 24 h and move `completed_at` a day past `clock`. Any
+    /// value that is not a plausible shot time now takes the same fallback
+    /// as a missing one: the last sample's elapsed.
+    #[test]
+    fn an_implausible_meta_time_falls_back_to_the_samples() {
+        let start_ms = 1_710_510_622_000;
+        for bad in ["1e30", "86401", "-3", "0", "1e39"] {
+            let doc = V2_JSON_FIXTURE.replace(
+                r#""in": 18.0, "out": 36.0"#,
+                &format!(r#""in": 18.0, "out": 36.0, "time": {bad}"#),
+            );
+            assert_ne!(doc, V2_JSON_FIXTURE, "fixture edit applied");
+            let shot = import_v2_json_shot(&doc).unwrap_or_else(|e| panic!("{bad}: {e:?}"));
+            // The fixture's samples span 1 s.
+            assert_eq!(
+                shot.record.duration,
+                Duration::from_secs(1),
+                "meta.time {bad}"
+            );
+            assert_eq!(shot.completed_at, start_ms + 1_000, "meta.time {bad}");
+        }
+        // A plausible value is still preferred over the samples.
+        let doc = V2_JSON_FIXTURE.replace(
+            r#""in": 18.0, "out": 36.0"#,
+            r#""in": 18.0, "out": 36.0, "time": 28.5"#,
+        );
+        let shot = import_v2_json_shot(&doc).expect("imports");
+        assert_eq!(shot.record.duration, Duration::from_millis(28_500));
+        assert_eq!(shot.completed_at, start_ms + 28_500);
+        // The reviewer's probe: no samples, so the duration is zero and
+        // completed_at is the start, not a day later.
+        let probe =
+            import_v2_json_shot(r#"{"clock":1700000000,"meta":{"time":1e30}}"#).expect("imports");
+        assert_eq!(probe.completed_at, 1_700_000_000_000);
     }
 
     #[test]

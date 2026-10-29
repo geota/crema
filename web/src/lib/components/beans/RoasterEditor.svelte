@@ -1,6 +1,7 @@
 <script lang="ts">
 	import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeftIcon';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
+	import { scrollBehavior } from '#lib/a11y/motion.js';
 	/**
 	 * `RoasterEditor` — standalone page editor for a {@link Roaster} row.
 	 *
@@ -156,7 +157,7 @@
 
 		// Required-field gate: Name must be filled.
 		if (isNameMissing) {
-			nameInputEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			nameInputEl?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
 			nameInputEl?.focus();
 			return;
 		}
@@ -164,7 +165,7 @@
 		if (isWebsiteInvalid || isLogoInvalid) {
 			const id = isWebsiteInvalid ? 'rd-website-input' : 'rd-logo-input';
 			const el = document.getElementById(id) as HTMLInputElement | null;
-			el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			el?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
 			el?.focus();
 			return;
 		}
@@ -222,7 +223,7 @@
 		</div>
 	</header>
 
-	<main class="rd-main">
+	<div class="rd-main">
 		<!-- Hero — the same gradient avatar as the bean editor's photo slot,
 		     but using the live logo URL when present (falls back to the
 		     deterministic mark on null / load error). -->
@@ -441,7 +442,7 @@
 				Save
 			</button>
 		</div>
-	</main>
+	</div>
 </div>
 
 <style>
@@ -602,7 +603,7 @@
 	.rd-hero-sub {
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 
 	/* Form rows — mirror BeanEditPage's `.be-frow` so the two pages have
@@ -643,7 +644,7 @@
 	.rd-frow-sub {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		line-height: 1.4;
 	}
 	.rd-req {
@@ -663,7 +664,7 @@
 
 	.rd-input {
 		background: var(--bg-page);
-		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border: 1px solid var(--field-border);
 		border-radius: var(--radius-sm);
 		padding: 9px 12px;
 		font-family: var(--font-sans);

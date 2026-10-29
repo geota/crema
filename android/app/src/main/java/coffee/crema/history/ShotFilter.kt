@@ -73,10 +73,19 @@ fun filterAndSortShots(
 }
 
 /**
+ * [nowMs] floored to the minute — the `now` the History screens pass to
+ * [filterAndSortShots], so the memoized result stays valid across the many
+ * recompositions a minute brings (live telemetry updates the shared UI state
+ * several times a second) instead of re-filtering and re-sorting the whole log
+ * on each. Range edges move by under a minute, which no range can show.
+ */
+fun minuteBucket(nowMs: Long): Long = nowMs - Math.floorMod(nowMs, 60_000L)
+
+/**
  * True when the shot's text fields contain [query] (case-insensitive): profile,
  * brew method, recipe, notes, next-time plan, the bean snapshot's roaster /
- * name / grinder, barista and drinker. A blank query matches everything.
- * Mirrors the web `shotMatchesQuery`.
+ * name / grinder, the shot's own grinder model, barista and drinker. A blank
+ * query matches everything. Mirrors the web `shotMatchesQuery`.
  */
 fun shotMatchesQuery(s: StoredShot, query: String): Boolean {
     val q = query.trim()
@@ -89,6 +98,7 @@ fun shotMatchesQuery(s: StoredShot, query: String): Boolean {
         s.nextPlan,
         s.beanLabel,
         s.bean?.grinder,
+        s.grinderModel,
         s.barista,
         s.drinker,
     ).any { it?.contains(q, ignoreCase = true) == true }

@@ -1,5 +1,7 @@
 package coffee.crema.drive
 
+import coffee.crema.persist.ImportLimits
+import coffee.crema.persist.readBytesCapped
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -157,7 +159,8 @@ suspend fun driveDownloadBackup(accessToken: String, fileId: String, json: Json)
         try {
             val status = conn.responseCode
             if (status in 200..299) {
-                conn.inputStream.use { it.readBytes() }
+                // Size-capped like every import (review 05 P3-2).
+                conn.inputStream.use { it.readBytesCapped(ImportLimits.MAX_FILE_BYTES, "The Drive backup") }
             } else {
                 val err = conn.errorStream?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
                 throw IOException(errorMessage(json, err, status, "download"))

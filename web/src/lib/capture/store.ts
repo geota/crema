@@ -16,7 +16,7 @@
 import type { CaptureEntry } from './recorder';
 
 /** IndexedDB database name. */
-const DB_NAME = 'crema-captures';
+export const DB_NAME = 'crema-captures';
 /** Schema version — bump when the object-store layout changes. */
 const DB_VERSION = 1;
 /** The single object store: shot-id → CaptureEntry[]. */
@@ -61,7 +61,18 @@ export class CaptureStore {
 
 	/** Lazy DB open — the connection is opened on the first call. */
 	private getDb(): Promise<IDBDatabase> {
-		if (!this.dbPromise) this.dbPromise = openDb();
+		if (!this.dbPromise) {
+			const opening = openDb().then((db) => {
+				// Factory reset deletes this database: close on request so the
+				// delete is not blocked by this tab's cached connection.
+				db.onversionchange = () => {
+					db.close();
+					if (this.dbPromise === opening) this.dbPromise = undefined;
+				};
+				return db;
+			});
+			this.dbPromise = opening;
+		}
 		return this.dbPromise;
 	}
 

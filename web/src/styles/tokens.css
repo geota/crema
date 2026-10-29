@@ -21,6 +21,7 @@
    -------------------------------------------------------------------------- */
 
 :root {
+  color-scheme: light;
   /* ========================================================================
      COLOR — raw scales
      ======================================================================== */
@@ -75,33 +76,40 @@
      vs. the handoff at the project's request: pressure is the sage green,
      weight the amber. Every chart reads these via var(), so the swap here
      applies app-wide. */
-  --tel-pressure:    #6B8C5F;
+  /* Light-theme values (the :root default). Each hue doubles as the
+     readout label / number colour, so it has to reach 4.5:1 on the light
+     surfaces (#FFFFFA, paper-50); the original bright hues measured 2.1-3.0
+     there (cohort review 07 #5). The dark theme restores brighter hues in
+     the [data-theme="dark"] block below. The `-15` washes keep the brand
+     hue because they are fills, not text. */
+  --tel-pressure:    #4A6B3D;
   --tel-pressure-15: #6B8C5F26;
-  --tel-flow:        #4A6FA5;
+  --tel-flow:        #40618F;
   --tel-flow-15:     #4A6FA526;
-  --tel-temp:        #C44E3F;
+  --tel-temp:        #A8402F;
   --tel-temp-15:     #C44E3F26;
-  --tel-weight:      #D89030;
+  --tel-weight:      #8C5A12;
   --tel-weight-15:   #D8903026;
-  /* Secondary channel lines (palette B "bold siblings" — primary lightened
-     ~15 % at the same chroma). Solid 1.5 px stroke on the chart, paired
-     with their primary on the channel cards. Off by default; toggled in
-     the Quick Sheet's "Chart channels" group. */
-  --tel-pressure-2:  #88A37A;     /* resistance — lighter sage */
-  --tel-flow-2:      #6E8FBD;     /* volume — lighter blue */
-  --tel-temp-2:      #D8786A;     /* mix temp — lighter coral */
-  --tel-weight-2:    #E5A958;     /* weight flow — lighter amber */
+  /* Secondary channel lines (palette B "bold siblings"). Solid 1.5 px
+     stroke on the chart, paired with their primary on the channel cards.
+     Light values stay a step lighter than the primary but above 4.5:1. */
+  --tel-pressure-2:  #557A45;     /* resistance — lighter sage */
+  --tel-flow-2:      #3E6B8F;     /* volume — lighter blue */
+  --tel-temp-2:      #A44B3B;     /* mix temp — lighter coral */
+  --tel-weight-2:    #7F6200;     /* weight flow — lighter amber */
   /* Back-compat alias — the existing StaticShotChart resistance trace
      points at the same token now. Drop when the static chart adopts the
      primary/secondary pattern too. */
   --tel-resistance:  var(--tel-pressure-2);
   --tel-resistance-15: #88A37A26;
 
-  /* Semantic (light surface defaults) */
-  --success: #5C8A4C;
-  --warning: #C7873B;
-  --danger:  #B84A3A;
-  --info:    #4A6FA5;
+  /* Semantic (light surface defaults). Darkened so they pass 4.5:1 as text
+     on the light surfaces (the old warning #C7873B measured 3.0:1); the
+     `-rgb` wash triplets above keep the original hues for tinted fills. */
+  --success: #4A6B3D;
+  --warning: #8C5A12;
+  --danger:  #A8402F;
+  --info:    #40618F;
 
   /* ========================================================================
      COLOR — semantic aliases (use these in components, not raw scales)
@@ -115,9 +123,16 @@
 
   --fg-1:           var(--ink-900);     /* Primary text */
   --fg-2:           var(--ink-700);     /* Secondary */
-  --fg-3:           var(--ink-500);     /* Tertiary / meta */
+  /* Text tokens are the AA floor, per theme (cohort review 07 #5, #7):
+     every text colour below reaches 4.5:1 on the page, card and tinted
+     surfaces of its theme. Use them instead of alpha-faded ink
+     (`rgba(var(--tint-rgb), .4)` measured 2.2-3.4:1). */
+  --fg-3:           #625345;            /* Tertiary / meta */
+  --fg-muted:       #6B5B49;            /* Quietest readable text: captions,
+                                           counts, empty-state dashes */
   --fg-disabled:    var(--ink-300);
-  --fg-accent:      var(--copper-600);  /* Copper text on light */
+  --fg-accent:      #8F4E1F;            /* Copper text on light (copper-400
+                                           text measured 2.8:1 on paper) */
   --fg-on-accent:   var(--ink-900);     /* Text on copper button — dark
                                            text reads on the bright
                                            copper accent in both themes
@@ -131,6 +146,14 @@
                                            below collapses to the same
                                            ink-900 value so dark mode is
                                            unchanged. */
+
+  /* Control edges (WCAG 1.4.11, final cohort review 07 N4): the parts that
+     identify a control reach 3:1 against the page, card and sunken
+     surfaces. Light: the off switch track measured 1.35:1 and its knob
+     1.04:1 against the page; field borders 1.27:1 against the card. */
+  --switch-off:     #8C7B66;            /* 3.5-4.1:1 on paper / card */
+  --switch-knob:    #FFFFFF;            /* 4.1:1 on the off track, 3.4:1 on copper */
+  --field-border:   #94836D;            /* 3.2-3.7:1 on paper / card */
 
   --hairline:       rgba(31, 24, 18, 0.08); /* 1px borders on light */
   --hairline-strong:rgba(31, 24, 18, 0.16);
@@ -264,6 +287,12 @@
    ancestor. The Dashboard view sets this by default.
    ============================================================================ */
 [data-theme="dark"] {
+  /* Native controls (date pickers, scrollbars) follow the theme; light is
+     the :root default below. */
+  color-scheme: dark;
+  --switch-off:   rgba(var(--tint-rgb), 0.15);
+  --switch-knob:  var(--ink-50);
+  --field-border: #7A6B5C;              /* 3.1-3.7:1 on espresso page / card */
   --bg-page:      var(--espresso-950);
   --bg-surface:   var(--espresso-900);
   --bg-surface-2: var(--espresso-850);
@@ -273,8 +302,21 @@
   --fg-1:         var(--ink-50);
   --fg-2:         var(--ink-100);
   --fg-3:         #B8A689;
+  --fg-muted:     #A08F78;
   --fg-disabled:  var(--espresso-600);
   --fg-accent:    var(--copper-400);
+
+  /* Telemetry on dark: the brand hues, with flow and temp lifted so their
+     10 px readout labels clear 4.5:1 on the espresso cards (#4A6FA5 and
+     #C44E3F measured 3.4 and 3.8:1). */
+  --tel-pressure:    #779A6A;
+  --tel-flow:        #6E8FBD;
+  --tel-temp:        #E06B5B;
+  --tel-weight:      #D89030;
+  --tel-pressure-2:  #93AE86;
+  --tel-flow-2:      #8FAAD3;
+  --tel-temp-2:      #E8968A;
+  --tel-weight-2:    #E5A958;
   /* --fg-on-accent intentionally NOT overridden here — the root value
      (`--ink-900`) is theme-fixed because the copper button bg is
      theme-fixed. Inheriting from :root keeps both themes legible with
@@ -297,7 +339,7 @@
   --success-rgb: 122, 173, 126;
   --warning: #DBA764;
   --warning-rgb: 219, 167, 100;
-  --danger:  #D26456;
+  --danger:  #DA6E5F;
   --danger-rgb:  210, 100, 86;
   --info:    #7DA0CD;
   --info-rgb:    125, 160, 205;

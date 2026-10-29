@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { safeExternalUrl } from '#lib/utils/safe-url.js';
 	/**
 	 * `RecipeCredit` — a recipe's attribution line: who it's by, plus a
 	 * link to the primary source (opens in a new tab). Small, secondary
@@ -19,7 +20,7 @@
 		compact?: boolean;
 	} = $props();
 
-	const href = $derived(sourceUrl && /^https?:\/\//i.test(sourceUrl.trim()) ? sourceUrl.trim() : null);
+	const href = $derived(safeExternalUrl(sourceUrl));
 </script>
 
 {#if credit?.trim() || href}
@@ -49,7 +50,7 @@
 		font-family: var(--font-sans);
 		font-size: 11.5px;
 		line-height: 1.35;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		min-width: 0;
 	}
 	.rc.is-compact {
@@ -73,7 +74,7 @@
 		border-radius: var(--radius-sm);
 	}
 	.rc-link:hover {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		text-decoration-color: currentColor;
 	}
 	.rc-link:focus-visible {

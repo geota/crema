@@ -329,7 +329,7 @@
 		<div class="gb-recipe">
 			<div class="gb-recipe-head">
 				<div class="gb-recipe-id">
-					<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">
+					<div class="t-eyebrow" style="color:var(--fg-3)">
 						Recipe · {methodLabel(method)}
 					</div>
 					<div class="gb-recipe-name">
@@ -408,7 +408,7 @@
 		</div>
 		{:else}
 		<div class="gb-recipe gb-recipe-empty">
-			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">
+			<div class="t-eyebrow" style="color:var(--fg-3)">
 				Recipe · {methodLabel(method)}
 			</div>
 			<div class="gb-recipe-name">
@@ -464,7 +464,7 @@
 		<!-- ── Armed: waiting for the first pour ─────────────── -->
 		<div class="gb-live">
 			<div class="gb-live-head">
-				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">
+				<div class="t-eyebrow" style="color:var(--fg-3)">
 					Guided brew · {methodLabel(liveRecipe?.method)}
 				</div>
 				<div class="gb-live-name">{liveRecipe?.name}</div>
@@ -486,7 +486,7 @@
 		<div class="gb-live-grid">
 		<div class="gb-live">
 			<div class="gb-live-head">
-				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">
+				<div class="t-eyebrow" style="color:var(--fg-3)">
 					Guided brew · {methodLabel(liveRecipe?.method)}
 				</div>
 				<div class="gb-live-name">{liveRecipe?.name}</div>
@@ -581,7 +581,7 @@
 		</div>
 		<div class="gb-live-chart">
 			<div class="gb-live-chart-head">
-				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Weight</span>
+				<span class="t-eyebrow" style="color:var(--fg-3)">Weight</span>
 				{#if !connected}
 					<span class="gb-live-chart-note">No scale — stage bands only</span>
 				{/if}
@@ -594,7 +594,7 @@
 	{:else if session.phase === 'done' && session.summary}
 		<!-- ── Summary ───────────────────────────────────────── -->
 		<div class="gb-done">
-			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Brew finished</div>
+			<div class="t-eyebrow" style="color:var(--fg-3)">Brew finished</div>
 			<div class="gb-done-name">{session.summary.recipeName}</div>
 			<div class="gb-done-bean">
 				{#if brewBean}
@@ -690,7 +690,7 @@
 		justify-content: center;
 		background: rgba(var(--tint-rgb), 0.04);
 		border: 1px solid rgba(var(--tint-rgb), 0.12);
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		cursor: pointer;
 		transition: all var(--dur-1) var(--ease);
 	}
@@ -699,7 +699,7 @@
 		color: var(--fg-1);
 	}
 	.gb-bell.is-on {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		border-color: var(--copper-600);
 	}
 	.gb-bell:focus-visible,
@@ -728,7 +728,7 @@
 		transition: all var(--dur-1) var(--ease);
 	}
 	.gb-chip-add {
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 	}
 	.gb-chip:hover {
 		background: rgba(var(--tint-rgb), 0.06);
@@ -773,7 +773,7 @@
 		font-weight: 700;
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		border: 1px solid rgba(var(--tint-rgb), 0.18);
 		border-radius: var(--radius-pill);
 		padding: 1px 7px;
@@ -787,13 +787,13 @@
 		margin: 0;
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 	}
 	.gb-recipe-meta {
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 11.5px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		margin-top: 3px;
 	}
 	.gb-recipe-notes {
@@ -838,7 +838,7 @@
 	}
 	.gb-pick-btn :global(svg) {
 		flex: none;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 	}
 	.gb-select:hover,
 	.gb-pick-btn:hover {
@@ -863,7 +863,7 @@
 	.gb-step-n {
 		font-family: var(--font-mono);
 		font-size: 10.5px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		width: 14px;
 		flex: none;
 	}
@@ -872,19 +872,19 @@
 		min-width: 0;
 	}
 	.gb-step-spec {
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.gb-step-note {
 		display: block;
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.62);
+		color: var(--fg-3);
 		margin-top: 1px;
 	}
 	.gb-step-adv {
 		font-size: 9.5px;
 		font-weight: 700;
 		letter-spacing: 0.06em;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		flex: none;
 	}
 	/* Narrow card: the AUTO/TAP tag wraps under its step. */
@@ -910,7 +910,7 @@
 		gap: 7px;
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		border: 1px solid rgba(var(--tint-rgb), 0.1);
 		border-radius: var(--radius-pill);
 		padding: 5px 11px;
@@ -1006,7 +1006,7 @@
 	.gb-live-chart-note {
 		font-family: var(--font-sans);
 		font-size: 11.5px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	.gb-live-chart-plot {
 		flex: 1;
@@ -1046,12 +1046,12 @@
 	.gb-clock-sub {
 		font-family: var(--font-sans);
 		font-size: 11.5px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	.gb-armed-hint {
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		margin-top: 6px;
 	}
 	.gb-step-card {
@@ -1117,13 +1117,13 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.gb-step-target {
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 11.5px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	/* The step's instruction — wraps, capped at two lines so a long label
 	   ("Lower the plunger to the surface only, then pour gently") never
@@ -1157,14 +1157,14 @@
 	}
 	.gb-step-of {
 		font-size: 16px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	/* A drawdown's expected time is guidance, not a deadline: a quiet
 	   "about" before it, and past it the overtime reads muted, not red. */
 	.gb-step-about {
 		font-family: var(--font-sans);
 		font-size: 16px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-right: 2px;
 	}
 	.gb-step-big.is-over {
@@ -1196,7 +1196,7 @@
 		gap: 12px;
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		padding: 2px 4px;
 	}
 	.gb-flow {
@@ -1223,7 +1223,7 @@
 	.gb-text-btn {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		font-family: var(--font-sans);
 		font-size: 13px;
 		font-weight: 600;
@@ -1269,7 +1269,7 @@
 	.gb-done-bean {
 		font-family: var(--font-sans);
 		font-size: 12.5px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		margin-top: 2px;
 	}
 	.gb-bean {
@@ -1305,7 +1305,7 @@
 		font-size: 10px;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	.gb-done-actions {
 		display: flex;

@@ -45,6 +45,13 @@ import {
 	type TokenSet
 } from '../visualizer/oauth.ts';
 
+/**
+ * A token request that hangs (no response, no reset) fails as a retryable
+ * `NetworkError` after this long instead of stalling every caller queued
+ * behind the single-flight refresh (review 03 P3-5).
+ */
+const TOKEN_TIMEOUT_MS = 30_000;
+
 const FORM_HEADERS = {
 	'Content-Type': 'application/x-www-form-urlencoded',
 	Accept: 'application/json'
@@ -67,12 +74,68 @@ export class OAuth extends Context.Service<
 			| NetworkError
 			| ResponseDecodeError
 		>;
-		/** Refresh an access token. Collapses every failure to one tag. */
-		readonly refreshToken: (refreshToken: string) => Effect.Effect<TokenSet, TokenRefreshFailedError>;
+		/**
+		 * Refresh an access token. Fails with `TokenRefreshFailedError` ONLY when
+		 * the token endpoint definitively rejects the grant (see
+		 * {@link classifyRefreshFailure}); every transient or indeterminate failure
+		 * surfaces as `NetworkError` / a retryable `HttpStatusError`, so callers
+		 * keep the stored session and try again later.
+		 */
+		readonly refreshToken: (
+			refreshToken: string
+		) => Effect.Effect<TokenSet, TokenRefreshFailedError | NetworkError | HttpStatusError>;
 		/** Best-effort token revocation; never fails. */
 		readonly revokeToken: (token: string) => Effect.Effect<void>;
 	}
 >()('crema/OAuth') {}
+
+/** Token-endpoint statuses worth retrying as-is (the shared retry policy reads the status). */
+const RETRYABLE_REFRESH_STATUS = (status: number) => status >= 500 || status === 408 || status === 429;
+
+/** The OAuth `error` code of a token-endpoint error body, or null when it is not one. */
+function oauthErrorCode(body: string | undefined): string | null {
+	if (!body) return null;
+	try {
+		const json: unknown = JSON.parse(body);
+		if (typeof json === 'object' && json !== null && 'error' in json && typeof json.error === 'string') {
+			return json.error;
+		}
+	} catch {
+		// Not JSON (a proxy or captive-portal page): not a definitive answer.
+	}
+	return null;
+}
+
+/**
+ * Sort a failed refresh into the one outcome that ends the session and the
+ * ones that must keep it (review 03 P1-1).
+ *
+ * - **Definitive** (`TokenRefreshFailedError`): the token endpoint answered
+ *   HTTP 400 or 401 with the OAuth `invalid_grant` error. Visualizer runs
+ *   Doorkeeper 5.9 with refresh-token rotation; Doorkeeper answers a revoked,
+ *   expired, unknown or already-rotated refresh token with exactly that
+ *   (RFC 6749 §5.2). Also a build with no OAuth client id, which can never
+ *   refresh.
+ * - **Retryable status** (`HttpStatusError`): 5xx, 408 and 429 pass through so
+ *   the shared retry policy backs off by status.
+ * - **Everything else** (`NetworkError`): a transport failure or timeout, a
+ *   2xx body that does not decode (captive portals answer 200 with HTML), or
+ *   any other status without `invalid_grant` (a proxy 403, `invalid_client`).
+ *   None of these proves the refresh token is dead, so the session stays.
+ */
+export function classifyRefreshFailure(
+	cause: unknown
+): TokenRefreshFailedError | NetworkError | HttpStatusError {
+	if (cause instanceof OAuthNotConfiguredError) return new TokenRefreshFailedError({ cause });
+	if (cause instanceof HttpStatusError) {
+		if ((cause.status === 400 || cause.status === 401) && oauthErrorCode(cause.body) === 'invalid_grant') {
+			return new TokenRefreshFailedError({ cause });
+		}
+		if (RETRYABLE_REFRESH_STATUS(cause.status)) return cause;
+	}
+	if (cause instanceof NetworkError) return cause;
+	return new NetworkError({ cause, url: TOKEN_URL });
+}
 
 export const OAuthLive = Layer.effect(
 	OAuth,
@@ -132,38 +195,48 @@ export const OAuthLive = Layer.effect(
 				url: TOKEN_URL,
 				method: 'POST',
 				headers: FORM_HEADERS,
-				body: body.toString()
+				body: body.toString(),
+				timeoutMs: TOKEN_TIMEOUT_MS
 			});
 			return yield* parseTokenResponse(res);
 		});
 
 		const refreshToken = (refreshTokenValue: string) =>
 			Effect.gen(function* () {
-				// clientId() is read inside Effect.try so a not-configured throw
-				// becomes a typed failure (not a defect), and folds into the catch.
-				const body = yield* Effect.try({
-					try: () =>
-						new URLSearchParams({
-							grant_type: 'refresh_token',
-							refresh_token: refreshTokenValue,
-							client_id: clientId()
-						}).toString(),
-					catch: (cause) => cause
+				// No client id: this build can never refresh (and must not POST an
+				// empty client_id). `isConfigured` reads `import.meta.env`, absent under
+				// plain node, so a throw there folds into the same typed failure.
+				const configured = yield* Effect.try({
+					try: () => isConfigured(),
+					catch: () => new OAuthNotConfiguredError()
 				});
+				if (!configured) return yield* Effect.fail(new OAuthNotConfiguredError());
+				const body = new URLSearchParams({
+					grant_type: 'refresh_token',
+					refresh_token: refreshTokenValue,
+					client_id: clientId()
+				}).toString();
 				const res = yield* http.request({
 					url: TOKEN_URL,
 					method: 'POST',
 					headers: FORM_HEADERS,
-					body
+					body,
+					timeoutMs: TOKEN_TIMEOUT_MS
 				});
 				return yield* parseTokenResponse(res);
-			}).pipe(Effect.catch((cause) => Effect.fail(new TokenRefreshFailedError({ cause }))));
+			}).pipe(Effect.mapError(classifyRefreshFailure));
 
 		const revokeToken = (token: string) =>
 			Effect.gen(function* () {
 				if (!isConfigured()) return;
 				const body = new URLSearchParams({ token, client_id: clientId() }).toString();
-				yield* http.request({ url: REVOKE_URL, method: 'POST', headers: FORM_HEADERS, body });
+				yield* http.request({
+					url: REVOKE_URL,
+					method: 'POST',
+					headers: FORM_HEADERS,
+					body,
+					timeoutMs: TOKEN_TIMEOUT_MS
+				});
 			}).pipe(Effect.ignore);
 
 		return OAuth.of({ startLogin, exchangeCode, refreshToken, revokeToken });

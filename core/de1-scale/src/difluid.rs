@@ -64,7 +64,11 @@ pub fn parse_weight(data: &[u8]) -> Option<f32> {
     let mut weight = None;
     for frame in sensor_frames(data) {
         let raw = i32::from_be_bytes([frame[5], frame[6], frame[7], frame[8]]);
-        if raw.abs() < MAX_RAW_WEIGHT {
+        // `unsigned_abs`, not `abs`: `i32::MIN.abs()` overflows — a panic
+        // with overflow checks on (nightly Android), and on release it wraps
+        // to `i32::MIN`, which passed this gate as ~-214 kg (cohort review
+        // 2026-10-25, 01 P2-1).
+        if raw.unsigned_abs() < MAX_RAW_WEIGHT.unsigned_abs() {
             weight = Some(raw as f32 / 10.0);
         }
     }
@@ -113,6 +117,22 @@ mod tests {
         let mut f = DOC_FRAME;
         f[5..9].copy_from_slice(&raw.to_be_bytes());
         f
+    }
+
+    /// Cohort review 2026-10-25, 01 P2-1: the reviewer's frame carries
+    /// `0x80000000`. `i32::abs` overflowed on it (a panic in debug / nightly,
+    /// a ~-214 kg weight on release); it is now simply out of range.
+    #[test]
+    fn i32_min_raw_weight_is_rejected_without_overflow() {
+        let trigger: [u8; 19] = [
+            0xDF, 0xDF, 0x03, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(parse_weight(&trigger), None);
+        assert_eq!(parse_weight(&frame(i32::MIN)), None);
+        assert_eq!(parse_weight(&frame(i32::MAX)), None);
+        assert_eq!(parse_weight(&frame(-19_999)), Some(-1999.9));
+        assert_eq!(parse_weight(&frame(-20_000)), None);
     }
 
     #[test]

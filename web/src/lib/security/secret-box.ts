@@ -4,36 +4,95 @@
  * account token).
  *
  * What it does: AES-GCM with a 256-bit key that Web Crypto generates as
- * NON-extractable and that lives only in IndexedDB (a `CryptoKey` is
- * structured-cloneable; the key material never exists as bytes JavaScript
- * can read). The wrapped value is what goes into localStorage.
+ * NON-extractable and stores in IndexedDB (a `CryptoKey` is
+ * structured-cloneable; page script can use it but never read its bytes).
+ * The wrapped value is what goes into localStorage.
  *
- * What it protects against: reading the token out of a storage dump — a
- * browser profile backup or sync, a DevTools / extension with storage
- * access, disk forensics on a shared machine. The ciphertext is useless
- * without the key, and the key cannot leave this origin's IndexedDB.
+ * What it protects against: a leak of localStorage ALONE — a storage dump
+ * or export that does not include IndexedDB, a DevTools or extension view of
+ * localStorage, a support screenshot. The ciphertext is useless without the
+ * key.
  *
- * What it does NOT protect against: script running on this origin. Any
- * such script can call `unwrap` just like the app does. The defence for
- * that is the CSP (`web/svelte.config.js`) and keeping third-party script
- * out of the page — this module is the second layer, not the first.
+ * What it does NOT protect against:
+ *  - A copy of the whole browser profile or disk. Browsers persist a
+ *    non-extractable `CryptoKey` WITH its key material inside the profile's
+ *    IndexedDB files (Chromium: the IndexedDB LevelDB), so a profile backup,
+ *    sync of site data or a disk image holds both the ciphertext and the key.
+ *  - Script running on this origin. It can call `unwrap` just like the app
+ *    does. The defence for that is the CSP (`#lib/security/csp.js`) and
+ *    keeping third-party script out of the page.
+ * Treat it as one layer that keeps tokens out of casual storage dumps, not as
+ * encryption at rest.
  *
- * Degrades honestly: with no Web Crypto or no IndexedDB (node tests, some
- * private modes) `wrap` returns the plaintext unchanged and `unwrap`
- * passes plaintext through, so a value written before this module
- * existed keeps working and is re-wrapped on the next write. A wrapped
- * value whose key is gone (IndexedDB cleared, localStorage kept) unwraps
- * to `null` — callers surface that as "sign in again" (the Decent
- * account's `needsReauth`; Visualizer reads as disconnected).
+ * No key, three cases (review 05 P3-6, final review 05 N-6):
+ *  - This browser has never produced a key for this origin AND has no Web
+ *    Crypto or IndexedDB at all (node tests, some private modes): `wrap`
+ *    returns the plaintext so sign-in still works, logs a warning, and
+ *    {@link credentialsStoredUnencrypted} lets the Settings UI say so.
+ *  - Both APIs exist but getting the key failed (IndexedDB momentarily
+ *    unavailable, even on the very first sign-in): `wrap` throws
+ *    {@link SecretBoxUnavailableError}; a transient failure never means
+ *    plaintext. The next call tries again.
+ *  - A key existed before (the {@link KEYED_MARKER} is set) but cannot be
+ *    reached now: `wrap` throws {@link SecretBoxUnavailableError} rather than
+ *    silently writing plaintext; the caller does not save the credential.
+ * `unwrap` passes plaintext through (a value written before this module
+ * existed keeps working and is re-wrapped on the next write). A wrapped value
+ * whose key is gone unwraps to `null`, which callers surface as "sign in
+ * again" (the Decent account's `needsReauth`; Visualizer reads as
+ * disconnected).
  */
 
 const PREFIX = 'sb1:';
-const DB_NAME = 'crema-keys';
+/**
+ * Set in localStorage once a key has been obtained on this origin. While it is
+ * set, a missing key is an error, not a reason to store plaintext. Removed with
+ * every other `crema.*` key by a factory reset.
+ */
+export const KEYED_MARKER = 'crema.secretBox.keyed.v1';
+
+/** A key existed on this origin but cannot be reached; the secret was NOT stored. */
+export class SecretBoxUnavailableError extends Error {
+	/** Effect-style tag, so callers can `catchTag` it like the app's other errors. */
+	readonly _tag = 'SecretBoxUnavailableError' as const;
+	override name = 'SecretBoxUnavailableError';
+	constructor() {
+		super(
+			"Couldn't reach this browser's encryption key, so the sign-in was not saved. Try again; if it keeps failing, reload the page."
+		);
+	}
+}
+
+function storage(): Storage | null {
+	try {
+		return typeof localStorage === 'undefined' ? null : localStorage;
+	} catch {
+		return null;
+	}
+}
+
+function keyedBefore(): boolean {
+	return storage()?.getItem(KEYED_MARKER) === '1';
+}
+
+function markKeyed(): void {
+	try {
+		storage()?.setItem(KEYED_MARKER, '1');
+	} catch {
+		// Quota / disabled storage: the marker is a safety net, not required.
+	}
+}
+export const DB_NAME = 'crema-keys';
 const DB_VERSION = 1;
 const STORE = 'keys';
 const KEY_ID = 'secret-box-v1';
 
-/** The key source — the default persists a non-extractable AES key in IndexedDB. */
+/**
+ * The key source — the default persists a non-extractable AES key in
+ * IndexedDB. `getKey` resolves to `null` only when this browser has no Web
+ * Crypto or no IndexedDB at all; a failure to reach the key REJECTS, so the
+ * box can tell "cannot encrypt here" from "could not encrypt just now".
+ */
 export interface KeyProvider {
 	getKey(): Promise<CryptoKey | null>;
 }
@@ -129,8 +188,10 @@ export function createIndexedDbKeyProvider(
 					db.close();
 				}
 			} catch (e) {
-				console.warn('[Crema] secret-box key unavailable — storing credentials unwrapped:', e);
-				return null;
+				// Both APIs exist, so this is a failure, not an absence: reject
+				// (the box refuses to store plaintext) and let the next call retry.
+				console.warn('[Crema] secret-box key unavailable:', e);
+				throw e;
 			}
 		}
 	};
@@ -157,7 +218,12 @@ export function isWrapped(value: string): boolean {
 }
 
 export interface SecretBox {
-	/** Wrap a secret for storage; returns it unchanged when wrapping is unavailable. */
+	/**
+	 * Wrap a secret for storage. Returns it unchanged only when this origin
+	 * never had a key and this browser has no Web Crypto / IndexedDB; throws
+	 * {@link SecretBoxUnavailableError} when getting the key failed or a key
+	 * existed but is unreachable.
+	 */
 	wrap(plain: string): Promise<string>;
 	/**
 	 * Recover a stored secret. Plaintext (pre-wrapping) passes through;
@@ -169,15 +235,16 @@ export interface SecretBox {
 export function createSecretBox(provider: KeyProvider = indexedDbKeyProvider): SecretBox {
 	// Cache only a key that was actually obtained: a failed or `null` lookup
 	// (IndexedDB momentarily unavailable) is retried on the next call rather
-	// than pinning the whole session to "no key".
-	let keyPromise: Promise<CryptoKey | null> | null = null;
-	const key = (): Promise<CryptoKey | null> => {
+	// than pinning the whole session to "no key". `'failed'` is a lookup that
+	// threw — never a reason to store plaintext.
+	let keyPromise: Promise<CryptoKey | null | 'failed'> | null = null;
+	const key = (): Promise<CryptoKey | null | 'failed'> => {
 		if (keyPromise) return keyPromise;
-		const attempt: Promise<CryptoKey | null> = provider
+		const attempt: Promise<CryptoKey | null | 'failed'> = provider
 			.getKey()
-			.catch(() => null)
+			.catch((): 'failed' => 'failed')
 			.then((k) => {
-				if (k === null && keyPromise === attempt) keyPromise = null;
+				if ((k === null || k === 'failed') && keyPromise === attempt) keyPromise = null;
 				return k;
 			});
 		keyPromise = attempt;
@@ -187,7 +254,15 @@ export function createSecretBox(provider: KeyProvider = indexedDbKeyProvider): S
 		async wrap(plain) {
 			const k = await key();
 			const s = subtle();
-			if (!k || !s) return plain;
+			if (k === 'failed') throw new SecretBoxUnavailableError();
+			if (!k || !s) {
+				if (keyedBefore()) throw new SecretBoxUnavailableError();
+				console.warn(
+					'[Crema] this browser offers no Web Crypto / IndexedDB key — storing the credential unencrypted.'
+				);
+				return plain;
+			}
+			markKeyed();
 			const iv = crypto.getRandomValues(new Uint8Array(12));
 			const ct = await s.encrypt({ name: 'AES-GCM', iv }, k, new TextEncoder().encode(plain));
 			return `${PREFIX}${b64(iv)}:${b64(new Uint8Array(ct))}`;
@@ -196,7 +271,7 @@ export function createSecretBox(provider: KeyProvider = indexedDbKeyProvider): S
 			if (!isWrapped(stored)) return stored;
 			const k = await key();
 			const s = subtle();
-			if (!k || !s) return null;
+			if (!k || k === 'failed' || !s) return null;
 			try {
 				const [ivB64, ctB64] = stored.slice(PREFIX.length).split(':');
 				const pt = await s.decrypt({ name: 'AES-GCM', iv: unb64(ivB64) }, k, unb64(ctB64));

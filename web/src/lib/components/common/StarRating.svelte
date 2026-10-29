@@ -7,7 +7,9 @@
 		onRate,
 		size,
 		fillColor = 'var(--copper-400)',
-		emptyColor = 'rgba(var(--tint-rgb), 0.2)'
+		emptyColor = 'rgba(var(--tint-rgb), 0.2)',
+		label = 'Rating',
+		labelledby
 	}: {
 		/** Current rating, 0–5 (rounded + clamped). */
 		rating: number | null | undefined;
@@ -20,9 +22,30 @@
 		/** Filled / empty star colour — theme tokens. */
 		fillColor?: string;
 		emptyColor?: string;
+		/** Accessible group name for the interactive rating (default "Rating"). */
+		label?: string;
+		/** Id of a visible label for the interactive rating (wins over `label`). */
+		labelledby?: string;
 	} = $props();
 
 	const value = $derived(Math.max(0, Math.min(5, Math.round(rating ?? 0))));
+
+	/*
+	 * Interactive stars are a radio group (cohort review 07 #8): the set
+	 * rating is `aria-checked`, one star is in the tab order (roving
+	 * tabindex) and the arrow keys move and set the rating.
+	 */
+	function onStarKey(e: KeyboardEvent & { currentTarget: HTMLButtonElement }, n: number): void {
+		let next = n;
+		if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = Math.min(5, n + 1);
+		else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = Math.max(1, n - 1);
+		else if (e.key === 'Home') next = 1;
+		else if (e.key === 'End') next = 5;
+		else return;
+		e.preventDefault();
+		onRate?.(next);
+		(e.currentTarget.parentElement?.children[next - 1] as HTMLElement | undefined)?.focus();
+	}
 </script>
 
 <!--
@@ -31,18 +54,24 @@
 	(tiles, drawer, editor), replacing the divergent inline loops + the two Unicode
 	`★` paths. `interactive` turns each star into a button.
 -->
-<span
-	class="star-rating"
-	class:is-unrated={value <= 0}
-	style={size === undefined ? undefined : `font-size: ${size}px`}
-	aria-label="{value} of 5 stars"
->
-	{#each [1, 2, 3, 4, 5] as n (n)}
-		{#if interactive}
+{#if interactive}
+	<span
+		class="star-rating"
+		class:is-unrated={value <= 0}
+		style={size === undefined ? undefined : `font-size: ${size}px`}
+		role="radiogroup"
+		aria-label={labelledby ? undefined : label}
+		aria-labelledby={labelledby}
+	>
+		{#each [1, 2, 3, 4, 5] as n (n)}
 			<button
 				type="button"
 				class="star-btn"
+				role="radio"
+				aria-checked={n === value}
+				tabindex={n === Math.max(1, value) ? 0 : -1}
 				onclick={() => onRate?.(n)}
+				onkeydown={(e) => onStarKey(e, n)}
 				aria-label="{n} star{n === 1 ? '' : 's'}"
 			>
 				<Icon
@@ -51,15 +80,27 @@
 					aria-hidden="true"
 				/>
 			</button>
-		{:else}
+		{/each}
+	</span>
+{:else}
+	<!-- Read-only: one image with the rating as its name (a roleless span's
+	     aria-label is not announced). -->
+	<span
+		class="star-rating"
+		class:is-unrated={value <= 0}
+		style={size === undefined ? undefined : `font-size: ${size}px`}
+		role="img"
+		aria-label="{value} of 5 stars"
+	>
+		{#each [1, 2, 3, 4, 5] as n (n)}
 			<Icon
 				cls={n <= value ? 'ph-fill ph-star' : 'ph ph-star'}
 				color={n <= value ? fillColor : emptyColor}
 				aria-hidden="true"
 			/>
-		{/if}
-	{/each}
-</span>
+		{/each}
+	</span>
+{/if}
 
 <style>
 	.star-rating {

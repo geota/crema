@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '#lib/icons/Icon.svelte';
+	import { menuKeyboard } from '#lib/a11y/focus.js';
 	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	/**
@@ -51,6 +52,7 @@
 
 	let open = $state(false);
 	let rootEl = $state<HTMLDivElement | null>(null);
+	let fieldEl = $state<HTMLButtonElement>();
 
 	const currentOption = $derived(
 		options.find((o) => o.field === value.field) ?? options[0]
@@ -93,15 +95,21 @@
 			if (attached) window.removeEventListener('mousedown', handler, true);
 		};
 	});
+
+	/** The direction button's name: the current order; tapping flips it. */
+	const dirName = $derived(`Sort order: ${value.direction === 'asc' ? ascLabel : descLabel}`);
 </script>
 
+<!-- The direction button's name and tooltip are the same string, the
+     current order (final review 07 N12a: name "Descending" plus title
+     "Ascending" was announced as both). -->
 <div class="sortpill" bind:this={rootEl}>
 	<button
 		type="button"
 		class="sortpill-dir"
 		onclick={flipDirection}
-		title={value.direction === 'asc' ? descLabel : ascLabel}
-		aria-label={value.direction === 'asc' ? ascLabel : descLabel}
+		title={dirName}
+		aria-label={dirName}
 	>
 		<Icon
 			cls={value.direction === 'asc' ? 'ph ph-arrow-up' : 'ph ph-arrow-down'}
@@ -110,6 +118,7 @@
 	</button>
 	<div class="sortpill-sep" aria-hidden="true"></div>
 	<button
+		bind:this={fieldEl}
 		type="button"
 		class="sortpill-field"
 		onclick={(e) => {
@@ -126,7 +135,12 @@
 		<CaretDownIcon class="sortpill-chev" aria-hidden="true" />
 	</button>
 	{#if open}
-		<div class="sortpill-menu" role="menu">
+		<div
+			class="sortpill-menu"
+			role="menu"
+			aria-label="Sort by"
+			{@attach menuKeyboard({ onClose: () => (open = false), trigger: () => fieldEl })}
+		>
 			{#each options as o (o.field)}
 				<button
 					type="button"
@@ -211,7 +225,7 @@
 	}
 	.sortpill-field :global(svg) {
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.sortpill-label {
 		font-weight: 500;
@@ -256,14 +270,14 @@
 	}
 	.sortpill-menu-item.is-active {
 		background: rgba(var(--copper-rgb), 0.1);
-		color: var(--copper-300);
+		color: var(--fg-accent);
 	}
 	.sortpill-menu-item :global(svg) {
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.sortpill-menu-item.is-active :global(svg) {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.sortpill-menu-item span {
 		flex: 1 1 auto;

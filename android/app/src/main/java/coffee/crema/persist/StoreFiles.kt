@@ -73,3 +73,7 @@ fun saveStore(target: File, text: String, keepBackup: Boolean = true): Boolean =
     runCatching { SafeFile.write(target, text, keepBackup) }
         .onFailure { persistLog("couldn't save ${target.name}: ${it.message}") }
         .isSuccess
+
+/** [SafeFile.erase], logging a file that could not be deleted; true when gone. */
+fun eraseStore(target: File): Boolean =
+    SafeFile.erase(target).also { gone -> if (!gone) persistLog("couldn't erase every copy of ${target.name}") }

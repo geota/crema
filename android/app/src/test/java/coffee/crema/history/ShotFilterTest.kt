@@ -41,6 +41,13 @@ class ShotFilterTest {
     }
 
     @Test
+    fun `search reaches the shot's own grinder model, like the web (cohort review 06 #14)`() {
+        val imported = shot("a").copy(grinderModel = "Niche Zero")
+        assertTrue(shotMatchesQuery(imported, "niche"))
+        assertFalse(shotMatchesQuery(shot("b"), "niche"))
+    }
+
+    @Test
     fun `a coffee filter lists every bag of it, a bag filter only that bag`() {
         val history = listOf(
             shot("1", bean("bag-1", "Kenya AA", "Sey")),

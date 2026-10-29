@@ -14,7 +14,7 @@
  */
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Effect, Layer } from 'effect';
+import { Effect, Layer, ManagedRuntime } from 'effect';
 
 // runEntry reaches the history store via `#lib/history/index.js`; mock it so no real
 // rune store is instantiated and we can observe the bind / purge calls.
@@ -28,7 +28,13 @@ vi.mock('#lib/history/index.js', () => ({ getHistoryStore: () => mockHistory }))
 import { UploadQueue, UploadQueueLive } from './upload-queue.ts';
 import { ShotSync } from './shot-sync.ts';
 import { BeanSync } from './bean-sync.ts';
-import { HttpStatusError, NetworkError, VisualizerPremiumGatedError } from '../effect/errors.ts';
+import {
+	HttpStatusError,
+	NetworkError,
+	NotAuthenticatedError,
+	TokenRefreshFailedError,
+	VisualizerPremiumGatedError
+} from '../effect/errors.ts';
 import { enqueueEntry, readQueue } from './queue-store.ts';
 import { initTestWasm } from '#lib/testing/test-init.js';
 
@@ -212,6 +218,44 @@ describe('UploadQueue.drain — shot delete + bean/roaster delete', () => {
 	});
 });
 
+describe('UploadQueue.drain — remote deletes survive auth trouble (review 03 P1-1)', () => {
+	it('keeps a delete queued when the token refresh fails transiently', async () => {
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'delete', visualizerId: 'viz-9' });
+		// A refresh that hit the network now surfaces as NetworkError, not as a
+		// sign-out: the entry is retried, not dropped.
+		const result = await drainWith({
+			deleteShot: () =>
+				Effect.fail(new NetworkError({ cause: new TypeError('Failed to fetch'), url: '/oauth/token' }))
+		});
+		expect(result.dropped).toBe(0);
+		expect(readQueue().entries).toHaveLength(1);
+		expect(readQueue().entries[0]?.attempts).toBe(1);
+	});
+
+	it.each([
+		['TokenRefreshFailedError', () => new TokenRefreshFailedError({ cause: 'invalid_grant' })],
+		['NotAuthenticatedError', () => new NotAuthenticatedError()]
+	])('parks a delete on %s without spending an attempt', async (_tag, err) => {
+		enqueueEntry({ entity: 'bean', id: 'b1', op: 'delete', visualizerId: 'vb-1' });
+		const result = await drainWith({}, { deleteBean: () => Effect.fail(err()) });
+		expect(result.dropped).toBe(0);
+		expect(result.deferred).toBe(1);
+		const [entry] = readQueue().entries;
+		expect(entry?.attempts).toBe(0);
+		expect(entry?.nextAttemptAt).toBeGreaterThan(Date.now() + 60_000);
+	});
+
+	it('still drops a shot create on a sign-out (the unsynced pass re-offers it)', async () => {
+		mockHistory.get.mockReturnValue({ id: 's1', visualizerId: undefined });
+		enqueueEntry({ entity: 'shot', id: 's1', op: 'create' });
+		const result = await drainWith({
+			uploadShot: () => Effect.fail(new TokenRefreshFailedError({ cause: 'invalid_grant' }))
+		});
+		expect(result.dropped).toBe(1);
+		expect(readQueue().entries).toHaveLength(0);
+	});
+});
+
 describe('UploadQueue.drain — offline guard', () => {
 	it('defers entirely (no processing) when navigator reports offline', async () => {
 		vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
@@ -223,5 +267,42 @@ describe('UploadQueue.drain — offline guard', () => {
 		expect(result.deferred).toBe(1);
 		expect(result.processed).toBe(0);
 		expect(readQueue().entries).toHaveLength(1); // untouched
+	});
+});
+
+describe('UploadQueue.armLifecycle — runtime lifetime (review 03 P3-8)', () => {
+	it('stops the 5-minute drain loop when the runtime is disposed', async () => {
+		vi.useFakeTimers();
+		try {
+			vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+			mockHistory.get.mockReturnValue({ id: 's1', visualizerId: undefined });
+			enqueueEntry({ entity: 'shot', id: 's1', op: 'create' });
+			let uploads = 0;
+			const layer = Layer.provide(
+				UploadQueueLive,
+				Layer.merge(
+					fakeShotSync({
+						uploadShot: () => {
+							uploads += 1;
+							return Effect.fail(new HttpStatusError({ status: 503, url: '/u' }));
+						}
+					}),
+					fakeBeanSync({})
+				)
+			);
+			const runtime = ManagedRuntime.make(layer);
+			await runtime.runPromise(UploadQueue.pipe(Effect.flatMap((q) => q.armLifecycle)));
+			await vi.advanceTimersByTimeAsync(10);
+			expect(uploads).toBe(1); // the startup flush
+
+			await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+			expect(uploads).toBe(2); // the loop is alive while the runtime is
+
+			await runtime.dispose();
+			await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+			expect(uploads).toBe(2); // and dead once it is disposed
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

@@ -35,7 +35,12 @@
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { MachineState } from '#lib/core/crema-core.js';
 	import type { CremaApp } from '#lib/state/index.js';
-	import { INITIAL_SNAPSHOT, defaultRefillPointMm } from '#lib/state/index.js';
+	import {
+		INITIAL_SNAPSHOT,
+		defaultRefillPointMm,
+		maintenanceProgressText,
+		maintenanceTitle
+	} from '#lib/state/index.js';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -210,33 +215,14 @@
 	//
 	// The core follows a Descale / Clean / AirPurge from request to exit and
 	// reports it as `snapshot.maintenance` (null when none). On old DE1
-	// firmware (< 1356, or unknown) a cold request is held behind a 1 °C
-	// profile until preheat ends — "Waiting for the machine to stop heating".
+	// firmware (< 1356, or unknown) a cold request is held until its 1 °C
+	// profile has loaded and preheat has ended.
 	// A descale carries the firmware's fixed 720 s step schedule.
 
 	const maint = $derived(snapshot.maintenance);
-	const MAINT_NAMES: Record<string, string> = {
-		Descale: 'Descale',
-		Clean: 'Clean cycle',
-		AirPurge: 'Air purge'
-	};
-	const maintTitle = $derived(maint ? (MAINT_NAMES[maint.state] ?? maint.state) : '');
+	const maintTitle = $derived(maint ? maintenanceTitle(maint.state) : '');
 	/** e.g. `42% · Step 4 of 5 · 7 min 0 s left` — Decenza's descale readout. */
-	const maintSub = $derived.by(() => {
-		if (!maint) return '';
-		if (maint.phase === 'WaitingForPreheat') {
-			return 'Waiting for the machine to stop heating (older firmware workaround)…';
-		}
-		if (maint.phase === 'Requested') return 'Starting…';
-		if (maint.step_count > 0 && maint.step_index > 0) {
-			const pct = Math.floor(maint.progress * 100);
-			const min = Math.floor(maint.seconds_remaining / 60);
-			const sec = maint.seconds_remaining % 60;
-			const cycle = maint.cycle > 1 ? ` · pass ${maint.cycle}` : '';
-			return `${pct}% · Step ${maint.step_index} of ${maint.step_count} · ${min} min ${sec} s left${cycle}`;
-		}
-		return 'Running…';
-	});
+	const maintSub = $derived(maint ? maintenanceProgressText(maint) : '');
 	let cancellingMaint = $state(false);
 	async function cancelMaint(): Promise<void> {
 		if (!app || cancellingMaint) return;
@@ -631,7 +617,7 @@
 		flex-shrink: 0;
 		font-size: 18px;
 		margin-top: 1px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.cyc-actions {
 		display: flex;

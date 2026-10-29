@@ -103,7 +103,17 @@ const MAX_BUFFER_LEN: usize = 256;
 pub struct AcaiaDecoder {
     buffer: Vec<u8>,
     battery_percent: Option<u8>,
+    /// A weight frame has decoded on this connection — the ident / config
+    /// handshake landed, so it is no longer re-sent.
+    weight_seen: bool,
+    /// How many times the handshake has been re-sent with a heartbeat.
+    handshake_resends: u8,
 }
+
+/// Most times [`AcaiaDecoder::take_handshake_resend`] grants a re-send before
+/// giving up — reaprime retries its handshake up to 10 times
+/// (`acaia_scale.dart:224-258`).
+pub const MAX_HANDSHAKE_RESENDS: u8 = 10;
 
 impl AcaiaDecoder {
     /// Create an empty decoder.
@@ -117,6 +127,27 @@ impl AcaiaDecoder {
     #[must_use]
     pub fn battery_percent(&self) -> Option<u8> {
         self.battery_percent
+    }
+
+    /// Whether the next heartbeat should carry [`IDENT`] + [`CONFIG`] again:
+    /// true (and counted) until the first weight frame decodes, at most
+    /// [`MAX_HANDSHAKE_RESENDS`] times.
+    ///
+    /// The handshake used to go once, back-to-back, right after subscribing;
+    /// if that ident landed before the scale was ready, or was dropped (gen-1
+    /// writes go without response), the scale never streamed. de1app re-sends
+    /// the ident every 400 ms until a non-type-7 frame arrives
+    /// (`bluetooth.tcl:1050-1056`) and reaprime retries ident + config up to
+    /// 10 times until a valid weight (`acaia_scale.dart:224-258`). The
+    /// sans-IO core has no timer of its own, so the re-send rides the
+    /// shell-scheduled heartbeat ([`HEARTBEAT_INTERVAL_MS`]) — cohort review
+    /// 2026-10-25, scales appendix F-04.
+    pub fn take_handshake_resend(&mut self) -> bool {
+        if self.weight_seen || self.handshake_resends >= MAX_HANDSHAKE_RESENDS {
+            return false;
+        }
+        self.handshake_resends += 1;
+        true
     }
 
     /// Feed one BLE notification. Returns `Some(grams)` when a complete weight
@@ -164,6 +195,7 @@ impl AcaiaDecoder {
             }
             let frame: Vec<u8> = self.buffer.drain(..frame_len).collect();
             if let Some(grams) = self.decode_frame(&frame) {
+                self.weight_seen = true;
                 weight = Some(grams);
             }
         }
@@ -205,6 +237,13 @@ fn decode_weight(frame: &[u8], offset: usize) -> Option<f32> {
     // Weight is a little-endian 24-bit value; byte 4 is the decimal exponent.
     let value = (u32::from(body[2]) << 16) | (u32::from(body[1]) << 8) | u32::from(body[0]);
     let unit = body[4];
+    // Real frames carry exponent 1..=4 (reaprime `acaia_scale.dart:678-681`
+    // marks anything else malformed). Exponent 0 would read 10x heavy and a
+    // large one near zero — one bad sample into stop-at-weight (cohort
+    // review 2026-10-25, scales appendix F-09).
+    if !(1..=4).contains(&unit) {
+        return None;
+    }
     let grams = value as f32 / 10f32.powi(i32::from(unit));
     Some(if body[5] > 1 { -grams } else { grams })
 }
@@ -223,6 +262,33 @@ mod tests {
     fn decodes_a_complete_weight_frame() {
         let mut d = AcaiaDecoder::new();
         assert_eq!(d.push(&weight_frame(180, 0)), Some(18.0));
+    }
+
+    /// F-09: an exponent outside 1..=4 is a malformed frame, not a weight.
+    #[test]
+    fn rejects_an_out_of_range_exponent() {
+        for unit in [0u8, 5, 9, 0xFF] {
+            let mut frame = weight_frame(180, 0);
+            frame[9] = unit;
+            assert_eq!(AcaiaDecoder::new().push(&frame), None, "unit {unit}");
+        }
+        let mut frame = weight_frame(180, 0);
+        frame[9] = 2;
+        assert_eq!(AcaiaDecoder::new().push(&frame), Some(1.8));
+    }
+
+    /// F-04: the handshake re-send is granted until a weight decodes, at
+    /// most ten times.
+    #[test]
+    fn handshake_resend_stops_at_the_first_weight_or_after_ten() {
+        let mut d = AcaiaDecoder::new();
+        assert!(d.take_handshake_resend());
+        assert!(d.take_handshake_resend());
+        assert_eq!(d.push(&weight_frame(180, 0)), Some(18.0));
+        assert!(!d.take_handshake_resend());
+
+        let mut d = AcaiaDecoder::new();
+        assert_eq!((0..20).filter(|_| d.take_handshake_resend()).count(), 10);
     }
 
     #[test]

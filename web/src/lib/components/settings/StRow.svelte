@@ -11,6 +11,7 @@
 	 * coming) but honest about what doesn't work yet.
 	 */
 	import type { Snippet } from 'svelte';
+	import { setStRowContext } from './st-row-context.js';
 
 	let {
 		title,
@@ -29,12 +30,16 @@
 		/** When true, show a "Connect a DE1" pill — the row's controls need a live device. */
 		needsConnection?: boolean;
 	} = $props();
+
+	// Controls in the row (StSegment) take their group name from the title.
+	const titleId = $props.id();
+	setStRowContext({ titleId });
 </script>
 
 <div class="st-row" class:st-row-not-impl={notImplemented}>
 	<div class="st-row-text">
 		<div class="st-row-title">
-			<span>{title}</span>
+			<span id={titleId}>{title}</span>
 			{#if notImplemented}
 				<span
 					class="st-row-pill"
@@ -70,18 +75,21 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps, 0.06em);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		background: rgba(var(--tint-rgb), 0.08);
 		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		border-radius: 999px;
 		padding: 2px 8px;
 		white-space: nowrap;
 	}
+	/* "Soon" rows stay operable, so they must stay readable: opacity 0.5
+	   measured 2.3:1 (final review 07 N10). The "Soon" pill carries the
+	   not-yet-wired state; plain text in the control is muted, not faded. */
 	.st-row-not-impl .st-row-control {
-		opacity: 0.5;
+		color: var(--fg-muted);
 	}
 	.st-row-pill-conn {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		background: rgba(var(--copper-rgb), 0.08);
 		border-color: rgba(var(--copper-rgb), 0.22);
 	}

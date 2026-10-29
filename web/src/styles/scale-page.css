@@ -22,11 +22,11 @@
   display: flex; align-items: center; gap: 10px;
   font-family: var(--font-sans);
   font-size: 12px;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
   margin-top: 6px;
 }
 .sc-head-meta :is(i, svg) { font-size: 14px; }
-.sc-sep { color: rgba(var(--tint-rgb), 0.2); }
+.sc-sep { color: var(--fg-muted); }
 .sc-head-r {
   display: flex; gap: 8px;
 }
@@ -64,12 +64,12 @@
   line-height: 1;
   transition: color 240ms var(--ease);
 }
-.sc-readout-num.is-tare { color: var(--copper-400); }
+.sc-readout-num.is-tare { color: var(--fg-accent); }
 .sc-sign { font-size: 80px; opacity: 0.6; margin-right: -8px; }
 .sc-readout-num .sc-unit {
   font-size: 32px;
   font-weight: 400;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
   letter-spacing: 0;
 }
 .sc-readout-sub {
@@ -78,7 +78,7 @@
   font-weight: 500;
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
   margin-top: 18px;
 }
 
@@ -183,7 +183,7 @@
   font-size: 10px;
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
   font-weight: 600;
 }
 .sc-dose-status {
@@ -193,7 +193,7 @@
 }
 .sc-dose-ok   { color: var(--success); display: inline-flex; align-items: center; gap: 6px; }
 .sc-dose-ok :is(i, svg) { font-size: 16px; }
-.sc-dose-warn { color: var(--copper-400); }
+.sc-dose-warn { color: var(--fg-accent); }
 .sc-dose-bad  { color: var(--warning); }
 
 /* ───────────────────────────── Bottom split */
@@ -236,7 +236,7 @@
   font-family: var(--font-sans);
   font-size: 11px;
   line-height: 1.5;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
   margin-top: 2px;
 }
 
@@ -253,7 +253,7 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
 }
 .sc-arow-event {
   font-family: var(--font-sans);
@@ -268,5 +268,6 @@
   font-size: 12px;
   color: var(--fg-1);
 }
-.sc-arow.is-hl .sc-arow-event { color: var(--copper-400); }
-.sc-arow.is-muted { opacity: 0.5; }
+.sc-arow.is-hl .sc-arow-event { color: var(--fg-accent); }
+.sc-arow.is-muted,
+.sc-arow.is-muted * { color: var(--fg-muted); }

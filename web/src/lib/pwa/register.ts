@@ -12,7 +12,14 @@
  *    not, the offer is parked until the shell reports a change
  *    ({@link Handle.onStateChange}).
  * 3. When safe, {@link Deps.offer} shows the user a reload action. Applying
- *    it tells the waiting worker to take over and reloads once it has.
+ *    it checks again (the machine may have started a shot since the offer
+ *    appeared — busy re-parks the offer and calls {@link Deps.onDeferred}),
+ *    then tells the waiting worker to take over and reloads once it has. A
+ *    busy tap with no worker waiting any more is remembered and offered
+ *    again once idle.
+ * 4. A newer build that supersedes the offered one withdraws that offer and
+ *    is offered instead; applying always targets the worker waiting *now*,
+ *    and reloads straight away when none is (another tab applied it).
  *
  * Nothing here runs under `vite dev` (the plugin is build-only) or on
  * browsers without service workers. DOM access is injected so the lifecycle
@@ -30,9 +37,12 @@ export interface Deps {
 	readonly canReload: () => boolean;
 	/**
 	 * Show the user that an update is ready; `apply` performs it. Called at
-	 * most once per waiting worker.
+	 * most once per waiting worker. May return a function that withdraws the
+	 * offer (a newer build superseded it).
 	 */
-	readonly offer: (apply: () => void) => void;
+	readonly offer: (apply: () => void) => (() => void) | void;
+	/** `apply` found the machine busy: the offer is parked until it is idle again. */
+	readonly onDeferred?: () => void;
 	/** `navigator.serviceWorker` (injected for tests). */
 	readonly container?: ServiceWorkerContainer;
 	/** `location.reload` (injected for tests). */
@@ -67,30 +77,88 @@ export function installServiceWorker(deps: Deps): Handle {
 	let registration: ServiceWorkerRegistration | null = null;
 	/** The installed-and-waiting worker the user has not been offered yet. */
 	let parked: ServiceWorker | null = null;
-	let offered = false;
+	/** The worker the visible offer is for, and how to withdraw that offer. */
+	let offered: ServiceWorker | null = null;
+	let withdraw: (() => void) | null = null;
+	/**
+	 * Reload was tapped while busy and no worker was waiting any more (another
+	 * tab applied the update, so this tab already runs under the new
+	 * controller with the old shell). There is no worker to park, so remember
+	 * the request and offer the reload again once idle (final review 03 P3-3).
+	 */
+	let reloadWhenIdle = false;
 	let reloading = false;
+	let listening = false;
 
-	const apply = (waiting: ServiceWorker): void => {
+	const reloadOnce = (): void => {
+		if (reloading) return;
+		reloading = true;
+		reload();
+	};
+
+	const withdrawOffer = (): void => {
+		withdraw?.();
+		withdraw = null;
+		offered = null;
+	};
+
+	/** The worker to hand over to now: the registration's current waiting one. */
+	const currentWaiting = (): ServiceWorker | null =>
+		registration?.waiting ?? (offered?.state === 'installed' ? offered : null);
+
+	const apply = (): void => {
+		const target = currentWaiting();
+		// Re-gated at the tap: the offer is pinned, and a shot or steam may
+		// have started since it appeared.
+		if (!deps.canReload()) {
+			withdrawOffer();
+			if (target !== null) parked = target;
+			else reloadWhenIdle = true;
+			deps.onDeferred?.();
+			return;
+		}
+		withdrawOffer();
+		// Nothing waiting any more: another tab already applied it (this tab's
+		// controller is the new build). Reload into it.
+		if (target === null) {
+			reloadOnce();
+			return;
+		}
 		// The new worker takes over, then every open tab's controller changes;
 		// reload once on that signal (not before: the old shell would still be
 		// served).
-		container.addEventListener('controllerchange', () => {
-			if (reloading) return;
-			reloading = true;
-			reload();
-		});
-		waiting.postMessage({ type: 'SKIP_WAITING' });
+		if (!listening) {
+			listening = true;
+			container.addEventListener('controllerchange', reloadOnce);
+		}
+		target.postMessage({ type: 'SKIP_WAITING' });
 	};
 
 	const consider = (waiting: ServiceWorker): void => {
-		if (offered) return;
+		if (offered === waiting) return;
 		if (!deps.canReload()) {
 			parked = waiting;
 			return;
 		}
 		parked = null;
-		offered = true;
-		deps.offer(() => apply(waiting));
+		// This offer covers a pending reload-when-idle too.
+		reloadWhenIdle = false;
+		// A newer build supersedes an offer that is still showing.
+		withdrawOffer();
+		offered = waiting;
+		const w = deps.offer(apply);
+		withdraw = typeof w === 'function' ? w : null;
+	};
+
+	/** Re-offer the reload a busy tap deferred when no worker was waiting. */
+	const considerReload = (): void => {
+		if (!deps.canReload()) return;
+		reloadWhenIdle = false;
+		withdrawOffer();
+		// `apply` finds nothing waiting and reloads into the new build (or, if
+		// a newer build is waiting by then, hands over to it).
+		const w = deps.offer(apply);
+		withdraw = typeof w === 'function' ? w : null;
 	};
 
 	const watch = (reg: ServiceWorkerRegistration): void => {
@@ -126,10 +194,12 @@ export function installServiceWorker(deps: Deps): Handle {
 	return {
 		onStateChange: () => {
 			if (parked) consider(parked);
+			else if (reloadWhenIdle) considerReload();
 		},
 		dispose: () => {
 			doc.removeEventListener('visibilitychange', onVisibility);
 			clearI(timer);
+			if (listening) container.removeEventListener('controllerchange', reloadOnce);
 		}
 	};
 }

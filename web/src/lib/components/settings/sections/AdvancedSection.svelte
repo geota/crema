@@ -13,8 +13,11 @@
 	 * shared `UiSnapshot.eventLog` already exists). "Reset preferences" is real
 	 * — it calls `SettingsStore.reset()`; profiles and history are untouched.
 	 *
-	 * **Factory reset** — destructive; wipes every `crema.*` localStorage
-	 * key and reloads. Gated behind a confirm. DE1 firmware is untouched.
+	 * **Factory reset** — destructive; revokes the Visualizer and Drive
+	 * grants (best-effort), deletes every Crema IndexedDB database and every
+	 * `crema.*` localStorage / sessionStorage key, then reloads
+	 * (`#lib/security/factory-reset.js`). Gated behind a typed confirm. DE1
+	 * firmware is untouched.
 	 *
 	 * **Webhooks** — implemented: outbound POSTs from the browser to a
 	 * user-supplied URL when chosen events fire (subject to CORS). The
@@ -28,6 +31,11 @@
 	 * machine. See `CremaApp.replayCapture`.
 	 */
 	import { getMachineReadout, type CremaApp, type UiSnapshot } from '#lib/state/index.js';
+	import {
+		heaterVoltageSelection,
+		heaterVoltageText,
+		readHeaterVoltage
+	} from '#lib/state/heater-voltage.js';
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
@@ -38,6 +46,16 @@
 	import MainsConfirmModal from '../MainsConfirmModal.svelte';
 	import { onMount } from 'svelte';
 	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
+	import { factoryResetLocalData } from '#lib/security/factory-reset.js';
+	import { isAllowedWebhookUrl } from '#lib/services/webhook-url.js';
+	import { revokeVisualizerToken } from '#lib/bean/index.js';
+	import {
+		announceReset,
+		freezeCremaWrites,
+		stashResetReport
+	} from '#lib/security/reset-coordinator.js';
+	import { getCremaAppContext } from '#lib/shell/app-context.js';
+	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
 	import { compactLine, reconnectTimelines, type ReconnectTimeline } from '#lib/ble/index.js';
 
 	/** The shared orchestrator, or `null` while the wasm core is still loading. */
@@ -45,6 +63,7 @@
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
+	const appCtx = getCremaAppContext();
 
 	// ---- Reconnect timelines ----------------------------------------------
 	// The last reconnects (newest first): what started each one and where the
@@ -107,19 +126,11 @@
 	// `1230` decodes to `120` / `230`. A raw `0` means the firmware has
 	// not yet been told (legacy: "detect from heater dB").
 	const machine = getMachineReadout();
-	const heaterVoltageRaw = $derived(machine.heaterVoltage);
-	const heaterVoltage = $derived.by(() => {
-		const v = heaterVoltageRaw;
-		if (v === null || v === 0) return 0;
-		return v >= 1000 ? v - 1000 : v;
-	});
-	const heaterVoltageLabel = $derived(
-		heaterVoltageRaw === null
-			? '—'
-			: heaterVoltage === 0
-				? 'Not set (auto-detect)'
-				: `${heaterVoltage} V`
-	);
+	// The core decodes the word (`heaterVoltageFromRaw`); an unrecognised one
+	// (e.g. a doubled +1000 marker) asks to be set again (#2 N7).
+	const heaterVoltageReading = $derived(readHeaterVoltage(machine.heaterVoltage));
+	const heaterVoltage = $derived(heaterVoltageSelection(heaterVoltageReading));
+	const heaterVoltageLabel = $derived(heaterVoltageText(heaterVoltageReading));
 
 	// ---- Modal controllers ----------------------------------------------
 	//
@@ -240,22 +251,28 @@
 	}
 
 	/**
-	 * Factory reset for the **Crema app** — wipes every `crema.*` key from
-	 * `localStorage` and reloads. Does NOT touch the DE1: profiles
-	 * uploaded to the machine, calibration, etc. stay on the firmware.
-	 * Gated behind a `window.confirm` so a stray tap doesn't nuke user
-	 * data. Documented in the row's sub-copy.
+	 * Factory reset for the **Crema app** on this device: revoke the
+	 * Visualizer and Google Drive grants (best-effort — a failed or slow
+	 * revoke never blocks the wipe), delete every Crema IndexedDB database
+	 * (captures, telemetry series, bag photos, the secret-box key) and every
+	 * `crema.*` localStorage / sessionStorage key, then reload. Does NOT
+	 * touch the DE1: profiles uploaded to the machine, calibration, etc.
+	 * stay on the firmware. Gated behind a type-to-confirm.
 	 */
+	let resetting = $state(false);
 	async function factoryReset(): Promise<void> {
-		if (typeof window === 'undefined') return;
+		if (typeof window === 'undefined' || resetting) return;
 		const ok = await confirmDialog({
 			title: 'Reset the Crema app on this device?',
 			message:
-				'This permanently erases:\n' +
+				'This permanently erases from this browser:\n' +
 				'  • custom profiles + library overrides\n' +
-				'  • shot history + per-shot captures\n' +
-				'  • bean library + roasters\n' +
-				'  • all app preferences\n\n' +
+				'  • shot history, telemetry + per-shot captures\n' +
+				'  • bean library, roasters + bag photos\n' +
+				'  • brew recipes + all app preferences\n' +
+				'  • Visualizer, Decent and Google Drive sign-ins\n' +
+				'    (Visualizer and Drive access is revoked too)\n\n' +
+				'Backups you saved to files or Google Drive are not deleted.\n' +
 				'Your DE1 is NOT affected — uploaded profiles, calibration, and\n' +
 				'machine settings stay on the firmware. The page will reload.',
 			confirmLabel: 'Reset app',
@@ -265,17 +282,38 @@
 			requireTyped: 'ERASE'
 		});
 		if (!ok) return;
-		const keys: string[] = [];
-		for (let i = 0; i < localStorage.length; i++) {
-			const k = localStorage.key(i);
-			if (k && k.startsWith('crema.')) keys.push(k);
+		resetting = true;
+		const services = appCtx().services;
+		const drive = getDriveAuthStore();
+		// Other Crema tabs stop writing now and reload once the wipe is done
+		// (final review 05 N-3); this tab freezes its own writers after the
+		// revokes, which still need the stored tokens (06 #12).
+		announceReset({ type: 'started' });
+		try {
+			const result = await factoryResetLocalData({
+				revoke: [
+					async () => {
+						const tokens = services ? await services.tokens.getTokens() : null;
+						if (tokens?.accessToken) await revokeVisualizerToken(tokens.accessToken);
+					},
+					() => drive.signOut()
+				],
+				beforeWipe: () => freezeCremaWrites()
+			});
+			// Told after the reload: no dialog may hold the wiped page open
+			// while the live app could write its state back.
+			stashResetReport({
+				databasesFailed: result.databasesFailed,
+				revokeFailures: result.revokeFailures
+			});
+		} finally {
+			freezeCremaWrites();
+			announceReset({ type: 'done' });
+			// Hard reload so every $state / module-singleton re-initialises
+			// from the now-empty stores. The PWA service worker still serves
+			// cached app assets, which is fine; the data layer is what's reset.
+			window.location.reload();
 		}
-		for (const k of keys) localStorage.removeItem(k);
-		// Hard reload so every $state / module-singleton re-initialises
-		// from the now-empty store. `location.reload()` is enough — the
-		// PWA service worker will still serve cached assets, which is
-		// fine; the data layer is what's being reset.
-		window.location.reload();
 	}
 
 	// ---- Webhooks (Advanced → Webhooks card) ----------------------------
@@ -286,21 +324,8 @@
 	// that surfaces errors to the user — live fires are silent and log
 	// to the BLE event panel).
 
-	/** True for `https://…` and for `http://localhost…` (dev convenience). */
-	const webhookUrlValid = $derived.by(() => {
-		const url = prefs.webhookUrl.trim();
-		if (url.length === 0) return false;
-		if (url.startsWith('https://')) return true;
-		// Allow http://localhost / http://127.0.0.1 / http://[::1] for dev.
-		if (
-			url.startsWith('http://localhost') ||
-			url.startsWith('http://127.0.0.1') ||
-			url.startsWith('http://[::1]')
-		) {
-			return true;
-		}
-		return false;
-	});
+	/** True for `https://…` and for `http://localhost` / loopback (dev convenience). */
+	const webhookUrlValid = $derived(isAllowedWebhookUrl(prefs.webhookUrl));
 
 	/** Inline status for the most-recent "Send test" press; cleared after ~4 s. */
 	let webhookTestFeedback = $state<{ ok: boolean; message: string } | null>(null);
@@ -637,7 +662,7 @@
 	</StRow>
 	<StRow
 		title="Factory reset"
-		sub="Resets the Crema app on this device — profiles, history, settings, beans. Does NOT change DE1 machine settings (those stay on the firmware)."
+		sub="Erases the Crema app's data in this browser — profiles, history, beans and photos, settings and sign-ins. Does NOT change DE1 machine settings (those stay on the firmware)."
 	>
 		{#snippet control()}
 			<button type="button" class="st-btn st-btn-danger" onclick={factoryReset}>
@@ -717,7 +742,7 @@
 		font-variant-numeric: tabular-nums;
 	}
 	.rp-status-run {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.rp-status-ok {
 		color: var(--success);
