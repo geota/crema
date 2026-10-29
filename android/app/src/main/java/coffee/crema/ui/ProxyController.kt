@@ -244,6 +244,15 @@ class ProxyController(
      *  secondary can dial it. */
     private var relayPort: Int = 0
 
+    /** The relay port this hub bound last time (a tiny file, like [deviceId]).
+     *  The next start asks for it first, so a remote's saved host:port still
+     *  reaches the hub after a restart; 0 when none was saved. */
+    private val relayPortFile = File(app.filesDir, "relayPort")
+
+    private fun savedRelayPort(): Int =
+        runCatching { relayPortFile.takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull() }.getOrNull()
+            ?.takeIf { it in 1..65_535 } ?: 0
+
     /** Stable per-install id (persisted in a tiny file — issue 14): the
      *  secondary's `clientId`, which tells a host which pairing record to check.
      *  It is not advertised (see [instanceId]). */
@@ -856,12 +865,16 @@ class ProxyController(
         relayHub = hub
         val tapping = TappingBleTransport(real, hub, scope)
         tappingRef = tapping
-        val server = LanRelayServer(hub)
+        val wantedPort = savedRelayPort()
+        val server = LanRelayServer(hub, requestedPort = wantedPort)
         relayServer = server
         scope.launch {
             runCatching {
                 relayPort = server.start()
                 appendLog("LAN relay listening on :$relayPort")
+                if (relayPort != wantedPort) {
+                    runCatching { SafeFile.write(relayPortFile, relayPort.toString(), keepBackup = false) }
+                }
                 refreshAdvertisement()
             }.onFailure { appendLog("LAN relay failed to start: ${it.message}") }
         }

@@ -8,6 +8,7 @@ import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.EmbeddedServer
+import io.ktor.server.engine.connector
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.response.respond
 import io.ktor.server.routing.routing
@@ -15,6 +16,8 @@ import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.pingPeriod
 import io.ktor.server.websocket.timeout
 import io.ktor.server.websocket.webSocket
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -24,9 +27,11 @@ import kotlin.time.Duration.Companion.milliseconds
  * [KtorWsFrameLink] and driven by [RelayHub.serve]. All protocol logic lives in
  * the (link-agnostic, already unit-proven) [RelayHub]; this only owns the socket.
  *
- * Runs **on the primary device** (the DE1 owner). [start] binds an ephemeral
- * port by default and returns the resolved port so the caller can advertise it
- * over NSD (`_crema._tcp`). [INTERNET] is the only permission needed.
+ * Runs **on the primary device** (the DE1 owner). [start] binds [requestedPort]
+ * (the hub's last relay port, so its remotes' saved target still works after
+ * a restart), or an ephemeral port when that one is taken or none was asked
+ * for, and returns the resolved port so the caller can advertise it over NSD
+ * (`_crema._tcp`). [INTERNET] is the only permission needed.
  */
 class LanRelayServer(
     private val hub: RelayHub,
@@ -41,12 +46,37 @@ class LanRelayServer(
     private var server: EmbeddedServer<*, *>? = null
     private var stopped = false
 
-    /** Start listening and return the bound port. Suspends until the connector is
+    /** Start listening and return the bound port: [requestedPort], or an
+     *  ephemeral one if that port is taken. Suspends until the connector is
      *  resolved (the socket is accepting), so a caller can advertise the port
      *  immediately after this returns. Throws if [stop] ran first or while
      *  starting; nothing is left listening then. */
     suspend fun start(): Int {
-        val s = embeddedServer(CIO, port = requestedPort) {
+        if (requestedPort != 0) {
+            try {
+                return startOn(requestedPort)
+            } catch (e: Exception) {
+                // CIO reports a taken port as a cancellation of its own job:
+                // only this caller's cancellation, or a stop, ends the start.
+                currentCoroutineContext().ensureActive()
+                if (synchronized(lock) { stopped }) throw e
+                Log.w(TAG, "Relay port $requestedPort is taken (${e.message}) — using an ephemeral port")
+            }
+        }
+        return startOn(0)
+    }
+
+    private suspend fun startOn(port: Int): Int {
+        // reuseAddress: a restarted hub gets its port back while the last
+        // run's sockets sit in TIME_WAIT. It never shares a port another
+        // listener holds, so a taken port still fails over to an ephemeral one.
+        val s = embeddedServer(
+            CIO,
+            configure = {
+                connector { this.port = port }
+                reuseAddress = true
+            },
+        ) {
             install(WebSockets) {
                 maxFrameSize = PROXY_MAX_FRAME_BYTES
                 // Liveness: a TCP that dies without FIN (phone doze, wifi
@@ -75,7 +105,14 @@ class LanRelayServer(
             }
         }
         synchronized(lock) { check(!stopped) { "relay stopped before it started" } }
-        s.start(wait = false)
+        val bound = try {
+            s.start(wait = false)
+            s.engine.resolvedConnectors().first().port
+        } catch (e: Throwable) {
+            // The port is taken (or the start failed): leave nothing behind.
+            s.stop(gracePeriodMillis = 0, timeoutMillis = STOP_TIMEOUT_MS)
+            throw e
+        }
         // A stop() that ran while this was starting saw no server to stop:
         // stop the one just started rather than leave it listening.
         val keep = synchronized(lock) { if (stopped) false else { server = s; true } }
@@ -83,9 +120,8 @@ class LanRelayServer(
             s.stop(gracePeriodMillis = 0, timeoutMillis = STOP_TIMEOUT_MS)
             error("relay stopped while starting")
         }
-        val port = s.engine.resolvedConnectors().first().port
-        Log.i(TAG, "LAN relay listening on :$port$path")
-        return port
+        Log.i(TAG, "LAN relay listening on :$bound$path")
+        return bound
     }
 
     /** Stop the server and drop all connections — including a start that is
