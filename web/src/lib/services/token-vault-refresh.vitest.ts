@@ -31,6 +31,7 @@ const { TokenVault, TokenVaultLive } = await import('./token-vault.ts');
 const { TOKEN_URL } = await import('../visualizer/oauth.ts');
 
 type TokenSet = import('../visualizer/oauth.ts').TokenSet;
+type TokenVaultService = import('./token-vault.ts').TokenVault;
 type Outcome = 'network' | number | { access: string; refresh?: string };
 
 const SOON = () => Date.now() + 60_000; // inside the 5-minute refresh window
@@ -83,7 +84,7 @@ function endpoint(script: Outcome[], opts: { delayMs?: number; onRequest?: () =>
 }
 
 type Vault = Effect.Success<typeof TokenVault>;
-const run = <A, E>(layer: Layer.Layer<TokenVault>, f: (v: Vault) => Effect.Effect<A, E>) =>
+const run = <A, E>(layer: Layer.Layer<TokenVaultService>, f: (v: Vault) => Effect.Effect<A, E>) =>
 	Effect.runPromiseExit(Effect.flatMap(TokenVault, f).pipe(Effect.provide(layer)));
 
 const failTag = (exit: Exit.Exit<unknown, unknown>) => {
@@ -233,7 +234,7 @@ describe('TokenVault single-flight refresh (review 03 P1-2)', () => {
 describe('TokenVault across runtimes (review 03 P3-4)', () => {
 	/** A vault on its own runtime, like the shell's and the OAuth callback's. */
 	const vaultRuntime = () =>
-		ManagedRuntime.make(Layer.provide(TokenVaultLive, Layer.provide(OAuthLive, endpoint([400]).layer)));
+		ManagedRuntime.make(endpoint([400]).layer);
 
 	it("a sign-in stored through another runtime reaches this vault's changes on the next read", async () => {
 		const shell = vaultRuntime();
