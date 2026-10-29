@@ -151,4 +151,40 @@ class RelayHubControlOrderTest {
             io.cancel()
         }
     }
+
+    /** Validation D6, the session half: a failed announcement after the
+     *  command ran still answers `ControlOk`, so the remote doesn't revert. */
+    @Test
+    fun `a failed announcement after the command ran still answers ControlOk`() = runBlocking {
+        val actions = RecordingMachineActions()
+        val dispatcher = RelayedCommandDispatcher(
+            machine = LocalMachine(actions, notify = {}),
+            hostName = { "Tablet" },
+            machineIdle = { false },
+            announce = { _, _ -> error("announce failed") },
+            log = {},
+            lane = Dispatchers.Default,
+        )
+        val hub = hub { method, args, id, name ->
+            when (val outcome = dispatcher.dispatch(method, args, CommandOrigin(id, name))) {
+                CommandOutcome.Accepted -> Result.success(Unit)
+                is CommandOutcome.Refused -> Result.failure(IllegalStateException(outcome.reason))
+                is CommandOutcome.Unknown -> Result.failure(IllegalStateException(outcome.detail))
+            }
+        }
+        val io = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val (client, server) = InMemoryFrameLink.pair()
+            io.launch { hub.serve(server) }
+            val rx = CopyOnWriteArrayList<Frame>()
+            io.launch { client.incoming().collect { rx += it } }
+            handshake(client, rx)
+            client.send(Frame.Control(1, "startShot", ""))
+            withTimeout(5_000) { while (rx.none { it is Frame.ControlOk || it is Frame.ControlErr }) delay(5) }
+            assertEquals(listOf<Frame>(Frame.ControlOk(1)), rx.filter { it is Frame.ControlOk || it is Frame.ControlErr })
+            assertEquals(listOf("startShot"), actions.applied.toList())
+        } finally {
+            io.cancel()
+        }
+    }
 }
