@@ -190,9 +190,6 @@ class De1BleManager(
     @Volatile
     private var lastInboundMs = 0L
 
-    /** Consecutive failed liveness probe reads; teardown at [LIVENESS_MAX_FAILURES]. */
-    private var consecutiveLivenessFailures = 0
-
     // ---- Connect ----------------------------------------------------------
 
     /**
@@ -597,6 +594,16 @@ class De1BleManager(
         }
     }
 
+    /** [feedCore] for a profile write's synthesized ack, named by its upload. */
+    private fun feedAck(source: NotificationSource, bytes: ByteArray, tMs: Long, uploadId: UInt, what: String) {
+        runCatching {
+            onCoreOutput(bridge.onProfileWriteAck(source, bytes, tMs.toULong(), uploadId))
+        }.onFailure {
+            Log.e(TAG, "$what failed — skipping this ack (${Hex.encode(bytes)})", it)
+            onStatus("$what error — skipped (see diagnostics)")
+        }
+    }
+
     // ---- Machine control (AND5) -------------------------------------------
 
     // ---- Firmware flash I/O ---------------------------------------------------
@@ -712,10 +719,12 @@ class De1BleManager(
          *  would otherwise make the shot-stop wait — and itself skips
          *  registration so stops never preempt stops. */
         urgent: Boolean = false,
-        /** Asked after a successful profile header / frame write: whether its
-         *  synthesized ack may still reach the core. `false` once a newer
-         *  upload superseded this write's (cohort review 2026-10-28, #2 N2). */
-        shouldAck: () -> Boolean = { true },
+        /** Asked after a successful profile header / frame write: the core's
+         *  number for the upload it belongs to, or null once a newer upload
+         *  superseded it (cohort review 2026-10-28, #2 N2). The synthesized
+         *  ack names that upload, so the core drops it if a newer upload was
+         *  armed in between (round-2 verification V1 P3-1). */
+        ackUploadId: () -> UInt? = { null },
     ): Boolean {
         // Count the write BEFORE checking the gate (audit r2 LOW 3): a write
         // that passes the check is then always visible to the flash's drain,
@@ -766,7 +775,9 @@ class De1BleManager(
             nonFlashWritesInFlight.decrementAndGet()
         }
         profileWriteAckSource(target)?.let { source ->
-            if (shouldAck()) feedCore(source, bytes, SystemClock.elapsedRealtime(), "DE1 $target ACK")
+            ackUploadId()?.let { uploadId ->
+                feedAck(source, bytes, SystemClock.elapsedRealtime(), uploadId, "DE1 $target ACK")
+            }
         }
         return true
     }
@@ -813,7 +824,6 @@ class De1BleManager(
     private fun startLivenessLoop(device: BleTransport.DeviceHandle) {
         livenessJob?.cancel()
         lastInboundMs = SystemClock.elapsedRealtime()
-        consecutiveLivenessFailures = 0
         livenessJob = scope.launch { livenessLoop(device) }
     }
 
@@ -830,54 +840,36 @@ class De1BleManager(
      * only other silent-drop detector there, so a DE1 that power-cycled under us
      * (a power outage, the reported case) went unnoticed and never reconnected.
      *
-     * This loop closes that gap WITHOUT waking the machine. A healthy connected
-     * DE1 streams water-level notifications ~2/s, so while inbound traffic is
-     * recent ([lastInboundMs]) it does nothing — and it therefore never issues a
-     * read mid-shot (ShotSamples keep the link busy). Only once the link has been
-     * silent for [LIVENESS_QUIET_MS] does it issue a passive GATT READ of
-     * StateInfo, which succeeds even while the DE1 is asleep (a firmware state;
-     * the BLE link stays up) but times out on a truly dead link. After
-     * [LIVENESS_MAX_FAILURES] failed probes it tears the link down at the
+     * This loop closes that gap WITHOUT waking the machine: once a second it runs
+     * one [De1LivenessCheck] (quiet for 5 s → a passive StateInfo read; two failed
+     * reads in a row → dead). On a dead link it tears the link down at the
      * transport level; the [reconnectingSession] supervisor then rescans and
-     * reconnects.
+     * reconnects. The check is paused while a firmware flash holds the link
+     * ([firmwareExclusive]), as on the web.
      */
     private suspend fun livenessLoop(device: BleTransport.DeviceHandle) {
+        val check = De1LivenessCheck(
+            now = SystemClock::elapsedRealtime,
+            lastInboundMs = { lastInboundMs },
+            paused = { firmwareExclusive },
+            probe = { transport.read(device, De1Uuids.SERVICE, De1Uuids.STATE_INFO) },
+        )
         while (true) {
-            delay(LIVENESS_CHECK_INTERVAL_MS)
-            val quietForMs = SystemClock.elapsedRealtime() - lastInboundMs
-            if (quietForMs < LIVENESS_QUIET_MS) {
-                consecutiveLivenessFailures = 0
-                continue
-            }
-            val probeStartedMs = SystemClock.elapsedRealtime()
-            val ok = runCatching {
-                withTimeout(LIVENESS_PROBE_TIMEOUT_MS) {
-                    transport.read(device, De1Uuids.SERVICE, De1Uuids.STATE_INFO)
+            delay(De1LivenessCheck.CHECK_INTERVAL_MS)
+            when (check.check()) {
+                De1LivenessCheck.Verdict.PROBE_FAILED -> Log.w(
+                    TAG,
+                    "DE1 liveness probe failed (${check.failures}/${De1LivenessCheck.MAX_FAILURES}) " +
+                        "after ${check.quietMs}ms quiet",
+                )
+                De1LivenessCheck.Verdict.DEAD -> {
+                    Log.w(TAG, "DE1 liveness: ${De1LivenessCheck.MAX_FAILURES} probes failed after ${check.quietMs}ms quiet")
+                    onStatus("DE1 link went quiet — reconnecting…")
+                    runCatching { transport.disconnect(device) }
+                        .onFailure { Log.w(TAG, "Forced DE1 teardown (liveness) failed", it) }
+                    return
                 }
-            }.isSuccess
-            // Traffic that arrived while the probe was out proves the link
-            // alive (the read lost to a busy GATT queue): not a failure.
-            if (!ok && lastInboundMs > probeStartedMs) {
-                consecutiveLivenessFailures = 0
-                continue
-            }
-            if (ok) {
-                lastInboundMs = SystemClock.elapsedRealtime()
-                consecutiveLivenessFailures = 0
-                continue
-            }
-            consecutiveLivenessFailures++
-            Log.w(
-                TAG,
-                "DE1 liveness probe failed ($consecutiveLivenessFailures/$LIVENESS_MAX_FAILURES) " +
-                    "after ${quietForMs}ms quiet",
-            )
-            if (consecutiveLivenessFailures >= LIVENESS_MAX_FAILURES) {
-                consecutiveLivenessFailures = 0
-                onStatus("DE1 link went quiet — reconnecting…")
-                runCatching { transport.disconnect(device) }
-                    .onFailure { Log.w(TAG, "Forced DE1 teardown (liveness) failed", it) }
-                return
+                else -> Unit
             }
         }
     }
@@ -955,27 +947,7 @@ class De1BleManager(
         /** The reconnect-timeline device key — matches the supervisor label. */
         const val TIMELINE_DEVICE = "DE1"
 
-        /** How often the passive liveness loop wakes to check link activity (#65).
-         *  Same numbers as the web `de1-liveness.ts`: a dead link is dropped about
-         *  10 s after its last notification (final review 02 N8 — reaprime 10 s
-         *  without a push frame, Decenza 5 s after an abandoned write; the old
-         *  30 s / 15 s / 3-probe rule took 60–75 s). */
-        private const val LIVENESS_CHECK_INTERVAL_MS = 1_000L
-
-        /** Inbound-notification silence tolerated before the liveness loop issues
-         *  an active probe read. A healthy connected DE1 streams water levels
-         *  ~2/s, well inside this window, so an active read only ever happens on a
-         *  link that has genuinely gone quiet — never mid-shot, and it doesn't wake
-         *  the DE1. A successful probe counts as traffic (one read per window
-         *  while the DE1 sleeps silently). */
-        private const val LIVENESS_QUIET_MS = 5_000L
-
-        /** One liveness probe read's ceiling. */
-        private const val LIVENESS_PROBE_TIMEOUT_MS = 2_000L
-
-        /** Failed probes in a row (no traffic in between) before the link is
-         *  presumed dead and torn down. */
-        private const val LIVENESS_MAX_FAILURES = 2
+        // The liveness numbers live with the rule: see [De1LivenessCheck].
 
         /**
          * The DE1 `Version` (`A001`) and `Calibration` (`A012`) characteristic

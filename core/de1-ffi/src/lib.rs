@@ -2181,6 +2181,23 @@ impl CremaBridge {
         self.emit(self.core().on_notification(source.into(), &data, now_ms))
     }
 
+    /// The synthesised ack for a profile write of upload `upload_id` (its
+    /// `ProfileUploadStarted` number). Ignored unless that upload is still
+    /// running. See
+    /// [`CremaCore::on_profile_write_ack`](de1_app::CremaCore::on_profile_write_ack).
+    pub fn on_profile_write_ack(
+        &self,
+        source: NotificationSource,
+        data: Vec<u8>,
+        now_ms: u64,
+        upload_id: u32,
+    ) -> String {
+        self.emit(
+            self.core()
+                .on_profile_write_ack(source.into(), &data, now_ms, upload_id),
+        )
+    }
+
     /// Feed a periodic clock tick. Returns a JSON-encoded [`CoreOutput`].
     pub fn on_tick(&self, now_ms: u64) -> String {
         self.emit(self.core().on_tick(now_ms))
@@ -3109,11 +3126,12 @@ impl CremaBridge {
         self.emit(self.core().cancel_profile_upload())
     }
 
-    /// A profile write of the running upload did not reach the DE1: fail the
-    /// upload now (`ProfileUploadFailure::WriteFailed`). See
-    /// [`CremaCore::profile_write_failed`](de1_app::CremaCore::profile_write_failed).
-    pub fn profile_write_failed(&self, now_ms: u64) -> String {
-        self.emit(self.core().profile_write_failed(now_ms))
+    /// A profile write of upload `upload_id` (its `ProfileUploadStarted`
+    /// number) did not reach the DE1: fail that upload now
+    /// (`ProfileUploadFailure::WriteFailed`) if it is still the running one.
+    /// See [`CremaCore::profile_write_failed`](de1_app::CremaCore::profile_write_failed).
+    pub fn profile_write_failed(&self, now_ms: u64, upload_id: u32) -> String {
+        self.emit(self.core().profile_write_failed(now_ms, upload_id))
     }
 
     /// `true` from `upload_profile` until the tail-ack / a failure /

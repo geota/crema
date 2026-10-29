@@ -66,17 +66,26 @@ use de1_protocol::{
 /// Web Bluetooth's worst-case back-pressure window.
 pub const PROFILE_UPLOAD_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Consecutive [`Event::ProfileReuploadNeeded`] requests the core makes after
-/// failed uploads before it waits for the shell to upload on its own (the
-/// next shot start or reconnect). Reset by a completed upload. Bounds a link
-/// that fails every upload to a few attempts, like Decenza's capped retry.
+/// Uploads a shell may start in answer to [`Event::ProfileReuploadNeeded`]
+/// after failed uploads before the core stops asking and waits for the shell
+/// to upload on its own (the next shot start or reconnect). Reset by a
+/// completed upload. Bounds a link that fails every upload to a few attempts,
+/// like Decenza's capped retry. Repeats of a request nobody answered are
+/// bounded separately by [`MAX_UNANSWERED_REUPLOAD_REQUESTS`].
 pub const MAX_PROFILE_REUPLOAD_REQUESTS: u8 = 3;
 
-/// How often an outstanding [`Event::ProfileReuploadNeeded`] is repeated
-/// while no shell has started an upload in answer (the machine stays Idle and
-/// nothing uploads) — a shell that could not act when it was first asked
-/// (link not ready yet) is asked again.
+/// The first wait before an outstanding [`Event::ProfileReuploadNeeded`] that
+/// no shell answered is repeated (the machine stays Idle and nothing
+/// uploads): a shell that could not act when it was first asked (link not
+/// ready yet) is asked again. Each further repeat waits twice as long.
 pub const PROFILE_REUPLOAD_REPEAT: Duration = Duration::from_secs(5);
+
+/// How many times one outstanding [`Event::ProfileReuploadNeeded`] is sent
+/// with no upload in answer before the core stops repeating it: at 0, 5, 15
+/// and 35 s. A shell that cannot answer (no active profile) is not asked
+/// forever. A new failed upload or a reset asks again; an upload the shell
+/// starts on its own (the next shot start, a profile change) answers it.
+pub const MAX_UNANSWERED_REUPLOAD_REQUESTS: u8 = 4;
 
 /// How long an upload waits for the MachineModel MMR reply before it fails
 /// with [`ProfileUploadFailure::MachineModelUnknown`]. The model picks the
@@ -646,10 +655,12 @@ pub struct CremaCore {
     /// "active profile on the DE1" identity the brew page surfaces. `None`
     /// at cold start; cleared by [`reset`](Self::reset) on disconnect.
     last_active_profile_title: Option<String>,
-    /// What the DE1 holds is unknown after a failed upload, and no
-    /// [`Event::ProfileReuploadNeeded`] has been sent for it yet. Set on every
-    /// [`Event::ProfileUploadFailed`]; cleared by a completed upload, by the
-    /// request itself, and by [`reset`](Self::reset).
+    /// What the DE1 holds is unknown: an upload failed after it had started
+    /// writing frames. Set by such an [`Event::ProfileUploadFailed`] (not by
+    /// a parked upload that never wrote anything); cleared only by a
+    /// completed upload and by [`reset`](Self::reset). While set, an
+    /// [`Event::ProfileReuploadNeeded`] is requested (see
+    /// [`request_profile_reupload_if_idle`](Self::request_profile_reupload_if_idle)).
     profile_reupload_pending: bool,
     /// Uploads started in answer to an [`Event::ProfileReuploadNeeded`]
     /// since the last completed upload — capped at
@@ -657,9 +668,19 @@ pub struct CremaCore {
     profile_reupload_requests: u8,
     /// When the outstanding [`Event::ProfileReuploadNeeded`] was last
     /// emitted; `None` when no request is outstanding. Cleared when a shell
-    /// starts an upload (which counts one attempt), by a completed upload and
-    /// by [`reset`](Self::reset).
+    /// starts an upload (which counts one attempt), by a completed upload,
+    /// when the request is re-armed, and by [`reset`](Self::reset).
     profile_reupload_requested_at: Option<Duration>,
+    /// How many times the outstanding request went out with no upload in
+    /// answer — capped at [`MAX_UNANSWERED_REUPLOAD_REQUESTS`]. Zeroed with
+    /// [`profile_reupload_requested_at`](Self::profile_reupload_requested_at)
+    /// and when the request is re-armed by a new failed upload.
+    profile_reupload_unanswered: u8,
+    /// The number the next started upload gets (its
+    /// [`Event::ProfileUploadStarted`] `upload_id`). Kept across
+    /// [`reset`](Self::reset), so a shell's late report about an upload from
+    /// before a reconnect cannot match a new one.
+    next_upload_id: u32,
     /// An upload waiting for the MachineModel reply — see
     /// [`upload_profile`](Self::upload_profile). Never `Some` together with
     /// [`profile_upload`](Self::profile_upload).
@@ -880,6 +901,8 @@ struct UntaredSettle {
 
 #[derive(Debug)]
 struct ProfileUpload {
+    /// This upload's number ([`Event::ProfileUploadStarted`] `upload_id`).
+    id: u32,
     /// Title of the profile being uploaded; propagated to the completion /
     /// failure events and into
     /// [`last_active_profile_title`](CremaCore::last_active_profile_title)
@@ -934,6 +957,8 @@ struct ParkedUpload {
     /// A tank value that replaces the profile's own (the cold-maintenance
     /// profile's 0).
     tank_override: Option<u8>,
+    /// False only for the cold-maintenance profile (no default limiter).
+    default_flow_limit: bool,
 }
 
 impl Default for CremaCore {
@@ -998,6 +1023,8 @@ impl CremaCore {
             profile_reupload_pending: false,
             profile_reupload_requests: 0,
             profile_reupload_requested_at: None,
+            profile_reupload_unanswered: 0,
+            next_upload_id: 1,
             parked_upload: None,
             pending_cup_warmer_c: None,
             step_weight: StepWeightExit::default(),
@@ -3276,7 +3303,10 @@ impl CremaCore {
         // machine asleep before the drop must not be re-slept after it).
         let mut idle_sleep = std::mem::take(&mut self.idle_sleep);
         idle_sleep.link(false);
+        // Upload numbers stay unique across a reconnect (see the field).
+        let next_upload_id = self.next_upload_id;
         *self = CremaCore::new();
+        self.next_upload_id = next_upload_id;
         self.idle_sleep = idle_sleep;
         self.firmware_flash = firmware_flash;
         self.read_only = read_only;
@@ -4450,25 +4480,52 @@ impl CremaCore {
         profile: &Profile,
         now: Duration,
     ) -> Result<CoreOutput, AppError> {
+        self.upload_profile_with(profile, now, true)
+    }
+
+    /// [`upload_profile`](Self::upload_profile), with `default_flow_limit`
+    /// false only for the code-built cold-maintenance profile (see
+    /// [`Profile::assemble_without_default_flow_limit`]).
+    pub(crate) fn upload_profile_with(
+        &mut self,
+        profile: &Profile,
+        now: Duration,
+        default_flow_limit: bool,
+    ) -> Result<CoreOutput, AppError> {
         // A firmware flash holds the link (the reconnect path auto-uploads).
         if let Some(out) = self.refuse_if_firmware_locked("upload_profile") {
             return Ok(out);
         }
-        // Validate first: the step bounds are the same for both encodings.
-        profile.assemble_for(de1_protocol::FrameEncoding::V1)?;
+        // Validate first: a rejected profile leaves a running upload alone.
+        // With the model known this is the upload's one assembly; parked, only
+        // the step count (the same for both encodings) is checked now.
+        let assembled = match self.de1_machine_model {
+            Some(model) => {
+                let encoding = frame_encoding_for(model);
+                Some((assemble(profile, encoding, default_flow_limit)?, encoding))
+            }
+            None => {
+                profile.check_step_count()?;
+                None
+            }
+        };
         self.clock = self.clock.max(now);
         let mut out = CoreOutput::default();
         // A shell answering an outstanding re-upload request: one attempt.
         if self.profile_reupload_requested_at.take().is_some() {
             self.profile_reupload_requests = self.profile_reupload_requests.saturating_add(1);
         }
+        self.profile_reupload_unanswered = 0;
         // Abort any prior upload (running or parked) before arming the new one.
         if self.profile_upload.is_some() || self.parked_upload.is_some() {
             self.fail_profile_upload(ProfileUploadFailure::Aborted, &mut out);
         }
-        match self.de1_machine_model {
-            Some(model) => {
-                let started = self.start_upload(profile, frame_encoding_for(model), now, None)?;
+        // Any other upload replaces the cold-maintenance profile a held
+        // request is waiting on.
+        self.cold_maintenance_profile_replaced(&mut out);
+        match assembled {
+            Some((assembled, encoding)) => {
+                let started = self.start_upload(profile, assembled, encoding, now, None);
                 out.events.extend(started.events);
                 out.commands.extend(started.commands);
             }
@@ -4486,23 +4543,25 @@ impl CremaCore {
                     since: now,
                     reread_sent: false,
                     tank_override: None,
+                    default_flow_limit,
                 });
             }
         }
         Ok(out)
     }
 
-    /// Arm `profile`'s upload with `encoding` and emit its writes: header,
-    /// then every `frame_packets()` entry (frames → extensions → tail).
-    /// `tank_override` replaces the profile's own tank value.
+    /// Arm `profile`'s upload from its `assembled` packets (built for
+    /// `encoding`) and emit its writes: header, then every `frame_packets()`
+    /// entry (frames → extensions → tail). `tank_override` replaces the
+    /// profile's own tank value.
     fn start_upload(
         &mut self,
         profile: &Profile,
+        mut assembled: de1_domain::AssembledProfile,
         encoding: de1_protocol::FrameEncoding,
         now: Duration,
         tank_override: Option<u8>,
-    ) -> Result<CoreOutput, AppError> {
-        let mut assembled = profile.assemble_for(encoding)?;
+    ) -> CoreOutput {
         // NEVER arm the firmware-side dispensed-volume stop: the tail's
         // max_total_volume_ml drives the DE1's own (flow-integrated) volume
         // estimate, which mis-fires — reaprime: "not compatible with active
@@ -4543,16 +4602,20 @@ impl CremaCore {
             });
         }
 
+        let id = self.next_upload_id;
+        self.next_upload_id = self.next_upload_id.wrapping_add(1);
         out.events.push(Event::ProfileUploadStarted {
             title: profile.title.clone(),
             frame_count,
             extension_frame_count: extension_count,
+            upload_id: id,
         });
 
         // A profile upload is the user doing something (and, while in
         // flight, pins the idle-sleep countdown — see `idle_sleep_busy`).
         self.idle_sleep.note_activity();
         self.profile_upload = Some(ProfileUpload {
+            id,
             title: profile.title.clone(),
             beverage_type: profile.beverage_type,
             step_weight: StepWeightExit::for_profile(profile),
@@ -4569,7 +4632,7 @@ impl CremaCore {
             next_idx: 0,
             last_progress: now,
         });
-        Ok(out)
+        out
     }
 
     /// Replace the tank value the in-flight or parked upload writes on
@@ -4594,15 +4657,26 @@ impl CremaCore {
         let encoding = self
             .de1_machine_model
             .map_or(de1_protocol::FrameEncoding::V1, frame_encoding_for);
-        match self.start_upload(&parked.profile, encoding, self.clock, parked.tank_override) {
-            Ok(started) => {
+        match assemble(&parked.profile, encoding, parked.default_flow_limit) {
+            Ok(assembled) => {
+                let started = self.start_upload(
+                    &parked.profile,
+                    assembled,
+                    encoding,
+                    self.clock,
+                    parked.tank_override,
+                );
                 out.events.extend(started.events);
                 out.commands.extend(started.commands);
             }
-            // Validated when it was parked; kept total anyway.
-            Err(err) => out.events.push(Event::ProfileUploadFailed {
-                reason: ProfileUploadFailure::from(err),
-            }),
+            // Validated when it was parked; kept total anyway. Nothing was
+            // written, so the DE1 still holds what it held.
+            Err(err) => {
+                out.events.push(Event::ProfileUploadFailed {
+                    reason: ProfileUploadFailure::from(AppError::from(err)),
+                });
+                self.cold_maintenance_upload_failed(out);
+            }
         }
     }
 
@@ -4637,52 +4711,106 @@ impl CremaCore {
         out
     }
 
-    /// The shell reports that a profile write of the running upload did not
-    /// reach the DE1: fail the upload at once with
+    /// The shell reports that a profile write of upload `upload_id` (the
+    /// [`Event::ProfileUploadStarted`] number it recorded with the write) did
+    /// not reach the DE1: fail that upload at once with
     /// [`ProfileUploadFailure::WriteFailed`] instead of waiting for the ack
     /// watchdog, so the re-upload is requested without delay. The shell stops
-    /// writing the rest of that upload. A no-op when nothing is uploading (a
-    /// late report about an upload that already ended).
-    pub fn profile_write_failed(&mut self, now_ms: u64) -> CoreOutput {
+    /// writing the rest of that upload. A no-op unless `upload_id` is the
+    /// running upload: a late report about an upload that already ended, or
+    /// was superseded by a newer one, must not fail the newer one.
+    pub fn profile_write_failed(&mut self, now_ms: u64, upload_id: u32) -> CoreOutput {
         self.clock = self.clock.max(ms_to_duration(now_ms));
         let mut out = CoreOutput::default();
-        if self.profile_upload.is_some() {
+        if self
+            .profile_upload
+            .as_ref()
+            .is_some_and(|upload| upload.id == upload_id)
+        {
             self.fail_profile_upload(ProfileUploadFailure::WriteFailed, &mut out);
         }
         self.gate_read_only(out)
     }
 
-    /// End the in-flight (or parked) upload with `reason`: emit
-    /// [`Event::ProfileUploadFailed`], mark the DE1's profile unknown, and
-    /// ask for a re-upload at once when the machine is already Idle.
+    /// The shell's synthesised ack for a profile write of upload `upload_id`
+    /// that reached the DE1 (`source` is [`Source::De1HeaderAck`] or
+    /// [`Source::De1FrameAck`]). Fed like [`on_notification`](Self::on_notification)
+    /// only while `upload_id` is the running upload; otherwise ignored, so a
+    /// superseded upload's late ack can never count toward, or fail, a newer
+    /// one — whichever thread it arrives on (round-2 verification V1 P3-1).
+    pub fn on_profile_write_ack(
+        &mut self,
+        source: Source,
+        data: &[u8],
+        now_ms: u64,
+        upload_id: u32,
+    ) -> CoreOutput {
+        let current = self
+            .profile_upload
+            .as_ref()
+            .is_some_and(|upload| upload.id == upload_id);
+        if !current || !matches!(source, Source::De1HeaderAck | Source::De1FrameAck) {
+            self.clock = self.clock.max(ms_to_duration(now_ms));
+            return CoreOutput::default();
+        }
+        self.on_notification(source, data, now_ms)
+    }
+
+    /// End the in-flight (or parked) upload with `reason` and emit
+    /// [`Event::ProfileUploadFailed`].
     ///
-    /// An [`Aborted`](ProfileUploadFailure::Aborted) upload only marks the
-    /// profile unknown: it is a supersession (a new upload follows at once)
-    /// or a shell cancel, so an immediate request would race the new upload;
-    /// the next tick or Idle entry asks if nothing else uploads.
+    /// Only a running upload, which had started writing frames, leaves the
+    /// DE1's profile unknown: that marks it and asks for a re-upload at once
+    /// when the machine is already Idle. A parked upload wrote nothing (it
+    /// waited for the machine model), so the DE1 still holds its profile and
+    /// nothing is re-requested.
+    ///
+    /// An [`Aborted`](ProfileUploadFailure::Aborted) running upload only marks
+    /// the profile unknown: it is a supersession (a new upload follows at
+    /// once) or a shell cancel, so an immediate request would race the new
+    /// upload; the next tick or Idle entry asks if nothing else uploads.
     fn fail_profile_upload(&mut self, reason: ProfileUploadFailure, out: &mut CoreOutput) {
-        self.profile_upload = None;
+        let wrote = self.profile_upload.take().is_some();
         self.parked_upload = None;
         let aborted = reason == ProfileUploadFailure::Aborted;
         out.events.push(Event::ProfileUploadFailed { reason });
+        self.cold_maintenance_upload_failed(out);
+        if !wrote {
+            return;
+        }
         self.profile_reupload_pending = true;
+        // A new failure is a new reason to ask.
+        self.rearm_profile_reupload_request();
         if !aborted {
             self.request_profile_reupload_if_idle(out);
         }
     }
 
+    /// Let a request that went out unanswered [`MAX_UNANSWERED_REUPLOAD_REQUESTS`]
+    /// times be asked again: something changed (a new failed upload, a
+    /// completed one). The answered-upload budget is untouched.
+    fn rearm_profile_reupload_request(&mut self) {
+        self.profile_reupload_requested_at = None;
+        self.profile_reupload_unanswered = 0;
+    }
+
     /// Emit [`Event::ProfileReuploadNeeded`] when a failed upload left the
     /// DE1's profile unknown, nothing is uploading, the machine is Idle, no
-    /// firmware flash holds the link, the attempt budget is not spent, and no
-    /// request went out in the last [`PROFILE_REUPLOAD_REPEAT`]. The request
-    /// stays outstanding until a shell starts an upload.
+    /// firmware flash holds the link, and the answered-upload budget
+    /// ([`MAX_PROFILE_REUPLOAD_REQUESTS`]) is not spent. The request stays
+    /// outstanding until a shell starts an upload: it is repeated after
+    /// [`PROFILE_REUPLOAD_REPEAT`], then after twice the previous wait, and
+    /// stops after [`MAX_UNANSWERED_REUPLOAD_REQUESTS`] sends until it is
+    /// re-armed ([`rearm_profile_reupload_request`](Self::rearm_profile_reupload_request)).
     fn request_profile_reupload_if_idle(&mut self, out: &mut CoreOutput) {
         let idle = self
             .last_state
             .is_some_and(|info| info.state == MachineState::Idle);
-        let due = self
-            .profile_reupload_requested_at
-            .is_none_or(|at| self.clock.saturating_sub(at) >= PROFILE_REUPLOAD_REPEAT);
+        let sent = self.profile_reupload_unanswered;
+        let due = sent < MAX_UNANSWERED_REUPLOAD_REQUESTS
+            && self
+                .profile_reupload_requested_at
+                .is_none_or(|at| self.clock.saturating_sub(at) >= reupload_repeat_after(sent));
         if self.profile_reupload_pending
             && self.profile_upload.is_none()
             && self.parked_upload.is_none()
@@ -4692,6 +4820,7 @@ impl CremaCore {
             && self.profile_reupload_requests < MAX_PROFILE_REUPLOAD_REQUESTS
         {
             self.profile_reupload_requested_at = Some(self.clock);
+            self.profile_reupload_unanswered = sent.saturating_add(1);
             out.events.push(Event::ProfileReuploadNeeded);
         }
     }
@@ -4861,22 +4990,17 @@ impl CremaCore {
                 self.tank_temp_threshold_c = Some(tank_temp_c);
             }
             if encoding == de1_protocol::FrameEncoding::V2 {
-                out.commands.push(Command::WriteCharacteristic {
-                    target: WriteTarget::De1MmrWrite,
-                    data: mmr::write_request(
-                        mmr::END_OF_SHOT_WEIGHT_ADDRESS,
-                        &END_OF_SHOT_WEIGHT_CLEARED.to_le_bytes(),
-                    )
-                    .to_vec(),
-                });
+                out.commands.push(end_of_shot_weight_clear());
             }
             self.profile_reupload_pending = false;
             self.profile_reupload_requests = 0;
-            self.profile_reupload_requested_at = None;
+            self.rearm_profile_reupload_request();
             self.last_active_profile_title = Some(title.clone());
             self.active_beverage_type = beverage_type;
             self.step_weight.adopt_weights(step_weight);
             out.events.push(Event::ProfileUploadCompleted { title });
+            // A held cold-maintenance request goes out once its profile is in.
+            self.cold_maintenance_profile_loaded(now, out);
         }
     }
 
@@ -4941,6 +5065,17 @@ impl CremaCore {
                 let write = self.bengle_sleep_timeout_write();
                 out.events.extend(write.events);
                 out.commands.extend(write.commands);
+                // A Bengle's end-of-shot weight is cleared as soon as the
+                // model is known, not only after an upload: a session whose
+                // upload a fingerprint match skips would otherwise keep a
+                // target another app left persisted in the firmware (round-2
+                // verification V1 P3-4; see END_OF_SHOT_WEIGHT_CLEARED).
+                if de1_protocol::is_bengle_model(value) {
+                    match self.refuse_if_firmware_locked("end_of_shot_weight") {
+                        Some(locked) => out.events.extend(locked.events),
+                        None => out.commands.push(end_of_shot_weight_clear()),
+                    }
+                }
                 // A cup-warmer change made before the model was known.
                 if let Some(temp_c) = self.pending_cup_warmer_c.take() {
                     let write = self.set_cup_warmer_temperature(temp_c);
@@ -5642,14 +5777,6 @@ const STOP_REENFORCE_AFTER: Duration = Duration::from_secs(1);
 /// reconnect supervisor owns the problem).
 const STOP_REENFORCE_MAX: u32 = 30;
 
-/// Internal: build a `WriteToMMR` [`CoreOutput`] for one register.
-///
-/// Used by the public [`CremaCore::write_mmr`] and every typed setter;
-/// lockout-checking stays in the callers so a [`Event::FirmwareLockoutHit`]
-/// names the actual setter, not this internal helper.
-///
-/// `byte_len` is clamped to `1..=4`; the value is encoded little-endian.
-#[allow(clippy::cast_possible_truncation)]
 /// The value a Bengle (BLE v2) upload writes to the end-of-shot weight
 /// register (MMR `0x803864`, grams × 100, 0 = off). de1app
 /// (`de1_send_shot_frames` → `set_end_of_shot_weight`, `20e96d6`) writes the
@@ -5661,6 +5788,42 @@ const STOP_REENFORCE_MAX: u32 = 30;
 /// stop it cannot attribute must not end a Crema shot.
 const END_OF_SHOT_WEIGHT_CLEARED: u32 = 0;
 
+/// The MMR write that clears a Bengle's end-of-shot weight register (see
+/// [`END_OF_SHOT_WEIGHT_CLEARED`]).
+fn end_of_shot_weight_clear() -> Command {
+    Command::WriteCharacteristic {
+        target: WriteTarget::De1MmrWrite,
+        data: mmr::write_request(
+            mmr::END_OF_SHOT_WEIGHT_ADDRESS,
+            &END_OF_SHOT_WEIGHT_CLEARED.to_le_bytes(),
+        )
+        .to_vec(),
+    }
+}
+
+/// Assemble `profile` for `encoding`, with or without the default flow limit.
+fn assemble(
+    profile: &Profile,
+    encoding: de1_protocol::FrameEncoding,
+    default_flow_limit: bool,
+) -> Result<de1_domain::AssembledProfile, de1_domain::DomainError> {
+    if default_flow_limit {
+        profile.assemble_for(encoding)
+    } else {
+        profile.assemble_without_default_flow_limit(encoding)
+    }
+}
+
+/// The wait before an unanswered re-upload request that went out `sent`
+/// times is sent again: [`PROFILE_REUPLOAD_REPEAT`] after the first send,
+/// doubling after each further one (none before the first).
+fn reupload_repeat_after(sent: u8) -> Duration {
+    match sent {
+        0 => Duration::ZERO,
+        n => PROFILE_REUPLOAD_REPEAT.saturating_mul(1 << u32::from(n - 1).min(16)),
+    }
+}
+
 /// The frame encoding a machine model takes: BLE v2 on a Bengle (de1app
 /// `detect_ble_protocol_version`), classic otherwise.
 fn frame_encoding_for(model: u32) -> de1_protocol::FrameEncoding {
@@ -5671,6 +5834,14 @@ fn frame_encoding_for(model: u32) -> de1_protocol::FrameEncoding {
     }
 }
 
+/// Internal: build a `WriteToMMR` [`CoreOutput`] for one register.
+///
+/// Used by the public [`CremaCore::write_mmr`] and every typed setter;
+/// lockout-checking stays in the callers so a [`Event::FirmwareLockoutHit`]
+/// names the actual setter, not this internal helper.
+///
+/// `byte_len` is clamped to `1..=4`; the value is encoded little-endian.
+#[allow(clippy::cast_possible_truncation)]
 fn mmr_write_command(register: MmrRegister, value: u32, byte_len: u8) -> CoreOutput {
     let mut out = CoreOutput::default();
     let bytes = value.to_le_bytes();
@@ -9454,6 +9625,67 @@ mod tests {
     }
 
     #[test]
+    fn user_activity_rearms_steam_eco_and_lifts_it() {
+        // Round-2 verification V1 P3-5b / de1app `delay_screen_saver`: the
+        // 600 s eco delay counts from the last UI interaction, and an
+        // interaction while eco is engaged returns steam to normal.
+        use de1_domain::idle_sleep::{IdleActivity, IdleSleepInput};
+        let touch = IdleSleepInput::Activity {
+            kind: IdleActivity::Touch,
+        };
+        let mut core = CremaCore::new();
+        core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        core.enable_steam_eco_mode(true, 0);
+        // The user is busy at 500 s (core clock): no eco at 600 s.
+        let _ = core.on_tick(500_000);
+        let _ = core.idle_sleep(touch, 1);
+        assert!(
+            core.on_tick(600_000).events.is_empty(),
+            "the touch re-armed it"
+        );
+        let out = core.on_tick(1_100_000);
+        assert!(
+            out.events
+                .contains(&Event::SteamEcoModeChanged { eco: true })
+        );
+        // A touch while eco is on restores the normal 150 °C target.
+        let out = core.idle_sleep(touch, 2);
+        assert!(
+            out.events
+                .contains(&Event::SteamEcoModeChanged { eco: false })
+        );
+        let Some(Command::WriteCharacteristic { data, .. }) = out.commands.iter().find(|c| {
+            matches!(
+                c,
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1ShotSettings,
+                    ..
+                }
+            )
+        }) else {
+            panic!("expected the ShotSettings write");
+        };
+        assert_eq!(data[1], 150);
+    }
+
+    #[test]
+    fn user_activity_does_nothing_to_steam_while_eco_is_off() {
+        use de1_domain::idle_sleep::{IdleActivity, IdleSleepInput};
+        let mut core = CremaCore::new();
+        let out = core.idle_sleep(
+            IdleSleepInput::Activity {
+                kind: IdleActivity::Touch,
+            },
+            1,
+        );
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::SteamEcoModeChanged { .. }))
+        );
+    }
+
+    #[test]
     fn builtin_profiles_json_is_a_non_empty_profile_array() {
         let core = CremaCore::new();
         let json = core.builtin_profiles_json();
@@ -11099,6 +11331,30 @@ mod tests {
         }
 
         #[test]
+        fn a_cleaning_profile_the_user_runs_gets_the_default_limit_too() {
+            // Round-2 verification V1, decision 2: de1app caps every profile
+            // it selects, its forward-flush file included, and so does
+            // Decenza; only the code-built cold-maintenance profile goes out
+            // unlimited (see maintenance_run tests).
+            for beverage_type in [BeverageType::Cleaning, BeverageType::Calibrate] {
+                let mut core = CremaCore::new_with_model(1);
+                let mut p = profile("Flush", vec![step("rinse", Pump::Pressure, None)]);
+                p.beverage_type = beverage_type;
+                let out = core.upload_profile(&p, Duration::ZERO).unwrap();
+                assert!(
+                    out.commands.iter().any(|c| matches!(
+                        c,
+                        Command::WriteCharacteristic {
+                            target: WriteTarget::De1ProfileFrame,
+                            data,
+                        } if data[..3] == [32, 0x80, 0x10]
+                    )),
+                    "{beverage_type:?}"
+                );
+            }
+        }
+
+        #[test]
         fn an_unlimited_pressure_step_uploads_with_the_8_ml_s_default_limit() {
             // de1app apply_default_flow_limit_to_pressure_steps / Decenza
             // 0dbcc442 (report 08 S1): extension frame [32+i][U8P4 8.0 =
@@ -11525,14 +11781,6 @@ mod tests {
             assert_eq!(core.tank_temp_threshold_c, Some(38));
         }
 
-        /// The MachineModel `ReadFromMMR` reply carrying `model`.
-        fn model_reply(model: u32) -> [u8; de1_protocol::MMR_PACKET_LEN] {
-            let mut packet = [0u8; de1_protocol::MMR_PACKET_LEN];
-            packet[1..4].copy_from_slice(&[0x80, 0x00, 0x0C]);
-            packet[4..8].copy_from_slice(&model.to_le_bytes());
-            packet
-        }
-
         /// Whether `out` asks the DE1 for its MachineModel register.
         fn reads_the_model(out: &CoreOutput) -> bool {
             out.commands.iter().any(|c| {
@@ -11590,7 +11838,8 @@ mod tests {
             )));
             assert!(core.profile_upload_in_progress());
 
-            let released = core.on_notification(Source::De1MmrRead, &model_reply(128), 1_200);
+            let released =
+                core.on_notification(Source::De1MmrRead, &machine_model_packet(128), 1_200);
             let header = released
                 .commands
                 .iter()
@@ -11631,6 +11880,27 @@ mod tests {
             expected.resize(de1_protocol::MMR_PACKET_LEN, 0);
             assert_eq!(end_of_shot_weight_write(&last), Some(expected));
             assert!(!core.profile_upload_in_progress());
+        }
+
+        #[test]
+        fn a_bengle_model_reply_clears_the_end_of_shot_weight_without_an_upload() {
+            // Round-2 verification V1 P3-4: with the upload skipped on a
+            // fingerprint match, the register was never written, so a target
+            // another app persisted could still end a Crema shot.
+            let mut core = CremaCore::new();
+            let out = core.on_notification(Source::De1MmrRead, &machine_model_packet(128), 10);
+            let mut expected = vec![0x04, 0x80, 0x38, 0x64, 0, 0, 0, 0];
+            expected.resize(de1_protocol::MMR_PACKET_LEN, 0);
+            assert_eq!(end_of_shot_weight_write(&out.commands), Some(expected));
+            // A classic DE1 has no such register.
+            let mut classic = CremaCore::new();
+            let out = classic.on_notification(Source::De1MmrRead, &machine_model_packet(1), 10);
+            assert_eq!(end_of_shot_weight_write(&out.commands), None);
+            // Not while a firmware flash holds the link.
+            let mut flashing = CremaCore::new();
+            flashing.firmware_lock_override = true;
+            let out = flashing.on_notification(Source::De1MmrRead, &machine_model_packet(128), 10);
+            assert_eq!(end_of_shot_weight_write(&out.commands), None);
         }
 
         #[test]
@@ -11676,7 +11946,7 @@ mod tests {
                     reason: ProfileUploadFailure::Aborted
                 }
             )));
-            let released = core.on_notification(Source::De1MmrRead, &model_reply(1), 10);
+            let released = core.on_notification(Source::De1MmrRead, &machine_model_packet(1), 10);
             assert!(
                 released.events.iter().any(
                     |e| matches!(e, Event::ProfileUploadStarted { title, .. } if title == "B")
@@ -11691,8 +11961,9 @@ mod tests {
             // batch, so the core fails now instead of on the next stale ack.
             let mut core = CremaCore::new_with_model(1);
             let _ = core.on_notification(Source::De1State, &[2, 0], 0); // Idle
-            let _ = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
-            let out = core.profile_write_failed(100);
+            let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let id = started_upload_id(&up);
+            let out = core.profile_write_failed(100, id);
             assert!(out.events.iter().any(|e| matches!(
                 e,
                 Event::ProfileUploadFailed {
@@ -11701,7 +11972,7 @@ mod tests {
             )));
             assert_eq!(reupload_requests(&out.events), 1, "Idle: re-upload now");
             assert!(
-                core.profile_write_failed(200).events.is_empty(),
+                core.profile_write_failed(200, id).events.is_empty(),
                 "nothing left to fail"
             );
         }
@@ -11713,8 +11984,8 @@ mod tests {
             // so the DE1 kept a mixed profile until the next app start.
             let mut core = CremaCore::new_with_model(1);
             let _ = core.on_notification(Source::De1State, &[2, 0], 0); // Idle
-            let _ = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
-            let first = core.profile_write_failed(1_000);
+            let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let first = core.profile_write_failed(1_000, started_upload_id(&up));
             assert_eq!(reupload_requests(&first.events), 1);
             assert_eq!(reupload_requests(&core.on_tick(3_000).events), 0, "not yet");
             assert_eq!(
@@ -11724,15 +11995,216 @@ mod tests {
             );
             assert_eq!(
                 reupload_requests(&core.on_tick(11_000).events),
+                0,
+                "the next repeat waits twice as long"
+            );
+            assert_eq!(
+                reupload_requests(&core.on_tick(16_000).events),
                 1,
                 "and again"
             );
             // A shell acts: the request is answered and stops repeating.
             let _ = core
-                .upload_profile(&two_step(), Duration::from_millis(11_500))
+                .upload_profile(&two_step(), Duration::from_millis(16_500))
                 .unwrap();
-            let ack_free = core.on_tick(12_000);
+            let ack_free = core.on_tick(17_000);
             assert_eq!(reupload_requests(&ack_free.events), 0);
+        }
+
+        #[test]
+        fn a_late_write_failure_for_a_superseded_upload_leaves_the_newer_one_running() {
+            // Round-2 verification V3 #1: Android reported a failed write from
+            // the batch coroutine with no upload identity, so a report about
+            // upload N that landed after a shot start began upload N+1 failed
+            // N+1 and refused the shot.
+            let mut core = CremaCore::new_with_model(1);
+            let _ = core.on_notification(Source::De1State, &[2, 0], 0); // Idle
+            let n = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let n_plus_1 = core
+                .upload_profile(&two_step(), Duration::from_millis(50))
+                .unwrap();
+            let (old, new) = (started_upload_id(&n), started_upload_id(&n_plus_1));
+            assert_ne!(old, new);
+            let late = core.profile_write_failed(100, old);
+            assert!(late.events.is_empty(), "the report is about another upload");
+            assert!(core.profile_upload_in_progress());
+            // N+1 still completes.
+            let done = ack_every_frame(&mut core, &n_plus_1.commands, 10);
+            assert!(
+                done.iter()
+                    .any(|e| matches!(e, Event::ProfileUploadCompleted { .. }))
+            );
+        }
+
+        #[test]
+        fn a_superseded_uploads_late_acks_never_reach_the_newer_one() {
+            // Round-2 verification V1 P3-1, ack variant: on Android an old
+            // upload's write can finish after a shot start armed the next
+            // upload but before the shell's generation moved on. Its header
+            // ack (same step count) used to count as the new header, its frame
+            // acks as the new frames.
+            let mut core = CremaCore::new_with_model(1);
+            let a = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let b = core
+                .upload_profile(&two_step(), Duration::from_millis(10))
+                .unwrap();
+            let (a_id, b_id) = (started_upload_id(&a), started_upload_id(&b));
+            let header = |out: &CoreOutput| {
+                out.commands
+                    .iter()
+                    .find_map(|c| match c {
+                        Command::WriteCharacteristic {
+                            target: WriteTarget::De1ProfileHeader,
+                            data,
+                        } => Some(data.clone()),
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            let frames = |out: &CoreOutput| -> Vec<Vec<u8>> {
+                out.commands
+                    .iter()
+                    .filter_map(|c| match c {
+                        Command::WriteCharacteristic {
+                            target: WriteTarget::De1ProfileFrame,
+                            data,
+                        } => Some(data.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            assert_eq!(header(&a), header(&b), "same step count: identical headers");
+            // A's late header and first frame acks: ignored, B untouched.
+            assert!(
+                core.on_profile_write_ack(Source::De1HeaderAck, &header(&a), 20, a_id)
+                    .events
+                    .is_empty()
+            );
+            assert!(
+                core.on_profile_write_ack(Source::De1FrameAck, &frames(&a)[0], 21, a_id)
+                    .events
+                    .is_empty()
+            );
+            assert!(core.profile_upload_in_progress());
+            // B's own acks complete B.
+            let _ = core.on_profile_write_ack(Source::De1HeaderAck, &header(&b), 30, b_id);
+            let mut last = Vec::new();
+            for f in frames(&b) {
+                last = core
+                    .on_profile_write_ack(Source::De1FrameAck, &f, 31, b_id)
+                    .events;
+            }
+            assert!(
+                last.iter()
+                    .any(|e| matches!(e, Event::ProfileUploadCompleted { .. }))
+            );
+            // Only ack sources are accepted.
+            assert!(
+                core.on_profile_write_ack(Source::De1State, &[2, 0], 40, b_id)
+                    .events
+                    .is_empty()
+            );
+        }
+
+        #[test]
+        fn upload_ids_stay_unique_across_a_reset() {
+            // A report about an upload from before a reconnect must not match
+            // the first upload after it.
+            let mut core = CremaCore::new_with_model(1);
+            let before =
+                started_upload_id(&core.upload_profile(&two_step(), Duration::ZERO).unwrap());
+            core.reset();
+            core.de1_machine_model = Some(1);
+            let after = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            assert_ne!(before, started_upload_id(&after));
+            assert!(core.profile_write_failed(10, before).events.is_empty());
+            assert!(core.profile_upload_in_progress());
+        }
+
+        #[test]
+        fn an_unanswered_reupload_request_backs_off_and_stops() {
+            // Round-2 verification V3 #2: with no active profile neither shell
+            // answers, and the request used to repeat every 5 s for as long as
+            // the machine stayed Idle (an event, a log line and a profile-store
+            // reload each time).
+            let mut core = CremaCore::new_with_model(1);
+            let _ = core.on_notification(Source::De1State, &[2, 0], 0); // Idle
+            let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let mut sent_at = Vec::new();
+            let first = core.profile_write_failed(1_000, started_upload_id(&up));
+            if reupload_requests(&first.events) == 1 {
+                sent_at.push(1_000);
+            }
+            // Ten minutes of 1 Hz ticks while Idle.
+            for now in (2_000..=600_000).step_by(1_000) {
+                if reupload_requests(&core.on_tick(now).events) == 1 {
+                    sent_at.push(now);
+                }
+            }
+            assert_eq!(sent_at, vec![1_000, 6_000, 16_000, 36_000]);
+            assert_eq!(sent_at.len(), usize::from(MAX_UNANSWERED_REUPLOAD_REQUESTS));
+            // An Idle re-entry alone does not start it again.
+            let _ = core.on_notification(Source::De1State, &[0, 0], 601_000); // Sleep
+            let idle = core.on_notification(Source::De1State, &[2, 0], 602_000);
+            assert_eq!(reupload_requests(&idle.events), 0);
+            // A new failed upload is a new reason to ask.
+            let up = core
+                .upload_profile(&two_step(), Duration::from_millis(603_000))
+                .unwrap();
+            let again = core.profile_write_failed(603_100, started_upload_id(&up));
+            assert_eq!(reupload_requests(&again.events), 1);
+        }
+
+        #[test]
+        fn a_parked_upload_that_fails_leaves_the_profile_alone() {
+            // Round-2 verification V3 #5: a parked upload never wrote a frame,
+            // so the DE1 still holds its valid profile. A lost MachineModel
+            // reply used to mark it unknown and arm ~30 s of futile parked
+            // re-uploads.
+            let mut core = CremaCore::new();
+            let _ = core.on_notification(Source::De1State, &[2, 0], 0); // Idle
+            let _ = core
+                .upload_profile(&two_step(), Duration::from_millis(1_000))
+                .unwrap();
+            let failed = core.on_tick(11_000);
+            assert!(failed.events.contains(&Event::ProfileUploadFailed {
+                reason: ProfileUploadFailure::MachineModelUnknown
+            }));
+            let mut requests = reupload_requests(&failed.events);
+            for now in (12_000..=120_000).step_by(1_000) {
+                requests += reupload_requests(&core.on_tick(now).events);
+            }
+            assert_eq!(requests, 0, "MachineModelUnknown asks for nothing");
+            // Aborted while parked: the same.
+            let _ = core
+                .upload_profile(&two_step(), Duration::from_millis(121_000))
+                .unwrap();
+            let cancelled = core.cancel_profile_upload();
+            assert!(cancelled.events.contains(&Event::ProfileUploadFailed {
+                reason: ProfileUploadFailure::Aborted
+            }));
+            let mut requests = 0;
+            for now in (122_000..=200_000).step_by(1_000) {
+                requests += reupload_requests(&core.on_tick(now).events);
+            }
+            assert_eq!(requests, 0, "an abort while parked asks for nothing");
+        }
+
+        #[test]
+        fn a_parked_upload_failing_keeps_an_earlier_unknown_profile_pending() {
+            // A running upload failed first (the DE1 holds a mix): a parked
+            // retry that then fails must not clear that.
+            let mut core = CremaCore::new_with_model(1);
+            let _ = core.on_notification(Source::De1State, &[2, 0], 0); // Idle
+            let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let _ = core.profile_write_failed(100, started_upload_id(&up));
+            assert!(core.profile_reupload_pending);
+            core.de1_machine_model = None;
+            let _ = core
+                .upload_profile(&two_step(), Duration::from_millis(200))
+                .unwrap();
+            let _ = core.on_tick(200 + 10_000);
+            assert!(core.profile_reupload_pending);
         }
 
         #[test]
@@ -11755,6 +12227,17 @@ mod tests {
                     step("b", Pump::Pressure, None),
                 ],
             )
+        }
+
+        /// The `upload_id` of the upload `out` started.
+        fn started_upload_id(out: &CoreOutput) -> u32 {
+            out.events
+                .iter()
+                .find_map(|e| match e {
+                    Event::ProfileUploadStarted { upload_id, .. } => Some(*upload_id),
+                    _ => None,
+                })
+                .expect("the output starts an upload")
         }
 
         fn reupload_requests(events: &[Event]) -> usize {

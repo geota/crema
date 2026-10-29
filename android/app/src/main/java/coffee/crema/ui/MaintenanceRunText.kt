@@ -11,13 +11,27 @@ import coffee.crema.core.MaintenancePhase
  * profile until preheat ends; a descale reads Decenza's
  * "42% · Step 4 of 5 · 7 min 0 s left" from the firmware's fixed 720 s schedule.
  */
+/** Whether a `MaintenanceProgress` [phase] ends the cycle (finished, cancelled, or never started). */
+internal fun isMaintenanceTerminal(phase: MaintenancePhase): Boolean =
+    phase == MaintenancePhase.Finished || phase == MaintenancePhase.Cancelled || phase == MaintenancePhase.Failed
+
+/**
+ * The notice for a cycle core refused to start because its cold-start profile did
+ * not load (`MaintenancePhase.Failed`, round-2 verification V3 #4). Same copy as
+ * web `maintenanceFailedMessage`.
+ */
+internal fun maintenanceFailedText(state: MachineState): String =
+    "${maintenanceTitle(state)} didn't start: the cold-start profile older DE1 firmware needs could not be loaded. Try again."
+
+private fun maintenanceTitle(state: MachineState): String = when (state) {
+    MachineState.Descale -> "Descale"
+    MachineState.Clean -> "Clean cycle"
+    MachineState.AirPurge -> "Air purge"
+    else -> state.string
+}
+
 internal fun maintenanceRunText(run: EventMaintenanceProgressInner): Pair<String, String> {
-    val title = when (run.state) {
-        MachineState.Descale -> "Descale"
-        MachineState.Clean -> "Clean cycle"
-        MachineState.AirPurge -> "Air purge"
-        else -> run.state.string
-    }
+    val title = maintenanceTitle(run.state)
     val sub = when {
         run.phase == MaintenancePhase.WaitingForPreheat ->
             "Waiting for the machine to stop heating (older firmware workaround)…"

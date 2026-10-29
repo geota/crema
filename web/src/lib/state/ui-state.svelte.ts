@@ -434,7 +434,7 @@ export interface UiSnapshot {
 	 * The maintenance cycle (Descale / Clean / AirPurge) the core is
 	 * following, from `Event::MaintenanceProgress` — held for preheat on old
 	 * firmware, requested, or running (with the descale countdown). `null`
-	 * when none is, including once it finishes or is cancelled. Drives the
+	 * when none is, including once it finishes, is cancelled or fails. Drives the
 	 * progress line + Cancel on Settings → Water.
 	 */
 	readonly maintenance: MaintenanceView | null;
@@ -487,6 +487,25 @@ export interface UiSnapshot {
  */
 /** The payload of a core `MaintenanceProgress` event. */
 export type MaintenanceView = Extract<Event, { type: 'MaintenanceProgress' }>['content'];
+
+/**
+ * Whether a `MaintenanceProgress` phase ends the cycle: it finished, was
+ * cancelled, or (old firmware) never started because the cold-start profile
+ * did not load (`Failed`).
+ */
+export function isMaintenanceTerminal(phase: string): boolean {
+	return phase === 'Finished' || phase === 'Cancelled' || phase === 'Failed';
+}
+
+/**
+ * The notice for a cycle the core refused to start because its cold-start
+ * profile did not load (core `MaintenancePhase::Failed`, round-2
+ * verification V3 #4). Android `maintenanceFailedText` uses the same copy.
+ */
+export function maintenanceFailedMessage(state: string): string {
+	const title = state === 'Clean' ? 'Clean cycle' : state === 'AirPurge' ? 'Air purge' : state;
+	return `${title} didn't start: the cold-start profile older DE1 firmware needs could not be loaded. Try again.`;
+}
 
 export type De1MachineInfo = Partial<Record<MmrRegister, number>>;
 
@@ -801,7 +820,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 		}
 		case 'MaintenanceProgress': {
 			const m = event.content;
-			const terminal = m.phase === 'Finished' || m.phase === 'Cancelled';
+			const terminal = isMaintenanceTerminal(m.phase);
 			// Log the phase changes, not every countdown second.
 			const phaseChanged = snapshot.maintenance?.phase !== m.phase;
 			return {

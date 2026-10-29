@@ -1,6 +1,6 @@
 /**
  * `#lib/ble/de1-liveness.js` — mid-session dead-link detection for the DE1.
- * The web mirror of Android's `De1BleManager.livenessLoop` (geota/crema#65),
+ * The web mirror of Android's `De1LivenessCheck` (geota/crema#65),
  * same rule, same numbers.
  *
  * A dead link does not always deliver a disconnect: Decenza measured a link
@@ -24,16 +24,16 @@
 
 import { withTimeout } from '#lib/utils/timeout.js';
 
-/** How often the check runs, ms (Android `LIVENESS_CHECK_INTERVAL_MS`). */
+/** How often the check runs, ms (Android `De1LivenessCheck.CHECK_INTERVAL_MS`). */
 export const LIVENESS_CHECK_INTERVAL_MS = 1_000;
 
-/** Inbound silence before a probe read, ms (Android `LIVENESS_QUIET_MS`). */
+/** Inbound silence before a probe read, ms (Android `De1LivenessCheck.QUIET_MS`). */
 export const LIVENESS_QUIET_MS = 5_000;
 
-/** Failed probes in a row before the link is presumed dead (Android `LIVENESS_MAX_FAILURES`). */
+/** Failed probes in a row before the link is presumed dead (Android `De1LivenessCheck.MAX_FAILURES`). */
 export const LIVENESS_MAX_FAILURES = 2;
 
-/** One probe read's ceiling, ms (Android `LIVENESS_PROBE_TIMEOUT_MS`). */
+/** One probe read's ceiling, ms (Android `De1LivenessCheck.PROBE_TIMEOUT_MS`). */
 export const LIVENESS_PROBE_TIMEOUT_MS = 2_000;
 
 /**

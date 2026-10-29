@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Command } from '#lib/core/crema-core.js';
-import { ProfileWriteGenerations } from './profile-write-generations.ts';
+import { ProfileWriteGenerations, startedUploadId } from './profile-write-generations.ts';
 
 const write = (target: string): Command =>
 	({ type: 'WriteCharacteristic', content: { target, data: [0] } }) as unknown as Command;
@@ -54,5 +54,24 @@ describe('ProfileWriteGenerations', () => {
 		const a = g.begin(upload())!;
 		const more = g.begin([write('De1ProfileFrame')])!;
 		expect(more.generation).toBe(a.generation);
+	});
+
+	it("each batch carries its upload's number; frames without a header keep the current one", () => {
+		const g = new ProfileWriteGenerations();
+		const a = g.begin(upload(), 7)!;
+		expect(a.uploadId).toBe(7);
+		expect(g.begin([write('De1ProfileFrame')])!.uploadId).toBe(7);
+		const b = g.begin(upload(), 8)!;
+		expect(b.uploadId).toBe(8);
+		expect(a.uploadId, 'the older batch keeps its own number').toBe(7);
+	});
+
+	it('reads the upload number from the output that starts it', () => {
+		const started = {
+			type: 'ProfileUploadStarted',
+			content: { title: 'A', frame_count: 2, extension_frame_count: 0, upload_id: 41 }
+		} as unknown as Parameters<typeof startedUploadId>[0][number];
+		expect(startedUploadId([started])).toBe(41);
+		expect(startedUploadId([])).toBeNull();
 	});
 });

@@ -2262,6 +2262,24 @@ impl CremaBridge {
         self.state().stashed.is_some()
     }
 
+    /// The synthesised ack for a profile write of upload `upload_id` (its
+    /// `ProfileUploadStarted` number). Ignored unless that upload is still
+    /// running. See
+    /// [`CremaCore::on_profile_write_ack`](de1_app::CremaCore::on_profile_write_ack).
+    pub fn on_profile_write_ack(
+        &self,
+        source: NotificationSource,
+        data: Vec<u8>,
+        now_ms: f64,
+        upload_id: u32,
+    ) -> String {
+        json(
+            self.state()
+                .core
+                .on_profile_write_ack(source.into(), &data, now_ms as u64, upload_id),
+        )
+    }
+
     /// Feed a raw GATT notification. Returns a JSON-encoded [`CoreOutput`].
     pub fn on_notification(
         &self,
@@ -3327,11 +3345,16 @@ impl CremaBridge {
         json(self.state().core.cancel_profile_upload())
     }
 
-    /// A profile write of the running upload did not reach the DE1: fail the
-    /// upload now (`ProfileUploadFailure::WriteFailed`). See
-    /// [`CremaCore::profile_write_failed`](de1_app::CremaCore::profile_write_failed).
-    pub fn profile_write_failed(&self, now_ms: f64) -> String {
-        json(self.state().core.profile_write_failed(now_ms as u64))
+    /// A profile write of upload `upload_id` (its `ProfileUploadStarted`
+    /// number) did not reach the DE1: fail that upload now
+    /// (`ProfileUploadFailure::WriteFailed`) if it is still the running one.
+    /// See [`CremaCore::profile_write_failed`](de1_app::CremaCore::profile_write_failed).
+    pub fn profile_write_failed(&self, now_ms: f64, upload_id: u32) -> String {
+        json(
+            self.state()
+                .core
+                .profile_write_failed(now_ms as u64, upload_id),
+        )
     }
 
     /// `true` from `upload_profile` until the tail-ack / a failure /

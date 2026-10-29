@@ -1939,6 +1939,14 @@ export type Event =
 	frame_count: number;
 	/** Number of extension frames (one per step that has a limiter). */
 	extension_frame_count: number;
+	/**
+	 * This upload's number, unique for the core's lifetime (kept across
+	 * [`reset`](crate::CremaCore::reset)). The shell records it with
+	 * the upload's writes and passes it back to
+	 * [`profile_write_failed`](crate::CremaCore::profile_write_failed),
+	 * so a late failure report cannot fail a newer upload.
+	 */
+	upload_id: number;
 }}
 	/**
 	 * An upload is waiting for the DE1's machine model before it writes
@@ -4272,8 +4280,9 @@ export enum MachineState {
  */
 export enum MaintenancePhase {
 	/**
-	 * Old firmware, machine heating: the 1 °C profile is loaded and the
-	 * request is held until the machine reports it has left preheat.
+	 * Old firmware, machine heating: the 1 °C profile is uploading and the
+	 * request is held until that upload has completed AND the machine
+	 * reports it has left preheat.
 	 */
 	WaitingForPreheat = "WaitingForPreheat",
 	/**
@@ -4287,6 +4296,13 @@ export enum MaintenancePhase {
 	Finished = "Finished",
 	/** Cancelled by the user, by another state request, or by a DE1 link drop. */
 	Cancelled = "Cancelled",
+	/**
+	 * The 1 °C cold-maintenance profile did not load (its upload failed,
+	 * was cancelled, or another upload replaced it), so the held request
+	 * was never sent: running the cycle on the brew profile is what the
+	 * workaround exists to prevent. The user can start it again.
+	 */
+	Failed = "Failed",
 }
 
 /**

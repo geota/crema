@@ -71,6 +71,8 @@ import {
 	EMPTY_DE1_CALIBRATION,
 	getCremaUiState,
 	defaultRefillPointMm,
+	isMaintenanceTerminal,
+	maintenanceFailedMessage,
 	waterTankMl,
 	waterTankPercent,
 	type UiSnapshot
@@ -83,6 +85,7 @@ import { stepCapRefusal } from '#lib/profiles/step-cap.js';
 import {
 	ProfileWriteGenerations,
 	isProfileWriteTarget,
+	startedUploadId,
 	type ProfileWriteBatch,
 	type ProfileWriteOutcome
 } from '#lib/services/profile-write-generations.js';
@@ -879,7 +882,7 @@ export class CremaApp {
 				}
 			}
 			if (event.type === 'MaintenanceProgress' && event.content.cold_workaround) {
-				this.onColdMaintenanceProgress(event.content.phase);
+				this.onColdMaintenanceProgress(event.content.phase, event.content.state);
 			}
 			if (event.type === 'ProfileUploadCompleted') {
 				// Hand the completion to the `ProfileSync` service (T-21): it
@@ -1006,7 +1009,7 @@ export class CremaApp {
 		}
 		// The profile writes of this output form one batch: a header write
 		// supersedes every earlier upload's queued writes (#2 N2).
-		const batch = this.#profileWrites.begin(output.commands);
+		const batch = this.#profileWrites.begin(output.commands, startedUploadId(output.events));
 		for (const command of output.commands) {
 			void this.executeCommand(command, batch);
 		}
@@ -1241,7 +1244,13 @@ export class CremaApp {
 						// Stop the rest of this upload and fail it now, so the
 						// re-upload does not wait for the ack watchdog.
 						this.state.log('Profile write failed — stopping this upload');
-						this.applyCoreOutput(await this.core.profileWriteFailed(performance.now()));
+						// Named by its upload, so a report that lands after a
+						// newer upload started leaves that one alone (V3 #1).
+						if (profileBatch.uploadId !== null) {
+							this.applyCoreOutput(
+								await this.core.profileWriteFailed(performance.now(), profileBatch.uploadId)
+							);
+						}
 						break;
 					}
 					// Superseded between the write and now: its ack must not reach
@@ -1263,11 +1272,14 @@ export class CremaApp {
 				// fails the upload rather than report a half-written
 				// profile as loaded (cohort review 02 P0-2).
 				const ack = profileWriteAck(command.content.target, delivered);
-				if (ack !== null) {
-					const ackOut = await this.core.onNotification(
+				// Named by its upload, so the core drops it if a newer upload
+				// started meanwhile (round-2 V1 P3-1).
+				if (ack !== null && profileBatch?.uploadId != null) {
+					const ackOut = await this.core.onProfileWriteAck(
 						ack,
 						new Uint8Array(command.content.data),
-						performance.now()
+						performance.now(),
+						profileBatch.uploadId
 					);
 					this.applyCoreOutput(ackOut);
 				}
@@ -1310,14 +1322,16 @@ export class CremaApp {
 	 * "already loaded" fingerprint at once, and put the active profile back
 	 * when the cycle ends (Decenza re-uploads it on leaving its descale page).
 	 */
-	private onColdMaintenanceProgress(phase: string): void {
+	private onColdMaintenanceProgress(phase: string, state: string): void {
 		if (this.state.current.activeProfileFingerprint !== null) {
 			writeJson(LAST_FINGERPRINT_KEY, null);
 			this.state.patch({ activeProfileFingerprint: null });
 		}
-		if (phase === 'Finished' || phase === 'Cancelled') {
+		if (isMaintenanceTerminal(phase)) {
 			if (this.state.current.de1State === 'ready') this.ensureLoadedMatches();
 		}
+		// The cold profile never loaded, so the core did not send the request.
+		if (phase === 'Failed') toast.error(maintenanceFailedMessage(state));
 	}
 
 	/**

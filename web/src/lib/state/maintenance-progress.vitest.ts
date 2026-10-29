@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import { MachineState, MaintenancePhase } from '#lib/core/crema-core.js';
-import { applyEvent, INITIAL_SNAPSHOT, type MaintenanceView } from './ui-state.svelte';
+import {
+	applyEvent,
+	INITIAL_SNAPSHOT,
+	isMaintenanceTerminal,
+	maintenanceFailedMessage,
+	type MaintenanceView
+} from './ui-state.svelte';
 
 function progress(over: Partial<MaintenanceView>) {
 	return {
@@ -44,11 +50,28 @@ describe('maintenance progress fold', () => {
 		expect(s.eventLog[0]?.text).toContain('cold-start workaround');
 	});
 
-	it('clears on Finished and Cancelled', () => {
+	it('clears on Finished, Cancelled and Failed', () => {
 		const running = applyEvent(INITIAL_SNAPSHOT, progress({ step_index: 1 }));
-		for (const phase of [MaintenancePhase.Finished, MaintenancePhase.Cancelled]) {
+		for (const phase of [
+			MaintenancePhase.Finished,
+			MaintenancePhase.Cancelled,
+			MaintenancePhase.Failed
+		]) {
 			expect(applyEvent(running, progress({ phase })).maintenance).toBeNull();
 		}
+	});
+
+	it('a cold cycle whose profile never loaded clears the held row (V3 #4)', () => {
+		const held = applyEvent(
+			INITIAL_SNAPSHOT,
+			progress({ phase: MaintenancePhase.WaitingForPreheat, cold_workaround: true })
+		);
+		const failed = applyEvent(held, progress({ phase: MaintenancePhase.Failed, cold_workaround: true }));
+		expect(failed.maintenance).toBeNull();
+		expect(failed.eventLog[0]?.text).toContain('Failed');
+		expect(isMaintenanceTerminal(MaintenancePhase.Failed)).toBe(true);
+		expect(maintenanceFailedMessage(MachineState.Descale)).toMatch(/^Descale didn't start/);
+		expect(maintenanceFailedMessage(MachineState.Clean)).toMatch(/^Clean cycle didn't start/);
 	});
 
 	it('logs phase changes, not every countdown second', () => {

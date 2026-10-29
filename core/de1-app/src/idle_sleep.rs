@@ -59,6 +59,15 @@ impl CremaCore {
                 {
                     out = self.set_user_present(true);
                 }
+                // Activity re-arms steam eco and lifts it (de1app
+                // `delay_screen_saver`). On the core's own clock: `now_ms` is
+                // the idle-sleep clock, which is wall time on the web.
+                if !self.firmware_locks_writes() {
+                    let now = self.clock;
+                    for event in self.steam.on_activity(now) {
+                        self.map_steam_event(event, &mut out);
+                    }
+                }
             }
             IdleSleepInput::Link { ready } => self.idle_sleep.link(ready),
             IdleSleepInput::Tick => {

@@ -1604,7 +1604,13 @@ data class EventProfileUploadStartedInner (
 	/// Number of normal frames the profile has.
 	val frame_count: UByte,
 	/// Number of extension frames (one per step that has a limiter).
-	val extension_frame_count: UByte
+	val extension_frame_count: UByte,
+	/// This upload's number, unique for the core's lifetime (kept across
+	/// [`reset`](crate::CremaCore::reset)). The shell records it with
+	/// the upload's writes and passes it back to
+	/// [`profile_write_failed`](crate::CremaCore::profile_write_failed),
+	/// so a late failure report cannot fail a newer upload.
+	val upload_id: UInt
 )
 
 /// Generated type representing the anonymous struct variant `ProfileUploadWaitingForModel` of the `Event` Rust enum
@@ -4327,8 +4333,9 @@ enum class MachineState(val string: String) {
 /// `Event::MaintenanceProgress`.
 @Serializable
 enum class MaintenancePhase(val string: String) {
-	/// Old firmware, machine heating: the 1 °C profile is loaded and the
-	/// request is held until the machine reports it has left preheat.
+	/// Old firmware, machine heating: the 1 °C profile is uploading and the
+	/// request is held until that upload has completed AND the machine
+	/// reports it has left preheat.
 	@SerialName("WaitingForPreheat")
 	WaitingForPreheat("WaitingForPreheat"),
 	/// The held request has been sent; waiting for the machine to enter the
@@ -4344,6 +4351,12 @@ enum class MaintenancePhase(val string: String) {
 	/// Cancelled by the user, by another state request, or by a DE1 link drop.
 	@SerialName("Cancelled")
 	Cancelled("Cancelled"),
+	/// The 1 °C cold-maintenance profile did not load (its upload failed,
+	/// was cancelled, or another upload replaced it), so the held request
+	/// was never sent: running the cycle on the brew profile is what the
+	/// workaround exists to prevent. The user can start it again.
+	@SerialName("Failed")
+	Failed("Failed"),
 }
 
 /// Known MMR register addresses.

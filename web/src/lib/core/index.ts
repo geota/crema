@@ -310,6 +310,17 @@ export interface CremaCore {
 	 */
 	onNotification(source: NotificationSource, data: Uint8Array, nowMs: number): Promise<CoreOutput>;
 	/**
+	 * The synthesised ack for a profile write of upload `uploadId` (its
+	 * `ProfileUploadStarted` number); the core ignores it unless that upload is
+	 * still running. `source` is `De1HeaderAck` or `De1FrameAck`.
+	 */
+	onProfileWriteAck(
+		source: NotificationSource,
+		data: Uint8Array,
+		nowMs: number,
+		uploadId: number
+	): Promise<CoreOutput>;
+	/**
 	 * The `nowMs` of the most recent `onNotification` call, or `null` before
 	 * the first call. Lets the shell pin shot-slice bounds to the same
 	 * timebase the rolling capture buffer uses — `performance.now()` during
@@ -472,11 +483,12 @@ export interface CremaCore {
 	/** Cancel an in-progress upload; emits `ProfileUploadFailed { Aborted }`. */
 	cancelProfileUpload(): Promise<CoreOutput>;
 	/**
-	 * A profile write of the running upload did not reach the DE1: the core
-	 * fails the upload at once (`ProfileUploadFailed { WriteFailed }`). A
-	 * no-op when nothing is uploading. `nowMs` is a `performance.now()` time.
+	 * A profile write of upload `uploadId` (its `ProfileUploadStarted`
+	 * number) did not reach the DE1: the core fails that upload at once
+	 * (`ProfileUploadFailed { WriteFailed }`). A no-op unless it is still the
+	 * running upload. `nowMs` is a `performance.now()` time.
 	 */
-	profileWriteFailed(nowMs: number): Promise<CoreOutput>;
+	profileWriteFailed(nowMs: number, uploadId: number): Promise<CoreOutput>;
 	/** `true` from `uploadProfile` until the tail ack / failure / cancel. */
 	profileUploadInProgress(): Promise<boolean>;
 	/**
@@ -1039,6 +1051,11 @@ async function createCore(): Promise<CremaCore> {
 			lastNotificationAtMs = nowMs;
 			return parseOutput(bridge.on_notification(toWasmSource(source), data, nowMs));
 		},
+		async onProfileWriteAck(source, data, nowMs, uploadId) {
+			return parseOutput(
+				bridge.on_profile_write_ack(toWasmSource(source), data, nowMs, uploadId)
+			);
+		},
 		get lastNotificationAtMs(): number | null {
 			return lastNotificationAtMs;
 		},
@@ -1164,8 +1181,8 @@ async function createCore(): Promise<CremaCore> {
 		async cancelProfileUpload() {
 			return parseOutput(bridge.cancel_profile_upload());
 		},
-		async profileWriteFailed(nowMs) {
-			return parseOutput(bridge.profile_write_failed(nowMs));
+		async profileWriteFailed(nowMs, uploadId) {
+			return parseOutput(bridge.profile_write_failed(nowMs, uploadId));
 		},
 		async profileUploadInProgress() {
 			return bridge.profile_upload_in_progress();
