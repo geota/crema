@@ -4415,7 +4415,7 @@ impl CremaCore {
             step_weight: StepWeightExit::for_profile(profile),
             tank_temp_c: profile
                 .tank_temperature_opt()
-                .map(|t| t.round().clamp(0.0, MAX_TANK_TEMP_C) as u8)
+                .map(|t| sweep::whole_degrees(t, MAX_TANK_TEMP_C))
                 .or(self.tank_temp_threshold_c),
             header,
             header_acked: false,
