@@ -5734,14 +5734,6 @@ const STOP_REENFORCE_AFTER: Duration = Duration::from_secs(1);
 /// reconnect supervisor owns the problem).
 const STOP_REENFORCE_MAX: u32 = 30;
 
-/// Internal: build a `WriteToMMR` [`CoreOutput`] for one register.
-///
-/// Used by the public [`CremaCore::write_mmr`] and every typed setter;
-/// lockout-checking stays in the callers so a [`Event::FirmwareLockoutHit`]
-/// names the actual setter, not this internal helper.
-///
-/// `byte_len` is clamped to `1..=4`; the value is encoded little-endian.
-#[allow(clippy::cast_possible_truncation)]
 /// The value a Bengle (BLE v2) upload writes to the end-of-shot weight
 /// register (MMR `0x803864`, grams × 100, 0 = off). de1app
 /// (`de1_send_shot_frames` → `set_end_of_shot_weight`, `20e96d6`) writes the
@@ -5773,6 +5765,14 @@ fn frame_encoding_for(model: u32) -> de1_protocol::FrameEncoding {
     }
 }
 
+/// Internal: build a `WriteToMMR` [`CoreOutput`] for one register.
+///
+/// Used by the public [`CremaCore::write_mmr`] and every typed setter;
+/// lockout-checking stays in the callers so a [`Event::FirmwareLockoutHit`]
+/// names the actual setter, not this internal helper.
+///
+/// `byte_len` is clamped to `1..=4`; the value is encoded little-endian.
+#[allow(clippy::cast_possible_truncation)]
 fn mmr_write_command(register: MmrRegister, value: u32, byte_len: u8) -> CoreOutput {
     let mut out = CoreOutput::default();
     let bytes = value.to_le_bytes();
@@ -11627,14 +11627,6 @@ mod tests {
             assert_eq!(core.tank_temp_threshold_c, Some(38));
         }
 
-        /// The MachineModel `ReadFromMMR` reply carrying `model`.
-        fn model_reply(model: u32) -> [u8; de1_protocol::MMR_PACKET_LEN] {
-            let mut packet = [0u8; de1_protocol::MMR_PACKET_LEN];
-            packet[1..4].copy_from_slice(&[0x80, 0x00, 0x0C]);
-            packet[4..8].copy_from_slice(&model.to_le_bytes());
-            packet
-        }
-
         /// Whether `out` asks the DE1 for its MachineModel register.
         fn reads_the_model(out: &CoreOutput) -> bool {
             out.commands.iter().any(|c| {
@@ -11692,7 +11684,8 @@ mod tests {
             )));
             assert!(core.profile_upload_in_progress());
 
-            let released = core.on_notification(Source::De1MmrRead, &model_reply(128), 1_200);
+            let released =
+                core.on_notification(Source::De1MmrRead, &machine_model_packet(128), 1_200);
             let header = released
                 .commands
                 .iter()
@@ -11778,7 +11771,7 @@ mod tests {
                     reason: ProfileUploadFailure::Aborted
                 }
             )));
-            let released = core.on_notification(Source::De1MmrRead, &model_reply(1), 10);
+            let released = core.on_notification(Source::De1MmrRead, &machine_model_packet(1), 10);
             assert!(
                 released.events.iter().any(
                     |e| matches!(e, Event::ProfileUploadStarted { title, .. } if title == "B")
