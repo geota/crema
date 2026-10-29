@@ -478,4 +478,20 @@ class DecentSyncTest {
         assertNull(h.sync.shareUrl(stored))
         assertEquals(DECENT_HISTORY_URL, h.sync.viewUrl(stored))
     }
+
+    // Final review 04 P3-3: Erase all data leaves no activity log, settings or retry list.
+    @Test
+    fun `eraseAll resets the whole stored state, log included`() = runTest {
+        val h = harness(listOf(shot("s1")))
+        h.sync.uploadNow(h.history.getValue("s1"), manual = true, replace = false, fullSamples = null)
+        assertTrue(h.store.state.log.isNotEmpty())
+        assertTrue(h.sync.state.value.log.isNotEmpty())
+
+        h.sync.eraseAll()
+
+        assertEquals(DecentState(), h.store.state)
+        assertFalse(h.sync.state.value.linked)
+        assertTrue(h.sync.state.value.log.isEmpty())
+        assertNull(h.sync.state.value.email)
+    }
 }

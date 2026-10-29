@@ -320,11 +320,32 @@ class VisualizerSync(
      *  skips the snackbar (Erase all data reports once for everything). */
     fun signOut(quiet: Boolean = false) {
         scope.launch {
-            persisted.tokens?.accessToken?.let { revokeToken(clientId, it) }
+            // Forget first, then revoke from the in-memory copy: the revoke can
+            // take up to 20 s, and a kill in that window must not leave the
+            // token on disk (final review 04 P3-3).
+            val token = persisted.tokens?.accessToken
             // The tier is per-account: a later sign-in re-probes it.
             persist { it.copy(tokens = null, account = null, premium = null, premiumCheckedAt = null) }
             if (!quiet) notify("Signed out of Visualizer")
+            token?.let { revokeToken(clientId, it) }
         }
+    }
+
+    /**
+     * Erase all data: reset EVERYTHING this store keeps (sign-in, sharing
+     * settings, sync cursors, the activity log with its shot and bean names)
+     * and delete its file, then revoke the old token from the in-memory copy
+     * (final review 04 P3-3). The revoke runs on [scope] after the wipe.
+     */
+    suspend fun eraseAll() {
+        val token = persistMutex.withLock {
+            val t = persisted.tokens?.accessToken
+            persisted = VisualizerState()
+            store.erase()
+            t
+        }
+        fold()
+        token?.let { scope.launch { revokeToken(clientId, it) } }
     }
 
     /** Re-fetch `/me` (Settings open). Silent on failure — the cache stands. */

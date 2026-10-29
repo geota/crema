@@ -2,6 +2,7 @@ package coffee.crema.settings
 
 import android.content.Context
 import coffee.crema.core.CommonSettings
+import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
@@ -530,6 +531,11 @@ class SettingsStore(private val context: Context, private val json: Json) {
             runCatching { json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted()) }
                 .onSuccess { saveStore(file, it) }
         }
+    }
+
+    /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
+    suspend fun erase() {
+        withContext(Dispatchers.IO) { eraseStore(file) }
     }
 
     private companion object {

@@ -77,6 +77,9 @@ interface DecentStateStore {
 
     /** Write [state]; false (logged) when it could not be stored. */
     suspend fun save(state: DecentState): Boolean
+
+    /** Delete everything stored (Erase all data); true when nothing remains. */
+    suspend fun erase(): Boolean = save(DecentState())
 }
 
 /** The at-rest form: the token sealed. Idempotent. */
@@ -112,6 +115,8 @@ class DecentStore(
     }
 
     override suspend fun save(state: DecentState): Boolean = withContext(Dispatchers.IO) { write(state) }
+
+    override suspend fun erase(): Boolean = withContext(Dispatchers.IO) { SafeFile.erase(file) }
 
     private fun write(state: DecentState): Boolean = try {
         // No `.bak` copies of sealed tokens (review 05 P3-5).

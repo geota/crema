@@ -94,6 +94,9 @@ class DriveStore(
     /** Write [state]; false (logged) when it could not be stored. */
     suspend fun save(state: DriveState): Boolean = withContext(Dispatchers.IO) { write(state) }
 
+    /** Delete the file and every copy (Erase all data); true when nothing remains. */
+    suspend fun erase(): Boolean = withContext(Dispatchers.IO) { SafeFile.erase(file) }
+
     private fun write(state: DriveState): Boolean = try {
         // No `.bak` copies of sealed tokens (review 05 P3-5).
         SafeFile.writeCredential(file, json.encodeToString(DriveState.serializer(), state.sealedWith(box)))

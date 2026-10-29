@@ -4,6 +4,7 @@ import android.content.Context
 import coffee.crema.core.Bean
 import coffee.crema.core.BeanOrigin
 import coffee.crema.core.Roaster
+import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
@@ -49,6 +50,11 @@ class LibraryStore(private val context: Context, private val json: Json) {
         withContext(Dispatchers.IO) {
             saveStore(file, json.encodeToString(BeanLibrary.serializer(), library))
         }
+    }
+
+    /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
+    suspend fun erase() {
+        withContext(Dispatchers.IO) { eraseStore(file) }
     }
 
     private companion object {

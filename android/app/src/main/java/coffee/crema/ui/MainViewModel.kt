@@ -5053,11 +5053,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Erase ALL user data — bean library, roasters and bag photos, shot
-     * history, custom profiles, recipes, preferences, maintenance counters
-     * and the Visualizer / Decent / Google Drive sign-ins. Built-in profiles
-     * remain (they aren't user data); the active profile reseeds to the first
-     * built-in via [refreshProfiles]. Every store is cleared on disk too.
-     * Irreversible.
+     * history, custom profiles, recipes, preferences, maintenance counters,
+     * the learned stop-at-weight model, BLE session captures, and the
+     * Visualizer / Decent / Google Drive stores (sign-ins, sharing settings,
+     * sync cursors and activity logs). Built-in profiles remain (they aren't
+     * user data); the active profile reseeds to the first built-in via
+     * [refreshProfiles]. Irreversible.
+     *
+     * Memory first, so nothing can save the old values again; then, in one
+     * coroutine, every store file is DELETED with all its copies (`.bak`,
+     * `.tmp`, `.corrupt-*`) — saving an empty value would keep the old file
+     * as `.bak` (final review 05 N-1) — and a last sweep removes any copy an
+     * in-flight save left behind. The Visualizer and Drive grants are revoked
+     * after their tokens are gone from disk.
      */
     fun eraseAll() {
         // Reset the maintenance counters too — a fresh-install state (baselines and
@@ -5066,26 +5074,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onCoreLane {
             maintenanceTotalLitres = 0.0
             lastTelemetryMs = null
-        }
-        viewModelScope.launch {
-            settingsStore.save(AppPrefs())
-            maintenanceStore.save(freshMaintenance)
+            // A fresh stop-at-weight model (null = start learning again).
+            runCatching { bridge.loadSawModelJson(null) }
         }
         _ui.update { it.copy(
             maintenance = freshMaintenance,
             maintenanceReadout = computeMaintenanceReadout(freshMaintenance),
-            themeMode = AppPrefs().themeMode,
         ) }
-        // The library/history/custom-profile share (disk + UI rows + the
+        // Every preference back to its default in memory too (barista name,
+        // grinder, units, …): the next persistPrefs would otherwise write the
+        // old values straight back.
+        applyRestoredSettings(AppPrefs())
+        // The library/history/custom-profile share (UI rows + the
         // active-profile reseed via refreshProfiles).
         library.eraseAll()
-        // Sign-ins are personal data too (review 05 P2-1 parity with the web
-        // factory reset): revoke + forget Visualizer, forget Decent (it has no
-        // revoke endpoint) and Google Drive.
-        visualizer.signOut(quiet = true)
-        decent.signOut()
-        drive.disconnect(quiet = true)
-        notifyUser("Erased all Crema data on this device")
+        viewModelScope.launch {
+            library.eraseStoredData()
+            recipeStore.erase()
+            settingsStore.erase()
+            maintenanceStore.erase()
+            maintenanceStore.save(freshMaintenance)
+            sawModelStore.erase()
+            // Sign-ins are personal data too (review 05 P2-1), and so are the
+            // sync logs, settings and cursors (final review 04 P3-3).
+            visualizer.eraseAll()
+            decent.eraseAll()
+            drive.eraseAll()
+            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                bleRecorder.eraseCaptures()
+                val left = coffee.crema.persist.SafeFile.eraseCopiesIn(getApplication<Application>().filesDir)
+                if (left.isNotEmpty()) appendLog("Erase: couldn't delete ${left.joinToString()}")
+            }
+            notifyUser("Erased all Crema data on this device")
+        }
     }
 
     /** Scan for and connect to a scale — delegate of
