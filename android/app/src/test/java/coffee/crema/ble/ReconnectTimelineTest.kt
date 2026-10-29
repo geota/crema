@@ -117,4 +117,26 @@ class ReconnectTimelineTest {
         rec.end("DE1", ReconnectOutcome.CANCELLED)
         assertEquals("reconnect DE1 · launch → cancelled after 5.0s · 0 attempts", finished.single().compactLine())
     }
+
+    /** Final cohort review 2026-10-28, 04 P3-1: an old ViewModel's late
+     *  teardown blanked the process-wide hook its successor had installed. */
+    @Test
+    fun `releasing a hook keeps a newer owner's hook`() {
+        val oldLines = mutableListOf<String>()
+        val newLines = mutableListOf<String>()
+        val oldHook: (ReconnectTimeline) -> Unit = { oldLines += it.compactLine() }
+        val newHook: (ReconnectTimeline) -> Unit = { newLines += it.compactLine() }
+        rec.onFinished = oldHook
+        rec.onFinished = newHook // the successor VM's init
+        rec.releaseOnFinished(oldHook) // the predecessor's deferred teardown
+        rec.begin("DE1", ReconnectTrigger.LAUNCH)
+        rec.end("DE1", ReconnectOutcome.CANCELLED)
+        assertEquals(1, newLines.size, "the successor's hook survived")
+        assertTrue(oldLines.isEmpty())
+        // Releasing its own hook does clear it.
+        rec.releaseOnFinished(newHook)
+        rec.begin("DE1", ReconnectTrigger.LAUNCH)
+        rec.end("DE1", ReconnectOutcome.CANCELLED)
+        assertEquals(1, newLines.size)
+    }
 }

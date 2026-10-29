@@ -55,6 +55,52 @@ describe('CremaBridge after a panic', () => {
 		}
 	});
 
+	it('stops after the recovery cap and then fails fast with one clear error', () => {
+		// Final cohort review 2026-10-28, 01 P3-1: each reset leaks what the
+		// trap skipped (shadow stack, the abandoned core), so a panic loop
+		// used to reset forever and end with every call failing "memory access
+		// out of bounds". `MAX_PANIC_RECOVERIES` in de1-wasm is 5.
+		const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const bridge = new CremaBridge();
+		for (let i = 1; i <= 5; i++) {
+			expect(() => bridge.debug_trap()).toThrow(WebAssembly.RuntimeError);
+			expect(Array.isArray(idle(bridge).events)).toBe(true);
+			expect(bridge.panic_recoveries()).toBe(i);
+			expect(bridge.core_stopped()).toBe(false);
+		}
+		expect(() => bridge.debug_trap()).toThrow(WebAssembly.RuntimeError);
+
+		// The next call does not reset: it throws a plain Error, not a trap.
+		let stopped: unknown;
+		try {
+			idle(bridge);
+		} catch (err) {
+			stopped = err;
+		}
+		expect(stopped).toBeInstanceOf(Error);
+		expect(stopped).not.toBeInstanceOf(WebAssembly.RuntimeError);
+		expect((stopped as Error).message).toMatch(/^crema core stopped: .*reload Crema/);
+		expect(bridge.core_stopped()).toBe(true);
+		expect(bridge.panic_recoveries()).toBe(5);
+		expect(errors.mock.calls.flat().join('\n')).toContain('the core is stopped');
+		// The last panic is still there for a bug report.
+		expect(last_panic_message()).toContain('CremaBridge::debug_trap');
+
+		// Every later call fails the same way. Each such throw still leaks its
+		// frame (a few KB for on_tick), so the facade stops calling in after
+		// the first one (`stopped-guard.ts`); a few calls here are fine.
+		for (let i = 0; i < 20; i++) {
+			expect(() => bridge.on_tick(i)).toThrow((stopped as Error).message);
+		}
+		expect(bridge.core_stopped()).toBe(true);
+		expect(bridge.panic_recoveries()).toBe(5);
+
+		// A fresh bridge — what a reload builds — works.
+		const fresh = new CremaBridge();
+		expect(Array.isArray(idle(fresh).events)).toBe(true);
+		expect(fresh.core_stopped()).toBe(false);
+	});
+
 	it("no longer panics on the reviewer's inputs", () => {
 		const bridge = new CremaBridge();
 		// 01 P1-2: a huge persisted flush timeout trapped on every connect.

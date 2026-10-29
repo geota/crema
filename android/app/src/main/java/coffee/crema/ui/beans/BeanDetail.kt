@@ -45,6 +45,7 @@ import coffee.crema.ui.theme.JetBrainsMono
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 /*
  * Bean detail — the read-only view of everything recorded about one bag
@@ -273,12 +274,29 @@ data class ShotRowSummary(
     val snippet: String?,
 )
 
+/** The row date formatter, per thread (SimpleDateFormat is not
+ *  thread-safe), rebuilt only when the locale or time zone changes. */
+private val shotRowDateFormats = ThreadLocal<Triple<Locale, TimeZone, SimpleDateFormat>>()
+
+/** The "d MMM" formatter for the CURRENT locale and time zone: a static one
+ *  froze the launch locale (lint ConstantLocale), and one per call built a
+ *  SimpleDateFormat per row per recomposition (final cohort review
+ *  2026-10-28, 06 #15). */
+internal fun shotRowDateFormat(
+    locale: Locale = Locale.getDefault(),
+    zone: TimeZone = TimeZone.getDefault(),
+): SimpleDateFormat {
+    shotRowDateFormats.get()?.let { (l, z, format) -> if (l == locale && z == zone) return format }
+    return SimpleDateFormat("d MMM", locale).also {
+        it.timeZone = zone
+        shotRowDateFormats.set(Triple(locale, zone, it))
+    }
+}
+
 /** Project a stored shot down to what the detail's shot list shows. */
 fun shotRowSummary(shot: StoredShot): ShotRowSummary = ShotRowSummary(
     id = shot.id,
-    // A formatter per call, on the CURRENT locale: a static one froze the
-    // launch locale (lint ConstantLocale). Cheap next to the row it renders.
-    date = SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(shot.completedAtMs)),
+    date = shotRowDateFormat().format(Date(shot.completedAtMs)),
     title = shotTitle(shot),
     rating = shot.rating ?: 0,
     dial = listOfNotNull(

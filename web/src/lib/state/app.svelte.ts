@@ -432,6 +432,19 @@ export class CremaApp {
 			this.state.log(`Core reset after an internal error (reset #${count})`);
 			this.coreResetNotice.onReset();
 		});
+		// Past the bridge's reset cap every core call fails until a reload
+		// (final cohort review 2026-10-28, 01 P3-1). Nothing the shell does
+		// works on a stopped core, so the reload is offered without the busy
+		// gate: there is no recording or live control left to protect.
+		core.onCoreStopped?.(() => {
+			this.state.log('Core stopped after repeated internal errors; reload required');
+			toast.action(
+				'Crema hit repeated internal errors and stopped its engine. Reload to start it again.',
+				'Reload',
+				() => location.reload(),
+				0
+			);
+		});
 		this.sweep = new ConnectSweepRunner({
 			core,
 			settings: () => getSettingsStore().current,
