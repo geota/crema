@@ -813,11 +813,14 @@ export const ShotSyncLive = Layer.effect(
 			Effect.sync(() => {
 				const local = history.all;
 				const actions = reconcileShots(local, remote);
+				// Read once for the whole pull, not per shot (C3 #10): nothing
+				// edits a barista inside this synchronous pass.
+				const pending = baristaPending.snapshot();
 				const fillBarista = (localId: string, wire: WireShot): void => {
 					const name = baristaToFill(
 						history.all.find((s) => s.id === localId),
 						wire,
-						baristaPending.has(localId)
+						pending.has(localId)
 					);
 					if (name !== null) history.setPerson(localId, 'barista', name);
 				};

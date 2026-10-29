@@ -38,6 +38,14 @@ export class BaristaPending {
 		return this.#memory.has(id) || this.#stored().includes(id);
 	}
 
+	/**
+	 * Every pending id, read from storage once: for a pull that checks many
+	 * shots in one synchronous pass (C3 #10).
+	 */
+	snapshot(): ReadonlySet<string> {
+		return new Set([...this.#stored(), ...this.#memory]);
+	}
+
 	/** Mark `id`'s barista as edited here. */
 	add(id: string): void {
 		const ids = this.#stored();

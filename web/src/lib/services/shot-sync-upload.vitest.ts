@@ -13,6 +13,7 @@
 
 import { Effect, Exit, Layer } from 'effect';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { BaristaPending } from '#lib/visualizer/barista-pending.js';
 
 // Controllable settings + the wasm signature / v2 export, all hoisted so the
 // mock factories can close over them.
@@ -339,6 +340,9 @@ describe('ShotSync pull fills the barista (final review 06 #1)', () => {
 			{ kind: 'update', localId: 'named', remote: remote('r3', 'Ana') }
 		];
 		const { layer } = mkHttp(() => ({ ok: true, json: {} }));
+		// The pending set is read once per pull, not once per shot (C3 #10).
+		const snapshot = vi.spyOn(BaristaPending.prototype, 'snapshot');
+		const has = vi.spyOn(BaristaPending.prototype, 'has');
 		const exit = await run(
 			ShotSync.pipe(Effect.flatMap((sync) => sync.applyShotReconciliation(history, []))),
 			layer
@@ -349,6 +353,10 @@ describe('ShotSync pull fills the barista (final review 06 #1)', () => {
 			['pulled-before', 'barista', 'Ana'],
 			['recorded', 'barista', 'Cy']
 		]);
+		expect(snapshot).toHaveBeenCalledTimes(1);
+		expect(has).not.toHaveBeenCalled();
+		snapshot.mockRestore();
+		has.mockRestore();
 	});
 
 	it('does not fill a barista the user edited here that has not reached Visualizer (V3 #6)', () => {
