@@ -971,7 +971,9 @@ export const ShotSyncLive = Layer.effect(
 				...(shot.bean != null ? { bean: shot.bean } : {}),
 				...(grinderModel != null ? { grinderModel } : {}),
 				...(grinderSetting != null ? { grinderSetting } : {}),
-				...(barista ? { barista } : {})
+				// Always sent, empty once cleared: a cleared name must reach
+				// Visualizer (the core sends "" for a blank barista).
+				barista: barista ?? ''
 			};
 		};
 

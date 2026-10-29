@@ -217,12 +217,17 @@ describe('ShotSync.patchEditedShot — Premium-only fields by account tier', () 
 	const bean = { name: 'Kenya AA', roasterName: 'Sey' } as unknown as StoredShot['bean'];
 
 	for (const premium of [false, null, undefined]) {
-		it(`a ${premium === false ? 'free' : 'not-yet-probed'} account sends no request for a rating/notes/tags-only edit`, async () => {
+		it(`a ${premium === false ? 'free' : 'not-yet-probed'} account's rating/notes/tags-only edit carries only the barista`, async () => {
+			// The barista always rides (cohort review 06 #8: a cleared name
+			// must reach Visualizer), and it is a free field, so the request is
+			// never the empty PATCH that would 400 — just no Premium-only keys.
 			setPremium(premium);
-			const { layer, calls } = mkHttp(() => ({ ok: false, status: 400 }));
+			const { layer, calls } = mkHttp(() => ({ ok: true, json: {} }));
 			const exit = await patchEdited(edited(), layer);
 			expect(Exit.isSuccess(exit)).toBe(true);
-			expect(calls).toHaveLength(0);
+			const body = (JSON.parse(patchCall(calls)!.body as string) as { shot: Record<string, unknown> }).shot;
+			for (const key of PREMIUM_ONLY) expect(body).not.toHaveProperty(key);
+			expect(body.barista).toBe('');
 		});
 
 		it(`a ${premium === false ? 'free' : 'not-yet-probed'} account PATCHes the rest without the Premium-only fields`, async () => {
@@ -235,6 +240,17 @@ describe('ShotSync.patchEditedShot — Premium-only fields by account tier', () 
 			expect(body).toMatchObject({ bean_brand: 'Sey', bean_type: 'Kenya AA' });
 		});
 	}
+
+	it('a cleared barista reaches Visualizer as an empty string; a set one is trimmed', async () => {
+		setPremium(false);
+		const { layer, calls } = mkHttp(() => ({ ok: true, json: {} }));
+		await patchEdited(edited({ metadata: { rating: 4, barista: null } } as Partial<StoredShot>), layer);
+		await patchEdited(edited({ metadata: { rating: 4, barista: ' Ana ' } } as Partial<StoredShot>), layer);
+		const bodies = calls
+			.filter((c) => c.method === 'PATCH')
+			.map((c) => (JSON.parse(c.body as string) as { shot: Record<string, unknown> }).shot);
+		expect(bodies.map((b) => b.barista)).toEqual(['', 'Ana']);
+	});
 
 	it('a premium account still sends private_notes, flavor and tag_list', async () => {
 		setPremium(true);
