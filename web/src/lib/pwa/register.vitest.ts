@@ -185,6 +185,32 @@ describe('installServiceWorker', () => {
 		expect(reload).toHaveBeenCalledTimes(1);
 	});
 
+	it('a busy Reload with no worker waiting any more is offered again once idle (final review 03 P3-3)', async () => {
+		let idle = true;
+		const { container, offer, onDeferred, reload, handle } = setup(() => idle);
+		await tick();
+		const w = container.registration.foundUpdate();
+		w.setState('installed');
+		expect(offer).toHaveBeenCalledTimes(1);
+		// Another tab applied the update: nothing waits any more.
+		w.setState('activated');
+		container.registration.waiting = null;
+		idle = false;
+		offer.mock.calls[0][0]();
+		expect(reload).not.toHaveBeenCalled();
+		expect(onDeferred).toHaveBeenCalledTimes(1);
+		handle.onStateChange(); // still busy
+		expect(offer).toHaveBeenCalledTimes(1);
+		idle = true;
+		handle.onStateChange();
+		expect(offer).toHaveBeenCalledTimes(2);
+		// Only once: a later state change does not stack another offer.
+		handle.onStateChange();
+		expect(offer).toHaveBeenCalledTimes(2);
+		offer.mock.calls[1][0]();
+		expect(reload).toHaveBeenCalledTimes(1);
+	});
+
 	it('checks for a new build when the tab becomes visible and stops on dispose', async () => {
 		const { container, doc, handle } = setup();
 		await tick();

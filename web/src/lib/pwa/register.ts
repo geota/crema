@@ -14,7 +14,9 @@
  * 3. When safe, {@link Deps.offer} shows the user a reload action. Applying
  *    it checks again (the machine may have started a shot since the offer
  *    appeared — busy re-parks the offer and calls {@link Deps.onDeferred}),
- *    then tells the waiting worker to take over and reloads once it has.
+ *    then tells the waiting worker to take over and reloads once it has. A
+ *    busy tap with no worker waiting any more is remembered and offered
+ *    again once idle.
  * 4. A newer build that supersedes the offered one withdraws that offer and
  *    is offered instead; applying always targets the worker waiting *now*,
  *    and reloads straight away when none is (another tab applied it).
@@ -78,6 +80,13 @@ export function installServiceWorker(deps: Deps): Handle {
 	/** The worker the visible offer is for, and how to withdraw that offer. */
 	let offered: ServiceWorker | null = null;
 	let withdraw: (() => void) | null = null;
+	/**
+	 * Reload was tapped while busy and no worker was waiting any more (another
+	 * tab applied the update, so this tab already runs under the new
+	 * controller with the old shell). There is no worker to park, so remember
+	 * the request and offer the reload again once idle (final review 03 P3-3).
+	 */
+	let reloadWhenIdle = false;
 	let reloading = false;
 	let listening = false;
 
@@ -103,7 +112,8 @@ export function installServiceWorker(deps: Deps): Handle {
 		// have started since it appeared.
 		if (!deps.canReload()) {
 			withdrawOffer();
-			parked = target;
+			if (target !== null) parked = target;
+			else reloadWhenIdle = true;
 			deps.onDeferred?.();
 			return;
 		}
@@ -131,9 +141,22 @@ export function installServiceWorker(deps: Deps): Handle {
 			return;
 		}
 		parked = null;
+		// This offer covers a pending reload-when-idle too.
+		reloadWhenIdle = false;
 		// A newer build supersedes an offer that is still showing.
 		withdrawOffer();
 		offered = waiting;
+		const w = deps.offer(apply);
+		withdraw = typeof w === 'function' ? w : null;
+	};
+
+	/** Re-offer the reload a busy tap deferred when no worker was waiting. */
+	const considerReload = (): void => {
+		if (!deps.canReload()) return;
+		reloadWhenIdle = false;
+		withdrawOffer();
+		// `apply` finds nothing waiting and reloads into the new build (or, if
+		// a newer build is waiting by then, hands over to it).
 		const w = deps.offer(apply);
 		withdraw = typeof w === 'function' ? w : null;
 	};
@@ -171,6 +194,7 @@ export function installServiceWorker(deps: Deps): Handle {
 	return {
 		onStateChange: () => {
 			if (parked) consider(parked);
+			else if (reloadWhenIdle) considerReload();
 		},
 		dispose: () => {
 			doc.removeEventListener('visibilitychange', onVisibility);
