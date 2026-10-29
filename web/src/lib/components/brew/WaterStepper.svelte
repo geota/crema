@@ -27,6 +27,7 @@
 	{#if p.waterMode === 'temp'}
 		<QuickStepper
 			value={p.waterTemp}
+			name="Hot water temperature"
 			dimension="temp"
 			min={40}
 			max={98}
@@ -37,12 +38,14 @@
 		<QuickChipRow
 			options={[60, 75, 85, 92, 96]}
 			value={p.waterTemp}
+			name="Hot water temperature"
 			dimension="temp"
 			onChange={(v) => params.set('waterTemp', v)}
 		/>
 	{:else}
 		<QuickStepper
 			value={p.waterVolume}
+			name="Hot water volume"
 			dimension="volume"
 			min={20}
 			max={500}
@@ -53,6 +56,7 @@
 		<QuickChipRow
 			options={[60, 120, 180, 250, 350]}
 			value={p.waterVolume}
+			name="Hot water volume"
 			dimension="volume"
 			onChange={(v) => params.set('waterVolume', v)}
 		/>

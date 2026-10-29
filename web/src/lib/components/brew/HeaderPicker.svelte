@@ -40,9 +40,11 @@
 	 * data + the activate/route handlers and the open state.
 	 */
 	import ProfilePreview from '#lib/components/profiles/ProfilePreview.svelte';
+	import { restoreFocus } from '#lib/a11y/focus.js';
 
 	let {
 		open = false,
+		label = 'Choose an item',
 		items,
 		activeId = null,
 		searchPlaceholder = 'Search…',
@@ -56,6 +58,8 @@
 		rank
 	}: {
 		open?: boolean;
+		/** Dialog name, e.g. "Choose profile" (final review 07 N5). */
+		label?: string;
 		items: PickerItem[];
 		activeId?: string | null;
 		searchPlaceholder?: string;
@@ -82,13 +86,31 @@
 	let query = $state('');
 	let inputEl = $state<HTMLInputElement | null>(null);
 
-	// Reset + focus the search each time the picker opens.
+	let panelEl = $state<HTMLDivElement | null>(null);
+
+	// Reset + focus the search each time the picker opens. On close, hand
+	// focus back to the opener when it was inside the picker or dropped to
+	// <body> (Escape, picking an item), never when the user clicked
+	// elsewhere (final review 07 N5: Escape left focus on BODY).
 	$effect(() => {
-		if (open) {
-			query = '';
-			requestAnimationFrame(() => inputEl?.focus());
-		}
+		if (!open) return;
+		query = '';
+		const opener = document.activeElement;
+		requestAnimationFrame(() => inputEl?.focus());
+		return () => {
+			const active = document.activeElement;
+			if (active == null || active === document.body || panelEl?.contains(active)) {
+				restoreFocus(opener);
+			}
+		};
 	});
+
+	function onPanelKeydown(e: KeyboardEvent): void {
+		if (e.key !== 'Escape') return;
+		e.preventDefault();
+		e.stopPropagation();
+		onClose?.();
+	}
 
 	const filtered = $derived.by(() => {
 		const q = query.trim().toLowerCase();
@@ -119,7 +141,14 @@
 </script>
 
 {#if open}
-	<div class="hpick" role="dialog" aria-label="Quick picker">
+	<div
+		bind:this={panelEl}
+		class="hpick"
+		role="dialog"
+		aria-label={label}
+		tabindex="-1"
+		onkeydown={onPanelKeydown}
+	>
 		<div class="hpick-search">
 			<MagnifyingGlassIcon aria-hidden="true" />
 			<input
@@ -127,7 +156,7 @@
 				bind:value={query}
 				type="text"
 				placeholder={searchPlaceholder}
-				onkeydown={(e) => e.key === 'Escape' && onClose?.()}
+				aria-label={searchPlaceholder.replace(/…$/, '')}
 			/>
 		</div>
 

@@ -61,6 +61,7 @@
 	</div>
 	<QuickStepper
 		value={p.yield}
+		name="Yield"
 		dimension="weight"
 		min={10}
 		max={80}
@@ -73,6 +74,7 @@
 	<QuickChipRow
 		options={[28, 32, 36, 40, 45]}
 		value={p.yield}
+		name="Yield"
 		dimension="weight"
 		onChange={(v) => params.set('yield', v)}
 	/>

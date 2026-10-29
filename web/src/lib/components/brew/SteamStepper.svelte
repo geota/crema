@@ -31,6 +31,7 @@
 	{#if p.steamMode === 'time'}
 		<QuickStepper
 			value={p.steamTime}
+			name="Steam time"
 			unit="s"
 			min={1}
 			max={60}
@@ -42,12 +43,14 @@
 		<QuickChipRow
 			options={[5, 10, 15, 20, 30]}
 			value={p.steamTime}
+			name="Steam time"
 			unit="s"
 			onChange={(v) => params.set('steamTime', v)}
 		/>
 	{:else if p.steamMode === 'flow'}
 		<QuickStepper
 			value={p.steamFlow}
+			name="Steam flow"
 			unit="ml/s"
 			min={0.2}
 			max={3}
@@ -59,6 +62,7 @@
 		<QuickChipRow
 			options={[0.6, 0.9, 1.2, 1.6, 2.0]}
 			value={p.steamFlow}
+			name="Steam flow"
 			onChange={(v) => params.set('steamFlow', v)}
 			fmt={(v) => v.toFixed(1)}
 		/>
@@ -70,6 +74,7 @@
 		<div class="sts-temp" class:is-off={p.steamTemp === 0}>
 			<QuickStepper
 				value={p.steamTemp}
+				name="Steam temperature"
 				dimension="temp"
 				min={135}
 				max={170}
@@ -80,6 +85,7 @@
 			<QuickChipRow
 				options={[140, 145, 148, 150, 155]}
 				value={p.steamTemp}
+				name="Steam temperature"
 				dimension="temp"
 				onChange={(v) => params.set('steamTemp', v)}
 			/>

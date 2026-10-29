@@ -15,7 +15,9 @@
 	const lastUpdated = '2026-06-29';
 </script>
 
-<main class="legal">
+<!-- An article, not a <main>: the shell already renders the page's one
+     <main> landmark (final review 07 N8). -->
+<article class="legal">
 	<header class="legal-head">
 		<a class="legal-back" href="/">&larr; Crema</a>
 		<h1>Terms of Service</h1>
@@ -327,7 +329,7 @@
 			<a href="/">Back to Crema</a>
 		</p>
 	</footer>
-</main>
+</article>
 
 <style>
 	:global(body) {

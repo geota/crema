@@ -95,15 +95,21 @@
 			if (attached) window.removeEventListener('mousedown', handler, true);
 		};
 	});
+
+	/** The direction button's name: the current order; tapping flips it. */
+	const dirName = $derived(`Sort order: ${value.direction === 'asc' ? ascLabel : descLabel}`);
 </script>
 
+<!-- The direction button's name and tooltip are the same string, the
+     current order (final review 07 N12a: name "Descending" plus title
+     "Ascending" was announced as both). -->
 <div class="sortpill" bind:this={rootEl}>
 	<button
 		type="button"
 		class="sortpill-dir"
 		onclick={flipDirection}
-		title={value.direction === 'asc' ? descLabel : ascLabel}
-		aria-label={value.direction === 'asc' ? ascLabel : descLabel}
+		title={dirName}
+		aria-label={dirName}
 	>
 		<Icon
 			cls={value.direction === 'asc' ? 'ph ph-arrow-up' : 'ph ph-arrow-down'}

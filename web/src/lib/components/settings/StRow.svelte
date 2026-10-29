@@ -11,6 +11,7 @@
 	 * coming) but honest about what doesn't work yet.
 	 */
 	import type { Snippet } from 'svelte';
+	import { setStRowContext } from './st-row-context.js';
 
 	let {
 		title,
@@ -29,12 +30,16 @@
 		/** When true, show a "Connect a DE1" pill — the row's controls need a live device. */
 		needsConnection?: boolean;
 	} = $props();
+
+	// Controls in the row (StSegment) take their group name from the title.
+	const titleId = $props.id();
+	setStRowContext({ titleId });
 </script>
 
 <div class="st-row" class:st-row-not-impl={notImplemented}>
 	<div class="st-row-text">
 		<div class="st-row-title">
-			<span>{title}</span>
+			<span id={titleId}>{title}</span>
 			{#if notImplemented}
 				<span
 					class="st-row-pill"
