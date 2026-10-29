@@ -27,8 +27,8 @@ import kotlin.test.assertTrue
  * - a duplicate `Hello` on an approved session does not re-run TOFU;
  * - an `Attach` for a device the hub has no state for reports DISCONNECTED,
  *   not an assumed CONNECTED;
- * - a granted handoff's `ControlOk` reaches the taker, and the release waits
- *   for the taker's link to close (ack-by-disconnect);
+ * - a session that only claims a client id is neither that client nor a
+ *   remote in the hub's list;
  * - the observe tripwire counts concurrent collectors per characteristic.
  */
 class ProxyHardeningTest {
@@ -177,39 +177,6 @@ class ProxyHardeningTest {
     }
 
     @Test
-    fun `handoff grant reaches the taker and the release waits for its disconnect`() = runBlocking {
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        try {
-            val (client, server) = InMemoryFrameLink.pair()
-            lateinit var h: RelayHub
-            val released = CompletableDeferred<Boolean>()
-            h = RelayHub(
-                primaryId = "p",
-                primaryName = "P",
-                roster = { emptyList() },
-                readSource = { _, _, _ -> error("unused") },
-                isSnapshotChar = { _, _ -> false },
-                // What ProxyController's grant does: answer at once, release later.
-                controlHandler = { _, _, originId, _ ->
-                    scope.launch { released.complete(h.awaitClientGone(originId!!, 3_000)) }
-                    Result.success(Unit)
-                },
-            )
-            scope.launch { h.serve(server) }
-            val proxy = ProxyTransport(client, scope, "phone-1", "Phone")
-
-            assertTrue(withTimeout(2_000) { proxy.control("handoff") }.isSuccess, "the grant reaches the taker")
-            delay(200)
-            assertTrue(!released.isCompleted, "no release while the taker is still connected")
-
-            client.close() // the taker's mode switch closes its link
-            assertTrue(withTimeout(2_000) { released.await() }, "released on the disconnect, not the timeout")
-        } finally {
-            scope.cancel()
-        }
-    }
-
-    @Test
     fun `observe tripwire counts concurrent collectors`() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
@@ -266,7 +233,7 @@ class ProxyHardeningTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val h = hub()
-            // The real taker: approved.
+            // The real client: approved.
             val (taker, takerServer) = InMemoryFrameLink.pair()
             scope.launch { h.serve(takerServer) }
             val takerRx = CopyOnWriteArrayList<Frame>()
@@ -281,12 +248,10 @@ class ProxyHardeningTest {
             withTimeout(2_000) { while (claimantRx.none { it is Frame.Challenge }) delay(5) }
 
             assertTrue(h.hasClient("phone-1"))
-            taker.close() // the taker's mode switch closes its link
-            assertTrue(
-                withTimeout(2_000) { h.awaitClientGone("phone-1", 3_000) },
-                "the unapproved claimant doesn't hold the handoff release",
-            )
-            assertTrue(!h.hasClient("phone-1"))
+            assertEquals(listOf(RemoteClient("phone-1", "Phone", canControl = true)), h.remotes(), "only the approved session is a remote")
+            taker.close() // the approved client leaves
+            withTimeout(2_000) { while (h.hasClient("phone-1")) delay(5) }
+            assertTrue(h.remotes().isEmpty(), "the unapproved claimant isn't a remote")
         } finally {
             scope.cancel()
         }

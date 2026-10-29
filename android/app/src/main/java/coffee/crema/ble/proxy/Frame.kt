@@ -115,7 +115,7 @@ sealed class Frame {
         val authority: String,
         val roster: List<DeviceInfo>,
         /** The scope this peer was granted (issue 02 TOFU): `"control"` (may drive
-         *  the machine) or `"mirror"` (view-only — its Control/Handoff are refused).
+         *  the machine) or `"mirror"` (view-only — its Control frames are refused).
          *  Defaults to `"control"` so an older relay (pre-pairing) reads as full. */
         val scope: String = "control",
         /** Set only on the Welcome that completes a new pairing: the secret the
@@ -253,12 +253,10 @@ sealed class Frame {
     data class ControlErr(val id: Long, val reason: String) : Frame()
 
     /**
-     * Primary → secondary: a **push** handoff offer (issue 07) — "I'd like to hand
-     * you the machine." [fromName] is the offering primary's label, for the
-     * secondary's prompt. The secondary, on accept, simply runs its normal pull
-     * ("Take over") back at the primary, so the existing idle-gated release +
-     * reclaim machinery (issue 01) handles the actual swap — this frame is just the
-     * nudge. Unsolicited (no reply frame); declining is a local no-op.
+     * Retired: never sent; a remote decodes and ignores it. Older hubs (v3
+     * nightlies) still push it from their "Hand off" button. It stays in the
+     * codec because a v3 peer drops the link on a frame type it doesn't know;
+     * delete it once the codec tolerates unknown types.
      */
     @Serializable
     @SerialName("handoffOffer")

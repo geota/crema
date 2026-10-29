@@ -70,8 +70,6 @@ interface MachineActions {
  */
 class LocalMachine(
     private val actions: MachineActions,
-    /** Grant a mirror's take-over (the primary steps down), or refuse it. */
-    private val grantTakeOver: (takerId: String?) -> CommandOutcome,
     private val notify: (String) -> Unit,
 ) : MachineCommands {
 
@@ -87,8 +85,6 @@ class LocalMachine(
         is MachineCommand.StateRequest -> accepted { actions.applyMachineState(cmd.request) }
         MachineCommand.CancelMaintenance -> accepted { actions.applyCancelMaintenance() }
         MachineCommand.TareScale -> accepted { actions.applyTareScale() }
-        MachineCommand.TakeOver ->
-            if (origin == null) CommandOutcome.Refused("Not mirroring another device") else grantTakeOver(origin.id)
         is MachineCommand.Config -> accepted {
             actions.showConfig(cmd)
             actions.commitConfig(cmd)

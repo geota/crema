@@ -68,7 +68,6 @@ import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.brewDefaultsJson
 import coffee.crema.core.MachineState
 import coffee.crema.profiles.overrideBrewParamsJson
-import coffee.crema.profiles.profileIdOf
 import coffee.crema.profiles.SegmentEdit
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
@@ -1123,8 +1122,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * The multi-device proxy controller (review #43) — mode switching (normal /
-     * primary / secondary), the LAN relay + mirror-link lifecycle, NSD peer
-     * discovery, TOFU pairing, and handoff. A self-contained sibling of
+     * hub / remote), the LAN relay + remote-link lifecycle, NSD peer
+     * discovery and TOFU pairing. A self-contained sibling of
      * [visualizer] / [drive]; its [ProxyController.State] is mirrored into
      * [MainUiState] in `init`.
      *
@@ -1135,9 +1134,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * the Nordic `Environment` in [ProxyController.close]).
      *
      * Whole-app concerns stay in this VM, reached through the callbacks:
-     * the machine command bodies ([machineActions]), the session-config snapshot/apply, the
-     * TOFU paired-device list (persisted with the app prefs), and the
-     * mirrored-profile promotion on handoff. The lambdas referencing
+     * the machine command bodies ([machineActions]), the session-config snapshot/apply and the
+     * TOFU paired-device list (persisted with the app prefs). The lambdas referencing
      * later-declared fields ([ble], [scale], [bleRecorder]) are only INVOKED
      * post-construction: the controller starts no role until `init` calls
      * [ProxyController.start] (the field-init-order trap, review #36).
@@ -1179,7 +1177,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         isSnapshotChar = { _, char -> char != De1Uuids.SHOT_SAMPLE && char != scale.weightNotifyChar },
         pairedDevices = { _ui.value.pairedDevices },
         rememberPaired = { id, name, canControl -> rememberPaired(id, name, canControl) },
-        onHandoffGranted = { promoteMirroredProfile() },
         firmwareHoldsLink = { runCatching { bridge.firmwareLocksWrites() }.getOrDefault(false) },
         onModeApplied = { role, host, port ->
             _ui.update {
@@ -1196,7 +1193,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     mirroredProfile = null,
                     mirroredProfileJson = null,
                     mirroredBeanSummary = null,
-                    mirroringPrimaryName = if (role == "secondary") it.mirroringPrimaryName else "",
+                    // A new remote target's Welcome names its hub again.
+                    mirroringPrimaryName = "",
                 )
             }
             persistPrefs()
@@ -1660,8 +1658,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         pendingPairing = ps.pendingPairing,
                         pairingSecondsLeft = ps.pairingSecondsLeft,
                         pairedWithSecret = ps.pairedWithSecret,
-                        mirrorClients = ps.mirrorClients,
-                        pendingHandoffOffer = ps.pendingHandoffOffer,
+                        remotes = ps.remotes,
+                        // The Welcome names the hub before its first snapshot does.
+                        mirroringPrimaryName = ps.hubName.ifBlank { it.mirroringPrimaryName },
+                        remoteHubHasMachine = ps.hubHasMachine,
+                        hubHoldingMachine = if (ps.role == "normal") {
+                            ps.peers.firstOrNull { p -> p.isMirrorSource && p.id != proxy.instanceId }
+                        } else {
+                            null
+                        },
+                        pairedHubPinned = proxy.hasPinnedHub(),
                         changedHost = ps.changedHost,
                     )
                 }
@@ -2689,37 +2695,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** On a take-over (#01) the taker becomes the primary and must be able to
-     *  actually drive shots with whatever profile it was mirroring — including a
-     *  primary's custom profile it never had locally (issue 05). Promote the
-     *  transient overlay JSON into this device's real library (de-duped by id) and
-     *  make it the active selection. Set directly, not via [setActiveProfile]: we're
-     *  still nominally a secondary at this point, so that path would relay instead. */
-    private fun promoteMirroredProfile() {
-        val raw = _ui.value.mirroredProfileJson ?: return
-        val id = profileIdOf(raw, json)?.takeIf { it.isNotEmpty() } ?: return
-        if (!library.hasProfile(id)) {
-            library.adoptCustomProfile(raw)
-            appendLog("Handoff: promoted mirrored profile into the library ($id)")
-        }
-        _ui.update { it.copy(activeProfileId = id, brewParams = null) }
-    }
-
-    /** Secondary side of an M3 handoff (the picker's "Take over") — delegate of
-     *  [ProxyController.requestHandoff]. */
-    fun requestHandoff() = proxy.requestHandoff()
-
-    // ── Push handoff ("hand off TO X" — issue 07) ─────────────────────────────
-
-    /** Primary side: offer the machine to a specific mirroring secondary. */
-    fun offerHandoff(clientId: String) = proxy.offerHandoff(clientId)
-
-    /** The user accepted a pushed offer → take the machine (the normal pull). */
-    fun acceptHandoffOffer() = proxy.acceptHandoffOffer()
-
-    /** The user declined a pushed offer — a local no-op (the host keeps the DE1). */
-    fun declineHandoffOffer() = proxy.declineHandoffOffer()
-
     /** A one-line roaster · name · freshness summary of the active bean for the
      *  config snapshot (issue 05) so a mirror can render the bean chip even when
      *  the bean isn't in its own library. Mirrors `beanLine` on the Brew screen. */
@@ -3209,14 +3184,58 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Live mode switches (M2 — no restart) — see [ProxyController] ────────
 
-    /** Stop relaying/mirroring: become a standalone NORMAL device. */
-    fun switchToNormal() = proxy.switchToNormal()
+    /** Become a standalone NORMAL device. On a remote this is Stop, which
+     *  leaves the remote role like Connect directly. */
+    fun switchToNormal() {
+        if (proxy.state.value.role == "secondary") leaveRemote("normal") else proxy.switchToNormal()
+    }
 
-    /** Hold the DE1 and relay it to others (becomes the primary). */
-    fun switchToPrimary() = proxy.switchToPrimary()
-
-    /** Mirror the DE1 from a primary at [host]:[port] — the picker's "Mirror from X". */
+    /** Connect through the hub at [host]:[port]: the picker's "Connect through". */
     fun switchToSecondary(host: String, port: Int) = proxy.switchToSecondary(host, port)
+
+    /** A remote whose hub is unreachable, or no longer holds the DE1, connects
+     *  the machine itself. */
+    fun connectDirectly() {
+        if (proxy.state.value.role == "secondary") leaveRemote("normal")
+    }
+
+    /**
+     * The Hub mode switch (Settings ▸ Multi-device). On makes this device the
+     * hub; on a remote whose hub is gone it leaves the remote role first. Off
+     * frees the machine: the hub steps down without reconnecting, so another
+     * device can connect. Refused on a remote whose hub holds the DE1
+     * ([hubModeBlockedReason]) and, by the controller, during a firmware flash.
+     * A discovered hub's advertisement only warns ([discoveredHubWarning]):
+     * the switch asks first, and [anyway] is the user's "Turn on anyway".
+     */
+    fun setHubMode(on: Boolean, anyway: Boolean = false) {
+        val role = proxy.state.value.role
+        if (!on) {
+            if (role == "primary") proxy.setHubMode(false)
+            return
+        }
+        _ui.value.hubModeBlockedReason()?.let { reason ->
+            notifyUser(reason)
+            return
+        }
+        if (!anyway) {
+            _ui.value.discoveredHubWarning()?.let { warning ->
+                notifyUser(warning)
+                return
+            }
+        }
+        when (role) {
+            "primary" -> Unit
+            "secondary" -> leaveRemote("primary")
+            else -> proxy.setHubMode(true)
+        }
+    }
+
+    /** Leave the remote role for [next] (`"normal"` or `"primary"`): Stop,
+     *  Connect directly and Hub mode on with the hub gone all end here. */
+    private fun leaveRemote(next: String) {
+        if (next == "primary") proxy.setHubMode(true) else proxy.switchToNormal()
+    }
 
     /** Build a full AppPrefs from the current UI state so each setter persists
      *  without clobbering the other fields. */
@@ -4225,12 +4244,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistPrefs()
     }
 
-    // ── Multi-device proxy (M1, debug). Restart-to-apply. ────────────────────
-    fun setProxyRole(role: String) {
-        _ui.update { it.copy(proxyRole = role) }
-        persistPrefs()
-    }
-
+    // ── Multi-device proxy: the manual hub address (emulators, no NSD) ──────
     fun setProxyPrimaryHost(host: String) {
         _ui.update { it.copy(proxyPrimaryHost = host.trim()) }
         persistPrefs()

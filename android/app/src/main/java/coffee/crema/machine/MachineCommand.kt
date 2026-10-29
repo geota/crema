@@ -99,10 +99,6 @@ sealed interface MachineCommand {
 
     data object TareScale : Control
 
-    /** A mirror asks the primary for the machine (the picker's "Take over").
-     *  The primary grants it only from a positively idle machine. */
-    data object TakeOver : Control
-
     /** Select the active profile. A primary refuses an id its library lacks. */
     data class SetActiveProfile(val id: String) : Config {
         override fun refusal(): String? = idRefusal(id)

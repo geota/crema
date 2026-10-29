@@ -82,7 +82,7 @@ class RelayHubControlOrderTest {
         try {
             val actions = RecordingMachineActions()
             val dispatcher = RelayedCommandDispatcher(
-                machine = LocalMachine(actions, grantTakeOver = { CommandOutcome.Accepted }, notify = {}),
+                machine = LocalMachine(actions, notify = {}),
                 hostName = { "Tablet" },
                 machineIdle = { false },
                 announce = { _, _ -> },
@@ -106,6 +106,49 @@ class RelayHubControlOrderTest {
             assertEquals(setOf("main-lane"), actions.threads.toSet())
         } finally {
             laneExecutor.shutdownNow()
+        }
+    }
+
+    /** AC-5, the session half (verifier P3-3): a throw around a relayed
+     *  command (here the host name) comes back as that control's
+     *  `ControlErr`, and the same session serves the next control. */
+    @Test
+    fun `a throw outside the command refuses that control and the session keeps serving`() = runBlocking {
+        val actions = RecordingMachineActions()
+        var hostNameCalls = 0
+        val dispatcher = RelayedCommandDispatcher(
+            machine = LocalMachine(actions, notify = {}),
+            hostName = { check(hostNameCalls++ > 0) { "hostName failed" }; "Tablet" },
+            machineIdle = { false },
+            announce = { _, _ -> },
+            log = {},
+            lane = Dispatchers.Default,
+        )
+        // The mapping ProxyController wires into its hub.
+        val hub = hub { method, args, id, name ->
+            when (val outcome = dispatcher.dispatch(method, args, CommandOrigin(id, name))) {
+                CommandOutcome.Accepted -> Result.success(Unit)
+                is CommandOutcome.Refused -> Result.failure(IllegalStateException(outcome.reason))
+                is CommandOutcome.Unknown -> Result.failure(IllegalStateException(outcome.detail))
+            }
+        }
+        val io = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val (client, server) = InMemoryFrameLink.pair()
+            io.launch { hub.serve(server) }
+            val rx = CopyOnWriteArrayList<Frame>()
+            io.launch { client.incoming().collect { rx += it } }
+            handshake(client, rx)
+            client.send(Frame.Control(1, "tareScale", ""))
+            client.send(Frame.Control(2, "tareScale", ""))
+            withTimeout(5_000) { while (rx.count { it is Frame.ControlOk || it is Frame.ControlErr } < 2) delay(5) }
+            assertEquals(
+                listOf<Frame>(Frame.ControlErr(1, "hostName failed"), Frame.ControlOk(2)),
+                rx.filter { it is Frame.ControlOk || it is Frame.ControlErr },
+            )
+            assertEquals(listOf("tareScale"), actions.applied.toList())
+        } finally {
+            io.cancel()
         }
     }
 }

@@ -38,6 +38,7 @@ import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.NavRestore
 import coffee.crema.ui.SyncNavRoute
+import coffee.crema.ui.remoteStatus
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.phone.components.CremaBottomNav
 
@@ -47,8 +48,8 @@ import coffee.crema.ui.phone.components.CremaBottomNav
  * AppNavHost. The caller (MainActivity) wires each slot to the ViewModel, the
  * same pattern as the tablet host, so this file owns routing + chrome only.
  *
- * It also owns the **app-wide mirror authority cue** (issue 10): when this device
- * is a secondary, a thin "Mirroring <primary>" banner sits above every tab and
+ * It also owns the **app-wide remote status** (issue 10): when this device is
+ * a remote, a thin "Connected through <hub>" banner sits above every tab and
  * opens the (hoisted) Devices sheet — Settings/Profiles/Beans no longer look
  * local. The banner lives here, not per-screen, so it can't be missed on a tab.
  *
@@ -135,10 +136,8 @@ fun PhoneNavHost(
             // CONSUMES that inset so each screen's own TopAppBar doesn't re-pad
             // and leave a gap under the banner.
             if (secondary) {
-                MirrorBanner(
-                    primaryName = ui.mirroringPrimaryName,
-                    reconnecting = ui.mirrorReconnecting,
-                    viewOnly = ui.mirrorViewOnly,
+                RemoteBanner(
+                    status = ui.remoteStatus().orEmpty(),
                     onClick = { devicesOpen = true },
                     modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
                 )
@@ -183,7 +182,7 @@ fun PhoneNavHost(
     }
 
     // One app-wide Devices sheet, opened by the banner from any tab (the Brew
-    // screen keeps its own bluetooth-icon sheet). Take over / Stop live here too.
+    // screen keeps its own bluetooth-icon sheet). Stop / Connect directly live here too.
     if (devicesOpen) {
         PhoneDevicesSheet(
             ui = ui,
@@ -194,8 +193,7 @@ fun PhoneNavHost(
             onForgetScale = vm::forgetScale,
             onMirrorFrom = { host, port -> vm.switchToSecondary(host, port); devicesOpen = false },
             onStopMirroring = { vm.switchToNormal(); devicesOpen = false },
-            onTakeOver = { vm.requestHandoff(); devicesOpen = false },
-            onHandOff = { id -> vm.offerHandoff(id); devicesOpen = false },
+            onConnectDirectly = { vm.connectDirectly(); devicesOpen = false },
             onRetry = vm::retryReconnectNow,
             onDismiss = { devicesOpen = false },
         )
@@ -203,20 +201,18 @@ fun PhoneNavHost(
 }
 
 /**
- * The thin "Mirroring <primary>" bar shown on every tab while this device is a
- * secondary (issue 10) — brand-accent tinted so it reads as an authority state,
- * not an error. Switches to "Reconnecting to <primary>…" when the link drops, and
- * taps through to the Devices sheet (Stop / Take over).
+ * The thin remote status bar shown on every tab while this device is a remote
+ * (issue 10) — brand-accent tinted so it reads as an authority state, not an
+ * error. [status] is [remoteStatus]: "Connected through <hub>", "Reconnecting
+ * to <hub>…" or "<hub> isn't connected to the machine". Taps through to the
+ * Devices sheet (Stop / Connect directly).
  */
 @Composable
-private fun MirrorBanner(
-    primaryName: String,
-    reconnecting: Boolean,
-    viewOnly: Boolean,
+private fun RemoteBanner(
+    status: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val who = primaryName.ifBlank { "another device" }
     Surface(
         onClick = onClick,
         color = MaterialTheme.colorScheme.secondaryContainer,
@@ -230,11 +226,7 @@ private fun MirrorBanner(
         ) {
             PhIcon("bluetooth", sizeDp = 15)
             Text(
-                when {
-                    reconnecting -> "Reconnecting to $who…"
-                    viewOnly -> "Mirroring $who · view-only"
-                    else -> "Mirroring $who"
-                },
+                status,
                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 12.5.sp),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,

@@ -1,5 +1,6 @@
 package coffee.crema.machine
 
+import coffee.crema.ble.proxy.PROXY_PROTOCOL_VERSION
 import coffee.crema.core.MachineRequest
 import kotlin.reflect.KClass
 import kotlin.test.Test
@@ -128,9 +129,22 @@ class MachineCommandCodecTest {
         refused("setActiveProfile", "x".repeat(200)); refused("setActiveProfile", "a\nb")
         assertEquals(MachineCommand.SetActiveBean(null), ok("setActiveBean", "").command)
         ok("setActiveBean", "bean-1"); refused("setActiveBean", "a\u0000b")
-        for (v in listOf("startShot", "cancelMaintenance", "tareScale", "resetBrew", "handoff")) {
+        for (v in listOf("startShot", "cancelMaintenance", "tareScale", "resetBrew")) {
             ok(v); refused(v, "x")
         }
+    }
+
+    /** AC-4: take-over is retired on a v3 hub. `handoff` is no live method;
+     *  it is refused with the retired reason, with or without arguments
+     *  (checked before parsing, so `handoff x` isn't "unknown"). */
+    @Test
+    fun `handoff is a retired refusal on protocol v3`() {
+        val reason = MachineCommandCodec.RETIRED_METHODS.getValue("handoff")
+        assertTrue("hub mode" in reason, reason)
+        assertEquals(MachineCommandCodec.Decoded.Invalid(reason), MachineCommandCodec.decode("handoff", ""))
+        assertEquals(MachineCommandCodec.Decoded.Invalid(reason), MachineCommandCodec.decode("handoff", "x"))
+        assertTrue("handoff" !in MachineCommandCodec.METHODS)
+        assertEquals(3, PROXY_PROTOCOL_VERSION, "retiring a verb doesn't bump the protocol")
     }
 
     @Test

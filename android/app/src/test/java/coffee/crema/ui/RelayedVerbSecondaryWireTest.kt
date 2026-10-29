@@ -53,7 +53,7 @@ class RelayedVerbSecondaryWireTest {
     private val handled = CopyOnWriteArrayList<Pair<String, String>>()
 
     /** Verbs the test primary refuses (a `ControlErr` back to the secondary). */
-    private val refused = mutableSetOf("handoff")
+    private val refused = mutableSetOf<String>()
 
     private val hub = RelayHub(
         primaryId = "host-1",
@@ -78,7 +78,7 @@ class RelayedVerbSecondaryWireTest {
         VmHarness.idle()
         vm.switchToSecondary("127.0.0.1", server.port)
         VmHarness.advance(MODE_SWITCH_SETTLE_MS)
-        VmHarness.idleUntil("the secondary to be welcomed") { hub.handoffTargets().isNotEmpty() }
+        VmHarness.idleUntil("the secondary to be welcomed") { hub.remotes().isNotEmpty() }
     }
 
     @After

@@ -95,6 +95,8 @@ import coffee.crema.ui.components.CremaSettingsRow
 import coffee.crema.ui.components.CremaSettingsSelect
 import coffee.crema.ui.components.CremaMonoReadout
 import coffee.crema.ui.components.MultiDeviceSection
+import coffee.crema.ui.components.HubModeRow
+import coffee.crema.ui.components.HubHoldsMachineNotice
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.SegOption
 import coffee.crema.ui.components.CremaConfirmDialog
@@ -135,12 +137,22 @@ fun SettingsScreen(
     vm: MainViewModel,
     onNav: (String) -> Unit,
     onConnect: (String) -> Unit,
+    /** A section to show once (the remote status chip opens "advanced",
+     *  where Multi-device lives); [onSectionOpened] clears the request. */
+    openSection: String? = null,
+    onSectionOpened: () -> Unit = {},
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val firmwareFlow by vm.firmware.ui.collectAsStateWithLifecycle()
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
     var active by rememberSaveable { mutableStateOf("machine") }
+    LaunchedEffect(openSection) {
+        if (openSection != null) {
+            active = openSection
+            onSectionOpened()
+        }
+    }
     // Staged destructive-action confirms + SAF export — shared with the phone
     // shell (issue 27). Rows flip confirm.* flags; SettingsConfirmDialogs renders.
     val confirm = rememberSettingsConfirmState(vm)
@@ -210,6 +222,8 @@ fun SettingsScreen(
                         if (!connected && ui.de1Reconnecting) {
                             ReconnectingNotice("DE1", onRetry = { vm.retryReconnectNow(true) })
                         }
+                        // Another hub holds the machine: say how to get it here.
+                        if (!connected) HubHoldsMachineNotice(ui, onConnectThrough = vm::switchToSecondary)
                         SetGroup("Connection") {
                             // The one reconnect control: the remembered DE1 and
                             // Forget (replaces the Auto-connect switch and the
@@ -1060,63 +1074,46 @@ fun SettingsScreen(
                         }
                         SetGroup("Reconnects") { ReconnectTimelineList() }
                         // Live, no-restart picker (issue 13) — the same one the phone
-                        // uses: Mirror from a primary on the LAN, then Stop / Take over.
-                        // The tablet lives by the machine, so it's exactly the device
-                        // that wants this. The role selector below stays as the manual
-                        // (restart-to-apply) escape hatch + the way to host the DE1.
+                        // uses: Connect through a hub on the LAN, then Stop / Connect
+                        // directly; on the hub, the remotes connected through it. Hub
+                        // mode makes this tablet the hub, applied live.
                         SetGroup("Multi-device") {
+                            HubModeRow(ui, device = "tablet", onHubMode = vm::setHubMode)
                             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
                                 MultiDeviceSection(
                                     ui = ui,
                                     onMirrorFrom = { host, port -> vm.switchToSecondary(host, port) },
                                     onStopMirroring = vm::switchToNormal,
-                                    onTakeOver = vm::requestHandoff,
-                                    onHandOff = vm::offerHandoff,
+                                    onConnectDirectly = vm::connectDirectly,
                                     showHeader = false,
                                 )
                             }
                         }
-                        SetGroup("Multi-device — manual override (debug)") {
-                            // Restart-to-apply role override + the way to become a host.
-                            // The live picker above is the everyday path; this is the
-                            // escape hatch (and how to host until a live "Host" action).
-                            val roleSub = when (ui.proxyRole) {
-                                "primary" -> "Owns the DE1 and relays it to others. Restart to apply."
-                                "secondary" -> "Mirrors a primary over the LAN. Restart to apply."
-                                else -> "Off — normal single-device use."
+                        SetGroup("Multi-device — manual hub (debug)") {
+                            // The manual hub address, in every role: it feeds the
+                            // picker's manual row on an emulator or a network
+                            // without NSD.
+                            CremaSettingsRow("Hub host", "An IP, or 10.0.2.2 for an adb-forwarded emulator.") {
+                                CremaTextField(
+                                    value = ui.proxyPrimaryHost,
+                                    onValueChange = vm::setProxyPrimaryHost,
+                                    placeholder = "10.0.2.2",
+                                    singleLine = true,
+                                    modifier = Modifier.width(200.dp),
+                                )
                             }
-                            CremaSettingsRow("Role", roleSub, last = ui.proxyRole == "normal") {
-                                CremaSegmentedButton(
-                                    options = listOf(SegOption("normal", "Off"), SegOption("primary", "Primary"), SegOption("secondary", "Secondary")),
-                                    value = ui.proxyRole,
-                                    onChange = vm::setProxyRole,
-                                    enabled = true,
-                                    uniform = true,
+                            CremaSettingsRow("Hub port", "The relay port — see the hub's log line.", last = ui.proxyRole != "primary") {
+                                CremaTextField(
+                                    value = if (ui.proxyPrimaryPort > 0) ui.proxyPrimaryPort.toString() else "",
+                                    onValueChange = { vm.setProxyPrimaryPort(it.filter(Char::isDigit).take(5).toIntOrNull() ?: 0) },
+                                    placeholder = "8080",
+                                    singleLine = true,
+                                    modifier = Modifier.width(120.dp),
                                 )
                             }
                             if (ui.proxyRole == "primary") {
                                 CremaSettingsRow("Replay capture as DE1", "Emulator only: replay the newest recorded shot as a fake DE1 instead of live Bluetooth. Restart to apply.", last = true) {
                                     CremaSwitch(ui.replayPrimary, vm::setReplayPrimary)
-                                }
-                            }
-                            if (ui.proxyRole == "secondary") {
-                                CremaSettingsRow("Primary host", "An IP, or 10.0.2.2 for an adb-forwarded emulator.") {
-                                    CremaTextField(
-                                        value = ui.proxyPrimaryHost,
-                                        onValueChange = vm::setProxyPrimaryHost,
-                                        placeholder = "10.0.2.2",
-                                        singleLine = true,
-                                        modifier = Modifier.width(200.dp),
-                                    )
-                                }
-                                CremaSettingsRow("Primary port", "The relay port — see the primary's log line.", last = true) {
-                                    CremaTextField(
-                                        value = if (ui.proxyPrimaryPort > 0) ui.proxyPrimaryPort.toString() else "",
-                                        onValueChange = { vm.setProxyPrimaryPort(it.filter(Char::isDigit).take(5).toIntOrNull() ?: 0) },
-                                        placeholder = "8080",
-                                        singleLine = true,
-                                        modifier = Modifier.width(120.dp),
-                                    )
                                 }
                             }
                         }

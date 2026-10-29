@@ -18,8 +18,8 @@ import coffee.crema.settings.PairedDevice
 import coffee.crema.visualizer.VisualizerSync
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
-import coffee.crema.ble.proxy.HandoffTarget
 import coffee.crema.ble.proxy.Peer
+import coffee.crema.ble.proxy.RemoteClient
 import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.StopReason
 import coffee.crema.profiles.BrewDefaults
@@ -441,13 +441,18 @@ data class MainUiState(
     /** Debug: a primary replays the newest capture as a fake DE1 instead of using
      *  live BT (emulator demos only; default off — see [AppPrefs.replayPrimary]). */
     val replayPrimary: Boolean = false,
-    /** A secondary's link is mid-redial (primary dropped) — distinguishes a
-     *  reconnecting mirror from a healthy one so a frozen view doesn't read as
-     *  live (issue 03). Only meaningful while [proxyRole] == "secondary". */
+    /** A remote's link is mid-redial (hub dropped) or not yet welcomed —
+     *  distinguishes a reconnecting remote from a healthy one so a frozen view
+     *  doesn't read as live (issue 03). Only meaningful while [proxyRole] ==
+     *  "secondary". */
     val mirrorReconnecting: Boolean = false,
-    /** The primary's display name while mirroring (issue 10) — drives the app-wide
-     *  "Mirroring <primary>" authority banner. Blank when not a secondary. */
+    /** The hub's display name while this device is a remote (issue 10), from
+     *  the hub's Welcome and then its config snapshots — names the hub in the
+     *  "Connected through <hub>" status. Blank when not a remote. */
     val mirroringPrimaryName: String = "",
+    /** A remote's hub lists the DE1 in its roster (it holds the machine).
+     *  Only meaningful while [proxyRole] == "secondary". */
+    val remoteHubHasMachine: Boolean = false,
     /** This secondary was granted **view-only** (mirror, not control) by the host
      *  (issue 02) — its control attempts are refused, so the UI can say "view-only". */
     val mirrorViewOnly: Boolean = false,
@@ -463,12 +468,17 @@ data class MainUiState(
     /** Paired devices holding a pairing secret from this host; a listed device
      *  missing here must pair again. */
     val pairedWithSecret: Set<String> = emptySet(),
-    /** Secondaries currently mirroring THIS device while it's a primary (issue 07) —
-     *  the "hand off to <device>" targets shown in the picker. */
-    val mirrorClients: List<HandoffTarget> = emptyList(),
-    /** A pending **push** handoff offer (issue 07): a primary ([the name]) is offering
-     *  us the machine. Non-null ⟺ the Activity shows the "Take the machine?" dialog. */
-    val pendingHandoffOffer: String? = null,
+    /** Remotes connected through THIS device while it's the hub: the
+     *  read-only "Remotes connected" list. */
+    val remotes: List<RemoteClient> = emptyList(),
+    /** On a normal device: a discovered hub (not this device) whose NSD
+     *  advertisement says it holds the DE1. Unauthenticated, so only advice:
+     *  the connect surfaces and the Hub mode switch warn, and name it only
+     *  when [isVerifiedHub]. Null in the other roles. */
+    val hubHoldingMachine: Peer? = null,
+    /** This device holds a pairing secret for its pinned hub (the target at
+     *  [proxyPrimaryHost]): what [isVerifiedHub] checks a discovered hub against. */
+    val pairedHubPinned: Boolean = false,
     /** A host whose identity changed (it couldn't prove this device's pairing),
      *  as (host id, name): non-null ⟺ the Activity offers to forget it. */
     val changedHost: Pair<String, String>? = null,
@@ -479,9 +489,10 @@ data class MainUiState(
      * the Brew curve/targets/name match the primary exactly. Null = use the library
      * (built-in, or not mirroring). Cleared on any mode switch. */
     val mirroredProfile: CremaProfile? = null,
-    /** The raw wire JSON behind [mirroredProfile] — kept so a take-over (#01) can
-     *  promote it into the taker's real library (the thin [mirroredProfile] model
-     *  drops fields the upload needs). Set/cleared in lock-step with it. */
+    /** The raw wire JSON behind [mirroredProfile] — the full profile, which the
+     *  thin [mirroredProfile] model doesn't keep: what a remote would adopt into
+     *  its own library when it becomes standalone. Set/cleared in lock-step
+     *  with it. */
     val mirroredProfileJson: String? = null,
     /** A one-line summary of the primary's active bean (issue 05), shown on the bean
      *  chip when that bean isn't in this device's library. Null = use the library. */

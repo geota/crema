@@ -1,5 +1,6 @@
 package coffee.crema.machine
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -42,7 +43,18 @@ class RelayedCommandDispatcher(
         return order.withLock { withContext(lane) { run(method, cmd, origin) } }
     }
 
-    private fun run(method: String, cmd: MachineCommand.Relayable, origin: CommandOrigin): CommandOutcome {
+    /** Everything here runs inside one catch: a throw anywhere, not only in
+     *  the command, becomes a refusal for this control instead of ending the
+     *  peer's session. */
+    private fun run(method: String, cmd: MachineCommand.Relayable, origin: CommandOrigin): CommandOutcome = try {
+        runChecked(method, cmd, origin)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        refused(method, e.message ?: "control failed")
+    }
+
+    private fun runChecked(method: String, cmd: MachineCommand.Relayable, origin: CommandOrigin): CommandOutcome {
         machine.notePeerActivity()
         // A selection from the peer's own library that this one lacks would
         // leave the primary with no profile (or a dangling bean): refuse it
@@ -50,8 +62,7 @@ class RelayedCommandDispatcher(
         machine.unknownReference(cmd, hostName())?.let { return refused(method, it) }
         // Worded against the state before the command runs.
         val phrase = phrase(cmd)
-        val outcome = runCatching { machine.run(cmd, origin) }
-            .getOrElse { CommandOutcome.Refused(it.message ?: "control failed") }
+        val outcome = machine.run(cmd, origin)
         when (outcome) {
             CommandOutcome.Accepted ->
                 if (phrase != null && origin.id != null) announce("${origin.name ?: "A mirror"} $phrase", origin)
@@ -76,8 +87,7 @@ class RelayedCommandDispatcher(
         MachineCommand.StartHotWater -> "started hot water"
         MachineCommand.StartFlush -> "started a flush"
         MachineCommand.TareScale -> "tared the scale"
-        MachineCommand.StartDescale, MachineCommand.StartClean, MachineCommand.CancelMaintenance,
-        MachineCommand.TakeOver -> null
+        MachineCommand.StartDescale, MachineCommand.StartClean, MachineCommand.CancelMaintenance -> null
         is MachineCommand.Config -> null
     }
 }

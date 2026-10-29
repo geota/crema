@@ -8,6 +8,7 @@ import coffee.crema.ble.proxy.FrameCodec
 import coffee.crema.ble.proxy.Golden
 import coffee.crema.ble.proxy.PROXY_PROTOCOL_VERSION
 import coffee.crema.ble.proxy.RelayHub
+import coffee.crema.ble.proxy.RemoteClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -76,11 +77,9 @@ class RelayedVerbPrimaryDispatchTest {
     )
 
     /** Fixtures the primary refuses in this setup, with the reason's text.
-     *  `handoff` passes the allowlist but is granted only from a positively
-     *  idle machine, and no DE1 is connected here. `bean-1` is a bean from the
-     *  secondary's own library, which this primary doesn't have. */
+     *  `bean-1` is a bean from the secondary's own library, which this
+     *  primary doesn't have. */
     private val refusals = mapOf(
-        "handoff" to "handoff is idle-only",
         "setActiveBean" to "That bean isn\u2019t on",
     )
 
@@ -180,6 +179,27 @@ class RelayedVerbPrimaryDispatchTest {
 
         val accepted = relay(FrameCodec.encode(Frame.Control(2, "setActiveProfile", SAMPLE_PROFILE_ID)))
         assertEquals(Frame.ControlOk(2), accepted)
+    }
+
+    /** AC-2: an older remote's Take over (`control/retired/handoff.json`) is
+     *  answered with the retired reason. The hub stays the hub, nothing runs
+     *  or is announced, and the same session serves the next control. */
+    @Test
+    fun `a retired handoff is refused and the session is kept`() {
+        val messages = vm.ui.value.userMessages
+        val err = assertIs<Frame.ControlErr>(relay(Golden.require("control/retired/handoff.json")))
+        assertEquals(coffee.crema.machine.MachineCommandCodec.RETIRED_METHODS.getValue("handoff"), err.reason)
+        VmHarness.advance(1_000)
+        assertEquals("primary", VmHarness.proxyController(vm).state.value.role, "the hub didn't step down")
+        assertEquals(messages, vm.ui.value.userMessages, "nothing announced")
+        assertEquals(Frame.ControlOk(1), relay(Golden.require("control/tareScale.json")), "the session still serves")
+    }
+
+    /** The hub's read-only Remotes list shows the paired remote, with its scope. */
+    @Test
+    fun `the paired remote is listed under Remotes connected`() {
+        VmHarness.idle()
+        assertEquals(listOf(RemoteClient("phone-1", "Phone", canControl = true)), vm.ui.value.remotes)
     }
 
     /** An accepted start is announced to this primary's user. */

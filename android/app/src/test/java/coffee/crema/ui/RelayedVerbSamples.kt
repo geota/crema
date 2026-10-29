@@ -42,8 +42,6 @@ internal val RELAYED_VERB_SAMPLES: List<RelayedVerbSample> = listOf(
     RelayedVerbSample("startShot", "startShot", "") { it.startShot() },
     RelayedVerbSample("cancelMaintenance", "cancelMaintenance", "") { it.cancelMaintenance() },
     RelayedVerbSample("tareScale", "tareScale", "") { it.tareScale() },
-    // Sent by ProxyController.requestHandoff; granted by the controller's handoff release.
-    RelayedVerbSample("handoff", "handoff", "") { it.requestHandoff() },
     // Session config (MachineCommand.Config): applied locally, reverted on refusal.
     RelayedVerbSample("setActiveProfile", "setActiveProfile", SAMPLE_PROFILE_ID) { it.setActiveProfile(SAMPLE_PROFILE_ID) },
     RelayedVerbSample("setActiveBean", "setActiveBean", "bean-1") { it.setActiveBean("bean-1") },

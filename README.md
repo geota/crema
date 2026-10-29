@@ -255,7 +255,7 @@ The Android app is a full native client of the same core, not a remote. It uses 
 
 Most features ship to web, tablet and phone together; the [changelog](CHANGELOG.md) says which shells each change reaches. Where they differ today:
 
-- **Android only**: a background connection that keeps the DE1 link and reconnect loop alive with the screen off (opt-in, and only while the device is charging); multi-device mirroring, where one device owns the Bluetooth link and relays it to others on the LAN; and an on-demand update check against GitHub releases.
+- **Android only**: a background connection that keeps the DE1 link and reconnect loop alive with the screen off (opt-in, and only while the device is charging); multi-device use, where a hub (a device with Hub mode on) holds the Bluetooth link and remotes connect through it on the LAN; and an on-demand update check against GitHub releases.
 - **Web only**: webhooks.
 
 ## Contributing

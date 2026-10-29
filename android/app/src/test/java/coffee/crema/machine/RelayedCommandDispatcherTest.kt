@@ -22,12 +22,14 @@ class RelayedCommandDispatcherTest {
     private val actions = RecordingMachineActions()
     private val announced = CopyOnWriteArrayList<String>()
     private var machineIdle = false
+    private var hostNameThrows = false
+    private var machineIdleThrows = false
     private val phone = CommandOrigin("phone-1", "Phone")
 
     private val dispatcher = RelayedCommandDispatcher(
-        machine = LocalMachine(actions, grantTakeOver = { CommandOutcome.Accepted }, notify = {}),
-        hostName = { "Tablet" },
-        machineIdle = { machineIdle },
+        machine = LocalMachine(actions, notify = {}),
+        hostName = { check(!hostNameThrows) { "hostName failed" }; "Tablet" },
+        machineIdle = { check(!machineIdleThrows) { "machineIdle failed" }; machineIdle },
         announce = { text, _ -> announced += text },
         log = {},
         lane = laneExecutor.asCoroutineDispatcher(),
@@ -125,6 +127,44 @@ class RelayedCommandDispatcherTest {
         dispatch("cancelMaintenance")
         assertTrue(announced.isEmpty(), "$announced")
         assertEquals(3, actions.peerActivity)
+    }
+
+    /** AC-2: an older remote's Take over is refused with the retired reason,
+     *  with or without arguments, before anything runs or is announced. */
+    @Test
+    fun `a retired handoff is refused and runs nothing`() {
+        val reason = MachineCommandCodec.RETIRED_METHODS.getValue("handoff")
+        assertEquals(CommandOutcome.Refused(reason), dispatch("handoff"))
+        assertEquals(CommandOutcome.Refused(reason), dispatch("handoff", "x"))
+        assertTrue(actions.applied.isEmpty() && actions.shown.isEmpty(), "${actions.applied}")
+        assertEquals(0, actions.peerActivity, "a refused control isn't presence")
+        assertTrue(announced.isEmpty(), "$announced")
+    }
+
+    /** AC-5 (verifier P3-3): a throw from any step around the command, not
+     *  only the command, comes back as a refusal, and the next control runs. */
+    @Test
+    fun `a throw outside the command becomes a refusal`() {
+        actions.throwing += "notePeerActivity"
+        assertEquals(CommandOutcome.Refused("notePeerActivity failed"), dispatch("startShot"))
+        actions.throwing.clear()
+
+        actions.throwing += "hasProfile" // unknownReference
+        assertEquals(CommandOutcome.Refused("hasProfile failed"), dispatch("setActiveProfile", "p-1"))
+        actions.throwing.clear()
+
+        hostNameThrows = true
+        assertEquals(CommandOutcome.Refused("hostName failed"), dispatch("tareScale"))
+        hostNameThrows = false
+
+        machineIdleThrows = true // phrase() words an IDLE with it
+        assertEquals(CommandOutcome.Refused("machineIdle failed"), dispatch("machineState", "IDLE"))
+        machineIdleThrows = false
+
+        assertTrue(actions.applied.isEmpty(), "nothing ran: ${actions.applied}")
+        assertTrue(announced.isEmpty(), "$announced")
+        assertEquals(CommandOutcome.Accepted, dispatch("tareScale"), "the next control still runs")
+        assertEquals(listOf("tareScale"), actions.applied.toList())
     }
 
     private companion object {
