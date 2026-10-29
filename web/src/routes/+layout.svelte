@@ -22,7 +22,7 @@
 	import DebugPanel from '#lib/shell/DebugPanel.svelte';
 	import ReconnectStrip from '#lib/shell/ReconnectStrip.svelte';
 	import ToastHost from '#lib/components/shared/ToastHost.svelte';
-	import { toast } from '#lib/components/shared/toast.svelte.js';
+	import { dismissToast, toast } from '#lib/components/shared/toast.svelte.js';
 	import ConfirmDialog from '#lib/components/shared/ConfirmDialog.svelte';
 	import { describeError } from '#lib/utils/error.js';
 	import { installStorageNotices } from '#lib/shell/storage-notices.js';
@@ -35,7 +35,7 @@
 	import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { installServiceWorker, type Handle as ServiceWorkerHandle } from '#lib/pwa/register.js';
-	import { canReloadNow, type ReloadInputs } from '#lib/pwa/update-gate.js';
+	import { canReloadNow, reloadLinkOf, type ReloadInputs } from '#lib/pwa/update-gate.js';
 
 	let { children } = $props();
 
@@ -78,7 +78,7 @@
 		const snapshot = app?.state.current ?? null;
 		const brewPhase = getGuidedBrewStore().phase;
 		return {
-			connected: snapshot?.de1State === 'ready',
+			link: reloadLinkOf(snapshot?.de1State),
 			machineStateName: snapshot?.machineStateName ?? null,
 			shotInProgress: snapshot?.shotInProgress ?? false,
 			guidedBrewLive: brewPhase === 'armed' || brewPhase === 'running' || brewPhase === 'paused',
@@ -92,9 +92,20 @@
 			serviceWorker = installServiceWorker({
 				canReload: () => canReloadNow(reloadInputs()),
 				// Pinned until acted on: a new build is never applied behind the
-				// user's back, and the next launch picks it up regardless.
-				offer: (apply) =>
-					toast.action('Crema has been updated. Reload when you are ready.', 'Reload', apply, 0)
+				// user's back, and the next launch picks it up regardless. A newer
+				// build withdraws this toast and offers itself.
+				offer: (apply) => {
+					const id = toast.action(
+						'Crema has been updated. Reload when you are ready.',
+						'Reload',
+						apply,
+						0
+					);
+					return () => dismissToast(id);
+				},
+				// Tapped mid-shot (or mid-steam): not now; offered again once idle.
+				onDeferred: () =>
+					toast.info('The machine is busy — the update will be offered again once it is idle.', 6000)
 			});
 		}
 		// Web Bluetooth is Chromium-only. The app still loads on Firefox / Safari /

@@ -45,13 +45,14 @@ function show(
 	kind: ToastKind,
 	durationMs: number,
 	action?: Toast['action']
-): void {
+): number {
 	const id = nextId++;
 	items = [...items, { id, kind, message, ...(action ? { action } : {}) }];
 	// `durationMs <= 0` pins the toast until dismissed manually.
 	if (durationMs > 0 && typeof setTimeout !== 'undefined') {
 		setTimeout(() => dismissToast(id), durationMs);
 	}
+	return id;
 }
 
 /**
@@ -60,11 +61,12 @@ function show(
  * are advisory and clear sooner.
  */
 export const toast = {
-	info: (message: string, durationMs = 4000): void => show(message, 'info', durationMs),
-	success: (message: string, durationMs = 4000): void => show(message, 'success', durationMs),
-	error: (message: string, durationMs = 7000): void => show(message, 'error', durationMs),
+	info: (message: string, durationMs = 4000): void => void show(message, 'info', durationMs),
+	success: (message: string, durationMs = 4000): void => void show(message, 'success', durationMs),
+	error: (message: string, durationMs = 7000): void => void show(message, 'error', durationMs),
 	/** An info toast with one action button (e.g. "Undo") — lingers longer
-	 *  so the user has time to react; the action runs, then dismisses. */
-	action: (message: string, label: string, run: () => void, durationMs = 8000): void =>
+	 *  so the user has time to react; the action runs, then dismisses.
+	 *  Returns the toast's id, for {@link dismissToast}. */
+	action: (message: string, label: string, run: () => void, durationMs = 8000): number =>
 		show(message, 'info', durationMs, { label, run })
 };

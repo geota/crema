@@ -6,6 +6,12 @@
 		<link rel="icon" href="%sveltekit.assets%/favicon.ico" sizes="16x16 32x32 48x48" /><!-- legacy fallback for browsers without SVG-favicon support -->
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="theme-color" content="#1e1b16" />
+		<!-- The PWA plugin builds manifest.webmanifest but injects its link
+		     through a Vite HTML hook SvelteKit never runs (the same gap
+		     #lib/pwa/register.ts closes for the worker), so it is linked here.
+		     Production only in effect: `vite dev` skips the plugin, so dev
+		     answers this one request with a 404. -->
+		<link rel="manifest" href="%sveltekit.assets%/manifest.webmanifest" />
 		<!-- Design typography: Newsreader (serif), Hanken Grotesk (sans),
 		     JetBrains Mono. Loaded as a <head> link rather than a CSS @import
 		     so it can't be dropped by @import-ordering during CSS bundling.
