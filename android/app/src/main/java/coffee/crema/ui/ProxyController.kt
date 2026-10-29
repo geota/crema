@@ -484,6 +484,12 @@ class ProxyController(
                     appendLog("Handoff refused: ${outcome.reason}")
                     notify(takeoverRefusedMessage(outcome.reason))
                 }
+                // The primary may have granted it: it releases the DE1 after its
+                // timeout and reclaims it when nobody takes it. Not resent.
+                is CommandOutcome.Unknown -> {
+                    appendLog("Handoff: no reply (${outcome.detail}); staying a mirror")
+                    notify("No reply from the host — the machine may not have been handed over")
+                }
             }
         }
     }
@@ -747,6 +753,7 @@ class ProxyController(
                 when (val outcome = handleRelayedControl(method, args, originId, originName)) {
                     CommandOutcome.Accepted -> Result.success(Unit)
                     is CommandOutcome.Refused -> Result.failure(IllegalStateException(outcome.reason))
+                    is CommandOutcome.Unknown -> Result.failure(IllegalStateException(outcome.detail))
                 }
             },
             // The single-owner session config a mirror snaps to on attach (T2).

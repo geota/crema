@@ -56,6 +56,7 @@ class RelayedCommandDispatcher(
             CommandOutcome.Accepted ->
                 if (phrase != null && origin.id != null) announce("${origin.name ?: "A mirror"} $phrase", origin)
             is CommandOutcome.Refused -> log("Relayed $method refused: ${outcome.reason}")
+            is CommandOutcome.Unknown -> log("Relayed $method: ${outcome.detail}")
         }
         return outcome
     }

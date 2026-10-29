@@ -33,9 +33,13 @@ sealed interface ControlReply {
     /** The primary refused it ([Frame.ControlErr]), with its reason. */
     data class Err(val reason: String) : ControlReply
 
-    /** No answer from the primary: a timeout, a dropped session, or this
-     *  device was refused. */
-    data class Failed(val detail: String) : ControlReply
+    /** It never reached the primary (no welcomed session in time, or this
+     *  device was refused): not applied. */
+    data class NotSent(val detail: String) : ControlReply
+
+    /** It went out but no reply came (a timeout, or the session ended first):
+     *  the primary may have run it. */
+    data class NoReply(val detail: String) : ControlReply
 }
 
 /**
@@ -462,27 +466,31 @@ class ProxyTransport(
     suspend fun control(method: String, args: String = ""): Result<Unit> = when (val reply = sendControl(method, args)) {
         ControlReply.Ok -> Result.success(Unit)
         is ControlReply.Err -> Result.failure(IllegalStateException("control rejected: ${reply.reason}"))
-        is ControlReply.Failed -> Result.failure(IllegalStateException(reply.detail))
+        is ControlReply.NotSent -> Result.failure(IllegalStateException(reply.detail))
+        is ControlReply.NoReply -> Result.failure(IllegalStateException(reply.detail))
     }
 
     /**
-     * Relay a control and say how it ended: the primary's answer (with its
-     * reason when it refused), or no answer. Never resent.
+     * Relay a control and say how it ended, as far as this device can tell:
+     * the primary's answer, or whether the frame never left (not applied) or
+     * left without an answer (the primary may have run it). Never resent.
      */
     suspend fun sendControl(method: String, args: String = ""): ControlReply {
         val id = nextId.getAndIncrement()
+        var sent = false
         return try {
-            when (val reply = request(id) { Frame.Control(id, method, args) }) {
+            when (val reply = request(id, onWire = { sent = it }) { Frame.Control(id, method, args) }) {
                 is Frame.ControlOk -> ControlReply.Ok
                 is Frame.ControlErr -> ControlReply.Err(reply.reason)
-                else -> ControlReply.Failed("unexpected reply to control: $reply")
+                else -> ControlReply.NoReply("unexpected reply to control: $reply")
             }
         } catch (e: TimeoutCancellationException) {
-            ControlReply.Failed(e.message ?: "no reply in time")
+            if (sent) ControlReply.NoReply(e.message ?: "no reply in time") else ControlReply.NotSent(e.message ?: "not connected")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            ControlReply.Failed(e.message ?: e.toString())
+            val detail = e.message ?: e.toString()
+            if (sent) ControlReply.NoReply(detail) else ControlReply.NotSent(detail)
         }
     }
 
@@ -503,7 +511,10 @@ class ProxyTransport(
 
     // ---- Internals --------------------------------------------------------
 
-    private suspend fun request(id: Long, build: () -> Frame): Frame {
+    /** Send a request and wait for its reply. [onWire] is true from the moment
+     *  the frame may be on a welcomed session's wire, false again if that send
+     *  put nothing out. */
+    private suspend fun request(id: Long, onWire: (Boolean) -> Unit = {}, build: () -> Frame): Frame {
         return try {
             // The send is inside the timeout too: ReconnectingClientLink.send()
             // SUSPENDS until the link is back, so on a dead/mid-reconnect link an
@@ -523,7 +534,9 @@ class ProxyTransport(
                     val settled = handshake.first { it !is Handshake.Pending }
                     if (settled is Handshake.Refused) throw settled.error
                     sent = Sent(settled.epoch).also { pending[id] = it }
+                    onWire(true)
                     if (link.sendOn(settled.epoch, frame)) break
+                    onWire(false)
                     pending.remove(id)
                     handshake.first { it.epoch != settled.epoch || it is Handshake.Refused }
                 }

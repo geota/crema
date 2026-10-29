@@ -8,6 +8,10 @@ sealed interface CommandOutcome {
 
     /** Not applied, with a reason for the person who asked. */
     data class Refused(val reason: String) : CommandOutcome
+
+    /** Sent, but no answer came back: the primary may or may not have run it.
+     *  Never replayed; the next config push or state update shows the truth. */
+    data class Unknown(val detail: String) : CommandOutcome
 }
 
 /** The peer a relayed command came from, as its session identified itself. */

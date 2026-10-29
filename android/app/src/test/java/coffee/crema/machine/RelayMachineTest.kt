@@ -7,10 +7,12 @@ import kotlinx.coroutines.test.TestCoroutineScheduler
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /** A mirror's relay policy: Control is forwarded with nothing applied here,
- *  and Config is shown, forwarded, and undone when it fails. */
+ *  Config is shown, forwarded, and undone only when it surely didn't apply,
+ *  and nothing is ever resent. */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class RelayMachineTest {
 
@@ -76,11 +78,30 @@ class RelayMachineTest {
     }
 
     @Test
-    fun `a config edit with no answer is undone`() {
-        reply = ControlReply.Failed("Timed out waiting for 5000 ms")
+    fun `a config edit that never left is undone`() {
+        reply = ControlReply.NotSent("Timed out waiting for 5000 ms")
         val edit = MachineCommand.SetAutoTare(true)
         assertEquals(CommandOutcome.Refused(RelayMachine.UNREACHABLE), run(edit))
         assertEquals(listOf<MachineCommand.Config>(edit), actions.undone.toList())
         assertEquals(listOf("${RelayMachine.UNREACHABLE} — change reverted"), notices.toList())
+    }
+
+    @Test
+    fun `an unanswered config edit is kept, said to be uncertain, and not resent`() {
+        reply = ControlReply.NoReply("Proxy session ended before a reply")
+        val edit = MachineCommand.SetStopOnWeight(false)
+        assertIs<CommandOutcome.Unknown>(run(edit))
+        assertTrue(actions.undone.isEmpty(), "no blind revert: the primary may have applied it")
+        assertEquals(listOf(RelayMachine.UNKNOWN_CONFIG), notices.toList())
+        assertEquals(1, sent.size, "never resent")
+    }
+
+    @Test
+    fun `an unanswered control may have run and is not resent`() {
+        reply = ControlReply.NoReply("Timed out waiting for 5000 ms")
+        assertIs<CommandOutcome.Unknown>(run(MachineCommand.StartShot))
+        assertEquals(listOf(RelayMachine.UNKNOWN_CONTROL), notices.toList())
+        assertTrue("may not have been applied" in notices.single())
+        assertEquals(1, sent.size, "never resent")
     }
 }

@@ -9,9 +9,12 @@ import kotlinx.coroutines.launch
  * relay policy (see [MachineCommand]).
  *
  * - [MachineCommand.Control] is forwarded and nothing changes here.
- * - [MachineCommand.Config] is shown at once, then forwarded. A refusal, or
- *   any failure to get an answer, undoes it.
+ * - [MachineCommand.Config] is shown at once, then forwarded. A refusal, or a
+ *   frame that never left, undoes it. With no reply the primary may have
+ *   applied it, so it stays until the next config push corrects it.
  * - [MachineCommand.LocalOnly] is refused here.
+ *
+ * Nothing is ever resent: an unknown outcome is reported as one.
  */
 class RelayMachine(
     /** `ProxyTransport.sendControl`. */
@@ -55,10 +58,11 @@ class RelayMachine(
         return when (val reply = send(wire.method, wire.args)) {
             ControlReply.Ok -> CommandOutcome.Accepted
             is ControlReply.Err -> CommandOutcome.Refused(reply.reason)
-            is ControlReply.Failed -> {
-                log("Relay ${wire.method}: no answer (${reply.detail})")
+            is ControlReply.NotSent -> {
+                log("Relay ${wire.method} not sent: ${reply.detail}")
                 CommandOutcome.Refused(UNREACHABLE)
             }
+            is ControlReply.NoReply -> CommandOutcome.Unknown(reply.detail)
         }
     }
 
@@ -70,13 +74,19 @@ class RelayMachine(
                 log("Relay $method failed: ${outcome.reason}")
                 notify(refusedMessage(outcome.reason, config))
             }
+            is CommandOutcome.Unknown -> {
+                log("Relay $method: no reply (${outcome.detail}); outcome unknown, not resent")
+                notify(if (config) UNKNOWN_CONFIG else UNKNOWN_CONTROL)
+            }
         }
     }
 
     companion object {
-        /** The reason for a command the primary didn't answer. */
+        /** The reason for a command that never reached the primary. */
         const val UNREACHABLE = "Couldn’t reach the machine"
         const val NOT_ON_MIRROR = "Not available while mirroring — use the device holding the machine"
+        const val UNKNOWN_CONTROL = "No reply from the machine — it may not have been applied"
+        const val UNKNOWN_CONFIG = "No reply from the machine — the change may not have been applied"
 
         /** What the user sees for a refusal: the view-only wording for a
          *  mirror-only peer, else the primary's own reason. */

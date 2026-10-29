@@ -14,7 +14,8 @@ import coffee.crema.ui.QcSteam
  * The sub-interface is the relay policy, and a subtype must pick one:
  * - [Control]: machine control. A mirror forwards it and applies nothing itself.
  * - [Config]: the primary's single-owner session config. A mirror shows it at
- *   once, forwards it, and undoes it if the primary refuses it or it fails.
+ *   once, forwards it, and undoes it if the primary refuses it or it never got
+ *   there. On an unknown outcome it keeps it until the next config push.
  * - [LocalOnly]: never relayed. A mirror refuses it.
  *
  * Only [Relayable] commands have a wire form. [refusal] is each command's
