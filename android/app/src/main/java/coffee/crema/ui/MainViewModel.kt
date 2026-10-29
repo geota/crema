@@ -1115,8 +1115,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * TOFU paired-device list (persisted with the app prefs), and the
      * mirrored-profile promotion on handoff. The lambdas referencing
      * later-declared fields ([ble], [scale], [bleRecorder]) are only INVOKED
-     * post-construction — never during the controller's own field init
-     * (the field-init-order trap, review #36).
+     * post-construction: the controller starts no role until `init` calls
+     * [ProxyController.start] (the field-init-order trap, review #36).
      */
     private val proxy: ProxyController = ProxyController(
         app = app,
@@ -1485,6 +1485,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── `init` blocks: every property is declared above this point (P3-2) ──
 
     init {
+        // Multi-device (M2): start the persisted proxy role (a primary's relay,
+        // a secondary's mirror link), arm the recorder gate, start NSD peer
+        // discovery and advertise this instance. First, so the managers'
+        // transport is the role's before anything can drive it, and here, not
+        // in the controller's construction: it reaches [bleRecorder]/[ble].
+        proxy.start()
         // Seed the recipe library from disk — cheap (a handful of rows).
         viewModelScope.launch {
             val loaded = recipeStore.load()
@@ -1618,11 +1624,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 null
             }
         }
-        // Multi-device (M2): arm the recorder gate, start NSD peer discovery +
-        // advertise this instance on the LAN. Runs here, not at construction —
-        // it touches [bleRecorder]/[ble], which don't exist during the
-        // controller's own field init.
-        proxy.start()
         // Mirror the proxy controller's state slice into the UI snapshot (the
         // same pattern as [visualizer]/[drive] below).
         viewModelScope.launch {

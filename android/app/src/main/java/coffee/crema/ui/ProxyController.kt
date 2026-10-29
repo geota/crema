@@ -36,9 +36,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -79,7 +81,7 @@ class ProxyController(
     private val json: Json,
     private val scope: CoroutineScope,
     /** `bridge.setReadOnly` — a secondary's core mirrors but must never drive.
-     *  Invoked SYNCHRONOUSLY during construction (buildInitialDelegate). */
+     *  Never invoked during construction: [start] applies the persisted role. */
     private val setCoreReadOnly: (Boolean) -> Unit,
     /** `bleRecorder.enabled` — a mirror doesn't record (issue 14). Never invoked
      *  during construction (the recorder is built after this controller). */
@@ -165,10 +167,8 @@ class ProxyController(
     // Role-specific resources. In NORMAL, [nordicTransport] holds the real
     // transport; [relayHub]/[relayServer] (PRIMARY) and [proxyLink] (SECONDARY)
     // are the role-specific extras, torn down on a mode switch and in [close].
-    // ALL of these are declared BEFORE [switchable]: [buildInitialDelegate]
-    // assigns them during that field's initializer, and a later declaration
-    // would be zeroed by its own init afterwards (the field-init-order trap —
-    // review #36's launch-dead APK).
+    // Nothing assigns them during construction: the persisted role starts in
+    // [start], once the VM is fully built.
     private var nordicTransport: NordicBleTransport? = null
     @androidx.annotation.VisibleForTesting
     internal var relayHub: RelayHub? = null
@@ -193,8 +193,7 @@ class ProxyController(
             ?: UUID.randomUUID().toString().also { runCatching { SafeFile.write(f, it, keepBackup = false) } }
     }
 
-    /** The LAN pairing secrets and this install's host id. Declared before
-     *  [switchable]: [buildInitialDelegate] uses it. */
+    /** The LAN pairing secrets and this install's host id. */
     private val pairing = PairingStore(File(app.filesDir, PairingStore.FILE_NAME), secretBox, json)
 
     /** This process's NSD instance id: a random id per launch, advertised for
@@ -264,9 +263,10 @@ class ProxyController(
     private val handoffReleaseTimeoutMs = 3_000L
 
     // The managers + scanner sit on this facade so the transport can be swapped at
-    // runtime — M2 mode switches (Mirror/Hand-off) with NO app restart. The startup
-    // delegate is the persisted role (see [buildInitialDelegate]); [applyMode] swaps it.
-    private val switchable = SwitchableBleTransport(buildInitialDelegate())
+    // runtime — M2 mode switches (Mirror/Hand-off) with NO app restart. It holds
+    // [NotStartedTransport] until [start] installs the persisted role's
+    // transport ([startPersistedRole]); [applyMode] swaps it after that.
+    private val switchable = SwitchableBleTransport(NotStartedTransport)
 
     /** The app-wide BLE transport facade — the VM builds the scanner and both
      *  BLE managers on this. */
@@ -276,15 +276,22 @@ class ProxyController(
      *  instance and browses for peers, exposed as [State.peers]. */
     private val peerDiscovery = PeerDiscovery(app, scope, instanceId)
 
+    private var started = false
+
     /**
-     * Post-construction start, called from the VM's `init` (after every VM field
-     * — the recorder and both managers — exists): arm the recorder gate, start
-     * NSD discovery, and advertise this instance.
+     * Post-construction start, called once from the VM's `init` (after every VM
+     * field — the recorder, both managers — exists): start the persisted role
+     * (a primary's relay, a secondary's mirror link, or the plain radio), arm
+     * the recorder gate, start NSD discovery, and advertise this instance.
+     * Nothing role-specific runs during construction: a role started from a
+     * field initializer reached VM fields that didn't exist yet (the relay's
+     * advertisement read the DE1 manager; review #36's launch-dead APKs).
      */
     fun start() {
-        // A secondary (read-only mirror) doesn't record the primary's shot (issue
-        // 14). Set here, not in buildInitialDelegate — that runs during the
-        // [switchable] field init, before the recorder exists.
+        check(!started) { "ProxyController.start() runs once" }
+        started = true
+        switchable.setDelegate(startPersistedRole())
+        // A secondary (read-only mirror) doesn't record the primary's shot (issue 14).
         setRecorderEnabled(readProxyConfigSync().role != "secondary")
         scope.launch { peerDiscovery.peers.collect { p -> _state.update { it.copy(peers = p) } } }
         peerDiscovery.startDiscovery()
@@ -746,7 +753,7 @@ class ProxyController(
 
     // ── Mode construction ─────────────────────────────────────────────────────
 
-    private fun buildInitialDelegate(): BleTransport {
+    private fun startPersistedRole(): BleTransport {
         val cfg = readProxyConfigSync()
         // A secondary's core mirrors the DE1 but must never drive it — make it a
         // read-only observer from the start (preserved across session resets).
@@ -1012,7 +1019,7 @@ class ProxyController(
     // ── Persisted proxy config ────────────────────────────────────────────────
 
     /** Read just the proxy role/host/port straight off `prefs.json`, synchronously,
-     *  for [buildInitialDelegate] (which runs before the VM's async prefs load) —
+     *  for [startPersistedRole] (which runs before the VM's async prefs load) —
      *  served from the construction-time [proxyConfigCache]. */
     private fun readProxyConfigSync(): ProxyConfig = proxyConfigCache
 
@@ -1104,3 +1111,35 @@ internal fun takeoverRefusedMessage(reason: String?): String =
     } else {
         "Can't take over — the machine is busy"
     }
+
+/**
+ * The transport behind [ProxyController.transport] between construction and
+ * [ProxyController.start]: nothing to scan, nothing to connect to. The VM
+ * builds its scanner and managers on the facade during construction but
+ * drives them only after `start` has installed the persisted role.
+ */
+private object NotStartedTransport : BleTransport {
+    private fun notStarted(): Nothing = error("the proxy transport is used before ProxyController.start()")
+
+    override fun scan(matches: (name: String) -> Boolean): Flow<BleTransport.ScanMatch> = emptyFlow()
+
+    override suspend fun connect(device: BleTransport.DeviceHandle) = notStarted()
+
+    override suspend fun disconnect(device: BleTransport.DeviceHandle) {}
+
+    override fun connectionState(device: BleTransport.DeviceHandle): StateFlow<BleTransport.ConnState> =
+        MutableStateFlow(BleTransport.ConnState.DISCONNECTED)
+
+    override fun observe(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID): Flow<BleTransport.Notification> =
+        emptyFlow()
+
+    override suspend fun write(
+        device: BleTransport.DeviceHandle,
+        service: UUID,
+        characteristic: UUID,
+        data: ByteArray,
+        withoutResponse: Boolean,
+    ) = notStarted()
+
+    override suspend fun read(device: BleTransport.DeviceHandle, service: UUID, characteristic: UUID): ByteArray = notStarted()
+}
