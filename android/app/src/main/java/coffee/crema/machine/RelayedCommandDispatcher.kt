@@ -22,6 +22,8 @@ import kotlin.coroutines.CoroutineContext
  */
 class RelayedCommandDispatcher(
     private val machine: LocalMachine,
+    /** This primary's name, for a refusal the secondary shows. */
+    private val hostName: () -> String,
     /** Whether the machine reads idle or asleep: words a relayed IDLE as a
      *  wake rather than a stop. */
     private val machineIdle: () -> Boolean,
@@ -42,6 +44,10 @@ class RelayedCommandDispatcher(
 
     private fun run(method: String, cmd: MachineCommand.Relayable, origin: CommandOrigin): CommandOutcome {
         machine.notePeerActivity()
+        // A selection from the peer's own library that this one lacks would
+        // leave the primary with no profile (or a dangling bean): refuse it
+        // and change nothing here.
+        machine.unknownReference(cmd, hostName())?.let { return refused(method, it) }
         // Worded against the state before the command runs.
         val phrase = phrase(cmd)
         val outcome = runCatching { machine.run(cmd, origin) }

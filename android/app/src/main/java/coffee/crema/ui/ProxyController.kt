@@ -208,6 +208,7 @@ class ProxyController(
     /** A primary's entry for relayed controls (wired into [RelayHub]). */
     private val relayedCommands = RelayedCommandDispatcher(
         machine = localMachine,
+        hostName = { deviceLabel() },
         machineIdle = { machineStateName() in HANDOFF_IDLE_STATES },
         // "Who's driving" (issue 11, loose model): the other mirrors and this
         // primary learn who drove the machine; the originator already knows.

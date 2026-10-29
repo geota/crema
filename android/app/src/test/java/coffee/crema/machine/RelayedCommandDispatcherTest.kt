@@ -13,7 +13,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /** A primary's relayed-control entry: decode and check, run on the lane in
- *  order, and announce only accepted commands. */
+ *  order, refuse unknown references, and announce only accepted commands. */
 class RelayedCommandDispatcherTest {
 
     /** Stands in for Main: one named thread. */
@@ -25,6 +25,7 @@ class RelayedCommandDispatcherTest {
 
     private val dispatcher = RelayedCommandDispatcher(
         machine = LocalMachine(actions, grantTakeOver = { CommandOutcome.Accepted }, notify = {}),
+        hostName = { "Tablet" },
         machineIdle = { machineIdle },
         announce = { text, _ -> announced += text },
         log = {},
@@ -60,6 +61,18 @@ class RelayedCommandDispatcherTest {
         assertIs<CommandOutcome.Refused>(dispatch("setQcSteamTemp", "NaN"))
         assertIs<CommandOutcome.Refused>(dispatch("writeMmr", "1"))
         assertTrue(actions.applied.isEmpty() && actions.peerActivity == 0)
+    }
+
+    @Test
+    fun `a profile or bean this primary lacks is refused and nothing changes`() {
+        assertEquals(CommandOutcome.Refused("That profile isn’t on Tablet"), dispatch("setActiveProfile", "p-elsewhere"))
+        assertEquals(CommandOutcome.Refused("That bean isn’t on Tablet"), dispatch("setActiveBean", "bean-elsewhere"))
+        assertTrue(actions.applied.isEmpty() && actions.shown.isEmpty(), "nothing shown or committed: ${actions.applied}")
+
+        assertEquals(CommandOutcome.Accepted, dispatch("setActiveProfile", "p-1"))
+        assertEquals(CommandOutcome.Accepted, dispatch("setActiveBean", "bean-1"))
+        assertEquals(CommandOutcome.Accepted, dispatch("setActiveBean", ""), "clearing the bean names nothing")
+        assertEquals(3, actions.applied.size)
     }
 
     @Test

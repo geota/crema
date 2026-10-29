@@ -51,6 +51,10 @@ interface MachineActions {
      *  it, write the machine, push it to mirrors. */
     fun commitConfig(cmd: MachineCommand.Config)
 
+    fun hasProfile(id: String): Boolean
+
+    fun hasBean(id: String): Boolean
+
     /** A peer used Crema to drive this machine: presence at the machine. */
     fun notePeerActivity()
 }
@@ -84,6 +88,16 @@ class LocalMachine(
             actions.showConfig(cmd)
             actions.commitConfig(cmd)
         }
+    }
+
+    /** Why a peer's [cmd] names something this device doesn't have (a profile
+     *  or bean from the peer's own library), or null. [hostName] words it. */
+    fun unknownReference(cmd: MachineCommand.Relayable, hostName: String): String? = when (cmd) {
+        is MachineCommand.SetActiveProfile ->
+            if (actions.hasProfile(cmd.id)) null else "That profile isn’t on $hostName"
+        is MachineCommand.SetActiveBean ->
+            cmd.id?.takeUnless { actions.hasBean(it) }?.let { "That bean isn’t on $hostName" }
+        else -> null
     }
 
     /** A peer's command is about to run here. */

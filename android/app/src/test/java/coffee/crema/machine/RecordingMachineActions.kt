@@ -5,9 +5,13 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * [MachineActions] that records what ran, and on which thread: the verb bodies
- * a test's [LocalMachine] or [RelayMachine] reached.
+ * a test's [LocalMachine] or [RelayMachine] reached. [profiles] / [beans]
+ * are this device's library.
  */
-internal class RecordingMachineActions : MachineActions {
+internal class RecordingMachineActions(
+    val profiles: MutableSet<String> = mutableSetOf("p-1"),
+    val beans: MutableSet<String> = mutableSetOf("bean-1"),
+) : MachineActions {
     /** Verb bodies that ran, in order. */
     val applied = CopyOnWriteArrayList<String>()
 
@@ -37,6 +41,8 @@ internal class RecordingMachineActions : MachineActions {
     }
 
     override fun commitConfig(cmd: MachineCommand.Config) = ran("commit($cmd)")
+    override fun hasProfile(id: String) = id in profiles
+    override fun hasBean(id: String) = id in beans
     override fun notePeerActivity() {
         peerActivity++
     }

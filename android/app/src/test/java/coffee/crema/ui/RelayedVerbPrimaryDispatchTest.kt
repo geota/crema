@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.ble.proxy.CodecFrameLink
 import coffee.crema.ble.proxy.Frame
+import coffee.crema.ble.proxy.FrameCodec
 import coffee.crema.ble.proxy.Golden
 import coffee.crema.ble.proxy.PROXY_PROTOCOL_VERSION
 import coffee.crema.ble.proxy.RelayHub
@@ -57,8 +58,6 @@ class RelayedVerbPrimaryDispatchTest {
         "setActiveProfile" to Effect(prime = { vm -> vm.setActiveProfile(vm.ui.value.profiles.first { it.id != SAMPLE_PROFILE_ID }.id) }) {
             it.activeProfileId == SAMPLE_PROFILE_ID
         },
-        // Not in this primary's library: any well-formed id is taken as is.
-        "setActiveBean" to Effect { it.activeBeanId == "bean-1" },
         "setActiveBean.none" to Effect(prime = { it.setActiveBean("bean-2") }) { it.activeBeanId == null },
         "setStopOnWeight" to Effect(prime = { it.setStopOnWeight(false) }) { it.stopOnWeight },
         "setAutoTare" to Effect(prime = { it.setAutoTare(true) }) { !it.autoTare },
@@ -78,8 +77,15 @@ class RelayedVerbPrimaryDispatchTest {
 
     /** Fixtures the primary refuses in this setup, with the reason's text.
      *  `handoff` passes the allowlist but is granted only from a positively
-     *  idle machine, and no DE1 is connected here. */
-    private val refusals = mapOf("handoff" to "handoff is idle-only")
+     *  idle machine, and no DE1 is connected here. `bean-1` is a bean from the
+     *  secondary's own library, which this primary doesn't have. */
+    private val refusals = mapOf(
+        "handoff" to "handoff is idle-only",
+        "setActiveBean" to "That bean isn\u2019t on",
+    )
+
+    /** What a refused fixture must leave as it was. */
+    private val unchanged: Map<String, (MainUiState) -> Any?> = mapOf("setActiveBean" to { it.activeBeanId })
 
     @Before
     fun pairWithThePrimary() {
@@ -134,6 +140,7 @@ class RelayedVerbPrimaryDispatchTest {
                 VmHarness.idle()
                 assertFalse(it.applied(vm.ui.value), "${sample.fixture}: prime the state away from the sample first")
             }
+            val kept = unchanged[sample.fixture]?.invoke(vm.ui.value)
             val reply = relay(Golden.require("control/${sample.fixture}.json"))
             val refusal = refusals[sample.fixture]
             if (refusal == null) {
@@ -141,9 +148,23 @@ class RelayedVerbPrimaryDispatchTest {
             } else {
                 val err = assertIs<Frame.ControlErr>(reply, "${sample.fixture} should be refused here")
                 assertTrue(refusal in err.reason, "${sample.fixture}: ${err.reason}")
+                unchanged[sample.fixture]?.let { assertEquals(kept, it(vm.ui.value), "${sample.fixture} changed the primary") }
             }
             if (effect != null) assertTrue(effect.applied(vm.ui.value), "${sample.fixture} did not reach the primary's state")
         }
+    }
+
+    /** 05 F1: a profile from the secondary's own library is refused with a
+     *  reason, and the primary keeps its selection. */
+    @Test
+    fun `a profile this primary lacks is refused and its selection kept`() {
+        val before = vm.ui.value.activeProfileId
+        val err = assertIs<Frame.ControlErr>(relay(FrameCodec.encode(Frame.Control(1, "setActiveProfile", "custom-on-the-phone"))))
+        assertTrue("That profile isn\u2019t on" in err.reason, err.reason)
+        assertEquals(before, vm.ui.value.activeProfileId)
+
+        val accepted = relay(FrameCodec.encode(Frame.Control(2, "setActiveProfile", SAMPLE_PROFILE_ID)))
+        assertEquals(Frame.ControlOk(2), accepted)
     }
 
     /** An accepted start is announced to this primary's user. */

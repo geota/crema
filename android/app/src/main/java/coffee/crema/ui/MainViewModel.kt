@@ -1114,6 +1114,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         override fun applyTareScale() = this@MainViewModel.applyTareScale()
         override fun showConfig(cmd: MachineCommand.Config): () -> Unit = this@MainViewModel.showConfig(cmd)
         override fun commitConfig(cmd: MachineCommand.Config) = this@MainViewModel.commitConfig(cmd)
+        override fun hasProfile(id: String): Boolean = library.hasProfile(id)
+        override fun hasBean(id: String): Boolean = _ui.value.beans.any { it.id == id }
         // Someone is using Crema on a mirror: that's presence at the machine.
         override fun notePeerActivity() = idleSleep.activity(coffee.crema.core.IdleActivity.Mirror)
     }

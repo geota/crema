@@ -83,6 +83,7 @@ class RelayHubControlOrderTest {
             val actions = RecordingMachineActions()
             val dispatcher = RelayedCommandDispatcher(
                 machine = LocalMachine(actions, grantTakeOver = { CommandOutcome.Accepted }, notify = {}),
+                hostName = { "Tablet" },
                 machineIdle = { false },
                 announce = { _, _ -> },
                 log = {},
