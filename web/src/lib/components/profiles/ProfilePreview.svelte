@@ -374,7 +374,7 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps, 0.08em);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		pointer-events: none;
 	}
 </style>

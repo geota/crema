@@ -323,7 +323,7 @@
 	>
 		<div class="cmp-head">
 			<div>
-				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Compare</div>
+				<div class="t-eyebrow" style="color:var(--fg-3)">Compare</div>
 				<div class="cmp-title">
 					{shots.length} shots overlaid
 				</div>
@@ -533,7 +533,7 @@
 	.cmp-close {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		font-size: 20px;
 		padding: 6px 8px;
 		cursor: pointer;
@@ -558,7 +558,7 @@
 	}
 	:global(.cmp-ch-icon) {
 		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		margin-right: 2px;
 	}
 	.cmp-ch-rule {
@@ -591,12 +591,12 @@
 	.cmp-ch-chip.is-active {
 		background: rgba(var(--copper-rgb), 0.16);
 		border-color: rgba(var(--copper-rgb), 0.4);
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.cmp-ch-unit {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-left: 6px;
 	}
 	.cmp-chart-wrap {
@@ -631,7 +631,7 @@
 		font-weight: 500;
 		letter-spacing: var(--track-allcaps, 0.06em);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		text-align: left;
 		padding: 8px 10px;
 		border-bottom: 1px solid var(--hairline);
@@ -667,14 +667,14 @@
 	}
 	.cmp-td-shot-meta {
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-top: 1px;
 	}
 	.cmp-stars {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		letter-spacing: -1px;
 	}
 	.cmp-stars.is-unrated {
-		color: rgba(var(--tint-rgb), 0.25);
+		color: var(--fg-muted);
 	}
 </style>

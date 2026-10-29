@@ -220,7 +220,7 @@
 		z-index: 2;
 		background: transparent;
 		border: 0;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-size: 18px;
 		cursor: pointer;
 		padding: 4px;
@@ -232,10 +232,10 @@
 		background: rgba(var(--tint-rgb), 0.05);
 	}
 	.lcs-pin.lcs-pin-off {
-		color: rgba(var(--tint-rgb), 0.25);
+		color: var(--fg-muted);
 	}
 	.lcs-pin.lcs-pin-off:hover {
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 	}
 
 	/* Slot wrappers — purely structural; the snippet contents own their
@@ -311,11 +311,11 @@
 	.lcs-actions :global(.lcs-action-primary.is-on) {
 		background: rgba(193, 116, 75, 0.12);
 		border-color: var(--copper-500);
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		cursor: default;
 	}
 	.lcs-actions :global(.lcs-action-primary.is-on i) {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.lcs-actions :global(.lcs-action-icon) {
 		width: 30px;
@@ -324,7 +324,7 @@
 		border: 1px solid rgba(var(--tint-rgb), 0.1);
 		background: rgba(var(--tint-rgb), 0.03);
 		border-radius: var(--radius-sm);
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		cursor: pointer;
 		display: inline-flex;
 		align-items: center;

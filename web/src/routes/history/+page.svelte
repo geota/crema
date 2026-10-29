@@ -1046,7 +1046,7 @@
 	<!-- Header -->
 	<div class="hi-head">
 		<div>
-			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Library</div>
+			<div class="t-eyebrow" style="color:var(--fg-3)">Library</div>
 			<div class="t-page-title hi-title">{rowNoun === 'brew' ? 'Brew history' : 'Shot history'}</div>
 			<div class="hi-sub">
 				{shots.length}
@@ -1269,7 +1269,7 @@
 				</button>
 			{/if}
 			<div class="pp-sort hi-range">
-				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.45)">Range</span>
+				<span class="t-eyebrow" style="color:var(--fg-muted)">Range</span>
 				<button
 					class="pp-sort-opt"
 					class:is-active={range === '30d'}
@@ -1516,7 +1516,7 @@
 	.hi-sub {
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-top: 4px;
 	}
 	/* "esp" scope tag on the mixed-view espresso-scoped average tiles. */
@@ -1524,7 +1524,7 @@
 		font-style: normal;
 		font-size: 9px;
 		font-weight: 600;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		margin-left: 5px;
 		letter-spacing: 0.06em;
 		text-transform: lowercase;
@@ -1548,7 +1548,7 @@
 		border-color: rgba(var(--tint-rgb), 0.2);
 	}
 	.hi-search :global(svg) {
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		font-size: 13px;
 	}
 	.hi-search input {
@@ -1563,7 +1563,7 @@
 		padding: 8px 6px;
 	}
 	.hi-search input::placeholder {
-		color: rgba(var(--tint-rgb), 0.35);
+		color: var(--fg-muted);
 	}
 
 	/* The .st-btn family is shared globally — see settings-page.css. */
@@ -1589,7 +1589,7 @@
 		font-weight: 700;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 	.hi-stat-val {
 		display: flex;
@@ -1605,7 +1605,7 @@
 		font-style: normal;
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-left: 1px;
 	}
 
@@ -1634,7 +1634,7 @@
 	.pp-sort-opt {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		cursor: pointer;
@@ -1661,7 +1661,7 @@
 		gap: 4px;
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		cursor: pointer;
@@ -1699,7 +1699,7 @@
 		text-align: center;
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 	}
 	.hi-detail-empty {
 		display: flex;
@@ -1708,7 +1708,7 @@
 		background: var(--bg-surface);
 		border: 1px solid rgba(var(--tint-rgb), 0.05);
 		border-radius: var(--radius-lg, 14px);
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		font-family: var(--font-sans);
 		font-size: 13px;
 		min-height: 200px;
@@ -1723,7 +1723,7 @@
 		border-radius: var(--radius-sm, 6px);
 		background: rgba(var(--copper-rgb), 0.1);
 		border: 1px solid rgba(var(--copper-rgb), 0.22);
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		align-self: flex-start;
@@ -1744,7 +1744,7 @@
 	}
 	.hi-compare-staging-sub {
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	.hi-compare-list {
 		list-style: none;
@@ -1776,7 +1776,7 @@
 	.hi-compare-list-x {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		cursor: pointer;
 		padding: 2px 6px;
 		border-radius: 4px;
@@ -1805,7 +1805,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-size: 30px;
 		margin-bottom: 6px;
 	}
@@ -1818,7 +1818,7 @@
 		font-family: var(--font-sans);
 		font-size: 13px;
 		line-height: 1.55;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		max-width: 420px;
 	}
 

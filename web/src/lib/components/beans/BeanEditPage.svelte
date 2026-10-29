@@ -1668,7 +1668,7 @@
 		font-weight: 700;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		margin-top: 8px;
 	}
 	.be-photo-actions {
@@ -1682,7 +1682,7 @@
 		padding: 0;
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		text-decoration: underline;
 		text-underline-offset: 2px;
 		cursor: pointer;
@@ -1699,7 +1699,7 @@
 	.be-photo-sub {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		line-height: 1.5;
 	}
 	.be-toc {
@@ -1713,7 +1713,7 @@
 		align-items: center;
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		text-align: left;
 		font-family: var(--font-sans);
 		font-size: 12px;
@@ -1729,7 +1729,7 @@
 	.be-toc-n {
 		font-family: var(--font-mono);
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 	}
 	.be-rail-help {
 		display: flex;
@@ -1737,7 +1737,7 @@
 		align-items: flex-start;
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		background: rgba(var(--tint-rgb), 0.04);
 		border: 1px solid rgba(var(--tint-rgb), 0.06);
 		border-radius: var(--radius-sm);
@@ -1745,11 +1745,11 @@
 		line-height: 1.5;
 	}
 	.be-rail-help :global(svg) {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-size: 14px;
 	}
 	.be-req {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-weight: 700;
 	}
 
@@ -1775,7 +1775,7 @@
 	.be-block-n {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		margin-top: 4px;
 	}
 	.be-block-title {
@@ -1789,7 +1789,7 @@
 	.be-block-sub {
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		margin-top: 2px;
 		line-height: 1.45;
 	}
@@ -1852,7 +1852,7 @@
 	.be-frow-sub {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		line-height: 1.4;
 	}
 	.be-frow-r {
@@ -1924,14 +1924,14 @@
 	.be-default-chip:hover {
 		background: rgba(var(--tint-rgb), 0.08);
 		border-color: rgba(var(--copper-rgb), 0.32);
-		color: var(--copper-300);
+		color: var(--fg-accent);
 	}
 	.be-default-chip-tag {
 		font-size: 9px;
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps, 0.06em);
 		text-transform: uppercase;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		background: rgba(var(--copper-rgb), 0.12);
 		border-radius: 999px;
 		padding: 2px 6px;
@@ -1959,7 +1959,7 @@
 		padding: 6px 14px;
 		border: 0;
 		background: transparent;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		font-weight: 500;
@@ -2007,15 +2007,15 @@
 	}
 	.be-flag :global(svg) {
 		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.be-flag.is-on {
-		color: var(--copper-300);
+		color: var(--fg-accent);
 		border-color: var(--copper-400);
 		background: rgba(var(--copper-rgb), 0.08);
 	}
 	.be-flag.is-on :global(svg) {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 
 	/* Bag presets — centered so the 6 chips visually anchor under the
@@ -2040,7 +2040,7 @@
 	}
 	.be-preset em {
 		font-style: normal;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.be-preset:hover {
 		background: rgba(var(--tint-rgb), 0.08);
@@ -2048,10 +2048,10 @@
 	.be-preset.is-on {
 		background: rgba(var(--copper-rgb), 0.16);
 		border-color: var(--copper-400);
-		color: var(--copper-300);
+		color: var(--fg-accent);
 	}
 	.be-preset.is-on em {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 
 	/* Rating */

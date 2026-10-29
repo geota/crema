@@ -285,14 +285,14 @@
 	}
 	.ra-item :global(svg) {
 		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 	.ra-item.is-active {
 		background: rgba(193, 124, 79, 0.16);
-		color: var(--copper-300);
+		color: var(--fg-accent);
 	}
 	.ra-item.is-active :global(svg) {
-		color: var(--copper-300);
+		color: var(--fg-accent);
 	}
 	.ra-hint {
 		display: flex;
@@ -300,7 +300,7 @@
 		gap: 8px;
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		padding: 7px 10px;
 		border-top: 1px solid rgba(var(--tint-rgb), 0.08);
 		margin-top: 2px;
@@ -309,7 +309,7 @@
 		font-size: 12px;
 	}
 	.ra-hint strong {
-		color: var(--copper-300);
+		color: var(--fg-accent);
 		font-weight: 600;
 	}
 </style>

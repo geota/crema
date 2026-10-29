@@ -612,7 +612,7 @@
 	}
 	.fu-choice-rel {
 		font-size: 12px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.fu-choice-rel.is-warn {
 		color: var(--warning);

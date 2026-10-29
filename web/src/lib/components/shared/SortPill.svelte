@@ -211,7 +211,7 @@
 	}
 	.sortpill-field :global(svg) {
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.sortpill-label {
 		font-weight: 500;
@@ -256,14 +256,14 @@
 	}
 	.sortpill-menu-item.is-active {
 		background: rgba(var(--copper-rgb), 0.1);
-		color: var(--copper-300);
+		color: var(--fg-accent);
 	}
 	.sortpill-menu-item :global(svg) {
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.sortpill-menu-item.is-active :global(svg) {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.sortpill-menu-item span {
 		flex: 1 1 auto;

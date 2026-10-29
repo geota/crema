@@ -105,7 +105,7 @@
 	.sid-close {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		cursor: pointer;
 		padding: 4px;
 	}

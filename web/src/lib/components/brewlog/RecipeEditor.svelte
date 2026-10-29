@@ -160,7 +160,7 @@
 <div class="re" role="dialog" aria-modal="true" aria-labelledby="re-title" tabindex="-1" onkeydown={onKey}>
 	<header class="re-head">
 		<div>
-			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Recipe</div>
+			<div class="t-eyebrow" style="color:var(--fg-3)">Recipe</div>
 			<h2 class="re-title" id="re-title">{heading}</h2>
 			{#if base.credit || base.sourceUrl}
 				<div class="re-credit">
@@ -349,7 +349,7 @@
 	.re-x {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		font-size: 16px;
 		padding: 4px;
 		cursor: pointer;
@@ -408,7 +408,7 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.re-input {
 		background: rgba(var(--tint-rgb), 0.04);
@@ -475,7 +475,7 @@
 	.re-step-n {
 		font-family: var(--font-mono);
 		font-size: 10.5px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		width: 14px;
 		flex: none;
 	}
@@ -493,14 +493,14 @@
 	.re-step-fld span {
 		font-family: var(--font-sans);
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		flex: none;
 	}
 	.re-adv {
 		background: transparent;
 		border: 1px solid rgba(var(--tint-rgb), 0.14);
 		border-radius: var(--radius-pill);
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-size: 9.5px;
 		font-weight: 700;
 		letter-spacing: 0.06em;
@@ -509,12 +509,12 @@
 		flex: none;
 	}
 	.re-adv.is-tap {
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.re-del {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		cursor: pointer;
 		padding: 4px;
 		flex: none;
@@ -531,7 +531,7 @@
 	.re-add {
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		font-family: var(--font-sans);
 		font-size: 12.5px;
 		cursor: pointer;

@@ -377,7 +377,7 @@
 		font-weight: 700;
 		letter-spacing: var(--track-allcaps, 0.06em);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	.qsheet-chart-div {
 		display: inline-block;

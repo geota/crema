@@ -18,7 +18,7 @@
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
   font-weight: 600;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
 }
 .qcs-row {
   display: flex; align-items: stretch;
@@ -55,12 +55,12 @@
 }
 .qcs-unit {
   font-size: 12px;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
 }
 .qcs-suffix {
   font-family: var(--font-sans);
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
   margin-top: -2px;
   text-align: center;
 }
@@ -91,7 +91,10 @@
   border-color: var(--copper-500);
   color: var(--fg-on-accent);
 }
-.qchip-unit { font-size: 10px; opacity: 0.6; }
+/* The unit is quieter than the number through a text token, not opacity:
+   `opacity: .6` measured 2.9:1 (light) and 2.7:1 on the selected chip. */
+.qchip-unit { font-size: 10px; color: var(--fg-muted); }
+.qchip.is-active .qchip-unit { color: inherit; }
 
 /* ───────────────────────────────────────────────── Quick pill (variant A trigger) */
 .qcpill {
@@ -154,7 +157,7 @@
 .qsheet-sub {
   font-family: var(--font-sans);
   font-size: 12px;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
 }
 .qsheet-grid {
   display: grid;

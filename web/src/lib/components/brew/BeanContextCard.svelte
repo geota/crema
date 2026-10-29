@@ -462,7 +462,7 @@
 	.bean-edit-save {
 		background: rgba(193, 124, 79, 0.16);
 		border-color: var(--copper-400);
-		color: var(--copper-300);
+		color: var(--fg-accent);
 	}
 	.bean-edit-save:hover {
 		background: rgba(193, 124, 79, 0.24);
@@ -503,7 +503,7 @@
 		background: rgba(var(--tint-rgb), 0.04);
 		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		border-radius: var(--radius-sm);
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		text-transform: capitalize;
@@ -517,13 +517,13 @@
 	.bean-roast-opt.is-active {
 		background: rgba(193, 124, 79, 0.16);
 		border-color: var(--copper-400);
-		color: var(--copper-300);
+		color: var(--fg-accent);
 	}
 	.bean-fullopen {
 		display: inline-block;
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		text-decoration: none;
 		margin-top: 6px;
 		padding: 4px 0;
@@ -535,7 +535,7 @@
 		background: rgba(var(--tint-rgb), 0.06);
 		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		border-radius: 999px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		cursor: pointer;
 		display: inline-flex;
 		align-items: center;
@@ -575,14 +575,14 @@
 	.bean-default-chip:hover {
 		background: rgba(var(--tint-rgb), 0.08);
 		border-color: rgba(var(--copper-rgb), 0.32);
-		color: var(--copper-300);
+		color: var(--fg-accent);
 	}
 	.bean-default-chip-tag {
 		font-size: 9px;
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps, 0.06em);
 		text-transform: uppercase;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		background: rgba(var(--copper-rgb), 0.12);
 		border-radius: 999px;
 		padding: 2px 6px;

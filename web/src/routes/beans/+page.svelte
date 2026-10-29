@@ -1233,7 +1233,7 @@
 	.bn-head-sub {
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.bn-head-r {
 		display: flex;
@@ -1256,7 +1256,7 @@
 		border-color: rgba(var(--tint-rgb), 0.2);
 	}
 	.bn-search :global(svg) {
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		font-size: 14px;
 	}
 	.bn-search input {
@@ -1271,13 +1271,13 @@
 		padding: 9px 8px;
 	}
 	.bn-search input::placeholder {
-		color: rgba(var(--tint-rgb), 0.35);
+		color: var(--fg-muted);
 	}
 	.bn-search-clear {
 		background: transparent;
 		border: 0;
 		padding: 4px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		cursor: pointer;
 	}
 
@@ -1355,7 +1355,7 @@
 		font-weight: 700;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		padding: 6px 8px 4px;
 	}
 	.bn-split-menu-item {
@@ -1378,7 +1378,7 @@
 	}
 	.bn-split-menu-item :global(svg) {
 		font-size: 18px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		margin-top: 2px;
 	}
 	.bn-split-menu-text {
@@ -1396,7 +1396,7 @@
 	.bn-split-menu-sub {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		line-height: 1.4;
 	}
 	.bn-split-menu-sub code {
@@ -1462,7 +1462,7 @@
 		padding: 8px 14px;
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		font-family: var(--font-sans);
 		font-size: 13px;
 		font-weight: 500;
@@ -1483,7 +1483,7 @@
 	.bn-tab-count {
 		font-family: var(--font-mono);
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		padding: 1px 6px;
 		background: rgba(var(--tint-rgb), 0.06);
 		border-radius: 999px;
@@ -1501,7 +1501,7 @@
 		gap: 4px;
 		background: transparent;
 		border: 0;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		cursor: pointer;
@@ -1564,7 +1564,7 @@
 	.bn-section-count {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		font-weight: 500;
 	}
 	.bn-section-rule {
@@ -1605,7 +1605,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		font-size: 20px;
 		transition: all var(--dur-1) var(--ease);
 	}
@@ -1619,7 +1619,7 @@
 	}
 	.bn-tile-new-sub {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		text-align: center;
 		max-width: 240px;
 		line-height: 1.4;
@@ -1635,11 +1635,11 @@
 		text-align: center;
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.bn-empty-filter :global(svg) {
 		font-size: 48px;
-		color: rgba(var(--tint-rgb), 0.3);
+		color: var(--fg-muted);
 		margin-bottom: 4px;
 	}
 
@@ -1676,7 +1676,7 @@
 	.bn-merge-banner-sub {
 		font-family: var(--font-sans);
 		font-size: 11.5px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		margin-top: 2px;
 		line-height: 1.4;
 	}
@@ -1722,7 +1722,7 @@
 	}
 	.bn-roaster-tile-new .bn-tile-new-sub {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		text-align: center;
 		max-width: 220px;
 		line-height: 1.4;
@@ -1731,7 +1731,7 @@
 	/* "Show dupes" toggle in the tab toolbar — reuses `.bn-chip-clear`
 	   geometry but adds an on-state colour so the active filter reads. */
 	.bn-chip-toggle.is-on {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		background: rgba(var(--copper-rgb), 0.08);
 	}
 </style>

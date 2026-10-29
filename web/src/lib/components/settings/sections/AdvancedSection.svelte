@@ -717,7 +717,7 @@
 		font-variant-numeric: tabular-nums;
 	}
 	.rp-status-run {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.rp-status-ok {
 		color: var(--success);

@@ -111,20 +111,20 @@
 	}
 	.al-arrow {
 		font-family: var(--font-mono);
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		width: 12px;
 		text-align: center;
 	}
 	.al-dest {
 		font-family: var(--font-mono);
 		font-size: 10px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		border-radius: 4px;
 		padding: 0 5px;
 	}
 	.al-kind {
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		min-width: 40px;
 	}
 	.al-name {
@@ -135,7 +135,7 @@
 		text-overflow: ellipsis;
 	}
 	.al-time {
-		color: rgba(var(--tint-rgb), 0.4);
+		color: var(--fg-muted);
 		margin-left: auto;
 	}
 	.al-msg {

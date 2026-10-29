@@ -151,7 +151,7 @@
 		font: inherit;
 	}
 	:global(.qcs-num-btn:hover) {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	:global(.qcs-num-input) {
 		min-width: 0;
@@ -183,7 +183,7 @@
 	.is-overridden :global(.qcs-num),
 	.is-overridden :global(.qcs-unit) {
 		font-style: italic;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	/* Keep the hover affordance on the click-to-edit button while
 	   overridden — the rule above turns the colour copper, so the

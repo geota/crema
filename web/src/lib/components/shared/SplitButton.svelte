@@ -256,7 +256,7 @@
 		font-weight: 700;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		padding: 6px 8px 4px;
 	}
 	.sb-menu-item {
@@ -282,7 +282,7 @@
 	}
 	.sb-menu-item :global(svg) {
 		font-size: 18px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		margin-top: 2px;
 	}
 	.sb-menu-text {
@@ -300,7 +300,7 @@
 	.sb-menu-sub {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		line-height: 1.4;
 	}
 </style>

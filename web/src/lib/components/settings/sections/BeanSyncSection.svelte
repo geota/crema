@@ -513,7 +513,7 @@
 	.bs-hint-dim {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 	}
 	/* ── Direction control with optional premium tag ─────────────────────
 	   Inline layout: [premium tag (if locked)] [segment]. Living in the
@@ -533,7 +533,7 @@
 		gap: 4px;
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		text-decoration: none;
 	}
 	.bs-premium-tag :global(svg) {
@@ -541,7 +541,7 @@
 		opacity: 0.75;
 	}
 	.bs-premium-tag:hover {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.bs-premium-tag:hover :global(svg) {
 		opacity: 1;
@@ -557,6 +557,6 @@
 		color: rgba(var(--tint-rgb), 0.7);
 	}
 	.bs-premium a {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 </style>

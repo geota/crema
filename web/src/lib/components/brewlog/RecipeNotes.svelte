@@ -37,7 +37,7 @@
 		font-family: var(--font-sans);
 		font-size: 11.5px;
 		line-height: 1.35;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		white-space: pre-line;
 		overflow-wrap: anywhere;
 		min-width: 0;

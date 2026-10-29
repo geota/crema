@@ -20,7 +20,7 @@
   min-height: 14px;
 }
 .qsplit-prefix {
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
 }
 .qsplit-toggle {
   display: inline-flex; align-items: baseline; gap: 6px;
@@ -32,13 +32,13 @@
   font-size: 11px;
   letter-spacing: 0;
   text-transform: none;
-  color: var(--copper-400);
+  color: var(--fg-accent);
   font-weight: 500;
 }
 .qsplit-opt {
   background: transparent; border: 0; padding: 0;
   font: inherit; letter-spacing: inherit; text-transform: inherit;
-  color: rgba(var(--tint-rgb), 0.32);
+  color: var(--fg-muted);
   cursor: pointer;
   transition: color var(--dur-1) var(--ease);
   position: relative;
@@ -57,7 +57,7 @@
   border-radius: 1px;
 }
 .qsplit-sep {
-  color: rgba(var(--tint-rgb), 0.18);
+  color: var(--fg-muted);
   font-weight: 400;
 }
 .qsplit-meta {
@@ -65,7 +65,7 @@
   font-size: 9px;
   text-transform: none;
   letter-spacing: 0;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
   margin-left: 2px;
 }
 
@@ -84,7 +84,7 @@
   font-size: 11px;
   letter-spacing: 0;
   text-transform: none;
-  color: var(--copper-400);
+  color: var(--fg-accent);
   font-weight: 500;
 }
 
@@ -113,7 +113,7 @@
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
   font-weight: 600;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
 }
 .qsheet-f-grid > .qsheet-f-span2 { grid-column: span 1; }
 
@@ -141,13 +141,13 @@
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
   font-weight: 600;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
   padding-top: 2px;
 }
 .qcs-meta {
   font-size: 9px;
   font-weight: 500;
-  color: rgba(var(--tint-rgb), 0.32);
+  color: var(--fg-muted);
   text-transform: none;
   letter-spacing: 0;
   margin-left: 4px;
@@ -172,14 +172,14 @@
   letter-spacing: -0.01em;
 }
 .qcombo-num-sm span:first-child { font-size: 18px; }
-.qcombo-num .qcs-unit { font-size: 11px; color: rgba(var(--tint-rgb), 0.5); margin-left: 3px; }
+.qcombo-num .qcs-unit { font-size: 11px; color: var(--fg-muted); margin-left: 3px; }
 
 .qcs-btn-sm { width: 28px; flex-basis: 28px; font-size: 12px; }
 
 .qcs-suffix-inline {
   font-family: var(--font-sans);
   font-size: 10px;
-  color: rgba(var(--tint-rgb), 0.42);
+  color: var(--fg-muted);
   margin-top: 4px;
   padding: 0 2px;
 }
@@ -190,7 +190,7 @@
   font-size: 10px;
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
-  color: rgba(var(--tint-rgb), 0.42);
+  color: var(--fg-muted);
 }
 .qcs-ratio-val {
   font-family: var(--font-mono);
@@ -198,7 +198,7 @@
   font-size: 13px;
   letter-spacing: 0;
   text-transform: none;
-  color: var(--copper-400);
+  color: var(--fg-accent);
 }
 
 /* ───────────────────────────── Segmented control (2 options) */
@@ -214,7 +214,7 @@
   font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 500;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
   padding: 5px 12px;
   border-radius: 999px;
   cursor: pointer;
@@ -235,7 +235,7 @@
 .qmodeb-meta {
   font-family: var(--font-sans);
   font-size: 10px;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
 }
 .qmodeb-alt {
   display: flex; justify-content: space-between; align-items: baseline;
@@ -245,7 +245,7 @@
   font-size: 10px;
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
 }
 .qmodeb-alt-val {
   font-family: var(--font-mono);
@@ -255,7 +255,7 @@
   text-transform: none;
   color: rgba(var(--tint-rgb), 0.7);
 }
-.qmodeb-alt-val em { font-style: normal; font-family: var(--font-sans); font-size: 10px; color: rgba(var(--tint-rgb), 0.4); }
+.qmodeb-alt-val em { font-style: normal; font-family: var(--font-sans); font-size: 10px; color: var(--fg-muted); }
 
 /* ───────────────────────────── Mode Tabs (Espresso/Steam/Water/Flush) */
 .qmtabs {
@@ -273,7 +273,7 @@
   border: 0;
   padding: 10px 14px;
   border-radius: 8px;
-  color: rgba(var(--tint-rgb), 0.6);
+  color: var(--fg-3);
   font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 500;
@@ -287,7 +287,7 @@
   color: var(--fg-1);
   box-shadow: inset 0 1px 0 rgba(var(--tint-rgb), 0.06);
 }
-.qmtab.is-active :is(i, svg) { color: var(--copper-400); }
+.qmtab.is-active :is(i, svg) { color: var(--fg-accent); }
 
 /* ───────────────────────────── Mode-aware big Start button */
 .qmstart {
@@ -347,7 +347,7 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
 }
 .qfstrip-key {
   width: 16px; height: 16px;
@@ -355,7 +355,7 @@
   background: rgba(var(--tint-rgb), 0.08);
   font-family: var(--font-mono);
   font-size: 9px;
-  color: rgba(var(--tint-rgb), 0.6);
+  color: var(--fg-3);
   display: inline-flex; align-items: center; justify-content: center;
 }
 .qfstrip-item.is-active .qfstrip-key {
@@ -368,7 +368,7 @@
   padding: 7px 12px;
   background: transparent;
   border: 1px dashed rgba(var(--tint-rgb), 0.15);
-  color: rgba(var(--tint-rgb), 0.6);
+  color: var(--fg-3);
   border-radius: var(--radius-pill);
   font-family: var(--font-sans);
   font-size: 12px;
@@ -407,7 +407,7 @@
   display: flex; align-items: center; gap: 16px;
   font-family: var(--font-sans);
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
 }
 
 /* ───────────────────────────── Variant E — All-modes sectioned */
@@ -428,7 +428,7 @@
 .qsheet-e-sec-label {
   display: flex; align-items: center; gap: 8px;
 }
-.qsheet-e-sec-label :is(i, svg) { font-size: 20px; color: var(--copper-400); }
+.qsheet-e-sec-label :is(i, svg) { font-size: 20px; color: var(--fg-accent); }
 .qsheet-e-sec-label-text {
   display: flex; flex-direction: column;
 }
@@ -443,7 +443,7 @@
 .qsheet-e-sec-label-text .meta {
   font-family: var(--font-sans);
   font-size: 10px;
-  color: rgba(var(--tint-rgb), 0.42);
+  color: var(--fg-muted);
   margin-top: 2px;
 }
 .qsheet-e-body {
@@ -500,7 +500,7 @@
   border: 0;
   padding: 12px 0 10px;
   cursor: pointer;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
   font-family: var(--font-sans);
   font-size: 10px;
   letter-spacing: 0.02em;
@@ -509,7 +509,7 @@
 .cside-item :is(i, svg) { font-size: 22px; }
 .cside-item:hover { color: var(--fg-1); }
 .cside-item.is-active { color: var(--fg-1); }
-.cside-item.is-active :is(i, svg) { color: var(--copper-400); }
+.cside-item.is-active :is(i, svg) { color: var(--fg-accent); }
 .cside-item.is-active::before {
   content: '';
   position: absolute;
@@ -523,7 +523,7 @@
   top: 8px; right: 14px;
   font-family: var(--font-mono);
   font-size: 9px;
-  color: rgba(var(--tint-rgb), 0.3);
+  color: var(--fg-muted);
 }
 .cside-bottom {
   display: flex; flex-direction: column; align-items: center;
@@ -534,7 +534,7 @@
   display: flex; flex-direction: column; align-items: center; gap: 4px;
   font-family: var(--font-sans);
   font-size: 9px;
-  color: rgba(var(--tint-rgb), 0.45);
+  color: var(--fg-muted);
 }
 .cside-status.is-button {
   border: 0;
@@ -559,7 +559,7 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
   font-weight: 600;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
 }
 .cside-status.is-connected .cside-status-label { color: rgba(var(--tint-rgb), 0.7); }
 .cside-status-cta {
@@ -632,7 +632,7 @@
 }
 .qc-pop-head-l > :is(i, svg) {
   font-size: 22px;
-  color: var(--copper-400);
+  color: var(--fg-accent);
   line-height: 1;
   margin-top: 1px;
 }
@@ -645,12 +645,12 @@
 }
 .qc-pop-sub {
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
   margin-top: 2px;
 }
 .qc-pop-close {
   background: transparent; border: 0;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
   font-size: 16px;
   cursor: pointer;
   padding: 4px;
@@ -667,7 +667,7 @@
   font-size: 12px;
 }
 .qc-pop-row-label {
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 9px;
@@ -690,7 +690,7 @@
 .qc-pop-row-scanning {
   display: flex; align-items: center; gap: 8px;
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.6);
+  color: var(--fg-3);
   padding: 2px 0 4px;
 }
 .qc-pop-spinner {
@@ -727,7 +727,7 @@
 }
 .qc-pop-device > :is(i, svg) {
   font-size: 18px;
-  color: rgba(var(--tint-rgb), 0.6);
+  color: var(--fg-3);
 }
 .qc-pop-device-text {
   display: flex; flex-direction: column; gap: 1px;
@@ -739,12 +739,12 @@
 }
 .qc-pop-device-meta {
   font-size: 10px;
-  color: rgba(var(--tint-rgb), 0.45);
+  color: var(--fg-muted);
 }
 .qc-pop-device-cta {
   font-size: 11px;
   font-weight: 600;
-  color: var(--copper-400);
+  color: var(--fg-accent);
 }
 .qc-pop-actions {
   display: flex; gap: 8px;
@@ -820,7 +820,7 @@
 .qflyout-sub {
   font-family: var(--font-sans);
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
   margin-top: 2px;
 }
 .qflyout-sub kbd {
@@ -833,7 +833,7 @@
 }
 .qflyout-close {
   background: transparent; border: 0;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
   font-size: 18px;
   cursor: pointer;
   padding: 4px 6px;
@@ -849,7 +849,7 @@
   border-radius: var(--radius-sm);
   padding: 0 10px;
 }
-.qflyout-search :is(i, svg) { color: rgba(var(--tint-rgb), 0.4); font-size: 14px; }
+.qflyout-search :is(i, svg) { color: var(--fg-muted); font-size: 14px; }
 .qflyout-search input {
   flex: 1 1 auto;
   background: transparent; border: 0; outline: 0;
@@ -858,10 +858,10 @@
   color: var(--fg-1);
   padding: 9px 8px;
 }
-.qflyout-search input::placeholder { color: rgba(var(--tint-rgb), 0.35); }
+.qflyout-search input::placeholder { color: var(--fg-muted); }
 .qflyout-clear {
   background: transparent; border: 0;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
   font-family: var(--font-sans);
   font-size: 10px;
   cursor: pointer;
@@ -877,7 +877,7 @@
 .qflyout-tag {
   background: transparent;
   border: 1px solid rgba(var(--tint-rgb), 0.08);
-  color: rgba(var(--tint-rgb), 0.6);
+  color: var(--fg-3);
   padding: 4px 10px;
   border-radius: 999px;
   font-family: var(--font-sans);
@@ -936,15 +936,15 @@
 .qflyout-row-sub {
   font-family: var(--font-sans);
   font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
   margin-top: 2px;
 }
-.qflyout-row-check { color: var(--copper-400); font-size: 18px; }
+.qflyout-row-check { color: var(--fg-accent); font-size: 18px; }
 .qflyout-empty {
   text-align: center;
   font-family: var(--font-sans);
   font-size: 12px;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
   padding: 32px 16px;
 }
 .qflyout-foot {
@@ -997,7 +997,7 @@
 }
 .qfstrip-search-inline:hover { border-color: rgba(var(--tint-rgb), 0.16); background: rgba(var(--tint-rgb), 0.04); }
 .qfstrip-search-inline:focus-within { border-color: rgba(var(--tint-rgb), 0.2); background: rgba(var(--tint-rgb), 0.05); }
-.qfstrip-search-inline :is(i, svg) { color: rgba(var(--tint-rgb), 0.4); font-size: 13px; }
+.qfstrip-search-inline :is(i, svg) { color: var(--fg-muted); font-size: 13px; }
 .qfstrip-search-inline input {
   flex: 1 1 auto;
   min-width: 0;
@@ -1009,8 +1009,8 @@
      room only so the caret doesn't kiss the icon. */
   padding: 0 2px;
 }
-.qfstrip-search-inline input::placeholder { color: rgba(var(--tint-rgb), 0.35); }
-.qfstrip-search-clear { background: transparent; border: 0; color: rgba(var(--tint-rgb), 0.4); cursor: pointer; padding: 0 2px; }
+.qfstrip-search-inline input::placeholder { color: var(--fg-muted); }
+.qfstrip-search-clear { background: transparent; border: 0; color: var(--fg-muted); cursor: pointer; padding: 0 2px; }
 
 .qfstrip-arrow {
   display: inline-flex; align-items: center; justify-content: center;
@@ -1033,7 +1033,7 @@
 .qfstrip-empty {
   font-family: var(--font-sans);
   font-size: 12px;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
   padding: 8px 4px;
   white-space: nowrap;
 }
@@ -1073,12 +1073,12 @@
   font-size: 10px;
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
-  color: rgba(var(--tint-rgb), 0.4);
+  color: var(--fg-muted);
   transition: all var(--dur-1) var(--ease);
 }
 .qcs-grindlog:hover {
   border-color: rgba(var(--tint-rgb), 0.2);
-  color: rgba(var(--tint-rgb), 0.6);
+  color: var(--fg-3);
 }
 .qcs-grindlog-val {
   font-family: var(--font-mono);
@@ -1094,7 +1094,7 @@
   font-size: 9px;
   text-transform: none;
   letter-spacing: 0;
-  color: rgba(var(--tint-rgb), 0.32);
+  color: var(--fg-muted);
 }
 
 /* Hot water demoted chip in sheet footer (variant H) */
@@ -1111,8 +1111,8 @@
   transition: all var(--dur-1) var(--ease);
 }
 .qhwchip:hover { background: rgba(var(--tint-rgb), 0.07); border-color: rgba(var(--tint-rgb), 0.15); }
-.qhwchip > :is(i, svg):first-child { color: var(--copper-400); font-size: 18px; }
-.qhwchip > :is(i, svg):last-child { color: rgba(var(--tint-rgb), 0.4); font-size: 14px; }
+.qhwchip > :is(i, svg):first-child { color: var(--fg-accent); font-size: 18px; }
+.qhwchip > :is(i, svg):last-child { color: var(--fg-muted); font-size: 14px; }
 .qhwchip-text {
   display: flex; flex-direction: column; gap: 2px;
   align-items: flex-start;
@@ -1122,14 +1122,14 @@
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
   font-weight: 600;
-  color: rgba(var(--tint-rgb), 0.5);
+  color: var(--fg-muted);
 }
 .qhwchip-val {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 12px;
 }
-.qhwchip-val em { font-style: normal; font-size: 10px; color: rgba(var(--tint-rgb), 0.5); margin-left: 1px; }
+.qhwchip-val em { font-style: normal; font-size: 10px; color: var(--fg-muted); margin-left: 1px; }
 
 
 .qsheet-v2-head {
@@ -1154,7 +1154,7 @@
   display: flex; align-items: center; gap: 8px;
   font-family: var(--font-sans);
   font-size: 12px;
-  color: rgba(var(--tint-rgb), 0.55);
+  color: var(--fg-3);
   padding: 4px 10px;
   border-radius: 999px;
   background: rgba(var(--tint-rgb), 0.04);
@@ -1180,7 +1180,7 @@
   padding: 4px 0;
 }
 .qsheet-d-readout-val { font-size: 28px; font-weight: 500; letter-spacing: -0.02em; }
-.qsheet-d-readout-unit { font-size: 12px; color: rgba(var(--tint-rgb), 0.5); }
+.qsheet-d-readout-unit { font-size: 12px; color: var(--fg-muted); }
 .qsheet-d-readout-meta {
   font-family: var(--font-sans);
   font-size: 10px;

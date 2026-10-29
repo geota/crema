@@ -831,7 +831,7 @@
 	.cal-refresh-label {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 
 	/* ---- Flow-multiplier row -------------------------------------------- */
@@ -938,7 +938,7 @@
 	}
 	.cal-field-sub {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 	}
 	.cal-field-input {
 		margin-top: 6px;
@@ -963,7 +963,7 @@
 	.cal-field-unit {
 		font-family: var(--font-mono);
 		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 	}
 	.cal-modal-caption {
 		margin: 0;

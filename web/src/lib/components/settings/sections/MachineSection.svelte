@@ -370,7 +370,7 @@
 	</div>
 	<div class="st-machinecard-fw">
 		<div class="fw-head">
-			<div class="t-eyebrow" style="color:var(--copper-400)">Firmware</div>
+			<div class="t-eyebrow" style="color:var(--fg-accent)">Firmware</div>
 			{#if !connected}
 				<span class="fw-conn-pill" title="This setting needs a connected DE1."
 					>Connect DE1</span
@@ -714,7 +714,7 @@
 	.st-diag-mono {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 		font-variant-numeric: tabular-nums;
 	}
 	/* Two-state dot — empty grey by default, filled green when on. Used
@@ -737,7 +737,7 @@
 	.st-diag-id {
 		font-family: var(--font-mono);
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.45);
+		color: var(--fg-muted);
 		word-break: break-all;
 		max-width: 220px;
 		display: inline-block;
@@ -779,7 +779,7 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps, 0.06em);
 		text-transform: uppercase;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		background: rgba(var(--copper-rgb), 0.08);
 		border: 1px solid rgba(var(--copper-rgb), 0.22);
 		border-radius: 999px;

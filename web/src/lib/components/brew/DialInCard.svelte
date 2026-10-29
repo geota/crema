@@ -117,7 +117,7 @@
 		cursor: pointer;
 		font-family: var(--font-sans);
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		text-decoration: underline dotted;
 		text-underline-offset: 2px;
 	}
@@ -144,7 +144,7 @@
 	.di-v em {
 		font-style: normal;
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-left: 2px;
 	}
 	.di-l {
@@ -153,7 +153,7 @@
 		font-weight: 700;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.42);
+		color: var(--fg-muted);
 	}
 	.di-stars {
 		display: flex;
@@ -173,7 +173,7 @@
 		font-weight: 700;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.42);
+		color: var(--fg-muted);
 	}
 	.di-plan-t {
 		font-family: var(--font-sans);
@@ -209,7 +209,7 @@
 	}
 	.di-start :global(svg) {
 		font-size: 12px;
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.di-start:hover {
 		background: rgba(var(--tint-rgb), 0.2);

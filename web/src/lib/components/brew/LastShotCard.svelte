@@ -139,12 +139,12 @@
 	.ls-stop :global(.ph) {
 		/* Value-sized: the icon stands alone in the cell. */
 		font-size: 15px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 	}
 	.ls-v em {
 		font-style: normal;
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 		margin-left: 2px;
 	}
 	.ls-l {
@@ -153,6 +153,6 @@
 		font-weight: 700;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.42);
+		color: var(--fg-muted);
 	}
 </style>

@@ -310,18 +310,18 @@
 	}
 	.ab-lib-name :global(svg) {
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
+		color: var(--fg-muted);
 	}
 	.ab-lib-name:hover {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.ab-lib-name:hover :global(svg) {
-		color: var(--copper-400);
+		color: var(--fg-accent);
 	}
 	.ab-lib-desc {
 		font-size: 11px;
 		line-height: 1.45;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: var(--fg-3);
 	}
 
 </style>
