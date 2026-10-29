@@ -427,6 +427,24 @@ impl Profile {
         )
     }
 
+    /// Check the step count the DE1 accepts (1 to 20) — the only way
+    /// [`assemble_for`](Self::assemble_for) can fail, for either encoding,
+    /// without assembling anything.
+    ///
+    /// # Errors
+    ///
+    /// [`DomainError::NoSteps`] or [`DomainError::TooManySteps`].
+    pub fn check_step_count(&self) -> Result<(), DomainError> {
+        let count = self.steps.len();
+        if count == 0 {
+            return Err(DomainError::NoSteps);
+        }
+        if count > MAX_STEPS {
+            return Err(DomainError::TooManySteps { count });
+        }
+        Ok(())
+    }
+
     /// Assemble this profile for a machine that takes `encoding` — V1 for a
     /// classic DE1, V2 for a Bengle (pressure / flow bytes in tenths,
     /// `HeaderV` 2, header `MaximumFlow` 12; de1app `de1_packed_shot`,
@@ -436,13 +454,8 @@ impl Profile {
     ///
     /// As [`assemble`](Self::assemble).
     pub fn assemble_for(&self, encoding: FrameEncoding) -> Result<AssembledProfile, DomainError> {
+        self.check_step_count()?;
         let count = self.steps.len();
-        if count == 0 {
-            return Err(DomainError::NoSteps);
-        }
-        if count > MAX_STEPS {
-            return Err(DomainError::TooManySteps { count });
-        }
         // `count` is 1..=MAX_STEPS (20), checked above, so this fits a u8.
         let frame_count = u8::try_from(count).unwrap_or(u8::MAX);
 

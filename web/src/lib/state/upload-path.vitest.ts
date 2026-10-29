@@ -218,4 +218,44 @@ describe('profile-write generations in the app executor (#2 N2)', () => {
 		expect(failedWith(h, 'WriteFailed')).toBe(true);
 		expect(written, 'nothing after the failed frame').toEqual(['H2', 'F0']);
 	});
+
+	it('a failure report that lands after a newer upload started leaves the newer one running (V3 #1)', async () => {
+		// Upload A's first frame fails. Before the executor reports it, upload
+		// B starts (a shot start). The report names A, so B is not failed and
+		// completes; the old unnamed report failed B and refused the shot.
+		const written: string[] = [];
+		let chain: Promise<unknown> = Promise.resolve();
+		let startedB = false;
+		// The write runs only after `harness` returned, so `h` is set by then.
+		const h: Harness = await harness((target, data, guard, settled) => {
+			const op = chain.then(async () => {
+				if (guard && !guard()) return false;
+				const failA = !startedB && target === 'De1ProfileFrame' && data[0] === 0;
+				if (failA) {
+					settled?.(false);
+					// The newer upload starts between the failure and its report.
+					startedB = true;
+					h.feed(await h.core.uploadProfile(twoStepProfile('B'), performance.now()));
+					return false;
+				}
+				record(written, target, data);
+				settled?.(true);
+				return true;
+			});
+			chain = op;
+			return op;
+		});
+		h.onState('ready');
+		await knowModel(h);
+		// The event log outlives one app; read only this test's entries.
+		const idOf = (l: string) => (JSON.parse(l) as { id?: number }).id ?? 0;
+		const startId = Math.max(0, ...h.log().map(idOf));
+		const fresh = () => h.log().filter((l) => idOf(l) > startId);
+		await h.app.uploadProfile(twoStepProfile('A'));
+		await vi.advanceTimersByTimeAsync(10);
+		expect(fresh().some((l) => l.includes('Profile write failed'))).toBe(true);
+		expect(fresh().some((l) => l.includes('Profile upload failed: WriteFailed'))).toBe(false);
+		expect(fresh().some((l) => l.includes('Profile uploaded: B'))).toBe(true);
+		expect(written).toEqual(['H2', 'H2', 'F0', 'F1', 'F32', 'F33', 'F2']);
+	});
 });

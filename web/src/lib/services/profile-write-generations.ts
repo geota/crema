@@ -19,16 +19,31 @@
  * - After the write, {@link settle} says what to do: ack it to the core, drop
  *   it silently (superseded), or report the batch's first failure to the core
  *   (`profileWriteFailed`), which fails the upload at once.
+ * - Each batch carries the core's number for its upload (the output's
+ *   `ProfileUploadStarted.upload_id`; a batch without a header joins the
+ *   current upload). The failure report passes it back, so a report that
+ *   arrives after a newer upload started cannot fail the newer one
+ *   (round-2 verification V3 #1).
  *
  * Android's `ProfileWriteGenerations` applies the same rule.
  */
 
-import type { Command } from '#lib/core/crema-core.js';
+import type { Command, Event } from '#lib/core/crema-core.js';
 
 /** The profile writes of one `CoreOutput`. */
 export interface ProfileWriteBatch {
 	readonly generation: number;
+	/** The core's number for the upload these writes belong to, if known. */
+	readonly uploadId: number | null;
 	failed: boolean;
+}
+
+/** The `upload_id` of the upload an output's `events` start, or `null`. */
+export function startedUploadId(events: readonly Event[]): number | null {
+	for (const e of events) {
+		if (e.type === 'ProfileUploadStarted') return e.content.upload_id;
+	}
+	return null;
 }
 
 /** What the shell does after a profile write returned. */
@@ -40,6 +55,7 @@ function isProfileTarget(target: string): boolean {
 
 export class ProfileWriteGenerations {
 	#current = 0;
+	#currentUploadId: number | null = null;
 
 	/** The live generation (for tests and logs). */
 	get current(): number {
@@ -49,9 +65,10 @@ export class ProfileWriteGenerations {
 	/**
 	 * Open the batch for one output's `commands`, or `null` when they carry no
 	 * profile write. A header write starts a new generation, which supersedes
-	 * every earlier batch.
+	 * every earlier batch; `uploadId` is that upload's number
+	 * ({@link startedUploadId} of the same output).
 	 */
-	begin(commands: readonly Command[]): ProfileWriteBatch | null {
+	begin(commands: readonly Command[], uploadId: number | null = null): ProfileWriteBatch | null {
 		let profile = false;
 		let header = false;
 		for (const c of commands) {
@@ -60,8 +77,11 @@ export class ProfileWriteGenerations {
 			if (isProfileTarget(c.content.target)) profile = true;
 		}
 		if (!profile) return null;
-		if (header) this.#current += 1;
-		return { generation: this.#current, failed: false };
+		if (header) {
+			this.#current += 1;
+			this.#currentUploadId = uploadId;
+		}
+		return { generation: this.#current, uploadId: this.#currentUploadId, failed: false };
 	}
 
 	/** Whether a write of `batch` may go out now. */

@@ -5472,7 +5472,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // device and keep their own coroutines.
         val de1Writes = output.commands.filterIsInstance<Command.WriteCharacteristic>()
         output.commands.filterIsInstance<Command.WriteScale>().forEach(::executeCommand)
-        if (de1Writes.isNotEmpty()) executeDe1Writes(de1Writes)
+        if (de1Writes.isNotEmpty()) executeDe1Writes(de1Writes, startedUploadId(output.events))
     }
 
     /**
@@ -5519,7 +5519,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * to a UUID and writes; a profile header / frame write also gets its
      * synthesized ack. This is the machine-control path (AND5).
      */
-    private fun executeDe1Writes(writes: List<Command.WriteCharacteristic>) {
+    private fun executeDe1Writes(writes: List<Command.WriteCharacteristic>, uploadId: UInt? = null) {
         // A machine-state write during a shot IS the stop (issue #15).
         val shotRunning = _ui.value.shotInProgress
         fun isStop(c: Command.WriteCharacteristic) =
@@ -5538,7 +5538,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (batch.isEmpty()) return
         // The profile writes of this output: a header write supersedes every
         // older upload's remaining writes (cohort review 2026-10-28, #2 N2).
-        val profileBatch = profileWrites.begin(batch.map { it.content.target })
+        val profileBatch = profileWrites.begin(batch.map { it.content.target }, uploadId)
         val job = viewModelScope.launch {
             executeInOrder(batch) { c ->
                 val profile = profileBatch?.takeIf { isProfileWriteTarget(c.content.target) }
@@ -5553,7 +5553,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (profileWrites.settle(profile, delivered) == ProfileWriteGenerations.Outcome.FAILED) {
                     // Fail the upload now rather than on the ack watchdog.
                     appendLog("Profile write failed — stopping this upload")
-                    onCoreOutputJson(bridge.profileWriteFailed(SystemClock.elapsedRealtime().toULong()))
+                    // Named by its upload: this runs on Main, so a shot start
+                    // on the core lane may already have begun a newer upload,
+                    // which the core must leave alone (round-2 V3 #1).
+                    profile.uploadId?.let { id ->
+                        onCoreOutputJson(bridge.profileWriteFailed(SystemClock.elapsedRealtime().toULong(), id))
+                    }
                 }
             }
         }
@@ -5675,7 +5680,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.IdleSleepUnconfirmed -> appendLog("Idle sleep: the DE1 never reported Sleep — timer re-armed")
             is Event.MaintenanceProgress -> {
                 val c = event.content
-                val terminal = c.phase == MaintenancePhase.Finished || c.phase == MaintenancePhase.Cancelled
+                val terminal = isMaintenanceTerminal(c.phase)
                 val phaseChanged = _ui.value.maintenanceRun?.phase != c.phase
                 _ui.update { it.copy(maintenanceRun = if (terminal) null else c) }
                 if (phaseChanged) {
@@ -5690,6 +5695,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // back once the cycle ends.
                     lastUploadedFingerprint = null
                     if (terminal) reuploadActiveProfile()
+                    // The cold profile never loaded, so core did not send the
+                    // request (round-2 V3 #4): say so instead of going quiet.
+                    if (c.phase == MaintenancePhase.Failed) notifyUser(maintenanceFailedText(c.state))
                 }
             }
             is Event.MachineErrorChanged -> {

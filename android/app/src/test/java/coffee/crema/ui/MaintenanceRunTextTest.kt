@@ -52,4 +52,19 @@ class MaintenanceRunTextTest {
         assertEquals("Running…", maintenanceRunText(run(MaintenancePhase.Running, state = MachineState.Clean)).second)
         assertEquals("Starting…", maintenanceRunText(run(MaintenancePhase.Requested)).second)
     }
+
+    @Test
+    fun aFailedColdCycleIsTerminalAndSaysWhy() {
+        // Round-2 verification V3 #4: the cold profile never loaded, so core
+        // did not send the request; the row clears and the user is told.
+        assertEquals(true, isMaintenanceTerminal(MaintenancePhase.Failed))
+        assertEquals(true, isMaintenanceTerminal(MaintenancePhase.Finished))
+        assertEquals(true, isMaintenanceTerminal(MaintenancePhase.Cancelled))
+        assertEquals(false, isMaintenanceTerminal(MaintenancePhase.WaitingForPreheat))
+        assertEquals(
+            "Descale didn't start: the cold-start profile older DE1 firmware needs could not be loaded. Try again.",
+            maintenanceFailedText(MachineState.Descale),
+        )
+        assertEquals(true, maintenanceFailedText(MachineState.Clean).startsWith("Clean cycle didn't start"))
+    }
 }

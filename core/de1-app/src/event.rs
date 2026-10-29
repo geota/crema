@@ -648,6 +648,12 @@ pub enum Event {
         frame_count: u8,
         /// Number of extension frames (one per step that has a limiter).
         extension_frame_count: u8,
+        /// This upload's number, unique for the core's lifetime (kept across
+        /// [`reset`](crate::CremaCore::reset)). The shell records it with
+        /// the upload's writes and passes it back to
+        /// [`profile_write_failed`](crate::CremaCore::profile_write_failed),
+        /// so a late failure report cannot fail a newer upload.
+        upload_id: u32,
     },
     /// An upload is waiting for the DE1's machine model before it writes
     /// anything: the model picks the frame encoding (classic DE1 or Bengle

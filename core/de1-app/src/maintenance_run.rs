@@ -12,10 +12,15 @@
 //! `d5f405fb`) that is still heating is silently dropped. So instead of
 //! the state write, [`CremaCore::request_machine_state`] uploads the one-frame
 //! 1 °C profile, zeroes the tank threshold, and HOLDS the request
-//! ([`MaintenancePhase::WaitingForPreheat`]). The first state notification
-//! showing the machine no longer heating releases it
-//! ([`MaintenancePhase::Requested`]). On firmware ≥ 1356 the request stays the
-//! plain single write it always was.
+//! ([`MaintenancePhase::WaitingForPreheat`]). It is released
+//! ([`MaintenancePhase::Requested`]) once the cold profile's upload has
+//! completed AND a state notification shows the machine no longer heating,
+//! whichever comes last. The upload can wait for the machine model or fail;
+//! if it fails, is cancelled, or another upload replaces the cold profile,
+//! the request is never sent and the run ends [`MaintenancePhase::Failed`]
+//! (de1app and Decenza send the request after their profile write; running
+//! the cycle on the brew profile is what the workaround exists to prevent).
+//! On firmware ≥ 1356 the request stays the plain single write it always was.
 //!
 //! **Progress.** Whoever started it (the app or the GHC), a cycle is followed
 //! from the machine entering the state ([`MaintenancePhase::Running`]) to
@@ -52,6 +57,8 @@ pub(crate) struct MaintenanceRun {
     phase: MaintenancePhase,
     /// The 1 °C profile was loaded for it.
     cold: bool,
+    /// The 1 °C profile's upload completed (a held request waits for it).
+    cold_loaded: bool,
     /// The user cancelled while it was running — its exit reports
     /// `Cancelled`, not `Finished`.
     cancelled: bool,
@@ -67,6 +74,7 @@ impl MaintenanceRun {
             state,
             phase,
             cold,
+            cold_loaded: false,
             cancelled: false,
             requested_at: None,
             reported: None,
@@ -96,6 +104,12 @@ impl CremaCore {
             // request is better than none.
             return false;
         };
+        if !self.profile_upload_in_progress() {
+            // Refused (a firmware flash holds the link): nothing to wait for.
+            out.commands.extend(upload.commands);
+            out.events.extend(upload.events);
+            return false;
+        }
         // Its tail ack writes 0, like the immediate write below — never the
         // active profile's tank value mid-cycle (also when the upload still
         // waits for the machine model).
@@ -113,6 +127,49 @@ impl CremaCore {
         ));
         self.report_maintenance(self.clock, out);
         true
+    }
+
+    /// The cold profile's upload completed: a held request goes out now if
+    /// the machine has already left preheat, else on the first packet that
+    /// shows it has. Runs from the upload's tail ack.
+    pub(crate) fn cold_maintenance_profile_loaded(&mut self, now: Duration, out: &mut CoreOutput) {
+        let Some(run) = self.maintenance.as_mut() else {
+            return;
+        };
+        if run.phase != MaintenancePhase::WaitingForPreheat || !run.cold {
+            return;
+        }
+        run.cold_loaded = true;
+        if self
+            .last_state
+            .is_some_and(|info| !is_machine_heating(info))
+        {
+            release_held(Some(run), now, out);
+        }
+    }
+
+    /// An upload failed or was cancelled. A held request still waiting for
+    /// its cold profile will never get it: end the run
+    /// [`MaintenancePhase::Failed`] without sending the request.
+    pub(crate) fn cold_maintenance_upload_failed(&mut self, out: &mut CoreOutput) {
+        if self.maintenance.as_ref().is_some_and(|run| {
+            run.phase == MaintenancePhase::WaitingForPreheat && run.cold && !run.cold_loaded
+        }) {
+            self.finish_maintenance(MaintenancePhase::Failed, self.clock, out);
+        }
+    }
+
+    /// Another upload is starting: it replaces the cold profile a held
+    /// request waits on (or has already loaded), so the request must not be
+    /// sent — end the run [`MaintenancePhase::Failed`].
+    pub(crate) fn cold_maintenance_profile_replaced(&mut self, out: &mut CoreOutput) {
+        if self
+            .maintenance
+            .as_ref()
+            .is_some_and(|run| run.phase == MaintenancePhase::WaitingForPreheat && run.cold)
+        {
+            self.finish_maintenance(MaintenancePhase::Failed, self.clock, out);
+        }
     }
 
     /// A new state request supersedes a maintenance request still held for
@@ -155,7 +212,8 @@ impl CremaCore {
                 }
                 push_state_write(MachineState::Idle, &mut out);
             }
-            MaintenancePhase::Finished | MaintenancePhase::Cancelled => {}
+            MaintenancePhase::Finished | MaintenancePhase::Cancelled | MaintenancePhase::Failed => {
+            }
         }
         self.gate_read_only(out)
     }
@@ -169,14 +227,10 @@ impl CremaCore {
         out: &mut CoreOutput,
     ) {
         // Release a held request on the first packet showing the machine is
-        // no longer heating (Decenza `flushPendingMaintenanceState`).
-        if let Some(run) = self.maintenance.as_mut()
-            && run.phase == MaintenancePhase::WaitingForPreheat
-            && !is_machine_heating(info)
-        {
-            run.phase = MaintenancePhase::Requested;
-            run.requested_at = Some(now);
-            push_state_write(run.state, out);
+        // no longer heating (Decenza `flushPendingMaintenanceState`), once the
+        // cold profile is in.
+        if !is_machine_heating(info) {
+            release_held(self.maintenance.as_mut(), now, out);
         }
         if is_maintenance_state(info.state) {
             let carried_cold = self
@@ -290,6 +344,19 @@ impl CremaCore {
             cycle,
             cold_workaround: run.cold,
         });
+    }
+}
+
+/// Send a held request whose cold profile is in: `Requested`, with its entry
+/// timeout running from `now`.
+fn release_held(run: Option<&mut MaintenanceRun>, now: Duration, out: &mut CoreOutput) {
+    if let Some(run) = run
+        && run.phase == MaintenancePhase::WaitingForPreheat
+        && run.cold_loaded
+    {
+        run.phase = MaintenancePhase::Requested;
+        run.requested_at = Some(now);
+        push_state_write(run.state, out);
     }
 }
 
@@ -431,19 +498,24 @@ mod tests {
     #[test]
     fn firmware_1355_holds_the_request_behind_the_cold_profile() {
         let mut core = heating_core(Some(1355));
-        let out = core.request_machine_state(MachineState::Descale);
-        assert!(uploads_profile(&out), "the 1 °C profile is uploaded");
-        assert_eq!(tank_writes(&out), vec![0], "tank target zeroed");
-        assert!(state_writes(&out).is_empty(), "the request is held");
+        let start = core.request_machine_state(MachineState::Descale);
+        let out = &start;
+        assert!(uploads_profile(out), "the 1 °C profile is uploaded");
+        assert_eq!(tank_writes(out), vec![0], "tank target zeroed");
+        assert!(state_writes(out).is_empty(), "the request is held");
         assert_eq!(
-            progress(&out),
+            progress(out),
             vec![(MaintenancePhase::WaitingForPreheat, 0, 0, true)]
         );
         // Still heating: nothing goes out.
         let out = core.on_notification(Source::De1State, &[2, 2], 2_000); // FinalHeating
         assert!(state_writes(&out).is_empty());
-        // Preheat over: the held request is released.
+        // Preheat over, but the cold profile is not in yet: still held
+        // (round-2 verification V3 #4).
         let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
+        assert!(state_writes(&out).is_empty(), "waits for the cold profile");
+        // The cold profile's tail ack releases the held request.
+        let out = ack_profile_writes(&mut core, &start, 3_100);
         assert_eq!(
             state_writes(&out),
             vec![requested_state(MachineState::Descale)]
@@ -598,7 +670,8 @@ mod tests {
     #[test]
     fn a_released_request_the_machine_never_honours_times_out() {
         let mut core = heating_core(Some(1355));
-        let _ = core.request_machine_state(MachineState::Descale);
+        let start = core.request_machine_state(MachineState::Descale);
+        let _ = ack_profile_writes(&mut core, &start, 1_500);
         let _ = core.on_notification(Source::De1State, &[2, 0], 2_000);
         let out = core.on_tick(2_000 + 14_000);
         assert!(progress(&out).is_empty());
@@ -717,5 +790,120 @@ mod tests {
         let last = ack_profile_writes(&mut core, &released, 1_200);
         assert_eq!(tank_writes(&last), vec![0]);
         assert_eq!(core.tank_temp_threshold_c, Some(30));
+    }
+
+    /// The `upload_id` of the upload `out` started.
+    fn started_upload_id(out: &CoreOutput) -> u32 {
+        out.events
+            .iter()
+            .find_map(|e| match e {
+                Event::ProfileUploadStarted { upload_id, .. } => Some(*upload_id),
+                _ => None,
+            })
+            .expect("the output starts an upload")
+    }
+
+    #[test]
+    fn a_cold_profile_loaded_while_still_heating_waits_for_preheat_to_end() {
+        let mut core = heating_core(Some(1355));
+        let start = core.request_machine_state(MachineState::Clean);
+        let loaded = ack_profile_writes(&mut core, &start, 1_500);
+        assert!(
+            loaded
+                .events
+                .iter()
+                .any(|e| matches!(e, Event::ProfileUploadCompleted { .. }))
+        );
+        assert!(state_writes(&loaded).is_empty(), "still heating");
+        let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
+        assert_eq!(
+            state_writes(&out),
+            vec![requested_state(MachineState::Clean)]
+        );
+        assert_eq!(
+            progress(&out),
+            vec![(MaintenancePhase::Requested, 0, 0, true)]
+        );
+    }
+
+    #[test]
+    fn a_cold_upload_that_never_gets_the_model_fails_the_cycle_without_sending_it() {
+        // Round-2 verification V3 #4: firmware < 1356, Descale tapped before
+        // the MachineModel reply. The parked cold upload fails after 10 s; the
+        // DE1 still holds the brew profile, so the held request must never go
+        // out — it used to be released on the first non-heating packet.
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(
+            Source::De1MmrRead,
+            &mmr_packet(MmrRegister::FirmwareVersion, 1355),
+            0,
+        );
+        let _ = core.on_notification(Source::De1MmrRead, &mmr_packet(MmrRegister::GhcInfo, 1), 0);
+        let _ = core.on_notification(Source::De1State, &[2, 1], 1_000); // Idle / Heating
+        core.tank_temp_threshold_c = Some(30);
+        let start = core.request_machine_state(MachineState::Descale);
+        assert!(!uploads_profile(&start), "waits for the model");
+        // Preheat ends while the upload still waits: nothing goes out.
+        let out = core.on_notification(Source::De1State, &[2, 0], 2_000);
+        assert!(state_writes(&out).is_empty());
+        // The model never arrives.
+        let out = core.on_tick(1_000 + 10_000);
+        assert!(out.events.iter().any(|e| matches!(
+            e,
+            Event::ProfileUploadFailed {
+                reason: crate::ProfileUploadFailure::MachineModelUnknown
+            }
+        )));
+        assert_eq!(progress(&out), vec![(MaintenancePhase::Failed, 0, 0, true)]);
+        assert!(
+            state_writes(&out).is_empty(),
+            "never runs on the brew profile"
+        );
+        assert_eq!(
+            tank_writes(&out),
+            vec![30],
+            "the zeroed tank target is restored"
+        );
+        // A late model reply starts nothing and sends nothing.
+        let late = core.on_notification(
+            Source::De1MmrRead,
+            &mmr_packet(MmrRegister::MachineModel, 1),
+            12_000,
+        );
+        assert!(!uploads_profile(&late));
+        assert!(state_writes(&late).is_empty());
+    }
+
+    #[test]
+    fn a_failed_or_cancelled_cold_upload_fails_the_cycle() {
+        // A write that never reached the DE1.
+        let mut core = heating_core(Some(1355));
+        let start = core.request_machine_state(MachineState::Descale);
+        let out = core.profile_write_failed(1_500, started_upload_id(&start));
+        assert_eq!(progress(&out), vec![(MaintenancePhase::Failed, 0, 0, true)]);
+        let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
+        assert!(state_writes(&out).is_empty());
+        // The shell's upload backstop.
+        let mut core = heating_core(Some(1355));
+        let _ = core.request_machine_state(MachineState::Descale);
+        let out = core.cancel_profile_upload();
+        assert_eq!(progress(&out), vec![(MaintenancePhase::Failed, 0, 0, true)]);
+        let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
+        assert!(state_writes(&out).is_empty());
+    }
+
+    #[test]
+    fn another_upload_replacing_the_cold_profile_fails_the_held_cycle() {
+        let mut core = heating_core(Some(1355));
+        let start = core.request_machine_state(MachineState::Descale);
+        let _ = ack_profile_writes(&mut core, &start, 1_500);
+        // The user activates a brew profile while the machine still heats.
+        let brew = de1_domain::cold_maintenance_profile();
+        let out = core
+            .upload_profile(&brew, std::time::Duration::from_millis(1_600))
+            .unwrap();
+        assert_eq!(progress(&out), vec![(MaintenancePhase::Failed, 0, 0, true)]);
+        let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
+        assert!(state_writes(&out).is_empty());
     }
 }
