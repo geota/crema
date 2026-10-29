@@ -11,6 +11,7 @@ import coffee.crema.core.ShotStatInput
 import coffee.crema.core.brewHistoryStats as coreBrewHistoryStats
 import coffee.crema.core.downsampleIndices
 import coffee.crema.core.historyStats as coreHistoryStats
+import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import coffee.crema.ui.TelemetrySample
@@ -464,6 +465,11 @@ class HistoryStore(private val context: Context, private val json: Json) {
             runCatching { json.encodeToString(ListSerializer(StoredShot.serializer()), shots) }
                 .onSuccess { saveStore(file, it) }
         }
+    }
+
+    /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
+    suspend fun erase() {
+        withContext(Dispatchers.IO) { eraseStore(file) }
     }
 
     companion object {

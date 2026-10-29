@@ -26,6 +26,11 @@
 	import ConfirmDialog from '#lib/components/shared/ConfirmDialog.svelte';
 	import { describeError } from '#lib/utils/error.js';
 	import { installStorageNotices } from '#lib/shell/storage-notices.js';
+	import {
+		installResetListener,
+		resetReportMessage,
+		takeResetReport
+	} from '#lib/security/reset-coordinator.js';
 	import { setCremaAppContext, type CoreLoadState } from '#lib/shell/app-context.js';
 	import { createAppRuntime, type AppRuntime } from '#lib/effect/runtime.js';
 	import { createCremaServices, type CremaServices } from '#lib/effect/crema-services.js';
@@ -65,6 +70,8 @@
 	let onPageShow: ((e: PageTransitionEvent) => void) | null = null;
 	// Unreadable stores kept aside / failed saves -> toasts (see storage-notices).
 	let stopStorageNotices: (() => void) | null = null;
+	// A factory reset in another tab freezes this one and reloads it.
+	let stopResetListener: (() => void) | null = null;
 	// The service worker (offline app shell + wasm precache) and its update
 	// offer. Production only: the PWA plugin is build-only, so `vite dev` has
 	// no sw.js to register.
@@ -85,6 +92,11 @@
 	}
 
 	onMount(async () => {
+		stopResetListener = installResetListener();
+		// What a factory reset in this tab could not finish, told after its reload.
+		const resetReport = takeResetReport();
+		const resetNotice = resetReport && resetReportMessage(resetReport);
+		if (resetNotice) toast.error(resetNotice, 0);
 		if (data.coreError !== null) {
 			// The core never loaded (see +layout.ts): nothing can run, so build no
 			// runtime or app; the template shows CoreLoadFailed instead.
@@ -214,6 +226,7 @@
 	// (also fires on HMR), so a dev reload doesn't leak runtimes or listeners.
 	onDestroy(() => {
 		stopStorageNotices?.();
+		stopResetListener?.();
 		serviceWorker?.dispose();
 		if (onOnline) window.removeEventListener('online', onOnline);
 		if (onVisibility) document.removeEventListener('visibilitychange', onVisibility);

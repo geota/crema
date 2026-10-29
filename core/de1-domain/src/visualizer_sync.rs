@@ -28,6 +28,7 @@
 //! `localStorage` constructors. Only the pure-data fns move.
 
 use crate::bean::{Bean, Roaster};
+use crate::bean_sync::sync_direction_pushes;
 use crate::visualizer_wire::RoasterWire;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -108,8 +109,10 @@ pub struct GuardedVisualizerPrefs {
     /// every held field keeps its current value.
     pub apply: VisualizerSyncPrefs,
     /// The camelCase names of the fields the backup would widen
-    /// (`"privacy"`, `"includeNotes"`, `"autoUpload"`). A shell either asks the
-    /// user before applying the incoming value or keeps the current one.
+    /// (`"privacy"`, `"includeNotes"`, `"autoUpload"`, `"includeProfile"`,
+    /// `"autoSync"`, `"shotsDirection"`, `"beansDirection"`,
+    /// `"roastersDirection"`). A shell either asks the user before applying
+    /// the incoming value or keeps the current one.
     pub held: Vec<String>,
 }
 
@@ -125,10 +128,16 @@ fn privacy_rank(privacy: &str) -> u8 {
 }
 
 /// Restore `incoming` (a backup's Visualizer prefs, possibly from someone
-/// else) over `current` without silently sharing more: a more public
-/// `privacy`, `includeNotes` turning on, or `autoUpload` turning on are held
-/// back (current value kept in `apply`, name listed in `held`). Narrowing
-/// changes and the remaining fields apply as-is.
+/// else) over `current` without silently sharing more. Held back (current
+/// value kept in `apply`, name listed in `held`):
+///  - a more public `privacy`;
+///  - `includeNotes`, `includeProfile`, `autoUpload` or `autoSync` turning on;
+///  - a shots, beans or roasters direction that starts pushing (`off` or
+///    `pull` becoming `backup` or `two-way`) — the shot auto-upload gate is
+///    `pushes(shotsDirection) && autoUpload`, so a direction change alone can
+///    switch uploads on (final review 05 N-4a).
+///
+/// Narrowing changes and the remaining fields apply as-is.
 #[must_use]
 pub fn guard_restored_visualizer_prefs(
     current: &VisualizerSyncPrefs,
@@ -147,6 +156,37 @@ pub fn guard_restored_visualizer_prefs(
     if incoming.auto_upload && !current.auto_upload {
         apply.auto_upload = false;
         held.push("autoUpload".to_owned());
+    }
+    if incoming.include_profile && !current.include_profile {
+        apply.include_profile = false;
+        held.push("includeProfile".to_owned());
+    }
+    if incoming.auto_sync && !current.auto_sync {
+        apply.auto_sync = false;
+        held.push("autoSync".to_owned());
+    }
+    let directions = [
+        (
+            "shotsDirection",
+            &mut apply.shots_direction,
+            &current.shots_direction,
+        ),
+        (
+            "beansDirection",
+            &mut apply.beans_direction,
+            &current.beans_direction,
+        ),
+        (
+            "roastersDirection",
+            &mut apply.roasters_direction,
+            &current.roasters_direction,
+        ),
+    ];
+    for (name, applied, now) in directions {
+        if sync_direction_pushes(applied) && !sync_direction_pushes(now) {
+            applied.clone_from(now);
+            held.push(name.to_owned());
+        }
     }
     GuardedVisualizerPrefs { apply, held }
 }
@@ -992,6 +1032,63 @@ mod tests {
         assert_eq!(g.apply, prefs("unlisted", false, false));
         let same = guard_restored_visualizer_prefs(&current, &current);
         assert!(same.held.is_empty());
+    }
+
+    // Final review 05 N-4a: every field that starts sending data is held.
+    #[test]
+    fn restore_holds_a_direction_that_starts_pushing() {
+        let current = VisualizerSyncPrefs {
+            shots_direction: "off".to_owned(),
+            beans_direction: "pull".to_owned(),
+            roasters_direction: "off".to_owned(),
+            ..prefs("private", false, true)
+        };
+        let incoming = VisualizerSyncPrefs {
+            shots_direction: "backup".to_owned(),
+            beans_direction: "two-way".to_owned(),
+            roasters_direction: "pull".to_owned(),
+            ..current.clone()
+        };
+        let g = guard_restored_visualizer_prefs(&current, &incoming);
+        assert_eq!(g.held, vec!["shotsDirection", "beansDirection"]);
+        assert_eq!(g.apply.shots_direction, "off");
+        assert_eq!(g.apply.beans_direction, "pull");
+        // Pull-only never sends anything: applies as-is.
+        assert_eq!(g.apply.roasters_direction, "pull");
+    }
+
+    #[test]
+    fn restore_applies_a_direction_that_keeps_or_stops_pushing() {
+        let current = VisualizerSyncPrefs {
+            shots_direction: "two-way".to_owned(),
+            beans_direction: "backup".to_owned(),
+            ..VisualizerSyncPrefs::default()
+        };
+        let incoming = VisualizerSyncPrefs {
+            shots_direction: "backup".to_owned(),
+            beans_direction: "off".to_owned(),
+            ..current.clone()
+        };
+        let g = guard_restored_visualizer_prefs(&current, &incoming);
+        assert!(g.held.is_empty());
+        assert_eq!(g.apply, incoming);
+    }
+
+    #[test]
+    fn restore_holds_include_profile_and_auto_sync_turning_on() {
+        let current = VisualizerSyncPrefs {
+            include_profile: false,
+            auto_sync: false,
+            ..VisualizerSyncPrefs::default()
+        };
+        let g = guard_restored_visualizer_prefs(&current, &VisualizerSyncPrefs::default());
+        assert_eq!(g.held, vec!["includeProfile", "autoSync"]);
+        assert!(!g.apply.include_profile);
+        assert!(!g.apply.auto_sync);
+        // Turning them off applies.
+        let off = guard_restored_visualizer_prefs(&VisualizerSyncPrefs::default(), &current);
+        assert!(off.held.is_empty());
+        assert_eq!(off.apply, current);
     }
 
     #[test]

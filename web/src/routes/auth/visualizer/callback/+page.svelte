@@ -114,7 +114,10 @@
 			);
 			if (Exit.isFailure(exit)) throw Cause.squash(exit.cause);
 			const tokens = exit.value;
-			await runtime.runPromise(completeVisualizerSignIn(tokens));
+			// Fails when the tokens could not be stored encrypted (the grant
+			// is revoked); its message says so instead of "Connected".
+			const saved = await runtime.runPromiseExit(completeVisualizerSignIn(tokens));
+			if (Exit.isFailure(saved)) throw Cause.squash(saved.cause);
 			// Settings offers the catch-up upload once, on arrival.
 			markVisualizerJustConnected();
 			const returnTo = takeReturnPath('/settings');

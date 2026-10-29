@@ -43,6 +43,7 @@ import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
 import { strToU8, strFromU8, zipSync } from 'fflate';
 import { assertImportSize, unzipImportSync } from '#lib/utils/import-limits.js';
 import { readJson } from '#lib/utils/storage.js';
+import { isAllowedWebhookUrl } from '#lib/services/webhook-url.js';
 import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
 import type { Bean, Roaster } from '#lib/bean/model.js';
 import type { StoredShot } from '#lib/history/index.js';
@@ -273,16 +274,38 @@ export interface HeldRestoreChanges {
 /** The webhook settings — never applied by a restore without confirmation. */
 const WEBHOOK_KEYS = ['webhookEnabled', 'webhookUrl', 'webhookEvents'] as const;
 
+/**
+ * A backup's webhook URL in the form it may be offered and stored: the
+ * parsed `href`, `''` for a blank URL, or `null` when it must not be offered
+ * at all (final review 05 N-4b). The WHATWG parser silently drops tabs and
+ * newlines, so a raw string padded with them could read as one host in the
+ * dialog while the parsed host is another; any control or format character
+ * therefore rejects the URL, as does anything {@link isAllowedWebhookUrl}
+ * refuses. Storing the `href` means the value applied is exactly the one shown.
+ */
+export function restorableWebhookUrl(raw: string): string | null {
+	const trimmed = raw.trim();
+	if (trimmed === '') return '';
+	if (/[\p{Cc}\p{Cf}]/u.test(raw)) return null;
+	if (!isAllowedWebhookUrl(trimmed)) return null;
+	return new URL(trimmed).href;
+}
+
 /** Pick the backup's webhook settings when they would change this device's. */
 function heldWebhook(
 	incoming: Record<string, unknown>,
 	current: Settings
 ): HeldRestoreChanges['webhook'] {
 	if (!WEBHOOK_KEYS.some((k) => k in incoming)) return null;
+	const incomingUrl =
+		typeof incoming.webhookUrl === 'string' ? restorableWebhookUrl(incoming.webhookUrl) : current.webhookUrl;
+	// A URL that cannot be shown honestly is never offered, nor is the rest of
+	// the backup's webhook block (switching on a webhook it could not name).
+	if (incomingUrl === null) return null;
 	const next = {
 		webhookEnabled:
 			typeof incoming.webhookEnabled === 'boolean' ? incoming.webhookEnabled : current.webhookEnabled,
-		webhookUrl: typeof incoming.webhookUrl === 'string' ? incoming.webhookUrl : current.webhookUrl,
+		webhookUrl: incomingUrl,
 		webhookEvents:
 			incoming.webhookEvents && typeof incoming.webhookEvents === 'object'
 				? { ...current.webhookEvents, ...(incoming.webhookEvents as Settings['webhookEvents']) }
@@ -302,20 +325,36 @@ function heldWebhook(
 const VISUALIZER_FIELD_LABELS: Record<string, (p: VisualizerSyncPrefs) => string> = {
 	privacy: (p) => `make Visualizer uploads ${p.privacy}`,
 	includeNotes: () => 'include your tasting notes in Visualizer uploads',
-	autoUpload: () => 'upload every new shot to Visualizer automatically'
+	autoUpload: () => 'upload every new shot to Visualizer automatically',
+	includeProfile: () => 'include the profile in Visualizer uploads',
+	autoSync: () => 'sync shots, beans and roasters to Visualizer in the background',
+	shotsDirection: (p) => `upload shots to Visualizer (shot sync: ${p.shotsDirection})`,
+	beansDirection: (p) => `upload your beans to Visualizer (bean sync: ${p.beansDirection})`,
+	roastersDirection: (p) => `upload your roasters to Visualizer (roaster sync: ${p.roastersDirection})`
 };
+
+/** The webhook lines: the parsed host on its own line first, then the full address. */
+function describeWebhook(webhook: NonNullable<HeldRestoreChanges['webhook']>): string {
+	let host: string | null = null;
+	let href = webhook.webhookUrl.trim();
+	try {
+		const url = new URL(href);
+		// `host` is the ASCII (punycode) form, so a lookalike name shows as `xn--…`.
+		host = url.host;
+		href = url.href;
+	} catch {
+		// A blank URL: nothing would be sent.
+	}
+	if (host === null) return '• Clear the webhook URL';
+	return webhook.webhookEnabled
+		? `• Send shot and machine events to a webhook at:\n    ${host}\n    Full address: ${href}`
+		: `• Set the webhook address to ${host} (left switched off)\n    Full address: ${href}`;
+}
 
 /** Plain-language list of what applying `held` would change, for a confirm dialog. */
 export function describeHeldRestoreChanges(held: HeldRestoreChanges): string {
 	const lines: string[] = [];
-	if (held.webhook) {
-		const url = held.webhook.webhookUrl.trim() || '(no URL)';
-		lines.push(
-			held.webhook.webhookEnabled
-				? `• Send shot and machine events to this webhook:\n    ${url}`
-				: `• Set the webhook URL to ${url} (left switched off)`
-		);
-	}
+	if (held.webhook) lines.push(describeWebhook(held.webhook));
 	if (held.visualizer) {
 		for (const f of held.visualizer.fields) {
 			const label = VISUALIZER_FIELD_LABELS[f];
@@ -484,7 +523,8 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 	}
 	// Visualizer sync prefs — a shared core type, either shell (no per-shell
 	// tag); never the OAuth token (re-authorise after a restore). Fields that
-	// would share more (privacy, notes, auto-upload) are held for the user's OK
+	// would share more (privacy, notes, profile, auto-upload, background sync,
+	// a direction that starts pushing) are held for the user's OK
 	// by the core's guard; the rest apply now.
 	let heldVisualizer: HeldRestoreChanges['visualizer'] = null;
 	if (visualizerPrefs) {

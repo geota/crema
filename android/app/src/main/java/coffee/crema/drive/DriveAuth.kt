@@ -53,6 +53,8 @@ import java.net.URLEncoder
 
 const val GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 const val GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+/** Google's token revocation endpoint: accepts an access or refresh token. */
+const val GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 const val DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 
 /** A successful exchange — persisted by [DriveStore]. */
@@ -176,3 +178,29 @@ suspend fun refreshDriveToken(clientId: String, refreshToken: String, json: Json
         fallbackRefresh = refreshToken,
         json = json,
     )
+
+/**
+ * Revoke a Drive grant at Google (best-effort; false on any failure). The
+ * refresh token is preferred: revoking it ends the whole grant, so the app
+ * disappears from the user's Google Account permissions. Without one, the
+ * access token is revoked instead. Never throws.
+ */
+suspend fun revokeDriveGrant(tokens: DriveTokenSet, revokeUrl: String = GOOGLE_REVOKE_URL): Boolean =
+    withContext(Dispatchers.IO) {
+        runCatching {
+            val conn = (URL(revokeUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 10_000
+                readTimeout = 10_000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+            }
+            try {
+                val token = tokens.refreshToken ?: tokens.accessToken
+                conn.outputStream.use { it.write(formBody(mapOf("token" to token)).toByteArray(Charsets.UTF_8)) }
+                conn.responseCode in 200..299
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrDefault(false)
+    }

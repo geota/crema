@@ -1198,27 +1198,14 @@ class LibraryController(
     // ── Erase-all (the library/history/profile share of Settings ▸ Erase) ────
 
     /** Clear the bean library, roaster directory, shot history, custom
-     *  profiles, pins / hidden built-ins, recipes + custom methods, bag photos
-     *  and the last-shot diagnostic (disk + UI); built-ins remain and the active profile reseeds
-     *  via [refreshProfiles]. The VM composes this with its settings +
-     *  maintenance resets. */
+     *  profiles, pins / hidden built-ins and recipes + custom methods in
+     *  memory and in the UI; built-ins remain and the active profile reseeds
+     *  via [refreshProfiles]. The disk half is [eraseStoredData]. The VM
+     *  composes both with its settings + maintenance resets. */
     fun eraseAll() {
         customProfilesJson = emptyList()
         pinnedIds = emptySet()
         hiddenIds = emptySet()
-        scope.launch {
-            library.save(BeanLibrary())
-            historyStore.save(emptyList())
-            customProfileStore.save(emptyList())
-            pinnedProfileStore.save(emptySet())
-            hiddenProfileStore.save(emptySet())
-            // Bag photos and the last-shot diagnostic are user data too
-            // (review 05 P2-1 parity with the web factory reset).
-            withContext(Dispatchers.IO) {
-                BeanImageStore.deleteAll(app)
-                coffee.crema.diag.ShotDiag.clear(app)
-            }
-        }
         // Brew recipes + custom methods: an empty wipe-restore clears them.
         applyRestoredCustomMethods(emptyList(), true)
         applyRestoredRecipes(emptyList(), null, true)
@@ -1230,6 +1217,24 @@ class LibraryController(
             activeProfileId = null,
         ) }
         refreshProfiles()
+    }
+
+    /**
+     * The disk half of [eraseAll]: delete each library store's file and every
+     * copy of it (`.bak`, `.tmp`, `.corrupt-*`) rather than saving an empty
+     * value, which would keep the full old file as `.bak` (final review 05
+     * N-1), plus the bag photos and the last-shot diagnostic (review 05 P2-1).
+     */
+    suspend fun eraseStoredData() {
+        library.erase()
+        historyStore.erase()
+        customProfileStore.erase()
+        pinnedProfileStore.erase()
+        hiddenProfileStore.erase()
+        withContext(Dispatchers.IO) {
+            BeanImageStore.deleteAll(app)
+            coffee.crema.diag.ShotDiag.clear(app)
+        }
     }
 
     // ── Visualizer sync hooks (pull/backfill/synced stamps) ──────────────────

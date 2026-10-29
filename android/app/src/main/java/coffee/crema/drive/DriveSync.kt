@@ -176,12 +176,34 @@ class DriveSync(
         }
     }
 
-    /** Forget the token (best-effort — Google has no public revoke for `drive.file`). */
+    /**
+     * Forget the token, then revoke the grant at Google (best-effort, from the
+     * in-memory copy so a slow or failed revoke never leaves it on disk).
+     * Revoking the refresh token ends the whole grant (final review 05 N-5).
+     */
     fun disconnect(quiet: Boolean = false) {
         scope.launch {
+            val tokens = persisted.tokens
             persist { it.copy(tokens = null) }
             if (!quiet) notify("Disconnected from Google Drive")
+            tokens?.let { revokeDriveGrant(it) }
         }
+    }
+
+    /**
+     * Erase all data: reset everything this store keeps (the token, a pending
+     * handshake, the backup timestamps), delete its file, then revoke the old
+     * grant from the in-memory copy.
+     */
+    suspend fun eraseAll() {
+        val tokens = persistMutex.withLock {
+            val t = persisted.tokens
+            persisted = DriveState()
+            store.erase()
+            t
+        }
+        fold()
+        tokens?.let { scope.launch { revokeDriveGrant(it) } }
     }
 
     /** A valid access token, refreshing within 60 s of expiry; null when signed out

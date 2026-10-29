@@ -44,6 +44,14 @@ import java.util.Locale
  * The Rust replay tool (`core/de1-app/examples/replay.rs`) parses the same
  * format; keep the two in sync.
  *
+ * ## Retention (final review 05 N-2)
+ *
+ * The files live in app-specific external storage
+ * (`Android/data/<package>/files/captures`), which the system deletes with the
+ * app. Each new session prunes the directory to the newest [MAX_KEPT] files
+ * and drops any older than [MAX_AGE_MS]; Erase all data deletes them all
+ * ([eraseCaptures]). The privacy page describes them.
+ *
  * Recording is a debug aid: file IO failures are logged and swallowed, never
  * propagated, so a recording problem can never crash the app. Notifications
  * arrive on a binder thread, so appends are synchronized; each line is flushed
@@ -116,11 +124,13 @@ class BleSessionRecorder(private val context: Context) {
         synchronized(lock) {
             if (writer != null || !enabled) return
             try {
-                val dir = File(context.getExternalFilesDir(null), "captures")
+                val dir = capturesDir(context) ?: return
                 if (!dir.exists() && !dir.mkdirs()) {
                     Log.w(TAG, "Could not create captures directory ${dir.absolutePath}")
                     return
                 }
+                // Room for the new file within the cap.
+                pruneCaptures(dir, keep = MAX_KEPT - 1, maxAgeMs = MAX_AGE_MS, nowMs = System.currentTimeMillis())
                 val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
                 val file = File(dir, "session-$stamp.jsonl")
                 writer = BufferedWriter(FileWriter(file))
@@ -187,6 +197,23 @@ class BleSessionRecorder(private val context: Context) {
         }
     }
 
+    /**
+     * Erase all data: close the open capture (if any), delete every capture
+     * file in both capture directories, and — when a device is still
+     * connected — start a fresh file for the rest of the session. Returns the
+     * number of files deleted. Never throws.
+     */
+    fun eraseCaptures(): Int {
+        synchronized(lock) {
+            val wasRecording = writer != null
+            stop()
+            val dirs = listOfNotNull(capturesDir(context), File(context.filesDir, CAPTURES_DIR))
+            val deleted = dirs.sumOf { eraseCapturesIn(it) }
+            if (wasRecording && connections > 0) start()
+            return deleted
+        }
+    }
+
     /** Write one capture line; logs and swallows any IO failure. */
     private fun append(tMs: Long, dir: String, src: String, data: ByteArray) {
         synchronized(lock) {
@@ -203,5 +230,41 @@ class BleSessionRecorder(private val context: Context) {
 
     companion object {
         private const val TAG = "BleSessionRecorder"
+
+        /** Capture files kept, the newest first; older ones are deleted. */
+        const val MAX_KEPT = 10
+
+        /** Capture files older than this are deleted when a session starts. */
+        const val MAX_AGE_MS = 14L * 24 * 60 * 60 * 1000
+
+        private const val CAPTURES_DIR = "captures"
+
+        /** App-specific external `captures/`; null when external storage is unavailable. */
+        private fun capturesDir(context: Context): File? =
+            context.getExternalFilesDir(null)?.let { File(it, CAPTURES_DIR) }
+
+        private fun captureFiles(dir: File): List<File> =
+            (dir.listFiles { f -> f.isFile && f.name.startsWith("session-") && f.name.endsWith(".jsonl") }
+                ?: emptyArray()).toList()
+
+        /**
+         * Keep at most [keep] capture files in [dir], newest (by mtime) first,
+         * and delete any older than [maxAgeMs]. Only `session-*.jsonl` files are
+         * touched. Returns the files deleted.
+         */
+        internal fun pruneCaptures(dir: File, keep: Int, maxAgeMs: Long, nowMs: Long): List<File> {
+            val newestFirst = captureFiles(dir).sortedByDescending { it.lastModified() }
+            val doomed = newestFirst.drop(keep.coerceAtLeast(0)) +
+                newestFirst.take(keep.coerceAtLeast(0)).filter { nowMs - it.lastModified() > maxAgeMs }
+            return doomed.filter { it.delete() }
+        }
+
+        /** Delete every file in [dir] and the directory itself; the count deleted. */
+        internal fun eraseCapturesIn(dir: File): Int {
+            val files = dir.listFiles()?.filter { it.isFile } ?: return 0
+            val deleted = files.count { it.delete() }
+            dir.delete()
+            return deleted
+        }
     }
 }

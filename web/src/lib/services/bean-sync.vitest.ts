@@ -15,6 +15,8 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { BeanSync, BeanSyncLive, PREMIUM_REFRESH_INTERVAL_MS } from './bean-sync.ts';
 import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
+import { OAuth } from './oauth.ts';
+import { SecretBoxUnavailableError } from '#lib/security/secret-box.js';
 import { HttpStatusError } from '../effect/errors.ts';
 import { blankBean, blankRoaster } from '#lib/bean/index.js';
 import type { TokenSet } from '../visualizer/oauth.ts';
@@ -370,11 +372,55 @@ describe('BeanSync premium refresh (the bean-sync flag the edit sync reads)', ()
 		await Effect.runPromise(
 			Effect.provide(
 				completeVisualizerSignIn(aToken),
-				Layer.merge(recordingVault, Layer.provide(BeanSyncLive, Layer.merge(layer, recordingVault)))
+				Layer.mergeAll(
+					recordingVault,
+					oauthStub([]),
+					Layer.provide(BeanSyncLive, Layer.merge(layer, recordingVault))
+				)
 			)
 		);
 		expect(order[0]).toBe('storeTokens');
 		expect(roasterPosts(calls)).toHaveLength(1);
 		expect(readSyncSettings().premium).toBe(true);
 	});
+
+	// Final review 05 N-6: a sign-in whose tokens cannot be stored encrypted
+	// fails visibly (the callback shows the message) and revokes the new grant.
+	it('sign-in fails with the storage error and revokes the grant when the tokens cannot be stored', async () => {
+		const revoked: string[] = [];
+		const failingVault = Layer.succeed(TokenVault, TokenVault.of({
+			getTokens: Effect.succeed(null),
+			storeTokens: () => Effect.fail(new SecretBoxUnavailableError()),
+			clearTokens: Effect.void,
+			withFreshToken: ((req: (t: string) => Effect.Effect<unknown, unknown>) => req('tok')) as never,
+			changes: undefined as never
+		}));
+		const { layer, calls } = probeHttp(201);
+		const exit = await Effect.runPromiseExit(
+			Effect.provide(
+				completeVisualizerSignIn(aToken),
+				Layer.mergeAll(
+					failingVault,
+					oauthStub(revoked),
+					Layer.provide(BeanSyncLive, Layer.merge(layer, failingVault))
+				)
+			)
+		);
+		expect(Exit.isFailure(exit)).toBe(true);
+		if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(SecretBoxUnavailableError);
+		expect(revoked).toEqual([aToken.accessToken]);
+		expect(roasterPosts(calls)).toHaveLength(0);
+	});
 });
+
+function oauthStub(revoked: string[]) {
+	return Layer.succeed(
+		OAuth,
+		OAuth.of({
+			startLogin: () => Effect.void,
+			exchangeCode: () => Effect.die('n/a'),
+			refreshToken: () => Effect.die('n/a'),
+			revokeToken: (t: string) => Effect.sync(() => void revoked.push(t))
+		})
+	);
+}

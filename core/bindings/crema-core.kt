@@ -2817,8 +2817,10 @@ data class GuardedVisualizerPrefs (
 	/// every held field keeps its current value.
 	val apply: VisualizerSyncPrefs,
 	/// The camelCase names of the fields the backup would widen
-	/// (`"privacy"`, `"includeNotes"`, `"autoUpload"`). A shell either asks the
-	/// user before applying the incoming value or keeps the current one.
+	/// (`"privacy"`, `"includeNotes"`, `"autoUpload"`, `"includeProfile"`,
+	/// `"autoSync"`, `"shotsDirection"`, `"beansDirection"`,
+	/// `"roastersDirection"`). A shell either asks the user before applying
+	/// the incoming value or keeps the current one.
 	val held: List<String>
 )
 
