@@ -1544,6 +1544,16 @@ data class EventCalibrationInner (
 	val measured: Float
 )
 
+/// Generated type representing the anonymous struct variant `CalibrationRefused` of the `Event` Rust enum
+@Serializable
+data class EventCalibrationRefusedInner (
+	/// The sensor the refused request targeted; `None` for the
+	/// firmware's error reply, which does not say.
+	val target: CalTarget? = null,
+	/// Why it was refused.
+	val reason: CalibrationRefusal
+)
+
 /// Generated type representing the anonymous struct variant `FirmwareLockoutHit` of the `Event` Rust enum
 @Serializable
 data class EventFirmwareLockoutHitInner (
@@ -1896,6 +1906,13 @@ sealed class Event {
 	@Serializable
 	@SerialName("Calibration")
 	data class Calibration(val content: EventCalibrationInner): Event()
+	/// A calibration write or factory reset was refused — by the core's
+	/// guards before anything reached the wire, or by the DE1's own error
+	/// reply ([`CalibrationRefusal::FirmwareRejected`](crate::CalibrationRefusal::FirmwareRejected)).
+	/// See [`calibration_guard`](crate::calibration_guard).
+	@Serializable
+	@SerialName("CalibrationRefused")
+	data class CalibrationRefused(val content: EventCalibrationRefusedInner): Event()
 	/// A write was refused because a firmware upload is locking out other
 	/// writes. v1 carries the lockout guard as a stub
 	/// ([`firmware_locks_writes`](crate::CremaCore::firmware_locks_writes))
@@ -3802,6 +3819,54 @@ enum class CalTarget(val string: String) {
 	/// The temperature sensor.
 	@SerialName("Temperature")
 	Temperature("Temperature"),
+}
+
+/// Generated type representing the anonymous struct variant `OutOfRange` of the `CalibrationRefusal` Rust enum
+@Serializable
+data class CalibrationRefusalOutOfRangeInner (
+	/// The rejected value.
+	val value: Float,
+	/// Band minimum.
+	val min: Float,
+	/// Band maximum.
+	val max: Float
+)
+
+/// Generated type representing the anonymous struct variant `MachineNotIdle` of the `CalibrationRefusal` Rust enum
+@Serializable
+data class CalibrationRefusalMachineNotIdleInner (
+	/// The state the machine last reported.
+	val state: MachineState
+)
+
+/// Why a calibration write or reset was refused.
+@Serializable
+sealed class CalibrationRefusal {
+	/// A value was NaN or infinite.
+	@Serializable
+	@SerialName("NonFinite")
+	object NonFinite: CalibrationRefusal()
+	/// The reported value encodes as zero on a ratio sensor (flow, pressure).
+	@Serializable
+	@SerialName("ZeroReported")
+	object ZeroReported: CalibrationRefusal()
+	/// A value fell outside the sensor's band.
+	@Serializable
+	@SerialName("OutOfRange")
+	data class OutOfRange(val details: CalibrationRefusalOutOfRangeInner): CalibrationRefusal()
+	/// The machine is not in Sleep or Idle.
+	@Serializable
+	@SerialName("MachineNotIdle")
+	data class MachineNotIdle(val details: CalibrationRefusalMachineNotIdleInner): CalibrationRefusal()
+	/// No machine state has been reported yet (fail closed).
+	@Serializable
+	@SerialName("MachineStateUnknown")
+	object MachineStateUnknown: CalibrationRefusal()
+	/// The DE1 answered the request with its calibration error reply
+	/// (target byte 255).
+	@Serializable
+	@SerialName("FirmwareRejected")
+	object FirmwareRejected: CalibrationRefusal()
 }
 
 /// The direction of an exit comparison. Lowercase wire spelling

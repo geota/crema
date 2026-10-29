@@ -575,6 +575,17 @@ pub enum Event {
         /// every reference app reads.
         measured: f32,
     },
+    /// A calibration write or factory reset was refused — by the core's
+    /// guards before anything reached the wire, or by the DE1's own error
+    /// reply ([`CalibrationRefusal::FirmwareRejected`](crate::CalibrationRefusal::FirmwareRejected)).
+    /// See [`calibration_guard`](crate::calibration_guard).
+    CalibrationRefused {
+        /// The sensor the refused request targeted; `None` for the
+        /// firmware's error reply, which does not say.
+        target: Option<CalTarget>,
+        /// Why it was refused.
+        reason: crate::CalibrationRefusal,
+    },
     /// A write was refused because a firmware upload is locking out other
     /// writes. v1 carries the lockout guard as a stub
     /// ([`firmware_locks_writes`](crate::CremaCore::firmware_locks_writes))

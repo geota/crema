@@ -1461,6 +1461,7 @@ export type {
 } from './crema-core';
 export { FlashPhase, DecentFirmwareChannel } from './crema-core';
 export type { Event, Command, ModeInfo, RangeCapability } from './crema-core';
+export type { CalibrationRefusal } from './crema-core';
 // Telemetry wire types — now typeshare-generated (review #01 F24); replaced the
 // hand-written `RustShotSample` / `RustTimedSample`.
 export type { TimedSample, ShotSample, WireShotBean } from './crema-core';

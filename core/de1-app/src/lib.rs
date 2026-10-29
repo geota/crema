@@ -10,6 +10,7 @@
 //! [`Command`]s in a [`CoreOutput`] envelope. It is sans-IO and holds no clock
 //! — every notification carries a monotonic `now_ms` from the shell.
 
+pub mod calibration_guard;
 mod capture;
 pub mod de1_uuids;
 pub mod error;
@@ -22,6 +23,7 @@ mod idle_sleep;
 mod maintenance_run;
 mod sweep;
 
+pub use calibration_guard::CalibrationRefusal;
 pub use de1_domain::{FirmwareBuildReport, FirmwareBuildStatus};
 pub use de1_uuids::{
     De1Uuids, de1_uuids, de1_uuids_json, de1_write_target_uuid, de1_write_target_uuid_by_name,
@@ -1437,11 +1439,19 @@ impl CremaCore {
 
     /// Write a new sensor calibration: the DE1 reported `reported` while
     /// the externally-measured true value was `measured`. The firmware
-    /// stores the pair as a `WriteKey 0xCAFEF00D` packet on `cuuid_12`
-    /// and from then on applies `measured / reported` as a multiplier on
-    /// that sensor. The caller is expected to follow up with
+    /// stores the pair as a `WriteKey 0xCAFEF00D` packet on `cuuid_12`. For
+    /// flow and pressure it applies `measured / reported` as a ratio; for
+    /// temperature the correction is an offset, `measured − reported` in °C
+    /// (pyDE1 `CalTargets`: flow and pressure "ratiometric", temperature
+    /// "differential, degrees C"). The caller is expected to follow up with
     /// [`read_calibration`](Self::read_calibration) to surface the value
     /// the DE1 now reports as current.
+    ///
+    /// Refused — one [`Event::CalibrationRefused`] and no command — unless
+    /// the machine is in Sleep or Idle and both values pass
+    /// [`calibration_guard::check_values`] (finite, a non-zero reported
+    /// value for flow / pressure, inside the sensor's band). See
+    /// [`calibration_guard`].
     ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
@@ -1451,6 +1461,15 @@ impl CremaCore {
             return out;
         }
         let mut out = CoreOutput::default();
+        let verdict = calibration_guard::check_state(self.last_state.map(|s| s.state))
+            .and_then(|()| calibration_guard::check_values(target, reported, measured));
+        if let Err(reason) = verdict {
+            out.events.push(Event::CalibrationRefused {
+                target: Some(target),
+                reason,
+            });
+            return out;
+        }
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1Calibration,
             data: Calibration::write(target, reported, measured)
@@ -1468,6 +1487,9 @@ impl CremaCore {
     /// [`read_factory_calibration`](Self::read_factory_calibration)) to
     /// confirm the in-use value.
     ///
+    /// Refused outside Sleep / Idle like a write — one
+    /// [`Event::CalibrationRefused`] and no command.
+    ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
     /// one [`Event::FirmwareLockoutHit`] and no command.
@@ -1476,6 +1498,13 @@ impl CremaCore {
             return out;
         }
         let mut out = CoreOutput::default();
+        if let Err(reason) = calibration_guard::check_state(self.last_state.map(|s| s.state)) {
+            out.events.push(Event::CalibrationRefused {
+                target: Some(target),
+                reason,
+            });
+            return out;
+        }
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1Calibration,
             data: Calibration::reset_to_factory(target).encode().to_vec(),
@@ -4612,6 +4641,15 @@ impl CremaCore {
     /// a `ReadFactory` reply is the factory slot, anything else the current
     /// one (de1app's mapping).
     fn handle_calibration(data: &[u8], out: &mut CoreOutput) {
+        // The firmware's "bad request" reply (target 255): a refusal of our
+        // write, not an undecodable packet.
+        if Calibration::is_error_reply(data) {
+            out.events.push(Event::CalibrationRefused {
+                target: None,
+                reason: CalibrationRefusal::FirmwareRejected,
+            });
+            return;
+        }
         let (cal, write_key) = match Calibration::decode_reply(data) {
             Ok(cal) => cal,
             Err(e) => {
@@ -7251,7 +7289,8 @@ mod tests {
         // `write_encodes_to_the_exact_wire_bytes` test in
         // `core/de1-protocol/src/calibration.rs`: a temperature write,
         // de1_reported = 92.5, measured = 93.0.
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[0, 0], 0); // Sleep
         let out = core.write_calibration(CalTarget::Temperature, 92.5, 93.0);
         let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
             panic!("expected a WriteCharacteristic");
@@ -7277,7 +7316,8 @@ mod tests {
         // Same shape: command targets De1Calibration; the encoded packet
         // carries the WriteKey + ResetToFactory + target tuple with zero
         // value fields. Fixture: pressure sensor.
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[2, 0], 0); // Idle
         let out = core.reset_calibration_to_factory(CalTarget::Pressure);
         let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
             panic!("expected a WriteCharacteristic");
@@ -7292,6 +7332,90 @@ mod tests {
                 0x00, 0x00, 0x00, 0x00, // de1_reported = 0.0
                 0x00, 0x00, 0x00, 0x00, // measured = 0.0
             ],
+        );
+    }
+
+    #[test]
+    fn calibration_writes_are_refused_outside_sleep_and_idle() {
+        // Cohort review 02 P1-2 / docs/18 §3.
+        let mut core = CremaCore::new();
+        let unknown = core.write_calibration(CalTarget::Pressure, 9.0, 9.1);
+        assert!(unknown.commands.is_empty(), "fail closed before any state");
+        assert_eq!(
+            unknown.events,
+            vec![Event::CalibrationRefused {
+                target: Some(CalTarget::Pressure),
+                reason: CalibrationRefusal::MachineStateUnknown,
+            }]
+        );
+        core.on_notification(Source::De1State, &[4, 5], 0); // Espresso pouring
+        for out in [
+            core.write_calibration(CalTarget::Pressure, 9.0, 9.1),
+            core.reset_calibration_to_factory(CalTarget::Pressure),
+        ] {
+            assert!(out.commands.is_empty());
+            assert_eq!(
+                out.events,
+                vec![Event::CalibrationRefused {
+                    target: Some(CalTarget::Pressure),
+                    reason: CalibrationRefusal::MachineNotIdle {
+                        state: MachineState::Espresso
+                    },
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn calibration_writes_with_bad_values_are_refused() {
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[2, 0], 0); // Idle
+        for (target, reported, measured, reason) in [
+            (
+                CalTarget::Flow,
+                f32::NAN,
+                2.0,
+                CalibrationRefusal::NonFinite,
+            ),
+            (CalTarget::Flow, 0.0, 2.0, CalibrationRefusal::ZeroReported),
+            (
+                CalTarget::Pressure,
+                9.0,
+                130.0,
+                CalibrationRefusal::OutOfRange {
+                    value: 130.0,
+                    min: 2.0,
+                    max: 10.0,
+                },
+            ),
+        ] {
+            let out = core.write_calibration(target, reported, measured);
+            assert!(out.commands.is_empty(), "{reason:?}");
+            assert_eq!(
+                out.events,
+                vec![Event::CalibrationRefused {
+                    target: Some(target),
+                    reason,
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn the_firmware_calibration_error_reply_is_a_refusal() {
+        // pyDE1 CalTargets.CalError = 255: "return value indicating bad
+        // request" — not a decode error (cohort review 02 P3-6).
+        let mut core = CremaCore::new();
+        let mut reply = [0u8; 14];
+        reply[4] = 1; // Write
+        reply[5] = 255;
+        let out = core.on_notification(Source::De1Calibration, &reply, 0);
+        assert_eq!(
+            out.events,
+            vec![Event::CalibrationRefused {
+                target: None,
+                reason: CalibrationRefusal::FirmwareRejected,
+            }]
         );
     }
 

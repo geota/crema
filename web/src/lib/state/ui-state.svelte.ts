@@ -17,6 +17,7 @@
  * then just applies the returned snapshot.
  */
 
+import { calibrationRefusalMessage } from '#lib/calibration/refusal.js';
 import type {
 	Event,
 	MachineState,
@@ -1241,6 +1242,19 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				)
 			};
 		}
+		case 'ProfileReuploadNeeded':
+			// The app's fold starts the re-upload; nothing to show here.
+			return snapshot;
+		case 'CalibrationRefused':
+			// The core's calibration guard, or the DE1's error reply. The
+			// modal shows the sentence; the log keeps the record.
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Calibration refused${event.content.target ? ` (${event.content.target})` : ''}: ${calibrationRefusalMessage(event.content.reason)}`
+				)
+			};
 		case 'FirmwareLockoutHit':
 			// v1 stub never fires this in practice. Logged so the data is
 			// visible when v2 lands, without a dedicated UI surface yet.

@@ -59,6 +59,7 @@ import { runtimePromise } from '#lib/effect/bridge.js';
 import { UploadQueue } from '#lib/services/upload-queue.js';
 import { Webhooks } from '#lib/services/webhooks.js';
 import { ProfileSync, profileWriteAck } from '#lib/services/profile-sync.js';
+import { CalibrationRefusedError, calibrationRefusalIn } from '#lib/calibration/refusal.js';
 import { replayCaptureProgram } from '#lib/services/replay.js';
 import {
 	CremaUiState,
@@ -2152,7 +2153,12 @@ export class CremaApp {
 		reported: number,
 		measured: number
 	): Promise<void> {
-		this.applyCoreOutput(await this.core.writeCalibration(sensor, reported, measured));
+		const out = await this.core.writeCalibration(sensor, reported, measured);
+		this.applyCoreOutput(out);
+		// The core's guard (Sleep / Idle only, finite in-band values) refused
+		// it: nothing was written, so say why instead of re-reading.
+		const refusal = calibrationRefusalIn(out);
+		if (refusal !== null) throw new CalibrationRefusedError(refusal);
 		await this.readCalibration(sensor, false);
 	}
 
@@ -2163,7 +2169,10 @@ export class CremaApp {
 	 * brought up to date).
 	 */
 	async resetCalibrationToFactory(sensor: import('#lib/core/index.js').CalTarget): Promise<void> {
-		this.applyCoreOutput(await this.core.resetCalibrationToFactory(sensor));
+		const out = await this.core.resetCalibrationToFactory(sensor);
+		this.applyCoreOutput(out);
+		const refusal = calibrationRefusalIn(out);
+		if (refusal !== null) throw new CalibrationRefusedError(refusal);
 		await this.readCalibration(sensor, false);
 		await this.readCalibration(sensor, true);
 	}

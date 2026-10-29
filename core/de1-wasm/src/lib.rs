@@ -3156,7 +3156,9 @@ mod tests {
 
     #[test]
     fn write_and_reset_calibration_produce_write_commands() {
-        let bridge = CremaBridge::new();
+        let mut bridge = CremaBridge::new();
+        // Calibration writes need a Sleep / Idle machine (calibration_guard).
+        bridge.on_notification(NotificationSource::De1State, vec![2, 0], 0.0);
         for json in [
             bridge.write_calibration(CalSensor::Temperature, 92.5, 93.0),
             bridge.reset_calibration_to_factory(CalSensor::Pressure),

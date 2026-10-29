@@ -3591,6 +3591,8 @@ mod tests {
     #[test]
     fn read_calibration_produces_a_write_command() {
         let bridge = CremaBridge::new();
+        // Calibration writes need a Sleep / Idle machine (calibration_guard).
+        bridge.on_notification(NotificationSource::De1State, vec![2, 0], 0);
         for json in [
             bridge.read_calibration(CalSensor::Pressure),
             bridge.read_factory_calibration(CalSensor::Flow),

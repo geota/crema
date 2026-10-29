@@ -1851,6 +1851,21 @@ export type Event =
 	measured: number;
 }}
 	/**
+	 * A calibration write or factory reset was refused — by the core's
+	 * guards before anything reached the wire, or by the DE1's own error
+	 * reply ([`CalibrationRefusal::FirmwareRejected`](crate::CalibrationRefusal::FirmwareRejected)).
+	 * See [`calibration_guard`](crate::calibration_guard).
+	 */
+	| { type: "CalibrationRefused", content: {
+	/**
+	 * The sensor the refused request targeted; `None` for the
+	 * firmware's error reply, which does not say.
+	 */
+	target?: CalTarget;
+	/** Why it was refused. */
+	reason: CalibrationRefusal;
+}}
+	/**
 	 * A write was refused because a firmware upload is locking out other
 	 * writes. v1 carries the lockout guard as a stub
 	 * ([`firmware_locks_writes`](crate::CremaCore::firmware_locks_writes))
@@ -3884,6 +3899,34 @@ export enum CalTarget {
 	/** The temperature sensor. */
 	Temperature = "Temperature",
 }
+
+/** Why a calibration write or reset was refused. */
+export type CalibrationRefusal = 
+	/** A value was NaN or infinite. */
+	| { kind: "NonFinite", details?: undefined }
+	/** The reported value encodes as zero on a ratio sensor (flow, pressure). */
+	| { kind: "ZeroReported", details?: undefined }
+	/** A value fell outside the sensor's band. */
+	| { kind: "OutOfRange", details: {
+	/** The rejected value. */
+	value: number;
+	/** Band minimum. */
+	min: number;
+	/** Band maximum. */
+	max: number;
+}}
+	/** The machine is not in Sleep or Idle. */
+	| { kind: "MachineNotIdle", details: {
+	/** The state the machine last reported. */
+	state: MachineState;
+}}
+	/** No machine state has been reported yet (fail closed). */
+	| { kind: "MachineStateUnknown", details?: undefined }
+	/**
+	 * The DE1 answered the request with its calibration error reply
+	 * (target byte 255).
+	 */
+	| { kind: "FirmwareRejected", details?: undefined };
 
 /**
  * The direction of an exit comparison. Lowercase wire spelling
