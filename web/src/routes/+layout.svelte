@@ -36,8 +36,10 @@
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import { installServiceWorker, type Handle as ServiceWorkerHandle } from '#lib/pwa/register.js';
 	import { canReloadNow, type ReloadInputs } from '#lib/pwa/update-gate.js';
+	import CoreLoadFailed from '#lib/shell/CoreLoadFailed.svelte';
+	import type { LayoutProps } from './$types';
 
-	let { children } = $props();
+	let { children, data }: LayoutProps = $props();
 
 	/** Web Bluetooth is Chromium-only — Firefox / Safari / iOS lack it. */
 	const bluetoothSupported =
@@ -87,6 +89,13 @@
 	}
 
 	onMount(async () => {
+		if (data.coreError !== null) {
+			// The core never loaded (see +layout.ts): nothing can run, so build no
+			// runtime or app; the template shows CoreLoadFailed instead.
+			loadState = 'failed';
+			loadError = data.coreError;
+			return;
+		}
 		stopStorageNotices = installStorageNotices();
 		if (import.meta.env.PROD) {
 			serviceWorker = installServiceWorker({
@@ -210,19 +219,24 @@
 
 <!-- The app loads on every browser; the Web-Bluetooth notice is a toast (see
      onMount), and the connect actions guard themselves on unsupported browsers. -->
-<CremaSidebar {app} />
-<DebugPanel {app} />
-<div class="shell-content">
-	<ReconnectStrip {app} />
-	{@render children?.()}
-</div>
-<!-- App-wide in-app dialog + toast hosts (FD4) — replace native
-     confirm/alert/prompt. Single instances, driven by the shared stores. -->
-<ConfirmDialog />
-<ToastHost />
-<!-- The firmware-update flow (alpha) — app-wide so a running flash or its
-     power-cycle step stays visible on every page. -->
-<FirmwareUpdateHost {app} />
+{#if data.coreError !== null}
+	<!-- No core, no app: the routes and chrome all depend on it. -->
+	<CoreLoadFailed message={data.coreError} />
+{:else}
+	<CremaSidebar {app} />
+	<DebugPanel {app} />
+	<div class="shell-content">
+		<ReconnectStrip {app} />
+		{@render children?.()}
+	</div>
+	<!-- App-wide in-app dialog + toast hosts (FD4) — replace native
+	     confirm/alert/prompt. Single instances, driven by the shared stores. -->
+	<ConfirmDialog />
+	<ToastHost />
+	<!-- The firmware-update flow (alpha) — app-wide so a running flash or its
+	     power-cycle step stays visible on every page. -->
+	<FirmwareUpdateHost {app} />
+{/if}
 
 <style>
 	/* The content area clears the fixed side rail (--sidebar-w wide). */
