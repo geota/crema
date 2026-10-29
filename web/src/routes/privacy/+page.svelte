@@ -72,9 +72,14 @@
 				your device only inside a backup you make.
 			</li>
 			<li>
-				<strong>Bluetooth-traffic captures</strong>: the raw machine
-				notifications of recent shots, used to recover a shot's telemetry if
-				the page is reloaded mid-shot (IndexedDB, web only).
+				<strong>Bluetooth-traffic captures</strong>: on the web, the raw
+				machine notifications of recent shots, used to recover a shot's
+				telemetry if the page is reloaded mid-shot (IndexedDB). On Android,
+				a recording of each Bluetooth session with the machine and scale,
+				used to diagnose and replay problems; it is kept in the app's own
+				folder on shared storage (<code>Android/data</code>), limited to the
+				10 most recent sessions and to the last 14 days, and is never sent
+				anywhere.
 			</li>
 			<li>
 				<strong>Sign-in tokens</strong> for the services you connect: the
@@ -157,12 +162,15 @@
 				upload earlier shots on request.
 			</li>
 			<li>
-				<strong>What a shot upload contains:</strong> the telemetry curves
-				(pressure, flow, temperature, weight), the profile, dose and yield,
-				TDS and extraction yield, your rating and tasting notes, the bean,
-				roaster, roast date and level, grinder and setting, barista and
-				drinker names if you entered them, your DE1's serial number and model,
-				and the Crema version.
+				<strong>What a shot upload contains:</strong> the shot's time and a
+				Crema shot id; the telemetry curves (pressure, flow, mix, group and
+				steam temperatures, their targets, the profile step, the machine
+				state, scale weight and weight flow); the profile (its name and
+				steps); target and actual dose and yield; TDS and extraction yield;
+				your rating and tasting notes; the bean, roaster, roast date and
+				level; grinder and setting; barista and drinker names if you entered
+				them; your DE1's serial number, model and firmware version; and the
+				Crema version. Nothing else is sent.
 			</li>
 			<li>
 				<strong>Unlinking</strong> forgets the token on this device. Decent
@@ -252,8 +260,10 @@
 				buttons produce).
 			</li>
 			<li>
-				<strong>Revoking access</strong>: disconnect in Settings &rarr;
-				Sharing, or revoke the application at
+				<strong>Revoking access</strong>: disconnecting in Settings &rarr;
+				Sharing (or erasing Crema's data) asks Google to revoke Crema's
+				access, on the web and on Android. If that request cannot reach
+				Google, for example offline, revoke the application at
 				<a href="https://myaccount.google.com/permissions" target="_blank" rel="noreferrer noopener">myaccount.google.com/permissions</a>.
 				Revoking does not delete backup files already uploaded; remove those
 				from your Drive.
@@ -344,7 +354,11 @@
 				storage key in this browser, including the sign-in tokens, after
 				revoking the visualizer.coffee and Google Drive access. On Android,
 				Settings &rarr; Erase all data deletes your beans, photos, shots,
-				recipes, custom profiles, preferences and sign-ins. Clearing the
+				recipes, custom profiles, preferences, maintenance counters and
+				Bluetooth captures, and the Visualizer, Decent and Google Drive
+				sign-ins together with their sync settings and activity logs, with
+				no backup copy left behind; it revokes the visualizer.coffee and
+				Google Drive access too. Clearing the
 				site's data in your browser, or uninstalling the Android app, also
 				removes everything. Backup files you saved, and data already sent to
 				a service in Section&nbsp;3, are not affected.

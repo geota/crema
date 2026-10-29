@@ -47,6 +47,30 @@ describe('privacy policy page', () => {
 		expect(t).toMatch(/password is not stored/);
 	});
 
+	// Final review 05 N-2 / N-5: Android captures, Drive revoke, the full erase,
+	// and every field the Decent record carries.
+	it('describes the Android Bluetooth captures and their limits', () => {
+		const t = text();
+		expect(t).not.toMatch(/IndexedDB, web only/);
+		expect(t).toMatch(/10 most recent sessions/);
+		expect(t).toMatch(/14 days/);
+	});
+
+	it('says disconnecting Drive revokes access on Android too', () => {
+		expect(text()).toMatch(/asks Google to revoke Crema's\s+access, on the web and on Android/);
+	});
+
+	it('lists what Android Erase all data removes', () => {
+		const t = text();
+		expect(t).toMatch(/Bluetooth captures/);
+		expect(t).toMatch(/sync settings and activity logs/);
+		expect(t).toMatch(/no backup copy left behind/);
+	});
+
+	it('names the firmware version among the Decent upload fields', () => {
+		expect(text()).toMatch(/serial number, model and firmware version/);
+	});
+
 	it('does not claim data never leaves the device', () => {
 		expect(text()).not.toMatch(/This data never leaves your device/);
 	});
