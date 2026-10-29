@@ -97,10 +97,14 @@ export function menuKeyNav(e: KeyboardEvent, items: readonly HTMLElement[]): boo
 	return true;
 }
 
-/** The `role="menuitem"` elements inside a menu, skipping disabled ones. */
+/** The menu items (plain, radio, checkbox) inside a menu, skipping disabled ones. */
 export function menuItems(menu: HTMLElement | null | undefined): HTMLElement[] {
 	if (!menu) return [];
-	return [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')].filter(
+	return [
+		...menu.querySelectorAll<HTMLElement>(
+			'[role="menuitem"],[role="menuitemradio"],[role="menuitemcheckbox"]'
+		)
+	].filter(
 		(el) => !(el as HTMLButtonElement).disabled && el.getAttribute('aria-disabled') !== 'true'
 	);
 }
@@ -123,4 +127,48 @@ export function restoreFocus(el: Element | null | undefined): boolean {
 	if (!(el instanceof HTMLElement) || !el.isConnected) return false;
 	el.focus();
 	return true;
+}
+
+export interface MenuKeyboardOptions {
+	/** Close the menu (the caller flips its `open` state). */
+	onClose: () => void;
+	/** The button that opened the menu; focus returns here on Escape / pick. */
+	trigger: () => HTMLElement | null | undefined;
+}
+
+/**
+ * Attachment for a hand-rolled `role="menu"` that is mounted while open
+ * (`{#if open}<div role="menu" {@attach menuKeyboard(...)}>`). It brings the
+ * keyboard contract screen readers expect from that role (report 07 #9):
+ * focus moves to the first item on open; ArrowUp / ArrowDown / Home / End
+ * move between items; Escape closes and returns focus to the trigger; Tab
+ * closes and lets focus move on. When the menu unmounts with focus still
+ * inside it (an item was picked), focus goes back to the trigger.
+ */
+export function menuKeyboard(opts: MenuKeyboardOptions): (node: HTMLElement) => () => void {
+	return (node) => {
+		menuItems(node)[0]?.focus();
+		function onKeydown(e: KeyboardEvent): void {
+			if (e.key === 'Escape') {
+				e.preventDefault();
+				e.stopPropagation();
+				opts.onClose();
+				restoreFocus(opts.trigger());
+				return;
+			}
+			if (e.key === 'Tab') {
+				opts.onClose();
+				return;
+			}
+			menuKeyNav(e, menuItems(node));
+		}
+		node.addEventListener('keydown', onKeydown);
+		return () => {
+			node.removeEventListener('keydown', onKeydown);
+			const active = node.ownerDocument.activeElement;
+			if (active == null || active === node.ownerDocument.body || node.contains(active)) {
+				restoreFocus(opts.trigger());
+			}
+		};
+	};
 }

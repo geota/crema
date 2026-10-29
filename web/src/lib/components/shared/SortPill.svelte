@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '#lib/icons/Icon.svelte';
+	import { menuKeyboard } from '#lib/a11y/focus.js';
 	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	/**
@@ -51,6 +52,7 @@
 
 	let open = $state(false);
 	let rootEl = $state<HTMLDivElement | null>(null);
+	let fieldEl = $state<HTMLButtonElement>();
 
 	const currentOption = $derived(
 		options.find((o) => o.field === value.field) ?? options[0]
@@ -110,6 +112,7 @@
 	</button>
 	<div class="sortpill-sep" aria-hidden="true"></div>
 	<button
+		bind:this={fieldEl}
 		type="button"
 		class="sortpill-field"
 		onclick={(e) => {
@@ -126,7 +129,12 @@
 		<CaretDownIcon class="sortpill-chev" aria-hidden="true" />
 	</button>
 	{#if open}
-		<div class="sortpill-menu" role="menu">
+		<div
+			class="sortpill-menu"
+			role="menu"
+			aria-label="Sort by"
+			{@attach menuKeyboard({ onClose: () => (open = false), trigger: () => fieldEl })}
+		>
 			{#each options as o (o.field)}
 				<button
 					type="button"

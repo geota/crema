@@ -16,6 +16,7 @@
 	 * dismissal lives here via `svelte:window`.
 	 */
 	import type { Snippet } from 'svelte';
+	import { menuKeyboard } from '#lib/a11y/focus.js';
 
 	export interface SplitButtonItem {
 		/** Phosphor icon class — e.g. `ph-duotone ph-file-text`. */
@@ -73,6 +74,7 @@
 	}: Props = $props();
 
 	let open = $state(false);
+	let caretEl = $state<HTMLButtonElement>();
 
 	function closeOnDocClick(): void {
 		open = false;
@@ -107,6 +109,7 @@
 		{/if}
 	</button>
 	<button
+		bind:this={caretEl}
 		class="sb-btn sb-{variant} sb-caret-btn"
 		{disabled}
 		onclick={(e) => {
@@ -120,8 +123,13 @@
 		<CaretDownIcon class="sb-caret" aria-hidden="true" />
 	</button>
 	{#if open}
-		<div class="sb-menu" role="menu">
-			<div class="sb-menu-head">{menuHead}</div>
+		<div
+			class="sb-menu"
+			role="menu"
+			aria-label={menuHead}
+			{@attach menuKeyboard({ onClose: () => (open = false), trigger: () => caretEl })}
+		>
+			<div class="sb-menu-head" aria-hidden="true">{menuHead}</div>
 			{#each items as it (it.title)}
 				<button
 					class="sb-menu-item"

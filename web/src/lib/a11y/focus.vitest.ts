@@ -3,6 +3,7 @@ import {
 	focusableWithin,
 	isOwnActivationKey,
 	menuItems,
+	menuKeyboard,
 	menuKeyNav,
 	restoreFocus,
 	trapTab
@@ -175,5 +176,59 @@ describe('restoreFocus', () => {
 		const detached = document.createElement('button');
 		expect(restoreFocus(detached)).toBe(false);
 		expect(restoreFocus(null)).toBe(false);
+	});
+});
+
+describe('menuKeyboard', () => {
+	function setup() {
+		const root = html(`
+			<button id="trigger">open</button>
+			<div role="menu" id="menu">
+				<button role="menuitem" id="i1">1</button>
+				<button role="menuitem" id="i2">2</button>
+			</div>`);
+		const trigger = root.querySelector<HTMLElement>('#trigger')!;
+		const menu = root.querySelector<HTMLElement>('#menu')!;
+		let closed = 0;
+		const detach = menuKeyboard({ onClose: () => closed++, trigger: () => trigger })(menu);
+		return { trigger, menu, detach, closed: () => closed };
+	}
+	const press = (el: HTMLElement, key: string) =>
+		el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+
+	it('focuses the first item on open and moves with the arrow keys', () => {
+		const { menu } = setup();
+		expect(document.activeElement?.id).toBe('i1');
+		press(document.activeElement as HTMLElement, 'ArrowDown');
+		expect(document.activeElement?.id).toBe('i2');
+		press(menu, 'Home');
+		expect(document.activeElement?.id).toBe('i1');
+	});
+
+	it('closes on Escape and returns focus to the trigger', () => {
+		const t = setup();
+		press(document.activeElement as HTMLElement, 'Escape');
+		expect(t.closed()).toBe(1);
+		expect(document.activeElement).toBe(t.trigger);
+	});
+
+	it('closes on Tab without stealing focus back', () => {
+		const t = setup();
+		press(document.activeElement as HTMLElement, 'Tab');
+		expect(t.closed()).toBe(1);
+	});
+
+	it('returns focus to the trigger when it unmounts with focus inside', () => {
+		const t = setup();
+		t.detach();
+		expect(document.activeElement).toBe(t.trigger);
+	});
+
+	it('leaves focus alone when it unmounts after focus moved elsewhere', () => {
+		const t = setup();
+		const other = html('<button id="other">x</button>').querySelector<HTMLElement>('#other')!;
+		other.focus();
+		t.detach();
+		expect(document.activeElement).toBe(other);
 	});
 });
