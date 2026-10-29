@@ -49,8 +49,10 @@ import { readJson, writeJson } from '#lib/utils/storage.js';
 import { isSerialStolen } from '#lib/decent/stolen-serials.js';
 import { SAW_MODEL_KEY, seedSawModel } from './saw-model-store';
 import { getSettingsStore } from '#lib/settings/index.js';
-import { toast } from '#lib/components/shared/toast.svelte.js';
+import { dismissToast, toast } from '#lib/components/shared/toast.svelte.js';
 import { CoreRecoveryWatch } from '#lib/core/recovery-watch.js';
+import { CoreResetNotice } from '#lib/core/reset-notice.js';
+import { canReloadNow, reloadInputsOf } from '#lib/pwa/update-gate.js';
 import { getMaintenanceStore } from '#lib/maintenance/index.js';
 import { parseCaptureFile } from '#lib/replay/index.js';
 import { describeError } from '#lib/utils/error.js';
@@ -282,6 +284,8 @@ export class CremaApp {
 	 * (stop on weight, auto-tare, targets) until the app reloads.
 	 */
 	readonly #coreRecovery: CoreRecoveryWatch;
+	/** The engine-reset reload offer; the shell feeds it state changes. */
+	readonly coreResetNotice: CoreResetNotice;
 
 	/**
 	 * Devices the user took over this session with a Connect tap that has not
@@ -401,15 +405,32 @@ export class CremaApp {
 		 */
 		private readonly runtime: AppRuntime | null = null
 	) {
+		// The Reload goes through the update offer's idle gate (final review
+		// 03 P3-2): never mid-shot, mid-steam, mid-brew or mid-flash.
+		this.coreResetNotice = new CoreResetNotice({
+			canReload: () =>
+				canReloadNow(
+					reloadInputsOf(this.state.current, getGuidedBrewStore().phase, this.firmware?.running ?? false)
+				),
+			show: (apply) => {
+				const id = toast.action(
+					'Crema hit an internal error and restarted its engine. Stop-at-weight and other ' +
+						'shot settings are off until you reload.',
+					'Reload',
+					apply,
+					0,
+					// Assertive (`role="alert"`, 07 P2 #7): stop-at-weight is off.
+					'error'
+				);
+				return () => dismissToast(id);
+			},
+			onDeferred: () =>
+				toast.info('The machine is busy — the reload will be offered again once it is idle.', 6000),
+			reload: () => location.reload()
+		});
 		this.#coreRecovery = new CoreRecoveryWatch(core.panicRecoveries?.bind(core), (count) => {
 			this.state.log(`Core reset after an internal error (reset #${count})`);
-			toast.action(
-				'Crema hit an internal error and restarted its engine. Stop-at-weight and other ' +
-					'shot settings are off until you reload.',
-				'Reload',
-				() => location.reload(),
-				0
-			);
+			this.coreResetNotice.onReset();
 		});
 		this.sweep = new ConnectSweepRunner({
 			core,
