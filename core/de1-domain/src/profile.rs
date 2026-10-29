@@ -408,25 +408,6 @@ impl Profile {
         self.assemble_for(FrameEncoding::V1)
     }
 
-    /// Whether unlimited pressure steps get [`DEFAULT_PRESSURE_FLOW_LIMIT`]
-    /// at assembly: every brew, but not a cleaning or calibration routine
-    /// (the forward flush, the pressure / flow calibration profiles, the
-    /// one-frame cold-maintenance profile). The default exists so a recipe
-    /// brews the same on a DE1 (≈ 7–8 ml/s) and a Bengle (≈ 20 ml/s); a
-    /// maintenance or measurement routine is not a recipe, and capping it
-    /// would change how it flushes or what it measures. reaprime and Decenza
-    /// add no default limiter at all, and de1app's own code-built
-    /// `onestep_cold` frame has none (`binary.tcl`). (de1app applies its
-    /// load-time default to every *profile file* it selects, the cleaning
-    /// files included; Crema follows reaprime for those.)
-    #[must_use]
-    pub fn takes_default_flow_limit(&self) -> bool {
-        !matches!(
-            self.beverage_type,
-            BeverageType::Cleaning | BeverageType::Calibrate
-        )
-    }
-
     /// Check the step count the DE1 accepts (1 to 20) — the only way
     /// [`assemble_for`](Self::assemble_for) can fail, for either encoding,
     /// without assembling anything.
@@ -453,7 +434,40 @@ impl Profile {
     /// # Errors
     ///
     /// As [`assemble`](Self::assemble).
+    ///
+    /// Every unlimited pressure step goes out with [`DEFAULT_PRESSURE_FLOW_LIMIT`],
+    /// whatever the beverage type, cleaning and calibration profiles included:
+    /// de1app caps every profile it selects or restores at launch
+    /// (`profile.tcl` `apply_default_flow_limit_to_pressure_steps`, called from
+    /// `vars.tcl` `select_profile` and `gui.tcl` at startup, no type filter),
+    /// and Decenza caps every profile that becomes current (0dbcc442,
+    /// `ProfileManager::setCurrentProfile`). Only reaprime adds none. The
+    /// code-built cold-maintenance profile is the one exception: see
+    /// [`assemble_without_default_flow_limit`](Self::assemble_without_default_flow_limit).
     pub fn assemble_for(&self, encoding: FrameEncoding) -> Result<AssembledProfile, DomainError> {
+        self.assemble_with(encoding, true)
+    }
+
+    /// [`assemble_for`](Self::assemble_for) without the default flow limit —
+    /// for the code-built cold-maintenance profile only, which de1app
+    /// (`onestep_cold`, built in `binary.tcl`) and Decenza (built in
+    /// `de1device.cpp`, bypassing `setCurrentProfile`) send with no limiter.
+    ///
+    /// # Errors
+    ///
+    /// As [`assemble`](Self::assemble).
+    pub fn assemble_without_default_flow_limit(
+        &self,
+        encoding: FrameEncoding,
+    ) -> Result<AssembledProfile, DomainError> {
+        self.assemble_with(encoding, false)
+    }
+
+    fn assemble_with(
+        &self,
+        encoding: FrameEncoding,
+        default_limit: bool,
+    ) -> Result<AssembledProfile, DomainError> {
         self.check_step_count()?;
         let count = self.steps.len();
         // `count` is 1..=MAX_STEPS (20), checked above, so this fits a u8.
@@ -473,7 +487,6 @@ impl Profile {
 
         let mut frames = Vec::with_capacity(count);
         let mut extension_frames = Vec::new();
-        let default_limit = self.takes_default_flow_limit();
         // `0u8..` zipped with at most 20 steps never overflows the index.
         for (index, step) in (0u8..).zip(&self.steps) {
             frames.push(step.to_shot_frame(index));
@@ -718,19 +731,22 @@ mod tests {
     }
 
     #[test]
-    fn cleaning_and_calibration_profiles_get_no_default_flow_limit() {
-        // Cohort review 2026-10-28 #6 #7 / #2 N4: the default limiter is for
-        // brews (reaprime / Decenza add none; de1app's `onestep_cold` has
-        // none). An authored limiter still goes out.
-        for beverage_type in [BeverageType::Cleaning, BeverageType::Calibrate] {
-            let mut limited = step("limited", Pump::Pressure);
-            limited.limiter = Some(Limiter {
-                value: 3.0,
-                range: 0.6,
-            });
-            let mut p = profile(vec![step("open", Pump::Pressure), limited]);
+    fn every_beverage_type_gets_the_default_flow_limit() {
+        // Round-2 verification V1, decision 2: de1app caps every profile it
+        // selects (`select_profile` → `apply_default_flow_limit_to_pressure_steps`,
+        // no beverage-type filter; its forward-flush and flow-calibration
+        // profiles have unlimited pressure steps) and so does Decenza
+        // (0dbcc442, `setCurrentProfile`). Round 2 had exempted Cleaning and
+        // Calibrate on the wrong premise that Decenza adds none.
+        for beverage_type in [
+            BeverageType::Cleaning,
+            BeverageType::Calibrate,
+            BeverageType::Espresso,
+            BeverageType::Manual,
+            BeverageType::Pourover,
+        ] {
+            let mut p = profile(vec![step("open", Pump::Pressure)]);
             p.beverage_type = beverage_type;
-            assert!(!p.takes_default_flow_limit());
             let ext: Vec<(u8, f32, f32)> = p
                 .assemble()
                 .unwrap()
@@ -738,17 +754,27 @@ mod tests {
                 .iter()
                 .map(|e| (e.index, e.max_flow_or_pressure, e.max_fop_range))
                 .collect();
-            assert_eq!(ext, vec![(1, 3.0, 0.6)], "{beverage_type:?}");
+            assert_eq!(ext, vec![(0, 8.0, 1.0)], "{beverage_type:?}");
         }
-        for beverage_type in [
-            BeverageType::Espresso,
-            BeverageType::Manual,
-            BeverageType::Pourover,
-        ] {
-            let mut p = profile(vec![step("open", Pump::Pressure)]);
-            p.beverage_type = beverage_type;
-            assert!(p.takes_default_flow_limit(), "{beverage_type:?}");
-        }
+    }
+
+    #[test]
+    fn the_unlimited_assembly_keeps_authored_limiters_only() {
+        // The cold-maintenance profile's path (de1app `onestep_cold`).
+        let mut limited = step("limited", Pump::Pressure);
+        limited.limiter = Some(Limiter {
+            value: 3.0,
+            range: 0.6,
+        });
+        let p = profile(vec![step("open", Pump::Pressure), limited]);
+        let ext: Vec<(u8, f32, f32)> = p
+            .assemble_without_default_flow_limit(FrameEncoding::V1)
+            .unwrap()
+            .extension_frames
+            .iter()
+            .map(|e| (e.index, e.max_flow_or_pressure, e.max_fop_range))
+            .collect();
+        assert_eq!(ext, vec![(1, 3.0, 0.6)]);
     }
 
     #[test]

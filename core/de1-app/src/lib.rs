@@ -957,6 +957,8 @@ struct ParkedUpload {
     /// A tank value that replaces the profile's own (the cold-maintenance
     /// profile's 0).
     tank_override: Option<u8>,
+    /// False only for the cold-maintenance profile (no default limiter).
+    default_flow_limit: bool,
 }
 
 impl Default for CremaCore {
@@ -4478,6 +4480,18 @@ impl CremaCore {
         profile: &Profile,
         now: Duration,
     ) -> Result<CoreOutput, AppError> {
+        self.upload_profile_with(profile, now, true)
+    }
+
+    /// [`upload_profile`](Self::upload_profile), with `default_flow_limit`
+    /// false only for the code-built cold-maintenance profile (see
+    /// [`Profile::assemble_without_default_flow_limit`]).
+    pub(crate) fn upload_profile_with(
+        &mut self,
+        profile: &Profile,
+        now: Duration,
+        default_flow_limit: bool,
+    ) -> Result<CoreOutput, AppError> {
         // A firmware flash holds the link (the reconnect path auto-uploads).
         if let Some(out) = self.refuse_if_firmware_locked("upload_profile") {
             return Ok(out);
@@ -4488,7 +4502,7 @@ impl CremaCore {
         let assembled = match self.de1_machine_model {
             Some(model) => {
                 let encoding = frame_encoding_for(model);
-                Some((profile.assemble_for(encoding)?, encoding))
+                Some((assemble(profile, encoding, default_flow_limit)?, encoding))
             }
             None => {
                 profile.check_step_count()?;
@@ -4529,6 +4543,7 @@ impl CremaCore {
                     since: now,
                     reread_sent: false,
                     tank_override: None,
+                    default_flow_limit,
                 });
             }
         }
@@ -4642,7 +4657,7 @@ impl CremaCore {
         let encoding = self
             .de1_machine_model
             .map_or(de1_protocol::FrameEncoding::V1, frame_encoding_for);
-        match parked.profile.assemble_for(encoding) {
+        match assemble(&parked.profile, encoding, parked.default_flow_limit) {
             Ok(assembled) => {
                 let started = self.start_upload(
                     &parked.profile,
@@ -5744,6 +5759,19 @@ const STOP_REENFORCE_MAX: u32 = 30;
 /// the Bengle's integrated scale, so it always clears the register: a machine
 /// stop it cannot attribute must not end a Crema shot.
 const END_OF_SHOT_WEIGHT_CLEARED: u32 = 0;
+
+/// Assemble `profile` for `encoding`, with or without the default flow limit.
+fn assemble(
+    profile: &Profile,
+    encoding: de1_protocol::FrameEncoding,
+    default_flow_limit: bool,
+) -> Result<de1_domain::AssembledProfile, de1_domain::DomainError> {
+    if default_flow_limit {
+        profile.assemble_for(encoding)
+    } else {
+        profile.assemble_without_default_flow_limit(encoding)
+    }
+}
 
 /// The wait before an unanswered re-upload request that went out `sent`
 /// times is sent again: [`PROFILE_REUPLOAD_REPEAT`] after the first send,
@@ -11198,6 +11226,30 @@ mod tests {
                 run_shot_disposition(&mut core, 20_000, 24_000),
                 ShotDisposition::DiscardAborted
             );
+        }
+
+        #[test]
+        fn a_cleaning_profile_the_user_runs_gets_the_default_limit_too() {
+            // Round-2 verification V1, decision 2: de1app caps every profile
+            // it selects, its forward-flush file included, and so does
+            // Decenza; only the code-built cold-maintenance profile goes out
+            // unlimited (see maintenance_run tests).
+            for beverage_type in [BeverageType::Cleaning, BeverageType::Calibrate] {
+                let mut core = CremaCore::new_with_model(1);
+                let mut p = profile("Flush", vec![step("rinse", Pump::Pressure, None)]);
+                p.beverage_type = beverage_type;
+                let out = core.upload_profile(&p, Duration::ZERO).unwrap();
+                assert!(
+                    out.commands.iter().any(|c| matches!(
+                        c,
+                        Command::WriteCharacteristic {
+                            target: WriteTarget::De1ProfileFrame,
+                            data,
+                        } if data[..3] == [32, 0x80, 0x10]
+                    )),
+                    "{beverage_type:?}"
+                );
+            }
         }
 
         #[test]

@@ -99,7 +99,9 @@ impl CremaCore {
         ) {
             return false;
         }
-        let Ok(upload) = self.upload_profile(&cold_maintenance_profile(), self.clock) else {
+        // Like de1app's code-built `onestep_cold`: no default flow limit.
+        let Ok(upload) = self.upload_profile_with(&cold_maintenance_profile(), self.clock, false)
+        else {
             // The fixed profile always assembles; if it ever did not, a plain
             // request is better than none.
             return false;
@@ -787,6 +789,16 @@ mod tests {
             1_100,
         );
         assert!(uploads_profile(&released));
+        assert!(
+            !released.commands.iter().any(|c| matches!(
+                c,
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1ProfileFrame,
+                    data,
+                } if data[0] >= 32
+            )),
+            "the parked cold profile still goes out without a default limiter"
+        );
         let last = ack_profile_writes(&mut core, &released, 1_200);
         assert_eq!(tank_writes(&last), vec![0]);
         assert_eq!(core.tank_temp_threshold_c, Some(30));
