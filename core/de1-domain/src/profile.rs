@@ -215,6 +215,8 @@ impl ProfileStep {
                 // The legacy app always sets IgnoreLimit: the header limits are
                 // advisory, and the per-step limiter is the real control.
                 ignore_limit: true,
+                // BLE protocol v2 only (de1app refuses it on v1).
+                compare_power: false,
             },
             set_value: self.target,
             temperature: self.temperature_c,

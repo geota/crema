@@ -1686,7 +1686,7 @@ impl CremaCore {
     /// Set the tank desired water-temperature threshold, in °C (legacy
     /// `set_tank_temperature_threshold` — the immediate value only; the
     /// legacy "preheat with 60 °C for 4 s" dance is a shell-side concern).
-    /// MMR `0x80380C`, 1-byte.
+    /// MMR `0x80380C`, 4-byte LE word.
     pub fn set_tank_threshold(&self, temp_c: u8) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_tank_threshold") {
             return out;
@@ -1744,7 +1744,11 @@ impl CremaCore {
     }
 
     /// Set the group-head-control mode (legacy `set_ghc_mode`). `mode` is the
-    /// raw mode id (`0`–`3`). MMR `0x803820`, 1-byte.
+    /// raw mode id (`0`–`3`). MMR `0x803820`, 4-byte LE word.
+    ///
+    /// An explicit user action only — nothing in the core writes this
+    /// register on its own (no reference app does; pyDE1 keeps it out of its
+    /// writable set). See [`request_machine_state`](Self::request_machine_state).
     pub fn set_ghc_mode(&self, mode: u8) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_ghc_mode") {
             return out;
@@ -2003,9 +2007,13 @@ impl CremaCore {
     }
 
     /// Set the cup-warmer plate temperature, in °C (Bengle models only).
-    /// MMR `0x803874`, 2-byte. The bridge layer is responsible for gating
-    /// this on the model — the firmware accepts the write on any DE1, but it
-    /// is a no-op outside Bengles.
+    /// MMR `0x803874`, 4-byte LE word.
+    ///
+    /// Writes nothing unless the machine is known to be a Bengle
+    /// ([`is_bengle_model`](de1_protocol::is_bengle_model)): de1app's
+    /// `set_cupwarmer_temperature` returns early on any other model
+    /// (`de1_comms.tcl`), and the plate exists only on Bengles. The shells
+    /// hide the card on other machines too; this is the core's own guard.
     ///
     /// Clamped to 0..=80 °C — matches the web shell's
     /// `MachineSection.svelte` stepper (`min=0, max=80`); neither legacy
@@ -2025,6 +2033,12 @@ impl CremaCore {
     pub fn set_cup_warmer_temperature(&self, temp_c: u8) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_cup_warmer_temperature") {
             return out;
+        }
+        if !self
+            .de1_machine_model
+            .is_some_and(de1_protocol::is_bengle_model)
+        {
+            return CoreOutput::default();
         }
         // Range 0..=80 °C — matches shell stepper bounds.
         let clamped = temp_c.min(80);
@@ -9874,9 +9888,28 @@ mod tests {
     }
 
     #[test]
+    fn set_cup_warmer_temperature_is_bengle_only() {
+        // de1app set_cupwarmer_temperature returns early unless
+        // is_bengle_model (cohort review 02 P3-4).
+        let mut core = CremaCore::new();
+        assert!(
+            core.set_cup_warmer_temperature(60).commands.is_empty(),
+            "model unknown"
+        );
+        core.de1_machine_model = Some(3); // DE1PRO
+        assert!(
+            core.set_cup_warmer_temperature(60).commands.is_empty(),
+            "classic DE1"
+        );
+        core.de1_machine_model = Some(128); // Bengle
+        assert_eq!(core.set_cup_warmer_temperature(60).commands.len(), 1);
+    }
+
+    #[test]
     fn set_cup_warmer_temperature_clamps_above_80c() {
         // Shell stepper bounds 0..80; core mirrors.
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
+        core.de1_machine_model = Some(128); // Bengle
         let in_range = core.set_cup_warmer_temperature(60);
         // CupWarmer is 2-byte but mmr_write_payload reads the first 4;
         // the low byte carries the value, the rest are zero.

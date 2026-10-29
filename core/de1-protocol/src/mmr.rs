@@ -178,7 +178,10 @@ pub enum MmrRegister {
     MachineModel,
     /// Firmware build number.
     FirmwareVersion,
-    /// Group Head Controller info bitmask (bit 0: present, bit 1: active).
+    /// Group Head Controller info bitmask: `0x1` LED controller present,
+    /// `0x2` touch controller present, `0x4` active (reaprime
+    /// `de1.models.dart` `ghcInfo`; pyDE1 `c_api.py`). de1app treats any
+    /// value outside `{0, 1, 2, 4}` as "start at the group head only".
     GhcInfo,
     /// Tank desired water-temperature threshold, °C.
     TankTempThreshold,

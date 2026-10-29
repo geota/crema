@@ -4194,6 +4194,13 @@ export enum MachineState {
 	AirPurge = "AirPurge",
 	/** Scheduled-wake idle; firmware v1293 and later only. */
 	SchedIdle = "SchedIdle",
+	/**
+	 * Firmware-upgrade mode, `0x16` (de1app `machine.tcl` `22 FWUpgrade`;
+	 * reaprime `fwUpgrade(0x16)`, `3ab190b6`). Requested by reaprime's
+	 * Bengle flash path; decoded so a machine reporting it does not freeze
+	 * the state display behind a decode error.
+	 */
+	FwUpgrade = "FwUpgrade",
 }
 
 /**
@@ -4243,7 +4250,12 @@ export enum MmrRegister {
 	MachineModel = "MachineModel",
 	/** Firmware build number. */
 	FirmwareVersion = "FirmwareVersion",
-	/** Group Head Controller info bitmask (bit 0: present, bit 1: active). */
+	/**
+	 * Group Head Controller info bitmask: `0x1` LED controller present,
+	 * `0x2` touch controller present, `0x4` active (reaprime
+	 * `de1.models.dart` `ghcInfo`; pyDE1 `c_api.py`). de1app treats any
+	 * value outside `{0, 1, 2, 4}` as "start at the group head only".
+	 */
 	GhcInfo = "GhcInfo",
 	/** Tank desired water-temperature threshold, °C. */
 	TankTempThreshold = "TankTempThreshold",

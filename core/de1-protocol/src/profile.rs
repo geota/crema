@@ -14,7 +14,9 @@ use crate::fixed_point::{
     u10p0_encode,
 };
 
-/// Header version byte — always 1 in current firmware.
+/// Header version byte. 1 for the classic DE1 encoding Crema writes; a
+/// Bengle on BLE protocol v2 uses 2 with U8D1 pressure / flow (de1app
+/// `binary.tcl`, reaprime `Bengle`), which Crema does not encode.
 const HEADER_VERSION: u8 = 1;
 /// A `FrameToWrite` byte at or above this value marks an extension frame.
 const EXTENSION_FRAME_OFFSET: u8 = 32;
@@ -67,6 +69,11 @@ pub struct FrameFlags {
     pub interpolate: bool,
     /// `IgnoreLimit` — ignore the header's min-pressure / max-flow limits.
     pub ignore_limit: bool,
+    /// `DC_ComparePower` (`0x80`) — an independent power (watts) compare
+    /// (de1app `binary.tcl`). BLE protocol v2 only: de1app refuses to send
+    /// it otherwise, and Crema never sets it. Modelled so a decoded frame
+    /// keeps the bit and re-encodes byte-for-byte.
+    pub compare_power: bool,
 }
 
 impl FrameFlags {
@@ -80,6 +87,7 @@ impl FrameFlags {
             target_mix_temp: byte & 0x10 != 0,
             interpolate: byte & 0x20 != 0,
             ignore_limit: byte & 0x40 != 0,
+            compare_power: byte & 0x80 != 0,
         }
     }
 
@@ -92,6 +100,7 @@ impl FrameFlags {
             | (u8::from(self.target_mix_temp) << 4)
             | (u8::from(self.interpolate) << 5)
             | (u8::from(self.ignore_limit) << 6)
+            | (u8::from(self.compare_power) << 7)
     }
 }
 
@@ -335,6 +344,16 @@ mod tests {
             };
             // [HeaderV=1, frames, preinfuse, 1.0*16=0x10, 6.0*16=0x60]
             assert_eq!(header.encode(), [1, 4, 2, 0x10, 0x60]);
+        }
+
+        #[test]
+        fn every_flag_byte_round_trips_including_compare_power() {
+            // de1app binary.tcl defines DC_ComparePower = 0x80 (cohort review
+            // 02 P3-3): a decode must not drop bit 7.
+            for byte in 0..=u8::MAX {
+                assert_eq!(FrameFlags::from_byte(byte).to_byte(), byte);
+            }
+            assert!(FrameFlags::from_byte(0x80).compare_power);
         }
 
         #[test]
