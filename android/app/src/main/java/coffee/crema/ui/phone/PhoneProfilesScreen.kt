@@ -355,11 +355,14 @@ private fun PhoneProfileCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    // Saved before the DE1's 20-step limit: the sub-line says
+                    // what to change instead (cohort review 2026-10-28, #6 #6).
+                    val stepNote = coffee.crema.profiles.StepCap.note(profile.segments.size)
                     Text(
-                        if (profile.source == "custom") "Custom profile" else "Built-in profile",
+                        stepNote ?: if (profile.source == "custom") "Custom profile" else "Built-in profile",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
+                        color = if (stepNote != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = 2.dp),
                     )

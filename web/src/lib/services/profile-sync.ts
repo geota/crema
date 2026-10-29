@@ -99,6 +99,14 @@ export interface ProfileSyncRequest {
 	readonly cancel: Effect.Effect<void>;
 	/** Append a line to the shared event log (the timeout path uses it). */
 	readonly log: (line: string) => void;
+	/**
+	 * An automatic sync (connect, re-upload request) that must never displace
+	 * an upload already in flight: it awaits that upload instead of
+	 * superseding it. A user's start is not background, so it supersedes an
+	 * automatic upload — never the other way round (cohort review 2026-10-28,
+	 * #2 N2).
+	 */
+	readonly background?: boolean;
 }
 
 export class ProfileSync extends Context.Service<
@@ -183,6 +191,11 @@ export const ProfileSyncLive = Layer.effect(
 						if (Option.isSome(current) && current.value.fingerprint === req.desired) {
 							return current.value.done;
 						}
+						// An automatic sync never displaces an upload in flight (a
+						// user's start, typically): it waits on that one instead.
+						if (Option.isSome(current) && req.background === true) {
+							return current.value.done;
+						}
 						// A different fingerprint is in flight → supersede it. `cancel`
 						// folds `ProfileUploadFailed`, which runs `failed` synchronously
 						// (resolving the old waiter `false` + clearing pending) before it
@@ -205,14 +218,19 @@ export const ProfileSyncLive = Layer.effect(
 					}),
 					Effect.catchTag('ProfileUploadTimeoutError', () =>
 						Effect.gen(function* () {
-							// Drop the pending entry only if it's still *ours* — a late
-							// Completed/Failed may have already replaced/cleared it.
-							yield* Ref.update(pending, (cur) =>
-								Option.isSome(cur) && cur.value.done === waiter ? Option.none() : cur
-							);
-							req.log(
-								'Profile sync timed out waiting for ProfileUploadCompleted — proceeding anyway.'
-							);
+							// Still ours (a late Completed/Failed may have replaced or
+							// cleared it): cancel the core upload, so it fails like any
+							// other — the fingerprint is forgotten and the re-upload is
+							// armed (cohort review 2026-10-28, #2 N1). The `Aborted` fold
+							// runs `failed`, which clears the entry.
+							const cur = yield* Ref.get(pending);
+							if (Option.isSome(cur) && cur.value.done === waiter) {
+								yield* req.cancel;
+								yield* Ref.update(pending, (now) =>
+									Option.isSome(now) && now.value.done === waiter ? Option.none() : now
+								);
+							}
+							req.log('Profile sync timed out waiting for ProfileUploadCompleted — upload cancelled.');
 							return false;
 						})
 					)

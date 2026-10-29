@@ -20,6 +20,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -696,6 +698,10 @@ class De1BleManager(
      * ([profileWriteAckSource]). A failed write throws before the ack, so the
      * core fails the upload (cohort review 02 P0-2). Mirrors the web shell's
      * `profileWriteAck`.
+     *
+     * Returns `true` once written, `false` when skipped (no link, firmware
+     * lock); a failed, timed-out or preempted write throws
+     * [De1WriteFailedException] or the transport's exception.
      */
     suspend fun writeCharacteristic(
         target: WriteTarget,
@@ -706,7 +712,11 @@ class De1BleManager(
          *  would otherwise make the shot-stop wait — and itself skips
          *  registration so stops never preempt stops. */
         urgent: Boolean = false,
-    ) {
+        /** Asked after a successful profile header / frame write: whether its
+         *  synthesized ack may still reach the core. `false` once a newer
+         *  upload superseded this write's (cohort review 2026-10-28, #2 N2). */
+        shouldAck: () -> Boolean = { true },
+    ): Boolean {
         // Count the write BEFORE checking the gate (audit r2 LOW 3): a write
         // that passes the check is then always visible to the flash's drain,
         // which runs after the gate closes.
@@ -714,38 +724,40 @@ class De1BleManager(
         if (firmwareExclusive) {
             nonFlashWritesInFlight.decrementAndGet()
             onStatus("DE1 $target write skipped — firmware update in progress")
-            return
+            return false
         }
         val d = device ?: run {
             nonFlashWritesInFlight.decrementAndGet()
             onStatus("Write ignored — DE1 not connected")
-            return
+            return false
         }
         try {
-            if (urgent) {
-                val dropped = UrgentWriteGate.preempt("an urgent DE1 $target write")
-                if (dropped.isNotEmpty()) {
-                    // Field-log visibility: exactly which writes the stop
-                    // sacrificed (each dropped write logs its own side too).
-                    onStatus("Urgent $target write preempted: ${dropped.joinToString(", ")}")
-                }
-                writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes, retriesAfterTimeout(target))
-            } else {
-                UrgentWriteGate.preemptible(coroutineContext[Job], "DE1 $target write") {
+            asDe1WriteFailure(
+                "$target write",
+                onTimeout = { onWriteFailure(d) },
+                // Dropped, not failed: deliberately NOT re-queued (see
+                // UrgentWriteGate's header) — say so where a field report
+                // can see it. Only this write was cancelled; the batch goes on.
+                onPreempted = { reason -> onStatus("DE1 $target write dropped — $reason") },
+            ) {
+                if (urgent) {
+                    val dropped = UrgentWriteGate.preempt("an urgent DE1 $target write")
+                    if (dropped.isNotEmpty()) {
+                        // Field-log visibility: exactly which writes the stop
+                        // sacrificed (each dropped write logs its own side too).
+                        onStatus("Urgent $target write preempted: ${dropped.joinToString(", ")}")
+                    }
                     writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes, retriesAfterTimeout(target))
+                } else {
+                    UrgentWriteGate.preemptible(coroutineContext[Job], "DE1 $target write") {
+                        writeWithOneRetry(d, De1Uuids.forWriteTarget(target), bytes, retriesAfterTimeout(target))
+                    }
                 }
             }
             consecutiveWriteFailures = 0
-        } catch (t: TimeoutCancellationException) {
-            onWriteFailure(d)
-            throw t // callers log per-write context (executeCommand's guard)
+        } catch (e: De1WriteFailedException) {
+            throw e // already counted (timeout) or not a failure (preempted)
         } catch (c: CancellationException) {
-            if (c is UrgentWriteGate.WritePreempted) {
-                // Dropped, not failed: deliberately NOT re-queued (see
-                // UrgentWriteGate's header) — say so where a field report
-                // can see it.
-                onStatus("DE1 $target write dropped — ${c.message}")
-            }
             throw c // the caller's scope is going away — never swallow
         } catch (e: Exception) {
             onWriteFailure(d)
@@ -754,8 +766,9 @@ class De1BleManager(
             nonFlashWritesInFlight.decrementAndGet()
         }
         profileWriteAckSource(target)?.let { source ->
-            feedCore(source, bytes, SystemClock.elapsedRealtime(), "DE1 $target ACK")
+            if (shouldAck()) feedCore(source, bytes, SystemClock.elapsedRealtime(), "DE1 $target ACK")
         }
+        return true
     }
 
     /**
@@ -1032,6 +1045,43 @@ internal class FwMapSubscription(
         job?.cancel()
         job = null
     }
+}
+
+/**
+ * A DE1 write that did not happen: it timed out, or a stop preempted it. An
+ * [java.io.IOException], not a cancellation, so the caller's write batch logs
+ * it and carries on (cohort review 2026-10-28, Android P2-1) — a
+ * `TimeoutCancellationException` escaping as a cancellation used to end the
+ * batch silently, dropping every later write and the stop's failure line.
+ */
+class De1WriteFailedException(message: String, cause: Throwable) :
+    java.io.IOException(message, cause)
+
+/**
+ * Run one DE1 write ([block]) and turn the write's own timeout or preemption
+ * into [De1WriteFailedException] — never into a cancellation of the caller,
+ * whose batch goes on with its next write (cohort review 2026-10-28, Android
+ * P2-1 / #6 #4). [onTimeout] runs for a timeout (the dead-link counter),
+ * [onPreempted] for a stop that dropped this write. A cancellation of the
+ * caller itself still propagates. Top-level for JUnit.
+ */
+internal suspend fun <T> asDe1WriteFailure(
+    label: String,
+    onTimeout: suspend () -> Unit,
+    onPreempted: (reason: String) -> Unit,
+    block: suspend () -> T,
+): T = try {
+    block()
+} catch (t: TimeoutCancellationException) {
+    onTimeout()
+    throw De1WriteFailedException("$label timed out", t)
+} catch (c: CancellationException) {
+    if (c is UrgentWriteGate.WritePreempted && currentCoroutineContext().isActive) {
+        val reason = c.message ?: "preempted"
+        onPreempted(reason)
+        throw De1WriteFailedException("$label dropped — $reason", c)
+    }
+    throw c
 }
 
 /**

@@ -87,6 +87,13 @@ pub const fn is_bengle_model(raw: u32) -> bool {
     raw >= 128
 }
 
+/// The Bengle end-of-shot weight register (`0x803864`): grams × 100, 0 = off;
+/// the firmware persists it and stops a shot there with its integrated scale.
+/// Bengle-only, write-only from Crema's side (de1app `set_end_of_shot_weight`,
+/// `de1_comms.tcl`; reaprime `integrated_scale_capability.dart`), so it is an
+/// address rather than an [`MmrRegister`] the shells would read and label.
+pub const END_OF_SHOT_WEIGHT_ADDRESS: u32 = 0x80_3864;
+
 /// Decode a raw `HeaterVoltage` MMR word (`0x803834`) to the nominal mains
 /// voltage, `Some(120)` or `Some(230)`, or `None` when the firmware has not
 /// been told (raw `0`) or the word is outside both bands.

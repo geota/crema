@@ -54,6 +54,7 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.MmrRegister
 import coffee.crema.core.hasCupWarmer
+import coffee.crema.core.heaterVoltageFromRaw
 import coffee.crema.core.machineModelName
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.rememberScrollMemoryState
@@ -1922,28 +1923,22 @@ internal fun serialLabel(info: Map<MmrRegister, UInt>): String =
     info[MmrRegister.SerialNumber]?.let { "$it" } ?: "—"
 
 /**
- * Decode the raw HeaterVoltage MMR word (0x803834) to actual mains volts. The
- * firmware stamps `+1000` on user-committed writes, but a raw read can come back
- * as the actual volts (e.g. 120, not 1120) — so only un-stamp words ≥ 1000.
- * Mirrors the web readout (`v >= 1000 ? v - 1000 : v`); blindly subtracting 1000
- * turned a 120 V read into "−880 V". 0 = firmware not told yet; null = unread.
+ * Decode the raw HeaterVoltage MMR word (0x803834) through the core's
+ * `heaterVoltageFromRaw` (cohort review 2026-10-28, #2 N7). The firmware stamps
+ * `+1000` on a user-committed value (1120 / 1230); the core strips it once and
+ * buckets like reaprime, so a doubled marker (2120 — a machine set by an older
+ * Crema build) is not recognised instead of reading "1120 V". 0 = firmware not
+ * told yet; null = unread. Mirrors the web `heater-voltage.ts`.
  */
-private fun heaterVoltageVolts(info: Map<MmrRegister, UInt>): Int? {
-    val raw = info[MmrRegister.HeaterVoltage]?.toInt() ?: return null
-    return if (raw >= 1000) raw - 1000 else raw
+internal fun heaterVoltageLabel(info: Map<MmrRegister, UInt>): String {
+    val raw = info[MmrRegister.HeaterVoltage] ?: return "\u2014"
+    if (raw == 0u) return "Not set"
+    return heaterVoltageFromRaw(raw)?.let { "$it V" } ?: "Not recognised \u2014 set it again"
 }
 
-/** Heater mains voltage readout — "120 V" / "230 V", "Not set" (auto-detect), or "—" (unread). */
-internal fun heaterVoltageLabel(info: Map<MmrRegister, UInt>): String =
-    when (val v = heaterVoltageVolts(info)) {
-        null -> "—"
-        0 -> "Not set"
-        else -> "$v V"
-    }
-
-/** The current heater-voltage selection ("120" / "230") for the segmented control; null when unread or auto-detect (0). */
+/** The current heater-voltage selection ("120" / "230") for the segmented control; null when unread, not set or not recognised. */
 internal fun heaterVoltageValue(info: Map<MmrRegister, UInt>): String? =
-    heaterVoltageVolts(info)?.takeIf { it > 0 }?.toString()
+    info[MmrRegister.HeaterVoltage]?.takeIf { it != 0u }?.let { heaterVoltageFromRaw(it) }?.toString()
 
 /** The one-line Settings notice for a DE1 on Decent's stolen-machine list. */
 internal const val STOLEN_SERIAL_NOTICE = "This DE1's serial is on Decent's stolen-machine list"

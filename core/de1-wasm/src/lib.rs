@@ -911,7 +911,8 @@ pub fn crema_profile_from_wire(wire_json: &str) -> Result<String, String> {
 /// Returns the error string when `content` is not a valid v2 profile.
 #[wasm_bindgen(js_name = parseV2Profile)]
 pub fn parse_v2_profile(content: &str) -> Result<String, String> {
-    de1_domain::import_v2_json(content)
+    // A shot's embedded recipe: up to 32 steps stay readable (#6 #6).
+    de1_domain::import_v2_json_embedded(content)
         .map_err(|e| e.to_string())
         .and_then(|p| serde_json::to_string(&p).map_err(|e| e.to_string()))
 }
@@ -1541,6 +1542,15 @@ pub fn machine_model_name(raw: u32) -> String {
 #[must_use]
 pub fn has_cup_warmer(raw: u32) -> bool {
     de1_protocol::has_cup_warmer(raw)
+}
+
+/// Decode a raw `HeaterVoltage` MMR word to 120 / 230 V, or `undefined` for 0
+/// (not set) and any word outside both bands (e.g. a doubled +1000 marker).
+/// Mirrors [`de1_protocol::heater_voltage_from_raw`].
+#[wasm_bindgen(js_name = heaterVoltageFromRaw)]
+#[must_use]
+pub fn heater_voltage_from_raw(raw: u32) -> Option<u16> {
+    de1_protocol::heater_voltage_from_raw(raw)
 }
 
 /// Human-readable English message for an error substate name (the
@@ -3315,6 +3325,13 @@ impl CremaBridge {
     /// no upload is in flight.
     pub fn cancel_profile_upload(&self) -> String {
         json(self.state().core.cancel_profile_upload())
+    }
+
+    /// A profile write of the running upload did not reach the DE1: fail the
+    /// upload now (`ProfileUploadFailure::WriteFailed`). See
+    /// [`CremaCore::profile_write_failed`](de1_app::CremaCore::profile_write_failed).
+    pub fn profile_write_failed(&self, now_ms: f64) -> String {
+        json(self.state().core.profile_write_failed(now_ms as u64))
     }
 
     /// `true` from `upload_profile` until the tail-ack / a failure /

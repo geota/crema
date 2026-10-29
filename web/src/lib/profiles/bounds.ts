@@ -47,7 +47,7 @@ const bounds = (): RawProfileBounds =>
  * lazy getter so the wasm call defers off the module-load path (see header).
  */
 export const ProfileBounds = {
-	/** Maximum step count in a profile — DE1 firmware accepts `0..=32`. */
+	/** Maximum step count in a profile — the DE1 runs at most 20 frames. */
 	get MAX_PROFILE_STEPS() {
 		return bounds().max_profile_steps;
 	},

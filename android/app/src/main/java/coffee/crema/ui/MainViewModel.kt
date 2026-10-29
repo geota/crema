@@ -1022,6 +1022,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var pendingBrew = false
 
+    /** Which start armed [pendingBrew] — its backstop acts only on its own start. */
+    private var pendingBrewToken = 0L
+
     /**
      * Profile-upload-skip cache (issue 11, mirrors the web shell). The djb2
      * fingerprint of the profile last successfully uploaded to the *currently
@@ -1308,6 +1311,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val _logBrew = MutableStateFlow<coffee.crema.ui.brewlog.BrewLogDraft?>(null)
     val logBrew: StateFlow<coffee.crema.ui.brewlog.BrewLogDraft?> = _logBrew.asStateFlow()
+
+    /** Which profile writes may still go out and be acked (cohort review 2026-10-28, #2 N2). */
+    private val profileWrites = ProfileWriteGenerations()
+
+    /**
+     * The 1 s core clock while the DE1 link is up or coming up (cohort review
+     * 2026-10-28, #2 N1): the upload ack watchdog, the machine-model wait, the
+     * re-upload repeat, the lost-scale watchdog and steam eco. The bridge call
+     * and its output both run on the core lane, so a tick's events are never
+     * stale against a start queued on the lane.
+     */
+    private val coreTicker by lazy {
+        CoreTicker(viewModelScope) {
+            kotlinx.coroutines.withContext(coreDispatcher) {
+                applyCoreOutputJson(bridge.onTick(SystemClock.elapsedRealtime().toULong()))
+            }
+        }
+    }
 
     /** Runs [seedMachineSettings] on each ready and [usbChargerTick] every minute while ready. */
     private val sweepRunner by lazy {
@@ -2406,6 +2427,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             var wasReady = false
             ble.state.collect { st ->
+                coreTicker.onLinkState(st)
                 val ready = st == De1BleManager.State.READY
                 if (ready && !wasReady) firmware.onLinkRestored(ble.connectedAddress)
                 if (!ready && wasReady) firmware.onLinkLost()
@@ -3105,6 +3127,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // (the Decenza/reaprime "profile uses weight" gate).
         val s = _ui.value
         val activeProfile = s.profiles.firstOrNull { it.id == s.activeProfileId }
+        // A profile saved before the DE1's 20-step limit can't upload: say
+        // what to change instead of failing the upload (cohort review
+        // 2026-10-28, #6 #6).
+        activeProfile?.let { coffee.crema.profiles.StepCap.refusal(it.name, it.segments.size) }?.let {
+            notifyUser(it)
+            return
+        }
         val weightTarget = s.brewParams?.yieldOut?.toFloat()?.takeIf { it.isFinite() && it > 0f }
             ?: activeProfile?.yieldOut?.takeIf { it.isFinite() && it > 0f }
         if (s.stopOnWeight && weightTarget != null && s.scaleState != ScaleBleManager.State.READY) {
@@ -3188,32 +3217,56 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             proceedToEspresso()
             return
         }
-        pendingUploadFingerprint = fingerprint
         val wireJson = runCatching { cremaProfileToWire(effectiveJson) }.getOrElse {
             notifyUser("Can\u2019t start shot \u2014 profile conversion failed")
             return
         }
-        val raw = runCatching {
-            bridge.uploadProfile(wireJson, System.currentTimeMillis().toULong())
-        }.getOrElse {
+        if (!startUploadOnLane(wireJson, fingerprint)) {
             notifyUser("Can\u2019t start shot \u2014 profile upload failed")
             return
         }
+        // Set only after the upload's own output was applied: its Aborted
+        // for the upload it superseded (often the automatic re-upload) used
+        // to clear this flag and drop the start silently (#2 N2).
         pendingBrew = true
-        _ui.update { it.copy(profileUploading = true, profileUploadProgress = null) }
-        onCoreOutputJson(raw)
-        // Backstop: if no ProfileUploadCompleted arrives, clear the pending brew
-        // so the UI doesn't hang in "uploading" forever. On the core lane so
-        // pendingBrew stays single-threaded.
+        val token = ++pendingBrewToken
+        // Backstop: if no ProfileUploadCompleted arrives, cancel the core
+        // upload (so it fails like any other: fingerprint forgotten, re-upload
+        // armed) and clear the pending brew so the UI doesn't hang in
+        // "uploading". On the core lane so pendingBrew stays single-threaded.
         viewModelScope.launch(coreDispatcher) {
             delay(PROFILE_UPLOAD_TIMEOUT_MS)
-            if (pendingBrew) {
+            if (pendingBrew && pendingBrewToken == token) {
+                runCatching { applyCoreOutputJson(bridge.cancelProfileUpload()) }
                 pendingBrew = false
                 pendingUploadFingerprint = null
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 notifyUser("Profile upload timed out \u2014 shot not started")
             }
         }
+    }
+
+    /**
+     * On the core lane: start uploading [wireJson] and apply the output NOW,
+     * then record [fingerprint] as the upload in flight. The output's own
+     * events — an `Aborted` for the upload it superseded — must land before the
+     * caller marks this upload's pending state, or they clear it (cohort review
+     * 2026-10-28, #2 N2). Its acks queue behind this lane task, so the
+     * completion always sees that state. Returns whether an upload is now
+     * running (or waiting for the machine model).
+     */
+    private fun startUploadOnLane(wireJson: String, fingerprint: String?): Boolean {
+        val raw = runCatching {
+            bridge.uploadProfile(wireJson, SystemClock.elapsedRealtime().toULong())
+        }.getOrElse {
+            appendLog("Profile upload failed to start: ${it.message}")
+            return false
+        }
+        applyCoreOutputJson(raw)
+        if (runCatching { bridge.profileUploadInProgress() }.getOrDefault(false) != true) return false
+        pendingUploadFingerprint = fingerprint
+        _ui.update { it.copy(profileUploading = true, profileUploadProgress = null) }
+        return true
     }
 
     /**
@@ -3614,6 +3667,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 writes.map { cmd ->
                     suspend {
                         ble.writeCharacteristic(cmd.content.target, cmd.content.data.map { it.toByte() }.toByteArray())
+                        Unit
                     }
                 },
                 QUIT_WRITE_BUDGET_MS,
@@ -3678,7 +3732,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val tankTempC = ui.profiles.firstOrNull { it.id == ui.activeProfileId }?.tankTemperatureC ?: 0f
         val settings = ui.connectSweepSettings(tankTempC, batteryPercent())
         routeWrite("Connect sweep") {
-            bridge.connectSweep(json.encodeToString(ConnectSweepSettings.serializer(), settings), System.currentTimeMillis().toULong())
+            // The notification clock (elapsedRealtime), like every core
+            // timestamp: wall-clock ms pushed the core's clock decades ahead
+            // and every watchdog compared against the wrong epoch.
+            bridge.connectSweep(json.encodeToString(ConnectSweepSettings.serializer(), settings), SystemClock.elapsedRealtime().toULong())
         }
     }
 
@@ -4029,16 +4086,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (_ui.value.bleState != De1BleManager.State.READY) return
         val cremaJson = _ui.value.activeProfileId?.let { library.profileJson(it) } ?: return
         viewModelScope.launch(coreDispatcher) {
-            val wireJson = runCatching { cremaProfileToWire(cremaJson) }.getOrElse { return@launch }
-            val raw = runCatching {
-                bridge.uploadProfile(wireJson, System.currentTimeMillis().toULong())
-            }.getOrElse {
-                appendLog("Re-upload after maintenance failed: ${it.message}")
+            // A user's start owns the upload (it carries the Quick-Controls
+            // overrides): never displace it (#2 N2). The core asks again in
+            // 5 s if the DE1's profile is still unknown then.
+            if (pendingBrew || runCatching { bridge.profileUploadInProgress() }.getOrDefault(false) == true) {
                 return@launch
             }
-            pendingUploadFingerprint = runCatching { profileFingerprint(cremaJson, null) }.getOrNull()
-            _ui.update { it.copy(profileUploading = true, profileUploadProgress = null) }
-            onCoreOutputJson(raw)
+            val wireJson = runCatching { cremaProfileToWire(cremaJson) }.getOrElse { return@launch }
+            startUploadOnLane(wireJson, runCatching { profileFingerprint(cremaJson, null) }.getOrNull())
         }
     }
 
@@ -4115,7 +4170,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(steamEco = enabled) }
         persistPrefs()
         val raw = runCatching {
-            bridge.enableSteamEcoMode(enabled, System.currentTimeMillis().toULong())
+            bridge.enableSteamEcoMode(enabled, SystemClock.elapsedRealtime().toULong())
         }.getOrElse {
             appendLog("Set steam eco failed: ${it.message}")
             return
@@ -5488,8 +5543,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         if (batch.isEmpty()) return
+        // The profile writes of this output: a header write supersedes every
+        // older upload's remaining writes (cohort review 2026-10-28, #2 N2).
+        val profileBatch = profileWrites.begin(batch.map { it.content.target })
         val job = viewModelScope.launch {
-            executeInOrder(batch) { c -> deliverDe1Write(c, stopWrite = isStop(c)) }
+            executeInOrder(batch) { c ->
+                val profile = profileBatch?.takeIf { isProfileWriteTarget(c.content.target) }
+                if (profile == null) {
+                    deliverDe1Write(c, stopWrite = isStop(c))
+                    return@executeInOrder
+                }
+                // Superseded, or an earlier write of this upload failed:
+                // nothing more of it reaches the DE1.
+                if (!profileWrites.mayWrite(profile)) return@executeInOrder
+                val delivered = deliverDe1Write(c, stopWrite = false) { profileWrites.mayWrite(profile) }
+                if (profileWrites.settle(profile, delivered) == ProfileWriteGenerations.Outcome.FAILED) {
+                    // Fail the upload now rather than on the ack watchdog.
+                    appendLog("Profile write failed — stopping this upload")
+                    onCoreOutputJson(bridge.profileWriteFailed(SystemClock.elapsedRealtime().toULong()))
+                }
+            }
         }
         if (batch.any(::isStop)) {
             pendingStopWrite.set(job)
@@ -5497,8 +5570,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** One DE1 write from [executeDe1Writes]; failures are logged, never thrown. */
-    private suspend fun deliverDe1Write(command: Command.WriteCharacteristic, stopWrite: Boolean) {
+    /** One DE1 write from [executeDe1Writes]; failures are logged, never thrown.
+     *  Returns whether the write reached the DE1. [shouldAck] gates a profile
+     *  write's synthesized ack (see [ProfileWriteGenerations]). */
+    private suspend fun deliverDe1Write(
+        command: Command.WriteCharacteristic,
+        stopWrite: Boolean,
+        shouldAck: () -> Boolean = { true },
+    ): Boolean {
         val bytes = command.content.data
             .map { it.toByte() }
             .toByteArray()
@@ -5508,25 +5587,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val queuedAt = if (stopWrite) SystemClock.elapsedRealtime() else 0L
         // A failed machine write (e.g. the keep-alive poke as the DE1 drops)
         // must not become an uncaught crash.
-        try {
-            // Stop writes ride the urgent lane (issue #15): they preempt any
-            // in-flight non-critical GATT op instead of queuing behind it on
-            // the global op mutex.
-            ble.writeCharacteristic(command.content.target, bytes, urgent = stopWrite)
-            if (stopWrite) {
-                appendLog("Stop write delivered in ${SystemClock.elapsedRealtime() - queuedAt} ms")
-            }
-        } catch (ce: kotlinx.coroutines.CancellationException) {
-            throw ce
-        } catch (e: Exception) {
-            appendLog(
-                if (stopWrite) {
-                    "STOP WRITE FAILED after ${SystemClock.elapsedRealtime() - queuedAt} ms: ${e.message}"
-                } else {
-                    "DE1 write failed (${command.content.target}): ${e.message}"
-                },
-            )
-        }
+        // A write's timeout or preemption arrives as De1WriteFailedException
+        // (an IOException, logged here); only the batch's own teardown is a
+        // cancellation (cohort review 2026-10-28, Android P2-1).
+        return deliverOrLog(
+            write = {
+                // Stop writes ride the urgent lane (issue #15): they preempt any
+                // in-flight non-critical GATT op instead of queuing behind it on
+                // the global op mutex.
+                val written = ble.writeCharacteristic(command.content.target, bytes, urgent = stopWrite, shouldAck = shouldAck)
+                if (stopWrite && written) {
+                    appendLog("Stop write delivered in ${SystemClock.elapsedRealtime() - queuedAt} ms")
+                }
+                written
+            },
+            log = { e ->
+                appendLog(
+                    if (stopWrite) {
+                        "STOP WRITE FAILED after ${SystemClock.elapsedRealtime() - queuedAt} ms: ${e.message}"
+                    } else {
+                        "DE1 write failed (${command.content.target}): ${e.message}"
+                    },
+                )
+            },
+        )
     }
 
     private fun applyEvent(event: Event) {
@@ -6114,6 +6198,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(profileUploading = true, profileUploadProgress = null) }
                 appendLog("Uploading profile: ${event.content.title}")
             }
+            is Event.ProfileUploadWaitingForModel ->
+                appendLog("Waiting for the machine model before uploading ${event.content.title}")
             is Event.ProfileUploadProgress -> {
                 val c = event.content
                 // High-rate (one per frame ack); update the progress hint, no log.
@@ -6278,6 +6364,24 @@ internal fun pushActiveProfile(
 internal suspend fun <T> executeInOrder(items: List<T>, write: suspend (T) -> Unit) {
     for (item in items) write(item)
 }
+
+/**
+ * One write of a DE1 batch: [write]'s failure — including a timeout or a
+ * preemption, which `De1BleManager` raises as `De1WriteFailedException` — is
+ * [log]ged and reported as `false`, so the batch goes on; a cancellation of
+ * the batch itself propagates. The catch structure of
+ * `MainViewModel.deliverDe1Write`, top-level for JUnit (cohort review
+ * 2026-10-28, Android P2-1).
+ */
+internal suspend fun deliverOrLog(write: suspend () -> Boolean, log: (Exception) -> Unit): Boolean =
+    try {
+        write()
+    } catch (ce: kotlinx.coroutines.CancellationException) {
+        throw ce
+    } catch (e: Exception) {
+        log(e)
+        false
+    }
 
 /**
  * Whether [MainViewModel.startShot] can skip the profile upload (issue 11): a

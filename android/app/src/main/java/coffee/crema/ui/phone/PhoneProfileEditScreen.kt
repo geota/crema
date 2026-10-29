@@ -1,5 +1,6 @@
 package coffee.crema.ui.phone
 
+import coffee.crema.profiles.StepCap
 import coffee.crema.ui.fmt
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -236,13 +237,23 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                                     segs.removeAt(i)
                                     if (openPhase == i) openPhase = -1
                                 },
-                                onDuplicate = { segs.add(i + 1, seg.copy(name = seg.name + " (copy)")) },
+                                onDuplicate = {
+                                    // The DE1 runs at most 20 frames (#2 N6).
+                                    if (StepCap.canAdd(segs.size)) segs.add(i + 1, seg.copy(name = seg.name + " (copy)"))
+                                },
                                 last = i == segs.lastIndex,
                             )
                         }
                     }
                 }
+                // A profile saved before the 20-step limit: say what to change (#6 #6).
+                StepCap.note(segs.size)?.let { note ->
+                    Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
                 CremaButton(
+                    // The DE1 runs at most MAX_PROFILE_STEPS (20) frames — the
+                    // tablet editor's gate (cohort review 2026-10-28, #2 N6).
+                    enabled = StepCap.canAdd(segs.size),
                     onClick = {
                         segs.add(
                             SegmentEdit(

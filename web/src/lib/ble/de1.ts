@@ -31,6 +31,7 @@ import type { AppRuntime } from '#lib/effect/runtime.js';
 import { Effect } from 'effect';
 import {
 	de1ConnectProgram,
+	de1MachineInfoProgram,
 	de1SeedProgram,
 	STATE_SEED_STEP
 } from '#lib/services/de1-orchestrator.js';
@@ -165,6 +166,14 @@ export class De1Manager {
 
 	/** The mid-session dead-link check while the link is ready (`de1-liveness`). */
 	private liveness: De1Liveness | null = null;
+	/**
+	 * This device's identity reads (FirmwareVersion + the MMR sweep) have not
+	 * run over a healthy link yet: the first connect handed off to the
+	 * reconnect loop before finishing (hollow), or the link dropped as the
+	 * program ended. The first healthy re-seed runs them, then clears this
+	 * (cohort review 2026-10-28, #3 P1).
+	 */
+	private identityPending = false;
 
 	/**
 	 * While a firmware flash holds the link, every write except the flash's
@@ -400,6 +409,7 @@ export class De1Manager {
 		// drops the link (transport `bounded`), and a loop started then would
 		// race the program. The outcome below decides what happens next.
 		device.holdReconnect?.();
+		this.identityPending = true;
 		const exit = await this.runtime.runPromiseExit(
 			de1ConnectProgram({
 				device,
@@ -458,6 +468,7 @@ export class De1Manager {
 			this.callbacks.onStatus('DE1 link dropped while connecting — reconnecting…');
 			return;
 		}
+		this.identityPending = false;
 		this.callbacks.onState('ready');
 		this.startLiveness(device);
 	}
@@ -474,8 +485,20 @@ export class De1Manager {
 	 * failure resolves `false` (never throws), so the caller can refuse to
 	 * synthesise a profile header / frame ack for bytes that never reached
 	 * the DE1 (cohort review 02 P0-2).
+	 *
+	 * `guard`, when given, is checked when the write reaches the head of the
+	 * GATT queue; a refusal sends nothing and resolves `false` (the caller's
+	 * guard knows it refused). `settled` hears the write's result inside the
+	 * same queued step, so a failure is recorded before the next queued write
+	 * checks its guard. The profile upload passes its generation rule through
+	 * both (cohort review 2026-10-28, #2 N2).
 	 */
-	async writeCharacteristic(target: WriteTarget, data: Uint8Array): Promise<boolean> {
+	async writeCharacteristic(
+		target: WriteTarget,
+		data: Uint8Array,
+		guard?: () => boolean,
+		settled?: (written: boolean) => void
+	): Promise<boolean> {
 		if (this.firmwareExclusive) {
 			this.callbacks.onStatus(`DE1 write skipped: firmware update in progress (${target})`);
 			return false;
@@ -491,6 +514,14 @@ export class De1Manager {
 			return false;
 		}
 		try {
+			if (guard === undefined) {
+				await device.write(De1Uuids.SERVICE, uuid, data);
+				return true;
+			}
+			if (device.writeIf) {
+				return await device.writeIf(De1Uuids.SERVICE, uuid, data, guard, settled);
+			}
+			if (!guard()) return false;
 			await device.write(De1Uuids.SERVICE, uuid, data);
 			return true;
 		} catch (error) {
@@ -619,6 +650,28 @@ export class De1Manager {
 				this.callbacks.onState('failed');
 			}
 			return;
+		}
+		// The first connect never got to the identity reads over a healthy
+		// link: run them now, before `ready`, so this session learns the model
+		// (frame encoding), serial, firmware build and heater voltage.
+		if (this.identityPending) {
+			this.callbacks.onStatus('Reading machine identity…');
+			const info = de1MachineInfoProgram({
+				core: this.core,
+				onStatus: (line) => {
+					if (current()) this.callbacks.onStatus(line);
+				},
+				onCoreOutput: (output) => {
+					if (current()) this.callbacks.onCoreOutput(output);
+				}
+			});
+			if (this.runtime === null) await Effect.runPromiseExit(info);
+			else await this.runtime.runPromiseExit(info);
+			if (!current()) {
+				device.releaseReconnect?.(false);
+				return;
+			}
+			this.identityPending = false;
 		}
 		// A read or write may have dropped the link after the seed: the loop
 		// that release starts reconnects (and re-seeds) again.
