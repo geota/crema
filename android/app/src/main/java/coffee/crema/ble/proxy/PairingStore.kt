@@ -17,6 +17,8 @@ internal data class PairingFile(
     val issued: Map<String, String> = emptyMap(),
     /** Secrets this device holds for hosts it mirrors, by host id. Sealed at rest. */
     val held: Map<String, String> = emptyMap(),
+    /** The host id the saved mirror target last completed a handshake with. */
+    val pinnedHost: String? = null,
 )
 
 /**
@@ -57,6 +59,14 @@ class PairingStore(
 
     /** The secret this device holds for the host [hostId], or null. */
     fun heldSecret(hostId: String): String? = open(synchronized(lock) { state.held[hostId] })
+
+    /** The host id the saved mirror target is pinned to, or null. */
+    val pinnedHost: String? get() = synchronized(lock) { state.pinnedHost }
+
+    /** Pin the saved mirror target to [hostId] (null clears it). */
+    fun pinHost(hostId: String?) {
+        update { s -> if (s.pinnedHost == hostId) null else s.copy(pinnedHost = hostId) }
+    }
 
     /** Keep [secret] for the host [hostId]; false when it couldn't be stored. */
     fun putHeld(hostId: String, secret: String): Boolean =

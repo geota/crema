@@ -104,4 +104,12 @@ object DenyReason {
     /** Secondary-side: the Welcome came from another host than the one that
      *  challenged this session. */
     const val HANDSHAKE_MISMATCH = "handshake mismatch"
+    /** Host-side: this device already holds a secret from this host; the host
+     *  user has to Forget it before it can pair again. */
+    const val ALREADY_PAIRED = "already-paired"
+    /** Secondary-side: the host isn't the one this mirror target is pinned to. */
+    const val HOST_MISMATCH = "host-mismatch"
+    /** Secondary-side: the host couldn't prove the secret this device holds for
+     *  it, and the user didn't choose to pair again. */
+    const val HOST_UNVERIFIED = "host-unverified"
 }

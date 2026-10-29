@@ -260,4 +260,35 @@ class ProxyHardeningTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun `a session that only claims an id doesn't count as that client`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val h = hub()
+            // The real taker: approved.
+            val (taker, takerServer) = InMemoryFrameLink.pair()
+            scope.launch { h.serve(takerServer) }
+            val takerRx = CopyOnWriteArrayList<Frame>()
+            scope.launch { taker.incoming().collect { takerRx.add(it) } }
+            handshake(taker, takerRx, clientId = "phone-1")
+            // A second session that sends Hello with the same id but never completes.
+            val (claimant, claimantServer) = InMemoryFrameLink.pair()
+            scope.launch { h.serve(claimantServer) }
+            val claimantRx = CopyOnWriteArrayList<Frame>()
+            scope.launch { claimant.incoming().collect { claimantRx.add(it) } }
+            claimant.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
+            withTimeout(2_000) { while (claimantRx.none { it is Frame.Challenge }) delay(5) }
+
+            assertTrue(h.hasClient("phone-1"))
+            taker.close() // the taker's mode switch closes its link
+            assertTrue(
+                withTimeout(2_000) { h.awaitClientGone("phone-1", 3_000) },
+                "the unapproved claimant doesn't hold the handoff release",
+            )
+            assertTrue(!h.hasClient("phone-1"))
+        } finally {
+            scope.cancel()
+        }
+    }
 }

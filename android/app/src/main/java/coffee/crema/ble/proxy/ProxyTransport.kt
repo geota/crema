@@ -90,6 +90,15 @@ class ProxyTransport(
     /** A primary approved this device and issued it a pairing secret: keep it
      *  for that host id. Default no-op. */
     private val onPaired: (primaryId: String, primaryName: String, secret: String) -> Unit = { _, _, _ -> },
+    /** The host id this mirror target is pinned to, or null (not pinned yet):
+     *  a Challenge from any other host id is refused. */
+    private val pinnedHostId: () -> String? = { null },
+    /** A session completed with this host id: the caller pins the target to it. */
+    private val onHostConfirmed: (primaryId: String) -> Unit = {},
+    /** Whether the user chose to pair again: only then does a host that can't
+     *  prove the secret this device holds get a pairing request (else the
+     *  session is refused). */
+    private val allowRepair: Boolean = false,
 ) : BleTransport {
 
     /** Devices the primary holds, from [Frame.Welcome] / [Frame.Roster]; drives [scan]. */
@@ -240,6 +249,7 @@ class ProxyTransport(
                             Log.w(TAG, "Ignoring a pairing secret this device didn't ask for")
                         }
                     }
+                    if (challengedBy != null) onHostConfirmed(challengedBy)
                     applyRoster(frame.roster)
                     onWelcome(frame.scope)
                     handshake.value = Handshake.Welcomed(state.epoch)
@@ -254,15 +264,29 @@ class ProxyTransport(
                     return
                 }
                 current.challengedBy = frame.primaryId
+                val pinned = pinnedHostId()
+                if (pinned != null && frame.primaryId != pinned) {
+                    Log.w(TAG, "Challenge from ${frame.primaryId}, but this target is pinned to $pinned — refusing")
+                    refuse(DenyReason.HOST_MISMATCH, IllegalStateException("Proxy host refused: ${DenyReason.HOST_MISMATCH}"))
+                    return
+                }
                 // Prove our secret only to a host that proved it first, over our
-                // nonce: a host without the secret gets a pairing request instead.
+                // nonce. A host without the secret gets a pairing request only if
+                // the user chose to pair again; otherwise the session is refused.
                 val held = pairingSecretFor(frame.primaryId)
                 val hostProved = held != null &&
                     PairingCrypto.verifyHost(held, frame.primaryId, clientId, current.clientNonce, frame.nonce, frame.hostProof)
                 val proof = if (held != null && hostProved) {
                     runCatching { PairingCrypto.clientProof(held, frame.primaryId, clientId, current.clientNonce, frame.nonce) }.getOrNull()
                 } else {
-                    if (held != null) Log.w(TAG, "Host ${frame.primaryName} didn't prove our pairing secret — asking to pair instead")
+                    if (held != null) {
+                        if (!allowRepair) {
+                            Log.w(TAG, "Host ${frame.primaryName} didn't prove our pairing secret — refusing")
+                            refuse(DenyReason.HOST_UNVERIFIED, IllegalStateException("Proxy host refused: ${DenyReason.HOST_UNVERIFIED}"))
+                            return
+                        }
+                        Log.w(TAG, "Host ${frame.primaryName} didn't prove our pairing secret — asking to pair again")
+                    }
                     null
                 }
                 current.askedToPair = proof == null

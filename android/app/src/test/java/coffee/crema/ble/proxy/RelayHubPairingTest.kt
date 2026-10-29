@@ -99,7 +99,7 @@ class RelayHubPairingTest {
     }
 
     @Test
-    fun `a wrong secret is refused`() = runBlocking {
+    fun `a wrong proof is refused`() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val real = PairingCrypto.newSecret()
@@ -108,13 +108,10 @@ class RelayHubPairingTest {
             })
             val (client, server) = InMemoryFrameLink.pair()
             scope.launch { h.serve(server) }
-            val denied = CompletableDeferred<String>()
-            val proxy = ProxyTransport(
-                client, scope, "phone-1", "Phone",
-                onDenied = { denied.complete(it) }, pairingSecretFor = { PairingCrypto.newSecret() },
-            )
-            assertTrue(withTimeout(2_000) { proxy.control("tareScale") }.isFailure)
-            assertEquals(DenyReason.PAIRING_CLOSED, withTimeout(2_000) { denied.await() })
+            val rx = CopyOnWriteArrayList<Frame>()
+            scope.launch { client.incoming().collect { rx += it } }
+            handshake(client, rx, proof = "forged")
+            assertEquals(Frame.Denied(DenyReason.PAIRING_CLOSED), rx.last())
         } finally {
             scope.cancel()
         }

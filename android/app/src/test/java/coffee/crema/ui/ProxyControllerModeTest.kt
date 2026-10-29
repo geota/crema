@@ -171,7 +171,34 @@ class ProxyControllerModeTest {
 
         val forged = scope.async { controller.authorizePeer(request("phone", PairingCrypto.newSecret())) }
         scheduler.runCurrent()
-        assertEquals(PairingDecision.Denied(DenyReason.PAIRING_CLOSED), forged.getCompleted())
+        assertEquals(PairingDecision.Denied(DenyReason.ALREADY_PAIRED), forged.getCompleted())
+    }
+
+    @Test
+    fun `a device that holds a secret can't pair again until the host forgets it`() {
+        controller.openPairingWindow()
+        scheduler.runCurrent()
+        val first = scope.async { controller.authorizePeer(request("phone")) }
+        scheduler.runCurrent()
+        controller.resolvePairing(PairingChoice.ALLOW_CONTROL)
+        scheduler.runCurrent()
+        assertTrue(first.getCompleted() is PairingDecision.Allowed)
+
+        scheduler.advanceTimeBy(PROMPT_COOLDOWN_MS + 1)
+        controller.openPairingWindow()
+        scheduler.runCurrent()
+        val again = scope.async { controller.authorizePeer(request("phone")) }
+        scheduler.runCurrent()
+        assertEquals(PairingDecision.Denied(DenyReason.ALREADY_PAIRED), again.getCompleted())
+        assertNull(controller.state.value.pendingPairing, "no prompt for an already-paired device")
+
+        controller.forgetPaired("phone")
+        val afterForget = scope.async { controller.authorizePeer(request("phone")) }
+        scheduler.runCurrent()
+        assertEquals(PairingPrompt("phone", "Phone"), controller.state.value.pendingPairing, "after Forget it may pair again")
+        controller.resolvePairing(PairingChoice.DENY)
+        scheduler.runCurrent()
+        assertEquals(PairingDecision.Denied(DenyReason.NOT_AUTHORIZED), afterForget.getCompleted())
     }
 
     @Test
@@ -312,6 +339,9 @@ class ProxyControllerModeTest {
         assertTrue(deniedMessage("version mismatch — update Crema on both devices").contains("Update Crema"))
         assertTrue(deniedMessage(DenyReason.REVOKED).contains("pair again"))
         assertTrue(deniedMessage(DenyReason.BUSY).contains("busy"))
+        assertTrue(deniedMessage(DenyReason.ALREADY_PAIRED).contains("Forget"))
+        assertTrue(deniedMessage(DenyReason.HOST_MISMATCH).contains("Other devices"))
+        assertTrue(deniedMessage(DenyReason.HOST_UNVERIFIED).contains("pair again"))
         assertEquals("The host hasn't allowed this device", deniedMessage(DenyReason.NOT_AUTHORIZED))
     }
 

@@ -28,8 +28,13 @@ class ProxyPairingBindingTest {
     private val paired = Channel<Pair<String, String>>(Channel.UNLIMITED)
     private val denied = CompletableDeferred<String>()
     private val welcomed = CompletableDeferred<Unit>()
+    private val confirmed = Channel<String>(Channel.UNLIMITED)
 
-    private suspend fun <T> scripted(block: suspend (server: FrameLink, rx: Channel<Frame>, proxy: ProxyTransport) -> T): T {
+    private suspend fun <T> scripted(
+        allowRepair: Boolean = false,
+        pinned: String? = null,
+        block: suspend (server: FrameLink, rx: Channel<Frame>, proxy: ProxyTransport) -> T,
+    ): T {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val (client, server) = InMemoryFrameLink.pair()
@@ -41,6 +46,9 @@ class ProxyPairingBindingTest {
                 onWelcome = { welcomed.complete(Unit) },
                 pairingSecretFor = { held[it] },
                 onPaired = { id, _, secret -> held[id] = secret; paired.trySend(id to secret) },
+                pinnedHostId = { pinned },
+                onHostConfirmed = { confirmed.trySend(it) },
+                allowRepair = allowRepair,
             )
             return withTimeout(5_000) { block(server, rx, proxy) }
         } finally {
@@ -88,10 +96,10 @@ class ProxyPairingBindingTest {
     }
 
     @Test
-    fun `a host that can't prove the secret gets a pairing request, never a proof`() = runBlocking {
+    fun `a host that can't prove the secret gets a pairing request, never a proof, when the user chose to pair again`() = runBlocking {
         val secret = PairingCrypto.newSecret()
         held["host-1"] = secret
-        scripted { server, rx, _ ->
+        scripted(allowRepair = true) { server, rx, _ ->
             rx.next<Frame.Hello>()
             // No host proof (or a wrong one): this host doesn't know our secret.
             server.send(Frame.Challenge("host-1", "Tablet", PairingCrypto.newNonce(), hostProof = "forged"))
@@ -102,6 +110,42 @@ class ProxyPairingBindingTest {
             server.send(welcome("host-1", fresh))
             assertEquals("host-1" to fresh, paired.receive())
             assertEquals(fresh, held["host-1"])
+        }
+    }
+
+    @Test
+    fun `a host that can't prove the secret is refused unless the user chose to pair again`() = runBlocking {
+        val secret = PairingCrypto.newSecret()
+        held["host-1"] = secret
+        scripted(allowRepair = false) { server, rx, proxy ->
+            rx.next<Frame.Hello>()
+            server.send(Frame.Challenge("host-1", "Tablet", PairingCrypto.newNonce()))
+            assertEquals(DenyReason.HOST_UNVERIFIED, denied.await())
+            assertTrue(proxy.control("tareScale").isFailure)
+            assertTrue(rx.tryReceive().getOrNull() !is Frame.Auth, "no Auth at all: no pairing request either")
+            assertEquals(secret, held["host-1"])
+        }
+    }
+
+    @Test
+    fun `a pinned target refuses a challenge from another host id`() = runBlocking {
+        scripted(allowRepair = true, pinned = "host-1") { server, rx, _ ->
+            rx.next<Frame.Hello>()
+            server.send(Frame.Challenge("host-9", "Tablet", PairingCrypto.newNonce()))
+            assertEquals(DenyReason.HOST_MISMATCH, denied.await())
+            assertTrue(rx.tryReceive().getOrNull() !is Frame.Auth, "no Auth sent to another host")
+            assertTrue(held.isEmpty())
+        }
+    }
+
+    @Test
+    fun `a completed session confirms the host it challenged with`() = runBlocking {
+        scripted(pinned = "host-1") { server, rx, _ ->
+            rx.next<Frame.Hello>()
+            server.send(Frame.Challenge("host-1", "Tablet", PairingCrypto.newNonce()))
+            rx.next<Frame.Auth>()
+            server.send(welcome("host-1", null))
+            assertEquals("host-1", confirmed.receive())
         }
     }
 

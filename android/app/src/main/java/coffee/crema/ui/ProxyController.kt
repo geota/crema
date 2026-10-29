@@ -230,6 +230,14 @@ class ProxyController(
     /** Rate limit for the "needs an update" notice. */
     @Volatile private var outdatedNoticeCooling = false
 
+    /** How the next secondary session may treat its host: a mirror target the
+     *  user just picked is not pinned yet and may pair again; a restored or
+     *  automatic target is pinned to the host it last completed with and may
+     *  not. Consumed by [startSecondaryMode]. */
+    private class MirrorTrust(val repin: Boolean, val allowRepair: Boolean)
+
+    @Volatile private var nextMirrorTrust: MirrorTrust? = null
+
     /** Serializes [applyMode]: mode switches launch from several async paths
      *  (the picker, a handoff grant's delayed release, the reclaim probe,
      *  denied→normal) and interleaved teardown/build would leak a relay server
@@ -480,7 +488,8 @@ class ProxyController(
             return
         }
         appendLog("Re-mirror: auto-mirroring ${host.name} (${host.host}:${host.port})")
-        switchToSecondary(host.host, host.port)
+        nextMirrorTrust = MirrorTrust(repin = true, allowRepair = false)
+        applyMode("secondary", host.host, host.port)
     }
 
     /** Secondary side of an M3 handoff (the picker's "Take over"): ask the primary
@@ -607,6 +616,12 @@ class ProxyController(
             return PairingDecision.Allowed(known.canControl)
         }
         if (id in deniedWhileHosting) return PairingDecision.Denied(DenyReason.NOT_AUTHORIZED)
+        // A device that already holds a secret from us must prove it; a new
+        // pairing for it needs the host user to Forget it first.
+        if (known != null && secret != null) {
+            appendLog("Pairing request from ${request.clientName} refused: already paired (Forget it to pair again)")
+            return PairingDecision.Denied(DenyReason.ALREADY_PAIRED)
+        }
         if (!pairingOpen) {
             appendLog("Pairing request from ${request.clientName} refused: pairing is closed")
             return PairingDecision.Denied(DenyReason.PAIRING_CLOSED)
@@ -788,6 +803,9 @@ class ProxyController(
         // collectors AND the ProxyTransport's own init collectors), so applyMode can
         // cancel them ALL on the next switch instead of leaking ~4 coroutines + a dead
         // ProxyTransport/link per secondary→x→secondary cycle (issue 10).
+        val trust = nextMirrorTrust ?: MirrorTrust(repin = false, allowRepair = false)
+        nextMirrorTrust = null
+        if (trust.repin) pairing.pinHost(null)
         val modeScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
         secondaryScope = modeScope
         val link = ReconnectingClientLink(url, modeScope)
@@ -819,6 +837,11 @@ class ProxyController(
                 if (pairing.putHeld(hostId, secret)) appendLog("Paired with $hostName")
                 else appendLog("Paired with $hostName, but the pairing secret wasn't saved")
             },
+            // Pin this target to the host it completes with; a restored or
+            // automatic redial then refuses any other host at that address.
+            pinnedHostId = { pairing.pinnedHost },
+            onHostConfirmed = { hostId -> pairing.pinHost(hostId) },
+            allowRepair = trust.allowRepair,
         )
         // Mirror the primary's SCALE (issue 04), roster-driven: attach it only once
         // the primary actually advertises one — no blind scan, so a scaleless primary
@@ -845,7 +868,12 @@ class ProxyController(
     fun switchToPrimary() = applyMode("primary", "", 0)
 
     /** Mirror the DE1 from a primary at [host]:[port] — the picker's "Mirror from X". */
-    fun switchToSecondary(host: String, port: Int) = applyMode("secondary", host, port)
+    fun switchToSecondary(host: String, port: Int) {
+        // The user picked this target: it may be a new host, or the same host
+        // after a reset that needs pairing again.
+        nextMirrorTrust = MirrorTrust(repin = true, allowRepair = true)
+        applyMode("secondary", host, port)
+    }
 
     /**
      * Swap the transport at runtime: tear the managers' connections down, dispose
@@ -1023,6 +1051,11 @@ internal fun deniedMessage(reason: String): String = when {
         "Pairing needed — on the host, open Settings ▸ Paired devices ▸ Pair a device, then connect again"
     reason == DenyReason.BUSY -> "The host is busy — try again in a moment"
     reason == DenyReason.REVOKED -> "The host removed this device — pair again to reconnect"
+    reason == DenyReason.ALREADY_PAIRED ->
+        "The host already has a pairing for this device — on the host, Forget it under Paired devices, then pair again"
+    reason == DenyReason.HOST_MISMATCH -> "This isn't the host this device mirrors — choose a host under Other devices"
+    reason == DenyReason.HOST_UNVERIFIED ->
+        "The host couldn't confirm this device's pairing — choose it under Other devices to pair again"
     reason.startsWith(DenyReason.VERSION_MISMATCH) -> "Update Crema on both devices to connect"
     else -> "The host hasn't allowed this device"
 }

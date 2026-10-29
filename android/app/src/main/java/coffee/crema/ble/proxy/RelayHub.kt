@@ -142,10 +142,11 @@ class RelayHub(
     /** Latest connection state per device address (a [BleTransport.ConnState] name). */
     private val connStates = ConcurrentHashMap<String, String>()
 
-    /** Whether [clientId] currently has a live session — the handoff release
-     *  gate: the granting primary waits for the taker's disconnect (its mode
-     *  switch closes the link) instead of a blind timer. */
-    fun hasClient(clientId: String): Boolean = clients.any { it.clientId == clientId }
+    /** Whether [clientId] currently has a live, approved session — the handoff
+     *  release gate: the granting primary waits for the taker's disconnect (its
+     *  mode switch closes the link) instead of a blind timer. A session that only
+     *  claimed the id in its Hello doesn't count. */
+    fun hasClient(clientId: String): Boolean = clients.any { it.approved && it.clientId == clientId }
 
     /** Bumped whenever a session joins, is approved or leaves. */
     private val clientsVersion = MutableStateFlow(0L)
