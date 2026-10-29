@@ -95,6 +95,11 @@ class ProxyControllerModeTest {
     /** Every applied mode with its target, in order. */
     private val targets = CopyOnWriteArrayList<String>()
 
+    /** Every remote target this controller dialed, as host:port, in order:
+     *  saved targets and re-find attempts alike. */
+    private fun dials(): List<String> =
+        log.filter { "SECONDARY →" in it }.map { it.substringAfter("ws://").substringBefore("/") }
+
     private fun advance(ms: Long) {
         scheduler.advanceTimeBy(ms)
         scheduler.runCurrent()
@@ -476,13 +481,16 @@ class ProxyControllerModeTest {
         assertTrue(log.any { it.contains("refused") && it.contains(FIRMWARE_BUSY_REASON) }, "$log")
     }
 
-    /** AC-9: once the link has been CONNECTING for refindDelayMs, a remote
-     *  dials a hub NSD lists at another address — with or without the DE1 —
-     *  unattended, so the pin stays. Itself, its own target, a normal device
-     *  and a port-less advertisement are not candidates. */
+    /** AC-9: once its session has gone unwelcomed for refindDelayMs, a remote
+     *  dials a hub NSD lists on its saved host at a new port — with or
+     *  without the DE1 — unattended, so the pin stays. Itself, its own
+     *  target, a normal device, a port-less advertisement and a hub at any
+     *  other address are not candidates. The attempt isn't saved until a
+     *  Welcome. */
     @Test
     fun `a lost hub is re-found unattended`() {
         remoteOnDeadHub(
+            peer("elsewhere", 13, host = "192.168.1.66"),
             peer(controller.instanceId, 10),
             peer("same-target", 9),
             peer("a-normal-device", 11, role = "normal"),
@@ -490,11 +498,12 @@ class ProxyControllerModeTest {
             peer("nsd-restarted", 12, de1 = false),
         )
         advance(REFIND_DELAY_MS - 1_000)
-        assertEquals("secondary 127.0.0.1:9", targets.last(), "not before the delay")
+        assertEquals("127.0.0.1:9", dials().last(), "not before the delay")
         advance(1_500)
-        assertEquals("secondary 127.0.0.1:12", targets.last())
+        assertEquals("127.0.0.1:12", dials().last())
         assertEquals("host-1", controller.pairingStore.pinnedHost, "unattended: the pin is kept")
         assertEquals("secondary", controller.state.value.role)
+        assertEquals("secondary 127.0.0.1:9", targets.last(), "an attempt isn't saved before its Welcome")
     }
 
     /** AC-9: a held re-find (P2's frozen slice) starts nothing; a release
@@ -504,106 +513,253 @@ class ProxyControllerModeTest {
         controller.holdRefind(true)
         remoteOnDeadHub(peer("nsd-restarted", 12))
         advance(REFIND_DELAY_MS * 3)
-        assertEquals("secondary 127.0.0.1:9", targets.last())
+        assertEquals("127.0.0.1:9", dials().last())
         controller.holdRefind(false)
         advance(200)
-        assertEquals("secondary 127.0.0.1:12", targets.last())
+        assertEquals("127.0.0.1:12", dials().last())
     }
 
     /**
-     * AC-9: a candidate refused for a trust reason is skipped by instance id
-     * and the previous target is re-applied (a refused link never redials),
-     * after 5 s, then 15 s, then 60 s. After three refusals with no other
-     * candidate the remote gives up ("Couldn't verify <hub>") and stays a
-     * remote, until NSD shows a new instance.
+     * AC-9 as narrowed (validation P1b): a refused attempt goes back to the
+     * saved target (a refused link never redials), and the next try waits
+     * 5 s, then 15 s, then 60 s. Nothing is skipped by instance id, so the
+     * same port is tried again. After three refusals the remote gives up
+     * ("Couldn't verify <hub>") and stays a remote, until NSD lists a new
+     * port on the saved host.
      */
     @Test
     fun `an unattended refusal keeps the remote role`() {
-        val peers = remoteOnDeadHub(peer("a", 12), peer("b", 13), peer("c", 14))
+        val peers = remoteOnDeadHub(peer("a", 12))
         advance(REFIND_DELAY_MS + 200)
-        assertEquals("secondary 127.0.0.1:12", targets.last())
+        assertEquals("127.0.0.1:12", dials().last())
 
         controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
         advance(200)
-        assertEquals("secondary 127.0.0.1:9", targets.last(), "the previous target is re-applied")
+        assertEquals("127.0.0.1:9", dials().last(), "the saved target is dialed again")
         assertEquals("secondary", controller.state.value.role)
         advance(REFIND_DELAY_MS - 400)
-        assertEquals("secondary 127.0.0.1:9", targets.last(), "5 s back-off")
+        assertEquals("127.0.0.1:9", dials().last(), "5 s back-off")
         advance(600)
-        assertEquals("secondary 127.0.0.1:13", targets.last(), "a is skipped")
+        assertEquals("127.0.0.1:12", dials().last())
 
         controller.refuseCurrentSessionForTest(DenyReason.HOST_CHANGED, byHost = false, hostProved = false)
         advance(200)
-        assertEquals("secondary 127.0.0.1:9", targets.last())
+        assertEquals("127.0.0.1:9", dials().last())
         advance(14_000)
-        assertEquals("secondary 127.0.0.1:9", targets.last(), "15 s back-off")
+        assertEquals("127.0.0.1:9", dials().last(), "15 s back-off")
         advance(1_200)
-        assertEquals("secondary 127.0.0.1:14", targets.last(), log.filter { "Re-find" in it || "SECONDARY" in it }.joinToString("\n"))
+        assertEquals("127.0.0.1:12", dials().last())
 
         // A host's Denied before it proved the pairing is just as unverified.
         controller.refuseCurrentSessionForTest(DenyReason.REVOKED, byHost = true, hostProved = false)
         advance(200)
-        assertEquals("secondary 127.0.0.1:9", targets.last())
+        assertEquals("127.0.0.1:9", dials().last())
         assertFalse(controller.state.value.refindGaveUp, "not before the 60 s back-off")
         advance(60_000)
-        assertTrue(controller.state.value.refindGaveUp, "three refusals and no other candidate")
+        assertTrue(controller.state.value.refindGaveUp, "three refusals")
         assertEquals("secondary", controller.state.value.role)
         assertEquals("host-1", controller.pairingStore.pinnedHost)
+        val dialed = dials().size
         advance(120_000)
-        assertEquals("secondary 127.0.0.1:9", targets.last(), "it stops trying")
+        assertEquals(dialed, dials().size, "it stops trying")
+        assertEquals(listOf("secondary 127.0.0.1:9"), targets.toList(), "no attempt was saved")
 
-        peers.value = peers.value + peer("d", 15)
+        peers.value = peers.value + peer("a-again", 15)
         advance(200)
-        assertFalse(controller.state.value.refindGaveUp, "a new instance resumes the re-find")
-        assertEquals("secondary 127.0.0.1:15", targets.last())
+        assertFalse(controller.state.value.refindGaveUp, "a new port on the saved host resumes the re-find")
+        assertEquals("127.0.0.1:12", dials().last(), "the first listed port is tried")
     }
 
-    /** An instance id leaves the skip set once NSD stops listing it, so the
-     *  same hub restarted under a fresh id can be tried again. */
+    /** Validation P1b S1/S3: the re-find never dials another address, so an
+     *  advertiser elsewhere on the LAN can't relay or hide the hub, even
+     *  with the hub's own instance id and a name that sorts first. */
     @Test
-    fun `a skipped instance is forgotten when NSD drops it`() {
-        val peers = remoteOnDeadHub(peer("a", 12))
+    fun `the re-find dials only the saved host`() {
+        remoteOnDeadHub(
+            Peer("nsd-hub", "A Kitchen tablet", "primary", true, "192.168.1.66", 12),
+            Peer("nsd-hub", "A Kitchen tablet", "primary", true, "localhost", 14),
+            Peer("nsd-hub", "Kitchen tablet", "primary", true, "127.0.0.1", 13),
+        )
         advance(REFIND_DELAY_MS + 200)
-        controller.refuseCurrentSessionForTest(DenyReason.HOST_UNVERIFIED, byHost = false, hostProved = false)
-        advance(REFIND_DELAY_MS + 400)
-        assertEquals("secondary 127.0.0.1:9", targets.last(), "a is skipped")
-        peers.value = emptyList()
-        scheduler.runCurrent()
-        peers.value = listOf(peer("a", 12))
-        advance(200)
-        assertEquals("secondary 127.0.0.1:12", targets.last())
+        assertEquals("127.0.0.1:13", dials().last())
+        controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
+        advance(REFIND_BACKOFF_MS.sum() + REFIND_DELAY_MS * 6)
+        assertTrue(dials().all { it.startsWith("127.0.0.1:") }, "${dials()}")
     }
 
-    /** AC-9: only a Denied from a host that proved the pairing, a refused
-     *  user pick, or a host's Denied on the current target make a remote
-     *  normal. A trust refusal on the current target keeps the role. */
+    /** Validation P1b S6: the re-find needs a target pinned to a host this
+     *  device paired with, so it never runs from a user's pick still waiting
+     *  for its Welcome (the pick clears the pin). */
     @Test
-    fun `only a denied or a refused user pick makes a remote normal`() {
+    fun `no re-find from an unpinned target or an unwelcomed user pick`() {
+        controller.switchToSecondary("127.0.0.1", 9)
+        advance(200)
+        controller.overridePeers(MutableStateFlow(listOf(peer("nsd-restarted", 12))))
+        advance(REFIND_DELAY_MS * 4)
+        assertEquals(listOf("127.0.0.1:9"), dials(), "the user's pick, unpinned")
+
+        controller.pairingStore.pinHost("host-1")
+        advance(REFIND_DELAY_MS * 4)
+        assertEquals(listOf("127.0.0.1:9"), dials(), "a pin doesn't make an unwelcomed pick unattended")
+    }
+
+    /** Validation P1b S2 / M3, the handshake deadline: an attempt that isn't
+     *  welcomed within refindDelayMs ends, whatever its socket does. It
+     *  counts as a refusal, the remote goes back to the saved target, and
+     *  the attempt's port is never saved. */
+    @Test
+    fun `an attempt not welcomed in time ends and is not saved`() {
+        remoteOnDeadHub(peer("silent", 12))
+        advance(REFIND_DELAY_MS + 200)
+        assertEquals("127.0.0.1:12", dials().last())
+        advance(REFIND_DELAY_MS - 400)
+        assertEquals("127.0.0.1:12", dials().last(), "within the deadline")
+        advance(600)
+        assertEquals("127.0.0.1:9", dials().last(), "the deadline ended it")
+        advance(REFIND_BACKOFF_MS.sum() + REFIND_DELAY_MS * 6)
+        assertTrue(controller.state.value.refindGaveUp, "three unanswered attempts: ${dials()}")
+        assertEquals(3, dials().count { it == "127.0.0.1:12" })
+        assertEquals("127.0.0.1:9", dials().last())
+        assertEquals(listOf("secondary 127.0.0.1:9"), targets.toList(), "never saved")
+        assertEquals("secondary", controller.state.value.role)
+    }
+
+    /** AC-9 as narrowed (validation P1b S5, S7): only a Denied from a host
+     *  that proved the pairing in this session, or a refused user pick
+     *  before its Welcome, make a remote normal. Any unproven refusal of the
+     *  saved target keeps the role, and the saved target is dialed again
+     *  after the back-off. */
+    @Test
+    fun `only a proved denied or a refused user pick makes a remote normal`() {
         remoteOnDeadHub()
         controller.refuseCurrentSessionForTest(DenyReason.HOST_UNVERIFIED, byHost = false, hostProved = false)
         advance(1_000)
-        assertEquals("secondary", controller.state.value.role, "the restored target refused for trust: still a remote")
+        assertEquals("secondary", controller.state.value.role, "the saved target refused for trust: still a remote")
+        advance(REFIND_BACKOFF_MS[0])
+        assertEquals(listOf("127.0.0.1:9", "127.0.0.1:9"), dials(), "dialed again after the back-off")
 
-        // A re-find candidate that proved the pairing and then refused us.
-        val peers = MutableStateFlow(listOf(peer("a", 12)))
-        controller.overridePeers(peers)
+        controller.refuseCurrentSessionForTest(DenyReason.PAIRING_CLOSED, byHost = true, hostProved = false)
+        advance(1_000)
+        assertEquals("secondary", controller.state.value.role, "a bare Denied from the saved target: still a remote")
+        controller.refuseCurrentSessionForTest(DenyReason.BUSY, byHost = true, hostProved = false)
+        advance(1_000)
+        assertEquals("secondary", controller.state.value.role)
+
+        controller.remirrorUnattended("127.0.0.1", 9)
         advance(200)
-        assertEquals("secondary 127.0.0.1:12", targets.last(), "the trust refusal is a re-find trigger")
         controller.refuseCurrentSessionForTest(DenyReason.REVOKED, byHost = true, hostProved = true)
         advance(1_000)
-        assertEquals("normal", controller.state.value.role)
+        assertEquals("normal", controller.state.value.role, "a Denied after the host proved the pairing")
+
+        // A re-find attempt that proved the pairing and then refused us.
+        remoteOnDeadHub(peer("a", 12))
+        advance(REFIND_DELAY_MS + 200)
+        assertEquals("127.0.0.1:12", dials().last())
+        controller.refuseCurrentSessionForTest(DenyReason.VERSION_MISMATCH, byHost = false, hostProved = true)
+        advance(1_000)
+        assertEquals("normal", controller.state.value.role, "a version refusal after a proof")
 
         controller.switchToSecondary("127.0.0.1", 9) // the user's pick
         advance(200)
         controller.refuseCurrentSessionForTest(DenyReason.HOST_MISMATCH, byHost = false, hostProved = false)
         advance(1_000)
         assertEquals("normal", controller.state.value.role, "a refused user pick")
+    }
 
-        controller.remirrorUnattended("127.0.0.1", 9)
-        advance(200)
-        controller.refuseCurrentSessionForTest(DenyReason.PAIRING_CLOSED, byHost = true, hostProved = false)
+    /** Run the controller's scope until [done] holds, for work that crosses
+     *  a real socket (the relay server's bind). */
+    private fun runUntil(what: String, done: () -> Boolean) {
+        val deadline = System.nanoTime() + 10_000_000_000L
+        while (!done()) {
+            check(System.nanoTime() < deadline) { "Timed out waiting for $what" }
+            scheduler.runCurrent()
+            Thread.sleep(5)
+        }
+    }
+
+    /** Owner decision (validation P1b): the hub binds its last relay port
+     *  again, so a remote's saved host:port reaches it after a restart. A
+     *  taken port falls back to an ephemeral one, which is saved instead. */
+    @Test
+    fun `the hub binds its last relay port again`() {
+        val portFile = java.io.File(ApplicationProvider.getApplicationContext<Application>().filesDir, "relayPort")
+        val wanted = java.net.ServerSocket(0).use { it.localPort }
+        portFile.writeText("$wanted")
+        controller.setHubMode(true)
         advance(1_000)
-        assertEquals("normal", controller.state.value.role, "the host's own Denied on the current target")
+        runUntil("the relay") { log.any { "LAN relay listening" in it } }
+        assertTrue("LAN relay listening on :$wanted" in log, "$log")
+        controller.setHubMode(false)
+        advance(1_000)
+
+        java.net.ServerSocket(wanted).use {
+            log.clear()
+            controller.setHubMode(true)
+            advance(1_000)
+            runUntil("the relay") { log.any { "LAN relay listening" in it } }
+            val bound = log.first { "LAN relay listening" in it }.substringAfter(":").toInt()
+            assertTrue(bound != wanted && bound > 0, "$log")
+            assertEquals("$bound", portFile.readText().trim(), "the fallback port is the one saved")
+            controller.setHubMode(false)
+            advance(1_000)
+        }
+    }
+
+    /** P2a validation: a restarting hub doesn't serve before its prefs (the
+     *  paired devices) are loaded, so a paired remote that dials at once meets
+     *  a closed port and redials, and is admitted once loading finishes: no
+     *  Denied, so nothing for it to count or demote on. */
+    @Test
+    fun `a loading hub doesn't refuse a paired remote`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val port = java.net.ServerSocket(0).use { it.localPort }
+        java.io.File(app.filesDir, "relayPort").writeText("$port")
+        val paired = CopyOnWriteArrayList<PairedDevice>()
+        val loaded = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val hub = ProxyController(
+            app = app, json = Json { ignoreUnknownKeys = true }, scope = scope,
+            setCoreReadOnly = {}, setRecorderEnabled = {}, notify = {}, appendLog = { log += it }, connect = {}, disconnect = {},
+            disconnectDevices = {}, connectScale = {}, scaleAttachWanted = { false }, de1Connected = { false },
+            machineStateName = { null }, machineActions = RecordingMachineActions(), snapshotConfig = { "" }, applyConfig = {},
+            roster = { emptyList() }, isSnapshotChar = { _, _ -> false }, pairedDevices = { paired.toList() },
+            rememberPaired = { _, _, _ -> }, onModeApplied = { _, _, _ -> }, secretBox = box,
+            prefsReady = { loaded.await() },
+        )
+        val secret = PairingCrypto.newSecret()
+        hub.pairingStore.putIssued("phone-1", secret)
+        val remoteScope = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        val refusals = CopyOnWriteArrayList<String>()
+        val welcomed = java.util.concurrent.atomic.AtomicBoolean(false)
+        try {
+            hub.setHubMode(true)
+            advance(1_000)
+            // The remote dials the hub's saved port straight away.
+            val link = coffee.crema.ble.proxy.ReconnectingClientLink("ws://127.0.0.1:$port${coffee.crema.ble.proxy.LanRelayServer.PATH}", remoteScope)
+            coffee.crema.ble.proxy.ProxyTransport(
+                link, remoteScope, "phone-1", "Phone",
+                pairingSecretFor = { secret }, allowRepair = false,
+                onRefused = { reason, _, _ -> refusals += reason },
+                onWelcome = { _, _ -> welcomed.set(true) },
+            )
+            val until = System.nanoTime() + 1_500_000_000L
+            while (System.nanoTime() < until) {
+                scheduler.runCurrent()
+                Thread.sleep(10)
+            }
+            assertTrue(log.none { "LAN relay listening" in it }, "not serving while loading: $log")
+            assertEquals(emptyList(), refusals.toList(), "no Denied while loading")
+            assertFalse(welcomed.get())
+
+            // Loading finishes: the paired devices are known, the relay serves.
+            paired += PairedDevice("phone-1", "Phone", canControl = true)
+            loaded.complete(Unit)
+            runUntil("the relay") { log.any { "LAN relay listening on :$port" in it } }
+            runUntil("the remote's welcome") { welcomed.get() }
+            assertEquals(emptyList(), refusals.toList(), "no refusal at any point")
+        } finally {
+            remoteScope.cancel()
+            hub.close()
+        }
     }
 
     /** A user's switch queued before the re-find's own wins: the re-find
@@ -619,7 +775,7 @@ class ProxyControllerModeTest {
         assertEquals("normal", controller.state.value.role)
         advance(REFIND_DELAY_MS * 2)
         assertEquals("normal", controller.state.value.role)
-        assertTrue(targets.none { it == "secondary 127.0.0.1:12" }, "$targets")
+        assertTrue(dials().none { it == "127.0.0.1:12" }, "${dials()}")
         assertTrue(log.any { "a newer switch ran first" in it }, "the re-find was queued and skipped: $log")
     }
 
