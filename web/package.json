@@ -45,7 +45,6 @@
     "uplot": "^1.6.32"
   },
   "imports": {
-    "#lib": "./src/lib/index.js",
     "#lib/*": "./src/lib/*"
   }
 }

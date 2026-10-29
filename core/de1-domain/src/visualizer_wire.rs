@@ -936,13 +936,17 @@ pub struct ShotPatchInputs {
     /// Inline bean: the bean's recorded dial → `grinder_setting`.
     pub grinder_setting: Option<String>,
     /// Who made the shot → `barista` (editable on free accounts too).
+    /// `None` = leave the remote value alone; a blank string is sent as
+    /// `""`, which clears it (the shells pass the shot's barista, empty
+    /// once cleared, so a cleared name reaches Visualizer).
     pub barista: Option<String>,
 }
 
 /// Assemble the `PATCH /shots/{id}` body (the inner object — the shell
 /// wraps it in the spec's `{ "shot": … }` envelope). Blank-after-trim
 /// strings are omitted like absent ones, except `notes` (see
-/// [`ShotPatchInputs::notes`]).
+/// [`ShotPatchInputs::notes`]) and `barista` (see
+/// [`ShotPatchInputs::barista`]), whose blank value clears the remote one.
 #[must_use]
 pub fn visualizer_shot_patch(inputs: &ShotPatchInputs) -> Value {
     let mut body = Map::new();
@@ -964,7 +968,12 @@ pub fn visualizer_shot_patch(inputs: &ShotPatchInputs) -> Value {
     );
     put_trimmed("grinder_setting", &inputs.grinder_setting);
     put_trimmed("grinder_model", &inputs.grinder_model);
-    put_trimmed("barista", &inputs.barista);
+    if let Some(barista) = &inputs.barista {
+        body.insert(
+            "barista".to_owned(),
+            Value::String(barista.trim().to_owned()),
+        );
+    }
     if let Some(level) = roast_level_to_wire(inputs.roast_level) {
         body.insert("roast_level".to_owned(), Value::String(level));
     }
@@ -1978,6 +1987,24 @@ mod tests {
             ..ShotPatchInputs::default()
         });
         assert_eq!(body, serde_json::json!({ "private_notes": "" }));
+    }
+
+    #[test]
+    fn a_cleared_barista_rides_as_empty_and_an_absent_one_is_omitted() {
+        // Cohort review 2026-10-25 (06 #8): clearing a shot's barista must
+        // reach Visualizer, which accepts `""` for its string column.
+        let cleared = visualizer_shot_patch(&ShotPatchInputs {
+            barista: Some("  ".to_owned()),
+            ..ShotPatchInputs::default()
+        });
+        assert_eq!(cleared, serde_json::json!({ "barista": "" }));
+        // And it survives the free-account fit (barista is a free field).
+        assert_eq!(
+            visualizer_shot_patch_for_account(cleared, Some(false)),
+            Some(serde_json::json!({ "barista": "" }))
+        );
+        let absent = visualizer_shot_patch(&ShotPatchInputs::default());
+        assert!(absent.get("barista").is_none());
     }
 
     #[test]

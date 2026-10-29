@@ -663,25 +663,11 @@ class VisualizerSync(
         val vid = shot.visualizerId ?: return
         if (persisted.tokens == null) return
         if (!directionPushes(persisted.prefs.shotsDirection)) return
-        val inputs = ShotPatchInputs(
-            rating = shot.rating?.toUByte(),
-            notes = if (persisted.prefs.includeNotes) (shot.notes ?: "") else null,
-            privacy = shot.privacy ?: persisted.prefs.privacy,
-            grinderModel = grinderModel(),
-            // Android has no shot tags; empty = the core omits `tag_list`
-            // (the web sends `patch.tagList ?? []` the same way).
-            tagList = emptyList(),
-            // Inline bean from the structured snapshot frozen at shot time (issue 06).
-            beanBrand = shot.bean?.roasterName,
-            beanType = shot.bean?.name,
-            roastDate = shot.bean?.roastedOn,
-            roastLevel = shot.bean?.roastLevel?.toDouble(),
-            // The shot's own recorded/edited grind wins over the bean's
-            // reference setting — the same precedence History displays
-            // (issue #16: a grind edit must reach the uploaded copy).
-            grinderSetting = shot.effectiveGrindSetting,
-            // Who made it → `barista` (a free-account field; no drinker field).
-            barista = shot.barista,
+        val inputs = shotPatchInputs(
+            shot,
+            includeNotes = persisted.prefs.includeNotes,
+            defaultPrivacy = persisted.prefs.privacy,
+            settingsGrinderModel = grinderModel(),
         )
         // Fitted to the account tier in core: a free account — or one whose tier
         // isn't probed yet — silently loses the Premium-only fields
@@ -1042,3 +1028,45 @@ class VisualizerSync(
         }
     }
 }
+
+/**
+ * The equipment-level grinder model for [shot]'s upload / PATCH: the shot's
+ * own (an imported or restored shot carries the grinder it was pulled on),
+ * else the Settings default. Blank counts as absent. Mirrors the web
+ * `resolveGrinderModel`.
+ */
+internal fun resolveGrinderModel(shot: StoredShot, settingsDefault: String?): String? =
+    shot.grinderModel?.trim()?.takeIf { it.isNotEmpty() }
+        ?: settingsDefault?.trim()?.takeIf { it.isNotEmpty() }
+
+/**
+ * The shell-side inputs of an edit-sync PATCH (web `buildEditPatch`); the
+ * body itself is assembled in the core. Pure, for the JVM tests.
+ */
+internal fun shotPatchInputs(
+    shot: StoredShot,
+    includeNotes: Boolean,
+    defaultPrivacy: String?,
+    settingsGrinderModel: String?,
+): ShotPatchInputs = ShotPatchInputs(
+    rating = shot.rating?.toUByte(),
+    notes = if (includeNotes) (shot.notes ?: "") else null,
+    privacy = shot.privacy ?: defaultPrivacy,
+    grinderModel = resolveGrinderModel(shot, settingsGrinderModel),
+    // Android has no shot tags; empty = the core omits `tag_list`
+    // (the web sends `patch.tagList ?? []` the same way).
+    tagList = emptyList(),
+    // Inline bean from the structured snapshot frozen at shot time (issue 06).
+    beanBrand = shot.bean?.roasterName,
+    beanType = shot.bean?.name,
+    roastDate = shot.bean?.roastedOn,
+    roastLevel = shot.bean?.roastLevel?.toDouble(),
+    // The shot's own recorded/edited grind wins over the bean's
+    // reference setting — the same precedence History displays
+    // (issue #16: a grind edit must reach the uploaded copy).
+    grinderSetting = shot.effectiveGrindSetting,
+    // Who made it → `barista` (a free-account field; no drinker field).
+    // Always sent, empty once cleared, so a cleared name reaches
+    // Visualizer (the core sends "" for a blank barista).
+    barista = shot.barista ?: "",
+)

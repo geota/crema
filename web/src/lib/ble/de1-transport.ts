@@ -121,11 +121,25 @@ export interface De1Transport {
 
 	/**
 	 * Drop the GATT link *without* marking a user disconnect, so the ordinary
-	 * reconnect loop runs — for a link that came up hollow (connected,
-	 * subscribed, not answering). Optional: a transport without it is dropped
+	 * reconnect loop runs — for a link that stopped answering mid-session
+	 * (the liveness check). Optional: a transport without it is dropped
 	 * outright instead.
 	 */
 	recycle?(): void;
+
+	/**
+	 * Hold the auto-reconnect loop while the owner's connect or re-seed
+	 * program judges a fresh link: a drop meanwhile is noted, not acted on.
+	 * Optional, paired with {@link releaseReconnect}.
+	 */
+	holdReconnect?(): void;
+
+	/**
+	 * End the hold. `healthy` = the program succeeded. Returns true when the
+	 * link is up and healthy; otherwise the link goes to the reconnect loop
+	 * (a hollow one resuming the backoff ladder where it was).
+	 */
+	releaseReconnect?(healthy: boolean): boolean;
 
 	/**
 	 * Cut a pending auto-reconnect wait short and attempt now (the tab came

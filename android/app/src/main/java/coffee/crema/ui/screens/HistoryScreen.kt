@@ -555,8 +555,9 @@ fun HistoryScreen(
                             pressureUnit = ui.pressureUnit,
                             onRate = { r, n -> vm.updateShot(selected.id, r, n) },
                             onNextPlanChange = { p -> vm.setShotNextPlan(selected.id, p) },
-                            baristaNames = recentNames(ui.history, "barista"),
-                            drinkerNames = recentNames(ui.history, "drinker"),
+                            // Sorted once per history change, not per recomposition.
+                            baristaNames = remember(ui.history) { recentNames(ui.history, "barista") },
+                            drinkerNames = remember(ui.history) { recentNames(ui.history, "drinker") },
                             onPersonChange = { field, name -> vm.setShotPerson(selected.id, field, name) },
                             onStartFromShot = { vm.startFromShot(selected.id) },
                             onLoadOnBrew = { vm.loadProfileOnBrew(selected.profileName) },
@@ -775,10 +776,7 @@ private fun ShotRow(
         // Main — profile name over the bean (PWA .hi-row-main). Brew rows show
         // the recipe / method name with a quiet "logged" provenance tag.
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            val rowName = shot.profileName
-                ?: shot.recipeName
-                ?: shot.methodOf?.let { methodLabel(it) }
-                ?: "Shot"
+            val rowName = coffee.crema.history.shotTitle(shot)
             Text(
                 if (shot.isManualLog) "$rowName · logged" else rowName,
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.Medium),
@@ -973,7 +971,7 @@ private fun ShotDetail(
                     eyebrowBelow = if (narrow) stamp else null,
                     title = when {
                         isBrew -> (shot.recipeName ?: methodLabel(method)) + if (manual) " · logged" else ""
-                        else -> shot.profileName ?: "Shot"
+                        else -> shot.profileName?.trim()?.takeIf { it.isNotEmpty() } ?: coffee.crema.history.UNTITLED_SHOT
                     },
                     // A shot's profile is a historical fact — no picker, no caret.
                     showCaret = false,

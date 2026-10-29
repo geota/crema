@@ -3371,6 +3371,9 @@ data class ShotPatchInputs (
 	/// Inline bean: the bean's recorded dial → `grinder_setting`.
 	val grinderSetting: String? = null,
 	/// Who made the shot → `barista` (editable on free accounts too).
+	/// `None` = leave the remote value alone; a blank string is sent as
+	/// `""`, which clears it (the shells pass the shot's barista, empty
+	/// once cleared, so a cleared name reaches Visualizer).
 	val barista: String? = null
 )
 

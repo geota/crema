@@ -800,12 +800,12 @@
 				disabled={profiles.length === 0}
 				onclick={exportAllAsV2Jsonl}
 				title="Download every profile as one .jsonl file — one community-v2 profile per line"
-			><DownloadSimpleIcon aria-hidden="true" />Export</button>
+			><DownloadSimpleIcon aria-hidden="true" /> Export</button>
 
 			<button
 				class="pp-btn pp-btn-primary"
 				onclick={() => goto(resolve('profiles/new'))}
-			><PlusIcon aria-hidden="true" />New profile</button>
+			><PlusIcon aria-hidden="true" /> New profile</button>
 		</div>
 	</div>
 

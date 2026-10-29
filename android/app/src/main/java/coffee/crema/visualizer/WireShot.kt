@@ -31,7 +31,8 @@ fun shotFinalWeight(shot: StoredShot): Float? {
 }
 
 /** Assemble the Rust wire `StoredShot` JSON for [shot]. [grinderModel] is the
- *  equipment-level settings cascade value (web `resolveGrinderModel`).
+ *  equipment-level Settings default; the shot's own [StoredShot.grinderModel]
+ *  wins over it (web `resolveGrinderModel`), so a backup keeps it too.
  *
  *  [forBackup] preserves the locally-held identity fields the Visualizer UPLOAD
  *  path intentionally nulls (the server assigns `visualizerId`; the upload omits
@@ -143,7 +144,7 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
                 }
             } ?: JsonNull,
         )
-        put("grinderModel", grinderModel)
+        put("grinderModel", resolveGrinderModel(shot, grinderModel))
         put("tags", buildJsonArray {})
         // The stop-at-weight target dialled for this shot (Decent's `targetYield`).
         put("yieldTarget", shot.yieldTargetG)
@@ -289,6 +290,7 @@ fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Jso
         recipeName = str("recipeName"),
         nextPlan = metaStr("nextPlan"),
         barista = metaStr("barista")?.takeIf { it.isNotBlank() },
+        grinderModel = str("grinderModel")?.takeIf { it.isNotBlank() },
         drinker = metaStr("drinker")?.takeIf { it.isNotBlank() },
         waterG = metaStr("waterG")?.toFloatOrNull(),
         brewTempC = str("brewTempTarget")?.toFloatOrNull(),

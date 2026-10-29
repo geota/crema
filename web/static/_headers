@@ -2,7 +2,8 @@
 #
 # The resource CSP (script-src + its inline-bootstrap hash, style-src,
 # font-src, connect-src, img-src, base-uri) is emitted as a <meta> CSP by
-# SvelteKit — see web/svelte.config.js (kit.csp, hash mode). It lives there
+# SvelteKit — see the `csp` block of `sveltekit({...})` in web/vite.config.ts
+# (hash mode; SvelteKit 3 has no svelte.config.js). It lives there
 # because the inline-script hash is recomputed on every build.
 #
 # `frame-ancestors` cannot be expressed in a <meta> CSP, so the anti-clickjacking

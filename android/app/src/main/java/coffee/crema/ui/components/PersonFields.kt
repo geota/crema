@@ -7,15 +7,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 /** How many name suggestions show under a person field. */
 private const val PERSON_SUGGESTION_CAP = 4
+
+/** Typing pause before a person field commits (each commit saves the history). */
+internal const val PERSON_COMMIT_DEBOUNCE_MS = 700L
 
 /**
  * The names to offer under a person field: [names] (most recent first) that
@@ -32,7 +37,9 @@ fun personSuggestions(names: List<String>, typed: String): List<String> {
 /**
  * Barista + drinker for a shot (dye2 audit #1): two text fields side by side,
  * each with chips for names used before (most recent first, filtered by what's
- * typed). Every change persists through [onChange]; blank clears. Keyed on
+ * typed). Changes persist through [onChange] after a typing pause, on a chip
+ * tap, and when the shot changes or the fields leave the screen — not per
+ * keystroke (each commit rewrites the whole history). Blank clears. Keyed on
  * [shotId] so a selection change resets the drafts.
  */
 @Composable
@@ -62,10 +69,17 @@ private fun PersonField(
     modifier: Modifier,
 ) {
     var text by remember(shotId) { mutableStateOf(value ?: "") }
+    val scope = rememberCoroutineScope()
+    // Bound to this shot's onChange: a pending edit flushed on a shot change
+    // lands on the shot it was typed for.
+    val committer = remember(shotId) {
+        DebouncedCommit(scope, PERSON_COMMIT_DEBOUNCE_MS, value?.trim()?.ifEmpty { null }, onChange)
+    }
+    DisposableEffect(committer) { onDispose { committer.flush() } }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         CremaTextField(
             value = text,
-            onValueChange = { text = it; onChange(it.trim().ifEmpty { null }) },
+            onValueChange = { text = it; committer.update(it.trim().ifEmpty { null }) },
             label = label,
             placeholder = placeholder,
             modifier = Modifier.fillMaxWidth(),
@@ -74,7 +88,11 @@ private fun PersonField(
         if (suggestions.isNotEmpty()) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 suggestions.forEach { name ->
-                    CremaFilterChip(label = name, selected = false, onClick = { text = name; onChange(name) })
+                    CremaFilterChip(label = name, selected = false, onClick = {
+                        text = name
+                        committer.update(name)
+                        committer.flush()
+                    })
                 }
             }
         }

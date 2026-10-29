@@ -91,6 +91,28 @@ class BackupShotRoundTripTest {
     }
 
     @Test
+    fun `a shot's own grinder model survives a backup round trip and wins over the Settings grinder`() {
+        val s = StoredShot(id = "shot:g", completedAtMs = 1, durationMs = 1, grinderModel = "Niche Zero")
+        val restored = storedShotFromBackupJson(wireShotJson(s, forBackup = true), json)!!
+        assertEquals("Niche Zero", restored.grinderModel)
+        assertEquals("Niche Zero", wireShotJson(s, grinderModel = "EK43")["grinderModel"]!!.jsonPrimitive.content)
+        // A shot captured here carries none: the Settings grinder fills in.
+        val local = StoredShot(id = "shot:h", completedAtMs = 1, durationMs = 1)
+        assertEquals("EK43", wireShotJson(local, grinderModel = "EK43")["grinderModel"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `the edit PATCH always carries the barista, empty once cleared (cohort review 06 #8)`() {
+        val cleared = StoredShot(id = "shot:p", completedAtMs = 1, durationMs = 1, barista = null)
+        assertEquals("", shotPatchInputs(cleared, includeNotes = true, defaultPrivacy = "unlisted", settingsGrinderModel = null).barista)
+        val set = cleared.copy(barista = "Ana", grinderModel = "Niche Zero")
+        val inputs = shotPatchInputs(set, includeNotes = false, defaultPrivacy = "unlisted", settingsGrinderModel = "EK43")
+        assertEquals("Ana", inputs.barista)
+        assertEquals("Niche Zero", inputs.grinderModel)
+        assertNull(inputs.notes)
+    }
+
+    @Test
     fun `null rating round-trips to unrated and a beanless shot stays beanless`() {
         val s = StoredShot(id = "shot:2", completedAtMs = 1, durationMs = 1, rating = null, bean = null)
         val restored = storedShotFromBackupJson(wireShotJson(s), json)!!

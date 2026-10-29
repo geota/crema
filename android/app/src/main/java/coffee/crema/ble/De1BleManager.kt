@@ -11,6 +11,8 @@ import kotlinx.serialization.json.Json
 import java.util.UUID
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -76,6 +78,8 @@ class De1BleManager(
     private val onStatus: (String) -> Unit,
     /** Per-episode reconnect timelines (Settings → Advanced, diagnostics). */
     private val timeline: ReconnectTimelineRecorder? = null,
+    /** Where the manager's jobs run; a test dispatcher in the JVM tests. */
+    dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
     enum class State { IDLE, SCANNING, CONNECTING, DISCOVERING, SUBSCRIBING, READY, DISCONNECTED }
 
@@ -89,7 +93,7 @@ class De1BleManager(
      *  process. (handleNotification catches its own FFI call so the stream
      *  survives; this only catches what it doesn't.) */
     private val scope = CoroutineScope(
-        SupervisorJob() +
+        SupervisorJob() + dispatcher +
             CoroutineExceptionHandler { _, e -> Log.e(TAG, "Uncaught in DE1 BLE scope", e) },
     )
 
@@ -269,15 +273,9 @@ class De1BleManager(
             onConnected = {
                 _state.value = State.READY
                 onStatus("Ready — receiving DE1 notifications")
-                // Connect-time one-shot seed reads (firmware / machine-state /
-                // shot-settings): the DE1 answers them on a direct GATT read but
-                // does NOT notify them at connect, so subscribing alone leaves
-                // those rows blank. Re-seeded on every (re)connect so a reconnect
-                // re-syncs state. Best-effort, off the loop.
-                scope.launch {
-                    seedReads(device)
-                    timeline?.postConnectDone(TIMELINE_DEVICE)
-                }
+                // The seed reads already ran inside establish (READY only once
+                // the DE1 has reported a state on this link).
+                timeline?.postConnectDone(TIMELINE_DEVICE)
                 // Watch for a silent drop even on the idle screensaver (#65).
                 startLivenessLoop(device)
             },
@@ -362,6 +360,7 @@ class De1BleManager(
             timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.DISCOVER)
         }
         afterLinked(device)
+        seedReads(device)
     }
 
     /**
@@ -380,6 +379,7 @@ class De1BleManager(
             timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.DISCOVER)
         }
         afterLinked(device)
+        seedReads(device)
     }
 
     /** Linked + discovered: join the recording and (re)subscribe. */
@@ -475,36 +475,33 @@ class De1BleManager(
      * **StateInfo is required.** The DE1 answers it on a direct read even while
      * asleep, so a link that can't produce it in two tries is hollow — up at
      * the GATT level, dead for data (a connect at the edge of range). Rather
-     * than sit READY with no state behind it, the link is torn down and the
-     * supervisor reconnects ([HOLLOW_LINK_STATUS]). The web connect program
-     * applies the same rule. The read bytes are fed to the core through the
-     * same seam as a notification, so they decode and record identically.
+     * than sit READY with no state behind it, the link is torn down and this
+     * throws, so the supervisor counts a failed attempt and backs off before
+     * the next ([HOLLOW_LINK_STATUS]). The web connect program applies the
+     * same rule. The read bytes are fed to the core through the same seam as
+     * a notification, so they decode and record identically.
+     *
+     * Runs inside [establish] — before READY is published, and in the session
+     * coroutine, so a [disconnect] or a replacement [connect] cancels it and
+     * a stale judgement can never tear down the next link (cohort review
+     * 2026-10-25: report 04 P2-1, report 06 #12).
      */
     private suspend fun seedReads(device: BleTransport.DeviceHandle) {
         val seeds = listOf(
-            Triple(VERSION, NotificationSource.DE1_VERSION, "firmware version"),
-            Triple(De1Uuids.STATE_INFO, NotificationSource.DE1_STATE, "machine state"),
-            Triple(De1Uuids.SHOT_SETTINGS, NotificationSource.DE1_SHOT_SETTINGS, "shot-settings"),
+            SeedSpec(Triple(VERSION, NotificationSource.DE1_VERSION, "firmware version"), "firmware version", required = false),
+            SeedSpec(Triple(De1Uuids.STATE_INFO, NotificationSource.DE1_STATE, "machine state"), "machine state", required = true),
+            SeedSpec(Triple(De1Uuids.SHOT_SETTINGS, NotificationSource.DE1_SHOT_SETTINGS, "shot-settings"), "shot-settings", required = false),
         )
-        for ((char, source, label) in seeds) {
-            val required = char == De1Uuids.STATE_INFO
-            val attempts = if (required) SEED_READ_ATTEMPTS_REQUIRED else 1
-            var failure: Throwable? = null
-            for (attempt in 1..attempts) {
-                failure = seedRead(device, char, source, label).exceptionOrNull() ?: break
-                if (attempt < attempts) delay(SEED_READ_RETRY_DELAY_MS)
-            }
-            if (failure == null) continue
-            if (!required) {
-                onStatus("DE1 $label seed read skipped: ${failure.message}")
-                continue
-            }
-            Log.w(TAG, "DE1 machine-state seed read failed $attempts× (${failure.message}) — hollow link, tearing down")
-            onStatus(HOLLOW_LINK_STATUS)
-            runCatching { transport.disconnect(device) }
-                .onFailure { Log.w(TAG, "Forced DE1 teardown (hollow link) failed", it) }
-            return
-        }
+        runSeedReads(
+            seeds,
+            read = { seed -> val (char, source, label) = seed.key; seedRead(device, char, source, label) },
+            onStatus = onStatus,
+            teardown = {
+                Log.w(TAG, "DE1 machine-state seed read failed twice — hollow link, tearing down")
+                runCatching { transport.disconnect(device) }
+                    .onFailure { Log.w(TAG, "Forced DE1 teardown (hollow link) failed", it) }
+            },
+        )
     }
 
     /** One time-boxed seed read, fed to the core on success. */
@@ -513,7 +510,7 @@ class De1BleManager(
         char: UUID,
         source: NotificationSource,
         label: String,
-    ): Result<Unit> = runCatching {
+    ): Result<Unit> = try {
         val bytes = kotlinx.coroutines.withTimeoutOrNull(SEED_READ_TIMEOUT_MS) {
             transport.read(device, De1Uuids.SERVICE, char)
         } ?: error("read timed out")
@@ -522,6 +519,13 @@ class De1BleManager(
         val json = bridge.onNotification(source, bytes, tMs.toULong())
         onCoreOutput(json)
         onStatus("DE1 $label read ✓")
+        Result.success(Unit)
+    } catch (c: CancellationException) {
+        // The session ended (disconnect / replacement connect): never judge
+        // a link we no longer own.
+        throw c
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
     // ---- Core integration -------------------------------------------------
@@ -895,11 +899,6 @@ class De1BleManager(
 
         /** One connect-time seed read's ceiling. */
         private const val SEED_READ_TIMEOUT_MS = 3_000L
-
-        /** StateInfo tries before the link counts as hollow (see [seedReads]). */
-        private const val SEED_READ_ATTEMPTS_REQUIRED = 2
-
-        private const val SEED_READ_RETRY_DELAY_MS = 500L
 
         /** Every Nth consecutive advertisement miss falls back to one direct
          *  connect (see [establish]). */

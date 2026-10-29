@@ -3408,7 +3408,12 @@ export interface ShotPatchInputs {
 	beanNotes?: string;
 	/** Inline bean: the bean's recorded dial → `grinder_setting`. */
 	grinderSetting?: string;
-	/** Who made the shot → `barista` (editable on free accounts too). */
+	/**
+	 * Who made the shot → `barista` (editable on free accounts too).
+	 * `None` = leave the remote value alone; a blank string is sent as
+	 * `""`, which clears it (the shells pass the shot's barista, empty
+	 * once cleared, so a cleared name reaches Visualizer).
+	 */
 	barista?: string;
 }
 

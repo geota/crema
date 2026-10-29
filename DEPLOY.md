@@ -85,7 +85,7 @@ cd web && pnpm dev
 | `.github/workflows/release.yml` | The only automated deploy: the `web (pwa)` job, on `v*.*.*` tags. |
 | `scripts/cut-release.sh` | Release notes PR, then the tag that triggers `release.yml`. |
 | `wrangler.jsonc` | CF Pages project config (name + output dir + compat date). Read by `wrangler pages deploy`. |
-| `web/static/_headers` | Cache + security headers (CSP, COOP/COEP, etc.) — copied verbatim into `web/build/` by adapter-static. CF Pages applies them per-request. |
+| `web/static/_headers` | Cache + security headers (`frame-ancestors` CSP, X-Frame-Options, nosniff, Referrer-Policy, Permissions-Policy; the resource CSP is a `<meta>` tag from `web/vite.config.ts`) — copied verbatim into `web/build/` by adapter-static. CF Pages applies them per-request. |
 | `web/vite.config.ts` | SvelteKit config (the `sveltekit()` plugin: `adapter-static`, the CSP) and the PWA plugin. SvelteKit 3 has no `svelte.config.js`. |
 | `web/.env.example` | Template for local dev's `.env.local`. |
 | `web/.env.local` | **Local-only.** Gitignored. Holds your dev Client UID. |

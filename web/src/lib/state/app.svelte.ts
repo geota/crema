@@ -275,6 +275,15 @@ export class CremaApp {
 	readonly #launch = new LaunchReconnect();
 
 	/**
+	 * Devices the user took over this session with a Connect tap that has not
+	 * reached ready yet (chooser dismissed, a non-DE1 picked, a failed
+	 * connect). Tab-return / Bluetooth-on kicks must not silently reconnect
+	 * the remembered device behind that choice; a connect that reaches ready
+	 * clears it, and the next app launch starts fresh.
+	 */
+	readonly #userTookOver: Record<DeviceKind, boolean> = { de1: false, scale: false };
+
+	/**
 	 * The fiber running an in-progress capture replay, or `null` when none is
 	 * running. {@link cancelReplay} interrupts it (T-28 — the old
 	 * `AbortController`; `Effect.sleep` pacing is interrupted for free).
@@ -1113,6 +1122,7 @@ export class CremaApp {
 	async connectDe1(): Promise<void> {
 		if (refuseConnect()) return;
 		this.#launch.cancel('de1');
+		this.#userTookOver.de1 = true;
 		this.state.patch({ ...CLEARED_DE1_READOUT });
 		await this.de1.connect();
 	}
@@ -1186,6 +1196,7 @@ export class CremaApp {
 
 	/** A device reached ready: remember it for the next launch. */
 	#rememberConnected(kind: DeviceKind): void {
+		this.#userTookOver[kind] = false;
 		const id = kind === 'de1' ? this.de1.identity() : this.scale.identity();
 		if (id !== null) rememberDevice(kind, id);
 	}
@@ -1200,6 +1211,7 @@ export class CremaApp {
 		await this.#launch.run({
 			bluetooth,
 			isIdle: (kind) => {
+				if (this.#userTookOver[kind]) return false;
 				const s = kind === 'de1' ? this.state.current.de1State : this.state.current.scaleState;
 				return s === 'idle' || s === 'disconnected' || s === 'failed';
 			},
@@ -1272,6 +1284,7 @@ export class CremaApp {
 	async connectScale(): Promise<void> {
 		if (refuseConnect()) return;
 		this.#launch.cancel('scale');
+		this.#userTookOver.scale = true;
 		await this.scale.connect();
 	}
 

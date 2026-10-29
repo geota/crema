@@ -53,7 +53,9 @@
 		shotCoffee,
 		recentNames,
 		COFFEE_FILTER_PREFIX,
-		selectedShot
+		selectedShot,
+		filterScopeKey,
+		type SelectionPin
 	} from '#lib/history/index.js';
 	import type { StoredShot } from '#lib/history/index.js';
 	import { ShotRow, ShotDetail, CompareOverlay } from '#lib/components/history/index.js';
@@ -297,7 +299,12 @@
 		const beanParam = url.searchParams.get('bean');
 		if (beanParam) filterBean = beanParam;
 		const shotParam = url.searchParams.get('shot');
-		if (shotParam) selectedId = shotParam;
+		if (shotParam) {
+			// An explicit selection: it wins over a filter remembered from the
+			// last visit until the user changes a filter (see selectedShot).
+			selectedId = shotParam;
+			pin = { id: shotParam, scope: filterScope };
+		}
 	});
 	/**
 	 * Pip for the per-row indicator, across every enabled destination: on
@@ -569,6 +576,11 @@
 	let range = $state<'30d' | 'all'>('all');
 	/** The selected shot's id. */
 	let selectedId = $state<string | null>(null);
+	/**
+	 * Set when the selection was explicit (a `?shot=` deep link, a just-saved
+	 * brew log) rather than browsed — see {@link selectedShot}.
+	 */
+	let pin = $state<SelectionPin | null>(null);
 
 	// ── Keep this view across round trips (#123) ─────────────────────────
 	// Search, filters, sort and the selected shot come back after leaving for
@@ -922,11 +934,25 @@
 		return arr;
 	});
 
+	/** The filter inputs as one key: an explicit selection holds while it is unchanged. */
+	const filterScope = $derived(
+		filterScopeKey({
+			q,
+			profile: filterProfile,
+			bean: filterBean,
+			method: filterMethod,
+			tags: selectedTags,
+			range
+		})
+	);
 	/**
 	 * The selected shot record — the picked one while the filtered list
-	 * still shows it, else the first filtered shot ({@link selectedShot}).
+	 * still shows it, an explicit pick until a filter changes, else the first
+	 * filtered shot ({@link selectedShot}).
 	 */
-	const selected = $derived(selectedShot(filtered, selectedId));
+	const selected = $derived(
+		selectedShot(filtered, selectedId, { pin, scope: filterScope, lookup: (id) => store.get(id) })
+	);
 
 	// ── Stats (issue 48) ──────────────────────────────────────────────────
 	// Scoped to the FILTERED set (reflects the active filter/range, not all-time).
@@ -979,6 +1005,7 @@
 	/** Select a shot. */
 	function select(id: string): void {
 		selectedId = id;
+		pin = null;
 	}
 
 	// ── Compare state ────────────────────────────────────────────────────
@@ -1484,6 +1511,7 @@
 		onClose={() => (logBrewOpen = false)}
 		onSaved={(record) => {
 			selectedId = record.id;
+			pin = { id: record.id, scope: filterScope };
 		}}
 	/>
 {/if}
