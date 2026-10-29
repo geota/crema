@@ -1199,6 +1199,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             persistPrefs()
         },
+        // The re-find reattached on a new port of the saved host: that is
+        // the remote's target now (same role, same hub, nothing to drop).
+        onTargetMoved = { host, port ->
+            _ui.update { it.copy(proxyPrimaryHost = host, proxyPrimaryPort = port) }
+            persistPrefs()
+        },
     )
 
     /**
