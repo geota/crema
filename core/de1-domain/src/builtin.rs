@@ -251,6 +251,44 @@ mod tests {
         assert_eq!(v3.max_total_volume_ml, 36);
     }
 
+    /// Cohort review 2026-10-25, report 08 M1: the TCL importer typed every
+    /// built-in as Espresso, so the three de1app cleaning profiles (all
+    /// `beverage_type cleaning`) never hit `SkipCleaning` and a forward
+    /// flush was saved as a shot. The catalogue now carries de1app's types.
+    #[test]
+    fn builtin_beverage_types_come_from_the_tcl() {
+        use crate::profile::BeverageType;
+        use crate::shot::{ShotDisposition, shot_disposition};
+        let cleaning: Vec<&str> = builtin_profiles()
+            .iter()
+            .filter(|p| p.beverage_type == BeverageType::Cleaning)
+            .map(|p| p.title.as_str())
+            .collect();
+        assert_eq!(cleaning.len(), 3, "{cleaning:?}");
+        for title in ["Cleaning/Forward flush", "Cleaning/Forward Flush x5"] {
+            let p = builtin(title);
+            assert_eq!(p.beverage_type, BeverageType::Cleaning, "{title}");
+            assert_eq!(
+                shot_disposition(30_000, Some(0.0), p.beverage_type),
+                ShotDisposition::SkipCleaning,
+                "{title}"
+            );
+        }
+        assert_eq!(
+            builtin("Test/Flow calibration").beverage_type,
+            BeverageType::Calibrate
+        );
+        assert_eq!(
+            builtin("Tea/in a basket").beverage_type,
+            BeverageType::Pourover
+        );
+        assert_eq!(
+            builtin("Tea portafilter/Sencha").beverage_type,
+            BeverageType::Pourover
+        );
+        assert_eq!(builtin("Default").beverage_type, BeverageType::Espresso);
+    }
+
     #[test]
     fn builtin_profiles_is_memoized() {
         // Two calls return the very same cached slice.

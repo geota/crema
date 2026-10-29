@@ -1263,7 +1263,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "cleaning",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -2099,7 +2099,7 @@
     "target_weight": 100.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -2204,7 +2204,7 @@
     "target_weight": 100.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -3345,7 +3345,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -3603,7 +3603,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -3715,7 +3715,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -3827,7 +3827,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -3939,7 +3939,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -3999,7 +3999,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -4111,7 +4111,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -4174,7 +4174,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Damian",
-    "beverage_type": "espresso",
+    "beverage_type": "calibrate",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -5894,7 +5894,7 @@
     "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "cleaning",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -6015,7 +6015,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -6755,7 +6755,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -6889,7 +6889,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "calibrate",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -7010,7 +7010,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -7059,7 +7059,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "manual",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -7115,7 +7115,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "manual",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -7389,7 +7389,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -7514,7 +7514,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -7639,7 +7639,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -7764,7 +7764,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -7928,7 +7928,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -8053,7 +8053,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -8191,7 +8191,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -8303,7 +8303,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -8428,7 +8428,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -8553,7 +8553,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -8678,7 +8678,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "calibrate",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -8734,7 +8734,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "calibrate",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -8794,7 +8794,7 @@
     "target_weight": 36.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "calibrate",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -9058,7 +9058,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "calibrate",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -9114,7 +9114,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "calibrate",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -9157,7 +9157,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "calibrate",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -9265,7 +9265,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -9386,7 +9386,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -9507,7 +9507,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "pourover",
     "tank_temperature": 0.0,
     "version": "2"
   },
@@ -9755,7 +9755,7 @@
     "target_weight": 0.0,
     "dose": 0.0,
     "author": "Decent",
-    "beverage_type": "espresso",
+    "beverage_type": "cleaning",
     "tank_temperature": 0.0,
     "version": "2"
   }
