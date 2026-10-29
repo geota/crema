@@ -312,6 +312,9 @@ class ConnectionController(
         bleScanner.cancel(SCAN_LABEL_SCALE)
         ble.disconnect()
         scale.disconnect()
+        // …and their scopes: no detached child outlives the VM (P3-3).
+        ble.close()
+        scale.close()
     }
 
     // ── Connect / disconnect verbs ────────────────────────────────────────────

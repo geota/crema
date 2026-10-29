@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -121,6 +122,9 @@ class ScaleBleManager(
     )
 
     /** The connected scale, or null when not connected. */
+    // Written by connect/disconnect on Main and by the session on the
+    // manager scope; read from both.
+    @Volatile
     private var device: BleTransport.DeviceHandle? = null
 
     /** The connected scale's Bluetooth address (for remembering it), or null. */
@@ -474,6 +478,18 @@ class ScaleBleManager(
         }
         _state.value = State.DISCONNECTED
         onStatus("Scale disconnected")
+    }
+
+    /**
+     * End this manager for good — from `ConnectionController.close()` on VM
+     * teardown, after [disconnect]. Cancels [scope] so no session, liveness or
+     * observation child outlives the VM (cohort review 2026-10-25, P3-3); a
+     * transport disconnect [disconnect] launched may be cut short, which is
+     * fine: the transport's own close (right after) tears the GATT link down.
+     * Not reusable afterwards.
+     */
+    fun close() {
+        scope.cancel()
     }
 
     // ---- Command write ----------------------------------------------------
