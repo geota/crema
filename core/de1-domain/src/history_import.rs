@@ -178,11 +178,14 @@ pub fn import_v2_json_shot(content: &str) -> Result<StoredShot, ImportError> {
     );
     // Prefer the explicit `meta.time` flow-window duration (what the
     // exporter writes); fall back to the last sample's elapsed for
-    // documents that omit it.
+    // documents that omit it, or whose value is not a plausible shot time
+    // (NaN, infinite, non-positive, or over a day). Clamping a garbage value
+    // instead invented a 24 h shot ending a day after it started (final
+    // cohort review 2026-10-28, 01 P3-2).
     let duration = raw
         .meta
         .time
-        .filter(|t| *t > 0.0)
+        .filter(|t| t.is_finite() && *t > 0.0 && *t <= crate::duration::MAX_IMPORTED_SHOT_TIME_S)
         .map(duration_from_seconds)
         .unwrap_or_else(|| samples.last().map_or(Duration::ZERO, |t| t.elapsed));
 
@@ -825,6 +828,43 @@ settings {
         assert_ne!(tcl, LEGACY_FIXTURE, "fixture edit applied");
         let shot = import_legacy_tcl_shot(&tcl).expect("Tcl elapsed 1e30 imports");
         assert_eq!(shot.record.samples[1].elapsed, one_day);
+    }
+
+    /// Final cohort review 2026-10-28, 01 P3-2: an out-of-range `meta.time`
+    /// used to clamp to 24 h and move `completed_at` a day past `clock`. Any
+    /// value that is not a plausible shot time now takes the same fallback
+    /// as a missing one: the last sample's elapsed.
+    #[test]
+    fn an_implausible_meta_time_falls_back_to_the_samples() {
+        let start_ms = 1_710_510_622_000;
+        for bad in ["1e30", "86401", "-3", "0", "1e39"] {
+            let doc = V2_JSON_FIXTURE.replace(
+                r#""in": 18.0, "out": 36.0"#,
+                &format!(r#""in": 18.0, "out": 36.0, "time": {bad}"#),
+            );
+            assert_ne!(doc, V2_JSON_FIXTURE, "fixture edit applied");
+            let shot = import_v2_json_shot(&doc).unwrap_or_else(|e| panic!("{bad}: {e:?}"));
+            // The fixture's samples span 1 s.
+            assert_eq!(
+                shot.record.duration,
+                Duration::from_secs(1),
+                "meta.time {bad}"
+            );
+            assert_eq!(shot.completed_at, start_ms + 1_000, "meta.time {bad}");
+        }
+        // A plausible value is still preferred over the samples.
+        let doc = V2_JSON_FIXTURE.replace(
+            r#""in": 18.0, "out": 36.0"#,
+            r#""in": 18.0, "out": 36.0, "time": 28.5"#,
+        );
+        let shot = import_v2_json_shot(&doc).expect("imports");
+        assert_eq!(shot.record.duration, Duration::from_millis(28_500));
+        assert_eq!(shot.completed_at, start_ms + 28_500);
+        // The reviewer's probe: no samples, so the duration is zero and
+        // completed_at is the start, not a day later.
+        let probe =
+            import_v2_json_shot(r#"{"clock":1700000000,"meta":{"time":1e30}}"#).expect("imports");
+        assert_eq!(probe.completed_at, 1_700_000_000_000);
     }
 
     #[test]
