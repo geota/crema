@@ -9,6 +9,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Hub mode** — Settings → Multi-device has a Hub mode switch, applied live
+  with no restart: on, this device holds the machine and other devices connect
+  through it as remotes; off, it disconnects from the machine so another device
+  can connect (tap Connect to take it back). A device that wants the machine
+  while another device is the hub is told to turn hub mode off there, and can
+  connect through that hub instead. A remote shows "Connected through ‹hub›"
+  on every screen, and offers Connect directly when its hub is gone or no
+  longer holds the machine. Tablet and phone.
 - **Bengle machines receive profiles in their own encoding** — Crema waits for
   the machine model before uploading, and a stop-at-weight target another app
   saved in a Bengle is cleared on connect, even when no upload is needed.
@@ -57,6 +65,14 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   a weekly workflow watches npm for the official release).
 - **History search finds more** — it now also matches the coffee's name and
   roaster, the grinder, and the barista and drinker. Web, tablet and phone.
+
+### Removed
+
+- **Hand-off and take-over between devices** — the "Take over the DE1" and
+  "Hand off" actions are gone; to move the machine to another device, turn off
+  hub mode on the hub. Nightly users: update every device — an older nightly
+  hub still shows "Hand off" next to a newer remote, and tapping it waits
+  forever. Tablet and phone.
 
 ### Fixed
 
