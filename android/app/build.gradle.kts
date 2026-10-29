@@ -85,6 +85,8 @@ android {
     // throwing; the MainViewModel smoke test runs under Robolectric instead.
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Robolectric (MainViewModelSmokeTest) needs the merged resources.
+        unitTests.isIncludeAndroidResources = true
     }
 
     // Visualizer Doorkeeper application client_id (a PUBLIC client — PKCE, no
@@ -561,6 +563,10 @@ val cargoBuildHostCore =
 
 tasks.withType<Test>().configureEach {
     dependsOn(cargoBuildHostCore)
+    // Unit tests run on a Java 21 JVM: the Nordic BLE library ships Java 21
+    // bytecode, which MainViewModelSmokeTest loads under Robolectric. The
+    // app itself still compiles to Java 17 (compileOptions above).
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
     systemProperty(
         "jna.library.path",
         layout.projectDirectory.dir("../../core/target/debug").asFile.absolutePath,

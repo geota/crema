@@ -1294,6 +1294,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val recipeStore = coffee.crema.brew.RecipeFileStore(app, json)
     private var brewTickJob: kotlinx.coroutines.Job? = null
 
+    // ── Declared above every `init` block (cohort review 2026-10-25, P3-2) ──
+    // Kotlin initialises properties and runs `init` blocks in source order, so
+    // a property declared below an init is still null/0 while that init runs
+    // (the July 2026 launch crash). These four used to sit far below.
+
+    /**
+     * The open Log-brew form's draft, or null. VM-held (not a screen
+     * `remember`) so it survives rotation and the phone↔tablet host swap:
+     * the phone's pushed `log-brew` route and the tablet's side sheet on the
+     * owning tab render this same draft (see [NavRestore.restoreRoute]).
+     */
+    private val _logBrew = MutableStateFlow<coffee.crema.ui.brewlog.BrewLogDraft?>(null)
+    val logBrew: StateFlow<coffee.crema.ui.brewlog.BrewLogDraft?> = _logBrew.asStateFlow()
+
+    /** Runs [seedMachineSettings] on each ready and [usbChargerTick] every minute while ready. */
+    private val sweepRunner by lazy {
+        ConnectSweepRunner(viewModelScope, sweep = ::seedMachineSettings, tick = ::usbChargerTick)
+    }
+
+    /** Monotonic ms of the last user interaction (the screensaver's idle
+     *  clock) — bumped by the activity's root touch interceptor and by machine
+     *  transitions into active modes. */
+    @Volatile
+    private var lastInteractionAtMs: Long = SystemClock.elapsedRealtime()
+
+    /** Whether the activity is started (visible). */
+    @Volatile
+    private var appInForeground = true
+
     init {
         // Seed the recipe library from disk — cheap (a handful of rows).
         viewModelScope.launch {
@@ -2686,15 +2715,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Record a manual brew / guided-session result; debits the bag. */
     fun addManualBrew(input: LibraryController.ManualBrewInput) = library.addManualBrew(input)
 
-    /**
-     * The open Log-brew form's draft, or null. VM-held (not a screen
-     * `remember`) so it survives rotation and the phone↔tablet host swap:
-     * the phone's pushed `log-brew` route and the tablet's side sheet on the
-     * owning tab render this same draft (see [NavRestore.restoreRoute]).
-     */
-    private val _logBrew = MutableStateFlow<coffee.crema.ui.brewlog.BrewLogDraft?>(null)
-    val logBrew: StateFlow<coffee.crema.ui.brewlog.BrewLogDraft?> = _logBrew.asStateFlow()
-
     /** Open the form on [owner]'s tab — seeded from [prefill] ("Log again") or [beanId]'s bag. */
     fun openLogBrew(owner: String, prefill: StoredShot? = null, beanId: String? = null) {
         val s = _ui.value
@@ -3668,11 +3688,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val bm = getApplication<Application>().getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).takeIf { it in 0..100 }
     }.getOrNull()
-
-    /** Runs [seedMachineSettings] on each ready and [usbChargerTick] every minute while ready. */
-    private val sweepRunner by lazy {
-        ConnectSweepRunner(viewModelScope, sweep = ::seedMachineSettings, tick = ::usbChargerTick)
-    }
 
     /** Smart-charging mode for the DE1's USB port. Persisted; the next minute's check applies it. */
     fun setUsbChargingMode(mode: String) {
@@ -4777,12 +4792,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile
     private var shotStartedByApp: Boolean = false
 
-    /** Monotonic ms of the last user interaction (the screensaver's idle
-     *  clock) — bumped by the activity's root touch interceptor and by machine
-     *  transitions into active modes. */
-    @Volatile
-    private var lastInteractionAtMs: Long = SystemClock.elapsedRealtime()
-
     /** Bump the saver's idle clock and tell the idle-sleep timer (throttled to
      *  one a second, see [IdleSleepRunner.activity]). Called on every touch
      *  (MainActivity's root interceptor, Initial pass, never consumes). */
@@ -4790,10 +4799,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         lastInteractionAtMs = SystemClock.elapsedRealtime()
         idleSleep.activity(coffee.crema.core.IdleActivity.Touch)
     }
-
-    /** Whether the activity is started (visible). */
-    @Volatile
-    private var appInForeground = true
 
     /** Foreground/background transitions from [MainActivity]'s
      *  onStart/onStop. Returning counts as user presence: the saver's idle
