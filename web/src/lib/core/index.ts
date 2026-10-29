@@ -319,6 +319,12 @@ export interface CremaCore {
 	/** Feed a periodic clock tick. Resolves to the parsed `CoreOutput`. */
 	onTick(nowMs: number): Promise<CoreOutput>;
 	/**
+	 * How many times the bridge reset its core after a panicked call
+	 * (`CremaBridge::panic_recoveries`). Optional so test doubles need not
+	 * implement it; see `#lib/core/recovery-watch.js`.
+	 */
+	panicRecoveries?(): number;
+	/**
 	 * Arm a guided brew session for a JSON-encoded `BrewRecipe`
 	 * (issue #10). `startOnPour` starts the clock at the first
 	 * sustained pour instead of a Start tap.
@@ -1017,6 +1023,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async onTick(nowMs) {
 			return parseOutput(bridge.on_tick(nowMs));
+		},
+		panicRecoveries() {
+			return bridge.panic_recoveries();
 		},
 		async brewSessionArm(recipeJson, startOnPour) {
 			return parseOutput(bridge.brew_session_arm(recipeJson, startOnPour));

@@ -50,6 +50,7 @@ import { isSerialStolen } from '#lib/decent/stolen-serials.js';
 import { SAW_MODEL_KEY, seedSawModel } from './saw-model-store';
 import { getSettingsStore } from '#lib/settings/index.js';
 import { toast } from '#lib/components/shared/toast.svelte.js';
+import { CoreRecoveryWatch } from '#lib/core/recovery-watch.js';
 import { getMaintenanceStore } from '#lib/maintenance/index.js';
 import { parseCaptureFile } from '#lib/replay/index.js';
 import { describeError } from '#lib/utils/error.js';
@@ -275,6 +276,12 @@ export class CremaApp {
 	private readonly scale: ScaleManager;
 	/** Reconnect the last DE1 / scale on launch; a user action cancels its wait. */
 	readonly #launch = new LaunchReconnect();
+	/**
+	 * Notices a core reset after a panic (batch 03's bridge recovery) and
+	 * offers a reload: a fresh core has lost the shell's behaviour settings
+	 * (stop on weight, auto-tare, targets) until the app reloads.
+	 */
+	readonly #coreRecovery: CoreRecoveryWatch;
 
 	/**
 	 * Devices the user took over this session with a Connect tap that has not
@@ -394,6 +401,16 @@ export class CremaApp {
 		 */
 		private readonly runtime: AppRuntime | null = null
 	) {
+		this.#coreRecovery = new CoreRecoveryWatch(core.panicRecoveries?.bind(core), (count) => {
+			this.state.log(`Core reset after an internal error (reset #${count})`);
+			toast.action(
+				'Crema hit an internal error and restarted its engine. Stop-at-weight and other ' +
+					'shot settings are off until you reload.',
+				'Reload',
+				() => location.reload(),
+				0
+			);
+		});
 		this.sweep = new ConnectSweepRunner({
 			core,
 			settings: () => getSettingsStore().current,
@@ -626,6 +643,7 @@ export class CremaApp {
 	 * after the fold yields the complete series to persist.
 	 */
 	private applyCoreOutput(output: CoreOutput): void {
+		this.#coreRecovery.check();
 		for (const event of output.events) {
 			// Stash the prior error text so we can detect a `null → text`
 			// transition into an `Error*` substate after the fold below.
