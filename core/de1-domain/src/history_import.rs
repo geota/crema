@@ -319,14 +319,13 @@ fn derive_resistance(pressure: f32, flow: f32) -> Option<f32> {
 }
 
 fn duration_from_seconds(s: f32) -> Duration {
-    // Total over hostile input (review #31): `from_secs_f32` PANICS on a
-    // non-finite value, and both import paths accept the token "inf" from
-    // f32::from_str — one corrupt .shot file must not abort the whole
-    // import (wasm trap / FFI panic). NaN and negatives coerce to zero.
-    if !s.is_finite() {
-        return Duration::ZERO;
-    }
-    Duration::from_secs_f32(s.max(0.0))
+    // Total over hostile input (review #31; cohort review 2026-10-25 01
+    // P1-1): `from_secs_f32` PANICS on a non-finite value and on any finite
+    // value above ~1.8e19 s, and both import paths accept such tokens from
+    // f32::from_str — one corrupt .shot file must not abort the whole import
+    // (wasm trap / FFI panic). NaN, infinities and negatives coerce to zero;
+    // a huge finite time clamps to one day.
+    crate::duration::secs_clamped(s, crate::duration::MAX_IMPORTED_SHOT_TIME_S)
 }
 
 /// Profile frame indices from a v2 `state_change` series — the inverse of
@@ -798,6 +797,34 @@ settings {
         // Out-of-range values clamp.
         assert_eq!(enjoyment_to_rating(-10.0), None);
         assert_eq!(enjoyment_to_rating(500.0), Some(5));
+    }
+
+    /// Cohort review 2026-10-25, 01 P1-1: a huge FINITE time used to panic
+    /// in `Duration::from_secs_f32` (it only guarded non-finite values), and
+    /// on web the trap wedged the whole core. Each of the reviewer's three
+    /// triggers now imports, with the time clamped to one day.
+    #[test]
+    fn huge_finite_times_import_instead_of_panicking() {
+        let one_day = Duration::from_secs(86_400);
+        assert_eq!(duration_from_seconds(1e30), one_day);
+
+        // v2 JSON `meta.time`.
+        let meta_time = import_v2_json_shot(r#"{"clock":1700000000,"meta":{"time":1e30}}"#);
+        assert!(meta_time.is_ok(), "meta.time 1e30 imports: {meta_time:?}");
+
+        // v2 JSON `elapsed[i]`, with the other seven series non-empty.
+        let elapsed =
+            V2_JSON_FIXTURE.replace(r#""elapsed": [0.0, 1.0]"#, r#""elapsed": [0.0, 1e30]"#);
+        assert_ne!(elapsed, V2_JSON_FIXTURE, "fixture edit applied");
+        let shot = import_v2_json_shot(&elapsed).expect("elapsed 1e30 imports");
+        assert_eq!(shot.record.samples[1].elapsed, one_day);
+
+        // Legacy Tcl `espresso_elapsed`, with the other series present.
+        let tcl =
+            LEGACY_FIXTURE.replace("espresso_elapsed {0.0 1.0}", "espresso_elapsed {0.0 1e30}");
+        assert_ne!(tcl, LEGACY_FIXTURE, "fixture edit applied");
+        let shot = import_legacy_tcl_shot(&tcl).expect("Tcl elapsed 1e30 imports");
+        assert_eq!(shot.record.samples[1].elapsed, one_day);
     }
 
     #[test]

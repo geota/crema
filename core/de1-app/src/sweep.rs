@@ -29,13 +29,13 @@ fn whole_degrees(value: f32, max: f32) -> u8 {
     }
 }
 
-/// Seconds as a `Duration`, negative / non-finite read as zero.
+/// Seconds as a whole-millisecond `Duration`: negative / non-finite read as
+/// zero, and a huge persisted value (a restored backup is not range-checked)
+/// clamps to the one-hour machine-timeout ceiling the FFI / wasm setters use
+/// — `Duration::from_secs_f32(1e30)` used to panic here (cohort review
+/// 2026-10-25, 01 P1-2).
 fn secs(value: f32) -> Duration {
-    Duration::from_secs_f32(if value.is_finite() {
-        value.max(0.0)
-    } else {
-        0.0
-    })
+    de1_domain::duration::secs_clamped_whole_ms(value, de1_domain::duration::MAX_MACHINE_TIMEOUT_S)
 }
 
 impl CremaCore {
@@ -380,6 +380,55 @@ mod tests {
             mmr_writes(&out),
             vec![(MmrRegister::UsbChargerOn, 0)],
             "asleep: the floor is 15 %"
+        );
+    }
+
+    /// Cohort review 2026-10-25, 01 P1-2: a huge persisted timeout (a
+    /// restored backup is not range-checked) panicked the sweep in
+    /// `Duration::from_secs_f32`, and on web every connect then trapped. The
+    /// reviewer's JSON triggers now clamp to the setters' one-hour ceiling
+    /// (3600 s = 36000 deciseconds) like `set_espresso_warmup_timeout` does.
+    #[test]
+    fn huge_persisted_timeouts_clamp_like_the_setters() {
+        for json in [
+            r#"{"flushTimeoutS":1e30}"#,
+            r#"{"espressoWarmupTimeoutS":1e30}"#,
+        ] {
+            let mut core = CremaCore::new();
+            let out = core.connect_sweep_json(json, 1_000);
+            let writes = mmr_writes(&out);
+            let register = if json.contains("flush") {
+                MmrRegister::FlushTimeout
+            } else {
+                MmrRegister::HeaterUp2Timeout
+            };
+            assert!(writes.contains(&(register, 36_000)), "{json}: {writes:?}");
+        }
+        // Whole-ms rounding matches the setter: 5.1 s is 51 deciseconds, not 50.
+        let mut core = CremaCore::new();
+        let mut s = snapshot();
+        s.flush_timeout_s = 5.1;
+        s.espresso_warmup_timeout_s = Some(5.1);
+        let writes = mmr_writes(&core.connect_sweep(&s, 0));
+        assert!(
+            writes.contains(&(MmrRegister::FlushTimeout, 51)),
+            "{writes:?}"
+        );
+        assert!(
+            writes.contains(&(MmrRegister::HeaterUp2Timeout, 51)),
+            "{writes:?}"
+        );
+        // Non-finite and negative values still read as zero.
+        s.flush_timeout_s = f32::NAN;
+        s.espresso_warmup_timeout_s = Some(-4.0);
+        let writes = mmr_writes(&core.connect_sweep(&s, 0));
+        assert!(
+            writes.contains(&(MmrRegister::FlushTimeout, 0)),
+            "{writes:?}"
+        );
+        assert!(
+            writes.contains(&(MmrRegister::HeaterUp2Timeout, 0)),
+            "{writes:?}"
         );
     }
 

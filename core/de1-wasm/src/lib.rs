@@ -2874,19 +2874,12 @@ impl CremaBridge {
     /// `espresso_warmup_timeout`). MMR `0x803838`, 4-byte LE. `seconds`
     /// is scaled to deciseconds on the wire (`int(10 × seconds)`).
     pub fn set_espresso_warmup_timeout(&self, seconds: f32) -> String {
-        // 1-hour domain ceiling (ms), replacing the old `u64::MAX as f32` clamp.
-        // Far above any real DE1 warmup; it only bounds the conversion below.
-        const MAX_WARMUP_TIMEOUT_MS: f32 = 60.0 * 60.0 * 1000.0;
-        let dur = if seconds.is_finite() && seconds > 0.0 {
-            // Round to whole ms (compensates f32 error, e.g. 5.1 s → 5100 ms),
-            // clamp to the ceiling, then widen to f64: `from_secs_f64` rounds to
-            // the nearest nanosecond and recovers the integer ms — no float→int
-            // cast, hence no `cast_*` allow.
-            let ms = (seconds * 1000.0).round().clamp(0.0, MAX_WARMUP_TIMEOUT_MS);
-            std::time::Duration::from_secs_f64(f64::from(ms) / 1000.0)
-        } else {
-            std::time::Duration::ZERO
-        };
+        // Whole ms, clamped to the 1-hour machine-timeout ceiling the connect
+        // sweep shares (one helper, so the two paths cannot disagree).
+        let dur = de1_domain::duration::secs_clamped_whole_ms(
+            seconds,
+            de1_domain::duration::MAX_MACHINE_TIMEOUT_S,
+        );
         json(self.core.set_espresso_warmup_timeout(dur))
     }
 

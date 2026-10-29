@@ -74,6 +74,7 @@ pub mod crema_jsonl;
 pub mod crema_profile;
 pub mod decent_shot_record;
 pub mod decent_wire;
+pub mod duration;
 pub mod error;
 pub mod filter;
 pub mod firmware_builds;
