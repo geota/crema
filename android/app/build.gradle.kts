@@ -78,10 +78,11 @@ android {
         manifestPlaceholders["googleRedirectScheme"] = "com.googleusercontent.apps.unconfigured"
     }
 
-    // JVM unit tests (`./gradlew :app:testDebugUnitTest`) for the pure shell logic
-    // — wire assembly, fingerprint-skip decisions, formatters. They never touch the
-    // BLE/DE1 or the native FFI (those need a device), so stubbed android.* calls
-    // return defaults rather than throwing.
+    // JVM unit tests (`./gradlew :app:testDebugUnitTest`) for the shell logic
+    // — wire assembly, fingerprint-skip decisions, formatters. They never touch
+    // BLE (that needs a device); the few that need the core load its HOST build
+    // (cargoBuildHostCore). Stubbed android.* calls return defaults rather than
+    // throwing; the MainViewModel smoke test runs under Robolectric instead.
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
@@ -393,6 +394,15 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("io.ktor:ktor-client-mock:$ktor")
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.0")
+    // The desktop JNA jar (same version as the @aar above) carries the host
+    // libjnidispatch, so JVM tests can load the HOST build of the Rust core
+    // (cargoBuildHostCore below) — MainUiState's defaults and MainViewModel
+    // construction both call into it.
+    testImplementation("net.java.dev.jna:jna:5.19.1")
+    // Robolectric: a real Application/Looper for the MainViewModel
+    // construct-and-clear smoke test (cohort review 2026-10-25, P3-2).
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("androidx.test:core:1.7.0")
 }
 
 // ---------------------------------------------------------------------------
@@ -533,4 +543,26 @@ androidComponents {
             GenerateUniffiBindings::outputDirectory,
         )
     }
+}
+
+// ---------------------------------------------------------------------------
+// Host build of the Rust core for JVM unit tests
+// ---------------------------------------------------------------------------
+// The APK carries the Android cdylib; JVM tests run on the build machine, so
+// they need the same crate built for the HOST (libde1_ffi.dylib / .so). JNA
+// finds it through jna.library.path. Incremental: a no-op when unchanged.
+val cargoBuildHostCore =
+    tasks.register<Exec>("cargoBuildHostCore") {
+        description = "Build de1-ffi for the host, for JVM unit tests."
+        group = "rust"
+        workingDir = layout.projectDirectory.dir("../../core").asFile
+        commandLine(cargoExecutable, "build", "--package", "de1-ffi", "--lib")
+    }
+
+tasks.withType<Test>().configureEach {
+    dependsOn(cargoBuildHostCore)
+    systemProperty(
+        "jna.library.path",
+        layout.projectDirectory.dir("../../core/target/debug").asFile.absolutePath,
+    )
 }
