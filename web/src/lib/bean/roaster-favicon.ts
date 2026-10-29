@@ -27,7 +27,8 @@
  * no servers). It's the same network call the user's browser makes when
  * visiting the roaster's website itself, so we don't gate it behind a
  * preference. The roaster's website domain is sent to Google; nothing
- * else about the user.
+ * else about the user. It is automatic, so the privacy policy
+ * (`routes/privacy`, section 3.1) discloses it; keep the two in step.
  */
 
 import type { Roaster } from './model';
