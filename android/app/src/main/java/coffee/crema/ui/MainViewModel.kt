@@ -2265,6 +2265,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Every store file reported unreadable this process (see [KeptAsideNotices]). */
     private var keptAside: List<KeptAside> = emptyList()
 
+    /** This VM's reconnect-timeline hook and sleep-on-quit registration. The
+     *  deferred teardown in [onCleared] releases exactly these, so a VM built
+     *  meanwhile keeps its own (final cohort review 2026-10-28, 04 P3-1). */
+    private val timelineLogHook: (coffee.crema.ble.ReconnectTimeline) -> Unit = { appendLog(it.compactLine()) }
+    private var quitSleepRegistration: Any? = null
+
     init {
         // Unreadable store files: the stores move them aside as they load and
         // report here; tell the user once instead of showing silently-empty data.
@@ -2279,7 +2285,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         // Each finished reconnect episode → one compact line in the event log
         // (and so the diagnostics ring buffer).
-        coffee.crema.diag.ReconnectTimelines.recorder.onFinished = { appendLog(it.compactLine()) }
+        coffee.crema.diag.ReconnectTimelines.recorder.onFinished = timelineLogHook
         // A companion device appeared: the keep-alive may start now, even from
         // the background (the CDM exemption) — its own gates still apply. The
         // reconnect kick itself is the connection controller's.
@@ -2333,7 +2339,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // fire time — never mid-shot (idle only), and never from a
         // secondary (its sleep() would relay to the machine the primary is
         // still using).
-        QuitSleep.install {
+        quitSleepRegistration = QuitSleep.install {
             val s = _ui.value
             // "Not busy", not "exactly Idle": a machine that is heating,
             // running a calibration or simply hasn't reported a state yet is
@@ -6154,15 +6160,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // cancelled here (lifecycle 2.x closes it before calling onCleared),
         // so the handler's write runs on ProcessScope, and the BLE teardown
         // below waits (bounded) for it: closing the link first would drop it.
+        // If the service's onTaskRemoved fired first, fire() hands back the
+        // write it started, so the wait covers that one too.
         val quitWrite = QuitSleep.fire()
         // Unregister the power receiver + stop the keep-alive service (#65).
         bgConnection.close()
         teardownAfterQuitWrite(ProcessScope.main, quitWrite, QUIT_WRITE_BUDGET_MS + QUIT_TEARDOWN_SLACK_MS) {
-            QuitSleep.clear()
+            QuitSleep.clear(quitSleepRegistration)
             // Adapter watcher off, scans cancelled, both device links down…
             connection.close()
             // The recorder is process-scoped: don't let it pin this VM.
-            coffee.crema.diag.ReconnectTimelines.recorder.onFinished = {}
+            coffee.crema.diag.ReconnectTimelines.recorder.releaseOnFinished(timelineLogHook)
             // Close the transport last — it unregisters the Nordic environment's
             // Bluetooth receiver and tears down the central manager. The managers'
             // disconnect() calls above are fire-and-forget coroutines; closing the

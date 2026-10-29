@@ -182,6 +182,14 @@ class ReconnectTimelineRecorder(
     /** Newest first; at most [capacity]. Includes open (in-progress) episodes. */
     val timelines: StateFlow<List<ReconnectTimeline>> = _timelines.asStateFlow()
 
+    /** Drop [hook] if it is still [onFinished]. The recorder is process-wide
+     *  and a ViewModel's teardown can run after its successor installed its
+     *  own hook, which must survive (final cohort review 2026-10-28, 04 P3-1). */
+    @Synchronized
+    fun releaseOnFinished(hook: (ReconnectTimeline) -> Unit) {
+        if (onFinished === hook) onFinished = {}
+    }
+
     private var nextId = 1L
 
     /** Per device: the id of its open episode, if any. */

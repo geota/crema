@@ -37,7 +37,7 @@ class QuitSleepTest {
 
     @After
     fun reset() {
-        QuitSleep.clear()
+        QuitSleep.reset()
     }
 
     // ── The regression: a write fired from teardown runs to completion ────
@@ -123,13 +123,79 @@ class QuitSleepTest {
 
     @Test
     fun firingWithNoHandlerDoesNotLatch() {
-        QuitSleep.clear()
+        QuitSleep.reset()
         assertNull(QuitSleep.fire())
         var calls = 0
         // install() re-arms anyway, but the point is fire() never latched.
         QuitSleep.install { calls++; null }
         QuitSleep.fire()
         assertEquals(1, calls)
+    }
+
+    // ── Successor VMs and the other signal (final review 2026-10-28, 04 P3-1)
+
+    @Test
+    fun aPredecessorsLateTeardownKeepsTheSuccessorsHandler() = runTest {
+        var oldCalls = 0
+        var newCalls = 0
+        val old = QuitSleep.install { oldCalls++; null }
+        // The swipe: the old VM fires, its teardown is deferred…
+        assertNull(QuitSleep.fire())
+        // …and the user relaunches before it runs: a new VM installs.
+        QuitSleep.install { newCalls++; CompletableDeferred(true) }
+        // The old VM's deferred teardown drops only its own handler.
+        QuitSleep.clear(old)
+        assertTrue(QuitSleep.fire()!!.await(), "sleep-on-quit still works for the new session")
+        assertEquals(1, newCalls)
+        assertEquals(1, oldCalls)
+    }
+
+    @Test
+    fun clearDropsItsOwnHandler() {
+        var calls = 0
+        val mine = QuitSleep.install { calls++; null }
+        QuitSleep.clear(mine)
+        assertNull(QuitSleep.fire())
+        assertEquals(0, calls)
+        QuitSleep.clear(null) // no registration: a no-op
+    }
+
+    @Test
+    fun aLatchedFireHandsOutTheWriteTheServiceStarted() = runTest {
+        val write = CompletableDeferred<Boolean>()
+        var calls = 0
+        QuitSleep.install { calls++; write }
+        // QuitSleepService.onTaskRemoved fires first and starts the write…
+        val fromService = QuitSleep.fire()
+        // …then the activity is destroyed: onCleared gets the same write, not
+        // null, so it does not tear the link down underneath it.
+        val fromOnCleared = QuitSleep.fire()
+        assertTrue(fromOnCleared === fromService && fromOnCleared === write)
+        assertEquals(1, calls, "still one write")
+        var torn = 0
+        teardownAfterQuitWrite(this, fromOnCleared, QUIT_WRITE_BUDGET_MS) { torn++ }
+        runCurrent()
+        assertEquals(0, torn, "the link stays up while the service's write runs")
+        write.complete(true)
+        advanceUntilIdle()
+        assertEquals(1, torn)
+        // Once it settled there is nothing left to wait for.
+        assertNull(QuitSleep.fire())
+    }
+
+    @Test
+    fun aPredecessorsFailedWriteDoesNotReArmTheSuccessor() = runTest {
+        val oldWrite = CompletableDeferred<Boolean>()
+        QuitSleep.install { oldWrite }
+        assertTrue(QuitSleep.fire() === oldWrite)
+        var newCalls = 0
+        QuitSleep.install { newCalls++; CompletableDeferred(true) }
+        assertTrue(QuitSleep.fire()!!.await())
+        assertEquals(1, newCalls)
+        // The old write fails late: the successor's latch stays held.
+        oldWrite.complete(false)
+        assertNull(QuitSleep.fire())
+        assertEquals(1, newCalls)
     }
 
     // ── Bounded, best-effort ──────────────────────────────────────────────
