@@ -199,7 +199,7 @@ class ProxyHandshakeTest {
         server.start()
         try {
             val link = ReconnectingClientLink("ws://127.0.0.1:$port${LanRelayServer.PATH}", scope)
-            val proxy = ProxyTransport(link, scope, "phone-1", "Phone", requestTimeoutMs = 4_000, reconnects = link.reconnects)
+            val proxy = ProxyTransport(link, scope, "phone-1", "Phone", requestTimeoutMs = 4_000)
             assertTrue(withTimeout(5_000) { proxy.control("tareScale") }.isSuccess)
 
             server.stop()

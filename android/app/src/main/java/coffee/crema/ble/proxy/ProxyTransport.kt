@@ -6,10 +6,10 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
@@ -47,16 +47,18 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * ## Lifecycle
  *
- * On construction it sends [Frame.Hello] and collects the link. Every request
- * (attach, detach, read, write, control) waits for the current session's
- * [Frame.Welcome] before it is sent, so nothing reaches the primary ahead of the
- * handshake; on [Frame.Denied] requests fail at once. A redial (from
- * [ReconnectingClientLink]) starts a new session: a fresh `Hello`, then the
- * re-attach. Here a closed link simply ends the flows.
+ * It collects the link's [FrameLink.events] and runs one handshake per
+ * session epoch: exactly one [Frame.Hello], sent on that session only. Every
+ * request (attach, detach, read, write, control) waits for the current
+ * session's [Frame.Welcome] and is sent on that session only, so nothing
+ * reaches the primary ahead of the handshake or lands on a later session. On
+ * [Frame.Denied] requests fail at once and the link is closed (no redial). A
+ * Welcome after the first one (a redial) re-attaches every device. A closed
+ * link simply ends the flows.
  */
 class ProxyTransport(
     private val link: FrameLink,
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
     private val clientId: String,
     private val clientName: String,
     private val requestTimeoutMs: Long = 5_000L,
@@ -79,10 +81,6 @@ class ProxyTransport(
      *  notice (issue 11, loose multi-controller). Display-only; the VM surfaces it
      *  as a snackbar. Default no-op. */
     private val onEvent: (text: String) -> Unit = {},
-    /** Fires when the link redials after a drop (from [ReconnectingClientLink]).
-     *  Each emission re-runs the attach handshake so telemetry resumes instead of
-     *  freezing on stale state (issue 03). Default empty for the in-memory links. */
-    reconnects: Flow<Unit> = emptyFlow(),
 ) : BleTransport {
 
     /** Devices the primary holds, from [Frame.Welcome] / [Frame.Roster]; drives [scan]. */
@@ -109,29 +107,58 @@ class ProxyTransport(
 
     private val nextId = AtomicLong(1L)
 
-    /** The current session's handshake: completes on its [Frame.Welcome], fails on
-     *  [Frame.Denied] or a version mismatch. Replaced when the link redials. */
-    @Volatile
-    private var handshake = CompletableDeferred<Unit>()
-
-    init {
-        link.incoming().onEach { dispatch(it) }.launchIn(scope)
-        scope.launch { link.send(Frame.Hello(PROXY_PROTOCOL_VERSION, ROLE_SECONDARY, clientId, clientName)) }
-        scope.launch { reconnects.collect { onReconnect() } }
+    /** Where the current session's handshake stands. One per epoch. */
+    private sealed class Handshake(val epoch: Long) {
+        class Pending(epoch: Long) : Handshake(epoch)
+        class Welcomed(epoch: Long) : Handshake(epoch)
+        class Refused(epoch: Long, val error: Throwable) : Handshake(epoch)
     }
 
-    /** Re-run the attach handshake after the link redials (issue 03): a fresh
-     *  [Frame.Hello] (the primary may have restarted), then re-[Frame.Attach] every
-     *  device the managers had attached — each re-attach triggers the relay's
-     *  snapshot burst, so the secondary's core re-converges and `observe` resumes.
-     *  The re-attach (like every request) waits for the new session's Welcome. */
-    private suspend fun onReconnect() {
-        Log.i(TAG, "Link reconnected — re-handshaking (re-attach ${attached.size} device(s))")
-        if (handshake.isCompleted) handshake = CompletableDeferred()
-        runCatching { link.send(Frame.Hello(PROXY_PROTOCOL_VERSION, ROLE_SECONDARY, clientId, clientName)) }
+    private val handshake = MutableStateFlow<Handshake>(Handshake.Pending(0L))
+
+    /** Whether a session has been welcomed before (a later Welcome re-attaches). */
+    @Volatile
+    private var welcomedBefore = false
+
+    init {
+        link.events().onEach { onLinkEvent(it) }.launchIn(scope)
+    }
+
+    private fun onLinkEvent(event: LinkEvent) {
+        when (event) {
+            is LinkEvent.SessionStarted -> {
+                // A terminal refusal sticks: the link is closed, nothing redials.
+                if (handshake.value is Handshake.Refused) return
+                handshake.value = Handshake.Pending(event.epoch)
+                // Exactly one Hello per session, on that session only.
+                scope.launch {
+                    runCatching { link.sendOn(event.epoch, Frame.Hello(PROXY_PROTOCOL_VERSION, ROLE_SECONDARY, clientId, clientName)) }
+                }
+            }
+            is LinkEvent.Received -> dispatch(event.frame)
+        }
+    }
+
+    /** The current session refused us (Denied, version): fail every waiting
+     *  request, tell the caller, and close the link so it doesn't redial into
+     *  the same refusal. */
+    private fun refuse(reason: String, error: Throwable) {
+        handshake.value = Handshake.Refused(handshake.value.epoch, error)
+        onDenied(reason)
+        scope.launch { runCatching { link.close() } }
+    }
+
+    /** Re-attach every device the managers had attached after a redial (issue
+     *  03): each re-attach triggers the relay's snapshot burst, so the
+     *  secondary's core re-converges and `observe` resumes. */
+    private suspend fun reattach() {
+        Log.i(TAG, "Session re-established — re-attaching ${attached.size} device(s)")
         for (address in attached.toList()) {
             val id = nextId.getAndIncrement()
             runCatching { request(id) { Frame.Attach(id, address) } }
+                .onSuccess { reply ->
+                    if (reply !is Frame.Attached) Log.w(TAG, "re-attach $address refused: $reply")
+                }
                 .onFailure { Log.w(TAG, "re-attach $address failed: ${it.message}") }
         }
     }
@@ -143,14 +170,18 @@ class ProxyTransport(
                 // primary normally denies our Hello, but an OLDER primary won't know
                 // to, so the secondary refuses here and surfaces "please update".
                 if (frame.v != PROXY_PROTOCOL_VERSION) {
-                    onDenied("version mismatch — update Crema on both devices")
-                    handshake.completeExceptionally(
+                    refuse(
+                        "version mismatch — update Crema on both devices",
                         IllegalStateException("Proxy version mismatch: primary v${frame.v} != v$PROXY_PROTOCOL_VERSION"),
                     )
                 } else {
+                    val current = handshake.value
+                    if (current !is Handshake.Pending) return
                     applyRoster(frame.roster)
                     onWelcome(frame.scope)
-                    handshake.complete(Unit)
+                    handshake.value = Handshake.Welcomed(current.epoch)
+                    if (welcomedBefore) scope.launch { reattach() }
+                    welcomedBefore = true
                 }
             }
             is Frame.Roster -> applyRoster(frame.devices)
@@ -169,10 +200,7 @@ class ProxyTransport(
             is Frame.State -> stateFlow(frame.address).value = parseState(frame.state)
             is Frame.Config -> onConfig(frame.json)
             is Frame.Event -> onEvent(frame.text)
-            is Frame.Denied -> {
-                onDenied(frame.reason)
-                handshake.completeExceptionally(IllegalStateException("Proxy denied: ${frame.reason}"))
-            }
+            is Frame.Denied -> refuse(frame.reason, IllegalStateException("Proxy denied: ${frame.reason}"))
             is Frame.HandoffOffer -> onHandoffOffer(frame.fromName)
             else -> Log.w(TAG, "Secondary ignoring unexpected server frame: $frame")
         }
@@ -194,7 +222,8 @@ class ProxyTransport(
 
     override suspend fun connect(device: BleTransport.DeviceHandle) {
         // The first handshake may wait on the host's pairing prompt: no timeout.
-        handshake.await()
+        val settled = handshake.first { it !is Handshake.Pending }
+        if (settled is Handshake.Refused) throw settled.error
         val id = nextId.getAndIncrement()
         val reply = request(id) { Frame.Attach(id, device.address) }
         if (reply is Frame.ControlErr) error("attach refused: ${reply.reason}")
@@ -302,11 +331,17 @@ class ProxyTransport(
             // neither succeed, fail, nor be able to revert (issue 06). Bounding the
             // whole round-trip makes a control/read fail fast so the optimistic
             // apply can be rolled back and surfaced.
-            // The handshake wait is inside the timeout too: a request never goes
-            // out before this session's Welcome (the primary would refuse it).
+            // The handshake wait is inside the timeout too: a request goes out
+            // only on a welcomed session, and only on that one. If the session
+            // ends before the send, wait for the next session's Welcome.
             withTimeout(requestTimeoutMs) {
-                handshake.await()
-                link.send(build())
+                val frame = build()
+                while (true) {
+                    val settled = handshake.first { it !is Handshake.Pending }
+                    if (settled is Handshake.Refused) throw settled.error
+                    if (link.sendOn(settled.epoch, frame)) break
+                    handshake.first { it.epoch != settled.epoch }
+                }
                 deferred.await()
             }
         } finally {

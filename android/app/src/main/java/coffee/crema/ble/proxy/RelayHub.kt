@@ -5,6 +5,9 @@ import coffee.crema.ble.BleTransport
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -129,6 +132,19 @@ class RelayHub(
      *  switch closes the link) instead of a blind timer. */
     fun hasClient(clientId: String): Boolean = clients.any { it.clientId == clientId }
 
+    /** Bumped whenever a session joins, is approved or leaves. */
+    private val clientsVersion = MutableStateFlow(0L)
+
+    /** Wait until [clientId] has no live session, at most [timeoutMs]; true when
+     *  it left in time. Event-driven: wakes when a session ends. */
+    suspend fun awaitClientGone(clientId: String, timeoutMs: Long): Boolean =
+        withTimeoutOrNull(timeoutMs) { clientsVersion.first { !hasClient(clientId) } } != null
+
+    private fun clientsChanged() {
+        clientsVersion.update { it + 1 }
+        onClientsChanged()
+    }
+
     // ---- Tap: fed by the primary's notification path ----------------------
 
     /** A notification arrived on the real link: cache it (if a snapshot char) and
@@ -196,7 +212,7 @@ class RelayHub(
     fun handoffTargets(): List<HandoffTarget> =
         clients.mapNotNull { c ->
             val id = c.clientId
-            if (id != null && c.canControl) HandoffTarget(id, c.clientName ?: id) else null
+            if (id != null && c.canControl && !c.isClosed) HandoffTarget(id, c.clientName ?: id) else null
         }
 
     /** Push a [Frame.HandoffOffer] to a specific mirroring secondary (issue 07).
@@ -223,7 +239,12 @@ class RelayHub(
         // drop (its incoming() completes → its reconnect machinery resyncs)
         // instead of a half-dead session that streams nothing forever.
         val pump = launch {
-            for (frame in session.outbox) link.send(frame)
+            for (frame in session.outbox) {
+                // A lag-dropped peer resyncs from a snapshot anyway: don't trickle
+                // its backlog out at the slow peer's pace first.
+                if (session.dropped) break
+                link.send(frame)
+            }
             runCatching { link.close() }
         }
         try {
@@ -252,14 +273,14 @@ class RelayHub(
             }
         } finally {
             clients.remove(session)
-            session.outbox.close()
+            session.closeOutbox()
             pump.cancel()
             // Belt-and-braces: make sure the socket dies with the session even
             // when the collect ended abnormally (the pump's drain-then-close
             // covers the outbox-close paths). Bounded, so a stuck flush can't
             // hold this coroutine past the server's stop.
             withContext(NonCancellable) { withTimeoutOrNull(CLOSE_TIMEOUT_MS) { runCatching { link.close() } } }
-            onClientsChanged()
+            clientsChanged()
         }
     }
 
@@ -280,7 +301,7 @@ class RelayHub(
         if (frame.v != PROXY_PROTOCOL_VERSION) {
             Log.i(TAG, "denied ${frame.clientName}: protocol v${frame.v} != v$PROXY_PROTOCOL_VERSION")
             deliver(session, Frame.Denied("version mismatch"))
-            session.outbox.close()
+            session.closeOutbox()
             return
         }
         when (val decision = authorize(frame.clientId, frame.clientName)) {
@@ -291,12 +312,12 @@ class RelayHub(
                 session.clientName = frame.clientName
                 val scope = if (decision.canControl) SCOPE_CONTROL else SCOPE_MIRROR
                 deliver(session, Frame.Welcome(PROXY_PROTOCOL_VERSION, primaryId, primaryName, AUTHORITY_PRIMARY, roster(), scope))
-                onClientsChanged() // identity known → the primary's hand-off list can list it
+                clientsChanged() // identity known → the primary's hand-off list can list it
             }
             is PairingDecision.Denied -> {
                 Log.i(TAG, "pairing denied for ${frame.clientName} (${frame.clientId}): ${decision.reason}")
                 deliver(session, Frame.Denied(decision.reason))
-                session.outbox.close()
+                session.closeOutbox()
             }
         }
     }
@@ -325,8 +346,11 @@ class RelayHub(
                 // A (re-)attach means the peer's core is converging afresh: clear
                 // its per-char seq marks for this device FIRST so the snapshot
                 // burst is delivered even for chars it saw in a previous attach.
-                // (No live frames can interleave here — fan-out for this device
-                // only starts once attach() registers below.)
+                // On a re-attach the session is already attached, so live frames
+                // CAN interleave with this. That is safe: the cache only ever
+                // moves forward and onInbound updates it before delivering, so
+                // after the clear the burst can repeat the newest value but never
+                // enqueue one older than a frame already delivered.
                 val prefix = frame.address + "|"
                 session.seenSeq.keys.removeIf { it.startsWith(prefix) }
                 session.attach(frame.address)
@@ -404,11 +428,20 @@ class RelayHub(
      * strictly increasing per char and they are never snapshotted.
      */
     private fun deliverNotify(session: ClientSession, key: String, seq: Long, frame: Frame.Notify) {
-        var wins = false
+        if (session.isClosed) return
+        var overflow = false
+        // The check and the enqueue happen together, under the map's lock for
+        // this key, so two threads can't pass the check and then enqueue in the
+        // opposite order.
         session.seenSeq.compute(key) { _, cur ->
-            if (cur == null || seq > cur) { wins = true; seq } else cur
+            if (cur == null || seq > cur) {
+                if (!session.offer(frame)) overflow = true
+                seq
+            } else {
+                cur
+            }
         }
-        if (wins) deliver(session, frame)
+        if (overflow) dropLagging(session)
     }
 
     /** Enqueue a frame for [session]. If its outbox is full (a lagging client on a
@@ -417,10 +450,18 @@ class RelayHub(
      *  drains what's queued and then closes the LINK (see [serve]) so the peer
      *  actually observes the drop. */
     private fun deliver(session: ClientSession, frame: Frame) {
-        if (!session.offer(frame)) {
-            Log.w(TAG, "Client outbox full — dropping client (will resync on reconnect)")
-            session.outbox.close()
-        }
+        // A session already closed (denied, dropped, ending) gets nothing more.
+        if (session.isClosed) return
+        if (!session.offer(frame)) dropLagging(session)
+    }
+
+    /** The peer stopped keeping up: end its session now (the pump skips the
+     *  backlog and closes the link). */
+    private fun dropLagging(session: ClientSession) {
+        if (session.dropped) return
+        session.dropped = true
+        Log.w(TAG, "Client outbox full — dropping client (will resync on reconnect)")
+        session.closeOutbox()
     }
 
     private fun cacheKey(address: String, char: UUID): String = "$address|$char"
@@ -428,6 +469,15 @@ class RelayHub(
     /** One connected secondary: its outbox and the set of devices it has attached. */
     private class ClientSession(@Suppress("unused") val link: FrameLink, capacity: Int) {
         val outbox = Channel<Frame>(capacity)
+        /** Dropped for lagging: the pump sends nothing more. */
+        @Volatile var dropped: Boolean = false
+        /** The outbox is closed: the session is ending and gets nothing more. */
+        @Volatile var isClosed: Boolean = false
+            private set
+        fun closeOutbox() {
+            isClosed = true
+            outbox.close()
+        }
         /** Set true once this peer's Hello has been APPROVED (issue 03). Until then it
          *  may not attach, read, or observe, and the fan-out methods skip it — a peer
          *  that never sent (or was denied) a Hello gets no roster, snapshot, or stream. */

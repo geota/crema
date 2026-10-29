@@ -190,7 +190,7 @@ class ProxyHardeningTest {
                 isSnapshotChar = { _, _ -> false },
                 // What ProxyController's grant does: answer at once, release later.
                 controlHandler = { _, _, originId, _ ->
-                    scope.launch { released.complete(coffee.crema.ui.awaitDisconnect({ h.hasClient(originId!!) }, 3_000)) }
+                    scope.launch { released.complete(h.awaitClientGone(originId!!, 3_000)) }
                     Result.success(Unit)
                 },
             )

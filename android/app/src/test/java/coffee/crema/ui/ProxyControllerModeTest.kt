@@ -2,12 +2,20 @@ package coffee.crema.ui
 
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
+import coffee.crema.ble.proxy.Frame
+import coffee.crema.ble.proxy.InMemoryFrameLink
+import coffee.crema.ble.proxy.PROXY_PROTOCOL_VERSION
 import coffee.crema.ble.proxy.PairingDecision
+import coffee.crema.ble.proxy.RelayHub
 import coffee.crema.settings.PairedDevice
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -114,20 +122,53 @@ class ProxyControllerModeTest {
     }
 
     @Test
-    fun `release waits for the disconnect and gives up at the timeout`() {
-        var connected = true
-        val released = scope.async { awaitDisconnect({ connected }, timeoutMs = 3_000) }
-        scheduler.advanceTimeBy(1_000)
+    fun `a denial is remembered while hosting`() {
+        val first = scope.async { controller.authorizePeer("id-1", "Phone") }
         scheduler.runCurrent()
-        assertTrue(!released.isCompleted)
-        connected = false
-        scheduler.advanceTimeBy(150)
+        controller.resolvePairing(PairingChoice.DENY)
         scheduler.runCurrent()
-        assertEquals(true, released.getCompleted())
+        assertEquals(PairingDecision.Denied("not authorized"), first.getCompleted())
 
-        val stuck = scope.async { awaitDisconnect({ true }, timeoutMs = 3_000) }
-        scheduler.advanceTimeBy(3_001)
+        val again = scope.async { controller.authorizePeer("id-1", "Phone") }
         scheduler.runCurrent()
-        assertEquals(false, stuck.getCompleted())
+        assertEquals(PairingDecision.Denied("not authorized"), again.getCompleted())
+        assertNull(controller.state.value.pendingPairing, "a denied device can't re-prompt by reconnecting")
+    }
+
+    /** Drives the real path: a relayed "handoff" from an approved session →
+     *  handleRelayedControl → grantHandoff(takerId) → release on that
+     *  session's disconnect. */
+    @Test
+    fun `a relayed handoff releases only when the taker's session ends`() {
+        val hub = RelayHub("p", "P", roster = { emptyList() }, readSource = { _, _, _ -> ByteArray(0) }, isSnapshotChar = { _, _ -> false })
+        controller.relayHub = hub
+        val io = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val (client, server) = InMemoryFrameLink.pair()
+            io.launch { hub.serve(server) }
+            val rx = CopyOnWriteArrayList<Frame>()
+            io.launch { client.incoming().collect { rx += it } }
+            runBlocking {
+                client.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "taker", "Taker"))
+                withTimeout(2_000) { while (!hub.hasClient("taker")) delay(5) }
+            }
+
+            assertTrue(controller.handleRelayedControl("handoff", "", "taker", "Taker").isSuccess)
+            repeat(20) { scheduler.runCurrent(); Thread.sleep(5) }
+            scheduler.advanceTimeBy(200)
+            scheduler.runCurrent()
+            assertTrue("applied:normal" !in events, "no release while the taker is connected: $events")
+
+            runBlocking { client.close() }
+            val deadline = System.currentTimeMillis() + 2_000
+            while ("applied:normal" !in events && System.currentTimeMillis() < deadline) {
+                scheduler.runCurrent()
+                scheduler.advanceTimeBy(200) // the switch's settle delay; stays far below the 3 s cap
+                Thread.sleep(5)
+            }
+            assertTrue("applied:normal" in events, "released on the taker's disconnect: $events")
+        } finally {
+            io.cancel()
+        }
     }
 }

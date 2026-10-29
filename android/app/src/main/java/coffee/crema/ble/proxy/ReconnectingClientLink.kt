@@ -10,12 +10,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -32,19 +32,17 @@ enum class LinkState { CONNECTING, CONNECTED }
  * primary restarting (issue 03), not just a late-starting primary (M1).
  *
  * Reconnection has two parts and this class owns the **transport** half:
- * - [incoming] is one continuous flow spanning every session (frames from each
- *   live socket are pumped into one channel), so the [ProxyTransport] collector
- *   never ends.
- * - [state] exposes CONNECTING/CONNECTED for the UI; [reconnects] fires once each
- *   time a *new* session goes live after the first.
+ * - [events] is one continuous stream spanning every session: each new socket
+ *   starts with [LinkEvent.SessionStarted] (epoch 1, 2, …), then its frames, so
+ *   the [ProxyTransport] collector never ends and knows which session every
+ *   frame came from.
+ * - [sendOn] sends on one session only, so a frame meant for a session that
+ *   has ended is never delivered to the next one.
+ * - [state] exposes CONNECTING/CONNECTED for the UI.
  *
- * The **protocol** half (re-`Hello` → re-`Attach` → re-snapshot on a reconnect)
- * lives in [ProxyTransport], driven by [reconnects] — the link can't re-establish
- * protocol state alone. The link does keep one protocol rule per session: until
- * that session's handshake reply ([Frame.Welcome] or [Frame.Denied]) arrives,
- * only [Frame.Hello] goes out. Any other frame waits for the reply, so a request
- * sent during a redial can never reach the primary ahead of the new session's
- * `Hello` (the primary would refuse it).
+ * The **protocol** half (one `Hello` per session, requests after that
+ * session's `Welcome`, re-`Attach` → re-snapshot) lives in [ProxyTransport],
+ * keyed by epoch. The link knows nothing about frames.
  *
  * The socket is Ktor's OkHttp engine ([HttpClients.webSocketClient]: no retry
  * plugin, no read timeout, a ping every [HttpClients.WS_PING_INTERVAL_MS], so a
@@ -60,53 +58,42 @@ class ReconnectingClientLink(
 ) : FrameLink {
 
     /** One continuous inbound stream across all sessions. */
-    private val inbox = Channel<Frame>(Channel.UNLIMITED)
+    private val inbox = Channel<LinkEvent>(Channel.UNLIMITED)
 
     private val _state = MutableStateFlow(LinkState.CONNECTING)
     /** CONNECTING while dialing/redialing, CONNECTED while a session is live. */
     val state: StateFlow<LinkState> = _state.asStateFlow()
 
-    /** Fires once each time a session goes live **after the first** — the
-     *  [ProxyTransport]'s cue to re-run the attach handshake. */
-    private val _reconnects = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
-    val reconnects: Flow<Unit> = _reconnects
+    /** One live socket and its epoch. */
+    private class Session(val epoch: Long, val link: KtorWsFrameLink)
 
     /** The current live session, or null while (re)connecting. */
     @Volatile
-    private var live: KtorWsFrameLink? = null
-
-    /** The live session once its handshake reply has arrived; null before that
-     *  and while (re)connecting. Every frame except [Frame.Hello] waits for it. */
-    private val ready = MutableStateFlow<KtorWsFrameLink?>(null)
+    private var live: Session? = null
 
     private val loop = scope.launch {
         var attempt = 0
-        var first = true
+        var epoch = 0L
         while (isActive) {
             try {
                 val session = client.webSocketSession { url(this@ReconnectingClientLink.url) }
                 val link = KtorWsFrameLink(session, maxFrameBytes = PROXY_MAX_FRAME_BYTES)
-                live = link
+                epoch++
+                // The boundary goes into the stream before the session can be
+                // sent on, so the consumer sees it before any of its frames.
+                inbox.trySend(LinkEvent.SessionStarted(epoch))
+                live = Session(epoch, link)
                 attempt = 0
                 _state.value = LinkState.CONNECTED
-                Log.i(TAG, "Connected to primary at $url")
-                if (!first) _reconnects.emit(Unit) // re-attach trigger (not the first connect)
-                first = false
-                // Pump this session until the socket ends, then fall through to
-                // redial. The handshake reply opens the session to requests; it is
-                // queued to the consumer first, so the Welcome is handled before
-                // any reply to a request it let through.
-                link.incoming().collect { frame ->
-                    inbox.trySend(frame)
-                    if (frame is Frame.Welcome || frame is Frame.Denied) ready.value = link
-                }
+                Log.i(TAG, "Connected to primary at $url (session $epoch)")
+                // Pump this session until the socket ends, then fall through to redial.
+                link.incoming().collect { inbox.trySend(LinkEvent.Received(it)) }
                 Log.i(TAG, "Primary link dropped — will redial")
             } catch (e: Exception) {
                 Log.i(TAG, "Primary not reachable at $url (attempt ${attempt + 1}): ${e.message}")
             } finally {
                 // Also on cancellation: the session isn't a child of this loop.
-                ready.value = null
-                live?.cancel()
+                live?.link?.cancel()
                 live = null
                 if (isActive) _state.value = LinkState.CONNECTING
             }
@@ -115,24 +102,26 @@ class ReconnectingClientLink(
         }
     }
 
+    /** Send on the live session, waiting for one while redialing. A frame sent
+     *  during a blip may be lost with the socket. */
     override suspend fun send(frame: Frame) {
-        // Hello opens a session, so it goes out on the live socket (waiting for
-        // one while redialing). Everything else waits until the session has
-        // answered the Hello. A frame sent during a blip may still be lost with
-        // the socket; callers bound their wait (ProxyTransport's request timeout).
-        val link = if (frame is Frame.Hello) {
-            live ?: run { state.first { it == LinkState.CONNECTED }; live }
-        } else {
-            ready.filterNotNull().first()
-        }
-        link?.send(frame)
+        val session = live ?: run { state.first { it == LinkState.CONNECTED }; live }
+        session?.link?.send(frame)
     }
 
-    override fun incoming(): Flow<Frame> = inbox.receiveAsFlow()
+    override suspend fun sendOn(epoch: Long, frame: Frame): Boolean {
+        val session = live?.takeIf { it.epoch == epoch } ?: return false
+        return runCatching { session.link.send(frame) }.isSuccess
+    }
+
+    override fun events(): Flow<LinkEvent> = inbox.receiveAsFlow()
+
+    override fun incoming(): Flow<Frame> =
+        inbox.receiveAsFlow().filterIsInstance<LinkEvent.Received>().map { it.frame }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     override suspend fun close() {
-        val session = live
+        val session = live?.link
         loop.cancel()
         runCatching { session?.close() }
         session?.cancel()
@@ -143,7 +132,7 @@ class ReconnectingClientLink(
     /** Synchronous teardown for non-suspend call sites (e.g. `ViewModel.onCleared`).
      *  Cancels the live session (the shared engine outlives the client). */
     fun dispose() {
-        val session = live
+        val session = live?.link
         loop.cancel()
         session?.cancel()
         runCatching { client.close() }

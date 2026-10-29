@@ -52,7 +52,7 @@ class ProxyLivenessTest {
                 scope,
                 client = HttpClients.webSocketClient(engine),
             )
-            val proxy = ProxyTransport(link, scope, "phone-1", "Phone", reconnects = link.reconnects)
+            val proxy = ProxyTransport(link, scope, "phone-1", "Phone")
             assertTrue(withTimeout(5_000) { proxy.control("tareScale") }.isSuccess)
 
             relay.freeze()

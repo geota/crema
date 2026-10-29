@@ -37,7 +37,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 
 /** This device's human label — the name peers see in the multi-device picker
@@ -155,7 +154,8 @@ class ProxyController(
     // would be zeroed by its own init afterwards (the field-init-order trap —
     // review #36's launch-dead APK).
     private var nordicTransport: NordicBleTransport? = null
-    private var relayHub: RelayHub? = null
+    @androidx.annotation.VisibleForTesting
+    internal var relayHub: RelayHub? = null
     private var relayServer: LanRelayServer? = null
     private var proxyLink: ReconnectingClientLink? = null
 
@@ -191,6 +191,11 @@ class ProxyController(
     // at a time; concurrent unknown peers queue on the mutex.
     private val pairingMutex = Mutex()
     private var pairingDeferred: CompletableDeferred<PairingChoice>? = null
+
+    /** Client ids the host denied while hosting: not prompted again until
+     *  hosting stops (a denied device must not be able to re-prompt by
+     *  reconnecting). */
+    private val deniedWhileHosting: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /** Serializes [applyMode]: mode switches launch from several async paths
      *  (the picker, a handoff grant's delayed release, the reclaim probe,
@@ -312,7 +317,7 @@ class ProxyController(
      *  Wired into the [RelayHub] by [startPrimaryMode]; `startShot` runs the
      *  primary's full shot orchestration, so that complexity never crosses the
      *  wire. */
-    private fun handleRelayedControl(
+    internal fun handleRelayedControl(
         method: String,
         args: String,
         originId: String? = null,
@@ -378,17 +383,16 @@ class ProxyController(
             throw IllegalStateException(reason)
         }
         appendLog("Handoff granted — releasing the DE1")
+        val hub = relayHub
         scope.launch {
             // Ack-by-disconnect: the grant (ControlOk) is queued after this
             // handler returns; the taker, once it has it, switches to primary and
-            // its link closes. Wait for that — with a crash-guard timeout.
-            val hub = relayHub
-            if (takerId != null && hub != null) {
-                if (!awaitDisconnect({ hub.hasClient(takerId) }, handoffReleaseTimeoutMs)) {
-                    appendLog("Handoff: taker still connected after ${handoffReleaseTimeoutMs}ms — releasing anyway")
-                }
-            } else {
-                delay(400) // legacy fallback: no taker identity to wait on
+            // its link closes. Wait for that — with a crash-guard timeout. (A
+            // relayed control always carries the approved session's id.)
+            if (takerId == null || hub == null) {
+                appendLog("Handoff: no taker identity — releasing now")
+            } else if (!hub.awaitClientGone(takerId, handoffReleaseTimeoutMs)) {
+                appendLog("Handoff: taker still connected after ${handoffReleaseTimeoutMs}ms — releasing anyway")
             }
             // RELEASE: step down to normal but do NOT reconnect — the taker must be
             // able to acquire the now-free DE1 (issue 01). The old path reconnected,
@@ -524,6 +528,7 @@ class ProxyController(
         pairedDevices().firstOrNull { it.id == clientId }?.let {
             return PairingDecision.Allowed(it.canControl)
         }
+        if (clientId in deniedWhileHosting) return PairingDecision.Denied("not authorized")
         return pairingMutex.withLock {
             // Re-check inside the lock: a peer approved while we queued is now known.
             val known = pairedDevices().firstOrNull { it.id == clientId }
@@ -543,7 +548,10 @@ class ProxyController(
                 _state.update { it.copy(pendingPairing = null) }
             }
             when (choice) {
-                PairingChoice.DENY -> PairingDecision.Denied("not authorized")
+                PairingChoice.DENY -> {
+                    deniedWhileHosting += clientId
+                    PairingDecision.Denied("not authorized")
+                }
                 PairingChoice.MIRROR_ONLY -> { rememberPaired(clientId, clientName, false); PairingDecision.Allowed(false) }
                 PairingChoice.ALLOW_CONTROL -> { rememberPaired(clientId, clientName, true); PairingDecision.Allowed(true) }
             }
@@ -603,6 +611,7 @@ class ProxyController(
             normalMode()
         }
         var tappingRef: TappingBleTransport? = null
+        deniedWhileHosting.clear() // a new hosting session
         val hub = RelayHub(
             primaryId = deviceLabel(),
             primaryName = deviceLabel(),
@@ -673,8 +682,6 @@ class ProxyController(
             onHandoffOffer = { fromName -> onHandoffOffered(fromName) },
             // "Who's driving" (issue 11): another mirror drove the machine → toast.
             onEvent = { text -> notify(text) },
-            // Re-run the attach handshake when the link redials (issue 03).
-            reconnects = link.reconnects,
         )
         // Mirror the primary's SCALE (issue 04), roster-driven: attach it only once
         // the primary actually advertises one — no blind scan, so a scaleless primary
@@ -715,23 +722,23 @@ class ProxyController(
     private fun applyMode(role: String, host: String, port: Int, reconnect: Boolean = true) {
         // Never move the radio while a firmware flash or its erase / reboot
         // window holds the DE1 (audit r2 H1 / r1 NOTE 8).
-        if (firmwareHoldsLink()) {
-            appendLog("Mode switch to $role refused: $FIRMWARE_BUSY_REASON")
-            notify(FIRMWARE_BUSY_NOTICE)
-            return
-        }
+        if (refusedForFirmware(role)) return
         scope.launch {
             modeMutex.withLock {
                 // Again under the lock: a switch queued behind another one may
                 // start after a flash has taken the DE1.
-                if (firmwareHoldsLink()) {
-                    appendLog("Mode switch to $role refused: $FIRMWARE_BUSY_REASON")
-                    notify(FIRMWARE_BUSY_NOTICE)
-                    return@withLock
-                }
-                applyModeLocked(role, host, port, reconnect)
+                if (!refusedForFirmware(role)) applyModeLocked(role, host, port, reconnect)
             }
         }
+    }
+
+    /** True (logged, user told) when a firmware flash holds the DE1, so a
+     *  switch to [role] must not move the radio. */
+    private fun refusedForFirmware(role: String): Boolean {
+        if (!firmwareHoldsLink()) return false
+        appendLog("Mode switch to $role refused: $FIRMWARE_BUSY_REASON")
+        notify(FIRMWARE_BUSY_NOTICE)
+        return true
     }
 
     private suspend fun applyModeLocked(role: String, host: String, port: Int, reconnect: Boolean) {
@@ -840,14 +847,6 @@ class ProxyController(
         else -> null
     }
 }
-
-/** Wait until [isConnected] reads false, polling every [pollMs], for at most
- *  [timeoutMs]. True when it went false in time — the handoff release's
- *  ack-by-disconnect. */
-internal suspend fun awaitDisconnect(isConnected: () -> Boolean, timeoutMs: Long, pollMs: Long = 100L): Boolean =
-    withTimeoutOrNull(timeoutMs) {
-        while (isConnected()) delay(pollMs)
-    } != null
 
 /** Machine states it's safe to hand off the radio in (see [ProxyController]). */
 internal val HANDOFF_IDLE_STATES = setOf("Sleep", "GoingToSleep", "Idle", "SchedIdle")

@@ -2,7 +2,19 @@ package coffee.crema.ble.proxy
 
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.receiveAsFlow
+
+/** What a [FrameLink] delivers to its one consumer, with session boundaries. */
+sealed interface LinkEvent {
+    /** A new session (connection) went live; every later [Received] frame
+     *  belongs to it until the next [SessionStarted]. */
+    data class SessionStarted(val epoch: Long) : LinkEvent
+
+    /** A frame arrived on the current session. */
+    data class Received(val frame: Frame) : LinkEvent
+}
 
 /**
  * A duplex, ordered, reliable stream of [Frame]s — the transport-agnostic seam
@@ -24,6 +36,22 @@ interface FrameLink {
 
     /** Close this end. Idempotent. */
     suspend fun close()
+
+    /**
+     * [incoming] with session boundaries — use one or the other, not both. A
+     * link that redials ([ReconnectingClientLink]) starts each new connection
+     * with [LinkEvent.SessionStarted]; the default is one session (epoch 1)
+     * for the life of the link.
+     */
+    fun events(): Flow<LinkEvent> =
+        incoming().map<Frame, LinkEvent> { LinkEvent.Received(it) }.onStart { emit(LinkEvent.SessionStarted(1L)) }
+
+    /** Send [frame] on session [epoch] only: false (nothing sent) when that
+     *  session is no longer the live one. The default link has one session. */
+    suspend fun sendOn(epoch: Long, frame: Frame): Boolean {
+        send(frame)
+        return true
+    }
 }
 
 /**
