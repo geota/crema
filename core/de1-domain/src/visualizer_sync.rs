@@ -97,6 +97,75 @@ impl Default for VisualizerSyncPrefs {
     }
 }
 
+/// The outcome of restoring a backup's [`VisualizerSyncPrefs`] over the
+/// device's current ones: what to apply now, and which fields were HELD
+/// because the backup would widen what Crema shares (review 05 P3-1).
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuardedVisualizerPrefs {
+    /// The prefs to apply without asking: the incoming values, except that
+    /// every held field keeps its current value.
+    pub apply: VisualizerSyncPrefs,
+    /// The camelCase names of the fields the backup would widen
+    /// (`"privacy"`, `"includeNotes"`, `"autoUpload"`). A shell either asks the
+    /// user before applying the incoming value or keeps the current one.
+    pub held: Vec<String>,
+}
+
+/// How widely an upload privacy value shares: `private` < `unlisted` <
+/// `public`. An unknown value ranks as `public` so it is never applied
+/// silently.
+fn privacy_rank(privacy: &str) -> u8 {
+    match privacy {
+        "private" => 0,
+        "unlisted" => 1,
+        _ => 2,
+    }
+}
+
+/// Restore `incoming` (a backup's Visualizer prefs, possibly from someone
+/// else) over `current` without silently sharing more: a more public
+/// `privacy`, `includeNotes` turning on, or `autoUpload` turning on are held
+/// back (current value kept in `apply`, name listed in `held`). Narrowing
+/// changes and the remaining fields apply as-is.
+#[must_use]
+pub fn guard_restored_visualizer_prefs(
+    current: &VisualizerSyncPrefs,
+    incoming: &VisualizerSyncPrefs,
+) -> GuardedVisualizerPrefs {
+    let mut apply = incoming.clone();
+    let mut held = Vec::new();
+    if privacy_rank(&incoming.privacy) > privacy_rank(&current.privacy) {
+        apply.privacy.clone_from(&current.privacy);
+        held.push("privacy".to_owned());
+    }
+    if incoming.include_notes && !current.include_notes {
+        apply.include_notes = false;
+        held.push("includeNotes".to_owned());
+    }
+    if incoming.auto_upload && !current.auto_upload {
+        apply.auto_upload = false;
+        held.push("autoUpload".to_owned());
+    }
+    GuardedVisualizerPrefs { apply, held }
+}
+
+/// JSON form of [`guard_restored_visualizer_prefs`] for the shells: two
+/// `VisualizerSyncPrefs` JSON objects in (partial objects fill from the
+/// defaults), `GuardedVisualizerPrefs` JSON out.
+///
+/// # Errors
+/// When either input is not a JSON object of the prefs shape.
+pub fn guard_restored_visualizer_prefs_json(
+    current_json: &str,
+    incoming_json: &str,
+) -> Result<String, serde_json::Error> {
+    let current: VisualizerSyncPrefs = serde_json::from_str(current_json)?;
+    let incoming: VisualizerSyncPrefs = serde_json::from_str(incoming_json)?;
+    serde_json::to_string(&guard_restored_visualizer_prefs(&current, &incoming))
+}
+
 /// The fields the planner reads from a remote shot row. Visualizer's
 /// API returns a superset; we only care about identity + the de-dup
 /// hash inputs + editable annotations. Mirrors the TS `WireShot` in
@@ -879,6 +948,66 @@ pub fn reconcile_beans_json(payload: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── guard_restored_visualizer_prefs (review 05 P3-1) ─────────────
+
+    fn prefs(privacy: &str, notes: bool, auto: bool) -> VisualizerSyncPrefs {
+        VisualizerSyncPrefs {
+            privacy: privacy.to_owned(),
+            include_notes: notes,
+            auto_upload: auto,
+            ..VisualizerSyncPrefs::default()
+        }
+    }
+
+    #[test]
+    fn restore_holds_every_widening_field() {
+        let current = prefs("private", false, false);
+        let incoming = VisualizerSyncPrefs {
+            shots_direction: "two-way".to_owned(),
+            ..prefs("public", true, true)
+        };
+        let g = guard_restored_visualizer_prefs(&current, &incoming);
+        assert_eq!(g.held, vec!["privacy", "includeNotes", "autoUpload"]);
+        assert_eq!(g.apply.privacy, "private");
+        assert!(!g.apply.include_notes);
+        assert!(!g.apply.auto_upload);
+        // Non-sharing fields still restore.
+        assert_eq!(g.apply.shots_direction, "two-way");
+    }
+
+    #[test]
+    fn restore_applies_narrowing_and_equal_changes_without_holding() {
+        let current = prefs("public", true, true);
+        let g = guard_restored_visualizer_prefs(&current, &prefs("unlisted", false, false));
+        assert!(g.held.is_empty());
+        assert_eq!(g.apply, prefs("unlisted", false, false));
+        let same = guard_restored_visualizer_prefs(&current, &current);
+        assert!(same.held.is_empty());
+    }
+
+    #[test]
+    fn restore_treats_unknown_privacy_as_widest() {
+        let g = guard_restored_visualizer_prefs(
+            &prefs("unlisted", false, true),
+            &prefs("everyone", false, true),
+        );
+        assert_eq!(g.held, vec!["privacy"]);
+        assert_eq!(g.apply.privacy, "unlisted");
+    }
+
+    #[test]
+    fn restore_guard_json_round_trips_and_fills_partial_input() {
+        let out = guard_restored_visualizer_prefs_json(
+            r#"{"privacy":"private","includeNotes":false,"autoUpload":false}"#,
+            r#"{"privacy":"public"}"#,
+        )
+        .expect("valid input");
+        let g: GuardedVisualizerPrefs = serde_json::from_str(&out).expect("valid output");
+        // The partial incoming blob fills autoUpload=true from the defaults: held too.
+        assert_eq!(g.held, vec!["privacy", "autoUpload"]);
+        assert!(guard_restored_visualizer_prefs_json("42", "{}").is_err());
+    }
 
     // ── signature_for_shot ────────────────────────────────────────────
 

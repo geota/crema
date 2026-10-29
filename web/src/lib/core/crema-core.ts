@@ -2667,6 +2667,74 @@ export interface FrameExitSpec {
 }
 
 /**
+ * The user's Visualizer sync **preferences** — the portable, cross-shell
+ * subset a whole-app backup carries. One shared `#[typeshare]` shape so web
+ * and Android serialise byte-identical JSON: a backup's `visualizerPrefs`
+ * line restores on either shell (no per-shell tag), and the two devices can
+ * converge on one set of choices.
+ * 
+ * NOT here: OAuth tokens, the cached account, the in-flight PKCE handshake,
+ * pull cursors, the premium-tier cache, last-sync timestamps, and the sync
+ * activity log — those are per-device runtime state, kept shell-local and
+ * never backed up.
+ * 
+ * Two distinct auto gates (the web shell has both; Android today only honours
+ * `auto_upload`):
+ * - `auto_upload` — auto-push a shot to Visualizer as it completes.
+ * - `auto_sync` — fire background library (bean/roaster/shot) pushes on
+ * mutation; manual "Sync now" always works regardless.
+ * 
+ * `#[serde(default)]` on the whole struct (via [`Default`]) so a partial blob
+ * deserialises to the canonical defaults rather than failing — a shell that
+ * doesn't own a field (Android doesn't drive `beans_direction`) round-trips it
+ * untouched, and an older/partial line fills gaps from the defaults below.
+ */
+export interface VisualizerSyncPrefs {
+	/**
+	 * Auto-push a finished shot to Visualizer (web `visualizerAutoUpload`;
+	 * Android's single auto gate). Default: true.
+	 */
+	autoUpload: boolean;
+	/**
+	 * Fire background bean/roaster/shot pushes on mutation (web sync-config
+	 * `autoSync`). Android doesn't background-sync the library yet, so it
+	 * carries the field but doesn't act on it. Default: true.
+	 */
+	autoSync: boolean;
+	/** Upload privacy: `"public" | "unlisted" | "private"`. Default: unlisted. */
+	privacy: string;
+	/** Include the profile block in uploads. Default: true. */
+	includeProfile: boolean;
+	/** Include tasting notes in uploads. Default: false. */
+	includeNotes: boolean;
+	/** Shots sync direction: `"off" | "backup" | "pull" | "two-way"`. Default: backup. */
+	shotsDirection: string;
+	/** Beans sync direction. Web-driven; Android carries the default only. Default: two-way. */
+	beansDirection: string;
+	/** Roasters sync direction. Web-driven; Android carries the default only. Default: two-way. */
+	roastersDirection: string;
+}
+
+/**
+ * The outcome of restoring a backup's [`VisualizerSyncPrefs`] over the
+ * device's current ones: what to apply now, and which fields were HELD
+ * because the backup would widen what Crema shares (review 05 P3-1).
+ */
+export interface GuardedVisualizerPrefs {
+	/**
+	 * The prefs to apply without asking: the incoming values, except that
+	 * every held field keeps its current value.
+	 */
+	apply: VisualizerSyncPrefs;
+	/**
+	 * The camelCase names of the fields the backup would widen
+	 * (`"privacy"`, `"includeNotes"`, `"autoUpload"`). A shell either asks the
+	 * user before applying the incoming value or keeps the current one.
+	 */
+	held: string[];
+}
+
+/**
  * Summary metrics over a (filter/range-scoped) set of shots — the
  * History page's stat strip. `None` means "no data" (render as "—").
  * One derivation for every shell (review #41: Android ignored the
@@ -3666,55 +3734,6 @@ export interface TimedSample {
 	 * non-upload story as `resistance`.
 	 */
 	resistanceWeight?: number;
-}
-
-/**
- * The user's Visualizer sync **preferences** — the portable, cross-shell
- * subset a whole-app backup carries. One shared `#[typeshare]` shape so web
- * and Android serialise byte-identical JSON: a backup's `visualizerPrefs`
- * line restores on either shell (no per-shell tag), and the two devices can
- * converge on one set of choices.
- * 
- * NOT here: OAuth tokens, the cached account, the in-flight PKCE handshake,
- * pull cursors, the premium-tier cache, last-sync timestamps, and the sync
- * activity log — those are per-device runtime state, kept shell-local and
- * never backed up.
- * 
- * Two distinct auto gates (the web shell has both; Android today only honours
- * `auto_upload`):
- * - `auto_upload` — auto-push a shot to Visualizer as it completes.
- * - `auto_sync` — fire background library (bean/roaster/shot) pushes on
- * mutation; manual "Sync now" always works regardless.
- * 
- * `#[serde(default)]` on the whole struct (via [`Default`]) so a partial blob
- * deserialises to the canonical defaults rather than failing — a shell that
- * doesn't own a field (Android doesn't drive `beans_direction`) round-trips it
- * untouched, and an older/partial line fills gaps from the defaults below.
- */
-export interface VisualizerSyncPrefs {
-	/**
-	 * Auto-push a finished shot to Visualizer (web `visualizerAutoUpload`;
-	 * Android's single auto gate). Default: true.
-	 */
-	autoUpload: boolean;
-	/**
-	 * Fire background bean/roaster/shot pushes on mutation (web sync-config
-	 * `autoSync`). Android doesn't background-sync the library yet, so it
-	 * carries the field but doesn't act on it. Default: true.
-	 */
-	autoSync: boolean;
-	/** Upload privacy: `"public" | "unlisted" | "private"`. Default: unlisted. */
-	privacy: string;
-	/** Include the profile block in uploads. Default: true. */
-	includeProfile: boolean;
-	/** Include tasting notes in uploads. Default: false. */
-	includeNotes: boolean;
-	/** Shots sync direction: `"off" | "backup" | "pull" | "two-way"`. Default: backup. */
-	shotsDirection: string;
-	/** Beans sync direction. Web-driven; Android carries the default only. Default: two-way. */
-	beansDirection: string;
-	/** Roasters sync direction. Web-driven; Android carries the default only. Default: two-way. */
-	roastersDirection: string;
 }
 
 /**

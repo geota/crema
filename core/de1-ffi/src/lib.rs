@@ -409,6 +409,18 @@ pub fn brews_remaining_estimate(remaining_g: f32, recent_doses: Vec<f32>) -> u32
     de1_domain::brews_remaining_estimate(remaining_g, &recent_doses)
 }
 
+/// Restore a backup's Visualizer prefs over the current ones without silently
+/// widening sharing; returns `GuardedVisualizerPrefs` JSON. Mirrors the wasm
+/// `guardRestoredVisualizerPrefs`; see [`de1_domain::guard_restored_visualizer_prefs`].
+#[uniffi::export]
+pub fn guard_restored_visualizer_prefs(
+    current_json: String,
+    incoming_json: String,
+) -> Result<String, CremaError> {
+    de1_domain::guard_restored_visualizer_prefs_json(&current_json, &incoming_json)
+        .map_err(crema_err)
+}
+
 /// Derive the History stat strip over a JSON array of light per-shot
 /// tuples (`ShotStatInput`); returns `HistoryStats` JSON. One
 /// derivation for every shell (review #41: Android ignored the
