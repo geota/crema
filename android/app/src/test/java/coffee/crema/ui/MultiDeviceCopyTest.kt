@@ -154,12 +154,69 @@ class MultiDeviceCopyTest {
         assertFalse("restart the app" in picker, "the picker's restart-to-apply sub")
         for (path in listOf("coffee/crema/ui/screens/SettingsScreen.kt", "coffee/crema/ui/phone/PhoneSettingsScreen.kt")) {
             val lines = files.getValue(path).lines()
-            val host = lines.indexOfFirst { "CremaSettingsRow(\"Hub host\"" in it }
-            assertTrue(host >= 0, "$path has the manual hub host row")
-            // Neither the row nor the nearest block opener above it is a role check.
-            val opener = lines.subList(0, host).last { it.trimEnd().endsWith("{") }
-            assertFalse("proxyRole" in lines[host] || "proxyRole" in opener, "$path guards the host row by role: $opener / ${lines[host]}")
-            assertTrue(lines.any { "CremaSettingsRow(\"Hub port\"" in it }, "$path has the manual hub port row")
+            for (row in listOf("Hub host", "Hub port")) {
+                val at = lines.indexOfFirst { "CremaSettingsRow(\"$row\"" in it }
+                assertTrue(at >= 0, "$path has the manual $row row")
+                // An `if (…proxyRole…)` before the row on its own line, or on any
+                // block that encloses it. (The row's own `last = …` may read the role.)
+                val guards = (listOf(lines[at].substringBefore("CremaSettingsRow(")) + enclosingBlockOpeners(lines, at))
+                    .filter { "proxyRole" in it }
+                assertEquals(emptyList(), guards, "$path guards the $row row by role")
+            }
         }
+    }
+
+    /** Validation D3: the phone Brew cue says what the status line says, so it
+     *  never claims "Connected through" while the hub has no machine. */
+    @Test
+    fun `the phone brew cue follows the status line`() {
+        assertEquals("· Connected through Kitchen tablet", remote().remoteBrewCue())
+        assertEquals("· Kitchen tablet isn't connected to the machine", remote(hasMachine = false).remoteBrewCue())
+        assertEquals("· Reconnecting to Kitchen tablet…", remote(reconnecting = true).remoteBrewCue())
+        assertNull(MainUiState().remoteBrewCue())
+    }
+
+    /** Validation D2: the Devices sheet says the turn-off-hub sentence once,
+     *  in the notice with its button, not again in the DE1 row's status. */
+    @Test
+    fun `the turn-off-hub sentence is shown once on the devices sheet`() {
+        val sheets = MainSources.kotlinFiles().toMap().getValue("coffee/crema/ui/phone/PhoneBrewSheets.kt")
+        assertFalse("turnOffHub" in sheets, "the DE1 row's status repeats the notice")
+        assertEquals(2, Regex("HubHoldsMachineNotice\\(").findAll(sheets).count(), "the notice on both layouts")
+    }
+
+    /** Validation D4: no user-facing string says "mirror" any more (hub and
+     *  remote wording). Log lines and the wire's `"mirror"` scope are exempt. */
+    @Test
+    fun `no user-facing string says mirror`() {
+        val literal = Regex("\"[^\"\\n]*[Mm]irror[^\"\\n]*\"")
+        val hits = MainSources.kotlinFiles()
+            .filter { (path, _) -> !path.startsWith("coffee/crema/core/") } // generated UniFFI bindings
+            .flatMap { (path, text) ->
+                text.lines().withIndex().flatMap { (i, line) ->
+                    val code = line.trim()
+                    if (code.startsWith("*") || code.startsWith("//") || code.startsWith("/*")) return@flatMap emptyList()
+                    if (listOf("appendLog(", "Log.", "log(").any { it in line }) return@flatMap emptyList()
+                    literal.findAll(line).map { it.value }.filter { it != "\"mirror\"" }.map { "$path:${i + 1}: $it" }.toList()
+                }
+            }
+        assertEquals(emptyList(), hits)
+    }
+
+    /** The lines that open the blocks enclosing line [at], innermost first,
+     *  up to the enclosing function: a brace-depth walk upwards. */
+    private fun enclosingBlockOpeners(lines: List<String>, at: Int): List<String> {
+        val openers = mutableListOf<String>()
+        var depth = 0
+        for (i in at - 1 downTo 0) {
+            val line = lines[i]
+            depth += line.count { it == '}' } - line.count { it == '{' }
+            if (depth < 0) {
+                openers += line
+                depth = 0
+                if (line.trimStart().startsWith("fun ") || line.contains(" fun ")) break
+            }
+        }
+        return openers
     }
 }

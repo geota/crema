@@ -92,7 +92,7 @@ class RelayMachine(
     companion object {
         /** The reason for a command that never reached the primary. */
         const val UNREACHABLE = "Couldn’t reach the machine"
-        const val NOT_ON_MIRROR = "Not available while mirroring — use the device holding the machine"
+        const val NOT_ON_MIRROR = "Not available on a remote — use the hub"
         const val UNKNOWN_CONTROL = "No reply from the machine — it may not have been applied"
         const val UNKNOWN_CONFIG = "No reply from the machine — the change may not have been applied"
 

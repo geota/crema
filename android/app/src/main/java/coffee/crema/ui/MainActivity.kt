@@ -1218,7 +1218,7 @@ private fun PairingDialog(prompt: PairingPrompt, onChoice: (PairingChoice) -> Un
         title = { Text("Allow this device?") },
         text = {
             Column {
-                Text("“${prompt.clientName}” wants to mirror and control this machine over the network.")
+                Text("“${prompt.clientName}” wants to connect through this hub and control the machine over the network.")
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "ID ${prompt.clientId.take(8)}",
@@ -1233,7 +1233,7 @@ private fun PairingDialog(prompt: PairingPrompt, onChoice: (PairingChoice) -> Un
         },
         dismissButton = {
             Row {
-                TextButton(onClick = { onChoice(PairingChoice.MIRROR_ONLY) }) { Text("Mirror only") }
+                TextButton(onClick = { onChoice(PairingChoice.MIRROR_ONLY) }) { Text("View only") }
                 TextButton(onClick = { onChoice(PairingChoice.DENY) }) { Text("Deny") }
             }
         },

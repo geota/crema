@@ -34,7 +34,6 @@ import coffee.crema.ui.WaterMode
 import coffee.crema.ui.YieldRatioMode
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.effectiveBrew
-import coffee.crema.ui.turnOffHubCopy
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.CremaEdge
 import coffee.crema.ui.theme.CremaTheme
@@ -603,7 +602,6 @@ fun DevicesPanel(
                     listOfNotNull("Connected", ui.de1Firmware).joinToString(" · ")
                 } else {
                     when {
-                        ui.hubHoldingMachine != null -> ui.turnOffHubCopy().orEmpty()
                         ui.de1Reconnecting -> "Reconnecting…"
                         ui.bleState == De1BleManager.State.SCANNING -> "Scanning…"
                         ui.bleState == De1BleManager.State.CONNECTING || ui.bleState == De1BleManager.State.DISCOVERING || ui.bleState == De1BleManager.State.SUBSCRIBING -> "Connecting…"
@@ -729,8 +727,6 @@ fun DevicesPanelWide(
 ) {
     val machineStat = if (connected) {
         listOfNotNull("Connected", ui.de1Firmware).joinToString(" · ")
-    } else if (ui.hubHoldingMachine != null) {
-        ui.turnOffHubCopy().orEmpty()
     } else if (ui.de1Reconnecting) {
         "Reconnecting…"
     } else when (ui.bleState) {

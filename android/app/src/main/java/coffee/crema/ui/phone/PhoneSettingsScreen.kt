@@ -1262,15 +1262,15 @@ private fun AdvancedSection(
             }
         }
         if (ui.pairedDevices.isEmpty()) {
-            CremaSettingsRow("No paired devices", "Devices you allow to mirror this machine appear here.", last = true) {}
+            CremaSettingsRow("No paired devices", "Devices you allow to connect through this hub appear here.", last = true) {}
         } else {
             ui.pairedDevices.forEachIndexed { i, d ->
                 CremaSettingsRow(
                     d.name,
                     when {
                         d.id !in ui.pairedWithSecret -> "Needs to pair again — use Pair a device"
-                        d.canControl -> "Mirror + control"
-                        else -> "Mirror only"
+                        d.canControl -> "View and control"
+                        else -> "View only"
                     },
                     last = i == ui.pairedDevices.lastIndex,
                 ) {

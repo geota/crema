@@ -62,7 +62,7 @@ import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.rankProfilesForPicker
 import coffee.crema.beans.rankBeansForPicker
 import coffee.crema.ui.MainUiState
-import coffee.crema.ui.remoteHubLabel
+import coffee.crema.ui.remoteBrewCue
 import coffee.crema.ui.activeProfile
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.effectiveBrew
@@ -838,9 +838,9 @@ private fun RestingBody(
                         )
                         // Authority cue: this device is a remote; its config +
                         // controls are the hub's (single-owner config / control).
-                        if (ui.proxyRole == "secondary") {
+                        ui.remoteBrewCue()?.let { cue ->
                             Text(
-                                if (ui.mirrorReconnecting) "· Reconnecting…" else "· Connected through ${ui.remoteHubLabel()}",
+                                cue,
                                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium, fontSize = 11.5.sp),
                                 color = MaterialTheme.colorScheme.primary,
                                 maxLines = 1,
