@@ -611,3 +611,55 @@ describe('abortableSleep', () => {
 		expect(early).toHaveBeenCalledOnce();
 	});
 });
+
+describe('BleDevice write and writeIf share one body (V3 #10)', () => {
+	const bytes = (v: unknown) => Array.from(new Uint8Array(v as ArrayBuffer));
+
+	it('writeIf resolves an uncached characteristic once and writes like write()', async () => {
+		const t = watchingSetup();
+		t.script.ok = true;
+		await t.ble.connectGatt();
+		const settled = vi.fn();
+		await expect(t.ble.writeIf('a000', 'a00d', new Uint8Array([7, 8]), () => true, settled)).resolves.toBe(true);
+		await t.ble.write('a000', 'a00d', new Uint8Array([9]));
+		expect(settled).toHaveBeenCalledWith(true);
+		const writes = t.characteristic.writeValueWithResponse.mock.calls.map((c) => bytes(c[0]));
+		expect(writes).toEqual([[7, 8], [9]]);
+		// Looked up by the first write, reused by the second.
+		expect(t.gatt.getPrimaryService).toHaveBeenCalledOnce();
+		t.ble.disconnect();
+	});
+
+	it('a refused guard sends nothing', async () => {
+		const t = watchingSetup();
+		t.script.ok = true;
+		await t.ble.connectGatt();
+		await expect(t.ble.writeIf('a000', 'a00d', new Uint8Array([1]), () => false)).resolves.toBe(false);
+		expect(t.characteristic.writeValueWithResponse).not.toHaveBeenCalled();
+		t.ble.disconnect();
+	});
+
+	it('writeIf is bounded like write(): a hung write times out, settles false and drops the link', async () => {
+		const t = watchingSetup();
+		t.script.ok = true;
+		await t.ble.connectGatt();
+		t.characteristic.writeValueWithResponse.mockImplementationOnce(() => new Promise(() => undefined));
+		const settled = vi.fn();
+		const hung = t.ble.writeIf('a000', 'a00d', new Uint8Array([1]), () => true, settled).catch((e: unknown) => e);
+		await vi.advanceTimersByTimeAsync(GATT_TIMEOUTS.operationMs);
+		expect(await hung).toBeInstanceOf(GattTimeoutError);
+		expect(settled).toHaveBeenCalledWith(false);
+		expect(t.ble.connectionState).toBe('reconnecting');
+		t.ble.disconnect();
+	});
+
+	it('writeIf refuses a disconnected device like write()', async () => {
+		const t = setup();
+		t.ble.disconnect();
+		const settled = vi.fn();
+		await expect(t.ble.writeIf('a000', 'a002', new Uint8Array([1]), () => true, settled)).rejects.toThrow(
+			'Device was disconnected'
+		);
+		expect(settled).toHaveBeenCalledWith(false);
+	});
+});
