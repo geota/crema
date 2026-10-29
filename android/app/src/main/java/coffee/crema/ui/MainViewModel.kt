@@ -86,6 +86,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.serialization.json.Json
@@ -989,7 +991,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val coreDispatcher = kotlinx.coroutines.Dispatchers.Default.limitedParallelism(1)
 
     private val _ui = MutableStateFlow(MainUiState())
-    val ui: StateFlow<MainUiState> = _ui.asStateFlow()
+
+    /**
+     * The UI state the screens collect. Identical to [_ui] except while the
+     * screensaver covers everything: then a change confined to the high-rate
+     * live fields ([hiddenBySaver]) is not published, so the screen tree
+     * behind the saver stops recomposing several times a second for hours on
+     * a wall tablet (cohort review 2026-10-25, P2-4). Any other change —
+     * including the saver going away — publishes the latest state in full.
+     * The VM itself always reads [_ui].
+     */
+    val ui: StateFlow<MainUiState> = _ui
+        .distinctUntilChanged(::hiddenBySaver)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, _ui.value)
 
     /**
      * Set when [startShot] kicks off a profile upload that should be followed by an
@@ -6267,3 +6281,39 @@ private fun firmwarePowerOk(context: android.content.Context): Boolean {
     val percent = if (level >= 0 && scale > 0) level * 100 / scale else null
     return coffee.crema.firmware.powerOk(plugged, percent)
 }
+
+/** The event log with [line] prepended, capped at [max] lines (newest first).
+ *  Pure, so [MainViewModel]'s appendLog can apply it inside `_ui.update`. */
+internal fun prependLogLine(log: List<String>, line: String, max: Int): List<String> =
+    (listOf(line) + log).take(max)
+
+/**
+ * True when [new] differs from [old] (the last PUBLISHED state) only in the
+ * high-rate live readouts while the screensaver is up in both — a change
+ * nothing on screen can show. Used to keep [MainViewModel.ui] quiet behind
+ * the saver. Pure + `internal` for unit tests.
+ */
+internal fun hiddenBySaver(old: MainUiState, new: MainUiState): Boolean =
+    old.saverVisible && new.saverVisible && old.withoutLiveReadouts() == new.withoutLiveReadouts()
+
+/** [this] with every telemetry-rate field blanked (DE1 samples, scale
+ *  readings, water level, mode timers, the debug log). */
+private fun MainUiState.withoutLiveReadouts(): MainUiState = copy(
+    telemetry = null,
+    pressure = null,
+    flow = null,
+    headTemp = null,
+    mixTemp = null,
+    steamTemp = null,
+    dispensedVolume = null,
+    resistance = null,
+    resistanceWeight = null,
+    shotElapsedMs = 0,
+    shotTelemetry = emptyList(),
+    scaleWeightG = null,
+    scaleFlowGPerS = null,
+    scaleTimerMs = null,
+    waterLevelMm = null,
+    modeElapsedMs = 0,
+    eventLog = emptyList(),
+)

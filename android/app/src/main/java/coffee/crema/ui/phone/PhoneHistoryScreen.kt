@@ -173,10 +173,15 @@ fun PhoneHistoryScreen(
     // Bean filter: a coffee (every bag of it) or, from the bean detail's deep
     // link, one bag. The coffee resolves through the live library.
     val liveCoffee = remember(ui.beans, ui.roasters) { liveCoffeeLookup(ui.beans, ui.roasters) }
-    val filtered = filterAndSortShots(
-        ui.history, query, range, profileFilter, sort, sortDesc, now, beanFilter, methodFilter,
-        coffeeOf = { shotCoffee(it, liveCoffee)?.key },
-    )
+    // Memoized with a minute-bucketed `now` (see HistoryScreen): telemetry
+    // recomposes this screen several times a second.
+    val nowBucket = coffee.crema.history.minuteBucket(now)
+    val filtered = remember(ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter, liveCoffee) {
+        filterAndSortShots(
+            ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter,
+            coffeeOf = { shotCoffee(it, liveCoffee)?.key },
+        )
+    }
 
     val detail = detailId?.let { id -> ui.history.firstOrNull { it.id == id } }
 
