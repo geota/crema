@@ -22,7 +22,14 @@ import coffee.crema.ble.proxy.ReplayBleTransport
 import coffee.crema.ble.proxy.SwitchableBleTransport
 import coffee.crema.ble.proxy.TappingBleTransport
 import coffee.crema.ble.De1Uuids
-import coffee.crema.core.MachineRequest
+import coffee.crema.machine.CommandOrigin
+import coffee.crema.machine.CommandOutcome
+import coffee.crema.machine.LocalMachine
+import coffee.crema.machine.MachineActions
+import coffee.crema.machine.MachineCommand
+import coffee.crema.machine.MachineCommands
+import coffee.crema.machine.RelayMachine
+import coffee.crema.machine.RelayedCommandDispatcher
 import coffee.crema.persist.SafeFile
 import coffee.crema.security.DeviceSecretBox
 import coffee.crema.security.SecretBox
@@ -32,6 +39,7 @@ import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -46,6 +54,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
+import kotlin.coroutines.CoroutineContext
 
 /** This device's human label — the name peers see in the multi-device picker
  *  and the label stamped into backup envelopes. */
@@ -72,9 +81,14 @@ enum class PairingChoice { DENY, MIRROR_ONLY, ALLOW_CONTROL }
  * mode switch).
  *
  * Whole-app concerns stay VM-side, reached through constructor callbacks: the
- * relayed-control dispatch ([dispatchControl]), the session-config snapshot
- * ([snapshotConfig] / [applyConfig]), the paired-device list (persisted with
- * the app prefs), and the mirrored-profile promotion on handoff.
+ * verb bodies behind machine commands ([machineActions]), the session-config
+ * snapshot ([snapshotConfig] / [applyConfig]), the paired-device list
+ * (persisted with the app prefs), and the mirrored-profile promotion on handoff.
+ *
+ * It also picks where the VM's commands go ([machine]): a [RelayMachine] while
+ * mirroring, else the [LocalMachine], swapped with the transport. On a primary
+ * a secondary's relayed control runs through [RelayedCommandDispatcher] into
+ * the same [LocalMachine].
  */
 class ProxyController(
     private val app: Application,
@@ -106,9 +120,9 @@ class ProxyController(
     /** The DE1's current machine-state name (`MachineState.string`), null when
      *  unknown — gates handoff (idle-only) and words the "who's driving" notice. */
     private val machineStateName: () -> String?,
-    /** Run a relayed control verb on the VM's command router; throws on an
-     *  unknown method (becomes a `ControlErr` back to the secondary). */
-    private val dispatchControl: (method: String, args: String) -> Unit,
+    /** The VM's verb bodies, which machine commands run on this device. Never
+     *  invoked during construction. */
+    private val machineActions: MachineActions,
     /** The primary's session-config snapshot JSON for a mirror (T2). */
     private val snapshotConfig: () -> String,
     /** Apply a primary's pushed config snapshot on this secondary (T2). */
@@ -133,6 +147,9 @@ class ProxyController(
     private val firmwareHoldsLink: () -> Boolean = { false },
     /** Seals the pairing secrets at rest (tests pass a fake cipher). */
     secretBox: SecretBox = DeviceSecretBox.instance,
+    /** Where a primary runs relayed commands: Main, like its own UI (tests
+     *  pass a test dispatcher). */
+    commandLane: CoroutineContext = Dispatchers.Main.immediate,
 ) {
 
     /** The proxy slice of the UI snapshot — the VM mirrors this into MainUiState. */
@@ -174,6 +191,38 @@ class ProxyController(
     internal var relayHub: RelayHub? = null
     private var relayServer: LanRelayServer? = null
     private var proxyLink: ReconnectingClientLink? = null
+
+    /** A secondary's relay to its primary; null in the other roles. */
+    @Volatile private var relayMachine: RelayMachine? = null
+
+    /** Runs commands on this device: this device's UI, and a primary's relayed
+     *  controls. A take-over is granted here with the taker's identity, so the
+     *  release waits for that client's disconnect instead of a blind flush
+     *  timer that could tear the `ControlOk` down with the relay. */
+    private val localMachine = LocalMachine(
+        actions = machineActions,
+        grantTakeOver = { takerId -> grantHandoff(takerId) },
+        notify = { notify(it) },
+    )
+
+    /** A primary's entry for relayed controls (wired into [RelayHub]). */
+    private val relayedCommands = RelayedCommandDispatcher(
+        machine = localMachine,
+        hostName = { deviceLabel() },
+        machineIdle = { machineStateName() in HANDOFF_IDLE_STATES },
+        // "Who's driving" (issue 11, loose model): the other mirrors and this
+        // primary learn who drove the machine; the originator already knows.
+        announce = { text, origin ->
+            relayHub?.broadcastEvent(text, exceptClientId = origin.id)
+            notify(text)
+        },
+        log = { appendLog(it) },
+        lane = commandLane,
+    )
+
+    /** Where the VM's verbs send their commands: the relay while mirroring,
+     *  else this device. Chosen with the transport on each mode switch. */
+    val machine: MachineCommands get() = relayMachine ?: localMachine
 
     /** Child scope for the SECONDARY mode's collectors + its [ProxyTransport],
      *  cancelled on every mode switch and in [close] so they don't leak across
@@ -251,12 +300,6 @@ class ProxyController(
      *  they were requested. */
     private val modeMutex = Mutex()
 
-    /** Machine states it's safe to hand off the radio in. An **allowlist** (issue
-     *  09): everything else — dispensing, cleaning, calibrating, erroring, booting —
-     *  refuses, and so does an unknown/`null` state, so we never grant during a
-     *  moment we can't positively call idle. `Idle` covers warm-up/ready. */
-    private val handoffIdleStates = HANDOFF_IDLE_STATES
-
     /** Crash-guard on the ack-by-disconnect handoff release: if the granted taker
      *  never drops its link (crashed, BT off), release the DE1 anyway — the
      *  reclaim probe (issue 01) still recovers an orphaned machine after that. */
@@ -311,123 +354,19 @@ class ProxyController(
         peerDiscovery.close()
     }
 
-    // ── Relaying a secondary's user intent to the primary ────────────────────
+    // ── A secondary's relayed control, on this primary ───────────────────────
 
-    /**
-     * On a secondary (read-only mirror), relay user-intent control [method] to
-     * the primary instead of running it locally — the secondary's core can't
-     * drive the machine, so a tap on its Brew controls crosses the LAN to the
-     * primary's command router ([coffee.crema.ble.proxy.Frame.Control]). Returns
-     * `true` when relayed (the caller must `return`, skipping the local path);
-     * `false` on a normal/primary device, where the caller runs the action.
-     */
-    fun relayIfSecondary(method: String, args: String = ""): Boolean {
-        if (_state.value.role != "secondary") return false
-        val proxy = switchable.delegate as? ProxyTransport ?: return false
-        scope.launch {
-            proxy.control(method, args).onFailure {
-                appendLog("Relay $method failed: ${it.message}")
-                notify(relayFailureMessage(it, applied = false))
-            }
-        }
-        return true
-    }
-
-    /** User-facing copy for a failed relay: an authorization refusal (issue 02
-     *  view-only peer) reads differently from a dropped link. */
-    private fun relayFailureMessage(error: Throwable, applied: Boolean): String =
-        if (error.message?.contains("not authorized") == true) {
-            "View-only — the host hasn't allowed this device to control the machine"
-        } else if (applied) {
-            "Couldn't reach the machine — change reverted"
-        } else {
-            "Couldn't reach the machine — change not applied"
-        }
-
-    /**
-     * Relay a **config** verb from a secondary, optimistic-apply style (issue 06).
-     * The caller has already updated its UI locally (snappy — no round-trip lag);
-     * this relays and, on failure, runs [revert] + surfaces it, so a dropped link
-     * never silently eats the change. On success the primary's authoritative
-     * `Config` push reconciles (usually a no-op). Returns true when handled as a
-     * secondary (the caller must `return`, skipping its persist + machine write).
-     *
-     * Distinct from [relayIfSecondary], which stays authority-first (no local
-     * apply) for machine-control verbs (start/stop/tare) where optimism is unsafe.
-     */
-    fun relayConfigOptimistic(method: String, args: String, revert: () -> Unit): Boolean {
-        if (_state.value.role != "secondary") return false
-        val proxy = switchable.delegate as? ProxyTransport ?: return false
-        scope.launch {
-            proxy.control(method, args).onFailure {
-                appendLog("Relay $method failed: ${it.message}")
-                notify(relayFailureMessage(it, applied = true))
-                revert()
-            }
-        }
-        return true
-    }
-
-    /** Run a secondary's relayed control intent on this (primary) device via the
-     *  VM's [dispatchControl] router — the same verbs the primary's own UI calls.
-     *  Wired into the [RelayHub] by [startPrimaryMode]; `startShot` runs the
-     *  primary's full shot orchestration, so that complexity never crosses the
-     *  wire. */
-    internal fun handleRelayedControl(
+    /** Run a secondary's relayed control through [relayedCommands]: decoded,
+     *  checked, then run on Main by the same [LocalMachine] the primary's own
+     *  UI uses, so `startShot` runs the full shot orchestration and that
+     *  complexity never crosses the wire. Wired into the [RelayHub] by
+     *  [startPrimaryMode]. */
+    internal suspend fun handleRelayedControl(
         method: String,
         args: String,
         originId: String? = null,
         originName: String? = null,
-    ): Result<Unit> = runCatching {
-        // Only what the Android UI can send, with arguments in range.
-        RelayedControlPolicy.refusal(method, args)?.let { reason ->
-            appendLog("Relayed $method refused: $reason")
-            throw IllegalArgumentException(reason)
-        }
-        // Handoff is granted HERE, not through the VM router, so the taker's
-        // identity travels with the grant: the release then waits for that
-        // client's disconnect (its mode switch closes the link) instead of a
-        // blind flush timer — the ControlOk can no longer be torn down with the
-        // relay before it reaches the taker.
-        if (method == "handoff") {
-            grantHandoff(takerId = originId)
-            return@runCatching
-        }
-        // "Who's driving" notice (issue 11, loose model): compute BEFORE dispatch so
-        // an IDLE request reads as stop-vs-wake against the PRE-action machine state.
-        // Only a secondary-initiated control carries an originId.
-        val phrase = if (originId != null) controlPhrase(method, args) else null
-        dispatchControl(method, args)
-        // Dispatch succeeded (a throw above is caught by runCatching, skipping this):
-        // fan the notice to the OTHER mirrors + surface it on this primary, so
-        // everyone but the originator learns who drove the machine (issue 11).
-        if (phrase != null) {
-            val text = "${originName ?: "A mirror"} $phrase"
-            relayHub?.broadcastEvent(text, exceptClientId = originId)
-            notify(text)
-        }
-    }
-
-    /** A short human phrase for a relayed machine-control verb (issue 11) — the
-     *  predicate of "<who> …". Returns null for verbs not worth announcing (config
-     *  edits, unknowns). IDLE is read against the current state: stop while running,
-     *  otherwise wake. */
-    private fun controlPhrase(method: String, args: String): String? = when (method) {
-        "startShot" -> "started a shot"
-        "tareScale" -> "tared the scale"
-        "machineState" -> when (args) {
-            MachineRequest.ESPRESSO.name -> "started a shot"
-            MachineRequest.STEAM.name, MachineRequest.STEAM_RINSE.name -> "started steam"
-            MachineRequest.HOT_WATER.name -> "started hot water"
-            MachineRequest.FLUSH.name -> "started a flush"
-            MachineRequest.SLEEP.name -> "put the machine to sleep"
-            MachineRequest.IDLE.name ->
-                if (machineStateName() in handoffIdleStates) "woke the machine"
-                else "stopped the machine"
-            else -> null
-        }
-        else -> null
-    }
+    ): CommandOutcome = relayedCommands.dispatch(method, args, CommandOrigin(originId, originName))
 
     // ── Handoff (M3) ──────────────────────────────────────────────────────────
 
@@ -437,11 +376,11 @@ class ProxyController(
      *  DISCONNECT — its own mode switch closes the link once it has the grant —
      *  so tearing the relay down can't race the `ControlOk` off the wire (the old
      *  400 ms flush timer could); a timeout still releases if the taker crashed.
-     *  Throwing here becomes a `ControlErr` → the taker stays put. */
-    private fun grantHandoff(takerId: String? = null) {
+     *  A refusal becomes a `ControlErr` → the taker stays put. */
+    private fun grantHandoff(takerId: String? = null): CommandOutcome {
         handoffRefusal(machineStateName(), firmwareHoldsLink())?.let { reason ->
             appendLog("Handoff refused: $reason")
-            throw IllegalStateException(reason)
+            return CommandOutcome.Refused(reason)
         }
         appendLog("Handoff granted — releasing the DE1")
         val hub = relayHub
@@ -462,6 +401,7 @@ class ProxyController(
             applyMode("normal", "", 0, reconnect = false)
             armHandoffReclaim()
         }
+        return CommandOutcome.Accepted
     }
 
     /** After granting a handoff we release the DE1 without reconnecting. If the
@@ -523,14 +463,13 @@ class ProxyController(
      *  a no-Bluetooth emulator "becoming primary" falls to a replay; the real radio
      *  move is hardware-gated. Both are documented follow-ups. */
     fun requestHandoff() {
+        val relay = relayMachine ?: run {
+            appendLog("Handoff: not currently mirroring a primary")
+            return
+        }
         scope.launch {
-            val proxy = switchable.delegate as? ProxyTransport
-            if (proxy == null) {
-                appendLog("Handoff: not currently mirroring a primary")
-                return@launch
-            }
-            proxy.control("handoff")
-                .onSuccess {
+            when (val outcome = relay.forward(MachineCommand.TakeOver)) {
+                CommandOutcome.Accepted -> {
                     appendLog("Handoff granted — acquiring the DE1")
                     notify("Taking over the machine…")
                     onHandoffGranted() // keep the mirrored custom profile (issue 05)
@@ -541,10 +480,17 @@ class ProxyController(
                     // advertises; there is no window to miss.
                     switchToPrimary()
                 }
-                .onFailure {
-                    appendLog("Handoff refused: ${it.message}")
-                    notify(takeoverRefusedMessage(it.message))
+                is CommandOutcome.Refused -> {
+                    appendLog("Handoff refused: ${outcome.reason}")
+                    notify(takeoverRefusedMessage(outcome.reason))
                 }
+                // The primary may have granted it: it releases the DE1 after its
+                // timeout and reclaims it when nobody takes it. Not resent.
+                is CommandOutcome.Unknown -> {
+                    appendLog("Handoff: no reply (${outcome.detail}); staying a mirror")
+                    notify("No reply from the host — the machine may not have been handed over")
+                }
+            }
         }
     }
 
@@ -802,9 +748,13 @@ class ProxyController(
             // streams — the DE1 ShotSample and the scale weight — stay live-only or
             // the mirror's core double-counts (issue 04; M1-PROTOCOL §5).
             isSnapshotChar = isSnapshotChar,
-            // Relayed user intent from a secondary → the primary's command router.
+            // Relayed user intent from a secondary → the machine command seam.
             controlHandler = { method, args, originId, originName ->
-                handleRelayedControl(method, args, originId, originName)
+                when (val outcome = handleRelayedControl(method, args, originId, originName)) {
+                    CommandOutcome.Accepted -> Result.success(Unit)
+                    is CommandOutcome.Refused -> Result.failure(IllegalStateException(outcome.reason))
+                    is CommandOutcome.Unknown -> Result.failure(IllegalStateException(outcome.detail))
+                }
             },
             // The single-owner session config a mirror snaps to on attach (T2).
             configSource = { snapshotConfig() },
@@ -880,6 +830,15 @@ class ProxyController(
             onHostConfirmed = { hostId -> pairing.pinHost(hostId) },
             allowRepair = trust.allowRepair,
             onHostChanged = { hostId, hostName -> _state.update { it.copy(changedHost = hostId to hostName) } },
+        )
+        // The VM's commands now go to this primary.
+        relayMachine = RelayMachine(
+            send = { method, args -> proxy.sendControl(method, args) },
+            showConfig = { machineActions.showConfig(it) },
+            machineStateName = machineStateName,
+            scope = scope,
+            notify = notify,
+            log = appendLog,
         )
         // Mirror the primary's SCALE (issue 04), roster-driven: attach it only once
         // the primary actually advertises one — no blind scan, so a scaleless primary
@@ -957,6 +916,7 @@ class ProxyController(
         // Cancel the previous SECONDARY mode's collectors + ProxyTransport before
         // releasing the link, so nothing leaks across the switch (issue 10).
         secondaryScope?.cancel(); secondaryScope = null
+        relayMachine = null
         proxyLink?.dispose(); proxyLink = null
         switchable.setDelegate(
             when (role) {
@@ -1057,7 +1017,10 @@ class ProxyController(
     }
 }
 
-/** Machine states it's safe to hand off the radio in (see [ProxyController]). */
+/** Machine states it's safe to hand off the radio in. An **allowlist** (issue
+ *  09): everything else — dispensing, cleaning, calibrating, erroring, booting —
+ *  refuses, and so does an unknown/`null` state, so we never grant during a
+ *  moment we can't positively call idle. `Idle` covers warm-up/ready. */
 internal val HANDOFF_IDLE_STATES = setOf("Sleep", "GoingToSleep", "Idle", "SchedIdle")
 
 /** The `ControlErr` reason a primary gives while a firmware flash holds the DE1. */

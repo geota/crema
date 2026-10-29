@@ -3,10 +3,11 @@ package coffee.crema.ui
 import coffee.crema.ble.proxy.Frame
 import coffee.crema.ble.proxy.FrameCodec
 import coffee.crema.ble.proxy.Golden
-import java.io.File
+import coffee.crema.machine.MachineCommand
+import coffee.crema.machine.MachineCommandCodec
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
+import kotlin.test.assertIs
 
 /**
  * Golden `control` frames for every relayed verb (`proxy-golden/v3/control/`):
@@ -14,8 +15,8 @@ import kotlin.test.assertNull
  * accepts today. A typed-command seam must keep these bytes, or secondaries
  * already in the field stop working against an updated primary.
  *
- * The verb list comes from [RelayedControlPolicy.VERBS], the primary's
- * allowlist: a verb added there without a sample here fails
+ * The verb list comes from [MachineCommandCodec.METHODS], what a primary
+ * accepts: a method added there without a sample here fails
  * [every relayed verb has a golden sample]. The sender side (that the VM
  * produces these bytes) is [RelayedVerbSecondaryWireTest]; the dispatcher
  * side (that the primary's VM runs them) is [RelayedVerbPrimaryDispatchTest].
@@ -25,34 +26,32 @@ class ControlVerbGoldenTest {
     @Test
     fun `every relayed verb has a golden sample`() {
         assertEquals(
-            RelayedControlPolicy.VERBS,
+            MachineCommandCodec.METHODS,
             RELAYED_VERB_SAMPLES.map { it.method }.toSet(),
-            "verbs in RelayedControlPolicy.VERBS without a sample in RELAYED_VERB_SAMPLES (or samples for no verb)",
+            "methods in MachineCommandCodec.METHODS without a sample in RELAYED_VERB_SAMPLES (or samples for no method)",
         )
     }
 
     /**
-     * The senders, read from the source: every verb passed to a relay guard
-     * (`relayIfSecondary` / `relayConfigOptimistic`) or straight to
-     * `ProxyTransport.control` anywhere under `src/main/java`, so a file move
-     * in the MainViewModel breakup doesn't matter. A verb a sender relays but
-     * the primary's allowlist doesn't know would be refused at runtime. The
-     * typed-command seam replaces these call shapes: replace this scan with
-     * its exhaustive command list then.
+     * The senders: every sample a secondary sends decodes to a command that
+     * encodes back to exactly its wire form, and every relayable command has
+     * such a sample. Wake has none of its own: it shares Stop's IDLE.
      */
     @Test
-    fun `every verb a sender relays is in the allowlist`() {
-        val call = Regex("""(?:relayIfSecondary|relayConfigOptimistic|\.control)\("([A-Za-z]+)"""")
-        val sent = File("src/main/java").walkTopDown().filter { it.extension == "kt" }
-            .flatMap { f -> call.findAll(f.readText()).map { it.groupValues[1] } }
-            .toSet()
-        assertEquals(RelayedControlPolicy.VERBS, sent, "verbs the senders relay vs the primary's allowlist")
+    fun `every relayable command has a sample that round-trips`() {
+        val decoded = RELAYED_VERB_SAMPLES.filter { it.send != null }.map { s ->
+            val cmd = assertIs<MachineCommandCodec.Decoded.Valid>(MachineCommandCodec.decode(s.method, s.args), s.fixture).command
+            assertEquals(MachineCommandCodec.Wire(s.method, s.args), MachineCommandCodec.encode(cmd), "${s.fixture} re-encodes")
+            cmd::class
+        }.toSet()
+        val relayable = MachineCommand.Relayable::class.leaves()
+        assertEquals(relayable - MachineCommand.Wake::class, decoded, "relayable commands vs the samples a secondary sends")
     }
 
     @Test
     fun `every machine state the UI relays has a sample`() {
         val sampled = RELAYED_VERB_SAMPLES.filter { it.method == "machineState" }.map { it.args }.toSet()
-        assertEquals(RelayedControlPolicy.RELAYABLE_MACHINE_STATES, sampled)
+        assertEquals(MachineCommandCodec.RELAYABLE_STATES, sampled)
     }
 
     @Test
@@ -73,7 +72,7 @@ class ControlVerbGoldenTest {
     @Test
     fun `the primary's allowlist accepts every sample`() {
         for (s in RELAYED_VERB_SAMPLES) {
-            assertNull(RelayedControlPolicy.refusal(s.method, s.args), "${s.fixture}: ${s.method}(${s.args}) is refused")
+            assertIs<MachineCommandCodec.Decoded.Valid>(MachineCommandCodec.decode(s.method, s.args), "${s.fixture}: ${s.method}(${s.args}) is refused")
         }
     }
 
@@ -82,3 +81,7 @@ class ControlVerbGoldenTest {
         assertEquals(emptySet(), Golden.list("control") - RELAYED_VERB_SAMPLES.map { it.fixture }.toSet())
     }
 }
+
+/** The concrete commands under a sealed command type. */
+internal fun kotlin.reflect.KClass<*>.leaves(): Set<kotlin.reflect.KClass<*>> =
+    if (isSealed) sealedSubclasses.flatMap { it.leaves() }.toSet() else setOf(this)

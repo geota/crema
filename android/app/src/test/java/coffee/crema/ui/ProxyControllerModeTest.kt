@@ -10,6 +10,10 @@ import coffee.crema.ble.proxy.PairingDecision
 import coffee.crema.ble.proxy.PairingRequest
 import coffee.crema.ble.proxy.RelayHub
 import coffee.crema.ble.proxy.handshake
+import coffee.crema.machine.CommandOutcome
+import coffee.crema.machine.MachineCommand
+import coffee.crema.machine.QcField
+import coffee.crema.machine.RecordingMachineActions
 import coffee.crema.security.SecretBox
 import coffee.crema.security.SecretCipher
 import coffee.crema.settings.PairedDevice
@@ -32,6 +36,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -51,7 +56,7 @@ class ProxyControllerModeTest {
     private val events = CopyOnWriteArrayList<String>()
     private val log = CopyOnWriteArrayList<String>()
     private val remembered = CopyOnWriteArrayList<PairedDevice>()
-    private val dispatched = CopyOnWriteArrayList<String>()
+    private val actions = RecordingMachineActions()
     @Volatile private var flashing = false
 
     /** Not crypto: enough for the store to seal and open. */
@@ -79,7 +84,7 @@ class ProxyControllerModeTest {
         scaleAttachWanted = { false },
         de1Connected = { false },
         machineStateName = { "Idle" },
-        dispatchControl = { method, args -> dispatched += "$method($args)" },
+        machineActions = actions,
         snapshotConfig = { "" },
         applyConfig = {},
         roster = { emptyList() },
@@ -309,7 +314,7 @@ class ProxyControllerModeTest {
             app = ApplicationProvider.getApplicationContext(), json = Json { ignoreUnknownKeys = true }, scope = scope,
             setCoreReadOnly = {}, setRecorderEnabled = {}, notify = {}, appendLog = {}, connect = {}, disconnect = {},
             disconnectDevices = {}, connectScale = {}, scaleAttachWanted = { false }, de1Connected = { false },
-            machineStateName = { null }, dispatchControl = { _, _ -> }, snapshotConfig = { "" }, applyConfig = {},
+            machineStateName = { null }, machineActions = RecordingMachineActions(), snapshotConfig = { "" }, applyConfig = {},
             roster = { emptyList() }, isSnapshotChar = { _, _ -> false }, pairedDevices = { emptyList() },
             rememberPaired = { _, _, _ -> }, onHandoffGranted = {}, onModeApplied = { _, _, _ -> }, secretBox = box,
         )
@@ -322,14 +327,33 @@ class ProxyControllerModeTest {
     }
 
     @Test
-    fun `a relayed control is checked before it is dispatched`() {
-        assertTrue(controller.handleRelayedControl("machineState", "AIR_PURGE", "phone", "Phone").isFailure)
-        assertTrue(controller.handleRelayedControl("setQcSteamTemp", "NaN", "phone", "Phone").isFailure)
-        assertTrue(controller.handleRelayedControl("writeMmr", "1", "phone", "Phone").isFailure)
-        assertTrue(dispatched.isEmpty(), "nothing refused reaches the router: $dispatched")
+    fun `a relayed control is checked before it is dispatched`() = runBlocking {
+        assertIs<CommandOutcome.Refused>(controller.handleRelayedControl("machineState", "AIR_PURGE", "phone", "Phone"))
+        assertIs<CommandOutcome.Refused>(controller.handleRelayedControl("setQcSteamTemp", "NaN", "phone", "Phone"))
+        assertIs<CommandOutcome.Refused>(controller.handleRelayedControl("writeMmr", "1", "phone", "Phone"))
+        assertTrue(actions.applied.isEmpty(), "nothing refused reaches the verbs: ${actions.applied}")
 
-        assertTrue(controller.handleRelayedControl("machineState", "IDLE", "phone", "Phone").isSuccess)
-        assertEquals(listOf("machineState(IDLE)"), dispatched.toList())
+        assertEquals(CommandOutcome.Accepted, controller.handleRelayedControl("machineState", "IDLE", "phone", "Phone"))
+        assertEquals(listOf("machineState(IDLE)"), actions.applied.toList())
+    }
+
+    @Test
+    fun `this device's commands run locally until it mirrors`() {
+        controller.machine.execute(MachineCommand.SetQc(QcField.GRIND, 14.5f))
+        assertEquals(listOf("commit(${MachineCommand.SetQc(QcField.GRIND, 14.5f)})"), actions.applied.toList())
+
+        controller.switchToSecondary("127.0.0.1", 9)
+        scheduler.advanceTimeBy(1_000)
+        scheduler.runCurrent()
+        actions.applied.clear()
+        controller.machine.execute(MachineCommand.TareScale)
+        assertTrue(actions.applied.isEmpty(), "a mirror forwards machine control and applies nothing itself")
+
+        controller.switchToNormal()
+        scheduler.advanceTimeBy(1_000)
+        scheduler.runCurrent()
+        controller.machine.execute(MachineCommand.TareScale)
+        assertEquals(listOf("tareScale"), actions.applied.toList())
     }
 
     @Test
@@ -400,7 +424,7 @@ class ProxyControllerModeTest {
             io.launch { client.incoming().collect { rx += it } }
             runBlocking { handshake(client, rx, clientId = "taker") }
 
-            assertTrue(controller.handleRelayedControl("handoff", "", "taker", "Taker").isSuccess)
+            assertEquals(CommandOutcome.Accepted, runBlocking { controller.handleRelayedControl("handoff", "", "taker", "Taker") })
             repeat(20) { scheduler.runCurrent(); Thread.sleep(5) }
             scheduler.advanceTimeBy(200)
             scheduler.runCurrent()

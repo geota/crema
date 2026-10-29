@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.ViewModelStore
 import coffee.crema.ble.proxy.CodecFrameLink
 import coffee.crema.ble.proxy.Frame
+import coffee.crema.ble.proxy.FrameCodec
 import coffee.crema.ble.proxy.Golden
 import coffee.crema.ble.proxy.PROXY_PROTOCOL_VERSION
 import coffee.crema.ble.proxy.RelayHub
@@ -28,16 +29,15 @@ import kotlin.test.assertTrue
 /**
  * The primary's half of the relayed-verb wire: a real [MainViewModel] built in
  * the persisted primary role, its own [RelayHub] (the one ProxyController
- * built), its pairing prompt, the [RelayedControlPolicy] allowlist and the
- * VM's relay router, fed each golden `control` text over an in-memory codec
- * link. Every fixture must be accepted (`ControlOk`; `handoff` is refused
- * without a connected, idle DE1), and every config verb must land in the
- * primary's UI state. That pins the dispatcher side of the
- * wire before the typed-command seam replaces the string router.
+ * built), its pairing prompt, the machine command codec and the VM's verb
+ * bodies, fed each golden `control` text over an in-memory codec link. Every
+ * fixture must be answered as expected (`ControlOk`, or a `ControlErr` with
+ * the primary's reason), and every accepted config verb must land in the
+ * primary's UI state. That pins the dispatcher side of the wire.
  *
  * Everything runs on the Robolectric main looper, so the test is
  * deterministic: no socket, no sleeps. (In production the hub runs on the
- * relay server's threads; the seam moves dispatch onto Main.)
+ * relay server's threads and the dispatcher moves each command onto Main.)
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
@@ -58,9 +58,6 @@ class RelayedVerbPrimaryDispatchTest {
         "setActiveProfile" to Effect(prime = { vm -> vm.setActiveProfile(vm.ui.value.profiles.first { it.id != SAMPLE_PROFILE_ID }.id) }) {
             it.activeProfileId == SAMPLE_PROFILE_ID
         },
-        // Not in this primary's library: today any well-formed id is taken as
-        // is (the seam's reference validation would refuse it instead).
-        "setActiveBean" to Effect { it.activeBeanId == "bean-1" },
         "setActiveBean.none" to Effect(prime = { it.setActiveBean("bean-2") }) { it.activeBeanId == null },
         "setStopOnWeight" to Effect(prime = { it.setStopOnWeight(false) }) { it.stopOnWeight },
         "setAutoTare" to Effect(prime = { it.setAutoTare(true) }) { !it.autoTare },
@@ -80,14 +77,23 @@ class RelayedVerbPrimaryDispatchTest {
 
     /** Fixtures the primary refuses in this setup, with the reason's text.
      *  `handoff` passes the allowlist but is granted only from a positively
-     *  idle machine, and no DE1 is connected here. */
-    private val refusals = mapOf("handoff" to "handoff is idle-only")
+     *  idle machine, and no DE1 is connected here. `bean-1` is a bean from the
+     *  secondary's own library, which this primary doesn't have. */
+    private val refusals = mapOf(
+        "handoff" to "handoff is idle-only",
+        "setActiveBean" to "That bean isn\u2019t on",
+    )
+
+    /** What a refused fixture must leave as it was. */
+    private val unchanged: Map<String, (MainUiState) -> Any?> = mapOf("setActiveBean" to { it.activeBeanId })
 
     @Before
     fun pairWithThePrimary() {
         VmHarness.persistRole("primary")
         vm = VmHarness.build(store)
         VmHarness.idle()
+        // The settings a test sets must not be overwritten by the prefs load.
+        VmHarness.awaitPrefsLoaded(vm)
         val hub: RelayHub = assertNotNull(VmHarness.proxyController(vm).relayHub, "the primary built its relay")
         val (clientEnd, serverEnd) = CodecFrameLink.pair(scope)
         client = clientEnd
@@ -136,6 +142,7 @@ class RelayedVerbPrimaryDispatchTest {
                 VmHarness.idle()
                 assertFalse(it.applied(vm.ui.value), "${sample.fixture}: prime the state away from the sample first")
             }
+            val kept = unchanged[sample.fixture]?.invoke(vm.ui.value)
             val reply = relay(Golden.require("control/${sample.fixture}.json"))
             val refusal = refusals[sample.fixture]
             if (refusal == null) {
@@ -143,8 +150,44 @@ class RelayedVerbPrimaryDispatchTest {
             } else {
                 val err = assertIs<Frame.ControlErr>(reply, "${sample.fixture} should be refused here")
                 assertTrue(refusal in err.reason, "${sample.fixture}: ${err.reason}")
+                unchanged[sample.fixture]?.let { assertEquals(kept, it(vm.ui.value), "${sample.fixture} changed the primary") }
             }
             if (effect != null) assertTrue(effect.applied(vm.ui.value), "${sample.fixture} did not reach the primary's state")
         }
+    }
+
+    /** 05 F4: a start the primary refuses goes back to the secondary with the
+     *  primary's reason, and nobody is told the secondary started a shot. */
+    @Test
+    fun `a start the primary refuses is refused to the sender and not announced`() {
+        vm.setStopOnWeight(true)
+        vm.setRequireScale(true)
+        vm.quickAdjustBrew(18.0, 36.0, 93.0) // a weight target, and no scale here
+        VmHarness.idle()
+        val err = assertIs<Frame.ControlErr>(relay(Golden.require("control/startShot.json")))
+        assertTrue("Require scale to start" in err.reason, err.reason)
+        assertTrue(vm.ui.value.userMessages.none { "started a shot" in it }, "${vm.ui.value.userMessages}")
+    }
+
+    /** 05 F1: a profile from the secondary's own library is refused with a
+     *  reason, and the primary keeps its selection. */
+    @Test
+    fun `a profile this primary lacks is refused and its selection kept`() {
+        val before = vm.ui.value.activeProfileId
+        val err = assertIs<Frame.ControlErr>(relay(FrameCodec.encode(Frame.Control(1, "setActiveProfile", "custom-on-the-phone"))))
+        assertTrue("That profile isn\u2019t on" in err.reason, err.reason)
+        assertEquals(before, vm.ui.value.activeProfileId)
+
+        val accepted = relay(FrameCodec.encode(Frame.Control(2, "setActiveProfile", SAMPLE_PROFILE_ID)))
+        assertEquals(Frame.ControlOk(2), accepted)
+    }
+
+    /** An accepted start is announced to this primary's user. */
+    @Test
+    fun `an accepted start is announced`() {
+        vm.setRequireScale(false)
+        VmHarness.idle()
+        assertEquals(Frame.ControlOk(1), relay(Golden.require("control/startShot.json")))
+        assertTrue(vm.ui.value.userMessages.any { it == "Phone started a shot" }, "${vm.ui.value.userMessages}")
     }
 }

@@ -1,0 +1,111 @@
+package coffee.crema.ble.proxy
+
+import coffee.crema.machine.CommandOrigin
+import coffee.crema.machine.CommandOutcome
+import coffee.crema.machine.LocalMachine
+import coffee.crema.machine.MachineCommand
+import coffee.crema.machine.QcField
+import coffee.crema.machine.RecordingMachineActions
+import coffee.crema.machine.RelayedCommandDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
+import kotlin.random.Random
+import kotlin.test.Test
+import kotlin.test.assertEquals
+
+/**
+ * A session's controls reach the primary's handler one at a time, in the
+ * order the secondary sent them, even when the hub runs on a thread pool (as
+ * on Ktor's IO threads) and a handler takes a while; and through the machine
+ * seam they apply on the lane in that order.
+ */
+class RelayHubControlOrderTest {
+
+    private fun hub(handler: suspend (String, String, String?, String?) -> Result<Unit>) = RelayHub(
+        primaryId = "host-1",
+        primaryName = "Tablet",
+        roster = { emptyList() },
+        readSource = { _, _, _ -> error("unused") },
+        isSnapshotChar = { _, _ -> false },
+        controlHandler = handler,
+    )
+
+    /** Pair a client with [hub] on a thread pool, send [count] controls back to
+     *  back, and wait for every reply. */
+    private fun sendInOrder(hub: RelayHub, count: Int, control: (Int) -> Frame.Control) = runBlocking {
+        val io = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val (client, server) = InMemoryFrameLink.pair()
+            io.launch { hub.serve(server) }
+            val rx = CopyOnWriteArrayList<Frame>()
+            io.launch { client.incoming().collect { rx += it } }
+            handshake(client, rx)
+            for (i in 1..count) client.send(control(i))
+            withTimeout(10_000) { while (rx.count { it is Frame.ControlOk || it is Frame.ControlErr } < count) delay(5) }
+            // One reply per control, in order.
+            assertEquals((1..count).map { it.toLong() }, rx.mapNotNull { (it as? Frame.ControlOk)?.id })
+        } finally {
+            io.cancel()
+        }
+    }
+
+    @Test
+    fun `controls from one session are handled one at a time in arrival order`() {
+        val handled = CopyOnWriteArrayList<String>()
+        var running = 0
+        var overlapped = false
+        val hub = hub { _, args, _, _ ->
+            synchronized(this) { if (running++ > 0) overlapped = true }
+            // A later control that finishes faster must still wait its turn.
+            delay(Random.nextLong(0, 5))
+            handled += args
+            synchronized(this) { running-- }
+            Result.success(Unit)
+        }
+        sendInOrder(hub, 40) { i -> Frame.Control(i.toLong(), "setQcGrind", "$i.0") }
+        assertEquals((1..40).map { "$it.0" }, handled.toList())
+        assertEquals(false, overlapped, "two controls of one session ran at once")
+    }
+
+    @Test
+    fun `through the machine seam they apply on the lane in that order`() {
+        val laneExecutor = Executors.newSingleThreadExecutor { Thread(it, "main-lane") }
+        try {
+            val actions = RecordingMachineActions()
+            val dispatcher = RelayedCommandDispatcher(
+                machine = LocalMachine(actions, grantTakeOver = { CommandOutcome.Accepted }, notify = {}),
+                hostName = { "Tablet" },
+                machineIdle = { false },
+                announce = { _, _ -> },
+                log = {},
+                lane = laneExecutor.asCoroutineDispatcher(),
+            )
+            val hub = hub { method, args, id, name ->
+                when (val outcome = dispatcher.dispatch(method, args, CommandOrigin(id, name))) {
+                    CommandOutcome.Accepted -> Result.success(Unit)
+                    else -> Result.failure(IllegalStateException(outcome.toString()))
+                }
+            }
+            // A setting then a start, repeatedly: a swap would start on the old value.
+            sendInOrder(hub, 40) { i ->
+                if (i % 2 == 1) Frame.Control(i.toLong(), "setQcGrind", "$i.0") else Frame.Control(i.toLong(), "startShot", "")
+            }
+            val expected = (1..40).map { i ->
+                if (i % 2 == 1) "commit(${MachineCommand.SetQc(QcField.GRIND, i.toFloat())})" else "startShot"
+            }
+            assertEquals(expected, actions.applied.toList())
+            assertEquals(setOf("main-lane"), actions.threads.toSet())
+        } finally {
+            laneExecutor.shutdownNow()
+        }
+    }
+}

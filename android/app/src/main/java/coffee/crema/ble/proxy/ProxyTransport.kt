@@ -2,6 +2,7 @@ package coffee.crema.ble.proxy
 
 import android.util.Log
 import coffee.crema.ble.BleTransport
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
@@ -17,11 +18,29 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.transform
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+
+/** How a relayed control ended, as far as the secondary can tell. */
+sealed interface ControlReply {
+    /** The primary accepted it ([Frame.ControlOk]). */
+    data object Ok : ControlReply
+
+    /** The primary refused it ([Frame.ControlErr]), with its reason. */
+    data class Err(val reason: String) : ControlReply
+
+    /** It never reached the primary (no welcomed session in time, or this
+     *  device was refused): not applied. */
+    data class NotSent(val detail: String) : ControlReply
+
+    /** It went out but no reply came (a timeout, or the session ended first):
+     *  the primary may have run it. */
+    data class NoReply(val detail: String) : ControlReply
+}
 
 /**
  * [BleTransport] implemented as a network client to a primary's [RelayHub] — the
@@ -441,18 +460,37 @@ class ProxyTransport(
      * core is a read-only mirror and cannot drive the machine). Suspends until
      * the primary acks dispatch via [Frame.ControlOk]; the action's *effect*
      * arrives asynchronously over [observe] as the primary's machine state. Not
-     * part of [BleTransport] — the VM calls it directly when relaying a tap on a
-     * secondary's Brew controls. Returns failure on [Frame.ControlErr]/timeout so
-     * the caller can surface it, never throwing into the UI thread.
+     * part of [BleTransport]. Returns failure on [Frame.ControlErr]/timeout,
+     * never throwing into the UI thread. [sendControl] says which failure.
      */
-    suspend fun control(method: String, args: String = ""): Result<Unit> {
+    suspend fun control(method: String, args: String = ""): Result<Unit> = when (val reply = sendControl(method, args)) {
+        ControlReply.Ok -> Result.success(Unit)
+        is ControlReply.Err -> Result.failure(IllegalStateException("control rejected: ${reply.reason}"))
+        is ControlReply.NotSent -> Result.failure(IllegalStateException(reply.detail))
+        is ControlReply.NoReply -> Result.failure(IllegalStateException(reply.detail))
+    }
+
+    /**
+     * Relay a control and say how it ended, as far as this device can tell:
+     * the primary's answer, or whether the frame never left (not applied) or
+     * left without an answer (the primary may have run it). Never resent.
+     */
+    suspend fun sendControl(method: String, args: String = ""): ControlReply {
         val id = nextId.getAndIncrement()
-        return runCatching {
-            when (val reply = request(id) { Frame.Control(id, method, args) }) {
-                is Frame.ControlOk -> Unit
-                is Frame.ControlErr -> error("control rejected: ${reply.reason}")
-                else -> error("Unexpected reply to control: $reply")
+        var sent = false
+        return try {
+            when (val reply = request(id, onWire = { sent = it }) { Frame.Control(id, method, args) }) {
+                is Frame.ControlOk -> ControlReply.Ok
+                is Frame.ControlErr -> ControlReply.Err(reply.reason)
+                else -> ControlReply.NoReply("unexpected reply to control: $reply")
             }
+        } catch (e: TimeoutCancellationException) {
+            if (sent) ControlReply.NoReply(e.message ?: "no reply in time") else ControlReply.NotSent(e.message ?: "not connected")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val detail = e.message ?: e.toString()
+            if (sent) ControlReply.NoReply(detail) else ControlReply.NotSent(detail)
         }
     }
 
@@ -473,7 +511,10 @@ class ProxyTransport(
 
     // ---- Internals --------------------------------------------------------
 
-    private suspend fun request(id: Long, build: () -> Frame): Frame {
+    /** Send a request and wait for its reply. [onWire] is true from the moment
+     *  the frame may be on a welcomed session's wire, false again if that send
+     *  put nothing out. */
+    private suspend fun request(id: Long, onWire: (Boolean) -> Unit = {}, build: () -> Frame): Frame {
         return try {
             // The send is inside the timeout too: ReconnectingClientLink.send()
             // SUSPENDS until the link is back, so on a dead/mid-reconnect link an
@@ -493,7 +534,9 @@ class ProxyTransport(
                     val settled = handshake.first { it !is Handshake.Pending }
                     if (settled is Handshake.Refused) throw settled.error
                     sent = Sent(settled.epoch).also { pending[id] = it }
+                    onWire(true)
                     if (link.sendOn(settled.epoch, frame)) break
+                    onWire(false)
                     pending.remove(id)
                     handshake.first { it.epoch != settled.epoch || it is Handshake.Refused }
                 }

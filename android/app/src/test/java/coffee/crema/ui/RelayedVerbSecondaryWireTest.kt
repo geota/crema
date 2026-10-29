@@ -22,6 +22,7 @@ import org.robolectric.annotation.Config
 import java.net.InetAddress
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * The secondary's half of the relayed-verb wire: a real [MainViewModel]
@@ -93,9 +94,10 @@ class RelayedVerbSecondaryWireTest {
 
     @Test
     fun `every relayed verb leaves the secondary in its golden wire form`() {
-        for (sample in RELAYED_VERB_SAMPLES) {
+        val senders = RELAYED_VERB_SAMPLES.filter { it.send != null }
+        for (sample in senders) {
             val before = controlTexts().size
-            sample.send(vm)
+            sample.send!!(vm)
             VmHarness.idleUntil("${sample.fixture} on the wire") { controlTexts().size > before }
             val sent = controlTexts()
             assertEquals(before + 1, sent.size, "${sample.fixture} sent more than one control")
@@ -106,12 +108,27 @@ class RelayedVerbSecondaryWireTest {
             )
         }
         // And the primary's hub decoded every one of them back to the same verb.
-        VmHarness.idleUntil("the primary to handle every control") { handled.size == RELAYED_VERB_SAMPLES.size }
-        assertEquals(RELAYED_VERB_SAMPLES.map { it.method to it.args }, handled.toList())
+        VmHarness.idleUntil("the primary to handle every control") { handled.size == senders.size }
+        assertEquals(senders.map { it.method to it.args }, handled.toList())
+    }
+
+    /** What a secondary keeps to itself: the debug panel's raw Espresso (a
+     *  shot is relayed only as startShot), and a Wake while its view of the
+     *  machine isn't asleep (that IDLE would stop whatever is running). */
+    @Test
+    fun `raw espresso and a wake of an awake machine stay on the secondary`() {
+        vm.startEspresso()
+        vm.wake()
+        vm.tareScale() // a control that is sent, so the wire has caught up
+        VmHarness.idleUntil("the tare on the wire") { controlTexts().isNotEmpty() }
+        VmHarness.idleUntil("the primary to handle it") { handled.isNotEmpty() }
+        assertEquals(listOf("tareScale" to ""), handled.toList())
+        val notices = vm.ui.value.userMessages
+        assertTrue(notices.any { "Not available while mirroring" in it }, "$notices")
     }
 
     /** A config verb is applied on the secondary at once, then reverted when
-     *  the primary refuses it (ProxyController.relayConfigOptimistic). */
+     *  the primary refuses it (RelayMachine's config policy). */
     @Test
     fun `a refused config verb is reverted on the secondary`() {
         refused += "setQcGrind"

@@ -55,6 +55,11 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ble.De1Uuids
 import coffee.crema.ble.proxy.DeviceInfo
+import coffee.crema.machine.CommandOutcome
+import coffee.crema.machine.MachineActions
+import coffee.crema.machine.MachineCommand
+import coffee.crema.machine.MachineCommands
+import coffee.crema.machine.QcField
 import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.ShotDisposition
 import coffee.crema.core.ShotQualityReport
@@ -1098,6 +1103,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var lastTelemetryMs: Long? = null
 
     /**
+     * What this device does for each [MachineCommand]: the bodies behind the
+     * verbs. [ProxyController]'s local machine runs them for this device's own
+     * UI and for a secondary's relayed commands alike. Declared before [proxy],
+     * which takes it; its members reach later fields only when invoked.
+     */
+    private val machineActions = object : MachineActions {
+        override fun applyStartShot(): CommandOutcome = this@MainViewModel.applyStartShot()
+        override fun applyMachineState(request: MachineRequest) = this@MainViewModel.applyMachineState(request)
+        override fun applyCancelMaintenance() = this@MainViewModel.applyCancelMaintenance()
+        override fun applyTareScale() = this@MainViewModel.applyTareScale()
+        override fun showConfig(cmd: MachineCommand.Config): () -> Unit = this@MainViewModel.showConfig(cmd)
+        override fun commitConfig(cmd: MachineCommand.Config) = this@MainViewModel.commitConfig(cmd)
+        override fun hasProfile(id: String): Boolean = library.hasProfile(id)
+        override fun hasBean(id: String): Boolean = _ui.value.beans.any { it.id == id }
+        // Someone is using Crema on a mirror: that's presence at the machine.
+        override fun notePeerActivity() = idleSleep.activity(coffee.crema.core.IdleActivity.Mirror)
+    }
+
+    /**
      * The multi-device proxy controller (review #43) — mode switching (normal /
      * primary / secondary), the LAN relay + mirror-link lifecycle, NSD peer
      * discovery, TOFU pairing, and handoff. A self-contained sibling of
@@ -1111,7 +1135,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * the Nordic `Environment` in [ProxyController.close]).
      *
      * Whole-app concerns stay in this VM, reached through the callbacks:
-     * relayed-control dispatch, the session-config snapshot/apply, the
+     * the machine command bodies ([machineActions]), the session-config snapshot/apply, the
      * TOFU paired-device list (persisted with the app prefs), and the
      * mirrored-profile promotion on handoff. The lambdas referencing
      * later-declared fields ([ble], [scale], [bleRecorder]) are only INVOKED
@@ -1135,7 +1159,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         },
         de1Connected = { ble.connectedAddress != null },
         machineStateName = { _ui.value.machineStateName?.string },
-        dispatchControl = { method, args -> dispatchRelayedControl(method, args) },
+        machineActions = machineActions,
         snapshotConfig = { configSnapshotJson() },
         applyConfig = { applyRemoteConfig(it) },
         // The devices this primary holds: the DE1, plus the scale when one is
@@ -1746,17 +1770,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Select the Brew header's active profile. (M1: display only — uploading the
      *  profile to the DE1 on Coffee is the M2 gated-start sequence.) Persisted
      *  (AppPrefs.activeProfileId) so the selection survives a restart. */
-    fun setActiveProfile(id: String) {
-        val prev = _ui.value
-        // Switching profiles clears any Quick-Controls override (re-seeds from new).
-        _ui.update { it.copy(activeProfileId = id, brewParams = null) }
-        if (relayConfigOptimistic("setActiveProfile", id) {
-                _ui.update { it.copy(activeProfileId = prev.activeProfileId, brewParams = prev.brewParams) }
-            }
-        ) return
-        persistPrefs()
-        pushStopTargets() // new profile's recipe yield/volume become the stop targets
-    }
+    fun setActiveProfile(id: String) = machine.execute(MachineCommand.SetActiveProfile(id))
 
     // ── Library delegates (see [LibraryController]) ──────────────────────────
     // Thin pass-throughs so screens keep calling the same VM API.
@@ -2133,25 +2147,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Apply a Quick-Controls brew override (dose/yield/brew-temp). Transient —
      *  not saved to the profile; baked into the next shot's upload by [startShot]. */
-    fun quickAdjustBrew(dose: Double, yieldOut: Double, brewTemp: Double, preinf: Double? = null) {
-        val prev = _ui.value.brewParams
-        _ui.update { it.copy(brewParams = BrewParams(dose, yieldOut, brewTemp, preinf)) }
-        if (relayConfigOptimistic("quickAdjustBrew", "$dose,$yieldOut,$brewTemp,${preinf ?: ""}") {
-                _ui.update { it.copy(brewParams = prev) }
-            }
-        ) return
-        pushStopTargets() // the new yield override becomes the live stop-at-weight target
-        proxy.pushConfig() // mirrors track the primary's live override (issue 06)
-    }
+    fun quickAdjustBrew(dose: Double, yieldOut: Double, brewTemp: Double, preinf: Double? = null) =
+        machine.execute(MachineCommand.AdjustBrew(dose, yieldOut, brewTemp, preinf))
 
     /** Reset the Quick-Controls override back to the active profile's recipe. */
-    fun resetBrewParams() {
-        val prev = _ui.value.brewParams
-        _ui.update { it.copy(brewParams = null) }
-        if (relayConfigOptimistic("resetBrew", "") { _ui.update { it.copy(brewParams = prev) } }) return
-        pushStopTargets() // drop the per-shot override; the profile recipe target takes over
-        proxy.pushConfig() // mirrors drop their override too (issue 06)
-    }
+    fun resetBrewParams() = machine.execute(MachineCommand.ResetBrew)
 
     /**
      * Push the stop-at-weight (SAW) / stop-at-volume (SAV) targets into the core
@@ -2321,13 +2321,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Start steaming. */
-    fun steam() = requestMachineState(MachineRequest.STEAM)
+    fun steam() = machine.execute(MachineCommand.StartSteam)
 
     /** Start hot water. */
-    fun hotWater() = requestMachineState(MachineRequest.HOT_WATER)
+    fun hotWater() = machine.execute(MachineCommand.StartHotWater)
 
     /** Start a group-head flush / rinse. */
-    fun flush() = requestMachineState(MachineRequest.FLUSH)
+    fun flush() = machine.execute(MachineCommand.StartFlush)
 
     /**
      * Start an espresso shot the gated way (web parity): upload the active
@@ -2344,23 +2344,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * M2 v1 always uploads (no fingerprint-skip optimisation yet) and has no
      * pre-shot flush (no settings store on Android yet) — both are later refinements.
      */
-    fun startShot() {
-        if (relayIfSecondary("startShot")) return
+    fun startShot() = machine.execute(MachineCommand.StartShot)
+
+    /** [startShot]'s body on the device holding the machine (also a mirror's
+     *  relayed start): refused, with the reason for whoever asked, when a shot
+     *  can't start. */
+    private fun applyStartShot(): CommandOutcome {
         // One start at a time (05 F2): a second chain's late Espresso request
         // would land mid-shot. Stop is how to end or cancel either.
-        if (startSequence.active) {
-            notifyUser("A shot is already starting")
-            return
-        }
-        if (_ui.value.machineStateName == MachineState.Espresso) {
-            notifyUser("A shot is already running")
-            return
-        }
+        if (startSequence.active) return CommandOutcome.Refused("A shot is already starting")
+        if (_ui.value.machineStateName == MachineState.Espresso) return CommandOutcome.Refused("A shot is already running")
         val cremaJson = _ui.value.activeProfileId?.let { library.profileJson(it) }
-        if (cremaJson == null) {
-            notifyUser("Can\u2019t start shot \u2014 no profile selected")
-            return
-        }
+            ?: return CommandOutcome.Refused("Can\u2019t start shot \u2014 no profile selected")
         // Pre-shot scale gate (issue #29). Only when this shot actually
         // resolves a weight target (QC dial override, else the active
         // profile's own yield \u2014 the same precedence pushStopTargets uses): a
@@ -2372,8 +2367,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // what to change instead of failing the upload (cohort review
         // 2026-10-28, #6 #6).
         activeProfile?.let { coffee.crema.profiles.StepCap.refusal(it.name, it.segments.size) }?.let {
-            notifyUser(it)
-            return
+            return CommandOutcome.Refused(it)
         }
         val weightTarget = s.brewParams?.yieldOut?.toFloat()?.takeIf { it.isFinite() && it > 0f }
             ?: activeProfile?.yieldOut?.takeIf { it.isFinite() && it > 0f }
@@ -2385,11 +2379,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // / reaprime `blockOnNoScale` \u2014 both also default off). The DE1
                 // is left untouched; the reconnect kick above may make the next
                 // attempt succeed.
-                notifyUser(
+                return CommandOutcome.Refused(
                     if (remembered) "Shot not started \u2014 reconnecting the scale\u2026 try again in a moment"
                     else "Shot not started \u2014 no scale connected, and \u201cRequire scale to start\u201d is on"
                 )
-                return
             }
             // Default: NON-blocking cue \u2014 a modal between the user and a
             // tamped puck is workflow poison. The #15 fix arms SAW mid-shot,
@@ -2399,14 +2392,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 else "No scale connected \u2014 stop-at-weight is off for this shot"
             )
         }
-        val start = startSequence.begin() ?: run {
-            notifyUser(if (startSequence.active) "A shot is already starting" else "A shot is already running")
-            return
-        }
+        val start = startSequence.begin()
+            ?: return CommandOutcome.Refused(if (startSequence.active) "A shot is already starting" else "A shot is already running")
         // The heavy chain below — several bridge calls including the full
         // profile-frame build in Rust — runs on the core lane instead of
         // the Main tap handler (review #28).
         viewModelScope.launch(coreDispatcher) { startShotOnCoreLane(cremaJson, start) }
+        return CommandOutcome.Accepted
     }
 
     private fun startShotOnCoreLane(cremaJson: String, start: ShotStartSequence.Start) {
@@ -2603,60 +2595,97 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * shared command path — the same path the scale writes use. The Brew screen
      * (M1/M2) builds its Coffee / Stop / mode controls on this.
      */
-    // ── Multi-device: relaying + relayed dispatch (see [ProxyController]) ─────
+    // ── Multi-device: where commands go (see [ProxyController]) ─────────────
 
-    /** On a secondary, relay user-intent control [method] to the primary instead
-     *  of running it locally; `true` = relayed, the caller must `return`. A thin
-     *  delegate of [ProxyController.relayIfSecondary] so the control-path call
-     *  sites read unchanged. */
-    private fun relayIfSecondary(method: String, args: String = ""): Boolean =
-        proxy.relayIfSecondary(method, args)
+    /** Where the verbs send their [MachineCommand]s: this device, or the
+     *  primary while mirroring. */
+    private val machine: MachineCommands get() = proxy.machine
 
-    /** Relay a config verb from a secondary, optimistic-apply style (issue 06);
-     *  `true` = handled as a secondary, the caller must `return` (skipping its
-     *  persist + machine write). A thin delegate of
-     *  [ProxyController.relayConfigOptimistic]. */
-    private fun relayConfigOptimistic(method: String, args: String, revert: () -> Unit): Boolean =
-        proxy.relayConfigOptimistic(method, args, revert)
+    /** The visible half of a config command: update the UI state now and
+     *  return what undoes it. A mirror shows its relayed edits with this alone;
+     *  this device then also runs [commitConfig]. */
+    private fun showConfig(cmd: MachineCommand.Config): () -> Unit = when (cmd) {
+        is MachineCommand.SetActiveProfile -> {
+            val prev = _ui.value
+            // Switching profiles clears any Quick-Controls override (re-seeds from new).
+            _ui.update { it.copy(activeProfileId = cmd.id, brewParams = null) }
+            ({ _ui.update { it.copy(activeProfileId = prev.activeProfileId, brewParams = prev.brewParams) } })
+        }
+        is MachineCommand.SetActiveBean -> showField(cmd.id, { it.activeBeanId }) { s, v -> s.copy(activeBeanId = v) }
+        is MachineCommand.SetStopOnWeight -> showField(cmd.on, { it.stopOnWeight }) { s, v -> s.copy(stopOnWeight = v) }
+        is MachineCommand.SetAutoTare -> showField(cmd.on, { it.autoTare }) { s, v -> s.copy(autoTare = v) }
+        is MachineCommand.SetQc -> when (cmd.field) {
+            QcField.STEAM_TIME -> showField(cmd.value, { it.qcSteamTimeS }) { s, v -> s.copy(qcSteamTimeS = v) }
+            QcField.STEAM_FLOW -> showField(cmd.value, { it.qcSteamFlowMlS }) { s, v -> s.copy(qcSteamFlowMlS = v) }
+            QcField.STEAM_TEMP -> showField(cmd.value, { it.qcSteamTempC }) { s, v -> s.copy(qcSteamTempC = v) }
+            QcField.HOT_WATER_TEMP -> showField(cmd.value, { it.qcHotWaterTempC }) { s, v -> s.copy(qcHotWaterTempC = v) }
+            QcField.HOT_WATER_VOLUME -> showField(cmd.value, { it.qcHotWaterVolumeMl }) { s, v -> s.copy(qcHotWaterVolumeMl = v) }
+            QcField.FLUSH_TIME -> showField(cmd.value, { it.qcFlushTimeS }) { s, v -> s.copy(qcFlushTimeS = v) }
+            QcField.FLUSH_TEMP -> showField(cmd.value, { it.qcFlushTempC }) { s, v -> s.copy(qcFlushTempC = v) }
+            QcField.GRIND -> showField(cmd.value, { it.qcGrind }) { s, v -> s.copy(qcGrind = v) }
+        }
+        is MachineCommand.AdjustBrew -> showField(BrewParams(cmd.dose, cmd.yieldOut, cmd.brewTemp, cmd.preinf), { it.brewParams }) { s, v ->
+            s.copy(brewParams = v)
+        }
+        MachineCommand.ResetBrew -> showField(null, { it.brewParams }) { s, v -> s.copy(brewParams = v) }
+    }
 
-    /** Run a relayed control verb from a secondary on this (primary) device — the
-     *  same verbs the primary's own UI calls, so `startShot` runs the full local
-     *  shot orchestration and that complexity never crosses the wire. Wired in as
-     *  [ProxyController]'s dispatch router; a throw on an unknown method becomes
-     *  a `ControlErr` back to the peer. */
-    private fun dispatchRelayedControl(method: String, args: String) {
-        // Someone is using Crema on a mirror: that's presence at the machine.
-        idleSleep.activity(coffee.crema.core.IdleActivity.Mirror)
-        when (method) {
-            "machineState" -> requestMachineState(MachineRequest.valueOf(args))
-            "startShot" -> startShot()
-            "cancelMaintenance" -> cancelMaintenance()
-            "tareScale" -> tareScale()
-            // Config-authority verbs: the primary changes its (single-owner) config
-            // and `persistPrefs`/`setActiveBean` push the result back to mirrors.
-            "setActiveProfile" -> setActiveProfile(args)
-            "setActiveBean" -> setActiveBean(args.ifEmpty { null })
-            "setStopOnWeight" -> setStopOnWeight(args.toBoolean())
-            "setAutoTare" -> setAutoTare(args.toBoolean())
-            // Quick-Controls config verbs (issue 06): a secondary's edit drives the
-            // primary's single-owner config, which `persistPrefs` pushes back.
-            "setQcSteamTime" -> setQcSteamTime(args.toFloat())
-            "setQcSteamFlow" -> setQcSteamFlow(args.toFloat())
-            "setQcSteamTemp" -> setQcSteamTemp(args.toFloat())
-            "setQcHotWaterTemp" -> setQcHotWaterTemp(args.toFloat())
-            "setQcHotWaterVolume" -> setQcHotWaterVolume(args.toFloat())
-            "setQcFlushTime" -> setQcFlushTime(args.toFloat())
-            "setQcFlushTemp" -> setQcFlushTemp(args.toFloat())
-            "setQcGrind" -> setQcGrind(args.toFloat())
-            // The live Quick-Controls brew override (dose/yield/temp/preinf). CSV
-            // "dose,yield,temp,preinf" — preinf empty = null. resetBrew clears it.
-            "quickAdjustBrew" -> args.split(",").let { p ->
-                quickAdjustBrew(p[0].toDouble(), p[1].toDouble(), p[2].toDouble(), p.getOrNull(3)?.toDoubleOrNull())
+    /** Set one UI field to [value]; the returned undo puts back what it held. */
+    private fun <T> showField(value: T, get: (MainUiState) -> T, set: (MainUiState, T) -> MainUiState): () -> Unit {
+        val prev = get(_ui.value)
+        _ui.update { set(it, value) }
+        return { _ui.update { set(it, prev) } }
+    }
+
+    /** The rest of a config command on the device that owns the config:
+     *  persist it, write the machine, push it to mirrors. */
+    private fun commitConfig(cmd: MachineCommand.Config) {
+        when (cmd) {
+            is MachineCommand.SetActiveProfile -> {
+                persistPrefs()
+                pushStopTargets() // new profile's recipe yield/volume become the stop targets
             }
-            "resetBrew" -> resetBrewParams()
-            // "handoff" never reaches this router: ProxyController grants it with
-            // the taker's identity (the release waits for the taker's disconnect).
-            else -> error("unknown relayed control: $method")
+            is MachineCommand.SetActiveBean -> {
+                library.persistLibrary()
+                proxy.pushConfig() // bean activation persists via the library, not prefs
+                // Linked-profile auto-load (web activateBean parity). Only user acts
+                // reach this — boot/library restore writes activeBeanId directly —
+                // so firing here matches the "explicit activation only" rule.
+                if (cmd.id != null) library.maybeLoadLinkedProfile(cmd.id)
+            }
+            is MachineCommand.SetStopOnWeight -> {
+                runCatching { bridge.setStopOnWeight(cmd.on) }.onFailure {
+                    appendLog("Set stop-on-weight failed: ${it.message}")
+                }
+                persistPrefs()
+            }
+            is MachineCommand.SetAutoTare -> {
+                runCatching { bridge.setAutoTare(cmd.on) }.onFailure {
+                    appendLog("Set auto-tare failed: ${it.message}")
+                }
+                persistPrefs()
+            }
+            is MachineCommand.SetQc -> {
+                persistPrefs()
+                when (cmd.field) {
+                    // One read-modify-write packet carries these four.
+                    QcField.STEAM_TIME, QcField.STEAM_TEMP, QcField.HOT_WATER_TEMP, QcField.HOT_WATER_VOLUME ->
+                        applySteamHotWater()
+                    QcField.STEAM_FLOW -> routeWrite("Set steam flow") { bridge.setSteamFlow(cmd.value) }
+                    QcField.FLUSH_TIME -> routeWrite("Set flush time") { bridge.setFlushTimeout((cmd.value * 1000f).toUInt()) }
+                    QcField.FLUSH_TEMP -> routeWrite("Set flush temp") { bridge.setFlushTemp(cmd.value) }
+                    // Grind never reaches the machine: it's recorded onto the next shot.
+                    QcField.GRIND -> Unit
+                }
+            }
+            is MachineCommand.AdjustBrew -> {
+                pushStopTargets() // the new yield override becomes the live stop-at-weight target
+                proxy.pushConfig() // mirrors track the primary's live override (issue 06)
+            }
+            MachineCommand.ResetBrew -> {
+                pushStopTargets() // drop the per-shot override; the profile recipe target takes over
+                proxy.pushConfig() // mirrors drop their override too (issue 06)
+            }
         }
     }
 
@@ -2851,16 +2880,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** A user's machine request (a control, or one relayed from a peer). It
      *  cancels a pending shot start first (05 F2): a Stop, or another mode,
      *  during the guard or the pre-flush must not end in Espresso. */
-    private fun requestMachineState(state: MachineRequest) {
-        // A sleep the app asked for is deliberate, not idle: mark it so the
-        // Sleep state report that follows doesn't raise the screensaver (see
-        // [appAskedForSleep]). Marked before the relay so both ends of a
-        // mirrored session (the secondary that tapped, the primary that
-        // writes) treat it the same.
-        if (state == MachineRequest.SLEEP) appSleepRequestedAtMs = SystemClock.elapsedRealtime()
-        if (relayIfSecondary("machineState", state.name)) return
+    private fun applyMachineState(state: MachineRequest) {
+        if (state == MachineRequest.SLEEP) markAppSleepRequest()
         cancelStartSequence(state.name)
         writeMachineState(state)
+    }
+
+    /** A sleep the app asked for is deliberate, not idle: mark it so the
+     *  Sleep state report that follows doesn't raise the screensaver (see
+     *  [appAskedForSleep]). Both ends of a mirrored session (the secondary
+     *  that tapped, the primary that writes) mark it. */
+    private fun markAppSleepRequest() {
+        appSleepRequestedAtMs = SystemClock.elapsedRealtime()
     }
 
     /** Drop the pending shot start, if any. Its upload runs on, and the
@@ -2915,17 +2946,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Wake the DE1 / return to idle (also stops a running shot). */
-    fun wake() = requestMachineState(MachineRequest.IDLE)
+    /** Wake a sleeping DE1 (the request also stops anything running, so a
+     *  mirror sends it only while it shows the machine asleep). */
+    fun wake() = machine.execute(MachineCommand.Wake)
 
-    /** Put the DE1 to sleep. */
-    fun sleep() = requestMachineState(MachineRequest.SLEEP)
+    /** Put the DE1 to sleep. Marked here too, for a mirror's own screensaver. */
+    fun sleep() {
+        markAppSleepRequest()
+        machine.execute(MachineCommand.Sleep)
+    }
 
-    /** Start an espresso shot. */
-    fun startEspresso() = requestMachineState(MachineRequest.ESPRESSO)
+    /** The debug panel's raw Espresso request, skipping the start sequence.
+     *  Not available while mirroring. */
+    fun startEspresso() = machine.execute(MachineCommand.RawEspresso)
 
     /** Stop a running shot (return to idle). */
-    fun stopShot() = requestMachineState(MachineRequest.IDLE)
+    fun stopShot() = machine.execute(MachineCommand.Stop)
 
     /**
      * Read the DE1's identity + service registers once a connection is READY.
@@ -3290,18 +3326,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Start a descale cycle (Settings → Water → "Run now"). */
-    fun startDescale() = requestMachineState(MachineRequest.DESCALE)
+    fun startDescale() = machine.execute(MachineCommand.StartDescale)
 
     /** Start a cleaning cycle (Settings → Water → "Run now"). */
-    fun startClean() = requestMachineState(MachineRequest.CLEAN)
+    fun startClean() = machine.execute(MachineCommand.StartClean)
 
     /**
      * Cancel the maintenance cycle core is following (Settings → Water's
      * Cancel): drops a Descale / Clean held for preheat on old firmware, or
      * asks a running one to stop. Progress arrives as `MaintenanceProgress`.
      */
-    fun cancelMaintenance() {
-        if (relayIfSecondary("cancelMaintenance")) return
+    fun cancelMaintenance() = machine.execute(MachineCommand.CancelMaintenance)
+
+    private fun applyCancelMaintenance() {
         val raw = runCatching { bridge.cancelMaintenance() }.getOrElse {
             appendLog("cancelMaintenance failed: ${it.message}")
             return
@@ -3330,29 +3367,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Enable/disable auto-tare at shot start (Quick Controls). Optimistic. Persisted. */
-    fun setAutoTare(enabled: Boolean) {
-        val prev = _ui.value.autoTare
-        _ui.update { it.copy(autoTare = enabled) }
-        if (relayConfigOptimistic("setAutoTare", enabled.toString()) { _ui.update { it.copy(autoTare = prev) } }) return
-        runCatching { bridge.setAutoTare(enabled) }.onFailure {
-            appendLog("Set auto-tare failed: ${it.message}")
-        }
-        persistPrefs()
-    }
+    fun setAutoTare(enabled: Boolean) = machine.execute(MachineCommand.SetAutoTare(enabled))
 
     /**
      * Enable/disable stop-on-weight (Quick Controls). The yield target comes from
      * the active profile; this just arms/disarms the behaviour. Optimistic.
      */
-    fun setStopOnWeight(enabled: Boolean) {
-        val prev = _ui.value.stopOnWeight
-        _ui.update { it.copy(stopOnWeight = enabled) }
-        if (relayConfigOptimistic("setStopOnWeight", enabled.toString()) { _ui.update { it.copy(stopOnWeight = prev) } }) return
-        runCatching { bridge.setStopOnWeight(enabled) }.onFailure {
-            appendLog("Set stop-on-weight failed: ${it.message}")
-        }
-        persistPrefs()
-    }
+    fun setStopOnWeight(enabled: Boolean) = machine.execute(MachineCommand.SetStopOnWeight(enabled))
 
     /**
      * Opt into the profile's max-volume stop racing stop-at-weight while a
@@ -3443,79 +3464,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Steam timeout, seconds (Quick Controls). Persisted; RMW write. */
-    fun setQcSteamTime(seconds: Float) {
-        val prev = _ui.value.qcSteamTimeS
-        _ui.update { it.copy(qcSteamTimeS = seconds) }
-        if (relayConfigOptimistic("setQcSteamTime", seconds.toString()) { _ui.update { it.copy(qcSteamTimeS = prev) } }) return
-        persistPrefs()
-        applySteamHotWater()
-    }
+    fun setQcSteamTime(seconds: Float) = machine.execute(MachineCommand.SetQc(QcField.STEAM_TIME, seconds))
 
     /** Steam flow rate, ml/s (Quick Controls). Persisted; standalone write. */
-    fun setQcSteamFlow(mlPerS: Float) {
-        val prev = _ui.value.qcSteamFlowMlS
-        _ui.update { it.copy(qcSteamFlowMlS = mlPerS) }
-        if (relayConfigOptimistic("setQcSteamFlow", mlPerS.toString()) { _ui.update { it.copy(qcSteamFlowMlS = prev) } }) return
-        persistPrefs()
-        routeWrite("Set steam flow") { bridge.setSteamFlow(mlPerS) }
-    }
+    fun setQcSteamFlow(mlPerS: Float) = machine.execute(MachineCommand.SetQc(QcField.STEAM_FLOW, mlPerS))
 
     /** Steam temperature, °C (Quick Controls). Persisted; RMW write. */
-    fun setQcSteamTemp(tempC: Float) {
-        val prev = _ui.value.qcSteamTempC
-        _ui.update { it.copy(qcSteamTempC = tempC) }
-        if (relayConfigOptimistic("setQcSteamTemp", tempC.toString()) { _ui.update { it.copy(qcSteamTempC = prev) } }) return
-        persistPrefs()
-        applySteamHotWater()
-    }
+    fun setQcSteamTemp(tempC: Float) = machine.execute(MachineCommand.SetQc(QcField.STEAM_TEMP, tempC))
 
     /** Hot-water temperature, °C (Quick Controls). Persisted; RMW write. */
-    fun setQcHotWaterTemp(tempC: Float) {
-        val prev = _ui.value.qcHotWaterTempC
-        _ui.update { it.copy(qcHotWaterTempC = tempC) }
-        if (relayConfigOptimistic("setQcHotWaterTemp", tempC.toString()) { _ui.update { it.copy(qcHotWaterTempC = prev) } }) return
-        persistPrefs()
-        applySteamHotWater()
-    }
+    fun setQcHotWaterTemp(tempC: Float) = machine.execute(MachineCommand.SetQc(QcField.HOT_WATER_TEMP, tempC))
 
     /** Hot-water volume, ml (Quick Controls). Persisted; RMW write. */
-    fun setQcHotWaterVolume(ml: Float) {
-        val prev = _ui.value.qcHotWaterVolumeMl
-        _ui.update { it.copy(qcHotWaterVolumeMl = ml) }
-        if (relayConfigOptimistic("setQcHotWaterVolume", ml.toString()) { _ui.update { it.copy(qcHotWaterVolumeMl = prev) } }) return
-        persistPrefs()
-        applySteamHotWater()
-    }
+    fun setQcHotWaterVolume(ml: Float) = machine.execute(MachineCommand.SetQc(QcField.HOT_WATER_VOLUME, ml))
 
     /** Flush timeout, seconds (Quick Controls). Persisted; standalone write. */
-    fun setQcFlushTime(seconds: Float) {
-        val prev = _ui.value.qcFlushTimeS
-        _ui.update { it.copy(qcFlushTimeS = seconds) }
-        if (relayConfigOptimistic("setQcFlushTime", seconds.toString()) { _ui.update { it.copy(qcFlushTimeS = prev) } }) return
-        persistPrefs()
-        routeWrite("Set flush time") { bridge.setFlushTimeout((seconds * 1000f).toUInt()) }
-    }
+    fun setQcFlushTime(seconds: Float) = machine.execute(MachineCommand.SetQc(QcField.FLUSH_TIME, seconds))
 
     /** Flush temperature, °C (Quick Controls). Persisted; standalone write. */
-    fun setQcFlushTemp(tempC: Float) {
-        val prev = _ui.value.qcFlushTempC
-        _ui.update { it.copy(qcFlushTempC = tempC) }
-        if (relayConfigOptimistic("setQcFlushTemp", tempC.toString()) { _ui.update { it.copy(qcFlushTempC = prev) } }) return
-        persistPrefs()
-        routeWrite("Set flush temp") { bridge.setFlushTemp(tempC) }
-    }
+    fun setQcFlushTemp(tempC: Float) = machine.execute(MachineCommand.SetQc(QcField.FLUSH_TEMP, tempC))
 
     /**
      * Grinder click (Quick Controls). Persisted so it sticks + recorded onto the
      * next shot (issue 15). Grind never reaches the machine — it's a log/record
      * value — so there's no machine write, just persistence.
      */
-    fun setQcGrind(clicks: Float) {
-        val prev = _ui.value.qcGrind
-        _ui.update { it.copy(qcGrind = clicks) }
-        if (relayConfigOptimistic("setQcGrind", clicks.toString()) { _ui.update { it.copy(qcGrind = prev) } }) return
-        persistPrefs()
-    }
+    fun setQcGrind(clicks: Float) = machine.execute(MachineCommand.SetQc(QcField.GRIND, clicks))
 
     /** Show/hide a live-chart channel (Quick Controls). Persisted display pref. */
     fun toggleChartChannel(key: String, enabled: Boolean) {
@@ -3659,17 +3633,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── Bean library — see [LibraryController] ──────────────────────────────
 
     /** Set (or with `null`, clear) the active bean (the Brew bean block). Persisted. */
-    fun setActiveBean(id: String?) {
-        val prev = _ui.value.activeBeanId
-        _ui.update { it.copy(activeBeanId = id) }
-        if (relayConfigOptimistic("setActiveBean", id ?: "") { _ui.update { it.copy(activeBeanId = prev) } }) return
-        library.persistLibrary()
-        proxy.pushConfig() // bean activation persists via the library, not prefs
-        // Linked-profile auto-load (web activateBean parity). Only user acts
-        // reach this fun — boot/library restore writes activeBeanId directly —
-        // so firing here matches the "explicit activation only" rule.
-        if (id != null) library.maybeLoadLinkedProfile(id)
-    }
+    fun setActiveBean(id: String?) = machine.execute(MachineCommand.SetActiveBean(id))
 
     // ── Maintenance (water accumulation) ────────────────────────────────────────
     //
@@ -4231,7 +4195,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         saveMaintenance(_ui.value.maintenance.copy(cleanEnabled = on))
 
     /** Start a steam-rinse cycle (Settings → Water → "Run now"). */
-    fun startSteamRinse() = requestMachineState(MachineRequest.STEAM_RINSE)
+    fun startSteamRinse() = machine.execute(MachineCommand.StartSteamRinse)
 
     /** Check the DE1's serial against Decent's stolen-machine list (fetched at
      *  most daily, cached, failures silent) and raise the Settings notice. */
@@ -4606,8 +4570,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * the resulting `Command.WriteScale` through the shared command path so the
      * exact same code handles a manual tare and the core's auto-tare.
      */
-    fun tareScale() {
-        if (relayIfSecondary("tareScale")) return
+    fun tareScale() = machine.execute(MachineCommand.TareScale)
+
+    private fun applyTareScale() {
         val raw = runCatching { bridge.tareScale() }.getOrElse {
             appendLog("Tare failed: ${it.message}")
             return
