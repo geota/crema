@@ -56,7 +56,14 @@ pub fn hds_firmware_major(frame: &[u8]) -> Option<u8> {
 /// Whether `frame` is the 7-byte answer to [`VOLTAGE_PROBE`].
 #[must_use]
 pub fn is_voltage_reply(frame: &[u8]) -> bool {
-    frame.len() == FRAME_LEN && frame[0] == HEADER && frame[1] == VOLTAGE_OPCODE
+    // The XOR must verify too (reaprime `parseDecentVoltageFrame`,
+    // `profile.dart:279-283`): a corrupt frame must not grant SoftSleep
+    // (cohort review 2026-10-25, scales appendix F-10). Only an HDS answers
+    // the probe, and the HDS checksums every frame it sends.
+    frame.len() == FRAME_LEN
+        && frame[0] == HEADER
+        && frame[1] == VOLTAGE_OPCODE
+        && frame[..FRAME_LEN - 1].iter().fold(0u8, |acc, b| acc ^ b) == frame[FRAME_LEN - 1]
 }
 
 /// Per-connection negotiation and sleep state for a Decent Scale.
@@ -195,6 +202,20 @@ mod tests {
         assert!(hds.is_soft_sleeping());
         assert_eq!(hds.wake(), Some(SOFT_SLEEP_EXIT));
         assert_eq!(hds.wake(), None);
+    }
+
+    /// F-10: a voltage reply whose XOR does not verify is not an HDS answer,
+    /// so it cannot grant SoftSleep.
+    #[test]
+    fn a_corrupt_voltage_reply_grants_nothing() {
+        assert!(is_voltage_reply(&VOLTAGE));
+        let mut corrupt = VOLTAGE;
+        corrupt[3] ^= 0x01;
+        assert!(!is_voltage_reply(&corrupt));
+        let mut hds = HdsNegotiation::new();
+        let _ = hds.on_frame(&status(0x03, 0x1E));
+        assert!(hds.on_frame(&corrupt).is_empty());
+        assert!(!hds.supports_soft_sleep());
     }
 
     #[test]

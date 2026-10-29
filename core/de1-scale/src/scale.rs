@@ -193,6 +193,22 @@ const SCALE_SCAN: &[ScaleScanEntry] = &[
     },
 ];
 
+/// Largest weight magnitude, in grams, a reading may carry. No supported
+/// scale weighs more than a few kilograms; anything beyond this (or a
+/// non-finite value) is a decode artefact — the Skale's `mantissa ×
+/// 10^exponent` frame yields `inf` for exponent `0x7F` and `1e20` for
+/// `0x14` — and is dropped before it reaches the core's weight pipeline
+/// (cohort review 2026-10-25, 01 P2-4: the untared-cup guard ran before the
+/// spike gate, so such a value reached the shells as a `null` weight).
+pub const MAX_PLAUSIBLE_WEIGHT_G: f32 = 10_000.0;
+
+/// Whether `weight_g` is a reading a real scale could report — see
+/// [`MAX_PLAUSIBLE_WEIGHT_G`].
+#[must_use]
+pub fn is_plausible_weight(weight_g: f32) -> bool {
+    weight_g.is_finite() && weight_g.abs() <= MAX_PLAUSIBLE_WEIGHT_G
+}
+
 /// One decoded scale notification.
 ///
 /// Every scale reports a `weight_g`. A few scales report more in the same
@@ -729,11 +745,19 @@ impl Scale {
             Inner::Skale => Some(skale::BUTTON_NOTIFY_UUID),
             _ => None,
         };
-        // Gen-1/IPS Acaia, Timemore and Skale commands go WITHOUT response
-        // (see the field doc); Pyxis + everything else take the default write.
+        // Gen-1/IPS Acaia, Timemore, Skale and the Eureka Precisa / Solo
+        // Barista commands go WITHOUT response (see the field doc); Pyxis +
+        // everything else take the default write. Eureka / Solo: reaprime
+        // `eureka_scale.dart:114-121` and Decenza
+        // `eurekaprecisascale.cpp:155-158` both write `FFF2` without
+        // response (cohort review 2026-10-25, scales appendix F-05).
         let command_write_no_response = matches!(
             &self.inner,
-            Inner::AcaiaGen1(_) | Inner::Timemore | Inner::Skale
+            Inner::AcaiaGen1(_)
+                | Inner::Timemore
+                | Inner::Skale
+                | Inner::EurekaPrecisa
+                | Inner::SoloBarista
         );
         ScaleUuids {
             service,
@@ -1029,6 +1053,23 @@ impl Scale {
         }
     }
 
+    /// The writes for one heartbeat tick: [`heartbeat_command`](Self::heartbeat_command),
+    /// preceded for an Acaia by the ident + config handshake until the scale
+    /// streams its first weight (at most
+    /// [`acaia::MAX_HANDSHAKE_RESENDS`] times — see
+    /// [`acaia::AcaiaDecoder::take_handshake_resend`]). `None` when the
+    /// scale has no heartbeat.
+    #[must_use]
+    pub fn heartbeat_writes(&mut self) -> Option<Vec<&'static [u8]>> {
+        let mut writes = self.heartbeat_command()?;
+        if let Inner::AcaiaGen1(decoder) | Inner::AcaiaPyxis(decoder) = &mut self.inner
+            && decoder.take_handshake_resend()
+        {
+            writes.splice(0..0, [&acaia::IDENT[..], &acaia::CONFIG[..]]);
+        }
+        Some(writes)
+    }
+
     /// Decode an on-scale button press from the scale's button
     /// characteristic ([`ScaleUuids::button_notify`]). Returns the button
     /// byte, or `None` for scales without a button channel / empty frames.
@@ -1092,21 +1133,22 @@ impl Scale {
     pub fn sensor_lag(&self) -> Duration {
         let ms: u64 = match &self.inner {
             Inner::HiroiaJimmy => 250,
-            Inner::Felicita | Inner::Bookoo | Inner::AtomheartEclair => 500,
+            // Timemore Dot: de1app `device_scale.tcl:221` lists 0.50 s
+            // (cohort review 2026-10-25, scales appendix F-13).
+            Inner::Felicita | Inner::Bookoo | Inner::AtomheartEclair | Inner::Timemore => 500,
             // The legacy switch has no `acaiapyxis` arm (a Pyxis would hit the
             // 0.38 default); the Pyxis is physically an Acaia, so it shares the
             // Acaia sensor lag here — a deliberate correction of that gap.
             Inner::AcaiaGen1(_) | Inner::AcaiaPyxis(_) => 690,
-            // Decent, Skale, and the scales without a dedicated entry take the
-            // legacy 380 ms default.
+            // Decent, Skale (both listed at 0.38 s) and the scales without a
+            // dedicated entry take the legacy 380 ms default.
             Inner::Decent(_)
             | Inner::Skale
             | Inner::EurekaPrecisa
             | Inner::SoloBarista
             | Inner::Difluid { .. }
             | Inner::Smartchef(_)
-            | Inner::VariaAku
-            | Inner::Timemore => 380,
+            | Inner::VariaAku => 380,
         };
         Duration::from_millis(ms)
     }
@@ -1117,6 +1159,12 @@ impl Scale {
     /// notifications; stateless scales ignore the mutability. Returns `None`
     /// if the bytes are not (yet) a complete weight reading.
     pub fn parse_weight(&mut self, data: &[u8]) -> Option<f32> {
+        self.decode_weight(data).filter(|&w| is_plausible_weight(w))
+    }
+
+    /// The per-scale weight decode behind [`parse_weight`](Self::parse_weight),
+    /// before the plausibility gate.
+    fn decode_weight(&mut self, data: &[u8]) -> Option<f32> {
         match &mut self.inner {
             Inner::Decent(state) => state.parse_weight_frame(data).map(|f| f.weight_g),
             Inner::Skale => skale::parse_weight(data),
@@ -1152,6 +1200,9 @@ impl Scale {
             // The Bookoo's 20-byte notification carries weight, native flow,
             // the built-in timer and its live settings in one packet.
             if let Some(packet) = bookoo::parse_packet(data) {
+                if !is_plausible_weight(packet.weight_g) {
+                    return None;
+                }
                 return Some(ScaleReading {
                     weight_g: packet.weight_g,
                     flow_g_per_s: Some(packet.flow_g_per_s),
@@ -1446,6 +1497,69 @@ impl Scale {
         }
     }
 
+    /// The writes for one logical tare: [`tare`](Self::tare)'s frame, sent
+    /// twice to a Decent Scale that may drop commands (see
+    /// [`DecentScale::drops_commands`](decent_scale::DecentScale::drops_commands);
+    /// the copy is the same frame, so the tare counter advances once).
+    /// Empty when the scale has no tare write.
+    pub fn tare_writes(&mut self) -> Vec<Vec<u8>> {
+        let copies = self.command_copies();
+        self.tare()
+            .map_or_else(Vec::new, |frame| vec![frame; copies])
+    }
+
+    /// The writes for one timer command: [`timer`](Self::timer)'s frame
+    /// (twice for a Decent Scale that may drop commands, like
+    /// [`tare_writes`](Self::tare_writes)). A Difluid stop is followed by the
+    /// start/reset frame, as both de1app (`bluetooth.tcl:100-101`) and
+    /// reaprime (`difluid_scale.dart:221-233`) do, so the on-scale timer is
+    /// left reset rather than stopped (cohort review 2026-10-25, scales
+    /// appendix F-12). Empty when the scale has no such command.
+    #[must_use]
+    pub fn timer_writes(&self, command: TimerCommand) -> Vec<Vec<u8>> {
+        let Some(frame) = self.timer(command) else {
+            return Vec::new();
+        };
+        let mut writes = vec![frame; self.command_copies()];
+        if matches!(
+            (&self.inner, command),
+            (Inner::Difluid { .. }, TimerCommand::Stop)
+        ) {
+            writes.push(difluid::TIMER_RESET.to_vec());
+        }
+        writes
+    }
+
+    /// How many copies of a tare / timer frame to write — 2 for a Decent
+    /// Scale that may drop commands (cohort review 2026-10-25, scales
+    /// appendix F-03), 1 otherwise.
+    fn command_copies(&self) -> usize {
+        match &self.inner {
+            Inner::Decent(state) if state.drops_commands() => 2,
+            _ => 1,
+        }
+    }
+
+    /// The Decent Scale's next tare counter byte; `None` for other scales.
+    /// The core reads it after each tare to carry the counter across
+    /// reconnects (scales appendix F-14).
+    #[must_use]
+    pub fn decent_tare_counter(&self) -> Option<u8> {
+        match &self.inner {
+            Inner::Decent(state) => Some(state.tare_counter()),
+            _ => None,
+        }
+    }
+
+    /// Continue a Decent Scale's tare counter from `counter`
+    /// ([`DecentScale::set_tare_counter`](decent_scale::DecentScale::set_tare_counter)).
+    /// No-op for every other scale.
+    pub fn seed_decent_tare_counter(&mut self, counter: u8) {
+        if let Inner::Decent(state) = &mut self.inner {
+            state.set_tare_counter(counter);
+        }
+    }
+
     /// Build a tare command to write to the [command characteristic](ScaleUuids).
     /// Returns `None` if the scale tares purely client-side and there is no
     /// command to send (the Smartchef — see [`crate::smartchef::SmartchefScale`]).
@@ -1670,8 +1784,16 @@ mod tests {
     #[test]
     fn write_without_response_table() {
         // Decenza b0c25e3e (Skale), acaiascale.cpp:279-295 (gen-1 Acaia),
-        // timemorescale.cpp:165 (Timemore). Everything else writes with response.
-        let no_response = ["Acaia", "Timemore Dot", "Skale II"];
+        // timemorescale.cpp:165 (Timemore), eurekaprecisascale.cpp:155-158 and
+        // reaprime eureka_scale.dart:114-121 (Eureka / Solo Barista, F-05).
+        // Everything else writes with response.
+        let no_response = [
+            "Acaia",
+            "Timemore Dot",
+            "Skale II",
+            "Eureka Precisa",
+            "Solo Barista",
+        ];
         for entry in SCALE_SCAN {
             let scale = Scale::from_label(entry.label).unwrap();
             assert_eq!(
@@ -2245,5 +2367,30 @@ mod tests {
             Scale::from_label("Skale II").unwrap().sensor_lag(),
             Duration::from_millis(380)
         );
+        // F-13: de1app `device_scale.tcl:221` lists the Dot at 0.50 s.
+        assert_eq!(
+            Scale::from_label("Timemore Dot").unwrap().sensor_lag(),
+            Duration::from_millis(500)
+        );
+    }
+
+    /// 01 P2-4: the Skale's exponent frame yields `inf` / `1e20`; the
+    /// plausibility gate drops both, and every other scale's decode goes
+    /// through the same gate.
+    #[test]
+    fn implausible_weights_are_dropped_for_every_scale() {
+        let mut skale = Scale::from_label("Skale II").unwrap();
+        assert_eq!(skale.parse_reading(&[0x00, 0x01, 0x00, 0x00, 0x7F]), None);
+        assert_eq!(skale.parse_reading(&[0x00, 0x01, 0x00, 0x00, 0x14]), None);
+        assert_eq!(skale.parse_weight(&[0x00, 0x01, 0x00, 0x00, 0x14]), None);
+        // 10 kg is the edge: 1 x 10^4 g passes, 1 x 10^5 g does not.
+        assert_eq!(
+            skale.parse_weight(&[0x00, 0x01, 0x00, 0x00, 0x04]),
+            Some(10_000.0)
+        );
+        assert_eq!(skale.parse_weight(&[0x00, 0x01, 0x00, 0x00, 0x05]), None);
+        assert!(!is_plausible_weight(f32::NAN));
+        assert!(!is_plausible_weight(-10_000.1));
+        assert!(is_plausible_weight(-10_000.0));
     }
 }

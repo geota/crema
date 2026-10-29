@@ -67,11 +67,23 @@ pub fn parse_weight_frame(data: &[u8]) -> Option<WeightFrame> {
     if data[0] != PACKET_HEADER || (data[1] != 0xCE && data[1] != 0xCA) {
         return None;
     }
-    // The packet carries a trailing XOR of every byte before it — byte 6 of
-    // a 7-byte frame, byte 9 of a 10-byte frame. Verify it before trusting
-    // the value: a corrupted frame whose type byte still reads as weight
-    // must not inject a spurious spike into stop-at-weight (review #32).
-    if xor_of_body(data) != data[data.len() - 1] {
+    // The v1.2 frame carries a trailing XOR of every byte before it at byte
+    // 9; verify it so a corrupted frame whose type byte still reads as
+    // weight cannot inject a spike into stop-at-weight (review #32).
+    //
+    // The 7-byte frame is NOT checked: original v1.0/v1.1 firmware does not
+    // compute that checksum correctly, so requiring it dropped every weight
+    // frame from those scales (cohort review 2026-10-25, scales appendix
+    // F-01). reaprime checks the XOR on 10-byte frames only, on purpose
+    // (`decent_scale/profile.dart:262-268`; its scale-protocol-integrity
+    // design note: "Strict checksum rejection would regress verified
+    // original Decent Scale compatibility"); de1app never checks it
+    // (`binary.tcl:1804-1838`); Decenza turns its check off after repeated
+    // failures for the same reason (`decentscale.cpp`, issue #630). The HDS
+    // (openscale `decentXor`, model byte 0x03) does send a valid XOR, but a
+    // 7-byte frame cannot say which scale sent it. The core's spike gate and
+    // plausible-weight gate still bound a corrupt 7-byte reading.
+    if timestamped && xor_of_body(data) != data[data.len() - 1] {
         return None;
     }
     // Weight is a big-endian signed 16-bit value in units of 0.1 g, at bytes
@@ -174,7 +186,10 @@ pub const POWER_OFF: [u8; 7] = [0x03, 0x0A, 0x02, 0x00, 0x00, 0x00, 0x0B];
 /// Command: heartbeat write.
 ///
 /// The Decent Scale's spec allows up to 5 s between heartbeats; the legacy
-/// app ships one every 1 s and reaprime every 4 s. Crema uses
+/// app ships one every 1 s (`bluetooth.tcl:1014`). reaprime sends none: its
+/// LCD-on sets byte 5 to `00`, which turns the heartbeat requirement off
+/// (`scale.dart:558-566`; its 4 s timer only runs a watchdog). Crema keeps
+/// de1app's heartbeat-required LCD-on and sends the heartbeat every
 /// [`HEARTBEAT_INTERVAL_MS`] (2 s), comfortably under the spec ceiling and
 /// quieter than the legacy 1 s cadence.
 pub const HEARTBEAT: [u8; 7] = [0x03, 0x0A, 0x03, 0xFF, 0xFF, 0x00, 0x0A];
@@ -193,13 +208,13 @@ pub const HEARTBEAT_INTERVAL_MS: u64 = 2_000;
 /// useful as a connection-info field and for future telemetry. Older
 /// firmware versions silently no-op on commands they don't understand.
 ///
-/// (The legacy app *also* double-sends every command write regardless of
-/// firmware version — the original `bluetooth.tcl:1327-1330` comment
-/// pinned that on a v1.0 bug, but a closer read of every Decent-Scale
-/// proc shows the duplicate is applied uniformly because the scale's
-/// command buffer occasionally drops the next write when the previous
-/// hasn't finished. The double-send therefore happens unconditionally in
-/// [`crate::Scale`] / `de1-app`; it is *not* gated on this enum.)
+/// The version does gate one behaviour: while it is unknown or v1.0 (and
+/// the scale has not identified as an HDS), tare and timer commands are
+/// sent twice — see [`DecentScale::drops_commands`]. de1app double-sends
+/// every Decent tare and timer write (`bluetooth.tcl:1438-1444`, and
+/// :1358-1420 for the timer) because v1.0 firmware "occasionally drops
+/// commands"; reaprime sends a second copy 50 ms later while its profile is
+/// conservative (unknown scale or v1.0 marker, `profile.dart:26-31`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DecentScaleFirmwareVersion {
     /// v1.0 — original firmware; no remote power-off.
@@ -377,7 +392,9 @@ pub struct DecentScale {
     /// one. Diagnostic only — see [`CommandResponse::LcdAck::hds_firmware`].
     hds_firmware: Option<HdsFirmwareVersion>,
     /// Counter byte for the next [`tare`] frame — starts at 0 and wraps,
-    /// like decaid's `_tareCounter`.
+    /// like decaid's `_tareCounter`. The core re-seeds it on every connect
+    /// ([`set_tare_counter`](Self::set_tare_counter)) so it keeps counting
+    /// across reconnects, as de1app's app-lifetime counter does.
     tare_counter: u8,
 }
 
@@ -390,6 +407,38 @@ impl DecentScale {
             hds_firmware: None,
             tare_counter: 0,
         }
+    }
+
+    /// The counter byte the next [`next_tare`](Self::next_tare) will carry.
+    #[must_use]
+    pub fn tare_counter(&self) -> u8 {
+        self.tare_counter
+    }
+
+    /// Continue the rolling tare counter from `counter` — the core carries
+    /// it across reconnects, because the scale is rebuilt on every connect
+    /// and a counter restarting at 0 could repeat the previous session's
+    /// last counter, which the original scale treats as the same request
+    /// (cohort review 2026-10-25, scales appendix F-14). de1app seeds 253
+    /// and keeps the counter for the life of the app
+    /// (`bluetooth.tcl:1264-1270`).
+    pub fn set_tare_counter(&mut self, counter: u8) {
+        self.tare_counter = counter;
+    }
+
+    /// Whether this scale may silently drop a command, so tare and timer
+    /// writes should go twice: true until the firmware is known to be v1.1
+    /// or later, or the scale has identified as an HDS (reaprime's
+    /// conservative profile, `profile.dart:26-31, 172-177`; de1app
+    /// double-sends unconditionally). The duplicate is the same frame — a
+    /// retry never advances the tare counter.
+    #[must_use]
+    pub fn drops_commands(&self) -> bool {
+        self.hds_firmware.is_none()
+            && matches!(
+                self.firmware_version,
+                None | Some(DecentScaleFirmwareVersion::Unknown | DecentScaleFirmwareVersion::V1_0)
+            )
     }
 
     /// The frame for the next logical tare, advancing the rolling counter.
@@ -471,8 +520,28 @@ mod tests {
             parse_weight(&[0x03, 0xCE, 0x00, 0xC8, 0, 0, 0x05]),
             Some(20.0)
         );
-        // A corrupted frame with a stale checksum is rejected, not decoded.
-        assert_eq!(parse_weight(&[0x03, 0xCE, 0x00, 0xC8, 0, 0, 0x00]), None);
+    }
+
+    /// Cohort review 2026-10-25, scales appendix F-01: original v1.0/v1.1
+    /// firmware does not compute the 7-byte frame's XOR correctly, so the old
+    /// strict check dropped every weight frame from those scales. A 7-byte
+    /// frame with a wrong XOR now decodes (reaprime and de1app behaviour);
+    /// the 10-byte v1.2 frame keeps its check (`rejects_a_corrupt_v12_frame`).
+    #[test]
+    fn a_seven_byte_frame_with_a_bad_xor_still_decodes() {
+        assert_eq!(
+            parse_weight(&[0x03, 0xCE, 0x00, 0xC8, 0, 0, 0x00]),
+            Some(20.0)
+        );
+        assert_eq!(
+            parse_weight(&[0x03, 0xCA, 0xFF, 0x38, 0, 0, 0x77]),
+            Some(-20.0)
+        );
+        // An HDS frame as openscale builds it (`buildWeightPacket`: model
+        // byte 0x03, `decentXor`) still decodes too.
+        let mut hds = [0x03, 0xCE, 0x01, 0x2C, 0x00, 0x00, 0x00];
+        hds[6] = 0x03 ^ hds[1..6].iter().fold(0, |a, b| a ^ b);
+        assert_eq!(parse_weight(&hds), Some(30.0));
     }
 
     #[test]

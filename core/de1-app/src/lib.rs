@@ -20,6 +20,8 @@ pub mod firmware_info;
 mod hds_sleep_tests;
 mod idle_sleep;
 mod maintenance_run;
+#[cfg(test)]
+mod scale_robustness_tests;
 mod sweep;
 
 pub use de1_domain::{FirmwareBuildReport, FirmwareBuildStatus};
@@ -577,6 +579,10 @@ pub struct CremaCore {
     untared_window_reopened: bool,
     /// Last unit-recovery nudge write, for [`UNIT_RECOVERY_THROTTLE`].
     last_unit_recovery_write: Option<Duration>,
+    /// The Decent Scale's next tare counter, carried across scale
+    /// reconnects (the [`Scale`] is rebuilt on every connect) and seeded at
+    /// 253 like de1app's app-lifetime counter — scales appendix F-14.
+    decent_tare_counter: u8,
     /// Timestamp of the most recent scale-weight reading, for the lost-scale
     /// watchdog. `None` until the connected scale reports once.
     last_scale_weight: Option<Duration>,
@@ -893,6 +899,7 @@ impl CremaCore {
             untared_settle: None,
             untared_window_reopened: false,
             last_unit_recovery_write: None,
+            decent_tare_counter: 253,
             last_scale_weight: None,
             last_scale_estimate: None,
             scale_stale_reported: false,
@@ -1027,6 +1034,9 @@ impl CremaCore {
         discovered_services: &[String],
     ) -> Option<String> {
         self.scale = Scale::identify(advertised_name, discovered_services);
+        if let Some(scale) = &mut self.scale {
+            scale.seed_decent_tare_counter(self.decent_tare_counter);
+        }
         self.hds = self
             .scale
             .as_ref()
@@ -2354,10 +2364,15 @@ impl CremaCore {
     fn push_tare_command(&mut self, out: &mut CoreOutput) {
         // Any tare moves the zero — a captured pre-shot offset no longer applies.
         self.pre_shot_zero_offset_g = 0.0;
-        if let Some(scale) = &mut self.scale
-            && let Some(data) = scale.tare()
-        {
-            out.commands.push(Command::WriteScale { data });
+        if let Some(scale) = &mut self.scale {
+            // A Decent Scale that may drop commands gets the frame twice
+            // (scales appendix F-03); its counter is carried across reconnects.
+            for data in scale.tare_writes() {
+                out.commands.push(Command::WriteScale { data });
+            }
+            if let Some(counter) = scale.decent_tare_counter() {
+                self.decent_tare_counter = counter;
+            }
         }
     }
 
@@ -2410,10 +2425,10 @@ impl CremaCore {
     /// [`map_shot_event`](Self::map_shot_event). Returns silently when the
     /// scale is `None` or its codec returns `None` for the command.
     fn push_timer_command(scale: &Option<Scale>, command: TimerCommand, out: &mut CoreOutput) {
-        if let Some(scale) = scale
-            && let Some(data) = scale.timer(command)
-        {
-            out.commands.push(Command::WriteScale { data });
+        if let Some(scale) = scale {
+            for data in scale.timer_writes(command) {
+                out.commands.push(Command::WriteScale { data });
+            }
         }
     }
 
@@ -2480,7 +2495,10 @@ impl CremaCore {
     /// While a Half Decent Scale is in SoftSleep the heartbeat is withheld
     /// (an empty output): the scale sleeps with its link kept and must not be
     /// poked awake (decaid sends no keep-alive in SoftSleep).
-    pub fn scale_heartbeat(&self) -> Result<CoreOutput, AppError> {
+    ///
+    /// An Acaia's heartbeat also carries the ident + config handshake until
+    /// its first weight frame (scales appendix F-04), hence `&mut self`.
+    pub fn scale_heartbeat(&mut self) -> Result<CoreOutput, AppError> {
         let scale = Self::scale_for("scale_heartbeat", self.scale.as_ref())?;
         if self
             .hds
@@ -2489,9 +2507,18 @@ impl CremaCore {
         {
             return Ok(CoreOutput::default());
         }
-        let writes = scale
-            .heartbeat_command()
-            .ok_or_else(|| Self::unsupported(scale, "scale_heartbeat", "no heartbeat command"))?;
+        if scale.heartbeat_command().is_none() {
+            return Err(Self::unsupported(
+                scale,
+                "scale_heartbeat",
+                "no heartbeat command",
+            ));
+        }
+        let writes = self
+            .scale
+            .as_mut()
+            .and_then(Scale::heartbeat_writes)
+            .unwrap_or_default();
         let mut out = CoreOutput::default();
         Self::push_scale_writes(&mut out, writes);
         Ok(out)
@@ -6271,7 +6298,7 @@ mod tests {
 
     #[test]
     fn scale_methods_error_when_no_scale_is_connected() {
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
         assert!(matches!(
             core.enable_scale_lcd(WeightUnit::Grams).unwrap_err(),
             AppError::UnsupportedOnHardware { .. }
