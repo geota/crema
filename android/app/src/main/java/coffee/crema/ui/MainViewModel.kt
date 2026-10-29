@@ -3623,7 +3623,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The Activity resolves a pending [PairingPrompt] with the user's choice. */
     fun resolvePairing(choice: PairingChoice) = proxy.resolvePairing(choice)
 
-    /** Settings ▸ Paired devices ▸ Pair a device: accept new devices for a while. */
+    /** Settings ▸ Advanced ▸ Paired devices ▸ Pair a device: accept new devices for a while. */
     fun openPairingWindow() = proxy.openPairingWindow()
 
     /** Stop accepting new devices now. */
@@ -3643,7 +3643,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         appendLog("Paired device '$name' (${if (canControl) "control" else "mirror-only"})")
     }
 
-    /** Revoke a paired device (Settings ▸ Paired devices): its pairing secret is
+    /** Revoke a paired device (Settings ▸ Advanced ▸ Paired devices): its pairing secret is
      *  dropped and a live session ends now; it has to pair again to reconnect. */
     fun forgetPairedDevice(id: String) {
         _ui.update { it.copy(pairedDevices = it.pairedDevices.filterNot { d -> d.id == id }) }

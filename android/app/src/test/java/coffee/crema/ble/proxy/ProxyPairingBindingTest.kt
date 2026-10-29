@@ -30,6 +30,7 @@ class ProxyPairingBindingTest {
     private val welcomed = CompletableDeferred<Unit>()
     private val confirmed = Channel<String>(Channel.UNLIMITED)
     private val changed = Channel<Pair<String, String>>(Channel.UNLIMITED)
+    private val pushed = Channel<String>(Channel.UNLIMITED)
 
     private suspend fun <T> scripted(
         allowRepair: Boolean = true,
@@ -51,6 +52,9 @@ class ProxyPairingBindingTest {
                 onHostConfirmed = { confirmed.trySend(it) },
                 allowRepair = allowRepair,
                 onHostChanged = { id, name -> changed.trySend(id to name) },
+                onConfig = { pushed.trySend("config:$it") },
+                onEvent = { pushed.trySend("event:$it") },
+                onHandoffOffer = { pushed.trySend("offer:$it") },
             )
             return withTimeout(5_000) { block(server, rx, proxy) }
         } finally {
@@ -229,6 +233,27 @@ class ProxyPairingBindingTest {
             welcomed.await()
             assertEquals("host-1", confirmed.receive())
             assertTrue(!denied.isCompleted)
+        }
+    }
+
+    @Test
+    fun `nothing a host pushes before its Welcome is acted on`() = runBlocking {
+        scripted { server, rx, _ ->
+            rx.next<Frame.Hello>()
+            // Before (and instead of) a completed handshake: config, an event,
+            // a hand-off offer, telemetry.
+            server.send(Frame.Config("""{"stopOnWeight":false}"""))
+            server.send(Frame.Event("someone drove"))
+            server.send(Frame.HandoffOffer("Fake host"))
+            server.send(Frame.Notify("AA:BB", "s", "c", "00", 1L))
+            server.send(Frame.Challenge("host-1", "Tablet", PairingCrypto.newNonce()))
+            rx.next<Frame.Auth>()
+            server.send(welcome("host-1", null))
+            welcomed.await()
+            // After the Welcome, a push is applied (a round trip orders it).
+            server.send(Frame.Event("after"))
+            assertEquals("event:after", pushed.receive(), "only the post-Welcome push reached the app")
+            assertTrue(pushed.tryReceive().isFailure)
         }
     }
 

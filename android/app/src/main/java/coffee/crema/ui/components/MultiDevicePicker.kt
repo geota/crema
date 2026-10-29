@@ -67,7 +67,7 @@ fun MultiDeviceSection(
     if (ui.proxyRole == "primary") {
         if (ui.mirrorClients.isEmpty()) {
             Text(
-                "No devices are mirroring this machine. To add one, open Settings ▸ Paired devices ▸ Pair a device.",
+                "No devices are mirroring this machine. To add one, open Settings ▸ Advanced ▸ Paired devices ▸ Pair a device.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

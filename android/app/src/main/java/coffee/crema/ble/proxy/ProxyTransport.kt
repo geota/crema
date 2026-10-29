@@ -235,6 +235,16 @@ class ProxyTransport(
     }
 
     private fun dispatch(frame: Frame) {
+        // Until this session is welcomed only the handshake counts: anything
+        // else (config, telemetry, events, offers) from a host that hasn't
+        // completed it is ignored, so a host refused later can't have pushed
+        // anything first.
+        if (frame !is Frame.Welcome && frame !is Frame.Challenge && frame !is Frame.Denied &&
+            handshake.value !is Handshake.Welcomed
+        ) {
+            Log.w(TAG, "Ignoring ${frame::class.simpleName} before the session's Welcome")
+            return
+        }
         when (frame) {
             is Frame.Welcome -> {
                 // Reject a primary on a different protocol version (issue 05): the

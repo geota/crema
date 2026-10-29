@@ -237,15 +237,13 @@ class ProxyController(
      *  pick ([USER_PICK]) clears the pin and may pair. Anything unattended — a
      *  restored target, a re-mirror after a handoff or reclaim — keeps the pin
      *  and connects only to a host that proves a secret this device already
-     *  holds ([UNATTENDED]). Consumed by [startSecondaryMode]. */
+     *  holds ([UNATTENDED]). Passed with each switch to [startSecondaryMode]. */
     internal data class MirrorTrust(val repin: Boolean, val allowRepair: Boolean) {
         companion object {
             val USER_PICK = MirrorTrust(repin = true, allowRepair = true)
             val UNATTENDED = MirrorTrust(repin = false, allowRepair = false)
         }
     }
-
-    @Volatile private var nextMirrorTrust: MirrorTrust? = null
 
     /** Serializes [applyMode]: mode switches launch from several async paths
      *  (the picker, a handoff grant's delayed release, the reclaim probe,
@@ -504,8 +502,7 @@ class ProxyController(
      *  a host that proves a secret this device holds is accepted. Anything
      *  else is refused and stays in the picker for the user. */
     internal fun remirrorUnattended(host: String, port: Int) {
-        nextMirrorTrust = MirrorTrust.UNATTENDED
-        applyMode("secondary", host, port)
+        applyMode("secondary", host, port, trust = MirrorTrust.UNATTENDED)
     }
 
     /** The pairing store, for tests. */
@@ -675,7 +672,7 @@ class ProxyController(
                 PairingChoice.MIRROR_ONLY, PairingChoice.ALLOW_CONTROL -> {
                     val canControl = choice == PairingChoice.ALLOW_CONTROL
                     val issued = PairingCrypto.newSecret()
-                    if (!pairing.putIssued(id, issued)) appendLog("Pairing secret for ${request.clientName} not saved: this pairing lasts until the app restarts")
+                    if (!pairing.putIssued(id, issued)) appendLog("Pairing secret for ${request.clientName} not saved: this session works, but the device will have to pair again next time")
                     rememberPaired(id, request.clientName, canControl)
                     _state.update { it.copy(pairedWithSecret = pairing.issuedIds()) }
                     closePairingWindow() // one pairing per window
@@ -715,7 +712,7 @@ class ProxyController(
         _state.update { it.copy(changedHost = null) }
     }
 
-    /** The host forgot [clientId] (Settings ▸ Paired devices): drop its secret
+    /** The host forgot [clientId] (Settings ▸ Advanced ▸ Paired devices): drop its secret
      *  and end its live session, if any. */
     fun forgetPaired(clientId: String) {
         pairing.removeIssued(clientId)
@@ -755,7 +752,7 @@ class ProxyController(
         // read-only observer from the start (preserved across session resets).
         setCoreReadOnly(cfg.role == "secondary")
         return when (cfg.role) {
-            "secondary" -> startSecondaryMode(cfg.host, cfg.port)
+            "secondary" -> startSecondaryMode(cfg.host, cfg.port, MirrorTrust.UNATTENDED)
             "primary" -> startPrimaryMode()
             else -> normalMode()
         }
@@ -831,15 +828,13 @@ class ProxyController(
     }
 
     /** SECONDARY: a self-connecting ProxyTransport to a primary's relay. */
-    private fun startSecondaryMode(host: String, port: Int): BleTransport {
+    private fun startSecondaryMode(host: String, port: Int, trust: MirrorTrust): BleTransport {
         val url = "ws://$host:$port${LanRelayServer.PATH}"
         appendLog("Multi-device: SECONDARY → $url")
         // A child scope for everything this mode launches (the link-state + roster
         // collectors AND the ProxyTransport's own init collectors), so applyMode can
         // cancel them ALL on the next switch instead of leaking ~4 coroutines + a dead
         // ProxyTransport/link per secondary→x→secondary cycle (issue 10).
-        val trust = nextMirrorTrust ?: MirrorTrust.UNATTENDED
-        nextMirrorTrust = null
         if (trust.repin) pairing.pinHost(null)
         val modeScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
         secondaryScope = modeScope
@@ -907,8 +902,7 @@ class ProxyController(
     fun switchToSecondary(host: String, port: Int) {
         // The user picked this target: it may be a new host, or the same host
         // after a reset that needs pairing again.
-        nextMirrorTrust = MirrorTrust.USER_PICK
-        applyMode("secondary", host, port)
+        applyMode("secondary", host, port, trust = MirrorTrust.USER_PICK)
     }
 
     /**
@@ -920,7 +914,13 @@ class ProxyController(
      * managers' fire-and-forget transport release run against the OLD delegate
      * before it is replaced.
      */
-    private fun applyMode(role: String, host: String, port: Int, reconnect: Boolean = true) {
+    private fun applyMode(
+        role: String,
+        host: String,
+        port: Int,
+        reconnect: Boolean = true,
+        trust: MirrorTrust = MirrorTrust.UNATTENDED,
+    ) {
         // Never move the radio while a firmware flash or its erase / reboot
         // window holds the DE1 (audit r2 H1 / r1 NOTE 8).
         if (refusedForFirmware(role)) return
@@ -928,7 +928,7 @@ class ProxyController(
             modeMutex.withLock {
                 // Again under the lock: a switch queued behind another one may
                 // start after a flash has taken the DE1.
-                if (!refusedForFirmware(role)) applyModeLocked(role, host, port, reconnect)
+                if (!refusedForFirmware(role)) applyModeLocked(role, host, port, reconnect, trust)
             }
         }
     }
@@ -942,7 +942,7 @@ class ProxyController(
         return true
     }
 
-    private suspend fun applyModeLocked(role: String, host: String, port: Int, reconnect: Boolean) {
+    private suspend fun applyModeLocked(role: String, host: String, port: Int, reconnect: Boolean, trust: MirrorTrust) {
         closePairingWindow()
         disconnectDevices()
         delay(150)
@@ -953,7 +953,7 @@ class ProxyController(
         proxyLink?.dispose(); proxyLink = null
         switchable.setDelegate(
             when (role) {
-                "secondary" -> startSecondaryMode(host, port)
+                "secondary" -> startSecondaryMode(host, port, trust)
                 "primary" -> startPrimaryMode()
                 else -> normalMode()
             },
@@ -1084,7 +1084,7 @@ private const val OUTDATED_NOTICE_COOLDOWN_MS = 60_000L
 /** What a secondary shows when its host turns it away, from the host's reason. */
 internal fun deniedMessage(reason: String): String = when {
     reason == DenyReason.PAIRING_CLOSED ->
-        "Pairing needed — on the host, open Settings ▸ Paired devices ▸ Pair a device, then connect again"
+        "Pairing needed — on the host, open Settings ▸ Advanced ▸ Paired devices ▸ Pair a device, then connect again"
     reason == DenyReason.BUSY -> "The host is busy — try again in a moment"
     reason == DenyReason.REVOKED -> "The host removed this device — pair again to reconnect"
     reason == DenyReason.ALREADY_PAIRED ->
@@ -1092,7 +1092,7 @@ internal fun deniedMessage(reason: String): String = when {
     reason == DenyReason.HOST_MISMATCH -> "This isn't the host this device mirrors — choose a host under Other devices"
     reason == DenyReason.HOST_CHANGED -> "This host's identity changed — forget it on this device to pair again"
     reason == DenyReason.HOST_UNVERIFIED ->
-        "Couldn't verify this host for this device — choose it under Other devices to connect"
+        "Couldn't verify this host for this device — choose it under Other devices to connect (it may need pairing again)"
     reason.startsWith(DenyReason.VERSION_MISMATCH) -> "Update Crema on both devices to connect"
     else -> "The host hasn't allowed this device"
 }

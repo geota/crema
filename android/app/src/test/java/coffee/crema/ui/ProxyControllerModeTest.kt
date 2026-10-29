@@ -350,6 +350,18 @@ class ProxyControllerModeTest {
     }
 
     @Test
+    fun `each queued secondary switch keeps its own trust`() {
+        controller.pairingStore.pinHost("host-1")
+        // A user pick, then an unattended re-mirror, both queued before either runs.
+        controller.switchToSecondary("127.0.0.1", 9)
+        controller.remirrorUnattended("127.0.0.1", 9)
+        scheduler.advanceTimeBy(1_000)
+        scheduler.runCurrent()
+        assertEquals(listOf("applied:secondary", "applied:secondary"), events.filter { it.startsWith("applied") })
+        assertNull(controller.pairingStore.pinnedHost, "the user's pick (run first) cleared the pin; the unattended one kept it cleared")
+    }
+
+    @Test
     fun `forgetting a host on this device drops its secret and its pin`() {
         controller.pairingStore.putHeld("host-1", PairingCrypto.newSecret())
         controller.pairingStore.pinHost("host-1")
