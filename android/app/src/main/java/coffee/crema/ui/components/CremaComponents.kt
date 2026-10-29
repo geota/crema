@@ -692,9 +692,9 @@ fun CremaSlider(
     onCommit: (Float) -> Unit,
     min: Float,
     max: Float,
+    modifier: Modifier = Modifier,
     step: Float = 1f,
     fmt: (Float) -> String = { fmt("%.0f", it) },
-    modifier: Modifier = Modifier,
 ) {
     // Keyed on value so an external change (restore, another device) resets
     // any stale drag state.
@@ -1372,9 +1372,9 @@ fun CremaSplitLabel(
 fun CremaTextField(
     value: String,
     onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
     /** Blank = no header line (the host row already carries the title). */
     label: String = "",
-    modifier: Modifier = Modifier,
     placeholder: String? = null,
     singleLine: Boolean = true,
     minLines: Int = 1,
@@ -1768,6 +1768,7 @@ data class CremaStepperStyle(
 
 @Composable
 fun CremaStepper(
+    modifier: Modifier = Modifier,
     label: String? = null,
     value: Double,
     unit: String? = null,
@@ -1776,7 +1777,6 @@ fun CremaStepper(
     min: Double = 0.0,
     max: Double = 100.0,
     fmt: (Double) -> String = { fmt("%.1f",  it) },
-    modifier: Modifier = Modifier,
     style: CremaStepperStyle = CremaStepperStyle.Telemetry,
     enabled: Boolean = true,
     header: (@Composable () -> Unit)? = null,

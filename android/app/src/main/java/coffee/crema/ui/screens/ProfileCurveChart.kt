@@ -65,10 +65,10 @@ private const val TEMP_MAX = 105f
 fun ProfileCurveChart(
     targets: List<Float>,
     times: List<Float>,
+    modifier: Modifier = Modifier,
     modes: List<Pump?> = emptyList(),
     ramps: List<Transition?> = emptyList(),
     temps: List<Float?> = emptyList(),
-    modifier: Modifier = Modifier,
     /** Non-null enables draggable handles: (segmentIndex, newTarget, newTime). */
     onSegmentEdit: ((index: Int, target: Float, time: Float) -> Unit)? = null,
 ) {

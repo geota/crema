@@ -1823,7 +1823,7 @@ private fun BrewFoot(
             // Power, the LIVE steam boiler temp (the Steam chip's sub-label
             // is the configured target, not a reading — this is its only
             // Brew-screen surface), and Tank.
-            val compactFoot = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1100
+            val compactFoot = coffee.crema.ui.windowContentDpSize().width.value < 1100
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 PowerButton(connected = connected, asleep = machineStateName == MachineState.Sleep, onClick = onPower)
                 val steam = convertTemp(steamTemp, tempUnit)

@@ -64,7 +64,6 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.ModeInfo
 import coffee.crema.core.RangeCapability
-import androidx.compose.ui.platform.LocalConfiguration
 import coffee.crema.ui.phone.PhoneBeanEditScreen
 import coffee.crema.ui.phone.PhoneBeansScreen
 import coffee.crema.ui.phone.PhoneBrewScreen
@@ -407,7 +406,7 @@ class MainActivity : ComponentActivity() {
                 // expands until the close-rotation has settled back to the pre-expand
                 // width (not a timed delay — keyed off the width agreeing again), so
                 // the nav host is never torn down and you return exactly where you were.
-                val rawCompact = LocalConfiguration.current.screenWidthDp < 840
+                val rawCompact = windowContentDpSize().width.value < 840
                 var stableCompact by remember { mutableStateOf(rawCompact) }
                 var chartHold by remember { mutableStateOf(false) }
                 LaunchedEffect(fullscreenChart, rawCompact) {

@@ -260,7 +260,7 @@ fun HistoryScreen(
             // ~700dp-tall window before the list. Below 800dp of height the
             // title drops to one compact line (the shot count lives in the
             // Shots stat tile anyway) and the stat tiles slim down.
-            val shortWindow = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 800
+            val shortWindow = coffee.crema.ui.windowContentDpSize().height.value < 800
             Row(
                 Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = if (shortWindow) 12.dp else 20.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -289,7 +289,7 @@ fun HistoryScreen(
                 // to icon buttons whenever the window is narrow OR short
                 // (the compact-header variant already trades chrome for the
                 // list), so the serif title never wraps a letter at a time.
-                val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1000 || shortWindow
+                val narrowBar = coffee.crema.ui.windowContentDpSize().width.value < 1000 || shortWindow
                 if (ui.history.isNotEmpty()) {
                     Spacer(Modifier.width(12.dp))
                     CremaSearchPill(
@@ -520,7 +520,7 @@ fun HistoryScreen(
                         // Narrow 7" tablet: a slimmer shot list leaves the detail
                         // panel (7-metric row + chart) a usable width; 10" keeps 480.
                         modifier = Modifier
-                            .width(if (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1100) 320.dp else 480.dp)
+                            .width(if (coffee.crema.ui.windowContentDpSize().width.value < 1100) 320.dp else 480.dp)
                             .fillMaxHeight(),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                         contentPadding = PaddingValues(top = 4.dp, bottom = 12.dp),

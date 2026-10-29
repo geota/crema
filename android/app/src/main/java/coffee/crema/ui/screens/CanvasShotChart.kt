@@ -30,7 +30,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -99,8 +98,8 @@ private fun Float.plotClamped(): Float = coerceIn(0f, CHART_PLOT_MAX)
 fun CanvasShotChart(
     samples: List<TelemetrySample>,
     enabledChannels: Set<String>,
-    live: Boolean = true,
     modifier: Modifier = Modifier,
+    live: Boolean = true,
 ) {
     val tel = CremaTheme.telemetry
     val gridColor = MaterialTheme.colorScheme.outlineVariant
@@ -342,7 +341,7 @@ fun ChartExpandOverlay(
     val context = LocalContext.current
     // Latch phone-ness at open time: screenWidthDp jumps >600 the instant we're in
     // landscape, so re-reading it would flip the guard mid-rotation.
-    val widthDp = LocalConfiguration.current.screenWidthDp
+    val widthDp = coffee.crema.ui.windowContentDpSize().width.value
     val startedOnPhone = remember { widthDp < 600 }
     DisposableEffect(Unit) {
         val activity = context.findActivity()

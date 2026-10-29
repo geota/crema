@@ -1385,7 +1385,7 @@ private fun MachineHeroCard(
         // "CONNECTED \u00b7 ES\u2026" truncated and the BLE address rendered one
         // character per line, issue #35's 8" reports). Compact stacks the two
         // panels full-width and drops the artwork well.
-        val compactHero = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1100
+        val compactHero = coffee.crema.ui.windowContentDpSize().width.value < 1100
         if (compactHero) {
             Column(
                 Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 20.dp),

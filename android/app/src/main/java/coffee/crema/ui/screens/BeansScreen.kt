@@ -223,7 +223,7 @@ fun BeansScreen(
                 Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 840
+                val narrowBar = coffee.crema.ui.windowContentDpSize().width.value < 840
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Eyebrow("Library")
                     Text(
@@ -906,13 +906,13 @@ private fun RoasterDialog(
                     )
                     CatalogueClashDialog(clashGate, ROASTER_FORM_FIELD_LABELS)
                 }
-                CremaTextField(name, { name = it }, "Name", placeholder = "e.g. Onyx Coffee Lab")
-                CremaTextField(website, { website = it }, "Website", placeholder = "https://…")
+                CremaTextField(name, { name = it }, label = "Name", placeholder = "e.g. Onyx Coffee Lab")
+                CremaTextField(website, { website = it }, label = "Website", placeholder = "https://…")
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    CremaTextField(city, { city = it }, "City", Modifier.weight(1f))
-                    CremaTextField(country, { country = it }, "Country", Modifier.weight(1f))
+                    CremaTextField(city, { city = it }, label = "City", modifier = Modifier.weight(1f))
+                    CremaTextField(country, { country = it }, label = "Country", modifier = Modifier.weight(1f))
                 }
-                CremaTextField(notes, { notes = it }, "Notes", placeholder = "Tasting style, subscription…", singleLine = false, minLines = 2)
+                CremaTextField(notes, { notes = it }, label = "Notes", placeholder = "Tasting style, subscription…", singleLine = false, minLines = 2)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Spacer(Modifier.weight(1f))
                     CremaButton(onClick = onDismiss, variant = CremaButtonVariant.Text, label = "Cancel")

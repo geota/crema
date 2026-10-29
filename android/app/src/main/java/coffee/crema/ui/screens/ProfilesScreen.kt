@@ -176,7 +176,7 @@ fun ProfilesScreen(
             // (collapsing it to a 1-char column), so they switch to icon-only and the
             // search flexes — everything still fits one row.
             val pinned = ui.profiles.count { it.pinned }
-            val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 840
+            val narrowBar = coffee.crema.ui.windowContentDpSize().width.value < 840
             Row(
                 Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,

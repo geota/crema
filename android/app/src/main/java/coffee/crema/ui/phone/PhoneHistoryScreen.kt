@@ -18,7 +18,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -1111,7 +1110,7 @@ private fun ShotBeanSwapDropdown(
     onSelect: (String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val ddWidth = LocalConfiguration.current.screenWidthDp.dp - CremaEdge * 2
+    val ddWidth = coffee.crema.ui.windowContentDpSize().width - CremaEdge * 2
     CremaAnchoredPopup(expanded = true, onDismiss = onDismiss) {
         Surface(
             shape = RoundedCornerShape(CremaCardSpec.phoneRadius),
