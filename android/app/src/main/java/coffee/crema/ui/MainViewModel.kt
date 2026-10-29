@@ -522,42 +522,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile
     private var appInForeground = true
 
-    init {
-        // Seed the recipe library from disk — cheap (a handful of rows).
-        viewModelScope.launch {
-            val loaded = recipeStore.load()
-            // One-time clean-up: untouched legacy "… classic" starters go,
-            // their default pointers move to the method's built-in.
-            val migrated = coffee.crema.brew.RecipeLibraryRules.migrate(loaded)
-            if (migrated != null) recipeStore.save(migrated)
-            val env = migrated ?: loaded
-            coffee.crema.brew.CustomMethods.all = env.customMethods
-            _ui.update {
-                it.copy(
-                    brewRecipes = env.recipes,
-                    lastRecipeByMethod = env.lastUsedByMethod,
-                    hiddenBuiltinRecipes = env.hiddenBuiltins,
-                    builtinRecipes = coffee.crema.brew.BUILTIN_BREW_RECIPES,
-                    customMethods = env.customMethods,
-                )
-            }
-            resolveGuidedSetup()
-        }
-        // Rows saved with a custom method snapshot its label; keep the
-        // id → label fallback current for methods this device doesn't know.
-        viewModelScope.launch {
-            _ui.map { it.history }.distinctUntilChanged().collect { rows ->
-                coffee.crema.brew.CustomMethods.snapshotLabels = buildMap {
-                    rows.forEach { r ->
-                        val id = r.brewMethod?.trim()?.lowercase() ?: return@forEach
-                        val label = r.brewMethodLabel ?: return@forEach
-                        if (coffee.crema.brew.isCustomMethodId(id) && id !in this) put(id, label)
-                    }
-                }
-            }
-        }
-    }
-
     private fun startBrewTick() {
         if (brewTickJob?.isActive == true) return
         brewTickJob = viewModelScope.launch {
@@ -1469,6 +1433,92 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  meanwhile keeps its own (final cohort review 2026-10-28, 04 P3-1). */
     private val timelineLogHook: (coffee.crema.ble.ReconnectTimeline) -> Unit = { appendLog(it.compactLine()) }
     private var quitSleepRegistration: Any? = null
+
+    // ── Declared above every `init` block too (P3-2) ──────────────────────
+    // Moved up from their feature sections below, in their original order,
+    // so that no property is declared after an `init` block.
+
+    /** The post-steam auto-purge (issue 15). Only the device holding the DE1
+     *  runs it, and it stands down for a pending shot start. */
+    private val autoPurge = AutoPurge(
+        scope = viewModelScope,
+        authoritative = { proxy.state.value.role != "secondary" },
+        startPending = { startSequence.active },
+        flush = { writeMachineState(MachineRequest.FLUSH) },
+    )
+
+    /** Connect-time machine-info sweep (see [readMachineInfo]); cancelled on reconnect/disconnect. */
+    private var machineInfoJob: kotlinx.coroutines.Job? = null
+
+    /** True once [loadPrefs] has hydrated the UI from disk — writes before that
+     *  would snapshot half-initialised state and clobber the saved prefs (e.g.
+     *  erase the restored activeProfileId during boot). */
+    @Volatile private var prefsLoaded = false
+
+    /** The pending "nearby" setup after a DE1 connects (see [setUpNearby]). */
+    private var nearbySetupJob: kotlinx.coroutines.Job? = null
+
+    /** The address of a DE1 link the setup paused, to reconnect afterwards. */
+    private var nearbyPausedAddress: String? = null
+
+    /** Last whole-millimetre tank level written to the event log, so an
+     *  unchanged reading doesn't flood the diagnostics buffer (#56). */
+    private var lastLoggedWaterMm: Int? = null
+
+    /** The core's last-armed stop targets, kept for the shot record's verdict
+     *  line. Sourced from `Event.StopTargetsArmed`, i.e. what the core ACTUALLY
+     *  armed — not what the Brew card computed from the UI profile. When these
+     *  disagree, that discrepancy IS the bug (geota/crema#56). */
+    private var lastArmedTargets: String? = null
+
+    /** Whether the CURRENT shot was started from Crema rather than at the
+     *  machine. A GHC start runs none of the shell's shot-start path, which is
+     *  how geota/crema#56 hid — worth recording per shot. */
+    @Volatile
+    private var shotStartedByApp: Boolean = false
+
+    /** Monotonic ms of the last sleep the app itself asked for (the Brew power
+     *  button, the phone menu, a mirrored peer), or 0 once consumed. */
+    @Volatile
+    private var appSleepRequestedAtMs: Long = 0L
+
+    // ── `init` blocks: every property is declared above this point (P3-2) ──
+
+    init {
+        // Seed the recipe library from disk — cheap (a handful of rows).
+        viewModelScope.launch {
+            val loaded = recipeStore.load()
+            // One-time clean-up: untouched legacy "… classic" starters go,
+            // their default pointers move to the method's built-in.
+            val migrated = coffee.crema.brew.RecipeLibraryRules.migrate(loaded)
+            if (migrated != null) recipeStore.save(migrated)
+            val env = migrated ?: loaded
+            coffee.crema.brew.CustomMethods.all = env.customMethods
+            _ui.update {
+                it.copy(
+                    brewRecipes = env.recipes,
+                    lastRecipeByMethod = env.lastUsedByMethod,
+                    hiddenBuiltinRecipes = env.hiddenBuiltins,
+                    builtinRecipes = coffee.crema.brew.BUILTIN_BREW_RECIPES,
+                    customMethods = env.customMethods,
+                )
+            }
+            resolveGuidedSetup()
+        }
+        // Rows saved with a custom method snapshot its label; keep the
+        // id → label fallback current for methods this device doesn't know.
+        viewModelScope.launch {
+            _ui.map { it.history }.distinctUntilChanged().collect { rows ->
+                coffee.crema.brew.CustomMethods.snapshotLabels = buildMap {
+                    rows.forEach { r ->
+                        val id = r.brewMethod?.trim()?.lowercase() ?: return@forEach
+                        val label = r.brewMethodLabel ?: return@forEach
+                        if (coffee.crema.brew.isCustomMethodId(id) && id !in this) put(id, label)
+                    }
+                }
+            }
+        }
+    }
 
     init {
         // Unreadable store files: the stores move them aside as they load and
@@ -2469,15 +2519,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return true
     }
 
-    /** The post-steam auto-purge (issue 15). Only the device holding the DE1
-     *  runs it, and it stands down for a pending shot start. */
-    private val autoPurge = AutoPurge(
-        scope = viewModelScope,
-        authoritative = { proxy.state.value.role != "secondary" },
-        startPending = { startSequence.active },
-        flush = { writeMachineState(MachineRequest.FLUSH) },
-    )
-
     /** Scan for and connect to a DE1 — delegate of [ConnectionController.connect].
      *  Called from the UI once the BLE runtime permissions have been granted. */
     fun connect() = connection.connect()
@@ -2885,9 +2926,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Stop a running shot (return to idle). */
     fun stopShot() = requestMachineState(MachineRequest.IDLE)
 
-    /** Connect-time machine-info sweep (see [readMachineInfo]); cancelled on reconnect/disconnect. */
-    private var machineInfoJob: kotlinx.coroutines.Job? = null
-
     /**
      * Read the DE1's identity + service registers once a connection is READY.
      * Each [CremaBridge.readMmr] emits a `Command.WriteCharacteristic` read
@@ -3210,11 +3248,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         replayPrimary = _ui.value.replayPrimary,
         pairedDevices = _ui.value.pairedDevices,
     )
-
-    /** True once [loadPrefs] has hydrated the UI from disk — writes before that
-     *  would snapshot half-initialised state and clobber the saved prefs (e.g.
-     *  erase the restored activeProfileId during boot). */
-    @Volatile private var prefsLoaded = false
 
     /** Persist the current prefs snapshot (best-effort, off the main thread).
      *  No-op until the initial [loadPrefs] hydration completes. */
@@ -3869,12 +3902,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (companion.associated.value != before) persistPrefs()
     }
 
-    /** The pending "nearby" setup after a DE1 connects (see [setUpNearby]). */
-    private var nearbySetupJob: kotlinx.coroutines.Job? = null
-
-    /** The address of a DE1 link the setup paused, to reconnect afterwards. */
-    private var nearbyPausedAddress: String? = null
-
     /** Try the one-time "nearby" setup a few seconds after a DE1 connects. */
     private fun scheduleNearbySetup() {
         if (!companion.isSupported) return
@@ -4015,16 +4042,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Sleep & screensaver ───────────────────────────────────────────────────
 
-    /** Last whole-millimetre tank level written to the event log, so an
-     *  unchanged reading doesn't flood the diagnostics buffer (#56). */
-    private var lastLoggedWaterMm: Int? = null
-
-    /** The core's last-armed stop targets, kept for the shot record's verdict
-     *  line. Sourced from `Event.StopTargetsArmed`, i.e. what the core ACTUALLY
-     *  armed — not what the Brew card computed from the UI profile. When these
-     *  disagree, that discrepancy IS the bug (geota/crema#56). */
-    private var lastArmedTargets: String? = null
-
     /**
      * The one-line verdict at the top of a shot record: what was armed, what
      * actually stopped the shot, and what it yielded. Deliberately answers
@@ -4045,12 +4062,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             append(" · start=").append(if (shotStartedByApp) "app" else "GHC/machine")
         }
     }
-
-    /** Whether the CURRENT shot was started from Crema rather than at the
-     *  machine. A GHC start runs none of the shell's shot-start path, which is
-     *  how geota/crema#56 hid — worth recording per shot. */
-    @Volatile
-    private var shotStartedByApp: Boolean = false
 
     /** Bump the saver's idle clock and tell the idle-sleep timer (throttled to
      *  one a second, see [IdleSleepRunner.activity]). Called on every touch
@@ -4087,11 +4098,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** "Retry now" on a reconnecting device row ([de1] = the DE1, else the scale). */
     fun retryReconnectNow(de1: Boolean) = connection.retryNow(de1)
-
-    /** Monotonic ms of the last sleep the app itself asked for (the Brew power
-     *  button, the phone menu, a mirrored peer), or 0 once consumed. */
-    @Volatile
-    private var appSleepRequestedAtMs: Long = 0L
 
     /** True while a Sleep state report can still be attributed to our own
      *  request. Deliberately putting the machine to sleep from the app must
