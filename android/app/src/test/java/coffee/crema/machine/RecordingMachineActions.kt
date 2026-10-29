@@ -19,9 +19,8 @@ internal class RecordingMachineActions(
     /** The thread each one ran on. */
     val threads = CopyOnWriteArrayList<String>()
 
-    /** Config shown (the optimistic half) and undone. */
+    /** Config shown (the visible half). */
     val shown = CopyOnWriteArrayList<MachineCommand.Config>()
-    val undone = CopyOnWriteArrayList<MachineCommand.Config>()
 
     var peerActivity = 0
 
@@ -43,9 +42,8 @@ internal class RecordingMachineActions(
     override fun applyCancelMaintenance() = ran("cancelMaintenance")
     override fun applyTareScale() = ran("tareScale")
 
-    override fun showConfig(cmd: MachineCommand.Config): () -> Unit {
+    override fun showConfig(cmd: MachineCommand.Config) {
         shown += cmd
-        return { undone += cmd }
     }
 
     override fun commitConfig(cmd: MachineCommand.Config) = ran("commit($cmd)")

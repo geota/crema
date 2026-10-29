@@ -25,7 +25,9 @@ import coffee.crema.ble.De1Uuids
 import coffee.crema.machine.CommandOrigin
 import coffee.crema.machine.CommandOutcome
 import coffee.crema.machine.LocalMachine
+import coffee.crema.machine.ConfigEcho
 import coffee.crema.machine.MachineActions
+import coffee.crema.machine.MachineCommand
 import coffee.crema.machine.MachineCommands
 import coffee.crema.machine.RelayMachine
 import coffee.crema.machine.RelayedCommandDispatcher
@@ -150,6 +152,16 @@ class ProxyController(
     /** How long a remote's link must stay CONNECTING before it looks for its
      *  hub elsewhere on NSD (the re-find). */
     private val refindDelayMs: Long = REFIND_DELAY_MS,
+    /** A role is about to start, before its transport is built: the VM
+     *  creates or drops its mirror slice (I6). [refind] is a remote dialing
+     *  its hub at a new address, which keeps the slice. */
+    private val onRoleStarting: (role: String, refind: Boolean) -> Unit = { _, _ -> },
+    /** A remote shows a relayed config edit until the hub answers (its mirror
+     *  slice); the echo settles it. */
+    private val showPending: (MachineCommand.Config) -> ConfigEcho = { ConfigEcho.NONE },
+    /** A remote session was welcomed, with the hub's name. Called before any
+     *  frame of that session is applied. */
+    private val onWelcomed: (hubName: String) -> Unit = {},
 ) {
 
     /** The proxy slice of the UI snapshot — the VM mirrors this into MainUiState. */
@@ -348,6 +360,7 @@ class ProxyController(
     fun start() {
         check(!started) { "ProxyController.start() runs once" }
         started = true
+        onRoleStarting(readProxyConfigSync().role, false)
         switchable.setDelegate(startPersistedRole())
         // A secondary (read-only mirror) doesn't record the primary's shot (issue 14).
         setRecorderEnabled(readProxyConfigSync().role != "secondary")
@@ -919,6 +932,7 @@ class ProxyController(
             // Reflect the granted scope (issue 02): view-only remotes can't
             // control. The hub's name labels the status line from now on.
             onWelcome = { scope, hubName ->
+                onWelcomed(hubName)
                 _state.update { it.copy(mirrorViewOnly = scope == "mirror", hubName = hubName, mirrorReconnecting = false) }
                 onRemoteWelcomed(remote)
             },
@@ -954,7 +968,7 @@ class ProxyController(
         // The VM's commands now go to this primary.
         relayMachine = RelayMachine(
             send = { method, args -> proxy.sendControl(method, args) },
-            showConfig = { machineActions.showConfig(it) },
+            showConfig = { showPending(it) },
             machineStateName = machineStateName,
             scope = scope,
             notify = notify,
@@ -1087,6 +1101,7 @@ class ProxyController(
         relayMachine = null
         proxyLink?.dispose(); proxyLink = null
         session = null
+        onRoleStarting(role, refind != null)
         switchable.setDelegate(
             when (role) {
                 "secondary" -> startSecondaryMode(host, port, trust, refind)

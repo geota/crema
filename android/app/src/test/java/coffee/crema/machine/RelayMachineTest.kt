@@ -10,9 +10,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-/** A mirror's relay policy: Control is forwarded with nothing applied here,
- *  Config is shown, forwarded, and undone only when it surely didn't apply,
- *  LocalOnly is refused here, and nothing is ever resent. */
+/** A remote's relay policy: Control is forwarded with nothing applied here,
+ *  Config is shown, forwarded, and its echo settled with the outcome,
+ *  whatever it is; LocalOnly is refused here, and nothing is ever resent. */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class RelayMachineTest {
 
@@ -23,9 +23,13 @@ class RelayMachineTest {
     private var reply: ControlReply = ControlReply.Ok
     private var machineState: String? = "Idle"
 
+    /** Config edits shown, and how each one's echo settled. */
+    private val shown = CopyOnWriteArrayList<MachineCommand.Config>()
+    private val settled = CopyOnWriteArrayList<Pair<MachineCommand.Config, CommandOutcome>>()
+
     private val relay = RelayMachine(
         send = { method, args -> sent += MachineCommandCodec.Wire(method, args); reply },
-        showConfig = actions::showConfig,
+        showConfig = { cmd -> shown += cmd; ConfigEcho { outcome -> settled += cmd to outcome } },
         machineStateName = { machineState },
         scope = CoroutineScope(StandardTestDispatcher(scheduler)),
         notify = { notices += it },
@@ -44,7 +48,7 @@ class RelayMachineTest {
     fun `a control is forwarded and nothing is applied here`() {
         assertEquals(CommandOutcome.Accepted, run(MachineCommand.StartShot))
         assertEquals(listOf(MachineCommandCodec.Wire("startShot", "")), sent.toList())
-        assertTrue(actions.applied.isEmpty() && actions.shown.isEmpty(), "applied ${actions.applied}, shown ${actions.shown}")
+        assertTrue(actions.applied.isEmpty() && shown.isEmpty(), "applied ${actions.applied}, shown $shown")
         assertTrue(notices.isEmpty(), "$notices")
     }
 
@@ -60,40 +64,41 @@ class RelayMachineTest {
     }
 
     @Test
-    fun `a config edit is shown at once and stays when accepted`() {
+    fun `a config edit is shown at once and settles when accepted`() {
         val edit = MachineCommand.SetQc(QcField.GRIND, 14.5f)
         relay.execute(edit)
-        assertEquals(listOf<MachineCommand.Config>(edit), actions.shown.toList(), "shown before the round trip")
+        assertEquals(listOf<MachineCommand.Config>(edit), shown.toList(), "shown before the round trip")
+        assertTrue(settled.isEmpty(), "not settled before the answer")
         scheduler.advanceUntilIdle()
         assertEquals(listOf(MachineCommandCodec.Wire("setQcGrind", "14.5")), sent.toList())
-        assertTrue(actions.undone.isEmpty())
-        assertTrue(actions.applied.isEmpty(), "a mirror never commits: ${actions.applied}")
+        assertEquals(listOf<Pair<MachineCommand.Config, CommandOutcome>>(edit to CommandOutcome.Accepted), settled.toList())
+        assertTrue(actions.applied.isEmpty() && actions.shown.isEmpty(), "a remote never shows or commits own values: ${actions.applied}")
     }
 
     @Test
-    fun `a refused config edit is undone`() {
+    fun `a refused config edit settles as refused`() {
         reply = ControlReply.Err("That profile isn’t on Tablet")
         val edit = MachineCommand.SetActiveProfile("p-2")
         assertEquals(CommandOutcome.Refused("That profile isn’t on Tablet"), run(edit))
-        assertEquals(listOf<MachineCommand.Config>(edit), actions.undone.toList())
+        assertEquals(listOf<Pair<MachineCommand.Config, CommandOutcome>>(edit to CommandOutcome.Refused("That profile isn’t on Tablet")), settled.toList())
         assertEquals(listOf("That profile isn’t on Tablet — change reverted"), notices.toList())
     }
 
     @Test
-    fun `a config edit that never left is undone`() {
+    fun `a config edit that never left settles as unreachable`() {
         reply = ControlReply.NotSent("Timed out waiting for 5000 ms")
         val edit = MachineCommand.SetAutoTare(true)
         assertEquals(CommandOutcome.Refused(RelayMachine.UNREACHABLE), run(edit))
-        assertEquals(listOf<MachineCommand.Config>(edit), actions.undone.toList())
+        assertEquals(listOf<Pair<MachineCommand.Config, CommandOutcome>>(edit to CommandOutcome.Refused(RelayMachine.UNREACHABLE)), settled.toList())
         assertEquals(listOf("${RelayMachine.UNREACHABLE} — change reverted"), notices.toList())
     }
 
     @Test
-    fun `an unanswered config edit is kept, said to be uncertain, and not resent`() {
+    fun `an unanswered config edit settles as unknown, is said to be uncertain, and not resent`() {
         reply = ControlReply.NoReply("Proxy session ended before a reply")
         val edit = MachineCommand.SetStopOnWeight(false)
         assertIs<CommandOutcome.Unknown>(run(edit))
-        assertTrue(actions.undone.isEmpty(), "no blind revert: the primary may have applied it")
+        assertIs<CommandOutcome.Unknown>(settled.single().second, "the echo keeps it, as unconfirmed")
         assertEquals(listOf(RelayMachine.UNKNOWN_CONFIG), notices.toList())
         assertEquals(1, sent.size, "never resent")
     }

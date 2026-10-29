@@ -14,6 +14,7 @@ import coffee.crema.history.StoredShot
 import coffee.crema.maintenance.MaintenanceStore
 import coffee.crema.maintenance.defaultMaintenanceState
 import coffee.crema.settings.AppPrefs
+import coffee.crema.settings.MirroredSettings
 import coffee.crema.settings.PairedDevice
 import coffee.crema.visualizer.VisualizerSync
 import coffee.crema.ble.De1BleManager
@@ -488,19 +489,26 @@ data class MainUiState(
      *  as (host id, name): non-null ⟺ the Activity offers to forget it. */
     val changedHost: Pair<String, String>? = null,
     /**
-     * Transient mirror overlay (issue 05): the primary's active profile, decoded
-     * for **display only**, when it's a custom profile this device's own library
-     * lacks. Preferred over the [activeProfileId] library lookup while mirroring so
-     * the Brew curve/targets/name match the primary exactly. Null = use the library
-     * (built-in, or not mirroring). Cleared on any mode switch. */
+     * A remote's mirror slice (spec §7.2): the hub's values as last received,
+     * in memory only. Non-null exactly while this device is a remote (I6). The
+     * screens see it laid over this device's own values ([effective]); the VM
+     * persists only the own values.
+     */
+    val mirror: MirroredSettings? = null,
+    /**
+     * Mirror overlay (issue 05), projected from [mirror] by [effective] and
+     * never held in the own state: the hub's active profile, decoded for
+     * **display only**, when it's a custom profile this device's own library
+     * lacks. Preferred over the [activeProfileId] library lookup so the Brew
+     * curve/targets/name match the hub exactly. Null = use the library. */
     val mirroredProfile: CremaProfile? = null,
     /** The raw wire JSON behind [mirroredProfile] — the full profile, which the
-     *  thin [mirroredProfile] model doesn't keep: what a remote would adopt into
-     *  its own library when it becomes standalone. Set/cleared in lock-step
-     *  with it. */
+     *  thin [mirroredProfile] model doesn't keep: what a remote adopts into its
+     *  own library when it becomes standalone. Projected with it. */
     val mirroredProfileJson: String? = null,
-    /** A one-line summary of the primary's active bean (issue 05), shown on the bean
-     *  chip when that bean isn't in this device's library. Null = use the library. */
+    /** A one-line summary of the hub's active bean (issue 05), shown on the bean
+     *  chip when that bean isn't in this device's library. Projected from
+     *  [mirror]; null = use the library. */
     val mirroredBeanSummary: String? = null,
     /** Crema instances discovered on the LAN (NSD) — the device picker's list. */
     val peers: List<Peer> = emptyList(),

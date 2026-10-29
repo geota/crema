@@ -71,6 +71,9 @@ internal object VmHarness {
         idleUntil("the prefs load") { field.getBoolean(vm) }
     }
 
+    /** The VM's own state: what it persists (the screens see [MainViewModel.ui]). */
+    fun ownState(vm: MainViewModel): MainUiState = vm.ownState.value
+
     /** The VM's event log, newest first. */
     fun log(vm: MainViewModel): List<String> = vm.ui.value.eventLog
 }

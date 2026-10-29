@@ -6,6 +6,8 @@ import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -511,6 +513,10 @@ data class ConfigSnapshot(
 class SettingsStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
+    /** One save at a time, and never an older snapshot after a newer one. */
+    private val saveLock = Mutex()
+    private var lastGeneration = Long.MIN_VALUE
+
     suspend fun load(): AppPrefs = withContext(Dispatchers.IO) {
         val stored = loadStore(file, "settings") { text ->
             if (json.parseToJsonElement(text).jsonObject["common"] != null) {
@@ -527,10 +533,22 @@ class SettingsStore(private val context: Context, private val json: Json) {
         prefs
     }
 
-    suspend fun save(prefs: AppPrefs) {
+    /**
+     * Write [prefs]. Saves run one at a time. A save with a [generation] (the
+     * VM numbers each snapshot when it builds it) is skipped when a newer
+     * snapshot was already written, so a fire-and-forget save that loses the
+     * race can never put older values back (spec §7.5 step 5).
+     */
+    suspend fun save(prefs: AppPrefs, generation: Long? = null) {
         withContext(Dispatchers.IO) {
-            runCatching { json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted()) }
-                .onSuccess { saveStore(file, it) }
+            saveLock.withLock {
+                if (generation != null) {
+                    if (generation < lastGeneration) return@withLock
+                    lastGeneration = generation
+                }
+                runCatching { json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted()) }
+                    .onSuccess { saveStore(file, it) }
+            }
         }
     }
 

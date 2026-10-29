@@ -43,6 +43,8 @@ import coffee.crema.persist.KeptAside
 import coffee.crema.persist.KeptAsideNotices
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.ConfigSnapshot
+import coffee.crema.settings.MirroredSettings
+import coffee.crema.settings.setting
 import coffee.crema.settings.PairedDevice
 import coffee.crema.visualizer.VisualizerClient
 import coffee.crema.visualizer.VisualizerStore
@@ -56,6 +58,7 @@ import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ble.De1Uuids
 import coffee.crema.ble.proxy.DeviceInfo
 import coffee.crema.machine.CommandOutcome
+import coffee.crema.machine.ConfigEcho
 import coffee.crema.machine.MachineActions
 import coffee.crema.machine.MachineCommand
 import coffee.crema.machine.MachineCommands
@@ -168,17 +171,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _ui = MutableStateFlow(MainUiState())
 
     /**
-     * The UI state the screens collect. Identical to [_ui] except while the
-     * screensaver covers everything: then a change confined to the high-rate
-     * live fields ([hiddenBySaver]) is not published, so the screen tree
-     * behind the saver stops recomposing several times a second for hours on
-     * a wall tablet (cohort review 2026-10-25, P2-4). Any other change —
-     * including the saver going away — publishes the latest state in full.
-     * The VM itself always reads [_ui].
+     * The UI state the screens collect: the effective projection of [_ui]
+     * ([effective]: on a remote, the hub's mirrored values laid over this
+     * device's own; elsewhere [_ui] itself). While the screensaver covers
+     * everything, a change confined to the high-rate live fields
+     * ([hiddenBySaver]) is not published, so the screen tree behind the saver
+     * stops recomposing several times a second for hours on a wall tablet
+     * (cohort review 2026-10-25, P2-4). Any other change — including the
+     * saver going away — publishes the latest state in full.
+     *
+     * [_ui] holds this device's own values plus the mirror slice, and is what
+     * the VM persists. VM code reads it directly for its own values and
+     * [effectiveState] for what is on screen (spec §7.2).
      */
     val ui: StateFlow<MainUiState> = _ui
+        .map { it.effective() }
         .distinctUntilChanged(::hiddenBySaver)
-        .stateIn(viewModelScope, SharingStarted.Eagerly, _ui.value)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, _ui.value.effective())
+
+    /** This device's own state, for tests (AC-16): what [persistPrefs] saves. */
+    @androidx.annotation.VisibleForTesting
+    internal val ownState: StateFlow<MainUiState> = _ui
+
+    /** The state the screens show ([effective]). */
+    private fun effectiveState(): MainUiState = _ui.value.effective()
 
     /**
      * Set when [startShot] kicks off a profile upload that should be followed by an
@@ -319,7 +335,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 shot = shot,
                 machine = machine,
                 appVersion = coffee.crema.BuildConfig.VERSION_NAME,
-                grinderModel = _ui.value.grinderModel.trim().takeIf { it.isNotEmpty() },
+                grinderModel = effectiveState().grinderModel.trim().takeIf { it.isNotEmpty() },
                 fullSamples = fullSamples,
             )
         },
@@ -353,13 +369,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrNull() ?: "dev",
         notify = { msg -> notifyUser(msg) },
         onShotSynced = { localId, visualizerId -> library.markShotSynced(localId, visualizerId) },
-        grinderModel = { _ui.value.grinderModel.trim().takeIf { it.isNotEmpty() } },
+        grinderModel = { effectiveState().grinderModel.trim().takeIf { it.isNotEmpty() } },
         onPulledShots = { stubs -> library.insertPulledShots(stubs) },
         onBackfillTelemetry = { localId, samples, durationMs -> library.backfillShotTelemetry(localId, samples, durationMs) },
         onFillBarista = { localId, barista -> library.fillShotBarista(localId, barista) },
         onSignedIn = { sharing.offerCatchUp(UploadTargetId.Visualizer) },
         currentShot = { id -> _ui.value.history.firstOrNull { it.id == id } },
-        beanLibrary = { _ui.value.let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
+        beanLibrary = { effectiveState().let { coffee.crema.beans.BeanLibrary(it.beans, it.roasters, it.activeBeanId) } },
         onBeansSynced = { result, beanIds, roasterIds -> library.applyBeanSync(result, beanIds, roasterIds) },
     )
 
@@ -438,6 +454,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         applyRestoredRecipes = { recipes, meta, wipe -> applyRestoredRecipes(recipes, meta, wipe) },
         applyRestoredCustomMethods = { methods, wipe -> applyRestoredCustomMethods(methods, wipe) },
         uiState = { _ui.value },
+        effectiveState = { effectiveState() },
         updateUi = { transform -> _ui.update(transform) },
         notify = { notifyUser(it) },
         appendLog = { appendLog(it) },
@@ -681,7 +698,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The recipe [method] opens on (pointer, else its default built-in), or null. */
     fun defaultBrewRecipeFor(method: String): coffee.crema.core.BrewRecipe? {
-        val st = _ui.value
+        val st = effectiveState()
         return coffee.crema.brew.RecipeLibraryRules.defaultFor(method, st.brewRecipes, st.builtinRecipes, st.lastRecipeByMethod)
     }
 
@@ -696,7 +713,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val guidedSetup: StateFlow<coffee.crema.ui.brewlog.GuidedBrewSetup> = _guidedSetup.asStateFlow()
 
     private fun resolveGuidedSetup() {
-        val st = _ui.value
+        val st = effectiveState()
         _guidedSetup.update {
             coffee.crema.ui.brewlog.GuidedSetupRules.resolve(
                 it,
@@ -732,7 +749,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun selectGuidedBean(key: String) = _guidedSetup.update { it.copy(beanPick = key) }
 
     /** The bag the guided brew will debit — the setup's pick, else the active bag. */
-    fun guidedBeanId(st: MainUiState = _ui.value): String? =
+    fun guidedBeanId(st: MainUiState = effectiveState()): String? =
         coffee.crema.ui.brewlog.GuidedBeanRules.resolve(_guidedSetup.value.beanPick, st.beans, st.activeBeanId)
 
 
@@ -943,7 +960,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The finished session's "Save brew…": the Log-brew form, pre-filled with measured truth. */
     fun openGuidedLogBrew() {
-        val s = _ui.value
+        val s = effectiveState()
         val session = s.guidedBrew
         val recipe = session.recipe ?: _guidedSetup.value.recipe
         val summary = session.summary
@@ -1112,7 +1129,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         override fun applyMachineState(request: MachineRequest) = this@MainViewModel.applyMachineState(request)
         override fun applyCancelMaintenance() = this@MainViewModel.applyCancelMaintenance()
         override fun applyTareScale() = this@MainViewModel.applyTareScale()
-        override fun showConfig(cmd: MachineCommand.Config): () -> Unit = this@MainViewModel.showConfig(cmd)
+        override fun showConfig(cmd: MachineCommand.Config) = this@MainViewModel.showConfig(cmd)
         override fun commitConfig(cmd: MachineCommand.Config) = this@MainViewModel.commitConfig(cmd)
         override fun hasProfile(id: String): Boolean = library.hasProfile(id)
         override fun hasBean(id: String): Boolean = _ui.value.beans.any { it.id == id }
@@ -1178,6 +1195,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pairedDevices = { _ui.value.pairedDevices },
         rememberPaired = { id, name, canControl -> rememberPaired(id, name, canControl) },
         firmwareHoldsLink = { runCatching { bridge.firmwareLocksWrites() }.getOrDefault(false) },
+        onRoleStarting = { role, refind -> onRoleStarting(role, refind) },
+        showPending = { showPending(it) },
+        onWelcomed = { hubName -> _ui.update { s -> s.copy(mirror = s.mirror?.welcomed(hubName)) } },
         onModeApplied = { role, host, port ->
             _ui.update {
                 it.copy(
@@ -1188,11 +1208,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // a network with no NSD you couldn't re-mirror without re-seeding it.
                     proxyPrimaryHost = if (role == "secondary") host else it.proxyPrimaryHost,
                     proxyPrimaryPort = if (role == "secondary") port else it.proxyPrimaryPort,
-                    // Drop any mirror overlay (issue 05) + authority cue (issue 10);
-                    // a fresh `secondary` attach repopulates them from the snapshot.
-                    mirroredProfile = null,
-                    mirroredProfileJson = null,
-                    mirroredBeanSummary = null,
                     // A new remote target's Welcome names its hub again.
                     mirroringPrimaryName = "",
                 )
@@ -1659,6 +1674,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         pairingSecondsLeft = ps.pairingSecondsLeft,
                         pairedWithSecret = ps.pairedWithSecret,
                         remotes = ps.remotes,
+                        // The link to the hub dropped: pending edits become
+                        // unconfirmed (never resent) until it's back.
+                        mirror = it.mirror?.let { m ->
+                            if (ps.mirrorReconnecting && !m.reconnecting) m.reconnectingNow() else m
+                        },
                         // The Welcome names the hub before its first snapshot does.
                         mirroringPrimaryName = ps.hubName.ifBlank { it.mirroringPrimaryName },
                         remoteHubHasMachine = ps.hubHasMachine,
@@ -1999,7 +2019,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Open the form on [owner]'s tab — seeded from [prefill] ("Log again") or [beanId]'s bag. */
     fun openLogBrew(owner: String, prefill: StoredShot? = null, beanId: String? = null) {
-        val s = _ui.value
+        val s = effectiveState()
         _logBrew.value = coffee.crema.ui.brewlog.BrewLogSeeds.open(
             owner = owner,
             history = s.history,
@@ -2117,17 +2137,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * covers whatever the shot didn't record.
      */
     fun startFromShot(id: String) {
-        val shot = _ui.value.history.firstOrNull { it.id == id } ?: return
+        // What's on screen: on a remote, the hub's bean and profile.
+        val st = effectiveState()
+        val shot = st.history.firstOrNull { it.id == id } ?: return
         // 1. The bag.
         shot.bean?.beanId?.let { bid ->
-            val bean = _ui.value.beans.firstOrNull { it.id == bid }
-            if (bean != null && bean.archivedAt == null && _ui.value.activeBeanId != bid) {
+            val bean = st.beans.firstOrNull { it.id == bid }
+            if (bean != null && bean.archivedAt == null && st.activeBeanId != bid) {
                 setActiveBean(bid)
             }
         }
         // 2. The profile — by name; a renamed/deleted one degrades to "the rest".
         val match = shot.profileName?.let { n ->
-            _ui.value.profiles.firstOrNull { it.name.equals(n, ignoreCase = true) }
+            st.profiles.firstOrNull { it.name.equals(n, ignoreCase = true) }
         }
         if (match != null) setActiveProfile(match.id)
         // 3. The dial: the shot's own grind (falling back to its bag snapshot's
@@ -2136,7 +2158,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             ?: shot.bean?.grinderSetting?.trim()?.replace(',', '.')?.toFloatOrNull()
         grind?.let { setQcGrind(it) }
         if (shot.doseG != null || shot.yieldTargetG != null) {
-            val active = match ?: _ui.value.activeProfile()
+            val active = match ?: effectiveState().activeProfile()
             val dose = shot.doseG?.toDouble() ?: active?.dose?.toDouble() ?: 18.0
             quickAdjustBrew(
                 dose = dose,
@@ -2172,8 +2194,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * shot target is the Quick-Controls dial override (null when unset, so the
      * profile recipe wins). Safe while disconnected — pure core state, no BLE.
      */
-    private fun pushStopTargets() {
-        val s = _ui.value
+    private fun pushStopTargets(s: MainUiState = effectiveState()) {
         val active = s.profiles.firstOrNull { it.id == s.activeProfileId }
         val profileYield = active?.yieldOut?.takeIf { it.isFinite() && it > 0f }
         val volumeLimit = active?.maxTotalVolumeMl?.takeIf { it > 0 }?.toFloat()
@@ -2609,40 +2630,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  primary while mirroring. */
     private val machine: MachineCommands get() = proxy.machine
 
-    /** The visible half of a config command: update the UI state now and
-     *  return what undoes it. A mirror shows its relayed edits with this alone;
-     *  this device then also runs [commitConfig]. */
-    private fun showConfig(cmd: MachineCommand.Config): () -> Unit = when (cmd) {
-        is MachineCommand.SetActiveProfile -> {
-            val prev = _ui.value
-            // Switching profiles clears any Quick-Controls override (re-seeds from new).
-            _ui.update { it.copy(activeProfileId = cmd.id, brewParams = null) }
-            ({ _ui.update { it.copy(activeProfileId = prev.activeProfileId, brewParams = prev.brewParams) } })
-        }
-        is MachineCommand.SetActiveBean -> showField(cmd.id, { it.activeBeanId }) { s, v -> s.copy(activeBeanId = v) }
-        is MachineCommand.SetStopOnWeight -> showField(cmd.on, { it.stopOnWeight }) { s, v -> s.copy(stopOnWeight = v) }
-        is MachineCommand.SetAutoTare -> showField(cmd.on, { it.autoTare }) { s, v -> s.copy(autoTare = v) }
-        is MachineCommand.SetQc -> when (cmd.field) {
-            QcField.STEAM_TIME -> showField(cmd.value, { it.qcSteamTimeS }) { s, v -> s.copy(qcSteamTimeS = v) }
-            QcField.STEAM_FLOW -> showField(cmd.value, { it.qcSteamFlowMlS }) { s, v -> s.copy(qcSteamFlowMlS = v) }
-            QcField.STEAM_TEMP -> showField(cmd.value, { it.qcSteamTempC }) { s, v -> s.copy(qcSteamTempC = v) }
-            QcField.HOT_WATER_TEMP -> showField(cmd.value, { it.qcHotWaterTempC }) { s, v -> s.copy(qcHotWaterTempC = v) }
-            QcField.HOT_WATER_VOLUME -> showField(cmd.value, { it.qcHotWaterVolumeMl }) { s, v -> s.copy(qcHotWaterVolumeMl = v) }
-            QcField.FLUSH_TIME -> showField(cmd.value, { it.qcFlushTimeS }) { s, v -> s.copy(qcFlushTimeS = v) }
-            QcField.FLUSH_TEMP -> showField(cmd.value, { it.qcFlushTempC }) { s, v -> s.copy(qcFlushTempC = v) }
-            QcField.GRIND -> showField(cmd.value, { it.qcGrind }) { s, v -> s.copy(qcGrind = v) }
-        }
-        is MachineCommand.AdjustBrew -> showField(BrewParams(cmd.dose, cmd.yieldOut, cmd.brewTemp, cmd.preinf), { it.brewParams }) { s, v ->
-            s.copy(brewParams = v)
-        }
-        MachineCommand.ResetBrew -> showField(null, { it.brewParams }) { s, v -> s.copy(brewParams = v) }
-    }
-
-    /** Set one UI field to [value]; the returned undo puts back what it held. */
-    private fun <T> showField(value: T, get: (MainUiState) -> T, set: (MainUiState, T) -> MainUiState): () -> Unit {
-        val prev = get(_ui.value)
-        _ui.update { set(it, value) }
-        return { _ui.update { set(it, prev) } }
+    /** The visible half of a config command on the device that owns the
+     *  config: update the UI state now; [commitConfig] does the rest. A remote
+     *  shows its relayed edits in its mirror slice instead ([showPending]). */
+    private fun showConfig(cmd: MachineCommand.Config) {
+        _ui.update { cmd.applyTo(it) }
     }
 
     /** The rest of a config command on the device that owns the config:
@@ -2760,62 +2752,81 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }.getOrDefault("")
 
-    /** Apply a primary's pushed [ConfigSnapshot] on a secondary — snap this
-     *  mirror's session config (active profile/bean, SAW, QC, units) to the
-     *  primary's: the settings-drift fix. Display-only (the read-only core needs
-     *  no command); per-device bindings (DE1/scale address) + UI prefs stay put.
-     *  The profile id is applied only if this device has that profile, so a mirror
-     *  never blanks its Brew screen on an unknown custom profile. */
+    /**
+     * Apply a hub's pushed [ConfigSnapshot] on this remote: it goes into the
+     * mirror slice only, never into this device's own values, so nothing a
+     * hub sends is ever persisted here (spec §7.2, I1). Dropped when there is
+     * no slice (this device isn't a remote) or the slice is frozen. The
+     * custom-profile overlay (issue 05) shows the hub's profile even when this
+     * device never saved it.
+     */
     private fun applyRemoteConfig(jsonStr: String) {
+        val mirror = _ui.value.mirror
+        if (mirror == null || mirror.frozen) {
+            appendLog("Config snapshot dropped: ${if (mirror == null) "not a remote" else "leaving the remote role"}")
+            return
+        }
         val cfg = runCatching { json.decodeFromString(ConfigSnapshot.serializer(), jsonStr) }.getOrElse {
             appendLog("Config snapshot parse failed: ${it.message}")
             return
         }
-        // Decode the custom-profile overlay (issue 05) so the curve/targets/name
-        // match the primary even for a profile this mirror never saved. A built-in
-        // sends no JSON → overlay null → we fall back to the (guarded) library id.
         val overlay = cfg.activeProfileJson?.let { raw ->
             runCatching { json.decodeFromString(CremaProfile.serializer(), raw) }.getOrElse {
                 appendLog("Mirror profile overlay parse failed: ${it.message}")
                 null
             }
         }
-        // Mirror the primary's live brew override (issue 06): the dose/yield/temp
-        // travel together, so a snapshot with them set re-arms the override here;
-        // all-null clears it (the profile recipe wins again).
-        val brew = if (cfg.brewDoseG != null && cfg.brewYieldG != null && cfg.brewTempC != null) {
-            BrewParams(cfg.brewDoseG!!, cfg.brewYieldG!!, cfg.brewTempC!!, cfg.brewPreinfuseS)
-        } else {
-            null
+        _ui.update { s ->
+            val m = s.mirror?.takeUnless { it.frozen } ?: return@update s
+            s.copy(mirror = m.applied(cfg, overlay, cfg.activeProfileJson))
         }
-        _ui.update {
-            it.copy(
-                activeProfileId = cfg.activeProfileId?.takeIf { id -> library.hasProfile(id) } ?: it.activeProfileId,
-                mirroredProfile = overlay,
-                mirroredProfileJson = overlay?.let { cfg.activeProfileJson },
-                mirroredBeanSummary = cfg.activeBeanSummary,
-                mirroringPrimaryName = cfg.primaryName,
-                brewParams = brew,
-                activeBeanId = cfg.activeBeanId,
-                stopOnWeight = cfg.stopOnWeight,
-                autoTare = cfg.autoTare,
-                maxShotDurationS = cfg.maxShotDurationS,
-                grinderModel = cfg.grinderModel,
-                weightUnit = cfg.weightUnit,
-                tempUnit = cfg.tempUnit,
-                pressureUnit = cfg.pressureUnit,
-                volumeUnit = cfg.volumeUnit,
-                qcSteamTimeS = cfg.qcSteamTimeS,
-                qcSteamFlowMlS = cfg.qcSteamFlowMlS,
-                qcSteamTempC = cfg.qcSteamTempC,
-                qcHotWaterTempC = cfg.qcHotWaterTempC,
-                qcHotWaterVolumeMl = cfg.qcHotWaterVolumeMl,
-                qcFlushTimeS = cfg.qcFlushTimeS,
-                qcFlushTempC = cfg.qcFlushTempC,
-                qcGrind = cfg.qcGrind,
-            )
+        pushStopTargets()
+        appendLog("Config from the hub applied (profile ${cfg.activeProfileId})")
+    }
+
+    /** Test seam: feed a hub's config frame to this device, whatever its role
+     *  (AC-20: a normal device or a hub drops it). */
+    @androidx.annotation.VisibleForTesting
+    internal fun deliverConfigForTest(json: String) = applyRemoteConfig(json)
+
+    /**
+     * A role is starting ([ProxyController], before its transport is built):
+     * the mirror slice exists exactly while this device is a remote (I6). A
+     * re-find (a remote dialing its hub at a new address) keeps the slice,
+     * marked reconnecting; any other start of the remote role gets an empty
+     * one, and every other role drops it.
+     */
+    private fun onRoleStarting(role: String, refind: Boolean) {
+        _ui.update { s ->
+            when {
+                role != "secondary" -> s.copy(mirror = null)
+                refind && s.mirror != null -> s.copy(mirror = s.mirror.reconnectingNow())
+                else -> s.copy(mirror = MirroredSettings(hubName = s.mirroringPrimaryName))
+            }
         }
-        appendLog("Config from primary applied (pressure ${cfg.pressureUnit}, temp ${cfg.tempUnit}, profile ${cfg.activeProfileId})")
+    }
+
+    /**
+     * Show a relayed config edit on this remote until the hub answers (spec
+     * §7.3): it goes into the slice as pending, never into own values. The
+     * returned echo settles it with the hub's answer.
+     */
+    private fun showPending(cmd: MachineCommand.Config): ConfigEcho {
+        var generation = 0L
+        _ui.update { s ->
+            val m = s.mirror?.takeUnless { it.frozen } ?: return@update s
+            val (next, gen) = m.withPending(cmd)
+            generation = gen
+            s.copy(mirror = next)
+        }
+        if (generation == 0L) return ConfigEcho.NONE
+        val key = cmd.setting()
+        return ConfigEcho { outcome ->
+            _ui.update { s ->
+                val m = s.mirror?.takeUnless { it.frozen } ?: return@update s
+                s.copy(mirror = m.settled(key, generation, outcome))
+            }
+        }
     }
 
     // ── Multi-device pairing (issue 02) ───────────────────────────────────────
@@ -3307,12 +3318,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pairedDevices = _ui.value.pairedDevices,
     )
 
+    /** The last [persistPrefs] snapshot's number (Main only). */
+    private var prefsGeneration = 0L
+
     /** Persist the current prefs snapshot (best-effort, off the main thread).
      *  No-op until the initial [loadPrefs] hydration completes. */
     private fun persistPrefs() {
         if (!prefsLoaded) return
         val snapshot = currentPrefs()
-        viewModelScope.launch { settingsStore.save(snapshot) }
+        // Numbered on Main as the snapshot is built: the store skips one that
+        // lands after a newer one.
+        val generation = ++prefsGeneration
+        viewModelScope.launch { settingsStore.save(snapshot, generation) }
         // Multi-device: if we're hosting, push the updated session config to every
         // mirror so a secondary tracks our config mid-session (the attach-time
         // snapshot only covers a fresh join). No-op off-primary.
@@ -4035,7 +4052,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * weight leg shows as `armed=weight — · …` next to `stopped=none`.
      */
     private fun shotDiagSummary(c: coffee.crema.core.EventShotCompletedInner): String {
-        val s = _ui.value
+        val s = effectiveState()
         val yieldG = c.final_weight?.let { fmt("%.1f g", it) } ?: "—"
         val peakG = c.peak_weight?.let { fmt("%.1f g", it) } ?: "—"
         return buildString {
@@ -4180,8 +4197,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun consumeDiscardToast() = library.consumeDiscardToast()
 
     fun saveQuickGrindToBean(): Boolean {
-        val dial = _ui.value.qcGrind ?: return false
-        val bean = _ui.value.beans.firstOrNull { it.id == _ui.value.activeBeanId } ?: return false
+        // The dial and bean on screen: on a remote, the hub's.
+        val st = effectiveState()
+        val dial = st.qcGrind ?: return false
+        val bean = st.beans.firstOrNull { it.id == st.activeBeanId } ?: return false
         val fmt = if (dial % 1f == 0f) fmt("%.0f", dial) else fmt("%.1f", dial)
         if (bean.grinderSetting == fmt) return false
         library.mutateBean(bean.id) { it.copy(grinderSetting = fmt) }

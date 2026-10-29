@@ -48,9 +48,10 @@ interface MachineActions {
 
     fun applyTareScale()
 
-    /** The visible half of a config change: update the UI state now and return
-     *  what undoes it. A mirror shows its relayed edits with this alone. */
-    fun showConfig(cmd: MachineCommand.Config): () -> Unit
+    /** The visible half of a config change on the device that owns the
+     *  config: update the UI state now. (A remote shows its relayed edits in
+     *  its mirror slice instead.) */
+    fun showConfig(cmd: MachineCommand.Config)
 
     /** The rest of a config change on the device that owns the config: persist
      *  it, write the machine, push it to mirrors. */
