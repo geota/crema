@@ -688,6 +688,10 @@ pub struct CremaCore {
     /// A cup-warmer temperature set before the machine model was known —
     /// written when the model reply says Bengle (the plate is Bengle-only).
     pending_cup_warmer_c: Option<u8>,
+    /// A Bengle's end-of-shot weight clear was refused because a firmware
+    /// flash held the link when the model reply came in: sent on the first
+    /// tick after the lock lets go (round-3 clean check C3 #1).
+    end_of_shot_clear_pending: bool,
     /// Per-step weight exits of the active profile (issue 11): sends
     /// `SkipToNext` when the projected weight reaches the current frame's
     /// step `weight`. Follows the ACTIVE profile: set by
@@ -1027,6 +1031,7 @@ impl CremaCore {
             next_upload_id: 1,
             parked_upload: None,
             pending_cup_warmer_c: None,
+            end_of_shot_clear_pending: false,
             step_weight: StepWeightExit::default(),
             active_beverage_type: BeverageType::default(),
             last_profile_header: None,
@@ -3057,6 +3062,15 @@ impl CremaCore {
         out
     }
 
+    /// Feed one notification (or recorded line) from `source`.
+    ///
+    /// A profile ack ([`Source::De1HeaderAck`] / [`Source::De1FrameAck`])
+    /// fed here counts toward whatever upload is running. That is the replay
+    /// path: a capture's recorded acks drive its replayed upload, and replay
+    /// knows no upload ids. The DE1 sends no profile acks of its own, so live
+    /// shells never feed them here: they synthesise each one and pass it to
+    /// [`on_profile_write_ack`](Self::on_profile_write_ack) with its upload
+    /// id, which drops a superseded upload's ack (round-3 clean check C3 #5).
     pub fn on_notification(&mut self, source: Source, data: &[u8], now_ms: u64) -> CoreOutput {
         // Capture side-effect first — the recorder needs the raw notification
         // bytes regardless of whether the decode that follows succeeds, and
@@ -3147,6 +3161,7 @@ impl CremaCore {
             self.fail_profile_upload(reason, &mut out);
         }
         self.tick_parked_upload(now, &mut out);
+        self.send_pending_end_of_shot_clear(&mut out);
         // An outstanding re-upload request nobody acted on is repeated.
         self.request_profile_reupload_if_idle(&mut out);
         self.update_machine_error(now, &mut out);
@@ -3193,6 +3208,15 @@ impl CremaCore {
     /// [`reset`](Self::reset), which wipes everything.
     pub fn capture_clear(&mut self) {
         self.capture.clear();
+    }
+
+    /// Send a Bengle end-of-shot weight clear that a firmware flash refused
+    /// at the model reply, once the flash no longer holds the link.
+    fn send_pending_end_of_shot_clear(&mut self, out: &mut CoreOutput) {
+        if self.end_of_shot_clear_pending && !self.firmware_locks_writes() {
+            self.end_of_shot_clear_pending = false;
+            out.commands.push(end_of_shot_weight_clear());
+        }
     }
 
     /// The DE1's BLE link dropped unexpectedly (the shells' auto-reconnect is
@@ -4516,13 +4540,14 @@ impl CremaCore {
             self.profile_reupload_requests = self.profile_reupload_requests.saturating_add(1);
         }
         self.profile_reupload_unanswered = 0;
+        // Any other upload replaces the cold-maintenance profile a held
+        // request is waiting on. Before the abort below, which would
+        // otherwise end the run as a cold upload that failed.
+        self.cold_maintenance_profile_replaced(&mut out);
         // Abort any prior upload (running or parked) before arming the new one.
         if self.profile_upload.is_some() || self.parked_upload.is_some() {
             self.fail_profile_upload(ProfileUploadFailure::Aborted, &mut out);
         }
-        // Any other upload replaces the cold-maintenance profile a held
-        // request is waiting on.
-        self.cold_maintenance_profile_replaced(&mut out);
         match assembled {
             Some((assembled, encoding)) => {
                 let started = self.start_upload(profile, assembled, encoding, now, None);
@@ -4989,8 +5014,14 @@ impl CremaCore {
             if remember_tank {
                 self.tank_temp_threshold_c = Some(tank_temp_c);
             }
+            // The model reply has usually cleared it already. Kept for parity
+            // with de1app, which writes the register after every v2 upload,
+            // and as a backstop: the firmware keeps whatever was last written,
+            // and a model-reply clear whose MMR write failed is not retried.
+            // One idempotent write per Bengle upload (C3 #15).
             if encoding == de1_protocol::FrameEncoding::V2 {
                 out.commands.push(end_of_shot_weight_clear());
+                self.end_of_shot_clear_pending = false;
             }
             self.profile_reupload_pending = false;
             self.profile_reupload_requests = 0;
@@ -5070,10 +5101,18 @@ impl CremaCore {
                 // upload a fingerprint match skips would otherwise keep a
                 // target another app left persisted in the firmware (round-2
                 // verification V1 P3-4; see END_OF_SHOT_WEIGHT_CLEARED).
+                // Refused while a firmware flash holds the link, it waits for
+                // the lock to let go (`send_pending_end_of_shot_clear`).
                 if de1_protocol::is_bengle_model(value) {
                     match self.refuse_if_firmware_locked("end_of_shot_weight") {
-                        Some(locked) => out.events.extend(locked.events),
-                        None => out.commands.push(end_of_shot_weight_clear()),
+                        Some(locked) => {
+                            out.events.extend(locked.events);
+                            self.end_of_shot_clear_pending = true;
+                        }
+                        None => {
+                            out.commands.push(end_of_shot_weight_clear());
+                            self.end_of_shot_clear_pending = false;
+                        }
                     }
                 }
                 // A cup-warmer change made before the model was known.
@@ -9669,6 +9708,34 @@ mod tests {
     }
 
     #[test]
+    fn user_activity_on_a_read_only_mirror_leaves_steam_eco_alone() {
+        // Round-3 clean check C3 #4: the mirror cannot write ShotSettings, so
+        // a touch on it must not report eco lifted while the machine is still
+        // in eco.
+        use de1_domain::idle_sleep::{IdleActivity, IdleSleepInput};
+        let touch = IdleSleepInput::Activity {
+            kind: IdleActivity::Touch,
+        };
+        let mut core = CremaCore::new();
+        core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        core.enable_steam_eco_mode(true, 0);
+        core.set_read_only(true);
+        let out = core.on_tick(600_000);
+        assert!(
+            out.events
+                .contains(&Event::SteamEcoModeChanged { eco: true })
+        );
+        let out = core.idle_sleep(touch, 1);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::SteamEcoModeChanged { .. })),
+            "no local eco change on a mirror"
+        );
+        assert!(out.commands.is_empty());
+    }
+
+    #[test]
     fn user_activity_does_nothing_to_steam_while_eco_is_off() {
         use de1_domain::idle_sleep::{IdleActivity, IdleSleepInput};
         let mut core = CremaCore::new();
@@ -11904,6 +11971,40 @@ mod tests {
         }
 
         #[test]
+        fn a_clear_refused_during_a_flash_goes_out_once_the_lock_lets_go() {
+            // Round-3 clean check C3 #1: the model reply lands while a flash
+            // still holds the link (reconnect during its power-cycle wait), and
+            // a fingerprint match then skips the upload whose tail ack is the
+            // only other clear. The refused clear must not be lost.
+            let mut expected = vec![0x04, 0x80, 0x38, 0x64, 0, 0, 0, 0];
+            expected.resize(de1_protocol::MMR_PACKET_LEN, 0);
+            let mut core = CremaCore::new();
+            core.firmware_lock_override = true;
+            let out = core.on_notification(Source::De1MmrRead, &machine_model_packet(128), 10);
+            assert_eq!(end_of_shot_weight_write(&out.commands), None);
+            let out = core.on_tick(1_000);
+            assert_eq!(
+                end_of_shot_weight_write(&out.commands),
+                None,
+                "still locked"
+            );
+            core.firmware_lock_override = false;
+            let out = core.on_tick(2_000);
+            assert_eq!(end_of_shot_weight_write(&out.commands), Some(expected));
+            let out = core.on_tick(3_000);
+            assert_eq!(end_of_shot_weight_write(&out.commands), None, "once");
+            // A classic DE1 never queues one.
+            let mut classic = CremaCore::new();
+            classic.firmware_lock_override = true;
+            let _ = classic.on_notification(Source::De1MmrRead, &machine_model_packet(1), 10);
+            classic.firmware_lock_override = false;
+            assert_eq!(
+                end_of_shot_weight_write(&classic.on_tick(1_000).commands),
+                None
+            );
+        }
+
+        #[test]
         fn a_classic_upload_never_writes_the_end_of_shot_weight() {
             let mut core = CremaCore::new_with_model(3);
             let p = profile("Classic", vec![step("a", Pump::Pressure, None)]);
@@ -11962,7 +12063,7 @@ mod tests {
             let mut core = CremaCore::new_with_model(1);
             let _ = core.on_notification(Source::De1State, &[2, 0], 0); // Idle
             let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
-            let id = started_upload_id(&up);
+            let id = up.started_upload_id();
             let out = core.profile_write_failed(100, id);
             assert!(out.events.iter().any(|e| matches!(
                 e,
@@ -11985,7 +12086,7 @@ mod tests {
             let mut core = CremaCore::new_with_model(1);
             let _ = core.on_notification(Source::De1State, &[2, 0], 0); // Idle
             let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
-            let first = core.profile_write_failed(1_000, started_upload_id(&up));
+            let first = core.profile_write_failed(1_000, up.started_upload_id());
             assert_eq!(reupload_requests(&first.events), 1);
             assert_eq!(reupload_requests(&core.on_tick(3_000).events), 0, "not yet");
             assert_eq!(
@@ -12023,7 +12124,7 @@ mod tests {
             let n_plus_1 = core
                 .upload_profile(&two_step(), Duration::from_millis(50))
                 .unwrap();
-            let (old, new) = (started_upload_id(&n), started_upload_id(&n_plus_1));
+            let (old, new) = (n.started_upload_id(), n_plus_1.started_upload_id());
             assert_ne!(old, new);
             let late = core.profile_write_failed(100, old);
             assert!(late.events.is_empty(), "the report is about another upload");
@@ -12048,7 +12149,7 @@ mod tests {
             let b = core
                 .upload_profile(&two_step(), Duration::from_millis(10))
                 .unwrap();
-            let (a_id, b_id) = (started_upload_id(&a), started_upload_id(&b));
+            let (a_id, b_id) = (a.started_upload_id(), b.started_upload_id());
             let header = |out: &CoreOutput| {
                 out.commands
                     .iter()
@@ -12111,12 +12212,14 @@ mod tests {
             // A report about an upload from before a reconnect must not match
             // the first upload after it.
             let mut core = CremaCore::new_with_model(1);
-            let before =
-                started_upload_id(&core.upload_profile(&two_step(), Duration::ZERO).unwrap());
+            let before = core
+                .upload_profile(&two_step(), Duration::ZERO)
+                .unwrap()
+                .started_upload_id();
             core.reset();
             core.de1_machine_model = Some(1);
             let after = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
-            assert_ne!(before, started_upload_id(&after));
+            assert_ne!(before, after.started_upload_id());
             assert!(core.profile_write_failed(10, before).events.is_empty());
             assert!(core.profile_upload_in_progress());
         }
@@ -12131,7 +12234,7 @@ mod tests {
             let _ = core.on_notification(Source::De1State, &[2, 0], 0); // Idle
             let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
             let mut sent_at = Vec::new();
-            let first = core.profile_write_failed(1_000, started_upload_id(&up));
+            let first = core.profile_write_failed(1_000, up.started_upload_id());
             if reupload_requests(&first.events) == 1 {
                 sent_at.push(1_000);
             }
@@ -12151,7 +12254,7 @@ mod tests {
             let up = core
                 .upload_profile(&two_step(), Duration::from_millis(603_000))
                 .unwrap();
-            let again = core.profile_write_failed(603_100, started_upload_id(&up));
+            let again = core.profile_write_failed(603_100, up.started_upload_id());
             assert_eq!(reupload_requests(&again.events), 1);
         }
 
@@ -12197,7 +12300,7 @@ mod tests {
             let mut core = CremaCore::new_with_model(1);
             let _ = core.on_notification(Source::De1State, &[2, 0], 0); // Idle
             let up = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
-            let _ = core.profile_write_failed(100, started_upload_id(&up));
+            let _ = core.profile_write_failed(100, up.started_upload_id());
             assert!(core.profile_reupload_pending);
             core.de1_machine_model = None;
             let _ = core
@@ -12227,17 +12330,6 @@ mod tests {
                     step("b", Pump::Pressure, None),
                 ],
             )
-        }
-
-        /// The `upload_id` of the upload `out` started.
-        fn started_upload_id(out: &CoreOutput) -> u32 {
-            out.events
-                .iter()
-                .find_map(|e| match e {
-                    Event::ProfileUploadStarted { upload_id, .. } => Some(*upload_id),
-                    _ => None,
-                })
-                .expect("the output starts an upload")
         }
 
         fn reupload_requests(events: &[Event]) -> usize {

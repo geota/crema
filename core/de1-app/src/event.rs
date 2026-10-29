@@ -3,8 +3,8 @@
 
 use de1_domain::idle_sleep::IdleSleepBlock;
 use de1_domain::{
-    BrewCue, BrewSessionSummary, MaintenancePhase, ShotDisposition, ShotPhase, SteamClogReason,
-    StopReason, WaterSessionKind,
+    BrewCue, BrewSessionSummary, MaintenanceFailure, MaintenancePhase, ShotDisposition, ShotPhase,
+    SteamClogReason, StopReason, WaterSessionKind,
 };
 use de1_protocol::{CalCommand, CalTarget, MachineState, MmrRegister, SubState};
 use serde::{Deserialize, Serialize};
@@ -155,6 +155,9 @@ pub enum Event {
         cycle: u8,
         /// The 1 °C cold-maintenance profile was loaded for this cycle.
         cold_workaround: bool,
+        /// Why the cycle never started; set only on
+        /// [`MaintenancePhase::Failed`].
+        failure: Option<MaintenanceFailure>,
     },
     /// The idle-sleep timer ("Sleep after") sent Sleep — see
     /// [`de1_domain::idle_sleep`]. `attempt` is 1 for the episode's send, 2
@@ -651,8 +654,10 @@ pub enum Event {
         /// This upload's number, unique for the core's lifetime (kept across
         /// [`reset`](crate::CremaCore::reset)). The shell records it with
         /// the upload's writes and passes it back to
-        /// [`profile_write_failed`](crate::CremaCore::profile_write_failed),
-        /// so a late failure report cannot fail a newer upload.
+        /// [`profile_write_failed`](crate::CremaCore::profile_write_failed)
+        /// and `on_profile_write_ack`, so a late report or ack cannot reach a
+        /// newer upload. A wasm bridge that rebuilds its core after a panic
+        /// starts again at 1: the web shell then supersedes every open batch.
         upload_id: u32,
     },
     /// An upload is waiting for the DE1's machine model before it writes
@@ -888,6 +893,24 @@ pub struct CoreOutput {
     pub events: Vec<Event>,
     /// BLE writes the shell should perform, in order.
     pub commands: Vec<Command>,
+}
+
+#[cfg(test)]
+impl CoreOutput {
+    /// The `upload_id` of the upload this output started (tests only).
+    ///
+    /// # Panics
+    ///
+    /// When the output starts no upload.
+    pub(crate) fn started_upload_id(&self) -> u32 {
+        self.events
+            .iter()
+            .find_map(|e| match e {
+                Event::ProfileUploadStarted { upload_id, .. } => Some(*upload_id),
+                _ => None,
+            })
+            .expect("the output starts an upload")
+    }
 }
 
 impl CoreOutput {

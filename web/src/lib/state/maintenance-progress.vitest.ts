@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { MachineState, MaintenancePhase } from '#lib/core/crema-core.js';
+import { MachineState, MaintenanceFailure, MaintenancePhase } from '#lib/core/crema-core.js';
 import {
 	applyEvent,
 	INITIAL_SNAPSHOT,
 	isMaintenanceTerminal,
 	maintenanceFailedMessage,
+	maintenanceProgressText,
+	maintenanceTitle,
 	type MaintenanceView
 } from './ui-state.svelte';
 
@@ -70,8 +72,53 @@ describe('maintenance progress fold', () => {
 		expect(failed.maintenance).toBeNull();
 		expect(failed.eventLog[0]?.text).toContain('Failed');
 		expect(isMaintenanceTerminal(MaintenancePhase.Failed)).toBe(true);
-		expect(maintenanceFailedMessage(MachineState.Descale)).toMatch(/^Descale didn't start/);
-		expect(maintenanceFailedMessage(MachineState.Clean)).toMatch(/^Clean cycle didn't start/);
+		expect(maintenanceFailedMessage(MachineState.Descale, null)).toMatch(/^Descale didn't start/);
+		expect(maintenanceFailedMessage(MachineState.Clean, null)).toMatch(/^Clean cycle didn't start/);
+	});
+
+	it('words the notice by why the cycle never started (C1 P3-1)', () => {
+		// The core sends `null` for an absent reason; an older core sends none.
+		for (const absent of [null, undefined, MaintenanceFailure.ColdProfileNotLoaded]) {
+			expect(maintenanceFailedMessage(MachineState.Descale, absent)).toContain(
+				'cold-start profile older DE1 firmware needs could not be loaded'
+			);
+		}
+		const replaced = maintenanceFailedMessage(
+			MachineState.AirPurge,
+			MaintenanceFailure.ProfileReplaced
+		);
+		expect(replaced).toBe(
+			"Air purge didn't start: another profile was loaded while the machine was still heating. Start it again when you're ready."
+		);
+		expect(replaced).not.toContain('could not be loaded');
+	});
+
+	it('names the cycle once for the progress row and the notice (C3 #11)', () => {
+		expect(maintenanceTitle(MachineState.Descale)).toBe('Descale');
+		expect(maintenanceTitle(MachineState.Clean)).toBe('Clean cycle');
+		expect(maintenanceTitle(MachineState.AirPurge)).toBe('Air purge');
+		expect(maintenanceFailedMessage(MachineState.AirPurge, null)).toMatch(/^Air purge /);
+	});
+
+	it('reads the progress row like Android maintenanceRunText', () => {
+		const view = (over: Partial<MaintenanceView>) => progress(over).content;
+		expect(
+			maintenanceProgressText(
+				view({ step_index: 4, progress: 0.42, seconds_remaining: 420, cycle: 1 })
+			)
+		).toBe('42% · Step 4 of 5 · 7 min 0 s left');
+		expect(
+			maintenanceProgressText(
+				view({ step_index: 2, progress: 0.1, seconds_remaining: 650, cycle: 2 })
+			)
+		).toBe('10% · Step 2 of 5 · 10 min 50 s left · pass 2');
+		expect(maintenanceProgressText(view({ phase: MaintenancePhase.Requested }))).toBe('Starting…');
+		expect(maintenanceProgressText(view({ state: MachineState.Clean, step_count: 0 }))).toBe(
+			'Running…'
+		);
+		expect(
+			maintenanceProgressText(view({ phase: MaintenancePhase.WaitingForPreheat, cold_workaround: true }))
+		).toBe('Loading the cold-start profile and waiting for heating to stop (older firmware workaround)…');
 	});
 
 	it('logs phase changes, not every countdown second', () => {

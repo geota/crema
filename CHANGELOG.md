@@ -35,7 +35,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 - **Basic pressure profiles limit flow during the forced rise**, and pressure
   steps without a flow limit — cleaning and calibration profiles included — are
-  capped at 8 ml/s, matching de1app and Decenza. Web, tablet and phone.
+  capped at 8 ml/s, matching de1app and Decenza. A profile an earlier version
+  already loaded is sent once more after the update so it picks these up. Web,
+  tablet and phone.
 - **A dead DE1 Bluetooth link is detected in about 10 s** instead of about a
   minute. Web and Android.
 - **Steam eco mode waits for 10 minutes without any app activity**, as in
@@ -97,8 +99,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   recorded, debited from the bag and uploaded. Tea, pour-over, calibration and
   manual built-ins now carry their real type too. Web, tablet and phone.
 - **On older DE1 firmware, Descale, Clean and Air purge wait for the cold-start
-  profile to load** before they start; if it cannot load, the cycle does not run
-  and the app says so. Web, tablet and phone.
+  profile to load** before they start; if it cannot load, or you load another
+  profile while the machine is still heating, the cycle does not run and the
+  app says which. Web, tablet and phone.
 - **Original Decent Scales (firmware v1.0/v1.1) show weight again**, so
   stop-at-weight works with them, while Half Decent Scale frames with a bad
   checksum are still dropped. Also: Acaia scales that miss the first handshake

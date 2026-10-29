@@ -10,8 +10,10 @@
  * restart or another tab keeps the mark until a PATCH carrying the current
  * value lands. Android keeps the same set in `VisualizerState.baristaPending`.
  *
- * Reads go to storage each time (another tab may have changed it); a memory
- * copy keeps the session working where storage is unavailable.
+ * Reads go to storage each time (another tab may have changed it). Only a
+ * mark that could not be persisted (storage unavailable or full) is kept in
+ * memory instead, so a PATCH that lands in another tab clears a persisted
+ * mark here too (round-3 clean check C3 #8).
  */
 
 import { readJson, writeJson } from '../utils/storage.ts';
@@ -22,8 +24,9 @@ export const BARISTA_PENDING_KEY = 'crema.visualizer.baristaPending.v1';
 const isIdList = (v: unknown): v is string[] =>
 	Array.isArray(v) && v.every((x) => typeof x === 'string');
 
-/** The persisted pending set, with a per-session memory copy. */
+/** The persisted pending set, with a memory fallback for marks storage refused. */
 export class BaristaPending {
+	/** Marks this tab could not persist. */
 	readonly #memory = new Set<string>();
 
 	#stored(): string[] {
@@ -35,11 +38,19 @@ export class BaristaPending {
 		return this.#memory.has(id) || this.#stored().includes(id);
 	}
 
+	/**
+	 * Every pending id, read from storage once: for a pull that checks many
+	 * shots in one synchronous pass (C3 #10).
+	 */
+	snapshot(): ReadonlySet<string> {
+		return new Set([...this.#stored(), ...this.#memory]);
+	}
+
 	/** Mark `id`'s barista as edited here. */
 	add(id: string): void {
-		this.#memory.add(id);
 		const ids = this.#stored();
 		if (!ids.includes(id)) writeJson(BARISTA_PENDING_KEY, [...ids, id]);
+		if (!this.#stored().includes(id)) this.#memory.add(id);
 	}
 
 	/** `id`'s barista reached Visualizer (or the shot is gone). */

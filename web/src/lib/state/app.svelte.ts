@@ -23,7 +23,7 @@ import {
 	type CremaCore
 } from '#lib/core/index.js';
 import { MachineState, MmrRegister } from '#lib/core/crema-core.js';
-import type { BrewRecipe } from '#lib/core/crema-core.js';
+import type { BrewRecipe, MaintenanceFailure } from '#lib/core/crema-core.js';
 import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
 import { playBrewCue } from '#lib/brew/cues.js';
 import {
@@ -84,6 +84,7 @@ import { CoreTicker } from './core-ticker';
 import { stepCapRefusal } from '#lib/profiles/step-cap.js';
 import {
 	ProfileWriteGenerations,
+	UNNAMED_PROFILE_BATCH_LOG,
 	isProfileWriteTarget,
 	startedUploadId,
 	type ProfileWriteBatch,
@@ -465,6 +466,9 @@ export class CremaApp {
 		});
 		this.#coreRecovery = new CoreRecoveryWatch(core.panicRecoveries?.bind(core), (count) => {
 			this.state.log(`Core reset after an internal error (reset #${count})`);
+			// The fresh core runs no upload and numbers uploads from 1 again:
+			// no old batch may write, ack or report into it (C2 P3-1).
+			this.#profileWrites.supersede();
 			this.coreResetNotice.onReset();
 		});
 		// Logged once with the bridge's own message as context; the per-call
@@ -882,7 +886,11 @@ export class CremaApp {
 				}
 			}
 			if (event.type === 'MaintenanceProgress' && event.content.cold_workaround) {
-				this.onColdMaintenanceProgress(event.content.phase, event.content.state);
+				this.onColdMaintenanceProgress(
+					event.content.phase,
+					event.content.state,
+					event.content.failure
+				);
 			}
 			if (event.type === 'ProfileUploadCompleted') {
 				// Hand the completion to the `ProfileSync` service (T-21): it
@@ -1010,6 +1018,7 @@ export class CremaApp {
 		// The profile writes of this output form one batch: a header write
 		// supersedes every earlier upload's queued writes (#2 N2).
 		const batch = this.#profileWrites.begin(output.commands, startedUploadId(output.events));
+		if (this.#profileWrites.unnamed(batch)) this.state.log(UNNAMED_PROFILE_BATCH_LOG);
 		for (const command of output.commands) {
 			void this.executeCommand(command, batch);
 		}
@@ -1245,8 +1254,13 @@ export class CremaApp {
 						// re-upload does not wait for the ack watchdog.
 						this.state.log('Profile write failed — stopping this upload');
 						// Named by its upload, so a report that lands after a
-						// newer upload started leaves that one alone (V3 #1).
-						if (profileBatch.uploadId !== null) {
+						// newer upload started leaves that one alone (V3 #1);
+						// not sent once superseded (a newer header, or a core
+						// rebuilt after a panic, C2 P3-1).
+						if (
+							profileBatch.uploadId !== null &&
+							this.#profileWrites.isCurrent(profileBatch)
+						) {
 							this.applyCoreOutput(
 								await this.core.profileWriteFailed(performance.now(), profileBatch.uploadId)
 							);
@@ -1322,7 +1336,11 @@ export class CremaApp {
 	 * "already loaded" fingerprint at once, and put the active profile back
 	 * when the cycle ends (Decenza re-uploads it on leaving its descale page).
 	 */
-	private onColdMaintenanceProgress(phase: string, state: string): void {
+	private onColdMaintenanceProgress(
+		phase: string,
+		state: string,
+		failure: MaintenanceFailure | null | undefined
+	): void {
 		if (this.state.current.activeProfileFingerprint !== null) {
 			writeJson(LAST_FINGERPRINT_KEY, null);
 			this.state.patch({ activeProfileFingerprint: null });
@@ -1330,8 +1348,9 @@ export class CremaApp {
 		if (isMaintenanceTerminal(phase)) {
 			if (this.state.current.de1State === 'ready') this.ensureLoadedMatches();
 		}
-		// The cold profile never loaded, so the core did not send the request.
-		if (phase === 'Failed') toast.error(maintenanceFailedMessage(state));
+		// The cold profile never loaded (or was replaced), so the core did not
+		// send the request.
+		if (phase === 'Failed') toast.error(maintenanceFailedMessage(state, failure));
 	}
 
 	/**

@@ -5539,6 +5539,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // The profile writes of this output: a header write supersedes every
         // older upload's remaining writes (cohort review 2026-10-28, #2 N2).
         val profileBatch = profileWrites.begin(batch.map { it.content.target }, uploadId)
+        if (profileWrites.unnamed(profileBatch)) appendLog(UNNAMED_PROFILE_BATCH_LOG)
         val job = viewModelScope.launch {
             executeInOrder(batch) { c ->
                 val profile = profileBatch?.takeIf { isProfileWriteTarget(c.content.target) }
@@ -5697,9 +5698,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // back once the cycle ends.
                     lastUploadedFingerprint = null
                     if (terminal) reuploadActiveProfile()
-                    // The cold profile never loaded, so core did not send the
-                    // request (round-2 V3 #4): say so instead of going quiet.
-                    if (c.phase == MaintenancePhase.Failed) notifyUser(maintenanceFailedText(c.state))
+                    // The cold profile never loaded (or was replaced), so core
+                    // did not send the request (round-2 V3 #4): say so, and why,
+                    // instead of going quiet.
+                    if (c.phase == MaintenancePhase.Failed) notifyUser(maintenanceFailedText(c.state, c.failure))
                 }
             }
             is Event.MachineErrorChanged -> {

@@ -178,8 +178,8 @@ pub use brew_session::{
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use cold_maintenance::{
     COLD_MAINTENANCE_MIN_FIRMWARE_BUILD, DESCALE_SCHEDULE, DESCALE_TOTAL_SECONDS, DescaleProgress,
-    DescaleTracker, MaintenancePhase, cold_maintenance_profile, firmware_drops_cold_requests,
-    is_machine_heating, is_maintenance_state, needs_cold_workaround,
+    DescaleTracker, MaintenanceFailure, MaintenancePhase, cold_maintenance_profile,
+    firmware_drops_cold_requests, is_machine_heating, is_maintenance_state, needs_cold_workaround,
 };
 pub use connect_sweep::{
     ConnectSweepSettings, USB_CHARGER_CHECK_INTERVAL_MS, UsbChargingMode, usb_charger_decision,

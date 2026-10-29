@@ -1168,7 +1168,10 @@ data class EventMaintenanceProgressInner (
 	/// Descale pass, from 1 (`0` when not descaling).
 	val cycle: UByte,
 	/// The 1 °C cold-maintenance profile was loaded for this cycle.
-	val cold_workaround: Boolean
+	val cold_workaround: Boolean,
+	/// Why the cycle never started; set only on
+	/// [`MaintenancePhase::Failed`].
+	val failure: MaintenanceFailure? = null
 )
 
 /// Generated type representing the anonymous struct variant `IdleSleepRequested` of the `Event` Rust enum
@@ -1608,8 +1611,10 @@ data class EventProfileUploadStartedInner (
 	/// This upload's number, unique for the core's lifetime (kept across
 	/// [`reset`](crate::CremaCore::reset)). The shell records it with
 	/// the upload's writes and passes it back to
-	/// [`profile_write_failed`](crate::CremaCore::profile_write_failed),
-	/// so a late failure report cannot fail a newer upload.
+	/// [`profile_write_failed`](crate::CremaCore::profile_write_failed)
+	/// and `on_profile_write_ack`, so a late report or ack cannot reach a
+	/// newer upload. A wasm bridge that rebuilds its core after a panic
+	/// starts again at 1: the web shell then supersedes every open batch.
 	val upload_id: UInt
 )
 
@@ -4329,6 +4334,20 @@ enum class MachineState(val string: String) {
 	FwUpgrade("FwUpgrade"),
 }
 
+/// Why a held cold-maintenance request ended [`MaintenancePhase::Failed`] —
+/// carried by `Event::MaintenanceProgress` so the shells can say what
+/// happened.
+@Serializable
+enum class MaintenanceFailure(val string: String) {
+	/// The 1 °C profile's upload failed or was cancelled.
+	@SerialName("ColdProfileNotLoaded")
+	ColdProfileNotLoaded("ColdProfileNotLoaded"),
+	/// Another upload (the user picked a profile or started a shot) replaced
+	/// the 1 °C profile before the machine finished heating.
+	@SerialName("ProfileReplaced")
+	ProfileReplaced("ProfileReplaced"),
+}
+
 /// Where a maintenance cycle the core is following stands — carried by
 /// `Event::MaintenanceProgress`.
 @Serializable
@@ -4354,7 +4373,8 @@ enum class MaintenancePhase(val string: String) {
 	/// The 1 °C cold-maintenance profile did not load (its upload failed,
 	/// was cancelled, or another upload replaced it), so the held request
 	/// was never sent: running the cycle on the brew profile is what the
-	/// workaround exists to prevent. The user can start it again.
+	/// workaround exists to prevent. The user can start it again. Why is in
+	/// the event's [`MaintenanceFailure`].
 	@SerialName("Failed")
 	Failed("Failed"),
 }

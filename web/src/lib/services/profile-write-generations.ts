@@ -24,6 +24,10 @@
  *   current upload). The failure report passes it back, so a report that
  *   arrives after a newer upload started cannot fail the newer one
  *   (round-2 verification V3 #1).
+ * - The generation is the shell's own count and the upload id the core's;
+ *   both are kept. Upload ids restart at 1 when the wasm bridge rebuilds its
+ *   core after a panic, so the generation is what supersedes a batch then
+ *   ({@link ProfileWriteGenerations.supersede}).
  *
  * Android's `ProfileWriteGenerations` applies the same rule.
  */
@@ -45,6 +49,17 @@ export function startedUploadId(events: readonly Event[]): number | null {
 	}
 	return null;
 }
+
+/**
+ * Logged when a batch has no upload id ({@link ProfileWriteGenerations.unnamed}).
+ * The core pairs every header write with `ProfileUploadStarted` in the same
+ * output, so this marks a broken invariant. Such a batch's acks and failure are
+ * not fed to the core: an id-less ack could count toward, or fail, the wrong
+ * upload (round-2 V1 P3-1), so the core's ack watchdog ends the upload
+ * instead (round-3 clean check C3 #3). Android logs the same line.
+ */
+export const UNNAMED_PROFILE_BATCH_LOG =
+	'Profile writes without an upload id: their acks are not fed to the core; the ack watchdog ends the upload';
 
 /** What the shell does after a profile write returned. */
 export type ProfileWriteOutcome = 'ack' | 'drop' | 'failed';
@@ -84,9 +99,34 @@ export class ProfileWriteGenerations {
 		return { generation: this.#current, uploadId: this.#currentUploadId, failed: false };
 	}
 
+	/** Whether `batch` has no upload id to name its acks and failure with. */
+	unnamed(batch: ProfileWriteBatch | null): boolean {
+		return batch !== null && batch.uploadId === null;
+	}
+
 	/** Whether a write of `batch` may go out now. */
 	mayWrite(batch: ProfileWriteBatch): boolean {
 		return batch.generation === this.#current && !batch.failed;
+	}
+
+	/**
+	 * Whether `batch` is still the live generation, failed or not: a failure
+	 * report for it may still go to the core.
+	 */
+	isCurrent(batch: ProfileWriteBatch): boolean {
+		return batch.generation === this.#current;
+	}
+
+	/**
+	 * Supersede every open batch without starting a new one. For a wasm core
+	 * rebuilt after a panic (`CoreRecoveryWatch`): the fresh core runs
+	 * no upload and numbers its uploads from 1 again, so an old batch's id
+	 * could name the fresh core's first upload (round-3 clean check C2 P3-1).
+	 * Its queued writes, acks and failure report are dropped instead.
+	 */
+	supersede(): void {
+		this.#current += 1;
+		this.#currentUploadId = null;
 	}
 
 	/**

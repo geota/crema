@@ -61,8 +61,11 @@ impl CremaCore {
                 }
                 // Activity re-arms steam eco and lifts it (de1app
                 // `delay_screen_saver`). On the core's own clock: `now_ms` is
-                // the idle-sleep clock, which is wall time on the web.
-                if !self.firmware_locks_writes() {
+                // the idle-sleep clock, which is wall time on the web. Not on
+                // a read-only mirror: its ShotSettings write is stripped, so
+                // lifting eco here would show normal steam while the machine,
+                // driven by the primary, stays in eco (C3 #4).
+                if !self.read_only && !self.firmware_locks_writes() {
                     let now = self.clock;
                     for event in self.steam.on_activity(now) {
                         self.map_steam_event(event, &mut out);

@@ -571,35 +571,28 @@ class De1BleManager(
         // the passive [livenessLoop] holds off its active probe read (#65).
         lastInboundMs = tMs
         recorder.recordInbound(source, notification.data, tMs)
-        feedCore(source, notification.data, tMs, "DE1 ${source.name}")
-    }
-
-    /**
-     * Hand [bytes] to the core under [source] and forward the `CoreOutput` JSON.
-     * The FFI call can throw — a UniFFI-rethrown Rust panic from anywhere in the
-     * core would otherwise escape this flow collector uncaught and crash the
-     * process. Catch it, log the offending bytes ([what] names the stream; the
-     * Rust panic hook has already written file:line to the diagnostics log), and
-     * drop just this one notification so the stream survives a single bad packet.
-     */
-    private fun feedCore(source: NotificationSource, bytes: ByteArray, tMs: Long, what: String) {
-        // Guard decode AND the onCoreOutput forward together: a failure in either
-        // skips only THIS notification — feedCore returns normally, so the onEach
-        // collector continues with the NEXT packet. It is not a permanent stop.
-        runCatching {
-            onCoreOutput(bridge.onNotification(source, bytes, tMs.toULong()))
-        }.onFailure {
-            Log.e(TAG, "$what failed — skipping this notification (${Hex.encode(bytes)})", it)
-            onStatus("$what error — skipped (see diagnostics)")
+        feedCore(notification.data, "DE1 ${source.name}", "notification") {
+            bridge.onNotification(source, notification.data, tMs.toULong())
         }
     }
 
-    /** [feedCore] for a profile write's synthesized ack, named by its upload. */
-    private fun feedAck(source: NotificationSource, bytes: ByteArray, tMs: Long, uploadId: UInt, what: String) {
+    /**
+     * Run one core [call] on [bytes] and forward its `CoreOutput` JSON. The FFI
+     * call can throw — a UniFFI-rethrown Rust panic from anywhere in the core
+     * would otherwise escape this flow collector uncaught and crash the process.
+     * Catch it, log the offending bytes ([what] names the stream, [item] the kind
+     * of input; the Rust panic hook has already written file:line to the
+     * diagnostics log), and drop just this one input so the stream survives a
+     * single bad packet. Notifications and synthesized profile acks share it.
+     */
+    private inline fun feedCore(bytes: ByteArray, what: String, item: String, call: () -> String) {
+        // Guard decode AND the onCoreOutput forward together: a failure in either
+        // skips only THIS input — feedCore returns normally, so the onEach
+        // collector continues with the NEXT packet. It is not a permanent stop.
         runCatching {
-            onCoreOutput(bridge.onProfileWriteAck(source, bytes, tMs.toULong(), uploadId))
+            onCoreOutput(call())
         }.onFailure {
-            Log.e(TAG, "$what failed — skipping this ack (${Hex.encode(bytes)})", it)
+            Log.e(TAG, "$what failed — skipping this $item (${Hex.encode(bytes)})", it)
             onStatus("$what error — skipped (see diagnostics)")
         }
     }
@@ -776,7 +769,8 @@ class De1BleManager(
         }
         profileWriteAckSource(target)?.let { source ->
             ackUploadId()?.let { uploadId ->
-                feedAck(source, bytes, SystemClock.elapsedRealtime(), uploadId, "DE1 $target ACK")
+                val tMs = SystemClock.elapsedRealtime().toULong()
+                feedCore(bytes, "DE1 $target ACK", "ack") { bridge.onProfileWriteAck(source, bytes, tMs, uploadId) }
             }
         }
         return true

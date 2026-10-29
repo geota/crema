@@ -385,6 +385,26 @@ class VisualizerEditSyncTest {
     }
 
     @Test
+    fun `a barista edit made before load keeps its mark and the stored sign-in (C3 #9)`() {
+        seed(premium = false)
+        val cleared = edited.copy(barista = null)
+        history[cleared.id] = cleared
+        // The clear lands right after launch, before load() has read the file.
+        val s = sync()
+        s.markBaristaEdited(cleared.id)
+        settle()
+        runBlocking { s.load() }
+        settle()
+        // The pull leaves the clear alone, and the mark is on disk next to
+        // the stored state (the early store did not overwrite it with defaults).
+        s.fillBarista(cleared.id, buildJsonObject { put("id", "v-1"); put("barista", "Ana") })
+        assertEquals(emptyList<Pair<String, String>>(), fills)
+        val stored = runBlocking { store.load() }
+        assertEquals(setOf(cleared.id), stored.baristaPending)
+        assertTrue("still signed in", stored.tokens != null)
+    }
+
+    @Test
     fun `erasing all data forgets pending barista edits`() {
         seed(premium = false)
         val s = sync().also { runBlocking { it.load() } }

@@ -198,13 +198,24 @@ class VisualizerSync(
         _state.update { it.copy(uploadingShotIds = it.uploadingShotIds - shotId) }
     }
 
-    /** Hydrate from disk at startup (called from the VM's init coroutine). */
+    /**
+     * Hydrate from disk at startup (called from the VM's init coroutine). A
+     * barista edit made before this finished keeps its pending mark, merged
+     * with the stored ones and stored here (round-3 clean check C3 #9).
+     */
     suspend fun load() {
-        persisted = store.load()
-        baristaPending.clear()
-        baristaPending += persisted.baristaPending
+        val unstored = persistMutex.withLock {
+            persisted = store.load()
+            loaded = true
+            baristaPending += persisted.baristaPending
+            baristaPending.any { it !in persisted.baristaPending }
+        }
         fold()
+        if (unstored) storeBaristaPending()
     }
+
+    /** [load] has read the file: until then a store would overwrite it with defaults. */
+    @Volatile private var loaded = false
 
     private fun fold() {
         val p = persisted
@@ -747,8 +758,13 @@ class VisualizerSync(
         if (baristaPending.add(localId)) scope.launch { storeBaristaPending() }
     }
 
-    /** Store the live pending set (read under the persist lock, so the last write wins with the latest set). */
+    /**
+     * Store the live pending set (read under the persist lock, so the last write
+     * wins with the latest set). Before [load], a no-op: [load] stores the marks
+     * made before it.
+     */
     private suspend fun storeBaristaPending() {
+        if (!loaded) return
         persist { it.copy(baristaPending = baristaPending.toSet()) }
     }
 

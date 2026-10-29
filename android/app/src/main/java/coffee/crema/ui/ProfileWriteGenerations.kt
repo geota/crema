@@ -58,6 +58,9 @@ internal class ProfileWriteGenerations {
         return Batch(current, currentUploadId)
     }
 
+    /** Whether [batch] has no upload id to name its acks and failure with. */
+    fun unnamed(batch: Batch?): Boolean = batch != null && batch.uploadId == null
+
     /** Whether a write of [batch] may go out (or be acked) now. */
     @Synchronized
     fun mayWrite(batch: Batch): Boolean = batch.generation == current && !batch.failed
@@ -73,6 +76,17 @@ internal class ProfileWriteGenerations {
         }
     }
 }
+
+/**
+ * Logged when a batch has no upload id ([ProfileWriteGenerations.unnamed]). Core
+ * pairs every header write with `ProfileUploadStarted` in the same output, so
+ * this marks a broken invariant. Such a batch's acks and failure are not fed to
+ * core: an id-less ack could count toward, or fail, the wrong upload (round-2
+ * V1 P3-1), so core's ack watchdog ends the upload instead (round-3 clean check
+ * C3 #3). Same line as web.
+ */
+internal const val UNNAMED_PROFILE_BATCH_LOG =
+    "Profile writes without an upload id: their acks are not fed to the core; the ack watchdog ends the upload"
 
 /** The `upload_id` of the upload an output's [events] start, or null. */
 internal fun startedUploadId(events: List<Event>): UInt? =
