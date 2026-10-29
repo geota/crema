@@ -163,10 +163,16 @@ class RelayHub(
         val seq = seqGen.incrementAndGet()
         // Keep the newest by seq: two overlapping calls for one characteristic
         // must not leave the older value cached for later attaches.
-        if (isSnapshotChar(service, char)) {
+        val snapshot = isSnapshotChar(service, char)
+        if (snapshot) {
             cache.merge(key, CachedNotify(seq, frame)) { old, new -> if (new.seq > old.seq) new else old }
         }
-        for (c in clients) if (c.approved && c.isAttached(address)) deliverNotify(c, key, seq, frame)
+        // Only snapshot chars race the attach burst; counted sample streams
+        // are never cached, so they skip the per-char guard (no map work per
+        // sample on the primary's notification path).
+        for (c in clients) if (c.approved && c.isAttached(address)) {
+            if (snapshot) deliverNotify(c, key, seq, frame) else deliver(c, frame)
+        }
     }
 
     /** A device's connection state changed: fan a [Frame.State] out to attached
@@ -219,7 +225,7 @@ class RelayHub(
      *  The peer prompts and, on accept, runs its normal pull back at us. Returns
      *  false if no such client is connected. */
     fun offerHandoff(clientId: String): Boolean {
-        val session = clients.firstOrNull { it.clientId == clientId } ?: return false
+        val session = clients.firstOrNull { it.clientId == clientId && !it.isClosed } ?: return false
         deliver(session, Frame.HandoffOffer(primaryName))
         return true
     }

@@ -234,4 +234,131 @@ class ProxySessionTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun `a Denied wakes a request parked for the next session and fails it at once`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val link = ScriptedSessionLink()
+            val proxy = ProxyTransport(link, scope, "phone-1", "Phone", requestTimeoutMs = 10_000)
+            link.start(1)
+            waitFor { link.hellos(1) == 1 }
+            link.receive(welcome())
+            delay(100) // welcomed
+            link.drop() // the request's send fails: it parks for the next session
+            val control = scope.async { proxy.control("tareScale") }
+            delay(100)
+            link.receive(Frame.Denied("revoked"))
+            val result = withTimeout(1_000) { control.await() }
+            assertTrue(result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("revoked"), "${result.exceptionOrNull()}")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `a request sent on a session that ends fails at once instead of timing out`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val link = ScriptedSessionLink()
+            val proxy = ProxyTransport(link, scope, "phone-1", "Phone", requestTimeoutMs = 10_000)
+            link.start(1)
+            waitFor { link.hellos(1) == 1 }
+            link.receive(welcome())
+            val control = scope.async { proxy.control("tareScale") }
+            waitFor { link.sent.any { it.second is Frame.Control } }
+            link.drop()
+            link.start(2) // the reply to session 1 can no longer arrive
+            val result = withTimeout(1_000) { control.await() }
+            assertTrue(result.isFailure, "failed at once, not after the 10 s timeout")
+            assertTrue(link.sent.count { it.second is Frame.Control } == 1, "not resent: a control may already have run")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `the first Hello reaches a real relay on a multi-threaded dispatcher`() = runBlocking {
+        val hub = RelayHub(
+            "p", "P", roster = { emptyList() }, readSource = { _, _, _ -> ByteArray(0) }, isSnapshotChar = { _, _ -> false },
+            controlHandler = { _, _, _, _ -> Result.success(Unit) },
+        )
+        val server = LanRelayServer(hub)
+        val port = server.start()
+        try {
+            repeat(20) {
+                val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+                try {
+                    val link = ReconnectingClientLink("ws://127.0.0.1:$port${LanRelayServer.PATH}", scope)
+                    val proxy = ProxyTransport(link, scope, "phone-$it", "Phone", requestTimeoutMs = 3_000)
+                    assertTrue(withTimeout(5_000) { proxy.control("tareScale") }.isSuccess, "connection $it")
+                    link.close()
+                } finally {
+                    scope.cancel()
+                }
+            }
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `stopping the relay while it starts leaves nothing listening`() = runBlocking {
+        val hub = RelayHub("p", "P", roster = { emptyList() }, readSource = { _, _, _ -> ByteArray(0) }, isSnapshotChar = { _, _ -> false })
+        val stoppedFirst = LanRelayServer(hub)
+        stoppedFirst.stop()
+        assertTrue(runCatching { stoppedFirst.start() }.isFailure, "a stopped relay doesn't start")
+        repeat(20) {
+            val port = java.net.ServerSocket(0).use { it.localPort }
+            val server = LanRelayServer(hub, requestedPort = port)
+            val starting = async(Dispatchers.Default) { runCatching { server.start() } }
+            server.stop() // a fast primary -> normal switch
+            starting.await()
+            val accepted = runCatching { java.net.Socket("127.0.0.1", port).close() }.isSuccess
+            assertTrue(!accepted, "no listener left on :$port (round $it)")
+        }
+    }
+
+    @Test
+    fun `a hand-off offer goes to the client's live session, not a closed one`() = runBlocking<Unit> {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val hub = RelayHub(
+                "p", "P", roster = { listOf(DeviceInfo(addr, "DE1", "de1", "CONNECTED")) },
+                readSource = { _, _, _ -> ByteArray(0) }, isSnapshotChar = { _, _ -> false }, clientCapacity = 4,
+            )
+            // Session 1: lag-dropped, its pump stuck, so it lingers closed in the list.
+            val (c1, s1end) = InMemoryFrameLink.pair()
+            val stuck = CompletableDeferred<Unit>()
+            var stall = false
+            val s1 = object : FrameLink {
+                override suspend fun send(frame: Frame) { if (stall) stuck.await(); s1end.send(frame) }
+                override fun incoming() = s1end.incoming()
+                override suspend fun close() = s1end.close()
+            }
+            scope.launch { hub.serve(s1) }
+            val rx1 = CopyOnWriteArrayList<Frame>()
+            scope.launch { c1.incoming().collect { rx1 += it } }
+            c1.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
+            c1.send(Frame.Attach(1L, addr))
+            waitFor { rx1.any { it is Frame.Attached } }
+            stall = true
+            repeat(20) { i -> hub.onInbound(addr, service, stateChar, byteArrayOf(i.toByte()), i.toLong()) }
+
+            // Session 2: the same client, redialed and live.
+            val (c2, s2) = InMemoryFrameLink.pair()
+            scope.launch { hub.serve(s2) }
+            val rx2 = CopyOnWriteArrayList<Frame>()
+            scope.launch { c2.incoming().collect { rx2 += it } }
+            c2.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
+            waitFor { rx2.any { it is Frame.Welcome } }
+
+            assertTrue(hub.offerHandoff("phone-1"))
+            waitFor { rx2.any { it is Frame.HandoffOffer } }
+            stuck.complete(Unit)
+        } finally {
+            scope.cancel()
+        }
+    }
 }

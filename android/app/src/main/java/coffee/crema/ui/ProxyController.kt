@@ -463,8 +463,10 @@ class ProxyController(
                     notify("Taking over the machine…")
                     onHandoffGranted() // keep the mirrored custom profile (issue 05)
                     // No wait here: the primary releases once our link closes,
-                    // which this switch does; the DE1 scan stays armed until the
-                    // machine advertises.
+                    // which this switch does. connect() is scan-based and the
+                    // scan has no timeout (ConnectionController.connect /
+                    // scanForDe1), so it binds only once the released DE1
+                    // advertises; there is no window to miss.
                     switchToPrimary()
                 }
                 .onFailure {
@@ -533,6 +535,8 @@ class ProxyController(
             // Re-check inside the lock: a peer approved while we queued is now known.
             val known = pairedDevices().firstOrNull { it.id == clientId }
             if (known != null) return@withLock PairingDecision.Allowed(known.canControl)
+            // ...and a peer denied while we queued is not asked again.
+            if (clientId in deniedWhileHosting) return@withLock PairingDecision.Denied("not authorized")
             val deferred = CompletableDeferred<PairingChoice>()
             pairingDeferred = deferred
             _state.update { it.copy(pendingPairing = PairingPrompt(clientId, clientName)) }

@@ -79,10 +79,12 @@ class ReconnectingClientLink(
                 val session = client.webSocketSession { url(this@ReconnectingClientLink.url) }
                 val link = KtorWsFrameLink(session, maxFrameBytes = PROXY_MAX_FRAME_BYTES)
                 epoch++
-                // The boundary goes into the stream before the session can be
-                // sent on, so the consumer sees it before any of its frames.
-                inbox.trySend(LinkEvent.SessionStarted(epoch))
+                // The session is live (sendOn works) BEFORE its boundary reaches
+                // the consumer, so a Hello sent on SessionStarted always finds
+                // it, whatever thread the consumer runs on. The boundary still
+                // precedes every frame of the session: those are pumped below.
                 live = Session(epoch, link)
+                inbox.trySend(LinkEvent.SessionStarted(epoch))
                 attempt = 0
                 _state.value = LinkState.CONNECTED
                 Log.i(TAG, "Connected to primary at $url (session $epoch)")

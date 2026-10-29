@@ -32,11 +32,14 @@ class LanRelayServer(
     private val pingPeriodMs: Long = PING_PERIOD_MS,
     private val pingTimeoutMs: Long = PING_TIMEOUT_MS,
 ) {
+    private val lock = Any()
     private var server: EmbeddedServer<*, *>? = null
+    private var stopped = false
 
     /** Start listening and return the bound port. Suspends until the connector is
      *  resolved (the socket is accepting), so a caller can advertise the port
-     *  immediately after this returns. */
+     *  immediately after this returns. Throws if [stop] ran first or while
+     *  starting; nothing is left listening then. */
     suspend fun start(): Int {
         val s = embeddedServer(CIO, port = requestedPort) {
             install(WebSockets) {
@@ -56,17 +59,28 @@ class LanRelayServer(
                 }
             }
         }
+        synchronized(lock) { check(!stopped) { "relay stopped before it started" } }
         s.start(wait = false)
-        server = s
+        // A stop() that ran while this was starting saw no server to stop:
+        // stop the one just started rather than leave it listening.
+        val keep = synchronized(lock) { if (stopped) false else { server = s; true } }
+        if (!keep) {
+            s.stop(gracePeriodMillis = 0, timeoutMillis = STOP_TIMEOUT_MS)
+            error("relay stopped while starting")
+        }
         val port = s.engine.resolvedConnectors().first().port
         Log.i(TAG, "LAN relay listening on :$port$path")
         return port
     }
 
-    /** Stop the server and drop all connections. Idempotent. */
+    /** Stop the server and drop all connections — including a start that is
+     *  still in flight. Idempotent; a stopped server can't be started again. */
     fun stop() {
-        server?.stop(gracePeriodMillis = 0, timeoutMillis = STOP_TIMEOUT_MS)
-        server = null
+        val s = synchronized(lock) {
+            stopped = true
+            server.also { server = null }
+        }
+        s?.stop(gracePeriodMillis = 0, timeoutMillis = STOP_TIMEOUT_MS)
     }
 
     companion object {

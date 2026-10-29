@@ -122,6 +122,19 @@ class ProxyControllerModeTest {
     }
 
     @Test
+    fun `a second connection queued behind a denied prompt is not prompted again`() {
+        val first = scope.async { controller.authorizePeer("id-1", "Phone") }
+        val second = scope.async { controller.authorizePeer("id-1", "Phone") }
+        scheduler.runCurrent()
+        assertEquals(PairingPrompt("id-1", "Phone"), controller.state.value.pendingPairing)
+        controller.resolvePairing(PairingChoice.DENY)
+        scheduler.runCurrent()
+        assertEquals(PairingDecision.Denied("not authorized"), first.getCompleted())
+        assertEquals(PairingDecision.Denied("not authorized"), second.getCompleted())
+        assertNull(controller.state.value.pendingPairing, "the queued connection got no prompt")
+    }
+
+    @Test
     fun `a denial is remembered while hosting`() {
         val first = scope.async { controller.authorizePeer("id-1", "Phone") }
         scheduler.runCurrent()

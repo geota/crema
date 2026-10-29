@@ -8,6 +8,7 @@ import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -59,6 +60,8 @@ class PeerDiscovery(
     private val scope: CoroutineScope,
     /** This install's stable id — advertised, and used to filter ourselves out. */
     private val selfId: String,
+    /** Resolves one discovered service; tests pass a fake. */
+    resolver: (suspend (NsdServiceInfo) -> NsdResolveOutcome<NsdServiceInfo>)? = null,
 ) {
     private val nsd = context.applicationContext.getSystemService(Context.NSD_SERVICE) as NsdManager
 
@@ -68,6 +71,15 @@ class PeerDiscovery(
     /** Resolved peers, keyed by NSD service name. */
     private val found = ConcurrentHashMap<String, Peer>()
     private val resolveLock = Mutex()
+
+    private val resolveOne: suspend (NsdServiceInfo) -> NsdResolveOutcome<NsdServiceInfo> = resolver ?: { resolve(it) }
+
+    /** Service names currently on the network (found and not lost): a resolve
+     *  that finishes, or a retry that fires, for anything else is dropped. */
+    private val wanted: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** Pending resolve retries, by service name. */
+    private val retries = ConcurrentHashMap<String, Job>()
 
     private var registration: NsdManager.RegistrationListener? = null
     private var discovery: NsdManager.DiscoveryListener? = null
@@ -110,8 +122,8 @@ class PeerDiscovery(
             override fun onDiscoveryStopped(t: String) {}
             override fun onStartDiscoveryFailed(t: String, code: Int) { Log.w(TAG, "discovery start failed: $code") }
             override fun onStopDiscoveryFailed(t: String, code: Int) {}
-            override fun onServiceFound(info: NsdServiceInfo) { scope.launch { resolveAndAdd(info) } }
-            override fun onServiceLost(info: NsdServiceInfo) { found.remove(info.serviceName)?.let { publish() } }
+            override fun onServiceFound(info: NsdServiceInfo) = onFound(info)
+            override fun onServiceLost(info: NsdServiceInfo) = onLost(info)
         }
         discovery = listener
         runCatching { nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener) }
@@ -121,6 +133,20 @@ class PeerDiscovery(
     fun stopDiscovery() {
         discovery?.let { l -> runCatching { nsd.stopServiceDiscovery(l) } }
         discovery = null
+        wanted.clear()
+        retries.values.forEach { it.cancel() }
+        retries.clear()
+    }
+
+    internal fun onFound(info: NsdServiceInfo) {
+        wanted += info.serviceName
+        scope.launch { resolveAndAdd(info) }
+    }
+
+    internal fun onLost(info: NsdServiceInfo) {
+        wanted -= info.serviceName
+        retries.remove(info.serviceName)?.cancel()
+        found.remove(info.serviceName)?.let { publish() }
     }
 
     fun close() {
@@ -135,21 +161,25 @@ class PeerDiscovery(
      *  after a pause, a few times, so one stuck resolve can't hide a peer for
      *  good. */
     private suspend fun resolveAndAdd(info: NsdServiceInfo, attempt: Int = 1) {
-        val outcome = resolveLock.withLock { resolve(info) }
+        val name = info.serviceName
+        if (name !in wanted) return
+        val outcome = resolveLock.withLock { resolveOne(info) }
         val resolved = when (outcome) {
             is NsdResolveOutcome.Resolved -> outcome.value
             else -> {
                 if (shouldRetryNsdResolve(outcome, attempt, Build.VERSION.SDK_INT)) {
                     Log.i(TAG, "resolve of ${info.serviceName} didn't run ($outcome); retrying")
-                    scope.launch {
+                    retries[name] = scope.launch {
                         delay(NSD_RESOLVE_RETRY_MS * attempt)
+                        retries.remove(name)
                         resolveAndAdd(info, attempt + 1)
                     }
                 }
                 return
             }
         }
-        addResolved(resolved)
+        // The peer may have left (or discovery stopped) while this resolved.
+        if (name in wanted) addResolved(resolved)
     }
 
     private fun addResolved(resolved: NsdServiceInfo) {
@@ -201,7 +231,7 @@ class PeerDiscovery(
 internal const val NSD_RESOLVE_TIMEOUT_MS = 5_000L
 
 /** How one NSD resolve ended. */
-internal sealed class NsdResolveOutcome<out T> {
+sealed class NsdResolveOutcome<out T> {
     data class Resolved<T>(val value: T) : NsdResolveOutcome<T>()
     /** NSD reported a failure ([code] is an `NsdManager.FAILURE_*`), or the call threw (-1). */
     data class Failed(val code: Int) : NsdResolveOutcome<Nothing>()

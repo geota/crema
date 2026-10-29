@@ -94,7 +94,22 @@ class ProxyTransport(
     private val connStates = ConcurrentHashMap<String, MutableStateFlow<BleTransport.ConnState>>()
 
     /** In-flight requests (attach/detach/read/write) awaiting a correlated reply. */
-    private val pending = ConcurrentHashMap<Long, CompletableDeferred<Frame>>()
+    private val pending = ConcurrentHashMap<Long, Sent>()
+
+    /** A request on the wire: the session [epoch] it went out on, and its reply. */
+    private class Sent(val epoch: Long, val reply: CompletableDeferred<Frame> = CompletableDeferred())
+
+    /** Fail every request sent on a session older than [epoch] (all of them
+     *  when null): its reply can no longer arrive. Not resent — a control may
+     *  already have run. */
+    private fun failSupersededRequests(epoch: Long?) {
+        for ((id, sent) in pending) {
+            if (epoch == null || sent.epoch < epoch) {
+                pending.remove(id)
+                sent.reply.completeExceptionally(IllegalStateException("Proxy session ended before a reply"))
+            }
+        }
+    }
 
     /** Addresses the managers have attached, so a reconnect can re-attach them all. */
     private val attached = ConcurrentHashMap.newKeySet<String>()
@@ -130,6 +145,7 @@ class ProxyTransport(
                 // A terminal refusal sticks: the link is closed, nothing redials.
                 if (handshake.value is Handshake.Refused) return
                 handshake.value = Handshake.Pending(event.epoch)
+                failSupersededRequests(event.epoch)
                 // Exactly one Hello per session, on that session only.
                 scope.launch {
                     runCatching { link.sendOn(event.epoch, Frame.Hello(PROXY_PROTOCOL_VERSION, ROLE_SECONDARY, clientId, clientName)) }
@@ -144,6 +160,7 @@ class ProxyTransport(
      *  the same refusal. */
     private fun refuse(reason: String, error: Throwable) {
         handshake.value = Handshake.Refused(handshake.value.epoch, error)
+        failSupersededRequests(null)
         onDenied(reason)
         scope.launch { runCatching { link.close() } }
     }
@@ -187,15 +204,15 @@ class ProxyTransport(
             is Frame.Roster -> applyRoster(frame.devices)
             is Frame.Attached -> {
                 stateFlow(frame.address).value = parseState(frame.state)
-                pending.remove(frame.id)?.complete(frame)
+                pending.remove(frame.id)?.reply?.complete(frame)
             }
-            is Frame.Detached -> pending.remove(frame.id)?.complete(frame)
-            is Frame.ReadOk -> pending.remove(frame.id)?.complete(frame)
-            is Frame.ReadErr -> pending.remove(frame.id)?.complete(frame)
-            is Frame.WriteOk -> pending.remove(frame.id)?.complete(frame)
-            is Frame.WriteErr -> pending.remove(frame.id)?.complete(frame)
-            is Frame.ControlOk -> pending.remove(frame.id)?.complete(frame)
-            is Frame.ControlErr -> pending.remove(frame.id)?.complete(frame)
+            is Frame.Detached -> pending.remove(frame.id)?.reply?.complete(frame)
+            is Frame.ReadOk -> pending.remove(frame.id)?.reply?.complete(frame)
+            is Frame.ReadErr -> pending.remove(frame.id)?.reply?.complete(frame)
+            is Frame.WriteOk -> pending.remove(frame.id)?.reply?.complete(frame)
+            is Frame.WriteErr -> pending.remove(frame.id)?.reply?.complete(frame)
+            is Frame.ControlOk -> pending.remove(frame.id)?.reply?.complete(frame)
+            is Frame.ControlErr -> pending.remove(frame.id)?.reply?.complete(frame)
             is Frame.Notify -> channelFor(frame.address, frame.char).trySend(frame)
             is Frame.State -> stateFlow(frame.address).value = parseState(frame.state)
             is Frame.Config -> onConfig(frame.json)
@@ -322,8 +339,6 @@ class ProxyTransport(
     // ---- Internals --------------------------------------------------------
 
     private suspend fun request(id: Long, build: () -> Frame): Frame {
-        val deferred = CompletableDeferred<Frame>()
-        pending[id] = deferred
         return try {
             // The send is inside the timeout too: ReconnectingClientLink.send()
             // SUSPENDS until the link is back, so on a dead/mid-reconnect link an
@@ -333,16 +348,21 @@ class ProxyTransport(
             // apply can be rolled back and surfaced.
             // The handshake wait is inside the timeout too: a request goes out
             // only on a welcomed session, and only on that one. If the session
-            // ends before the send, wait for the next session's Welcome.
+            // ends before the send, wait for the next session's Welcome (or
+            // fail at once on a refusal). Once sent, a new session or a refusal
+            // fails the request at once instead of letting it time out.
             withTimeout(requestTimeoutMs) {
                 val frame = build()
+                var sent: Sent
                 while (true) {
                     val settled = handshake.first { it !is Handshake.Pending }
                     if (settled is Handshake.Refused) throw settled.error
+                    sent = Sent(settled.epoch).also { pending[id] = it }
                     if (link.sendOn(settled.epoch, frame)) break
-                    handshake.first { it.epoch != settled.epoch }
+                    pending.remove(id)
+                    handshake.first { it.epoch != settled.epoch || it is Handshake.Refused }
                 }
-                deferred.await()
+                sent.reply.await()
             }
         } finally {
             pending.remove(id)
