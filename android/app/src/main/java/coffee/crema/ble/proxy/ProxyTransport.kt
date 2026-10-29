@@ -97,7 +97,8 @@ class ProxyTransport(
     private val onHostConfirmed: (primaryId: String) -> Unit = {},
     /** Whether the user picked this target just now: only then may the session
      *  ask to pair (a new host, or one that can't prove the secret this device
-     *  holds). An unattended session (restored target, automatic re-mirror)
+     *  holds), and only until a handshake completes; later sessions (redials)
+     *  are unattended. An unattended session (restored target, automatic re-mirror)
      *  connects only to a host that proves a secret this device already holds,
      *  and refuses anything else. Production passes it per session; the default
      *  serves the loopback and tests. */
@@ -155,6 +156,12 @@ class ProxyTransport(
     /** Whether a session has been welcomed before (a later Welcome re-attaches). */
     @Volatile
     private var welcomedBefore = false
+
+    /** Whether this session may still ask to pair: the user's pick
+     *  ([allowRepair]) covers only the first completed handshake. Every later
+     *  session on this transport (an automatic redial) is unattended. */
+    @Volatile
+    private var repairAllowed = allowRepair
 
     /** What this device did in one session's pairing handshake: the nonce its
      *  Hello carried, the host id of the Challenge it answered, and whether its
@@ -262,6 +269,8 @@ class ProxyTransport(
                         }
                     }
                     onHostConfirmed(challengedBy)
+                    // The user's consent was for this handshake only.
+                    repairAllowed = false
                     applyRoster(frame.roster)
                     onWelcome(frame.scope)
                     handshake.value = Handshake.Welcomed(state.epoch)
@@ -292,7 +301,7 @@ class ProxyTransport(
                 val proof = if (held != null && hostProved) {
                     runCatching { PairingCrypto.clientProof(held, frame.primaryId, clientId, current.clientNonce, frame.nonce) }.getOrNull()
                 } else {
-                    if (!allowRepair) {
+                    if (!repairAllowed) {
                         Log.w(TAG, "Host ${frame.primaryName} isn't one this device can verify, and the user didn't pick it — refusing")
                         refuse(DenyReason.HOST_UNVERIFIED, IllegalStateException("Proxy host refused: ${DenyReason.HOST_UNVERIFIED}"))
                         return

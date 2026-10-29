@@ -55,6 +55,7 @@ class ProxyHandshakeTest {
 
     private fun hub(
         relayed: MutableList<String>,
+        pairingSecretFor: (String) -> String? = { null },
         authorize: suspend (PairingRequest) -> PairingDecision = { PairingDecision.Allowed(true) },
     ) = RelayHub(
         primaryId = "p",
@@ -64,6 +65,7 @@ class ProxyHandshakeTest {
         isSnapshotChar = { _, c -> c == stateChar },
         controlHandler = { method, _, _, _ -> relayed += method; Result.success(Unit) },
         authorize = authorize,
+        pairingSecretFor = pairingSecretFor,
     )
 
     @Test
@@ -189,17 +191,29 @@ class ProxyHandshakeTest {
         val port = ServerSocket(0).use { it.localPort }
         val relayed = CopyOnWriteArrayList<String>()
         val hellos = AtomicInteger(0)
-        // The second session's approval is slow, so its Welcome comes well after
-        // the socket is back: anything sent on CONNECTED alone would be early.
-        val h = hub(relayed) {
+        // A real host: it pairs the device on first contact and proves the
+        // secret on the redial. The second session's approval is slow, so its
+        // Welcome comes well after the socket is back: anything sent on
+        // CONNECTED alone would be early.
+        val issued = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val held = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val h = hub(relayed, pairingSecretFor = { issued[it] }) { req ->
             if (hellos.incrementAndGet() > 1) delay(300)
-            PairingDecision.Allowed(true)
+            val known = issued[req.clientId]
+            if (known != null && req.proves(known)) {
+                PairingDecision.Allowed(true)
+            } else {
+                PairingDecision.Allowed(true, PairingCrypto.newSecret().also { issued[req.clientId] = it })
+            }
         }
         var server = LanRelayServer(h, requestedPort = port)
         server.start()
         try {
             val link = ReconnectingClientLink("ws://127.0.0.1:$port${LanRelayServer.PATH}", scope)
-            val proxy = ProxyTransport(link, scope, "phone-1", "Phone", requestTimeoutMs = 4_000)
+            val proxy = ProxyTransport(
+                link, scope, "phone-1", "Phone", requestTimeoutMs = 4_000,
+                pairingSecretFor = { held[it] }, onPaired = { id, _, secret -> held[id] = secret },
+            )
             assertTrue(withTimeout(5_000) { proxy.control("tareScale") }.isSuccess)
 
             server.stop()
