@@ -6,10 +6,10 @@ package coffee.crema.ui
  * `Frame.Control(id = 1, method, args)` as encoded; [send] is the
  * [MainViewModel] call that produces it on a secondary.
  *
- * The list is the characterisation of every verb in
- * [RelayedControlPolicy.VERBS] (every machine state the UI requests, and both
- * shapes where an argument is optional), shared by the codec test
- * ([ControlVerbGoldenTest]), the secondary's sender test
+ * The list is the characterisation of every method in
+ * [coffee.crema.machine.MachineCommandCodec.METHODS] (every machine state the
+ * UI requests, and both shapes where an argument is optional), shared by the
+ * codec test ([ControlVerbGoldenTest]), the secondary's sender test
  * ([RelayedVerbSecondaryWireTest]) and the primary's dispatcher test
  * ([RelayedVerbPrimaryDispatchTest]).
  */
@@ -25,7 +25,7 @@ internal data class RelayedVerbSample(
 internal const val SAMPLE_PROFILE_ID = "019e5fb5-63b5-7333-a2ac-34b9f4f0e604"
 
 internal val RELAYED_VERB_SAMPLES: List<RelayedVerbSample> = listOf(
-    // Authority-first machine control (ProxyController.relayIfSecondary).
+    // Machine control (MachineCommand.Control): forwarded, nothing applied locally.
     RelayedVerbSample("machineState.SLEEP", "machineState", "SLEEP") { it.sleep() },
     RelayedVerbSample("machineState.IDLE", "machineState", "IDLE") { it.stopShot() },
     RelayedVerbSample("machineState.ESPRESSO", "machineState", "ESPRESSO") { it.startEspresso() },
@@ -38,9 +38,9 @@ internal val RELAYED_VERB_SAMPLES: List<RelayedVerbSample> = listOf(
     RelayedVerbSample("startShot", "startShot", "") { it.startShot() },
     RelayedVerbSample("cancelMaintenance", "cancelMaintenance", "") { it.cancelMaintenance() },
     RelayedVerbSample("tareScale", "tareScale", "") { it.tareScale() },
-    // Sent by ProxyController.requestHandoff; granted by the controller, not the VM router.
+    // Sent by ProxyController.requestHandoff; granted by the controller's handoff release.
     RelayedVerbSample("handoff", "handoff", "") { it.requestHandoff() },
-    // Optimistic config (ProxyController.relayConfigOptimistic): applied locally, reverted on failure.
+    // Session config (MachineCommand.Config): applied locally, reverted on refusal.
     RelayedVerbSample("setActiveProfile", "setActiveProfile", SAMPLE_PROFILE_ID) { it.setActiveProfile(SAMPLE_PROFILE_ID) },
     RelayedVerbSample("setActiveBean", "setActiveBean", "bean-1") { it.setActiveBean("bean-1") },
     RelayedVerbSample("setActiveBean.none", "setActiveBean", "") { it.setActiveBean(null) },

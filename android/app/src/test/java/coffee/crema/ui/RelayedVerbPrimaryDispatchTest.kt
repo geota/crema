@@ -28,16 +28,15 @@ import kotlin.test.assertTrue
 /**
  * The primary's half of the relayed-verb wire: a real [MainViewModel] built in
  * the persisted primary role, its own [RelayHub] (the one ProxyController
- * built), its pairing prompt, the [RelayedControlPolicy] allowlist and the
- * VM's relay router, fed each golden `control` text over an in-memory codec
- * link. Every fixture must be accepted (`ControlOk`; `handoff` is refused
- * without a connected, idle DE1), and every config verb must land in the
- * primary's UI state. That pins the dispatcher side of the
- * wire before the typed-command seam replaces the string router.
+ * built), its pairing prompt, the machine command codec and the VM's verb
+ * bodies, fed each golden `control` text over an in-memory codec link. Every
+ * fixture must be answered as expected (`ControlOk`, or a `ControlErr` with
+ * the primary's reason), and every accepted config verb must land in the
+ * primary's UI state. That pins the dispatcher side of the wire.
  *
  * Everything runs on the Robolectric main looper, so the test is
  * deterministic: no socket, no sleeps. (In production the hub runs on the
- * relay server's threads; the seam moves dispatch onto Main.)
+ * relay server's threads.)
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
@@ -58,8 +57,7 @@ class RelayedVerbPrimaryDispatchTest {
         "setActiveProfile" to Effect(prime = { vm -> vm.setActiveProfile(vm.ui.value.profiles.first { it.id != SAMPLE_PROFILE_ID }.id) }) {
             it.activeProfileId == SAMPLE_PROFILE_ID
         },
-        // Not in this primary's library: today any well-formed id is taken as
-        // is (the seam's reference validation would refuse it instead).
+        // Not in this primary's library: any well-formed id is taken as is.
         "setActiveBean" to Effect { it.activeBeanId == "bean-1" },
         "setActiveBean.none" to Effect(prime = { it.setActiveBean("bean-2") }) { it.activeBeanId == null },
         "setStopOnWeight" to Effect(prime = { it.setStopOnWeight(false) }) { it.stopOnWeight },
@@ -146,5 +144,14 @@ class RelayedVerbPrimaryDispatchTest {
             }
             if (effect != null) assertTrue(effect.applied(vm.ui.value), "${sample.fixture} did not reach the primary's state")
         }
+    }
+
+    /** An accepted start is announced to this primary's user. */
+    @Test
+    fun `an accepted start is announced`() {
+        vm.setRequireScale(false)
+        VmHarness.idle()
+        assertEquals(Frame.ControlOk(1), relay(Golden.require("control/startShot.json")))
+        assertTrue(vm.ui.value.userMessages.any { it == "Phone started a shot" }, "${vm.ui.value.userMessages}")
     }
 }

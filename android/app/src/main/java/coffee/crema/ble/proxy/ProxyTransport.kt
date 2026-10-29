@@ -2,6 +2,7 @@ package coffee.crema.ble.proxy
 
 import android.util.Log
 import coffee.crema.ble.BleTransport
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
@@ -17,11 +18,25 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.transform
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+
+/** How a relayed control ended, as far as the secondary can tell. */
+sealed interface ControlReply {
+    /** The primary accepted it ([Frame.ControlOk]). */
+    data object Ok : ControlReply
+
+    /** The primary refused it ([Frame.ControlErr]), with its reason. */
+    data class Err(val reason: String) : ControlReply
+
+    /** No answer from the primary: a timeout, a dropped session, or this
+     *  device was refused. */
+    data class Failed(val detail: String) : ControlReply
+}
 
 /**
  * [BleTransport] implemented as a network client to a primary's [RelayHub] — the
@@ -441,18 +456,33 @@ class ProxyTransport(
      * core is a read-only mirror and cannot drive the machine). Suspends until
      * the primary acks dispatch via [Frame.ControlOk]; the action's *effect*
      * arrives asynchronously over [observe] as the primary's machine state. Not
-     * part of [BleTransport] — the VM calls it directly when relaying a tap on a
-     * secondary's Brew controls. Returns failure on [Frame.ControlErr]/timeout so
-     * the caller can surface it, never throwing into the UI thread.
+     * part of [BleTransport]. Returns failure on [Frame.ControlErr]/timeout,
+     * never throwing into the UI thread. [sendControl] says which failure.
      */
-    suspend fun control(method: String, args: String = ""): Result<Unit> {
+    suspend fun control(method: String, args: String = ""): Result<Unit> = when (val reply = sendControl(method, args)) {
+        ControlReply.Ok -> Result.success(Unit)
+        is ControlReply.Err -> Result.failure(IllegalStateException("control rejected: ${reply.reason}"))
+        is ControlReply.Failed -> Result.failure(IllegalStateException(reply.detail))
+    }
+
+    /**
+     * Relay a control and say how it ended: the primary's answer (with its
+     * reason when it refused), or no answer. Never resent.
+     */
+    suspend fun sendControl(method: String, args: String = ""): ControlReply {
         val id = nextId.getAndIncrement()
-        return runCatching {
+        return try {
             when (val reply = request(id) { Frame.Control(id, method, args) }) {
-                is Frame.ControlOk -> Unit
-                is Frame.ControlErr -> error("control rejected: ${reply.reason}")
-                else -> error("Unexpected reply to control: $reply")
+                is Frame.ControlOk -> ControlReply.Ok
+                is Frame.ControlErr -> ControlReply.Err(reply.reason)
+                else -> ControlReply.Failed("unexpected reply to control: $reply")
             }
+        } catch (e: TimeoutCancellationException) {
+            ControlReply.Failed(e.message ?: "no reply in time")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            ControlReply.Failed(e.message ?: e.toString())
         }
     }
 

@@ -111,7 +111,7 @@ class RelayedVerbSecondaryWireTest {
     }
 
     /** A config verb is applied on the secondary at once, then reverted when
-     *  the primary refuses it (ProxyController.relayConfigOptimistic). */
+     *  the primary refuses it (RelayMachine's config policy). */
     @Test
     fun `a refused config verb is reverted on the secondary`() {
         refused += "setQcGrind"
