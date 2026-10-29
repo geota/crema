@@ -990,6 +990,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val coreDispatcher = kotlinx.coroutines.Dispatchers.Default.limitedParallelism(1)
 
+    /** Run [block] on the core lane, FIFO behind any queued event application.
+     *  Every write to lane-owned state (the upload-skip cache, [pendingBrew],
+     *  [waterLowWarned], [maintenanceTotalLitres]) goes through here or runs
+     *  on the lane already: a plain Main-thread write is not ordered against a
+     *  queued lane task (cohort review 2026-10-25, Android P2-3). */
+    private fun onCoreLane(block: () -> Unit) {
+        viewModelScope.launch(coreDispatcher) { block() }
+    }
+
     private val _ui = MutableStateFlow(MainUiState())
 
     /**
@@ -1251,7 +1260,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         applyRestoredSettings = { applyRestoredSettings(it) },
         applyRestoredMaintenance = { m ->
             // Reseed the live water integrator + persist (maintenance is VM-owned).
-            maintenanceTotalLitres = m.totalLitres
+            onCoreLane { maintenanceTotalLitres = m.totalLitres }
             saveMaintenance(m)
         },
         persistSawModel = {
@@ -2202,7 +2211,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // the next shot re-uploads (issue 11). Without this, a skip after a
         // reconnect would brew against a stale/absent profile.
         onDe1Dropped = {
-            lastUploadedFingerprint = null
+            // On the lane: a ProfileUploadCompleted still queued there would
+            // otherwise re-commit the fingerprint AFTER this clear.
+            onCoreLane { lastUploadedFingerprint = null }
             de1SetupDone = false
             sweepRunner.onDropped()
             idleSleep.link(false)
@@ -3256,9 +3267,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  values. Wired as [ConnectionController]'s onDe1SessionClosed. */
     private fun clearDe1SessionUi() {
         machineInfoJob?.cancel() // stop any in-flight connect-time register sweep
-        pendingBrew = false
-        // Next connection's first low-water report warns afresh (#33).
-        waterLowWarned = false
+        onCoreLane {
+            pendingBrew = false
+            // Next connection's first low-water report warns afresh (#33).
+            waterLowWarned = false
+        }
         _ui.update { it.copy(
             machineState = null,
             machineStateName = null,
@@ -4245,7 +4258,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setWaterWarnMl(ml: Float) {
         _ui.update { it.copy(waterWarnMl = ml) }
         persistPrefs()
-        waterLowWarned = false
+        onCoreLane { waterLowWarned = false }
     }
 
     /** The machine's own refill threshold, raw sensor mm (geota/crema#47).
@@ -4362,7 +4375,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Load the persisted maintenance state, seed the live total, compute the readout. */
     private suspend fun loadMaintenance() {
         val state = maintenanceStore.load()
-        maintenanceTotalLitres = state.totalLitres
+        onCoreLane { maintenanceTotalLitres = state.totalLitres }
         _ui.update { it.copy(
             maintenance = state,
             maintenanceReadout = computeMaintenanceReadout(state),
@@ -4425,7 +4438,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * total and stamp `filterAtMs` (the web store's `markFilterCleaned`). Persists
      * + recomputes the readout.
      */
-    fun markFilterCleaned() {
+    fun markFilterCleaned() = onCoreLane {
         val next = _ui.value.maintenance.copy(
             totalLitres = maintenanceTotalLitres,
             filterBaselineLitres = maintenanceTotalLitres,
@@ -4439,7 +4452,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * total and stamp `descaleAtMs` (the web store's `markDescaled`). Persists +
      * recomputes the readout.
      */
-    fun markDescaled() {
+    fun markDescaled() = onCoreLane {
         val next = _ui.value.maintenance.copy(
             totalLitres = maintenanceTotalLitres,
             descaleBaselineLitres = maintenanceTotalLitres,
@@ -4452,7 +4465,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * Mark a clean cycle done — reset its hour counter by stamping `cleanAtMs`
      * (the web store's `markCleaned`). Persists + recomputes the readout.
      */
-    fun markCleaned() {
+    fun markCleaned() = onCoreLane {
         val next = _ui.value.maintenance.copy(
             totalLitres = maintenanceTotalLitres,
             cleanAtMs = System.currentTimeMillis(),
@@ -5043,8 +5056,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Reset the maintenance counters too — a fresh-install state (baselines and
         // total zeroed, the three *AtMs = now so the readouts read "0 since").
         val freshMaintenance = defaultMaintenanceState(System.currentTimeMillis())
-        maintenanceTotalLitres = 0.0
-        lastTelemetryMs = null
+        onCoreLane {
+            maintenanceTotalLitres = 0.0
+            lastTelemetryMs = null
+        }
         viewModelScope.launch {
             settingsStore.save(AppPrefs())
             maintenanceStore.save(freshMaintenance)
