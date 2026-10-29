@@ -66,6 +66,8 @@ class HubRestartReattachTest {
         VmHarness.persistRole("secondary", "127.0.0.1", first.port)
         vm = VmHarness.build(store)
         VmHarness.idle()
+        // The role and target reach the UI with the prefs load.
+        VmHarness.awaitPrefsLoaded(vm)
         val proxy = VmHarness.proxyController(vm)
         val peers = MutableStateFlow<List<Peer>>(emptyList())
         proxy.overridePeers(peers)

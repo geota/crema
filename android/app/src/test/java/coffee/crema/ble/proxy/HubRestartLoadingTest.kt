@@ -81,6 +81,8 @@ class HubRestartLoadingTest {
         VmHarness.persistRole("secondary", "127.0.0.1", port)
         val vm = VmHarness.build(store)
         VmHarness.idle()
+        // The role and target reach the UI with the prefs load.
+        VmHarness.awaitPrefsLoaded(vm)
         return vm
     }
 

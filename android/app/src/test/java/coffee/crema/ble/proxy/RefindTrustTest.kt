@@ -71,6 +71,8 @@ class RefindTrustTest {
         VmHarness.persistRole("secondary", "127.0.0.1", 1)
         val vm = VmHarness.build(store)
         VmHarness.idle()
+        // The role and target reach the UI with the prefs load.
+        VmHarness.awaitPrefsLoaded(vm)
         val proxy = VmHarness.proxyController(vm)
         proxy.overridePeers(
             MutableStateFlow(listOf(Peer("nsd-impostor", "Kitchen tablet", "primary", holdsDe1 = true, host = "127.0.0.1", port = impostor.port))),
@@ -98,6 +100,8 @@ class RefindTrustTest {
         pairingFile.writeText("""{"hostId":"this-device","held":{"host-1":"$secret"}}""")
         val vm = VmHarness.build(store)
         VmHarness.idle()
+        // The role and target reach the UI with the prefs load.
+        VmHarness.awaitPrefsLoaded(vm)
         VmHarness.proxyController(vm).switchToSecondary("127.0.0.1", changed.port)
         advanceUntil("the forget prompt", maxMs = 10_000) { vm.ui.value.changedHost != null }
         assertEquals("host-1", vm.ui.value.changedHost?.first)
