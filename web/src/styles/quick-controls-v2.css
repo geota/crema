@@ -1143,6 +1143,8 @@
   display: flex; align-items: baseline; gap: 12px;
 }
 .qsheet-v2-title {
+  margin: 0;
+  font-weight: 400;
   font-family: var(--font-serif);
   font-size: 22px;
   letter-spacing: -0.01em;

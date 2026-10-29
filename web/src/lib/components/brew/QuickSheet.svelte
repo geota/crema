@@ -29,6 +29,7 @@
 	import WaterStepper from './WaterStepper.svelte';
 	import PreinfFlushStepper from './PreinfFlushStepper.svelte';
 	import { getSettingsStore, type Settings } from '#lib/settings/index.js';
+	import { restoreFocus, trapTab } from '#lib/a11y/focus.js';
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
@@ -148,22 +149,78 @@
 	} = $props();
 
 	const p = $derived(params.current);
+
+	/*
+	 * Dialog behaviour (cohort review 07 #2, #3). While closed the sheet and
+	 * its scrim are `inert`: out of the tab order and the accessibility tree,
+	 * so Tab can no longer land on an off-screen control and scroll the
+	 * dashboard. While open the panel is a modal dialog: focus moves into it,
+	 * Tab / Shift+Tab stay inside, Escape closes it, and focus returns to
+	 * whatever opened it (the Quick Controls pill).
+	 */
+	const titleId = $props.id();
+	let panelEl = $state<HTMLDivElement>();
+	let opener: Element | null = null;
+
+	$effect(() => {
+		if (!open) return;
+		opener = document.activeElement;
+		// The panel itself takes focus (not the first control): on a touch
+		// tablet focusing the search field would pop the soft keyboard, and
+		// the first header buttons are Save / Reset. Tab reaches them next.
+		panelEl?.focus({ preventScroll: true });
+		return () => {
+			const el = opener;
+			opener = null;
+			// Only take focus back if it is still inside the (now inert) sheet
+			// or was dropped to <body>; never steal it from where the user went.
+			const active = document.activeElement;
+			if (active == null || active === document.body || panelEl?.contains(active)) {
+				restoreFocus(el);
+			}
+		};
+	});
+
+	function onPanelKeydown(e: KeyboardEvent): void {
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			e.stopPropagation();
+			onClose();
+			return;
+		}
+		if (panelEl) trapTab(e, panelEl);
+	}
 </script>
 
 <!-- The scrim dims the dashboard behind the open sheet; tapping it — or the
      header's Close — dismisses the sheet. When closed both slide / fade away
      (the CSS base state) and the dashboard's QuickPill brings it back. -->
+<!-- The scrim is a pointer-only dismiss target: keyboard users close with
+     Escape or the header's Close, so it stays out of the tab order and the
+     accessibility tree (it would otherwise be a full-screen unlabeled stop). -->
 <button
 	type="button"
 	class="qsheet-scrim"
 	class:is-open={open}
-	aria-label="Close Quick Controls"
+	tabindex="-1"
+	aria-hidden="true"
+	inert={!open}
 	onclick={onClose}
 ></button>
-<div class="qsheet is-v2 is-onerow" class:is-open={open}>
+<div
+	bind:this={panelEl}
+	class="qsheet is-v2 is-onerow"
+	class:is-open={open}
+	role="dialog"
+	aria-modal="true"
+	aria-labelledby={titleId}
+	tabindex="-1"
+	inert={!open}
+	onkeydown={onPanelKeydown}
+>
 	<div class="qsheet-v2-head">
 		<div class="qsheet-v2-title-block">
-			<div class="qsheet-v2-title">Quick Controls</div>
+			<h2 class="qsheet-v2-title" id={titleId}>Quick Controls</h2>
 		</div>
 		<div class="qsheet-v2-actions">
 			{#if onSavePreset}
