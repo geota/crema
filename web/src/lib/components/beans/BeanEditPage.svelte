@@ -78,6 +78,10 @@
 		tagSuggestions?: string[];
 	} = $props();
 
+	/** Id prefix for the label / description / error wiring of every row
+	 *  (cohort review 07 #6): each field is named by its row label. */
+	const uid = $props.id();
+
 	const library = getBeanStore();
 	/**
 	 * Equipment-level grinder default from Settings → Machine. Surfaced
@@ -628,7 +632,7 @@
 					{#if viz.connected}
 						<div class="be-frow">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Visualizer catalogue</div>
+								<div class="be-frow-label" id={`${uid}-catalogue-label`}>Visualizer catalogue</div>
 								<div class="be-frow-sub">
 									Find this bag to fill in the details. You're asked before anything
 									you typed is replaced.
@@ -648,27 +652,31 @@
 					{/if}
 					<div class="be-frow">
 						<div class="be-frow-l">
-							<div class="be-frow-label">Name <span class="be-req">*</span></div>
+							<label class="be-frow-label" for={`${uid}-name`}>Name <span class="be-req">*</span></label>
 						</div>
 						<div class="be-frow-r">
 							<input
+								id={`${uid}-name`}
 								bind:this={nameInputEl}
 								class="be-input"
 								class:is-invalid={attempted && isNameMissing}
+								aria-required="true"
+								aria-invalid={attempted && isNameMissing}
+								aria-describedby={attempted && isNameMissing ? `${uid}-name-err` : undefined}
 								value={current.name}
 								placeholder="e.g. Geisha Esmeralda Lot 3"
 								oninput={(e) =>
 									patch({ name: (e.currentTarget as HTMLInputElement).value })}
 							/>
 							{#if attempted && isNameMissing}
-								<div class="be-required">Required</div>
+								<div class="be-required" id={`${uid}-name-err`}>Required</div>
 							{/if}
 						</div>
 					</div>
 
 					<div class="be-frow" bind:this={roasterRowEl}>
 						<div class="be-frow-l">
-							<div class="be-frow-label">Roaster <span class="be-req">*</span></div>
+							<label class="be-frow-label" for={`${uid}-roaster`}>Roaster <span class="be-req">*</span></label>
 						</div>
 						<div class="be-frow-r">
 							<RoasterAutocomplete
@@ -676,6 +684,9 @@
 								resolved={resolvedRoaster}
 								roasters={library.roasters}
 								placeholder="Search or create roaster"
+								id={`${uid}-roaster`}
+								required
+								describedby={attempted && isRoasterMissing ? `${uid}-roaster-err` : undefined}
 								invalid={attempted && isRoasterMissing}
 								onChange={setRoasterNameInput}
 								onResolve={(r) => {
@@ -693,7 +704,7 @@
 									: undefined}
 							/>
 							{#if attempted && isRoasterMissing}
-								<div class="be-required">Required</div>
+								<div class="be-required" id={`${uid}-roaster-err`}>Required</div>
 							{/if}
 						</div>
 					</div>
@@ -706,7 +717,7 @@
 					-->
 					<div class="be-frow">
 						<div class="be-frow-l">
-							<div class="be-frow-label">Tags</div>
+							<div class="be-frow-label" id={`${uid}-tags-label`}>Tags</div>
 							<div class="be-frow-sub">
 								Free-form labels — used to filter the library grid.
 							</div>
@@ -719,11 +730,13 @@
 					<!-- Linked profile — auto-loads on activation (bean → profile). -->
 					<div class="be-frow be-frow-stack">
 						<div class="be-frow-l">
-							<div class="be-frow-label">Linked profile</div>
-							<div class="be-frow-sub">Auto-loads when this bean is selected on Brew.</div>
+							<label class="be-frow-label" for={`${uid}-linked-profile`}>Linked profile</label>
+							<div class="be-frow-sub" id={`${uid}-linked-profile-sub`}>Auto-loads when this bean is selected on Brew.</div>
 						</div>
 						<div class="be-frow-r">
 							<select
+								id={`${uid}-linked-profile`}
+								aria-describedby={`${uid}-linked-profile-sub`}
 								class="be-input"
 								value={linkedProfileValue}
 								onchange={(e) => {
@@ -744,7 +757,7 @@
 
 					<div class="be-frow">
 						<div class="be-frow-l">
-							<div class="be-frow-label">Flags</div>
+							<div class="be-frow-label" id={`${uid}-flags-label`}>Flags</div>
 							<div class="be-frow-sub">
 								Active selects this bag on Brew; pin keeps it on the brew
 								strip; decaf is a filter facet; archived hides it from the
@@ -752,7 +765,7 @@
 							</div>
 						</div>
 						<div class="be-frow-r">
-							<div class="be-flagrow">
+							<div class="be-flagrow" role="group" aria-labelledby={`${uid}-flags-label`}>
 								<!-- Active toggle drives the library's activeBeanId pointer.
 								     Effectively replaces the "& make active" half of the
 								     prior Save button. -->
@@ -813,7 +826,7 @@
 				<div class="be-block-body">
 					<div class="be-frow be-frow-stack">
 						<div class="be-frow-l">
-							<div class="be-frow-label">Roast level</div>
+							<div class="be-frow-label" id={`${uid}-roast-level-label`}>Roast level</div>
 							<div class="be-frow-sub">1 = light, 10 = dark</div>
 						</div>
 						<div class="be-frow-r">
@@ -826,7 +839,7 @@
 					</div>
 					<div class="be-frow">
 						<div class="be-frow-l">
-							<div class="be-frow-label">Mix</div>
+							<div class="be-frow-label" id={`${uid}-mix-label`}>Mix</div>
 							<div class="be-frow-sub">Single origin or blend.</div>
 						</div>
 						<div class="be-frow-r be-frow-r-end">
@@ -838,17 +851,19 @@
 							    floating pill on the right; it lives flush with the
 							    column edge.
 							-->
-							<div class="be-seg be-seg-sm">
+							<div class="be-seg be-seg-sm" role="group" aria-labelledby={`${uid}-mix-label`}>
 								<button
 									type="button"
 									class="be-seg-opt"
 									class:is-on={current.mix === 'single'}
+									aria-pressed={current.mix === 'single'}
 									onclick={() => patch({ mix: 'single' })}
 								>Single</button>
 								<button
 									type="button"
 									class="be-seg-opt"
 									class:is-on={current.mix === 'blend'}
+									aria-pressed={current.mix === 'blend'}
 									onclick={() => patch({ mix: 'blend' })}
 								>Blend</button>
 							</div>
@@ -856,15 +871,16 @@
 					</div>
 					<div class="be-frow">
 						<div class="be-frow-l">
-							<div class="be-frow-label">Roast type</div>
+							<div class="be-frow-label" id={`${uid}-roast-type-label`}>Roast type</div>
 							<div class="be-frow-sub">What it's roasted for. Click an active option to clear.</div>
 						</div>
 						<div class="be-frow-r be-frow-r-end">
-							<div class="be-seg be-seg-sm">
+							<div class="be-seg be-seg-sm" role="group" aria-labelledby={`${uid}-roast-type-label`}>
 								<button
 									type="button"
 									class="be-seg-opt"
 									class:is-on={current.roastType === 'espresso'}
+									aria-pressed={current.roastType === 'espresso'}
 									onclick={() =>
 										patch({
 											roastType: current.roastType === 'espresso' ? null : 'espresso'
@@ -874,6 +890,7 @@
 									type="button"
 									class="be-seg-opt"
 									class:is-on={current.roastType === 'filter'}
+									aria-pressed={current.roastType === 'filter'}
 									onclick={() =>
 										patch({
 											roastType: current.roastType === 'filter' ? null : 'filter'
@@ -883,6 +900,7 @@
 									type="button"
 									class="be-seg-opt"
 									class:is-on={current.roastType === 'omni'}
+									aria-pressed={current.roastType === 'omni'}
 									onclick={() =>
 										patch({
 											roastType: current.roastType === 'omni' ? null : 'omni'
@@ -909,11 +927,17 @@
 					<div class="be-grid2">
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Roasted on <span class="be-req">*</span></div>
-								<div class="be-frow-sub">{dateHint(days)}</div>
+								<label class="be-frow-label" for={`${uid}-roasted-on`}>Roasted on <span class="be-req">*</span></label>
+								<div class="be-frow-sub" id={`${uid}-roasted-on-sub`}>{dateHint(days)}</div>
 							</div>
 							<div class="be-frow-r">
 								<input
+									id={`${uid}-roasted-on`}
+									aria-describedby={attempted && isRoastedOnMissing
+										? `${uid}-roasted-on-sub ${uid}-roasted-on-err`
+										: `${uid}-roasted-on-sub`}
+									aria-required="true"
+									aria-invalid={attempted && isRoastedOnMissing}
 									bind:this={roastedDateInputEl}
 									class="be-input be-input-date"
 									class:is-invalid={attempted && isRoastedOnMissing}
@@ -926,18 +950,22 @@
 										})}
 								/>
 								{#if attempted && isRoastedOnMissing}
-									<div class="be-required">Required</div>
+									<div class="be-required" id={`${uid}-roasted-on-err`}>Required</div>
 								{/if}
 							</div>
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Opened on</div>
-								<div class="be-frow-sub">When you cracked the bag.</div>
+								<label class="be-frow-label" for="be-opened-input">Opened on</label>
+								<div class="be-frow-sub" id={`${uid}-opened-on-sub`}>When you cracked the bag.</div>
 							</div>
 							<div class="be-frow-r">
 								<input
 									id="be-opened-input"
+									aria-invalid={isOpenedBeforeRoasted}
+									aria-describedby={isOpenedBeforeRoasted
+										? `${uid}-opened-on-sub ${uid}-opened-on-err`
+										: `${uid}-opened-on-sub`}
 									class="be-input be-input-date"
 									class:is-invalid={isOpenedBeforeRoasted}
 									type="date"
@@ -950,14 +978,14 @@
 										})}
 								/>
 								{#if isOpenedBeforeRoasted}
-									<div class="be-required">Can't be before the roast date</div>
+									<div class="be-required" id={`${uid}-opened-on-err`}>Can't be before the roast date</div>
 								{/if}
 							</div>
 						</div>
 					</div>
 					<div class="be-frow">
 						<div class="be-frow-l">
-							<div class="be-frow-label">Frozen storage</div>
+							<div class="be-frow-label" id={`${uid}-frozen-label`}>Frozen storage</div>
 							<div class="be-frow-sub">Pauses the off-roast clock.</div>
 						</div>
 						<div class="be-frow-r">
@@ -991,10 +1019,11 @@
 						<div class="be-grid2">
 							<div class="be-frow be-frow-stack">
 								<div class="be-frow-l">
-									<div class="be-frow-label">Frozen on</div>
+									<label class="be-frow-label" for={`${uid}-frozen-on`}>Frozen on</label>
 								</div>
 								<div class="be-frow-r">
 									<input
+										id={`${uid}-frozen-on`}
 										class="be-input be-input-date"
 										type="date"
 										value={current.frozenOn ?? ''}
@@ -1008,10 +1037,11 @@
 							</div>
 							<div class="be-frow be-frow-stack">
 								<div class="be-frow-l">
-									<div class="be-frow-label">Defrosted on</div>
+									<label class="be-frow-label" for={`${uid}-defrosted-on`}>Defrosted on</label>
 								</div>
 								<div class="be-frow-r">
 									<input
+										id={`${uid}-defrosted-on`}
 										class="be-input be-input-date"
 										type="date"
 										value={current.defrostedOn ?? ''}
@@ -1046,11 +1076,12 @@
 					<div class="be-grid2">
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Bag size</div>
+								<div class="be-frow-label" id={`${uid}-bag-size-label`}>Bag size</div>
 							</div>
 							<div class="be-frow-r">
 								<QuickStepper
 									label=""
+									name="Bag size"
 									value={current.bagSize}
 									unit="g"
 									min={0}
@@ -1074,11 +1105,12 @@
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Remaining</div>
+								<div class="be-frow-label" id={`${uid}-remaining-label`}>Remaining</div>
 							</div>
 							<div class="be-frow-r">
 								<QuickStepper
 									label=""
+									name="Remaining"
 									value={current.remaining}
 									unit="g"
 									min={0}
@@ -1092,10 +1124,11 @@
 					<div class="be-grid2">
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Grinder</div>
+								<label class="be-frow-label" for={`${uid}-grinder`}>Grinder</label>
 							</div>
 							<div class="be-frow-r">
 								<input
+									id={`${uid}-grinder`}
 									class="be-input"
 									value={current.grinder}
 									placeholder="e.g. Niche Zero"
@@ -1119,11 +1152,12 @@
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Grind</div>
+								<div class="be-frow-label" id={`${uid}-grind-label`}>Grind</div>
 							</div>
 							<div class="be-frow-r">
 								<QuickStepper
 									label=""
+									name="Grind"
 									value={grindNum}
 									unit=""
 									min={0}
@@ -1153,10 +1187,11 @@
 					<div class="be-grid2">
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Country</div>
+								<label class="be-frow-label" for={`${uid}-country`}>Country</label>
 							</div>
 							<div class="be-frow-r">
 								<input
+									id={`${uid}-country`}
 									class="be-input"
 									value={current.origin.country ?? ''}
 									placeholder="Ethiopia"
@@ -1167,10 +1202,11 @@
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Region</div>
+								<label class="be-frow-label" for={`${uid}-region`}>Region</label>
 							</div>
 							<div class="be-frow-r">
 								<input
+									id={`${uid}-region`}
 									class="be-input"
 									value={current.origin.region ?? ''}
 									placeholder="Yirgacheffe"
@@ -1181,10 +1217,11 @@
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Farm / co-op</div>
+								<label class="be-frow-label" for={`${uid}-farm-co-op`}>Farm / co-op</label>
 							</div>
 							<div class="be-frow-r">
 								<input
+									id={`${uid}-farm-co-op`}
 									class="be-input"
 									value={current.origin.farm ?? ''}
 									placeholder="Halo Hartume"
@@ -1195,10 +1232,11 @@
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Farmer</div>
+								<label class="be-frow-label" for={`${uid}-farmer`}>Farmer</label>
 							</div>
 							<div class="be-frow-r">
 								<input
+									id={`${uid}-farmer`}
 									class="be-input"
 									value={current.origin.farmer ?? ''}
 									placeholder="Tarekech Geleta"
@@ -1209,10 +1247,11 @@
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Variety</div>
+								<label class="be-frow-label" for={`${uid}-variety`}>Variety</label>
 							</div>
 							<div class="be-frow-r">
 								<input
+									id={`${uid}-variety`}
 									class="be-input"
 									value={current.origin.variety ?? ''}
 									placeholder="Heirloom"
@@ -1223,10 +1262,11 @@
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Elevation</div>
+								<label class="be-frow-label" for={`${uid}-elevation`}>Elevation</label>
 							</div>
 							<div class="be-frow-r">
 								<input
+									id={`${uid}-elevation`}
 									class="be-input"
 									value={current.origin.elevation ?? ''}
 									placeholder="1900–2100 masl"
@@ -1237,10 +1277,11 @@
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Processing</div>
+								<label class="be-frow-label" for={`${uid}-processing`}>Processing</label>
 							</div>
 							<div class="be-frow-r">
 								<input
+									id={`${uid}-processing`}
 									class="be-input"
 									value={current.origin.processing ?? ''}
 									placeholder="Natural · Washed · Anaerobic…"
@@ -1255,10 +1296,11 @@
 					</div>
 					<div class="be-frow be-frow-stack">
 						<div class="be-frow-l">
-							<div class="be-frow-label">Harvest time</div>
+							<label class="be-frow-label" for={`${uid}-harvest-time`}>Harvest time</label>
 						</div>
 						<div class="be-frow-r">
 							<input
+								id={`${uid}-harvest-time`}
 								class="be-input"
 								value={current.origin.harvestTime ?? ''}
 								placeholder="Nov 2025"
@@ -1285,13 +1327,15 @@
 					<div class="be-grid2">
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Score</div>
-								<div class="be-frow-sub">
+								<label class="be-frow-label" for={`${uid}-score`}>Score</label>
+								<div class="be-frow-sub" id={`${uid}-score-sub`}>
 									Free text — number, letter grade, whatever you log.
 								</div>
 							</div>
 							<div class="be-frow-r">
 								<input
+									id={`${uid}-score`}
+									aria-describedby={`${uid}-score-sub`}
 									class="be-input"
 									value={current.qualityScore}
 									placeholder="88"
@@ -1304,24 +1348,26 @@
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Rating</div>
+								<div class="be-frow-label" id={`${uid}-rating-label`}>Rating</div>
 							</div>
 							<div class="be-frow-r">
 								<div class="be-rating">
-									<StarRating rating={current.rating} interactive onRate={setRating} size={22} emptyColor="rgba(var(--tint-rgb), 0.18)" />
+									<StarRating rating={current.rating} interactive onRate={setRating} size={22} emptyColor="rgba(var(--tint-rgb), 0.18)" labelledby={`${uid}-rating-label`} />
 								</div>
 							</div>
 						</div>
 					</div>
 					<div class="be-frow be-frow-stack">
 						<div class="be-frow-l">
-							<div class="be-frow-label">Tasting notes</div>
-							<div class="be-frow-sub">
+							<label class="be-frow-label" for={`${uid}-tasting-notes`}>Tasting notes</label>
+							<div class="be-frow-sub" id={`${uid}-tasting-notes-sub`}>
 								Flavour, aroma, brewing advice — whatever the cup tells you.
 							</div>
 						</div>
 						<div class="be-frow-r">
 							<textarea
+								id={`${uid}-tasting-notes`}
+								aria-describedby={`${uid}-tasting-notes-sub`}
 								class="be-input be-textarea"
 								rows="4"
 								value={current.tastingNotes}
@@ -1352,10 +1398,11 @@
 					<div class="be-grid2">
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Place of purchase</div>
+								<label class="be-frow-label" for={`${uid}-place-of-purchase`}>Place of purchase</label>
 							</div>
 							<div class="be-frow-r">
 								<input
+									id={`${uid}-place-of-purchase`}
 									class="be-input"
 									value={current.placeOfPurchase ?? ''}
 									placeholder="Roastery website · Cafe · Subscription"
@@ -1369,10 +1416,11 @@
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Cost</div>
+								<label class="be-frow-label" for={`${uid}-cost`}>Cost</label>
 							</div>
 							<div class="be-frow-r">
 								<input
+									id={`${uid}-cost`}
 									class="be-input"
 									type="number"
 									inputmode="decimal"
@@ -1392,7 +1440,7 @@
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">URL</div>
+								<label class="be-frow-label" for={urlInputId}>URL</label>
 							</div>
 							<div class="be-frow-r">
 								<input
@@ -1429,7 +1477,7 @@
 				<header class="be-block-head">
 					<span class="be-block-n">08</span>
 					<div>
-						<h3 class="be-block-title">Notes</h3>
+						<h3 class="be-block-title" id={`${uid}-notes-title`}>Notes</h3>
 						<div class="be-block-sub">
 							Anything else worth keeping — not surfaced on the brew page.
 						</div>
@@ -1439,6 +1487,7 @@
 					<div class="be-frow be-frow-stack">
 						<div class="be-frow-r">
 							<textarea
+								aria-labelledby={`${uid}-notes-title`}
 								class="be-input be-textarea"
 								rows="4"
 								value={current.notes}

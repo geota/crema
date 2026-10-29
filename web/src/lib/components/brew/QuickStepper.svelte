@@ -17,6 +17,7 @@
 
 	let {
 		label,
+		name,
 		value,
 		unit = '',
 		min = 0,
@@ -31,6 +32,11 @@
 	}: {
 		/** Optional caption above the stepper row. */
 		label?: string;
+		/**
+		 * Accessible name when the caption lives outside the stepper (e.g. a
+		 * form row label): names the ± buttons and the value control.
+		 */
+		name?: string;
 		/** Current value (canonical units when `dimension` is set). */
 		value: number;
 		/** Unit shown after the digits. Ignored when `dimension` is set. */
@@ -98,6 +104,8 @@
 
 	/** Format a value (already in display units) — the supplied `fmt`, or step-aware default. */
 	const format = (v: number): string => (fmt ? fmt(v) : v.toFixed(stepper.decimals));
+	/** `label=""` (caption rendered elsewhere) must not produce "Decrease ". */
+	const a11yName = $derived(name || label || 'value');
 </script>
 
 <div class="qcs">
@@ -105,7 +113,7 @@
 		<div class="qcs-label">{label}</div>
 	{/if}
 	<div class="qcs-row">
-		<button class="qcs-btn" onclick={() => stepper.inc(-1)} aria-label="Decrease {label ?? 'value'}">
+		<button class="qcs-btn" onclick={() => stepper.inc(-1)} aria-label="Decrease {a11yName}">
 			<MinusIcon aria-hidden="true" />
 		</button>
 		<div class="qcs-val" class:is-overridden={overridden}>
@@ -115,6 +123,7 @@
 					bind:this={stepper.inputEl}
 					class="qcs-num qcs-num-input"
 					type="number"
+					aria-label={a11yName}
 					bind:value={stepper.draft}
 					onblur={stepper.commit}
 					onkeydown={stepper.onKey}
@@ -123,6 +132,7 @@
 				<button
 					type="button"
 					class="qcs-num qcs-num-btn"
+					aria-label={`${a11yName}: ${format(stepper.toDisplay(value))}${stepper.unit ? ` ${stepper.unit}` : ''}, edit`}
 					onclick={stepper.beginEdit}
 					title={overridden ? overriddenTooltip : undefined}
 				>
@@ -131,7 +141,7 @@
 			{/if}
 			<span class="qcs-unit">{stepper.unit}</span>
 		</div>
-		<button class="qcs-btn" onclick={() => stepper.inc(1)} aria-label="Increase {label ?? 'value'}">
+		<button class="qcs-btn" onclick={() => stepper.inc(1)} aria-label="Increase {a11yName}">
 			<PlusIcon aria-hidden="true" />
 		</button>
 	</div>

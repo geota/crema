@@ -327,6 +327,8 @@
 	// placeholder shows the current settings default so the user can see
 	// what the upload *would* use today without committing to an override.
 	const settingsDefaultGrinder = $derived(settings.current.grinderModel?.trim() ?? '');
+	const detailUid = $props.id();
+	const grinderInputId = `${detailUid}-grinder`;
 	const grinderPlaceholder = $derived(
 		settingsDefaultGrinder ? settingsDefaultGrinder : 'No default set'
 	);
@@ -1062,8 +1064,9 @@
 	     cascade re-engages. The placeholder shows the current default so
 	     the user knows what the upload *would* use today. -->
 	<div class="hi-grinder">
-		<span class="t-eyebrow" style="color:var(--fg-3)">Grinder model</span>
+		<label class="t-eyebrow" style="color:var(--fg-3)" for={grinderInputId}>Grinder model</label>
 		<input
+			id={grinderInputId}
 			class="hi-grinder-input"
 			type="text"
 			placeholder={grinderPlaceholder}
@@ -1175,11 +1178,12 @@
 	{#if !isBrew}
 	<div class="hi-privacy">
 		<span class="t-eyebrow" style="color:var(--fg-3)">Privacy</span>
-		<div class="hi-privacy-chips">
+		<div class="hi-privacy-chips" role="group" aria-label="Visualizer privacy">
 			{#each ['public', 'unlisted', 'private'] as const as p (p)}
 				<button
 					class="hi-privacy-chip"
 					class:is-on={shot.privacy === p || (shot.privacy == null && defaultPrivacy === p)}
+					aria-pressed={shot.privacy === p || (shot.privacy == null && defaultPrivacy === p)}
 					onclick={() => onPrivacyChange(shot.privacy === p ? null : p)}
 					title={shot.privacy == null && defaultPrivacy === p
 						? 'Following the Settings → Sharing default'

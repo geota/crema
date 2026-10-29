@@ -29,6 +29,9 @@
 		roasters,
 		placeholder = '',
 		invalid = false,
+		id,
+		required = false,
+		describedby,
 		onChange,
 		onResolve,
 		onCommitTyped
@@ -47,6 +50,12 @@
 		 * participates in the editor's save-attempt validation).
 		 */
 		invalid?: boolean;
+		/** Input id, so the parent's `<label for>` names the field. */
+		id?: string;
+		/** Mark the field required for assistive tech (`aria-required`). */
+		required?: boolean;
+		/** Id(s) of the parent's error / hint text (`aria-describedby`). */
+		describedby?: string;
 		/** Fires on every keystroke with the new free-text value. */
 		onChange: (next: string) => void;
 		/**
@@ -164,8 +173,12 @@
 <div class="ra-wrap">
 	<input
 		bind:this={inputEl}
+		{id}
 		class="ra-input"
 		class:is-invalid={invalid}
+		aria-required={required || undefined}
+		aria-invalid={invalid}
+		aria-describedby={describedby}
 		type="text"
 		{value}
 		{placeholder}

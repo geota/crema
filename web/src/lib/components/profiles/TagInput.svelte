@@ -67,6 +67,7 @@
 		<!-- svelte-ignore a11y_autofocus -->
 		<input
 			class="pe-tag-input"
+			aria-label="New tag"
 			bind:value={draft}
 			autofocus
 			placeholder="New tag…"

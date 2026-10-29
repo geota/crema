@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '#lib/icons/Icon.svelte';
+	import { menuKeyboard } from '#lib/a11y/focus.js';
 	import { pinActiveThenFavourite } from '#lib/library-order.js';
 	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 	import CoffeeBeanIcon from 'phosphor-svelte/lib/CoffeeBeanIcon';
@@ -156,6 +157,7 @@
 
 	// Add-button split
 	let addMenuOpen = $state(false);
+	let addMenuTrigger = $state<HTMLButtonElement>();
 
 	let drawerBeanId = $state<string | null>(null);
 	let quickAddOpen = $state(false);
@@ -770,6 +772,7 @@
 				<MagnifyingGlassIcon aria-hidden="true" />
 				<input
 					bind:value={q}
+					aria-label="Search beans"
 					placeholder="Search beans, roasters, origin, notes…"
 					title="Searches every field you've recorded — origin, process, tasting notes, grinder, tags — and tolerates typos."
 				/>
@@ -827,6 +830,7 @@
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div class="bn-split" onclick={(e) => e.stopPropagation()}>
 				<button
+					bind:this={addMenuTrigger}
 					class="bn-btn bn-btn-primary bn-split-main bn-split-solo"
 					onclick={(e) => {
 						e.stopPropagation();
@@ -840,8 +844,13 @@
 					<CaretDownIcon class="bn-split-caret" aria-hidden="true" />
 				</button>
 				{#if addMenuOpen}
-					<div class="bn-split-menu" role="menu">
-						<div class="bn-split-menu-head">Add</div>
+					<div
+						class="bn-split-menu"
+						role="menu"
+						aria-label="Add"
+						{@attach menuKeyboard({ onClose: () => (addMenuOpen = false), trigger: () => addMenuTrigger })}
+					>
+						<div class="bn-split-menu-head" aria-hidden="true">Add</div>
 						<button
 							class="bn-split-menu-item"
 							role="menuitem"
@@ -918,10 +927,11 @@
 	     the sort pill on the far right. The filter-pill region scrolls
 	     horizontally if needed so tabs and sort stay anchored. -->
 	<div class="bn-tabs">
-		<div class="bn-tabs-l">
+		<div class="bn-tabs-l" role="group" aria-label="Library view">
 			<button
 				class="bn-tab"
 				class:is-active={tab === 'bags'}
+				aria-pressed={tab === 'bags'}
 				onclick={() => selectTab('bags')}
 			>
 				<CoffeeBeanIcon weight="duotone" aria-hidden="true" />
@@ -931,6 +941,7 @@
 			<button
 				class="bn-tab"
 				class:is-active={tab === 'roasters'}
+				aria-pressed={tab === 'roasters'}
 				onclick={() => selectTab('roasters')}
 			>
 				<StorefrontIcon weight="duotone" aria-hidden="true" />

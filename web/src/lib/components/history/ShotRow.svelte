@@ -149,6 +149,8 @@
 	class:is-active={active && !selectable}
 	class:is-selected={selectable && selected}
 	class:is-selectmode={selectable}
+	aria-current={active && !selectable ? 'true' : undefined}
+	aria-pressed={selectable ? selected : undefined}
 	disabled={selectable && selectionDisabled && !selected}
 	{onclick}
 >

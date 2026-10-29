@@ -767,7 +767,7 @@
 		<div class="pp-head-r">
 			<div class="pp-search">
 				<MagnifyingGlassIcon aria-hidden="true" />
-				<input bind:value={q} placeholder="Search profiles, beans, notes…" />
+				<input bind:value={q} aria-label="Search profiles" placeholder="Search profiles, beans, notes…" />
 				{#if q}
 					<button
 						class="pp-search-clear"

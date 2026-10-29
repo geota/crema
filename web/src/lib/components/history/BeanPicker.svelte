@@ -113,6 +113,7 @@
 			<MagnifyingGlassIcon aria-hidden="true" />
 			<input
 				bind:value={query}
+				aria-label="Search bags or roasters"
 				placeholder="Search bag or roaster…"
 				autocomplete="off"
 			/>

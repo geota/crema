@@ -1056,7 +1056,7 @@
 		<div class="hi-head-r">
 			<div class="hi-search">
 				<MagnifyingGlassIcon aria-hidden="true" />
-				<input bind:value={q} placeholder="Search profile, notes…" />
+				<input bind:value={q} aria-label="Search shots" placeholder="Search profile, notes…" />
 			</div>
 			<!-- Log brew — the Brew Log's manual-entry door (issue #10). -->
 			<button

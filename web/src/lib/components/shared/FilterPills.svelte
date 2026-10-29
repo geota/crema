@@ -54,6 +54,7 @@
 				class="pp-tag"
 				class:pp-tag-custom={p.custom}
 				class:is-active={p.selected}
+				aria-pressed={p.selected ?? false}
 				title={p.title}
 				onclick={() => onclick(p.id)}
 			>

@@ -684,6 +684,7 @@
 		{#snippet control()}
 			<input
 				type="text"
+				aria-label="Grinder model"
 				class="mc-grinder-model"
 				placeholder="e.g. Niche Zero"
 				value={prefs.grinderModel}
