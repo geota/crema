@@ -1300,13 +1300,22 @@ impl CremaCore {
     /// [`MachineState::Espresso`] to start a shot, [`MachineState::Idle`] to
     /// stop one or wake from sleep.
     ///
-    /// Flow-mode starts (Espresso / Steam / HotWater / HotWaterRinse) get the
-    /// start-operation interlock the reference apps use (Decenza
-    /// `de1device.cpp:796-830`; de1app writes the same GHC mode before
-    /// starts): first `GhcMode = 1` so a GHC-equipped machine accepts
-    /// app-initiated starts, then an `Idle` bounce when the machine isn't
-    /// known to be Idle — the firmware accepts flow-state requests reliably
-    /// only from Idle. Plain Idle / Sleep requests stay a single write.
+    /// Flow-mode starts (Espresso / Steam / HotWater / HotWaterRinse) get an
+    /// `Idle` bounce first when the machine isn't known to be Idle — the
+    /// firmware accepts flow-state requests reliably only from Idle (de1app
+    /// `go_idle_before_all_operations`, Decenza `startEspresso`). Plain Idle /
+    /// Sleep requests stay a single write.
+    ///
+    /// No `GhcMode` (MMR `0x803820`) write precedes a start. de1app's
+    /// `start_espresso` / `start_steam` / `start_water` / `start_flush` send
+    /// only the state request and nothing calls its `set_ghc_mode`; reaprime
+    /// never models the register; pyDE1 keeps it out of its writable set as
+    /// "not fully implemented" and notes that touching it froze firmware ≤ 1260.
+    /// Decenza's per-start write was an experiment while debugging a machine
+    /// that refused app starts (`docs/headless-mode-investigation.md`), and its
+    /// log shows the machine still refused afterwards. A GHC-required machine
+    /// refuses app starts by design (UL compliance; de1app shows READY, not
+    /// START), so the write could only ever defeat that control or do nothing.
     ///
     /// Maintenance requests (Descale / Clean / AirPurge) on firmware that
     /// drops them while cold (< 1356, or unknown) go through the
@@ -1342,10 +1351,6 @@ impl CremaCore {
                 | MachineState::HotWaterRinse
         );
         if starting_flow {
-            // 4-byte write like every other MMR register (Decenza writes
-            // GHC_MODE as a full word too).
-            out.commands
-                .extend(mmr_write_command(MmrRegister::GhcMode, 1, 4).commands);
             let known_idle = self
                 .last_state
                 .is_some_and(|info| info.state == MachineState::Idle);
@@ -8116,32 +8121,24 @@ mod tests {
     }
 
     #[test]
-    fn a_flow_start_writes_ghc_mode_and_bounces_to_idle() {
+    fn a_flow_start_bounces_to_idle_without_a_ghc_mode_write() {
+        // Cohort review 02 P2-1: de1app and reaprime send only the state
+        // requests; no MMR write (GhcMode 0x803820) precedes a start.
         let mut core = CremaCore::new();
-        // Machine known to be in Steam: GhcMode word + Idle bounce + target.
-        core.on_notification(Source::De1State, &[5, 7], 0);
+        core.on_notification(Source::De1State, &[5, 7], 0); // Steam
         let out = core.request_machine_state(MachineState::Espresso);
-        assert_eq!(out.commands.len(), 3);
-        assert!(matches!(
-            &out.commands[0],
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1MmrWrite,
-                ..
-            }
-        ));
         assert_eq!(
-            out.commands[1],
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                data: vec![requested_state(MachineState::Idle)],
-            }
-        );
-        assert_eq!(
-            out.commands[2],
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                data: vec![requested_state(MachineState::Espresso)],
-            }
+            out.commands,
+            vec![
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1RequestedState,
+                    data: vec![requested_state(MachineState::Idle)],
+                },
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1RequestedState,
+                    data: vec![requested_state(MachineState::Espresso)],
+                },
+            ]
         );
     }
 
@@ -8149,22 +8146,22 @@ mod tests {
     fn a_flow_start_from_idle_skips_the_idle_bounce() {
         let mut core = CremaCore::new();
         core.on_notification(Source::De1State, &[2, 0], 0);
-        let out = core.request_machine_state(MachineState::Steam);
-        assert_eq!(out.commands.len(), 2);
-        assert!(matches!(
-            &out.commands[0],
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1MmrWrite,
-                ..
-            }
-        ));
-        assert_eq!(
-            out.commands[1],
-            Command::WriteCharacteristic {
-                target: WriteTarget::De1RequestedState,
-                data: vec![requested_state(MachineState::Steam)],
-            }
-        );
+        for state in [
+            MachineState::Steam,
+            MachineState::HotWater,
+            MachineState::HotWaterRinse,
+            MachineState::Espresso,
+        ] {
+            let out = core.request_machine_state(state);
+            assert_eq!(
+                out.commands,
+                vec![Command::WriteCharacteristic {
+                    target: WriteTarget::De1RequestedState,
+                    data: vec![requested_state(state)],
+                }],
+                "{state:?} is one state write, no GhcMode MMR"
+            );
+        }
     }
 
     #[test]
