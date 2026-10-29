@@ -7,6 +7,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
@@ -109,14 +110,13 @@ class RelayHubPairingGateTest {
 
             handshake(client, rx)
             client.send(Frame.Attach(1L, addr))
-            delay(150)
+            // Poll for what must arrive; a fixed sleep fails under load.
+            withTimeout(5_000) { while (rx.none { it is Frame.Attached }) delay(5) }
             assertTrue(rx.any { it is Frame.Welcome }, "approved peer is welcomed")
-            assertTrue(rx.any { it is Frame.Attached }, "and can attach")
 
             rx.clear()
             h.pushRoster()
-            delay(100)
-            assertTrue(rx.any { it is Frame.Roster }, "approved peer receives push fan-out")
+            withTimeout(5_000) { while (rx.none { it is Frame.Roster }) delay(5) }
             obs.cancel()
         } finally {
             scope.cancel()

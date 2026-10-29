@@ -407,7 +407,8 @@ class ProxyControllerModeTest {
             assertTrue("applied:normal" !in events, "no release while the taker is connected: $events")
 
             runBlocking { client.close() }
-            val deadline = System.currentTimeMillis() + 2_000
+            // Real time (the hub runs on Dispatchers.Default): generous under load.
+            val deadline = System.currentTimeMillis() + 10_000
             while ("applied:normal" !in events && System.currentTimeMillis() < deadline) {
                 scheduler.runCurrent()
                 scheduler.advanceTimeBy(200) // the switch's settle delay; stays far below the 3 s cap
