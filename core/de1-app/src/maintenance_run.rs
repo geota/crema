@@ -110,7 +110,10 @@ impl CremaCore {
             return false;
         };
         if !self.profile_upload_in_progress() {
-            // Refused (a firmware flash holds the link): nothing to wait for.
+            // Not reached today: the only refusal is a firmware flash, and
+            // `request_machine_state` refuses before calling this. Kept so an
+            // upload that ever fails to start sends a plain request rather
+            // than holding one nothing would release (C3 #13).
             out.commands.extend(upload.commands);
             out.events.extend(upload.events);
             return false;

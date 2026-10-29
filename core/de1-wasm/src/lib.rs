@@ -3312,7 +3312,8 @@ impl CremaBridge {
     ///   carries one `ProfileUploadFailed` and `commands` is empty.
     /// - On a JSON parse failure, `events` carries one `DecodeError`.
     ///
-    /// Subsequent acks arrive via `on_notification(De1FrameAck, …)`; the
+    /// The shell confirms each write it made with
+    /// `on_profile_write_ack(De1HeaderAck | De1FrameAck, …, upload_id)`; the
     /// core emits `ProfileUploadProgress` / `ProfileUploadCompleted` /
     /// `ProfileUploadFailed` from those.
     pub fn upload_profile(&self, profile_json: String, now_ms: f64) -> String {

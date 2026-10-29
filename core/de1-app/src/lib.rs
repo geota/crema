@@ -3062,6 +3062,15 @@ impl CremaCore {
         out
     }
 
+    /// Feed one notification (or recorded line) from `source`.
+    ///
+    /// A profile ack ([`Source::De1HeaderAck`] / [`Source::De1FrameAck`])
+    /// fed here counts toward whatever upload is running. That is the replay
+    /// path: a capture's recorded acks drive its replayed upload, and replay
+    /// knows no upload ids. The DE1 sends no profile acks of its own, so live
+    /// shells never feed them here: they synthesise each one and pass it to
+    /// [`on_profile_write_ack`](Self::on_profile_write_ack) with its upload
+    /// id, which drops a superseded upload's ack (round-3 clean check C3 #5).
     pub fn on_notification(&mut self, source: Source, data: &[u8], now_ms: u64) -> CoreOutput {
         // Capture side-effect first — the recorder needs the raw notification
         // bytes regardless of whether the decode that follows succeeds, and
@@ -5005,6 +5014,11 @@ impl CremaCore {
             if remember_tank {
                 self.tank_temp_threshold_c = Some(tank_temp_c);
             }
+            // The model reply has usually cleared it already. Kept for parity
+            // with de1app, which writes the register after every v2 upload,
+            // and as a backstop: the firmware keeps whatever was last written,
+            // and a model-reply clear whose MMR write failed is not retried.
+            // One idempotent write per Bengle upload (C3 #15).
             if encoding == de1_protocol::FrameEncoding::V2 {
                 out.commands.push(end_of_shot_weight_clear());
                 self.end_of_shot_clear_pending = false;
