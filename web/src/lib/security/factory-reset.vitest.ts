@@ -115,4 +115,20 @@ describe('factoryResetLocalData', () => {
 		expect(result.databasesFailed).toEqual(['crema-captures']);
 		held.close();
 	});
+
+	// Final review 06 #12: writers are frozen after the revokes and before the
+	// first delete, so the live app cannot recreate data mid-wipe.
+	it('runs beforeWipe after every revoke and before any database is deleted', async () => {
+		await createDb('crema-keys');
+		const order: string[] = [];
+		await factoryResetLocalData({
+			revoke: [async () => void order.push('revoke')],
+			beforeWipe: () => {
+				order.push('freeze');
+				void cremaDatabases().then((names) => order.push(`dbs:${names.join(',')}`));
+			}
+		});
+		expect(order.slice(0, 2)).toEqual(['revoke', 'freeze']);
+		expect(order).toContain('dbs:crema-keys');
+	});
 });

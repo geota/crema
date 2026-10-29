@@ -19,8 +19,11 @@
  *     (preferences, library, history summaries, the wrapped Visualizer and
  *     Decent tokens, the Drive session token, the OAuth handshake).
  *
- * The caller reloads the page afterwards so no in-memory store writes stale
- * state back. The DE1 itself is not touched.
+ * Between steps 1 and 2 the caller's `beforeWipe` runs — the shell freezes
+ * every Crema write there (`#lib/security/reset-coordinator`), so nothing the
+ * live app does can recreate a database or a key mid-wipe. The caller reloads
+ * the page straight afterwards, with no dialog in between. The DE1 itself is
+ * not touched.
  */
 
 import { DB_NAME as CAPTURES_DB } from '#lib/capture/store.js';
@@ -46,6 +49,8 @@ export interface FactoryResetDeps {
 	revokeTimeoutMs?: number;
 	/** Give up on one database delete after this long (e.g. blocked by another tab). */
 	deleteTimeoutMs?: number;
+	/** Runs after the revocations and before the first delete (freeze writers here). */
+	beforeWipe?: () => void;
 }
 
 export interface FactoryResetResult {
@@ -139,6 +144,8 @@ export async function factoryResetLocalData(deps: FactoryResetDeps = {}): Promis
 		(deps.revoke ?? []).map((revoke) => withTimeout(Promise.resolve().then(revoke), revokeTimeoutMs))
 	);
 	for (const r of revocations) if (r.status === 'rejected') revokeFailures++;
+
+	deps.beforeWipe?.();
 
 	const databasesDeleted: string[] = [];
 	const databasesFailed: string[] = [];

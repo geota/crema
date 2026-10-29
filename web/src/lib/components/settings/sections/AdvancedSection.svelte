@@ -44,6 +44,11 @@
 	import { factoryResetLocalData } from '#lib/security/factory-reset.js';
 	import { isAllowedWebhookUrl } from '#lib/services/webhook-url.js';
 	import { revokeVisualizerToken } from '#lib/bean/index.js';
+	import {
+		announceReset,
+		freezeCremaWrites,
+		stashResetReport
+	} from '#lib/security/reset-coordinator.js';
 	import { getCremaAppContext } from '#lib/shell/app-context.js';
 	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
 	import { compactLine, reconnectTimelines, type ReconnectTimeline } from '#lib/ble/index.js';
@@ -283,30 +288,35 @@
 		resetting = true;
 		const services = appCtx().services;
 		const drive = getDriveAuthStore();
-		const result = await factoryResetLocalData({
-			revoke: [
-				async () => {
-					const tokens = services ? await services.tokens.getTokens() : null;
-					if (tokens?.accessToken) await revokeVisualizerToken(tokens.accessToken);
-				},
-				() => drive.signOut()
-			]
-		});
-		if (result.databasesFailed.length > 0) {
-			await confirmDialog({
-				title: 'Some data is still in use',
-				message:
-					'Crema is open in another tab or window, so part of the stored data ' +
-					'(shot telemetry, captures or bag photos) could not be deleted. ' +
-					'Close the other Crema tabs, then run Factory reset again.',
-				confirmLabel: 'Reload',
-				cancelLabel: 'Reload'
+		// Other Crema tabs stop writing now and reload once the wipe is done
+		// (final review 05 N-3); this tab freezes its own writers after the
+		// revokes, which still need the stored tokens (06 #12).
+		announceReset({ type: 'started' });
+		try {
+			const result = await factoryResetLocalData({
+				revoke: [
+					async () => {
+						const tokens = services ? await services.tokens.getTokens() : null;
+						if (tokens?.accessToken) await revokeVisualizerToken(tokens.accessToken);
+					},
+					() => drive.signOut()
+				],
+				beforeWipe: () => freezeCremaWrites()
 			});
+			// Told after the reload: no dialog may hold the wiped page open
+			// while the live app could write its state back.
+			stashResetReport({
+				databasesFailed: result.databasesFailed,
+				revokeFailures: result.revokeFailures
+			});
+		} finally {
+			freezeCremaWrites();
+			announceReset({ type: 'done' });
+			// Hard reload so every $state / module-singleton re-initialises
+			// from the now-empty stores. The PWA service worker still serves
+			// cached app assets, which is fine; the data layer is what's reset.
+			window.location.reload();
 		}
-		// Hard reload so every $state / module-singleton re-initialises
-		// from the now-empty stores. The PWA service worker still serves
-		// cached app assets, which is fine; the data layer is what's reset.
-		window.location.reload();
 	}
 
 	// ---- Webhooks (Advanced → Webhooks card) ----------------------------
