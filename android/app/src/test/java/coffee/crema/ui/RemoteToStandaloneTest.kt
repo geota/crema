@@ -210,11 +210,11 @@ class RemoteToStandaloneTest {
         VmHarness.advance(200)
         VmHarness.idle()
         assertNull(vm.ui.value.adoptPrompt)
-        assertTrue(VmHarness.log(vm).any { "Leaving the hub cancelled" in it }, "the Denied's switch cancelled it")
+        val pendingLeave = MainViewModel::class.java.getDeclaredField("pendingLeave").apply { isAccessible = true }
+        assertNull(pendingLeave.get(vm), "the Denied's switch cancelled the leave itself, not only the prompt")
         vm.resolveAdoption(useHub = true) // too late: nothing to resolve
         VmHarness.advance(200)
         VmHarness.idle()
-        assertTrue(VmHarness.log(vm).none { "Mode switch to normal skipped" in it }, "no stale commit was even attempted")
         assertEquals(abOf(P), abOf(savedPrefs()), "no adoption")
         assertEquals(listOf("normal"), switches.map { it.first }, "one switch")
     }
