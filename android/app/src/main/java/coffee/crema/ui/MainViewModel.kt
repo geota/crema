@@ -6074,8 +6074,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Mirror into the crash-report ring buffer — it outlives the UI's
         // eventLog (which dies with the process). See coffee.crema.diag.DiagLog.
         coffee.crema.diag.DiagLog.add(stamped)
-        val log = (listOf(stamped) + _ui.value.eventLog).take(MAX_LOG_LINES)
-        _ui.update { it.copy(eventLog = log) }
+        // Built INSIDE the atomic update: appendLog runs from Main, the core
+        // lane and the firmware scope at once, and a read outside the update
+        // dropped concurrent lines (or resurrected a just-cleared log).
+        _ui.update { it.copy(eventLog = prependLogLine(it.eventLog, stamped, MAX_LOG_LINES)) }
     }
 
     override fun onCleared() {
