@@ -85,19 +85,19 @@
 		scrollKey?: string;
 	} = $props();
 
-	function onKey(e: KeyboardEvent): void {
-		if (e.key === 'Enter' || e.key === ' ') {
-			e.preventDefault();
-			onCardClick();
-		}
-	}
-
 	function onPinClick(e: MouseEvent): void {
 		e.stopPropagation();
 		onFavouriteClick?.(e);
 	}
 </script>
 
+<!-- The card is a plain container. Its "open" action is a real <button>
+     stretched over the whole card (`.lcs-open`), and the pin / action
+     buttons are its siblings layered above it. The old design made the card
+     itself a `role="button"` that nested six buttons: invalid ARIA (a
+     button's children are presentational) and its Enter / Space handler
+     swallowed the keys of every nested button, so Enter on "Delete" opened
+     the drawer instead (cohort review 07 #4). -->
 <div
 	class="lcs"
 	class:is-active={isActive}
@@ -106,12 +106,8 @@
 	data-kind={cardKind}
 	data-scroll-key={scrollKey}
 	style="--lcs-min-h: {minHeight}px"
-	role="button"
-	tabindex="0"
-	onclick={onCardClick}
-	onkeydown={onKey}
-	aria-label={ariaLabel}
 >
+	<button type="button" class="lcs-open" aria-label={ariaLabel} onclick={onCardClick}></button>
 	{#if favourite !== null}
 		<button
 			type="button"
@@ -167,15 +163,38 @@
 			background var(--dur-1) var(--ease),
 			border-color var(--dur-1) var(--ease),
 			transform var(--dur-1) var(--ease);
-		outline: 0;
 	}
 	.lcs:hover {
 		background: rgba(var(--tint-rgb), 0.06);
 		border-color: rgba(var(--tint-rgb), 0.16);
 	}
-	.lcs:focus-visible {
+	/* The stretched open button: covers the card (z 0) so a tap anywhere on
+	   the static content opens the drawer; interactive children sit above it
+	   (z 1+). Its focus ring is drawn around the whole card. */
+	.lcs-open {
+		position: absolute;
+		inset: 0;
+		z-index: 0;
+		margin: 0;
+		padding: 0;
+		border: 0;
+		border-radius: inherit;
+		background: transparent;
+		cursor: pointer;
+	}
+	.lcs-open:focus-visible {
 		outline: 2px solid var(--copper-400);
 		outline-offset: 2px;
+		box-shadow: none;
+	}
+	/* Static slot content stays under the open button; links and buttons in
+	   the slots, and the whole action row, are lifted above it. */
+	.lcs-actions,
+	.lcs-head :global(:is(a[href], button)),
+	.lcs-avatar :global(:is(a[href], button)),
+	.lcs-metrics :global(:is(a[href], button)) {
+		position: relative;
+		z-index: 1;
 	}
 	.lcs.is-active {
 		border-color: var(--copper-400);

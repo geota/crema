@@ -29,6 +29,7 @@
 	} from '#lib/bean/index.js';
 	import { getHistoryStore, effectiveGrindSetting, yieldOf } from '#lib/history/index.js';
 	import { getProfileStore } from '#lib/profiles/index.js';
+	import { restoreFocus, trapTab } from '#lib/a11y/focus.js';
 	import { shotTitle } from '#lib/brew/methods.js';
 	import BeanImage from './BeanImage.svelte';
 	import BeanPhotoViewer from './BeanPhotoViewer.svelte';
@@ -139,10 +140,24 @@
 	}
 
 	function onKey(e: KeyboardEvent): void {
-		if (e.key === 'Escape') {
+		// A dialog stacked on top (ConfirmDialog) handles its own Escape first.
+		if (e.key === 'Escape' && !e.defaultPrevented) {
 			e.preventDefault();
 			onClose();
 		}
+	}
+
+	/*
+	 * Modal focus handling (cohort review 07 #10): the drawer takes focus when
+	 * it mounts, Tab stays inside it, and closing hands focus back to the
+	 * card that opened it (when that card still exists).
+	 */
+	function modalFocus(node: HTMLElement): () => void {
+		const opener = document.activeElement;
+		node.focus({ preventScroll: true });
+		return () => {
+			restoreFocus(opener);
+		};
 	}
 
 </script>
@@ -156,15 +171,19 @@
 	aria-label="Close detail"
 ></div>
 
-<!-- The drawer uses `<aside>` for landmark semantics but presents as a
-     modal dialog, which Svelte's a11y linter (correctly) flags as a
-     conflict. Drop the role; the scrim + `aria-modal` semantics on the
-     wrapping `<div role="button">` already establish focus management.
-     The dialog name is conveyed by `aria-labelledby` on the inner
-     content. The Escape key is intercepted at the window level via
-     {@link svelte:window} below — no per-element listener needed. -->
+<!-- The drawer is a modal dialog: the scrim covers the page, focus moves in
+     on open and is trapped, Escape (window-level, below) closes it, and focus
+     returns to the opening card. -->
 <svelte:window onkeydown={onKey} />
-<aside class="bn-drawer" aria-labelledby="bn-drawer-name">
+<div
+	{@attach modalFocus}
+	class="bn-drawer"
+	role="dialog"
+	aria-modal="true"
+	aria-labelledby="bn-drawer-name"
+	tabindex="-1"
+	onkeydown={(e) => trapTab(e, e.currentTarget)}
+>
 	<header class="bn-drawer-head">
 		<div class="bn-drawer-roaster">
 			<span class="bn-drawer-roaster-mark" style="--tone: {mt.tone}">{mt.mark}</span>
@@ -607,7 +626,7 @@
 			{/if}
 		</div>
 	</div>
-</aside>
+</div>
 
 {#if photoOpen}
 	<BeanPhotoViewer
@@ -623,6 +642,12 @@
 		inset: 0;
 		background: rgba(var(--scrim-rgb, 0, 0, 0), 0.4);
 		z-index: 68;
+	}
+	/* The panel takes focus as the dialog; keep its own shadow rather than
+	   the global focus ring around the whole drawer. */
+	.bn-drawer:focus-visible {
+		outline: none;
+		box-shadow: -16px 0 48px rgba(0, 0, 0, 0.18);
 	}
 	.bn-drawer {
 		position: fixed;
