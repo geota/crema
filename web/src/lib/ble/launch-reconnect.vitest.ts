@@ -251,6 +251,31 @@ describe('CremaApp wiring', () => {
 		}
 	});
 
+	it('a Connect the user abandoned is not undone by a tab-return kick (cohort review 06 #9)', async () => {
+		rememberDevice('de1', { id: 'de1-id', name: 'DE1' });
+		const { app, spies } = await makeApp();
+		const de1 = fakeDevice('de1-id', 'DE1');
+		const bluetooth = fakeBluetooth([de1]);
+		Object.defineProperty(navigator, 'bluetooth', { value: bluetooth, configurable: true });
+		try {
+			const callbacks = (app as unknown as { de1: { callbacks: { onState(s: string): void } } })
+				.de1.callbacks;
+			// Connect tapped, chooser dismissed: the DE1 manager reports idle.
+			await app.connectDe1();
+			callbacks.onState('idle');
+			app.kickReconnect('foreground');
+			await new Promise((r) => setTimeout(r, 0));
+			expect(spies.de1Known).not.toHaveBeenCalled();
+			// A connect that reaches ready ends the take-over: kicks retry again.
+			callbacks.onState('ready');
+			callbacks.onState('disconnected');
+			await app.reconnectLastOnLaunch(bluetooth);
+			expect(spies.de1Known).toHaveBeenCalledWith(de1);
+		} finally {
+			Reflect.deleteProperty(navigator, 'bluetooth');
+		}
+	});
+
 	it('Connect without Web Bluetooth is refused before the chooser', async () => {
 		const { app, spies } = await makeApp();
 		await app.connectDe1();
