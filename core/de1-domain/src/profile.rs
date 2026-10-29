@@ -289,12 +289,13 @@ pub struct Profile {
     /// `#[serde(default)]` → `Espresso` for older serialized profiles.
     #[serde(default)]
     pub beverage_type: BeverageType,
-    /// Target tank temperature, °C. Some advanced profiles change the
-    /// tank setpoint mid-shot; most are 0.0 (no override).
+    /// Target tank temperature, °C; 0.0 = no override (most profiles).
     ///
     /// Matches reaprime's `Profile.tankTemperature` + the community v2
-    /// `tank_temperature` field. App-side metadata only — the DE1
-    /// protocol has no per-profile tank-temp frame field.
+    /// `tank_temperature` field. Not a frame field: the core writes it to
+    /// the tank-threshold MMR (`0x80380C`) once the upload's tail is acked,
+    /// as de1app and reaprime do after every upload (see
+    /// `CremaCore::upload_profile`).
     #[serde(default)]
     pub tank_temperature: f32,
     /// Community v2 profile schema version. Reaprime serializes this as

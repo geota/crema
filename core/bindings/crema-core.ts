@@ -4332,7 +4332,7 @@ export enum MmrRegister {
 export type ProfileUploadFailure = 
 	/** The profile had no steps. */
 	| { kind: "Empty", details?: undefined }
-	/** The profile had more than 32 steps. */
+	/** The profile had more than 20 steps (the DE1 frame limit). */
 	| { kind: "TooManySteps", details: {
 	/** How many steps the rejected profile had. */
 	count: number;

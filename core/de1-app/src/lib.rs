@@ -39,6 +39,7 @@ use capture::{CaptureRecorder, slice_to_jsonl};
 
 use std::time::Duration;
 
+use de1_domain::connect_sweep::MAX_TANK_TEMP_C;
 use de1_domain::saw_learning::{SawLearningModel, SawModelLoad};
 use de1_domain::{
     AUTO_TARE_HOLDOFF_MS, AUTO_TARE_THRESHOLD_G, AutoStop, BeverageType, BrewRecipe,
@@ -852,6 +853,9 @@ struct ProfileUpload {
     /// The uploaded profile's step-weight arbiter; latched into
     /// [`step_weight`](CremaCore::step_weight) on success.
     step_weight: StepWeightExit,
+    /// The tank-temperature threshold to write once the tail is acked, °C
+    /// (`None` = no write). See [`CremaCore::upload_profile`].
+    tank_temp_c: Option<u8>,
     /// The header packet as written; the shell's
     /// [`Source::De1HeaderAck`] must echo it before any frame ack counts.
     header: [u8; SHOT_HEADER_LEN],
@@ -4269,6 +4273,15 @@ impl CremaCore {
     /// `now` stamps the upload start so the ack-timeout watchdog can fire
     /// from [`on_tick`](Self::on_tick) after [`PROFILE_UPLOAD_ACK_TIMEOUT`].
     ///
+    /// When the tail is acked the output that carries
+    /// [`Event::ProfileUploadCompleted`] also writes the tank-temperature
+    /// threshold (MMR `0x80380C`), as de1app (`de1_send_shot_frames`) and
+    /// reaprime (`setProfile` → `tankTemperature`) do after every upload:
+    /// the profile's own `tank_temperature` when it sets one (capped at
+    /// [`MAX_TANK_TEMP_C`](de1_domain::connect_sweep::MAX_TANK_TEMP_C)), otherwise the user's tank setting from the
+    /// connect sweep, so a profile without a tank target restores it. The
+    /// cold-maintenance profile writes 0.
+    ///
     /// # Errors
     ///
     /// [`AppError::ProfileUpload`] wrapping a
@@ -4345,6 +4358,10 @@ impl CremaCore {
             title: profile.title.clone(),
             beverage_type: profile.beverage_type,
             step_weight: StepWeightExit::for_profile(profile),
+            tank_temp_c: profile
+                .tank_temperature_opt()
+                .map(|t| t.round().clamp(0.0, MAX_TANK_TEMP_C) as u8)
+                .or(self.tank_temp_threshold_c),
             header,
             header_acked: false,
             expected_acks,
@@ -4554,7 +4571,13 @@ impl CremaCore {
             let title = std::mem::take(&mut upload.title);
             let beverage_type = upload.beverage_type;
             let step_weight = std::mem::take(&mut upload.step_weight);
+            let tank_temp_c = upload.tank_temp_c;
             self.profile_upload = None;
+            if let Some(tank) = tank_temp_c {
+                out.commands.extend(
+                    mmr_write_command(MmrRegister::TankTempThreshold, u32::from(tank), 4).commands,
+                );
+            }
             self.profile_reupload_pending = false;
             self.profile_reupload_requests = 0;
             self.last_active_profile_title = Some(title.clone());
@@ -10967,6 +10990,61 @@ mod tests {
             assert!(!core.profile_upload_in_progress());
             // reset() also drops the last-active title.
             assert_eq!(core.active_profile_title(), None);
+        }
+
+        /// The TankTempThreshold MMR word written by `commands`, if any.
+        fn tank_write(commands: &[Command]) -> Option<u8> {
+            commands.iter().find_map(|c| match c {
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1MmrWrite,
+                    data,
+                } if data[1..4] == [0x80, 0x38, 0x0C] => Some(data[4]),
+                _ => None,
+            })
+        }
+
+        /// Upload `p`, ack everything, and return the completion's commands.
+        fn completion_commands(core: &mut CremaCore, p: &Profile) -> Vec<Command> {
+            let up = core.upload_profile(p, Duration::ZERO).unwrap();
+            assert_eq!(tank_write(&up.commands), None, "not before the tail ack");
+            ack_header(core, &up.commands, 0);
+            let mut last = Vec::new();
+            for c in &up.commands {
+                if let Command::WriteCharacteristic {
+                    target: WriteTarget::De1ProfileFrame,
+                    data,
+                } = c
+                {
+                    last = core.on_notification(Source::De1FrameAck, data, 1).commands;
+                }
+            }
+            last
+        }
+
+        #[test]
+        fn the_tail_ack_writes_the_profiles_tank_temperature() {
+            // de1app de1_send_shot_frames / reaprime setProfile write the tank
+            // threshold after every upload (cohort review 02 P2-3).
+            let mut core = CremaCore::new();
+            let mut p = profile("Tank", vec![step("a", Pump::Pressure, None)]);
+            p.tank_temperature = 38.0;
+            assert_eq!(tank_write(&completion_commands(&mut core, &p)), Some(38));
+            // Capped like the user setting (de1app range 0..45).
+            p.tank_temperature = 70.0;
+            assert_eq!(tank_write(&completion_commands(&mut core, &p)), Some(45));
+        }
+
+        #[test]
+        fn a_profile_without_a_tank_target_restores_the_user_setting() {
+            let mut core = CremaCore::new();
+            let p = profile("NoTank", vec![step("a", Pump::Pressure, None)]);
+            assert_eq!(
+                tank_write(&completion_commands(&mut core, &p)),
+                None,
+                "no setting known yet: leave the register alone"
+            );
+            core.tank_temp_threshold_c = Some(30);
+            assert_eq!(tank_write(&completion_commands(&mut core, &p)), Some(30));
         }
 
         fn two_step() -> Profile {

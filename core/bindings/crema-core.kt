@@ -4442,7 +4442,7 @@ sealed class ProfileUploadFailure {
 	@Serializable
 	@SerialName("Empty")
 	object Empty: ProfileUploadFailure()
-	/// The profile had more than 32 steps.
+	/// The profile had more than 20 steps (the DE1 frame limit).
 	@Serializable
 	@SerialName("TooManySteps")
 	data class TooManySteps(val details: ProfileUploadFailureTooManyStepsInner): ProfileUploadFailure()

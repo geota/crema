@@ -96,6 +96,11 @@ impl CremaCore {
             // request is better than none.
             return false;
         };
+        // Its tail ack writes 0, like the immediate write below — never the
+        // user's tank setting mid-cycle.
+        if let Some(upload) = self.profile_upload.as_mut() {
+            upload.tank_temp_c = Some(0);
+        }
         out.commands.extend(upload.commands);
         out.events.extend(upload.events);
         // The 0 °C tank target the reference profiles carry (decaid
@@ -618,5 +623,31 @@ mod tests {
             vec![(MaintenancePhase::Finished, 0, 0, true)]
         );
         assert_eq!(tank_writes(&out), vec![30]);
+    }
+
+    #[test]
+    fn the_cold_profiles_tail_ack_writes_tank_zero_not_the_user_setting() {
+        // The completion write (cohort review 02 P2-3) must not restore the
+        // user's tank threshold while the cold cycle runs.
+        let mut core = heating_core(Some(1355));
+        core.tank_temp_threshold_c = Some(30);
+        let start = core.request_machine_state(MachineState::Descale);
+        let mut last = CoreOutput::default();
+        for c in &start.commands {
+            if let Command::WriteCharacteristic { target, data } = c {
+                let source = match target {
+                    WriteTarget::De1ProfileHeader => Source::De1HeaderAck,
+                    WriteTarget::De1ProfileFrame => Source::De1FrameAck,
+                    _ => continue,
+                };
+                last = core.on_notification(source, data, 1_000);
+            }
+        }
+        assert!(
+            last.events
+                .iter()
+                .any(|e| matches!(e, Event::ProfileUploadCompleted { .. }))
+        );
+        assert_eq!(tank_writes(&last), vec![0]);
     }
 }
