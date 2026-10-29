@@ -428,7 +428,7 @@ export class CremaApp {
 				canReloadNow(
 					reloadInputsOf(this.state.current, getGuidedBrewStore().phase, this.firmware?.running ?? false)
 				),
-			show: (apply) => {
+			show: (apply, closed) => {
 				const id = toast.action(
 					'Crema hit an internal error and restarted its engine. Stop-at-weight and other ' +
 						'shot settings are off until you reload.',
@@ -436,9 +436,25 @@ export class CremaApp {
 					apply,
 					0,
 					// Assertive (`role="alert"`, 07 P2 #7): stop-at-weight is off.
-					'error'
+					'error',
+					// Closed with ×: a later reset offers it again (V3 #3).
+					{ onDismiss: closed }
 				);
 				return () => dismissToast(id);
+			},
+			// Past the bridge's reset cap every core call fails until a reload
+			// (final cohort review 2026-10-28, 01 P3-1). Nothing works on a
+			// stopped core, so this notice replaces the reset notice and its
+			// Reload is not gated: there is no recording or live control left to
+			// protect (V3 #7). Assertive, like the reset notice (V2 P3-1).
+			showStopped: (reload) => {
+				toast.action(
+					'Crema hit repeated internal errors and stopped its engine. Reload to start it again.',
+					'Reload',
+					reload,
+					0,
+					'error'
+				);
 			},
 			onDeferred: () =>
 				toast.info('The machine is busy — the reload will be offered again once it is idle.', 6000),
@@ -448,18 +464,14 @@ export class CremaApp {
 			this.state.log(`Core reset after an internal error (reset #${count})`);
 			this.coreResetNotice.onReset();
 		});
-		// Past the bridge's reset cap every core call fails until a reload
-		// (final cohort review 2026-10-28, 01 P3-1). Nothing the shell does
-		// works on a stopped core, so the reload is offered without the busy
-		// gate: there is no recording or live control left to protect.
-		core.onCoreStopped?.(() => {
-			this.state.log('Core stopped after repeated internal errors; reload required');
-			toast.action(
-				'Crema hit repeated internal errors and stopped its engine. Reload to start it again.',
-				'Reload',
-				() => location.reload(),
-				0
+		// Logged once with the bridge's own message as context; the per-call
+		// failures that follow are not logged (V2 P3-2), so this line and the
+		// panic before it stay in the diagnostics export.
+		core.onCoreStopped?.((reason) => {
+			this.state.log(
+				`Core stopped after repeated internal errors; reload required${reason ? ` (${reason})` : ''}`
 			);
+			this.coreResetNotice.onCoreStopped();
 		});
 		this.sweep = new ConnectSweepRunner({
 			core,
