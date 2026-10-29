@@ -82,7 +82,7 @@ class RelayHubControlOrderTest {
         try {
             val actions = RecordingMachineActions()
             val dispatcher = RelayedCommandDispatcher(
-                machine = LocalMachine(actions, grantTakeOver = { CommandOutcome.Accepted }, notify = {}),
+                machine = LocalMachine(actions, notify = {}),
                 hostName = { "Tablet" },
                 machineIdle = { false },
                 announce = { _, _ -> },
@@ -117,7 +117,7 @@ class RelayHubControlOrderTest {
         val actions = RecordingMachineActions()
         var hostNameCalls = 0
         val dispatcher = RelayedCommandDispatcher(
-            machine = LocalMachine(actions, grantTakeOver = { CommandOutcome.Accepted }, notify = {}),
+            machine = LocalMachine(actions, notify = {}),
             hostName = { check(hostNameCalls++ > 0) { "hostName failed" }; "Tablet" },
             machineIdle = { false },
             announce = { _, _ -> },

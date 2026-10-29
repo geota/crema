@@ -3,13 +3,9 @@ package coffee.crema.ui
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import coffee.crema.ble.proxy.DenyReason
-import coffee.crema.ble.proxy.Frame
-import coffee.crema.ble.proxy.InMemoryFrameLink
 import coffee.crema.ble.proxy.PairingCrypto
 import coffee.crema.ble.proxy.PairingDecision
 import coffee.crema.ble.proxy.PairingRequest
-import coffee.crema.ble.proxy.RelayHub
-import coffee.crema.ble.proxy.handshake
 import coffee.crema.machine.CommandOutcome
 import coffee.crema.machine.MachineCommand
 import coffee.crema.machine.QcField
@@ -20,11 +16,8 @@ import coffee.crema.settings.PairedDevice
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -77,8 +70,8 @@ class ProxyControllerModeTest {
         setRecorderEnabled = {},
         notify = {},
         appendLog = { log += it },
-        connect = {},
-        disconnect = {},
+        connect = { events += "connect" },
+        disconnect = { events += "disconnect" },
         disconnectDevices = { events += "teardown" },
         connectScale = {},
         scaleAttachWanted = { false },
@@ -91,7 +84,6 @@ class ProxyControllerModeTest {
         isSnapshotChar = { _, _ -> false },
         pairedDevices = { remembered.toList() },
         rememberPaired = { id, name, canControl -> remembered += PairedDevice(id, name, canControl) },
-        onHandoffGranted = {},
         onModeApplied = { role, _, _ -> events += "applied:$role" },
         firmwareHoldsLink = { flashing },
         secretBox = box,
@@ -109,7 +101,7 @@ class ProxyControllerModeTest {
         controller.switchToNormal()
         scheduler.advanceUntilIdle()
 
-        assertEquals(listOf("teardown", "applied:normal", "teardown", "applied:normal"), events.toList())
+        assertEquals(listOf("teardown", "applied:normal", "connect", "teardown", "applied:normal", "connect"), events.toList())
     }
 
     @Test
@@ -121,7 +113,7 @@ class ProxyControllerModeTest {
         flashing = true // a flash takes the DE1 while the second switch waits
         scheduler.advanceUntilIdle()
 
-        assertEquals(listOf("teardown", "applied:normal"), events.toList(), "the queued switch must not run")
+        assertEquals(listOf("teardown", "applied:normal", "connect"), events.toList(), "the queued switch must not run")
         assertTrue(log.any { it.contains("refused") && it.contains(FIRMWARE_BUSY_REASON) }, "$log")
     }
 
@@ -316,7 +308,7 @@ class ProxyControllerModeTest {
             disconnectDevices = {}, connectScale = {}, scaleAttachWanted = { false }, de1Connected = { false },
             machineStateName = { null }, machineActions = RecordingMachineActions(), snapshotConfig = { "" }, applyConfig = {},
             roster = { emptyList() }, isSnapshotChar = { _, _ -> false }, pairedDevices = { emptyList() },
-            rememberPaired = { _, _, _ -> }, onHandoffGranted = {}, onModeApplied = { _, _, _ -> }, secretBox = box,
+            rememberPaired = { _, _, _ -> }, onModeApplied = { _, _, _ -> }, secretBox = box,
         )
         try {
             assertEquals(controller.deviceId, other.deviceId, "the install id is stable")
@@ -364,7 +356,7 @@ class ProxyControllerModeTest {
         controller.remirrorUnattended("127.0.0.1", 9)
         scheduler.advanceTimeBy(1_000)
         scheduler.runCurrent()
-        assertEquals("applied:secondary", events.last())
+        assertEquals("applied:secondary", events.last { it.startsWith("applied") })
         assertEquals("host-1", controller.pairingStore.pinnedHost, "an unattended re-mirror leaves the pin alone")
 
         controller.switchToSecondary("127.0.0.1", 9)
@@ -409,38 +401,49 @@ class ProxyControllerModeTest {
         assertEquals("The host hasn't allowed this device", deniedMessage(DenyReason.NOT_AUTHORIZED))
     }
 
-    /** Drives the real path: a relayed "handoff" from an approved session →
-     *  handleRelayedControl → grantHandoff(takerId) → release on that
-     *  session's disconnect. */
+    /** AC-6: the Hub mode switch applies live, both ways, with no restart. */
     @Test
-    fun `a relayed handoff releases only when the taker's session ends`() {
-        val hub = RelayHub("p", "P", roster = { emptyList() }, readSource = { _, _, _ -> ByteArray(0) }, isSnapshotChar = { _, _ -> false })
-        controller.relayHub = hub
-        val io = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        try {
-            val (client, server) = InMemoryFrameLink.pair()
-            io.launch { hub.serve(server) }
-            val rx = CopyOnWriteArrayList<Frame>()
-            io.launch { client.incoming().collect { rx += it } }
-            runBlocking { handshake(client, rx, clientId = "taker") }
+    fun `hub mode switches live`() {
+        controller.setHubMode(true)
+        scheduler.advanceTimeBy(1_000)
+        scheduler.runCurrent()
+        assertEquals("primary", controller.state.value.role)
+        assertEquals(listOf("teardown", "applied:primary", "connect"), events.toList(), "on: reconnect as the hub")
 
-            assertEquals(CommandOutcome.Accepted, runBlocking { controller.handleRelayedControl("handoff", "", "taker", "Taker") })
-            repeat(20) { scheduler.runCurrent(); Thread.sleep(5) }
-            scheduler.advanceTimeBy(200)
-            scheduler.runCurrent()
-            assertTrue("applied:normal" !in events, "no release while the taker is connected: $events")
+        events.clear()
+        controller.setHubMode(false)
+        scheduler.advanceTimeBy(1_000)
+        scheduler.runCurrent()
+        assertEquals("normal", controller.state.value.role)
+        assertTrue("applied:normal" in events, "$events")
+    }
 
-            runBlocking { client.close() }
-            // Real time (the hub runs on Dispatchers.Default): generous under load.
-            val deadline = System.currentTimeMillis() + 10_000
-            while ("applied:normal" !in events && System.currentTimeMillis() < deadline) {
-                scheduler.runCurrent()
-                scheduler.advanceTimeBy(200) // the switch's settle delay; stays far below the 3 s cap
-                Thread.sleep(5)
-            }
-            assertTrue("applied:normal" in events, "released on the taker's disconnect: $events")
-        } finally {
-            io.cancel()
-        }
+    /** AC-6: turning Hub mode off frees the machine. The hub steps down with a
+     *  full user disconnect (no reconnect loop, no scan left running) and
+     *  never calls connect, so another device can take the DE1. A flash
+     *  refuses the switch either way. */
+    @Test
+    fun `hub mode off leaves the machine free`() {
+        controller.modeSwitchProbe = { role -> events += "probe:$role" }
+        controller.setHubMode(true)
+        scheduler.advanceTimeBy(1_000)
+        scheduler.runCurrent()
+        events.clear()
+
+        controller.setHubMode(false)
+        scheduler.advanceTimeBy(10_000)
+        scheduler.runCurrent()
+        assertEquals(listOf("probe:normal", "disconnect", "teardown", "applied:normal"), events.toList())
+        assertTrue("connect" !in events, "the stepped-down hub must not reconnect: $events")
+
+        // During a flash neither direction moves the radio.
+        events.clear()
+        flashing = true
+        controller.setHubMode(true)
+        scheduler.advanceTimeBy(1_000)
+        scheduler.runCurrent()
+        assertEquals("normal", controller.state.value.role)
+        assertTrue(events.isEmpty(), "$events")
+        assertTrue(log.any { it.contains("refused") && it.contains(FIRMWARE_BUSY_REASON) }, "$log")
     }
 }

@@ -285,7 +285,7 @@ class ProxySessionTest {
             hub.onInbound(addr, service, stateChar, byteArrayOf(0), 0L)
             stalled.await()
             repeat(100) { i -> hub.onInbound(addr, service, stateChar, byteArrayOf(i.toByte()), i + 1L) }
-            assertTrue(hub.handoffTargets().none { it.clientId == "phone-1" }, "a dropped client is no handoff target")
+            assertTrue(hub.remotes().none { it.clientId == "phone-1" }, "a dropped client is not listed as a remote")
             release.complete(Unit)
 
             withTimeout(2_000) { ended.await() }
@@ -381,7 +381,7 @@ class ProxySessionTest {
     }
 
     @Test
-    fun `a hand-off offer goes to the client's live session, not a closed one`() = runBlocking<Unit> {
+    fun `the remotes list shows the client's live session, not a closed one`() = runBlocking<Unit> {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val hub = RelayHub(
@@ -413,8 +413,7 @@ class ProxySessionTest {
             scope.launch { c2.incoming().collect { rx2 += it } }
             handshake(c2, rx2)
 
-            assertTrue(hub.offerHandoff("phone-1"))
-            waitFor { rx2.any { it is Frame.HandoffOffer } }
+            assertEquals(listOf(RemoteClient("phone-1", "Phone", canControl = true)), hub.remotes())
             stuck.complete(Unit)
         } finally {
             scope.cancel()

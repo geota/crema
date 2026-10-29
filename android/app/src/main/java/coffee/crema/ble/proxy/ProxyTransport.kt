@@ -88,17 +88,15 @@ class ProxyTransport(
      *  — the secondary applies it so its config mirrors the primary (single-owner
      *  config; the settings-drift fix). Default no-op (tests / read-only path). */
     private val onConfig: (json: String) -> Unit = {},
-    /** Invoked with the granted scope (`"control"` / `"mirror"`) from each
-     *  [Frame.Welcome] (issue 02) so the secondary can reflect view-only state.
+    /** Invoked with the granted scope (`"control"` / `"mirror"`) and the hub's
+     *  name from each [Frame.Welcome] (issue 02), so the remote can reflect
+     *  view-only state and name its hub before the first config snapshot.
      *  Default no-op. */
-    private val onWelcome: (scope: String) -> Unit = {},
+    private val onWelcome: (scope: String, primaryName: String) -> Unit = { _, _ -> },
     /** Invoked when the primary [Frame.Denied]s this peer (TOFU declined / revoked,
      *  issue 02) — on the initial handshake AND on a reconnect after a revoke — so
      *  the secondary can surface it and stop mirroring. Default no-op. */
     private val onDenied: (reason: String) -> Unit = {},
-    /** Invoked when the primary pushes a [Frame.HandoffOffer] (issue 07) — the host
-     *  is offering us the machine. The VM prompts; accept runs the normal pull. */
-    private val onHandoffOffer: (fromName: String) -> Unit = {},
     /** Invoked with a primary [Frame.Event] — a transient "<who> drove the machine"
      *  notice (issue 11, loose multi-controller). Display-only; the VM surfaces it
      *  as a snackbar. Default no-op. */
@@ -304,7 +302,7 @@ class ProxyTransport(
                     // The user's consent was for this handshake only.
                     repairAllowed = false
                     applyRoster(frame.roster)
-                    onWelcome(frame.scope)
+                    onWelcome(frame.scope, frame.primaryName)
                     handshake.value = Handshake.Welcomed(state.epoch)
                     if (welcomedBefore) scope.launch { reattach() }
                     welcomedBefore = true
@@ -372,7 +370,8 @@ class ProxyTransport(
             is Frame.Config -> onConfig(frame.json)
             is Frame.Event -> onEvent(frame.text)
             is Frame.Denied -> refuse(frame.reason, IllegalStateException("Proxy denied: ${frame.reason}"))
-            is Frame.HandoffOffer -> onHandoffOffer(frame.fromName)
+            // Retired: an older hub's "Hand off". Nothing changes here.
+            is Frame.HandoffOffer -> Log.i(TAG, "Ignoring a retired handoff offer from ${frame.fromName}")
             else -> Log.w(TAG, "Secondary ignoring unexpected server frame: $frame")
         }
     }

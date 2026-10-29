@@ -6,9 +6,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -20,7 +17,7 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * The host's verdict on a secondary's pairing request (issue 02): either
  * [Denied] (no mirror) or [Allowed] with a capability scope — `canControl=false`
- * is a view-only mirror whose `Control`/`Handoff` are refused. [Allowed.issuedSecret]
+ * is a view-only remote whose `Control` frames are refused. [Allowed.issuedSecret]
  * is set when this decision completes a new pairing; it rides the Welcome.
  */
 sealed class PairingDecision {
@@ -28,9 +25,9 @@ sealed class PairingDecision {
     data class Denied(val reason: String) : PairingDecision()
 }
 
-/** A secondary currently mirroring this primary, as a **push-handoff** target
- *  (issue 07) — the primary's picker lists these so it can "hand off to <name>". */
-data class HandoffTarget(val clientId: String, val clientName: String)
+/** A remote currently connected through this hub: the hub's read-only
+ *  "Remotes connected" list. [canControl] is false for a view-only remote. */
+data class RemoteClient(val clientId: String, val clientName: String, val canControl: Boolean)
 
 /**
  * The primary-side relay: it forwards the one real BLE link out to N secondaries
@@ -109,8 +106,8 @@ class RelayHub(
      */
     private val authorize: suspend (request: PairingRequest) -> PairingDecision =
         { PairingDecision.Allowed(canControl = true) },
-    /** Fired when a secondary attaches/detaches (issue 07) so the primary's UI can
-     *  refresh its "hand off to <device>" list. Default no-op (tests / loopback). */
+    /** Fired when a remote joins, is approved or leaves, so the hub's UI can
+     *  refresh its "Remotes connected" list. Default no-op (tests / loopback). */
     private val onClientsChanged: () -> Unit = {},
     /** Fired with the peer's name when a secondary on another protocol version
      *  is turned away, so the host can say an update is needed. */
@@ -143,24 +140,9 @@ class RelayHub(
     /** Latest connection state per device address (a [BleTransport.ConnState] name). */
     private val connStates = ConcurrentHashMap<String, String>()
 
-    /** Whether [clientId] currently has a live, approved session — the handoff
-     *  release gate: the granting primary waits for the taker's disconnect (its
-     *  mode switch closes the link) instead of a blind timer. A session that only
-     *  claimed the id in its Hello doesn't count. */
+    /** Whether [clientId] currently has a live, approved session. A session
+     *  that only claimed the id in its Hello doesn't count. */
     fun hasClient(clientId: String): Boolean = clients.any { it.approved && it.clientId == clientId }
-
-    /** Bumped whenever a session joins, is approved or leaves. */
-    private val clientsVersion = MutableStateFlow(0L)
-
-    /** Wait until [clientId] has no live session, at most [timeoutMs]; true when
-     *  it left in time. Event-driven: wakes when a session ends. */
-    suspend fun awaitClientGone(clientId: String, timeoutMs: Long): Boolean =
-        withTimeoutOrNull(timeoutMs) { clientsVersion.first { !hasClient(clientId) } } != null
-
-    private fun clientsChanged() {
-        clientsVersion.update { it + 1 }
-        onClientsChanged()
-    }
 
     // ---- Tap: fed by the primary's notification path ----------------------
 
@@ -229,23 +211,14 @@ class RelayHub(
         for (c in clients) if (c.approved && c.clientId != exceptClientId) deliver(c, frame)
     }
 
-    /** Control-capable secondaries currently mirroring this primary — the
-     *  "hand off to <device>" targets (issue 07). View-only peers are excluded:
-     *  their take-over would be refused by the scope gate anyway. */
-    fun handoffTargets(): List<HandoffTarget> =
+    /** Every approved, live remote session, view-only ones included: the
+     *  hub's "Remotes connected" list. A peer that hasn't finished the
+     *  handshake isn't a remote yet. */
+    fun remotes(): List<RemoteClient> =
         clients.mapNotNull { c ->
             val id = c.clientId
-            if (id != null && c.canControl && !c.isClosed) HandoffTarget(id, c.clientName ?: id) else null
+            if (id != null && c.approved && !c.isClosed) RemoteClient(id, c.clientName ?: id, c.canControl) else null
         }
-
-    /** Push a [Frame.HandoffOffer] to a specific mirroring secondary (issue 07).
-     *  The peer prompts and, on accept, runs its normal pull back at us. Returns
-     *  false if no such client is connected. */
-    fun offerHandoff(clientId: String): Boolean {
-        val session = clients.firstOrNull { it.approved && it.clientId == clientId && !it.isClosed } ?: return false
-        deliver(session, Frame.HandoffOffer(primaryName))
-        return true
-    }
 
     /** End every live session of [clientId] (the host forgot the device): it
      *  gets a [Frame.Denied] and its link closes; nothing else reaches it. */
@@ -256,7 +229,7 @@ class RelayHub(
             deliver(c, Frame.Denied(REVOKED))
             c.closeOutbox()
         }
-        clientsChanged()
+        onClientsChanged()
     }
 
     // ---- One client connection --------------------------------------------
@@ -311,7 +284,7 @@ class RelayHub(
             // covers the outbox-close paths). Bounded, so a stuck flush can't
             // hold this coroutine past the server's stop.
             withContext(NonCancellable) { withTimeoutOrNull(CLOSE_TIMEOUT_MS) { runCatching { link.close() } } }
-            clientsChanged()
+            onClientsChanged()
         }
     }
 
@@ -413,7 +386,7 @@ class RelayHub(
                     session,
                     Frame.Welcome(PROXY_PROTOCOL_VERSION, primaryId, primaryName, AUTHORITY_PRIMARY, roster(), scope, decision.issuedSecret),
                 )
-                clientsChanged() // identity known → the primary's hand-off list can list it
+                onClientsChanged() // approved → the hub's Remotes list shows it
             }
             is PairingDecision.Denied -> {
                 Log.i(TAG, "pairing denied for $name ($clientId): ${decision.reason}")
@@ -505,7 +478,7 @@ class RelayHub(
      *  returns to every secondary as machine state over the [Frame.Notify] stream. */
     private suspend fun handleControl(session: ClientSession, frame: Frame.Control) {
         // Scope gate (issue 02): a view-only (mirror-only) peer may observe but not
-        // drive — refuse every Control/Handoff/config verb it sends.
+        // drive — refuse every Control frame it sends, config verbs included.
         if (!session.canControl) {
             Log.i(TAG, "control refused (mirror-only peer): ${frame.method}")
             deliver(session, Frame.ControlErr(frame.id, "not authorized"))
@@ -585,7 +558,7 @@ class RelayHub(
         @Volatile var approved: Boolean = false
         /** Granted control scope (issue 02): false = view-only mirror, set on Welcome. */
         @Volatile var canControl: Boolean = false
-        /** Peer identity from [Frame.Hello], for push-handoff targeting (issue 07). */
+        /** Peer identity from [Frame.Hello], for the hub's Remotes list. */
         @Volatile var clientId: String? = null
         @Volatile var clientName: String? = null
         /** This session's challenge nonce, set when the Hello is answered. */

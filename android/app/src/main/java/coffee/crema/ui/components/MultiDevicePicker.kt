@@ -18,23 +18,31 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coffee.crema.ble.proxy.Peer
 import coffee.crema.ui.MainUiState
+import coffee.crema.ui.connectThroughLabel
+import coffee.crema.ui.turnOffHubToConnect
+import coffee.crema.ui.canConnectDirectly
+import coffee.crema.ui.hubModeBlockedReason
+import coffee.crema.ui.hubModeSubtitle
+import coffee.crema.ui.remoteHubLabel
+import coffee.crema.ui.remoteStatus
 
-/* ── Multi-device: mirror another Crema on the LAN (M2 / issue 13) ──────────
+/* ── Multi-device: connect through a hub on the LAN (M2 / issue 13) ─────────
  * Shared, role-agnostic picker used by BOTH shells — the phone's Devices sheet
- * (PhoneDevicesSheet) and the tablet's Settings. Lists NSD-discovered hosts that
- * hold the DE1 (plus a debug manual peer) → "Mirror"; once mirroring, offers
- * Stop + (idle-only) Take over. The live switch is no-restart (the caller wires
- * switchToSecondary / switchToNormal / requestHandoff). */
+ * (PhoneDevicesSheet) and the tablet's Settings. On a normal device it lists
+ * NSD-discovered hubs that hold the DE1 (plus the manual peer) → "Connect
+ * through"; on a remote it shows the status line with Stop, and Connect
+ * directly once the hub is unreachable or no longer holds the DE1; on the hub
+ * it lists the connected remotes, read-only. The live switch is no-restart
+ * (the caller wires switchToSecondary / switchToNormal / connectDirectly). */
 
 @Composable
 fun MultiDeviceSection(
     ui: MainUiState,
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
-    onTakeOver: () -> Unit,
-    // Primary side (issue 07): push the machine to a specific mirroring secondary.
-    onHandOff: (clientId: String) -> Unit = {},
+    onConnectDirectly: () -> Unit,
     // The phone embeds this at the bottom of its Devices sheet, so it draws its own
     // "Other devices" header; the tablet hosts it under a Settings group title that
     // already serves as the header, so it suppresses this one (issue 13).
@@ -50,7 +58,7 @@ fun MultiDeviceSection(
         Spacer(Modifier.height(4.dp))
     }
 
-    // LAN mirror / hand-off is still experimental and unvalidated on real
+    // Hub and remotes are still experimental and unvalidated on real
     // hardware — flag it alpha wherever these controls surface (Settings + the
     // Devices sheet, phone + tablet), shown regardless of [showHeader].
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -63,64 +71,53 @@ fun MultiDeviceSection(
     }
     Spacer(Modifier.height(8.dp))
 
-    // Primary: we hold the DE1 → offer to hand it off to a mirroring device (issue 07).
+    // Hub: we hold the DE1 → list the remotes connected through us, read-only.
+    // Pairing and Forget live in Settings ▸ Advanced ▸ Paired devices.
     if (ui.proxyRole == "primary") {
-        if (ui.mirrorClients.isEmpty()) {
+        if (ui.remotes.isEmpty()) {
             Text(
-                "No devices are mirroring this machine. To add one, open Settings ▸ Advanced ▸ Paired devices ▸ Pair a device.",
+                "No remotes are connected. To add one, open Settings ▸ Advanced ▸ Paired devices ▸ Pair a device.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            ui.mirrorClients.forEach { client ->
-                MirrorRow(
-                    title = client.clientName,
-                    sub = "Mirroring this machine",
-                    action = "Hand off",
-                    onClick = { onHandOff(client.clientId) },
-                )
+            Text(
+                "Remotes connected",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            ui.remotes.forEach { remote ->
+                RemoteRow(name = remote.clientName, viewOnly = !remote.canControl)
             }
         }
         return
     }
 
-    // If we're already a mirror, the only action is to stop.
+    // A remote: the status line, Stop, and Connect directly when the hub
+    // can't give us the machine.
     if (ui.proxyRole == "secondary") {
-        // Reflect the ACTUAL link, not just the role: mirroringPrimaryName is only
-        // populated once the primary's config snapshot arrives (a real connection);
-        // mirrorReconnecting means the socket is still dialing. Setting the role via
-        // the Settings selector is restart-to-apply, so it can be "secondary" with no
-        // transport built at all — don't claim "Mirroring" in that case.
-        val connected = ui.mirroringPrimaryName.isNotBlank()
-        val target = ui.mirroringPrimaryName.ifBlank { ui.proxyPrimaryHost.ifBlank { "a primary on the LAN" } }
         MirrorRow(
-            title = when {
-                connected -> "Mirroring $target"
-                ui.mirrorReconnecting -> "Connecting to $target…"
-                else -> "Not connected"
-            },
-            sub = when {
-                connected -> "Connected — showing this machine's live shots."
-                ui.mirrorReconnecting -> "Reaching the primary over the LAN…"
-                else -> "Set to secondary, but nothing is linked yet. Pick a primary below — or, if you switched roles in Settings, restart the app to apply."
+            title = ui.remoteStatus().orEmpty(),
+            sub = if (ui.canConnectDirectly()) {
+                "Connect directly to use the machine from this device."
+            } else {
+                "Showing the machine's live shots from ${ui.remoteHubLabel()}."
             },
             action = "Stop",
             onClick = onStopMirroring,
         )
-        // M3 handoff: pull the DE1 onto this device — only meaningful once we're
-        // actually mirroring a primary. Idle-only; the primary refuses mid-shot.
-        if (connected) {
+        if (ui.canConnectDirectly()) {
             MirrorRow(
-                title = "Take over the DE1",
-                sub = "Hold the machine here (idle only)",
-                action = "Take over",
-                onClick = onTakeOver,
+                title = "Connect directly",
+                sub = "Stop using ${ui.remoteHubLabel()} and connect the machine here.",
+                action = "Connect",
+                onClick = onConnectDirectly,
             )
         }
         return
     }
 
-    // NSD-discovered hosts holding the DE1, plus the debug manual peer (for
+    // NSD-discovered hubs holding the DE1, plus the manual peer (for
     // emulators / when NSD can't run).
     val sources = ui.peers.filter { it.isMirrorSource }
     val manualHost = ui.proxyPrimaryHost.takeIf { it.isNotBlank() }
@@ -135,18 +132,79 @@ fun MultiDeviceSection(
     sources.forEach { peer ->
         MirrorRow(
             title = peer.name,
-            sub = "Holds the DE1 · ${peer.host}",
-            action = "Mirror",
+            sub = "Hub · holds the DE1 · ${peer.host}",
+            action = "Connect through",
             onClick = { onMirrorFrom(peer.host, peer.port) },
         )
     }
     manualHost?.let { host ->
         MirrorRow(
-            title = "Debug primary",
+            title = "Manual hub",
             sub = "$host:${ui.proxyPrimaryPort}",
-            action = "Mirror",
+            action = "Connect through",
             onClick = { onMirrorFrom(host, ui.proxyPrimaryPort) },
         )
+    }
+}
+
+/**
+ * The Hub mode switch (Settings ▸ Multi-device, both shells), applied live.
+ * Off frees the machine for another device; disabled while another hub holds
+ * the DE1. [device] names this device in the subtitle ("tablet" / "phone").
+ */
+@Composable
+fun HubModeRow(ui: MainUiState, device: String, onHubMode: (Boolean) -> Unit, last: Boolean = false) {
+    val blocked = ui.hubModeBlockedReason()
+    CremaSettingsRow("Hub mode", ui.hubModeSubtitle(device), last = last) {
+        CremaSwitch(checked = ui.proxyRole == "primary", onCheckedChange = onHubMode, enabled = blocked == null)
+    }
+}
+
+/**
+ * On a normal device while another hub holds the DE1 ([hub] non-null): why
+ * this device can't connect the machine, and "Connect through <hub>" to use
+ * it from here anyway. The DE1 scan keeps running, so this device connects
+ * once that hub turns hub mode off.
+ */
+@Composable
+fun HubHoldsMachineNotice(hub: Peer?, onConnectThrough: (host: String, port: Int) -> Unit, modifier: Modifier = Modifier) {
+    if (hub == null) return
+    Row(
+        modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            turnOffHubToConnect(hub.name),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        OutlinedButton(onClick = { onConnectThrough(hub.host, hub.port) }, shape = RoundedCornerShape(999.dp)) {
+            Text(
+                connectThroughLabel(hub.name),
+                style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
+            )
+        }
+    }
+}
+
+/** One remote in the hub's read-only list: its name, and a badge when it
+ *  may only view. */
+@Composable
+private fun RemoteRow(name: String, viewOnly: Boolean) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        PhIcon("bluetooth", sizeDp = 20)
+        Text(
+            name,
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+            modifier = Modifier.weight(1f),
+        )
+        if (viewOnly) CremaSettingsPill("View only")
     }
 }
 

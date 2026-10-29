@@ -34,6 +34,7 @@ import coffee.crema.ui.WaterMode
 import coffee.crema.ui.YieldRatioMode
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.effectiveBrew
+import coffee.crema.ui.turnOffHubToConnect
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.CremaEdge
 import coffee.crema.ui.theme.CremaTheme
@@ -519,8 +520,7 @@ fun PhoneDevicesSheet(
     onForgetScale: () -> Unit,
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
-    onTakeOver: () -> Unit,
-    onHandOff: (clientId: String) -> Unit,
+    onConnectDirectly: () -> Unit,
     onDismiss: () -> Unit,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
@@ -538,8 +538,7 @@ fun PhoneDevicesSheet(
             onForgetScale = onForgetScale,
             onMirrorFrom = onMirrorFrom,
             onStopMirroring = onStopMirroring,
-            onTakeOver = onTakeOver,
-            onHandOff = onHandOff,
+            onConnectDirectly = onConnectDirectly,
             onRetry = onRetry,
             modifier = Modifier.fillMaxWidth().padding(horizontal = CremaEdge).padding(bottom = 20.dp),
         )
@@ -559,8 +558,7 @@ fun DevicesPanel(
     onForgetScale: () -> Unit,
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
-    onTakeOver: () -> Unit,
-    onHandOff: (clientId: String) -> Unit,
+    onConnectDirectly: () -> Unit,
     modifier: Modifier = Modifier,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
@@ -605,6 +603,7 @@ fun DevicesPanel(
                     listOfNotNull("Connected", ui.de1Firmware).joinToString(" · ")
                 } else {
                     when {
+                        ui.hubHoldingMachine != null -> turnOffHubToConnect(ui.hubHoldingMachine.name)
                         ui.de1Reconnecting -> "Reconnecting…"
                         ui.bleState == De1BleManager.State.SCANNING -> "Scanning…"
                         ui.bleState == De1BleManager.State.CONNECTING || ui.bleState == De1BleManager.State.DISCOVERING || ui.bleState == De1BleManager.State.SUBSCRIBING -> "Connecting…"
@@ -619,6 +618,7 @@ fun DevicesPanel(
                 remembered = ui.rememberedDe1Address != null,
                 onForget = onForgetDe1,
             )
+            if (!connected) HubHoldsMachineNotice(ui.hubHoldingMachine, onConnectThrough = onMirrorFrom)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             DeviceRow(
                 kind = "Scale",
@@ -660,7 +660,7 @@ fun DevicesPanel(
                 Spacer(Modifier.width(9.dp))
                 Text("Scan for devices", style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold))
             }
-            MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onTakeOver, onHandOff)
+            MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onConnectDirectly)
             Text(
                 "Acaia, Bookoo, Decent, Felicita and more pair automatically.",
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
@@ -683,8 +683,7 @@ fun TabletDevicesSheet(
     onForgetScale: () -> Unit,
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
-    onTakeOver: () -> Unit,
-    onHandOff: (clientId: String) -> Unit,
+    onConnectDirectly: () -> Unit,
     onDismiss: () -> Unit,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
@@ -703,8 +702,7 @@ fun TabletDevicesSheet(
             onForgetScale = onForgetScale,
             onMirrorFrom = onMirrorFrom,
             onStopMirroring = onStopMirroring,
-            onTakeOver = onTakeOver,
-            onHandOff = onHandOff,
+            onConnectDirectly = onConnectDirectly,
             onRetry = onRetry,
             modifier = Modifier.fillMaxWidth().padding(horizontal = CremaEdge).padding(top = 2.dp, bottom = 10.dp),
         )
@@ -724,14 +722,15 @@ fun DevicesPanelWide(
     onForgetScale: () -> Unit,
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
-    onTakeOver: () -> Unit,
-    onHandOff: (clientId: String) -> Unit,
+    onConnectDirectly: () -> Unit,
     modifier: Modifier = Modifier,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
 ) {
     val machineStat = if (connected) {
         listOfNotNull("Connected", ui.de1Firmware).joinToString(" · ")
+    } else if (ui.hubHoldingMachine != null) {
+        turnOffHubToConnect(ui.hubHoldingMachine.name)
     } else if (ui.de1Reconnecting) {
         "Reconnecting…"
     } else when (ui.bleState) {
@@ -834,10 +833,11 @@ fun DevicesPanelWide(
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onTakeOver, onHandOff, showHeader = false)
+                    MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onConnectDirectly, showHeader = false)
                 }
             }
         }
+        if (!connected) HubHoldsMachineNotice(ui.hubHoldingMachine, onConnectThrough = onMirrorFrom)
         // Three across when there's room; on a narrow sheet (a 7" tablet in portrait,
         // ~600dp) Machine + Scale share a row and Other devices spans below — otherwise
         // the third column crushes the mirroring text to one character per line.
@@ -958,7 +958,7 @@ private fun WideDeviceTile(
     }
 }
 
-/* ── Multi-device picker (Mirror from / Stop / Take over) now lives in the shared
+/* ── Multi-device picker (Connect through / Stop / Connect directly) now lives in the shared
  * coffee.crema.ui.components.MultiDeviceSection (issue 13 — reused by the tablet). */
 
 @Composable

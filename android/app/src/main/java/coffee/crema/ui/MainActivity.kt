@@ -554,8 +554,7 @@ class MainActivity : ComponentActivity() {
                         onForgetScale = viewModel::forgetScale,
                         onMirrorFrom = { host, port -> viewModel.switchToSecondary(host, port); showDevices = false },
                         onStopMirroring = { viewModel.switchToNormal(); showDevices = false },
-                        onTakeOver = { viewModel.requestHandoff(); showDevices = false },
-                        onHandOff = { id -> viewModel.offerHandoff(id); showDevices = false },
+                        onConnectDirectly = { viewModel.connectDirectly(); showDevices = false },
                         onRetry = viewModel::retryReconnectNow,
                         onDismiss = { showDevices = false },
                     )
@@ -571,19 +570,12 @@ class MainActivity : ComponentActivity() {
                 ui.pendingPairing?.let { prompt ->
                     PairingDialog(prompt = prompt, onChoice = viewModel::resolvePairing)
                 }
-                // Push handoff (issue 07) — a primary is offering us the machine.
+                // A host this device pairs with couldn't prove the pairing.
                 ui.changedHost?.let { (hostId, hostName) ->
                     ChangedHostDialog(
                         hostName = hostName,
                         onForget = { viewModel.forgetHost(hostId) },
                         onDismiss = viewModel::dismissChangedHost,
-                    )
-                }
-                ui.pendingHandoffOffer?.let { fromName ->
-                    HandoffOfferDialog(
-                        fromName = fromName,
-                        onAccept = viewModel::acceptHandoffOffer,
-                        onDecline = viewModel::declineHandoffOffer,
                     )
                 }
                 // Fullscreen expanded chart — drawn last, over everything.
@@ -1255,21 +1247,5 @@ private fun ChangedHostDialog(hostName: String, onForget: () -> Unit, onDismiss:
         },
         confirmButton = { TextButton(onClick = onForget) { Text("Forget host") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Keep") } },
-    )
-}
-
-/**
- * Push-handoff offer (issue 07): a primary ([fromName]) is offering this device the
- * machine. Accept → run the normal idle-gated take-over; dismiss / Not now = leave
- * the machine where it is.
- */
-@Composable
-private fun HandoffOfferDialog(fromName: String, onAccept: () -> Unit, onDecline: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDecline,
-        title = { Text("Take the machine?") },
-        text = { Text("“$fromName” wants to hand you the espresso machine. You'll become the host.") },
-        confirmButton = { TextButton(onClick = onAccept) { Text("Take over") } },
-        dismissButton = { TextButton(onClick = onDecline) { Text("Not now") } },
     )
 }

@@ -27,7 +27,7 @@ class RelayedCommandDispatcherTest {
     private val phone = CommandOrigin("phone-1", "Phone")
 
     private val dispatcher = RelayedCommandDispatcher(
-        machine = LocalMachine(actions, grantTakeOver = { CommandOutcome.Accepted }, notify = {}),
+        machine = LocalMachine(actions, notify = {}),
         hostName = { check(!hostNameThrows) { "hostName failed" }; "Tablet" },
         machineIdle = { check(!machineIdleThrows) { "machineIdle failed" }; machineIdle },
         announce = { text, _ -> announced += text },
@@ -127,6 +127,18 @@ class RelayedCommandDispatcherTest {
         dispatch("cancelMaintenance")
         assertTrue(announced.isEmpty(), "$announced")
         assertEquals(3, actions.peerActivity)
+    }
+
+    /** AC-2: an older remote's Take over is refused with the retired reason,
+     *  with or without arguments, before anything runs or is announced. */
+    @Test
+    fun `a retired handoff is refused and runs nothing`() {
+        val reason = MachineCommandCodec.RETIRED_METHODS.getValue("handoff")
+        assertEquals(CommandOutcome.Refused(reason), dispatch("handoff"))
+        assertEquals(CommandOutcome.Refused(reason), dispatch("handoff", "x"))
+        assertTrue(actions.applied.isEmpty() && actions.shown.isEmpty(), "${actions.applied}")
+        assertEquals(0, actions.peerActivity, "a refused control isn't presence")
+        assertTrue(announced.isEmpty(), "$announced")
     }
 
     /** AC-5 (verifier P3-3): a throw from any step around the command, not

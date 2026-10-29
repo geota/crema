@@ -198,15 +198,16 @@ data class AppPrefs(
      *  scans to zero with the screen off, reaprime #107) while still telling
      *  the core codec which scale it is. Additive → nullable. */
     val scaleName: String? = null,
-    // ── Multi-device LAN proxy (M1, debug/demo) ──────────────────────────────
-    /** Proxy role — `"normal" | "primary" | "secondary"`. `normal` = today's
-     *  single-device behaviour. A debug/demo setting: the transport is built at
-     *  startup, so a change is **restart-to-apply**. */
+    // ── Multi-device LAN proxy: hub and remotes ──────────────────────────────
+    /** Proxy role — `"normal" | "primary" | "secondary"` (users see normal,
+     *  hub, remote). `normal` = today's single-device behaviour. Set live by the
+     *  Hub mode switch and "Connect through"; the device restarts in it. */
     val proxyRole: String = "normal",
-    /** For `secondary`: the primary's host — an IP, or `10.0.2.2` to reach an
-     *  `adb forward`ed port on the dev host from an emulator. */
+    /** The hub a remote connects through: its host — an IP, or `10.0.2.2` to
+     *  reach an `adb forward`ed port on the dev host from an emulator. Also the
+     *  picker's manual hub in every role. */
     val proxyPrimaryHost: String = "",
-    /** For `secondary`: the primary's relay port. */
+    /** The hub's relay port (see [proxyPrimaryHost]). */
     val proxyPrimaryPort: Int = 0,
     /** Debug/emulator only: when a `primary` starts, **replay the newest captured
      *  shot as a fake DE1** instead of using live Bluetooth. Default OFF — a real
@@ -441,7 +442,7 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
 /**
  * A secondary this host has approved (issue 02). [id] is the peer's stable
  * `clientId` (the TOFU key); [name] its display label; [canControl] = false marks
- * a **view-only** mirror whose Control/Handoff the relay refuses.
+ * a **view-only** remote: Control is refused.
  */
 @Serializable
 data class PairedDevice(

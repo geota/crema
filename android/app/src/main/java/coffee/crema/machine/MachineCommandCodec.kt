@@ -33,7 +33,6 @@ object MachineCommandCodec {
         is MachineCommand.StateRequest -> Wire(MACHINE_STATE, cmd.request.name)
         MachineCommand.CancelMaintenance -> Wire(CANCEL_MAINTENANCE, "")
         MachineCommand.TareScale -> Wire(TARE_SCALE, "")
-        MachineCommand.TakeOver -> Wire(HANDOFF, "")
         is MachineCommand.SetActiveProfile -> Wire(SET_ACTIVE_PROFILE, cmd.id)
         // No bean travels as an empty argument.
         is MachineCommand.SetActiveBean -> Wire(SET_ACTIVE_BEAN, cmd.id.orEmpty())
@@ -49,6 +48,9 @@ object MachineCommandCodec {
 
     /** Parse a relayed control and check its arguments. Nothing here applies it. */
     fun decode(method: String, args: String): Decoded {
+        // Before parse: a retired method with arguments would otherwise read
+        // as an unknown control.
+        RETIRED_METHODS[method]?.let { return Decoded.Invalid(it) }
         val command = parse(method, args) ?: return Decoded.Invalid(parseRefusal(method, args))
         return command.refusal()?.let { Decoded.Invalid(it) } ?: Decoded.Valid(command)
     }
@@ -56,10 +58,19 @@ object MachineCommandCodec {
     /** Every method a primary accepts. */
     val METHODS: Set<String> by lazy {
         setOf(
-            START_SHOT, MACHINE_STATE, CANCEL_MAINTENANCE, TARE_SCALE, HANDOFF, SET_ACTIVE_PROFILE,
+            START_SHOT, MACHINE_STATE, CANCEL_MAINTENANCE, TARE_SCALE, SET_ACTIVE_PROFILE,
             SET_ACTIVE_BEAN, SET_STOP_ON_WEIGHT, SET_AUTO_TARE, QUICK_ADJUST_BREW, RESET_BREW,
         ) + QcField.entries.map(::qcMethod)
     }
+
+    /**
+     * Methods older remotes still send that a hub no longer runs, with the
+     * reason it refuses them. The reason carries no host name: the codec has
+     * none, and an older remote shows its own wording for the refusal anyway.
+     */
+    val RETIRED_METHODS: Map<String, String> = mapOf(
+        "handoff" to "Take-over was removed — turn off hub mode on the hub to connect another device",
+    )
 
     /** The machine states a `machineState` control may carry. */
     val RELAYABLE_STATES: Set<String> get() = stateRequests.keys
@@ -84,7 +95,6 @@ object MachineCommandCodec {
             START_SHOT -> noArgs(args, MachineCommand.StartShot)
             CANCEL_MAINTENANCE -> noArgs(args, MachineCommand.CancelMaintenance)
             TARE_SCALE -> noArgs(args, MachineCommand.TareScale)
-            HANDOFF -> noArgs(args, MachineCommand.TakeOver)
             RESET_BREW -> noArgs(args, MachineCommand.ResetBrew)
             MACHINE_STATE -> stateRequests[args]
             SET_ACTIVE_PROFILE -> MachineCommand.SetActiveProfile(args)
@@ -141,7 +151,6 @@ object MachineCommandCodec {
     private const val MACHINE_STATE = "machineState"
     private const val CANCEL_MAINTENANCE = "cancelMaintenance"
     private const val TARE_SCALE = "tareScale"
-    private const val HANDOFF = "handoff"
     private const val SET_ACTIVE_PROFILE = "setActiveProfile"
     private const val SET_ACTIVE_BEAN = "setActiveBean"
     private const val SET_STOP_ON_WEIGHT = "setStopOnWeight"

@@ -6,7 +6,6 @@ import coffee.crema.ble.BleTransport
 import coffee.crema.ble.NordicBleTransport
 import coffee.crema.ble.proxy.DenyReason
 import coffee.crema.ble.proxy.DeviceInfo
-import coffee.crema.ble.proxy.HandoffTarget
 import coffee.crema.ble.proxy.LanRelayServer
 import coffee.crema.ble.proxy.LinkState
 import coffee.crema.ble.proxy.PairingCrypto
@@ -18,6 +17,7 @@ import coffee.crema.ble.proxy.PeerDiscovery
 import coffee.crema.ble.proxy.ProxyTransport
 import coffee.crema.ble.proxy.ReconnectingClientLink
 import coffee.crema.ble.proxy.RelayHub
+import coffee.crema.ble.proxy.RemoteClient
 import coffee.crema.ble.proxy.ReplayBleTransport
 import coffee.crema.ble.proxy.SwitchableBleTransport
 import coffee.crema.ble.proxy.TappingBleTransport
@@ -26,7 +26,6 @@ import coffee.crema.machine.CommandOrigin
 import coffee.crema.machine.CommandOutcome
 import coffee.crema.machine.LocalMachine
 import coffee.crema.machine.MachineActions
-import coffee.crema.machine.MachineCommand
 import coffee.crema.machine.MachineCommands
 import coffee.crema.machine.RelayMachine
 import coffee.crema.machine.RelayedCommandDispatcher
@@ -69,9 +68,9 @@ data class PairingPrompt(val clientId: String, val clientName: String)
 enum class PairingChoice { DENY, MIRROR_ONLY, ALLOW_CONTROL }
 
 /*
- * The multi-device proxy controller — mode switching (normal / primary /
- * secondary), the LAN relay + mirror link lifecycle, peer discovery, TOFU
- * pairing, and handoff, extracted from MainViewModel (review #43).
+ * The multi-device proxy controller — mode switching (normal / hub / remote;
+ * `primary` / `secondary` in code), the LAN relay + remote link lifecycle,
+ * peer discovery and TOFU pairing, extracted from MainViewModel (review #43).
  *
  * Follows the VisualizerSync / DriveSync pattern: a self-contained controller
  * with its own [state] flow; the VM constructs it, wires callbacks, and mirrors
@@ -82,8 +81,8 @@ enum class PairingChoice { DENY, MIRROR_ONLY, ALLOW_CONTROL }
  *
  * Whole-app concerns stay VM-side, reached through constructor callbacks: the
  * verb bodies behind machine commands ([machineActions]), the session-config
- * snapshot ([snapshotConfig] / [applyConfig]), the paired-device list
- * (persisted with the app prefs), and the mirrored-profile promotion on handoff.
+ * snapshot ([snapshotConfig] / [applyConfig]) and the paired-device list
+ * (persisted with the app prefs).
  *
  * It also picks where the VM's commands go ([machine]): a [RelayMachine] while
  * mirroring, else the [LocalMachine], swapped with the transport. On a primary
@@ -118,7 +117,7 @@ class ProxyController(
     /** Whether the DE1 manager currently holds a device (drives advertisement). */
     private val de1Connected: () -> Boolean,
     /** The DE1's current machine-state name (`MachineState.string`), null when
-     *  unknown — gates handoff (idle-only) and words the "who's driving" notice. */
+     *  unknown — words the "who's driving" notice. */
     private val machineStateName: () -> String?,
     /** The VM's verb bodies, which machine commands run on this device. Never
      *  invoked during construction. */
@@ -135,15 +134,12 @@ class ProxyController(
     private val pairedDevices: () -> List<PairedDevice>,
     /** Persist a TOFU decision so the peer's reconnects are silent. */
     private val rememberPaired: (id: String, name: String, canControl: Boolean) -> Unit,
-    /** A pull-handoff was granted: promote the mirrored custom profile into the
-     *  local library before becoming the primary (issue 05). */
-    private val onHandoffGranted: () -> Unit,
     /** A mode switch landed: mirror role/host/port into MainUiState (sticky
      *  rules), drop the mirror overlay fields, and persist the prefs. */
     private val onModeApplied: (role: String, host: String, port: Int) -> Unit,
     /** The core's firmware lock (`bridge.firmwareLocksWrites()`): a flash or
-     *  its erase / reboot window holds the DE1, so no takeover, handoff or mode
-     *  switch may move the radio (audit r2 H1). */
+     *  its erase / reboot window holds the DE1, so no mode switch may move the
+     *  radio (audit r2 H1). */
     private val firmwareHoldsLink: () -> Boolean = { false },
     /** Seals the pairing secrets at rest (tests pass a fake cipher). */
     secretBox: SecretBox = DeviceSecretBox.instance,
@@ -159,21 +155,25 @@ class ProxyController(
         val role: String = "normal",
         /** LAN peers discovered over NSD (the multi-device picker). */
         val peers: List<Peer> = emptyList(),
-        /** True while a secondary's link to its primary is (re)dialing (issue 03). */
+        /** True while a remote's link to its hub is (re)dialing or not yet
+         *  welcomed (issue 03). */
         val mirrorReconnecting: Boolean = false,
         /** True when the host admitted this mirror view-only (issue 02). */
         val mirrorViewOnly: Boolean = false,
         /** A host-side TOFU prompt awaiting the user's choice (issue 02). */
         val pendingPairing: PairingPrompt? = null,
-        /** Secondaries mirroring this primary — the push-handoff targets (issue 07). */
-        val mirrorClients: List<HandoffTarget> = emptyList(),
+        /** Remotes connected through this hub: its read-only Remotes list. */
+        val remotes: List<RemoteClient> = emptyList(),
         /** Seconds left in the host's pairing window; 0 = closed. */
         val pairingSecondsLeft: Int = 0,
         /** Paired devices that hold a pairing secret from this host. A remembered
          *  device missing here has to pair again. */
         val pairedWithSecret: Set<String> = emptySet(),
-        /** A pushed handoff offer awaiting accept/decline, by host name (issue 07). */
-        val pendingHandoffOffer: String? = null,
+        /** A remote's hub name, from the hub's Welcome; blank until then and
+         *  in the other roles. */
+        val hubName: String = "",
+        /** A remote's hub lists the DE1 in its roster: it holds the machine. */
+        val hubHasMachine: Boolean = false,
         /** A host that couldn't prove the secret this device holds for it, as
          *  (host id, name): the UI offers to forget it on this device. */
         val changedHost: Pair<String, String>? = null,
@@ -196,12 +196,9 @@ class ProxyController(
     @Volatile private var relayMachine: RelayMachine? = null
 
     /** Runs commands on this device: this device's UI, and a primary's relayed
-     *  controls. A take-over is granted here with the taker's identity, so the
-     *  release waits for that client's disconnect instead of a blind flush
-     *  timer that could tear the `ControlOk` down with the relay. */
+     *  controls. */
     private val localMachine = LocalMachine(
         actions = machineActions,
-        grantTakeOver = { takerId -> grantHandoff(takerId) },
         notify = { notify(it) },
     )
 
@@ -209,7 +206,7 @@ class ProxyController(
     private val relayedCommands = RelayedCommandDispatcher(
         machine = localMachine,
         hostName = { deviceLabel() },
-        machineIdle = { machineStateName() in HANDOFF_IDLE_STATES },
+        machineIdle = { machineStateName() in IDLE_STATES },
         // "Who's driving" (issue 11, loose model): the other mirrors and this
         // primary learn who drove the machine; the originator already knows.
         announce = { text, origin ->
@@ -283,9 +280,9 @@ class ProxyController(
 
     /** How the next secondary session may treat its host. Only the user's own
      *  pick ([USER_PICK]) clears the pin and may pair. Anything unattended — a
-     *  restored target, a re-mirror after a handoff or reclaim — keeps the pin
-     *  and connects only to a host that proves a secret this device already
-     *  holds ([UNATTENDED]). Passed with each switch to [startSecondaryMode]. */
+     *  restored target, an automatic re-mirror — keeps the pin and connects
+     *  only to a host that proves a secret this device already holds
+     *  ([UNATTENDED]). Passed with each switch to [startSecondaryMode]. */
     internal data class MirrorTrust(val repin: Boolean, val allowRepair: Boolean) {
         companion object {
             val USER_PICK = MirrorTrust(repin = true, allowRepair = true)
@@ -294,19 +291,18 @@ class ProxyController(
     }
 
     /** Serializes [applyMode]: mode switches launch from several async paths
-     *  (the picker, a handoff grant's delayed release, the reclaim probe,
-     *  denied→normal) and interleaved teardown/build would leak a relay server
-     *  or install two transports. Switches run one at a time, in the order
-     *  they were requested. */
+     *  (the picker, the Hub mode switch, denied→normal) and interleaved
+     *  teardown/build would leak a relay server or install two transports.
+     *  Switches run one at a time, in the order they were requested. */
     private val modeMutex = Mutex()
 
-    /** Crash-guard on the ack-by-disconnect handoff release: if the granted taker
-     *  never drops its link (crashed, BT off), release the DE1 anyway — the
-     *  reclaim probe (issue 01) still recovers an orphaned machine after that. */
-    private val handoffReleaseTimeoutMs = 3_000L
+    /** Test seam: runs at the top of every [applyModeLocked], under the mode
+     *  lock, before anything is torn down. */
+    @androidx.annotation.VisibleForTesting
+    internal var modeSwitchProbe: (suspend (role: String) -> Unit)? = null
 
     // The managers + scanner sit on this facade so the transport can be swapped at
-    // runtime — M2 mode switches (Mirror/Hand-off) with NO app restart. It holds
+    // runtime — M2 mode switches with NO app restart. It holds
     // [NotStartedTransport] until [start] installs the persisted role's
     // transport ([startPersistedRole]); [applyMode] swaps it after that.
     private val switchable = SwitchableBleTransport(NotStartedTransport)
@@ -320,6 +316,9 @@ class ProxyController(
     private val peerDiscovery = PeerDiscovery(app, scope, instanceId)
 
     private var started = false
+
+    /** Feeds [State.peers]: NSD discovery, or a test's flow ([overridePeers]). */
+    private var peersJob: Job? = null
 
     /**
      * Post-construction start, called once from the VM's `init` (after every VM
@@ -336,10 +335,20 @@ class ProxyController(
         switchable.setDelegate(startPersistedRole())
         // A secondary (read-only mirror) doesn't record the primary's shot (issue 14).
         setRecorderEnabled(readProxyConfigSync().role != "secondary")
-        scope.launch { peerDiscovery.peers.collect { p -> _state.update { it.copy(peers = p) } } }
+        collectPeers(peerDiscovery.peers)
         peerDiscovery.startDiscovery()
         refreshAdvertisement()
     }
+
+    private fun collectPeers(source: Flow<List<Peer>>) {
+        peersJob?.cancel()
+        peersJob = scope.launch { source.collect { p -> _state.update { it.copy(peers = p) } } }
+    }
+
+    /** Test seam: [State.peers] follows [flow] instead of NSD, which doesn't
+     *  run under Robolectric. */
+    @androidx.annotation.VisibleForTesting
+    internal fun overridePeers(flow: Flow<List<Peer>>) = collectPeers(flow)
 
     /** Tear down whatever the current role holds. Called from the VM's
      *  `onCleared`, after the managers disconnected. Closing the Nordic
@@ -368,83 +377,6 @@ class ProxyController(
         originName: String? = null,
     ): CommandOutcome = relayedCommands.dispatch(method, args, CommandOrigin(originId, originName))
 
-    // ── Handoff (M3) ──────────────────────────────────────────────────────────
-
-    /** Primary side of an M3 handoff: a secondary asked for the DE1. Refuse unless
-     *  the machine is positively idle; otherwise grant by stepping down to NORMAL so
-     *  the taker can connect its own radio. The release waits for the TAKER'S
-     *  DISCONNECT — its own mode switch closes the link once it has the grant —
-     *  so tearing the relay down can't race the `ControlOk` off the wire (the old
-     *  400 ms flush timer could); a timeout still releases if the taker crashed.
-     *  A refusal becomes a `ControlErr` → the taker stays put. */
-    private fun grantHandoff(takerId: String? = null): CommandOutcome {
-        handoffRefusal(machineStateName(), firmwareHoldsLink())?.let { reason ->
-            appendLog("Handoff refused: $reason")
-            return CommandOutcome.Refused(reason)
-        }
-        appendLog("Handoff granted — releasing the DE1")
-        val hub = relayHub
-        scope.launch {
-            // Ack-by-disconnect: the grant (ControlOk) is queued after this
-            // handler returns; the taker, once it has it, switches to primary and
-            // its link closes. Wait for that — with a crash-guard timeout. (A
-            // relayed control always carries the approved session's id.)
-            if (takerId == null || hub == null) {
-                appendLog("Handoff: no taker identity — releasing now")
-            } else if (!hub.awaitClientGone(takerId, handoffReleaseTimeoutMs)) {
-                appendLog("Handoff: taker still connected after ${handoffReleaseTimeoutMs}ms — releasing anyway")
-            }
-            // RELEASE: step down to normal but do NOT reconnect — the taker must be
-            // able to acquire the now-free DE1 (issue 01). The old path reconnected,
-            // so the "released" holder immediately re-grabbed the radio and the
-            // take-over could never land on real hardware.
-            applyMode("normal", "", 0, reconnect = false)
-            armHandoffReclaim()
-        }
-        return CommandOutcome.Accepted
-    }
-
-    /** After granting a handoff we release the DE1 without reconnecting. If the
-     *  taker never actually acquires it (BT off, a crash, out of range) the machine
-     *  would be orphaned — so after a grace period, probe: if the DE1 came **free**
-     *  the take-over didn't stick, so reclaim it and resume hosting; if it's
-     *  **taken**, the handoff succeeded and we stay a plain normal device. The
-     *  free/busy test is the real BLE scan, so this recovery is hardware-exercised
-     *  (on a no-Bluetooth emulator the probe always finds nothing → stays normal).
-     *  (issue 01 — release + reclaim-on-timeout: a failed take-over never orphans.) */
-    private fun armHandoffReclaim() {
-        scope.launch {
-            delay(8_000L) // grace for the taker to acquire the radio
-            if (_state.value.role != "normal" || de1Connected()) return@launch
-            appendLog("Handoff reclaim: probing whether the DE1 came free")
-            connect() // scans + binds the DE1 only if it is free
-            delay(3_000L) // give the probe scan time to bind
-            if (de1Connected()) {
-                appendLog("Handoff reclaim: DE1 was free — resuming as primary")
-                switchToPrimary()
-            } else {
-                appendLog("Handoff reclaim: DE1 is taken — re-mirroring the new host")
-                disconnect() // cancel the pending scan
-                autoMirrorDiscoveredPrimary() // don't go dark: become the taker's mirror (issue 07)
-            }
-        }
-    }
-
-    /** After stepping down from a handoff, don't sit blank (issue 07): if a primary
-     *  holding the DE1 has appeared on NSD, mirror it — a true role-swap, not
-     *  A→primary/B→dark. NSD doesn't cross the emulator NAT, so the cross-device
-     *  re-mirror is hardware-validated; on the emulator [State.peers] is empty →
-     *  no-op (the user can still re-mirror via the picker's manual peer). */
-    private fun autoMirrorDiscoveredPrimary() {
-        if (_state.value.role != "normal") return
-        val host = _state.value.peers.firstOrNull { it.isMirrorSource && it.id != instanceId } ?: run {
-            appendLog("Re-mirror: no DE1-holding primary discovered yet (NSD)")
-            return
-        }
-        appendLog("Re-mirror: auto-mirroring ${host.name} (${host.host}:${host.port})")
-        remirrorUnattended(host.host, host.port)
-    }
-
     /** Mirror [host]:[port] without the user picking it: the pin stays, and only
      *  a host that proves a secret this device holds is accepted. Anything
      *  else is refused and stays in the picker for the user. */
@@ -456,82 +388,11 @@ class ProxyController(
     @androidx.annotation.VisibleForTesting
     internal val pairingStore: PairingStore get() = pairing
 
-    /** Secondary side of an M3 handoff (the picker's "Take over"): ask the primary
-     *  to release the DE1, and on grant become the host ourselves. Idle-only — the
-     *  primary refuses mid-shot. NOTE: the old primary stepping back as *our*
-     *  mirror needs an endpoint exchange / NSD (it doesn't know our relay), and on
-     *  a no-Bluetooth emulator "becoming primary" falls to a replay; the real radio
-     *  move is hardware-gated. Both are documented follow-ups. */
-    fun requestHandoff() {
-        val relay = relayMachine ?: run {
-            appendLog("Handoff: not currently mirroring a primary")
-            return
-        }
-        scope.launch {
-            when (val outcome = relay.forward(MachineCommand.TakeOver)) {
-                CommandOutcome.Accepted -> {
-                    appendLog("Handoff granted — acquiring the DE1")
-                    notify("Taking over the machine…")
-                    onHandoffGranted() // keep the mirrored custom profile (issue 05)
-                    // No wait here: the primary releases once our link closes,
-                    // which this switch does. connect() is scan-based and the
-                    // scan has no timeout (ConnectionController.connect /
-                    // scanForDe1), so it binds only once the released DE1
-                    // advertises; there is no window to miss.
-                    switchToPrimary()
-                }
-                is CommandOutcome.Refused -> {
-                    appendLog("Handoff refused: ${outcome.reason}")
-                    notify(takeoverRefusedMessage(outcome.reason))
-                }
-                // The primary may have granted it: it releases the DE1 after its
-                // timeout and reclaims it when nobody takes it. Not resent.
-                is CommandOutcome.Unknown -> {
-                    appendLog("Handoff: no reply (${outcome.detail}); staying a mirror")
-                    notify("No reply from the host — the machine may not have been handed over")
-                }
-            }
-        }
-    }
-
-    // ── Push handoff ("hand off TO X" — issue 07) ─────────────────────────────
-
-    /** Refresh the list of secondaries mirroring this primary (the push targets),
-     *  wired to [RelayHub.onClientsChanged]. No-op off-primary. */
-    private fun refreshMirrorClients() {
-        val targets = relayHub?.handoffTargets() ?: emptyList()
-        _state.update { it.copy(mirrorClients = targets) }
-    }
-
-    /** Primary side: offer the machine to a specific mirroring secondary. The peer
-     *  prompts and, on accept, runs its normal "Take over" back at us — so the
-     *  idle-gated release + reclaim (issue 01) handles the swap. */
-    fun offerHandoff(clientId: String) {
-        if (firmwareHoldsLink()) {
-            notify(FIRMWARE_BUSY_NOTICE)
-            return
-        }
-        if (relayHub?.offerHandoff(clientId) == true) {
-            notify("Offered the machine — waiting for the other device")
-        } else {
-            appendLog("Handoff offer failed: $clientId not connected")
-        }
-    }
-
-    /** Secondary side: the host pushed us an offer. Raise the accept prompt. */
-    private fun onHandoffOffered(fromName: String) {
-        _state.update { it.copy(pendingHandoffOffer = fromName) }
-    }
-
-    /** The user accepted a pushed offer → take the machine (the normal pull). */
-    fun acceptHandoffOffer() {
-        _state.update { it.copy(pendingHandoffOffer = null) }
-        requestHandoff()
-    }
-
-    /** The user declined a pushed offer — a local no-op (the host keeps the DE1). */
-    fun declineHandoffOffer() {
-        _state.update { it.copy(pendingHandoffOffer = null) }
+    /** Refresh the hub's Remotes list, wired to [RelayHub.onClientsChanged].
+     *  No-op off-hub. */
+    private fun refreshRemotes() {
+        val remotes = relayHub?.remotes() ?: emptyList()
+        _state.update { it.copy(remotes = remotes) }
     }
 
     // ── Multi-device pairing (issue 02) ───────────────────────────────────────
@@ -761,8 +622,8 @@ class ProxyController(
             // Pairing gate (issue 02): a valid pairing secret, or the host's
             // prompt while its pairing window is open.
             authorize = { request -> authorizePeer(request) },
-            // Keep the "hand off to <device>" list live as mirrors come/go (issue 07).
-            onClientsChanged = { refreshMirrorClients() },
+            // Keep the Remotes list live as remotes come and go.
+            onClientsChanged = { refreshRemotes() },
             onOutdatedPeer = { name -> onOutdatedPeer(name) },
             // The host proves the secret it issued before a device proves it back.
             pairingSecretFor = { clientId ->
@@ -797,10 +658,14 @@ class ProxyController(
         secondaryScope = modeScope
         val link = ReconnectingClientLink(url, modeScope)
         proxyLink = link
-        // Reflect the link's CONNECTING/CONNECTED into the UI so a dropped primary
-        // shows "Reconnecting…", not a frozen "Mirroring" (issue 03).
+        // Reflect the link into the UI so a dropped hub shows "Reconnecting…",
+        // not a frozen "Connected through" (issue 03). The link only counts as
+        // up once the hub has welcomed this session (onWelcome below): until
+        // then a socket can be open while the hub's pairing prompt waits.
         modeScope.launch {
-            link.state.collect { s -> _state.update { it.copy(mirrorReconnecting = s == LinkState.CONNECTING) } }
+            link.state.collect { s ->
+                if (s == LinkState.CONNECTING) _state.update { it.copy(mirrorReconnecting = true) }
+            }
         }
         val proxy = ProxyTransport(
             // clientId = the STABLE per-install id (issue 14) so the host finds
@@ -809,12 +674,13 @@ class ProxyController(
             link, modeScope, clientId = deviceId, clientName = deviceLabel(),
             // Snap this mirror's config to the primary's on every attach (T2).
             onConfig = { applyConfig(it) },
-            // Reflect the granted scope (issue 02): view-only mirrors can't control.
-            onWelcome = { scope -> _state.update { it.copy(mirrorViewOnly = scope == "mirror") } },
+            // Reflect the granted scope (issue 02): view-only remotes can't
+            // control. The hub's name labels the status line from now on.
+            onWelcome = { scope, hubName ->
+                _state.update { it.copy(mirrorViewOnly = scope == "mirror", hubName = hubName, mirrorReconnecting = false) }
+            },
             // Host declined/revoked us → stop mirroring with a message (issue 02).
             onDenied = { reason -> onProxyDenied(reason) },
-            // The host is pushing us the machine (issue 07) → prompt to accept.
-            onHandoffOffer = { fromName -> onHandoffOffered(fromName) },
             // "Who's driving" (issue 11): another mirror drove the machine → toast.
             onEvent = { text -> notify(text) },
             // Prove the pairing secret this device holds for the host it reaches,
@@ -846,6 +712,7 @@ class ProxyController(
         // satisfied by the same roster, so this just times the trigger.
         modeScope.launch {
             proxy.deviceRoster.collect { devices ->
+                _state.update { it.copy(hubHasMachine = devices.any { d -> d.kind == "de1" }) }
                 val hasScale = devices.any { it.kind == "scale" }
                 if (hasScale && scaleAttachWanted()) {
                     appendLog("Mirror: primary has a scale — attaching")
@@ -858,11 +725,23 @@ class ProxyController(
 
     // ── Live mode switches (M2 — no restart) ────────────────────────────────
 
-    /** Stop relaying/mirroring: become a standalone NORMAL device. */
+    /** Stop being a remote: become a standalone NORMAL device and connect the
+     *  DE1 directly (Stop, Connect directly, and a host's Denied). */
     fun switchToNormal() = applyMode("normal", "", 0)
 
     /** Hold the DE1 and relay it to others (becomes the primary). */
     fun switchToPrimary() = applyMode("primary", "", 0)
+
+    /**
+     * The Hub mode switch. On: become the hub, reconnecting over the tapping
+     * transport. Off: step down to normal **without reconnecting**, leaving
+     * the DE1 user-disconnected, so neither the reconnect loop nor companion
+     * presence grabs it again and another device can connect. The user takes
+     * it back here with Connect. Both are refused during a firmware flash.
+     */
+    fun setHubMode(on: Boolean) {
+        if (on) switchToPrimary() else applyMode("normal", "", 0, reconnect = false)
+    }
 
     /** Mirror the DE1 from a primary at [host]:[port] — the picker's "Mirror from X". */
     fun switchToSecondary(host: String, port: Int) {
@@ -909,7 +788,11 @@ class ProxyController(
     }
 
     private suspend fun applyModeLocked(role: String, host: String, port: Int, reconnect: Boolean, trust: MirrorTrust) {
+        modeSwitchProbe?.invoke(role)
         closePairingWindow()
+        // Not reconnecting (Hub mode off): a full user disconnect, which also
+        // drops a DE1 scan still waiting for the machine, so nothing re-grabs it.
+        if (!reconnect) disconnect()
         disconnectDevices()
         delay(150)
         relayServer?.stop(); relayServer = null; relayHub = null
@@ -931,10 +814,10 @@ class ProxyController(
                 // The granted scope only applies while secondary (issue 02);
                 // a fresh attach's Welcome repopulates it.
                 mirrorViewOnly = if (role == "secondary") it.mirrorViewOnly else false,
-                // Push-handoff state (issue 07): the client list only applies while
-                // primary; a pending offer is dropped on any role change.
-                mirrorClients = if (role == "primary") it.mirrorClients else emptyList(),
-                pendingHandoffOffer = null,
+                // The Remotes list only applies while hub.
+                remotes = if (role == "primary") it.remotes else emptyList(),
+                // A new target's Welcome names the hub again.
+                hubName = "",
             )
         }
         // The VM mirrors role/host/port into MainUiState (with its sticky
@@ -949,8 +832,8 @@ class ProxyController(
         // Reconnect the DE1 over the new delegate (a secondary attaches to the
         // primary's DE1; primary/normal scan the real or replayed radio). The
         // scale, if any, is reconnected by the user — DE1-only mirror for now.
-        // A handoff release passes reconnect=false so the stepped-down holder
-        // does NOT re-grab the DE1 — the taker needs it free (issue 01).
+        // Hub mode off passes reconnect=false so the stepped-down hub does NOT
+        // re-grab the DE1: another device needs it free.
         if (reconnect) connect()
         refreshAdvertisement()
     }
@@ -1017,28 +900,15 @@ class ProxyController(
     }
 }
 
-/** Machine states it's safe to hand off the radio in. An **allowlist** (issue
- *  09): everything else — dispensing, cleaning, calibrating, erroring, booting —
- *  refuses, and so does an unknown/`null` state, so we never grant during a
- *  moment we can't positively call idle. `Idle` covers warm-up/ready. */
-internal val HANDOFF_IDLE_STATES = setOf("Sleep", "GoingToSleep", "Idle", "SchedIdle")
+/** Machine states that read as idle or asleep: a relayed IDLE in one of them
+ *  is worded as a wake rather than a stop. `Idle` covers warm-up/ready. */
+internal val IDLE_STATES = setOf("Sleep", "GoingToSleep", "Idle", "SchedIdle")
 
 /** The `ControlErr` reason a primary gives while a firmware flash holds the DE1. */
 internal const val FIRMWARE_BUSY_REASON = "DE1 is updating firmware"
 
-/** What this device shows when it refuses a mode switch or handoff offer itself. */
+/** What this device shows when it refuses a mode switch itself. */
 internal const val FIRMWARE_BUSY_NOTICE = "Not now — the DE1 is updating firmware"
-
-/**
- * Why a relayed "Take over" must be refused, or null to grant. The firmware
- * lock comes first: the flash's own Sleep makes the machine read as idle, so
- * the idle allowlist alone would hand the radio away mid-flash.
- */
-internal fun handoffRefusal(machineState: String?, firmwareHoldsLink: Boolean): String? = when {
-    firmwareHoldsLink -> FIRMWARE_BUSY_REASON
-    machineState !in HANDOFF_IDLE_STATES -> "machine not idle (${machineState ?: "unknown"}) — handoff is idle-only"
-    else -> null
-}
 
 /** How long the host's pairing window stays open. */
 internal const val PAIRING_WINDOW_S = 120
@@ -1066,14 +936,6 @@ internal fun deniedMessage(reason: String): String = when {
     reason.startsWith(DenyReason.VERSION_MISMATCH) -> "Update Crema on both devices to connect"
     else -> "The host hasn't allowed this device"
 }
-
-/** The requesting device's notice for a refused takeover, from the primary's reason. */
-internal fun takeoverRefusedMessage(reason: String?): String =
-    if (reason?.contains(FIRMWARE_BUSY_REASON) == true) {
-        "Can't take over — the DE1 is updating firmware"
-    } else {
-        "Can't take over — the machine is busy"
-    }
 
 /**
  * The transport behind [ProxyController.transport] between construction and

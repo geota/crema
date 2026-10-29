@@ -149,10 +149,10 @@ fun PhoneSettingsScreen(
                 // Phone settings render in the dense row layout; the tablet keeps
                 // the default (roomy) — one CremaSettingsRow serves both (issue 26).
                 CompositionLocalProvider(LocalSettingsRowDense provides true) {
-                    // On a secondary the machine-write rows (GHC, heater voltage, line
+                    // On a remote the machine-write rows (GHC, heater voltage, line
                     // frequency, flow calibration) aren't relayed — they'd hit the
                     // read-only core and go nowhere — so they're disabled + annotated
-                    // here, and the app-wide banner already says we're mirroring (issue 10).
+                    // here, and the app-wide banner already names the hub (issue 10).
                     val secondary = ui.proxyRole == "secondary"
                     val primaryName = ui.mirroringPrimaryName
                     when (current) {
@@ -284,11 +284,11 @@ fun PhoneSettingsScreen(
 /* ───────────────────────── section bodies ──────────────────────────────── */
 
 /** A note at the top of a settings section whose machine-write controls are
- *  disabled because this device is mirroring (issue 10) — the writes apply on
- *  the primary, not here. */
+ *  disabled because this device is a remote (issue 10) — the writes apply on
+ *  the hub, not here. */
 @Composable
 private fun MirrorControlledNote(primaryName: String) {
-    val who = primaryName.ifBlank { "the primary" }
+    val who = primaryName.ifBlank { "the hub" }
     Surface(
         shape = RoundedCornerShape(CremaCardSpec.phoneRadius),
         color = MaterialTheme.colorScheme.secondaryContainer,
@@ -302,7 +302,7 @@ private fun MirrorControlledNote(primaryName: String) {
         ) {
             PhIcon("bluetooth", sizeDp = 18)
             Text(
-                "Mirroring $who — machine settings are controlled there.",
+                "Connected through $who — machine settings are controlled there.",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.weight(1f),
             )
@@ -319,7 +319,7 @@ private fun MachineSection(
     secondary: Boolean = false,
     primaryName: String = "",
 ) {
-    // On a mirror, machine settings live on the host — say so up top (issue 10).
+    // On a remote, machine settings live on the hub — say so up top (issue 10).
     if (secondary) MirrorControlledNote(primaryName)
     val firmwareFlow by vm.firmware.ui.collectAsStateWithLifecycle()
     // Machine hero (proto .pst-mhero): icon + state + identity key-values.
@@ -369,6 +369,8 @@ private fun MachineSection(
                     label = if (connected) "Disconnect" else "Connect DE1",
                     modifier = Modifier.fillMaxWidth(),
                 )
+                // Another hub holds the machine: say how to get it here.
+                if (!connected) HubHoldsMachineNotice(ui.hubHoldingMachine, onConnectThrough = vm::switchToSecondary)
             }
         }
         if (!connected && ui.de1Reconnecting) {
@@ -1198,7 +1200,7 @@ private fun AdvancedSection(
         CopyDiagnosticsRow(last = true)
     }
     SettingsGroup("Reconnects") { ReconnectTimelineList() }
-    SettingsGroup("Multi-device (LAN proxy · debug)") {
+    SettingsGroup("Multi-device") {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1211,49 +1213,34 @@ private fun AdvancedSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        // M1: mirror/drive the DE1 from a second device over the LAN. The transport
-        // is built at startup, so a role change is restart-to-apply.
-        val roleSub = when (ui.proxyRole) {
-            "primary" -> "Owns the DE1 and relays it to others. Restart to apply."
-            "secondary" -> "Mirrors a primary over the LAN. Restart to apply."
-            else -> "Off — normal single-device use."
-        }
-        // stacked: the 3-way Off/Primary/Secondary control is too wide to sit
-        // beside the title on the narrow phone — without this the "Role" label
-        // squeezes into letter-per-line wrapping (same fix as Water source).
-        CremaSettingsRow("Role", roleSub, last = ui.proxyRole == "normal", stacked = true) {
-            CremaSegmentedButton(
-                options = listOf(SegOption("normal", "Off"), SegOption("primary", "Primary"), SegOption("secondary", "Secondary")),
-                value = ui.proxyRole,
-                onChange = vm::setProxyRole,
-                enabled = true,
-                fillWidth = true,
-            )
-        }
+        // Hub mode, applied live: this phone holds the machine and others
+        // connect through it. Becoming a remote is "Connect through" in the
+        // Devices sheet.
+        HubModeRow(ui, device = "phone", onHubMode = vm::setHubMode)
         if (ui.proxyRole == "primary") {
-            CremaSettingsRow("Replay capture as DE1", "Emulator only: replay the newest recorded shot as a fake DE1 instead of live Bluetooth. Restart to apply.", last = true) {
+            CremaSettingsRow("Replay capture as DE1", "Emulator only: replay the newest recorded shot as a fake DE1 instead of live Bluetooth. Restart to apply.") {
                 CremaSwitch(ui.replayPrimary, vm::setReplayPrimary)
             }
         }
-        if (ui.proxyRole == "secondary") {
-            CremaSettingsRow("Primary host", "An IP, or 10.0.2.2 for an adb-forwarded emulator.") {
-                CremaTextField(
-                    value = ui.proxyPrimaryHost,
-                    onValueChange = vm::setProxyPrimaryHost,
-                    placeholder = "10.0.2.2",
-                    singleLine = true,
-                    modifier = Modifier.width(160.dp),
-                )
-            }
-            CremaSettingsRow("Primary port", "The relay port — see the primary's log line.", last = true) {
-                CremaTextField(
-                    value = if (ui.proxyPrimaryPort > 0) ui.proxyPrimaryPort.toString() else "",
-                    onValueChange = { vm.setProxyPrimaryPort(it.filter(Char::isDigit).take(5).toIntOrNull() ?: 0) },
-                    placeholder = "8080",
-                    singleLine = true,
-                    modifier = Modifier.width(120.dp),
-                )
-            }
+        // The manual hub address, in every role: it feeds the Devices sheet's
+        // manual row on an emulator or a network without NSD.
+        CremaSettingsRow("Hub host", "An IP, or 10.0.2.2 for an adb-forwarded emulator.") {
+            CremaTextField(
+                value = ui.proxyPrimaryHost,
+                onValueChange = vm::setProxyPrimaryHost,
+                placeholder = "10.0.2.2",
+                singleLine = true,
+                modifier = Modifier.width(160.dp),
+            )
+        }
+        CremaSettingsRow("Hub port", "The relay port — see the hub's log line.", last = true) {
+            CremaTextField(
+                value = if (ui.proxyPrimaryPort > 0) ui.proxyPrimaryPort.toString() else "",
+                onValueChange = { vm.setProxyPrimaryPort(it.filter(Char::isDigit).take(5).toIntOrNull() ?: 0) },
+                placeholder = "8080",
+                singleLine = true,
+                modifier = Modifier.width(120.dp),
+            )
         }
     }
     SettingsGroup("Paired devices") {

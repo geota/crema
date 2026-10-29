@@ -214,7 +214,8 @@ class LibraryController(
     fun isBuiltinProfile(id: String): Boolean = builtinProfileJson.containsKey(id)
 
     /** Adopt a complete custom-profile JSON into the library (newest first),
-     *  refresh + persist — the handoff's mirrored-profile promotion (issue 05). */
+     *  refresh + persist — a hub's custom profile, which a remote adopts when
+     *  it becomes standalone (issue 05). */
     fun adoptCustomProfile(raw: String) {
         customProfilesJson = listOf(raw) + customProfilesJson
         refreshProfiles()

@@ -4,6 +4,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
@@ -45,7 +46,7 @@ class ProxyPairingBindingTest {
             val proxy = ProxyTransport(
                 client, scope, "phone-1", "Phone",
                 onDenied = { denied.complete(it) },
-                onWelcome = { welcomed.complete(Unit) },
+                onWelcome = { _, _ -> welcomed.complete(Unit) },
                 pairingSecretFor = { held[it] },
                 onPaired = { id, _, secret -> held[id] = secret; paired.trySend(id to secret) },
                 pinnedHostId = { pinned },
@@ -54,7 +55,6 @@ class ProxyPairingBindingTest {
                 onHostChanged = { id, name -> changed.trySend(id to name) },
                 onConfig = { pushed.trySend("config:$it") },
                 onEvent = { pushed.trySend("event:$it") },
-                onHandoffOffer = { pushed.trySend("offer:$it") },
             )
             return withTimeout(5_000) { block(server, rx, proxy) }
         } finally {
@@ -241,7 +241,7 @@ class ProxyPairingBindingTest {
         scripted { server, rx, _ ->
             rx.next<Frame.Hello>()
             // Before (and instead of) a completed handshake: config, an event,
-            // a hand-off offer, telemetry.
+            // a retired hand-off offer, telemetry.
             server.send(Frame.Config("""{"stopOnWeight":false}"""))
             server.send(Frame.Event("someone drove"))
             server.send(Frame.HandoffOffer("Fake host"))
@@ -254,6 +254,32 @@ class ProxyPairingBindingTest {
             server.send(Frame.Event("after"))
             assertEquals("event:after", pushed.receive(), "only the post-Welcome push reached the app")
             assertTrue(pushed.tryReceive().isFailure)
+        }
+    }
+
+    /** AC-3: an older hub's "Hand off" pushes a retired [Frame.HandoffOffer].
+     *  The remote decodes and ignores it: the session stays welcomed, nothing
+     *  reaches the app, and the next push still lands. */
+    @Test
+    fun `a retired handoff offer is ignored`() = runBlocking {
+        scripted { server, rx, proxy ->
+            rx.next<Frame.Hello>()
+            server.send(Frame.Challenge("host-1", "Tablet", PairingCrypto.newNonce()))
+            rx.next<Frame.Auth>()
+            server.send(welcome("host-1", null))
+            welcomed.await()
+            assertEquals("host-1", confirmed.receive())
+
+            server.send(Frame.HandoffOffer("Old hub"))
+            server.send(Frame.Event("after"))
+            assertEquals("event:after", pushed.receive(), "the offer reached nothing; the next push did")
+            assertTrue(pushed.tryReceive().isFailure)
+            assertTrue(!denied.isCompleted, "the session wasn't refused")
+            // Still welcomed: a control goes out on the same session and its reply lands.
+            val control = async { proxy.sendControl("tareScale", "") }
+            val sent = rx.next<Frame.Control>()
+            server.send(Frame.ControlOk(sent.id))
+            assertEquals(ControlReply.Ok, control.await())
         }
     }
 

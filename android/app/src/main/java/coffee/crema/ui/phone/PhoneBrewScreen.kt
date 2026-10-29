@@ -62,6 +62,7 @@ import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.rankProfilesForPicker
 import coffee.crema.beans.rankBeansForPicker
 import coffee.crema.ui.MainUiState
+import coffee.crema.ui.remoteHubLabel
 import coffee.crema.ui.activeProfile
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.effectiveBrew
@@ -202,6 +203,7 @@ fun PhoneBrewScreen(
                     onRate = { id, r -> vm.updateShot(id, r, ui.history.firstOrNull { it.id == id }?.notes ?: "") },
                     onStartFromShot = { id -> vm.startFromShot(id) },
                     onTareScale = vm::tareScale,
+                    onConnectThrough = vm::switchToSecondary,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -248,8 +250,7 @@ fun PhoneBrewScreen(
             onForgetScale = vm::forgetScale,
             onMirrorFrom = { host, port -> vm.switchToSecondary(host, port); devicesOpen = false },
             onStopMirroring = { vm.switchToNormal(); devicesOpen = false },
-            onTakeOver = { vm.requestHandoff(); devicesOpen = false },
-            onHandOff = { id -> vm.offerHandoff(id); devicesOpen = false },
+            onConnectDirectly = { vm.connectDirectly(); devicesOpen = false },
             onRetry = vm::retryReconnectNow,
             onDismiss = { devicesOpen = false },
         )
@@ -803,6 +804,8 @@ private fun RestingBody(
     onStartFromShot: (String) -> Unit = {},
     /** Tap-to-tare for the Scale stat tile (issue #37). */
     onTareScale: () -> Unit = {},
+    /** "Connect through <hub>" while another hub holds the machine. */
+    onConnectThrough: (host: String, port: Int) -> Unit = { _, _ -> },
 ) {
     val tel = CremaTheme.telemetry
     Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -833,13 +836,15 @@ private fun RestingBody(
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold, fontSize = 13.sp),
                             color = badgeColor,
                         )
-                        // Authority cue: this device mirrors a primary; its config +
-                        // controls are the primary's (single-owner config / control).
+                        // Authority cue: this device is a remote; its config +
+                        // controls are the hub's (single-owner config / control).
                         if (ui.proxyRole == "secondary") {
                             Text(
-                                if (ui.mirrorReconnecting) "· Reconnecting…" else "· Mirroring",
+                                if (ui.mirrorReconnecting) "· Reconnecting…" else "· Connected through ${ui.remoteHubLabel()}",
                                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium, fontSize = 11.5.sp),
                                 color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
@@ -849,6 +854,8 @@ private fun RestingBody(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                // Another hub holds the machine: say how to get it here.
+                if (!connected) HubHoldsMachineNotice(ui.hubHoldingMachine, onConnectThrough = onConnectThrough)
                 // Target line: dose → yield, ratio.
                 val (dose, yieldOut) = ui.effectiveBrew()
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

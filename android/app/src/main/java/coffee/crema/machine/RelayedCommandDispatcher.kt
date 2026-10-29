@@ -87,8 +87,7 @@ class RelayedCommandDispatcher(
         MachineCommand.StartHotWater -> "started hot water"
         MachineCommand.StartFlush -> "started a flush"
         MachineCommand.TareScale -> "tared the scale"
-        MachineCommand.StartDescale, MachineCommand.StartClean, MachineCommand.CancelMaintenance,
-        MachineCommand.TakeOver -> null
+        MachineCommand.StartDescale, MachineCommand.StartClean, MachineCommand.CancelMaintenance -> null
         is MachineCommand.Config -> null
     }
 }
