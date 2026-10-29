@@ -78,12 +78,15 @@ android {
         manifestPlaceholders["googleRedirectScheme"] = "com.googleusercontent.apps.unconfigured"
     }
 
-    // JVM unit tests (`./gradlew :app:testDebugUnitTest`) for the pure shell logic
-    // — wire assembly, fingerprint-skip decisions, formatters. They never touch the
-    // BLE/DE1 or the native FFI (those need a device), so stubbed android.* calls
-    // return defaults rather than throwing.
+    // JVM unit tests (`./gradlew :app:testDebugUnitTest`) for the shell logic
+    // — wire assembly, fingerprint-skip decisions, formatters. They never touch
+    // BLE (that needs a device); the few that need the core load its HOST build
+    // (cargoBuildHostCore). Stubbed android.* calls return defaults rather than
+    // throwing; the MainViewModel smoke test runs under Robolectric instead.
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Robolectric (MainViewModelSmokeTest) needs the merged resources.
+        unitTests.isIncludeAndroidResources = true
     }
 
     // Visualizer Doorkeeper application client_id (a PUBLIC client — PKCE, no
@@ -328,6 +331,9 @@ dependencies {
     // libjnidispatch.so ships 16 KB ELF page alignment, required by Android 15+ /
     // API 36+ devices + emulators (16 KB pages); older JNA fails to dlopen there.
     implementation("net.java.dev.jna:jna:5.19.1@aar")
+    // 1.11.0, not 1.12.0: dependabot #175 bumped to 1.12.0, which is not
+    // published on Maven Central or Google Maven (latest is 1.11.0), so
+    // nothing resolved. Keep -android and -test on the same version.
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
@@ -393,6 +399,15 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("io.ktor:ktor-client-mock:$ktor")
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
+    // The desktop JNA jar (same version as the @aar above) carries the host
+    // libjnidispatch, so JVM tests can load the HOST build of the Rust core
+    // (cargoBuildHostCore below) — MainUiState's defaults and MainViewModel
+    // construction both call into it.
+    testImplementation("net.java.dev.jna:jna:5.19.1")
+    // Robolectric: a real Application/Looper for the MainViewModel
+    // construct-and-clear smoke test (cohort review 2026-10-25, P3-2).
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("androidx.test:core:1.7.0")
 }
 
 // ---------------------------------------------------------------------------
@@ -541,4 +556,30 @@ androidComponents {
             GenerateUniffiBindings::outputDirectory,
         )
     }
+}
+
+// ---------------------------------------------------------------------------
+// Host build of the Rust core for JVM unit tests
+// ---------------------------------------------------------------------------
+// The APK carries the Android cdylib; JVM tests run on the build machine, so
+// they need the same crate built for the HOST (libde1_ffi.dylib / .so). JNA
+// finds it through jna.library.path. Incremental: a no-op when unchanged.
+val cargoBuildHostCore =
+    tasks.register<Exec>("cargoBuildHostCore") {
+        description = "Build de1-ffi for the host, for JVM unit tests."
+        group = "rust"
+        workingDir = layout.projectDirectory.dir("../../core").asFile
+        commandLine(cargoExecutable, "build", "--package", "de1-ffi", "--lib")
+    }
+
+tasks.withType<Test>().configureEach {
+    dependsOn(cargoBuildHostCore)
+    // Unit tests run on a Java 21 JVM: the Nordic BLE library ships Java 21
+    // bytecode, which MainViewModelSmokeTest loads under Robolectric. The
+    // app itself still compiles to Java 17 (compileOptions above).
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+    systemProperty(
+        "jna.library.path",
+        layout.projectDirectory.dir("../../core/target/debug").asFile.absolutePath,
+    )
 }

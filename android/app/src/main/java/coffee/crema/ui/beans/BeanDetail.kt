@@ -276,7 +276,9 @@ data class ShotRowSummary(
 /** Project a stored shot down to what the detail's shot list shows. */
 fun shotRowSummary(shot: StoredShot): ShotRowSummary = ShotRowSummary(
     id = shot.id,
-    date = SHOT_DATE_FORMAT.format(Date(shot.completedAtMs)),
+    // A formatter per call, on the CURRENT locale: a static one froze the
+    // launch locale (lint ConstantLocale). Cheap next to the row it renders.
+    date = SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(shot.completedAtMs)),
     title = shotTitle(shot),
     rating = shot.rating ?: 0,
     dial = listOfNotNull(
@@ -289,8 +291,6 @@ fun shotRowSummary(shot: StoredShot): ShotRowSummary = ShotRowSummary(
             ?: shot.notes?.trim()?.takeIf { it.isNotEmpty() }
         )?.replace(Regex("\\s+"), " "),
 )
-
-private val SHOT_DATE_FORMAT = SimpleDateFormat("d MMM", Locale.getDefault())
 
 /**
  * Display name for a bag's linked profile: the profile's own name, or

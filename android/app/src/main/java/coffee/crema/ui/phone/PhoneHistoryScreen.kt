@@ -20,7 +20,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -175,10 +174,15 @@ fun PhoneHistoryScreen(
     // Bean filter: a coffee (every bag of it) or, from the bean detail's deep
     // link, one bag. The coffee resolves through the live library.
     val liveCoffee = remember(ui.beans, ui.roasters) { liveCoffeeLookup(ui.beans, ui.roasters) }
-    val filtered = filterAndSortShots(
-        ui.history, query, range, profileFilter, sort, sortDesc, now, beanFilter, methodFilter,
-        coffeeOf = { shotCoffee(it, liveCoffee)?.key },
-    )
+    // Memoized with a minute-bucketed `now` (see HistoryScreen): telemetry
+    // recomposes this screen several times a second.
+    val nowBucket = coffee.crema.history.minuteBucket(now)
+    val filtered = remember(ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter, liveCoffee) {
+        filterAndSortShots(
+            ui.history, query, range, profileFilter, sort, sortDesc, nowBucket, beanFilter, methodFilter,
+            coffeeOf = { shotCoffee(it, liveCoffee)?.key },
+        )
+    }
 
     val detail = detailId?.let { id -> ui.history.firstOrNull { it.id == id } }
 
@@ -1118,7 +1122,7 @@ private fun ShotBeanSwapDropdown(
     onSelect: (String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val ddWidth = LocalConfiguration.current.screenWidthDp.dp - CremaEdge * 2
+    val ddWidth = coffee.crema.ui.windowContentDpSize().width - CremaEdge * 2
     CremaAnchoredPopup(expanded = true, onDismiss = onDismiss) {
         Surface(
             shape = RoundedCornerShape(CremaCardSpec.phoneRadius),

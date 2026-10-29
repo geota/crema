@@ -561,9 +561,9 @@ fun DevicesPanel(
     onStopMirroring: () -> Unit,
     onTakeOver: () -> Unit,
     onHandOff: (clientId: String) -> Unit,
+    modifier: Modifier = Modifier,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     Column(
         modifier,
@@ -726,9 +726,9 @@ fun DevicesPanelWide(
     onStopMirroring: () -> Unit,
     onTakeOver: () -> Unit,
     onHandOff: (clientId: String) -> Unit,
+    modifier: Modifier = Modifier,
     /** "Retry now" on a reconnecting device (true = the DE1, false = the scale). */
     onRetry: (de1: Boolean) -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val machineStat = if (connected) {
         listOfNotNull("Connected", ui.de1Firmware).joinToString(" · ")
@@ -887,10 +887,10 @@ private fun WideDeviceTile(
     /** The device is remembered (reconnects automatically); [onForget] forgets it. */
     remembered: Boolean,
     onForget: () -> Unit,
+    modifier: Modifier = Modifier,
     /** Show a "Retry now" pill (the device is reconnecting). */
     reconnecting: Boolean = false,
     onRetry: () -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val tel = CremaTheme.telemetry
     Surface(

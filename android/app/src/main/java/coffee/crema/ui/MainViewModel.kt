@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import android.os.SystemClock
 import android.util.Log
+import coffee.crema.ProcessScope
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import android.content.Context
@@ -75,6 +76,8 @@ import coffee.crema.profiles.profileIdOf
 import coffee.crema.profiles.SegmentEdit
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.update
@@ -83,6 +86,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.serialization.json.Json
@@ -985,8 +990,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val coreDispatcher = kotlinx.coroutines.Dispatchers.Default.limitedParallelism(1)
 
+    /** Run [block] on the core lane, FIFO behind any queued event application.
+     *  Every write to lane-owned state (the upload-skip cache, [pendingBrew],
+     *  [waterLowWarned], [maintenanceTotalLitres]) goes through here or runs
+     *  on the lane already: a plain Main-thread write is not ordered against a
+     *  queued lane task (cohort review 2026-10-25, Android P2-3). */
+    private fun onCoreLane(block: () -> Unit) {
+        viewModelScope.launch(coreDispatcher) { block() }
+    }
+
     private val _ui = MutableStateFlow(MainUiState())
-    val ui: StateFlow<MainUiState> = _ui.asStateFlow()
+
+    /**
+     * The UI state the screens collect. Identical to [_ui] except while the
+     * screensaver covers everything: then a change confined to the high-rate
+     * live fields ([hiddenBySaver]) is not published, so the screen tree
+     * behind the saver stops recomposing several times a second for hours on
+     * a wall tablet (cohort review 2026-10-25, P2-4). Any other change —
+     * including the saver going away — publishes the latest state in full.
+     * The VM itself always reads [_ui].
+     */
+    val ui: StateFlow<MainUiState> = _ui
+        .distinctUntilChanged(::hiddenBySaver)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, _ui.value)
 
     /**
      * Set when [startShot] kicks off a profile upload that should be followed by an
@@ -1234,7 +1260,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         applyRestoredSettings = { applyRestoredSettings(it) },
         applyRestoredMaintenance = { m ->
             // Reseed the live water integrator + persist (maintenance is VM-owned).
-            maintenanceTotalLitres = m.totalLitres
+            onCoreLane { maintenanceTotalLitres = m.totalLitres }
             saveMaintenance(m)
         },
         persistSawModel = {
@@ -1267,6 +1293,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val recipeStore = coffee.crema.brew.RecipeFileStore(app, json)
     private var brewTickJob: kotlinx.coroutines.Job? = null
+
+    // ── Declared above every `init` block (cohort review 2026-10-25, P3-2) ──
+    // Kotlin initialises properties and runs `init` blocks in source order, so
+    // a property declared below an init is still null/0 while that init runs
+    // (the July 2026 launch crash). These four used to sit far below.
+
+    /**
+     * The open Log-brew form's draft, or null. VM-held (not a screen
+     * `remember`) so it survives rotation and the phone↔tablet host swap:
+     * the phone's pushed `log-brew` route and the tablet's side sheet on the
+     * owning tab render this same draft (see [NavRestore.restoreRoute]).
+     */
+    private val _logBrew = MutableStateFlow<coffee.crema.ui.brewlog.BrewLogDraft?>(null)
+    val logBrew: StateFlow<coffee.crema.ui.brewlog.BrewLogDraft?> = _logBrew.asStateFlow()
+
+    /** Runs [seedMachineSettings] on each ready and [usbChargerTick] every minute while ready. */
+    private val sweepRunner by lazy {
+        ConnectSweepRunner(viewModelScope, sweep = ::seedMachineSettings, tick = ::usbChargerTick)
+    }
+
+    /** Monotonic ms of the last user interaction (the screensaver's idle
+     *  clock) — bumped by the activity's root touch interceptor and by machine
+     *  transitions into active modes. */
+    @Volatile
+    private var lastInteractionAtMs: Long = SystemClock.elapsedRealtime()
+
+    /** Whether the activity is started (visible). */
+    @Volatile
+    private var appInForeground = true
 
     init {
         // Seed the recipe library from disk — cheap (a handful of rows).
@@ -2185,7 +2240,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // the next shot re-uploads (issue 11). Without this, a skip after a
         // reconnect would brew against a stale/absent profile.
         onDe1Dropped = {
-            lastUploadedFingerprint = null
+            // On the lane: a ProfileUploadCompleted still queued there would
+            // otherwise re-commit the fingerprint AFTER this clear.
+            onCoreLane { lastUploadedFingerprint = null }
             de1SetupDone = false
             sweepRunner.onDropped()
             idleSleep.link(false)
@@ -2297,12 +2354,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Logcat, not appendLog: the in-app event log dies with the task.
             if (s.sleepOnQuit && sleepable && primary && notDoubled) {
                 Log.i("QuitSleep", "quit while idle — putting the DE1 to sleep")
-                sleep()
+                launchQuitSleepWrite()
             } else {
                 Log.i(
                     "QuitSleep",
                     "quit — sleep skipped (on=${s.sleepOnQuit} state=${s.machineStateName} role=${s.proxyRole} idleSleepPending=${!notDoubled})",
                 )
+                null
             }
         }
         // Multi-device (M2): arm the recorder gate, start NSD peer discovery +
@@ -2531,11 +2589,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Import shots from a Crema / de1app / legacy export. */
     fun importShots(uri: Uri) = library.importShots(uri)
 
-    /** Build the whole-app `crema-backup/v1` JSONL bundle, or null + a notice. */
-    fun backupBundleJson(): String? = library.backupBundleJson()
-
-    /** Wrap the backup JSONL + bean photos into a `.crema.zip`. */
-    fun buildBackupZipBytes(): ByteArray? = library.buildBackupZipBytes()
+    /** Wrap the backup JSONL + bean photos into a `.crema.zip`, or null + a
+     *  notice. Suspends: the build runs off the main thread. */
+    suspend fun buildBackupZipBytes(): ByteArray? = library.buildBackupZipBytes()
 
     /** A suggested filename for the SAF create-document picker. */
     fun backupFileName(): String = library.backupFileName()
@@ -2658,15 +2714,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── Brew Log (issue #10) ─────────────────────────────────────────
     /** Record a manual brew / guided-session result; debits the bag. */
     fun addManualBrew(input: LibraryController.ManualBrewInput) = library.addManualBrew(input)
-
-    /**
-     * The open Log-brew form's draft, or null. VM-held (not a screen
-     * `remember`) so it survives rotation and the phone↔tablet host swap:
-     * the phone's pushed `log-brew` route and the tablet's side sheet on the
-     * owning tab render this same draft (see [NavRestore.restoreRoute]).
-     */
-    private val _logBrew = MutableStateFlow<coffee.crema.ui.brewlog.BrewLogDraft?>(null)
-    val logBrew: StateFlow<coffee.crema.ui.brewlog.BrewLogDraft?> = _logBrew.asStateFlow()
 
     /** Open the form on [owner]'s tab — seeded from [prefill] ("Log again") or [beanId]'s bag. */
     fun openLogBrew(owner: String, prefill: StoredShot? = null, beanId: String? = null) {
@@ -3240,9 +3287,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  values. Wired as [ConnectionController]'s onDe1SessionClosed. */
     private fun clearDe1SessionUi() {
         machineInfoJob?.cancel() // stop any in-flight connect-time register sweep
-        pendingBrew = false
-        // Next connection's first low-water report warns afresh (#33).
-        waterLowWarned = false
+        onCoreLane {
+            pendingBrew = false
+            // Next connection's first low-water report warns afresh (#33).
+            waterLowWarned = false
+        }
         _ui.update { it.copy(
             machineState = null,
             machineStateName = null,
@@ -3534,6 +3583,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onCoreOutputJson(raw)
     }
 
+    /**
+     * Sleep-on-quit's write. NOT [sleep]: that routes through the core lane
+     * and [executeCommand], both on [viewModelScope], which is already
+     * cancelled when [onCleared] fires the quit. The core output is computed
+     * synchronously here and its DE1 writes go out on [ProcessScope], bounded
+     * by [QUIT_WRITE_BUDGET_MS]. The result is true only when every write
+     * completed on a live link, so [QuitSleep]'s latch re-arms otherwise.
+     * The output's events are dropped: the UI they would update is going away.
+     */
+    private fun launchQuitSleepWrite(): Deferred<Boolean> {
+        appSleepRequestedAtMs = SystemClock.elapsedRealtime()
+        val writes = runCatching {
+            json.decodeFromString(CoreOutput.serializer(), bridge.requestMachineState(MachineRequest.SLEEP))
+                .commands.filterIsInstance<Command.WriteCharacteristic>()
+        }.getOrElse {
+            Log.w("QuitSleep", "sleep request failed", it)
+            emptyList()
+        }
+        if (ble.connectedAddress == null) return CompletableDeferred(false)
+        return ProcessScope.main.async {
+            sendQuitWrites(
+                writes.map { cmd ->
+                    suspend {
+                        ble.writeCharacteristic(cmd.content.target, cmd.content.data.map { it.toByte() }.toByteArray())
+                    }
+                },
+                QUIT_WRITE_BUDGET_MS,
+            ).also { sent -> Log.i("QuitSleep", if (sent) "sleep write sent" else "sleep write did not go out") }
+        }
+    }
+
     /** Wake the DE1 / return to idle (also stops a running shot). */
     fun wake() = requestMachineState(MachineRequest.IDLE)
 
@@ -3608,11 +3688,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val bm = getApplication<Application>().getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).takeIf { it in 0..100 }
     }.getOrNull()
-
-    /** Runs [seedMachineSettings] on each ready and [usbChargerTick] every minute while ready. */
-    private val sweepRunner by lazy {
-        ConnectSweepRunner(viewModelScope, sweep = ::seedMachineSettings, tick = ::usbChargerTick)
-    }
 
     /** Smart-charging mode for the DE1's USB port. Persisted; the next minute's check applies it. */
     fun setUsbChargingMode(mode: String) {
@@ -4198,7 +4273,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setWaterWarnMl(ml: Float) {
         _ui.update { it.copy(waterWarnMl = ml) }
         persistPrefs()
-        waterLowWarned = false
+        onCoreLane { waterLowWarned = false }
     }
 
     /** The machine's own refill threshold, raw sensor mm (geota/crema#47).
@@ -4315,7 +4390,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Load the persisted maintenance state, seed the live total, compute the readout. */
     private suspend fun loadMaintenance() {
         val state = maintenanceStore.load()
-        maintenanceTotalLitres = state.totalLitres
+        onCoreLane { maintenanceTotalLitres = state.totalLitres }
         _ui.update { it.copy(
             maintenance = state,
             maintenanceReadout = computeMaintenanceReadout(state),
@@ -4378,7 +4453,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * total and stamp `filterAtMs` (the web store's `markFilterCleaned`). Persists
      * + recomputes the readout.
      */
-    fun markFilterCleaned() {
+    fun markFilterCleaned() = onCoreLane {
         val next = _ui.value.maintenance.copy(
             totalLitres = maintenanceTotalLitres,
             filterBaselineLitres = maintenanceTotalLitres,
@@ -4392,7 +4467,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * total and stamp `descaleAtMs` (the web store's `markDescaled`). Persists +
      * recomputes the readout.
      */
-    fun markDescaled() {
+    fun markDescaled() = onCoreLane {
         val next = _ui.value.maintenance.copy(
             totalLitres = maintenanceTotalLitres,
             descaleBaselineLitres = maintenanceTotalLitres,
@@ -4405,7 +4480,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * Mark a clean cycle done — reset its hour counter by stamping `cleanAtMs`
      * (the web store's `markCleaned`). Persists + recomputes the readout.
      */
-    fun markCleaned() {
+    fun markCleaned() = onCoreLane {
         val next = _ui.value.maintenance.copy(
             totalLitres = maintenanceTotalLitres,
             cleanAtMs = System.currentTimeMillis(),
@@ -4717,12 +4792,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile
     private var shotStartedByApp: Boolean = false
 
-    /** Monotonic ms of the last user interaction (the screensaver's idle
-     *  clock) — bumped by the activity's root touch interceptor and by machine
-     *  transitions into active modes. */
-    @Volatile
-    private var lastInteractionAtMs: Long = SystemClock.elapsedRealtime()
-
     /** Bump the saver's idle clock and tell the idle-sleep timer (throttled to
      *  one a second, see [IdleSleepRunner.activity]). Called on every touch
      *  (MainActivity's root interceptor, Initial pass, never consumes). */
@@ -4730,10 +4799,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         lastInteractionAtMs = SystemClock.elapsedRealtime()
         idleSleep.activity(coffee.crema.core.IdleActivity.Touch)
     }
-
-    /** Whether the activity is started (visible). */
-    @Volatile
-    private var appInForeground = true
 
     /** Foreground/background transitions from [MainActivity]'s
      *  onStart/onStop. Returning counts as user presence: the saver's idle
@@ -4998,8 +5063,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Reset the maintenance counters too — a fresh-install state (baselines and
         // total zeroed, the three *AtMs = now so the readouts read "0 since").
         val freshMaintenance = defaultMaintenanceState(System.currentTimeMillis())
-        maintenanceTotalLitres = 0.0
-        lastTelemetryMs = null
+        onCoreLane {
+            maintenanceTotalLitres = 0.0
+            lastTelemetryMs = null
+        }
         viewModelScope.launch {
             settingsStore.save(AppPrefs())
             maintenanceStore.save(freshMaintenance)
@@ -6036,32 +6103,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Mirror into the crash-report ring buffer — it outlives the UI's
         // eventLog (which dies with the process). See coffee.crema.diag.DiagLog.
         coffee.crema.diag.DiagLog.add(stamped)
-        val log = (listOf(stamped) + _ui.value.eventLog).take(MAX_LOG_LINES)
-        _ui.update { it.copy(eventLog = log) }
+        // Built INSIDE the atomic update: appendLog runs from Main, the core
+        // lane and the firmware scope at once, and a read outside the update
+        // dropped concurrent lines (or resurrected a just-cleared log).
+        _ui.update { it.copy(eventLog = prependLogLine(it.eventLog, stamped, MAX_LOG_LINES)) }
     }
 
     override fun onCleared() {
         // Quit path (sleep-on-quit): a swipe-away destroys the activity —
         // and clears this VM — ~400 ms before the OS kills the process, so
-        // this is the reliable place to fire. It MUST run before
-        // `super.onCleared()`: the handler's sleep() write launches on
-        // viewModelScope, whose Main.immediate dispatch runs it to the first
-        // suspension synchronously — the GATT op reaches the system BT stack
-        // (which outlives us) before the scope cancellation lands.
-        QuitSleep.fire()
-        QuitSleep.clear()
+        // this is the reliable place to fire. viewModelScope is ALREADY
+        // cancelled here (lifecycle 2.x closes it before calling onCleared),
+        // so the handler's write runs on ProcessScope, and the BLE teardown
+        // below waits (bounded) for it: closing the link first would drop it.
+        val quitWrite = QuitSleep.fire()
         // Unregister the power receiver + stop the keep-alive service (#65).
         bgConnection.close()
-        super.onCleared()
-        // Adapter watcher off, scans cancelled, both device links down…
-        connection.close()
-        // The recorder is process-scoped: don't let it pin this VM.
-        coffee.crema.diag.ReconnectTimelines.recorder.onFinished = {}
-        // Close the transport last — it unregisters the Nordic environment's
-        // Bluetooth receiver and tears down the central manager. The managers'
-        // disconnect() calls above are fire-and-forget coroutines; closing the
-        // transport also cancels its scope, so any in-flight disconnect ends.
-        proxy.close()
+        teardownAfterQuitWrite(ProcessScope.main, quitWrite, QUIT_WRITE_BUDGET_MS + QUIT_TEARDOWN_SLACK_MS) {
+            QuitSleep.clear()
+            // Adapter watcher off, scans cancelled, both device links down…
+            connection.close()
+            // The recorder is process-scoped: don't let it pin this VM.
+            coffee.crema.diag.ReconnectTimelines.recorder.onFinished = {}
+            // Close the transport last — it unregisters the Nordic environment's
+            // Bluetooth receiver and tears down the central manager. The managers'
+            // disconnect() calls above are fire-and-forget coroutines; closing the
+            // transport also cancels its scope, so any in-flight disconnect ends.
+            proxy.close()
+        }
         // The HTTP clients (viewModelScope is already cancelled, so no
         // Visualizer / Decent call is still in flight). They sit on the
         // shared, process-lifetime OkHttp engine, which stays up.
@@ -6075,6 +6144,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         /** How long a Sleep state report is still attributable to our own
          *  request (BLE write → firmware → notify, plus a GoingToSleep dwell). */
         const val APP_SLEEP_WINDOW_MS = 15_000L
+
+        /** Grace past [QUIT_WRITE_BUDGET_MS] before onCleared's deferred BLE
+         *  teardown runs anyway (the write's own timeout normally fires first). */
+        const val QUIT_TEARDOWN_SLACK_MS = 250L
 
         /**
          * Wait after `ProfileUploadCompleted` before requesting Espresso — the
@@ -6239,3 +6312,39 @@ private fun firmwarePowerOk(context: android.content.Context): Boolean {
     val percent = if (level >= 0 && scale > 0) level * 100 / scale else null
     return coffee.crema.firmware.powerOk(plugged, percent)
 }
+
+/** The event log with [line] prepended, capped at [max] lines (newest first).
+ *  Pure, so [MainViewModel]'s appendLog can apply it inside `_ui.update`. */
+internal fun prependLogLine(log: List<String>, line: String, max: Int): List<String> =
+    (listOf(line) + log).take(max)
+
+/**
+ * True when [new] differs from [old] (the last PUBLISHED state) only in the
+ * high-rate live readouts while the screensaver is up in both — a change
+ * nothing on screen can show. Used to keep [MainViewModel.ui] quiet behind
+ * the saver. Pure + `internal` for unit tests.
+ */
+internal fun hiddenBySaver(old: MainUiState, new: MainUiState): Boolean =
+    old.saverVisible && new.saverVisible && old.withoutLiveReadouts() == new.withoutLiveReadouts()
+
+/** [this] with every telemetry-rate field blanked (DE1 samples, scale
+ *  readings, water level, mode timers, the debug log). */
+private fun MainUiState.withoutLiveReadouts(): MainUiState = copy(
+    telemetry = null,
+    pressure = null,
+    flow = null,
+    headTemp = null,
+    mixTemp = null,
+    steamTemp = null,
+    dispensedVolume = null,
+    resistance = null,
+    resistanceWeight = null,
+    shotElapsedMs = 0,
+    shotTelemetry = emptyList(),
+    scaleWeightG = null,
+    scaleFlowGPerS = null,
+    scaleTimerMs = null,
+    waterLevelMm = null,
+    modeElapsedMs = 0,
+    eventLog = emptyList(),
+)

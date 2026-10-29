@@ -331,6 +331,10 @@ class NordicBleTransport(context: Context) : BleTransport {
         } ?: false
     }
 
+    // getConnectionState needs BLUETOOTH_CONNECT; a missing grant throws
+    // SecurityException, which the runCatching below turns into "unknown"
+    // (false). Lint can't see that handler, hence the narrow suppression.
+    @android.annotation.SuppressLint("MissingPermission")
     override fun isLinkHeldByStack(device: BleTransport.DeviceHandle): Boolean {
         val handle = device as NordicDeviceHandle
         val manager = bluetoothManager ?: return false

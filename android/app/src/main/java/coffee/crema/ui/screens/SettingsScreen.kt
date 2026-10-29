@@ -871,7 +871,7 @@ fun SettingsScreen(
                         }
                         SetGroup("Backup & restore") {
                             CremaSettingsRow("Back up everything", "All custom profiles, beans, roasters, shots, settings and bag photos in one .crema.zip.") {
-                                CremaButton(onClick = { confirm.launchSaveBytes(vm.backupFileName(), vm.buildBackupZipBytes()) }, variant = CremaButtonVariant.Filled, icon = "download-simple", label = "Back up")
+                                BackUpEverythingButton(vm, confirm.launchSaveBytes)
                             }
                             CremaSettingsRow("Restore — merge", "Add anything from a backup you don't already have; keeps your current data.") {
                                 CremaButton(onClick = { confirm.launchRestore(MainViewModel.RestoreMode.MERGE) }, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Merge")
@@ -1385,7 +1385,7 @@ private fun MachineHeroCard(
         // "CONNECTED \u00b7 ES\u2026" truncated and the BLE address rendered one
         // character per line, issue #35's 8" reports). Compact stacks the two
         // panels full-width and drops the artwork well.
-        val compactHero = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1100
+        val compactHero = coffee.crema.ui.windowContentDpSize().width.value < 1100
         if (compactHero) {
             Column(
                 Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 20.dp),

@@ -79,8 +79,14 @@ fun PhoneProfilesScreen(
     // Same facet model as the tablet: Hidden appears only when something is
     // archived, and falls back to All once the last one is restored (issue 28).
     val effectiveFilter = effectiveProfileFilter(filter, ui.hiddenProfileIds)
-    val sorted = filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter, sort, sortDesc, ui.activeProfileId)
-    val chipCounts = profileChipCounts(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter)
+    // Memoized: the screen recomposes on every UI-state emission (telemetry
+    // included); only these inputs change the list.
+    val sorted = remember(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter, sort, sortDesc, ui.activeProfileId) {
+        filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter, sort, sortDesc, ui.activeProfileId)
+    }
+    val chipCounts = remember(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter) {
+        profileChipCounts(ui.profiles, ui.hiddenProfileIds, query, filter, roastFilter)
+    }
 
     // Brew recipes — the guided-brew library section (issue #10); authored
     // here, run from the Scale screen's Brew tab.

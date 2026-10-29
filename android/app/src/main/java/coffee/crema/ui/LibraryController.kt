@@ -872,10 +872,27 @@ class LibraryController(
     // stripped on export and preserved on import — a backup moves between devices
     // without dragging this device's bindings along.
 
-    /** Build the whole-app backup bundle as `crema-backup/v1` JSONL, or null + a
-     *  notice when there's nothing to back up. Custom profiles only — built-ins
-     *  ship with the app, so backing them up would only create duplicates. */
-    fun backupBundleJson(): String? {
+    /**
+     * Everything the backup reads from controller and VM state, captured on the
+     * caller's (Main) thread so the serialisation, the core export and the zip
+     * can run on [Dispatchers.Default] without touching live mutable state
+     * (cohort review 2026-10-25, Android P1-2: a few hundred shots with their
+     * full sample series froze the UI thread, daily at launch for Drive users).
+     */
+    private class BackupSnapshot(
+        val customs: List<String>,
+        val state: MainUiState,
+        val pinned: Set<String>,
+        val hidden: Set<String>,
+        val prefs: AppPrefs,
+        val visualizerPrefs: VisualizerSyncPrefs,
+        val userRecipes: List<coffee.crema.core.BrewRecipe>,
+    )
+
+    /** Snapshot the backup inputs, or null + a notice when there's nothing to
+     *  back up. Custom profiles only — built-ins ship with the app, so backing
+     *  them up would only create duplicates. Cheap; runs on the caller. */
+    private fun backupSnapshot(): BackupSnapshot? {
         val customs = customProfilesJson
         val s = uiState()
         // "Nothing to back up" only when EVERYTHING the bundle carries is empty /
@@ -895,9 +912,21 @@ class LibraryController(
         if (noData && noProfileOrg && settingsDefault) {
             notify("Nothing to back up yet"); return null
         }
+        return BackupSnapshot(customs, s, pinnedIds, hiddenIds, currentPrefs(), visualizer.backupPrefs(), userRecipes)
+    }
+
+    /** Build the whole-app backup bundle as `crema-backup/v1` JSONL from [snap].
+     *  Heavy (every shot's sample series + the core export); reads only [snap],
+     *  so it is safe off the main thread. */
+    private fun backupBundleJson(snap: BackupSnapshot): String? {
+        val customs = snap.customs
+        val s = snap.state
+        val pinnedIds = snap.pinned
+        val hiddenIds = snap.hidden
+        val userRecipes = snap.userRecipes
         // Portable settings only — drop per-device identity (BLE addresses, LAN
         // proxy, paired devices); they're meaningless on another device.
-        val portable = currentPrefs().copy(
+        val portable = snap.prefs.copy(
             de1Address = null,
             scaleAddress = null,
             proxyRole = "normal",
@@ -962,7 +991,7 @@ class LibraryController(
         }.getOrElse { "[]" }
         val maintenanceJson = runCatching { json.encodeToString(MaintenanceState.serializer(), s.maintenance) }.getOrElse { "{}" }
         val visualizerPrefsJson = runCatching {
-            json.encodeToString(VisualizerSyncPrefs.serializer(), visualizer.backupPrefs())
+            json.encodeToString(VisualizerSyncPrefs.serializer(), snap.visualizerPrefs)
         }.getOrElse { "{}" }
         // Assemble the envelope as a JsonObject rather than raw string concat so a
         // dropped brace / comma can't silently corrupt it (issue 06 F5). Each piece
@@ -995,26 +1024,24 @@ class LibraryController(
      * web + Android restore by). Photos resolve by file existence (not by parsing
      * `imageRef`), so a web-restored bag's photo rides along too. Null + a notice
      * when there's nothing to back up. Shared by the local SAF save + Drive upload.
+     * Snapshots on the caller's thread, then serialises, exports and zips on
+     * [Dispatchers.Default] — never on Main.
      */
-    fun buildBackupZipBytes(): ByteArray? {
-        val jsonl = backupBundleJson() ?: return null // already notified "nothing to back up"
-        return runCatching {
-            val baos = java.io.ByteArrayOutputStream()
-            java.util.zip.ZipOutputStream(baos).use { zos ->
-                zos.putNextEntry(java.util.zip.ZipEntry("backup.jsonl"))
-                zos.write(jsonl.toByteArray(Charsets.UTF_8))
-                zos.closeEntry()
-                for (bean in uiState().beans) {
-                    if (!BeanImageStore.exists(app, bean.id)) continue
-                    val bytes = runCatching { BeanImageStore.beanImageFile(app, bean.id).readBytes() }.getOrNull() ?: continue
-                    zos.putNextEntry(java.util.zip.ZipEntry("images/${bean.id}"))
-                    zos.write(bytes)
-                    zos.closeEntry()
-                }
-            }
-            baos.toByteArray()
-        }.getOrElse { appendLog("Backup zip failed: ${it.message}"); notify("Backup failed"); null }
-    }
+    suspend fun buildBackupZipBytes(): ByteArray? =
+        snapshotThenBuild(::backupSnapshot, Dispatchers.Default) { snap ->
+            val jsonl = backupBundleJson(snap) ?: return@snapshotThenBuild null // already notified
+            runCatching {
+                zipBackupBytes(
+                    jsonl,
+                    snap.state.beans.asSequence()
+                        .filter { BeanImageStore.exists(app, it.id) }
+                        .mapNotNull { bean ->
+                            runCatching { BeanImageStore.beanImageFile(app, bean.id).readBytes() }
+                                .getOrNull()?.let { bean.id to it }
+                        },
+                )
+            }.getOrElse { appendLog("Backup zip failed: ${it.message}"); notify("Backup failed"); null }
+        }
 
     /** A suggested filename for the SAF create-document picker. */
     fun backupFileName(): String {
