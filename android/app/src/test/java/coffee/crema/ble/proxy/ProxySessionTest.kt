@@ -303,7 +303,7 @@ class ProxySessionTest {
             val proxy = ProxyTransport(link, scope, "phone-1", "Phone", requestTimeoutMs = 10_000)
             link.start(1)
             waitFor { link.hellos(1) == 1 }
-            link.receive(welcome())
+            handshakeOn(link, 1)
             delay(100) // welcomed
             link.drop() // the request's send fails: it parks for the next session
             val control = scope.async { proxy.control("tareScale") }
@@ -325,7 +325,7 @@ class ProxySessionTest {
             val proxy = ProxyTransport(link, scope, "phone-1", "Phone", requestTimeoutMs = 10_000)
             link.start(1)
             waitFor { link.hellos(1) == 1 }
-            link.receive(welcome())
+            handshakeOn(link, 1)
             val control = scope.async { proxy.control("tareScale") }
             waitFor { link.sent.any { it.second is Frame.Control } }
             link.drop()
