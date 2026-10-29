@@ -19,6 +19,15 @@ export class CoreStoppedError extends Error {
 	override name = 'CoreStoppedError';
 }
 
+/**
+ * Whether `error` is a call refused because the core has stopped. Callers that
+ * run on every BLE notification drop these: the stop is logged once, with its
+ * context, and the pinned notice already asks for a reload (V2 P3-2).
+ */
+export function isCoreStopped(error: unknown): boolean {
+	return error instanceof CoreStoppedError;
+}
+
 /** The part of the wasm `CremaBridge` the guard reads. */
 export interface StoppableBridge {
 	core_stopped(): boolean;
@@ -34,13 +43,14 @@ const PASS_THROUGH: ReadonlySet<PropertyKey> = new Set([
 
 /**
  * Wrap `bridge` so that, once a call fails on a stopped bridge, `onStopped`
- * runs once and every later call throws {@link CoreStoppedError} without
- * calling into the wasm. Calls that fail for any other reason (a trap the
- * bridge will recover from, a `Result` error) are rethrown untouched.
+ * runs once with the bridge's stop message and every later call throws
+ * {@link CoreStoppedError} without calling into the wasm. Calls that fail for
+ * any other reason (a trap the bridge will recover from, a `Result` error)
+ * are rethrown untouched.
  */
 export function guardStoppedBridge<T extends StoppableBridge>(
 	bridge: T,
-	onStopped: () => void
+	onStopped: (reason: string) => void
 ): T {
 	let stoppedMessage: string | null = null;
 	const wrappers = new Map<PropertyKey, (...args: unknown[]) => unknown>();
@@ -60,7 +70,7 @@ export function guardStoppedBridge<T extends StoppableBridge>(
 					} catch (err) {
 						if (!target.core_stopped()) throw err;
 						stoppedMessage = err instanceof Error ? err.message : String(err);
-						onStopped();
+						onStopped(stoppedMessage);
 						throw new CoreStoppedError(stoppedMessage);
 					}
 				};

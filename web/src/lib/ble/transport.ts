@@ -779,26 +779,9 @@ export class BleDevice implements De1Transport {
 		data: Uint8Array,
 		withResponse = true
 	): Promise<void> {
-		return this.gattQueue.enqueue(() => this.bounded('write', async () => {
-			this.assertLive();
-			let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
-			if (characteristic === undefined) {
-				characteristic = await this.resolveCharacteristic(
-					serviceUuid,
-					characteristicUuid
-				);
-			}
-			// `writeValueWithResponse` is the equivalent of the Android
-			// transport's acknowledged write; copy into a fresh buffer for a
-			// clean ArrayBuffer. `withResponse = false` for characteristics
-			// that only accept unacknowledged writes (gen-1/IPS Acaia).
-			const buffer = data.slice().buffer;
-			if (withResponse) {
-				await characteristic.writeValueWithResponse(buffer);
-			} else {
-				await characteristic.writeValueWithoutResponse(buffer);
-			}
-		}));
+		return this.gattQueue.enqueue(() =>
+			this.writeNow(serviceUuid, characteristicUuid, data, withResponse)
+		);
 	}
 
 	/**
@@ -816,20 +799,44 @@ export class BleDevice implements De1Transport {
 		return this.gattQueue.enqueue(async () => {
 			if (!guard()) return false;
 			try {
-				await this.bounded('write', async () => {
-					this.assertLive();
-					let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
-					if (characteristic === undefined) {
-						characteristic = await this.resolveCharacteristic(serviceUuid, characteristicUuid);
-					}
-					await characteristic.writeValueWithResponse(data.slice().buffer);
-				});
+				await this.writeNow(serviceUuid, characteristicUuid, data, true);
 			} catch (error) {
 				settled?.(false);
 				throw error;
 			}
 			settled?.(true);
 			return true;
+		});
+	}
+
+	/**
+	 * The un-queued body of {@link write} and {@link writeIf}: resolve the
+	 * characteristic (cached after the first lookup) and write, bounded like
+	 * every GATT step. Callers run it inside one queued step (V3 #10: the two
+	 * had separate copies that could drift).
+	 */
+	private writeNow(
+		serviceUuid: string,
+		characteristicUuid: string,
+		data: Uint8Array,
+		withResponse: boolean
+	): Promise<void> {
+		return this.bounded('write', async () => {
+			this.assertLive();
+			let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
+			if (characteristic === undefined) {
+				characteristic = await this.resolveCharacteristic(serviceUuid, characteristicUuid);
+			}
+			// `writeValueWithResponse` is the equivalent of the Android
+			// transport's acknowledged write; copy into a fresh buffer for a
+			// clean ArrayBuffer. `withResponse = false` for characteristics
+			// that only accept unacknowledged writes (gen-1/IPS Acaia).
+			const buffer = data.slice().buffer;
+			if (withResponse) {
+				await characteristic.writeValueWithResponse(buffer);
+			} else {
+				await characteristic.writeValueWithoutResponse(buffer);
+			}
 		});
 	}
 

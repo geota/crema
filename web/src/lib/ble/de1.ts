@@ -27,6 +27,7 @@ import type { CremaCore, NotificationSource } from '#lib/core/index.js';
 import { WriteTarget } from '#lib/core/crema-core.js';
 import { de1WriteTargetUuid as wasmDe1WriteTargetUuid } from '#lib/wasm/de1_wasm.js';
 import { describeError } from '#lib/utils/error.js';
+import { isCoreStopped } from '#lib/core/stopped-guard.js';
 import type { AppRuntime } from '#lib/effect/runtime.js';
 import { Effect } from 'effect';
 import {
@@ -382,6 +383,10 @@ export class De1Manager {
 				.onNotification(source, notification.data, notification.atMs)
 				.then(this.callbacks.onCoreOutput)
 				.catch((error: unknown) => {
+					// A stopped core refuses every call: the stop is logged once
+					// with its context, so a line per notification would only push
+					// it out of the diagnostics log (V2 P3-2).
+					if (isCoreStopped(error)) return;
 					// A rejection here — a wasm panic or a bad-packet JSON parse
 					// error — would otherwise silently kill the notification
 					// pipeline. Surface it instead.

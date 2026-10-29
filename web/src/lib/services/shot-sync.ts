@@ -69,6 +69,7 @@ import {
 	type WireShot
 } from '#lib/visualizer/shot-sync-signatures.js';
 import { appendSyncLog, readSyncConfig } from '#lib/visualizer/sync-config.js';
+import { BaristaPending } from '#lib/visualizer/barista-pending.js';
 import {
 	samplesFromVisualizerDetail as wasmSamplesFromVisualizerDetail,
 	wireShotFromDetail as wasmWireShotFromDetail,
@@ -200,11 +201,17 @@ function baristaOf(shot: StoredShot): string {
 /**
  * Fill a local shot's barista from a pulled remote one (final review 06 #1),
  * only when the local shot has none: a name set or edited in Crema is never
- * overwritten by a pull. Returns the name to store, or `null` for no change.
+ * overwritten by a pull. `editedLocally` is true while a barista edit made
+ * here has not reached Visualizer: a blank barista is then the user's clear,
+ * not a gap to fill (V3 #6). Returns the name to store, or `null` for no change.
  */
-export function baristaToFill(local: StoredShot | undefined, remote: WireShot): string | null {
+export function baristaToFill(
+	local: StoredShot | undefined,
+	remote: WireShot,
+	editedLocally = false
+): string | null {
 	const pulled = remote.barista?.trim();
-	if (!local || !pulled) return null;
+	if (!local || !pulled || editedLocally) return null;
 	return local.metadata.barista?.trim() ? null : pulled;
 }
 
@@ -522,6 +529,15 @@ export const ShotSyncLive = Layer.effect(
 		const http = yield* HttpClient;
 		const vault = yield* TokenVault;
 
+		/**
+		 * Shots whose barista was edited here and has not reached Visualizer
+		 * yet: a failed barista PATCH is carried by the next edit's PATCH, and
+		 * a pull does not fill a barista into them (V3 #6). Persisted, so a
+		 * restart keeps the mark (V2 P3-4); cleared once a PATCH carrying the
+		 * current value lands.
+		 */
+		const baristaPending = new BaristaPending();
+
 		/** Early bail mirroring the old `if (!isConnected())` guard. */
 		const requireConnected: Effect.Effect<void, NotAuthenticatedError> = vault.getTokens.pipe(
 			Effect.flatMap((t) => (t === null ? Effect.fail(new NotAuthenticatedError()) : Effect.void))
@@ -800,7 +816,8 @@ export const ShotSyncLive = Layer.effect(
 				const fillBarista = (localId: string, wire: WireShot): void => {
 					const name = baristaToFill(
 						history.all.find((s) => s.id === localId),
-						wire
+						wire,
+						baristaPending.has(localId)
 					);
 					if (name !== null) history.setPerson(localId, 'barista', name);
 				};
@@ -1020,13 +1037,6 @@ export const ShotSyncLive = Layer.effect(
 				...(sendBarista ? { barista: baristaOf(shot) } : {})
 			};
 		};
-
-		/**
-		 * Shots whose barista was edited here and has not reached Visualizer
-		 * yet, so a failed barista PATCH is carried by the next edit's PATCH
-		 * (this session). Cleared once a PATCH carrying the current value lands.
-		 */
-		const baristaPending = new Set<string>();
 
 		const patchEditedShot = Effect.fn('ShotSync.patchEditedShot')(function* (
 			history: HistoryStore,

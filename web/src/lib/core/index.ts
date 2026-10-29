@@ -329,10 +329,11 @@ export interface CremaCore {
 	 * Register `listener` to run once when the bridge stops: a call panicked
 	 * after the bridge's last allowed reset (`MAX_PANIC_RECOVERIES` in
 	 * de1-wasm), so every core call now fails with `CoreStoppedError` until
-	 * the page reloads. Optional so test doubles need not implement it; see
-	 * `#lib/core/stopped-guard.js`.
+	 * the page reloads. `reason` is the bridge's stop message (the context
+	 * the shell logs once). Optional so test doubles need not implement it;
+	 * see `#lib/core/stopped-guard.js`.
 	 */
-	onCoreStopped?(listener: () => void): void;
+	onCoreStopped?(listener: (reason: string) => void): void;
 	/**
 	 * Arm a guided brew session for a JSON-encoded `BrewRecipe`
 	 * (issue #10). `startOnPour` starts the clock at the first
@@ -968,9 +969,9 @@ async function createCore(): Promise<CremaCore> {
 	}
 	// Once the bridge stops (too many panics), the guard answers every call
 	// itself instead of entering the wasm, and tells the shell once.
-	const stoppedListeners: (() => void)[] = [];
-	const bridge = guardStoppedBridge(new wasm.CremaBridge(), () => {
-		for (const listener of stoppedListeners) listener();
+	const stoppedListeners: ((reason: string) => void)[] = [];
+	const bridge = guardStoppedBridge(new wasm.CremaBridge(), (reason) => {
+		for (const listener of stoppedListeners) listener(reason);
 	});
 
 	/**

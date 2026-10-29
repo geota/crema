@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CremaBridge, NotificationSource } from '#lib/wasm/de1_wasm.js';
-import { CoreStoppedError, guardStoppedBridge } from './stopped-guard.js';
+import { CoreStoppedError, guardStoppedBridge, isCoreStopped } from './stopped-guard.js';
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -88,5 +88,22 @@ describe('guardStoppedBridge', () => {
 		// The module still works for a fresh bridge, as after a reload.
 		const fresh = new CremaBridge();
 		expect(() => fresh.on_tick(1)).not.toThrow();
+	});
+});
+
+describe('guardStoppedBridge stop context (V2 P3-2)', () => {
+	it("hands the bridge's stop message to the shell, the context it logs once", () => {
+		const fake = new FakeBridge();
+		const onStopped = vi.fn();
+		const bridge = guardStoppedBridge(fake, onStopped);
+		fake.stopped = true;
+		expect(() => bridge.tick(1)).toThrow(CoreStoppedError);
+		expect(onStopped).toHaveBeenCalledWith('crema core stopped: reload');
+	});
+
+	it('isCoreStopped tells a refused call from any other failure', () => {
+		expect(isCoreStopped(new CoreStoppedError('crema core stopped'))).toBe(true);
+		expect(isCoreStopped(new Error('bad packet'))).toBe(false);
+		expect(isCoreStopped('crema core stopped')).toBe(false);
 	});
 });
