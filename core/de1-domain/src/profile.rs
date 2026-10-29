@@ -1,7 +1,8 @@
 //! The espresso [`Profile`] model and its assembly into protocol packets.
 
 use de1_protocol::{
-    ExtensionFrame, FrameFlags, SHOT_FRAME_LEN, SHOT_HEADER_LEN, ShotFrame, ShotHeader, ShotTail,
+    ExtensionFrame, FrameEncoding, FrameFlags, SHOT_FRAME_LEN, SHOT_HEADER_LEN, ShotFrame,
+    ShotHeader, ShotTail,
 };
 use typeshare::typeshare;
 
@@ -29,9 +30,12 @@ pub const DEFAULT_PRESSURE_FLOW_LIMIT_RANGE: f32 = 1.0;
 /// limits are inert; sending constants removes any dependency on imported
 /// data.
 const HEADER_MINIMUM_PRESSURE: f32 = 0.0;
-/// Header `MaximumFlow` sent on every upload — de1app's classic-DE1 value
-/// (`binary.tcl`, 6.0; 12 only on Bengle).
+/// Header `MaximumFlow` sent on a classic DE1 — de1app `binary.tcl` (6.0).
 const HEADER_MAXIMUM_FLOW: f32 = 6.0;
+/// Header `MaximumFlow` sent on a Bengle (BLE v2) — de1app and reaprime
+/// both send 12.0; de1app notes that keeping 6.0 "left the Bengle refusing
+/// to pour".
+const HEADER_MAXIMUM_FLOW_V2: f32 = 12.0;
 
 /// Which quantity a step holds at its target. Serializes as lowercase
 /// (`"pressure"` / `"flow"`) to match the community v2 JSON contract.
@@ -401,6 +405,18 @@ impl Profile {
     /// - [`DomainError::TooManySteps`] if it has more than 20 (the DE1's
     ///   frame limit, de1app / pyDE1).
     pub fn assemble(&self) -> Result<AssembledProfile, DomainError> {
+        self.assemble_for(FrameEncoding::V1)
+    }
+
+    /// Assemble this profile for a machine that takes `encoding` — V1 for a
+    /// classic DE1, V2 for a Bengle (pressure / flow bytes in tenths,
+    /// `HeaderV` 2, header `MaximumFlow` 12; de1app `de1_packed_shot`,
+    /// reaprime `_writeHeader` / `_writeSteps`).
+    ///
+    /// # Errors
+    ///
+    /// As [`assemble`](Self::assemble).
+    pub fn assemble_for(&self, encoding: FrameEncoding) -> Result<AssembledProfile, DomainError> {
         let count = self.steps.len();
         if count == 0 {
             return Err(DomainError::NoSteps);
@@ -417,7 +433,10 @@ impl Profile {
             frame_count,
             preinfuse_frame_count: self.preinfuse_step_count,
             minimum_pressure: HEADER_MINIMUM_PRESSURE,
-            maximum_flow: HEADER_MAXIMUM_FLOW,
+            maximum_flow: match encoding {
+                FrameEncoding::V1 => HEADER_MAXIMUM_FLOW,
+                FrameEncoding::V2 => HEADER_MAXIMUM_FLOW_V2,
+            },
         };
 
         let mut frames = Vec::with_capacity(count);
@@ -443,6 +462,7 @@ impl Profile {
         }
 
         Ok(AssembledProfile {
+            encoding,
             header,
             frames,
             extension_frames,
@@ -457,6 +477,8 @@ impl Profile {
 /// A [`Profile`] assembled into protocol packets, ready to upload.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssembledProfile {
+    /// How the packets encode pressure / flow (classic DE1 or Bengle).
+    pub encoding: FrameEncoding,
     /// The profile header.
     pub header: ShotHeader,
     /// The normal frames, one per step, in order.
@@ -470,15 +492,19 @@ pub struct AssembledProfile {
 impl AssembledProfile {
     /// The encoded `HeaderWrite` packet.
     pub fn header_packet(&self) -> [u8; SHOT_HEADER_LEN] {
-        self.header.encode()
+        self.header.encode_with(self.encoding)
     }
 
     /// The encoded `FrameWrite` packets in upload order: normal frames, then
     /// extension frames, then the tail (protocol §5.6).
     pub fn frame_packets(&self) -> Vec<[u8; SHOT_FRAME_LEN]> {
         let mut packets = Vec::with_capacity(self.frames.len() + self.extension_frames.len() + 1);
-        packets.extend(self.frames.iter().map(ShotFrame::encode));
-        packets.extend(self.extension_frames.iter().map(ExtensionFrame::encode));
+        packets.extend(self.frames.iter().map(|f| f.encode_with(self.encoding)));
+        packets.extend(
+            self.extension_frames
+                .iter()
+                .map(|e| e.encode_with(self.encoding)),
+        );
         packets.push(self.tail.encode());
         packets
     }
@@ -598,6 +624,39 @@ mod tests {
         assert_eq!(assembled.extension_frames.len(), 1);
         assert_eq!(assembled.extension_frames[0].index, 0);
         assert_eq!(assembled.extension_frames[0].max_flow_or_pressure, 8.0);
+    }
+
+    #[test]
+    fn a_bengle_profile_encodes_pressure_and_flow_in_tenths() {
+        // Report 02 P1-3. Expected bytes from de1app `de1_packed_shot` /
+        // `convert_float_to_U8D1` (round(v × 10)) and reaprime `_writeHeader`
+        // / `_writeSteps` (scale 10): HeaderV 2, MaximumFlow 12 → 120,
+        // SetVal 9.0 → 90, TriggerVal 4.0 → 40, limiter 3.5 / 0.5 → 35 / 5.
+        let mut s = step("pour", Pump::Pressure);
+        s.exit = Some(ExitCondition {
+            metric: ExitMetric::Flow,
+            compare: Compare::Over,
+            threshold: 4.0,
+        });
+        s.limiter = Some(Limiter {
+            value: 3.5,
+            range: 0.5,
+        });
+        let v2 = profile(vec![s.clone()])
+            .assemble_for(FrameEncoding::V2)
+            .unwrap();
+        assert_eq!(v2.header_packet(), [2, 1, 1, 0, 120]);
+        let packets = v2.frame_packets();
+        // flags: DoCompare 0x02 | DC_GT 0x04 | DC_CompF 0x08 | IgnoreLimit
+        // 0x40 = 0x4E; 92 °C → 184; 20 s → 20 | 0x80; MaxVol 0 | 0x400.
+        assert_eq!(packets[0], [0, 0x4E, 90, 184, 0x94, 40, 0x04, 0x00]);
+        assert_eq!(packets[1], [32, 35, 5, 0, 0, 0, 0, 0]);
+        assert_eq!(packets[2], [1, 0, 0, 0, 0, 0, 0, 0]);
+        // The same profile on a classic DE1: U8P4, HeaderV 1, MaximumFlow 6.
+        let v1 = profile(vec![s]).assemble().unwrap();
+        assert_eq!(v1.header_packet(), [1, 1, 1, 0, 96]);
+        assert_eq!(v1.frame_packets()[0][2], 144, "9.0 × 16");
+        assert_eq!(v1.frame_packets()[1][1], 56, "3.5 × 16");
     }
 
     #[test]

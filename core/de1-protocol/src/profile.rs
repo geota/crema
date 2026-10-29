@@ -10,14 +10,54 @@
 
 use crate::error::ProtocolError;
 use crate::fixed_point::{
-    f8_1_7_decode, f8_1_7_encode, u8p1_decode, u8p1_encode, u8p4_decode, u8p4_encode, u10p0_decode,
-    u10p0_encode,
+    f8_1_7_decode, f8_1_7_encode, u8d1_decode, u8d1_encode, u8p1_decode, u8p1_encode, u8p4_decode,
+    u8p4_encode, u10p0_decode, u10p0_encode,
 };
 
-/// Header version byte. 1 for the classic DE1 encoding Crema writes; a
-/// Bengle on BLE protocol v2 uses 2 with U8D1 pressure / flow (de1app
-/// `binary.tcl`, reaprime `Bengle`), which Crema does not encode.
-const HEADER_VERSION: u8 = 1;
+/// How a profile's pressure / flow bytes go on the wire — the BLE shot
+/// protocol version, chosen from the machine model (de1app
+/// `detect_ble_protocol_version`: model ≥ 128, a Bengle, is v2).
+///
+/// Only the pressure / flow bytes and the header version change: the header
+/// `MinimumPressure` / `MaximumFlow`, every frame's `SetVal` and
+/// `TriggerVal`, and an extension frame's limit and range (de1app
+/// `convert_float_to_flow_pressure_byte`; reaprime `_writeHeader` /
+/// `_writeSteps` scale 16 vs 10). Temperature (U8P1), time (F8_1_7) and
+/// volume (U10P0) are the same in both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FrameEncoding {
+    /// Classic DE1, `HeaderV` 1: pressure / flow as `U8P4` (1/16, max 15.9375).
+    #[default]
+    V1,
+    /// Bengle, `HeaderV` 2: pressure / flow as `U8D1` (1/10, max 25.5).
+    V2,
+}
+
+impl FrameEncoding {
+    /// The `HeaderV` byte.
+    pub const fn header_version(self) -> u8 {
+        match self {
+            FrameEncoding::V1 => 1,
+            FrameEncoding::V2 => 2,
+        }
+    }
+
+    /// Encode a pressure / flow value.
+    pub fn encode(self, value: f32) -> u8 {
+        match self {
+            FrameEncoding::V1 => u8p4_encode(value),
+            FrameEncoding::V2 => u8d1_encode(value),
+        }
+    }
+
+    /// Decode a pressure / flow byte.
+    pub fn decode(self, raw: u8) -> f32 {
+        match self {
+            FrameEncoding::V1 => u8p4_decode(raw),
+            FrameEncoding::V2 => u8d1_decode(raw),
+        }
+    }
+}
 /// A `FrameToWrite` byte at or above this value marks an extension frame.
 const EXTENSION_FRAME_OFFSET: u8 = 32;
 
@@ -118,14 +158,19 @@ pub struct ShotHeader {
 }
 
 impl ShotHeader {
-    /// Encode to the 5-byte `HeaderWrite` packet.
+    /// Encode to the 5-byte `HeaderWrite` packet, classic DE1 (`HeaderV` 1).
     pub fn encode(&self) -> [u8; SHOT_HEADER_LEN] {
+        self.encode_with(FrameEncoding::V1)
+    }
+
+    /// Encode to the 5-byte `HeaderWrite` packet with `encoding`.
+    pub fn encode_with(&self, encoding: FrameEncoding) -> [u8; SHOT_HEADER_LEN] {
         [
-            HEADER_VERSION,
+            encoding.header_version(),
             self.frame_count,
             self.preinfuse_frame_count,
-            u8p4_encode(self.minimum_pressure),
-            u8p4_encode(self.maximum_flow),
+            encoding.encode(self.minimum_pressure),
+            encoding.encode(self.maximum_flow),
         ]
     }
 
@@ -172,16 +217,21 @@ pub struct ShotFrame {
 }
 
 impl ShotFrame {
-    /// Encode to the 8-byte normal-frame `FrameWrite` packet.
+    /// Encode to the 8-byte normal-frame `FrameWrite` packet, classic DE1.
     pub fn encode(&self) -> [u8; SHOT_FRAME_LEN] {
+        self.encode_with(FrameEncoding::V1)
+    }
+
+    /// Encode to the 8-byte normal-frame `FrameWrite` packet with `encoding`.
+    pub fn encode_with(&self, encoding: FrameEncoding) -> [u8; SHOT_FRAME_LEN] {
         let max_vol = u10p0_encode(f32::from(self.max_volume_ml)).to_be_bytes();
         [
             self.index,
             self.flags.to_byte(),
-            u8p4_encode(self.set_value),
+            encoding.encode(self.set_value),
             u8p1_encode(self.temperature),
             f8_1_7_encode(self.duration_seconds),
-            u8p4_encode(self.trigger_value),
+            encoding.encode(self.trigger_value),
             max_vol[0],
             max_vol[1],
         ]
@@ -219,12 +269,19 @@ pub struct ExtensionFrame {
 }
 
 impl ExtensionFrame {
-    /// Encode to the 8-byte extension-frame `FrameWrite` packet.
+    /// Encode to the 8-byte extension-frame `FrameWrite` packet, classic DE1.
     pub fn encode(&self) -> [u8; SHOT_FRAME_LEN] {
+        self.encode_with(FrameEncoding::V1)
+    }
+
+    /// Encode to the 8-byte extension-frame `FrameWrite` packet with
+    /// `encoding`. Bytes 3–7 (v2's Mode / ModeMaxP / LeverSpring / LeverGive /
+    /// Reserved) stay 0: Crema never uses the v2 pump modes.
+    pub fn encode_with(&self, encoding: FrameEncoding) -> [u8; SHOT_FRAME_LEN] {
         [
             self.index.wrapping_add(EXTENSION_FRAME_OFFSET),
-            u8p4_encode(self.max_flow_or_pressure),
-            u8p4_encode(self.max_fop_range),
+            encoding.encode(self.max_flow_or_pressure),
+            encoding.encode(self.max_fop_range),
             0,
             0,
             0,

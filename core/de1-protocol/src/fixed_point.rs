@@ -65,6 +65,25 @@ pub fn u8p4_encode(value: f32) -> u8 {
     (value.clamp(0.0, U8P4_MAX) * 16.0).round() as u8
 }
 
+// --- U8D1 — unsigned tenths, one byte. Bengle (BLE v2) pressure / flow. ---
+
+/// Largest value representable in `U8D1` (`255 / 10`).
+pub const U8D1_MAX: f32 = 25.5;
+
+/// Decode `U8D1`: `value = raw / 10`.
+pub fn u8d1_decode(raw: u8) -> f32 {
+    f32::from(raw) / 10.0
+}
+
+/// Encode `U8D1` (de1app `convert_float_to_U8D1`: clamp `0..=25.5`, then
+/// `round(v × 10)`). NaN encodes as 0, like [`u8p4_encode`].
+pub fn u8d1_encode(value: f32) -> u8 {
+    if value.is_nan() {
+        return 0;
+    }
+    (value.clamp(0.0, U8D1_MAX) * 10.0).round() as u8
+}
+
 // --- U8P1 — unsigned 7.1 fixed-point, one byte. Frame temperatures. ---
 
 /// Decode `U8P1`: `value = raw / 2` (0.5-degree steps).
@@ -388,5 +407,17 @@ mod tests {
         assert_eq!(u8p0_encode(f32::NAN), 0);
         // u10p0 always carries the enabled flag — NaN encodes like 0.0.
         assert_eq!(u10p0_encode(f32::NAN), u10p0_encode(0.0));
+    }
+
+    #[test]
+    fn u8d1_matches_de1app_convert_float_to_u8d1() {
+        // de1app binary.tcl: clamp 0..25.5, round(v × 10).
+        assert_eq!(u8d1_encode(9.0), 90);
+        assert_eq!(u8d1_encode(12.0), 120);
+        assert_eq!(u8d1_encode(25.5), 255);
+        assert_eq!(u8d1_encode(30.0), 255, "saturates, never wraps");
+        assert_eq!(u8d1_encode(-1.0), 0);
+        assert_eq!(u8d1_encode(f32::NAN), 0);
+        assert!((u8d1_decode(35) - 3.5).abs() < f32::EPSILON);
     }
 }

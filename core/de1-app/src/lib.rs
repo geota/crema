@@ -4341,7 +4341,18 @@ impl CremaCore {
         if let Some(out) = self.refuse_if_firmware_locked("upload_profile") {
             return Ok(out);
         }
-        let mut assembled = profile.assemble()?;
+        // A Bengle takes the BLE v2 frame encoding (pressure / flow in
+        // tenths, HeaderV 2); de1app switches on the model MMR the same way
+        // (`detect_ble_protocol_version`). Until the model is read, classic.
+        let encoding = if self
+            .de1_machine_model
+            .is_some_and(de1_protocol::is_bengle_model)
+        {
+            de1_protocol::FrameEncoding::V2
+        } else {
+            de1_protocol::FrameEncoding::V1
+        };
+        let mut assembled = profile.assemble_for(encoding)?;
         // NEVER arm the firmware-side dispensed-volume stop: the tail's
         // max_total_volume_ml drives the DE1's own (flow-integrated) volume
         // estimate, which mis-fires — reaprime: "not compatible with active
@@ -10920,6 +10931,33 @@ mod tests {
                 ))
             ));
             assert!(!core.profile_upload_in_progress());
+        }
+
+        #[test]
+        fn a_bengle_gets_the_v2_frame_encoding() {
+            // Report 02 P1-3: de1app / reaprime send HeaderV 2 with U8D1
+            // pressure / flow to a Bengle (model >= 128).
+            let mut core = CremaCore::new();
+            core.de1_machine_model = Some(128);
+            let p = profile("Bengle", vec![step("a", Pump::Flow, None)]);
+            let out = core.upload_profile(&p, Duration::ZERO).unwrap();
+            let Command::WriteCharacteristic { data, .. } = &out.commands[0] else {
+                panic!("header first");
+            };
+            assert_eq!(data.as_slice(), &[2, 1, 1, 0, 120]);
+            // The upload still completes on the header + frame acks.
+            let done = ack_every_frame(&mut core, &out.commands, 10);
+            assert!(
+                done.iter()
+                    .any(|e| matches!(e, Event::ProfileUploadCompleted { .. }))
+            );
+            // A classic DE1 keeps HeaderV 1.
+            core.de1_machine_model = Some(3);
+            let out = core.upload_profile(&p, Duration::ZERO).unwrap();
+            let Command::WriteCharacteristic { data, .. } = &out.commands[0] else {
+                panic!("header first");
+            };
+            assert_eq!(data[0], 1);
         }
 
         #[test]
