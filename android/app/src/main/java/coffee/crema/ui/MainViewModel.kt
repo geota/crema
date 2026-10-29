@@ -90,7 +90,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
-import kotlinx.serialization.json.Json
 import kotlinx.coroutines.Dispatchers
 import android.net.Uri
 import kotlinx.serialization.json.put
@@ -942,14 +941,8 @@ data class MainUiState(
  */
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
-    // coerceInputValues: an unknown enum string (e.g. an out-of-contract profile
-    // `mode`/`metric` or a version-skewed peer frame) coerces to the property
-    // default (null) rather than throwing — preserves the lenient profile decode
-    // after the mode/ramp/metric/compare fields became typed enums.
-    private val json = Json {
-        ignoreUnknownKeys = true
-        coerceInputValues = true
-    }
+    // See [coreJson]: lenient enums, and the core enums tagged `kind`.
+    private val json = coreJson
 
     /** The Rust core, behind the UniFFI bridge. */
     private val bridge: CremaBridge = CremaBridge()
@@ -6231,7 +6224,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // old frames (Decenza aa8232e6). Never skip the next upload.
                 lastUploadedFingerprint = null
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
-                appendLog("Profile upload failed: ${event.content.reason}")
+                appendLog("Profile upload failed: ${uploadFailureLabel(event.content.reason)}")
             }
             is Event.ProfileReuploadNeeded -> {
                 // The core saw the machine Idle with an unknown profile after a
