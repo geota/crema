@@ -350,6 +350,16 @@ class ProxyControllerModeTest {
     }
 
     @Test
+    fun `forgetting a host on this device drops its secret and its pin`() {
+        controller.pairingStore.putHeld("host-1", PairingCrypto.newSecret())
+        controller.pairingStore.pinHost("host-1")
+        controller.forgetHost("host-1")
+        assertNull(controller.pairingStore.heldSecret("host-1"))
+        assertNull(controller.pairingStore.pinnedHost)
+        assertNull(controller.state.value.changedHost)
+    }
+
+    @Test
     fun `denied reasons map to what the secondary shows`() {
         assertTrue(deniedMessage(DenyReason.PAIRING_CLOSED).contains("Pair a device"))
         assertTrue(deniedMessage(DenyReason.VERSION_MISMATCH).contains("Update Crema"))
@@ -359,6 +369,7 @@ class ProxyControllerModeTest {
         assertTrue(deniedMessage(DenyReason.ALREADY_PAIRED).contains("Forget"))
         assertTrue(deniedMessage(DenyReason.HOST_MISMATCH).contains("Other devices"))
         assertTrue(deniedMessage(DenyReason.HOST_UNVERIFIED).contains("Other devices"))
+        assertTrue(deniedMessage(DenyReason.HOST_CHANGED).contains("forget it on this device"))
         assertEquals("The host hasn't allowed this device", deniedMessage(DenyReason.NOT_AUTHORIZED))
     }
 

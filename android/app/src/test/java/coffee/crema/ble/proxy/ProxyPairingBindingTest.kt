@@ -29,6 +29,7 @@ class ProxyPairingBindingTest {
     private val denied = CompletableDeferred<String>()
     private val welcomed = CompletableDeferred<Unit>()
     private val confirmed = Channel<String>(Channel.UNLIMITED)
+    private val changed = Channel<Pair<String, String>>(Channel.UNLIMITED)
 
     private suspend fun <T> scripted(
         allowRepair: Boolean = true,
@@ -49,6 +50,7 @@ class ProxyPairingBindingTest {
                 pinnedHostId = { pinned },
                 onHostConfirmed = { confirmed.trySend(it) },
                 allowRepair = allowRepair,
+                onHostChanged = { id, name -> changed.trySend(id to name) },
             )
             return withTimeout(5_000) { block(server, rx, proxy) }
         } finally {
@@ -96,16 +98,29 @@ class ProxyPairingBindingTest {
     }
 
     @Test
-    fun `a host that can't prove the secret gets a pairing request, never a proof, when the user chose to pair again`() = runBlocking {
+    fun `even on the user's pick, a host that can't prove the held secret is refused and the secret kept`() = runBlocking {
         val secret = PairingCrypto.newSecret()
         held["host-1"] = secret
-        scripted(allowRepair = true) { server, rx, _ ->
+        scripted(allowRepair = true) { server, rx, proxy ->
             rx.next<Frame.Hello>()
             // No host proof (or a wrong one): this host doesn't know our secret.
             server.send(Frame.Challenge("host-1", "Tablet", PairingCrypto.newNonce(), hostProof = "forged"))
-            assertNull(rx.next<Frame.Auth>().proof, "nothing to collect for a host without the secret")
+            assertEquals(DenyReason.HOST_CHANGED, denied.await())
+            assertEquals("host-1" to "Tablet", changed.receive(), "the user is offered to forget the host")
+            assertTrue(rx.tryReceive().getOrNull() !is Frame.Auth, "no pairing request")
+            assertEquals(secret, held["host-1"], "the held secret is not replaced")
+            assertTrue(proxy.control("tareScale").isFailure)
+        }
+    }
 
-            // Having asked to pair, the device takes the secret the host issues.
+    @Test
+    fun `after the host is forgotten on this device, the user's pick may pair again`() = runBlocking {
+        held["host-1"] = PairingCrypto.newSecret()
+        held.remove("host-1") // Forget host
+        scripted(allowRepair = true) { server, rx, _ ->
+            rx.next<Frame.Hello>()
+            server.send(Frame.Challenge("host-1", "Tablet", PairingCrypto.newNonce()))
+            assertNull(rx.next<Frame.Auth>().proof, "a pairing request")
             val fresh = PairingCrypto.newSecret()
             server.send(welcome("host-1", fresh))
             assertEquals("host-1" to fresh, paired.receive())
@@ -114,13 +129,13 @@ class ProxyPairingBindingTest {
     }
 
     @Test
-    fun `a host that can't prove the secret is refused unless the user chose to pair again`() = runBlocking {
+    fun `an unattended session refuses a host that can't prove the held secret`() = runBlocking {
         val secret = PairingCrypto.newSecret()
         held["host-1"] = secret
         scripted(allowRepair = false) { server, rx, proxy ->
             rx.next<Frame.Hello>()
             server.send(Frame.Challenge("host-1", "Tablet", PairingCrypto.newNonce()))
-            assertEquals(DenyReason.HOST_UNVERIFIED, denied.await())
+            assertEquals(DenyReason.HOST_CHANGED, denied.await())
             assertTrue(proxy.control("tareScale").isFailure)
             assertTrue(rx.tryReceive().getOrNull() !is Frame.Auth, "no Auth at all: no pairing request either")
             assertEquals(secret, held["host-1"])

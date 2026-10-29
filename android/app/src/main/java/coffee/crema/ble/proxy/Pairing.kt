@@ -112,4 +112,8 @@ object DenyReason {
     /** Secondary-side: the host couldn't prove the secret this device holds for
      *  it, and the user didn't choose to pair again. */
     const val HOST_UNVERIFIED = "host-unverified"
+    /** Secondary-side: this device holds a secret for the host id, and the
+     *  host couldn't prove it. Never repaired silently: the user forgets the
+     *  host on this device first. */
+    const val HOST_CHANGED = "host-changed"
 }

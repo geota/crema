@@ -151,13 +151,13 @@ class ProxySessionTest {
             link.receive(Frame.Welcome(PROXY_PROTOCOL_VERSION, "p", "P", "primary", emptyList(), "control", secret))
             waitFor { held["p"] == secret }
 
-            // Session 2 (an automatic redial): a host presenting the same id
-            // but unable to prove the secret.
+            // Session 2 (an automatic redial): a host this device has no secret
+            // for. The user's pick doesn't carry over, so no pairing request.
             link.drop()
             link.start(2)
             waitFor { link.hellos(2) == 1 }
-            link.receive(Frame.Challenge("p", "P", PairingCrypto.newNonce(), hostProof = null))
-            link.receive(Frame.Welcome(PROXY_PROTOCOL_VERSION, "p", "P", "primary", emptyList(), "control", PairingCrypto.newSecret()))
+            link.receive(Frame.Challenge("p2", "P", PairingCrypto.newNonce(), hostProof = null))
+            link.receive(Frame.Welcome(PROXY_PROTOCOL_VERSION, "p2", "P", "primary", emptyList(), "control", PairingCrypto.newSecret()))
 
             assertEquals(DenyReason.HOST_UNVERIFIED, withTimeout(2_000) { denied.await() })
             delay(100)

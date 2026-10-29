@@ -68,6 +68,11 @@ class PairingStore(
         update { s -> if (s.pinnedHost == hostId) null else s.copy(pinnedHost = hostId) }
     }
 
+    /** Forget the secret this device holds for the host [hostId]. */
+    fun removeHeld(hostId: String) {
+        update { s -> if (hostId in s.held) s.copy(held = s.held - hostId) else null }
+    }
+
     /** Keep [secret] for the host [hostId]; false when it couldn't be stored. */
     fun putHeld(hostId: String, secret: String): Boolean =
         update { s -> seal(secret)?.let { s.copy(held = s.held + (hostId to it)) } }

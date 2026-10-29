@@ -103,6 +103,9 @@ class ProxyTransport(
      *  and refuses anything else. Production passes it per session; the default
      *  serves the loopback and tests. */
     private val allowRepair: Boolean = true,
+    /** The host with this id couldn't prove the secret this device holds for
+     *  it: the session is refused, and the caller can offer to forget the host. */
+    private val onHostChanged: (primaryId: String, primaryName: String) -> Unit = { _, _ -> },
 ) : BleTransport {
 
     /** Devices the primary holds, from [Frame.Welcome] / [Frame.Roster]; drives [scan]. */
@@ -301,12 +304,20 @@ class ProxyTransport(
                 val proof = if (held != null && hostProved) {
                     runCatching { PairingCrypto.clientProof(held, frame.primaryId, clientId, current.clientNonce, frame.nonce) }.getOrNull()
                 } else {
+                    if (held != null) {
+                        // A secret this device holds is never replaced by a new
+                        // pairing, not even on the user's pick: the user forgets
+                        // the host on this device first.
+                        Log.w(TAG, "Host ${frame.primaryName} didn't prove our pairing secret — refusing")
+                        onHostChanged(frame.primaryId, frame.primaryName)
+                        refuse(DenyReason.HOST_CHANGED, IllegalStateException("Proxy host refused: ${DenyReason.HOST_CHANGED}"))
+                        return
+                    }
                     if (!repairAllowed) {
                         Log.w(TAG, "Host ${frame.primaryName} isn't one this device can verify, and the user didn't pick it — refusing")
                         refuse(DenyReason.HOST_UNVERIFIED, IllegalStateException("Proxy host refused: ${DenyReason.HOST_UNVERIFIED}"))
                         return
                     }
-                    if (held != null) Log.w(TAG, "Host ${frame.primaryName} didn't prove our pairing secret — asking to pair again")
                     null
                 }
                 current.askedToPair = proof == null

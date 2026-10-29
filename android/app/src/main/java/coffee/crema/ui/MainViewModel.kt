@@ -810,6 +810,9 @@ data class MainUiState(
     /** A pending **push** handoff offer (issue 07): a primary ([the name]) is offering
      *  us the machine. Non-null ⟺ the Activity shows the "Take the machine?" dialog. */
     val pendingHandoffOffer: String? = null,
+    /** A host whose identity changed (it couldn't prove this device's pairing),
+     *  as (host id, name): non-null ⟺ the Activity offers to forget it. */
+    val changedHost: Pair<String, String>? = null,
     /**
      * Transient mirror overlay (issue 05): the primary's active profile, decoded
      * for **display only**, when it's a custom profile this device's own library
@@ -2429,6 +2432,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         pairedWithSecret = ps.pairedWithSecret,
                         mirrorClients = ps.mirrorClients,
                         pendingHandoffOffer = ps.pendingHandoffOffer,
+                        changedHost = ps.changedHost,
                     )
                 }
             }
@@ -3624,6 +3628,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Stop accepting new devices now. */
     fun closePairingWindow() = proxy.closePairingWindow()
+
+    /** Forget a host whose identity changed, so it can be paired again. */
+    fun forgetHost(hostId: String) = proxy.forgetHost(hostId)
+
+    /** Keep the host's pairing; dismiss the notice. */
+    fun dismissChangedHost() = proxy.dismissChangedHost()
 
     private fun rememberPaired(id: String, name: String, canControl: Boolean) {
         _ui.update {

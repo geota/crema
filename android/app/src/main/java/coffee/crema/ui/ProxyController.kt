@@ -155,6 +155,9 @@ class ProxyController(
         val pairedWithSecret: Set<String> = emptySet(),
         /** A pushed handoff offer awaiting accept/decline, by host name (issue 07). */
         val pendingHandoffOffer: String? = null,
+        /** A host that couldn't prove the secret this device holds for it, as
+         *  (host id, name): the UI offers to forget it on this device. */
+        val changedHost: Pair<String, String>? = null,
     )
 
     private data class ProxyConfig(val role: String, val host: String, val port: Int, val replayPrimary: Boolean = false)
@@ -697,6 +700,21 @@ class ProxyController(
         pairingDeferred?.complete(choice)
     }
 
+    /** This device forgets the host [hostId]: drop the secret it holds for it
+     *  (and the pin, if it pointed there), so picking that host again may ask
+     *  to pair. The only way a held secret is ever replaced. */
+    fun forgetHost(hostId: String) {
+        pairing.removeHeld(hostId)
+        if (pairing.pinnedHost == hostId) pairing.pinHost(null)
+        _state.update { it.copy(changedHost = null) }
+        appendLog("Forgot host $hostId on this device")
+    }
+
+    /** Keep the held secret; just dismiss the notice. */
+    fun dismissChangedHost() {
+        _state.update { it.copy(changedHost = null) }
+    }
+
     /** The host forgot [clientId] (Settings ▸ Paired devices): drop its secret
      *  and end its live session, if any. */
     fun forgetPaired(clientId: String) {
@@ -859,6 +877,7 @@ class ProxyController(
             pinnedHostId = { pairing.pinnedHost },
             onHostConfirmed = { hostId -> pairing.pinHost(hostId) },
             allowRepair = trust.allowRepair,
+            onHostChanged = { hostId, hostName -> _state.update { it.copy(changedHost = hostId to hostName) } },
         )
         // Mirror the primary's SCALE (issue 04), roster-driven: attach it only once
         // the primary actually advertises one — no blind scan, so a scaleless primary
@@ -1071,6 +1090,7 @@ internal fun deniedMessage(reason: String): String = when {
     reason == DenyReason.ALREADY_PAIRED ->
         "The host already has a pairing for this device — on the host, Forget it under Paired devices, then pair again"
     reason == DenyReason.HOST_MISMATCH -> "This isn't the host this device mirrors — choose a host under Other devices"
+    reason == DenyReason.HOST_CHANGED -> "This host's identity changed — forget it on this device to pair again"
     reason == DenyReason.HOST_UNVERIFIED ->
         "Couldn't verify this host for this device — choose it under Other devices to connect"
     reason.startsWith(DenyReason.VERSION_MISMATCH) -> "Update Crema on both devices to connect"
