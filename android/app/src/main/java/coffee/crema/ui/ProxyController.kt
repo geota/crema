@@ -227,6 +227,7 @@ class ProxyController(
     private val localMachine = LocalMachine(
         actions = machineActions,
         notify = { notify(it) },
+        hostName = { deviceLabel() },
     )
 
     /** A primary's entry for relayed controls (wired into [RelayHub]). */
@@ -975,6 +976,8 @@ class ProxyController(
             scope = scope,
             notify = notify,
             log = appendLog,
+            viewOnly = { _state.value.mirrorViewOnly },
+            hubName = { _state.value.hubName.ifBlank { host } },
         )
         // Mirror the primary's SCALE (issue 04), roster-driven: attach it only once
         // the primary actually advertises one — no blind scan, so a scaleless primary

@@ -29,7 +29,7 @@ class RelayedCommandDispatcherTest {
     private val phone = CommandOrigin("phone-1", "Phone")
 
     private val dispatcher = RelayedCommandDispatcher(
-        machine = LocalMachine(actions, notify = {}),
+        machine = LocalMachine(actions, notify = {}, hostName = { "Tablet" }),
         hostName = { check(!hostNameThrows) { "hostName failed" }; "Tablet" },
         machineIdle = { check(!machineIdleThrows) { "machineIdle failed" }; machineIdle },
         announce = { text, _ -> check(!announceThrows) { "announce failed" }; announced += text },
@@ -180,6 +180,29 @@ class RelayedCommandDispatcherTest {
         announceThrows = false
         assertEquals(CommandOutcome.Accepted, dispatch("tareScale"))
         assertEquals(listOf("Phone tared the scale"), announced.toList())
+    }
+
+    /** AC-27 (review 17): before the hub loaded its config, a relayed config
+     *  edit is refused (the load would overwrite it after the reply); machine
+     *  control still runs. */
+    @Test
+    fun `a config edit before the hub loaded its config is refused`() {
+        actions.configLoaded = false
+        assertEquals(CommandOutcome.Refused("Tablet is starting up"), dispatch("setQcGrind", "14.5"))
+        assertTrue(actions.applied.isEmpty() && actions.shown.isEmpty())
+        assertEquals(CommandOutcome.Accepted, dispatch("tareScale"))
+        actions.configLoaded = true
+        assertEquals(CommandOutcome.Accepted, dispatch("setQcGrind", "14.5"))
+    }
+
+    /** AC-35, the hub half: an older remote's machine setting is applied and logged. */
+    @Test
+    fun `an older remote's machine setting is applied and logged`() {
+        assertEquals(CommandOutcome.Accepted, dispatch("setQcSteamTemp", "150.0"))
+        assertEquals(listOf("commit(${MachineCommand.SetQc(QcField.STEAM_TEMP, 150f)})"), actions.applied.toList())
+        assertTrue(logged.any { it == "Phone changed steam temperature (older Crema)" }, "$logged")
+        dispatch("setQcGrind", "14.5")
+        assertTrue(logged.none { "grind" in it && "older" in it }, "a shot dial isn't an older remote's edit")
     }
 
     private companion object {

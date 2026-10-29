@@ -44,6 +44,7 @@ import coffee.crema.persist.KeptAsideNotices
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.ConfigSnapshot
 import coffee.crema.settings.MirroredSettings
+import coffee.crema.settings.Setting
 import coffee.crema.settings.setting
 import coffee.crema.settings.PairedDevice
 import coffee.crema.visualizer.VisualizerClient
@@ -198,6 +199,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The state the screens show ([effective]). */
     private fun effectiveState(): MainUiState = _ui.value.effective()
+
+    /**
+     * Run [edit], the body of a read-only machine or session setter (§7.3),
+     * unless this device is a remote: there it changes nothing — no own value,
+     * no machine write — and says where to change it.
+     */
+    private inline fun editOwnSetting(setting: Setting, edit: () -> Unit) {
+        if (_ui.value.mirror != null) {
+            appendLog("Not changing ${setting.name} on a remote")
+            notifyUser("Change on ${_ui.value.remoteHubLabel()}")
+            return
+        }
+        edit()
+    }
 
     /**
      * Set when [startShot] kicks off a profile upload that should be followed by an
@@ -1138,6 +1153,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         override fun hasBean(id: String): Boolean = _ui.value.beans.any { it.id == id }
         // Someone is using Crema on a mirror: that's presence at the machine.
         override fun notePeerActivity() = idleSleep.activity(coffee.crema.core.IdleActivity.Mirror)
+        override fun configReady(): Boolean = prefsLoaded
     }
 
     /**
@@ -3137,16 +3153,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * only pass those — guarded here too so an out-of-range value is a no-op.
      */
     fun setHeaterVoltage(volts: Int) {
-        if (volts != 120 && volts != 230) {
-            appendLog("Heater voltage $volts ignored (only 120 / 230 allowed)")
-            return
+        editOwnSetting(Setting.HEATER_VOLTAGE) {
+            if (volts != 120 && volts != 230) {
+                appendLog("Heater voltage $volts ignored (only 120 / 230 allowed)")
+                return
+            }
+            val raw = runCatching { bridge.setHeaterVoltage(volts.toUByte()) }.getOrElse {
+                appendLog("Set heater voltage failed: ${it.message}")
+                return
+            }
+            onCoreOutputJson(raw)
+            runCatching { bridge.readMmr(MmrReg.HEATER_VOLTAGE) }.getOrNull()?.let(::onCoreOutputJson)
         }
-        val raw = runCatching { bridge.setHeaterVoltage(volts.toUByte()) }.getOrElse {
-            appendLog("Set heater voltage failed: ${it.message}")
-            return
-        }
-        onCoreOutputJson(raw)
-        runCatching { bridge.readMmr(MmrReg.HEATER_VOLTAGE) }.getOrNull()?.let(::onCoreOutputJson)
     }
 
     /**
@@ -3156,17 +3174,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * [MainUiState.lineFreqHz].
      */
     fun setLineFrequency(hz: Float) {
-        if (hz != 0.0f && hz != 50.0f && hz != 60.0f) {
-            appendLog("Line frequency $hz ignored (only 0 / 50 / 60 allowed)")
-            return
+        editOwnSetting(Setting.LINE_FREQUENCY) {
+            if (hz != 0.0f && hz != 50.0f && hz != 60.0f) {
+                appendLog("Line frequency $hz ignored (only 0 / 50 / 60 allowed)")
+                return
+            }
+            runCatching { bridge.setLineFrequencyOverride(hz) }.onFailure {
+                appendLog("Set line frequency failed: ${it.message}")
+                return
+            }
+            val resolved = runCatching { bridge.lineFrequencyHz() }.getOrNull() ?: hz
+            _ui.update { it.copy(lineFreqHz = resolved, lineFreqOverride = hz) }
+            proxy.pushConfig() // remotes show the hub's line frequency (§6.1)
         }
-        runCatching { bridge.setLineFrequencyOverride(hz) }.onFailure {
-            appendLog("Set line frequency failed: ${it.message}")
-            return
-        }
-        val resolved = runCatching { bridge.lineFrequencyHz() }.getOrNull() ?: hz
-        _ui.update { it.copy(lineFreqHz = resolved, lineFreqOverride = hz) }
-        proxy.pushConfig() // remotes show the hub's line frequency (§6.1)
     }
 
     /** On-demand GitHub release check (Settings → About, issue #36). */
@@ -3233,14 +3253,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * Unit (a sans-IO core setting); no event echo.
      */
     fun setMaxShotDuration(seconds: Float?) {
-        runCatching { bridge.setMaxShotDuration(seconds) }.onFailure {
-            appendLog("Set max shot duration failed: ${it.message}")
+        editOwnSetting(Setting.MAX_SHOT_DURATION) {
+            runCatching { bridge.setMaxShotDuration(seconds) }.onFailure {
+                appendLog("Set max shot duration failed: ${it.message}")
+            }
+            if (seconds != null) {
+                _ui.update { it.copy(maxShotDurationS = seconds) }
+                persistPrefs() // also pushes the hub's snapshot (§6.1)
+            }
+            refreshStopTargetProjection()
         }
-        if (seconds != null) {
-            _ui.update { it.copy(maxShotDurationS = seconds) }
-            persistPrefs() // also pushes the hub's snapshot (§6.1)
-        }
-        refreshStopTargetProjection()
     }
 
     // ── Live mode switches (M2 — no restart) — see [ProxyController] ────────
@@ -3403,12 +3425,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * reflects the machine's confirmed value.
      */
     fun setFlowMultiplier(multiplier: Float) {
-        val raw = runCatching { bridge.setCalibrationFlowMultiplier(multiplier) }.getOrElse {
-            appendLog("Set flow multiplier failed: ${it.message}")
-            return
+        editOwnSetting(Setting.FLOW_MULTIPLIER) {
+            val raw = runCatching { bridge.setCalibrationFlowMultiplier(multiplier) }.getOrElse {
+                appendLog("Set flow multiplier failed: ${it.message}")
+                return
+            }
+            onCoreOutputJson(raw)
+            runCatching { bridge.readMmr(MmrReg.CALIBRATION_FLOW_MULTIPLIER) }.getOrNull()?.let(::onCoreOutputJson)
         }
-        onCoreOutputJson(raw)
-        runCatching { bridge.readMmr(MmrReg.CALIBRATION_FLOW_MULTIPLIER) }.getOrNull()?.let(::onCoreOutputJson)
     }
 
     /** Start a descale cycle (Settings → Water → "Run now"). */
@@ -3469,11 +3493,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * a mid-shot flip re-targets the armed AutoStop via the core's refresh.
      */
     fun setVolumeStopWithScale(on: Boolean) {
-        _ui.update { it.copy(volumeStopWithScale = on) }
-        runCatching { bridge.setVolumeStopWithScale(on) }.onFailure {
-            appendLog("Set volume-stop-with-scale failed: ${it.message}")
+        editOwnSetting(Setting.VOLUME_STOP_WITH_SCALE) {
+            _ui.update { it.copy(volumeStopWithScale = on) }
+            runCatching { bridge.setVolumeStopWithScale(on) }.onFailure {
+                appendLog("Set volume-stop-with-scale failed: ${it.message}")
+            }
+            persistPrefs()
         }
-        persistPrefs()
     }
 
     // ── Auto-connect (per device) ─────────────────────────────────────────────
@@ -3506,15 +3532,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * MMR write) routed through the shared command path. Optimistic.
      */
     fun setSteamEco(enabled: Boolean) {
-        _ui.update { it.copy(steamEco = enabled) }
-        persistPrefs()
-        val raw = runCatching {
-            bridge.enableSteamEcoMode(enabled, SystemClock.elapsedRealtime().toULong())
-        }.getOrElse {
-            appendLog("Set steam eco failed: ${it.message}")
-            return
+        editOwnSetting(Setting.STEAM_ECO) {
+            _ui.update { it.copy(steamEco = enabled) }
+            persistPrefs()
+            val raw = runCatching {
+                bridge.enableSteamEcoMode(enabled, SystemClock.elapsedRealtime().toULong())
+            }.getOrElse {
+                appendLog("Set steam eco failed: ${it.message}")
+                return
+            }
+            onCoreOutputJson(raw)
         }
-        onCoreOutputJson(raw)
     }
 
     // ── Quick-Controls steam / hot-water / flush (issue 14) ──────────────────
@@ -3634,10 +3662,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  Persisted AND pushed straight through, so the DE1 stops (or starts)
      *  demanding water at the new level without waiting for a reconnect. */
     fun setWaterRefillPointMm(mm: Float) {
-        val clamped = mm.coerceIn(REFILL_POINT_MIN_MM, REFILL_POINT_MAX_MM)
-        _ui.update { it.copy(waterRefillPointMm = clamped) }
-        persistPrefs()
-        routeWrite("Set refill point") { bridge.setRefillThreshold(clamped) }
+        editOwnSetting(Setting.WATER_REFILL_POINT) {
+            val clamped = mm.coerceIn(REFILL_POINT_MIN_MM, REFILL_POINT_MAX_MM)
+            _ui.update { it.copy(waterRefillPointMm = clamped) }
+            persistPrefs()
+            routeWrite("Set refill point") { bridge.setRefillThreshold(clamped) }
+        }
     }
 
     /** Daily automatic Google Drive backup toggle (issue #36). Turning it on
@@ -3651,39 +3681,49 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Fan-on temperature threshold, °C (0..=60). Persisted + written to the
      *  machine immediately; re-seeded on every connect. */
     fun setFanThreshold(tempC: Float) {
-        _ui.update { it.copy(fanThresholdC = tempC) }
-        persistPrefs()
-        routeWrite("Set fan threshold") {
-            bridge.setFanThreshold(tempC.roundToInt().coerceIn(0, 60).toUByte())
+        editOwnSetting(Setting.FAN_THRESHOLD) {
+            _ui.update { it.copy(fanThresholdC = tempC) }
+            persistPrefs()
+            routeWrite("Set fan threshold") {
+                bridge.setFanThreshold(tempC.roundToInt().coerceIn(0, 60).toUByte())
+            }
         }
     }
 
     /** Opt-in "require scale to start" block (geota/crema#29). Persisted. */
     fun setRequireScale(on: Boolean) {
-        _ui.update { it.copy(requireScale = on) }
-        persistPrefs()
+        editOwnSetting(Setting.REQUIRE_SCALE) {
+            _ui.update { it.copy(requireScale = on) }
+            persistPrefs()
+        }
     }
 
     /** DE1 firmware two-tap steam stop. Persisted + written to the machine
      *  immediately; re-seeded on every connect. */
     fun setSteamTwoTap(enabled: Boolean) {
-        _ui.update { it.copy(steamTwoTap = enabled) }
-        persistPrefs()
-        routeWrite("Set steam two-tap stop") {
-            bridge.setSteamTwoTapStop(if (enabled) 1u else 0u)
+        editOwnSetting(Setting.STEAM_TWO_TAP) {
+            _ui.update { it.copy(steamTwoTap = enabled) }
+            persistPrefs()
+            routeWrite("Set steam two-tap stop") {
+                bridge.setSteamTwoTapStop(if (enabled) 1u else 0u)
+            }
         }
     }
 
     /** Persist the pre-shot flush preference (consumed by a later shot-sequence pass). */
     fun setPreFlush(enabled: Boolean) {
-        _ui.update { it.copy(preFlush = enabled) }
-        persistPrefs()
+        editOwnSetting(Setting.PRE_FLUSH) {
+            _ui.update { it.copy(preFlush = enabled) }
+            persistPrefs()
+        }
     }
 
     /** Persist the post-steam purge preference (consumed by a later shot-sequence pass). */
     fun setSteamPurge(enabled: Boolean) {
-        _ui.update { it.copy(steamPurge = enabled) }
-        persistPrefs()
+        editOwnSetting(Setting.STEAM_PURGE) {
+            _ui.update { it.copy(steamPurge = enabled) }
+            persistPrefs()
+        }
     }
 
     /** Keep the screen awake while a shot pulls (Settings → Display). Persisted. */
@@ -4047,8 +4087,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Equipment-level grinder model (free text). Persisted; rides Visualizer
      *  uploads/patches as `grinder_model`. */
     fun setGrinderModel(model: String) {
-        _ui.update { it.copy(grinderModel = model) }
-        persistPrefs()
+        editOwnSetting(Setting.GRINDER_MODEL) {
+            _ui.update { it.copy(grinderModel = model) }
+            persistPrefs()
+        }
     }
 
     /** Default barista name (free text), stamped on each new shot and brew log. Persisted. */
@@ -4061,11 +4103,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  Never), snapped to one of the core's choices. Persisted; the timer
      *  restarts from now. */
     fun setIdleSleepMin(minutes: Int) {
-        val choices = idleSleepChoices()
-        val snapped = choices[idleSleepIndex(minutes, choices)]
-        _ui.update { it.copy(idleSleepMin = snapped) }
-        persistPrefs()
-        idleSleep.configure(snapped)
+        editOwnSetting(Setting.IDLE_SLEEP) {
+            val choices = idleSleepChoices()
+            val snapped = choices[idleSleepIndex(minutes, choices)]
+            _ui.update { it.copy(idleSleepMin = snapped) }
+            persistPrefs()
+            idleSleep.configure(snapped)
+        }
     }
 
     /** Sleep the machine when Crema is quit (swiped from recents) — the
@@ -4296,12 +4340,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Set the Bengle cup-warmer plate temperature (0–80 °C) and re-read the
      *  register so the UI reflects what the machine accepted. */
     fun setCupWarmerTemp(tempC: Int) {
-        val raw = runCatching { bridge.setCupWarmerTemperature(tempC.coerceIn(0, 80).toUByte()) }.getOrElse {
-            appendLog("Set cup warmer temp failed: ${it.message}")
-            return
+        editOwnSetting(Setting.CUP_WARMER_TEMP) {
+            val raw = runCatching { bridge.setCupWarmerTemperature(tempC.coerceIn(0, 80).toUByte()) }.getOrElse {
+                appendLog("Set cup warmer temp failed: ${it.message}")
+                return
+            }
+            onCoreOutputJson(raw)
+            runCatching { bridge.readMmr(MmrReg.CUP_WARMER_TEMP) }.getOrNull()?.let(::onCoreOutputJson)
         }
-        onCoreOutputJson(raw)
-        runCatching { bridge.readMmr(MmrReg.CUP_WARMER_TEMP) }.getOrNull()?.let(::onCoreOutputJson)
     }
 
     /** Show/hide the inline debug panel (Settings → Advanced). Persisted. */
@@ -4524,20 +4570,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * catches up and confirms the scale's real value.
      */
     fun setScaleVolume(level: Int) {
-        val range = _ui.value.scaleCapabilities?.volume
-        val clamped = if (range != null) {
-            level.coerceIn(range.min.toInt(), range.max.toInt())
-        } else {
-            level
+        editOwnSetting(Setting.SCALE_VOLUME) {
+            val range = _ui.value.scaleCapabilities?.volume
+            val clamped = if (range != null) {
+                level.coerceIn(range.min.toInt(), range.max.toInt())
+            } else {
+                level
+            }
+            _ui.update { it.copy(scaleVolume = clamped) }
+            val raw = runCatching {
+                bridge.setScaleVolume(clamped.toUByte())
+            }.getOrElse {
+                appendLog("Set volume failed: ${it.message}")
+                return
+            }
+            onCoreOutputJson(raw)
         }
-        _ui.update { it.copy(scaleVolume = clamped) }
-        val raw = runCatching {
-            bridge.setScaleVolume(clamped.toUByte())
-        }.getOrElse {
-            appendLog("Set volume failed: ${it.message}")
-            return
-        }
-        onCoreOutputJson(raw)
     }
 
     /**
@@ -4553,20 +4601,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * `Event.ScaleReading.device_standby` stream then catches up.
      */
     fun setScaleStandbyMinutes(minutes: Int) {
-        val range = _ui.value.scaleCapabilities?.standby
-        val clamped = if (range != null) {
-            minutes.coerceIn(range.min.toInt(), range.max.toInt())
-        } else {
-            minutes
+        editOwnSetting(Setting.SCALE_STANDBY) {
+            val range = _ui.value.scaleCapabilities?.standby
+            val clamped = if (range != null) {
+                minutes.coerceIn(range.min.toInt(), range.max.toInt())
+            } else {
+                minutes
+            }
+            _ui.update { it.copy(scaleStandbyMinutes = clamped) }
+            val raw = runCatching {
+                bridge.setScaleStandby(clamped.toUByte())
+            }.getOrElse {
+                appendLog("Set standby failed: ${it.message}")
+                return
+            }
+            onCoreOutputJson(raw)
         }
-        _ui.update { it.copy(scaleStandbyMinutes = clamped) }
-        val raw = runCatching {
-            bridge.setScaleStandby(clamped.toUByte())
-        }.getOrElse {
-            appendLog("Set standby failed: ${it.message}")
-            return
-        }
-        onCoreOutputJson(raw)
     }
 
     /**
@@ -4578,14 +4628,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * stream then catches up and confirms the scale's real state.
      */
     fun setScaleFlowSmoothing(enabled: Boolean) {
-        _ui.update { it.copy(scaleFlowSmoothing = enabled) }
-        val raw = runCatching {
-            bridge.setScaleFlowSmoothing(enabled)
-        }.getOrElse {
-            appendLog("Set flow smoothing failed: ${it.message}")
-            return
+        editOwnSetting(Setting.SCALE_FLOW_SMOOTHING) {
+            _ui.update { it.copy(scaleFlowSmoothing = enabled) }
+            val raw = runCatching {
+                bridge.setScaleFlowSmoothing(enabled)
+            }.getOrElse {
+                appendLog("Set flow smoothing failed: ${it.message}")
+                return
+            }
+            onCoreOutputJson(raw)
         }
-        onCoreOutputJson(raw)
     }
 
     /**
@@ -4596,14 +4648,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * optimistically (the value is not read back).
      */
     fun setScaleAntiMistouch(enabled: Boolean) {
-        _ui.update { it.copy(scaleAntiMistouch = enabled) }
-        val raw = runCatching {
-            bridge.setScaleAntiMistouch(enabled)
-        }.getOrElse {
-            appendLog("Set anti-mistouch failed: ${it.message}")
-            return
+        editOwnSetting(Setting.SCALE_ANTI_MISTOUCH) {
+            _ui.update { it.copy(scaleAntiMistouch = enabled) }
+            val raw = runCatching {
+                bridge.setScaleAntiMistouch(enabled)
+            }.getOrElse {
+                appendLog("Set anti-mistouch failed: ${it.message}")
+                return
+            }
+            onCoreOutputJson(raw)
         }
-        onCoreOutputJson(raw)
     }
 
     /**
@@ -4620,14 +4674,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * response) then catches up and confirms the scale's real mode.
      */
     fun setScaleMode(modeId: Int) {
-        _ui.update { it.copy(scaleActiveMode = modeId) }
-        val raw = runCatching {
-            bridge.setScaleMode(modeId.toUByte())
-        }.getOrElse {
-            appendLog("Set mode failed: ${it.message}")
-            return
+        editOwnSetting(Setting.SCALE_MODE) {
+            _ui.update { it.copy(scaleActiveMode = modeId) }
+            val raw = runCatching {
+                bridge.setScaleMode(modeId.toUByte())
+            }.getOrElse {
+                appendLog("Set mode failed: ${it.message}")
+                return
+            }
+            onCoreOutputJson(raw)
         }
-        onCoreOutputJson(raw)
     }
 
     /**
@@ -4641,14 +4697,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * the scale's real mode.
      */
     fun setScaleAutoStop(modeId: Int) {
-        _ui.update { it.copy(scaleAutoStop = modeId) }
-        val raw = runCatching {
-            bridge.setScaleAutoStop(modeId.toUByte())
-        }.getOrElse {
-            appendLog("Set auto-stop failed: ${it.message}")
-            return
+        editOwnSetting(Setting.SCALE_AUTO_STOP) {
+            _ui.update { it.copy(scaleAutoStop = modeId) }
+            val raw = runCatching {
+                bridge.setScaleAutoStop(modeId.toUByte())
+            }.getOrElse {
+                appendLog("Set auto-stop failed: ${it.message}")
+                return
+            }
+            onCoreOutputJson(raw)
         }
-        onCoreOutputJson(raw)
     }
 
     /**

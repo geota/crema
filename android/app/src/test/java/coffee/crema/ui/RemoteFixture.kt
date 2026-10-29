@@ -32,6 +32,16 @@ internal class RemoteFixture(private val store: ViewModelStore) {
     lateinit var endpoint: TestHubServer
     lateinit var hub: RelayHub
 
+    /** The hub admits this remote view-only. */
+    var viewOnly = false
+
+    /** The hub applies each accepted relayed edit to its snapshot and pushes
+     *  it before replying, as a real hub does (§7.3). */
+    var echoEdits = false
+
+    /** The hub's current snapshot, when [echoEdits] is on. */
+    @Volatile var current: ConfigSnapshot = S
+
     /** Restore a remote with [own] as its settings and wait for the hub's Welcome. */
     fun start(own: AppPrefs = P, onBuilt: (MainViewModel) -> Unit = {}): MainViewModel {
         val dir = VmHarness.app().filesDir
@@ -45,8 +55,14 @@ internal class RemoteFixture(private val store: ViewModelStore) {
             configSource = { hubConfig },
             controlHandler = { method, args, _, _ ->
                 handled += method to args
-                if (method in refused) Result.failure(IllegalStateException("refused by the hub")) else Result.success(Unit)
+                if (method in refused) {
+                    Result.failure(IllegalStateException("refused by the hub"))
+                } else {
+                    if (echoEdits) echo(method, args)
+                    Result.success(Unit)
+                }
             },
+            canControl = !viewOnly,
         )
         endpoint = e
         hub = h
@@ -67,6 +83,21 @@ internal class RemoteFixture(private val store: ViewModelStore) {
     }
 
     fun kill() = runCatching { endpoint.kill() }
+
+    /** Apply a relayed edit to [current] and push it (on the hub's thread, before the reply). */
+    private fun echo(method: String, args: String) {
+        current = when (method) {
+            "setStopOnWeight" -> current.copy(stopOnWeight = args.toBoolean())
+            "setAutoTare" -> current.copy(autoTare = args.toBoolean())
+            "setQcGrind" -> current.copy(qcGrind = args.toFloat())
+            "quickAdjustBrew" -> args.split(",").let { p ->
+                current.copy(brewDoseG = p[0].toDouble(), brewYieldG = p[1].toDouble(), brewTempC = p[2].toDouble(), brewPreinfuseS = p.getOrNull(3)?.toDoubleOrNull())
+            }
+            else -> current
+        }.let { it.copy(rev = (it.rev ?: 0) + 1) }
+        hubConfig = coreJson.encodeToString(ConfigSnapshot.serializer(), current)
+        hub.pushConfig(hubConfig)
+    }
 
     companion object {
         const val PROFILE_P = "019e5fb5-63b5-7333-a2ac-34b9f4f0e604"

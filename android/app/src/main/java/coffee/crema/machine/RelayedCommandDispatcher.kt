@@ -60,6 +60,11 @@ class RelayedCommandDispatcher(
         // leave the primary with no profile (or a dangling bean): refuse it
         // and change nothing here.
         machine.unknownReference(cmd, hostName())?.let { return refused(method, it) }
+        // Older remotes still send the machine settings newer ones don't (§2):
+        // still applied, and logged.
+        if (!cmd.sentByRemotes() && cmd is MachineCommand.SetQc) {
+            log("${origin.name ?: "A remote"} changed ${cmd.field.label} (older Crema)")
+        }
         // Worded against the state before the command runs.
         val phrase = phrase(cmd)
         val outcome = machine.run(cmd, origin)
