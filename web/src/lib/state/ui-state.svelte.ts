@@ -512,8 +512,10 @@ export function maintenanceTitle(state: string): string {
  * firmware's fixed 720 s schedule). Android `maintenanceRunText`.
  */
 export function maintenanceProgressText(view: MaintenanceView): string {
+	// The held request waits for the cold profile's upload AND the end of
+	// preheat, whichever is last (C3 #7).
 	if (view.phase === 'WaitingForPreheat') {
-		return 'Waiting for the machine to stop heating (older firmware workaround)…';
+		return 'Loading the cold-start profile and waiting for heating to stop (older firmware workaround)…';
 	}
 	if (view.phase === 'Requested') return 'Starting…';
 	if (view.step_count > 0 && view.step_index > 0) {

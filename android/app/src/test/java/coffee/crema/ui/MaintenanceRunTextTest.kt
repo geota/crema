@@ -50,7 +50,7 @@ class MaintenanceRunTextTest {
     fun aHeldColdRequestSaysWhy() {
         val (title, sub) = maintenanceRunText(run(MaintenancePhase.WaitingForPreheat, state = MachineState.Clean, cold = true))
         assertEquals("Clean cycle", title)
-        assertEquals("Waiting for the machine to stop heating (older firmware workaround)…", sub)
+        assertEquals("Loading the cold-start profile and waiting for heating to stop (older firmware workaround)…", sub)
     }
 
     @Test

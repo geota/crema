@@ -215,8 +215,8 @@
 	//
 	// The core follows a Descale / Clean / AirPurge from request to exit and
 	// reports it as `snapshot.maintenance` (null when none). On old DE1
-	// firmware (< 1356, or unknown) a cold request is held behind a 1 °C
-	// profile until preheat ends — "Waiting for the machine to stop heating".
+	// firmware (< 1356, or unknown) a cold request is held until its 1 °C
+	// profile has loaded and preheat has ended.
 	// A descale carries the firmware's fixed 720 s step schedule.
 
 	const maint = $derived(snapshot.maintenance);

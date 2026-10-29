@@ -8,8 +8,8 @@ import coffee.crema.core.MaintenancePhase
 /**
  * Title + subtitle for the running-maintenance row on Settings → Water
  * (`MainUiState.maintenanceRun`). Same copy as web `WaterSection`: on old DE1
- * firmware (< 1356, or unknown) a cold request is held behind core's 1 °C
- * profile until preheat ends; a descale reads Decenza's
+ * firmware (< 1356, or unknown) a cold request is held until core's 1 °C
+ * profile has loaded and preheat has ended; a descale reads Decenza's
  * "42% · Step 4 of 5 · 7 min 0 s left" from the firmware's fixed 720 s schedule.
  */
 /** Whether a `MaintenanceProgress` [phase] ends the cycle (finished, cancelled, or never started). */
@@ -40,8 +40,9 @@ private fun maintenanceTitle(state: MachineState): String = when (state) {
 internal fun maintenanceRunText(run: EventMaintenanceProgressInner): Pair<String, String> {
     val title = maintenanceTitle(run.state)
     val sub = when {
+        // Held for the cold profile's upload AND the end of preheat (C3 #7).
         run.phase == MaintenancePhase.WaitingForPreheat ->
-            "Waiting for the machine to stop heating (older firmware workaround)…"
+            "Loading the cold-start profile and waiting for heating to stop (older firmware workaround)…"
         run.phase == MaintenancePhase.Requested -> "Starting…"
         run.step_count.toInt() > 0 && run.step_index.toInt() > 0 -> {
             val pct = (run.progress * 100f).toInt()

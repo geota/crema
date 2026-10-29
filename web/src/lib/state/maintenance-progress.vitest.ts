@@ -118,7 +118,7 @@ describe('maintenance progress fold', () => {
 		);
 		expect(
 			maintenanceProgressText(view({ phase: MaintenancePhase.WaitingForPreheat, cold_workaround: true }))
-		).toBe('Waiting for the machine to stop heating (older firmware workaround)…');
+		).toBe('Loading the cold-start profile and waiting for heating to stop (older firmware workaround)…');
 	});
 
 	it('logs phase changes, not every countdown second', () => {
