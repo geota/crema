@@ -4343,7 +4343,8 @@ enum class MaintenanceFailure(val string: String) {
 	@SerialName("ColdProfileNotLoaded")
 	ColdProfileNotLoaded("ColdProfileNotLoaded"),
 	/// Another upload (the user picked a profile or started a shot) replaced
-	/// the 1 °C profile before the machine finished heating.
+	/// the 1 °C profile before the cycle could start (while the machine was
+	/// still heating, or while the cold profile was still loading).
 	@SerialName("ProfileReplaced")
 	ProfileReplaced("ProfileReplaced"),
 }

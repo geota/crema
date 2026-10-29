@@ -542,7 +542,7 @@ export function maintenanceFailedMessage(
 ): string {
 	const title = maintenanceTitle(state);
 	if (failure === MaintenanceFailure.ProfileReplaced) {
-		return `${title} didn't start: another profile was loaded while the machine was still heating. Start it again when you're ready.`;
+		return `${title} didn't start: another profile was loaded before the cycle could start. Start it again when you're ready.`;
 	}
 	return `${title} didn't start: the cold-start profile older DE1 firmware needs could not be loaded. Try again.`;
 }

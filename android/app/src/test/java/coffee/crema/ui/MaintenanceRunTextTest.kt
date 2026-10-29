@@ -113,7 +113,7 @@ class MaintenanceRunTextTest {
         assertEquals(MaintenancePhase.Failed, failed.phase)
         assertEquals(MaintenanceFailure.ProfileReplaced, failed.failure)
         assertEquals(
-            "Descale didn't start: another profile was loaded while the machine was still heating. Start it again when you're ready.",
+            "Descale didn't start: another profile was loaded before the cycle could start. Start it again when you're ready.",
             maintenanceFailedText(failed.state, failed.failure),
         )
     }

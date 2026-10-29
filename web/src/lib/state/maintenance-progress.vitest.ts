@@ -88,7 +88,7 @@ describe('maintenance progress fold', () => {
 			MaintenanceFailure.ProfileReplaced
 		);
 		expect(replaced).toBe(
-			"Air purge didn't start: another profile was loaded while the machine was still heating. Start it again when you're ready."
+			"Air purge didn't start: another profile was loaded before the cycle could start. Start it again when you're ready."
 		);
 		expect(replaced).not.toContain('could not be loaded');
 	});
