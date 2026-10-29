@@ -19,6 +19,7 @@
 
 import type { NotificationSource } from '#lib/core/index.js';
 import { foldReplayMetaJsonl as wasmFoldReplayMetaJsonl } from '#lib/wasm/de1_wasm.js';
+import { readImportText } from '#lib/utils/import-limits.js';
 
 /**
  * One raw capture line — the JSON Lines schema the Android `BleSessionRecorder`
@@ -252,7 +253,7 @@ export function parseCapture(text: string): ParsedCapture {
 
 /** Read a `File` (e.g. from an `<input type="file">`) and {@link parseCapture} it. */
 export async function parseCaptureFile(file: File): Promise<ParsedCapture> {
-	return parseCapture(await file.text());
+	return parseCapture(await readImportText(file));
 }
 
 /**

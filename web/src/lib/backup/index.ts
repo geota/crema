@@ -36,7 +36,8 @@ import { getCustomMethodStore } from '#lib/brew/custom-methods.svelte.js';
 import { getMaintenanceStore } from '#lib/maintenance/index.js';
 import { visualizerSyncPrefs, applyVisualizerSyncPrefs } from '#lib/visualizer/sync-config.js';
 import { getBeanImageStore, refForBean } from '#lib/bean/image-storage.js';
-import { strToU8, strFromU8, zipSync, unzipSync } from 'fflate';
+import { strToU8, strFromU8, zipSync } from 'fflate';
+import { assertImportSize, unzipImportSync } from '#lib/utils/import-limits.js';
 import { readJson } from '#lib/utils/storage.js';
 import { downloadBlob, filenameStamp } from '#lib/utils/download.js';
 import type { Bean, Roaster } from '#lib/bean/model.js';
@@ -427,9 +428,15 @@ export async function restoreBackupData(
 ): Promise<RestoreSummary> {
 	if (typeof data === 'string') return restoreBackup(data, mode);
 	const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+	// Size caps (review 05 P3-2): a crafted file or zip bomb fails with a clear
+	// error instead of exhausting memory. Only the backup members are inflated.
+	assertImportSize(bytes.length, 'The backup');
 	if (!isZip(bytes)) return restoreBackup(strFromU8(bytes), mode);
 
-	const files = unzipSync(bytes);
+	const files = unzipImportSync(
+		bytes,
+		(name) => name === BACKUP_JSONL_MEMBER || name === 'crema.jsonl' || name.startsWith('images/')
+	);
 	const jsonl = files[BACKUP_JSONL_MEMBER] ?? files['crema.jsonl'];
 	if (!jsonl) throw new Error('Not a Crema backup zip (no backup.jsonl inside).');
 	const summary = restoreBackup(strFromU8(jsonl), mode);

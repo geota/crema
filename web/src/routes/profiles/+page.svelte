@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '#lib/icons/Icon.svelte';
 	import { pinActiveThenFavourite } from '#lib/library-order.js';
+	import { readImportText } from '#lib/utils/import-limits.js';
 	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
@@ -526,7 +527,7 @@
 			const isJsonl = file.name.toLowerCase().endsWith('.jsonl');
 			if (isJsonl) {
 				try {
-					const text = await file.text();
+					const text = await readImportText(file);
 					const lines = text.split('\n').filter((l) => l.trim().length > 0);
 					for (let i = 0; i < lines.length; i++) {
 						try {

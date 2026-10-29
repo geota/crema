@@ -58,6 +58,7 @@
 		type RestoreMode
 	} from '#lib/backup/index.js';
 	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
+	import { readImportBytes } from '#lib/utils/import-limits.js';
 	import {
 		describeDecentDrain,
 		isDecentLinked,
@@ -333,7 +334,7 @@
 		const file = (event.target as HTMLInputElement).files?.[0];
 		if (!file) return;
 		try {
-			const r = await restoreBackupData(await file.arrayBuffer(), pendingRestoreMode);
+			const r = await restoreBackupData(await readImportBytes(file), pendingRestoreMode);
 			const verb = pendingRestoreMode === 'wipe' ? 'Replaced —' : 'Merged —';
 			restoreNote =
 				`${verb} ${r.profiles} profile(s), ${r.beans} bean(s), ` +
