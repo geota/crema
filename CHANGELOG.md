@@ -10,8 +10,8 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - **Bengle machines receive profiles in their own encoding** — Crema waits for
-  the machine model before uploading, and a Bengle upload also clears a
-  stop-at-weight target another app left on the machine.
+  the machine model before uploading, and a stop-at-weight target another app
+  saved in a Bengle is cleared on connect, even when no upload is needed.
 - **The web app notices a DE1 link that has gone silent mid-session** and
   reconnects it, as Android already did.
 - **A System theme** that follows the device's light or dark setting. Web.
@@ -34,10 +34,12 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - **Basic pressure profiles limit flow during the forced rise**, and pressure
-  steps without a flow limit are capped at 8 ml/s, matching de1app; cleaning
-  and calibration profiles are left uncapped. Web, tablet and phone.
+  steps without a flow limit — cleaning and calibration profiles included — are
+  capped at 8 ml/s, matching de1app and Decenza. Web, tablet and phone.
 - **A dead DE1 Bluetooth link is detected in about 10 s** instead of about a
   minute. Web and Android.
+- **Steam eco mode waits for 10 minutes without any app activity**, as in
+  de1app; touching the app returns steam to its normal temperature.
 - **Larger Quick Controls touch targets, all bean filters visible on tablets,
   and animations respect the reduced-motion setting.** Web.
 - **Less CPU and battery while the screensaver is up**, and smoother History
@@ -63,9 +65,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   a Bluetooth error part-way through could leave the DE1 holding a mix of two
   profiles, which the next start or a group-head press brewed. A failed or
   stalled upload is now treated as failed, and Crema re-uploads your profile
-  once the machine is idle. Switching profiles quickly, or starting a shot
-  while Crema re-uploads, no longer fails the upload or drops the start. Web,
-  tablet and phone.
+  once the machine is idle (asking for about half a minute at most when
+  nothing can answer). Switching profiles quickly, or starting a shot while
+  Crema re-uploads, no longer fails the upload or drops the start, and a late
+  report from a replaced upload can no longer fail the new one. Web, tablet and
+  phone.
 - **A step that ends on weight and also has its own pressure or flow exit no
   longer skips the step after it.** Web, tablet and phone.
 - **Calibration changes are refused unless the machine is idle or asleep**, and
@@ -86,10 +90,15 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   it, and a stop cancels only the write in progress.
 - **Reloading during the firmware update's offline check no longer tells you
   to power-cycle early.** Web.
+- **Android no longer drops the DE1 link during a quiet stretch of a firmware
+  update.**
 - **The built-in cleaning profiles are no longer saved to history as shots** —
   forward flush and Weber Spring Clean were typed as espresso, so they were
   recorded, debited from the bag and uploaded. Tea, pour-over, calibration and
   manual built-ins now carry their real type too. Web, tablet and phone.
+- **On older DE1 firmware, Descale, Clean and Air purge wait for the cold-start
+  profile to load** before they start; if it cannot load, the cycle does not run
+  and the app says so. Web, tablet and phone.
 - **Original Decent Scales (firmware v1.0/v1.1) show weight again**, so
   stop-at-weight works with them, while Half Decent Scale frames with a bad
   checksum are still dropped. Also: Acaia scales that miss the first handshake
@@ -104,9 +113,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   Android, the connect-time settings were dropped); a corrupt duration no
   longer shows a 24-hour shot ending a day later. If the web app's engine ever
   crashes, it recovers and asks you to reload once the machine is idle,
-  because shot settings such as stop-at-weight are off until you do; after
-  repeated crashes it stops the engine and asks for a reload rather than
-  slowly breaking.
+  because shot settings such as stop-at-weight are off until you do (closing
+  that notice no longer hides a later one); after repeated crashes it stops the
+  engine, says so in an alert whose Reload works even mid-shot, and logs the
+  stop once instead of an error per Bluetooth notification.
 - **Nightly Android builds no longer crash on conditions that stable builds
   tolerate**, and `./gradlew assemble` / `build` package the optimized Rust
   library in release and nightly APKs.
@@ -121,10 +131,10 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   machine was busy, and the web app can be installed as a PWA again (the
   manifest link was missing). Pinned notices no longer cover the Coffee or
   Flush buttons, and their buttons are easier to tap. Web.
-- **Clearing a shot's barista now clears it on Visualizer too**, and editing a
-  shot in Crema (even its rating) no longer erases a barista stored on
-  Visualizer; shots pulled from Visualizer show their barista. Web, tablet and
-  phone.
+- **Clearing a shot's barista now clears it on Visualizer too** — even when
+  Visualizer was unreachable at the time — and editing a shot in Crema (even its
+  rating) no longer erases a barista stored on Visualizer; shots pulled from
+  Visualizer show their barista. Web, tablet and phone.
 - **Android barista and drinker names save when you stop typing**, not on every
   keystroke; search finds a shot's own grinder model; untitled shots read
   "Untitled shot" on every platform. The bean editor opens for bean ids with
