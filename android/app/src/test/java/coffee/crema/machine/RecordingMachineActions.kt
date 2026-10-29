@@ -25,6 +25,13 @@ internal class RecordingMachineActions(
 
     var peerActivity = 0
 
+    /** Hooks that throw instead of answering: `"notePeerActivity"`, `"hasProfile"`. */
+    val throwing: MutableSet<String> = mutableSetOf()
+
+    private fun maybeThrow(hook: String) {
+        if (hook in throwing) throw IllegalStateException("$hook failed")
+    }
+
     private fun ran(what: String) {
         applied += what
         // Coroutine debug mode appends " @coroutine#N" to the thread name.
@@ -42,9 +49,13 @@ internal class RecordingMachineActions(
     }
 
     override fun commitConfig(cmd: MachineCommand.Config) = ran("commit($cmd)")
-    override fun hasProfile(id: String) = id in profiles
+    override fun hasProfile(id: String): Boolean {
+        maybeThrow("hasProfile")
+        return id in profiles
+    }
     override fun hasBean(id: String) = id in beans
     override fun notePeerActivity() {
+        maybeThrow("notePeerActivity")
         peerActivity++
     }
 }
