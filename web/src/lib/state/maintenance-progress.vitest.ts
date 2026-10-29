@@ -6,6 +6,8 @@ import {
 	INITIAL_SNAPSHOT,
 	isMaintenanceTerminal,
 	maintenanceFailedMessage,
+	maintenanceProgressText,
+	maintenanceTitle,
 	type MaintenanceView
 } from './ui-state.svelte';
 
@@ -89,6 +91,34 @@ describe('maintenance progress fold', () => {
 			"Air purge didn't start: another profile was loaded while the machine was still heating. Start it again when you're ready."
 		);
 		expect(replaced).not.toContain('could not be loaded');
+	});
+
+	it('names the cycle once for the progress row and the notice (C3 #11)', () => {
+		expect(maintenanceTitle(MachineState.Descale)).toBe('Descale');
+		expect(maintenanceTitle(MachineState.Clean)).toBe('Clean cycle');
+		expect(maintenanceTitle(MachineState.AirPurge)).toBe('Air purge');
+		expect(maintenanceFailedMessage(MachineState.AirPurge, null)).toMatch(/^Air purge /);
+	});
+
+	it('reads the progress row like Android maintenanceRunText', () => {
+		const view = (over: Partial<MaintenanceView>) => progress(over).content;
+		expect(
+			maintenanceProgressText(
+				view({ step_index: 4, progress: 0.42, seconds_remaining: 420, cycle: 1 })
+			)
+		).toBe('42% · Step 4 of 5 · 7 min 0 s left');
+		expect(
+			maintenanceProgressText(
+				view({ step_index: 2, progress: 0.1, seconds_remaining: 650, cycle: 2 })
+			)
+		).toBe('10% · Step 2 of 5 · 10 min 50 s left · pass 2');
+		expect(maintenanceProgressText(view({ phase: MaintenancePhase.Requested }))).toBe('Starting…');
+		expect(maintenanceProgressText(view({ state: MachineState.Clean, step_count: 0 }))).toBe(
+			'Running…'
+		);
+		expect(
+			maintenanceProgressText(view({ phase: MaintenancePhase.WaitingForPreheat, cold_workaround: true }))
+		).toBe('Waiting for the machine to stop heating (older firmware workaround)…');
 	});
 
 	it('logs phase changes, not every countdown second', () => {

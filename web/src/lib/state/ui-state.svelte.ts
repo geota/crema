@@ -499,6 +499,34 @@ export function isMaintenanceTerminal(phase: string): boolean {
 }
 
 /**
+ * The user-facing name of a maintenance `state` — Settings → Water's progress
+ * row and the failure notice share it (C3 #11). Android `maintenanceTitle`.
+ */
+export function maintenanceTitle(state: string): string {
+	return state === 'Clean' ? 'Clean cycle' : state === 'AirPurge' ? 'Air purge' : state;
+}
+
+/**
+ * The progress row's subtitle for a cycle the core follows, e.g.
+ * `42% · Step 4 of 5 · 7 min 0 s left` (Decenza's descale readout from the
+ * firmware's fixed 720 s schedule). Android `maintenanceRunText`.
+ */
+export function maintenanceProgressText(view: MaintenanceView): string {
+	if (view.phase === 'WaitingForPreheat') {
+		return 'Waiting for the machine to stop heating (older firmware workaround)…';
+	}
+	if (view.phase === 'Requested') return 'Starting…';
+	if (view.step_count > 0 && view.step_index > 0) {
+		const pct = Math.floor(view.progress * 100);
+		const min = Math.floor(view.seconds_remaining / 60);
+		const sec = view.seconds_remaining % 60;
+		const cycle = view.cycle > 1 ? ` · pass ${view.cycle}` : '';
+		return `${pct}% · Step ${view.step_index} of ${view.step_count} · ${min} min ${sec} s left${cycle}`;
+	}
+	return 'Running…';
+}
+
+/**
  * The notice for a cycle the core never started (core
  * `MaintenancePhase::Failed`, round-2 verification V3 #4), worded by the
  * core's `failure`: another profile loaded while the machine was still
@@ -510,7 +538,7 @@ export function maintenanceFailedMessage(
 	state: string,
 	failure: MaintenanceFailure | null | undefined
 ): string {
-	const title = state === 'Clean' ? 'Clean cycle' : state === 'AirPurge' ? 'Air purge' : state;
+	const title = maintenanceTitle(state);
 	if (failure === MaintenanceFailure.ProfileReplaced) {
 		return `${title} didn't start: another profile was loaded while the machine was still heating. Start it again when you're ready.`;
 	}
