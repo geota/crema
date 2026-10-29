@@ -1446,19 +1446,33 @@
 		margin-block: 6px;
 		flex-shrink: 0;
 	}
+	/* The Status / Roast / tag pills (about 1100 px of them) wrap onto extra
+	   rows instead of hiding in a horizontal scroller: on a 1024 px tablet
+	   the scroller showed 416 px, cut "Archived" mid-word and hid every Roast
+	   filter with no hint that more existed (cohort review 07 #18). */
 	.bn-tabs-filters {
-		flex: 1 1 0;
+		flex: 1 1 320px;
 		min-width: 0;
 		display: flex;
 		align-items: center;
-		overflow: hidden;
 	}
-	/* The shared FilterPills container (`.pp-tags`) already enables
-	   horizontal overflow scroll; just make sure it can shrink inside our
-	   flex slot. */
 	.bn-tabs-filters :global(.pp-tags) {
 		flex: 1 1 auto;
 		min-width: 0;
+		flex-wrap: wrap;
+		overflow: visible;
+		row-gap: 4px;
+	}
+	/* Narrower tablets: tabs, clear and sort share the first row and the
+	   pills get a full-width row of their own beneath. */
+	@media (max-width: 1199px) {
+		.bn-tabs-filters {
+			order: 3;
+			flex-basis: 100%;
+		}
+		.bn-tabs-divider {
+			display: none;
+		}
 	}
 	.bn-toolbar-r {
 		margin-left: auto;
