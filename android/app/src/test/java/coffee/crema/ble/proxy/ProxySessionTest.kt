@@ -61,6 +61,14 @@ class ProxySessionTest {
 
     private fun welcome() = Frame.Welcome(PROXY_PROTOCOL_VERSION, "p", "P", "primary", listOf(DeviceInfo("AA:BB:CC:DD:EE:FF", "DE1", "de1", "CONNECTED")))
 
+    /** Play the primary's side of session [epoch]'s handshake: challenge, wait
+     *  for the Auth, welcome. */
+    private suspend fun handshakeOn(link: ScriptedSessionLink, epoch: Long) {
+        link.receive(Frame.Challenge("p", "P", PairingCrypto.newNonce()))
+        waitFor { link.sent.any { it.first == epoch && it.second is Frame.Auth } }
+        link.receive(welcome())
+    }
+
     private suspend fun waitFor(check: () -> Boolean) = withTimeout(2_000) { while (!check()) delay(5) }
 
     @Test
@@ -76,7 +84,7 @@ class ProxySessionTest {
 
             link.start(1)
             waitFor { link.hellos(1) == 1 }
-            link.receive(welcome())
+            handshakeOn(link, 1)
             val attach = scope.async { proxy.connect(device) }
             waitFor { link.sent.any { it.second is Frame.Attach } }
             val attachId = (link.sent.last().second as Frame.Attach).id
@@ -95,7 +103,7 @@ class ProxySessionTest {
             delay(100)
             assertTrue(link.sent.none { it.second is Frame.Control }, "nothing before session 3's Welcome")
 
-            link.receive(welcome())
+            handshakeOn(link, 3)
             waitFor { link.sent.any { it.second is Frame.Control } && link.sent.count { it.second is Frame.Attach } == 2 }
             assertEquals(3L, link.sent.first { it.second is Frame.Control }.first, "the control went on the welcomed session")
             assertEquals(3L, link.sent.last { it.second is Frame.Attach }.first, "re-attach on the new session")

@@ -150,6 +150,33 @@ class ProxyPairingBindingTest {
     }
 
     @Test
+    fun `a Welcome without a Challenge in this session is refused`() = runBlocking {
+        scripted { server, rx, proxy ->
+            rx.next<Frame.Hello>()
+            server.send(welcome("host-1", PairingCrypto.newSecret()))
+            assertEquals(DenyReason.HANDSHAKE_MISMATCH, denied.await())
+            assertTrue(held.isEmpty(), "nothing stored")
+            assertTrue(confirmed.tryReceive().isFailure, "no host confirmed")
+            assertTrue(!welcomed.isCompleted, "not welcomed")
+            assertTrue(proxy.control("tareScale").isFailure)
+        }
+    }
+
+    @Test
+    fun `a Welcome from a host other than the pinned one is refused`() = runBlocking {
+        scripted(pinned = "host-1") { server, rx, proxy ->
+            rx.next<Frame.Hello>()
+            server.send(Frame.Challenge("host-1", "Tablet", PairingCrypto.newNonce()))
+            rx.next<Frame.Auth>()
+            server.send(welcome("host-2", PairingCrypto.newSecret()))
+            assertEquals(DenyReason.HANDSHAKE_MISMATCH, denied.await())
+            assertTrue(held.isEmpty(), "nothing stored")
+            assertTrue(confirmed.tryReceive().isFailure, "no host confirmed")
+            assertTrue(proxy.control("tareScale").isFailure)
+        }
+    }
+
+    @Test
     fun `a first pairing keeps the issued secret`() = runBlocking {
         scripted { server, rx, _ ->
             rx.next<Frame.Hello>()

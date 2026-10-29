@@ -162,6 +162,10 @@ class ProxyTransport(
         /** The Auth carried no proof: this device asked to pair, so the Welcome
          *  may carry a new secret for [challengedBy]. */
         @Volatile var askedToPair: Boolean = false
+        /** This round answered its Challenge with an Auth: the host proved the
+         *  secret, or this device chose to ask to pair. Only then can a Welcome
+         *  complete the session. */
+        @Volatile var answered: Boolean = false
     }
 
     /** The current session's round; replaced at every session start. */
@@ -233,9 +237,14 @@ class ProxyTransport(
                     if (state !is Handshake.Pending) return
                     val current = round
                     val challengedBy = current.challengedBy
-                    if (challengedBy != null && frame.primaryId != challengedBy) {
-                        // Not the host that challenged this session: refuse it.
-                        Log.w(TAG, "Welcome from ${frame.primaryId} after a challenge from $challengedBy — refusing")
+                    val pinned = pinnedHostId()
+                    // A Welcome counts only after this session's Challenge/Auth
+                    // round, from the host that challenged it (and the pinned host,
+                    // if any). Anything else is refused and nothing is stored.
+                    if (challengedBy == null || !current.answered || frame.primaryId != challengedBy ||
+                        (pinned != null && frame.primaryId != pinned)
+                    ) {
+                        Log.w(TAG, "Welcome from ${frame.primaryId} outside a completed handshake (challenged by $challengedBy, pinned $pinned) — refusing")
                         refuse(DenyReason.HANDSHAKE_MISMATCH, IllegalStateException("Proxy handshake mismatch"))
                         return
                     }
@@ -243,13 +252,13 @@ class ProxyTransport(
                         // Keep a secret only when this session asked to pair with
                         // the host that challenged it; never replace a secret
                         // this device didn't ask to replace.
-                        if (challengedBy != null && current.askedToPair) {
+                        if (current.askedToPair) {
                             onPaired(challengedBy, frame.primaryName, secret)
                         } else {
                             Log.w(TAG, "Ignoring a pairing secret this device didn't ask for")
                         }
                     }
-                    if (challengedBy != null) onHostConfirmed(challengedBy)
+                    onHostConfirmed(challengedBy)
                     applyRoster(frame.roster)
                     onWelcome(frame.scope)
                     handshake.value = Handshake.Welcomed(state.epoch)
@@ -290,6 +299,7 @@ class ProxyTransport(
                     null
                 }
                 current.askedToPair = proof == null
+                current.answered = true
                 // On this session only, like the Hello it answers.
                 val epoch = handshake.value.epoch
                 scope.launch { runCatching { link.sendOn(epoch, Frame.Auth(proof)) } }
