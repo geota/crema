@@ -518,6 +518,9 @@ pub struct FirmwareFlash {
     /// [`VERIFY_TIMEOUT_MS`], or what was left of it when a verify was
     /// restored ([`Self::restore_verifying`]).
     verify_window_ms: u64,
+    /// Whether the verify window was restored after a reload, so
+    /// [`Self::verify_window_ms`] counts from the restore, not the request.
+    verify_restored: bool,
     /// The latest time the flash has seen (every input carries one).
     clock_ms: u64,
     /// Diagnostic lines not yet handed to the shell ([`Self::take_log`]).
@@ -603,6 +606,7 @@ impl FirmwareFlash {
             erase_started_ms: None,
             erase_hold_until: None,
             verify_window_ms: VERIFY_TIMEOUT_MS,
+            verify_restored: false,
             clock_ms: now_ms,
             log: Vec::new(),
             last_frame_logged: None,
@@ -794,6 +798,7 @@ impl FirmwareFlash {
             write_lost: true,
         };
         flash.verify_window_ms = hold_ms_left;
+        flash.verify_restored = true;
         flash.machine_restarted = true;
         flash.link_up = false;
         flash.note(
@@ -1342,10 +1347,18 @@ impl FirmwareFlash {
                 write_lost,
             } if acked_at.is_some() || write_lost => {
                 if now_ms.saturating_sub(sent_at) >= self.verify_window_ms {
-                    self.note(
-                        now_ms,
-                        "no verdict 120 s after the verify request: unconfirmed",
-                    );
+                    // Say which window closed: a restored one counts from the
+                    // restore and is only what was left of the 120 s (final
+                    // cohort review 2026-10-28, 06 #16).
+                    let window_s = self.verify_window_ms.div_ceil(1000);
+                    let line = if self.verify_restored {
+                        format!(
+                            "no verdict in the {window_s} s of the verify window left at the restore: unconfirmed"
+                        )
+                    } else {
+                        format!("no verdict {window_s} s after the verify request: unconfirmed")
+                    };
+                    self.note(now_ms, line);
                     return self.unconfirmed(now_ms);
                 }
                 self.poll(now_ms)
@@ -1920,9 +1933,18 @@ pub(crate) mod tests {
         r.on_tick(5_000 + 30_000 - 1);
         assert_eq!(r.phase(), FlashPhase::Verifying);
         r.on_link_lost(5_000 + 30_000 - 1);
+        let _ = r.take_log();
         r.on_tick(5_000 + 30_000);
         assert_eq!(r.phase(), FlashPhase::AwaitingPowerCycle);
         assert!(r.status(35_000).verify_unconfirmed);
+        // Final cohort review 2026-10-28, 06 #16: the note names the 30 s
+        // that were left at the restore, not the full 120 s from the request.
+        let log = r.take_log().join("\n");
+        assert!(
+            log.contains("no verdict in the 30 s of the verify window left at the restore"),
+            "{log}"
+        );
+        assert!(!log.contains("120 s"), "{log}");
     }
 
     #[test]
@@ -2226,10 +2248,16 @@ pub(crate) mod tests {
         let sent = now - 40;
         f.on_tick(sent + VERIFY_TIMEOUT_MS - 1);
         assert_eq!(f.phase(), FlashPhase::Verifying);
+        let _ = f.take_log();
         f.on_tick(sent + VERIFY_TIMEOUT_MS);
         assert_eq!(f.phase(), FlashPhase::AwaitingPowerCycle);
         assert!(f.status(now).verify_unconfirmed);
         assert!(f.locks_writes());
+        let log = f.take_log().join("\n");
+        assert!(
+            log.contains("no verdict 120 s after the verify request"),
+            "{log}"
+        );
     }
 
     #[test]
