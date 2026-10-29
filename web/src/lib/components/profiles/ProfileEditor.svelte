@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { stepCapNote } from '#lib/profiles/step-cap.js';
 	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
 	import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeftIcon';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
@@ -208,6 +209,8 @@
 
 	/** The DE1 runs at most this many frames (core `MAX_PROFILE_STEPS`). */
 	const atStepLimit = $derived(draft.segments.length >= ProfileBounds.MAX_PROFILE_STEPS);
+	/** A profile saved before the limit: how many segments to remove (#6 #6). */
+	const stepNote = $derived(stepCapNote(draft.segments.length));
 
 	/** Append a new segment after the last one. */
 	function addSegment(): void {
@@ -620,6 +623,9 @@
 							<PlusIcon aria-hidden="true" /> Add segment
 						</button>
 					</div>
+					{#if stepNote}
+						<p class="pe-step-cap" role="alert">{stepNote}</p>
+					{/if}
 					<!-- Every per-segment field — including the exit condition and
 					     the limiter — lives on a single (wide) `SegmentRow`. The
 					     row outgrows a narrow viewport, so the list scrolls
@@ -1017,5 +1023,10 @@
 	}
 	.pe-btn-ghost :global(svg) {
 		font-size: 13px;
+	}
+	.pe-step-cap {
+		margin: 0 0 8px;
+		font-size: 13px;
+		color: var(--warning);
 	}
 </style>

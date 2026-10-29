@@ -31,6 +31,11 @@
 	 * machine. See `CremaApp.replayCapture`.
 	 */
 	import { getMachineReadout, type CremaApp, type UiSnapshot } from '#lib/state/index.js';
+	import {
+		heaterVoltageSelection,
+		heaterVoltageText,
+		readHeaterVoltage
+	} from '#lib/state/heater-voltage.js';
 	import { getSettingsStore } from '#lib/settings/index.js';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
@@ -116,19 +121,11 @@
 	// `1230` decodes to `120` / `230`. A raw `0` means the firmware has
 	// not yet been told (legacy: "detect from heater dB").
 	const machine = getMachineReadout();
-	const heaterVoltageRaw = $derived(machine.heaterVoltage);
-	const heaterVoltage = $derived.by(() => {
-		const v = heaterVoltageRaw;
-		if (v === null || v === 0) return 0;
-		return v >= 1000 ? v - 1000 : v;
-	});
-	const heaterVoltageLabel = $derived(
-		heaterVoltageRaw === null
-			? '—'
-			: heaterVoltage === 0
-				? 'Not set (auto-detect)'
-				: `${heaterVoltage} V`
-	);
+	// The core decodes the word (`heaterVoltageFromRaw`); an unrecognised one
+	// (e.g. a doubled +1000 marker) asks to be set again (#2 N7).
+	const heaterVoltageReading = $derived(readHeaterVoltage(machine.heaterVoltage));
+	const heaterVoltage = $derived(heaterVoltageSelection(heaterVoltageReading));
+	const heaterVoltageLabel = $derived(heaterVoltageText(heaterVoltageReading));
 
 	// ---- Modal controllers ----------------------------------------------
 	//

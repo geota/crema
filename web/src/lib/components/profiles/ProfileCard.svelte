@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { stepCapNote } from '#lib/profiles/step-cap.js';
 	import Icon from '#lib/icons/Icon.svelte';
 	import CopyIcon from 'phosphor-svelte/lib/CopyIcon';
 	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
@@ -72,6 +73,8 @@
 		onExport?: (id: string) => void;
 	} = $props();
 
+	/** Saved before the 20-step limit: say what to change (#6 #6). */
+	const stepNote = $derived(stepCapNote(profile.segments.length));
 	const ratio = $derived(ratioLabel(profile));
 	const preinf = $derived(preinfuseSeconds(profile.segments));
 	const doseM = $derived(convertWeight(profile.dose, prefs.weightUnit));
@@ -159,6 +162,10 @@
 			</div>
 		</div>
 
+		{#if stepNote}
+			<div class="pp-card-step-cap" role="note">{stepNote}</div>
+		{/if}
+
 		<div class="pp-card-notes">{profile.notes || 'No notes.'}</div>
 
 		<div class="pp-card-actions">
@@ -222,5 +229,11 @@
 	.pp-action-icon:disabled {
 		opacity: 0.35;
 		cursor: not-allowed;
+	}
+	.pp-card-step-cap {
+		margin-top: 8px;
+		font-size: 12px;
+		line-height: 1.35;
+		color: var(--warning);
 	}
 </style>
