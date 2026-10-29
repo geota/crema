@@ -123,7 +123,7 @@ fun SettingsConfirmDialogs(state: SettingsConfirmState, vm: MainViewModel, ui: M
     )
     if (state.confirmErase) CremaConfirmDialog(
         title = "Erase all data?",
-        body = "Every bean, roaster, shot and custom profile will be permanently deleted. Built-in profiles remain. This can't be undone.",
+        body = "Every bean, bag photo, roaster, shot, recipe and custom profile, all preferences, and your Visualizer, Decent and Google Drive sign-ins will be permanently deleted from this device. Built-in profiles and backups you saved remain. This can't be undone.",
         confirmLabel = "Erase everything",
         icon = "trash",
         danger = true,

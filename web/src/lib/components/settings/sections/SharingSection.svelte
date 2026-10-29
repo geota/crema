@@ -55,9 +55,15 @@
 		exportBackup,
 		describeBackup,
 		restoreBackupData,
+		applyHeldRestoreChanges,
+		describeHeldRestoreChanges,
+		type HeldRestoreChanges,
 		type RestoreMode
 	} from '#lib/backup/index.js';
+	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import { getDriveAuthStore } from '#lib/drive/store.svelte.js';
+	import { readImportBytes } from '#lib/utils/import-limits.js';
+	import { credentialsStoredUnencrypted } from '#lib/security/credential-status.js';
 	import {
 		describeDecentDrain,
 		isDecentLinked,
@@ -115,6 +121,15 @@
 	const decentLinked = $derived(isDecentLinked(decent));
 	const liveSerial = $derived(machine.serialNumber);
 	onMount(() => onDecentAccountChange((next) => (decent = next)));
+
+	/** A stored sign-in sits in localStorage unencrypted (no Web Crypto key in
+	 *  this browser) — said out loud rather than silently (review 05 P3-6).
+	 *  Re-read whenever either account changes. */
+	const signInsUnencrypted = $derived.by(() => {
+		void viz.connected;
+		void decent;
+		return credentialsStoredUnencrypted();
+	});
 
 	// ── Catch-up offer ──────────────────────────────────────────────────
 	// The moment a destination becomes able to receive shots is when the
@@ -328,18 +343,42 @@
 		}
 	}
 
+	/**
+	 * A restore never applies the webhook or wider Visualizer sharing on its
+	 * own — a backup can come from someone else (review 05 P3-1). Show exactly
+	 * what it would change (the full webhook URL) and apply only on OK.
+	 * Resolves whether the held changes were applied.
+	 */
+	async function confirmHeldRestoreChanges(held: HeldRestoreChanges | null): Promise<boolean> {
+		if (!held) return false;
+		const ok = await confirmDialog({
+			title: 'Apply sharing settings from this backup?',
+			message:
+				'The backup also wants to:\n' +
+				describeHeldRestoreChanges(held) +
+				'\n\nOnly apply these if the backup is yours. Your data was restored either way.',
+			confirmLabel: 'Apply',
+			cancelLabel: 'Keep mine'
+		});
+		if (ok) applyHeldRestoreChanges(held);
+		return ok;
+	}
+
 	/** Read the chosen `.crema` file + apply it (merge or replace). */
 	async function onRestoreFile(event: Event): Promise<void> {
 		const file = (event.target as HTMLInputElement).files?.[0];
 		if (!file) return;
 		try {
-			const r = await restoreBackupData(await file.arrayBuffer(), pendingRestoreMode);
+			const r = await restoreBackupData(await readImportBytes(file), pendingRestoreMode);
 			const verb = pendingRestoreMode === 'wipe' ? 'Replaced —' : 'Merged —';
 			restoreNote =
 				`${verb} ${r.profiles} profile(s), ${r.beans} bean(s), ` +
 				`${r.roasters} roaster(s), ${r.shots} shot(s)` +
 				(r.recipes > 0 ? `, ${r.recipes} recipe(s)` : '') +
 				(r.settingsApplied ? ' + settings.' : '.');
+			if (r.held && !(await confirmHeldRestoreChanges(r.held))) {
+				restoreNote += ' Kept your webhook / Visualizer sharing settings.';
+			}
 		} catch (err) {
 			restoreNote = err instanceof Error ? `Restore failed: ${err.message}` : 'Restore failed.';
 		}
@@ -408,6 +447,9 @@
 			driveNote =
 				`Restored from Drive (${files[0].name}) — ${r.profiles} profile(s), ` +
 				`${r.beans} bean(s), ${r.shots} shot(s)${r.settingsApplied ? ' + settings.' : '.'}`;
+			if (r.held && !(await confirmHeldRestoreChanges(r.held))) {
+				driveNote += ' Kept your webhook / Visualizer sharing settings.';
+			}
 		} catch (err) {
 			driveNote = err instanceof Error ? `Drive restore failed: ${err.message}` : 'Drive restore failed.';
 		} finally {
@@ -421,6 +463,12 @@
 	title="Sharing"
 	sub="Crema is local-only — there's no Crema account. Shots and profiles live on this device. Connect Visualizer if you want to back up, share, or compare shots online."
 />
+{#if signInsUnencrypted}
+	<p class="st-signin-unencrypted" role="status">
+		This browser can't encrypt saved sign-ins, so your Visualizer or Decent sign-in is stored
+		unencrypted on this device. Sign out on shared devices.
+	</p>
+{/if}
 
 <!-- Visualizer card — owns the full connection life-cycle (sign in / out,
      account identity, Test). Once `connected`, BeanSyncSection below

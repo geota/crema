@@ -282,10 +282,11 @@ pub use visualizer_error::{
     visualizer_quota_limit,
 };
 pub use visualizer_sync::{
-    BeanReconcileAction, LocalShotRef, PulledBag, ReconcileAction, RoasterReconcileAction,
-    WireShot, reconcile_beans, reconcile_beans_json, reconcile_pulled_bags, reconcile_roasters,
-    reconcile_roasters_json, reconcile_shots, reconcile_shots_json, signature_for_bean,
-    signature_for_roaster, signature_for_shot,
+    BeanReconcileAction, GuardedVisualizerPrefs, LocalShotRef, PulledBag, ReconcileAction,
+    RoasterReconcileAction, WireShot, guard_restored_visualizer_prefs,
+    guard_restored_visualizer_prefs_json, reconcile_beans, reconcile_beans_json,
+    reconcile_pulled_bags, reconcile_roasters, reconcile_roasters_json, reconcile_shots,
+    reconcile_shots_json, signature_for_bean, signature_for_roaster, signature_for_shot,
 };
 pub use visualizer_wire::{
     BagWire, RoasterWire, ShotPatchInputs, VISUALIZER_PREMIUM_SHOT_FIELDS, VISUALIZER_SHOT_FIELDS,

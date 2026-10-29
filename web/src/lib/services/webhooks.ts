@@ -26,6 +26,7 @@ import { Context, Effect, Layer } from 'effect';
 import { HttpClient } from './http-client.ts';
 import type { HttpStatusError, NetworkError } from '../effect/errors.ts';
 import { getSettingsStore } from '#lib/settings/index.js';
+import { isAllowedWebhookUrl } from './webhook-url.ts';
 
 /** Matches today's `AbortSignal.timeout(5000)` on every webhook fetch. */
 const TIMEOUT_MS = 5000;
@@ -41,21 +42,7 @@ function describe(e: NetworkError | HttpStatusError): string {
 	return e.cause instanceof Error ? e.cause.message : String(e.cause);
 }
 
-/**
- * SEC2: the same allow-list the Settings UI enforces (`webhookUrlValid` in
- * `AdvancedSection.svelte`) — `https://…`, or `http://localhost` / `127.0.0.1`
- * / `[::1]` for dev. `fire()` / `sendTest()` re-check it so a URL that slipped
- * past the UI (an import, a hand-edited localStorage row) can't make the shell
- * POST to an arbitrary scheme.
- */
-function isAllowedWebhookUrl(url: string): boolean {
-	return (
-		url.startsWith('https://') ||
-		url.startsWith('http://localhost') ||
-		url.startsWith('http://127.0.0.1') ||
-		url.startsWith('http://[::1]')
-	);
-}
+// SEC2: the URL allow-list lives in `./webhook-url` (shared with the Settings UI).
 
 export class Webhooks extends Context.Service<
 	Webhooks,

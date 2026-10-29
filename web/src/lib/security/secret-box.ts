@@ -4,31 +4,79 @@
  * account token).
  *
  * What it does: AES-GCM with a 256-bit key that Web Crypto generates as
- * NON-extractable and that lives only in IndexedDB (a `CryptoKey` is
- * structured-cloneable; the key material never exists as bytes JavaScript
- * can read). The wrapped value is what goes into localStorage.
+ * NON-extractable and stores in IndexedDB (a `CryptoKey` is
+ * structured-cloneable; page script can use it but never read its bytes).
+ * The wrapped value is what goes into localStorage.
  *
- * What it protects against: reading the token out of a storage dump — a
- * browser profile backup or sync, a DevTools / extension with storage
- * access, disk forensics on a shared machine. The ciphertext is useless
- * without the key, and the key cannot leave this origin's IndexedDB.
+ * What it protects against: a leak of localStorage ALONE — a storage dump
+ * or export that does not include IndexedDB, a DevTools or extension view of
+ * localStorage, a support screenshot. The ciphertext is useless without the
+ * key.
  *
- * What it does NOT protect against: script running on this origin. Any
- * such script can call `unwrap` just like the app does. The defence for
- * that is the CSP (`sveltekit({ csp })` in `web/vite.config.ts`) and keeping third-party script
- * out of the page — this module is the second layer, not the first.
+ * What it does NOT protect against:
+ *  - A copy of the whole browser profile or disk. Browsers persist a
+ *    non-extractable `CryptoKey` WITH its key material inside the profile's
+ *    IndexedDB files (Chromium: the IndexedDB LevelDB), so a profile backup,
+ *    sync of site data or a disk image holds both the ciphertext and the key.
+ *  - Script running on this origin. It can call `unwrap` just like the app
+ *    does. The defence for that is the CSP (`#lib/security/csp.js`) and
+ *    keeping third-party script out of the page.
+ * Treat it as one layer that keeps tokens out of casual storage dumps, not as
+ * encryption at rest.
  *
- * Degrades honestly: with no Web Crypto or no IndexedDB (node tests, some
- * private modes) `wrap` returns the plaintext unchanged and `unwrap`
- * passes plaintext through, so a value written before this module
- * existed keeps working and is re-wrapped on the next write. A wrapped
- * value whose key is gone (IndexedDB cleared, localStorage kept) unwraps
- * to `null` — callers surface that as "sign in again" (the Decent
- * account's `needsReauth`; Visualizer reads as disconnected).
+ * No key, two cases (review 05 P3-6):
+ *  - This browser has never produced a key for this origin AND has no usable
+ *    Web Crypto or IndexedDB (node tests, some private modes): `wrap` returns
+ *    the plaintext so sign-in still works, logs a warning, and
+ *    {@link credentialsStoredUnencrypted} lets the Settings UI say so.
+ *  - A key existed before (the {@link KEYED_MARKER} is set) but cannot be
+ *    reached now: `wrap` throws {@link SecretBoxUnavailableError} rather than
+ *    silently writing plaintext; the caller does not save the credential.
+ * `unwrap` passes plaintext through (a value written before this module
+ * existed keeps working and is re-wrapped on the next write). A wrapped value
+ * whose key is gone unwraps to `null`, which callers surface as "sign in
+ * again" (the Decent account's `needsReauth`; Visualizer reads as
+ * disconnected).
  */
 
 const PREFIX = 'sb1:';
-const DB_NAME = 'crema-keys';
+/**
+ * Set in localStorage once a key has been obtained on this origin. While it is
+ * set, a missing key is an error, not a reason to store plaintext. Removed with
+ * every other `crema.*` key by a factory reset.
+ */
+export const KEYED_MARKER = 'crema.secretBox.keyed.v1';
+
+/** A key existed on this origin but cannot be reached; the secret was NOT stored. */
+export class SecretBoxUnavailableError extends Error {
+	override name = 'SecretBoxUnavailableError';
+	constructor() {
+		super(
+			"Couldn't reach this browser's encryption key, so the sign-in was not saved. Try again; if it keeps failing, reload the page."
+		);
+	}
+}
+
+function storage(): Storage | null {
+	try {
+		return typeof localStorage === 'undefined' ? null : localStorage;
+	} catch {
+		return null;
+	}
+}
+
+function keyedBefore(): boolean {
+	return storage()?.getItem(KEYED_MARKER) === '1';
+}
+
+function markKeyed(): void {
+	try {
+		storage()?.setItem(KEYED_MARKER, '1');
+	} catch {
+		// Quota / disabled storage: the marker is a safety net, not required.
+	}
+}
+export const DB_NAME = 'crema-keys';
 const DB_VERSION = 1;
 const STORE = 'keys';
 const KEY_ID = 'secret-box-v1';
@@ -129,7 +177,7 @@ export function createIndexedDbKeyProvider(
 					db.close();
 				}
 			} catch (e) {
-				console.warn('[Crema] secret-box key unavailable — storing credentials unwrapped:', e);
+				console.warn('[Crema] secret-box key unavailable:', e);
 				return null;
 			}
 		}
@@ -157,7 +205,11 @@ export function isWrapped(value: string): boolean {
 }
 
 export interface SecretBox {
-	/** Wrap a secret for storage; returns it unchanged when wrapping is unavailable. */
+	/**
+	 * Wrap a secret for storage. Returns it unchanged only when this origin
+	 * never had a key and none can be made; throws
+	 * {@link SecretBoxUnavailableError} when a key existed but is unreachable.
+	 */
 	wrap(plain: string): Promise<string>;
 	/**
 	 * Recover a stored secret. Plaintext (pre-wrapping) passes through;
@@ -187,7 +239,14 @@ export function createSecretBox(provider: KeyProvider = indexedDbKeyProvider): S
 		async wrap(plain) {
 			const k = await key();
 			const s = subtle();
-			if (!k || !s) return plain;
+			if (!k || !s) {
+				if (keyedBefore()) throw new SecretBoxUnavailableError();
+				console.warn(
+					'[Crema] this browser offers no Web Crypto / IndexedDB key — storing the credential unencrypted.'
+				);
+				return plain;
+			}
+			markKeyed();
 			const iv = crypto.getRandomValues(new Uint8Array(12));
 			const ct = await s.encrypt({ name: 'AES-GCM', iv }, k, new TextEncoder().encode(plain));
 			return `${PREFIX}${b64(iv)}:${b64(new Uint8Array(ct))}`;

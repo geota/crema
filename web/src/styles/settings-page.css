@@ -375,6 +375,15 @@
   margin-top: 4px;
 }
 
+/* Sharing: a stored sign-in could not be encrypted (no Web Crypto key). */
+.st-signin-unencrypted {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--warning, #c7873b);
+  margin: 0 0 12px;
+}
+
 /* ───────────────────────────── Maintenance
    The three-across card grid was replaced by full-width `StMaintenanceRow`s;
    only the shared action-button treatment is still used. */

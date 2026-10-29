@@ -104,6 +104,8 @@ class DecentStore(
         // Unreadable: kept aside + reported (see [loadStore]); starts signed out.
         val raw = loadStore(file, "Decent sign-in") { json.decodeFromString(DecentState.serializer(), it) }
             .valueOrNull() ?: return@withContext DecentState()
+        // A `.bak` left by an older build may hold a previous (or plaintext) token.
+        SafeFile.purgeCopies(file)
         val (state, resave) = raw.openedWith(box)
         if (resave) write(state)
         state
@@ -112,7 +114,8 @@ class DecentStore(
     override suspend fun save(state: DecentState): Boolean = withContext(Dispatchers.IO) { write(state) }
 
     private fun write(state: DecentState): Boolean = try {
-        SafeFile.write(file, json.encodeToString(DecentState.serializer(), state.sealedWith(box)))
+        // No `.bak` copies of sealed tokens (review 05 P3-5).
+        SafeFile.writeCredential(file, json.encodeToString(DecentState.serializer(), state.sealedWith(box)))
         true
     } catch (e: Exception) {
         // Includes a keystore failure while sealing: never fall back to plaintext.

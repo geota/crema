@@ -175,6 +175,8 @@ class VisualizerStore(
                 state
             }
         }.valueOrNull() ?: return@withContext VisualizerState()
+        // A `.bak` left by an older build may hold a previous (or plaintext) token.
+        SafeFile.purgeCopies(file)
         val (state, resave) = raw.openedWith(box)
         if (resave) write(state)
         state
@@ -201,7 +203,8 @@ class VisualizerStore(
     suspend fun save(state: VisualizerState): Boolean = withContext(Dispatchers.IO) { write(state) }
 
     private fun write(state: VisualizerState): Boolean = try {
-        SafeFile.write(file, json.encodeToString(VisualizerState.serializer(), state.sealedWith(box)))
+        // No `.bak` copies of sealed tokens (review 05 P3-5).
+        SafeFile.writeCredential(file, json.encodeToString(VisualizerState.serializer(), state.sealedWith(box)))
         true
     } catch (e: Exception) {
         // Includes a keystore failure while sealing: never fall back to plaintext.

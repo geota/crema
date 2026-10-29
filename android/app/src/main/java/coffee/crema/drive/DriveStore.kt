@@ -84,6 +84,8 @@ class DriveStore(
         // Unreadable: kept aside + reported (see [loadStore]); starts signed out.
         val raw = loadStore(file, "Google Drive sign-in") { json.decodeFromString(DriveState.serializer(), it) }
             .valueOrNull() ?: return@withContext DriveState()
+        // A `.bak` left by an older build may hold a previous (or plaintext) token.
+        SafeFile.purgeCopies(file)
         val (state, resave) = raw.openedWith(box)
         if (resave) write(state)
         state
@@ -93,7 +95,8 @@ class DriveStore(
     suspend fun save(state: DriveState): Boolean = withContext(Dispatchers.IO) { write(state) }
 
     private fun write(state: DriveState): Boolean = try {
-        SafeFile.write(file, json.encodeToString(DriveState.serializer(), state.sealedWith(box)))
+        // No `.bak` copies of sealed tokens (review 05 P3-5).
+        SafeFile.writeCredential(file, json.encodeToString(DriveState.serializer(), state.sealedWith(box)))
         true
     } catch (e: Exception) {
         // Includes a keystore failure while sealing: never fall back to plaintext.

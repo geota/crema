@@ -4987,10 +4987,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Erase ALL user data — bean library, roasters, shot history, custom
-     * profiles, and preferences. Built-in profiles remain (they aren't user
-     * data); the active profile reseeds to the first built-in via
-     * [refreshProfiles]. Every store is cleared on disk too. Irreversible.
+     * Erase ALL user data — bean library, roasters and bag photos, shot
+     * history, custom profiles, recipes, preferences, maintenance counters
+     * and the Visualizer / Decent / Google Drive sign-ins. Built-in profiles
+     * remain (they aren't user data); the active profile reseeds to the first
+     * built-in via [refreshProfiles]. Every store is cleared on disk too.
+     * Irreversible.
      */
     fun eraseAll() {
         // Reset the maintenance counters too — a fresh-install state (baselines and
@@ -5010,6 +5012,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // The library/history/custom-profile share (disk + UI rows + the
         // active-profile reseed via refreshProfiles).
         library.eraseAll()
+        // Sign-ins are personal data too (review 05 P2-1 parity with the web
+        // factory reset): revoke + forget Visualizer, forget Decent (it has no
+        // revoke endpoint) and Google Drive.
+        visualizer.signOut(quiet = true)
+        decent.signOut()
+        drive.disconnect(quiet = true)
+        notifyUser("Erased all Crema data on this device")
     }
 
     /** Scan for and connect to a scale — delegate of

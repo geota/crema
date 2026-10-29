@@ -362,6 +362,18 @@ pub fn brew_ratio(dose: f32, yield_out: f32) -> Option<f32> {
 /// tuples (`ShotStatInput`); returns `HistoryStats` JSON. One
 /// derivation for every shell (review #41). See
 /// `de1_domain::history_stats`.
+/// Restore a backup's Visualizer prefs over the current ones without silently
+/// widening sharing; returns `GuardedVisualizerPrefs` JSON. See
+/// `de1_domain::guard_restored_visualizer_prefs`.
+#[wasm_bindgen(js_name = guardRestoredVisualizerPrefs)]
+pub fn guard_restored_visualizer_prefs(
+    current_json: &str,
+    incoming_json: &str,
+) -> Result<String, String> {
+    de1_domain::guard_restored_visualizer_prefs_json(current_json, incoming_json)
+        .map_err(|e| e.to_string())
+}
+
 #[wasm_bindgen(js_name = historyStats)]
 pub fn history_stats(shots_json: &str) -> Result<String, String> {
     let shots: Vec<de1_domain::ShotStatInput> =

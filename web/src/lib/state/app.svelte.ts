@@ -88,6 +88,7 @@ import {
 import { installIosBridge, isBridgedBluetooth } from '#lib/ble/ios-bridge.js';
 import { watchBluetoothAvailability } from '#lib/ble/availability.js';
 import { connectBlocker } from '#lib/ble/connect-blocker.js';
+import { readImportText } from '#lib/utils/import-limits.js';
 
 /** `navigator.bluetooth` as it is now (the iOS bridge may install it late). */
 function currentBluetooth(): Bluetooth | undefined {
@@ -1771,7 +1772,7 @@ export class CremaApp {
 	): Promise<{ profile: import('#lib/core/index.js').Profile | null; error: string | null }> {
 		let content: string;
 		try {
-			content = await file.text();
+			content = await readImportText(file);
 		} catch (e) {
 			return {
 				profile: null,
@@ -1812,7 +1813,7 @@ export class CremaApp {
 	): Promise<{ record: ReturnType<ReturnType<typeof getHistoryStore>['addImported']>; error: string | null }> {
 		let content: string;
 		try {
-			content = await file.text();
+			content = await readImportText(file);
 		} catch (e) {
 			return {
 				record: null,

@@ -65,6 +65,31 @@ object SafeFile {
     fun write(target: File, text: String, keepBackup: Boolean = true) =
         writeBytes(target, text.toByteArray(Charsets.UTF_8), keepBackup)
 
+    /**
+     * Atomically replace a CREDENTIAL file (sealed sign-in tokens): no `.bak`
+     * of the previous version is kept, and any leftover `.bak`, `.tmp` or
+     * `.corrupt-*` copy is deleted afterwards. Old tokens must not linger in
+     * copies the backup / device-transfer rules cannot name (review 05 P3-5):
+     * the previous session after a sign-out, or the plaintext token right
+     * after the SecretBox migration re-save.
+     */
+    fun writeCredential(target: File, text: String) {
+        writeBytes(target, text.toByteArray(Charsets.UTF_8), keepBackup = false)
+        purgeCopies(target, keptAside = true)
+    }
+
+    /**
+     * Delete [target]'s `.bak` and `.tmp` siblings, and with [keptAside] its
+     * `.corrupt-*` copies too. For credential stores, called after loading
+     * (`.bak` / `.tmp` only, so a just-reported corrupt copy is still there
+     * when the notice names it) and by [writeCredential].
+     */
+    fun purgeCopies(target: File, keptAside: Boolean = false) {
+        backupOf(target).delete()
+        tmpOf(target).delete()
+        if (keptAside) keptAside(target).forEach { it.delete() }
+    }
+
     /** Atomically replace [target] with [bytes]. Throws on failure; the old target stays intact. */
     fun writeBytes(target: File, bytes: ByteArray, keepBackup: Boolean = false) {
         if (target.path in blocked) {

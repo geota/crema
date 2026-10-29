@@ -24,6 +24,7 @@
 	 *     standard duplicate / edit / delete trio in the actions slot.
 	 */
 	import { roasterMarkTone, type Roaster } from '#lib/bean/index.js';
+	import { safeExternalUrl } from '#lib/utils/safe-url.js';
 	import LibraryCardShell from '#lib/components/shared/LibraryCardShell.svelte';
 	import RoasterDeleteSplit from './RoasterDeleteSplit.svelte';
 
@@ -56,14 +57,11 @@
 
 	const mt = $derived(roasterMarkTone(roaster));
 
-	const websiteDomain = $derived.by<string | null>(() => {
-		if (!roaster.website) return null;
-		try {
-			return new URL(roaster.website).hostname.replace(/^www\./, '');
-		} catch {
-			return roaster.website;
-		}
-	});
+	/** The website as a safe absolute http(s) link, or null (never `javascript:` etc.). */
+	const websiteHref = $derived(safeExternalUrl(roaster.website));
+	const websiteDomain = $derived(
+		websiteHref ? new URL(websiteHref).hostname.replace(/^www\./, '') : null
+	);
 
 	function onCardClick(): void {
 		// Card click opens the roaster's shelf — every bag from them,
@@ -142,10 +140,10 @@
 			{/if}
 		</div>
 		<div class="rcd-meta">
-			{#if websiteDomain && roaster.website}
+			{#if websiteDomain && websiteHref}
 				<a
 					class="rcd-site"
-					href={roaster.website}
+					href={websiteHref}
 					target="_blank"
 					rel="noopener noreferrer"
 					onclick={(e) => e.stopPropagation()}

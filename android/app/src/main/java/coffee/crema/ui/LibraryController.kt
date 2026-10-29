@@ -35,6 +35,10 @@ import coffee.crema.history.coreShotJson
 import coffee.crema.history.downsampleForStorage
 import coffee.crema.history.isBrewLog
 import coffee.crema.history.isManualLog
+import coffee.crema.persist.ImportLimits
+import coffee.crema.persist.ImportTooLargeException
+import coffee.crema.persist.readBytesCapped
+import coffee.crema.persist.readZipCapped
 import coffee.crema.profiles.BrewDefaults
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.CustomProfileStore
@@ -705,18 +709,32 @@ class LibraryController(
         }
     }
 
-    /** Read a content Uri as UTF-8 text, off the main thread. */
+    /**
+     * The user-facing reason the last import read was refused for size
+     * ([ImportTooLargeException], review 05 P3-2), consumed by [readFailure] so
+     * the snackbar names the limit instead of a generic "couldn't read".
+     */
+    @Volatile private var lastTooLarge: String? = null
+
+    /** Note a size refusal from [block]; any other failure stays a plain null. */
+    private inline fun <T> capped(block: () -> T?): T? =
+        runCatching(block).onFailure { if (it is ImportTooLargeException) lastTooLarge = it.message }.getOrNull()
+
+    /** The message for a failed import read: the size refusal if there was one, else [fallback]. */
+    private fun readFailure(fallback: String): String = lastTooLarge?.also { lastTooLarge = null } ?: fallback
+
+    /** Read a content Uri as UTF-8 text (at most [ImportLimits.MAX_FILE_BYTES]), off the main thread. */
     private suspend fun readUriText(uri: Uri): String? = withContext(Dispatchers.IO) {
-        runCatching {
-            app.contentResolver.openInputStream(uri)?.use { String(it.readBytes(), Charsets.UTF_8) }
-        }.getOrNull()
+        lastTooLarge = null
+        capped {
+            app.contentResolver.openInputStream(uri)?.use { String(it.readBytesCapped(ImportLimits.MAX_FILE_BYTES), Charsets.UTF_8) }
+        }
     }
 
-    /** Read a SAF [uri]'s raw bytes, or null on failure. */
+    /** Read a SAF [uri]'s raw bytes (at most [ImportLimits.MAX_FILE_BYTES]), or null on failure. */
     private suspend fun readUriBytes(uri: Uri): ByteArray? = withContext(Dispatchers.IO) {
-        runCatching {
-            app.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-        }.getOrNull()
+        lastTooLarge = null
+        capped { app.contentResolver.openInputStream(uri)?.use { it.readBytesCapped(ImportLimits.MAX_FILE_BYTES) } }
     }
 
     /** `.crema.zip` local-file magic: `PK\x03\x04`. */
@@ -731,28 +749,25 @@ class LibraryController(
      * backup resolve them. Null when there's no backup.jsonl.
      */
     private suspend fun extractBackupJsonl(bytes: ByteArray): String? = withContext(Dispatchers.IO) {
-        runCatching {
+        capped {
             var jsonl: String? = null
+            // Only the backup members are inflated, each within the size caps
+            // (review 05 P3-2): a zip bomb stops with a clear error, not an OOM.
             java.util.zip.ZipInputStream(java.io.ByteArrayInputStream(bytes)).use { zis ->
-                var entry = zis.nextEntry
-                while (entry != null) {
-                    val name = entry.name
-                    when {
-                        !entry.isDirectory && (name == "backup.jsonl" || name == "crema.jsonl") ->
-                            jsonl = String(zis.readBytes(), Charsets.UTF_8)
-                        !entry.isDirectory && name.startsWith("images/") -> {
-                            val beanId = name.substringAfter("images/")
-                            if (beanId.isNotEmpty()) {
-                                runCatching { BeanImageStore.put(app, beanId, zis.readBytes()) }
-                            }
-                        }
+                readZipCapped(
+                    zis,
+                    accept = { it == "backup.jsonl" || it == "crema.jsonl" || it.startsWith("images/") },
+                ) { name, entryBytes ->
+                    if (name.startsWith("images/")) {
+                        val beanId = name.substringAfter("images/")
+                        if (beanId.isNotEmpty()) runCatching { BeanImageStore.put(app, beanId, entryBytes) }
+                    } else {
+                        jsonl = String(entryBytes, Charsets.UTF_8)
                     }
-                    zis.closeEntry()
-                    entry = zis.nextEntry
                 }
             }
             jsonl
-        }.getOrNull()
+        }
     }
 
     /** Re-stamp an exported profile's JSON as a fresh custom (new id, source,
@@ -774,7 +789,7 @@ class LibraryController(
     fun importProfiles(uri: Uri) {
         scope.launch {
             val text = readUriText(uri)?.trim()
-            if (text.isNullOrBlank()) { notify("Import failed — couldn't read that file"); return@launch }
+            if (text.isNullOrBlank()) { notify(readFailure("Import failed — couldn't read that file")); return@launch }
             val elements = runCatching {
                 when {
                     text.startsWith("[") -> json.parseToJsonElement(text).jsonArray.map { it.toString() }
@@ -815,7 +830,7 @@ class LibraryController(
     fun importShots(uri: Uri) {
         scope.launch {
             val text = readUriText(uri)?.trim()
-            if (text.isNullOrBlank()) { notify("Import failed — couldn't read that file"); return@launch }
+            if (text.isNullOrBlank()) { notify(readFailure("Import failed — couldn't read that file")); return@launch }
             var shots = runCatching {
                 if (text.startsWith("[")) json.decodeFromString(ListSerializer(StoredShot.serializer()), text)
                 else listOf(json.decodeFromString(StoredShot.serializer(), text))
@@ -1022,7 +1037,7 @@ class LibraryController(
     fun restoreBackup(uri: Uri, mode: MainViewModel.RestoreMode) {
         scope.launch {
             val bytes = readUriBytes(uri)
-            if (bytes == null || bytes.isEmpty()) { notify("Restore failed — couldn't read that file"); return@launch }
+            if (bytes == null || bytes.isEmpty()) { notify(readFailure("Restore failed — couldn't read that file")); return@launch }
             restoreBackupBytes(bytes, mode)
         }
     }
@@ -1032,7 +1047,7 @@ class LibraryController(
      *  restore and the Google Drive restore. */
     suspend fun restoreBackupBytes(bytes: ByteArray, mode: MainViewModel.RestoreMode) {
         val text = (if (isZip(bytes)) extractBackupJsonl(bytes) else String(bytes, Charsets.UTF_8))?.trim()
-        if (text.isNullOrBlank()) { notify("Restore failed — not a Crema backup"); return }
+        if (text.isNullOrBlank()) { notify(readFailure("Restore failed — not a Crema backup")); return }
         restoreBackupFromText(text, mode)
     }
 
@@ -1114,7 +1129,13 @@ class LibraryController(
             // applied verbatim on either shell (no per-shell tag); never the OAuth
             // token (re-auth after restore). Reseed the live water integrator.
             restoredMaintenance?.let { applyRestoredMaintenance(it) }
-            restoredVisualizerPrefs?.let { visualizer.restorePrefs(it) }
+            // Never widen sharing from a backup (review 05 P3-1): held fields keep
+            // this device's value and the notice below says so.
+            val heldSharing = restoredVisualizerPrefs?.let { incoming ->
+                val guarded = guardRestoredPrefs(visualizer.backupPrefs(), incoming, json)
+                visualizer.restorePrefs(guarded.apply)
+                guarded.held
+            }.orEmpty()
             // Methods before recipes, so a restored recipe's `custom:` method resolves.
             val newMethods = applyRestoredCustomMethods(parsed.customMethods, mode == MainViewModel.RestoreMode.WIPE)
             val newRecipes = applyRestoredRecipes(parsed.recipes, parsed.recipeMeta, mode == MainViewModel.RestoreMode.WIPE)
@@ -1123,7 +1144,8 @@ class LibraryController(
                 "Restored ${newProfiles.size} profile(s) · ${newBeans.size} bean(s) · " +
                     "${newRoasters.size} roaster(s) · ${newShots.size} shot(s)" +
                     (if (newRecipes > 0) " · $newRecipes recipe(s)" else "") +
-                    if (newMethods > 0) " · $newMethods method(s)" else "",
+                    (if (newMethods > 0) " · $newMethods method(s)" else "") +
+                    (heldSharingNotice(heldSharing)?.let { ". $it" } ?: ""),
             )
         }
     }
@@ -1148,17 +1170,31 @@ class LibraryController(
 
     // ── Erase-all (the library/history/profile share of Settings ▸ Erase) ────
 
-    /** Clear the bean library, roaster directory, shot history, and custom
-     *  profiles (disk + UI); built-ins remain and the active profile reseeds
+    /** Clear the bean library, roaster directory, shot history, custom
+     *  profiles, pins / hidden built-ins, recipes + custom methods, bag photos
+     *  and the last-shot diagnostic (disk + UI); built-ins remain and the active profile reseeds
      *  via [refreshProfiles]. The VM composes this with its settings +
      *  maintenance resets. */
     fun eraseAll() {
         customProfilesJson = emptyList()
+        pinnedIds = emptySet()
+        hiddenIds = emptySet()
         scope.launch {
             library.save(BeanLibrary())
             historyStore.save(emptyList())
             customProfileStore.save(emptyList())
+            pinnedProfileStore.save(emptySet())
+            hiddenProfileStore.save(emptySet())
+            // Bag photos and the last-shot diagnostic are user data too
+            // (review 05 P2-1 parity with the web factory reset).
+            withContext(Dispatchers.IO) {
+                BeanImageStore.deleteAll(app)
+                coffee.crema.diag.ShotDiag.clear(app)
+            }
         }
+        // Brew recipes + custom methods: an empty wipe-restore clears them.
+        applyRestoredCustomMethods(emptyList(), true)
+        applyRestoredRecipes(emptyList(), null, true)
         updateUi { it.copy(
             beans = emptyList(),
             roasters = emptyList(),
@@ -1285,20 +1321,21 @@ class LibraryController(
      */
     fun importBeanconquerorUri(uri: Uri) {
         scope.launch {
+            lastTooLarge = null
             val merged = withContext(Dispatchers.IO) {
-                runCatching {
+                capped {
                     val bytes = app.contentResolver.openInputStream(uri)
-                        ?.use { it.readBytes() } ?: return@runCatching null
+                        ?.use { it.readBytesCapped(ImportLimits.MAX_FILE_BYTES) } ?: return@capped null
                     // PK\x03\x04 magic → a zip archive; else treat as raw JSON text.
                     if (bytes.size >= 2 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4B.toByte()) {
                         mergeBcZip(bytes)
                     } else {
                         String(bytes, Charsets.UTF_8)
                     }
-                }.getOrNull()
+                }
             }
             if (merged.isNullOrBlank()) {
-                notify("Import failed — couldn't read that file")
+                notify(readFailure("Import failed — couldn't read that file"))
                 return@launch
             }
             val planJson = runCatching { importBeanconquerorJson(merged, System.currentTimeMillis()) }
@@ -1319,12 +1356,10 @@ class LibraryController(
      */
     private fun mergeBcZip(bytes: ByteArray): String? {
         val entries = HashMap<String, String>()
+        // Only the JSON members, within the size caps (review 05 P3-2).
         java.util.zip.ZipInputStream(bytes.inputStream()).use { zin ->
-            var e = zin.nextEntry
-            while (e != null) {
-                if (!e.isDirectory) entries[e.name] = zin.readBytes().toString(Charsets.UTF_8)
-                zin.closeEntry()
-                e = zin.nextEntry
+            readZipCapped(zin, accept = { it.lowercase().endsWith(".json") }) { name, entryBytes ->
+                entries[name] = entryBytes.toString(Charsets.UTF_8)
             }
         }
         val mainKey = entries.keys.firstOrNull { it.lowercase().endsWith("beanconqueror.json") } ?: return null
@@ -1581,7 +1616,7 @@ class LibraryController(
     fun setBeanImageFromUri(beanId: String, uri: Uri) {
         scope.launch {
             val bytes = readUriBytes(uri)
-            if (bytes == null || bytes.isEmpty()) { notify("Couldn't read that image"); return@launch }
+            if (bytes == null || bytes.isEmpty()) { notify(readFailure("Couldn't read that image")); return@launch }
             withContext(Dispatchers.IO) { BeanImageStore.put(app, beanId, bytes) }
             val ref = BeanImageStore.refForBean(beanId)
             val now = System.currentTimeMillis()
