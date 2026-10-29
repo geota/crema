@@ -194,11 +194,44 @@ describe('createSecretBox key caching', () => {
 			}
 		};
 		const box = createSecretBox(flaky);
-		expect(await box.wrap('t')).toBe('t'); // no key yet → plaintext
-		expect(await box.wrap('t')).toBe('t'); // provider threw → plaintext, not cached
+		expect(await box.wrap('t')).toBe('t'); // no Web Crypto / IndexedDB → plaintext
+		// Provider threw → refused, never plaintext; not cached.
+		await expect(box.wrap('t')).rejects.toBeInstanceOf(SecretBoxUnavailableError);
 		const w = await box.wrap('t');
 		expect(isWrapped(w)).toBe(true);
 		await box.wrap('t');
 		expect(calls).toBe(3); // a real key is cached
+	});
+});
+
+// Final review 05 N-6: a transient failure on the very first sign-in (no key
+// was ever made, so no marker yet) must not store the credential in plaintext.
+describe('first-use key failure', () => {
+	it('throws instead of returning plaintext when the provider fails', async () => {
+		expect(localStorage.getItem(KEYED_MARKER)).toBeNull();
+		const failing: KeyProvider = {
+			getKey: async () => {
+				throw new DOMException('open failed', 'UnknownError');
+			}
+		};
+		await expect(createSecretBox(failing).wrap('tok')).rejects.toBeInstanceOf(SecretBoxUnavailableError);
+		expect(await createSecretBox(failing).unwrap('sb1:AAAA:BBBB')).toBeNull();
+		expect(await createSecretBox(failing).unwrap('legacy-plain')).toBe('legacy-plain');
+	});
+
+	it('the IndexedDB provider rejects when IndexedDB exists but the open fails', async () => {
+		const broken = {
+			open: () => {
+				const req = {} as IDBOpenDBRequest & { error: DOMException };
+				queueMicrotask(() => {
+					Object.defineProperty(req, 'error', { value: new DOMException('busy', 'UnknownError') });
+					req.onerror?.(new Event('error') as never);
+				});
+				return req;
+			}
+		} as unknown as IDBFactory;
+		await expect(createIndexedDbKeyProvider(() => broken).getKey()).rejects.toBeDefined();
+		// No IndexedDB at all is an absence, not a failure.
+		expect(await createIndexedDbKeyProvider(() => undefined).getKey()).toBeNull();
 	});
 });

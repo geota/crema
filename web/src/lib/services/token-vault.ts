@@ -140,7 +140,13 @@ export class TokenVault extends Context.Service<
 	TokenVault,
 	{
 		readonly getTokens: Effect.Effect<TokenSet | null>;
-		readonly storeTokens: (t: TokenSet) => Effect.Effect<void>;
+		/**
+		 * Persist `t` (wrapped) and publish it on `changes`. Fails with
+		 * {@link SecretBoxUnavailableError} when the secret box cannot wrap
+		 * it: nothing is stored (any older set is dropped too) and `changes`
+		 * reads signed out, so the caller can say so instead of "Connected".
+		 */
+		readonly storeTokens: (t: TokenSet) => Effect.Effect<void, SecretBoxUnavailableError>;
 		readonly clearTokens: Effect.Effect<void>;
 		/**
 		 * Run `req` with a known-fresh access token, refreshing first if expiring
@@ -204,27 +210,32 @@ export const TokenVaultLive = Layer.effect(
 				return same ? Option.none() : Option.some(loaded);
 			});
 
-		const storeTokens = (t: TokenSet) =>
-			Effect.andThen(
-				Effect.promise(async () => {
-					let wrapped: TokenSet;
-					try {
-						wrapped = await wrapTokens(t);
-					} catch (e) {
-						if (!(e instanceof SecretBoxUnavailableError)) throw e;
-						// A key existed but is unreachable: never fall back to
-						// plaintext. Drop the stored set (it is stale now — the
-						// refresh token may have rotated) so the app reads as
-						// signed out and offers Sign in, rather than failing later.
-						console.error('[Crema] Visualizer sign-in not saved:', e.message);
-						if (typeof localStorage !== 'undefined') localStorage.removeItem(TOKENS_KEY);
-						storedButUnreadable = false;
-						return;
-					}
-					writeJson(TOKENS_KEY, wrapped);
+		const storeTokens = (t: TokenSet): Effect.Effect<void, SecretBoxUnavailableError> =>
+			Effect.promise(async (): Promise<SecretBoxUnavailableError | null> => {
+				let wrapped: TokenSet;
+				try {
+					wrapped = await wrapTokens(t);
+				} catch (e) {
+					if (!(e instanceof SecretBoxUnavailableError)) throw e;
+					// The key is unreachable: never fall back to plaintext. Drop
+					// the stored set (it is stale now — the refresh token may have
+					// rotated) so the app reads as signed out and offers Sign in.
+					console.error('[Crema] Visualizer sign-in not saved:', e.message);
+					if (typeof localStorage !== 'undefined') localStorage.removeItem(TOKENS_KEY);
 					storedButUnreadable = false;
-				}),
-				SubscriptionRef.set(ref, t)
+					return e;
+				}
+				writeJson(TOKENS_KEY, wrapped);
+				storedButUnreadable = false;
+				return null;
+			}).pipe(
+				// The mirror follows storage: the new set when it was saved,
+				// signed out when it was not (final review 06 #11).
+				Effect.flatMap((failure) =>
+					failure === null
+						? SubscriptionRef.set(ref, t)
+						: SubscriptionRef.set(ref, null).pipe(Effect.andThen(Effect.fail(failure)))
+				)
 			);
 
 		const clearTokens = Effect.andThen(
@@ -260,7 +271,7 @@ export const TokenVaultLive = Layer.effect(
 			return oauth.refreshToken(rt).pipe(
 				// Doorkeeper rotates refresh tokens; keep the old one if omitted.
 				Effect.map((fresh): TokenSet => ({ ...fresh, refreshToken: fresh.refreshToken ?? rt })),
-				Effect.tap(storeTokens),
+				Effect.tap((t) => storeTokens(t).pipe(Effect.mapError(() => new NotAuthenticatedError()))),
 				Effect.catchTag('TokenRefreshFailedError', (err) =>
 					Effect.gen(function* () {
 						const now = yield* getTokens;

@@ -24,11 +24,15 @@
  * Treat it as one layer that keeps tokens out of casual storage dumps, not as
  * encryption at rest.
  *
- * No key, two cases (review 05 P3-6):
- *  - This browser has never produced a key for this origin AND has no usable
- *    Web Crypto or IndexedDB (node tests, some private modes): `wrap` returns
- *    the plaintext so sign-in still works, logs a warning, and
+ * No key, three cases (review 05 P3-6, final review 05 N-6):
+ *  - This browser has never produced a key for this origin AND has no Web
+ *    Crypto or IndexedDB at all (node tests, some private modes): `wrap`
+ *    returns the plaintext so sign-in still works, logs a warning, and
  *    {@link credentialsStoredUnencrypted} lets the Settings UI say so.
+ *  - Both APIs exist but getting the key failed (IndexedDB momentarily
+ *    unavailable, even on the very first sign-in): `wrap` throws
+ *    {@link SecretBoxUnavailableError}; a transient failure never means
+ *    plaintext. The next call tries again.
  *  - A key existed before (the {@link KEYED_MARKER} is set) but cannot be
  *    reached now: `wrap` throws {@link SecretBoxUnavailableError} rather than
  *    silently writing plaintext; the caller does not save the credential.
@@ -49,6 +53,8 @@ export const KEYED_MARKER = 'crema.secretBox.keyed.v1';
 
 /** A key existed on this origin but cannot be reached; the secret was NOT stored. */
 export class SecretBoxUnavailableError extends Error {
+	/** Effect-style tag, so callers can `catchTag` it like the app's other errors. */
+	readonly _tag = 'SecretBoxUnavailableError' as const;
 	override name = 'SecretBoxUnavailableError';
 	constructor() {
 		super(
@@ -81,7 +87,12 @@ const DB_VERSION = 1;
 const STORE = 'keys';
 const KEY_ID = 'secret-box-v1';
 
-/** The key source — the default persists a non-extractable AES key in IndexedDB. */
+/**
+ * The key source — the default persists a non-extractable AES key in
+ * IndexedDB. `getKey` resolves to `null` only when this browser has no Web
+ * Crypto or no IndexedDB at all; a failure to reach the key REJECTS, so the
+ * box can tell "cannot encrypt here" from "could not encrypt just now".
+ */
 export interface KeyProvider {
 	getKey(): Promise<CryptoKey | null>;
 }
@@ -177,8 +188,10 @@ export function createIndexedDbKeyProvider(
 					db.close();
 				}
 			} catch (e) {
+				// Both APIs exist, so this is a failure, not an absence: reject
+				// (the box refuses to store plaintext) and let the next call retry.
 				console.warn('[Crema] secret-box key unavailable:', e);
-				return null;
+				throw e;
 			}
 		}
 	};
@@ -207,8 +220,9 @@ export function isWrapped(value: string): boolean {
 export interface SecretBox {
 	/**
 	 * Wrap a secret for storage. Returns it unchanged only when this origin
-	 * never had a key and none can be made; throws
-	 * {@link SecretBoxUnavailableError} when a key existed but is unreachable.
+	 * never had a key and this browser has no Web Crypto / IndexedDB; throws
+	 * {@link SecretBoxUnavailableError} when getting the key failed or a key
+	 * existed but is unreachable.
 	 */
 	wrap(plain: string): Promise<string>;
 	/**
@@ -221,15 +235,16 @@ export interface SecretBox {
 export function createSecretBox(provider: KeyProvider = indexedDbKeyProvider): SecretBox {
 	// Cache only a key that was actually obtained: a failed or `null` lookup
 	// (IndexedDB momentarily unavailable) is retried on the next call rather
-	// than pinning the whole session to "no key".
-	let keyPromise: Promise<CryptoKey | null> | null = null;
-	const key = (): Promise<CryptoKey | null> => {
+	// than pinning the whole session to "no key". `'failed'` is a lookup that
+	// threw — never a reason to store plaintext.
+	let keyPromise: Promise<CryptoKey | null | 'failed'> | null = null;
+	const key = (): Promise<CryptoKey | null | 'failed'> => {
 		if (keyPromise) return keyPromise;
-		const attempt: Promise<CryptoKey | null> = provider
+		const attempt: Promise<CryptoKey | null | 'failed'> = provider
 			.getKey()
-			.catch(() => null)
+			.catch((): 'failed' => 'failed')
 			.then((k) => {
-				if (k === null && keyPromise === attempt) keyPromise = null;
+				if ((k === null || k === 'failed') && keyPromise === attempt) keyPromise = null;
 				return k;
 			});
 		keyPromise = attempt;
@@ -239,6 +254,7 @@ export function createSecretBox(provider: KeyProvider = indexedDbKeyProvider): S
 		async wrap(plain) {
 			const k = await key();
 			const s = subtle();
+			if (k === 'failed') throw new SecretBoxUnavailableError();
 			if (!k || !s) {
 				if (keyedBefore()) throw new SecretBoxUnavailableError();
 				console.warn(
@@ -255,7 +271,7 @@ export function createSecretBox(provider: KeyProvider = indexedDbKeyProvider): S
 			if (!isWrapped(stored)) return stored;
 			const k = await key();
 			const s = subtle();
-			if (!k || !s) return null;
+			if (!k || k === 'failed' || !s) return null;
 			try {
 				const [ivB64, ctB64] = stored.slice(PREFIX.length).split(':');
 				const pt = await s.decrypt({ name: 'AES-GCM', iv: unb64(ivB64) }, k, unb64(ctB64));
