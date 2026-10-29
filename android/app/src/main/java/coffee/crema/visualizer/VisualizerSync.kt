@@ -284,15 +284,21 @@ class VisualizerSync(
         scope.launch {
             val verifier = persisted.pendingVerifier
             val expected = persisted.pendingState
+            val outcome = callbackOutcome(expected, verifier, code, returnedState, error)
+            // A callback that doesn't carry the pending handshake's state is not
+            // ours (any app or page can fire `crema://visualizer/...`): ignore it
+            // and keep the handshake, so it can't abort a sign-in in progress.
+            if (outcome == CallbackOutcome.NotOurs) return@launch
             // Single-use — clear the handshake whatever happens next.
             persist { it.copy(pendingVerifier = null, pendingState = null) }
-            when {
-                error != null -> notify("Visualizer sign-in was cancelled")
-                code == null -> notify("Visualizer sign-in failed — no code returned")
-                verifier == null -> notify("Visualizer sign-in expired — try again")
-                expected == null || expected != returnedState ->
-                    notify("Visualizer sign-in failed — state mismatch, try again")
-                else -> {
+            when (outcome) {
+                CallbackOutcome.NotOurs -> Unit
+                CallbackOutcome.Cancelled -> notify("Visualizer sign-in was cancelled")
+                CallbackOutcome.NoCode -> notify("Visualizer sign-in failed — no code returned")
+                CallbackOutcome.Expired -> notify("Visualizer sign-in expired — try again")
+                CallbackOutcome.Exchange -> {
+                    code ?: return@launch
+                    verifier ?: return@launch
                     _state.update { it.copy(busy = true) }
                     runCatchingCancellable { exchangeCode(code, verifier) }
                         .onSuccess { tokens ->
@@ -1020,6 +1026,29 @@ class VisualizerSync(
             syncNow(shots, includeBeans = false)
         }
     }
+
+/** What a `crema://visualizer/callback` intent means for the pending handshake. */
+internal enum class CallbackOutcome { NotOurs, Cancelled, NoCode, Expired, Exchange }
+
+/**
+ * Classify a callback (review 05 note: stray intents aborted sign-in). While a
+ * handshake is pending, only a callback echoing its exact `state` counts; any
+ * other is [CallbackOutcome.NotOurs] and leaves the handshake alone. With no
+ * pending handshake there is nothing to complete ([CallbackOutcome.Expired]).
+ */
+internal fun callbackOutcome(
+    expectedState: String?,
+    verifier: String?,
+    code: String?,
+    returnedState: String?,
+    error: String?,
+): CallbackOutcome = when {
+    expectedState != null && returnedState != expectedState -> CallbackOutcome.NotOurs
+    expectedState == null || verifier == null -> CallbackOutcome.Expired
+    error != null -> CallbackOutcome.Cancelled
+    code == null -> CallbackOutcome.NoCode
+    else -> CallbackOutcome.Exchange
+}
 
     /** Upload every shot without a `visualizerId`, sequentially, with a summary. */
     fun uploadAllUnsynced(shots: List<StoredShot>) {
