@@ -128,6 +128,8 @@ class BackupShotRoundTripTest {
         assertNull(baristaToFill(blank, null))
         assertNull(baristaToFill(blank, "  "))
         assertNull(baristaToFill(null, "Ana"))
+        // A barista edited here and not yet on Visualizer is never filled (V3 #6).
+        assertNull(baristaToFill(blank, "Ana", editedLocally = true))
     }
 
     @Test

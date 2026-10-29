@@ -107,6 +107,13 @@ data class VisualizerState(
     val shotPullCursor: Long? = null,
     /** Recent sync activity — capped at 20 entries, newest first. */
     val log: List<SyncLogEntry> = emptyList(),
+    /**
+     * Shots whose barista was edited here and has not reached Visualizer yet
+     * (see [VisualizerSync.markBaristaEdited]). Persisted so a pull after a
+     * restart does not refill a cleared barista (round-2 verification V2 P3-4);
+     * the web keeps the same set in `crema.visualizer.baristaPending.v1`.
+     */
+    val baristaPending: Set<String> = emptySet(),
 )
 
 /** The canonical default sync prefs — mirrors the core `VisualizerSyncPrefs::default`. */

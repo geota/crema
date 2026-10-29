@@ -201,6 +201,8 @@ class VisualizerSync(
     /** Hydrate from disk at startup (called from the VM's init coroutine). */
     suspend fun load() {
         persisted = store.load()
+        baristaPending.clear()
+        baristaPending += persisted.baristaPending
         fold()
     }
 
@@ -343,6 +345,7 @@ class VisualizerSync(
         val token = persistMutex.withLock {
             val t = persisted.tokens?.accessToken
             persisted = VisualizerState()
+            baristaPending.clear()
             store.erase()
             t
         }
@@ -721,6 +724,7 @@ class VisualizerSync(
                     // again while this PATCH was out.
                     if (sendBarista && (currentShot(shot.id)?.let(::baristaOf) ?: sentBarista) == sentBarista) {
                         baristaPending.remove(shot.id)
+                        storeBaristaPending()
                     }
                 }
                 .onFailure { notify("Visualizer update failed: ${it.message}") }
@@ -730,14 +734,22 @@ class VisualizerSync(
     /**
      * Shots whose barista was edited here and has not reached Visualizer yet:
      * only these PATCHes carry `barista` (the name, or "" once cleared, so a
-     * clear still reaches Visualizer). A failed PATCH leaves the shot pending,
-     * so the next edit's PATCH carries it (this session).
+     * clear still reaches Visualizer), and a pull does not fill a barista into
+     * them (V3 #6: a failed clear was refilled by the next pull, and the next
+     * edit then sent the old name back). A failed PATCH leaves the shot
+     * pending, so the next edit's PATCH carries it. Mirrored into
+     * [VisualizerState.baristaPending] so it survives a restart (V2 P3-4).
      */
     private val baristaPending: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /** The History barista edit — call before [patchEditedShot] for that shot. */
     fun markBaristaEdited(localId: String) {
-        baristaPending += localId
+        if (baristaPending.add(localId)) scope.launch { storeBaristaPending() }
+    }
+
+    /** Store the live pending set (read under the persist lock, so the last write wins with the latest set). */
+    private suspend fun storeBaristaPending() {
+        persist { it.copy(baristaPending = baristaPending.toSet()) }
     }
 
     /** Called on `ShotCompleted` — uploads when auto-sync is armed, signed in,
@@ -894,10 +906,15 @@ class VisualizerSync(
         return pulled
     }
 
-    /** Fill [localId]'s barista from a pulled remote when it has none (final review 06 #1). */
-    private fun fillBarista(localId: String, remote: JsonObject?) {
+    /**
+     * Fill [localId]'s barista from a pulled remote when it has none (final
+     * review 06 #1), unless a barista edit made here is still pending (V3 #6).
+     * Internal for the JVM tests (the reconcile that calls it is native).
+     */
+    internal fun fillBarista(localId: String, remote: JsonObject?) {
         val remoteBarista = (remote?.get("barista") as? JsonPrimitive)?.contentOrNull
-        baristaToFill(currentShot(localId), remoteBarista)?.let { onFillBarista(localId, it) }
+        baristaToFill(currentShot(localId), remoteBarista, editedLocally = localId in baristaPending)
+            ?.let { onFillBarista(localId, it) }
     }
 
     // ── Bean / roaster sync (web BeanSync.runSync) ────────────────────────────
@@ -1143,12 +1160,14 @@ internal fun baristaOf(shot: StoredShot): String = shot.barista?.trim().orEmpty(
 /**
  * The barista to fill into [local] from a pulled remote one (final review
  * 06 #1), or null for no change: only when the local shot has none, so a name
- * set or edited here is never overwritten by a pull. Mirrors the web
+ * set or edited here is never overwritten by a pull. [editedLocally] is true
+ * while a barista edit made here has not reached Visualizer: a blank barista
+ * is then the user's clear, not a gap to fill (V3 #6). Mirrors the web
  * `baristaToFill`.
  */
-internal fun baristaToFill(local: StoredShot?, remoteBarista: String?): String? {
+internal fun baristaToFill(local: StoredShot?, remoteBarista: String?, editedLocally: Boolean = false): String? {
     val pulled = remoteBarista?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-    if (local == null || !local.barista.isNullOrBlank()) return null
+    if (local == null || editedLocally || !local.barista.isNullOrBlank()) return null
     return pulled
 }
 
