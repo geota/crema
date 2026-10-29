@@ -350,4 +350,91 @@ describe('ShotSync pull fills the barista (final review 06 #1)', () => {
 			['recorded', 'barista', 'Cy']
 		]);
 	});
+
+	it('does not fill a barista the user edited here that has not reached Visualizer (V3 #6)', () => {
+		expect(baristaToFill(local('a'), remote('r', 'Ana'), true)).toBeNull();
+		expect(baristaToFill(local('a', ''), remote('r', 'Ana'), true)).toBeNull();
+	});
+});
+
+describe('ShotSync: an offline barista clear survives the next pull (V3 #6, V2 P3-4)', () => {
+	const remote = (id: string, barista: string) =>
+		({ id, clock: 1, duration_ms: 1, profile_title: null, final_weight_g: null, notes: null, rating: null, updated_at_ms: null, tag_list: [], barista }) as never;
+
+	function cleared() {
+		const shot = {
+			id: 's1',
+			visualizerId: 'viz-1',
+			bean: null,
+			tags: [],
+			grinderModel: null,
+			metadata: { rating: 4, barista: null }
+		} as unknown as StoredShot;
+		const setPerson = vi.fn((_id: string, field: string, name: string | null) => {
+			(shot.metadata as unknown as Record<string, unknown>)[field] = name;
+		});
+		const history = {
+			all: [shot],
+			setTags: vi.fn(),
+			bindVisualizerId: vi.fn(),
+			backfillTelemetry: vi.fn(),
+			insertPulled: vi.fn(),
+			setPerson
+		} as unknown as HistoryStore;
+		return { shot, history, setPerson };
+	}
+	const patchBaristas = (calls: HttpRequest[]) =>
+		calls
+			.filter((c) => c.method === 'PATCH')
+			.map((c) => (JSON.parse(c.body as string) as { shot: Record<string, unknown> }).shot.barista);
+
+	it('a failed clear is not refilled by a pull, in this session or the next, and is sent by the next edit', async () => {
+		setPremium(true);
+		const t = cleared();
+		let fail = true;
+		const { layer, calls } = mkHttp(() => (fail ? { ok: false, status: 503 } : { ok: true, json: {} }));
+		// The clear's PATCH fails (offline).
+		const first = await run(
+			ShotSync.pipe(
+				Effect.flatMap((sync) =>
+					Effect.gen(function* () {
+						const exit = yield* Effect.exit(sync.patchEditedShot(t.history, 's1', { baristaChanged: true }));
+						// A pull in the same session: the remote still has "Ana".
+						h.actions = [{ kind: 'update', localId: 's1', remote: remote('viz-1', 'Ana') }];
+						yield* sync.applyShotReconciliation(t.history, []);
+						return exit;
+					})
+				)
+			),
+			layer
+		);
+		expect(Exit.isSuccess(first) && Exit.isFailure(first.value)).toBe(true);
+		expect(t.setPerson).not.toHaveBeenCalled();
+
+		// A restart (a fresh layer): the mark was persisted, so the pull still
+		// leaves the clear alone, and the next rating edit carries it.
+		fail = false;
+		await run(
+			ShotSync.pipe(
+				Effect.flatMap((sync) =>
+					Effect.gen(function* () {
+						yield* sync.applyShotReconciliation(t.history, []);
+						yield* sync.patchEditedShot(t.history, 's1');
+					})
+				)
+			),
+			layer
+		);
+		expect(t.setPerson).not.toHaveBeenCalled();
+		expect(t.shot.metadata.barista).toBeNull();
+		expect(patchBaristas(calls)).toEqual(['', '']);
+
+		// The clear landed: the mark is gone and the fill rule applies again.
+		await run(
+			ShotSync.pipe(Effect.flatMap((sync) => sync.applyShotReconciliation(t.history, []))),
+			layer
+		);
+		h.actions = [];
+		expect(t.setPerson.mock.calls).toEqual([['s1', 'barista', 'Ana']]);
+	});
 });
