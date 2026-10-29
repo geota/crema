@@ -9,13 +9,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.background
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.ble.proxy.Peer
@@ -185,6 +188,41 @@ fun HubHoldsMachineNotice(hub: Peer?, onConnectThrough: (host: String, port: Int
                 connectThroughLabel(hub.name),
                 style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
             )
+        }
+    }
+}
+
+/**
+ * The tablet's app-wide remote status (above every screen while this device
+ * is a remote): the same line as the phone's banner, as a chip. [onClick]
+ * opens Settings ▸ Multi-device.
+ */
+@Composable
+fun RemoteStatusChip(status: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background).padding(horizontal = 16.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.End,
+    ) {
+        Surface(
+            onClick = onClick,
+            shape = RoundedCornerShape(999.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ) {
+            Row(
+                Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                PhIcon("bluetooth", sizeDp = 15)
+                Text(
+                    status,
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                PhIcon("caret-right", sizeDp = 14)
+            }
         }
     }
 }

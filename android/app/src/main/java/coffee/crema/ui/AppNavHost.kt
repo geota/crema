@@ -1,6 +1,10 @@
 package coffee.crema.ui
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -20,6 +24,8 @@ import androidx.navigation.compose.rememberNavController
  * @param onRailConnect tap on a rail pip: `"machine"` / `"scale"` → connect or
  *   disconnect that device (the caller is permission-wrapped).
  * @param debugContent the Phase-0 readout, hosted at the `debug` route.
+ * @param topBar an app-wide strip above every route (the remote status chip),
+ *   given this host's `onNav`; empty draws nothing.
  */
 @Composable
 fun AppNavHost(
@@ -52,6 +58,7 @@ fun AppNavHost(
     onRouteChange: (String) -> Unit = {},
     /** Dynamic owning tabs for [initialRoute]'s pushed routes ([NavRestore.owners]). */
     routeOwners: Map<String, String> = emptyMap(),
+    topBar: @Composable (onNav: (String) -> Unit) -> Unit = {},
 ) {
     val nav = rememberNavController()
     // Rail destinations replace one another (single-top, no back-stack buildup);
@@ -72,18 +79,23 @@ fun AppNavHost(
     }
     val onBack: () -> Unit = { nav.popBackStack() }
 
-    NavHost(navController = nav, startDestination = "brew") {
-        // The hero dashboard, wired to live VM telemetry by the caller.
-        composable("brew") { brewContent(onNav) }
-        composable("profiles") { profilesContent(onNav) }
-        composable("beans") { beansContent(onNav) }
-        composable("history") { historyContent(onNav) }
-        // The fully-designed exemplar, wired to live VM state by the caller.
-        composable("scale") { scaleContent(onNav) }
-        composable("settings") { settingsContent(onNav) }
-        composable("profile-edit") { profileEditContent(onBack) }
-        composable("bean-edit") { beanEditContent(onBack) }
-        composable("debug") { debugContent() }
+    Column(Modifier.fillMaxSize()) {
+        topBar(onNav)
+        Box(Modifier.weight(1f)) {
+            NavHost(navController = nav, startDestination = "brew") {
+                // The hero dashboard, wired to live VM telemetry by the caller.
+                composable("brew") { brewContent(onNav) }
+                composable("profiles") { profilesContent(onNav) }
+                composable("beans") { beansContent(onNav) }
+                composable("history") { historyContent(onNav) }
+                // The fully-designed exemplar, wired to live VM state by the caller.
+                composable("scale") { scaleContent(onNav) }
+                composable("settings") { settingsContent(onNav) }
+                composable("profile-edit") { profileEditContent(onBack) }
+                composable("bean-edit") { beanEditContent(onBack) }
+                composable("debug") { debugContent() }
+            }
+        }
     }
     SyncNavRoute(nav, initialRoute, NavRestore.TABLET_ROUTES, onNav, onRouteChange, routeOwners)
 }

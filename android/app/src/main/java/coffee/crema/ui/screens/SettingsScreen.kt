@@ -137,12 +137,22 @@ fun SettingsScreen(
     vm: MainViewModel,
     onNav: (String) -> Unit,
     onConnect: (String) -> Unit,
+    /** A section to show once (the remote status chip opens "advanced",
+     *  where Multi-device lives); [onSectionOpened] clears the request. */
+    openSection: String? = null,
+    onSectionOpened: () -> Unit = {},
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val firmwareFlow by vm.firmware.ui.collectAsStateWithLifecycle()
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
     var active by rememberSaveable { mutableStateOf("machine") }
+    LaunchedEffect(openSection) {
+        if (openSection != null) {
+            active = openSection
+            onSectionOpened()
+        }
+    }
     // Staged destructive-action confirms + SAF export — shared with the phone
     // shell (issue 27). Rows flip confirm.* flags; SettingsConfirmDialogs renders.
     val confirm = rememberSettingsConfirmState(vm)

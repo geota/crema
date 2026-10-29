@@ -79,6 +79,7 @@ import coffee.crema.ui.screens.BeanEditScreen
 import coffee.crema.ui.screens.BeansScreen
 import coffee.crema.ui.screens.BrewScreen
 import coffee.crema.ui.components.SaverOverlay
+import coffee.crema.ui.components.RemoteStatusChip
 import coffee.crema.ui.screens.ChartExpandOverlay
 import coffee.crema.ui.screens.LocalChartExpander
 import coffee.crema.ui.screens.HistoryScreen
@@ -508,7 +509,14 @@ class MainActivity : ComponentActivity() {
                 // instead of connecting directly — its buttons run onRailConnect (#2).
                 var showDevices by remember { mutableStateOf(false) }
                 val openDevices: (String) -> Unit = { showDevices = true }
+                // The remote status chip opens Settings ▸ Advanced, home of Multi-device.
+                var settingsSection by remember { mutableStateOf<String?>(null) }
                 AppNavHost(
+                    topBar = { navTo ->
+                        ui.remoteStatus()?.let { status ->
+                            RemoteStatusChip(status, onClick = { settingsSection = "advanced"; navTo("settings") })
+                        }
+                    },
                     machineConnected = machineConnected,
                     scaleConnected = scaleConnected,
                     onRailConnect = openDevices,
@@ -528,7 +536,10 @@ class MainActivity : ComponentActivity() {
                         ScaleScreen(viewModel, onNav = navTo, onConnect = openDevices)
                     },
                     settingsContent = { navTo ->
-                        SettingsScreen(viewModel, onNav = navTo, onConnect = openDevices)
+                        SettingsScreen(
+                            viewModel, onNav = navTo, onConnect = openDevices,
+                            openSection = settingsSection, onSectionOpened = { settingsSection = null },
+                        )
                     },
                     beanEditContent = { back ->
                         BeanEditScreen(viewModel, onBack = back)
