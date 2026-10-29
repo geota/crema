@@ -1129,7 +1129,13 @@ class LibraryController(
             // applied verbatim on either shell (no per-shell tag); never the OAuth
             // token (re-auth after restore). Reseed the live water integrator.
             restoredMaintenance?.let { applyRestoredMaintenance(it) }
-            restoredVisualizerPrefs?.let { visualizer.restorePrefs(it) }
+            // Never widen sharing from a backup (review 05 P3-1): held fields keep
+            // this device's value and the notice below says so.
+            val heldSharing = restoredVisualizerPrefs?.let { incoming ->
+                val guarded = guardRestoredPrefs(visualizer.backupPrefs(), incoming, json)
+                visualizer.restorePrefs(guarded.apply)
+                guarded.held
+            }.orEmpty()
             // Methods before recipes, so a restored recipe's `custom:` method resolves.
             val newMethods = applyRestoredCustomMethods(parsed.customMethods, mode == MainViewModel.RestoreMode.WIPE)
             val newRecipes = applyRestoredRecipes(parsed.recipes, parsed.recipeMeta, mode == MainViewModel.RestoreMode.WIPE)
@@ -1138,7 +1144,8 @@ class LibraryController(
                 "Restored ${newProfiles.size} profile(s) · ${newBeans.size} bean(s) · " +
                     "${newRoasters.size} roaster(s) · ${newShots.size} shot(s)" +
                     (if (newRecipes > 0) " · $newRecipes recipe(s)" else "") +
-                    if (newMethods > 0) " · $newMethods method(s)" else "",
+                    (if (newMethods > 0) " · $newMethods method(s)" else "") +
+                    (heldSharingNotice(heldSharing)?.let { ". $it" } ?: ""),
             )
         }
     }
