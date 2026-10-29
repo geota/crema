@@ -1,5 +1,7 @@
 package coffee.crema.ui.phone
 
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import coffee.crema.ui.fmt
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -584,10 +586,7 @@ private fun PhoneShotRow(
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                val rowName = shot.profileName
-                    ?: shot.recipeName
-                    ?: shot.methodOf?.let { methodLabel(it) }
-                    ?: "Shot"
+                val rowName = coffee.crema.history.shotTitle(shot)
                 Text(
                     if (shot.isManualLog) "$rowName · logged" else rowName,
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
@@ -767,7 +766,7 @@ private fun PhoneShotDetail(
                 ProfileStrip(
                     title = when {
                         isBrew -> (shot.recipeName ?: methodLabel(method)) + if (manual) " · logged" else ""
-                        else -> shot.profileName ?: "Shot"
+                        else -> shot.profileName?.trim()?.takeIf { it.isNotEmpty() } ?: coffee.crema.history.UNTITLED_SHOT
                     },
                     beanLine = shot.beanLabel ?: "No bean",
                     // Bottom row: the grind this shot was pulled at + the
@@ -979,13 +978,26 @@ private fun PhoneShotDetail(
                             fmt = { v -> if (v % 1.0 == 0.0) fmt("%.0f", v) else fmt("%.1f", v) },
                         )
                     }
-                    val people by vm.ui.collectAsStateWithLifecycle()
+                    // Only the name lists, recomputed when the history list changes
+                    // — not a second collect of the whole UI state, which ticks
+                    // with live telemetry and re-sorted the history each time.
+                    val people by remember(vm) {
+                        vm.ui
+                            .map { it.history }
+                            .distinctUntilChanged { a, b -> a === b }
+                            .map { h -> recentNames(h, "barista") to recentNames(h, "drinker") }
+                    }.collectAsStateWithLifecycle(
+                        initialValue = remember(vm) {
+                            val h = vm.ui.value.history
+                            recentNames(h, "barista") to recentNames(h, "drinker")
+                        },
+                    )
                     ShotPeopleFields(
                         shotId = shot.id,
                         barista = shot.barista,
                         drinker = shot.drinker,
-                        baristaNames = recentNames(people.history, "barista"),
-                        drinkerNames = recentNames(people.history, "drinker"),
+                        baristaNames = people.first,
+                        drinkerNames = people.second,
                         onChange = { field, name -> vm.setShotPerson(shot.id, field, name) },
                     )
                     CremaTextField(

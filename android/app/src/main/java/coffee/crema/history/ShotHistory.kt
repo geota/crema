@@ -115,6 +115,14 @@ data class StoredShot(
      */
     val drinker: String? = null,
     /**
+     * The grinder this shot was pulled on, when the shot itself carries one —
+     * an imported or restored shot (the core wire `grinderModel`). Null for
+     * shots captured here, which use the Settings grinder at upload time.
+     * Kept so a backup round trip no longer drops it, and searched like the
+     * web. Additive.
+     */
+    val grinderModel: String? = null,
+    /**
      * A downsampled telemetry slice for the History detail chart (≤
      * [SHOT_SAMPLE_CAP] points). Empty for shots captured before this field
      * existed (additive — older records deserialise cleanly).
@@ -207,19 +215,22 @@ const val BREW_LOG_UPLOAD_SKIP = "Brew Log entries stay on this device"
 val StoredShot.methodOf: String?
     get() = brewMethod?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
 
+/** The title of a machine espresso with no profile name (web: "Untitled shot"). */
+const val UNTITLED_SHOT = "Untitled shot"
+
 /**
  * What a stored row is called wherever it is listed — the History rows, the
  * bean detail's "Shots" list. One rule for every brew shape (#165): the
  * profile name (a machine espresso), else the guided recipe's name, else the
  * method's label (a manual or custom-method brew). A machine espresso with
- * no profile name is "Shot". Blank names count as absent. Mirrors the web's
- * `shotTitle`.
+ * no profile name is [UNTITLED_SHOT]. Blank names count as absent. Mirrors the
+ * web's `shotTitle`, wording included.
  */
 fun shotTitle(shot: StoredShot): String =
     shot.profileName?.trim()?.takeIf { it.isNotEmpty() }
         ?: shot.recipeName?.trim()?.takeIf { it.isNotEmpty() }
         ?: shot.methodOf?.let(::methodLabel)
-        ?: "Shot"
+        ?: UNTITLED_SHOT
 
 /**
  * Manually logged: a method was declared but no telemetry of any kind was

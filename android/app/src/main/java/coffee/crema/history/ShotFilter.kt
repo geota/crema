@@ -75,8 +75,8 @@ fun filterAndSortShots(
 /**
  * True when the shot's text fields contain [query] (case-insensitive): profile,
  * brew method, recipe, notes, next-time plan, the bean snapshot's roaster /
- * name / grinder, barista and drinker. A blank query matches everything.
- * Mirrors the web `shotMatchesQuery`.
+ * name / grinder, the shot's own grinder model, barista and drinker. A blank
+ * query matches everything. Mirrors the web `shotMatchesQuery`.
  */
 fun shotMatchesQuery(s: StoredShot, query: String): Boolean {
     val q = query.trim()
@@ -89,6 +89,7 @@ fun shotMatchesQuery(s: StoredShot, query: String): Boolean {
         s.nextPlan,
         s.beanLabel,
         s.bean?.grinder,
+        s.grinderModel,
         s.barista,
         s.drinker,
     ).any { it?.contains(q, ignoreCase = true) == true }
