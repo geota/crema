@@ -176,10 +176,10 @@ class DriveSync(
     }
 
     /** Forget the token (best-effort — Google has no public revoke for `drive.file`). */
-    fun disconnect() {
+    fun disconnect(quiet: Boolean = false) {
         scope.launch {
             persist { it.copy(tokens = null) }
-            notify("Disconnected from Google Drive")
+            if (!quiet) notify("Disconnected from Google Drive")
         }
     }
 

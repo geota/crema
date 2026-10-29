@@ -1252,7 +1252,7 @@ fun SettingsScreen(
                             CremaSettingsRow("Terms of Service", "License, hardware-risk disclaimer, limitation of liability.") {
                                 CremaButton(onClick = { openLink("https://crema.maceiras.dev/terms") }, variant = CremaButtonVariant.Outlined, icon = "arrow-square-out", label = "Read")
                             }
-                            CremaSettingsRow("Privacy Policy", "Crema is local-only. No analytics, no tracking.", last = true) {
+                            CremaSettingsRow("Privacy Policy", "No analytics or tracking. What Crema stores and which services it contacts.", last = true) {
                                 CremaButton(onClick = { openLink("https://crema.maceiras.dev/privacy") }, variant = CremaButtonVariant.Outlined, icon = "arrow-square-out", label = "Read")
                             }
                         }

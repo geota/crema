@@ -1170,17 +1170,31 @@ class LibraryController(
 
     // ── Erase-all (the library/history/profile share of Settings ▸ Erase) ────
 
-    /** Clear the bean library, roaster directory, shot history, and custom
-     *  profiles (disk + UI); built-ins remain and the active profile reseeds
+    /** Clear the bean library, roaster directory, shot history, custom
+     *  profiles, pins / hidden built-ins, recipes + custom methods, bag photos
+     *  and the last-shot diagnostic (disk + UI); built-ins remain and the active profile reseeds
      *  via [refreshProfiles]. The VM composes this with its settings +
      *  maintenance resets. */
     fun eraseAll() {
         customProfilesJson = emptyList()
+        pinnedIds = emptySet()
+        hiddenIds = emptySet()
         scope.launch {
             library.save(BeanLibrary())
             historyStore.save(emptyList())
             customProfileStore.save(emptyList())
+            pinnedProfileStore.save(emptySet())
+            hiddenProfileStore.save(emptySet())
+            // Bag photos and the last-shot diagnostic are user data too
+            // (review 05 P2-1 parity with the web factory reset).
+            withContext(Dispatchers.IO) {
+                BeanImageStore.deleteAll(app)
+                coffee.crema.diag.ShotDiag.clear(app)
+            }
         }
+        // Brew recipes + custom methods: an empty wipe-restore clears them.
+        applyRestoredCustomMethods(emptyList(), true)
+        applyRestoredRecipes(emptyList(), null, true)
         updateUi { it.copy(
             beans = emptyList(),
             roasters = emptyList(),

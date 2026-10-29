@@ -316,13 +316,14 @@ class VisualizerSync(
         }
     }
 
-    /** Revoke (best-effort) + forget tokens and the cached account. */
-    fun signOut() {
+    /** Revoke (best-effort) + forget tokens and the cached account. [quiet]
+     *  skips the snackbar (Erase all data reports once for everything). */
+    fun signOut(quiet: Boolean = false) {
         scope.launch {
             persisted.tokens?.accessToken?.let { revokeToken(clientId, it) }
             // The tier is per-account: a later sign-in re-probes it.
             persist { it.copy(tokens = null, account = null, premium = null, premiumCheckedAt = null) }
-            notify("Signed out of Visualizer")
+            if (!quiet) notify("Signed out of Visualizer")
         }
     }
 
@@ -1027,6 +1028,28 @@ class VisualizerSync(
         }
     }
 
+    /** Upload every shot without a `visualizerId`, sequentially, with a summary. */
+    fun uploadAllUnsynced(shots: List<StoredShot>) {
+        if (persisted.tokens == null) {
+            notify("Sign in to Visualizer first (Settings → Sharing)")
+            return
+        }
+        val unsynced = shots.filter { it.visualizerId == null && !it.isBrewLog }
+        if (unsynced.isEmpty()) {
+            notify("Everything is already on Visualizer")
+            return
+        }
+        _state.update { it.copy(busy = true) }
+        scope.launch {
+            val r = runUploadPass(unsynced, uploadPolicy) { shot -> pushTracked(shot) }
+            _state.update { it.copy(busy = false) }
+            val summary = if (r.failed == 0) "Uploaded ${r.uploaded} shot(s) to Visualizer"
+            else "Uploaded ${r.uploaded} shot(s); ${r.failed} failed"
+            notify(r.stop?.let { "$summary — ${it.notice}" } ?: summary)
+        }
+    }
+}
+
 /** What a `crema://visualizer/callback` intent means for the pending handshake. */
 internal enum class CallbackOutcome { NotOurs, Cancelled, NoCode, Expired, Exchange }
 
@@ -1048,26 +1071,4 @@ internal fun callbackOutcome(
     error != null -> CallbackOutcome.Cancelled
     code == null -> CallbackOutcome.NoCode
     else -> CallbackOutcome.Exchange
-}
-
-    /** Upload every shot without a `visualizerId`, sequentially, with a summary. */
-    fun uploadAllUnsynced(shots: List<StoredShot>) {
-        if (persisted.tokens == null) {
-            notify("Sign in to Visualizer first (Settings → Sharing)")
-            return
-        }
-        val unsynced = shots.filter { it.visualizerId == null && !it.isBrewLog }
-        if (unsynced.isEmpty()) {
-            notify("Everything is already on Visualizer")
-            return
-        }
-        _state.update { it.copy(busy = true) }
-        scope.launch {
-            val r = runUploadPass(unsynced, uploadPolicy) { shot -> pushTracked(shot) }
-            _state.update { it.copy(busy = false) }
-            val summary = if (r.failed == 0) "Uploaded ${r.uploaded} shot(s) to Visualizer"
-            else "Uploaded ${r.uploaded} shot(s); ${r.failed} failed"
-            notify(r.stop?.let { "$summary — ${it.notice}" } ?: summary)
-        }
-    }
 }
