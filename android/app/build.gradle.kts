@@ -1,5 +1,6 @@
 import java.util.Properties
 import javax.inject.Inject
+import net.mullvad.androidrust.CargoBuildTask
 import org.gradle.process.ExecOperations
 
 plugins {
@@ -421,16 +422,38 @@ dependencies {
 //
 // Native-lib build profile: "debug" (fast — local dev default) or "release"
 // (LTO + codegen-units=1 + opt-3, per core's [profile.release]). An explicit
-// -PcargoProfile wins. Otherwise any build that asks for a Nightly or Release
-// task defaults to "release": the debug cargo profile has overflow checks and
-// debug assertions on, so a user-facing APK built with it crashes where web and
-// stable wrap silently (cohort review 2026-10-25, report 01 P1-3). CI's
-// release and nightly jobs also pass -PcargoProfile=release explicitly.
-val shippableTaskRequested = gradle.startParameter.taskNames.any { task ->
-    task.contains("Nightly", ignoreCase = true) || task.contains("Release", ignoreCase = true)
+// -PcargoProfile wins. Otherwise it follows the variants being built: when the
+// task graph merges the JNI libs of any non-debuggable build type (release,
+// nightly) the profile is "release". The debug cargo profile has overflow
+// checks and debug assertions on, so a user-facing APK built with it crashes
+// where web and stable wrap silently (cohort review 2026-10-25, report 01
+// P1-3). Matching requested task NAMES missed `./gradlew assemble` and `build`,
+// which build the shippable APKs too (final cohort review 2026-10-28, 06 #13).
+// The plugin has one cargoBuild for every variant, so a mixed build (e.g.
+// `assemble`) puts the release library in the debug APK as well; that only
+// costs build time. CI's release and nightly jobs also pass
+// -PcargoProfile=release explicitly.
+val explicitCargoProfile = project.findProperty("cargoProfile") as String?
+var cargoProfile: String = explicitCargoProfile ?: "debug"
+gradle.taskGraph.whenReady {
+    val graph = this
+    if (graph.allTasks.none { it.project == project && it is CargoBuildTask }) return@whenReady
+    val shippableJniMerges = android.buildTypes
+        .filter { !it.isDebuggable }
+        .map { "${it.name.replaceFirstChar(Char::titlecase)}JniLibFolders" }
+    val shippable = graph.allTasks
+        .filter { it.project == project && it.name.startsWith("merge") }
+        .map { it.name }
+        .filter { name -> shippableJniMerges.any { name.endsWith(it) } }
+    cargoProfile = explicitCargoProfile ?: if (shippable.isNotEmpty()) "release" else "debug"
+    tasks.withType<CargoBuildTask>().configureEach { profile.set(cargoProfile) }
+    val why = when {
+        explicitCargoProfile != null -> "-PcargoProfile"
+        shippable.isNotEmpty() -> "shippable variant: ${shippable.joinToString()}"
+        else -> "no shippable variant in this build"
+    }
+    logger.lifecycle("Rust core for the APK: cargo profile '$cargoProfile' ($why)")
 }
-val cargoProfile = (project.findProperty("cargoProfile") as String?)
-    ?: if (shippableTaskRequested) "release" else "debug"
 
 cargo {
     // Path from this module to the Rust workspace member.
@@ -536,9 +559,10 @@ val generateUniffiBindings =
         cargoCommand.set(cargoExecutable)
         crateSource.set(layout.projectDirectory.dir("../../core/de1-ffi/src"))
         workspaceDir.set(layout.projectDirectory.dir("../../core"))
+        // Read at execution, after the task graph picked the profile.
         library.set(
             layout.projectDirectory.file(
-                "../../core/target/aarch64-linux-android/$cargoProfile/libde1_ffi.so",
+                provider { "../../core/target/aarch64-linux-android/$cargoProfile/libde1_ffi.so" },
             ),
         )
         outputDirectory.set(layout.buildDirectory.dir("generated/uniffi"))
@@ -564,22 +588,44 @@ androidComponents {
 // The APK carries the Android cdylib; JVM tests run on the build machine, so
 // they need the same crate built for the HOST (libde1_ffi.dylib / .so). JNA
 // finds it through jna.library.path. Incremental: a no-op when unchanged.
+//
+// The library is the build's output and every Test task's input, so a
+// Rust-only change re-runs the unit tests instead of leaving them UP-TO-DATE
+// or served from the build cache (final cohort review 2026-10-28, 04 P3-2).
+// Its directory comes from `cargo metadata`, which honours CARGO_TARGET_DIR
+// and a cargo `build.target-dir`, instead of a hard-coded core/target/debug.
+val coreDir = layout.projectDirectory.dir("../../core")
+val hostCoreLibrary: Provider<RegularFile> =
+    providers.exec {
+        workingDir = coreDir.asFile
+        commandLine(cargoExecutable, "metadata", "--format-version", "1", "--no-deps")
+    }.standardOutput.asText.map { json ->
+        val targetDir = (groovy.json.JsonSlurper().parseText(json) as Map<*, *>)["target_directory"] as String
+        layout.projectDirectory.file("$targetDir/debug/${System.mapLibraryName("de1_ffi")}")
+    }
 val cargoBuildHostCore =
     tasks.register<Exec>("cargoBuildHostCore") {
         description = "Build de1-ffi for the host, for JVM unit tests."
         group = "rust"
-        workingDir = layout.projectDirectory.dir("../../core").asFile
+        workingDir = coreDir.asFile
         commandLine(cargoExecutable, "build", "--package", "de1-ffi", "--lib")
+        outputs.file(hostCoreLibrary).withPropertyName("hostCoreLibrary")
+        // Cargo knows what is stale; Gradle has no view of the Rust sources.
+        outputs.upToDateWhen { false }
     }
 
 tasks.withType<Test>().configureEach {
     dependsOn(cargoBuildHostCore)
+    inputs.files(cargoBuildHostCore.map { it.outputs.files })
+        .withPropertyName("hostCoreLibrary")
+        .withPathSensitivity(PathSensitivity.NONE)
     // Unit tests run on a Java 21 JVM: the Nordic BLE library ships Java 21
     // bytecode, which MainViewModelSmokeTest loads under Robolectric. The
     // app itself still compiles to Java 17 (compileOptions above).
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
-    systemProperty(
-        "jna.library.path",
-        layout.projectDirectory.dir("../../core/target/debug").asFile.absolutePath,
-    )
+    // Set at execution: the library's content is the input above, so its
+    // machine-specific path stays out of the cache key.
+    doFirst {
+        systemProperty("jna.library.path", hostCoreLibrary.get().asFile.parentFile.absolutePath)
+    }
 }
