@@ -35,7 +35,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
 
 - **Basic pressure profiles limit flow during the forced rise**, and pressure
   steps without a flow limit — cleaning and calibration profiles included — are
-  capped at 8 ml/s, matching de1app and Decenza. Web, tablet and phone.
+  capped at 8 ml/s, matching de1app and Decenza. A profile an earlier version
+  already loaded is sent once more after the update so it picks these up. Web,
+  tablet and phone.
 - **A dead DE1 Bluetooth link is detected in about 10 s** instead of about a
   minute. Web and Android.
 - **Steam eco mode waits for 10 minutes without any app activity**, as in
