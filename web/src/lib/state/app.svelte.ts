@@ -23,7 +23,7 @@ import {
 	type CremaCore
 } from '#lib/core/index.js';
 import { MachineState, MmrRegister } from '#lib/core/crema-core.js';
-import type { BrewRecipe } from '#lib/core/crema-core.js';
+import type { BrewRecipe, MaintenanceFailure } from '#lib/core/crema-core.js';
 import { getGuidedBrewStore } from '#lib/brew/session.svelte.js';
 import { playBrewCue } from '#lib/brew/cues.js';
 import {
@@ -882,7 +882,11 @@ export class CremaApp {
 				}
 			}
 			if (event.type === 'MaintenanceProgress' && event.content.cold_workaround) {
-				this.onColdMaintenanceProgress(event.content.phase, event.content.state);
+				this.onColdMaintenanceProgress(
+					event.content.phase,
+					event.content.state,
+					event.content.failure
+				);
 			}
 			if (event.type === 'ProfileUploadCompleted') {
 				// Hand the completion to the `ProfileSync` service (T-21): it
@@ -1322,7 +1326,11 @@ export class CremaApp {
 	 * "already loaded" fingerprint at once, and put the active profile back
 	 * when the cycle ends (Decenza re-uploads it on leaving its descale page).
 	 */
-	private onColdMaintenanceProgress(phase: string, state: string): void {
+	private onColdMaintenanceProgress(
+		phase: string,
+		state: string,
+		failure: MaintenanceFailure | null | undefined
+	): void {
 		if (this.state.current.activeProfileFingerprint !== null) {
 			writeJson(LAST_FINGERPRINT_KEY, null);
 			this.state.patch({ activeProfileFingerprint: null });
@@ -1330,8 +1338,9 @@ export class CremaApp {
 		if (isMaintenanceTerminal(phase)) {
 			if (this.state.current.de1State === 'ready') this.ensureLoadedMatches();
 		}
-		// The cold profile never loaded, so the core did not send the request.
-		if (phase === 'Failed') toast.error(maintenanceFailedMessage(state));
+		// The cold profile never loaded (or was replaced), so the core did not
+		// send the request.
+		if (phase === 'Failed') toast.error(maintenanceFailedMessage(state, failure));
 	}
 
 	/**

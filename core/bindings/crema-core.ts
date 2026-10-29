@@ -1318,6 +1318,11 @@ export type Event =
 	cycle: number;
 	/** The 1 °C cold-maintenance profile was loaded for this cycle. */
 	cold_workaround: boolean;
+	/**
+	 * Why the cycle never started; set only on
+	 * [`MaintenancePhase::Failed`].
+	 */
+	failure?: MaintenanceFailure;
 }}
 	/**
 	 * The idle-sleep timer ("Sleep after") sent Sleep — see
@@ -4275,6 +4280,21 @@ export enum MachineState {
 }
 
 /**
+ * Why a held cold-maintenance request ended [`MaintenancePhase::Failed`] —
+ * carried by `Event::MaintenanceProgress` so the shells can say what
+ * happened.
+ */
+export enum MaintenanceFailure {
+	/** The 1 °C profile's upload failed or was cancelled. */
+	ColdProfileNotLoaded = "ColdProfileNotLoaded",
+	/**
+	 * Another upload (the user picked a profile or started a shot) replaced
+	 * the 1 °C profile before the machine finished heating.
+	 */
+	ProfileReplaced = "ProfileReplaced",
+}
+
+/**
  * Where a maintenance cycle the core is following stands — carried by
  * `Event::MaintenanceProgress`.
  */
@@ -4300,7 +4320,8 @@ export enum MaintenancePhase {
 	 * The 1 °C cold-maintenance profile did not load (its upload failed,
 	 * was cancelled, or another upload replaced it), so the held request
 	 * was never sent: running the cycle on the brew profile is what the
-	 * workaround exists to prevent. The user can start it again.
+	 * workaround exists to prevent. The user can start it again. Why is in
+	 * the event's [`MaintenanceFailure`].
 	 */
 	Failed = "Failed",
 }

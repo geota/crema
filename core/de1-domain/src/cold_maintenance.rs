@@ -303,8 +303,22 @@ pub enum MaintenancePhase {
     /// The 1 °C cold-maintenance profile did not load (its upload failed,
     /// was cancelled, or another upload replaced it), so the held request
     /// was never sent: running the cycle on the brew profile is what the
-    /// workaround exists to prevent. The user can start it again.
+    /// workaround exists to prevent. The user can start it again. Why is in
+    /// the event's [`MaintenanceFailure`].
     Failed,
+}
+
+/// Why a held cold-maintenance request ended [`MaintenancePhase::Failed`] —
+/// carried by `Event::MaintenanceProgress` so the shells can say what
+/// happened.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MaintenanceFailure {
+    /// The 1 °C profile's upload failed or was cancelled.
+    ColdProfileNotLoaded,
+    /// Another upload (the user picked a profile or started a shot) replaced
+    /// the 1 °C profile before the machine finished heating.
+    ProfileReplaced,
 }
 
 #[cfg(test)]

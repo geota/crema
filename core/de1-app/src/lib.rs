@@ -4516,13 +4516,14 @@ impl CremaCore {
             self.profile_reupload_requests = self.profile_reupload_requests.saturating_add(1);
         }
         self.profile_reupload_unanswered = 0;
+        // Any other upload replaces the cold-maintenance profile a held
+        // request is waiting on. Before the abort below, which would
+        // otherwise end the run as a cold upload that failed.
+        self.cold_maintenance_profile_replaced(&mut out);
         // Abort any prior upload (running or parked) before arming the new one.
         if self.profile_upload.is_some() || self.parked_upload.is_some() {
             self.fail_profile_upload(ProfileUploadFailure::Aborted, &mut out);
         }
-        // Any other upload replaces the cold-maintenance profile a held
-        // request is waiting on.
-        self.cold_maintenance_profile_replaced(&mut out);
         match assembled {
             Some((assembled, encoding)) => {
                 let started = self.start_upload(profile, assembled, encoding, now, None);

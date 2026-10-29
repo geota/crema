@@ -2,6 +2,7 @@ package coffee.crema.ui
 
 import coffee.crema.core.EventMaintenanceProgressInner
 import coffee.crema.core.MachineState
+import coffee.crema.core.MaintenanceFailure
 import coffee.crema.core.MaintenancePhase
 
 /**
@@ -16,12 +17,18 @@ internal fun isMaintenanceTerminal(phase: MaintenancePhase): Boolean =
     phase == MaintenancePhase.Finished || phase == MaintenancePhase.Cancelled || phase == MaintenancePhase.Failed
 
 /**
- * The notice for a cycle core refused to start because its cold-start profile did
- * not load (`MaintenancePhase.Failed`, round-2 verification V3 #4). Same copy as
- * web `maintenanceFailedMessage`.
+ * The notice for a cycle core never started (`MaintenancePhase.Failed`, round-2
+ * verification V3 #4), worded by core's [failure]: another profile loaded while
+ * the machine was still heating (the user picked one or started a shot), or the
+ * cold-start profile did not load (round-3 clean check C1 P3-1). Same copy as web
+ * `maintenanceFailedMessage`.
  */
-internal fun maintenanceFailedText(state: MachineState): String =
-    "${maintenanceTitle(state)} didn't start: the cold-start profile older DE1 firmware needs could not be loaded. Try again."
+internal fun maintenanceFailedText(state: MachineState, failure: MaintenanceFailure?): String =
+    if (failure == MaintenanceFailure.ProfileReplaced) {
+        "${maintenanceTitle(state)} didn't start: another profile was loaded while the machine was still heating. Start it again when you're ready."
+    } else {
+        "${maintenanceTitle(state)} didn't start: the cold-start profile older DE1 firmware needs could not be loaded. Try again."
+    }
 
 private fun maintenanceTitle(state: MachineState): String = when (state) {
     MachineState.Descale -> "Descale"

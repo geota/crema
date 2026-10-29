@@ -5697,9 +5697,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // back once the cycle ends.
                     lastUploadedFingerprint = null
                     if (terminal) reuploadActiveProfile()
-                    // The cold profile never loaded, so core did not send the
-                    // request (round-2 V3 #4): say so instead of going quiet.
-                    if (c.phase == MaintenancePhase.Failed) notifyUser(maintenanceFailedText(c.state))
+                    // The cold profile never loaded (or was replaced), so core
+                    // did not send the request (round-2 V3 #4): say so, and why,
+                    // instead of going quiet.
+                    if (c.phase == MaintenancePhase.Failed) notifyUser(maintenanceFailedText(c.state, c.failure))
                 }
             }
             is Event.MachineErrorChanged -> {

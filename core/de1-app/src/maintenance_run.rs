@@ -36,8 +36,8 @@
 use std::time::Duration;
 
 use de1_domain::{
-    MaintenancePhase, cold_maintenance_profile, is_machine_heating, is_maintenance_state,
-    needs_cold_workaround,
+    MaintenanceFailure, MaintenancePhase, cold_maintenance_profile, is_machine_heating,
+    is_maintenance_state, needs_cold_workaround,
 };
 use de1_protocol::{MachineState, MmrRegister, StateInfo, requested_state};
 
@@ -64,6 +64,8 @@ pub(crate) struct MaintenanceRun {
     cancelled: bool,
     /// When the held request was released (`Requested`).
     requested_at: Option<Duration>,
+    /// Why it ended `Failed`.
+    failure: Option<MaintenanceFailure>,
     /// The last values reported, for edge-triggering.
     reported: Option<(MaintenancePhase, u8, u32, u8)>,
 }
@@ -77,6 +79,7 @@ impl MaintenanceRun {
             cold_loaded: false,
             cancelled: false,
             requested_at: None,
+            failure: None,
             reported: None,
         }
     }
@@ -157,20 +160,23 @@ impl CremaCore {
         if self.maintenance.as_ref().is_some_and(|run| {
             run.phase == MaintenancePhase::WaitingForPreheat && run.cold && !run.cold_loaded
         }) {
-            self.finish_maintenance(MaintenancePhase::Failed, self.clock, out);
+            self.fail_maintenance(MaintenanceFailure::ColdProfileNotLoaded, out);
         }
     }
 
     /// Another upload is starting: it replaces the cold profile a held
     /// request waits on (or has already loaded), so the request must not be
-    /// sent — end the run [`MaintenancePhase::Failed`].
+    /// sent — end the run [`MaintenancePhase::Failed`] with
+    /// [`MaintenanceFailure::ProfileReplaced`]. Runs before the new upload
+    /// aborts a cold upload still in flight, so the reason is the
+    /// replacement, not the abort.
     pub(crate) fn cold_maintenance_profile_replaced(&mut self, out: &mut CoreOutput) {
         if self
             .maintenance
             .as_ref()
             .is_some_and(|run| run.phase == MaintenancePhase::WaitingForPreheat && run.cold)
         {
-            self.finish_maintenance(MaintenancePhase::Failed, self.clock, out);
+            self.fail_maintenance(MaintenanceFailure::ProfileReplaced, out);
         }
     }
 
@@ -292,6 +298,14 @@ impl CremaCore {
         self.descale = de1_domain::DescaleTracker::default();
     }
 
+    /// End a held cycle [`MaintenancePhase::Failed`] for `reason`.
+    fn fail_maintenance(&mut self, reason: MaintenanceFailure, out: &mut CoreOutput) {
+        if let Some(run) = self.maintenance.as_mut() {
+            run.failure = Some(reason);
+        }
+        self.finish_maintenance(MaintenancePhase::Failed, self.clock, out);
+    }
+
     /// End the followed cycle with a terminal `phase`, re-asserting the tank
     /// threshold the 1 °C profile zeroed.
     fn finish_maintenance(&mut self, phase: MaintenancePhase, now: Duration, out: &mut CoreOutput) {
@@ -345,6 +359,7 @@ impl CremaCore {
             seconds_remaining,
             cycle,
             cold_workaround: run.cold,
+            failure: run.failure,
         });
     }
 }
@@ -372,7 +387,7 @@ fn push_state_write(state: MachineState, out: &mut CoreOutput) {
 
 #[cfg(test)]
 mod tests {
-    use de1_domain::MaintenancePhase;
+    use de1_domain::{MaintenanceFailure, MaintenancePhase};
 
     /// The 24-bit big-endian address bytes an MMR packet carries.
     fn addr_bytes(register: MmrRegister) -> [u8; 3] {
@@ -457,6 +472,17 @@ mod tests {
                     cold_workaround,
                     ..
                 } => Some((*phase, *step_index, *seconds_remaining, *cold_workaround)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The `failure` of every progress event.
+    fn failures(out: &CoreOutput) -> Vec<Option<MaintenanceFailure>> {
+        out.events
+            .iter()
+            .filter_map(|e| match e {
+                Event::MaintenanceProgress { failure, .. } => Some(*failure),
                 _ => None,
             })
             .collect()
@@ -893,6 +919,10 @@ mod tests {
         let start = core.request_machine_state(MachineState::Descale);
         let out = core.profile_write_failed(1_500, started_upload_id(&start));
         assert_eq!(progress(&out), vec![(MaintenancePhase::Failed, 0, 0, true)]);
+        assert_eq!(
+            failures(&out),
+            vec![Some(MaintenanceFailure::ColdProfileNotLoaded)]
+        );
         let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
         assert!(state_writes(&out).is_empty());
         // The shell's upload backstop.
@@ -900,6 +930,10 @@ mod tests {
         let _ = core.request_machine_state(MachineState::Descale);
         let out = core.cancel_profile_upload();
         assert_eq!(progress(&out), vec![(MaintenancePhase::Failed, 0, 0, true)]);
+        assert_eq!(
+            failures(&out),
+            vec![Some(MaintenanceFailure::ColdProfileNotLoaded)]
+        );
         let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
         assert!(state_writes(&out).is_empty());
     }
@@ -915,7 +949,47 @@ mod tests {
             .upload_profile(&brew, std::time::Duration::from_millis(1_600))
             .unwrap();
         assert_eq!(progress(&out), vec![(MaintenancePhase::Failed, 0, 0, true)]);
+        assert_eq!(
+            failures(&out),
+            vec![Some(MaintenanceFailure::ProfileReplaced)]
+        );
         let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
         assert!(state_writes(&out).is_empty());
+    }
+
+    #[test]
+    fn replacing_a_cold_upload_still_in_flight_reports_the_replacement() {
+        // Round-3 clean check C1 P3-1: the user picks a profile (or starts a
+        // shot) while the cold profile is still uploading. The new upload
+        // aborts the cold one, but the cycle ended because of the user's
+        // upload, not a load failure, and the shells must say so.
+        let mut core = heating_core(Some(1355));
+        let _ = core.request_machine_state(MachineState::Descale);
+        let brew = de1_domain::cold_maintenance_profile();
+        let out = core
+            .upload_profile(&brew, std::time::Duration::from_millis(1_600))
+            .unwrap();
+        assert_eq!(progress(&out), vec![(MaintenancePhase::Failed, 0, 0, true)]);
+        assert_eq!(
+            failures(&out),
+            vec![Some(MaintenanceFailure::ProfileReplaced)]
+        );
+        assert!(out.events.iter().any(|e| matches!(
+            e,
+            Event::ProfileUploadFailed {
+                reason: crate::ProfileUploadFailure::Aborted
+            }
+        )));
+        assert!(uploads_profile(&out), "the user's upload goes out");
+        assert!(state_writes(&out).is_empty());
+    }
+
+    #[test]
+    fn only_a_failed_cycle_carries_a_reason() {
+        let mut core = heating_core(Some(1355));
+        let start = core.request_machine_state(MachineState::Descale);
+        assert_eq!(failures(&start), vec![None]);
+        let out = core.cancel_maintenance();
+        assert_eq!(failures(&out), vec![None]);
     }
 }

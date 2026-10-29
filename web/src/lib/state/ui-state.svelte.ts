@@ -27,6 +27,7 @@ import type {
 	SubState
 } from '#lib/core/index.js';
 import type { StopReason } from '#lib/core/crema-core.js';
+import { MaintenanceFailure } from '#lib/core/crema-core.js';
 import type { De1State, De1Diagnostics } from '#lib/ble/de1.js';
 import { EMPTY_DE1_DIAGNOSTICS } from '#lib/ble/de1.js';
 import type { ScaleState } from '#lib/ble/scale.js';
@@ -498,12 +499,21 @@ export function isMaintenanceTerminal(phase: string): boolean {
 }
 
 /**
- * The notice for a cycle the core refused to start because its cold-start
- * profile did not load (core `MaintenancePhase::Failed`, round-2
- * verification V3 #4). Android `maintenanceFailedText` uses the same copy.
+ * The notice for a cycle the core never started (core
+ * `MaintenancePhase::Failed`, round-2 verification V3 #4), worded by the
+ * core's `failure`: another profile loaded while the machine was still
+ * heating (the user picked one or started a shot), or the cold-start profile
+ * did not load (round-3 clean check C1 P3-1). Android `maintenanceFailedText`
+ * uses the same copy.
  */
-export function maintenanceFailedMessage(state: string): string {
+export function maintenanceFailedMessage(
+	state: string,
+	failure: MaintenanceFailure | null | undefined
+): string {
 	const title = state === 'Clean' ? 'Clean cycle' : state === 'AirPurge' ? 'Air purge' : state;
+	if (failure === MaintenanceFailure.ProfileReplaced) {
+		return `${title} didn't start: another profile was loaded while the machine was still heating. Start it again when you're ready.`;
+	}
 	return `${title} didn't start: the cold-start profile older DE1 firmware needs could not be loaded. Try again.`;
 }
 

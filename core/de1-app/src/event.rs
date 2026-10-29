@@ -3,8 +3,8 @@
 
 use de1_domain::idle_sleep::IdleSleepBlock;
 use de1_domain::{
-    BrewCue, BrewSessionSummary, MaintenancePhase, ShotDisposition, ShotPhase, SteamClogReason,
-    StopReason, WaterSessionKind,
+    BrewCue, BrewSessionSummary, MaintenanceFailure, MaintenancePhase, ShotDisposition, ShotPhase,
+    SteamClogReason, StopReason, WaterSessionKind,
 };
 use de1_protocol::{CalCommand, CalTarget, MachineState, MmrRegister, SubState};
 use serde::{Deserialize, Serialize};
@@ -155,6 +155,9 @@ pub enum Event {
         cycle: u8,
         /// The 1 °C cold-maintenance profile was loaded for this cycle.
         cold_workaround: bool,
+        /// Why the cycle never started; set only on
+        /// [`MaintenancePhase::Failed`].
+        failure: Option<MaintenanceFailure>,
     },
     /// The idle-sleep timer ("Sleep after") sent Sleep — see
     /// [`de1_domain::idle_sleep`]. `attempt` is 1 for the episode's send, 2

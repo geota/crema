@@ -97,8 +97,9 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   recorded, debited from the bag and uploaded. Tea, pour-over, calibration and
   manual built-ins now carry their real type too. Web, tablet and phone.
 - **On older DE1 firmware, Descale, Clean and Air purge wait for the cold-start
-  profile to load** before they start; if it cannot load, the cycle does not run
-  and the app says so. Web, tablet and phone.
+  profile to load** before they start; if it cannot load, or you load another
+  profile while the machine is still heating, the cycle does not run and the
+  app says which. Web, tablet and phone.
 - **Original Decent Scales (firmware v1.0/v1.1) show weight again**, so
   stop-at-weight works with them, while Half Decent Scale frames with a bad
   checksum are still dropped. Also: Acaia scales that miss the first handshake
