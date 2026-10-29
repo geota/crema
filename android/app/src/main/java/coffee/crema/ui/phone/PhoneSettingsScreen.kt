@@ -1043,7 +1043,7 @@ private fun SharingSection(
     }
     SettingsGroup("Backup & restore") {
         CremaSettingsRow("Back up everything", "All custom profiles, beans, roasters, shots, settings and bag photos in one .crema.zip.") {
-            CremaButton(onClick = { launchSaveBytes(vm.backupFileName(), vm.buildBackupZipBytes()) }, variant = CremaButtonVariant.Filled, icon = "download-simple", label = "Back up")
+            coffee.crema.ui.screens.BackUpEverythingButton(vm, launchSaveBytes)
         }
         CremaSettingsRow("Restore — merge", "Add anything from a backup you don't already have; keeps your current data.") {
             CremaButton(onClick = { launchRestore(MainViewModel.RestoreMode.MERGE) }, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Merge")

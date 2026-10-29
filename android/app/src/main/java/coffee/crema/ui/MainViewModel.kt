@@ -2535,11 +2535,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Import shots from a Crema / de1app / legacy export. */
     fun importShots(uri: Uri) = library.importShots(uri)
 
-    /** Build the whole-app `crema-backup/v1` JSONL bundle, or null + a notice. */
-    fun backupBundleJson(): String? = library.backupBundleJson()
-
-    /** Wrap the backup JSONL + bean photos into a `.crema.zip`. */
-    fun buildBackupZipBytes(): ByteArray? = library.buildBackupZipBytes()
+    /** Wrap the backup JSONL + bean photos into a `.crema.zip`, or null + a
+     *  notice. Suspends: the build runs off the main thread. */
+    suspend fun buildBackupZipBytes(): ByteArray? = library.buildBackupZipBytes()
 
     /** A suggested filename for the SAF create-document picker. */
     fun backupFileName(): String = library.backupFileName()

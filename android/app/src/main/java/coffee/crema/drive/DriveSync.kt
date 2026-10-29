@@ -48,8 +48,9 @@ class DriveSync(
     private val clientId: String,
     /** Surface a user-facing message (the VM's snackbar channel). */
     private val notify: (String) -> Unit,
-    /** Produce the `.crema.zip` backup bytes, or null (+ its own notice) when empty. */
-    private val backupZip: () -> ByteArray?,
+    /** Produce the `.crema.zip` backup bytes, or null (+ its own notice) when
+     *  empty. Suspends: the build runs off Main (LibraryController). */
+    private val backupZip: suspend () -> ByteArray?,
     /** A suggested backup filename (the VM's `backupFileName()`). */
     private val backupFileName: () -> String,
     /** Apply a downloaded backup's raw bytes (a `.crema.zip` or legacy text).
@@ -207,8 +208,13 @@ class DriveSync(
     fun backupNow() {
         scope.launch {
             val token = freshToken() ?: run { notify("Connect Google Drive first"); return@launch }
-            val zip = backupZip() ?: return@launch // backupZip already notified "nothing to back up"
+            // Busy from the start: building the zip takes a while on a big
+            // history (it runs off Main, so the UI stays live meanwhile).
             _state.update { it.copy(busy = true) }
+            val zip = backupZip() ?: run {
+                _state.update { it.copy(busy = false) } // backupZip already notified "nothing to back up"
+                return@launch
+            }
             runCatching { driveUploadBackup(token, backupFileName(), zip, json) }
                 .onSuccess {
                     persist { it.copy(lastBackupSuccessAtMs = System.currentTimeMillis()) }
