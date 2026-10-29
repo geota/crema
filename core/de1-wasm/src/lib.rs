@@ -46,19 +46,65 @@ fn report_error(message: &str) {
 thread_local! {
     /// The most recent panic's message and location, for [`last_panic_message`].
     static LAST_PANIC: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// How many panics the hook has seen since the module loaded.
+    static PANIC_COUNT: Cell<u64> = const { Cell::new(0) };
+    /// Whether [`install_panic_hook`] has run, so [`PANIC_COUNT`] is live.
+    static HOOK_INSTALLED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Install the panic hook. wasm-bindgen runs this once when the module is
 /// instantiated (`#[wasm_bindgen(start)]`); calling it again just replaces
 /// the hook. Each panic's message and location go to `console.error` and are
-/// kept for [`last_panic_message`].
+/// kept for [`last_panic_message`]; the hook also counts panics, so the
+/// bridge can tell a trapped call from a bug (see [`CremaBridge::state`]).
 #[wasm_bindgen(start)]
 pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
+        PANIC_COUNT.with(|count| count.set(count.get().wrapping_add(1)));
         let message = format!("crema core panicked: {info}");
         report_error(&message);
         LAST_PANIC.with(|last| *last.borrow_mut() = Some(message));
     }));
+    HOOK_INSTALLED.with(|installed| installed.set(true));
+}
+
+/// Panics the hook has counted, or `None` when the hook is not installed.
+fn panics_recorded() -> Option<u64> {
+    HOOK_INSTALLED
+        .with(Cell::get)
+        .then(|| PANIC_COUNT.with(Cell::get))
+}
+
+/// How many panicked calls one [`CremaBridge`] survives by resetting its
+/// core. The next one stops the bridge for good: every later call throws
+/// [`CORE_STOPPED_MESSAGE`] until the page reloads.
+///
+/// Each reset leaks what the trap skipped (see "Surviving a panic" on
+/// [`CremaBridge`]): the abandoned core, about 1.2 MB with a full capture
+/// ring, and the shadow stack of the frames that were live, about 100 bytes
+/// for the shallowest trap. Unbounded, a panic on a recurring input (a scale
+/// notification at 10 Hz) reset the core on every packet and, after about
+/// 10,900 traps, left an instance where every call failed with "memory
+/// access out of bounds" (final cohort review 2026-10-28, 01 P3-1). A
+/// lifetime cap, rather than a rate, bounds the total leak however the
+/// panics are spread out. Five resets is enough for a rare panic to cost
+/// only the call that hit it while the user finishes what they are doing;
+/// the shell offers a reload on the first one.
+pub const MAX_PANIC_RECOVERIES: u32 = 5;
+
+/// What every call on a stopped bridge throws (see [`MAX_PANIC_RECOVERIES`]).
+pub const CORE_STOPPED_MESSAGE: &str = "crema core stopped: it hit an internal error too many \
+     times (the last panic message is in last_panic_message()); reload Crema to start a fresh core";
+
+/// Fail a call on a stopped bridge. On wasm a JS `Error` is thrown, not a
+/// trap: the shell can tell it from a panic, and [`CremaBridge::state`]
+/// throws before it takes anything, so no frame of the core is live.
+#[cold]
+fn fail_stopped() -> ! {
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen::throw_str(CORE_STOPPED_MESSAGE);
+    #[cfg(not(target_arch = "wasm32"))]
+    panic!("{CORE_STOPPED_MESSAGE}");
 }
 
 /// The most recent panic's message and location, or `undefined` if the core
@@ -1979,10 +2025,28 @@ pub fn profile_bounds_json() -> String {
 /// A reset drops the live session (connected scale, shot in progress); the
 /// shell's reconnect and connect sweep rebuild it. That is the price of a
 /// panic; before, it cost the whole session.
+///
+/// Recovery is best-effort and bounded. A trap also skips every function
+/// epilogue, so state outside the slot is not reset: the shadow stack
+/// pointer is never restored, the abandoned core's memory is never freed,
+/// std's panic count stays raised (`std::thread::panicking()` is true from
+/// then on), and a `OnceLock` caught mid-initialisation stays poisoned, so
+/// every later use of it panics again. Only re-instantiating the module
+/// resets all of that, and every JS handle into the old memory would then
+/// dangle, so the shell reloads the page instead. To keep a panic loop from
+/// leaking until the instance breaks, the bridge resets at most
+/// [`MAX_PANIC_RECOVERIES`] times; after that it is stopped
+/// ([`core_stopped`](Self::core_stopped)) and every call throws
+/// [`CORE_STOPPED_MESSAGE`], which the shell turns into a reload notice.
 #[wasm_bindgen]
 pub struct CremaBridge {
     slot: Cell<Option<Box<BridgeState>>>,
     recoveries: Cell<u32>,
+    /// Set once a panicked call finds [`MAX_PANIC_RECOVERIES`] used up.
+    stopped: Cell<bool>,
+    /// [`panics_recorded`] when the state was last taken: an empty slot with
+    /// no panic since then was not left by a panic.
+    panics_at_take: Cell<Option<u64>>,
     /// Test-only: the next empty-slot recovery is an expected simulated trap.
     #[cfg(test)]
     trap_simulated: Cell<bool>,
@@ -2053,21 +2117,44 @@ impl CremaBridge {
     /// nested borrow — a bug, which panics loudly in the native tests.
     fn state(&self) -> StateGuard<'_> {
         let state = self.slot.take().unwrap_or_else(|| self.recover());
+        self.panics_at_take.set(panics_recorded());
         StateGuard {
             bridge: self,
             state: Some(state),
         }
     }
 
-    /// The empty-slot path of [`state`](Self::state).
+    /// The empty-slot path of [`state`](Self::state): reset the core, or,
+    /// with [`MAX_PANIC_RECOVERIES`] used up, stop the bridge.
     #[cold]
     fn recover(&self) -> Box<BridgeState> {
+        if self.stopped.get() {
+            fail_stopped();
+        }
+        if self.recoveries.get() >= MAX_PANIC_RECOVERIES {
+            self.stopped.set(true);
+            report_error(&format!(
+                "crema core: another call panicked after {MAX_PANIC_RECOVERIES} resets; \
+                 the core is stopped and every call now fails until Crema reloads"
+            ));
+            fail_stopped();
+        }
         if cfg!(not(target_arch = "wasm32")) {
             #[cfg(test)]
             let expected = self.trap_simulated.replace(false);
             #[cfg(not(test))]
             let expected = false;
             assert!(expected, "nested CremaBridge state borrow");
+        } else if let (Some(now), Some(then)) = (panics_recorded(), self.panics_at_take.get())
+            && now == then
+        {
+            // On wasm a nested borrow cannot panic here (that would trap with
+            // the slot empty and be taken for a recovery), so say it loudly.
+            report_error(
+                "crema core: the core state was missing but no panic was recorded since \
+                 the last call: a nested CremaBridge state borrow (a bridge bug) or a trap \
+                 that was not a panic (out of memory, stack overflow)",
+            );
         }
         self.recoveries.set(self.recoveries.get().saturating_add(1));
         report_error(
@@ -2092,6 +2179,8 @@ impl CremaBridge {
         CremaBridge {
             slot: Cell::new(Some(Box::new(BridgeState::new()))),
             recoveries: Cell::new(0),
+            stopped: Cell::new(false),
+            panics_at_take: Cell::new(None),
             #[cfg(test)]
             trap_simulated: Cell::new(false),
         }
@@ -2103,6 +2192,15 @@ impl CremaBridge {
     /// reconnect.
     pub fn panic_recoveries(&self) -> u32 {
         self.recoveries.get()
+    }
+
+    /// Whether the bridge is stopped: a call panicked after
+    /// [`MAX_PANIC_RECOVERIES`] resets, and every call that needs the core
+    /// now throws [`CORE_STOPPED_MESSAGE`] until the page reloads.
+    /// [`panic_recoveries`](Self::panic_recoveries) stays at the cap. Safe to
+    /// call at any time: it never touches the core.
+    pub fn core_stopped(&self) -> bool {
+        self.stopped.get()
     }
 
     /// Test hook: panic while holding the bridge state, exactly as a bug in a
@@ -3561,6 +3659,58 @@ mod tests {
         // And every call after that is ordinary.
         assert!(idle_state_events(&bridge).contains("events"));
         assert_eq!(bridge.panic_recoveries(), 1);
+    }
+
+    /// The panic message of a call that must fail, as a string.
+    fn panic_message(call: impl FnOnce()) -> String {
+        let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(call))
+            .expect_err("the call must fail");
+        err.downcast_ref::<String>()
+            .cloned()
+            .or_else(|| err.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+            .unwrap_or_default()
+    }
+
+    /// Final cohort review 2026-10-28, 01 P3-1: every reset leaks what the
+    /// trap skipped, so a panic loop used to reset forever and end in an
+    /// instance where every call failed with "memory access out of bounds".
+    /// The bridge now resets at most MAX_PANIC_RECOVERIES times, then stops:
+    /// every call fails fast with one clear error.
+    #[test]
+    fn the_bridge_stops_after_the_recovery_cap() {
+        let bridge = CremaBridge::new();
+        for i in 1..=MAX_PANIC_RECOVERIES {
+            simulate_trap(&bridge);
+            assert!(idle_state_events(&bridge).contains("events"), "reset {i}");
+            assert_eq!(bridge.panic_recoveries(), i);
+            assert!(!bridge.core_stopped());
+        }
+        // One panic too many: the next call stops the bridge instead of
+        // resetting it.
+        simulate_trap(&bridge);
+        let message = panic_message(|| {
+            idle_state_events(&bridge);
+        });
+        assert_eq!(message, CORE_STOPPED_MESSAGE);
+        assert!(bridge.core_stopped());
+        assert_eq!(
+            bridge.panic_recoveries(),
+            MAX_PANIC_RECOVERIES,
+            "no reset past the cap"
+        );
+        // Every later call fails the same way, and the counters hold still.
+        for _ in 0..3 {
+            let message = panic_message(|| {
+                bridge.in_replay();
+            });
+            assert_eq!(message, CORE_STOPPED_MESSAGE);
+        }
+        assert!(bridge.core_stopped());
+        assert_eq!(bridge.panic_recoveries(), MAX_PANIC_RECOVERIES);
+        // A new bridge (what a reload builds) starts afresh.
+        let fresh = CremaBridge::new();
+        assert!(!fresh.core_stopped());
+        assert!(idle_state_events(&fresh).contains("events"));
     }
 
     #[test]
