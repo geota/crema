@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 /** Another Crema instance on the LAN, discovered via NSD. */
 data class Peer(
-    /** Stable per-install id (the self-filter key). */
+    /** The peer's NSD instance id: random per launch (the self-filter key). */
     val id: String,
     /** Display name (the device model). */
     val name: String,
@@ -58,7 +58,8 @@ data class Peer(
 class PeerDiscovery(
     context: Context,
     private val scope: CoroutineScope,
-    /** This install's stable id — advertised, and used to filter ourselves out. */
+    /** This process's instance id — a random id per launch, advertised and used
+     *  to filter ourselves out. Never a stable install id. */
     private val selfId: String,
     /** Resolves one discovered service; tests pass a fake. */
     resolver: (suspend (NsdServiceInfo) -> NsdResolveOutcome<NsdServiceInfo>)? = null,

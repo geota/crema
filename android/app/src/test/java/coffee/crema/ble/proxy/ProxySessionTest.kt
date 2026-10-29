@@ -136,7 +136,7 @@ class ProxySessionTest {
         val prompts = AtomicInteger(0)
         val hub = RelayHub(
             "p", "P", roster = { emptyList() }, readSource = { _, _, _ -> ByteArray(0) }, isSnapshotChar = { _, _ -> false },
-            authorize = { _, _ -> prompts.incrementAndGet(); PairingDecision.Denied("not authorized") },
+            authorize = { prompts.incrementAndGet(); PairingDecision.Denied("not authorized") },
         )
         val server = LanRelayServer(hub)
         val port = server.start()
@@ -172,7 +172,7 @@ class ProxySessionTest {
                     if (f is Frame.Notify) values += ByteBuffer.wrap(Hex.decode(f.hex)).int
                 }
             }
-            client.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
+            handshake(client, rx)
             client.send(Frame.Attach(1L, addr))
             waitFor { rx.any { it is Frame.Attached } }
 
@@ -217,7 +217,7 @@ class ProxySessionTest {
             val rx = CopyOnWriteArrayList<Frame>()
             val ended = CompletableDeferred<Unit>()
             scope.launch { client.incoming().collect { rx += it }; ended.complete(Unit) }
-            client.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
+            handshake(client, rx)
             client.send(Frame.Attach(1L, addr))
             waitFor { rx.any { it is Frame.Attached } }
 
@@ -340,7 +340,7 @@ class ProxySessionTest {
             scope.launch { hub.serve(s1) }
             val rx1 = CopyOnWriteArrayList<Frame>()
             scope.launch { c1.incoming().collect { rx1 += it } }
-            c1.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
+            handshake(c1, rx1)
             c1.send(Frame.Attach(1L, addr))
             waitFor { rx1.any { it is Frame.Attached } }
             stall = true
@@ -351,8 +351,7 @@ class ProxySessionTest {
             scope.launch { hub.serve(s2) }
             val rx2 = CopyOnWriteArrayList<Frame>()
             scope.launch { c2.incoming().collect { rx2 += it } }
-            c2.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
-            waitFor { rx2.any { it is Frame.Welcome } }
+            handshake(c2, rx2)
 
             assertTrue(hub.offerHandoff("phone-1"))
             waitFor { rx2.any { it is Frame.HandoffOffer } }

@@ -23,7 +23,7 @@ class RelayHubPairingGateTest {
     private val service = UUID.fromString("0000a000-0000-1000-8000-00805f9b34fb")
     private val stateChar = UUID.fromString("0000a00e-0000-1000-8000-00805f9b34fb")
 
-    private fun hub(authorize: suspend (String, String) -> PairingDecision) = RelayHub(
+    private fun hub(authorize: suspend (PairingRequest) -> PairingDecision) = RelayHub(
         primaryId = "p", primaryName = "P",
         roster = { listOf(DeviceInfo(addr, "DE1", "de1", "CONNECTED")) },
         readSource = { _, _, _ -> error("read must not be served to an unapproved peer") },
@@ -37,7 +37,7 @@ class RelayHubPairingGateTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val (client, server) = InMemoryFrameLink.pair()
-            val h = hub { _, _ -> PairingDecision.Allowed(canControl = true) }
+            val h = hub { PairingDecision.Allowed(canControl = true) }
             // A cached snapshot value an attach WOULD burst, were it allowed.
             h.onInbound(addr, service, stateChar, byteArrayOf(0x01), atMs = 1L)
             scope.launch { h.serve(server) }
@@ -73,14 +73,13 @@ class RelayHubPairingGateTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val (client, server) = InMemoryFrameLink.pair()
-            val h = hub { _, _ -> PairingDecision.Denied("not on the allowlist") }
+            val h = hub { PairingDecision.Denied("not on the allowlist") }
             scope.launch { h.serve(server) }
 
             val rx = CopyOnWriteArrayList<Frame>()
             val obs = scope.launch { client.incoming().collect { rx.add(it) } }
 
-            client.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
-            delay(150)
+            handshake(client, rx)
             h.pushRoster(); h.pushConfig(); h.broadcastEvent("x", exceptClientId = null)
             h.onInbound(addr, service, stateChar, byteArrayOf(0x01), atMs = 1L)
             delay(150)
@@ -102,14 +101,13 @@ class RelayHubPairingGateTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val (client, server) = InMemoryFrameLink.pair()
-            val h = hub { _, _ -> PairingDecision.Allowed(canControl = true) }
+            val h = hub { PairingDecision.Allowed(canControl = true) }
             scope.launch { h.serve(server) }
 
             val rx = CopyOnWriteArrayList<Frame>()
             val obs = scope.launch { client.incoming().collect { rx.add(it) } }
 
-            client.send(Frame.Hello(PROXY_PROTOCOL_VERSION, "secondary", "phone-1", "Phone"))
-            delay(100)
+            handshake(client, rx)
             client.send(Frame.Attach(1L, addr))
             delay(150)
             assertTrue(rx.any { it is Frame.Welcome }, "approved peer is welcomed")

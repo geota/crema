@@ -4,11 +4,15 @@ import android.app.Application
 import android.os.Build
 import coffee.crema.ble.BleTransport
 import coffee.crema.ble.NordicBleTransport
+import coffee.crema.ble.proxy.DenyReason
 import coffee.crema.ble.proxy.DeviceInfo
 import coffee.crema.ble.proxy.HandoffTarget
 import coffee.crema.ble.proxy.LanRelayServer
 import coffee.crema.ble.proxy.LinkState
+import coffee.crema.ble.proxy.PairingCrypto
 import coffee.crema.ble.proxy.PairingDecision
+import coffee.crema.ble.proxy.PairingRequest
+import coffee.crema.ble.proxy.PairingStore
 import coffee.crema.ble.proxy.Peer
 import coffee.crema.ble.proxy.PeerDiscovery
 import coffee.crema.ble.proxy.ProxyTransport
@@ -20,6 +24,8 @@ import coffee.crema.ble.proxy.TappingBleTransport
 import coffee.crema.ble.De1Uuids
 import coffee.crema.core.MachineRequest
 import coffee.crema.persist.SafeFile
+import coffee.crema.security.DeviceSecretBox
+import coffee.crema.security.SecretBox
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.PairedDevice
 import java.io.File
@@ -43,9 +49,9 @@ import kotlinx.serialization.json.Json
  *  and the label stamped into backup envelopes. */
 internal fun deviceLabel(): String = Build.MODEL ?: "crema"
 
-/** A pending host-side "Allow this device?" pairing prompt (issue 02) — a secondary
- *  with an unknown [clientId] is connecting; the UI shows it and the user's choice
- *  resolves the held handshake. */
+/** A pending host-side "Allow this device?" pairing prompt (issue 02) — while the
+ *  host's pairing window is open, a secondary without a pairing secret is
+ *  connecting; the UI shows it and the user's choice resolves the held handshake. */
 data class PairingPrompt(val clientId: String, val clientName: String)
 
 /** The host's answer to a [PairingPrompt] (issue 02). */
@@ -123,6 +129,8 @@ class ProxyController(
      *  its erase / reboot window holds the DE1, so no takeover, handoff or mode
      *  switch may move the radio (audit r2 H1). */
     private val firmwareHoldsLink: () -> Boolean = { false },
+    /** Seals the pairing secrets at rest (tests pass a fake cipher). */
+    secretBox: SecretBox = DeviceSecretBox.instance,
 ) {
 
     /** The proxy slice of the UI snapshot — the VM mirrors this into MainUiState. */
@@ -140,6 +148,11 @@ class ProxyController(
         val pendingPairing: PairingPrompt? = null,
         /** Secondaries mirroring this primary — the push-handoff targets (issue 07). */
         val mirrorClients: List<HandoffTarget> = emptyList(),
+        /** Seconds left in the host's pairing window; 0 = closed. */
+        val pairingSecondsLeft: Int = 0,
+        /** Paired devices that hold a pairing secret from this host. A remembered
+         *  device missing here has to pair again. */
+        val pairedWithSecret: Set<String> = emptySet(),
         /** A pushed handoff offer awaiting accept/decline, by host name (issue 07). */
         val pendingHandoffOffer: String? = null,
     )
@@ -168,14 +181,22 @@ class ProxyController(
      *  secondary can dial it. */
     private var relayPort: Int = 0
 
-    /** Stable per-install id (persisted in a tiny file — issue 14) used to advertise
-     *  + self-filter in NSD discovery AND as the secondary's `clientId` for the
-     *  host's TOFU pairing (issue 02). */
+    /** Stable per-install id (persisted in a tiny file — issue 14): the
+     *  secondary's `clientId`, which tells a host which pairing record to check.
+     *  It is not advertised (see [instanceId]). */
     val deviceId: String = run {
         val f = File(app.filesDir, "deviceId")
         runCatching { f.takeIf { it.exists() }?.readText()?.trim()?.ifBlank { null } }.getOrNull()
             ?: UUID.randomUUID().toString().also { runCatching { SafeFile.write(f, it, keepBackup = false) } }
     }
+
+    /** The LAN pairing secrets and this install's host id. Declared before
+     *  [switchable]: [buildInitialDelegate] uses it. */
+    private val pairing = PairingStore(File(app.filesDir, PairingStore.FILE_NAME), secretBox, json)
+
+    /** This process's NSD instance id: a random id per launch, advertised for
+     *  discovery and used to filter our own advertisement out. */
+    internal val instanceId: String = UUID.randomUUID().toString()
 
     /** Construction-time proxy-config snapshot — read `prefs.json` ONCE
      *  (review #36: role/host/port are restart-to-apply anyway). A PLAIN val,
@@ -183,19 +204,31 @@ class ProxyController(
      *  (the lazy-below-use variant shipped a launch-dead APK — 4eeb92f2). */
     private val proxyConfigCache: ProxyConfig = readProxyConfigUncached()
 
-    private val _state = MutableStateFlow(State(role = proxyConfigCache.role))
+    private val _state = MutableStateFlow(State(role = proxyConfigCache.role, pairedWithSecret = pairing.issuedIds()))
     val state: StateFlow<State> = _state.asStateFlow()
 
-    // Multi-device pairing (TOFU — issue 02). The relay doesn't auto-accept: a
-    // connecting secondary is authorized in [authorizePeer]. One host-side prompt
-    // at a time; concurrent unknown peers queue on the mutex.
+    // Multi-device pairing (issue 02). The relay doesn't auto-accept: a
+    // connecting secondary is authorized in [authorizePeer]. A paired device
+    // proves its pairing secret; anything else is considered only while the
+    // host's pairing window is open, one prompt at a time, with a cooldown.
     private val pairingMutex = Mutex()
-    private var pairingDeferred: CompletableDeferred<PairingChoice>? = null
+    @Volatile private var pairingDeferred: CompletableDeferred<PairingChoice?>? = null
 
-    /** Client ids the host denied while hosting: not prompted again until
-     *  hosting stops (a denied device must not be able to re-prompt by
-     *  reconnecting). */
+    /** The open pairing window's countdown; null or finished = closed. */
+    private var pairingWindowJob: Job? = null
+
+    /** Prompts shown in the current window (capped at [MAX_PROMPTS_PER_WINDOW]). */
+    @Volatile private var promptsThisWindow = 0
+
+    /** True for [PROMPT_COOLDOWN_MS] after a prompt ends. */
+    @Volatile private var promptCooling = false
+
+    /** Client ids the host denied while hosting; not prompted again until
+     *  hosting stops. */
     private val deniedWhileHosting: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** Rate limit for the "needs an update" notice. */
+    @Volatile private var outdatedNoticeCooling = false
 
     /** Serializes [applyMode]: mode switches launch from several async paths
      *  (the picker, a handoff grant's delayed release, the reclaim probe,
@@ -226,7 +259,7 @@ class ProxyController(
 
     /** LAN peer discovery (NSD) for the multi-device picker (M2) — advertises this
      *  instance and browses for peers, exposed as [State.peers]. */
-    private val peerDiscovery = PeerDiscovery(app, scope, deviceId)
+    private val peerDiscovery = PeerDiscovery(app, scope, instanceId)
 
     /**
      * Post-construction start, called from the VM's `init` (after every VM field
@@ -248,6 +281,7 @@ class ProxyController(
      *  environment unregisters its Bluetooth receiver and cancels its scope.
      *  (Only one of these is non-null per proxy role; NORMAL has just the Nordic.) */
     fun close() {
+        closePairingWindow()
         nordicTransport?.close()
         relayServer?.stop()
         secondaryScope?.cancel()
@@ -323,6 +357,11 @@ class ProxyController(
         originId: String? = null,
         originName: String? = null,
     ): Result<Unit> = runCatching {
+        // Only what the Android UI can send, with arguments in range.
+        RelayedControlPolicy.refusal(method, args)?.let { reason ->
+            appendLog("Relayed $method refused: $reason")
+            throw IllegalArgumentException(reason)
+        }
         // Handoff is granted HERE, not through the VM router, so the taker's
         // identity travels with the grant: the release then waits for that
         // client's disconnect (its mode switch closes the link) instead of a
@@ -436,7 +475,7 @@ class ProxyController(
      *  no-op (the user can still re-mirror via the picker's manual peer). */
     private fun autoMirrorDiscoveredPrimary() {
         if (_state.value.role != "normal") return
-        val host = _state.value.peers.firstOrNull { it.isMirrorSource && it.id != deviceId } ?: run {
+        val host = _state.value.peers.firstOrNull { it.isMirrorSource && it.id != instanceId } ?: run {
             appendLog("Re-mirror: no DE1-holding primary discovered yet (NSD)")
             return
         }
@@ -516,49 +555,108 @@ class ProxyController(
         _state.update { it.copy(pendingHandoffOffer = null) }
     }
 
-    // ── Multi-device pairing (TOFU — issue 02) ────────────────────────────────
+    // ── Multi-device pairing (issue 02) ───────────────────────────────────────
 
     /**
-     * Primary-side TOFU gate wired into [RelayHub]'s `authorize`. A remembered peer
-     * is admitted silently with its stored scope; an unknown one raises a host-side
-     * "Allow this device?" prompt ([State.pendingPairing]) and suspends until
-     * the user chooses. Accepting persists the peer (via [rememberPaired]) so
-     * reconnects are silent. The mutex serializes prompts so two unknown peers
-     * don't fight over the dialog.
+     * Open the host's pairing window for [PAIRING_WINDOW_S] seconds: only then
+     * does a device without a pairing secret raise the "Allow this device?"
+     * prompt. It closes on its own, after one approval, on a mode switch, or
+     * with [closePairingWindow].
      */
-    internal suspend fun authorizePeer(clientId: String, clientName: String): PairingDecision {
-        pairedDevices().firstOrNull { it.id == clientId }?.let {
-            return PairingDecision.Allowed(it.canControl)
+    fun openPairingWindow() {
+        pairingWindowJob?.cancel()
+        promptsThisWindow = 0
+        appendLog("Pairing window open for ${PAIRING_WINDOW_S}s")
+        pairingWindowJob = scope.launch {
+            try {
+                for (left in PAIRING_WINDOW_S downTo 1) {
+                    _state.update { it.copy(pairingSecondsLeft = left) }
+                    delay(1_000L)
+                }
+            } finally {
+                _state.update { it.copy(pairingSecondsLeft = 0) }
+                // A prompt still up when the window ends expires with it.
+                pairingDeferred?.complete(null)
+            }
         }
-        if (clientId in deniedWhileHosting) return PairingDecision.Denied("not authorized")
-        return pairingMutex.withLock {
-            // Re-check inside the lock: a peer approved while we queued is now known.
-            val known = pairedDevices().firstOrNull { it.id == clientId }
-            if (known != null) return@withLock PairingDecision.Allowed(known.canControl)
-            // ...and a peer denied while we queued is not asked again.
-            if (clientId in deniedWhileHosting) return@withLock PairingDecision.Denied("not authorized")
-            val deferred = CompletableDeferred<PairingChoice>()
+    }
+
+    /** Close the pairing window now (a pending prompt expires). */
+    fun closePairingWindow() {
+        pairingWindowJob?.cancel()
+        pairingWindowJob = null
+    }
+
+    private val pairingOpen: Boolean get() = pairingWindowJob?.isActive == true
+
+    /**
+     * Primary-side gate wired into [RelayHub]'s `authorize`. A remembered device
+     * that proves the secret this host issued it is admitted silently with its
+     * stored scope. Anything else is refused unless the pairing window is open;
+     * then the host sees one "Allow this device?" prompt at a time
+     * ([State.pendingPairing]), with a cooldown between prompts and a cap per
+     * window. Approving issues a new secret (sent once, in the Welcome), stores
+     * it, remembers the device and closes the window. A denial is remembered
+     * until hosting stops.
+     */
+    internal suspend fun authorizePeer(request: PairingRequest): PairingDecision {
+        val id = request.clientId
+        val known = pairedDevices().firstOrNull { it.id == id }
+        val secret = pairing.issuedSecret(id)
+        if (known != null && secret != null && request.proves(secret)) {
+            return PairingDecision.Allowed(known.canControl)
+        }
+        if (id in deniedWhileHosting) return PairingDecision.Denied(DenyReason.NOT_AUTHORIZED)
+        if (!pairingOpen) {
+            appendLog("Pairing request from ${request.clientName} refused: pairing is closed")
+            return PairingDecision.Denied(DenyReason.PAIRING_CLOSED)
+        }
+        if (promptCooling || promptsThisWindow >= MAX_PROMPTS_PER_WINDOW || !pairingMutex.tryLock()) {
+            return PairingDecision.Denied(DenyReason.BUSY)
+        }
+        try {
+            promptsThisWindow++
+            val deferred = CompletableDeferred<PairingChoice?>()
             pairingDeferred = deferred
-            _state.update { it.copy(pendingPairing = PairingPrompt(clientId, clientName)) }
-            // finally: when this await is cancelled (the relay stops, the scope
-            // ends) the prompt must not outlive it, and the next unknown peer
-            // must get a fresh slot. A peer that merely disconnects mid-prompt
-            // does not cancel it yet: the relay isn't reading its socket while
-            // Hello is pending.
+            _state.update { it.copy(pendingPairing = PairingPrompt(id, request.clientName)) }
+            // finally: the prompt never outlives its request (cancelled when the
+            // relay stops or the scope ends), and the next one waits a cooldown.
+            // A peer that merely disconnects mid-prompt does not cancel it yet:
+            // the relay isn't reading its socket while the handshake is pending.
             val choice = try {
                 deferred.await()
             } finally {
                 pairingDeferred = null
                 _state.update { it.copy(pendingPairing = null) }
+                startPromptCooldown()
             }
-            when (choice) {
+            return when (choice) {
+                // The window closed with the prompt up: not a denial.
+                null -> PairingDecision.Denied(DenyReason.PAIRING_CLOSED)
                 PairingChoice.DENY -> {
-                    deniedWhileHosting += clientId
-                    PairingDecision.Denied("not authorized")
+                    deniedWhileHosting += id
+                    PairingDecision.Denied(DenyReason.NOT_AUTHORIZED)
                 }
-                PairingChoice.MIRROR_ONLY -> { rememberPaired(clientId, clientName, false); PairingDecision.Allowed(false) }
-                PairingChoice.ALLOW_CONTROL -> { rememberPaired(clientId, clientName, true); PairingDecision.Allowed(true) }
+                PairingChoice.MIRROR_ONLY, PairingChoice.ALLOW_CONTROL -> {
+                    val canControl = choice == PairingChoice.ALLOW_CONTROL
+                    val issued = PairingCrypto.newSecret()
+                    if (!pairing.putIssued(id, issued)) appendLog("Pairing secret for ${request.clientName} not saved: this pairing lasts until the app restarts")
+                    rememberPaired(id, request.clientName, canControl)
+                    _state.update { it.copy(pairedWithSecret = pairing.issuedIds()) }
+                    closePairingWindow() // one pairing per window
+                    PairingDecision.Allowed(canControl, issuedSecret = issued)
+                }
             }
+        } finally {
+            pairingMutex.unlock()
+        }
+    }
+
+    private fun startPromptCooldown() {
+        promptCooling = true
+        scope.launch {
+            delay(PROMPT_COOLDOWN_MS)
+            promptCooling = false
         }
     }
 
@@ -567,13 +665,34 @@ class ProxyController(
         pairingDeferred?.complete(choice)
     }
 
+    /** The host forgot [clientId] (Settings ▸ Paired devices): drop its secret
+     *  and end its live session, if any. */
+    fun forgetPaired(clientId: String) {
+        pairing.removeIssued(clientId)
+        relayHub?.revoke(clientId)
+        _state.update { it.copy(pairedWithSecret = pairing.issuedIds()) }
+    }
+
+    /** A secondary on another protocol version was turned away: tell the host
+     *  user, at most once a minute. */
+    private fun onOutdatedPeer(clientName: String) {
+        appendLog("Refused $clientName: different Crema version")
+        if (outdatedNoticeCooling) return
+        outdatedNoticeCooling = true
+        notify("$clientName runs a different Crema version — update both devices to connect")
+        scope.launch {
+            delay(OUTDATED_NOTICE_COOLDOWN_MS)
+            outdatedNoticeCooling = false
+        }
+    }
+
     /** Secondary side: the host declined (or revoked) this device (issue 02). Stop
      *  mirroring and tell the user, rather than silently retry-looping a denied link. */
     private fun onProxyDenied(reason: String) {
         if (_state.value.role != "secondary") return
         scope.launch {
             appendLog("Mirror denied by host: $reason")
-            notify("The host hasn't allowed this device")
+            notify(deniedMessage(reason))
             switchToNormal()
         }
     }
@@ -617,7 +736,8 @@ class ProxyController(
         var tappingRef: TappingBleTransport? = null
         deniedWhileHosting.clear() // a new hosting session
         val hub = RelayHub(
-            primaryId = deviceLabel(),
+            // The stable host id a secondary files its pairing secret under.
+            primaryId = pairing.hostId,
             primaryName = deviceLabel(),
             // The devices the primary holds: the DE1, plus the scale when one is
             // connected (issue 04) — its advertised name lets a secondary's scale
@@ -634,10 +754,16 @@ class ProxyController(
             },
             // The single-owner session config a mirror snaps to on attach (T2).
             configSource = { snapshotConfig() },
-            // TOFU gate (issue 02): prompt for an unknown peer, remember the choice.
-            authorize = { id, name -> authorizePeer(id, name) },
+            // Pairing gate (issue 02): a valid pairing secret, or the host's
+            // prompt while its pairing window is open.
+            authorize = { request -> authorizePeer(request) },
             // Keep the "hand off to <device>" list live as mirrors come/go (issue 07).
             onClientsChanged = { refreshMirrorClients() },
+            onOutdatedPeer = { name -> onOutdatedPeer(name) },
+            // The host proves the secret it issued before a device proves it back.
+            pairingSecretFor = { clientId ->
+                if (pairedDevices().any { it.id == clientId }) pairing.issuedSecret(clientId) else null
+            },
         )
         relayHub = hub
         val tapping = TappingBleTransport(real, hub, scope)
@@ -672,8 +798,8 @@ class ProxyController(
             link.state.collect { s -> _state.update { it.copy(mirrorReconnecting = s == LinkState.CONNECTING) } }
         }
         val proxy = ProxyTransport(
-            // clientId = the STABLE per-install id (issue 14) so the host's TOFU
-            // pairing (issue 02) remembers THIS device, not every same-model phone;
+            // clientId = the STABLE per-install id (issue 14) so the host finds
+            // THIS device's pairing record, not every same-model phone's;
             // clientName = the human label shown in the host's prompt.
             link, modeScope, clientId = deviceId, clientName = deviceLabel(),
             // Snap this mirror's config to the primary's on every attach (T2).
@@ -686,6 +812,13 @@ class ProxyController(
             onHandoffOffer = { fromName -> onHandoffOffered(fromName) },
             // "Who's driving" (issue 11): another mirror drove the machine → toast.
             onEvent = { text -> notify(text) },
+            // Prove the pairing secret this device holds for the host it reaches,
+            // and keep the one a host issues when it approves this device.
+            pairingSecretFor = { hostId -> pairing.heldSecret(hostId) },
+            onPaired = { hostId, hostName, secret ->
+                if (pairing.putHeld(hostId, secret)) appendLog("Paired with $hostName")
+                else appendLog("Paired with $hostName, but the pairing secret wasn't saved")
+            },
         )
         // Mirror the primary's SCALE (issue 04), roster-driven: attach it only once
         // the primary actually advertises one — no blind scan, so a scaleless primary
@@ -746,6 +879,7 @@ class ProxyController(
     }
 
     private suspend fun applyModeLocked(role: String, host: String, port: Int, reconnect: Boolean) {
+        closePairingWindow()
         disconnectDevices()
         delay(150)
         relayServer?.stop(); relayServer = null; relayHub = null
@@ -870,6 +1004,27 @@ internal fun handoffRefusal(machineState: String?, firmwareHoldsLink: Boolean): 
     firmwareHoldsLink -> FIRMWARE_BUSY_REASON
     machineState !in HANDOFF_IDLE_STATES -> "machine not idle (${machineState ?: "unknown"}) — handoff is idle-only"
     else -> null
+}
+
+/** How long the host's pairing window stays open. */
+internal const val PAIRING_WINDOW_S = 120
+
+/** Pause between two pairing prompts. */
+internal const val PROMPT_COOLDOWN_MS = 3_000L
+
+/** Pairing prompts allowed in one window. */
+internal const val MAX_PROMPTS_PER_WINDOW = 5
+
+private const val OUTDATED_NOTICE_COOLDOWN_MS = 60_000L
+
+/** What a secondary shows when its host turns it away, from the host's reason. */
+internal fun deniedMessage(reason: String): String = when {
+    reason == DenyReason.PAIRING_CLOSED ->
+        "Pairing needed — on the host, open Settings ▸ Paired devices ▸ Pair a device, then connect again"
+    reason == DenyReason.BUSY -> "The host is busy — try again in a moment"
+    reason == DenyReason.REVOKED -> "The host removed this device — pair again to reconnect"
+    reason.startsWith(DenyReason.VERSION_MISMATCH) -> "Update Crema on both devices to connect"
+    else -> "The host hasn't allowed this device"
 }
 
 /** The requesting device's notice for a refused takeover, from the primary's reason. */

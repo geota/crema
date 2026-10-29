@@ -56,9 +56,10 @@ sealed class Frame {
 
     /**
      * First frame a secondary sends on connect. [v] is [PROXY_PROTOCOL_VERSION];
-     * [clientId] is a stable per-device id (for TOFU remembering), [clientName]
-     * a display name ("Sam's phone"). [token] is reserved for the later
-     * cloud-relay path; null on the LAN.
+     * [clientId] is a stable per-device id (which pairing record to check),
+     * [clientName] a display name ("Sam's phone"), [nonce] a fresh random value
+     * the host's proof must cover. The primary answers with a [Challenge].
+     * [token] is reserved for the later cloud-relay path; null on the LAN.
      */
     @Serializable
     @SerialName("hello")
@@ -68,10 +69,40 @@ sealed class Frame {
         val clientId: String,
         val clientName: String,
         val token: String? = null,
+        val nonce: String? = null,
     ) : Frame()
 
     /**
-     * The primary's acceptance reply to [Hello]. Carries the [authority] holder
+     * Primary → secondary: the reply to [Hello]. [primaryId] is the primary's
+     * stable host id (the key a secondary files its pairing secret under),
+     * [nonce] a fresh random value for this session. [hostProof] is the host's
+     * own `PairingCrypto.hostProof` over both nonces when it holds a secret for
+     * this device, else null. The secondary sends its proof only after checking
+     * this one, so a host that doesn't know the secret can't collect proofs. The
+     * secondary answers with [Auth].
+     */
+    @Serializable
+    @SerialName("challenge")
+    data class Challenge(
+        val primaryId: String,
+        val primaryName: String,
+        val nonce: String,
+        val hostProof: String? = null,
+    ) : Frame()
+
+    /**
+     * Secondary → primary: the answer to [Challenge]. [proof] is
+     * `PairingCrypto.clientProof` over both nonces, keyed with the pairing
+     * secret this device holds for that primary, or null (a request to pair,
+     * which the host only considers while its pairing window is open): when it
+     * holds no secret, or the host's proof didn't check out.
+     */
+    @Serializable
+    @SerialName("auth")
+    data class Auth(val proof: String? = null) : Frame()
+
+    /**
+     * The primary's acceptance reply to [Auth]. Carries the [authority] holder
      * (always the primary in M1) and the current [roster] so the secondary can
      * populate `scan()` immediately without waiting for a change push.
      */
@@ -87,10 +118,13 @@ sealed class Frame {
          *  the machine) or `"mirror"` (view-only — its Control/Handoff are refused).
          *  Defaults to `"control"` so an older relay (pre-pairing) reads as full. */
         val scope: String = "control",
+        /** Set only on the Welcome that completes a new pairing: the secret the
+         *  secondary keeps for this primary and proves on every later connect. */
+        val pairingSecret: String? = null,
     ) : Frame()
 
-    /** The primary's rejection reply to [Hello] (TOFU declined / version
-     *  mismatch). The connection closes after this. */
+    /** The primary's rejection reply to [Hello] / [Auth] (not paired, pairing
+     *  closed, busy, version mismatch, revoked). The connection closes after this. */
     @Serializable
     @SerialName("denied")
     data class Denied(val reason: String) : Frame()
@@ -310,7 +344,7 @@ data class DeviceInfo(
 /** Current proxy wire-protocol version. The handshake ([Frame.Hello] /
  *  [Frame.Welcome]) carries it so peers can refuse a mismatch; bump on any
  *  breaking frame change. */
-const val PROXY_PROTOCOL_VERSION: Int = 2 // 2: + Frame.Event (issue 11 who's-driving)
+const val PROXY_PROTOCOL_VERSION: Int = 3 // 2: + Frame.Event (issue 11 who's-driving); 3: pairing secret (Challenge/Auth)
 
 /** Hard cap on a single proxy WebSocket frame (issue 03). Protocol frames are
  *  small JSON (well under 1 KiB; a snapshot burst is many small frames, not one

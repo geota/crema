@@ -799,6 +799,11 @@ data class MainUiState(
     /** Devices this host has approved to mirror it (issue 02) — shown in Settings ▸
      *  "Paired devices" for review/revoke. */
     val pairedDevices: List<PairedDevice> = emptyList(),
+    /** Seconds left in this host's pairing window; 0 = closed. */
+    val pairingSecondsLeft: Int = 0,
+    /** Paired devices holding a pairing secret from this host; a listed device
+     *  missing here must pair again. */
+    val pairedWithSecret: Set<String> = emptySet(),
     /** Secondaries currently mirroring THIS device while it's a primary (issue 07) —
      *  the "hand off to <device>" targets shown in the picker. */
     val mirrorClients: List<HandoffTarget> = emptyList(),
@@ -2420,6 +2425,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         mirrorReconnecting = ps.mirrorReconnecting,
                         mirrorViewOnly = ps.mirrorViewOnly,
                         pendingPairing = ps.pendingPairing,
+                        pairingSecondsLeft = ps.pairingSecondsLeft,
+                        pairedWithSecret = ps.pairedWithSecret,
                         mirrorClients = ps.mirrorClients,
                         pendingHandoffOffer = ps.pendingHandoffOffer,
                     )
@@ -3604,12 +3611,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         appendLog("Config from primary applied (pressure ${cfg.pressureUnit}, temp ${cfg.tempUnit}, profile ${cfg.activeProfileId})")
     }
 
-    // ── Multi-device pairing (TOFU — issue 02) ────────────────────────────────
+    // ── Multi-device pairing (issue 02) ───────────────────────────────────────
     // The gate itself lives in [ProxyController.authorizePeer]; the remembered
-    // peers stay here (persisted with the app prefs, listed in Settings).
+    // peers stay here (persisted with the app prefs, listed in Settings). The
+    // pairing secrets live in ProxyController's own credential file.
 
     /** The Activity resolves a pending [PairingPrompt] with the user's choice. */
     fun resolvePairing(choice: PairingChoice) = proxy.resolvePairing(choice)
+
+    /** Settings ▸ Paired devices ▸ Pair a device: accept new devices for a while. */
+    fun openPairingWindow() = proxy.openPairingWindow()
+
+    /** Stop accepting new devices now. */
+    fun closePairingWindow() = proxy.closePairingWindow()
 
     private fun rememberPaired(id: String, name: String, canControl: Boolean) {
         _ui.update {
@@ -3619,12 +3633,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         appendLog("Paired device '$name' (${if (canControl) "control" else "mirror-only"})")
     }
 
-    /** Revoke a paired device (Settings ▸ Paired devices). It re-prompts on its next
-     *  connect; a currently-attached peer keeps its live session until then (an
-     *  immediate cut would need to drop its session — a follow-up). */
+    /** Revoke a paired device (Settings ▸ Paired devices): its pairing secret is
+     *  dropped and a live session ends now; it has to pair again to reconnect. */
     fun forgetPairedDevice(id: String) {
         _ui.update { it.copy(pairedDevices = it.pairedDevices.filterNot { d -> d.id == id }) }
         persistPrefs()
+        proxy.forgetPaired(id)
     }
 
     /** A user's machine request (a control, or one relayed from a peer). It
