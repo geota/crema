@@ -26,6 +26,7 @@
 import { parseConnectExit } from './connect-exit.ts';
 import type { CoreOutput, CremaCore, NotificationSource, ScaleUuids } from '#lib/core/index.js';
 import { describeError } from '#lib/utils/error.js';
+import { isCoreStopped } from '#lib/core/stopped-guard.js';
 import type { AppRuntime } from '#lib/effect/runtime.js';
 import { scaleConnectProgram } from '#lib/services/scale-orchestrator.js';
 import type { BleConnectionState } from './connection-state';
@@ -283,6 +284,8 @@ export class ScaleManager {
 							.onNotification(source, notification.data, notification.atMs)
 							.then(this.callbacks.onCoreOutput)
 							.catch((error: unknown) => {
+								// Logged once when the core stopped (V2 P3-2).
+								if (isCoreStopped(error)) return;
 								this.callbacks.onStatus(
 									`Scale notification processing failed: ${describeError(error)}`
 								);
