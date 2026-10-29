@@ -1281,3 +1281,29 @@
 @container (max-width: 200px) {
   .qchip-unit { display: none; }
 }
+
+/* ── Phone width (final cohort review 07 N6) ──────────────────────────────
+   At 400 px the three-column grid overlapped labels and squeezed preset
+   chips to 10-20 px, and the foot ran off the right edge. Below 600 px the
+   parameter groups stack in one column, the foot stacks, and the sheet
+   (already max-height + overflow-y: auto) scrolls to the last toggle. */
+@media (max-width: 600px) {
+  .qsheet.is-v2 {
+    padding: 16px 16px 24px;
+    border-radius: 16px 16px 0 0;
+  }
+  .qsheet-v2-head { flex-wrap: wrap; row-gap: 10px; }
+  .qsheet-g-grid.is-four,
+  .qsheet-g-grid.is-five,
+  .qsheet-g-grid.is-six {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+  .qsheet-foot { flex-direction: column; align-items: stretch; }
+  .qsheet-toggles { flex-wrap: wrap; column-gap: 20px; row-gap: 0; }
+  /* The empty-state hint wraps instead of running under the arrows. */
+  .qfstrip-empty { white-space: normal; }
+  /* One channel group per row: the hairlines between groups would dangle. */
+  .qsheet .qsheet-foot .qsheet-chart { row-gap: 0; }
+  .qsheet .qsheet-chart .qsheet-chart-div { display: none; }
+}
