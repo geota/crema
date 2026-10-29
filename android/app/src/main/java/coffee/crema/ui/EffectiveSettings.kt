@@ -1,6 +1,8 @@
 package coffee.crema.ui
 
+import coffee.crema.core.MmrRegister
 import coffee.crema.machine.MachineCommand
+import kotlin.math.roundToInt
 import coffee.crema.machine.QcField
 import coffee.crema.settings.ConfigSnapshot
 import coffee.crema.settings.MirroredSettings
@@ -68,6 +70,24 @@ private fun MainUiState.withSnapshot(cfg: ConfigSnapshot, m: MirroredSettings): 
         qcFlushTimeS = cfg.qcFlushTimeS,
         qcFlushTempC = cfg.qcFlushTempC,
         qcGrind = cfg.qcGrind,
+        // Known only from a hub that sends them (§6.1); else this device's own.
+        steamEco = cfg.steamEco ?: steamEco,
+        steamTwoTap = cfg.steamTwoTap ?: steamTwoTap,
+        fanThresholdC = cfg.fanThresholdC ?: fanThresholdC,
+        waterRefillPointMm = cfg.waterRefillPointMm ?: waterRefillPointMm,
+        volumeStopWithScale = cfg.volumeStopWithScale ?: volumeStopWithScale,
+        requireScale = cfg.requireScale ?: requireScale,
+        preFlush = cfg.preFlush ?: preFlush,
+        steamPurge = cfg.steamPurge ?: steamPurge,
+        idleSleepMin = cfg.idleSleepMin ?: idleSleepMin,
+        // The hub's machine registers (A12, A13, A15) and its line frequency (A14).
+        de1MachineInfo = de1MachineInfo + listOfNotNull(
+            cfg.heaterVoltage?.let { MmrRegister.HeaterVoltage to it.toUInt() },
+            cfg.flowMultiplier?.let { MmrRegister.CalibrationFlowMultiplier to (it * 1000f).roundToInt().toUInt() },
+            cfg.cupWarmerTempC?.let { MmrRegister.CupWarmerTemp to it.toUInt() },
+        ),
+        lineFreqHz = cfg.lineFrequencyHz ?: lineFreqHz,
+        lineFreqOverride = cfg.lineFrequencyOverride ?: lineFreqOverride,
     )
 }
 

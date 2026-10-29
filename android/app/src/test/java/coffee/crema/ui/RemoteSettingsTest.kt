@@ -52,7 +52,7 @@ class RemoteSettingsTest {
     fun `own settings survive a remote session`() {
         val vm = fixture.start()
         fixture.push()
-        vm.setStopOnWeight(false) // relayed
+        vm.setStopOnWeight(true) // relayed (P has it off)
         vm.quickAdjustBrew(18.0, 36.0, 92.0) // a brew-dial edit, relayed
         idleRelays(2)
         vm.setThemeMode("dark")
@@ -85,6 +85,13 @@ class RemoteSettingsTest {
         assertEquals(PROFILE_S, ui.activeProfileId)
         assertEquals(BEAN_S, ui.activeBeanId)
         assertEquals(BrewParams(20.0, 40.0, 94.0, 6.0), ui.brewParams)
+        // The display fields a schema-1 hub adds (§6.1).
+        assertEquals(listOf(true, true, 58f, 8f, true, true, true, true, 60), listOf(ui.steamEco, ui.steamTwoTap, ui.fanThresholdC, ui.waterRefillPointMm, ui.volumeStopWithScale, ui.requireScale, ui.preFlush, ui.steamPurge, ui.idleSleepMin))
+        assertEquals(230u, ui.de1MachineInfo[coffee.crema.core.MmrRegister.HeaterVoltage])
+        assertEquals(1100u, ui.de1MachineInfo[coffee.crema.core.MmrRegister.CalibrationFlowMultiplier])
+        assertEquals(60u, ui.de1MachineInfo[coffee.crema.core.MmrRegister.CupWarmerTemp])
+        assertEquals(50f, ui.lineFreqHz)
+        assertEquals(50f, ui.lineFreqOverride)
         // Personal: units and the rest stay this device's, whatever the hub sent.
         assertEquals("oz", ui.weightUnit)
         assertEquals("F", ui.tempUnit)
@@ -107,7 +114,9 @@ class RemoteSettingsTest {
         VmHarness.idle()
         assertEquals(abOf(P), abOf(savedPrefs()), "relayed ack")
         vm.toggleBeanFavourite(BEAN_S) // a library save
-        VmHarness.idleUntil("the library saved") { java.io.File(VmHarness.app().filesDir, "beanLibrary.json").readText().contains("\"favourite\":true") }
+        VmHarness.idleUntil("the library saved") {
+            runCatching { java.io.File(VmHarness.app().filesDir, "beanLibrary.json").readText() }.getOrDefault("").contains("\"favourite\":true")
+        }
         assertEquals(BEAN_P, savedActiveBean(), "the library keeps this device's active bean")
         // The backup carries this device's own settings.
         val zip = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
@@ -159,6 +168,18 @@ class RemoteSettingsTest {
         assertEquals(before.qcSteamTempC, vm.ui.value.qcSteamTempC)
     }
 
+    /** §6.1: a snapshot at or below the last applied rev is dropped. */
+    @Test
+    fun `older snapshots are dropped`() {
+        val vm = fixture.start()
+        fixture.push(S.copy(rev = 5))
+        fixture.hubConfig = coreJson.encodeToString(coffee.crema.settings.ConfigSnapshot.serializer(), S.copy(rev = 3, qcGrind = 3f))
+        fixture.hub.pushConfig(fixture.hubConfig)
+        fixture.push(S.copy(rev = 6, qcGrind = 6f)) // a later one lands, so the rev-3 one was handled first
+        assertEquals(6f, vm.ui.value.qcGrind)
+        assertTrue(VmHarness.log(vm).any { "Config snapshot 3 dropped" in it }, "the rev-3 snapshot was dropped")
+    }
+
     /** AC-30, the behaviour half: on a remote, library actions act on what is
      *  on screen (the hub's), not on this device's own values. */
     @Test
@@ -194,20 +215,24 @@ class RemoteSettingsTest {
     fun `the remote core follows the hub`() {
         val vm = fixture.start()
         fixture.push()
-        fun weight() = vm.ui.value.stopTargets?.weightConfiguredG
-        VmHarness.idleUntil("the hub's stop target") { weight() == 40f }
+        // The core's projection: the weight target and the max-duration cap
+        // (S: 40 g, 44 s; this device's own: no override, 33 s).
+        fun core() = vm.ui.value.stopTargets?.let { it.weightConfiguredG to it.maxTimeS }
+        VmHarness.idle()
+        assertEquals(40f to 44f, core(), "after the snapshot")
         val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
         runBlocking { vm.restoreBackupBytes(backup, MainViewModel.RestoreMode.MERGE) }
         VmHarness.idle()
-        assertEquals(40f, weight(), "after a restore")
+        assertEquals(40f to 44f, core(), "after a restore")
         vm.resetPreferences()
         VmHarness.idle()
-        assertEquals(40f, weight(), "after a reset")
+        assertEquals(40f to 44f, core(), "after a reset")
         vm.switchToNormal()
         VmHarness.advance(200)
         VmHarness.idleUntil("normal") { VmHarness.proxyController(vm).state.value.role == "normal" }
         val ownYield = vm.ui.value.profiles.first { it.id == RemoteFixture.PROFILE_P }.yieldOut.takeIf { it > 0f }
-        assertEquals(ownYield, weight(), "this device's own profile, no override")
+        val ownCap = VmHarness.ownState(vm).maxShotDurationS.takeIf { it > 0f }
+        assertEquals(ownYield to ownCap, core(), "this device's own values, no override")
     }
 
     /** AC-32: restore, reset and erase on a remote change own values only;

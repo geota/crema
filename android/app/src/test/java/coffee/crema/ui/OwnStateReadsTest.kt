@@ -38,7 +38,7 @@ class OwnStateReadsTest {
             "applyStartShot" to setOf("activeProfileId", "brewParams", "requireScale", "stopOnWeight"),
             "startShotOnCoreLane" to setOf("autoTare", "brewParams", "preFlush", "stopOnWeight", "volumeStopWithScale"),
             // Holder logic, already gated by `authoritative`.
-            "applyEvent" to setOf("idleSleepMin", "preFlush", "steamPurge"),
+            "applyEvent" to setOf("idleSleepMin", "preFlush", "steamPurge", "de1MachineInfo"),
             // Own-state writers (§7.4).
             "loadPrefs" to setOf("idleSleepMin"),
             "applyRestoredSettings" to setOf("idleSleepMin"),

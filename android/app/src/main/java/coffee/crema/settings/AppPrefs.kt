@@ -507,7 +507,42 @@ data class ConfigSnapshot(
     /** Config owner — always `"primary"` from a primary; a secondary uses it to
      *  flag that it is viewing as a read-only mirror. */
     val authority: String = "primary",
+    // ── Settings ownership (spec §6.1). All nullable: null = the hub didn't
+    // send it (an older hub), and the remote shows it as unknown. ────────────
+    /** `1` from a hub that sends the full set below. */
+    val settingsSchema: Int? = null,
+    /** A counter from 0 the hub bumps for every snapshot it builds; a remote
+     *  drops one at or below the last it applied, and resets on each Welcome. */
+    val rev: Long? = null,
+    val steamEco: Boolean? = null,
+    val steamTwoTap: Boolean? = null,
+    val fanThresholdC: Float? = null,
+    /** The resolved refill point (the default when unset), raw sensor mm. */
+    val waterRefillPointMm: Float? = null,
+    /** The DE1's mains heater voltage (MMR `HeaterVoltage`). */
+    val heaterVoltage: Int? = null,
+    /** The DE1's flow calibration multiplier, decoded. */
+    val flowMultiplier: Float? = null,
+    /** The hub core's resolved line frequency, Hz, and its override (0 = auto). */
+    val lineFrequencyHz: Float? = null,
+    val lineFrequencyOverride: Float? = null,
+    /** The cup-warmer setpoint (Bengle, MMR `CupWarmerTemp`); null on other machines. */
+    val cupWarmerTempC: Int? = null,
+    val volumeStopWithScale: Boolean? = null,
+    val requireScale: Boolean? = null,
+    val preFlush: Boolean? = null,
+    val steamPurge: Boolean? = null,
+    val idleSleepMin: Int? = null,
 )
+
+/** Decode `prefs.json`'s text: the nested shape, or a pre-unification FLAT
+ *  [AppPrefs] (decoded directly; the next save rewrites it nested). */
+internal fun decodePrefs(json: Json, text: String): AppPrefs =
+    if (json.parseToJsonElement(text).jsonObject["common"] != null) {
+        json.decodeFromString(PersistedPrefs.serializer(), text).toAppPrefs()
+    } else {
+        json.decodeFromString(AppPrefs.serializer(), text)
+    }
 
 /** File-backed JSON persistence for [AppPrefs] (`filesDir/prefs.json`). */
 class SettingsStore(private val context: Context, private val json: Json) {
@@ -518,15 +553,7 @@ class SettingsStore(private val context: Context, private val json: Json) {
     private var lastGeneration = Long.MIN_VALUE
 
     suspend fun load(): AppPrefs = withContext(Dispatchers.IO) {
-        val stored = loadStore(file, "settings") { text ->
-            if (json.parseToJsonElement(text).jsonObject["common"] != null) {
-                json.decodeFromString(PersistedPrefs.serializer(), text).toAppPrefs()
-            } else {
-                // Pre-unification file: a FLAT AppPrefs. Decode it directly; the next
-                // save() rewrites it in the nested `common` shape.
-                json.decodeFromString(AppPrefs.serializer(), text)
-            }
-        }.valueOrNull()
+        val stored = loadStore(file, "settings") { text -> decodePrefs(json, text) }.valueOrNull()
         val prefs = resolveIdleSleep(stored)
         // Persist a migration once, so a later screensaver change can't move it.
         if (stored != null && stored.idleSleepMin == null) save(prefs)

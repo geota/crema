@@ -8,8 +8,6 @@ import coffee.crema.ble.proxy.RelayHub
 import coffee.crema.ble.proxy.TestHubServer
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.ConfigSnapshot
-import coffee.crema.settings.SettingsStore
-import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -64,7 +62,7 @@ internal class RemoteFixture(private val store: ViewModelStore) {
     /** The hub pushes [snapshot]; waits until the remote applied it. */
     fun push(snapshot: ConfigSnapshot = S) {
         hubConfig = coreJson.encodeToString(ConfigSnapshot.serializer(), snapshot)
-        hub.pushConfig()
+        hub.pushConfig(hubConfig)
         VmHarness.idleUntil("the snapshot") { VmHarness.ownState(vm).mirror?.snapshot == snapshot }
     }
 
@@ -105,14 +103,28 @@ internal class RemoteFixture(private val store: ViewModelStore) {
             qcHotWaterVolumeMl = 200f, qcFlushTimeS = 6f, qcFlushTempC = 93f, qcGrind = 15f,
             brewDoseG = 20.0, brewYieldG = 40.0, brewTempC = 94.0, brewPreinfuseS = 6.0,
             primaryName = "Kitchen tablet",
+            settingsSchema = 1,
+            steamEco = true, steamTwoTap = true, fanThresholdC = 58f, waterRefillPointMm = 8f,
+            heaterVoltage = 230, flowMultiplier = 1.1f, lineFrequencyHz = 50f, lineFrequencyOverride = 50f,
+            cupWarmerTempC = 60, volumeStopWithScale = true, requireScale = true, preFlush = true, steamPurge = true,
+            idleSleepMin = 60,
         )
 
         fun writePrefs(prefs: AppPrefs) {
             File(VmHarness.app().filesDir, "prefs.json").writeText(coreJson.encodeToString(AppPrefs.serializer(), prefs))
         }
 
-        /** What `prefs.json` holds now. */
-        fun savedPrefs(): AppPrefs = runBlocking { SettingsStore(VmHarness.app(), coreJson).load() }
+        /** What `prefs.json` holds now, read without touching it (a store load
+         *  would recover a file caught mid-save, racing the VM's writer). Null
+         *  fields while a save is renaming the file read as the last value. */
+        fun savedPrefs(): AppPrefs {
+            val file = File(VmHarness.app().filesDir, "prefs.json")
+            repeat(50) {
+                runCatching { return coffee.crema.settings.decodePrefs(coreJson, file.readText()) }
+                Thread.sleep(5)
+            }
+            return coffee.crema.settings.decodePrefs(coreJson, file.readText())
+        }
 
         /** The bean library's active bean on disk. */
         fun savedActiveBean(): String? =

@@ -51,7 +51,7 @@ class RelayHubPairingGateTest {
             client.send(Frame.Read(2L, addr, service.toString(), stateChar.toString()))
             delay(150)
             // Every push fan-out — none must reach an unapproved peer.
-            h.pushRoster(); h.pushConfig(); h.broadcastEvent("someone acted", exceptClientId = null)
+            h.pushRoster(); h.pushConfig("{\"x\":1}"); h.broadcastEvent("someone acted", exceptClientId = null)
             h.onInbound(addr, service, stateChar, byteArrayOf(0x02), atMs = 2L)
             delay(150)
 
@@ -81,7 +81,7 @@ class RelayHubPairingGateTest {
             val obs = scope.launch { client.incoming().collect { rx.add(it) } }
 
             handshake(client, rx)
-            h.pushRoster(); h.pushConfig(); h.broadcastEvent("x", exceptClientId = null)
+            h.pushRoster(); h.pushConfig("{\"x\":1}"); h.broadcastEvent("x", exceptClientId = null)
             h.onInbound(addr, service, stateChar, byteArrayOf(0x01), atMs = 1L)
             delay(150)
 

@@ -107,6 +107,9 @@ import coffee.crema.decent.decentShotRecordJson
  *  enough for the machine state to arrive (it only runs on an idle machine). */
 private const val NEARBY_SETUP_DELAY_MS = 5_000L
 
+/** The DE1 registers a hub sends its remotes (spec §6.1: A12, A13, A15). */
+private val MIRRORED_REGISTERS = setOf(MmrRegister.HeaterVoltage, MmrRegister.CalibrationFlowMultiplier, MmrRegister.CupWarmerTemp)
+
 /**
  * Owns the [CremaBridge] and the [De1BleManager], parses the JSON `CoreOutput`
  * the bridge returns, and projects decoded [Event]s into [MainUiState].
@@ -2709,7 +2712,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  [ConfigSnapshot]) — sourced from the live [MainUiState] so it reflects any
      *  unsaved in-session change. Fed to the relay as its config source (see [ProxyController]). */
     private fun configSnapshotJson(): String = runCatching {
+        // Read and numbered in one step, on Main (§6.1): a remote drops a
+        // snapshot at or below the last rev it applied.
         val ui = _ui.value
+        val rev = configRev++
         json.encodeToString(
             ConfigSnapshot.serializer(),
             ConfigSnapshot(
@@ -2745,9 +2751,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 brewPreinfuseS = ui.brewParams?.preinf,
                 primaryName = deviceLabel(),
                 authority = "primary",
+                settingsSchema = 1,
+                rev = rev,
+                steamEco = ui.steamEco,
+                steamTwoTap = ui.steamTwoTap,
+                fanThresholdC = ui.fanThresholdC,
+                waterRefillPointMm = ui.refillPointMm(),
+                heaterVoltage = ui.de1MachineInfo[MmrRegister.HeaterVoltage]?.toInt(),
+                flowMultiplier = ui.de1MachineInfo[MmrRegister.CalibrationFlowMultiplier]?.let { it.toInt() / 1000f },
+                lineFrequencyHz = ui.lineFreqHz,
+                lineFrequencyOverride = ui.lineFreqOverride,
+                cupWarmerTempC = ui.de1MachineInfo[MmrRegister.CupWarmerTemp]?.toInt(),
+                volumeStopWithScale = ui.volumeStopWithScale,
+                requireScale = ui.requireScale,
+                preFlush = ui.preFlush,
+                steamPurge = ui.steamPurge,
+                idleSleepMin = ui.idleSleepMin,
             ),
         )
     }.getOrDefault("")
+
+    /** The next config snapshot's `rev`: a plain counter from 0 (Main only). */
+    private var configRev = 0L
 
     /**
      * Apply a hub's pushed [ConfigSnapshot] on this remote: it goes into the
@@ -2767,6 +2792,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("Config snapshot parse failed: ${it.message}")
             return
         }
+        if (mirror.isStale(cfg.rev)) {
+            appendLog("Config snapshot ${cfg.rev} dropped: ${mirror.lastRev} already applied")
+            return
+        }
         val overlay = cfg.activeProfileJson?.let { raw ->
             runCatching { json.decodeFromString(CremaProfile.serializer(), raw) }.getOrElse {
                 appendLog("Mirror profile overlay parse failed: ${it.message}")
@@ -2774,7 +2803,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         _ui.update { s ->
-            val m = s.mirror?.takeUnless { it.frozen } ?: return@update s
+            val m = s.mirror?.takeUnless { it.frozen || it.isStale(cfg.rev) } ?: return@update s
             s.copy(mirror = m.applied(cfg, overlay, cfg.activeProfileJson))
         }
         // The remote's core follows the hub's values (§7.4).
@@ -3137,6 +3166,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         val resolved = runCatching { bridge.lineFrequencyHz() }.getOrNull() ?: hz
         _ui.update { it.copy(lineFreqHz = resolved, lineFreqOverride = hz) }
+        proxy.pushConfig() // remotes show the hub's line frequency (§6.1)
     }
 
     /** On-demand GitHub release check (Settings → About, issue #36). */
@@ -3208,7 +3238,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (seconds != null) {
             _ui.update { it.copy(maxShotDurationS = seconds) }
-            viewModelScope.launch { settingsStore.save(currentPrefs()) }
+            persistPrefs() // also pushes the hub's snapshot (§6.1)
         }
         refreshStopTargetProjection()
     }
@@ -5416,9 +5446,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.MmrValue -> {
                 val c = event.content
+                val before = _ui.value.de1MachineInfo[c.register]
                 _ui.update { it.copy(
                     de1MachineInfo = it.de1MachineInfo + (c.register to c.value),
                 ) }
+                // Remotes show these registers (A12, A13, A15): push the change.
+                // They arrive after the write's reply, and none is relayed, so
+                // only the push itself is owed here (§6.1). Built on Main.
+                if (c.register in MIRRORED_REGISTERS && before != c.value) {
+                    viewModelScope.launch(Dispatchers.Main) { proxy.pushConfig() }
+                }
                 appendLog("MMR ${c.register}: ${c.value}")
                 if (c.register == MmrRegister.SerialNumber) checkStolenSerial(c.value)
             }

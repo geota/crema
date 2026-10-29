@@ -69,6 +69,23 @@ class SettingsRegistryTest {
         assertEquals(24, Setting.entries.count { it.adoptable })
     }
 
+    /** AC-14. */
+    @Test
+    fun `the snapshot carries every A and B setting and no C setting`() {
+        val snapshotFields = names(ConfigSnapshot.serializer())
+        val ab = Setting.entries.filter { it.group != SettingGroup.C_PERSONAL }
+        val carried = ab.flatMap { it.snapshotFields }
+        assertEquals(carried.size, carried.toSet().size, "a snapshot field carries two settings")
+        assertEquals(emptySet(), SNAPSHOT_META intersect SNAPSHOT_DEPRECATED)
+        assertEquals(snapshotFields, carried.toSet() + SNAPSHOT_META + SNAPSHOT_DEPRECATED, "untagged snapshot fields (left) or tags for no field (right)")
+        for (s in ab) {
+            assertTrue(s.mirroredVia in setOf(MirrorSource.SNAPSHOT, MirrorSource.SCALE_ECHO, MirrorSource.NONE_AVAILABLE), "$s")
+        }
+        for (s in Setting.entries.filter { it.group == SettingGroup.C_PERSONAL }) {
+            assertEquals(emptyList(), s.snapshotFields, "$s is personal and never mirrored")
+        }
+    }
+
     /** AC-13: every public `set*` / `toggle*` on the VM, every controller,
      *  VisualizerSync, DecentSync and SharingController is tagged or excluded. */
     @Test

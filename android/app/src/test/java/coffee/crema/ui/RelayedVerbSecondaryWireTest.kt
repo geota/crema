@@ -80,7 +80,7 @@ class RelayedVerbSecondaryWireTest {
         configSource = { hubConfig },
     )
 
-    private fun pushHubConfig() = hub.pushConfig()
+    private fun pushHubConfig() = hub.pushConfig(hubConfig)
 
     private lateinit var vm: MainViewModel
 

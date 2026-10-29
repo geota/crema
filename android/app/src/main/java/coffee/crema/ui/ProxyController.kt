@@ -54,6 +54,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.CoroutineContext
 
@@ -148,7 +149,7 @@ class ProxyController(
     secretBox: SecretBox = DeviceSecretBox.instance,
     /** Where a primary runs relayed commands: Main, like its own UI (tests
      *  pass a test dispatcher). */
-    commandLane: CoroutineContext = Dispatchers.Main.immediate,
+    private val commandLane: CoroutineContext = Dispatchers.Main.immediate,
     /** How long a remote's link must stay CONNECTING before it looks for its
      *  hub elsewhere on NSD (the re-find). */
     private val refindDelayMs: Long = REFIND_DELAY_MS,
@@ -854,7 +855,8 @@ class ProxyController(
                 }
             },
             // The single-owner session config a mirror snaps to on attach (T2).
-            configSource = { snapshotConfig() },
+            // Built on Main (the command lane), like every push (§6.1).
+            configSource = { withContext(commandLane) { snapshotConfig() } },
             // Pairing gate (issue 02): a valid pairing secret, or the host's
             // prompt while its pairing window is open.
             authorize = { request -> authorizePeer(request) },
@@ -1159,7 +1161,7 @@ class ProxyController(
     /** Push the primary's session config to attached mirrors — called when the
      *  single-owner config changes (T2). No-op off-primary. */
     fun pushConfig() {
-        relayHub?.pushConfig()
+        relayHub?.pushConfig(snapshotConfig())
     }
 
     // ── Persisted proxy config ────────────────────────────────────────────────

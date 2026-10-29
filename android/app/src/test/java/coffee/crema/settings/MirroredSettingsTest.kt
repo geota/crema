@@ -97,4 +97,13 @@ class MirroredSettingsTest {
         assertEquals(setOf(Setting.AUTO_TARE), dropped.unconfirmed)
         assertEquals(slice.pending, dropped.pending, "kept on screen")
     }
+
+    @Test
+    fun `a snapshot at or below the last applied rev is stale, until a new Welcome`() {
+        val slice = MirroredSettings().applied(snap.copy(rev = 5), null, null)
+        assertTrue(slice.isStale(5) && slice.isStale(4))
+        assertTrue(!slice.isStale(6))
+        assertTrue(!slice.isStale(null), "an older hub sends no rev")
+        assertTrue(!slice.welcomed("Kitchen tablet").isStale(1), "a restarted hub counts from 0 again")
+    }
 }
