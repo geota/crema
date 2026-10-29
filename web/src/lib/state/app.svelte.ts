@@ -83,6 +83,13 @@ import { IdleSleepRunner } from './idle-sleep';
 import { CoreTicker } from './core-ticker';
 import { stepCapRefusal } from '#lib/profiles/step-cap.js';
 import {
+	ESPRESSO_ENTRY_TIMEOUT_MS,
+	NOT_STARTED_NOTICE,
+	PRESHOT_FLUSH_TIMEOUT_MS,
+	StartSequence,
+	type StartToken
+} from './start-sequence';
+import {
 	ProfileWriteGenerations,
 	UNNAMED_PROFILE_BATCH_LOG,
 	isProfileWriteTarget,
@@ -524,6 +531,9 @@ export class CremaApp {
 				// mirrors Android's `onDe1Dropped`.
 				if (de1State !== 'ready' && de1State !== 'subscribing') {
 					this.state.patch({ machineState: null, machineStateName: null, machineSubstate: null });
+					// A start never resumes on a later connection (Decenza
+					// cancels its deferred start on disconnect too).
+					this.cancelStart('disconnected');
 				}
 				// Defensive re-upload of the active profile when the DE1
 				// becomes ready. Mirrors the legacy DE1-app's
@@ -730,6 +740,9 @@ export class CremaApp {
 			// transition into an `Error*` substate after the fold below.
 			const priorMachineError = this.state.current.machineError;
 			this.state.applyEvent(event);
+			if (event.type === 'MachineStateChanged') {
+				this.startSequence.onMachineState(event.content.state);
+			}
 			if (event.type === 'MachineErrorChanged') {
 				const nextMachineError = this.state.current.machineError;
 				if (nextMachineError !== null && nextMachineError !== priorMachineError) {
@@ -957,29 +970,19 @@ export class CremaApp {
 					this.ensureLoadedMatches();
 				}
 			}
-			if (
-				event.type === 'WaterSessionStarted' &&
-				event.content.kind === 'Flush' &&
-				this.pendingPreshotFlush !== null
-			) {
+			if (event.type === 'WaterSessionStarted' && event.content.kind === 'Flush') {
 				// OUR pre-shot flush began — only a completion of a flush
-				// that started after the waiter armed may release it.
-				this.preshotFlushStarted = true;
+				// that started after the waiter armed may release it, so a
+				// stray Flush completion (a manual flush already running, a
+				// just-finished auto-purge) can't (review #34).
+				this.startSequence.onFlushStarted();
 			}
-			if (
-				event.type === 'WaterSessionCompleted' &&
-				event.content.kind === 'Flush' &&
-				this.pendingPreshotFlush !== null &&
-				this.preshotFlushStarted
-			) {
+			if (event.type === 'WaterSessionCompleted' && event.content.kind === 'Flush') {
 				// The pre-shot flush we requested just finished — release
 				// the `startShot()` waiter so it can issue the Espresso
-				// state request. The 30 s timeout in `startShot` is the
-				// backstop if this notification is missed. Correlated via
-				// `preshotFlushStarted` so a stray Flush completion (a
-				// manual flush already running, a just-finished auto-purge)
-				// can't release the waiter early (review #34).
-				this.pendingPreshotFlush();
+				// state request. The 30 s ceiling is the backstop if this
+				// notification is missed.
+				this.startSequence.onFlushCompleted();
 			}
 			if (event.type === 'SteamSessionCompleted') {
 				// Auto-purge after steam (Settings → Brew defaults). A
@@ -2409,28 +2412,25 @@ export class CremaApp {
 	private scheduleAutoPurge(): void {
 		// Auto-purge and the pre-shot flush both fire `HotWaterRinse`. If a user
 		// steams and immediately presses "Brew" within the 1.5 s defer window,
-		// both paths can race to request the same state. The `rinsePending`
-		// flag (shared with `startShot`) lets whichever path acquires it first
-		// proceed; the other bails out cleanly.
+		// the start wins: the purge checks for a pending start when it fires.
+		// `rinsePending` only keeps two purges from being scheduled at once.
 		if (this.rinsePending) return;
 		this.rinsePending = true;
 		window.setTimeout(() => {
 			try {
-				// Only fire from Idle — avoid stepping on a manual user action.
+				// Only fire from Idle — avoid stepping on a manual user action
+				// or a shot start that began during the defer.
 				if (this.state.current.machineStateName !== MachineState.Idle) return;
-				void this.requestMachineState(MachineState.HotWaterRinse);
+				if (this.startSequence.active) return;
+				void this.writeMachineState(MachineState.HotWaterRinse);
 			} finally {
 				this.rinsePending = false;
 			}
 		}, 1500);
 	}
 
-	/**
-	 * Shared in-flight guard for `HotWaterRinse` requests. Set by either the
-	 * post-steam auto-purge path or the pre-shot flush path while their rinse
-	 * is pending; the other path checks it and bails out so two rinses cannot
-	 * race when a user steams then immediately starts a shot.
-	 */
+	/** A post-steam auto-purge is scheduled (one at a time). A shot start
+	 *  is kept apart by `startSequence.active`, checked when the purge fires. */
 	private rinsePending = false;
 
 	/**
@@ -2477,6 +2477,12 @@ export class CremaApp {
 	 *     `WaterSessionCompleted(Flush)` (with a 30 s ceiling) before
 	 *     requesting Espresso.
 	 *
+	 * The whole chain is one owned start (05 F2, {@link StartSequence}): a
+	 * second call while it runs, or while a shot runs, is ignored, and
+	 * {@link stopShot} (or any other machine request) cancels it, so a Stop
+	 * during the pre-flush never ends in Espresso. The start stays pending
+	 * until the machine reports Espresso (`ui.shotStarting`).
+	 *
 	 * @param qc Per-shot Quick Controls overrides — the caller passes the
 	 *   live `BrewParamState.current` fields so the fingerprint reflects
 	 *   the user's *current* intent, not just the profile's own defaults.
@@ -2484,8 +2490,31 @@ export class CremaApp {
 	 *   (e.g. headless scripts) — equivalent to running the profile bare.
 	 */
 	async startShot(qc: ProfileFingerprintOverrides = {}): Promise<void> {
+		// Claimed before the first await, so a second tap is refused at once.
+		const start = this.startSequence.begin();
+		if (start === null) {
+			this.state.log(
+				this.startSequence.active
+					? 'A shot is already starting — Start ignored.'
+					: 'A shot is already running — Start ignored.'
+			);
+			return;
+		}
+		try {
+			await this.runStart(start, qc);
+		} finally {
+			this.startSequence.end(start);
+		}
+	}
+
+	/** The stages of {@link startShot} for one claimed `start`. Each await
+	 *  can see a cancel; nothing is requested after one. */
+	private async runStart(start: StartToken, qc: ProfileFingerprintOverrides): Promise<void> {
+		const live = () => this.startSequence.isLive(start);
 		const profiles = getProfileStore();
 		await profiles.ensureLoaded();
+		// Stopped before the library loaded: no toasts, upload or errors for it.
+		if (!live()) return;
 		const id = profiles.activeId;
 		if (id === null) {
 			throw new NoActiveProfileError();
@@ -2535,6 +2564,7 @@ export class CremaApp {
 		// cached "what's on the DE1" fingerprint. `syncActiveProfile` is
 		// a no-op when they match (cheap djb2 + one snapshot read).
 		const synced = await this.syncActiveProfile(profile, qc);
+		if (!live()) return;
 		if (!synced) {
 			// `ProfileUploadFailed`'s fold already logged the cause; the
 			// dashboard's machine-error / log banner will pick it up.
@@ -2543,59 +2573,64 @@ export class CremaApp {
 					'Try Coffee again, or reload the profile from the Profiles page.'
 			);
 		}
-		if (!getSettingsStore().current.groupFlushBeforeShot) {
-			await this.requestMachineState(MachineState.Espresso);
-			return;
-		}
-		// Pre-shot group flush. Hold the shared `rinsePending` guard so a
-		// just-scheduled auto-purge (within its 1.5 s defer) bails out
-		// instead of racing this flush. Kick off the rinse, then wait for
-		// its completion (or the 30 s ceiling) before requesting Espresso.
-		this.rinsePending = true;
-		try {
+		if (getSettingsStore().current.groupFlushBeforeShot) {
+			// Pre-shot group flush: kick off the rinse, then wait for its
+			// completion (or the 30 s ceiling) before requesting Espresso. A
+			// just-scheduled auto-purge stands down while the start is pending.
 			// Arm the waiter BEFORE the state request: the flush's Started
-			// notification could otherwise beat the installation and the
-			// correlation marker would be missed (review #34).
-			this.preshotFlushStarted = false;
-			const flushDone = new Promise<void>((resolve) => {
-				const timeout = window.setTimeout(() => {
-					this.pendingPreshotFlush = null;
-					resolve();
-				}, 30_000);
-				this.pendingPreshotFlush = () => {
-					window.clearTimeout(timeout);
-					this.pendingPreshotFlush = null;
-					resolve();
-				};
-			});
-			await this.requestMachineState(MachineState.HotWaterRinse);
-			await flushDone;
-		} finally {
-			this.rinsePending = false;
-			this.preshotFlushStarted = false;
+			// notification could otherwise beat it and the correlation marker
+			// would be missed (review #34).
+			start.flushArmed = true;
+			await this.writeMachineState(MachineState.HotWaterRinse, live);
+			const released = await start.waitFor(() => start.flushEnded, PRESHOT_FLUSH_TIMEOUT_MS);
+			if (!live()) return;
+			// The flush ended but the machine went somewhere else (a
+			// group-head button mid-flush): that is not ours to override.
+			const state = this.state.current.machineStateName;
+			if (released && state !== MachineState.Idle) {
+				this.state.log(`Pre-shot flush ended in ${state ?? 'an unknown state'} — shot not started.`);
+				toast.error('Shot not started — the machine left the flush');
+				return;
+			}
 		}
-		await this.requestMachineState(MachineState.Espresso);
+		if (!live()) return;
+		start.espressoRequested = true;
+		await this.writeMachineState(MachineState.Espresso, live);
+		// Stay pending until the machine reports Espresso, so a Start in the
+		// gap is refused rather than starting a second chain.
+		if (this.state.current.machineStateName === MachineState.Espresso) return;
+		const entered = await start.waitFor(() => start.espressoEntered, ESPRESSO_ENTRY_TIMEOUT_MS);
+		if (!entered && live()) {
+			// A machine that only starts from the group head (GHC required)
+			// ignores the app's request.
+			this.state.log(
+				`The machine did not enter Espresso within ${ESPRESSO_ENTRY_TIMEOUT_MS / 1000} s of the request.`
+			);
+			toast.info(NOT_STARTED_NOTICE, 7000);
+		}
 	}
 
-	/** Stop a running shot — requests `Idle`, which the DE1 honours from any session state. */
+	/** Stop a running shot — requests `Idle`, which the DE1 honours from any
+	 *  session state. Also cancels a shot start still pending (05 F2). */
 	async stopShot(): Promise<void> {
 		await this.requestMachineState(MachineState.Idle);
 	}
 
 	/**
-	 * The pre-shot-flush waiter, populated by `startShot()` while the
-	 * pre-flush is running. The event loop in `applyCoreOutput` resolves it
-	 * when `WaterSessionCompleted(Flush)` arrives, freeing `startShot` to
-	 * issue the `Espresso` request.
+	 * The one shot start in flight (05 F2). Its writes go through
+	 * {@link writeMachineState}, so they don't cancel it; every user request
+	 * through {@link requestMachineState} does.
 	 */
-	private pendingPreshotFlush: (() => void) | null = null;
+	private readonly startSequence = new StartSequence(
+		() => this.state.current.machineStateName,
+		(shotStarting) => this.state.patch({ shotStarting }),
+		(line) => this.state.log(line)
+	);
 
-	/**
-	 * True once a Flush session STARTED while the pre-shot waiter was
-	 * armed — the correlation that keeps a stray flush completion from
-	 * releasing the waiter early (review #34).
-	 */
-	private preshotFlushStarted = false;
+	/** Drop the pending shot start, if any. */
+	private cancelStart(why: string): void {
+		if (this.startSequence.cancel() !== null) this.state.log(`Shot start cancelled (${why}).`);
+	}
 
 	/**
 	 * Ask the DE1 to enter a machine state — most usefully Sleep or Idle.
@@ -2606,6 +2641,21 @@ export class CremaApp {
 	 * buttons; the shell exposes them for completeness.
 	 */
 	async requestMachineState(state: MachineState): Promise<void> {
+		// A user's request (a control, the power button, a maintenance run)
+		// cancels a pending shot start first (05 F2): a Stop, or another
+		// mode, during the sync or the pre-flush must not end in Espresso.
+		this.cancelStart(state);
+		await this.writeMachineState(state);
+	}
+
+	/** The write behind {@link requestMachineState}, also used by the shot
+	 *  start's own steps and the auto-purge, which must not cancel it. A
+	 *  `wanted` check that fails after the guard drops the write (a Stop
+	 *  during the guard cancelled the start). */
+	private async writeMachineState(
+		state: MachineState,
+		wanted: () => boolean = () => true
+	): Promise<void> {
 		// Profile-download race guard (BC 9788201734): the DE1 firmware holds
 		// `ProfileDownloadInProgress` for a short window after the final frame
 		// write — a state-request inside it is aborted to HeaterDown after
@@ -2618,6 +2668,7 @@ export class CremaApp {
 				ProfileSync.pipe(Effect.flatMap((ps) => ps.profileDownloadGuard))
 			);
 		}
+		if (!wanted()) return;
 		this.applyCoreOutput(await this.core.requestMachineState(state));
 	}
 
