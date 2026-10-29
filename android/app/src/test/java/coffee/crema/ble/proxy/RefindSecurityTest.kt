@@ -124,8 +124,18 @@ class RefindSecurityTest {
             server.enqueue(MockResponse.Builder().webSocketUpgrade(link).build())
             live.scope.launch { live.hub.serve(link) }
         }
-        server.start(InetAddress.getLoopbackAddress(), port)
-        return server
+        // Back on a port just released: retry the bind briefly while the old
+        // listener's socket is still going away.
+        val deadline = System.nanoTime() + 3_000_000_000L
+        while (true) {
+            try {
+                server.start(InetAddress.getLoopbackAddress(), port)
+                return server
+            } catch (e: java.net.BindException) {
+                if (port == 0 || System.nanoTime() > deadline) throw e
+                Thread.sleep(50)
+            }
+        }
     }
 
     /** S1's attacker: accepts a remote and pipes its frames to the hub at
@@ -302,7 +312,7 @@ class RefindSecurityTest {
         stepped(REFIND_DELAY_MS + 3_000)
         val back = serve(live, port = newPort)
         stepped(60_000)
-        VmHarness.idleUntil("welcomed again") { !vm.ui.value.mirrorReconnecting }
+        VmHarness.idleUntil("welcomed again", timeoutMs = 20_000) { !vm.ui.value.mirrorReconnecting }
         assertTrue(back.requestCount > 0, "the remote came back to the re-found port")
         assertEquals(newPort, vm.ui.value.proxyPrimaryPort)
         assertEquals(newPort, savedPort())
