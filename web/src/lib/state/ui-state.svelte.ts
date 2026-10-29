@@ -1195,9 +1195,12 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				scaleFirmware: c.firmware ?? snapshot.scaleFirmware,
 				scaleSerial: c.serial ?? snapshot.scaleSerial
 			};
-			if (c.anti_mistouch !== undefined) {
-				const serial = c.serial !== undefined ? `, serial=${c.serial}` : '';
-				const fw = c.firmware !== undefined ? `, fw=${c.firmware}` : '';
+			// The core sends an absent field as `null` (its `Option` has no
+			// `skip_serializing_if`), though the generated type says `?:`, so
+			// test both with `!= null` (round-3 clean check C1 P3-2).
+			if (c.anti_mistouch != null) {
+				const serial = c.serial != null ? `, serial=${c.serial}` : '';
+				const fw = c.firmware != null ? `, fw=${c.firmware}` : '';
 				return {
 					...next,
 					eventLog: appendLog(
@@ -1206,7 +1209,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					)
 				};
 			}
-			if (c.active_mode !== undefined) {
+			if (c.active_mode != null) {
 				return {
 					...next,
 					eventLog: appendLog(
