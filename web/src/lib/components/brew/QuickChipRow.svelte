@@ -25,7 +25,8 @@
 		unit = '',
 		onChange,
 		fmt,
-		dimension
+		dimension,
+		name
 	}: {
 		/** The preset values to render as chips (canonical when `dimension` set). */
 		options: number[];
@@ -39,6 +40,8 @@
 		fmt?: (value: number) => string;
 		/** Optional unit-aware dimension. */
 		dimension?: Dimension;
+		/** What the presets set ("Dose") — names the chip group "Dose presets". */
+		name?: string;
 	} = $props();
 
 	const settings = getSettingsStore();
@@ -58,14 +61,20 @@
 	};
 </script>
 
-<div class="qchipr">
+<!-- The current preset is aria-pressed (final review 07 N2). Each chip's
+     name carries the unit even where the narrow layout hides it (N12d). -->
+<div class="qchipr" role="group" aria-label={name ? `${name} presets` : undefined}>
 	{#each options as option (option)}
+		{@const text = format(toDisplay(option))}
 		<button
+			type="button"
 			class="qchip"
 			class:is-active={Math.abs(value - option) < 0.001}
+			aria-pressed={Math.abs(value - option) < 0.001}
+			aria-label={effectiveUnit ? `${text} ${effectiveUnit}` : undefined}
 			onclick={() => onChange?.(option)}
 		>
-			{format(toDisplay(option))}{#if effectiveUnit}<span class="qchip-unit">{effectiveUnit}</span>{/if}
+			{text}{#if effectiveUnit}<span class="qchip-unit">{effectiveUnit}</span>{/if}
 		</button>
 	{/each}
 </div>

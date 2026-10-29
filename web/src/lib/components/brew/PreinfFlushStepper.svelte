@@ -33,6 +33,7 @@
 	{#if p.flushMode === 'time'}
 		<QuickStepper
 			value={p.flushTime}
+			name="Flush time"
 			unit="s"
 			min={1}
 			max={20}
@@ -44,6 +45,7 @@
 		<QuickChipRow
 			options={[2, 4, 6, 8, 10]}
 			value={p.flushTime}
+			name="Flush time"
 			unit="s"
 			onChange={(v) => params.set('flushTime', v)}
 		/>
@@ -54,6 +56,7 @@
 		     props are *enforced*, not decorative. -->
 		<QuickStepper
 			value={p.flushTemp}
+			name="Flush temperature"
 			dimension="temp"
 			min={60}
 			max={100}
@@ -64,6 +67,7 @@
 		<QuickChipRow
 			options={[88, 92, 95, 97, 99]}
 			value={p.flushTemp}
+			name="Flush temperature"
 			dimension="temp"
 			onChange={(v) => params.set('flushTemp', v)}
 		/>

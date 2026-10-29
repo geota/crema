@@ -51,6 +51,20 @@
 		/** Called when the on/off dot is clicked. */
 		onDot?: () => void;
 	} = $props();
+
+	/**
+	 * Names the option group for assistive tech ("Steam: time, flow or
+	 * temp"), so the pressed option reads as "what the stepper edits".
+	 */
+	const groupName = $derived.by(() => {
+		if (!options || options.length === 0) return undefined;
+		const labels = options.map((o) => o.label);
+		const list =
+			labels.length > 1
+				? `${labels.slice(0, -1).join(', ')} or ${labels[labels.length - 1]}`
+				: labels[0];
+		return prefix ? `${prefix}: ${list}` : list;
+	});
 </script>
 
 <div class="qsplit">
@@ -68,14 +82,19 @@
 		<span class="qsplit-prefix">{prefix}</span>
 	{/if}
 	{#if options && options.length > 0}
-		<span class="qsplit-toggle">
+		<!-- Selected state (final review 07 N2): the active option is
+		     aria-pressed, so a screen reader hears which quantity the
+		     stepper below edits, not just the colour. -->
+		<span class="qsplit-toggle" role="group" aria-label={groupName}>
 			{#each options as option, i (option.id)}
 				{#if i > 0}
-					<span class="qsplit-sep">|</span>
+					<span class="qsplit-sep" aria-hidden="true">|</span>
 				{/if}
 				<button
+					type="button"
 					class="qsplit-opt"
 					class:is-active={value === option.id}
+					aria-pressed={value === option.id}
 					onclick={() => onChange?.(option.id)}
 				>
 					{option.label}{#if option.meta && value === option.id}<span class="qsplit-meta"

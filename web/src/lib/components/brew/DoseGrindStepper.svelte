@@ -37,6 +37,7 @@
 	{#if p.doseGrindMode === 'dose'}
 		<QuickStepper
 			value={p.dose}
+			name="Dose"
 			dimension="weight"
 			min={5}
 			max={30}
@@ -49,12 +50,14 @@
 		<QuickChipRow
 			options={[16, 17, 18, 19, 20]}
 			value={p.dose}
+			name="Dose"
 			dimension="weight"
 			onChange={(v) => params.set('dose', v)}
 		/>
 	{:else}
 		<QuickStepper
 			value={p.grind}
+			name="Grind"
 			min={0}
 			max={20}
 			step={0.1}
@@ -65,6 +68,7 @@
 		<QuickChipRow
 			options={[3.8, 4.0, 4.2, 4.4, 4.6]}
 			value={p.grind}
+			name="Grind"
 			onChange={(v) => params.set('grind', v)}
 			fmt={(v) => v.toFixed(1)}
 		/>

@@ -8,6 +8,7 @@
 	import DropHalfIcon from 'phosphor-svelte/lib/DropHalfIcon';
 	import InfoIcon from 'phosphor-svelte/lib/InfoIcon';
 	import StarIcon from 'phosphor-svelte/lib/StarIcon';
+	import { scrollBehavior } from '#lib/a11y/motion.js';
 	/**
 	 * `BeanEditPage` — full-page bean editor. Replaces the old drawer-style
 	 * `BeanEditor` for both create and edit flows. Layout follows the
@@ -401,30 +402,30 @@
 		// fields. Scroll the URL field into view + bounce out.
 		if (isBuyUrlInvalid) {
 			const el = document.getElementById(urlInputId) as HTMLInputElement | null;
-			el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			el?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
 			el?.focus();
 			return;
 		}
 		// Opened-before-roasted is invalid for both new bags and live edits.
 		if (isOpenedBeforeRoasted) {
 			const el = document.getElementById('be-opened-input') as HTMLInputElement | null;
-			el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			el?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
 			el?.focus();
 			return;
 		}
 		if (isNew) {
 			if (isNameMissing) {
-				nameInputEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				nameInputEl?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
 				nameInputEl?.focus();
 				return;
 			}
 			if (isRoasterMissing) {
-				roasterRowEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				roasterRowEl?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
 				roasterRowEl?.querySelector('input')?.focus();
 				return;
 			}
 			if (isRoastedOnMissing) {
-				roastedDateInputEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				roastedDateInputEl?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
 				roastedDateInputEl?.focus();
 				return;
 			}
@@ -505,7 +506,7 @@
 
 	function scrollToSection(id: string): void {
 		const el = document.getElementById(`be-${id}`);
-		if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+		if (el) el.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
 	}
 
 	// Bag-size presets, ordered ascending — covers the most common retail
@@ -541,7 +542,8 @@
 		</button>
 		<div class="be-bar-mid">
 			<div class="t-eyebrow">{isNew ? 'New bean' : 'Edit bean'}</div>
-			<div class="be-bar-name">{current.name || 'Untitled bag'}</div>
+			<!-- The screen's h1 (final review 07 N12e); sections are h2. -->
+			<h1 class="be-bar-name">{current.name || 'Untitled bag'}</h1>
 		</div>
 		<div class="be-bar-actions">
 			<button class="be-btn be-btn-ghost" onclick={discard}>Cancel</button>
@@ -622,7 +624,7 @@
 				<header class="be-block-head">
 					<span class="be-block-n">01</span>
 					<div>
-						<h3 class="be-block-title">Identity</h3>
+						<h2 class="be-block-title">Identity</h2>
 						<div class="be-block-sub">
 							The name and roaster this bag will be filed under.
 						</div>
@@ -819,7 +821,7 @@
 				<header class="be-block-head">
 					<span class="be-block-n">02</span>
 					<div>
-						<h3 class="be-block-title">Roast & mix</h3>
+						<h2 class="be-block-title">Roast & mix</h2>
 						<div class="be-block-sub">Roast level drives the freshness window. Mix changes how the origin block reads.</div>
 					</div>
 				</header>
@@ -917,7 +919,7 @@
 				<header class="be-block-head">
 					<span class="be-block-n">03</span>
 					<div>
-						<h3 class="be-block-title">Dates</h3>
+						<h2 class="be-block-title">Dates</h2>
 						<div class="be-block-sub">
 							Roast date drives the freshness signal everywhere else.
 						</div>
@@ -1065,7 +1067,7 @@
 				<header class="be-block-head">
 					<span class="be-block-n">04</span>
 					<div>
-						<h3 class="be-block-title">Bag & Grind</h3>
+						<h2 class="be-block-title">Bag & Grind</h2>
 						<div class="be-block-sub">
 							Bag size auto-debits per shot. Grinder is bean-scoped — surfaced
 							at brew time when you swap to this bean.
@@ -1176,7 +1178,7 @@
 				<header class="be-block-head">
 					<span class="be-block-n">05</span>
 					<div>
-						<h3 class="be-block-title">Origin</h3>
+						<h2 class="be-block-title">Origin</h2>
 						<div class="be-block-sub">
 							Free text. For blends, separate components with a slash (Ethiopia
 							/ Colombia).
@@ -1317,7 +1319,7 @@
 				<header class="be-block-head">
 					<span class="be-block-n">06</span>
 					<div>
-						<h3 class="be-block-title">Tasting</h3>
+						<h2 class="be-block-title">Tasting</h2>
 						<div class="be-block-sub">
 							One free-text note; chase it with stars.
 						</div>
@@ -1388,7 +1390,7 @@
 				<header class="be-block-head">
 					<span class="be-block-n">07</span>
 					<div>
-						<h3 class="be-block-title">Buy again</h3>
+						<h2 class="be-block-title">Buy again</h2>
 						<div class="be-block-sub">
 							Used by the bag burn-down nudge when you're running low.
 						</div>
@@ -1477,7 +1479,7 @@
 				<header class="be-block-head">
 					<span class="be-block-n">08</span>
 					<div>
-						<h3 class="be-block-title" id={`${uid}-notes-title`}>Notes</h3>
+						<h2 class="be-block-title" id={`${uid}-notes-title`}>Notes</h2>
 						<div class="be-block-sub">
 							Anything else worth keeping — not surfaced on the brew page.
 						</div>
@@ -1569,6 +1571,7 @@
 		flex-direction: column;
 	}
 	.be-bar-name {
+		margin: 0;
 		font-family: var(--font-serif);
 		font-size: 16px;
 		font-weight: 500;
@@ -1912,14 +1915,13 @@
 	}
 	.be-input {
 		background: rgba(var(--tint-rgb), 0.04);
-		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border: 1px solid var(--field-border);
 		border-radius: var(--radius-sm);
 		color: var(--fg-1);
 		font-family: var(--font-sans);
 		font-size: 13px;
 		padding: 8px 10px;
 		outline: 0;
-		color-scheme: dark;
 		width: 100%;
 		box-sizing: border-box;
 		/* Match the QuickStepper's `.qcs-row` height (4px padding + 36px

@@ -330,9 +330,8 @@
 	.st-stepper-dot:hover {
 		border-color: rgba(var(--copper-rgb), 0.6);
 	}
-	.st-stepper-row.is-off {
-		opacity: 0.4;
-	}
+	/* Off reads through the muted value colour, not opacity: the row stays
+	   editable, and opacity 0.4 measured 1.8:1 (final review 07 N10). */
 	.st-stepper-row.is-off .st-stepper-num,
 	.st-stepper-row.is-off .st-stepper-unit {
 		color: var(--fg-muted);

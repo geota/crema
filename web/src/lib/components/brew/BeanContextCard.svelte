@@ -481,14 +481,13 @@
 	}
 	.bean-input {
 		background: rgba(var(--tint-rgb), 0.04);
-		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border: 1px solid var(--field-border);
 		border-radius: var(--radius-sm);
 		color: var(--fg-1);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		padding: 7px 9px;
 		outline: 0;
-		color-scheme: dark;
 	}
 	.bean-input:focus {
 		border-color: rgba(var(--tint-rgb), 0.25);

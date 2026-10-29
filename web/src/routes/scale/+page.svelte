@@ -386,7 +386,9 @@
 	<div class="sc-head">
 		<div>
 			<div class="t-eyebrow" style="color:var(--fg-3)">Connected scale</div>
-			<h1 class="t-page-title sc-head-name">{scaleName}</h1>
+			<!-- The h1 names the screen; the device name follows (final review
+			     07 N12e: it read "No scale" as the page heading). -->
+			<h1 class="t-page-title sc-head-name"><span class="sr-only">Scale:</span> {scaleName}</h1>
 			<div class="sc-head-meta">
 				<span
 					class="sc-dot"
@@ -648,13 +650,17 @@
 			{#if caps?.volume}
 				<div class="sc-set-row">
 					<div>
-						<div class="sc-set-title">Beeper volume</div>
+						<div class="sc-set-title" id="sc-volume-title">Beeper volume</div>
 						<div class="sc-set-sub">How loud the scale's button / target tones are.</div>
 					</div>
-					<div class="st-segment">
+					<!-- Selected state + group name (final review 07 N3). -->
+					<div class="st-segment" role="group" aria-labelledby="sc-volume-title">
 						{#each Array.from( { length: caps.volume.max - caps.volume.min + 1 }, (_, i) => caps.volume!.min + i ) as step (step)}
-							<button class:is-active={scaleVolume === step} onclick={() => setVolume(step)}
-								>{step}</button
+							<button
+								type="button"
+								class:is-active={scaleVolume === step}
+								aria-pressed={scaleVolume === step}
+								onclick={() => setVolume(step)}>{step}</button
 							>
 						{/each}
 					</div>
@@ -665,13 +671,15 @@
 			{#if caps && caps.modes.length > 0}
 				<div class="sc-set-row">
 					<div>
-						<div class="sc-set-title">Display mode</div>
+						<div class="sc-set-title" id="sc-mode-title">Display mode</div>
 						<div class="sc-set-sub">Switches the scale's on-device display / behaviour.</div>
 					</div>
-					<div class="st-segment">
+					<div class="st-segment" role="group" aria-labelledby="sc-mode-title">
 						{#each caps.modes as m (m.id)}
 							<button
+								type="button"
 								class:is-active={snap?.scaleActiveMode === m.id}
+								aria-pressed={snap?.scaleActiveMode === m.id}
 								onclick={() => setMode(m.id)}>{m.name}</button
 							>
 						{/each}
@@ -690,19 +698,23 @@
 			{#if caps?.can_lcd || caps?.can_set_unit_grams || caps?.can_toggle_unit}
 				<div class="sc-set-row">
 					<div>
-						<div class="sc-set-title">Display unit</div>
+						<div class="sc-set-title" id="sc-unit-title">Display unit</div>
 						<div class="sc-set-sub">
 							What the on-scale display reads in. Mirrors the global Display
 							setting.
 						</div>
 					</div>
-					<div class="st-segment">
+					<div class="st-segment" role="group" aria-labelledby="sc-unit-title">
 						<button
+							type="button"
 							class:is-active={prefs.weightUnit === 'g'}
+							aria-pressed={prefs.weightUnit === 'g'}
 							onclick={() => setLcdUnit('g')}>g</button
 						>
 						<button
+							type="button"
 							class:is-active={prefs.weightUnit === 'oz'}
+							aria-pressed={prefs.weightUnit === 'oz'}
 							onclick={() => setLcdUnit('oz')}>oz</button
 						>
 					</div>

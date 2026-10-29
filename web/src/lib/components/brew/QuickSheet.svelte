@@ -342,7 +342,7 @@
 					class:on={prefs.autoPurgeAfterSteam}
 					onclick={() => settings.set('autoPurgeAfterSteam', !prefs.autoPurgeAfterSteam)}
 					aria-pressed={prefs.autoPurgeAfterSteam}
-					aria-label="Purge after steam"
+					aria-label="Steam purge"
 				></button>
 				<span>Steam purge</span>
 			</label>
@@ -352,7 +352,7 @@
 					class:on={prefs.steamEcoMode}
 					onclick={() => onToggleSteamEco(!prefs.steamEcoMode)}
 					aria-pressed={prefs.steamEcoMode}
-					aria-label="Steam eco mode"
+					aria-label="Steam eco"
 				></button>
 				<span>Steam eco</span>
 			</label>

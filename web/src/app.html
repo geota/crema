@@ -6,6 +6,10 @@
 		<link rel="icon" href="%sveltekit.assets%/favicon.ico" sizes="16x16 32x32 48x48" /><!-- legacy fallback for browsers without SVG-favicon support -->
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="theme-color" content="#1e1b16" />
+		<!-- Sets data-theme and theme-color from the stored theme before first
+		     paint (the dark values above are the no-script fallback). Must stay
+		     after the theme-color meta and before any stylesheet. -->
+		<script src="%sveltekit.assets%/theme-boot.js"></script>
 		<!-- The PWA plugin builds manifest.webmanifest but injects its link
 		     through a Vite HTML hook SvelteKit never runs (the same gap
 		     #lib/pwa/register.ts closes for the worker), so it is linked here.

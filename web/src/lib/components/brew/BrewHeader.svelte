@@ -141,6 +141,7 @@
 		{#snippet picker()}
 			<HeaderPicker
 				open={openPicker === 'profile'}
+				label="Choose profile"
 				items={profileItems}
 				activeId={activeProfileId}
 				searchPlaceholder="Search profiles…"
@@ -179,6 +180,7 @@
 		{#snippet picker()}
 			<HeaderPicker
 				open={openPicker === 'bean'}
+				label="Choose bean"
 				items={beanItems}
 				activeId={activeBeanId}
 				searchPlaceholder="Search beans, origin, notes…"

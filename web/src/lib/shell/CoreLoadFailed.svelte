@@ -54,8 +54,10 @@
 		font-size: 32px;
 		color: var(--danger);
 	}
+	/* Theme text tokens (final review 07 N10): the alpha ink and copper-400
+	   measured 3.9:1 and 2.8:1 in light. */
 	.clf-detail {
-		color: rgba(var(--tint-rgb), 0.55);
+		color: var(--fg-3);
 		overflow-wrap: anywhere;
 	}
 	.clf-btn {
@@ -67,7 +69,7 @@
 		border-radius: var(--radius-sm);
 		border: 1px solid var(--hairline);
 		background: var(--bg-surface);
-		color: var(--copper-400);
+		color: var(--fg-accent);
 		font-family: var(--font-sans);
 		cursor: pointer;
 	}
