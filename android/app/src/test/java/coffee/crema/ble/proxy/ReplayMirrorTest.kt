@@ -91,7 +91,11 @@ class ReplayMirrorTest {
             }
 
             // The secondary mirrors every telemetry sample, in order, verbatim t.
-            withTimeout(8_000) { while (mirrored.count { it.characteristic == sampleChar } < nSamples) delay(5) }
+            // The state line rides its own characteristic channel, so it can land
+            // after the last sample: wait for both.
+            withTimeout(8_000) {
+                while (mirrored.count { it.characteristic == sampleChar } < nSamples || mirrored.none { it.characteristic == stateChar }) delay(5)
+            }
             val mirroredSamples = mirrored.filter { it.characteristic == sampleChar }
             assertEquals(nSamples, mirroredSamples.size, "secondary sees every replayed telemetry sample")
             assertEquals((0 until nSamples).map { 10L + it }, mirroredSamples.map { it.atMs }, "order + verbatim timestamps")

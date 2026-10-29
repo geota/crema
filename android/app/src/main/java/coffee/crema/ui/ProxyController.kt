@@ -154,7 +154,8 @@ class ProxyController(
     // would be zeroed by its own init afterwards (the field-init-order trap —
     // review #36's launch-dead APK).
     private var nordicTransport: NordicBleTransport? = null
-    private var relayHub: RelayHub? = null
+    @androidx.annotation.VisibleForTesting
+    internal var relayHub: RelayHub? = null
     private var relayServer: LanRelayServer? = null
     private var proxyLink: ReconnectingClientLink? = null
 
@@ -191,11 +192,28 @@ class ProxyController(
     private val pairingMutex = Mutex()
     private var pairingDeferred: CompletableDeferred<PairingChoice>? = null
 
+    /** Client ids the host denied while hosting: not prompted again until
+     *  hosting stops (a denied device must not be able to re-prompt by
+     *  reconnecting). */
+    private val deniedWhileHosting: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** Serializes [applyMode]: mode switches launch from several async paths
+     *  (the picker, a handoff grant's delayed release, the reclaim probe,
+     *  denied→normal) and interleaved teardown/build would leak a relay server
+     *  or install two transports. Switches run one at a time, in the order
+     *  they were requested. */
+    private val modeMutex = Mutex()
+
     /** Machine states it's safe to hand off the radio in. An **allowlist** (issue
      *  09): everything else — dispensing, cleaning, calibrating, erroring, booting —
      *  refuses, and so does an unknown/`null` state, so we never grant during a
      *  moment we can't positively call idle. `Idle` covers warm-up/ready. */
     private val handoffIdleStates = HANDOFF_IDLE_STATES
+
+    /** Crash-guard on the ack-by-disconnect handoff release: if the granted taker
+     *  never drops its link (crashed, BT off), release the DE1 anyway — the
+     *  reclaim probe (issue 01) still recovers an orphaned machine after that. */
+    private val handoffReleaseTimeoutMs = 3_000L
 
     // The managers + scanner sit on this facade so the transport can be swapped at
     // runtime — M2 mode switches (Mirror/Hand-off) with NO app restart. The startup
@@ -299,12 +317,21 @@ class ProxyController(
      *  Wired into the [RelayHub] by [startPrimaryMode]; `startShot` runs the
      *  primary's full shot orchestration, so that complexity never crosses the
      *  wire. */
-    private fun handleRelayedControl(
+    internal fun handleRelayedControl(
         method: String,
         args: String,
         originId: String? = null,
         originName: String? = null,
     ): Result<Unit> = runCatching {
+        // Handoff is granted HERE, not through the VM router, so the taker's
+        // identity travels with the grant: the release then waits for that
+        // client's disconnect (its mode switch closes the link) instead of a
+        // blind flush timer — the ControlOk can no longer be torn down with the
+        // relay before it reaches the taker.
+        if (method == "handoff") {
+            grantHandoff(takerId = originId)
+            return@runCatching
+        }
         // "Who's driving" notice (issue 11, loose model): compute BEFORE dispatch so
         // an IDLE request reads as stop-vs-wake against the PRE-action machine state.
         // Only a secondary-initiated control carries an originId.
@@ -345,18 +372,28 @@ class ProxyController(
 
     /** Primary side of an M3 handoff: a secondary asked for the DE1. Refuse unless
      *  the machine is positively idle; otherwise grant by stepping down to NORMAL so
-     *  the taker can connect its own radio. The release is delayed a beat so this
-     *  grant (a `ControlOk`) flushes to the secondary before [applyMode] tears the
-     *  relay down. Throwing here becomes a `ControlErr` → the taker stays put.
-     *  Reached through the VM's control router (the `"handoff"` verb). */
-    internal fun grantHandoff() {
+     *  the taker can connect its own radio. The release waits for the TAKER'S
+     *  DISCONNECT — its own mode switch closes the link once it has the grant —
+     *  so tearing the relay down can't race the `ControlOk` off the wire (the old
+     *  400 ms flush timer could); a timeout still releases if the taker crashed.
+     *  Throwing here becomes a `ControlErr` → the taker stays put. */
+    private fun grantHandoff(takerId: String? = null) {
         handoffRefusal(machineStateName(), firmwareHoldsLink())?.let { reason ->
             appendLog("Handoff refused: $reason")
             throw IllegalStateException(reason)
         }
         appendLog("Handoff granted — releasing the DE1")
+        val hub = relayHub
         scope.launch {
-            delay(400) // let this grant (ControlOk) flush before the relay tears down
+            // Ack-by-disconnect: the grant (ControlOk) is queued after this
+            // handler returns; the taker, once it has it, switches to primary and
+            // its link closes. Wait for that — with a crash-guard timeout. (A
+            // relayed control always carries the approved session's id.)
+            if (takerId == null || hub == null) {
+                appendLog("Handoff: no taker identity — releasing now")
+            } else if (!hub.awaitClientGone(takerId, handoffReleaseTimeoutMs)) {
+                appendLog("Handoff: taker still connected after ${handoffReleaseTimeoutMs}ms — releasing anyway")
+            }
             // RELEASE: step down to normal but do NOT reconnect — the taker must be
             // able to acquire the now-free DE1 (issue 01). The old path reconnected,
             // so the "released" holder immediately re-grabbed the radio and the
@@ -425,7 +462,11 @@ class ProxyController(
                     appendLog("Handoff granted — acquiring the DE1")
                     notify("Taking over the machine…")
                     onHandoffGranted() // keep the mirrored custom profile (issue 05)
-                    delay(600) // let the primary release first
+                    // No wait here: the primary releases once our link closes,
+                    // which this switch does. connect() is scan-based and the
+                    // scan has no timeout (ConnectionController.connect /
+                    // scanForDe1), so it binds only once the released DE1
+                    // advertises; there is no window to miss.
                     switchToPrimary()
                 }
                 .onFailure {
@@ -485,22 +526,36 @@ class ProxyController(
      * reconnects are silent. The mutex serializes prompts so two unknown peers
      * don't fight over the dialog.
      */
-    private suspend fun authorizePeer(clientId: String, clientName: String): PairingDecision {
+    internal suspend fun authorizePeer(clientId: String, clientName: String): PairingDecision {
         pairedDevices().firstOrNull { it.id == clientId }?.let {
             return PairingDecision.Allowed(it.canControl)
         }
+        if (clientId in deniedWhileHosting) return PairingDecision.Denied("not authorized")
         return pairingMutex.withLock {
             // Re-check inside the lock: a peer approved while we queued is now known.
             val known = pairedDevices().firstOrNull { it.id == clientId }
             if (known != null) return@withLock PairingDecision.Allowed(known.canControl)
+            // ...and a peer denied while we queued is not asked again.
+            if (clientId in deniedWhileHosting) return@withLock PairingDecision.Denied("not authorized")
             val deferred = CompletableDeferred<PairingChoice>()
             pairingDeferred = deferred
             _state.update { it.copy(pendingPairing = PairingPrompt(clientId, clientName)) }
-            val choice = deferred.await()
-            pairingDeferred = null
-            _state.update { it.copy(pendingPairing = null) }
+            // finally: when this await is cancelled (the relay stops, the scope
+            // ends) the prompt must not outlive it, and the next unknown peer
+            // must get a fresh slot. A peer that merely disconnects mid-prompt
+            // does not cancel it yet: the relay isn't reading its socket while
+            // Hello is pending.
+            val choice = try {
+                deferred.await()
+            } finally {
+                pairingDeferred = null
+                _state.update { it.copy(pendingPairing = null) }
+            }
             when (choice) {
-                PairingChoice.DENY -> PairingDecision.Denied("not authorized")
+                PairingChoice.DENY -> {
+                    deniedWhileHosting += clientId
+                    PairingDecision.Denied("not authorized")
+                }
                 PairingChoice.MIRROR_ONLY -> { rememberPaired(clientId, clientName, false); PairingDecision.Allowed(false) }
                 PairingChoice.ALLOW_CONTROL -> { rememberPaired(clientId, clientName, true); PairingDecision.Allowed(true) }
             }
@@ -560,6 +615,7 @@ class ProxyController(
             normalMode()
         }
         var tappingRef: TappingBleTransport? = null
+        deniedWhileHosting.clear() // a new hosting session
         val hub = RelayHub(
             primaryId = deviceLabel(),
             primaryName = deviceLabel(),
@@ -630,8 +686,6 @@ class ProxyController(
             onHandoffOffer = { fromName -> onHandoffOffered(fromName) },
             // "Who's driving" (issue 11): another mirror drove the machine → toast.
             onEvent = { text -> notify(text) },
-            // Re-run the attach handshake when the link redials (issue 03).
-            reconnects = link.reconnects,
         )
         // Mirror the primary's SCALE (issue 04), roster-driven: attach it only once
         // the primary actually advertises one — no blind scan, so a scaleless primary
@@ -672,55 +726,68 @@ class ProxyController(
     private fun applyMode(role: String, host: String, port: Int, reconnect: Boolean = true) {
         // Never move the radio while a firmware flash or its erase / reboot
         // window holds the DE1 (audit r2 H1 / r1 NOTE 8).
-        if (firmwareHoldsLink()) {
-            appendLog("Mode switch to $role refused: $FIRMWARE_BUSY_REASON")
-            notify(FIRMWARE_BUSY_NOTICE)
-            return
-        }
+        if (refusedForFirmware(role)) return
         scope.launch {
-            disconnectDevices()
-            delay(150)
-            relayServer?.stop(); relayServer = null; relayHub = null
-            // Cancel the previous SECONDARY mode's collectors + ProxyTransport before
-            // releasing the link, so nothing leaks across the switch (issue 10).
-            secondaryScope?.cancel(); secondaryScope = null
-            proxyLink?.dispose(); proxyLink = null
-            switchable.setDelegate(
-                when (role) {
-                    "secondary" -> startSecondaryMode(host, port)
-                    "primary" -> startPrimaryMode()
-                    else -> normalMode()
-                },
-            )
-            _state.update {
-                it.copy(
-                    role = role,
-                    // The granted scope only applies while secondary (issue 02);
-                    // a fresh attach's Welcome repopulates it.
-                    mirrorViewOnly = if (role == "secondary") it.mirrorViewOnly else false,
-                    // Push-handoff state (issue 07): the client list only applies while
-                    // primary; a pending offer is dropped on any role change.
-                    mirrorClients = if (role == "primary") it.mirrorClients else emptyList(),
-                    pendingHandoffOffer = null,
-                )
+            modeMutex.withLock {
+                // Again under the lock: a switch queued behind another one may
+                // start after a flash has taken the DE1.
+                if (!refusedForFirmware(role)) applyModeLocked(role, host, port, reconnect)
             }
-            // The VM mirrors role/host/port into MainUiState (with its sticky
-            // rules), drops the mirror overlay, and persists the prefs.
-            onModeApplied(role, host, port)
-            // A secondary mirrors the machine but must never drive it: make its
-            // core a read-only observer so the autonomous writes it derives from
-            // the mirrored stream (SAW, frame-skip) are suppressed. normal/primary
-            // are authoritative. reset() preserves this across reconnects.
-            setCoreReadOnly(role == "secondary")
-            setRecorderEnabled(role != "secondary") // a mirror doesn't record (issue 14)
-            // Reconnect the DE1 over the new delegate (a secondary attaches to the
-            // primary's DE1; primary/normal scan the real or replayed radio). The
-            // scale, if any, is reconnected by the user — DE1-only mirror for now.
-            // A handoff release passes reconnect=false so the stepped-down holder
-            // does NOT re-grab the DE1 — the taker needs it free (issue 01).
-            if (reconnect) connect()
-            refreshAdvertisement()
         }
+    }
+
+    /** True (logged, user told) when a firmware flash holds the DE1, so a
+     *  switch to [role] must not move the radio. */
+    private fun refusedForFirmware(role: String): Boolean {
+        if (!firmwareHoldsLink()) return false
+        appendLog("Mode switch to $role refused: $FIRMWARE_BUSY_REASON")
+        notify(FIRMWARE_BUSY_NOTICE)
+        return true
+    }
+
+    private suspend fun applyModeLocked(role: String, host: String, port: Int, reconnect: Boolean) {
+        disconnectDevices()
+        delay(150)
+        relayServer?.stop(); relayServer = null; relayHub = null
+        // Cancel the previous SECONDARY mode's collectors + ProxyTransport before
+        // releasing the link, so nothing leaks across the switch (issue 10).
+        secondaryScope?.cancel(); secondaryScope = null
+        proxyLink?.dispose(); proxyLink = null
+        switchable.setDelegate(
+            when (role) {
+                "secondary" -> startSecondaryMode(host, port)
+                "primary" -> startPrimaryMode()
+                else -> normalMode()
+            },
+        )
+        _state.update {
+            it.copy(
+                role = role,
+                // The granted scope only applies while secondary (issue 02);
+                // a fresh attach's Welcome repopulates it.
+                mirrorViewOnly = if (role == "secondary") it.mirrorViewOnly else false,
+                // Push-handoff state (issue 07): the client list only applies while
+                // primary; a pending offer is dropped on any role change.
+                mirrorClients = if (role == "primary") it.mirrorClients else emptyList(),
+                pendingHandoffOffer = null,
+            )
+        }
+        // The VM mirrors role/host/port into MainUiState (with its sticky
+        // rules), drops the mirror overlay, and persists the prefs.
+        onModeApplied(role, host, port)
+        // A secondary mirrors the machine but must never drive it: make its
+        // core a read-only observer so the autonomous writes it derives from
+        // the mirrored stream (SAW, frame-skip) are suppressed. normal/primary
+        // are authoritative. reset() preserves this across reconnects.
+        setCoreReadOnly(role == "secondary")
+        setRecorderEnabled(role != "secondary") // a mirror doesn't record (issue 14)
+        // Reconnect the DE1 over the new delegate (a secondary attaches to the
+        // primary's DE1; primary/normal scan the real or replayed radio). The
+        // scale, if any, is reconnected by the user — DE1-only mirror for now.
+        // A handoff release passes reconnect=false so the stepped-down holder
+        // does NOT re-grab the DE1 — the taker needs it free (issue 01).
+        if (reconnect) connect()
+        refreshAdvertisement()
     }
 
     /** (Re)advertise this device's current role / DE1-hold / relay-port over NSD, so
