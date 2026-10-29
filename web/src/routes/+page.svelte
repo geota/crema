@@ -31,7 +31,8 @@
 <style>
 	/* The Brew dashboard is a fixed full-height layout: the header / main /
 	   foot bands fill the viewport and the docked Quick Sheet is absolutely
-	   positioned against `.qcontain` (which already sets `overflow: hidden`).
+	   positioned against `.qcontain` (which sets `overflow: clip`). When the
+	   viewport is too short, `.crema-dash` scrolls (see web-kit.css).
 	   Pin it to the viewport height AND make it a flex column — `.crema-dash`
 	   is a `flex: 1` child, so without the column context it collapses to its
 	   content height and the chart ends up only as tall as the left timer
@@ -39,9 +40,13 @@
 	   `flex: 1` main band stretch, and the foot stay a thin bottom strip. */
 	:global(.shell-content:has(.qcontain)) {
 		height: 100vh;
+		/* Dynamic viewport units track the visible area on tablets whose
+		   browser chrome shows and hides; `100vh` is the fallback. */
+		height: 100dvh;
 	}
 	:global(.qcontain) {
 		height: 100vh;
+		height: 100dvh;
 		display: flex;
 		flex-direction: column;
 	}
