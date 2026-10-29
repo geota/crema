@@ -1,6 +1,7 @@
 package coffee.crema.ble.proxy
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -43,16 +44,24 @@ class LanRelayPortTest {
     }
 
     @Test
-    fun `a taken port falls back to an ephemeral one`() = runBlocking {
-        ServerSocket(0).use { taken ->
-            val server = LanRelayServer(hub(), requestedPort = taken.localPort)
-            try {
-                val port = server.start()
-                assertNotEquals(taken.localPort, port)
-                assertTrue(port > 0 && accepts(port), "listening on the fallback port $port")
-            } finally {
-                server.stop()
+    fun `a taken port falls back to an ephemeral one`() {
+        runTest { } // arms kotlinx-coroutines-test's collector of uncaught exceptions
+        runBlocking {
+            ServerSocket(0).use { taken ->
+                val server = LanRelayServer(hub(), requestedPort = taken.localPort)
+                try {
+                    val port = server.start()
+                    assertNotEquals(taken.localPort, port)
+                    assertTrue(port > 0 && accepts(port), "listening on the fallback port $port")
+                } finally {
+                    server.stop()
+                }
             }
         }
+        // CIO fails the bind inside its own job. That must not reach the
+        // uncaught-exception handler (a crash on Android): this runTest
+        // reports any exception uncaught since the first one.
+        Thread.sleep(300)
+        runTest { }
     }
 }
