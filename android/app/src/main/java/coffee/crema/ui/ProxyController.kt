@@ -150,8 +150,9 @@ class ProxyController(
     /** Where a primary runs relayed commands: Main, like its own UI (tests
      *  pass a test dispatcher). */
     private val commandLane: CoroutineContext = Dispatchers.Main.immediate,
-    /** How long a remote's link must stay CONNECTING before it looks for its
-     *  hub elsewhere on NSD (the re-find). */
+    /** How long a remote's session may go without a Welcome before the
+     *  re-find looks for its hub on a new port, and how long a re-find
+     *  attempt has to be welcomed. */
     private val refindDelayMs: Long = REFIND_DELAY_MS,
     /** A role is about to start, before its transport is built: the VM
      *  creates or drops its mirror slice (I6). [refind] is a remote dialing
@@ -163,6 +164,12 @@ class ProxyController(
     /** A remote session was welcomed, with the hub's name. Called before any
      *  frame of that session is applied. */
     private val onWelcomed: (hubName: String) -> Unit = {},
+    /** A re-find attempt was welcomed: the remote's saved target is now
+     *  [host]:[port]. The VM shows and persists it (the role is unchanged). */
+    private val onTargetMoved: (host: String, port: Int) -> Unit = { _, _ -> },
+    /** Returns once the VM's prefs are loaded: [pairedDevices] is empty until
+     *  then, so a hub that served earlier would deny every paired remote. */
+    private val prefsReady: suspend () -> Unit = {},
 ) {
 
     /** The proxy slice of the UI snapshot — the VM mirrors this into MainUiState. */
@@ -256,6 +263,15 @@ class ProxyController(
     /** The primary relay's bound port (0 when not hosting) — advertised so a
      *  secondary can dial it. */
     private var relayPort: Int = 0
+
+    /** The relay port this hub bound last time (a tiny file, like [deviceId]).
+     *  The next start asks for it first, so a remote's saved host:port still
+     *  reaches the hub after a restart; 0 when none was saved. */
+    private val relayPortFile = File(app.filesDir, "relayPort")
+
+    private fun savedRelayPort(): Int =
+        runCatching { relayPortFile.takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull() }.getOrNull()
+            ?.takeIf { it in 1..65_535 } ?: 0
 
     /** Stable per-install id (persisted in a tiny file — issue 14): the
      *  secondary's `clientId`, which tells a host which pairing record to check.
@@ -375,7 +391,7 @@ class ProxyController(
         peersJob = scope.launch {
             source.collect { p ->
                 _state.update { it.copy(peers = p) }
-                onPeersChanged(p)
+                onPeersChanged()
             }
         }
     }
@@ -421,37 +437,44 @@ class ProxyController(
 
     // ── Re-find: a remote whose hub moved finds it again (spec §3.3) ─────────
 
-    /** The session a remote's current transport serves. [candidate] is set
-     *  when the re-find dialed it, with the target it left ([previous]), so a
-     *  refusal can go back there. Callbacks from any other session are stale. */
+    /** The session a remote's current transport serves. [attempt] is set when
+     *  the re-find dialed it: a new port on the saved host, tried until its
+     *  first Welcome. Callbacks from any other session are stale. */
     private class RemoteSession(
         val host: String,
         val port: Int,
         val trust: MirrorTrust,
-        val candidate: Peer?,
-        val previous: Pair<String, Int>?,
+        val attempt: Boolean,
     ) {
-        /** The link has been CONNECTING for [refindDelayMs]. */
-        var connectingLong = false
+        /** Not welcomed for [refindDelayMs]: since the session started, or
+         *  since its link last dropped. A socket that is open but silent
+         *  counts as not welcomed. */
+        var stalled = false
+        /** The hub welcomed this session on one of its link's dials. A
+         *  welcomed re-find attempt is the saved target from then on. */
+        var welcomed = false
+        /** This session was refused, so its link is closed and nothing
+         *  redials it. */
+        var refused = false
         val target: Pair<String, Int> get() = host to port
+        /** A re-find attempt still waiting for its first Welcome. */
+        val trying: Boolean get() = attempt && !welcomed
     }
 
-    /** A switch the re-find asked for: try [candidate], or go back ([candidate]
-     *  null) to a target after a refusal. Runs only if [from] is still the
-     *  session when the switch gets the mode lock. */
-    private class RefindSwitch(val candidate: Peer?, val previous: Pair<String, Int>?, val from: RemoteSession)
+    /** A switch the re-find asked for: try a new port on the saved host
+     *  ([attempt]), or go back to the saved target. Runs only if [from] is
+     *  still the session when the switch gets the mode lock. */
+    private class RefindSwitch(val attempt: Boolean, val from: RemoteSession)
 
     @Volatile private var session: RemoteSession? = null
 
-    /** NSD instance ids the re-find won't dial: they refused this device, or
-     *  never answered. An id leaves when NSD stops listing it. */
-    private val refindSkipped = mutableSetOf<String>()
+    /** The remote's saved target: what it restored, what the user picked, or
+     *  a re-find attempt that was welcomed. The re-find dials only this host,
+     *  and a refused attempt comes back here. */
+    private var savedTarget: Pair<String, Int>? = null
 
-    /** Candidates refused so far without a success in between. */
+    /** Unattended refusals and unanswered attempts since the last Welcome. */
     private var refindRefusals = 0
-
-    /** The last unattended session was refused for a trust reason. */
-    private var lastUnattendedRefused = false
 
     /** A re-find switch is queued and hasn't started yet. */
     private var refindQueued = false
@@ -459,9 +482,9 @@ class ProxyController(
     /** Running while the next attempt must wait (5 s, 15 s, then 60 s). */
     private var refindBackoff: Job? = null
 
-    /** Instance ids NSD listed when the re-find gave up: only a new one
-     *  resumes it. */
-    private var refindSeenAtGiveUp: Set<String> = emptySet()
+    /** The ports NSD listed for the saved host when the re-find gave up:
+     *  only a new one resumes it. */
+    private var refindSeenAtGiveUp: Set<Int> = emptySet()
 
     /** Held by the leave-remote flow (P2's frozen slice): no re-find runs. */
     private var refindHeld = false
@@ -477,109 +500,141 @@ class ProxyController(
     private fun resetRefind() {
         refindBackoff?.cancel()
         refindBackoff = null
-        refindSkipped.clear()
         refindRefusals = 0
-        lastUnattendedRefused = false
         refindQueued = false
         refindSeenAtGiveUp = emptySet()
         _state.update { it.copy(refindGaveUp = false) }
     }
 
-    /** A hub NSD lists that this remote may dial unattended: a primary with a
-     *  relay port, not this device, not skipped, at another address than the
-     *  current target. Not [Peer.isMirrorSource]: a hub that restarted before
+    /** The hubs NSD lists on the saved target's host: a primary with a relay
+     *  port, not this device. Only the port may differ from the saved target
+     *  (a hub that restarted and couldn't get its port back); another address
+     *  or device is never dialed unattended, because nothing binds a session
+     *  to the endpoint it dialed (an on-path relay stays possible until
+     *  protocol v3). Not [Peer.isMirrorSource]: a hub that restarted before
      *  its DE1 reconnected must still be found. */
-    private fun refindCandidate(current: RemoteSession): Peer? = _state.value.peers.firstOrNull {
-        it.role == "primary" && it.port > 0 && it.id != instanceId && it.id !in refindSkipped &&
-            (it.host to it.port) != current.target
+    private fun hubsOnSavedHost(): List<Peer> {
+        val (host, _) = savedTarget ?: return emptyList()
+        return _state.value.peers.filter {
+            it.role == "primary" && it.port > 0 && it.id != instanceId && sameAddress(it.host, host)
+        }
     }
 
-    /** Check the re-find's conditions and, when they hold, dial a candidate. */
+    /** A port the re-find may try: on the saved host, not the current
+     *  target, and only for a target pinned to a host this device paired with
+     *  (so never from a user's pick still waiting for its Welcome). */
+    private fun refindCandidate(current: RemoteSession): Peer? {
+        if (pairing.pinnedHost == null || (current.trust.repin && !current.welcomed)) return null
+        return hubsOnSavedHost().firstOrNull { it.port != current.port }
+    }
+
+    /** Check the re-find's conditions and, when they hold, dial a candidate
+     *  or go back to the saved target. */
     private fun evaluateRefind() {
         val current = session ?: return
         if (_state.value.role != "secondary" || refindHeld || refindQueued || _state.value.refindGaveUp) return
+        // The handshake deadline: an attempt not welcomed in time ends.
+        if (current.trying) {
+            if (current.stalled) endAttempt(current, "didn't answer")
+            return
+        }
         if (refindBackoff?.isActive == true) return
-        if (!current.connectingLong && !lastUnattendedRefused) return
-        // A candidate that never answered counts as tried: skip it and go back.
-        if (current.candidate != null) {
-            if (!current.connectingLong) return
-            appendLog("Re-find: ${current.candidate.name} didn't answer — going back")
-            refindSkipped += current.candidate.id
-            requestRefindSwitch(null, current.previous, current)
+        if (!current.stalled && !current.refused) return
+        if (refindRefusals >= REFIND_MAX_REFUSALS) {
+            giveUpRefind()
             return
         }
         val candidate = refindCandidate(current)
-        if (candidate == null) {
-            if (refindRefusals >= REFIND_MAX_REFUSALS) giveUpRefind()
-            return
+        when {
+            candidate != null -> {
+                appendLog("Re-find: trying ${candidate.name} at ${candidate.host}:${candidate.port}")
+                requestRefindSwitch(candidate.host, candidate.port, attempt = true, from = current)
+            }
+            // A refused link never redials: dial the saved target again.
+            current.refused -> savedTarget?.let { (host, port) ->
+                requestRefindSwitch(host, port, attempt = false, from = current)
+            }
         }
-        appendLog("Re-find: trying ${candidate.name} at ${candidate.host}:${candidate.port}")
-        requestRefindSwitch(candidate, current.target, current)
     }
 
-    private fun requestRefindSwitch(candidate: Peer?, target: Pair<String, Int>?, from: RemoteSession) {
-        val (host, port) = (if (candidate != null) candidate.host to candidate.port else target) ?: return
+    private fun requestRefindSwitch(host: String, port: Int, attempt: Boolean, from: RemoteSession) {
         refindQueued = true
         applyMode(
             "secondary", host, port, trust = MirrorTrust.UNATTENDED,
-            refind = RefindSwitch(candidate, target, from),
+            refind = RefindSwitch(attempt, from),
         )
     }
 
     private fun giveUpRefind() {
-        refindSeenAtGiveUp = _state.value.peers.map { it.id }.toSet()
+        refindSeenAtGiveUp = hubsOnSavedHost().map { it.port }.toSet()
         appendLog("Re-find: no hub proved this device's pairing — giving up until a new one appears")
         _state.update { it.copy(refindGaveUp = true) }
     }
 
-    /** A remote session was welcomed: the hub proved the pairing. */
+    /** Count an unattended refusal and wait before the next try. */
+    private fun backOff() {
+        refindRefusals++
+        val wait = REFIND_BACKOFF_MS[minOf(refindRefusals, REFIND_BACKOFF_MS.size) - 1]
+        refindBackoff?.cancel()
+        refindBackoff = scope.launch {
+            delay(wait)
+            refindBackoff = null // done waiting: this job is still active in its own body
+            evaluateRefind()
+        }
+    }
+
+    /** A re-find attempt was refused or didn't answer in time: count it, back
+     *  off, and go back to the saved target now. Nothing about the attempt is
+     *  saved. */
+    private fun endAttempt(attempt: RemoteSession, why: String) {
+        appendLog("Re-find: ${attempt.host}:${attempt.port} $why — going back")
+        backOff()
+        savedTarget?.let { (host, port) -> requestRefindSwitch(host, port, attempt = false, from = attempt) }
+    }
+
+    /** A remote session was welcomed: the hub proved the pairing. A re-find
+     *  attempt becomes the saved target, persisted. */
     private fun onRemoteWelcomed(welcomed: RemoteSession) {
         if (welcomed !== session) return
-        if (welcomed.candidate != null) appendLog("Re-find: reattached to ${welcomed.candidate.name}")
+        welcomed.welcomed = true
+        if (welcomed.attempt && savedTarget != welcomed.target) {
+            appendLog("Re-find: reattached at ${welcomed.host}:${welcomed.port}")
+            savedTarget = welcomed.target
+            onTargetMoved(welcomed.host, welcomed.port)
+        }
+        refindBackoff?.cancel()
+        refindBackoff = null
         refindRefusals = 0
-        lastUnattendedRefused = false
         _state.update { it.copy(refindGaveUp = false) }
     }
 
     /**
      * A remote session ended in a refusal ([ProxyTransport]'s `onRefused`).
-     * - The user's own pick: back to normal with the reason, as before.
-     * - A hub that proved the held secret and then refused (revoked, another
-     *   protocol version): normal, as before.
-     * - A re-find candidate otherwise: skipped by instance id, back-off, and
-     *   the previous target re-applied, because a refused link never redials.
-     * - The current target, refused for a trust reason (host mismatch or
-     *   changed, unverified, handshake mismatch): stays a remote, and the
-     *   re-find may look elsewhere. Any other refusal there (the host's own
-     *   Denied) still makes it normal.
+     * - The user's own pick, before its first Welcome: back to normal with
+     *   the reason, as before.
+     * - A Denied (or a version refusal) from a host that proved the held
+     *   secret in this session: normal, as before.
+     * - Anything else is unproven, from a re-find attempt or the saved target
+     *   alike: the remote keeps its role and backs off. An attempt goes back
+     *   to the saved target; the saved target is dialed again after the
+     *   back-off. After three in a row the re-find gives up.
      */
     private fun handleSessionRefused(refused: RemoteSession?, reason: String, byHost: Boolean, hostProved: Boolean) {
         if (refused == null || refused !== session || _state.value.role != "secondary") return
         val verifiedDenial = hostProved && (byHost || reason.startsWith(DenyReason.VERSION_MISMATCH))
-        val trustRefusal = !byHost && reason in TRUST_REFUSALS
         when {
-            refused.trust.repin -> demote(reason)
-            refused.candidate != null && !verifiedDenial -> {
-                refindSkipped += refused.candidate.id
-                refindRefusals++
-                lastUnattendedRefused = true
-                appendLog("Re-find: ${refused.candidate.name} refused ($reason) — skipped, going back")
-                val wait = REFIND_BACKOFF_MS[minOf(refindRefusals, REFIND_BACKOFF_MS.size) - 1]
-                refindBackoff?.cancel()
-                refindBackoff = scope.launch {
-                    delay(wait)
-                    refindBackoff = null // done waiting: this job is still active in its own body
-                    evaluateRefind()
-                }
-                requestRefindSwitch(null, refused.previous, refused)
+            refused.trust.repin && !refused.welcomed -> demote(reason)
+            verifiedDenial -> demote(reason)
+            refused.trying -> {
+                refused.refused = true
+                endAttempt(refused, "refused ($reason)")
             }
-            refused.candidate == null && trustRefusal -> {
+            else -> {
+                refused.refused = true
                 appendLog("Unattended session refused ($reason) — staying a remote")
-                notify(deniedMessage(reason))
-                lastUnattendedRefused = true
-                evaluateRefind()
+                if (refindRefusals == 0) notify(deniedMessage(reason))
+                backOff()
             }
-            else -> demote(reason)
         }
     }
 
@@ -607,13 +662,12 @@ class ProxyController(
         if (_state.value.hubStoppedHosting != stopped) _state.update { it.copy(hubStoppedHosting = stopped) }
     }
 
-    /** NSD changed: forget skipped ids that left, resume after a give-up when
-     *  a new instance appears, and re-check. */
-    private fun onPeersChanged(peers: List<Peer>) {
-        val ids = peers.map { it.id }.toSet()
-        refindSkipped.retainAll(ids)
-        if (_state.value.refindGaveUp && (ids - refindSeenAtGiveUp).isNotEmpty()) {
-            appendLog("Re-find: a new hub appeared — trying again")
+    /** NSD changed: resume after a give-up when a new port appears on the
+     *  saved host, and re-check. */
+    private fun onPeersChanged() {
+        if (_state.value.refindGaveUp && (hubsOnSavedHost().map { it.port }.toSet() - refindSeenAtGiveUp).isNotEmpty()) {
+            appendLog("Re-find: a hub appeared on ${savedTarget?.first} — trying again")
+            refindRefusals = 0
             _state.update { it.copy(refindGaveUp = false) }
         }
         refreshHubStoppedHosting()
@@ -871,12 +925,20 @@ class ProxyController(
         relayHub = hub
         val tapping = TappingBleTransport(real, hub, scope)
         tappingRef = tapping
-        val server = LanRelayServer(hub)
+        val wantedPort = savedRelayPort()
+        val server = LanRelayServer(hub, requestedPort = wantedPort)
         relayServer = server
         scope.launch {
             runCatching {
+                // Not before the paired devices are known: a remote that dials
+                // a restarting hub meets a closed port and redials, rather
+                // than a Denied.
+                prefsReady()
                 relayPort = server.start()
                 appendLog("LAN relay listening on :$relayPort")
+                if (relayPort != wantedPort) {
+                    runCatching { SafeFile.write(relayPortFile, relayPort.toString(), keepBackup = false) }
+                }
                 refreshAdvertisement()
             }.onFailure { appendLog("LAN relay failed to start: ${it.message}") }
         }
@@ -887,8 +949,9 @@ class ProxyController(
     private fun startSecondaryMode(host: String, port: Int, trust: MirrorTrust, refind: RefindSwitch?): BleTransport {
         val url = "ws://$host:$port${LanRelayServer.PATH}"
         appendLog("Multi-device: SECONDARY → $url")
-        val remote = RemoteSession(host, port, trust, refind?.candidate, refind?.previous)
+        val remote = RemoteSession(host, port, trust, attempt = refind?.attempt == true)
         session = remote
+        if (!remote.attempt) savedTarget = remote.target
         refindQueued = false
         // A child scope for everything this mode launches (the link-state + roster
         // collectors AND the ProxyTransport's own init collectors), so applyMode can
@@ -906,21 +969,29 @@ class ProxyController(
         // not a frozen "Connected through" (issue 03). The link only counts as
         // up once the hub has welcomed this session (onWelcome below): until
         // then a socket can be open while the hub's pairing prompt waits.
-        // The re-find's clock: CONNECTING for refindDelayMs.
-        var connectingTimer: Job? = null
+        // The re-find's clock runs while the session isn't welcomed: from
+        // the start, and again from each drop. An open socket doesn't stop
+        // it, so a silent endpoint can't hold the re-find.
+        var stallTimer: Job? = null
+        var live = false
+        fun armStallTimer() {
+            stallTimer?.cancel()
+            remote.stalled = false
+            stallTimer = modeScope.launch {
+                delay(refindDelayMs)
+                remote.stalled = true
+                evaluateRefind()
+            }
+        }
+        armStallTimer()
         modeScope.launch {
             link.state.collect { s ->
                 if (s == LinkState.CONNECTING) {
                     _state.update { it.copy(mirrorReconnecting = true) }
-                    connectingTimer?.cancel()
-                    connectingTimer = modeScope.launch {
-                        delay(refindDelayMs)
-                        remote.connectingLong = true
-                        evaluateRefind()
+                    if (live) {
+                        live = false
+                        armStallTimer()
                     }
-                } else {
-                    connectingTimer?.cancel()
-                    remote.connectingLong = false
                 }
             }
         }
@@ -936,6 +1007,9 @@ class ProxyController(
             onWelcome = { scope, hubName ->
                 onWelcomed(hubName)
                 _state.update { it.copy(mirrorViewOnly = scope == "mirror", hubName = hubName, mirrorReconnecting = false) }
+                live = true
+                stallTimer?.cancel()
+                remote.stalled = false
                 onRemoteWelcomed(remote)
             },
             // A refusal: the host declined or revoked us (issue 02), or this
@@ -960,10 +1034,11 @@ class ProxyController(
             },
             allowRepair = trust.allowRepair,
             // Offer to forget a host only for a target this device chose or
-            // restored: an address the re-find dialed off an unauthenticated
-            // advertisement must not raise "forget this host".
+            // restored, and once per run of refusals (the saved target is
+            // dialed again after each back-off): a port the re-find dialed off
+            // an unauthenticated advertisement must not raise "forget this host".
             onHostChanged = { hostId, hostName ->
-                if (refind?.candidate == null) _state.update { it.copy(changedHost = hostId to hostName) }
+                if (!remote.attempt && refindRefusals == 0) _state.update { it.copy(changedHost = hostId to hostName) }
                 else appendLog("Re-find: $hostName at $host:$port couldn't prove the pairing this device holds for it")
             },
         )
@@ -1125,8 +1200,10 @@ class ProxyController(
             )
         }
         // The VM mirrors role/host/port into MainUiState (with its sticky
-        // rules), drops the mirror overlay, and persists the prefs.
-        onModeApplied(role, host, port)
+        // rules), drops the mirror overlay, and persists the prefs. Not for a
+        // re-find switch: the role and the saved target stay, and an attempt
+        // is saved only once it is welcomed (onTargetMoved).
+        if (refind == null) onModeApplied(role, host, port)
         // A secondary mirrors the machine but must never drive it: make its
         // core a read-only observer so the autonomous writes it derives from
         // the mirrored stream (SAW, frame-skip) are suppressed. normal/primary
@@ -1215,20 +1292,24 @@ internal const val FIRMWARE_BUSY_REASON = "DE1 is updating firmware"
 /** What this device shows when it refuses a mode switch itself. */
 internal const val FIRMWARE_BUSY_NOTICE = "Not now — the DE1 is updating firmware"
 
-/** How long a remote's link stays CONNECTING before the re-find looks on NSD. */
+/** How long a remote's session goes unwelcomed before the re-find looks on
+ *  NSD, and how long a re-find attempt has to be welcomed. */
 internal const val REFIND_DELAY_MS = 5_000L
 
-/** The wait after each refused re-find candidate: the first, second, and every later one. */
+/** The wait after each unattended refusal or unanswered attempt: the first, second, and every later one. */
 internal val REFIND_BACKOFF_MS = listOf(5_000L, 15_000L, 60_000L)
 
-/** Refused candidates, with no other left, before the re-find gives up. */
+/** Unattended refusals and unanswered attempts in a row before the re-find gives up. */
 internal const val REFIND_MAX_REFUSALS = 3
 
-/** Refusals this device makes itself when a host can't show it's the one this
- *  device trusts: an unattended session refused for one keeps the remote role. */
-internal val TRUST_REFUSALS = setOf(
-    DenyReason.HOST_MISMATCH, DenyReason.HOST_CHANGED, DenyReason.HOST_UNVERIFIED, DenyReason.HANDSHAKE_MISMATCH,
-)
+/** Whether two host strings name the same address: NSD's resolved address
+ *  against a saved target, ignoring case and IPv6 brackets. A saved name
+ *  (`kitchen.local`) never matches an address, so the re-find doesn't run for
+ *  it. */
+internal fun sameAddress(a: String, b: String): Boolean {
+    fun norm(h: String) = h.trim().removePrefix("[").removeSuffix("]").lowercase()
+    return norm(a).isNotEmpty() && norm(a) == norm(b)
+}
 
 /** How long the host's pairing window stays open. */
 internal const val PAIRING_WINDOW_S = 120

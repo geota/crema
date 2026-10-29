@@ -21,14 +21,15 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The re-find dials addresses from unauthenticated NSD advertisements, so it
- * keeps #199's unattended trust intact. Against three impostors that answer
- * a real remote ([MainViewModel]) over real sockets: one claiming the pinned
- * host's id without proving the secret, one with another host id, and one
- * that answers the Hello with a Denied. The remote never sends a pairing
- * request (or any Auth), never replaces the held secret, keeps the pin,
- * raises no "forget this host" prompt, stays a remote, and after three
- * refusals shows "Couldn't verify <hub>" with Connect directly.
+ * The re-find dials ports from unauthenticated NSD advertisements, so it
+ * keeps #199's unattended trust intact. Even on the saved host itself (the
+ * only address it dials), against three impostors that answer a real remote
+ * ([MainViewModel]) over real sockets: one claiming the pinned host's id
+ * without proving the secret, one with another host id, and one that
+ * answers the Hello with a Denied. The remote never sends a pairing request
+ * (or any Auth), never replaces the held secret, keeps the pin and its saved
+ * target, raises no "forget this host" prompt, stays a remote, and after
+ * three refusals shows "Couldn't verify <hub>" with Connect directly.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
@@ -61,13 +62,8 @@ class RefindTrustTest {
     private fun heldSecret(): String? =
         Json.parseToJsonElement(pairingFile.readText()).jsonObject["held"]?.jsonObject?.get("host-1")?.jsonPrimitive?.content
 
-    @Test
-    fun `an unattended re-find refuses impostors without pairing or touching the pin`() {
-        val claimsPinnedId = TestHubServer.scripted { Frame.Challenge("host-1", "Kitchen tablet", PairingCrypto.newNonce()) }
-        val otherHost = TestHubServer.scripted { Frame.Challenge("rogue-1", "Kitchen tablet", PairingCrypto.newNonce()) }
-        val denier = TestHubServer.scripted { Frame.Denied(DenyReason.REVOKED) }
-        endpoints += listOf(claimsPinnedId, otherHost, denier)
-
+    private fun refusesWithoutTrusting(impostor: TestHubServer) {
+        endpoints += impostor
         // A remote restored on a target that's gone (nothing listens on :1),
         // paired with and pinned to host-1 (plaintext secret: Robolectric has
         // no keystore, and the store opens a pre-keystore value).
@@ -77,25 +73,31 @@ class RefindTrustTest {
         VmHarness.idle()
         val proxy = VmHarness.proxyController(vm)
         proxy.overridePeers(
-            MutableStateFlow(
-                listOf(claimsPinnedId, otherHost, denier).mapIndexed { i, e ->
-                    Peer("nsd-impostor-$i", "Kitchen tablet", "primary", holdsDe1 = true, host = "127.0.0.1", port = e.port)
-                },
-            ),
+            MutableStateFlow(listOf(Peer("nsd-impostor", "Kitchen tablet", "primary", holdsDe1 = true, host = "127.0.0.1", port = impostor.port))),
         )
 
         advanceUntil("given up", maxMs = 150_000) { vm.ui.value.refindGaveUp }
 
-        for (e in listOf(claimsPinnedId, otherHost, denier)) {
-            assertTrue(e.received.any { "\"type\":\"hello\"" in it }, "the re-find dialed :${e.port}")
-            assertEquals(emptyList(), e.auths, "no Auth, so no pairing request and no proof, to :${e.port}")
-        }
+        assertTrue(impostor.received.any { "\"type\":\"hello\"" in it }, "the re-find dialed :${impostor.port}")
+        assertEquals(emptyList(), impostor.auths, "no Auth, so no pairing request and no proof")
         assertEquals("secondary", proxy.state.value.role, "an impostor's refusal or Denied doesn't make it normal")
         assertEquals("host-1", proxy.pairingStore.pinnedHost, "the pin is unchanged")
         assertEquals(secret, heldSecret(), "the held secret is unchanged")
         assertNull(vm.ui.value.changedHost, "no \"forget this host\" prompt from an advertisement")
-        assertEquals(1, vm.ui.value.proxyPrimaryPort, "back on its own target")
+        assertEquals(1, vm.ui.value.proxyPrimaryPort, "its saved target is unchanged")
         assertEquals("Couldn't verify 127.0.0.1", vm.ui.value.remoteStatus())
         assertTrue(vm.ui.value.canConnectDirectly())
     }
+
+    @Test
+    fun `an impostor claiming the pinned host id is refused`() =
+        refusesWithoutTrusting(TestHubServer.scripted { Frame.Challenge("host-1", "Kitchen tablet", PairingCrypto.newNonce()) })
+
+    @Test
+    fun `an impostor with another host id is refused`() =
+        refusesWithoutTrusting(TestHubServer.scripted { Frame.Challenge("rogue-1", "Kitchen tablet", PairingCrypto.newNonce()) })
+
+    @Test
+    fun `an impostor's bare Denied is refused`() =
+        refusesWithoutTrusting(TestHubServer.scripted { Frame.Denied(DenyReason.REVOKED) })
 }
