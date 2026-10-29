@@ -92,6 +92,8 @@ class RelayedVerbPrimaryDispatchTest {
         VmHarness.persistRole("primary")
         vm = VmHarness.build(store)
         VmHarness.idle()
+        // The settings a test sets must not be overwritten by the prefs load.
+        VmHarness.awaitPrefsLoaded(vm)
         val hub: RelayHub = assertNotNull(VmHarness.proxyController(vm).relayHub, "the primary built its relay")
         val (clientEnd, serverEnd) = CodecFrameLink.pair(scope)
         client = clientEnd

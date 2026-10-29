@@ -1,5 +1,6 @@
 package coffee.crema.machine
 
+import coffee.crema.core.MachineRequest
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
@@ -90,6 +91,21 @@ class RelayedCommandDispatcherTest {
     fun `an older build's raw espresso runs the guarded start`() {
         assertEquals(CommandOutcome.Accepted, dispatch("machineState", "ESPRESSO"))
         assertEquals(listOf("startShot"), actions.applied.toList())
+    }
+
+    /** No relayed machine state reaches a raw Espresso write, and only the
+     *  states the Android UI requests are run at all. */
+    @Test
+    fun `no relayed machine state is a raw espresso or a state the UI can't send`() {
+        val uiStates = setOf("SLEEP", "IDLE", "ESPRESSO", "STEAM", "HOT_WATER", "FLUSH", "STEAM_RINSE", "DESCALE", "CLEAN")
+        for (state in MachineRequest.entries.map { it.name }) {
+            val outcome = dispatch("machineState", state)
+            if (state in uiStates) assertEquals(CommandOutcome.Accepted, outcome, state)
+            else assertIs<CommandOutcome.Refused>(outcome, state)
+        }
+        assertTrue("machineState(ESPRESSO)" !in actions.applied, "${actions.applied}")
+        assertEquals(1, actions.applied.count { it == "startShot" }, "ESPRESSO ran the guarded start once")
+        assertEquals(uiStates.size, actions.applied.size, "${actions.applied}")
     }
 
     @Test

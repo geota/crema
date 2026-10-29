@@ -62,6 +62,15 @@ internal object VmHarness {
         return field.get(vm) as ProxyController
     }
 
+    /** Idle the main looper until the VM's async prefs load has hydrated
+     *  the UI, so a later setter isn't overwritten by it. */
+    fun awaitPrefsLoaded(vm: MainViewModel) {
+        val field = runCatching { MainViewModel::class.java.getDeclaredField("prefsLoaded") }.getOrNull()
+            ?: error("MainViewModel no longer has a prefsLoaded flag: update VmHarness.awaitPrefsLoaded")
+        field.isAccessible = true
+        idleUntil("the prefs load") { field.getBoolean(vm) }
+    }
+
     /** The VM's event log, newest first. */
     fun log(vm: MainViewModel): List<String> = vm.ui.value.eventLog
 }
