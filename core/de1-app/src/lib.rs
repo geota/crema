@@ -69,6 +69,10 @@ pub const PROFILE_UPLOAD_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 /// next shot start or reconnect). Reset by a completed upload. Bounds a link
 /// that fails every upload to a few attempts, like Decenza's capped retry.
 pub const MAX_PROFILE_REUPLOAD_REQUESTS: u8 = 3;
+
+/// The steam timeout sent in place of 0 (de1app `binary.tcl`: 0 means "stop
+/// steam immediately", so it sends the U8P0 maximum).
+const STEAM_TIMEOUT_MAX_S: f32 = 255.0;
 use de1_scale::decent_hds::HdsNegotiation;
 use de1_scale::{Scale, ScaleCapabilities, ScaleConfigUpdate, ScaleUuids, TimerCommand};
 #[cfg(test)]
@@ -1549,9 +1553,9 @@ impl CremaCore {
     ///
     /// The `*_timeout_s` and `*_volume_ml` fields are not clamped here
     /// — they encode to a `u8` (capped at 255 in the protocol layer
-    /// via `u8p0_encode`) and a stale or zero value has no firmware-
-    /// damaging effect (`0` is interpreted as "use machine default"
-    /// per legacy `binary.tcl`).
+    /// via `u8p0_encode`). A steam timeout of 0 would stop steam at once,
+    /// so it goes out as 255 s, as de1app sends it (`binary.tcl`); the
+    /// retained settings keep the user's 0.
     pub fn set_steam_hotwater_settings(&mut self, settings: ShotSettings) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_steam_hotwater_settings") {
             return out;
@@ -2232,6 +2236,13 @@ impl CremaCore {
         }
         if self.scale.is_some() && settings.hot_water_volume_ml > 0.0 {
             settings.hot_water_volume_ml = HOT_WATER_STOP_ON_SCALE_ML;
+        }
+        // A steam timeout of 0 tells the DE1 to stop steam immediately, so
+        // de1app sends the maximum instead (`binary.tcl`: "a setting of zero
+        // would mean, turn off steam immediately, so we set it instead to the
+        // maximum allowed"). Wire-only, like the overrides above.
+        if settings.steam_timeout_s.is_nan() || settings.steam_timeout_s.round() < 1.0 {
+            settings.steam_timeout_s = STEAM_TIMEOUT_MAX_S;
         }
         settings
     }
@@ -9619,6 +9630,37 @@ mod tests {
             &[0x34, 0x12, 0x00, 0x00],
             "FeatureFlags value preserved"
         );
+    }
+
+    #[test]
+    fn a_zero_steam_timeout_goes_out_as_255() {
+        // de1app binary.tcl maps steam_timeout 0 to 255; 0 on the wire
+        // stops steam at once (cohort review 02 P3-1). Byte 2 of the
+        // 9-byte ShotSettings packet is TargetSteamLength.
+        let mut core = CremaCore::new();
+        let out = core.set_steam_hotwater_settings(ShotSettings {
+            steam_temp_c: 150.0,
+            steam_timeout_s: 0.0,
+            ..ShotSettings::default()
+        });
+        let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
+            panic!("expected the ShotSettings write");
+        };
+        assert_eq!(data[2], 255);
+        // The user's value is what the shells see.
+        assert!(out.events.iter().any(|e| matches!(
+            e,
+            Event::ShotSettingsRead { steam_timeout, .. } if *steam_timeout == 0.0
+        )));
+        let out = core.set_steam_hotwater_settings(ShotSettings {
+            steam_temp_c: 150.0,
+            steam_timeout_s: 90.0,
+            ..ShotSettings::default()
+        });
+        let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
+            panic!("expected the ShotSettings write");
+        };
+        assert_eq!(data[2], 90);
     }
 
     #[test]
