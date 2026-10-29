@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.profiles.StepCap
 import coffee.crema.ui.fmt
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -349,11 +350,15 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
+                // A profile saved before the 20-step limit: say what to change (#6 #6).
+                StepCap.note(segs.size)?.let { note ->
+                    Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Eyebrow("Segments", Modifier.weight(1f))
                     CremaButton(
                         // The DE1 runs at most MAX_PROFILE_STEPS (20) frames.
-                        enabled = segs.size < ProfileBounds.INSTANCE.maxProfileSteps,
+                        enabled = StepCap.canAdd(segs.size),
                         onClick = {
                             val last = segs.lastOrNull()
                             segs.add(
