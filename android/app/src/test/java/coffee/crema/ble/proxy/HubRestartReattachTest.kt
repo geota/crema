@@ -76,7 +76,7 @@ class HubRestartReattachTest {
         first.kill()
         VmHarness.idleUntil("the remote to notice") { vm.ui.value.mirrorReconnecting }
         assertEquals("Reconnecting to Kitchen tablet…", vm.ui.value.remoteStatus())
-        val (second, secondHub) = lifetime(configSource = { """{"grinderModel":"After the restart"}""" }, clientId = clientId)
+        val (second, secondHub) = lifetime(configSource = { """{"grinderModel":"After the restart","primaryName":"Kitchen tablet"}""" }, clientId = clientId)
         peers.value = listOf(Peer("nsd-second-lifetime", "Kitchen tablet", "primary", holdsDe1 = false, host = "127.0.0.1", port = second.port))
 
         advanceStepped(REFIND_DELAY_MS + 500)

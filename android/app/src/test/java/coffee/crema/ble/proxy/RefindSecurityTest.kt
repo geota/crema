@@ -87,9 +87,11 @@ class RefindSecurityTest {
         return vm
     }
 
-    private fun savedPort(): Int =
+    /** The port in the saved prefs, or -1 while the file is being replaced. */
+    private fun savedPort(): Int = runCatching {
         Json.parseToJsonElement(File(VmHarness.app().filesDir, "prefs.json").readText())
             .jsonObject["proxyPrimaryPort"]!!.jsonPrimitive.int
+    }.getOrDefault(-1)
 
     /** A WebSocket endpoint that accepts [sockets] dials and never says anything. */
     private fun silent(sockets: Int = 5): MockWebServer {

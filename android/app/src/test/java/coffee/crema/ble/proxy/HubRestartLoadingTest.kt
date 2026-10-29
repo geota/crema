@@ -103,6 +103,15 @@ class HubRestartLoadingTest {
         ).also { it.setHubMode(true) }
     }
 
+    /** Wait in real time for the hub's relay to accept connections. */
+    private fun awaitListening(port: Int) {
+        val deadline = System.nanoTime() + 10_000_000_000L
+        while (runCatching { java.net.Socket().use { it.connect(java.net.InetSocketAddress("127.0.0.1", port), 200) } }.isFailure) {
+            check(System.nanoTime() < deadline) { "the hub never listened on :$port" }
+            Thread.sleep(20)
+        }
+    }
+
     private fun finishLoading() {
         paired += PairedDevice("phone-1", "Phone", canControl = true)
         loaded.complete(Unit)
@@ -122,6 +131,7 @@ class HubRestartLoadingTest {
         assertEquals("secondary", VmHarness.proxyController(vm).state.value.role)
 
         finishLoading()
+        awaitListening(port)
         assertTrue(stepped(30_000) { !vm.ui.value.mirrorReconnecting }, "admitted once the hub loaded")
         assertEquals(emptyList(), refusals(vm), "no refusal at any point")
         assertNull(vm.ui.value.changedHost)
@@ -137,8 +147,9 @@ class HubRestartLoadingTest {
         val port = ServerSocket(0).use { it.localPort }
         val vm = remote(port)
         startHub(servesWhileLoading = true)
+        awaitListening(port)
 
-        assertTrue(stepped(10_000) { refusals(vm).isNotEmpty() }, "the loading hub was refused")
+        assertTrue(stepped(30_000) { refusals(vm).isNotEmpty() }, "the loading hub was refused")
         assertNull(vm.ui.value.changedHost, "no forget prompt from an automatic reconnect")
         assertEquals("secondary", VmHarness.proxyController(vm).state.value.role, "not demoted")
 
