@@ -339,7 +339,13 @@ class ProxyTransport(
                 val hostProved = held != null &&
                     PairingCrypto.verifyHost(held, frame.primaryId, clientId, current.clientNonce, frame.nonce, frame.hostProof)
                 val proof = if (held != null && hostProved) {
+                    // A proof that can't be computed refuses: a missing proof
+                    // would read as a pairing request.
                     runCatching { PairingCrypto.clientProof(held, frame.primaryId, clientId, current.clientNonce, frame.nonce) }.getOrNull()
+                        ?: run {
+                            refuse(DenyReason.HANDSHAKE_MISMATCH, IllegalStateException("Proxy client proof failed"))
+                            return
+                        }
                 } else {
                     if (held != null) {
                         // A secret this device holds is never replaced by a new
