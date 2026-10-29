@@ -9694,6 +9694,34 @@ mod tests {
     }
 
     #[test]
+    fn user_activity_on_a_read_only_mirror_leaves_steam_eco_alone() {
+        // Round-3 clean check C3 #4: the mirror cannot write ShotSettings, so
+        // a touch on it must not report eco lifted while the machine is still
+        // in eco.
+        use de1_domain::idle_sleep::{IdleActivity, IdleSleepInput};
+        let touch = IdleSleepInput::Activity {
+            kind: IdleActivity::Touch,
+        };
+        let mut core = CremaCore::new();
+        core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        core.enable_steam_eco_mode(true, 0);
+        core.set_read_only(true);
+        let out = core.on_tick(600_000);
+        assert!(
+            out.events
+                .contains(&Event::SteamEcoModeChanged { eco: true })
+        );
+        let out = core.idle_sleep(touch, 1);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::SteamEcoModeChanged { .. })),
+            "no local eco change on a mirror"
+        );
+        assert!(out.commands.is_empty());
+    }
+
+    #[test]
     fn user_activity_does_nothing_to_steam_while_eco_is_off() {
         use de1_domain::idle_sleep::{IdleActivity, IdleSleepInput};
         let mut core = CremaCore::new();
