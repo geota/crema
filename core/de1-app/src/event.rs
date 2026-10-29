@@ -649,6 +649,17 @@ pub enum Event {
         /// Number of extension frames (one per step that has a limiter).
         extension_frame_count: u8,
     },
+    /// An upload is waiting for the DE1's machine model before it writes
+    /// anything: the model picks the frame encoding (classic DE1 or Bengle
+    /// BLE v2), so no upload goes out on a guess. The core has asked for the
+    /// MachineModel register; the upload starts when the reply lands
+    /// ([`ProfileUploadStarted`](Self::ProfileUploadStarted)) or fails with
+    /// [`ProfileUploadFailure::MachineModelUnknown`] after
+    /// [`MACHINE_MODEL_WAIT`](crate::MACHINE_MODEL_WAIT).
+    ProfileUploadWaitingForModel {
+        /// Title of the profile waiting to upload.
+        title: String,
+    },
     /// One profile frame was acknowledged by the DE1.
     ProfileUploadProgress {
         /// The step index just acknowledged. For an extension-frame ack
@@ -686,11 +697,15 @@ pub enum Event {
     },
     /// The DE1's loaded profile is unknown after a failed upload and the
     /// machine is Idle, so the shell should upload the active profile now.
-    /// Emitted when a failure lands while the machine is Idle, or on the
-    /// next transition into Idle (after the flow that interrupted the
-    /// upload, never during it). Bounded to
+    /// Emitted when a failure lands while the machine is Idle, on the next
+    /// transition into Idle (after the flow that interrupted the upload,
+    /// never during it), or on a tick. The request stays outstanding until a
+    /// shell starts an upload: it is repeated every
+    /// [`PROFILE_REUPLOAD_REPEAT`](crate::PROFILE_REUPLOAD_REPEAT) while the
+    /// machine stays Idle, so a shell that could not act at once (link not
+    /// ready yet) is asked again. At most
     /// [`MAX_PROFILE_REUPLOAD_REQUESTS`](crate::MAX_PROFILE_REUPLOAD_REQUESTS)
-    /// consecutive requests until an upload completes; cleared by a
+    /// uploads are started in answer until one completes; cleared by a
     /// completed upload or a reset (the reconnect path owns the re-upload).
     /// Decenza's `ReArm` follow-up (`aa8232e6`).
     ProfileReuploadNeeded,
@@ -743,8 +758,17 @@ pub enum ProfileUploadFailure {
     },
     /// The shell called
     /// [`cancel_profile_upload`](crate::CremaCore::cancel_profile_upload)
-    /// mid-upload.
+    /// mid-upload, or a new upload superseded this one.
     Aborted,
+    /// A profile write of this upload did not reach the DE1 (the shell
+    /// reported it through
+    /// [`profile_write_failed`](crate::CremaCore::profile_write_failed)).
+    /// The shell stops the upload's remaining writes.
+    WriteFailed,
+    /// The machine model never arrived within
+    /// [`MACHINE_MODEL_WAIT`](crate::MACHINE_MODEL_WAIT), so the frame
+    /// encoding (classic DE1 or Bengle) is unknown and nothing was written.
+    MachineModelUnknown,
     /// An unexpected [`AppError`] variant — the bridge couldn't classify it.
     /// The `message` carries the `AppError`'s `Display` output so the shell
     /// can surface it in a toast / log without losing the underlying cause.

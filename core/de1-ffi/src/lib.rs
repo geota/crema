@@ -1170,6 +1170,14 @@ pub fn has_cup_warmer(raw: u32) -> bool {
     de1_protocol::has_cup_warmer(raw)
 }
 
+/// Decode a raw `HeaterVoltage` MMR word to 120 / 230 V, or `None` for 0 (not
+/// set) and any word outside both bands (e.g. a doubled +1000 marker). Mirrors
+/// the wasm `heaterVoltageFromRaw`; see [`de1_protocol::heater_voltage_from_raw`].
+#[uniffi::export]
+pub fn heater_voltage_from_raw(raw: u32) -> Option<u16> {
+    de1_protocol::heater_voltage_from_raw(raw)
+}
+
 // ── Visualizer bean / roaster wire converters ────────────────────────────
 //
 // Encode/decode the Crema bean & roaster shapes ⇄ the Visualizer coffee-bag /
@@ -1925,7 +1933,8 @@ pub fn wire_shot_from_detail(payload_json: String) -> Result<String, CremaError>
 /// [`CremaError`] when `content` is not a valid v2 profile.
 #[uniffi::export]
 pub fn parse_v2_profile(content: String) -> Result<String, CremaError> {
-    de1_domain::import_v2_json(&content)
+    // A shot's embedded recipe: up to 32 steps stay readable (#6 #6).
+    de1_domain::import_v2_json_embedded(&content)
         .map_err(crema_err)
         .and_then(|p| serde_json::to_string(&p).map_err(crema_err))
 }
@@ -3098,6 +3107,13 @@ impl CremaBridge {
     /// Cancel an in-progress profile upload.
     pub fn cancel_profile_upload(&self) -> String {
         self.emit(self.core().cancel_profile_upload())
+    }
+
+    /// A profile write of the running upload did not reach the DE1: fail the
+    /// upload now (`ProfileUploadFailure::WriteFailed`). See
+    /// [`CremaCore::profile_write_failed`](de1_app::CremaCore::profile_write_failed).
+    pub fn profile_write_failed(&self, now_ms: u64) -> String {
+        self.emit(self.core().profile_write_failed(now_ms))
     }
 
     /// `true` from `upload_profile` until the tail-ack / a failure /

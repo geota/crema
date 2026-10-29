@@ -97,10 +97,9 @@ impl CremaCore {
             return false;
         };
         // Its tail ack writes 0, like the immediate write below — never the
-        // user's tank setting mid-cycle.
-        if let Some(upload) = self.profile_upload.as_mut() {
-            upload.tank_temp_c = Some(0);
-        }
+        // active profile's tank value mid-cycle (also when the upload still
+        // waits for the machine model).
+        self.override_upload_tank(0);
         out.commands.extend(upload.commands);
         out.events.extend(upload.events);
         // The 0 °C tank target the reference profiles carry (decaid
@@ -325,7 +324,7 @@ mod tests {
     /// A core connected to a GHC machine at `build` (None = never read),
     /// idle and heating.
     fn heating_core(build: Option<u32>) -> CremaCore {
-        let mut core = CremaCore::new();
+        let mut core = CremaCore::new_with_model(1);
         if let Some(build) = build {
             let _ = core.on_notification(
                 Source::De1MmrRead,
@@ -399,7 +398,7 @@ mod tests {
         // Decenza d5f405fb: a Descale tapped right after connecting, before
         // the GhcInfo MMR reply lands, must not go out as a plain write that
         // firmware < 1356 drops.
-        let mut core = CremaCore::new();
+        let mut core = CremaCore::new_with_model(1);
         let _ = core.on_notification(
             Source::De1MmrRead,
             &mmr_packet(MmrRegister::FirmwareVersion, 1355),
@@ -413,7 +412,7 @@ mod tests {
 
     #[test]
     fn a_headless_machine_gets_the_plain_write() {
-        let mut core = CremaCore::new();
+        let mut core = CremaCore::new_with_model(1);
         let _ = core.on_notification(
             Source::De1MmrRead,
             &mmr_packet(MmrRegister::FirmwareVersion, 1355),
@@ -649,5 +648,74 @@ mod tests {
                 .any(|e| matches!(e, Event::ProfileUploadCompleted { .. }))
         );
         assert_eq!(tank_writes(&last), vec![0]);
+    }
+
+    /// Ack every profile write in `out` as the shells do; the last output.
+    fn ack_profile_writes(core: &mut CremaCore, out: &CoreOutput, now_ms: u64) -> CoreOutput {
+        let mut last = CoreOutput::default();
+        for c in &out.commands {
+            if let Command::WriteCharacteristic { target, data } = c {
+                let source = match target {
+                    WriteTarget::De1ProfileHeader => Source::De1HeaderAck,
+                    WriteTarget::De1ProfileFrame => Source::De1FrameAck,
+                    _ => continue,
+                };
+                last = core.on_notification(source, data, now_ms);
+            }
+        }
+        last
+    }
+
+    #[test]
+    fn the_cold_profile_goes_out_without_a_default_limiter_frame() {
+        // Cohort review 2026-10-28 #2 N4 / #6 #7: de1app `onestep_cold` and
+        // decaid `_onestepColdProfile` send header, one frame, tail — the
+        // default 8 ml/s limiter is for brews, not this firmware workaround.
+        let mut core = heating_core(Some(1355));
+        let start = core.request_machine_state(MachineState::Descale);
+        let frames: Vec<u8> = start
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1ProfileFrame,
+                    data,
+                } => Some(data[0]),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            frames,
+            vec![0, 1],
+            "frame 0, then the tail; no 32+ extension"
+        );
+    }
+
+    #[test]
+    fn a_cold_request_before_the_model_waits_and_still_writes_tank_zero() {
+        // The upload waits for the MachineModel reply (no guessed encoding);
+        // the cold profile's 0 °C tank override must survive the wait and
+        // must not become the value the end of the cycle restores.
+        let mut core = CremaCore::new();
+        let _ = core.on_notification(
+            Source::De1MmrRead,
+            &mmr_packet(MmrRegister::FirmwareVersion, 1355),
+            0,
+        );
+        let _ = core.on_notification(Source::De1MmrRead, &mmr_packet(MmrRegister::GhcInfo, 1), 0);
+        let _ = core.on_notification(Source::De1State, &[2, 1], 1_000); // Idle / Heating
+        core.tank_temp_threshold_c = Some(30);
+        let start = core.request_machine_state(MachineState::Descale);
+        assert!(!uploads_profile(&start), "waits for the model");
+        assert!(state_writes(&start).is_empty(), "the request is held");
+        let released = core.on_notification(
+            Source::De1MmrRead,
+            &mmr_packet(MmrRegister::MachineModel, 1),
+            1_100,
+        );
+        assert!(uploads_profile(&released));
+        let last = ack_profile_writes(&mut core, &released, 1_200);
+        assert_eq!(tank_writes(&last), vec![0]);
+        assert_eq!(core.tank_temp_threshold_c, Some(30));
     }
 }

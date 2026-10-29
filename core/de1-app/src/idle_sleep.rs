@@ -106,7 +106,7 @@ impl CremaCore {
         self.firmware_locks_writes()
             || self.shot_started.is_some()
             || self.post_shot_settle.is_some()
-            || self.profile_upload.is_some()
+            || self.profile_upload_in_progress()
             || self.brew_session.as_ref().is_some_and(|session| {
                 matches!(
                     session.phase(),
