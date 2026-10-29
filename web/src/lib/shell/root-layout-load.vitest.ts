@@ -5,7 +5,10 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('#lib/core/index.js', () => ({
+// Partial mock: only `loadCore` fails; the rest of the module (enums such as
+// `CalTarget` that the layout's import graph reaches) stays real.
+vi.mock('#lib/core/index.js', async (importOriginal) => ({
+	...(await importOriginal<typeof import('#lib/core/index.js')>()),
 	loadCore: () => Promise.reject(new Error('WebAssembly.instantiate(): network error'))
 }));
 
