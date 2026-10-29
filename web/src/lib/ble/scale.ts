@@ -33,7 +33,8 @@ import {
 	BleDevice,
 	isChooserCancelled,
 	requestDevice,
-	shortUuid,
+	advertisingStatus,
+	droppedNotificationsStatus,
 	type ConnState,
 	type KickResult
 } from './transport';
@@ -221,15 +222,11 @@ export class ScaleManager {
 		});
 		device.onAdvertisement((rssi) => {
 			if (!current()) return;
-			this.callbacks.onStatus(
-				`Scale is advertising${rssi === null ? '' : ` (${rssi} dBm)`} — reconnecting`
-			);
+			this.callbacks.onStatus(advertisingStatus('Scale', rssi));
 		});
 		device.onNotificationOverflow((characteristic, evicted) => {
 			if (!current()) return;
-			this.callbacks.onStatus(
-				`Scale: the browser dropped ${evicted} notification${evicted === 1 ? '' : 's'} (${shortUuid(characteristic)})`
-			);
+			this.callbacks.onStatus(droppedNotificationsStatus('Scale', characteristic, evicted));
 		});
 		device.onReconnected(() => {
 			if (!current()) return;
