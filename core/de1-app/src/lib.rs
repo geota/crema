@@ -4732,6 +4732,30 @@ impl CremaCore {
         self.gate_read_only(out)
     }
 
+    /// The shell's synthesised ack for a profile write of upload `upload_id`
+    /// that reached the DE1 (`source` is [`Source::De1HeaderAck`] or
+    /// [`Source::De1FrameAck`]). Fed like [`on_notification`](Self::on_notification)
+    /// only while `upload_id` is the running upload; otherwise ignored, so a
+    /// superseded upload's late ack can never count toward, or fail, a newer
+    /// one — whichever thread it arrives on (round-2 verification V1 P3-1).
+    pub fn on_profile_write_ack(
+        &mut self,
+        source: Source,
+        data: &[u8],
+        now_ms: u64,
+        upload_id: u32,
+    ) -> CoreOutput {
+        let current = self
+            .profile_upload
+            .as_ref()
+            .is_some_and(|upload| upload.id == upload_id);
+        if !current || !matches!(source, Source::De1HeaderAck | Source::De1FrameAck) {
+            self.clock = self.clock.max(ms_to_duration(now_ms));
+            return CoreOutput::default();
+        }
+        self.on_notification(source, data, now_ms)
+    }
+
     /// End the in-flight (or parked) upload with `reason` and emit
     /// [`Event::ProfileUploadFailed`].
     ///
@@ -11948,6 +11972,76 @@ mod tests {
             assert!(
                 done.iter()
                     .any(|e| matches!(e, Event::ProfileUploadCompleted { .. }))
+            );
+        }
+
+        #[test]
+        fn a_superseded_uploads_late_acks_never_reach_the_newer_one() {
+            // Round-2 verification V1 P3-1, ack variant: on Android an old
+            // upload's write can finish after a shot start armed the next
+            // upload but before the shell's generation moved on. Its header
+            // ack (same step count) used to count as the new header, its frame
+            // acks as the new frames.
+            let mut core = CremaCore::new_with_model(1);
+            let a = core.upload_profile(&two_step(), Duration::ZERO).unwrap();
+            let b = core
+                .upload_profile(&two_step(), Duration::from_millis(10))
+                .unwrap();
+            let (a_id, b_id) = (started_upload_id(&a), started_upload_id(&b));
+            let header = |out: &CoreOutput| {
+                out.commands
+                    .iter()
+                    .find_map(|c| match c {
+                        Command::WriteCharacteristic {
+                            target: WriteTarget::De1ProfileHeader,
+                            data,
+                        } => Some(data.clone()),
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            let frames = |out: &CoreOutput| -> Vec<Vec<u8>> {
+                out.commands
+                    .iter()
+                    .filter_map(|c| match c {
+                        Command::WriteCharacteristic {
+                            target: WriteTarget::De1ProfileFrame,
+                            data,
+                        } => Some(data.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            assert_eq!(header(&a), header(&b), "same step count: identical headers");
+            // A's late header and first frame acks: ignored, B untouched.
+            assert!(
+                core.on_profile_write_ack(Source::De1HeaderAck, &header(&a), 20, a_id)
+                    .events
+                    .is_empty()
+            );
+            assert!(
+                core.on_profile_write_ack(Source::De1FrameAck, &frames(&a)[0], 21, a_id)
+                    .events
+                    .is_empty()
+            );
+            assert!(core.profile_upload_in_progress());
+            // B's own acks complete B.
+            let _ = core.on_profile_write_ack(Source::De1HeaderAck, &header(&b), 30, b_id);
+            let mut last = Vec::new();
+            for f in frames(&b) {
+                last = core
+                    .on_profile_write_ack(Source::De1FrameAck, &f, 31, b_id)
+                    .events;
+            }
+            assert!(
+                last.iter()
+                    .any(|e| matches!(e, Event::ProfileUploadCompleted { .. }))
+            );
+            // Only ack sources are accepted.
+            assert!(
+                core.on_profile_write_ack(Source::De1State, &[2, 0], 40, b_id)
+                    .events
+                    .is_empty()
             );
         }
 

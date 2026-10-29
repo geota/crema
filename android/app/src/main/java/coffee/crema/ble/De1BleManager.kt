@@ -594,6 +594,16 @@ class De1BleManager(
         }
     }
 
+    /** [feedCore] for a profile write's synthesized ack, named by its upload. */
+    private fun feedAck(source: NotificationSource, bytes: ByteArray, tMs: Long, uploadId: UInt, what: String) {
+        runCatching {
+            onCoreOutput(bridge.onProfileWriteAck(source, bytes, tMs.toULong(), uploadId))
+        }.onFailure {
+            Log.e(TAG, "$what failed — skipping this ack (${Hex.encode(bytes)})", it)
+            onStatus("$what error — skipped (see diagnostics)")
+        }
+    }
+
     // ---- Machine control (AND5) -------------------------------------------
 
     // ---- Firmware flash I/O ---------------------------------------------------
@@ -709,10 +719,12 @@ class De1BleManager(
          *  would otherwise make the shot-stop wait — and itself skips
          *  registration so stops never preempt stops. */
         urgent: Boolean = false,
-        /** Asked after a successful profile header / frame write: whether its
-         *  synthesized ack may still reach the core. `false` once a newer
-         *  upload superseded this write's (cohort review 2026-10-28, #2 N2). */
-        shouldAck: () -> Boolean = { true },
+        /** Asked after a successful profile header / frame write: the core's
+         *  number for the upload it belongs to, or null once a newer upload
+         *  superseded it (cohort review 2026-10-28, #2 N2). The synthesized
+         *  ack names that upload, so the core drops it if a newer upload was
+         *  armed in between (round-2 verification V1 P3-1). */
+        ackUploadId: () -> UInt? = { null },
     ): Boolean {
         // Count the write BEFORE checking the gate (audit r2 LOW 3): a write
         // that passes the check is then always visible to the flash's drain,
@@ -763,7 +775,9 @@ class De1BleManager(
             nonFlashWritesInFlight.decrementAndGet()
         }
         profileWriteAckSource(target)?.let { source ->
-            if (shouldAck()) feedCore(source, bytes, SystemClock.elapsedRealtime(), "DE1 $target ACK")
+            ackUploadId()?.let { uploadId ->
+                feedAck(source, bytes, SystemClock.elapsedRealtime(), uploadId, "DE1 $target ACK")
+            }
         }
         return true
     }

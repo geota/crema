@@ -2262,6 +2262,24 @@ impl CremaBridge {
         self.state().stashed.is_some()
     }
 
+    /// The synthesised ack for a profile write of upload `upload_id` (its
+    /// `ProfileUploadStarted` number). Ignored unless that upload is still
+    /// running. See
+    /// [`CremaCore::on_profile_write_ack`](de1_app::CremaCore::on_profile_write_ack).
+    pub fn on_profile_write_ack(
+        &self,
+        source: NotificationSource,
+        data: Vec<u8>,
+        now_ms: f64,
+        upload_id: u32,
+    ) -> String {
+        json(
+            self.state()
+                .core
+                .on_profile_write_ack(source.into(), &data, now_ms as u64, upload_id),
+        )
+    }
+
     /// Feed a raw GATT notification. Returns a JSON-encoded [`CoreOutput`].
     pub fn on_notification(
         &self,

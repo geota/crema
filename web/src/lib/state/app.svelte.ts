@@ -1260,11 +1260,14 @@ export class CremaApp {
 				// fails the upload rather than report a half-written
 				// profile as loaded (cohort review 02 P0-2).
 				const ack = profileWriteAck(command.content.target, delivered);
-				if (ack !== null) {
-					const ackOut = await this.core.onNotification(
+				// Named by its upload, so the core drops it if a newer upload
+				// started meanwhile (round-2 V1 P3-1).
+				if (ack !== null && profileBatch?.uploadId != null) {
+					const ackOut = await this.core.onProfileWriteAck(
 						ack,
 						new Uint8Array(command.content.data),
-						performance.now()
+						performance.now(),
+						profileBatch.uploadId
 					);
 					this.applyCoreOutput(ackOut);
 				}

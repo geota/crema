@@ -310,6 +310,17 @@ export interface CremaCore {
 	 */
 	onNotification(source: NotificationSource, data: Uint8Array, nowMs: number): Promise<CoreOutput>;
 	/**
+	 * The synthesised ack for a profile write of upload `uploadId` (its
+	 * `ProfileUploadStarted` number); the core ignores it unless that upload is
+	 * still running. `source` is `De1HeaderAck` or `De1FrameAck`.
+	 */
+	onProfileWriteAck(
+		source: NotificationSource,
+		data: Uint8Array,
+		nowMs: number,
+		uploadId: number
+	): Promise<CoreOutput>;
+	/**
 	 * The `nowMs` of the most recent `onNotification` call, or `null` before
 	 * the first call. Lets the shell pin shot-slice bounds to the same
 	 * timebase the rolling capture buffer uses — `performance.now()` during
@@ -1038,6 +1049,11 @@ async function createCore(): Promise<CremaCore> {
 		async onNotification(source, data, nowMs) {
 			lastNotificationAtMs = nowMs;
 			return parseOutput(bridge.on_notification(toWasmSource(source), data, nowMs));
+		},
+		async onProfileWriteAck(source, data, nowMs, uploadId) {
+			return parseOutput(
+				bridge.on_profile_write_ack(toWasmSource(source), data, nowMs, uploadId)
+			);
 		},
 		get lastNotificationAtMs(): number | null {
 			return lastNotificationAtMs;

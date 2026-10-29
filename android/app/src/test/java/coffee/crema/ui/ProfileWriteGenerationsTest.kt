@@ -113,4 +113,30 @@ class ProfileWriteGenerationsTest {
         assertTrue("WriteFailed" in own, own)
         assertFalse(bridge.profileUploadInProgress())
     }
+
+    @Test
+    fun `a superseded upload's late ack never reaches the shot start's upload`() {
+        // Round-2 verification V1 P3-1, ack variant: upload N's write lands
+        // after the core lane armed N+1 but before N+1's batch began, so the
+        // generation still let N's ack through. The ack now names N.
+        val bridge = CremaBridge()
+        bridge.onNotification(NotificationSource.DE1_MMR_READ, modelReply(1), 0uL)
+        val g = ProfileWriteGenerations()
+        val n = json.decodeFromString(CoreOutput.serializer(), bridge.uploadProfile(profile("N"), 0uL))
+        val batchN = assertNotNull(g.begin(n.writeTargets(), startedUploadId(n.events)))
+        val nHeader = n.commands.filterIsInstance<Command.WriteCharacteristic>().first().content.data
+            .map { it.toByte() }.toByteArray()
+        // N+1 armed on the lane; its batch has not begun, so N still "may write".
+        bridge.uploadProfile(profile("N+1"), 10uL)
+        assertTrue(g.mayWrite(batchN))
+        val ackId = batchN.uploadId.takeIf { g.mayWrite(batchN) } // the VM's ackUploadId
+        val late = json.decodeFromString(
+            CoreOutput.serializer(),
+            bridge.onProfileWriteAck(NotificationSource.DE1_HEADER_ACK, nHeader, 20uL, assertNotNull(ackId)),
+        )
+        assertTrue(late.events.isEmpty(), late.events.toString())
+        // N+1's header is still unconfirmed: its watchdog would say HeaderNotAcked,
+        // not a frame mismatch caused by N.
+        assertTrue(bridge.profileUploadInProgress())
+    }
 }

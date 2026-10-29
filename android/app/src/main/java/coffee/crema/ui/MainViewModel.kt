@@ -5549,7 +5549,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // Superseded, or an earlier write of this upload failed:
                 // nothing more of it reaches the DE1.
                 if (!profileWrites.mayWrite(profile)) return@executeInOrder
-                val delivered = deliverDe1Write(c, stopWrite = false) { profileWrites.mayWrite(profile) }
+                val delivered = deliverDe1Write(c, stopWrite = false) {
+                    profile.uploadId.takeIf { profileWrites.mayWrite(profile) }
+                }
                 if (profileWrites.settle(profile, delivered) == ProfileWriteGenerations.Outcome.FAILED) {
                     // Fail the upload now rather than on the ack watchdog.
                     appendLog("Profile write failed — stopping this upload")
@@ -5569,12 +5571,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** One DE1 write from [executeDe1Writes]; failures are logged, never thrown.
-     *  Returns whether the write reached the DE1. [shouldAck] gates a profile
-     *  write's synthesized ack (see [ProfileWriteGenerations]). */
+     *  Returns whether the write reached the DE1. [ackUploadId] names a profile
+     *  write's upload for its synthesized ack, null when superseded (see [ProfileWriteGenerations]). */
     private suspend fun deliverDe1Write(
         command: Command.WriteCharacteristic,
         stopWrite: Boolean,
-        shouldAck: () -> Boolean = { true },
+        ackUploadId: () -> UInt? = { null },
     ): Boolean {
         val bytes = command.content.data
             .map { it.toByte() }
@@ -5593,7 +5595,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // Stop writes ride the urgent lane (issue #15): they preempt any
                 // in-flight non-critical GATT op instead of queuing behind it on
                 // the global op mutex.
-                val written = ble.writeCharacteristic(command.content.target, bytes, urgent = stopWrite, shouldAck = shouldAck)
+                val written = ble.writeCharacteristic(command.content.target, bytes, urgent = stopWrite, ackUploadId = ackUploadId)
                 if (stopWrite && written) {
                     appendLog("Stop write delivered in ${SystemClock.elapsedRealtime() - queuedAt} ms")
                 }
