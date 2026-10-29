@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { confirmDialog } from '#lib/components/shared/confirm-dialog.svelte.js';
 	import ArrowSquareOutIcon from 'phosphor-svelte/lib/ArrowSquareOutIcon';
 	import ChatsCircleIcon from 'phosphor-svelte/lib/ChatsCircleIcon';
 	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
