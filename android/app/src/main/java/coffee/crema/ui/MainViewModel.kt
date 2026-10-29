@@ -1669,7 +1669,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         } else {
                             null
                         },
-                        pairedHubPinned = proxy.hasPinnedHub(),
+                        pairedHubPinned = ps.pairedHubPinned,
                         changedHost = ps.changedHost,
                     )
                 }

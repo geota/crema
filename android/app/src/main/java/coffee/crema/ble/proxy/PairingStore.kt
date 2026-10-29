@@ -60,6 +60,10 @@ class PairingStore(
     /** The secret this device holds for the host [hostId], or null. */
     fun heldSecret(hostId: String): String? = open(synchronized(lock) { state.held[hostId] })
 
+    /** Whether a secret is stored for [hostId], without opening it (no
+     *  keystore work). One whose key was lost still counts here. */
+    fun holdsSecretFor(hostId: String): Boolean = synchronized(lock) { hostId in state.held }
+
     /** The host id the saved mirror target is pinned to, or null. */
     val pinnedHost: String? get() = synchronized(lock) { state.pinnedHost }
 

@@ -636,4 +636,58 @@ class ProxyControllerModeTest {
         scheduler.runCurrent()
         assertFalse(controller.state.value.hubStoppedHosting, "another address")
     }
+
+    /** Validation D8: a flash refuses turning Hub mode off too: the hub keeps
+     *  the machine rather than moving the radio mid-flash. */
+    @Test
+    fun `a flash refuses turning hub mode off`() {
+        controller.setHubMode(true)
+        advance(1_000)
+        events.clear()
+        flashing = true
+        controller.setHubMode(false)
+        advance(1_000)
+        assertEquals("primary", controller.state.value.role)
+        assertTrue(events.isEmpty(), "$events")
+        assertTrue(log.any { it.contains("Mode switch to normal refused") && it.contains(FIRMWARE_BUSY_REASON) }, "$log")
+    }
+
+    /** Validation D5: whether this device holds a secret for its pinned hub
+     *  is cached in the state and needs no keystore decrypt, however often
+     *  the state changes. */
+    @Test
+    fun `the pinned-hub flag is cached and never decrypts`() {
+        var opens = 0
+        val countingBox = SecretBox(object : SecretCipher {
+            override fun seal(plain: ByteArray) = ByteArray(12) + plain
+            override fun open(sealed: ByteArray): ByteArray {
+                opens++
+                return sealed.copyOfRange(12, sealed.size)
+            }
+        })
+        controller.pairingStore.putHeld("host-1", PairingCrypto.newSecret())
+        controller.pairingStore.pinHost("host-1")
+        val other = ProxyController(
+            app = ApplicationProvider.getApplicationContext(), json = Json { ignoreUnknownKeys = true }, scope = scope,
+            setCoreReadOnly = {}, setRecorderEnabled = {}, notify = {}, appendLog = {}, connect = {}, disconnect = {},
+            disconnectDevices = {}, connectScale = {}, scaleAttachWanted = { false }, de1Connected = { false },
+            machineStateName = { null }, machineActions = RecordingMachineActions(), snapshotConfig = { "" }, applyConfig = {},
+            roster = { emptyList() }, isSnapshotChar = { _, _ -> false }, pairedDevices = { emptyList() },
+            rememberPaired = { _, _, _ -> }, onModeApplied = { _, _, _ -> }, secretBox = countingBox,
+        )
+        try {
+            assertTrue(other.state.value.pairedHubPinned)
+            val peers = MutableStateFlow<List<Peer>>(emptyList())
+            other.overridePeers(peers)
+            repeat(50) { i ->
+                peers.value = listOf(peer("p$i", 1_000 + i))
+                scheduler.runCurrent()
+            }
+            assertEquals(0, opens, "no decrypt per state change")
+            other.forgetHost("host-1")
+            assertFalse(other.state.value.pairedHubPinned, "forgetting the host refreshes the cached flag")
+        } finally {
+            other.close()
+        }
+    }
 }

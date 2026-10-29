@@ -380,6 +380,28 @@ class ProxySessionTest {
         }
     }
 
+    /** Validation D8: a view-only remote is listed too, marked as such. */
+    @Test
+    fun `a view-only remote is listed under Remotes connected`() = runBlocking<Unit> {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val hub = RelayHub(
+                "p", "P", roster = { listOf(DeviceInfo(addr, "DE1", "de1", "CONNECTED")) },
+                readSource = { _, _, _ -> ByteArray(0) }, isSnapshotChar = { _, _ -> false },
+                authorize = { PairingDecision.Allowed(canControl = false) },
+            )
+            val (client, server) = InMemoryFrameLink.pair()
+            scope.launch { hub.serve(server) }
+            val rx = CopyOnWriteArrayList<Frame>()
+            scope.launch { client.incoming().collect { rx += it } }
+            handshake(client, rx)
+            waitFor { hub.remotes().isNotEmpty() }
+            assertEquals(listOf(RemoteClient("phone-1", "Phone", canControl = false)), hub.remotes())
+        } finally {
+            scope.cancel()
+        }
+    }
+
     @Test
     fun `the remotes list shows the client's live session, not a closed one`() = runBlocking<Unit> {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)

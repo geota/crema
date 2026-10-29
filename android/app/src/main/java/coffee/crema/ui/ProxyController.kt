@@ -185,6 +185,9 @@ class ProxyController(
         /** NSD lists this remote's hub address as a device that isn't a hub
          *  any more (it turned Hub mode off). Advice only: unauthenticated. */
         val hubStoppedHosting: Boolean = false,
+        /** This device holds a pairing secret for the host its target is
+         *  pinned to (cached; see [pinnedHubHeld]). */
+        val pairedHubPinned: Boolean = false,
         /** A host that couldn't prove the secret this device holds for it, as
          *  (host id, name): the UI offers to forget it on this device. */
         val changedHost: Pair<String, String>? = null,
@@ -263,7 +266,9 @@ class ProxyController(
      *  (the lazy-below-use variant shipped a launch-dead APK — 4eeb92f2). */
     private val proxyConfigCache: ProxyConfig = readProxyConfigUncached()
 
-    private val _state = MutableStateFlow(State(role = proxyConfigCache.role, pairedWithSecret = pairing.issuedIds()))
+    private val _state = MutableStateFlow(
+        State(role = proxyConfigCache.role, pairedWithSecret = pairing.issuedIds(), pairedHubPinned = pinnedHubHeld()),
+    )
     val state: StateFlow<State> = _state.asStateFlow()
 
     // Multi-device pairing (issue 02). The relay doesn't auto-accept: a
@@ -602,8 +607,15 @@ class ProxyController(
     }
 
     /** Whether this device holds a pairing secret for the host its target is
-     *  pinned to: a discovered hub at that target is one it has paired with. */
-    fun hasPinnedHub(): Boolean = pairing.pinnedHost?.let { pairing.heldSecret(it) != null } ?: false
+     *  pinned to: a discovered hub at that target is one it has paired with.
+     *  A presence check, so no keystore decrypt; [State.pairedHubPinned]
+     *  caches it, refreshed only when the pin or a held secret changes. */
+    private fun pinnedHubHeld(): Boolean = pairing.pinnedHost?.let { pairing.holdsSecretFor(it) } ?: false
+
+    private fun refreshPinnedHub() {
+        val held = pinnedHubHeld()
+        if (_state.value.pairedHubPinned != held) _state.update { it.copy(pairedHubPinned = held) }
+    }
 
     /** The pairing store, for tests. */
     @androidx.annotation.VisibleForTesting
@@ -739,6 +751,7 @@ class ProxyController(
         pairing.removeHeld(hostId)
         if (pairing.pinnedHost == hostId) pairing.pinHost(null)
         _state.update { it.copy(changedHost = null) }
+        refreshPinnedHub()
         appendLog("Forgot host $hostId on this device")
     }
 
@@ -866,7 +879,10 @@ class ProxyController(
         // collectors AND the ProxyTransport's own init collectors), so applyMode can
         // cancel them ALL on the next switch instead of leaking ~4 coroutines + a dead
         // ProxyTransport/link per secondary→x→secondary cycle (issue 10).
-        if (trust.repin) pairing.pinHost(null)
+        if (trust.repin) {
+            pairing.pinHost(null)
+            refreshPinnedHub()
+        }
         val modeScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
         secondaryScope = modeScope
         val link = ReconnectingClientLink(url, modeScope)
@@ -917,11 +933,15 @@ class ProxyController(
             onPaired = { hostId, hostName, secret ->
                 if (pairing.putHeld(hostId, secret)) appendLog("Paired with $hostName")
                 else appendLog("Paired with $hostName, but the pairing secret wasn't saved")
+                refreshPinnedHub()
             },
             // Pin this target to the host it completes with; a restored or
             // automatic redial then refuses any other host at that address.
             pinnedHostId = { pairing.pinnedHost },
-            onHostConfirmed = { hostId -> pairing.pinHost(hostId) },
+            onHostConfirmed = { hostId ->
+                pairing.pinHost(hostId)
+                refreshPinnedHub()
+            },
             allowRepair = trust.allowRepair,
             // Offer to forget a host only for a target this device chose or
             // restored: an address the re-find dialed off an unauthenticated
@@ -1212,7 +1232,7 @@ internal fun deniedMessage(reason: String): String = when {
     reason == DenyReason.REVOKED -> "The host removed this device — pair again to reconnect"
     reason == DenyReason.ALREADY_PAIRED ->
         "The host already has a pairing for this device — on the host, Forget it under Paired devices, then pair again"
-    reason == DenyReason.HOST_MISMATCH -> "This isn't the host this device mirrors — choose a host under Other devices"
+    reason == DenyReason.HOST_MISMATCH -> "This isn't the hub this device connects through — choose a hub under Other devices"
     reason == DenyReason.HOST_CHANGED -> "This host's identity changed — forget it on this device to pair again"
     reason == DenyReason.HOST_UNVERIFIED ->
         "Couldn't verify this host for this device — choose it under Other devices to connect (it may need pairing again)"
