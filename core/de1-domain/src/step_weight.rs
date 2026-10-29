@@ -68,6 +68,15 @@ struct Deferral {
 impl Deferral {
     /// Every recorded step moved toward the threshold (one reversal = not
     /// trending). A single reading counts as trending, as in Decenza.
+    ///
+    /// Two equal readings in a row count as not trending, which ends the
+    /// deferral. That happens whenever two scale samples arrive between two
+    /// DE1 shot samples (they carry the same cached pressure / flow). It is
+    /// Decenza's timing too, checked at `9c3cd016` (cohort review 2026-10-28
+    /// #6 #5): `WeightProcessor::processWeight` evaluates the arbiter on
+    /// every scale sample with `m_currentPressure` / `m_currentFlow` cached by
+    /// `setCurrentFrame` from the ~5 Hz shot-sample stream, and the arbiter's
+    /// header states that cadence assumption. Kept line for line.
     fn trending(&self, compare: Compare) -> bool {
         self.readings.windows(2).all(|w| match compare {
             Compare::Over => w[1] > w[0],
@@ -484,6 +493,22 @@ mod tests {
         assert!(!a.on_weight(1.1, ms(1_000), true, false));
         a.on_sensors(1.75, 2.0); // falling away from pressure_over 2.0
         assert!(a.on_weight(1.2, ms(1_100), true, false));
+    }
+
+    #[test]
+    fn two_scale_samples_on_one_shot_sample_end_the_deferral_as_in_decenza() {
+        // Cohort review 2026-10-28 #6 #5: the second scale sample before the
+        // next DE1 sample carries the same pressure, which reads as "not
+        // trending" — Decenza's `isTrending` (strict step) on the same
+        // cadence. Pinned so a divergence is a deliberate change.
+        let mut a = soup_like();
+        a.on_frame(0);
+        a.on_sensors(1.8, 2.0);
+        assert!(!a.on_weight(1.1, ms(1_000), true, false), "first: defer");
+        assert!(
+            a.on_weight(1.2, ms(1_100), true, false),
+            "same reading: fire"
+        );
     }
 
     #[test]

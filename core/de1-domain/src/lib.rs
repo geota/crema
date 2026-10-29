@@ -237,7 +237,9 @@ pub use profile::{
     ProfileStep, Pump, TempSensor, Transition,
 };
 pub use profile_fingerprint::profile_fingerprint;
-pub use profile_import::{export_v2_json, import_legacy_tcl, import_v2_json};
+pub use profile_import::{
+    export_v2_json, import_legacy_tcl, import_v2_json, import_v2_json_embedded,
+};
 pub use profile_roast::roast_from_profile;
 pub use replay::{ReplayMeta, ReplayMetaBean, fold_meta_jsonl, fold_meta_jsonl_json};
 pub use session::SessionTimer;

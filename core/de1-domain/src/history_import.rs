@@ -671,14 +671,16 @@ fn v2_metadata(raw: &V2ShotJson) -> ShotMetadata {
     }
 }
 
-/// Reuse `import_v2_json` to re-decode the embedded profile when one is
-/// present. Returns `None` if the profile block is absent or malformed —
-/// a v2 shot without a profile is still a valid history entry, the
-/// shot's telemetry stands on its own.
+/// Re-decode the embedded profile when one is present
+/// ([`import_v2_json_embedded`](crate::profile_import::import_v2_json_embedded):
+/// a recipe of up to 32 steps stays readable even though the DE1 runs at most
+/// 20). Returns `None` if the profile block is absent or malformed — a v2
+/// shot without a profile is still a valid history entry, the shot's
+/// telemetry stands on its own.
 fn v2_profile(raw: &V2ShotJson) -> Option<Profile> {
     let value = raw.profile.as_ref()?;
     let json = value.to_string();
-    crate::profile_import::import_v2_json(&json).ok()
+    crate::profile_import::import_v2_json_embedded(&json).ok()
 }
 
 #[cfg(test)]

@@ -31,6 +31,12 @@ use crate::profile::{
 /// many steps. Longer imports are rejected, never truncated.
 const MAX_STEPS: usize = crate::profile_bounds::MAX_PROFILE_STEPS as usize;
 
+/// The step bound for a profile embedded in a shot record
+/// ([`import_v2_json_embedded`]): 32, the cap Crema used before it adopted
+/// the DE1's 20 (and the frame-index space a v1 upload can address at all).
+/// A pulled shot's recipe stays readable even when it can no longer upload.
+const MAX_EMBEDDED_STEPS: usize = 32;
+
 // ---------------------------------------------------------------------------
 // v2 JSON import
 // ---------------------------------------------------------------------------
@@ -196,6 +202,24 @@ where
 /// - [`ImportError::TooManySteps`] if it has more than 20 (the DE1's frame
 ///   limit; never truncated).
 pub fn import_v2_json(json: &str) -> Result<Profile, ImportError> {
+    import_v2_json_capped(json, MAX_STEPS)
+}
+
+/// Import the v2 JSON profile **embedded in a shot record** (a Visualizer
+/// pull, a v2 `.json` shot): like [`import_v2_json`], but a profile of 21–32
+/// steps is kept, not dropped. Such a profile was legal before Crema adopted
+/// the DE1's 20-step cap (cohort review 2026-10-28, #6 #6); the shot's
+/// recipe stays readable, and an upload of it is still refused
+/// (`TooManySteps`).
+///
+/// # Errors
+///
+/// As [`import_v2_json`], with the step bound at 32.
+pub fn import_v2_json_embedded(json: &str) -> Result<Profile, ImportError> {
+    import_v2_json_capped(json, MAX_EMBEDDED_STEPS)
+}
+
+fn import_v2_json_capped(json: &str, max_steps: usize) -> Result<Profile, ImportError> {
     let raw: V2Profile =
         serde_json::from_str(json).map_err(|e| ImportError::Json(e.to_string()))?;
 
@@ -206,6 +230,7 @@ pub fn import_v2_json(json: &str) -> Result<Profile, ImportError> {
         .collect::<Result<Vec<_>, _>>()?;
 
     finish_profile(
+        max_steps,
         raw.title,
         raw.notes,
         steps,
@@ -551,6 +576,7 @@ pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
         .unwrap_or(0.0);
 
     finish_profile(
+        MAX_STEPS,
         title,
         notes,
         steps,
@@ -1012,6 +1038,7 @@ fn max_value(dict: &TclDict, value_key: &str, range_key: &str) -> Option<Limiter
 /// Assemble the parsed pieces into a validated [`Profile`].
 #[allow(clippy::too_many_arguments)]
 fn finish_profile(
+    max_steps: usize,
     title: String,
     notes: String,
     steps: Vec<ProfileStep>,
@@ -1027,12 +1054,12 @@ fn finish_profile(
     if steps.is_empty() {
         return Err(ImportError::NoSteps);
     }
-    if steps.len() > MAX_STEPS {
+    if steps.len() > max_steps {
         return Err(ImportError::TooManySteps { count: steps.len() });
     }
 
     // `preinfuse_step_count` can never exceed the step count, which is
-    // <= MAX_STEPS (checked above) so it fits a u16 and then a u8.
+    // <= max_steps (at most 32, checked above) so it fits a u16 and a u8.
     let step_count = u16::try_from(steps.len()).unwrap_or(u16::MAX);
     let preinfuse = preinfuse_step_count.min(step_count);
     let preinfuse_step_count = u8::try_from(preinfuse).unwrap_or(u8::MAX);
@@ -1502,6 +1529,35 @@ mod tests {
         assert!(matches!(
             import_v2_json(&v2_with_steps(21)),
             Err(ImportError::TooManySteps { count: 21 })
+        ));
+    }
+
+    #[test]
+    fn an_embedded_profile_of_up_to_32_steps_stays_readable() {
+        // Cohort review 2026-10-28 #6 #6: a pulled shot whose recipe has
+        // 21–32 steps (legal before the 20-step cap) lost it silently.
+        assert_eq!(
+            import_v2_json_embedded(&v2_with_steps(24))
+                .unwrap()
+                .steps
+                .len(),
+            24
+        );
+        assert_eq!(
+            import_v2_json_embedded(&v2_with_steps(32))
+                .unwrap()
+                .steps
+                .len(),
+            32
+        );
+        assert!(matches!(
+            import_v2_json_embedded(&v2_with_steps(33)),
+            Err(ImportError::TooManySteps { count: 33 })
+        ));
+        // A library import keeps the DE1's bound.
+        assert!(matches!(
+            import_v2_json(&v2_with_steps(24)),
+            Err(ImportError::TooManySteps { count: 24 })
         ));
     }
 
