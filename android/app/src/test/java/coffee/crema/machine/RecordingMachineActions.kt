@@ -5,10 +5,11 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * [MachineActions] that records what ran, and on which thread: the verb bodies
- * a test's [LocalMachine] or [RelayMachine] reached. [profiles] / [beans]
- * are this device's library.
+ * a test's [LocalMachine] or [RelayMachine] reached. [startShot] is what a
+ * start answers; [profiles] / [beans] are this device's library.
  */
 internal class RecordingMachineActions(
+    var startShot: CommandOutcome = CommandOutcome.Accepted,
     val profiles: MutableSet<String> = mutableSetOf("p-1"),
     val beans: MutableSet<String> = mutableSetOf("bean-1"),
 ) : MachineActions {
@@ -30,7 +31,7 @@ internal class RecordingMachineActions(
         threads += Thread.currentThread().name.substringBefore(" @")
     }
 
-    override fun applyStartShot() = ran("startShot")
+    override fun applyStartShot(): CommandOutcome = startShot.also { ran("startShot") }
     override fun applyMachineState(request: MachineRequest) = ran("machineState($request)")
     override fun applyCancelMaintenance() = ran("cancelMaintenance")
     override fun applyTareScale() = ran("tareScale")

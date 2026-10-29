@@ -55,6 +55,7 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ble.De1Uuids
 import coffee.crema.ble.proxy.DeviceInfo
+import coffee.crema.machine.CommandOutcome
 import coffee.crema.machine.MachineActions
 import coffee.crema.machine.MachineCommand
 import coffee.crema.machine.MachineCommands
@@ -1108,7 +1109,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * which takes it; its members reach later fields only when invoked.
      */
     private val machineActions = object : MachineActions {
-        override fun applyStartShot() = this@MainViewModel.applyStartShot()
+        override fun applyStartShot(): CommandOutcome = this@MainViewModel.applyStartShot()
         override fun applyMachineState(request: MachineRequest) = this@MainViewModel.applyMachineState(request)
         override fun applyCancelMaintenance() = this@MainViewModel.applyCancelMaintenance()
         override fun applyTareScale() = this@MainViewModel.applyTareScale()
@@ -2346,23 +2347,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun startShot() = machine.execute(MachineCommand.StartShot)
 
     /** [startShot]'s body on the device holding the machine (also a mirror's
-     *  relayed start). */
-    private fun applyStartShot() {
+     *  relayed start): refused, with the reason for whoever asked, when a shot
+     *  can't start. */
+    private fun applyStartShot(): CommandOutcome {
         // One start at a time (05 F2): a second chain's late Espresso request
         // would land mid-shot. Stop is how to end or cancel either.
-        if (startSequence.active) {
-            notifyUser("A shot is already starting")
-            return
-        }
-        if (_ui.value.machineStateName == MachineState.Espresso) {
-            notifyUser("A shot is already running")
-            return
-        }
+        if (startSequence.active) return CommandOutcome.Refused("A shot is already starting")
+        if (_ui.value.machineStateName == MachineState.Espresso) return CommandOutcome.Refused("A shot is already running")
         val cremaJson = _ui.value.activeProfileId?.let { library.profileJson(it) }
-        if (cremaJson == null) {
-            notifyUser("Can\u2019t start shot \u2014 no profile selected")
-            return
-        }
+            ?: return CommandOutcome.Refused("Can\u2019t start shot \u2014 no profile selected")
         // Pre-shot scale gate (issue #29). Only when this shot actually
         // resolves a weight target (QC dial override, else the active
         // profile's own yield \u2014 the same precedence pushStopTargets uses): a
@@ -2374,8 +2367,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // what to change instead of failing the upload (cohort review
         // 2026-10-28, #6 #6).
         activeProfile?.let { coffee.crema.profiles.StepCap.refusal(it.name, it.segments.size) }?.let {
-            notifyUser(it)
-            return
+            return CommandOutcome.Refused(it)
         }
         val weightTarget = s.brewParams?.yieldOut?.toFloat()?.takeIf { it.isFinite() && it > 0f }
             ?: activeProfile?.yieldOut?.takeIf { it.isFinite() && it > 0f }
@@ -2387,11 +2379,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // / reaprime `blockOnNoScale` \u2014 both also default off). The DE1
                 // is left untouched; the reconnect kick above may make the next
                 // attempt succeed.
-                notifyUser(
+                return CommandOutcome.Refused(
                     if (remembered) "Shot not started \u2014 reconnecting the scale\u2026 try again in a moment"
                     else "Shot not started \u2014 no scale connected, and \u201cRequire scale to start\u201d is on"
                 )
-                return
             }
             // Default: NON-blocking cue \u2014 a modal between the user and a
             // tamped puck is workflow poison. The #15 fix arms SAW mid-shot,
@@ -2401,14 +2392,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 else "No scale connected \u2014 stop-at-weight is off for this shot"
             )
         }
-        val start = startSequence.begin() ?: run {
-            notifyUser(if (startSequence.active) "A shot is already starting" else "A shot is already running")
-            return
-        }
+        val start = startSequence.begin()
+            ?: return CommandOutcome.Refused(if (startSequence.active) "A shot is already starting" else "A shot is already running")
         // The heavy chain below — several bridge calls including the full
         // profile-frame build in Rust — runs on the core lane instead of
         // the Main tap handler (review #28).
         viewModelScope.launch(coreDispatcher) { startShotOnCoreLane(cremaJson, start) }
+        return CommandOutcome.Accepted
     }
 
     private fun startShotOnCoreLane(cremaJson: String, start: ShotStartSequence.Start) {

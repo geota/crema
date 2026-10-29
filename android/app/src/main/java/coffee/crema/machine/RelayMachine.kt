@@ -79,11 +79,12 @@ class RelayMachine(
         const val NOT_ON_MIRROR = "Not available while mirroring — use the device holding the machine"
 
         /** What the user sees for a refusal: the view-only wording for a
-         *  mirror-only peer, else that the machine couldn't be reached. */
+         *  mirror-only peer, else the primary's own reason. */
         fun refusedMessage(reason: String, config: Boolean): String = when {
             reason.contains("not authorized") -> "View-only — the host hasn’t allowed this device to control the machine"
-            config -> "$UNREACHABLE — change reverted"
-            else -> "$UNREACHABLE — change not applied"
+            config -> "$reason — change reverted"
+            reason == UNREACHABLE -> "$reason — change not applied"
+            else -> reason
         }
     }
 }

@@ -76,7 +76,12 @@ class RelayedCommandDispatcherTest {
     }
 
     @Test
-    fun `a start is announced`() {
+    fun `a refused start goes back to the sender and is not announced`() {
+        actions.startShot = CommandOutcome.Refused("A shot is already starting")
+        assertEquals(CommandOutcome.Refused("A shot is already starting"), dispatch("startShot"))
+        assertTrue(announced.isEmpty(), "$announced")
+
+        actions.startShot = CommandOutcome.Accepted
         assertEquals(CommandOutcome.Accepted, dispatch("startShot"))
         assertEquals(listOf("Phone started a shot"), announced.toList())
     }

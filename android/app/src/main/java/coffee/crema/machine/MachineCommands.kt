@@ -33,8 +33,9 @@ interface MachineCommands {
  * Called on the Main thread.
  */
 interface MachineActions {
-    /** Start a shot through the owned start sequence. */
-    fun applyStartShot()
+    /** Start a shot, or say why not (one already starting or running, no
+     *  profile, the step cap, a required scale missing). */
+    fun applyStartShot(): CommandOutcome
 
     /** A user's machine-state request: cancels a pending shot start, then writes. */
     fun applyMachineState(request: MachineRequest)
@@ -78,7 +79,7 @@ class LocalMachine(
 
     /** Run [cmd] for this device's UI ([origin] null) or for a peer. */
     fun run(cmd: MachineCommand, origin: CommandOrigin?): CommandOutcome = when (cmd) {
-        MachineCommand.StartShot -> accepted { actions.applyStartShot() }
+        MachineCommand.StartShot -> actions.applyStartShot()
         is MachineCommand.StateRequest -> accepted { actions.applyMachineState(cmd.request) }
         MachineCommand.CancelMaintenance -> accepted { actions.applyCancelMaintenance() }
         MachineCommand.TareScale -> accepted { actions.applyTareScale() }

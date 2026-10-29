@@ -45,10 +45,10 @@ class RelayMachineTest {
     }
 
     @Test
-    fun `a refused control is reported`() {
+    fun `a refused control shows the primary's reason`() {
         reply = ControlReply.Err("A shot is already starting")
         assertEquals(CommandOutcome.Refused("A shot is already starting"), run(MachineCommand.StartShot))
-        assertEquals(listOf("${RelayMachine.UNREACHABLE} — change not applied"), notices.toList())
+        assertEquals(listOf("A shot is already starting"), notices.toList())
 
         reply = ControlReply.Err("not authorized")
         run(MachineCommand.TareScale)
@@ -72,7 +72,7 @@ class RelayMachineTest {
         val edit = MachineCommand.SetActiveProfile("p-2")
         assertEquals(CommandOutcome.Refused("That profile isn’t on Tablet"), run(edit))
         assertEquals(listOf<MachineCommand.Config>(edit), actions.undone.toList())
-        assertEquals(listOf("${RelayMachine.UNREACHABLE} — change reverted"), notices.toList())
+        assertEquals(listOf("That profile isn’t on Tablet — change reverted"), notices.toList())
     }
 
     @Test

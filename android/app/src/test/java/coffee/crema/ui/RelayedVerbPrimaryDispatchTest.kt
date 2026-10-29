@@ -154,6 +154,19 @@ class RelayedVerbPrimaryDispatchTest {
         }
     }
 
+    /** 05 F4: a start the primary refuses goes back to the secondary with the
+     *  primary's reason, and nobody is told the secondary started a shot. */
+    @Test
+    fun `a start the primary refuses is refused to the sender and not announced`() {
+        vm.setStopOnWeight(true)
+        vm.setRequireScale(true)
+        vm.quickAdjustBrew(18.0, 36.0, 93.0) // a weight target, and no scale here
+        VmHarness.idle()
+        val err = assertIs<Frame.ControlErr>(relay(Golden.require("control/startShot.json")))
+        assertTrue("Require scale to start" in err.reason, err.reason)
+        assertTrue(vm.ui.value.userMessages.none { "started a shot" in it }, "${vm.ui.value.userMessages}")
+    }
+
     /** 05 F1: a profile from the secondary's own library is refused with a
      *  reason, and the primary keeps its selection. */
     @Test
