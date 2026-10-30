@@ -248,10 +248,12 @@ class RelayKeyStore(
      * write can `reject_pairing` instead of confirming.
      */
     fun pinRemoteSaved(pin: RelayRemotePin): PinWrite = synchronized(lock) {
-        check(keys != null) { "relay keys not loaded" }
-        val previous = state.remotes.firstOrNull { it.id == pin.id }
-        state = state.copy(remotes = state.remotes.filterNot { it.id == pin.id } + pin)
-        PinWrite(previous, !persistent || write(state))
+        var previous: RelayRemotePin? = null
+        val saved = updateSaved { s ->
+            previous = s.remotes.firstOrNull { it.id == pin.id }
+            s.copy(remotes = s.remotes.filterNot { it.id == pin.id } + pin)
+        }
+        PinWrite(previous, saved)
     }
 
     /** Put back [previous] for [id] (null: the remote wasn't pinned, so unpin it). */

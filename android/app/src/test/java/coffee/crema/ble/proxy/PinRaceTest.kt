@@ -46,6 +46,48 @@ class PinRaceTest {
         }
     }
 
+    /** The window closes between the code entry and the commit: `confirm_paired`
+     *  fails (`PairingClosed`) and the shell restores what was there before. */
+    private fun commitThatCantConfirm(prior: RelayRemotePin?) {
+        val rig = RelayRig().start()
+        try {
+            val keys = RelayKeys.generate()
+            if (prior != null) {
+                rig.trust.remotes[keys.deviceId()] = prior.copy(id = keys.deviceId(), public = RelayKeyStore.b64(keys.publicKey()))
+                rig.trust.pins.insert(keys.publicKey())
+            }
+            rig.trust.duringStore = { rig.trust.gate.closeWindow() }
+            val dialer = PairingDialer(rig.url, "Kitchen tablet", keys, "New name", rig.scope, storePin = { _, _, _ -> true })
+            rig.trust.gate.open(System.currentTimeMillis().toULong())
+            dialer.start()
+            runBlocking {
+                eventually(what = "the code") { dialer.state.value is PairingState.ShowCode }
+                val code = (dialer.state.value as PairingState.ShowCode).code
+                eventually(what = "the request") { rig.trust.requests.isNotEmpty() }
+                rig.trust.requests.last().enterCode(code, canControl = false)
+                eventually(what = "the outcome") { dialer.state.value !is PairingState.ShowCode && dialer.state.value !is PairingState.Waiting }
+            }
+            assertTrue(dialer.state.value !is PairingState.Paired, "${dialer.state.value}")
+            if (prior == null) {
+                assertTrue(!rig.trust.remotes.containsKey(keys.deviceId()), "a new key leaves the store")
+                assertTrue(!rig.trust.pins.contains(keys.publicKey()), "and the live set")
+            } else {
+                assertEquals(prior.name, rig.trust.remotes[keys.deviceId()]?.name, "a re-pair keeps the old record")
+                assertEquals(prior.scope, rig.trust.remotes[keys.deviceId()]?.scope, "with its old scope")
+                assertTrue(rig.trust.pins.contains(keys.publicKey()), "and stays pinned")
+            }
+        } finally {
+            rig.stop()
+        }
+    }
+
+    @Test
+    fun `a commit that can't confirm unpins a new key`() = commitThatCantConfirm(prior = null)
+
+    @Test
+    fun `a re-pair that can't confirm restores the old record`() =
+        commitThatCantConfirm(prior = RelayRemotePin("x", "x", "Old name", SCOPE_CONTROL, pairedAtMs = 1))
+
     @Test
     fun `a pin that can't be saved is rejected and nothing is pinned`() {
         val rig = RelayRig().start()

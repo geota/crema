@@ -651,6 +651,52 @@ class ProxyControllerModeTest {
         assertEquals("secondary", controller.state.value.role, "advisory: wording only")
     }
 
+    @Test
+    fun `an unauthenticated revoke changes nothing`() {
+        remoteOnDeadHub()
+        controller.refuseCurrentSessionForTest("Revoked", authenticated = false)
+        advance(1_000)
+        assertEquals("secondary", controller.state.value.role, "only a decrypted CLOSE may change trust")
+        assertEquals("hub-1", controller.relayStore.savedHub)
+    }
+
+    @Test
+    fun `the v3 migration runs before the role starts`() {
+        // The first v4 start: no relay store yet (this class's own controller made one).
+        java.io.File(app.filesDir, RelayKeyStore.FILE_NAME).delete()
+        java.io.File(app.filesDir, "proxy-pairing.json").writeText("""{"hostId":"h","held":{"x":"sb1:AAAA"}}""")
+        java.io.File(app.filesDir, "deviceId").writeText("old-id")
+        java.io.File(app.filesDir, "prefs.json").writeText("""{"proxyRole":"secondary","proxyPrimaryHost":"127.0.0.1","proxyPrimaryPort":9}""")
+        val upgraded = newController()
+        try {
+            assertFalse(java.io.File(app.filesDir, "proxy-pairing.json").exists())
+            assertFalse(java.io.File(app.filesDir, "deviceId").exists())
+            assertTrue(upgraded.state.value.needsRepair, "a v3 remote must pair again")
+            upgraded.start()
+            advance(1_000)
+            assertEquals("secondary", upgraded.state.value.role, "the role is kept")
+            assertTrue(log.any { "has to pair with the hub again" in it }, "and it doesn't dial: $log")
+        } finally {
+            upgraded.close()
+        }
+    }
+
+    @Test
+    fun `a definitive key loss makes a remote normal at start`() {
+        java.io.File(app.filesDir, "prefs.json").writeText("""{"proxyRole":"secondary","proxyPrimaryHost":"127.0.0.1","proxyPrimaryPort":9}""")
+        keystore.keys.clear() // the relay key's alias is gone: a definitive loss
+        val reset = newController()
+        try {
+            reset.start()
+            advance(1_000)
+            assertEquals("normal", reset.state.value.role)
+            assertTrue(targets.contains("normal :0"), "persisted once the prefs load: $targets")
+            assertTrue(reset.state.value.pairedRemotes.isEmpty(), "every pin cleared")
+        } finally {
+            reset.close()
+        }
+    }
+
     /** Run the controller's scope until [done] holds, for work that crosses
      *  a real socket (the relay server's bind). */
     private fun runUntil(what: String, done: () -> Boolean) {

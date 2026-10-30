@@ -133,6 +133,21 @@ class ProxyHandshakeTest {
     }
 
     @Test
+    fun `a Welcome with an unknown scope reaches the remote as view-only`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val link = ScriptedLink()
+            val granted = CompletableDeferred<String>()
+            ProxyTransport(link, scope, onWelcome = { s, _ -> granted.complete(s) })
+            link.events.send(LinkEvent.SessionStarted(1))
+            link.events.send(LinkEvent.Received(Frame.Welcome("P", "primary", emptyList(), scope = "admin")))
+            assertEquals(SCOPE_MIRROR, withTimeout(2_000) { granted.await() }, "never fails open (R6)")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun `a terminal refusal fails parked requests at once`() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {

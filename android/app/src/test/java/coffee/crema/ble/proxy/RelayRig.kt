@@ -37,6 +37,9 @@ internal class TestHubTrust(
     @Volatile var storeDelayMs = 0L
     @Volatile var storeSaves = true
 
+    /** Runs inside the pin write (a test closes the window there, so `confirm_paired` fails). */
+    @Volatile var duringStore: () -> Unit = {}
+
     /** Pin [remote] as if it had paired, with [canControl]. */
     fun pin(remote: RelayKeys, name: String = "Phone", canControl: Boolean = true) {
         remotes[remote.deviceId()] = RelayRemotePin(
@@ -57,6 +60,7 @@ internal class TestHubTrust(
 
     override fun storePin(remoteId: String, remoteName: String, publicKey: ByteArray, canControl: Boolean): PinWrite? {
         if (storeDelayMs > 0) Thread.sleep(storeDelayMs)
+        duringStore()
         val previous = remotes[remoteId]
         remotes[remoteId] = RelayRemotePin(
             remoteId, RelayKeyStore.b64(publicKey), remoteName,
