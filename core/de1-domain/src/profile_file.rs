@@ -232,7 +232,7 @@ fn some_line_is_a_json_object(text: &str) -> bool {
 fn looks_like_tcl_profile(text: &str) -> bool {
     TCL_PROFILE_KEYS.iter().any(|key| {
         text.lines()
-            .any(|line| line.trim_start().split_whitespace().next() == Some(key))
+            .any(|line| line.split_whitespace().next() == Some(key))
     })
 }
 
