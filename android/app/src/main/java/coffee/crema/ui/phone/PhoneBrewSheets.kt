@@ -35,6 +35,11 @@ import coffee.crema.ui.QcBounds
 import coffee.crema.ui.QcSteam
 import coffee.crema.ui.SteamMode
 import coffee.crema.ui.WaterMode
+import coffee.crema.ui.HotWaterModeSwitch
+import coffee.crema.ui.HotWaterReadoutLine
+import coffee.crema.ui.hotWaterDose
+import coffee.crema.ui.hotWaterReadoutFor
+import coffee.crema.ui.hotWaterStepper
 import coffee.crema.ui.YieldRatioMode
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.effectiveBrew
@@ -96,7 +101,7 @@ fun PhoneQuickSheet(
     // persisted QC state (vm.setQcSteam* / vm.setQcHotWater*), shared with the
     // tablet — no local stub.
     var steamMode by remember { mutableStateOf(SteamMode.Time) }
-    var waterMode by remember { mutableStateOf(WaterMode.Volume) }
+    var waterMode by remember { mutableStateOf(WaterMode.Amount) }
     val brewGate = ui.gate(Setting.BREW_PARAMS)
 
     ModalBottomSheet(
@@ -286,28 +291,57 @@ fun PhoneQuickSheet(
                             onChange = { when (steamMode) { SteamMode.Flow -> vm.setQcSteamFlow(it.toFloat()); SteamMode.Temp -> vm.setQcSteamTemp(it.toFloat()); SteamMode.Time -> vm.setQcSteamTime(it.toFloat()) } },
                             gate = ui.gate(when (steamMode) { SteamMode.Flow -> Setting.QC_STEAM_FLOW; SteamMode.Temp -> Setting.QC_STEAM_TEMP; SteamMode.Time -> Setting.QC_STEAM_TIME }),
                         )
-                        // Hot water — Temp | Volume, wired to the VM (tablet parity). No
-                        // disable dot: 0 isn't a clean "off" here (the de1app/Decenza
-                        // cross-check), so it stays a plain mode switch.
-                        QcCell(
-                            modifier = Modifier.fillMaxWidth(),
-                            header = {
-                                CremaSplitLabel(
-                                    prefix = "Hot water",
-                                    options = listOf(SplitOption("temp", "Temp"), SplitOption("volume", "Volume")),
-                                    value = waterMode.value, onChange = { waterMode = WaterMode.of(it) },
-                                )
-                            },
-                            value = if (waterMode == WaterMode.Temp) ui.qcHotWaterTempC.toDouble() else ui.qcHotWaterVolumeMl.toDouble(),
-                            unit = if (waterMode == WaterMode.Temp) "°C" else "ml",
-                            step = if (waterMode == WaterMode.Temp) 1.0 else 10.0,
-                            min = if (waterMode == WaterMode.Temp) QcBounds.WATER_TEMP_MIN_C else QcBounds.WATER_VOL_MIN_ML,
-                            max = if (waterMode == WaterMode.Temp) QcBounds.WATER_TEMP_MAX_C else QcBounds.WATER_VOL_MAX_ML,
-                            presets = if (waterMode == WaterMode.Temp) listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
-                            fmt = { fmt("%.0f", it) },
-                            onChange = { if (waterMode == WaterMode.Temp) vm.setQcHotWaterTemp(it.toFloat()) else vm.setQcHotWaterVolume(it.toFloat()) },
-                            gate = ui.gate(if (waterMode == WaterMode.Temp) Setting.QC_HOT_WATER_TEMP else Setting.QC_HOT_WATER_VOLUME),
-                        )
+                        // Hot water — Temp | Amount (Time · ml · Ratio, spec §2.7), wired
+                        // to the VM (tablet parity). No disable dot: 0 isn't a clean "off"
+                        // here (the de1app/Decenza cross-check).
+                        val waterHeader: @Composable () -> Unit = {
+                            CremaSplitLabel(
+                                prefix = "Hot water",
+                                options = listOf(SplitOption("temp", "Temp"), SplitOption("amount", "Amount")),
+                                value = waterMode.value, onChange = { waterMode = WaterMode.of(it) },
+                            )
+                        }
+                        if (waterMode == WaterMode.Temp) {
+                            QcCell(
+                                modifier = Modifier.fillMaxWidth(),
+                                header = waterHeader,
+                                value = ui.qcHotWaterTempC.toDouble(),
+                                unit = "°C",
+                                step = 1.0,
+                                min = QcBounds.WATER_TEMP_MIN_C,
+                                max = QcBounds.WATER_TEMP_MAX_C,
+                                presets = listOf(60.0, 75.0, 85.0, 92.0, 96.0),
+                                fmt = { fmt("%.0f", it) },
+                                onChange = { vm.setQcHotWaterTemp(it.toFloat()) },
+                                gate = ui.gate(Setting.QC_HOT_WATER_TEMP),
+                            )
+                        } else {
+                            val dose = ui.hotWaterDose()
+                            val hw = hotWaterStepper(dose, vm::setHotWaterDose)
+                            QcCell(
+                                modifier = Modifier.fillMaxWidth(),
+                                header = {
+                                    waterHeader()
+                                    HotWaterModeSwitch(
+                                        mode = dose.mode,
+                                        onMode = { vm.setHotWaterDose(dose.copy(mode = it)) },
+                                        gate = ui.gate(Setting.QC_HOT_WATER_MODE),
+                                    )
+                                },
+                                value = hw.value,
+                                unit = hw.unit.orEmpty(),
+                                step = hw.step,
+                                min = hw.min,
+                                max = hw.max,
+                                presets = hw.chips,
+                                fmt = hw.fmt,
+                                onChange = hw.onChange,
+                                gate = ui.gate(hw.setting),
+                                footer = {
+                                    HotWaterReadoutLine(hotWaterReadoutFor(ui.hotWaterTarget, ui.weightUnit, ui.volumeUnit, dose.ratio))
+                                },
+                            )
+                        }
                     }
                 }
                 "chart" -> {

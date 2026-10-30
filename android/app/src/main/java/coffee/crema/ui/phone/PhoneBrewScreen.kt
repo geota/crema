@@ -60,7 +60,8 @@ import coffee.crema.ui.modeRunningSub
 import coffee.crema.ui.modeTargetSeconds
 import coffee.crema.core.steamAtTemperature
 import coffee.crema.core.groupAtTemperature
-import coffee.crema.ui.hotWaterMl
+import coffee.crema.ui.hotWaterCompactAmount
+import coffee.crema.ui.hotWaterRunning
 import coffee.crema.ui.rememberModeTargets
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.rankProfilesForPicker
@@ -179,7 +180,7 @@ fun PhoneBrewScreen(
                 ModeStatusBanner(
                     label = mode,
                     elapsedMs = ui.modeElapsedMs,
-                    targetS = modeTargetSeconds(ui.machineStateName, rememberModeTargets(ui)) ?: 0f,
+                    targetS = modeTargetSeconds(ui.machineStateName, rememberModeTargets(ui), ui.hotWaterTarget) ?: 0f,
                     // Steam shows the steam-heater temp; hot water / flush show
                     // the group-head temp (web headStatusMeta parity).
                     tempLabel = when (ui.machineStateName) {
@@ -217,7 +218,8 @@ fun PhoneBrewScreen(
                 machineStateName = ui.machineStateName,
                 modeElapsedMs = ui.modeElapsedMs,
                 targets = rememberModeTargets(ui),
-                hotWaterMl = hotWaterMl(ui),
+                hotWaterTarget = ui.hotWaterTarget,
+                volumeUnit = ui.volumeUnit,
                 targetsKnown = !ui.awaitingHubValues,
                 tempUnit = ui.tempUnit,
                 connected = connected,
@@ -1274,8 +1276,9 @@ private fun ModeCluster(
     machineStateName: MachineState?,
     modeElapsedMs: Long,
     targets: ModeTargets,
-    /** The hot-water amount, ml ([hotWaterMl]). */
-    hotWaterMl: Float,
+    /** The core's resolved hot-water target: the chip's amount or time. */
+    hotWaterTarget: coffee.crema.core.HotWaterTarget?,
+    volumeUnit: String,
     /** False on a remote before the hub's first snapshot ("—" subs). */
     targetsKnown: Boolean,
     tempUnit: String,
@@ -1311,9 +1314,9 @@ private fun ModeCluster(
         )
         ModePill(
             "Water",
-            if (dispensing) modeRunningSub(modeElapsedMs, targets.hotWaterTimeoutS)
+            if (dispensing) hotWaterTarget?.let { hotWaterRunning(it, modeElapsedMs, volumeUnit) } ?: modeRunningSub(modeElapsedMs, targets.hotWaterTimeoutS)
             else if (!targetsKnown) UNKNOWN_VALUE
-            else "${hotWaterMl.toInt()}ml · ${deg(targets.hotWaterTempC)}",
+            else hotWaterTarget?.let { "${hotWaterCompactAmount(it)} · ${deg(targets.hotWaterTempC)}" } ?: deg(targets.hotWaterTempC),
             "drop", tel.modeWater,
             active = dispensing,
             enabled = connected, atTemperature = groupHot, onTap = onWater, modifier = Modifier.weight(1f),

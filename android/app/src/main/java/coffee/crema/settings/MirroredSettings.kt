@@ -87,6 +87,11 @@ fun ConfigSnapshot.carries(setting: Setting): Boolean = when (setting) {
     Setting.HEATER_VOLTAGE -> heaterVoltage != null
     Setting.FLOW_MULTIPLIER -> flowMultiplier != null
     Setting.CUP_WARMER_TEMP -> cupWarmerTempC != null
+    // The hot-water dose fields are nullable: unknown until a hub sends them.
+    Setting.QC_HOT_WATER_MODE -> qcHotWaterMode != null
+    Setting.QC_HOT_WATER_TIME -> qcHotWaterTimeS != null
+    Setting.QC_HOT_WATER_TIME_NO_LIMIT -> qcHotWaterTimeNoLimit != null
+    Setting.QC_HOT_WATER_RATIO -> qcHotWaterRatio != null
     // For the rest a null value (no profile, no bean, no override) means "none".
     else -> setting.mirroredVia == MirrorSource.SNAPSHOT
 }

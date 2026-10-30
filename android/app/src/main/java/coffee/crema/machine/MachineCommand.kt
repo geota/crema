@@ -1,7 +1,9 @@
 package coffee.crema.machine
 
+import coffee.crema.core.HotWaterDose
 import coffee.crema.core.MachineRequest
 import coffee.crema.profiles.ProfileBounds
+import coffee.crema.ui.HotWaterUi
 import coffee.crema.ui.QcBounds
 import coffee.crema.ui.QcSteam
 
@@ -138,6 +140,11 @@ sealed interface MachineCommand {
     /** The debug panel's raw Espresso request: skips the start sequence, so it
      *  never leaves the device holding the machine. */
     data object RawEspresso : LocalOnly
+
+    /** The hot-water dose: the mode and every mode's value, one edit (spec
+     *  §4). A machine setting with no wire form: a remote shows the hub's and
+     *  refuses an edit ("Change on <hub>"). */
+    data class SetHotWaterDose(val dose: HotWaterDose) : LocalOnly
 }
 
 /** The Quick-Controls values a mirror may set, each with its stepper's bounds. */
@@ -148,7 +155,9 @@ enum class QcField(val label: String, private val range: ClosedFloatingPointRang
      *  keeps out of the band the firmware snaps to off. */
     STEAM_TEMP("steam temperature", QcSteam.MIN_TEMP_C..QcSteam.MAX_TEMP_C),
     HOT_WATER_TEMP("hot-water temperature", QcBounds.WATER_TEMP_MIN_C..QcBounds.WATER_TEMP_MAX_C),
-    HOT_WATER_VOLUME("hot-water volume", QcBounds.WATER_VOL_MIN_ML..QcBounds.WATER_VOL_MAX_ML),
+    /** An older remote's verb; its range is the core's volume range, read
+     *  lazily (see [refusal]). */
+    HOT_WATER_VOLUME("hot-water volume", 0.0..0.0),
     /** The phone's flush stepper starts at 0 (it shares the pre-infusion minimum). */
     FLUSH_TIME("flush time", 0.0..QcBounds.FLUSH_TIME_MAX_S),
     FLUSH_TEMP("flush temperature", QcBounds.FLUSH_TEMP_MIN_C..QcBounds.FLUSH_TEMP_MAX_C),
@@ -158,8 +167,17 @@ enum class QcField(val label: String, private val range: ClosedFloatingPointRang
     /** Why [value] is out of bounds for this field, or null. */
     fun refusal(value: Float): String? {
         if (this == STEAM_TEMP && value == 0f) return null
-        return if (value.toDouble().within(range)) null else "$label out of range: $value"
+        return if (value.toDouble().within(range())) null else "$label out of range: $value"
     }
+
+    /** The field's range; the hot-water volume's is the core's, read lazily
+     *  like `ProfileBounds`. */
+    private fun range(): ClosedFloatingPointRange<Double> =
+        if (this == HOT_WATER_VOLUME) {
+            HotWaterUi.bounds.volumeMl.let { it.min.toDouble()..it.max.toDouble() }
+        } else {
+            range
+        }
 }
 
 private val ASLEEP = setOf("Sleep", "GoingToSleep")

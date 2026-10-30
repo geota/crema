@@ -40,6 +40,7 @@ import coffee.crema.core.CommonSettings
 import coffee.crema.core.defaultIdleSleepMin
 import coffee.crema.settings.resetCommon
 import coffee.crema.settings.toCommonSettings
+import coffee.crema.settings.hotWaterDose
 import coffee.crema.core.maintenanceReadout
 import androidx.core.content.FileProvider
 import coffee.crema.beans.beanDaysOffRoast
@@ -1122,6 +1123,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         override fun applyMachineState(request: MachineRequest) = this@MainViewModel.applyMachineState(request)
         override fun applyCancelMaintenance() = this@MainViewModel.applyCancelMaintenance()
         override fun applyTareScale() = this@MainViewModel.applyTareScale()
+        override fun applyHotWaterDose(dose: coffee.crema.core.HotWaterDose) = this@MainViewModel.applyHotWaterDose(dose)
         override fun showConfig(cmd: MachineCommand.Config) = this@MainViewModel.showConfig(cmd)
         override fun commitConfig(cmd: MachineCommand.Config) = this@MainViewModel.commitConfig(cmd)
         override fun hasProfile(id: String): Boolean = library.hasProfile(id)
@@ -2322,7 +2324,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  activeProfileId is deliberately NOT restored, so a merge never hijacks the
      *  current selection. */
     private fun applyRestoredSettings(p: AppPrefs) {
-        _ui.update { it.copy(
+        // A backup with no hot-water mode goes through the core's rule — its
+        // own fields, never this device's marker.
+        val hwDose = p.hotWaterDose()
+        _ui.update { it.withHotWaterDose(hwDose).copy(
             idleSleepMin = p.idleSleepMin ?: it.idleSleepMin,
             themeMode = p.themeMode,
             maxShotDurationS = p.maxShotDurationS,
@@ -2358,7 +2363,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             qcSteamFlowMlS = p.qcSteamFlowMlS,
             qcSteamTempC = p.qcSteamTempC,
             qcHotWaterTempC = p.qcHotWaterTempC,
-            qcHotWaterVolumeMl = p.qcHotWaterVolumeMl,
             qcFlushTimeS = p.qcFlushTimeS,
             qcFlushTempC = p.qcFlushTempC,
             qcGrind = p.qcGrind,
@@ -2746,9 +2750,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is MachineCommand.SetQc -> {
                 persistPrefs()
                 when (cmd.field) {
-                    // One read-modify-write packet carries these four.
-                    QcField.STEAM_TIME, QcField.STEAM_TEMP, QcField.HOT_WATER_TEMP, QcField.HOT_WATER_VOLUME ->
+                    // One read-modify-write packet carries these and the dose.
+                    QcField.STEAM_TIME, QcField.STEAM_TEMP, QcField.HOT_WATER_TEMP -> applySteamHotWater()
+                    QcField.HOT_WATER_VOLUME -> {
+                        // Only an older remote sends this verb now: its volume
+                        // switched the dose to volume mode (`applyTo`).
+                        appendLog("Hot-water volume ${cmd.value.toInt()} ml from a remote: switched to volume mode")
                         applySteamHotWater()
+                    }
                     QcField.STEAM_FLOW -> routeWrite("Set steam flow") { bridge.setSteamFlow(cmd.value) }
                     QcField.FLUSH_TIME -> routeWrite("Set flush time") { bridge.setFlushTimeout((cmd.value * 1000f).toUInt()) }
                     QcField.FLUSH_TEMP -> routeWrite("Set flush temp") { bridge.setFlushTemp(cmd.value) }
@@ -2817,6 +2826,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 qcSteamTempC = ui.qcSteamTempC,
                 qcHotWaterTempC = ui.qcHotWaterTempC,
                 qcHotWaterVolumeMl = ui.qcHotWaterVolumeMl,
+                qcHotWaterMode = ui.qcHotWaterMode,
+                qcHotWaterTimeS = ui.qcHotWaterTimeS,
+                qcHotWaterTimeNoLimit = ui.qcHotWaterTimeNoLimit,
+                qcHotWaterRatio = ui.qcHotWaterRatio,
+                hotWaterTarget = ui.hotWaterTarget,
                 qcFlushTimeS = ui.qcFlushTimeS,
                 qcFlushTempC = ui.qcFlushTempC,
                 qcGrind = ui.qcGrind,
@@ -2940,6 +2954,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // threshold) — the core's apply_common_settings, as web does.
         runCatching { bridge.applyCommonSettings(json.encodeToString(CommonSettings.serializer(), state.commonSettings())) }
             .onFailure { appendLog("Apply settings to the core failed: ${it.message}") }
+        // The steam / hot-water packet's targets and the hot-water dose: a
+        // restore, reset or erase that changes the dose must not leave the old
+        // packet for the group-head button.
+        applySteamHotWater(state)
         pushStopTargets(state)
         idleSleep.configure(state.idleSleepMin)
     }
@@ -3528,6 +3546,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         qcSteamTempC = _ui.value.qcSteamTempC,
         qcHotWaterTempC = _ui.value.qcHotWaterTempC,
         qcHotWaterVolumeMl = _ui.value.qcHotWaterVolumeMl,
+        qcHotWaterMode = _ui.value.qcHotWaterMode,
+        qcHotWaterTimeS = _ui.value.qcHotWaterTimeS,
+        qcHotWaterTimeNoLimit = _ui.value.qcHotWaterTimeNoLimit,
+        qcHotWaterRatio = _ui.value.qcHotWaterRatio,
         qcFlushTimeS = _ui.value.qcFlushTimeS,
         qcFlushTempC = _ui.value.qcFlushTempC,
         qcGrind = _ui.value.qcGrind,
@@ -3713,15 +3735,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onCoreOutputJson(raw)
     }
 
-    /** Write the four QC steam / hot-water targets, the hot water as a
-     *  volume-mode dose; the core keeps the combined packet in step. */
-    private fun applySteamHotWater() {
-        val ui = _ui.value
+    /** Push the steam / hot-water targets and the hot-water dose to the core —
+     *  the one push for the combined cuuid_0B packet (spec §4), from [state]'s
+     *  settings: the core keeps the packet in step (the volume and timeout
+     *  from the dose, the group target the effective profile's). Every writer
+     *  of these settings ends here: a Quick Controls edit, a relayed one, and
+     *  the whole-bundle writes through [pushCoreInputs]. */
+    private fun applySteamHotWater(state: MainUiState = _ui.value) {
+        val ui = state
         val targets = SteamHotWaterTargets(
             steamTempC = ui.qcSteamTempC,
             steamTimeoutS = ui.qcSteamTimeS,
             hotWaterTempC = ui.qcHotWaterTempC,
-            hotWater = volumeHotWaterDose(ui.qcHotWaterVolumeMl),
+            hotWater = ui.hotWaterDose(),
         )
         routeWrite("Set steam/hot-water") {
             bridge.setSteamHotwaterTargets(json.encodeToString(SteamHotWaterTargets.serializer(), targets))
@@ -3738,7 +3764,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val target = runCatching {
             json.decodeFromString(HotWaterTarget.serializer().nullable, raw)
         }.getOrNull()
+        setHotWaterTarget(target)
+    }
+
+    /** Show [target]; a hub tells its remotes when it changed (they show the
+     *  hub's own number, from the snapshot). */
+    private fun setHotWaterTarget(target: HotWaterTarget?) {
+        if (_ui.value.hotWaterTarget == target) return
         _ui.update { it.copy(hotWaterTarget = target) }
+        proxy.pushConfig()
+    }
+
+    /** The hot-water dose — the Quick Controls' Time · ml · Ratio card sets the
+     *  mode and the mode's value in one edit. A machine setting: a remote
+     *  refuses it ("Change on <hub>"). */
+    fun setHotWaterDose(dose: coffee.crema.core.HotWaterDose) = machine.execute(MachineCommand.SetHotWaterDose(dose))
+
+    /** [setHotWaterDose] on the device holding the machine: store, push, show. */
+    private fun applyHotWaterDose(dose: coffee.crema.core.HotWaterDose) {
+        _ui.update { it.withHotWaterDose(dose) }
+        persistPrefs() // pushes the hub's snapshot too
+        applySteamHotWater()
     }
 
     /** Steam timeout, seconds (Quick Controls). Persisted; RMW write. */
@@ -4046,7 +4092,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Load persisted app preferences at startup. */
     private suspend fun loadPrefs() {
         val p = settingsStore.load()
-        _ui.update { it.copy(
+        // The load stored the migrated dose; read it through the core's rule.
+        val hwDose = p.hotWaterDose()
+        _ui.update { it.withHotWaterDose(hwDose).copy(
             themeMode = p.themeMode,
             maxShotDurationS = p.maxShotDurationS,
             autoTare = p.autoTare,
@@ -4092,7 +4140,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             qcSteamFlowMlS = p.qcSteamFlowMlS,
             qcSteamTempC = p.qcSteamTempC,
             qcHotWaterTempC = p.qcHotWaterTempC,
-            qcHotWaterVolumeMl = p.qcHotWaterVolumeMl,
             qcFlushTimeS = p.qcFlushTimeS,
             qcFlushTempC = p.qcFlushTempC,
             qcGrind = p.qcGrind,
@@ -5353,7 +5400,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.HotWaterTarget -> {
                 // A remote's own core is a read-only mirror: not the hub's number.
-                if (_ui.value.mirror == null) _ui.update { it.copy(hotWaterTarget = event.content.target) }
+                if (_ui.value.mirror == null) setHotWaterTarget(event.content.target)
             }
             is Event.ShotSettingsForeignChange -> appendLog(
                 if (event.content.restored) "Steam / hot-water settings changed outside Crema: restoring them"
@@ -5839,6 +5886,10 @@ internal fun MainUiState.commonSettings(): CommonSettings = AppPrefs(
     qcSteamTempC = qcSteamTempC,
     qcHotWaterTempC = qcHotWaterTempC,
     qcHotWaterVolumeMl = qcHotWaterVolumeMl,
+    qcHotWaterMode = qcHotWaterMode,
+    qcHotWaterTimeS = qcHotWaterTimeS,
+    qcHotWaterTimeNoLimit = qcHotWaterTimeNoLimit,
+    qcHotWaterRatio = qcHotWaterRatio,
     qcFlushTimeS = qcFlushTimeS,
     qcFlushTempC = qcFlushTempC,
 ).toCommonSettings()

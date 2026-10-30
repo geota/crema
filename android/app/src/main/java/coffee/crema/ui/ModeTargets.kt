@@ -69,11 +69,15 @@ fun rememberModeTargets(ui: MainUiState): ModeTargets {
 }
 
 /**
- * The hot-water amount, ml: the core's resolved target (never the machine
- * echo, which can carry the 250 ml scale backstop); the Quick Controls value
- * until the core has one.
+ * The mode card's fixed hot-water target, from the core's resolved target
+ * (never the machine echo, which can carry the 250 ml scale backstop): the ml
+ * poured, or time mode's seconds ("no limit" when it pours until stopped).
  */
-fun hotWaterMl(ui: MainUiState): Float = ui.hotWaterTarget?.volumeMl ?: ui.qcHotWaterVolumeMl
+fun hotWaterCardTarget(target: coffee.crema.core.HotWaterTarget?, volumeUnit: String): Measurement = when {
+    target?.mode != coffee.crema.core.HotWaterMode.Time -> convertVolume(target?.volumeMl, volumeUnit)
+    target.timeS == null -> Measurement("no limit", "")
+    else -> Measurement(kotlin.math.round(target.timeS).toInt().toString(), "s")
+}
 
 /** The active service mode's display label, or null when no mode is running. */
 fun modeLabel(state: MachineState?): String? = when (state) {
@@ -85,9 +89,11 @@ fun modeLabel(state: MachineState?): String? = when (state) {
 
 /** The running mode's target ceiling, seconds — the timeout the firmware
  *  enforces (the cap, not the typical session length); null when idle. */
-fun modeTargetSeconds(state: MachineState?, t: ModeTargets): Float? = when (state) {
+fun modeTargetSeconds(state: MachineState?, t: ModeTargets, hotWater: coffee.crema.core.HotWaterTarget? = null): Float? = when (state) {
     MachineState.Steam -> t.steamTimeoutS
-    MachineState.HotWater -> t.hotWaterTimeoutS
+    // Time mode's seconds; a volume or ratio pour has no time target (the 60 s
+    // backstop isn't the dose).
+    MachineState.HotWater -> hotWater?.let(::hotWaterTargetSeconds) ?: t.hotWaterTimeoutS
     MachineState.HotWaterRinse -> t.flushTimeS
     else -> null
 }

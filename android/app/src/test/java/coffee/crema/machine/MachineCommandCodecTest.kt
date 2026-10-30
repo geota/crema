@@ -1,5 +1,7 @@
 package coffee.crema.machine
 
+import coffee.crema.core.HotWaterDose
+import coffee.crema.core.HotWaterMode
 import coffee.crema.core.MachineRequest
 import kotlin.reflect.KClass
 import kotlin.test.Test
@@ -22,6 +24,7 @@ class MachineCommandCodecTest {
         MachineCommand.SetAutoTare(false),
         MachineCommand.AdjustBrew(18.0, 36.0, 93.0, 8.0),
         MachineCommand.AdjustBrew(18.0, 36.0, 93.0, null),
+        MachineCommand.SetHotWaterDose(HotWaterDose(HotWaterMode.Ratio, 30f, false, 150f, 3f)),
     ) + QcField.entries.map { MachineCommand.SetQc(it, inRange(it)) } +
         MachineCommand::class.leaves().mapNotNull { it.objectInstance as MachineCommand? }
 
@@ -60,7 +63,7 @@ class MachineCommandCodecTest {
     @Test
     fun `local-only commands have no wire form`() {
         val localOnly = samples.filterIsInstance<MachineCommand.LocalOnly>()
-        assertEquals(listOf<MachineCommand>(MachineCommand.RawEspresso), localOnly)
+        assertEquals(setOf(MachineCommand.RawEspresso::class, MachineCommand.SetHotWaterDose::class), localOnly.map { it::class }.toSet())
         assertTrue(localOnly.none { it is MachineCommand.Relayable })
     }
 

@@ -39,12 +39,15 @@ enum class SteamMode(val value: String) {
     }
 }
 
+/** Which side of the Hot water card shows: its temperature or its amount.
+ *  View state — peeking at Temp never changes the persisted hot-water mode
+ *  (`HotWaterMode`, from the core). */
 enum class WaterMode(val value: String) {
     Temp("temp"),
-    Volume("volume"),
+    Amount("amount"),
     ;
     companion object {
-        fun of(value: String): WaterMode = entries.firstOrNull { it.value == value } ?: Volume
+        fun of(value: String): WaterMode = entries.firstOrNull { it.value == value } ?: Amount
     }
 }
 
@@ -119,8 +122,6 @@ object QcBounds {
     const val PREINF_MAX_S = 30.0
     const val WATER_TEMP_MIN_C = 40.0
     const val WATER_TEMP_MAX_C = 98.0
-    const val WATER_VOL_MIN_ML = 20.0
-    const val WATER_VOL_MAX_ML = 250.0
     const val FLUSH_TIME_MIN_S = 1.0
     const val FLUSH_TIME_MAX_S = 20.0
     const val FLUSH_TEMP_MIN_C = 60.0

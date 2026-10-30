@@ -3,6 +3,8 @@ package coffee.crema.ui
 import coffee.crema.ble.proxy.RemotePeer
 import android.app.Application
 import androidx.lifecycle.ViewModelStore
+import coffee.crema.core.HotWaterDose
+import coffee.crema.core.HotWaterMode
 import coffee.crema.ble.proxy.Frame
 import coffee.crema.ble.proxy.Golden
 import coffee.crema.ble.proxy.InMemoryFrameLink
@@ -72,6 +74,7 @@ class RemoteEditFlowTest {
         "setQcSteamTemp" to listOf(150f), "setQcSteamTime" to listOf(30f), "setQcSteamFlow" to listOf(1.6f),
         "setQcHotWaterTemp" to listOf(85f), "setQcHotWaterVolume" to listOf(200f), "setQcFlushTime" to listOf(6f),
         "setQcFlushTemp" to listOf(93f),
+        "setHotWaterDose" to listOf(HotWaterDose(HotWaterMode.Volume, 30f, false, 200f, 3f)),
     )
 
     private fun call(vm: MainViewModel, signature: String) {
@@ -321,8 +324,8 @@ class RemoteEditFlowTest {
         assertTrue(actions.applied.isEmpty(), "the hub applied nothing")
     }
 
-    /** AC-35: the seven QC steam, hot-water and flush settings are READ_ONLY
-     *  on a control remote; their setters send nothing and change nothing. */
+    /** AC-35, AC-HW24: the eleven QC steam, hot-water and flush settings (the
+     *  hot-water dose's four included) are READ_ONLY on a control remote; their setters send nothing and change nothing. */
     @Test
     fun `QC steam, water and flush rows are read-only`() {
         val vm = fixture.start()
@@ -330,6 +333,7 @@ class RemoteEditFlowTest {
         val qc = listOf(
             Setting.QC_STEAM_TIME, Setting.QC_STEAM_FLOW, Setting.QC_STEAM_TEMP, Setting.QC_HOT_WATER_TEMP,
             Setting.QC_HOT_WATER_VOLUME, Setting.QC_FLUSH_TIME, Setting.QC_FLUSH_TEMP,
+            Setting.QC_HOT_WATER_MODE, Setting.QC_HOT_WATER_TIME, Setting.QC_HOT_WATER_TIME_NO_LIMIT, Setting.QC_HOT_WATER_RATIO,
         )
         for (s in qc) {
             assertEquals(SettingAvailability.READ_ONLY, availability(vm, s), "$s")
