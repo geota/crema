@@ -459,6 +459,8 @@ export interface BrewDefaultsBounds {
 	brewTempC: StepRange;
 	/** Default pre-infusion, s. */
 	preinfuseS: StepRange;
+	/** The global max shot duration, s (`0` = none). */
+	maxShotDurationS: StepRange;
 }
 
 /**
