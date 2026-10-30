@@ -35,11 +35,10 @@ fun fmt(pattern: String, vararg args: Any?): String = String.format(Locale.US, p
  * formatter, one precision, one source of truth: no `%.1f`-vs-`%.2f` drift
  * between screens or shells.
  */
-fun formatRatio(dose: Float?, yieldOut: Float?): String {
-    if (dose == null || yieldOut == null) return "1:—"
-    val r = brewRatio(dose, yieldOut) ?: return "1:—"
-    return fmt("1:%.1f", r)
-}
+fun formatRatio(dose: Float?, yieldOut: Float?): String =
+    // The core's one ratio label, shared with the hot-water ratio: a trailing
+    // ".0" dropped (1:2, 1:2.4), 1:— when undefined.
+    coffee.crema.core.ratioLabel(if (dose == null || yieldOut == null) null else brewRatio(dose, yieldOut))
 
 /** [Double] overload for call sites holding `Double` dose/yield values. */
 fun formatRatio(dose: Double?, yieldOut: Double?): String =

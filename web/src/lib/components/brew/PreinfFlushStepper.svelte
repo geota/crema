@@ -11,11 +11,14 @@
 	 * now "FlushStepper."
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
+	import { quickControlBounds } from '#lib/core/bounds.js';
 	import QuickSplitLabel from './QuickSplitLabel.svelte';
 	import QuickStepper from './QuickStepper.svelte';
 	import QuickChipRow from './QuickChipRow.svelte';
 
 	let { params }: { params: BrewParamState } = $props();
+	/** The steppers' ranges, from the core's table (F8). */
+	const b = quickControlBounds();
 
 	const p = $derived(params.current);
 </script>
@@ -35,9 +38,9 @@
 			value={p.flushTime}
 			name="Flush time"
 			unit="s"
-			min={1}
-			max={20}
-			step={1}
+			min={b.flushTimeS.min}
+			max={b.flushTimeS.max}
+			step={b.flushTimeS.step}
 			onChange={(v) => params.set('flushTime', v)}
 			fmt={(v) => v.toFixed(0)}
 		/>
@@ -58,9 +61,9 @@
 			value={p.flushTemp}
 			name="Flush temperature"
 			dimension="temp"
-			min={60}
-			max={100}
-			step={0.5}
+			min={b.flushTempC.min}
+			max={b.flushTempC.max}
+			step={b.flushTempC.step}
 			onChange={(v) => params.set('flushTemp', v)}
 		/>
 		<div style="height:6px"></div>

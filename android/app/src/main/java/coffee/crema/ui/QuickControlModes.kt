@@ -46,12 +46,15 @@ enum class SteamMode(val value: String) {
     }
 }
 
+/** Which side of the Hot water card shows: its temperature or its amount.
+ *  View state — peeking at Temp never changes the persisted hot-water mode
+ *  (`HotWaterMode`, from the core). */
 enum class WaterMode(val value: String) {
     Temp("temp"),
-    Volume("volume"),
+    Amount("amount"),
     ;
     companion object {
-        fun of(value: String): WaterMode = entries.firstOrNull { it.value == value } ?: Volume
+        fun of(value: String): WaterMode = entries.firstOrNull { it.value == value } ?: Amount
     }
 }
 
@@ -141,8 +144,8 @@ object QcSteam {
 /**
  * Min/max ranges for the remaining Quick-Controls steppers, read from the core's
  * table ([CoreBounds]). (Per-layout preset/chip arrays stay in their sheets:
- * they intentionally differ tablet vs phone.) The hot-water values are the
- * hot-water modes' and stay here until that work moves them.
+ * they intentionally differ tablet vs phone.) The hot-water temperature stays
+ * a hot-water modes' constant; its dose ranges are the core's `hot_water_bounds`.
  */
 object QcBounds {
     val DOSE_MIN_G: Double get() = CoreBounds.qc.doseG.min.toDouble()
@@ -159,8 +162,6 @@ object QcBounds {
     val PREINF_MAX_S: Double get() = CoreBounds.qc.preinfuseS.max.toDouble()
     const val WATER_TEMP_MIN_C = 40.0
     const val WATER_TEMP_MAX_C = 98.0
-    const val WATER_VOL_MIN_ML = 20.0
-    const val WATER_VOL_MAX_ML = 500.0
     val FLUSH_TIME_MIN_S: Double get() = CoreBounds.qc.flushTimeS.min.toDouble()
     val FLUSH_TIME_MAX_S: Double get() = CoreBounds.qc.flushTimeS.max.toDouble()
     val FLUSH_TEMP_MIN_C: Double get() = CoreBounds.qc.flushTempC.min.toDouble()

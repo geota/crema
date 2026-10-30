@@ -83,7 +83,10 @@ import coffee.crema.ui.freshnessColor
 import coffee.crema.ui.modeLabel
 import coffee.crema.ui.modeRunningSub
 import coffee.crema.ui.modeTargetSeconds
-import coffee.crema.ui.hotWaterMl
+import coffee.crema.ui.hotWaterCardTarget
+import coffee.crema.ui.hotWaterDose
+import coffee.crema.ui.hotWaterRestingAmount
+import coffee.crema.ui.hotWaterRunning
 import coffee.crema.ui.rememberModeTargets
 import coffee.crema.beans.roastBand
 import coffee.crema.ble.De1BleManager
@@ -284,11 +287,11 @@ fun BrewScreen(
                                 else -> "sparkle"
                             },
                             elapsedMs = ui.modeElapsedMs,
-                            targetS = modeTargetSeconds(ui.machineStateName, t) ?: 0f,
+                            targetS = modeTargetSeconds(ui.machineStateName, t, ui.hotWaterTarget) ?: 0f,
                             // A remote before the hub's first snapshot doesn't know the targets.
                             target = if (ui.awaitingHubValues) Measurement(UNKNOWN_VALUE, "") else when (ui.machineStateName) {
                                 MachineState.Steam -> convertTemp(t.steamTempC, ui.tempUnit)
-                                MachineState.HotWater -> convertVolume(hotWaterMl(ui), ui.volumeUnit)
+                                MachineState.HotWater -> hotWaterCardTarget(ui.hotWaterTarget, ui.volumeUnit)
                                 else -> convertTemp(t.flushTempC, ui.tempUnit)
                             },
                             color = when (ui.machineStateName) {
@@ -402,7 +405,7 @@ fun BrewScreen(
                 modeElapsedMs = ui.modeElapsedMs,
                 profileUploading = ui.profileUploading,
                 targets = rememberModeTargets(ui),
-                hotWaterMl = hotWaterMl(ui),
+                hotWaterTarget = ui.hotWaterTarget,
                 targetsKnown = !ui.awaitingHubValues,
                 tempUnit = ui.tempUnit,
                 volumeUnit = ui.volumeUnit,
@@ -441,7 +444,10 @@ fun BrewScreen(
                     qcSteamFlowMlS = ui.qcSteamFlowMlS.toDouble(),
                     qcSteamTempC = ui.qcSteamTempC.toDouble(),
                     qcHotWaterTempC = ui.qcHotWaterTempC.toDouble(),
-                    qcHotWaterVolumeMl = ui.qcHotWaterVolumeMl.toDouble(),
+                    hotWaterDose = ui.hotWaterDose(),
+                    hotWaterTarget = ui.hotWaterTarget,
+                    weightUnit = ui.weightUnit,
+                    volumeUnit = ui.volumeUnit,
                     qcFlushTimeS = ui.qcFlushTimeS.toDouble(),
                     qcFlushTempC = ui.qcFlushTempC.toDouble(),
                     onSelectProfile = vm::setActiveProfile,
@@ -458,7 +464,7 @@ fun BrewScreen(
                     onSteamFlow = { vm.setQcSteamFlow(it.toFloat()) },
                     onSteamTemp = { vm.setQcSteamTemp(it.toFloat()) },
                     onHotWaterTemp = { vm.setQcHotWaterTemp(it.toFloat()) },
-                    onHotWaterVolume = { vm.setQcHotWaterVolume(it.toFloat()) },
+                    onHotWaterDose = vm::setHotWaterDose,
                     onFlushTime = { vm.setQcFlushTime(it.toFloat()) },
                     onFlushTemp = { vm.setQcFlushTemp(it.toFloat()) },
                     qcGrind = ui.qcGrind?.toDouble(),
@@ -1831,8 +1837,8 @@ private fun BrewFoot(
     modeElapsedMs: Long,
     profileUploading: Boolean,
     targets: ModeTargets,
-    /** The hot-water amount, ml ([hotWaterMl]). */
-    hotWaterMl: Float,
+    /** The core's resolved hot-water target: the chip's amount or time. */
+    hotWaterTarget: coffee.crema.core.HotWaterTarget?,
     /** False on a remote before the hub's first snapshot ("—" subs). */
     targetsKnown: Boolean,
     tempUnit: String,
@@ -1897,9 +1903,10 @@ private fun BrewFoot(
                     else if (!targetsKnown) UNKNOWN_VALUE
                     else "${formatTempCompact(targets.steamTempC, tempUnit)} · ${targets.steamTimeoutS.toInt()} s"
                 val waterSub =
-                    if (dispensing) modeRunningSub(modeElapsedMs, targets.hotWaterTimeoutS)
+                    if (dispensing) hotWaterTarget?.let { hotWaterRunning(it, modeElapsedMs, volumeUnit) } ?: modeRunningSub(modeElapsedMs, targets.hotWaterTimeoutS)
                     else if (!targetsKnown) UNKNOWN_VALUE
-                    else "${formatTempCompact(targets.hotWaterTempC, tempUnit)} · ${formatVolume(hotWaterMl, volumeUnit)}"
+                    else hotWaterTarget?.let { "${formatTempCompact(targets.hotWaterTempC, tempUnit)} · ${hotWaterRestingAmount(it, volumeUnit)}" }
+                        ?: formatTempCompact(targets.hotWaterTempC, tempUnit)
                 val flushSub =
                     if (flushing) modeRunningSub(modeElapsedMs, targets.flushTimeS)
                     else if (!targetsKnown) UNKNOWN_VALUE

@@ -92,6 +92,8 @@ class RemoteToStandaloneTest {
                 qcSteamFlowMlS = s.qcSteamFlowMlS, qcSteamTempC = s.qcSteamTempC, qcHotWaterTempC = s.qcHotWaterTempC,
                 qcHotWaterVolumeMl = s.qcHotWaterVolumeMl, qcFlushTimeS = s.qcFlushTimeS, qcFlushTempC = s.qcFlushTempC,
                 qcGrind = s.qcGrind, activeProfileId = s.activeProfileId, waterRefillPointMm = s.waterRefillPointMm,
+                qcHotWaterMode = s.qcHotWaterMode, qcHotWaterTimeS = s.qcHotWaterTimeS,
+                qcHotWaterTimeNoLimit = s.qcHotWaterTimeNoLimit, qcHotWaterRatio = s.qcHotWaterRatio,
             ),
         )
         assertEquals(expected, abOf(saved), "own A1–A11 and B1–B13 are S's (the snapshot, not the pending 18)")
@@ -115,7 +117,7 @@ class RemoteToStandaloneTest {
         // And the first sweep after it writes S's machine values (A only;
         // the tank temperature and battery are inputs, not settings).
         assertEquals(
-            buildConnectSweepSettings(58f, true, 8f, 150f, 30f, 85f, 200f, 1.6f, 6f, 93f, true, own.usbChargingMode, 0f, null),
+            buildConnectSweepSettings(58f, true, 8f, 150f, 30f, 85f, coffee.crema.core.HotWaterDose(coffee.crema.core.HotWaterMode.Time, 45f, true, 200f, 2.5f), 1.6f, 6f, 93f, true, own.usbChargingMode, 0f, null),
             own.connectSweepSettings(0f, null),
         )
     }

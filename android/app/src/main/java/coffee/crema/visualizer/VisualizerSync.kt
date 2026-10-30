@@ -117,6 +117,9 @@ class VisualizerSync(
     /** Run the retry queue's timers (the scheduled retry and the foreground
      *  tick); JVM tests turn them off and drain by hand. */
     private val retryTimers: Boolean = true,
+    /** Waits for the stored shots' telemetry to load (F10 validation P1-2):
+     *  an upload or a pull before it would see shots without their series. */
+    private val seriesReady: suspend () -> Unit = {},
     /** How the retry timers wait (injected so a JVM test can see each wait). */
     private val retryDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
 ) : UploadDestination {
@@ -870,9 +873,12 @@ class VisualizerSync(
     }
 
     /** The suspend upload itself — payload → POST → lastSyncAt + log line. */
-    private suspend fun uploadShotNow(shot: StoredShot): String {
+    private suspend fun uploadShotNow(snapshot: StoredShot): String {
         // Backstop: every caller filters brews out first (issue #10).
-        require(!shot.isBrewLog) { "Brew Log rows are never uploaded to Visualizer" }
+        require(!snapshot.isBrewLog) { "Brew Log rows are never uploaded to Visualizer" }
+        // A copy taken before the series loaded has none: wait, then re-read.
+        seriesReady()
+        val shot = if (snapshot.samples.isEmpty()) currentShot(snapshot.id) ?: snapshot else snapshot
         val payload = buildShotPayload(shot)
         val id = withFreshToken { client.uploadShot(it, payload) }
         persist { it.copy(lastShotSyncAt = System.currentTimeMillis()) }
@@ -1160,6 +1166,17 @@ class VisualizerSync(
     }
 
     /**
+     * A restore or an import brought back shots with these [ids]: drop their
+     * tombstones, so a pending remote delete doesn't remove the copy a
+     * restored shot now points at, and the pull treats them as live again.
+     */
+    fun forgetTombstones(ids: Collection<String>) {
+        val gone = ids.toHashSet()
+        if (persisted.shotTombstones.none { it.id in gone }) return
+        scope.launch { persist { st -> st.copy(shotTombstones = st.shotTombstones.filterNot { it.id in gone }) } }
+    }
+
+    /**
      * Send `DELETE /shots/{id}` for every tombstone the user asked to delete
      * remotely (web `ShotSync.deleteShot`: open to free accounts, a 404 counts
      * as already gone). A success drops the tombstone. A failure goes by the
@@ -1303,6 +1320,9 @@ class VisualizerSync(
         }
         _state.update { it.copy(syncing = true) }
         scope.launch {
+            // The pull backfills curve-less shots: not before the stored
+            // series have loaded.
+            seriesReady()
             val parts = mutableListOf<String>()
             var failed = false
             // Remote deletes the user asked for that haven't landed yet.

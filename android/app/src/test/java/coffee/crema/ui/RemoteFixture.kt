@@ -194,6 +194,8 @@ internal class RemoteFixture(private val store: ViewModelStore) {
             steamPurge = false, idleSleepMin = 30, grinderModel = "P grinder",
             qcSteamTimeS = 20f, qcSteamFlowMlS = 1.0f, qcSteamTempC = 140f, qcHotWaterTempC = 70f,
             qcHotWaterVolumeMl = 100f, qcFlushTimeS = 3f, qcFlushTempC = 90f, qcGrind = 10f,
+            qcHotWaterMode = coffee.crema.core.HotWaterMode.Volume, qcHotWaterTimeS = 30f,
+            qcHotWaterTimeNoLimit = false, qcHotWaterRatio = 3f,
             activeProfileId = PROFILE_P, waterRefillPointMm = 5f,
         )
 
@@ -203,6 +205,8 @@ internal class RemoteFixture(private val store: ViewModelStore) {
             stopOnWeight = true, autoTare = true, maxShotDurationS = 44f, grinderModel = "S grinder",
             qcSteamTimeS = 30f, qcSteamFlowMlS = 1.6f, qcSteamTempC = 150f, qcHotWaterTempC = 85f,
             qcHotWaterVolumeMl = 200f, qcFlushTimeS = 6f, qcFlushTempC = 93f, qcGrind = 15f,
+            qcHotWaterMode = coffee.crema.core.HotWaterMode.Time, qcHotWaterTimeS = 45f,
+            qcHotWaterTimeNoLimit = true, qcHotWaterRatio = 2.5f,
             brewDoseG = 20.0, brewYieldG = 40.0, brewTempC = 94.0, brewPreinfuseS = 6.0,
             primaryName = "Kitchen tablet",
             rev = 0,
@@ -243,4 +247,6 @@ internal fun abOf(p: AppPrefs): Map<String, Any?> = mapOf(
     "qcSteamFlowMlS" to p.qcSteamFlowMlS, "qcSteamTempC" to p.qcSteamTempC, "qcHotWaterTempC" to p.qcHotWaterTempC,
     "qcHotWaterVolumeMl" to p.qcHotWaterVolumeMl, "qcFlushTimeS" to p.qcFlushTimeS, "qcFlushTempC" to p.qcFlushTempC,
     "qcGrind" to p.qcGrind, "activeProfileId" to p.activeProfileId, "waterRefillPointMm" to p.waterRefillPointMm,
+    "qcHotWaterMode" to p.qcHotWaterMode, "qcHotWaterTimeS" to p.qcHotWaterTimeS,
+    "qcHotWaterTimeNoLimit" to p.qcHotWaterTimeNoLimit, "qcHotWaterRatio" to p.qcHotWaterRatio,
 )

@@ -15,7 +15,7 @@ import kotlin.test.assertNull
 class ConnectSweepTest {
     private fun snapshot(mode: String = "alwaysOn", battery: Int? = 77) = buildConnectSweepSettings(
         fanThresholdC = 48f, steamTwoTap = true, refillPointMm = 9f,
-        steamTempC = 150f, steamTimeoutS = 90f, hotWaterTempC = 80f, hotWaterVolumeMl = 150f,
+        steamTempC = 150f, steamTimeoutS = 90f, hotWaterTempC = 80f, hotWater = HotWaterUi.defaults.copy(mode = coffee.crema.core.HotWaterMode.Volume, volumeMl = 150f),
         steamFlowMlS = 1.2f, flushTimeoutS = 4f, flushTempC = 90f, steamEco = false,
         usbChargingMode = mode, tankTempC = 35f, batteryPercent = battery,
     )

@@ -28,7 +28,8 @@
 		prefix,
 		dimension,
 		overridden = false,
-		overriddenTooltip
+		overriddenTooltip,
+		sub
 	}: {
 		/** Optional caption above the stepper row. */
 		label?: string;
@@ -82,6 +83,12 @@
 		 * the user's pref. Ignored when `overridden` is `false`.
 		 */
 		overriddenTooltip?: string;
+		/**
+		 * Optional secondary line under the digits, inside the value box (the
+		 * Hot water card's resolved amount or caveat). It sits in the box's
+		 * bottom padding, so the row keeps its height and the digits stay put.
+		 */
+		sub?: Snippet;
 	} = $props();
 
 	// Numeric core (clamp + canonical↔display + grid-snapped inc + click-to-type)
@@ -116,7 +123,7 @@
 		<button class="qcs-btn" onclick={() => stepper.inc(-1)} aria-label="Decrease {a11yName}">
 			<MinusIcon aria-hidden="true" />
 		</button>
-		<div class="qcs-val" class:is-overridden={overridden}>
+		<div class="qcs-val" class:is-overridden={overridden} class:has-sub={!!sub}>
 			{@render prefix?.()}
 			{#if stepper.editing}
 				<input
@@ -140,6 +147,7 @@
 				</button>
 			{/if}
 			<span class="qcs-unit">{stepper.unit}</span>
+			{#if sub}<span class="qcs-sub">{@render sub()}</span>{/if}
 		</div>
 		<button class="qcs-btn" onclick={() => stepper.inc(1)} aria-label="Increase {a11yName}">
 			<PlusIcon aria-hidden="true" />

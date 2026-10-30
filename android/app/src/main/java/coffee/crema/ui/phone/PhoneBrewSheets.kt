@@ -9,6 +9,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,6 +37,11 @@ import coffee.crema.ui.QcBounds
 import coffee.crema.ui.QcSteam
 import coffee.crema.ui.SteamMode
 import coffee.crema.ui.WaterMode
+import coffee.crema.ui.HotWaterHeader
+import coffee.crema.ui.hotWaterDose
+import coffee.crema.ui.hotWaterStepper
+import coffee.crema.ui.hotWaterSubLine
+import coffee.crema.ui.components.StepperExtraChip
 import coffee.crema.ui.YieldRatioMode
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.effectiveBrew
@@ -96,7 +103,7 @@ fun PhoneQuickSheet(
     // persisted QC state (vm.setQcSteam* / vm.setQcHotWater*), shared with the
     // tablet — no local stub.
     var steamMode by remember { mutableStateOf(SteamMode.Time) }
-    var waterMode by remember { mutableStateOf(WaterMode.Volume) }
+    var waterMode by remember { mutableStateOf(WaterMode.Amount) }
     val brewGate = ui.gate(Setting.BREW_PARAMS)
 
     ModalBottomSheet(
@@ -286,28 +293,56 @@ fun PhoneQuickSheet(
                             onChange = { when (steamMode) { SteamMode.Flow -> vm.setQcSteamFlow(it.toFloat()); SteamMode.Temp -> vm.setQcSteamTemp(it.toFloat()); SteamMode.Time -> vm.setQcSteamTime(it.toFloat()) } },
                             gate = ui.gate(when (steamMode) { SteamMode.Flow -> Setting.QC_STEAM_FLOW; SteamMode.Temp -> Setting.QC_STEAM_TEMP; SteamMode.Time -> Setting.QC_STEAM_TIME }),
                         )
-                        // Hot water — Temp | Volume, wired to the VM (tablet parity). No
-                        // disable dot: 0 isn't a clean "off" here (the de1app/Decenza
-                        // cross-check), so it stays a plain mode switch.
-                        QcCell(
-                            modifier = Modifier.fillMaxWidth(),
-                            header = {
-                                CremaSplitLabel(
-                                    prefix = "Hot water",
-                                    options = listOf(SplitOption("temp", "Temp"), SplitOption("volume", "Volume")),
-                                    value = waterMode.value, onChange = { waterMode = WaterMode.of(it) },
-                                )
-                            },
-                            value = if (waterMode == WaterMode.Temp) ui.qcHotWaterTempC.toDouble() else ui.qcHotWaterVolumeMl.toDouble(),
-                            unit = if (waterMode == WaterMode.Temp) "°C" else "ml",
-                            step = if (waterMode == WaterMode.Temp) 1.0 else 10.0,
-                            min = if (waterMode == WaterMode.Temp) QcBounds.WATER_TEMP_MIN_C else QcBounds.WATER_VOL_MIN_ML,
-                            max = if (waterMode == WaterMode.Temp) QcBounds.WATER_TEMP_MAX_C else QcBounds.WATER_VOL_MAX_ML,
-                            presets = if (waterMode == WaterMode.Temp) listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
-                            fmt = { fmt("%.0f", it) },
-                            onChange = { if (waterMode == WaterMode.Temp) vm.setQcHotWaterTemp(it.toFloat()) else vm.setQcHotWaterVolume(it.toFloat()) },
-                            gate = ui.gate(if (waterMode == WaterMode.Temp) Setting.QC_HOT_WATER_TEMP else Setting.QC_HOT_WATER_VOLUME),
-                        )
+                        // Hot water — Temp | ‹mode› ▾ (spec §2.7), wired to the VM
+                        // (tablet parity): the mode is a menu in the label and the
+                        // full readout sits inline after the value, so the cell
+                        // keeps header, stepper and chips like Steam and Flush. No
+                        // disable dot: 0 isn't a clean "off" here (the
+                        // de1app/Decenza cross-check).
+                        val dose = ui.hotWaterDose()
+                        val waterHeader: @Composable () -> Unit = {
+                            HotWaterHeader(
+                                waterMode = waterMode,
+                                onWaterMode = { waterMode = it },
+                                mode = dose.mode,
+                                onMode = { vm.setHotWaterDose(dose.copy(mode = it)) },
+                                gate = ui.gate(Setting.QC_HOT_WATER_MODE),
+                            )
+                        }
+                        if (waterMode == WaterMode.Temp) {
+                            QcCell(
+                                modifier = Modifier.fillMaxWidth(),
+                                header = waterHeader,
+                                value = ui.qcHotWaterTempC.toDouble(),
+                                unit = "°C",
+                                step = 1.0,
+                                min = QcBounds.WATER_TEMP_MIN_C,
+                                max = QcBounds.WATER_TEMP_MAX_C,
+                                presets = listOf(60.0, 75.0, 85.0, 92.0, 96.0),
+                                fmt = { fmt("%.0f", it) },
+                                onChange = { vm.setQcHotWaterTemp(it.toFloat()) },
+                                gate = ui.gate(Setting.QC_HOT_WATER_TEMP),
+                            )
+                        } else {
+                            val hw = hotWaterStepper(dose, vm::setHotWaterDose)
+                            QcCell(
+                                modifier = Modifier.fillMaxWidth(),
+                                header = waterHeader,
+                                value = hw.value,
+                                unit = hw.unit.orEmpty(),
+                                step = hw.step,
+                                min = hw.min,
+                                max = hw.max,
+                                presets = hw.chips,
+                                fmt = hw.fmt,
+                                presetFmt = hw.chipFmt,
+                                presetActive = hw.chipActive,
+                                extra = hw.extraChip,
+                                onChange = hw.onChange,
+                                gate = ui.gate(hw.setting),
+                                sub = hotWaterSubLine(ui.hotWaterTarget, ui.weightUnit, ui.volumeUnit, dose.ratio, long = true, fontSize = 11.sp),
+                            )
+                        }
                     }
                 }
                 "chart" -> {
@@ -395,7 +430,16 @@ private fun QcCell(
     gate: RowGate = RowGate.Open,
     /** Optional content under the stepper row (the brew-temp offset hint). */
     footer: @Composable () -> Unit = {},
+    /** Optional secondary text inline after the value, on its row (the hot-water
+     *  readout): one line, so the cell keeps its height. */
+    sub: (@Composable () -> Unit)? = null,
+    /** The presets' labels and which is active, when they differ from the value's. */
+    presetFmt: ((Double) -> String)? = null,
+    presetActive: ((Double) -> Boolean)? = null,
+    /** One more preset after [presets] that isn't a number (hot water's No limit). */
+    extra: StepperExtraChip? = null,
 ) {
+    val presetLabel = gate.fmt(presetFmt ?: fmt)
     val fmt = gate.fmt(fmt)
     Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier) {
         Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -406,7 +450,11 @@ private fun QcCell(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 QcRoundBtn("minus") { onChange((value - step).coerceIn(min, max)) }
-                Row(verticalAlignment = Alignment.Bottom) {
+                Row(
+                    if (sub != null) Modifier.weight(1f).padding(horizontal = 8.dp) else Modifier,
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.Bottom,
+                ) {
                     TapToEditValue(
                         value = value,
                         min = min,
@@ -426,32 +474,41 @@ private fun QcCell(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(start = 2.dp, bottom = 2.dp),
                     )
+                    if (sub != null) Box(Modifier.weight(1f, fill = false).padding(start = 8.dp, bottom = 4.dp)) { sub() }
                 }
                 QcRoundBtn("plus") { onChange((value + step).coerceIn(min, max)) }
             }
             footer()
             Row(Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.4f).gated(gate), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 presets.forEach { p ->
-                    val on = kotlin.math.abs(p - value) < 0.001
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (on) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest)
-                            .clickable { onChange(p) }
-                            .padding(vertical = 5.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            fmt(p),
-                            style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp, fontFeatureSettings = "tnum"),
-                            color = if (on) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    QcPreset(presetLabel(p), presetActive?.invoke(p) ?: (kotlin.math.abs(p - value) < 0.001)) { onChange(p) }
+                }
+                if (extra != null) {
+                    QcPreset(extra.label, extra.active, Modifier.semantics { contentDescription = extra.description }, onClick = extra.onClick)
                 }
             }
             GateNote(gate)
         }
+    }
+}
+
+/** One preset chip under a [QcCell] stepper; secondary-container fill when on. */
+@Composable
+private fun RowScope.QcPreset(label: String, on: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier
+            .weight(1f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (on) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest)
+            .clickable(onClick = onClick)
+            .padding(vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp, fontFeatureSettings = "tnum"),
+            color = if (on) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

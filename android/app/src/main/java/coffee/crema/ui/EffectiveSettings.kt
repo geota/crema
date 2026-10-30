@@ -67,6 +67,13 @@ private fun MainUiState.withSnapshot(cfg: ConfigSnapshot, m: MirroredSettings): 
         qcSteamTempC = cfg.qcSteamTempC,
         qcHotWaterTempC = cfg.qcHotWaterTempC,
         qcHotWaterVolumeMl = cfg.qcHotWaterVolumeMl,
+        // The hub's dose where its snapshot carries it (unknown rows show "—"),
+        // and the hub's own resolved target for the readout and chips.
+        qcHotWaterMode = cfg.qcHotWaterMode ?: qcHotWaterMode,
+        qcHotWaterTimeS = cfg.qcHotWaterTimeS ?: qcHotWaterTimeS,
+        qcHotWaterTimeNoLimit = cfg.qcHotWaterTimeNoLimit ?: qcHotWaterTimeNoLimit,
+        qcHotWaterRatio = cfg.qcHotWaterRatio ?: qcHotWaterRatio,
+        hotWaterTarget = cfg.hotWaterTarget,
         qcFlushTimeS = cfg.qcFlushTimeS,
         qcFlushTempC = cfg.qcFlushTempC,
         qcGrind = cfg.qcGrind,
@@ -111,7 +118,9 @@ fun MachineCommand.Config.applyTo(s: MainUiState): MainUiState = when (this) {
         QcField.STEAM_FLOW -> s.copy(qcSteamFlowMlS = value)
         QcField.STEAM_TEMP -> s.copy(qcSteamTempC = value)
         QcField.HOT_WATER_TEMP -> s.copy(qcHotWaterTempC = value)
-        QcField.HOT_WATER_VOLUME -> s.copy(qcHotWaterVolumeMl = value)
+        // An older remote's volume verb: the hub sets the volume and switches
+        // to volume mode, so the edit has a visible effect (spec §4).
+        QcField.HOT_WATER_VOLUME -> s.copy(qcHotWaterVolumeMl = value, qcHotWaterMode = coffee.crema.core.HotWaterMode.Volume)
         QcField.FLUSH_TIME -> s.copy(qcFlushTimeS = value)
         QcField.FLUSH_TEMP -> s.copy(qcFlushTempC = value)
         QcField.GRIND -> s.copy(qcGrind = value)

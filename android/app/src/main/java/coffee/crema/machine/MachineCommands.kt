@@ -48,6 +48,10 @@ interface MachineActions {
 
     fun applyTareScale()
 
+    /** A new hot-water dose on the device holding the machine: store it,
+     *  push it to the core, show it to remotes. */
+    fun applyHotWaterDose(dose: coffee.crema.core.HotWaterDose)
+
     /** The visible half of a config change on the device that owns the
      *  config: update the UI state now. (A remote shows its relayed edits in
      *  its mirror slice instead.) */
@@ -103,6 +107,7 @@ class LocalMachine(
             }
         }
         MachineCommand.RawEspresso -> accepted { actions.applyMachineState(MachineRequest.ESPRESSO) }
+        is MachineCommand.SetHotWaterDose -> accepted { actions.applyHotWaterDose(cmd.dose) }
     }
 
     /** Why a peer's [cmd] names something this device doesn't have (a profile

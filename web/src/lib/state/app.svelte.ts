@@ -18,7 +18,6 @@
 import { refreshStopTargetsProjection, setHotWaterTarget } from './ui-state.svelte';
 import {
 	loadCore,
-	volumeHotWaterDose,
 	type Command,
 	type CoreOutput,
 	type CremaCore
@@ -560,6 +559,11 @@ export class CremaApp {
 				// user-disconnect path already clears it in disconnectScale.
 				if (scaleState === 'disconnected' || scaleState === 'failed') {
 					this.clearScaleHeartbeat();
+				}
+				// A scale arriving or leaving moves the hot-water target (the
+				// backstop and the weight stop); with no DE1 no output says so.
+				if (scaleState === 'ready' || scaleState === 'disconnected' || scaleState === 'failed') {
+					void this.refreshHotWaterTarget();
 				}
 				// Fire `scaleConnected` on the first transition into ready.
 				// The advertised name and capabilities arrive a beat later
@@ -1551,7 +1555,8 @@ export class CremaApp {
 	/**
 	 * Push the whole settings bundle to the core: every settings-driven core
 	 * input in one call (`applyCommonSettings` — auto-tare, stop-on-weight,
-	 * volume stop, max shot, weight unit, low-water threshold), the mains
+	 * volume stop, max shot, weight unit, low-water threshold), the steam /
+	 * hot-water targets with the hot-water dose ({@link pushSteamHotwater}), the mains
 	 * line-frequency override, and the idle-sleep timeout. Runs at start-up and
 	 * after every whole-bundle write (the settings store's `onReplaced`: a
 	 * backup restore, Restore defaults), so the core never keeps stale values
@@ -1560,6 +1565,10 @@ export class CremaApp {
 	pushSettings(): void {
 		const s = getSettingsStore().current;
 		void this.core.applyCommonSettings(JSON.stringify(settingsToCommon(s)));
+		// The steam / hot-water packet's targets and the hot-water dose: a
+		// restore that switches to ratio must not leave the old packet for the
+		// group-head button.
+		void this.pushSteamHotwater();
 		void this.core.setLineFrequencyOverride(s.lineFrequencyHz === 50 || s.lineFrequencyHz === 60 ? s.lineFrequencyHz : 0);
 		this.idleSleep.configure(s.idleSleepMin);
 	}
@@ -1703,9 +1712,9 @@ export class CremaApp {
 	 * is the one moment it knows the picture moved (geota/crema#56).
 	 */
 	async refreshStopTargets(): Promise<void> {
+		// Re-reads the hot-water target too (the target yield is the ratio's
+		// basis).
 		await refreshStopTargetsProjection(this.core);
-		// The target yield is also the hot-water ratio's basis.
-		await this.refreshHotWaterTarget();
 	}
 
 	async applyProfileTargetWeight(grams: number): Promise<void> {
@@ -1853,24 +1862,24 @@ export class CremaApp {
 	}
 
 	/**
-	 * Write the four QC-modeled steam / hot-water fields (issue 14), the hot
-	 * water as a volume-mode dose. The core keeps the combined cuuid_0B packet
-	 * in step: the group target is the effective profile's temperature, and
-	 * the fields the Quick Sheet doesn't model (flags, espresso volume) keep
-	 * their current values.
+	 * Push the steam / hot-water targets and the hot-water dose to the core —
+	 * the one push for the combined cuuid_0B packet (spec §4), read from the
+	 * persisted settings (`hotWaterDose()`, never a view's copy). The core
+	 * keeps the packet in step: the volume and timeout come from the dose,
+	 * the group target is the effective profile's temperature, and the
+	 * fields no one here owns (flags, espresso volume) are kept. Every writer
+	 * of these settings ends here: the Quick Sheet, Settings → Steam, and the
+	 * whole-bundle writes through {@link pushSettings}.
 	 */
-	async setSteamHotwater(values: {
-		steamTempC: number;
-		steamTimeoutS: number;
-		hotWaterTempC: number;
-		hotWaterVolumeMl: number;
-	}): Promise<void> {
+	async pushSteamHotwater(): Promise<void> {
+		const settings = getSettingsStore();
+		const s = settings.current;
 		this.applyCoreOutput(
 			await this.core.setSteamHotwaterTargets({
-				steamTempC: values.steamTempC,
-				steamTimeoutS: values.steamTimeoutS,
-				hotWaterTempC: values.hotWaterTempC,
-				hotWater: volumeHotWaterDose(values.hotWaterVolumeMl)
+				steamTempC: s.qcSteamTempC,
+				steamTimeoutS: s.qcSteamTimeS,
+				hotWaterTempC: s.qcHotWaterTempC,
+				hotWater: settings.hotWaterDose()
 			})
 		);
 		await this.refreshHotWaterTarget();
@@ -2544,6 +2553,11 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 	// low-water threshold, the mains frequency and the idle-sleep timeout —
 	// and again whenever the whole bundle is replaced (restore, Restore
 	// defaults). Single edits flow through the matching `applyXxx(...)`.
+	// The hot-water migration runs once, here, right after the wasm core has
+	// loaded and before anything reads the dose (the connect sweep can run
+	// before any card renders): it stores the core's answer for a record from
+	// before the hot-water modes.
+	getSettingsStore().migrateHotWater();
 	app.pushSettings();
 	getSettingsStore().onReplaced = () => app.pushSettings();
 	// Seed the learned SAW drip model (core-owned opaque blob) from its

@@ -10,7 +10,7 @@ import coffee.crema.settings.carries
  * Remote → standalone (T6, spec §7.5): when a remote leaves its hub it may
  * take the hub's machine and session values as its own. Only the last
  * applied snapshot counts (never a pending edit), and only the adoptable
- * settings it carries: A1–A11 and B1–B13.
+ * settings it carries: A1–A11, A22–A25 and B1–B13.
  */
 
 /** The confirmation a leaving remote shows: [changed] of its own values
@@ -24,6 +24,10 @@ internal fun hubValue(cfg: ConfigSnapshot, setting: Setting): Any? = when (setti
     Setting.QC_STEAM_FLOW -> cfg.qcSteamFlowMlS
     Setting.QC_HOT_WATER_TEMP -> cfg.qcHotWaterTempC
     Setting.QC_HOT_WATER_VOLUME -> cfg.qcHotWaterVolumeMl
+    Setting.QC_HOT_WATER_MODE -> cfg.qcHotWaterMode
+    Setting.QC_HOT_WATER_TIME -> cfg.qcHotWaterTimeS
+    Setting.QC_HOT_WATER_TIME_NO_LIMIT -> cfg.qcHotWaterTimeNoLimit
+    Setting.QC_HOT_WATER_RATIO -> cfg.qcHotWaterRatio
     Setting.QC_FLUSH_TIME -> cfg.qcFlushTimeS
     Setting.QC_FLUSH_TEMP -> cfg.qcFlushTempC
     Setting.STEAM_ECO -> cfg.steamEco
@@ -57,6 +61,10 @@ internal fun ownValue(own: MainUiState, setting: Setting): Any? = when (setting)
     Setting.QC_STEAM_FLOW -> own.qcSteamFlowMlS
     Setting.QC_HOT_WATER_TEMP -> own.qcHotWaterTempC
     Setting.QC_HOT_WATER_VOLUME -> own.qcHotWaterVolumeMl
+    Setting.QC_HOT_WATER_MODE -> own.qcHotWaterMode
+    Setting.QC_HOT_WATER_TIME -> own.qcHotWaterTimeS
+    Setting.QC_HOT_WATER_TIME_NO_LIMIT -> own.qcHotWaterTimeNoLimit
+    Setting.QC_HOT_WATER_RATIO -> own.qcHotWaterRatio
     Setting.QC_FLUSH_TIME -> own.qcFlushTimeS
     Setting.QC_FLUSH_TEMP -> own.qcFlushTempC
     Setting.STEAM_ECO -> own.steamEco
@@ -103,6 +111,11 @@ fun adopt(own: MainUiState, cfg: ConfigSnapshot, changes: Set<Setting>, hasBean:
             Setting.QC_STEAM_FLOW -> s.qc(QcField.STEAM_FLOW, cfg.qcSteamFlowMlS) { copy(qcSteamFlowMlS = it) }
             Setting.QC_HOT_WATER_TEMP -> s.qc(QcField.HOT_WATER_TEMP, cfg.qcHotWaterTempC) { copy(qcHotWaterTempC = it) }
             Setting.QC_HOT_WATER_VOLUME -> s.qc(QcField.HOT_WATER_VOLUME, cfg.qcHotWaterVolumeMl) { copy(qcHotWaterVolumeMl = it) }
+            // Carried ⟹ non-null (see `carries`); the core clamps the dose on push.
+            Setting.QC_HOT_WATER_MODE -> cfg.qcHotWaterMode?.let { s.copy(qcHotWaterMode = it) } ?: s
+            Setting.QC_HOT_WATER_TIME -> cfg.qcHotWaterTimeS?.let { s.copy(qcHotWaterTimeS = it) } ?: s
+            Setting.QC_HOT_WATER_TIME_NO_LIMIT -> cfg.qcHotWaterTimeNoLimit?.let { s.copy(qcHotWaterTimeNoLimit = it) } ?: s
+            Setting.QC_HOT_WATER_RATIO -> cfg.qcHotWaterRatio?.let { s.copy(qcHotWaterRatio = it) } ?: s
             Setting.QC_FLUSH_TIME -> s.qc(QcField.FLUSH_TIME, cfg.qcFlushTimeS) { copy(qcFlushTimeS = it) }
             Setting.QC_FLUSH_TEMP -> s.qc(QcField.FLUSH_TEMP, cfg.qcFlushTempC) { copy(qcFlushTempC = it) }
             Setting.STEAM_ECO -> s.copy(steamEco = cfg.steamEco)

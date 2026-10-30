@@ -81,6 +81,8 @@ class DecentSync(
     private val liveSerialUnreadable: () -> Boolean = { false },
     /** The shot as history holds it NOW (null = deleted) — re-read before every POST. */
     private val currentShot: (localId: String) -> StoredShot?,
+    /** Waits for the stored shots' telemetry to load (F10 validation P1-2). */
+    private val seriesReady: suspend () -> Unit = {},
     /** The account was just linked — the moment to offer a catch-up of existing shots. */
     private val onLinked: () -> Unit = {},
     private val now: () -> Long = System::currentTimeMillis,
@@ -467,7 +469,9 @@ class DecentSync(
         if (!p.linked || email == null || token == null) return Outcome.Skipped("No Decent account linked")
         if (!manual && !p.autoUpload) return Outcome.Skipped("Auto-upload is off")
         if (p.needsReauth) return Outcome.Skipped("Decent login needs re-linking")
-        // The caller's copy may be stale (a second tap, a drain racing a live push).
+        // The caller's copy may be stale (a second tap, a drain racing a live
+        // push, or taken before the series loaded).
+        seriesReady()
         val shot = currentShot(snapshot.id) ?: return Outcome.Skipped("Shot no longer in history")
         // Brew Log rows (issue #10): never uploaded, and never stamped with
         // the live DE1 (which the bind after a successful POST would do).

@@ -5,12 +5,15 @@
 	 * label is the toggle; one stepper edits whichever side is active.
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
+	import { quickControlBounds } from '#lib/core/bounds.js';
 	import QuickSplitLabel from './QuickSplitLabel.svelte';
 	import QuickStepper from './QuickStepper.svelte';
 	import QuickChipRow from './QuickChipRow.svelte';
 	import { getSettingsStore, formatWeight } from '#lib/settings/index.js';
 
 	let { params }: { params: BrewParamState } = $props();
+	/** The steppers' ranges, from the core's table (F8). */
+	const b = quickControlBounds();
 
 	const p = $derived(params.current);
 	const prefs = $derived(getSettingsStore().current);
@@ -39,9 +42,9 @@
 			value={p.dose}
 			name="Dose"
 			dimension="weight"
-			min={5}
-			max={30}
-			step={0.1}
+			min={b.doseG.min}
+			max={b.doseG.max}
+			step={b.doseG.step}
 			onChange={(v) => params.set('dose', v)}
 			overridden={doseOverridden}
 			overriddenTooltip="Overriding default {doseSeedLabel}"
@@ -58,9 +61,9 @@
 		<QuickStepper
 			value={p.grind}
 			name="Grind"
-			min={0}
-			max={20}
-			step={0.1}
+			min={b.grind.min}
+			max={b.grind.max}
+			step={b.grind.step}
 			onChange={(v) => params.set('grind', v)}
 			fmt={(v) => v.toFixed(1)}
 		/>

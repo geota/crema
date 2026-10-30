@@ -1,8 +1,10 @@
 package coffee.crema.machine
 
+import coffee.crema.core.HotWaterDose
 import coffee.crema.core.MachineRequest
 import coffee.crema.profiles.ProfileBounds
 import coffee.crema.ui.CoreBounds
+import coffee.crema.ui.HotWaterUi
 import coffee.crema.ui.QcBounds
 
 /**
@@ -146,6 +148,11 @@ sealed interface MachineCommand {
     /** The debug panel's raw Espresso request: skips the start sequence, so it
      *  never leaves the device holding the machine. */
     data object RawEspresso : LocalOnly
+
+    /** The hot-water dose: the mode and every mode's value, one edit (spec
+     *  §4). A machine setting with no wire form: a remote shows the hub's and
+     *  refuses an edit ("Change on <hub>"). */
+    data class SetHotWaterDose(val dose: HotWaterDose) : LocalOnly
 }
 
 /** The Quick-Controls values a mirror may set, each with its stepper's bounds. */
@@ -156,7 +163,8 @@ enum class QcField(val label: String, private val range: () -> ClosedFloatingPoi
      *  keeps out of the band the firmware snaps to off. */
     STEAM_TEMP("steam temperature", { CoreBounds.qc.steamTempC.toRange() }),
     HOT_WATER_TEMP("hot-water temperature", { QcBounds.WATER_TEMP_MIN_C..QcBounds.WATER_TEMP_MAX_C }),
-    HOT_WATER_VOLUME("hot-water volume", { QcBounds.WATER_VOL_MIN_ML..QcBounds.WATER_VOL_MAX_ML }),
+    /** The bare volume edit; its range is the core's hot-water volume range. */
+    HOT_WATER_VOLUME("hot-water volume", { HotWaterUi.bounds.volumeMl.let { it.min.toDouble()..it.max.toDouble() } }),
     FLUSH_TIME("flush time", { CoreBounds.qc.flushTimeS.toRange() }),
     FLUSH_TEMP("flush temperature", { CoreBounds.qc.flushTempC.toRange() }),
     /** Grind also comes from a shot's or bag's recorded setting, not just the stepper. */

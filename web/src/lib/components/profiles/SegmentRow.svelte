@@ -36,7 +36,7 @@
 	import QuickStepper from '#lib/components/brew/QuickStepper.svelte';
 	import QuickSplitLabel from '#lib/components/brew/QuickSplitLabel.svelte';
 	import { getSettingsStore, unitLabel } from '#lib/settings/index.js';
-	import { ProfileBounds } from '#lib/profiles/bounds.js';
+	import { profileEditorBounds } from '#lib/core/bounds.js';
 
 	const settings = getSettingsStore();
 
@@ -184,6 +184,12 @@
 		if (!seg.limiter) return;
 		onEdit({ limiter: { ...seg.limiter, range: v } });
 	}
+	/** The editor's ranges, from the core's table (F8): they apply when a
+	 *  field is edited; a stored value outside them shows as it is. */
+	const eb = profileEditorBounds();
+	/** An exit is a pressure or a flow; the limiter is the other one. */
+	const exitRange = $derived(exitView.metric === 'pressure' ? eb.pressureBar : eb.flowMlS);
+	const limiterRange = $derived(seg.mode === 'flow' ? eb.pressureBar : eb.flowMlS);
 </script>
 
 <div
@@ -262,18 +268,18 @@
 					<QuickStepper
 						value={seg.target}
 						dimension="pressure"
-						min={0}
-						max={12}
-						step={0.1}
+						min={eb.pressureBar.min}
+						max={eb.pressureBar.max}
+						step={eb.pressureBar.step}
 						onChange={(v) => onEdit({ target: v })}
 					/>
 				{:else}
 					<QuickStepper
 						value={seg.target}
 						unit="ml/s"
-						min={0}
-						max={12}
-						step={0.1}
+						min={eb.flowMlS.min}
+						max={eb.flowMlS.max}
+						step={eb.flowMlS.step}
 						onChange={(v) => onEdit({ target: v })}
 					/>
 				{/if}
@@ -289,9 +295,9 @@
 				<QuickStepper
 					value={seg.time}
 					unit="s"
-					min={1}
-					max={60}
-					step={1}
+					min={eb.segmentTimeS.min}
+					max={eb.segmentTimeS.max}
+					step={eb.segmentTimeS.step}
 					onChange={(v) => onEdit({ time: Math.round(v) })}
 				/>
 			</div>
@@ -314,9 +320,9 @@
 				<QuickStepper
 					value={seg.temp}
 					dimension="temp"
-					min={80}
-					max={105}
-					step={0.5}
+					min={eb.segmentTempC.min}
+					max={eb.segmentTempC.max}
+					step={eb.segmentTempC.step}
 					onChange={(v) => onEdit({ temp: v })}
 				/>
 			</div>
@@ -331,9 +337,9 @@
 				<QuickStepper
 					value={seg.volumeLimitMl}
 					dimension="volume"
-					min={ProfileBounds.MIN_TOTAL_VOLUME_ML}
-					max={ProfileBounds.MAX_TOTAL_VOLUME_ML}
-					step={5}
+					min={eb.segmentVolumeMl.min}
+					max={eb.segmentVolumeMl.max}
+					step={eb.segmentVolumeMl.step}
 					onChange={(v) => onEdit({ volumeLimitMl: Math.round(v) })}
 				/>
 			</div>
@@ -361,9 +367,9 @@
 					value={exitView.threshold}
 					unit={exitUnit}
 					dimension={exitView.metric === 'pressure' ? 'pressure' : undefined}
-					min={0}
-					max={12}
-					step={0.1}
+					min={exitRange.min}
+					max={exitRange.max}
+					step={exitRange.step}
 					onChange={(v) => patchExit({ threshold: v })}
 				>
 					{#snippet prefix()}
@@ -391,9 +397,9 @@
 					value={limiterView.value}
 					unit={limiterUnit}
 					dimension={seg.mode === 'flow' ? 'pressure' : undefined}
-					min={0}
-					max={12}
-					step={0.1}
+					min={limiterRange.min}
+					max={limiterRange.max}
+					step={limiterRange.step}
 					onChange={setLimiterValue}
 				/>
 			</div>
@@ -404,9 +410,9 @@
 				<QuickStepper
 					value={limiterView.range}
 					unit=""
-					min={0}
-					max={6}
-					step={0.1}
+					min={eb.limiterRange.min}
+					max={eb.limiterRange.max}
+					step={eb.limiterRange.step}
 					onChange={setLimiterRange}
 				/>
 			</div>

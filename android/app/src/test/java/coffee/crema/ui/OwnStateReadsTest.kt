@@ -61,8 +61,10 @@ class OwnStateReadsTest {
             // The machine's identity (its serial register), not a setting.
             "checkStolenSerial" to setOf("de1MachineInfo"),
             // Own-state writers (§7.4).
-            "loadPrefs" to setOf("idleSleepMin", "activeProfileId"),
-            "applyRestoredSettings" to setOf("idleSleepMin"),
+            "loadPrefs" to setOf("idleSleepMin", "activeProfileId", "withHotWaterDose()"),
+            "applyRestoredSettings" to setOf("idleSleepMin", "withHotWaterDose()"),
+            // The hot-water dose edit: LocalOnly, so never on a remote (own is shown).
+            "applyHotWaterDose" to setOf("withHotWaterDose()"),
             // Restore defaults keeps this device's own line frequency (F15).
             "resetPreferences" to setOf("lineFreqOverride"),
             // The holder's own machine reads.

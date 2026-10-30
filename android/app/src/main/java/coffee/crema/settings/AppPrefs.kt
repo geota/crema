@@ -2,7 +2,10 @@ package coffee.crema.settings
 
 import android.content.Context
 import coffee.crema.core.CommonSettings
+import coffee.crema.core.HotWaterDose
 import coffee.crema.core.HotWaterMode
+import coffee.crema.core.StoredHotWater
+import coffee.crema.core.initialHotWaterDose
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
@@ -236,9 +239,10 @@ data class AppPrefs(
     val qcSteamTempC: Float = CommonDefaults.common.qcSteamTempC,
     val qcHotWaterTempC: Float = CommonDefaults.common.qcHotWaterTempC,
     val qcHotWaterVolumeMl: Float = CommonDefaults.common.qcHotWaterVolumeMl,
-    /** The hot-water dose's mode and its time / No limit / ratio values (the
-     *  volume is [qcHotWaterVolumeMl]), carried with the bundle. Null in a
-     *  `prefs.json` from before the modes. */
+    /** The hot-water dose mode, and the time / No limit / ratio values (the
+     *  volume is [qcHotWaterVolumeMl]). Null in a `prefs.json` from before the
+     *  modes, until [SettingsStore.load] stores the core's answer once. Read
+     *  the dose with [hotWaterDose]. */
     val qcHotWaterMode: HotWaterMode? = null,
     val qcHotWaterTimeS: Float? = null,
     val qcHotWaterTimeNoLimit: Boolean? = null,
@@ -419,6 +423,54 @@ fun AppPrefs.withCommonSettings(cIn: CommonSettings): AppPrefs = sanitizeCommonS
     qcFlushTempC = c.qcFlushTempC,
 ) }
 
+/** These prefs' stored hot-water fields, for the core's migration rule.
+ *  [volumeKnown] false = no `prefs.json` at all: no volume is passed. */
+fun AppPrefs.storedHotWater(volumeKnown: Boolean = true): StoredHotWater = StoredHotWater(
+    mode = qcHotWaterMode,
+    volumeMl = qcHotWaterVolumeMl.takeIf { volumeKnown },
+    timeS = qcHotWaterTimeS,
+    timeNoLimit = qcHotWaterTimeNoLimit,
+    ratio = qcHotWaterRatio,
+)
+
+/**
+ * The hot-water dose these prefs hold — the core's rule
+ * (`initial_hot_water_dose`): a stored mode wins; with none, the [marker]
+ * (the device-local copy) when given; else never-changed (no volume, or the
+ * old 150 ml default) gives ratio 1:3, a 0 ml volume time mode, and any other
+ * volume volume mode.
+ */
+fun AppPrefs.hotWaterDose(marker: StoredHotWater? = null, volumeKnown: Boolean = true): HotWaterDose =
+    prefsJson.decodeFromString(
+        HotWaterDose.serializer(),
+        initialHotWaterDose(
+            prefsJson.encodeToString(StoredHotWater.serializer(), storedHotWater(volumeKnown)),
+            marker?.takeIf { qcHotWaterMode == null }?.let { prefsJson.encodeToString(StoredHotWater.serializer(), it) },
+        ),
+    )
+
+/** These prefs holding [dose], its mode stored. */
+fun AppPrefs.withHotWaterDose(dose: HotWaterDose): AppPrefs = copy(
+    qcHotWaterMode = dose.mode,
+    qcHotWaterTimeS = dose.timeS,
+    qcHotWaterTimeNoLimit = dose.timeNoLimit,
+    qcHotWaterVolumeMl = dose.volumeMl,
+    qcHotWaterRatio = dose.ratio,
+)
+
+/** Encodes and decodes the core's hot-water JSON. */
+private val prefsJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+/**
+ * Resolve the hot-water dose on load: prefs with a stored mode are kept; any
+ * others get the core's answer (see [hotWaterDose]), read through the
+ * downgrade [marker] — `hot-water.json`, a copy an older build never rewrites,
+ * so a deliberate volume-mode 150 ml survives a downgrade and upgrade. No
+ * `prefs.json` at all ([fileExisted] false) passes no volume.
+ */
+internal fun resolveHotWater(prefs: AppPrefs, fileExisted: Boolean, marker: StoredHotWater?): AppPrefs =
+    if (prefs.qcHotWaterMode != null) prefs else prefs.withHotWaterDose(prefs.hotWaterDose(marker, volumeKnown = fileExisted))
+
 /**
  * The on-disk shape of [AppPrefs] (`prefs.json`) — the shared cross-shell
  * [CommonSettings] block plus this device's platform extras alongside it. "Storage
@@ -541,6 +593,15 @@ data class ConfigSnapshot(
     val qcFlushTimeS: Float = 4f,
     val qcFlushTempC: Float = 95f,
     val qcGrind: Float? = null,
+    /** The hub's hot-water dose (A22–A25), beside [qcHotWaterVolumeMl]. Null
+     *  = not carried: the rows read "Waiting for <hub>". */
+    val qcHotWaterMode: coffee.crema.core.HotWaterMode? = null,
+    val qcHotWaterTimeS: Float? = null,
+    val qcHotWaterTimeNoLimit: Boolean? = null,
+    val qcHotWaterRatio: Float? = null,
+    /** The hub core's resolved hot-water target, so a remote shows the hub's
+     *  own number without recomputing it. Null until the hub has one. */
+    val hotWaterTarget: coffee.crema.core.HotWaterTarget? = null,
     /** The live Quick-Controls **brew override** (issue 06) — the transient
      *  dose/yield/brew-temp/preinfuse the primary dialled for the next shot, so a
      *  mirror's Brew targets track it. All-null ⟺ no override (use the profile
@@ -613,11 +674,17 @@ class SettingsStore(private val context: Context, private val json: Json) {
 
     suspend fun load(): AppPrefs = withContext(Dispatchers.IO) {
         val stored = loadStore(file, "settings") { text -> decodePrefs(json, text) }.valueOrNull()
-        val prefs = resolveIdleSleep(stored)
-        // Persist a migration once, so a later screensaver change can't move it.
-        if (stored != null && stored.idleSleepMin == null) save(prefs)
+        val marker = if (stored?.qcHotWaterMode == null) readHotWaterMarker() else null
+        val prefs = resolveHotWater(resolveIdleSleep(stored), fileExisted = stored != null, marker = marker)
+        // Persist a migration once, so a later screensaver change can't move
+        // it, and the hot-water never-changed rule never runs again.
+        if (stored != null && (stored.idleSleepMin == null || stored.qcHotWaterMode == null)) save(prefs)
         prefs
     }
+
+    /** The downgrade marker (`hot-water.json`), or null. */
+    private fun readHotWaterMarker(): StoredHotWater? =
+        loadStore(markerFile, null) { text -> json.decodeFromString(StoredHotWater.serializer(), text) }.valueOrNull()
 
     /**
      * Write [prefs]. Saves run one at a time. A save with a [generation] (the
@@ -634,16 +701,27 @@ class SettingsStore(private val context: Context, private val json: Json) {
                 }
                 runCatching { json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted()) }
                     .onSuccess { saveStore(file, it) }
+                // Every save of a stored dose rewrites the downgrade marker.
+                if (prefs.qcHotWaterMode != null) {
+                    runCatching { json.encodeToString(StoredHotWater.serializer(), prefs.storedHotWater()) }
+                        .onSuccess { saveStore(markerFile, it) }
+                }
             }
         }
     }
 
     /** Delete the store file and every copy of it (Erase all data; final review 05 N-1). */
     suspend fun erase() {
-        withContext(Dispatchers.IO) { eraseStore(file) }
+        withContext(Dispatchers.IO) {
+            eraseStore(file)
+            eraseStore(markerFile)
+        }
     }
+
+    private val markerFile get() = File(context.filesDir, MARKER_FILE_NAME)
 
     private companion object {
         const val FILE_NAME = "prefs.json"
+        const val MARKER_FILE_NAME = "hot-water.json"
     }
 }

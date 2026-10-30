@@ -1,6 +1,9 @@
 package coffee.crema.settings
 
 import coffee.crema.ble.proxy.Golden
+import coffee.crema.core.HotWaterBasis
+import coffee.crema.core.HotWaterMode
+import coffee.crema.core.HotWaterTarget
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.coreJson
 import coffee.crema.ui.knownOnRemote
@@ -25,6 +28,11 @@ class ConfigSnapshotGoldenTest {
         stopOnWeight = true, autoTare = true, maxShotDurationS = 44f, grinderModel = "Niche",
         qcSteamTimeS = 30f, qcSteamFlowMlS = 1.6f, qcSteamTempC = 150f, qcHotWaterTempC = 85f, qcHotWaterVolumeMl = 200f,
         qcFlushTimeS = 6f, qcFlushTempC = 93f, qcGrind = 15f,
+        qcHotWaterMode = HotWaterMode.Time, qcHotWaterTimeS = 45f, qcHotWaterTimeNoLimit = true, qcHotWaterRatio = 2.5f,
+        hotWaterTarget = HotWaterTarget(
+            mode = HotWaterMode.Time, timeS = 45f, basis = HotWaterBasis.NotApplicable,
+            wireVolumeMl = 0f, wireTimeoutS = 45f,
+        ),
         brewDoseG = 20.0, brewYieldG = 40.0, brewTempC = 94.0, brewPreinfuseS = 6.0, primaryName = "Old tablet",
         rev = 7,
         steamEco = true, steamTwoTap = true, fanThresholdC = 58f, waterRefillPointMm = 8f, heaterVoltage = 230,
@@ -58,6 +66,23 @@ class ConfigSnapshotGoldenTest {
         val remote = MainUiState(mirror = MirroredSettings().applied(snapshot, null, null))
         val unknown = Setting.entries.filter { it.mirroredVia == MirrorSource.SNAPSHOT && !remote.knownOnRemote(it) }
         assertTrue(unknown.isEmpty(), "$unknown")
+    }
+
+    /** AC-HW24: the four hot-water dose fields and the hub's target round-trip;
+     *  null they read as unknown ("Waiting for <hub>"), never as defaults. */
+    @Test
+    fun `hot-water dose fields round-trip, and null reads as unknown`() {
+        val back = coreJson.decodeFromString(ConfigSnapshot.serializer(), coreJson.encodeToString(ConfigSnapshot.serializer(), snapshot))
+        kotlin.test.assertEquals(snapshot, back)
+        val unsent = snapshot.copy(
+            qcHotWaterMode = null, qcHotWaterTimeS = null, qcHotWaterTimeNoLimit = null, qcHotWaterRatio = null, hotWaterTarget = null,
+        )
+        val remote = MainUiState(mirror = MirroredSettings().applied(unsent, null, null))
+        val unknown = Setting.entries.filter { it.mirroredVia == MirrorSource.SNAPSHOT && !remote.knownOnRemote(it) }.toSet()
+        kotlin.test.assertEquals(
+            setOf(Setting.QC_HOT_WATER_MODE, Setting.QC_HOT_WATER_TIME, Setting.QC_HOT_WATER_TIME_NO_LIMIT, Setting.QC_HOT_WATER_RATIO),
+            unknown,
+        )
     }
 
     /** The machine registers a hub may not have read yet stay unknown until it has. */

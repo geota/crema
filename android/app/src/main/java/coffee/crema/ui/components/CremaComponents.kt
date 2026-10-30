@@ -1295,7 +1295,15 @@ fun CremaOptionalHeader(label: String, on: Boolean, onToggle: () -> Unit, modifi
 // An eyebrow-style label that's also a selector: [dot?] PREFIX  OPT | OPT, where
 // the active option is copper-underlined. Used for the segment editor's Temp
 // (Coffee|Water), Exit (Pressure|Flow) etc. `dot` adds the optional enable toggle.
-data class SplitOption(val id: String, val label: String, val icon: String? = null)
+data class SplitOption(
+    val id: String,
+    val label: String,
+    val icon: String? = null,
+    /** While active, a tap opens the label's menu ([CremaSplitLabel]'s
+     *  `onMenu`) instead of doing nothing; a caret marks it. The first tap
+     *  selects it like any option. */
+    val menu: Boolean = false,
+)
 
 @Composable
 fun CremaSplitLabel(
@@ -1312,6 +1320,10 @@ fun CremaSplitLabel(
     icon: String? = null,
     // The gate of the setting the dot toggles (spec §7.6).
     dotGate: RowGate = RowGate.Open,
+    // An active `menu` option was tapped again: open its menu.
+    onMenu: ((String) -> Unit)? = null,
+    // What a tap on an active `menu` option does, for accessibility services.
+    menuLabel: String? = null,
 ) {
     val style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
     val copper = MaterialTheme.colorScheme.primary
@@ -1343,6 +1355,26 @@ fun CremaSplitLabel(
                         )
                     } else {
                         if (i > 0) Text("|", style = style, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f), modifier = Modifier.padding(bottom = 3.dp))
+                        if (o.menu && active) {
+                            // The active menu option: its word and a caret, both
+                            // underlined; a tap opens the menu.
+                            Row(
+                                Modifier
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .clickable(enabled = onMenu != null, onClickLabel = menuLabel, role = Role.DropdownList) { onMenu?.invoke(o.id) }
+                                    .padding(bottom = 3.dp)
+                                    .drawBehind {
+                                        val sw = 1.5.dp.toPx()
+                                        drawLine(copper, Offset(0f, size.height - sw), Offset(size.width, size.height - sw), strokeWidth = sw)
+                                    },
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(o.label.uppercase(), style = style, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f), maxLines = 1, softWrap = false)
+                                PhIcon("caret-down", sizeDp = 9, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                            }
+                            return@forEachIndexed
+                        }
                         Text(
                             o.label.uppercase(),
                             style = style,
@@ -1730,6 +1762,11 @@ fun CremaMenuItem(
     }
 }
 
+/** A non-numeric chip after a stepper's presets: its glyph, what it means for
+ *  accessibility, whether it's on, and its action. */
+@Immutable
+data class StepperExtraChip(val label: String, val description: String, val active: Boolean, val onClick: () -> Unit)
+
 // ── Stepper — one −/value/+ control for every shell surface. ──────────────────
 // The numeric core (step/min/max, 2-decimal snap, optional quick-select chips) is
 // identical everywhere; only the *look* changes, captured by CremaStepperStyle.
@@ -1788,7 +1825,18 @@ fun CremaStepper(
     // A machine or session setting's gate (spec §7.6): locks the bar and chips
     // (the header stays live) and shows "—" for an unknown value.
     gate: RowGate = RowGate.Open,
+    // A secondary line under the value, inside the bar (boxed styles): drawn
+    // in the bar's padding, so the bar keeps its height (the hot-water card's
+    // resolved amount or caveat).
+    sub: (@Composable () -> Unit)? = null,
+    // The chips' labels and which one is active, when they differ from the
+    // value's (hot water's time chips while No limit is on).
+    chipFmt: ((Double) -> String)? = null,
+    chipActive: ((Double) -> Boolean)? = null,
+    // One more chip after [chips] that isn't a number (hot water's No limit).
+    extraChip: StepperExtraChip? = null,
 ) {
+    val chipLabel = gate.fmt(chipFmt ?: fmt)
     val fmt = gate.fmt(fmt)
     fun snap(x: Double) = (kotlin.math.round(x * 100) / 100).coerceIn(min, max)
     val dec = { onChange(snap(value - step)) }
@@ -1844,7 +1892,12 @@ fun CremaStepper(
                     style.valueMinWidth > 0.dp -> Modifier.widthIn(min = style.valueMinWidth)
                     else -> Modifier
                 }
-                Row(valueMod, horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.Bottom) {
+                Box(valueMod, contentAlignment = Alignment.Center) {
+                Row(
+                    if (sub != null) Modifier.offset(y = (-5).dp) else Modifier,
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.Bottom,
+                ) {
                     if (compareSymbol != null) {
                         Text(
                             compareSymbol,
@@ -1864,11 +1917,23 @@ fun CremaStepper(
                         CremaValueUnit(fmt(value), unit, valueSize = style.valueSize)
                     }
                 }
+                if (sub != null) Box(Modifier.align(Alignment.BottomCenter).offset(y = 7.dp)) { sub() }
+                }
                 StepperCircleBtn("plus", style.buttonSize, style.iconSize, inc)
             }
             if (chips != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    chips.forEach { c -> StepperChip(fmt(c), kotlin.math.abs(value - c) < 0.05) { onChange(snap(c)) } }
+                    chips.forEach { c ->
+                        StepperChip(chipLabel(c), chipActive?.invoke(c) ?: (kotlin.math.abs(value - c) < 0.05)) { onChange(snap(c)) }
+                    }
+                    if (extraChip != null) {
+                        StepperChip(
+                            extraChip.label,
+                            extraChip.active,
+                            Modifier.semantics { contentDescription = extraChip.description },
+                            onClick = extraChip.onClick,
+                        )
+                    }
                 }
             }
         }
@@ -1886,9 +1951,9 @@ private fun StepperCircleBtn(icon: String, size: Dp, iconSize: Int, onClick: () 
 // Quick-select value chip — copper fill when it matches the current value, faint
 // hairline otherwise (Quick Controls .qchip).
 @Composable
-private fun RowScope.StepperChip(label: String, active: Boolean, onClick: () -> Unit) {
+private fun RowScope.StepperChip(label: String, active: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(
-        Modifier
+        modifier
             .weight(1f)
             .clip(RoundedCornerShape(8.dp))
             .then(if (active) Modifier.background(MaterialTheme.colorScheme.primary) else Modifier.border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f), RoundedCornerShape(8.dp)))

@@ -19,7 +19,8 @@
  *     `qcOverrides()` keys baked in at shot start.
  *   - `grind` — log-only; never reaches the machine or a profile.
  *   - steam (`steamTime` / `steamFlow` / `steamTemp`), hot water
- *     (`waterTemp` / `waterVolume`), flush (`flushTime` / `flushTemp`) —
+ *     (`waterTemp`; the hot-water dose lives in the settings store —
+ *     `hotWaterDose()` — not here), flush (`flushTime` / `flushTemp`) —
  *     DE1 system settings, written live on edit via BLE (RMW for the
  *     steam+hot-water settings blob, standalone writes for steam flow /
  *     flush) — see `BrewDashboard.svelte`'s steam/water/flush `onWrite`
@@ -31,6 +32,7 @@
  */
 
 import { untrack } from 'svelte';
+import { quickControlBounds } from '#lib/core/bounds.js';
 
 /** The full mode-aware Quick Sheet parameter set — mirrors `DEFAULT_PARAMS_V2`. */
 export interface BrewParams {
@@ -56,12 +58,11 @@ export interface BrewParams {
 	steamFlow: number;
 	/** Steam boiler target temperature, °C. */
 	steamTemp: number;
-	/** Which of Temp / Volume the Hot Water card is editing. */
-	waterMode: 'temp' | 'volume';
+	/** Which of Temp / Amount the Hot Water card shows (view state: peeking
+	 *  at Temp never changes the persisted hot-water mode). */
+	waterMode: 'temp' | 'amount';
 	/** Hot-water temperature, °C. */
 	waterTemp: number;
-	/** Hot-water volume, ml. */
-	waterVolume: number;
 	/** Which of Time / Temp the Flush bucket is editing. */
 	flushMode: 'time' | 'temp';
 	/** Group-flush duration, seconds. */
@@ -87,9 +88,8 @@ export const DEFAULT_BREW_PARAMS: BrewParams = {
 	steamTime: 12,
 	steamFlow: 1.2,
 	steamTemp: 148.0,
-	waterMode: 'volume',
+	waterMode: 'amount',
 	waterTemp: 80,
-	waterVolume: 150,
 	flushMode: 'time',
 	flushTime: 4,
 	flushTemp: 95.0,
@@ -193,20 +193,22 @@ export class BrewParamState {
 	/**
 	 * The pre-infusion dial's bounds and whether it applies: the core's range
 	 * for the active profile (always holding its own value), else the
-	 * stepper's 0–30 s default. `adjustable` is false for a profile with no
-	 * pre-infusion segment — there is nothing to rescale.
+	 * stepper's range from the core's table. `adjustable` is false for a
+	 * profile with no pre-infusion segment — there is nothing to rescale.
 	 */
 	preinfusionBounds(): { min: number; max: number; adjustable: boolean } {
-		return this.preinfusionDial?.() ?? { min: 0, max: 30, adjustable: true };
+		const r = quickControlBounds().preinfuseS;
+		return this.preinfusionDial?.() ?? { min: r.min, max: r.max, adjustable: true };
 	}
 
 	/**
 	 * The brew-temperature dial's bounds: the core's range for the active
 	 * profile (no step may leave the core's temperature bounds after the
-	 * shift), else the stepper's 80–100 °C default.
+	 * shift), else the stepper's range from the core's table.
 	 */
 	brewTempBounds(): { min: number; max: number } {
-		return this.brewTempRange?.() ?? { min: 80, max: 100 };
+		const r = quickControlBounds().brewTempC;
+		return this.brewTempRange?.() ?? { min: r.min, max: r.max };
 	}
 
 	/**
