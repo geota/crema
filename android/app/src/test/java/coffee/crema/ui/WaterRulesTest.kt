@@ -84,9 +84,17 @@ class WaterRulesTest {
         // Raw 0 mm → 5 mm depth → 124 ml: above the 110 ml default.
         assertTrue(waterLow(bridge.onNotification(NotificationSource.DE1_WATER_LEVELS, byteArrayOf(0, 0, 5, 0), 0uL)).isEmpty())
         vm.setWaterWarnMl(130f)
-        VmHarness.idle()
-        val raw = bridge.onNotification(NotificationSource.DE1_WATER_LEVELS, byteArrayOf(0, 0, 5, 0), 100uL)
-        assertEquals(1, waterLow(raw).size, "the raised threshold reached the core and re-armed it")
+        // The push runs on the core lane: report the same level until the raised
+        // threshold has reached the core and it warns (once per dip, so a report
+        // before the push lands warns nothing and doesn't use the warning up).
+        var raw = ""
+        var at = 100uL
+        VmHarness.idleUntil("the raised threshold to reach the core", 5_000) {
+            raw = bridge.onNotification(NotificationSource.DE1_WATER_LEVELS, byteArrayOf(0, 0, 5, 0), at)
+            at += 100uL
+            waterLow(raw).isNotEmpty()
+        }
+        assertEquals(1, waterLow(raw).size)
         apply(vm, raw)
         VmHarness.idleUntil("the low-water notice", 5_000) { vm.ui.value.userMessages.any { it.startsWith("Water low") } }
     }
