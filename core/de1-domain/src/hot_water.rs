@@ -437,6 +437,9 @@ fn dose_from(stored: &StoredHotWater, mode: HotWaterMode, fw: &HotWaterFirmware)
 /// - no mode, no marker, and the volume missing or the old 150 ml default
 ///   (the only sign of "never changed" once any setting was saved) → ratio
 ///   1:3;
+/// - no mode, no marker, and a volume of 0 — the old "no volume stop", a pour
+///   the timeout ends (kept by the settings sanitize) → time mode, which is
+///   that pour;
 /// - no mode, no marker, any other volume → volume mode with that ml.
 ///
 /// Values not stored take the defaults. Shells call this on load and persist
@@ -460,6 +463,8 @@ pub fn initial_hot_water_dose(
         .is_none_or(|ml| ml == HOT_WATER_OLD_DEFAULT_ML || !ml.is_finite());
     let mode = if never_changed {
         HotWaterMode::Ratio
+    } else if stored.volume_ml == Some(0.0) {
+        HotWaterMode::Time
     } else {
         HotWaterMode::Volume
     };
@@ -787,6 +792,9 @@ mod tests {
             let d = initial_hot_water_dose(&stored(None, Some(set)), None, &FW);
             assert_eq!((d.mode, d.volume_ml), (HotWaterMode::Volume, got), "{set}");
         }
+        // 0 ml was "no volume stop": a pour the timeout ends, so time mode.
+        let d = initial_hot_water_dose(&stored(None, Some(0.0)), None, &FW);
+        assert_eq!((d.mode, d.time_s), (HotWaterMode::Time, 30.0));
         for mode in [
             HotWaterMode::Ratio,
             HotWaterMode::Volume,
