@@ -220,7 +220,6 @@ describe('a group-head shot records the dial (F7 validation P2)', () => {
 		const { loadCore } = await import('#lib/core/index.js');
 		const { CremaApp } = await import('#lib/state/app.svelte.js');
 		const { getActiveShotStore } = await import('#lib/state/active-shot.svelte.js');
-		const { asRunProfile } = await import('#lib/history/shot-persistence.js');
 		const { getProfileStore, brewTempRange, preinfusionDial } = await import(
 			'#lib/profiles/index.js'
 		);
@@ -260,9 +259,8 @@ describe('a group-head shot records the dial (F7 validation P2)', () => {
 		expect(recorded!.preinfuseTarget).toBeCloseTo(preinf, 5);
 		expect(recorded!.yieldTarget).toBeCloseTo(profile.yieldOut + 4, 5);
 		expect(recorded!.stopOnWeight).toBe(false);
-		// History's as-run profile is the dialled one, not the bare profile.
-		const run = asRunProfile(profile, recorded);
-		expect(run.segments[0].temp).toBeCloseTo(profile.segments[0].temp + 2, 5);
+		// History's as-run profile is the core's since F10 (the profile the DE1
+		// held): `a_shot_records_the_profile_and_overrides_the_de1_ran`.
 		getActiveShotStore().clear();
 	});
 });

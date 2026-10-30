@@ -3760,6 +3760,12 @@ export interface ShotCaptureContext {
 	tags?: string[];
 	/** The DE1 the shot ran on, or `None` when it isn't known. */
 	machine?: ShotMachine;
+	/**
+	 * The profile name the shell knows, the last fallback when the core
+	 * knows neither the profile it ran nor a title — a replay, whose shadow
+	 * core saw no upload, passes the capture's name here.
+	 */
+	profileName?: string;
 }
 
 /**

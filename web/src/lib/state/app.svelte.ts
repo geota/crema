@@ -901,6 +901,7 @@ export class CremaApp {
 					shotStartedAtMs: this.shotStartedAtMs,
 					lastNotificationAtMs: this.core.lastNotificationAtMs,
 					sliceJsonl: (from, to) => this.core.captureSliceJsonl(from, to),
+					takeStoredShot: (shotCtx) => this.core.takeStoredShot(shotCtx),
 					fireWebhook: (eventType, payload) => this.fireWebhook(eventType, payload),
 					runtime: this.runtime
 				});
