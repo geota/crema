@@ -120,12 +120,13 @@ class StandaloneSettingsTest {
      *  only once the prefs load, so a relayed setting edit before then is
      *  refused ("starting up") and applied after. */
     @Test
-    fun `a hub refuses relayed config edits until its prefs load`() {
+    fun `a hub refuses relayed config edits until its prefs load`() = VmHarness.holdingStartupLoad { release ->
         writePrefs(AppPrefs(idleSleepMin = 30, proxyRole = "primary"))
         val vm = VmHarness.build(store)
         val pc = VmHarness.proxyController(vm)
         val early = runBlocking { pc.handleRelayedControl("setQcGrind", "14.5", "remote-1", "Phone") }
         assertTrue(early is coffee.crema.machine.CommandOutcome.Refused && early.reason.endsWith("is starting up"), "$early")
+        release.complete(Unit)
         VmHarness.idle()
         VmHarness.awaitPrefsLoaded(vm)
         assertEquals(null, vm.ui.value.qcGrind, "the early edit wasn't applied")
@@ -161,7 +162,7 @@ class StandaloneSettingsTest {
         }
         pushedBy("the reset") { vm.resetPreferences() }
         val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
-        pushedBy("the restore") { runBlocking { vm.restoreBackupBytes(backup, MainViewModel.RestoreMode.MERGE) } }
+        pushedBy("the restore") { VmHarness.restore(vm, backup) }
         // The pushes §6.1 adds.
         val duration = pushedBy("a max shot duration") { vm.setMaxShotDuration(41f) }
         assertEquals(41f, duration.maxShotDurationS)

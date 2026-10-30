@@ -205,7 +205,10 @@ class RemoteSettingsTest {
         // custom profiles after the prefs).
         VmHarness.awaitStartupLoaded(vm)
         vm.saveQuickPreset("Hub dial")
-        VmHarness.idle()
+        // Saving a built-in's copy makes it active, an edit relayed to the
+        // hub. Until the hub answers, that pending edit is what the screen
+        // shows (and what the next library action acts on), so let it settle.
+        VmHarness.idleUntil("the hub's answer") { VmHarness.ownState(vm).mirror?.pending?.isEmpty() == true }
         val saved = vm.ui.value.profiles.firstOrNull { it.name == "Hub dial" }
         assertNotNull(saved, "a copy of S's built-in profile")
         assertEquals(20f, saved.dose, "with S's brew override")
@@ -234,8 +237,7 @@ class RemoteSettingsTest {
         VmHarness.idle()
         assertEquals(40f to 44f, core(), "after the snapshot")
         val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
-        runBlocking { vm.restoreBackupBytes(backup, MainViewModel.RestoreMode.MERGE) }
-        VmHarness.idle()
+        VmHarness.restore(vm, backup)
         assertEquals(40f to 44f, core(), "after a restore")
         vm.resetPreferences()
         VmHarness.idle()
@@ -250,11 +252,12 @@ class RemoteSettingsTest {
      *  lands before this device's prefs finish loading still drives the core
      *  once they have. */
     @Test
-    fun `the remote core follows a snapshot that beat loadPrefs`() {
+    fun `the remote core follows a snapshot that beat loadPrefs`() = VmHarness.holdingStartupLoad { release ->
         var early = false
         val vm = fixture.start(onBuilt = {
             early = !MainViewModel::class.java.getDeclaredField("prefsLoaded").apply { isAccessible = true }.getBoolean(it)
             it.deliverConfigForTest(coreJson.encodeToString(coffee.crema.settings.ConfigSnapshot.serializer(), S))
+            release.complete(Unit)
         })
         assertTrue(early, "the snapshot landed before loadPrefs finished")
         VmHarness.idle()
@@ -283,8 +286,7 @@ class RemoteSettingsTest {
         fixture.push()
         val shown = abOfUi(vm.ui.value)
         val backup = assertNotNull(runBlocking { vm.buildBackupZipBytes() })
-        runBlocking { vm.restoreBackupBytes(backup, MainViewModel.RestoreMode.MERGE) }
-        VmHarness.idle()
+        VmHarness.restore(vm, backup)
         assertEquals(shown, abOfUi(vm.ui.value), "after a restore")
         vm.resetPreferences()
         VmHarness.idle()

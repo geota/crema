@@ -129,23 +129,24 @@ class RefindSecurityTest {
     }
 
     private fun serve(live: LiveHub, port: Int = 0): MockWebServer {
-        val server = MockWebServer().also { servers += it }
-        repeat(4) {
-            val link = MockWsServerLink()
-            server.enqueue(MockResponse.Builder().webSocketUpgrade(link).build())
-            live.scope.launch { live.hub.serve(link) }
-        }
         // Back on a port just released: retry the bind briefly while the old
-        // listener's socket is still going away.
+        // listener's socket is still going away. A new server for each try:
+        // one whose start() failed keeps the address, and a second start()
+        // returns without binding anything.
         val deadline = System.nanoTime() + 3_000_000_000L
         while (true) {
+            val server = MockWebServer().also { servers += it }
+            val links = List(4) { MockWsServerLink() }
+            links.forEach { server.enqueue(MockResponse.Builder().webSocketUpgrade(it).build()) }
             try {
                 server.start(InetAddress.getLoopbackAddress(), port)
-                return server
             } catch (e: java.net.BindException) {
                 if (port == 0 || System.nanoTime() > deadline) throw e
                 Thread.sleep(50)
+                continue
             }
+            links.forEach { link -> live.scope.launch { live.hub.serveWhenOpen(link) } }
+            return server
         }
     }
 
@@ -305,7 +306,10 @@ class RefindSecurityTest {
         VmHarness.idleUntil("reconnecting") { vm.ui.value.mirrorReconnecting }
 
         val live = liveHub(clientId)
-        val server = serve(live)
+        // An explicit port: MockWebServer sets SO_REUSEADDR only then, and its
+        // connections inherit it. Linux lets the revived server below bind
+        // over the old connections' TIME_WAIT only when they carry it too.
+        val server = serve(live, port = java.net.ServerSocket(0).use { it.localPort })
         val newPort = server.port
         peers.value = listOf(Peer("nsd-second", "Kitchen tablet", "primary", true, "127.0.0.1", newPort))
         stepped(REFIND_DELAY_MS + 500)

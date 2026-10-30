@@ -60,7 +60,24 @@ internal class MockWsServerLink : WebSocketListener(), FrameLink {
 
     override fun incoming(): Flow<Frame> = inbox.receiveAsFlow().map { FrameCodec.decode(it) }
 
+    /** Suspends until the client's socket has opened. */
+    suspend fun awaitOpen() {
+        socket.await()
+    }
+
     override suspend fun close() {
         socket.await().close(1000, null)
     }
+}
+
+/**
+ * Serve [link] with this hub once the client's socket opens, as the relay
+ * server does for each connection it accepts. The hub's handshake deadline
+ * (5 s of real time) starts in [RelayHub.serve]: started when the test sets
+ * the link up, before the remote exists, a slow VM build can use it up, and
+ * the hub then closes the socket the moment it opens.
+ */
+internal suspend fun RelayHub.serveWhenOpen(link: MockWsServerLink) {
+    link.awaitOpen()
+    serve(link)
 }

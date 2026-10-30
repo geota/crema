@@ -1,4 +1,5 @@
-# Crema CI — quality gates for the Rust core and the SvelteKit web shell.
+# Crema CI — quality gates for the Rust core, the SvelteKit web shell and the
+# Android app.
 #
 # This workflow runs on every PR to `main` and on direct pushes to `main`,
 # plus two schedules: a weekly one that runs ONLY the advisory `audit` job and
@@ -7,8 +8,8 @@
 # deploy, and neither does a push to `main`: the web deploys to Cloudflare
 # Pages only from release.yml on a `v*.*.*` tag. See DEPLOY.md.
 #
-# The two main jobs (`rust` and `web`) run in parallel for shorter wall-clock
-# time. We don't gate them on per-job path filters because the web shell
+# The main jobs (`rust`, `web` and `android`) run in parallel for shorter
+# wall-clock time. We don't gate them on per-job path filters because the web shell
 # depends on the Rust core (via wasm) and they share a cargo cache — running
 # both on every PR is cheap once warm and avoids "PR didn't run check X"
 # foot-guns when a change touches both halves.
@@ -301,6 +302,85 @@ jobs:
         run: |
           pnpm wasm:test
           RELAY_WASM_TEST=1 pnpm vitest run src/lib/relay
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Android shell gates: JVM unit tests (incl. Robolectric), Android lint and
+  # a debug APK build. Setup mirrors release.yml / nightly.yml (JDK, SDK, NDK,
+  # Rust target). Gradle itself builds what the tests need: the arm64 de1-ffi
+  # library and its UniFFI bindings (cargoBuild, generateUniffiBindings) and
+  # the host library the JVM tests load (cargoBuildHostCore).
+  # ─────────────────────────────────────────────────────────────────────
+  android:
+    name: android (app)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Gradle runs on JDK 17 as in release.yml; the unit-test task asks for a
+      # Java 21 toolchain (app/build.gradle.kts), which Gradle finds through
+      # JAVA_HOME_21_X64 below instead of downloading one via Foojay.
+      - name: Set up JDK 21 + 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: |
+            21
+            17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install NDK + compileSdk platform (pinned to build.gradle.kts)
+        run: sdkmanager "ndk;30.0.14904198" "platforms;android-37.0"
+
+      # Pinned (not `stable`) to match core/Cargo.toml's rust-version — F-Droid's
+      # reproducible-build recipe needs a fixed compiler, not a floating channel.
+      - name: Install Rust toolchain (android target)
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-linux-android
+
+      # Its own key: this job builds the DEBUG arm64 library plus the host
+      # de1-ffi library, which neither rust-core (host test/clippy builds) nor
+      # rust-android (release.yml / nightly.yml, release-profile arm64) holds.
+      # Sharing either key would race those jobs to save and evict their
+      # artifacts.
+      - name: Cache cargo + target (android debug)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core -> target
+          shared-key: rust-android-debug
+
+      - name: Set up Gradle (with cache)
+        uses: gradle/actions/setup-gradle@v6
+
+      # Robolectric fetches its android-all jar (SDK 35, ~150 MB) from Maven
+      # Central at test time into ~/.m2, which setup-gradle doesn't cache.
+      - name: Cache Robolectric android-all jars
+        uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ hashFiles('android/app/build.gradle.kts') }}
+          restore-keys: robolectric-
+
+      - name: Unit tests + lint + debug APK
+        working-directory: android
+        run: |
+          ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug \
+            -Porg.gradle.java.installations.fromEnv=JAVA_HOME_21_X64 \
+            --no-daemon --stacktrace
+
+      - name: Upload test + lint reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-reports
+          path: |
+            android/app/build/reports/
+            android/app/build/test-results/
+          if-no-files-found: ignore
 
   # ─────────────────────────────────────────────────────────────────────
   # Advisory dependency audit. Runs on main pushes and weekly (no PR noise).
