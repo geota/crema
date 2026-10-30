@@ -294,8 +294,9 @@ class SecureRelayAcceptor(
             val write = trust.storePin(remoteId, remoteName, key, canControl)
             if (write == null || !write.saved) {
                 write?.let { trust.restorePin(remoteId, it.previous) }
-                w.withConn { core(this).rejectPairing(it) }?.let { w.applyStep(it) }
+                // The hub user hears it before the remote does.
                 r?.let { trust.onPairingNotSaved(it) }
+                w.withConn { core(this).rejectPairing(it) }?.let { w.applyStep(it) }
                 request = null
                 return
             }
@@ -304,8 +305,8 @@ class SecureRelayAcceptor(
             } catch (e: RelayFfiException) {
                 Log.w(TAG, "pin set refused the key: ${RelayWire.kindOf(e)}")
                 trust.restorePin(remoteId, write.previous)
-                w.withConn { core(this).rejectPairing(it) }?.let { w.applyStep(it) }
                 r?.let { trust.onPairingNotSaved(it) }
+                w.withConn { core(this).rejectPairing(it) }?.let { w.applyStep(it) }
                 request = null
                 return
             }
