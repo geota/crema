@@ -473,4 +473,27 @@ mod tests {
                 .is_empty()
         );
     }
+
+    #[test]
+    fn a_restored_out_of_range_refill_point_is_clamped_on_the_connect_sweep() {
+        let mut core = CremaCore::new();
+        let settings = ConnectSweepSettings {
+            refill_point_mm: 200.0,
+            ..snapshot()
+        };
+        let out = core.connect_sweep(&settings, 1_000);
+        let refill = out
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                Command::WriteCharacteristic {
+                    target: WriteTarget::De1WaterLevels,
+                    data,
+                } => de1_protocol::WaterLevels::decode(data).ok(),
+                _ => None,
+            })
+            .expect("a WaterLevels write")
+            .refill_threshold_mm;
+        assert!((refill - 70.0).abs() < 0.01, "{refill}");
+    }
 }
