@@ -94,6 +94,41 @@ class KeystoreKeySourceTest {
         assertSame(key, AndroidKeystoreKeySource("crema.relay.v1", starting).existing())
     }
 
+    /**
+     * Two threads call getOrCreate on their own source for the same absent alias
+     * and meet right after seeing it absent. Without the per-alias lock both
+     * would generate, and the second key would replace the first; with it, the
+     * second waits (the barrier times out) and then finds the first's key.
+     */
+    private fun assertOneKeyForTwoSealers(source: (KeystoreBackend) -> SecretKeySource) {
+        val barrier = java.util.concurrent.CyclicBarrier(2)
+        fun meet() = runCatching { barrier.await(300, java.util.concurrent.TimeUnit.MILLISECONDS) }
+        val racing = object : KeystoreBackend by ks {
+            override fun containsAlias(alias: String): Boolean =
+                ks.containsAlias(alias).also { if (alias == "crema.relay.v1" && !it) meet() }
+
+            override fun getKey(alias: String): javax.crypto.SecretKey? =
+                ks.getKey(alias).also { if (alias == "crema.relay.v1" && it == null) meet() }
+        }
+        val got = java.util.Collections.synchronizedList(mutableListOf<javax.crypto.SecretKey>())
+        val threads = List(2) { Thread { got += source(racing).getOrCreate() } }
+        threads.forEach(Thread::start)
+        threads.forEach { it.join(5_000) }
+        assertEquals(2, got.size)
+        assertSame(got[0], got[1])
+        assertEquals(1, ks.generated.count { it == "crema.relay.v1" })
+    }
+
+    @Test
+    fun `SR-3a P3-1 two first-use sealers share one key`() {
+        assertOneKeyForTwoSealers { AndroidKeystoreKeySource("crema.relay.v1", it) }
+    }
+
+    @Test
+    fun `SR-3a P3-1 two first-use token sealers share one key`() {
+        assertOneKeyForTwoSealers { LegacyKeystoreKeySource("crema.relay.v1", it) }
+    }
+
     @Test
     fun `getOrCreate makes the key only in a working keystore`() {
         val created = source.getOrCreate()

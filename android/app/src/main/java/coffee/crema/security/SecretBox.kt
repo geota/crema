@@ -8,6 +8,7 @@ import java.security.KeyStore
 import java.security.KeyStoreException
 import java.security.SecureRandom
 import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -188,7 +189,7 @@ class AndroidKeystoreKeySource(
         return if (backend.containsAlias(alias)) present() else null
     }
 
-    override fun getOrCreate(): SecretKey = existing() ?: backend.generate(alias)
+    override fun getOrCreate(): SecretKey = KeyCreation.locked(alias) { existing() ?: backend.generate(alias) }
 
     private fun present(): SecretKey = backend.getKey(alias)
         // A listed alias without a key is not proof of loss: transient.
@@ -197,8 +198,10 @@ class AndroidKeystoreKeySource(
     /** Throws [KeyStoreException] unless the keystore lists, returns and uses a key. */
     private fun probe() {
         try {
-            val key = (if (backend.containsAlias(PROBE_ALIAS)) backend.getKey(PROBE_ALIAS) else null)
-                ?: backend.generate(PROBE_ALIAS)
+            val key = KeyCreation.locked(PROBE_ALIAS) {
+                (if (backend.containsAlias(PROBE_ALIAS)) backend.getKey(PROBE_ALIAS) else null)
+                    ?: backend.generate(PROBE_ALIAS)
+            }
             if (!backend.containsAlias(PROBE_ALIAS)) throw KeyStoreException("probe alias not listed")
             val block = ByteArray(PROBE_BYTES).also { SecureRandom().nextBytes(it) }
             val enc = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }
@@ -235,7 +238,18 @@ class LegacyKeystoreKeySource(
 ) : SecretKeySource {
     override fun existing(): SecretKey? = backend.getKey(alias)
 
-    override fun getOrCreate(): SecretKey = existing() ?: backend.generate(alias)
+    override fun getOrCreate(): SecretKey = KeyCreation.locked(alias) { existing() ?: backend.generate(alias) }
+}
+
+/**
+ * One check-then-create per alias at a time, process-wide: generating under an
+ * alias that already has a key replaces it, so two first-use sealers (the three
+ * token stores share one alias) must not both see "absent" and both generate.
+ */
+internal object KeyCreation {
+    private val locks = ConcurrentHashMap<String, Any>()
+
+    fun <T> locked(alias: String, block: () -> T): T = synchronized(locks.getOrPut(alias) { Any() }) { block() }
 }
 
 /**
