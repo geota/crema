@@ -56,54 +56,7 @@ import kotlinx.serialization.json.jsonObject
 @Serializable
 sealed class Frame {
 
-    // ---- Session handshake ------------------------------------------------
-
-    /**
-     * First frame a secondary sends on connect. [v] is [PROXY_PROTOCOL_VERSION];
-     * [clientId] is a stable per-device id (which pairing record to check),
-     * [clientName] a display name ("Sam's phone"), [nonce] a fresh random value
-     * the host's proof must cover. The primary answers with a [Challenge].
-     * [token] is reserved for the later cloud-relay path; null on the LAN.
-     */
-    @Serializable
-    @SerialName("hello")
-    data class Hello(
-        val v: Int,
-        val role: String,
-        val clientId: String,
-        val clientName: String,
-        val token: String? = null,
-        val nonce: String? = null,
-    ) : Frame()
-
-    /**
-     * Primary → secondary: the reply to [Hello]. [primaryId] is the primary's
-     * stable host id (the key a secondary files its pairing secret under),
-     * [nonce] a fresh random value for this session. [hostProof] is the host's
-     * own `PairingCrypto.hostProof` over both nonces when it holds a secret for
-     * this device, else null. The secondary sends its proof only after checking
-     * this one, so a host that doesn't know the secret can't collect proofs. The
-     * secondary answers with [Auth].
-     */
-    @Serializable
-    @SerialName("challenge")
-    data class Challenge(
-        val primaryId: String,
-        val primaryName: String,
-        val nonce: String,
-        val hostProof: String? = null,
-    ) : Frame()
-
-    /**
-     * Secondary → primary: the answer to [Challenge]. [proof] is
-     * `PairingCrypto.clientProof` over both nonces, keyed with the pairing
-     * secret this device holds for that primary, or null (a request to pair,
-     * which the host only considers while its pairing window is open): when it
-     * holds no secret, or the host's proof didn't check out.
-     */
-    @Serializable
-    @SerialName("auth")
-    data class Auth(val proof: String? = null) : Frame()
+    // ---- Session start ----------------------------------------------------
 
     /**
      * The hub's first frame on an admitted session (relay v4: the core's
@@ -128,12 +81,6 @@ sealed class Frame {
         /** Whether this Welcome grants control; any value but `"control"` is view-only. */
         val grantsControl: Boolean get() = scope == SCOPE_CONTROL
     }
-
-    /** The primary's rejection reply to [Hello] / [Auth] (not paired, pairing
-     *  closed, busy, version mismatch, revoked). The connection closes after this. */
-    @Serializable
-    @SerialName("denied")
-    data class Denied(val reason: String) : Frame()
 
     // ---- Roster (drives scan + connectionState seed) ----------------------
 
@@ -347,7 +294,7 @@ data class DeviceInfo(
 
 /** Current proxy wire-protocol version, carried in the relay ClientHello and
  *  NSD (spec §4.5). 2: + Frame.Event (issue 11 who's-driving); 3: pairing
- *  secret (Challenge/Auth); 4: the encrypted relay (Noise, the core's hellos). */
+ *  secret (removed); 4: the encrypted relay (Noise, the core's hellos). */
 const val PROXY_PROTOCOL_VERSION: Int = 4
 
 /** The WebSocket message cap on both ends (spec §4.3, Appendix A

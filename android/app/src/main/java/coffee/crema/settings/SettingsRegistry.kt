@@ -120,7 +120,7 @@ enum class Setting(
         uiField = "brewParams", snapshotExtras = listOf("brewYieldG", "brewTempC", "brewPreinfuseS"),
     ),
 
-    // ── C: personal (54) ─────────────────────────────────────────────────────
+    // ── C: personal (53) ─────────────────────────────────────────────────────
     THEME_MODE(C, LOC, AP, "themeMode", NONE, null, false, listOf("$VM.setThemeMode(String)")),
     WEIGHT_UNIT(C, LOC, AP, "weightUnit", NONE, null, false, listOf("$VM.setWeightUnit(String)")),
     TEMP_UNIT(C, LOC, AP, "tempUnit", NONE, null, false, listOf("$VM.setTempUnit(String)")),
@@ -160,7 +160,6 @@ enum class Setting(
     PROXY_HOST(C, LOC, AP, "proxyPrimaryHost", NONE, null, false, listOf("$VM.setProxyPrimaryHost(String)")),
     PROXY_PORT(C, LOC, AP, "proxyPrimaryPort", NONE, null, false, listOf("$VM.setProxyPrimaryPort(Int)")),
     REPLAY_PRIMARY(C, LOC, AP, "replayPrimary", NONE, null, false, listOf("$VM.setReplayPrimary(Boolean)")),
-    PAIRED_DEVICES(C, LOC, AP, "pairedDevices", NONE, null, false, emptyList()),
     FILTER_CAPACITY(C, LOC, SettingStore.MAINTENANCE, "filterCapacityLitres", NONE, null, false, listOf("$VM.setFilterCapacity(Double)"), uiField = "maintenance"),
     DESCALE_INTERVAL(C, LOC, SettingStore.MAINTENANCE, "descaleIntervalLitres", NONE, null, false, listOf("$VM.setDescaleInterval(Double)"), uiField = "maintenance"),
     CLEAN_INTERVAL(C, LOC, SettingStore.MAINTENANCE, "cleanIntervalHours", NONE, null, false, listOf("$VM.setCleanInterval(Double)"), uiField = "maintenance"),

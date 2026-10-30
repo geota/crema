@@ -49,10 +49,11 @@ class SettingsRegistryTest {
 
     @Test
     fun `the groups and counts match the spec`() {
-        assertEquals(88, Setting.entries.size)
+        // 87: relay v4 R5 removed `pairedDevices` (C), the v3 pairing list.
+        assertEquals(87, Setting.entries.size)
         assertEquals(21, Setting.entries.count { it.group == SettingGroup.A_MACHINE })
         assertEquals(13, Setting.entries.count { it.group == SettingGroup.B_SESSION })
-        assertEquals(54, Setting.entries.count { it.group == SettingGroup.C_PERSONAL })
+        assertEquals(53, Setting.entries.count { it.group == SettingGroup.C_PERSONAL })
         for (s in Setting.entries) {
             if (s.group == SettingGroup.C_PERSONAL) {
                 assertEquals(OnRemote.LOCAL, s.onRemote, "$s")

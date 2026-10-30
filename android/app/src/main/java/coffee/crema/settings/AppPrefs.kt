@@ -218,10 +218,6 @@ data class AppPrefs(
      *  hijacking it into a fake DE1 + blocking the real DE1/scale. Set it in
      *  `prefs.json` for an emulator with no Bluetooth. */
     val replayPrimary: Boolean = false,
-    /** Devices this host has approved to mirror it (issue 02 — TOFU pairing). A
-     *  remembered peer skips the "Allow this device?" prompt on reconnect; absence
-     *  ⟺ re-prompt. Host-side only — never pushed to mirrors (not in [ConfigSnapshot]). */
-    val pairedDevices: List<PairedDevice> = emptyList(),
     // ── Companion-device association (Android CDM, optional per device) ──────
     /** The remembered DE1's companion association id, or null when it has none.
      *  [COMPANION_ID_UNKNOWN] = associated on API 31–32, where the platform keeps
@@ -382,7 +378,6 @@ private data class PersistedPrefs(
     val proxyPrimaryHost: String = "",
     val proxyPrimaryPort: Int = 0,
     val replayPrimary: Boolean = false,
-    val pairedDevices: List<PairedDevice> = emptyList(),
     val de1CompanionId: Int? = null,
     val scaleCompanionId: Int? = null,
     val companionDeclined: List<String> = emptyList(),
@@ -409,7 +404,6 @@ private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
     proxyPrimaryHost = proxyPrimaryHost,
     proxyPrimaryPort = proxyPrimaryPort,
     replayPrimary = replayPrimary,
-    pairedDevices = pairedDevices,
     de1CompanionId = de1CompanionId,
     scaleCompanionId = scaleCompanionId,
     companionDeclined = companionDeclined,
@@ -435,22 +429,9 @@ private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSetting
     proxyPrimaryHost = proxyPrimaryHost,
     proxyPrimaryPort = proxyPrimaryPort,
     replayPrimary = replayPrimary,
-    pairedDevices = pairedDevices,
     de1CompanionId = de1CompanionId,
     scaleCompanionId = scaleCompanionId,
     companionDeclined = companionDeclined,
-)
-
-/**
- * A secondary this host has approved (issue 02). [id] is the peer's stable
- * `clientId` (the TOFU key); [name] its display label; [canControl] = false marks
- * a **view-only** remote: Control is refused.
- */
-@Serializable
-data class PairedDevice(
-    val id: String,
-    val name: String,
-    val canControl: Boolean = true,
 )
 
 /**

@@ -32,15 +32,8 @@ class FrameGoldenTest {
 
     /** One canonical instance per fixture. */
     private val samples: Map<String, Frame> = linkedMapOf(
-        "hello" to Frame.Hello(Golden.VERSION, "secondary", "install-1", "Sam's phone", nonce = "Y2xpZW50LW5vbmNl"),
-        "hello.bare" to Frame.Hello(Golden.VERSION, "secondary", "install-1", "Sam's phone"),
-        "challenge" to Frame.Challenge("host-1", "Kitchen tablet", "aG9zdC1ub25jZQ", hostProof = "aG9zdC1wcm9vZg"),
-        "challenge.unpaired" to Frame.Challenge("host-1", "Kitchen tablet", "aG9zdC1ub25jZQ"),
-        "auth" to Frame.Auth("Y2xpZW50LXByb29m"),
-        "auth.pair" to Frame.Auth(),
         "welcome" to Frame.Welcome("Kitchen tablet", "primary", roster, scope = SCOPE_CONTROL),
         "welcome.mirror" to Frame.Welcome("Kitchen tablet", "primary", emptyList(), scope = SCOPE_MIRROR),
-        "denied" to Frame.Denied(DenyReason.NOT_PAIRED),
         "roster" to Frame.Roster(roster),
         "attach" to Frame.Attach(7, addr),
         "attached" to Frame.Attached(7, addr, "CONNECTED"),

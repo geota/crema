@@ -200,7 +200,7 @@ class StandaloneSettingsTest {
         assertEquals("primary", saved.proxyRole)
         assertEquals("192.168.1.20", saved.proxyPrimaryHost)
         assertEquals(8765, saved.proxyPrimaryPort)
-        assertEquals(emptyList(), saved.pairedDevices, "the prefs carry no pairing")
+        assertTrue("pairedDevices" !in java.io.File(VmHarness.app().filesDir, "prefs.json").readText(), "the prefs carry no pairing")
         assertEquals(listOf(remote.deviceId()), VmHarness.proxyController(vm).relayStore.remotes.map { it.id }, "the pin survives the reset")
         assertEquals("AA:BB:CC:DD:EE:01", saved.de1Address)
         assertEquals("AA:BB:CC:DD:EE:02", saved.scaleAddress)
