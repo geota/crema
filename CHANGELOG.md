@@ -27,6 +27,25 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   verify ‹hub›" with Connect directly. When the hub moved to another address,
   pick it again under Other devices. When the hub turns Hub mode off, the
   remote says "‹hub› isn't a hub any more". Tablet and phone.
+- **A remote shows its hub's machine and session settings, and keeps its own**
+  — steam, hot water and flush, the shot behaviour toggles, the grinder, idle
+  sleep, the water refill point, the brew dials, profile and bean come from the
+  hub, live; units, theme and the other personal settings stay this device's
+  own, so a remote no longer follows the hub's units. The hub's values are
+  never saved over this device's settings. A remote changes what it may through
+  the hub — the brew dials, grind, stop at weight, auto-tare, profile and bean —
+  and each edit shows "Sending to ‹hub›…" until the hub answers. Machine
+  settings, including Quick Controls' steam, hot water and flush and the steam
+  heater on/off, are read-only on a remote and say "Change on ‹hub›"; a
+  view-only remote changes nothing. A value the remote doesn't know yet shows
+  "—" ("Waiting for ‹hub›", or "Update Crema on ‹hub› to see this here" with an
+  older hub). Tablet and phone.
+- **Leaving a hub asks about its settings** — Stop, Connect directly and
+  turning Hub mode on, from a remote whose hub's settings differ from this
+  device's, ask once: "Use ‹hub›'s" makes the hub's machine and session settings
+  this device's own (its custom profile included), "Keep mine" keeps this
+  device's. Either way this device then writes its own machine settings to the
+  DE1 when it connects. Tablet and phone.
 - **Bengle machines receive profiles in their own encoding** — Crema waits for
   the machine model before uploading, and a stop-at-weight target another app
   saved in a Bengle is cleared on connect, even when no upload is needed.
@@ -75,6 +94,11 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   a weekly workflow watches npm for the official release).
 - **History search finds more** — it now also matches the coffee's name and
   roaster, the grinder, and the barista and drinker. Web, tablet and phone.
+- **Reset preferences no longer unpairs this device** — it keeps the
+  multi-device role, the hub address, the paired devices and the remembered
+  DE1 and scale, so nothing has to pair again afterwards. On a remote it reads
+  "Reset this device's preferences" and leaves the hub's settings on screen.
+  Tablet and phone.
 
 ### Removed
 
@@ -272,6 +296,21 @@ and Crema aims to follow [Semantic Versioning](https://semver.org/).
   power-cycle the DE1. On Android, when this device's own Bluetooth stack
   still holds the link, the app now reuses that link directly instead of
   scanning for an advertisement that cannot come.
+
+### Notes
+
+- **Multi-device: update every device together.** Remotes and hubs on
+  different builds don't fully interoperate. A remote on an older nightly
+  still saves the hub's settings over its own and still sends steam, hot water
+  and flush changes, which a newer hub applies. A newer remote shows "—" for
+  the settings an older hub doesn't send, and asks to adopt only the ones it
+  does. An older hub still shows Hand off next to a newer remote, which
+  ignores it (tapping it waits forever).
+- **What changes for remotes:** they stop following the hub's units; steam,
+  hot water and flush (including the steam heater on/off) are read-only on a
+  remote; leaving a hub asks before taking its settings, and Keep mine writes
+  this device's own machine settings when it connects; turning off Hub mode
+  disconnects the hub from the machine until you tap Connect; Hand off is gone.
 
 ## [0.0.9] — 2026-10-15
 
