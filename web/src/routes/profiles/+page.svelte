@@ -380,7 +380,7 @@
 		if (profile && app) {
 			// The core's desired profile; its profile sync uploads it unless
 			// the DE1 already holds it.
-			void app.setDesiredProfile(profile, {});
+			void app.setDesiredProfile(profile);
 		}
 	}
 

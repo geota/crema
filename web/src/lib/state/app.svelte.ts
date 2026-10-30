@@ -241,6 +241,13 @@ const WATER_WARN_DEFAULT_ML = 110;
 const WATER_WARN_REARM_ML = 55;
 
 /**
+ * How long the Quick Controls dial must rest before its overrides become the
+ * desired profile (de1app debounces its temperature dial by 0.5 s too), so a
+ * run of stepper taps uploads once.
+ */
+const DIAL_PUSH_DEBOUNCE_MS = 500;
+
+/**
  * The DE1 top-level states whose group flow counts toward the water-filter /
  * descale counters: an espresso shot and the two hot-water modes (hot water +
  * its rinse). Steam draws no water through the group, and idle / sleep / cal
@@ -1510,18 +1517,51 @@ export class CremaApp {
 	}
 
 	/**
+	 * The live Quick Controls overrides and the profile they were dialled on
+	 * (the Brew dashboard reports them). They are part of what the DE1 should
+	 * hold, so a group-head start runs the dialled profile too.
+	 */
+	#brewOverrides: { profileId: string; qc: ProfileFingerprintOverrides } | null = null;
+
+	/** The pending debounced push of a dial change ({@link setBrewOverrides}). */
+	#overridesPush: ReturnType<typeof setTimeout> | null = null;
+
+	/**
+	 * The Brew dashboard's live overrides for `profile`. They become the core's
+	 * desired profile after the dial settles for {@link DIAL_PUSH_DEBOUNCE_MS}
+	 * (de1app's 0.5 s), so stepping the dial uploads once, not per step.
+	 */
+	setBrewOverrides(profile: CremaProfile, qc: ProfileFingerprintOverrides): void {
+		this.#brewOverrides = { profileId: profile.id, qc };
+		if (this.#overridesPush !== null) clearTimeout(this.#overridesPush);
+		this.#overridesPush = setTimeout(() => {
+			this.#overridesPush = null;
+			void this.setDesiredProfile(profile, qc);
+		}, DIAL_PUSH_DEBOUNCE_MS);
+	}
+
+	/** The overrides that go with `profile`: the live ones when they were
+	 *  dialled on it, else none (a profile change clears them). */
+	#overridesFor(profile: CremaProfile | null): ProfileFingerprintOverrides {
+		return profile !== null && this.#brewOverrides?.profileId === profile.id
+			? this.#brewOverrides.qc
+			: {};
+	}
+
+	/**
 	 * Tell the core which profile the DE1 should hold: the library `profile`
-	 * (`null` = none active) with the Quick Controls overrides `qc`. The
+	 * (`null` = none active) with the Quick Controls overrides `qc` — by
+	 * default the live ones dialled on that profile, so activation, edits and
+	 * the boot push the overridden profile, never a bare one over a dial. The
 	 * core's profile sync uploads it (the shell's only way to put a profile on
 	 * the DE1) — on every connect, on a change, coalesced while an upload
-	 * runs, retried with backoff, never while the machine is busy. Called on
-	 * every activation, edit and override change; the core ignores a repeat.
-	 * Any upload it starts is applied like every other output. Returns the
-	 * sync's status.
+	 * runs, retried with backoff, never while the machine is busy. The core
+	 * ignores a repeat. Any upload it starts is applied like every other
+	 * output. Returns the sync's status.
 	 */
 	async setDesiredProfile(
 		profile: CremaProfile | null,
-		qc: ProfileFingerprintOverrides = {}
+		qc: ProfileFingerprintOverrides = this.#overridesFor(profile)
 	): Promise<ProfileSyncStatus> {
 		const { output, status } = await this.core.setDesiredProfile(profile, qc, performance.now());
 		this.applyCoreOutput(output);
@@ -2016,6 +2056,11 @@ export class CremaApp {
 		profile: CremaProfile,
 		qc: ProfileFingerprintOverrides
 	): Promise<boolean> {
+		// The start's own push supersedes a dial push still settling.
+		if (this.#overridesPush !== null) {
+			clearTimeout(this.#overridesPush);
+			this.#overridesPush = null;
+		}
 		const status = await this.setDesiredProfile(profile, qc);
 		const alreadyLoaded = status.desired != null && status.desired === status.lastPushed;
 		// No runtime ⇒ no Effect-routed services (and no Web Bluetooth ⇒ no DE1
@@ -2708,11 +2753,11 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 			getBeanLibraryStore().clearLinksTo(id);
 		};
 		profiles.onActivate = (profile) => {
-			void app.setDesiredProfile(profile, {});
+			void app.setDesiredProfile(profile);
 		};
 		void profiles.ensureLoaded().then(() => {
 			const id = profiles.activeId;
-			return app.setDesiredProfile(id === null ? null : (profiles.get(id) ?? null), {});
+			return app.setDesiredProfile(id === null ? null : (profiles.get(id) ?? null));
 		});
 	}
 	// Reconnect the last DE1 / scale where the browser can (client-only: this

@@ -547,16 +547,17 @@
 	}
 	/**
 	 * The dial is part of what the DE1 should hold: every change of the active
-	 * profile or its overrides makes them the core's desired profile, and the
-	 * core's profile sync uploads them (coalesced while an upload runs, never
-	 * while the machine is busy) — like Decenza re-uploading on a temperature
-	 * override. The core ignores a repeat.
+	 * profile or its overrides is reported to the app, which makes them the
+	 * core's desired profile once the dial rests 0.5 s (de1app's debounce), and
+	 * the core's profile sync uploads them (coalesced while an upload runs,
+	 * never while the machine is busy) — like Decenza re-uploading on a
+	 * temperature override. So a group-head start runs the dialled profile.
 	 */
 	$effect(() => {
 		const profile = activeProfile;
 		const qc = effectiveOverrides();
 		if (!app || !profile) return;
-		void app.setDesiredProfile(profile, qc);
+		app.setBrewOverrides(profile, qc);
 	});
 	/**
 	 * Whether the Quick Sheet is docked open. Starts hidden — the dashboard is
@@ -751,7 +752,7 @@
 			const profile = profileStore.all.find((pr) => pr.name.toLowerCase() === wanted);
 			if (profile) {
 				profileStore.setActive(profile.id);
-				void app?.setDesiredProfile(profile, {});
+				void app?.setDesiredProfile(profile);
 			} else {
 				toast.info(
 					`Profile "${shot.profileName}" was renamed or deleted since this shot; loaded the rest.`

@@ -106,6 +106,33 @@ class ShotStartOverridesTest {
         repeat(3) { kotlinx.coroutines.runBlocking(lane) {} }
     }
 
+    /** F7 (validation P2): the dial is part of the desired profile. A dial
+     *  change while connected becomes the desired profile once the dial rests
+     *  0.5 s, so the core pushes it and a group-head start runs it. */
+    @Test
+    fun `f7_dial a dial change becomes the desired profile after 0_5 s`() {
+        val vm = build()
+        val dial = pickProfile(vm)
+        val active = assertNotNull(vm.ui.value.activeProfile())
+        val bridge = bridgeOf(vm)
+        drainCoreLane(vm)
+        val profileJson = builtinJson(active.id)
+        fun desired() = json.decodeFromString(ProfileSyncStatus.serializer(), bridge.profileSyncStatus()).desired
+        assertEquals(effectiveProfileFingerprint(profileJson, null), desired(), "the bare profile at first")
+
+        vm.quickAdjustBrew(active.dose.toDouble(), active.yieldOut.toDouble(), dial.anchor + 1, null)
+        VmHarness.idle()
+        vm.quickAdjustBrew(active.dose.toDouble(), active.yieldOut.toDouble(), dial.anchor + 2, null)
+        VmHarness.idle()
+        drainCoreLane(vm)
+        assertEquals(effectiveProfileFingerprint(profileJson, null), desired(), "not while the dial moves")
+
+        val dialled = effectiveProfileFingerprint(profileJson, vm.ui.value.brewParams.overridesJson(json))
+        Thread.sleep(800) // the 0.5 s debounce, with margin
+        drainCoreLane(vm)
+        assertEquals(dialled, desired(), "the dialled profile once it rests")
+    }
+
     @Test
     fun `deleting or hiding the active profile clears the override`() {
         val vm = build()

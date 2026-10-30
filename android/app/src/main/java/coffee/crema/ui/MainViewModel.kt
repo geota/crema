@@ -2226,7 +2226,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * shot target is the Quick-Controls dial override (null when unset, so the
      * profile recipe wins). Safe while disconnected — pure core state, no BLE.
      */
-    private fun pushStopTargets(s: MainUiState = effectiveState()) {
+    private fun pushStopTargets(s: MainUiState = effectiveState(), desiredDelayMs: Long = 0) {
         // On a remote, a hub's custom profile this library lacks is the overlay.
         val active = s.activeProfile()
         val profileYield = active?.yieldOut?.takeIf { it.isFinite() && it > 0f }
@@ -2250,7 +2250,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             setActiveProfile = { bridge.setActiveProfile(it) },
             log = { appendLog(it) },
         )
-        pushDesiredProfile(s)
+        pushDesiredProfile(s, desiredDelayMs)
         refreshStopTargetProjection()
     }
 
@@ -2549,12 +2549,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * nothing: its core is a read-only mirror that never uploads (the hub holds
      * the machine), and it pushes again once it stops being a remote.
      */
-    private fun pushDesiredProfile(s: MainUiState = effectiveState()) {
+    private fun pushDesiredProfile(s: MainUiState = effectiveState(), delayMs: Long = 0) {
         if (_ui.value.mirror != null) return
         val cremaJson = s.activeProfile()?.id?.let { library.profileJson(it) } ?: s.mirroredProfileJson
         val qcJson = s.brewParams.overridesJson(json)
-        onCoreLane { setDesiredOnLane(cremaJson, qcJson) }
+        // The latest push wins: a dial change waits [delayMs] for the dial to
+        // rest (de1app's 0.5 s), and any later push replaces a pending one.
+        desiredPushJob?.cancel()
+        desiredPushJob = viewModelScope.launch(coreDispatcher) {
+            if (delayMs > 0) delay(delayMs)
+            setDesiredOnLane(cremaJson, qcJson)
+        }
     }
+
+    /** The pending [pushDesiredProfile] (a dial change waiting to settle). */
+    private var desiredPushJob: Job? = null
 
     /** Scan for and connect to a DE1 — delegate of [ConnectionController.connect].
      *  Called from the UI once the BLE runtime permissions have been granted. */
@@ -2720,7 +2729,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             is MachineCommand.AdjustBrew -> {
-                pushStopTargets() // the new yield override becomes the live stop-at-weight target
+                // The new yield override becomes the live stop-at-weight target
+                // now; the dialled profile goes to the DE1 once the dial rests.
+                pushStopTargets(desiredDelayMs = DIAL_PUSH_DEBOUNCE_MS)
                 proxy.pushConfig() // mirrors track the primary's live override (issue 06)
             }
             MachineCommand.ResetBrew -> {
@@ -5763,6 +5774,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Abort a pending gated-start brew if the upload never completes. */
         const val PROFILE_UPLOAD_TIMEOUT_MS = 15_000L
+
+        /** How long the Quick-Controls dial must rest before its override
+         *  becomes the desired profile (de1app debounces its temperature dial by
+         *  0.5 s too), so a run of stepper taps uploads once. */
+        const val DIAL_PUSH_DEBOUNCE_MS = 500L
     }
 }
 

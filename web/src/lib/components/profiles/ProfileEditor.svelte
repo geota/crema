@@ -321,7 +321,7 @@
 		}
 		// The active profile changed: it is the core's desired profile again,
 		// and the core's profile sync puts the edited bytes on the DE1.
-		if (app && store.activeId === toSave.id) void app.setDesiredProfile(toSave, {});
+		if (app && store.activeId === toSave.id) void app.setDesiredProfile(toSave);
 		dirty = false;
 		void goto(returnPath);
 	}
