@@ -458,7 +458,9 @@ pub fn sanitize_common_settings(blob: &serde_json::Value) -> CommonSettings {
 /// What "Restore defaults" leaves: every common setting back to the default
 /// bundle except the two facts about the user's setup it keeps, the weight
 /// unit (it matches their scale) and the mains line frequency. The idle-sleep
-/// timer gets its default explicitly.
+/// timer gets its default explicitly, and so does the hot-water dose: ratio
+/// 1:3 stored with its mode, so the next load doesn't run the never-changed
+/// rule on it.
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -476,6 +478,12 @@ pub fn reset_settings(current: &CommonSettings, line_frequency_hz: f32) -> Setti
     let mut common = default_common_settings();
     common.weight_unit = one_of(&current.weight_unit, &["g", "oz"], &common.weight_unit);
     common.idle_sleep_min = Some(crate::idle_sleep::DEFAULT_IDLE_SLEEP_MIN);
+    let dose = crate::hot_water::HotWaterDose::default();
+    common.qc_hot_water_mode = Some(dose.mode);
+    common.qc_hot_water_time_s = Some(dose.time_s);
+    common.qc_hot_water_time_no_limit = Some(dose.time_no_limit);
+    common.qc_hot_water_volume_ml = dose.volume_ml;
+    common.qc_hot_water_ratio = Some(dose.ratio);
     let line_frequency_hz = if line_frequency_hz == 50.0 || line_frequency_hz == 60.0 {
         line_frequency_hz
     } else {
@@ -563,6 +571,25 @@ mod tests {
         let back: CommonSettings =
             serde_json::from_str(&serde_json::to_string(&set).unwrap()).unwrap();
         assert_eq!(back, set);
+    }
+
+    /// AC-HW21 / AC-HW25 (the core's half): Restore defaults stores the
+    /// default dose with its mode, ratio 1:3, whatever the user had.
+    #[test]
+    fn reset_stores_the_default_hot_water_dose() {
+        let current = CommonSettings {
+            qc_hot_water_mode: Some(HotWaterMode::Time),
+            qc_hot_water_time_s: Some(90.0),
+            qc_hot_water_volume_ml: 200.0,
+            qc_hot_water_ratio: Some(2.0),
+            ..CommonSettings::default()
+        };
+        let r = reset_settings(&current, 0.0).common;
+        assert_eq!(r.qc_hot_water_mode, Some(HotWaterMode::Ratio));
+        assert_eq!(r.qc_hot_water_ratio, Some(3.0));
+        assert_eq!(r.qc_hot_water_time_s, Some(30.0));
+        assert_eq!(r.qc_hot_water_time_no_limit, Some(false));
+        assert_eq!(r.qc_hot_water_volume_ml, 150.0);
     }
 
     #[test]
@@ -759,6 +786,10 @@ mod tests {
             CommonSettings {
                 weight_unit: "oz".into(),
                 idle_sleep_min: Some(crate::idle_sleep::DEFAULT_IDLE_SLEEP_MIN),
+                qc_hot_water_mode: Some(HotWaterMode::Ratio),
+                qc_hot_water_time_s: Some(30.0),
+                qc_hot_water_time_no_limit: Some(false),
+                qc_hot_water_ratio: Some(3.0),
                 ..default_common_settings()
             }
         );

@@ -3780,7 +3780,9 @@ data class SeriesPoint (
 /// What "Restore defaults" leaves: every common setting back to the default
 /// bundle except the two facts about the user's setup it keeps, the weight
 /// unit (it matches their scale) and the mains line frequency. The idle-sleep
-/// timer gets its default explicitly.
+/// timer gets its default explicitly, and so does the hot-water dose: ratio
+/// 1:3 stored with its mode, so the next load doesn't run the never-changed
+/// rule on it.
 @Serializable
 data class SettingsReset (
 	/// The reset common settings.
