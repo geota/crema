@@ -135,8 +135,10 @@ impl HubConnection {
         self.phase
     }
 
-    /// The peer's static key, once trusted: from `PairPending` (pairing) or
-    /// admission (resume) on; `None` before and after a failure.
+    /// The peer's static key, once trusted: in `AwaitCommit`, `Paired` and
+    /// `Established`. `None` before, after a failure and after a normal close
+    /// (`Closed`), so the shell keeps the key it read at `PairPending` or
+    /// `Established`.
     pub fn peer_public_key(&self) -> Option<[u8; 32]> {
         // Only once the key is trusted: pairing confirmed (or committed), or
         // the session admitted. A replayed IK message 1 reveals nothing.

@@ -143,8 +143,9 @@ impl RemoteConnection {
         self.phase
     }
 
-    /// The hub's static key, once trusted (`Paired` or `Established`); `None`
-    /// before and after a failure.
+    /// The hub's static key, once trusted: in `Paired` and `Established`. `None`
+    /// before, after a failure and after a normal close (`Closed`), so the
+    /// shell pins the key it read at `Paired`.
     pub fn peer_public_key(&self) -> Option<[u8; 32]> {
         // Only once the hub is trusted: PAIR_COMPLETE decrypted, or IK message 2
         // did. A fake hub that reached XX message 2 without the code reveals nothing.

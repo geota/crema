@@ -126,8 +126,9 @@ H → R  RECORD           inner PAIR_COMPLETE (empty)                 R: decrypt
 8. **Key confirmation and failure counting.** The hub confirms when message 3 decrypts. A message 3 that fails
    authentication after a code entry is `WrongCode`: the hub counts one failure, sends `ABORT(HANDSHAKE_FAILED)`
    and closes 4401. **This is the only event that counts.** The hub checks that it still holds the slot, reads
-   message 3 and counts the failure under one gate lock, so a concurrent close of the window can't fall between. A DH failure (low-order key), a malformed message, a
-   timeout (including after code entry), a cancel, a closed window and `reject_pairing` free the slot uncounted.
+   message 3 and counts the failure under one gate lock, so a concurrent close of the window can't fall between.
+   A DH failure (low-order key), a malformed message, a timeout (including after code entry), a cancel, a closed
+   window and `reject_pairing` free the slot uncounted.
    The remote confirms only when the `PAIR_COMPLETE` record decrypts.
 9. **Two-phase commit on the hub.** On message 3 success the hub emits `PairPending`, exposes the remote's key and
    sends nothing. The shell persists the pin, inserts it into the live `PinSet`, and calls `confirm_paired()`.
@@ -296,8 +297,9 @@ Not wiped, and accepted (an attacker who can read process memory is out of scope
 
 `peer_public_key()` returns the peer's static key only once it is trusted: on the hub in `AwaitCommit`, `Paired`
 and `Established`, on the remote in `Paired` and `Established`. `channel_binding()` returns `h` only in
-`Established`. Before that (a replayed IK message 1, a fake hub that reached XX message 2 without the code) and
-after any failure, both are `None`.
+`Established`. Before that (a replayed IK message 1, a fake hub that reached XX message 2 without the code),
+after any failure and after a normal close (`Closed`), both are `None`, so the shell reads the key when it is
+offered: at `PairPending` on the hub, at `Paired` on the remote, at `Established` on a resume.
 
 ## Implementation notes (where the code pins down or differs from the spec)
 
