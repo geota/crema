@@ -5,6 +5,7 @@ import coffee.crema.core.Bean
 import coffee.crema.core.BeanOrigin
 import coffee.crema.core.Roaster
 import coffee.crema.core.duplicateBeanJson
+import coffee.crema.core.setBeanFrozenJson
 import coffee.crema.persist.eraseStore
 import coffee.crema.persist.loadStore
 import coffee.crema.persist.saveStore
@@ -101,7 +102,7 @@ fun newBean(
     updatedAt = nowMs,
 )
 
-private val duplicateJson = Json { ignoreUnknownKeys = true }
+private val coreBeanJson = Json { ignoreUnknownKeys = true }
 
 /**
  * A new bag copied from [source] — the core's `duplicate_bean`: [newId],
@@ -114,9 +115,26 @@ fun duplicateBean(
     nowMs: Long,
     newId: String = "bean:" + UUID.randomUUID(),
     core: (beanJson: String, newId: String, nowMs: Long) -> String = ::duplicateBeanJson,
-): Bean = duplicateJson.decodeFromString(
+): Bean = coreBeanJson.decodeFromString(
     Bean.serializer(),
-    core(duplicateJson.encodeToString(Bean.serializer(), source), newId, nowMs),
+    core(coreBeanJson.encodeToString(Bean.serializer(), source), newId, nowMs),
+)
+
+/**
+ * [bean] with its Frozen switch set to [frozen] — the core's `set_bean_frozen`:
+ * freezing stamps today, defrosting stamps `defrostedOn` and keeps `frozenOn`,
+ * refreezing carries the earlier frozen span. Only `frozenOn` / `defrostedOn`
+ * change and days off roast never moves. [core] is the UniFFI
+ * `setBeanFrozenJson` (injectable for JVM tests).
+ */
+fun setBeanFrozen(
+    bean: Bean,
+    frozen: Boolean,
+    nowMs: Long,
+    core: (beanJson: String, frozen: Boolean, nowMs: Long) -> String = ::setBeanFrozenJson,
+): Bean = coreBeanJson.decodeFromString(
+    Bean.serializer(),
+    core(coreBeanJson.encodeToString(Bean.serializer(), bean), frozen, nowMs),
 )
 
 /** Mint a new roaster-directory row. */

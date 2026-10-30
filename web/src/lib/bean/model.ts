@@ -21,7 +21,8 @@ import {
 	roast_freshness as wasmRoastFreshness,
 	coerceBean as wasmCoerceBean,
 	coerceRoaster as wasmCoerceRoaster,
-	duplicateBeanJson as wasmDuplicateBeanJson
+	duplicateBeanJson as wasmDuplicateBeanJson,
+	setBeanFrozenJson as wasmSetBeanFrozenJson
 } from '#lib/wasm/de1_wasm.js';
 
 // ── Wire types (mirrored from de1_domain::bean) ─────────────────────────
@@ -554,6 +555,16 @@ export function coerceBean(raw: unknown): Bean | null {
  */
 export function duplicateBean(src: Bean, newId: string = mintBeanId(), nowMs = Date.now()): Bean {
 	return JSON.parse(wasmDuplicateBeanJson(JSON.stringify(src), newId, nowMs)) as Bean;
+}
+
+/**
+ * `bean` with its Frozen switch set — `de1_domain::set_bean_frozen`, the rule
+ * Android uses too. Freezing stamps today; defrosting stamps `defrostedOn` and
+ * keeps `frozenOn`; refreezing carries the earlier frozen span. Only
+ * `frozenOn` / `defrostedOn` change, and days off roast never moves.
+ */
+export function setBeanFrozen(bean: Bean, frozen: boolean, nowMs = Date.now()): Bean {
+	return JSON.parse(wasmSetBeanFrozenJson(JSON.stringify(bean), frozen, nowMs)) as Bean;
 }
 
 /**

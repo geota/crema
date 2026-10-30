@@ -7,7 +7,15 @@
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { initTestWasm } from '#lib/testing/test-init.js';
-import { blankBean, coerceBean, coerceRoaster, duplicateBean, type Bean } from './model.ts';
+import {
+	beanDaysOffRoast,
+	blankBean,
+	coerceBean,
+	coerceRoaster,
+	duplicateBean,
+	setBeanFrozen,
+	type Bean
+} from './model.ts';
 
 beforeAll(async () => {
 	await initTestWasm();
@@ -125,5 +133,37 @@ describe('duplicateBean (core duplicate_bean)', () => {
 		expect(copy.name).toBe('Untitled bag (copy)');
 		expect(copy.id).toMatch(/^bean:/);
 		expect(copy.id).not.toBe('bean:x');
+	});
+});
+
+describe('setBeanFrozen (core set_bean_frozen)', () => {
+	// 2026-05-22 12:00 UTC.
+	const now = Date.UTC(2026, 4, 22, 12);
+
+	it('switching Frozen off defrosts today, keeps the freeze date and the count', () => {
+		const bag: Bean = {
+			...blankBean('bean:f'),
+			roastedOn: '2026-04-24',
+			frozenOn: '2026-05-07'
+		};
+		const off = setBeanFrozen(bag, false, now);
+		expect(off).toEqual({ ...bag, defrostedOn: '2026-05-22' });
+		expect(beanDaysOffRoast(off, now)).toBe(13);
+		expect(beanDaysOffRoast(bag, now)).toBe(13);
+	});
+
+	it('switching Frozen on stamps today, or carries an earlier freeze', () => {
+		const plain: Bean = { ...blankBean('bean:p'), roastedOn: '2026-05-12' };
+		expect(setBeanFrozen(plain, true, now)).toEqual({ ...plain, frozenOn: '2026-05-22' });
+		const thawed: Bean = {
+			...plain,
+			roastedOn: '2026-04-24',
+			frozenOn: '2026-05-07',
+			defrostedOn: '2026-05-12'
+		};
+		const on = setBeanFrozen(thawed, true, now);
+		expect(on.frozenOn).toBe('2026-05-17');
+		expect(on.defrostedOn).toBeNull();
+		expect(beanDaysOffRoast(on, now)).toBe(beanDaysOffRoast(thawed, now));
 	});
 });
