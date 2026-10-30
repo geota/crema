@@ -33,12 +33,17 @@ class CommonSettingsMappingTest {
         qcFlushTimeS = 6f, qcFlushTempC = 93f,
     )
 
+    /** The hot-water dose's new fields: Android's settings carry them with
+     *  the hot-water card (hot-water modes spec §4, HW-3), not before. */
+    private val hotWaterDose = setOf("qcHotWaterMode", "qcHotWaterTimeS", "qcHotWaterTimeNoLimit", "qcHotWaterRatio")
+
     @Test
     fun `the bundle differs from the defaults in every field`() {
         val nd = json.encodeToJsonElement(CommonSettings.serializer(), nonDefault).jsonObject
         val d = json.encodeToJsonElement(CommonSettings.serializer(), CommonDefaults.common).jsonObject
         val same = CommonSettings.serializer().descriptor.elementNames
             .filter { it != "suppressDe1Sleep" } // retired, always written true
+            .filter { it !in hotWaterDose }
             .filter { nd[it] == d[it] }
         assertEquals(emptyList(), same, "set these to a non-default value above")
     }
