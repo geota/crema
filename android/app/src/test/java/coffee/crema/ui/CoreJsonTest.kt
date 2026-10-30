@@ -36,8 +36,8 @@ class CoreJsonTest {
     fun `a superseding upload's output decodes with its Aborted event and every write`() {
         val bridge = CremaBridge() // the host build of the core
         bridge.onNotification(NotificationSource.DE1_MMR_READ, modelReply(1), 0uL)
-        bridge.uploadProfile(profile("A"), 0uL)
-        val raw = bridge.uploadProfile(profile("B"), 10uL) // aborts A, starts B
+        bridge.uploadWire(profile("A"), 0uL)
+        val raw = bridge.uploadWire(profile("B"), 10uL) // aborts A, starts B
         val out = coreJson.decodeFromString(CoreOutput.serializer(), raw)
         val failed = out.events.filterIsInstance<Event.ProfileUploadFailed>().single()
         assertIs<ProfileUploadFailure.Aborted>(failed.content.reason)

@@ -3,6 +3,7 @@ package coffee.crema.ui.phone
 import coffee.crema.ui.fmt
 import coffee.crema.settings.Setting
 import coffee.crema.ui.gate
+import coffee.crema.ui.screens.BrewTempOffsetRow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -47,8 +48,9 @@ import coffee.crema.ui.theme.JetBrainsMono
  * ViewModel seams:
  *  • dose / yield / brew-temp → the transient BrewParams override
  *    (vm.quickAdjustBrew); Reset clears it; Save preset persists a profile.
- *  • grind / pre-inf / steam / water / flush → local stepper state (no
- *    per-mode param store on Android yet — tablet parity).
+ *  • pre-inf → the same BrewParams override (the core rescales the leading
+ *    pre-infusion segments); flush time → local stepper state.
+ *  • grind / steam / water → the VM's persisted QC state.
  *  • Chart tab → vm.toggleChartChannel; Shot tab → the five behaviour setters.
  */
 
@@ -60,7 +62,14 @@ fun PhoneQuickSheet(
     vm: MainViewModel,
     onDismiss: () -> Unit,
 ) {
-    val (dose, yieldOut, brewTemp) = ui.effectiveBrew()
+    val (dose, yieldOut, profileBrewTemp) = ui.effectiveBrew()
+    // The core's dial for the profile on screen: the range (every step shifts
+    // with the absolute temperature), the profile's own brew temp, and its
+    // pre-infusion seconds (the total of its leading pre-infusion segments).
+    val brewDial = remember(ui.activeProfileId, ui.profiles, ui.mirroredProfileJson) { vm.brewDial() }
+    val brewTemp = ui.brewParams?.brewTemp ?: brewDial?.anchor ?: profileBrewTemp
+    // The live pre-infusion override, kept when another brew stepper fires.
+    val preinfOverride = ui.brewParams?.preinf
 
     var tab by remember { mutableStateOf("dial") }
     // Split-stepper modes + local (no-VM-seam) values — tablet QC parity.
@@ -77,7 +86,7 @@ fun PhoneQuickSheet(
     val grind = (ui.qcGrind ?: grindSeed).toDouble()
     var yieldRatioMode by remember { mutableStateOf(YieldRatioMode.Yield) }
     var piFlushMode by remember { mutableStateOf(PiFlushMode.Preinf) }
-    var preinf by remember { mutableStateOf(8.0) }
+    val preinf = preinfOverride ?: brewDial?.preinfS ?: 8.0
     var flushTime by remember { mutableStateOf(4.0) }
     // Steam / hot-water modes are local UI; the values they edit are the VM's
     // persisted QC state (vm.setQcSteam* / vm.setQcHotWater*), shared with the
@@ -173,7 +182,7 @@ fun PhoneQuickSheet(
                                 max = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MAX_G else QcBounds.GRIND_MAX,
                                 presets = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 18.0, 19.0, 20.0) else listOf(3.5, 4.0, 4.5, 5.0),
                                 fmt = { fmt("%.1f", it) },
-                                onChange = { if (doseGrindMode == DoseGrindMode.Dose) vm.quickAdjustBrew(it, yieldOut, brewTemp) else vm.setQcGrind(it.toFloat()) },
+                                onChange = { if (doseGrindMode == DoseGrindMode.Dose) vm.quickAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else vm.setQcGrind(it.toFloat()) },
                                 gate = if (doseGrindMode == DoseGrindMode.Dose) brewGate else ui.gate(Setting.QC_GRIND),
                             )
                             // Yield | Ratio.
@@ -194,8 +203,8 @@ fun PhoneQuickSheet(
                                 presets = if (yieldRatioMode == YieldRatioMode.Yield) listOf(32.0, 36.0, 40.0, 45.0) else listOf(1.5, 2.0, 2.5, 3.0),
                                 fmt = { if (yieldRatioMode == YieldRatioMode.Yield) fmt("%.1f", it) else fmt("1:%.1f", it) },
                                 onChange = {
-                                    if (yieldRatioMode == YieldRatioMode.Yield) vm.quickAdjustBrew(dose, it, brewTemp)
-                                    else vm.quickAdjustBrew(dose, dose * it, brewTemp)
+                                    if (yieldRatioMode == YieldRatioMode.Yield) vm.quickAdjustBrew(dose, it, brewTemp, preinfOverride)
+                                    else vm.quickAdjustBrew(dose, dose * it, brewTemp, preinfOverride)
                                 },
                                 gate = brewGate,
                             )
@@ -204,11 +213,22 @@ fun PhoneQuickSheet(
                             QcCell(
                                 modifier = Modifier.weight(1f),
                                 header = { Eyebrow("Brew temp") },
-                                value = brewTemp, unit = "°C", step = 0.5, min = QcBounds.BREW_TEMP_MIN_C, max = QcBounds.BREW_TEMP_MAX_C,
-                                presets = listOf(90.0, 93.0, 95.0, 97.0),
+                                value = brewTemp, unit = "°C", step = 0.5,
+                                min = brewDial?.min ?: QcBounds.BREW_TEMP_MIN_C,
+                                max = brewDial?.max ?: QcBounds.BREW_TEMP_MAX_C,
+                                presets = listOf(90.0, 93.0, 95.0, 97.0)
+                                    .filter { it in (brewDial?.min ?: QcBounds.BREW_TEMP_MIN_C)..(brewDial?.max ?: QcBounds.BREW_TEMP_MAX_C) },
                                 fmt = { fmt("%.1f", it) },
-                                onChange = { vm.quickAdjustBrew(dose, yieldOut, it) },
+                                onChange = { vm.quickAdjustBrew(dose, yieldOut, it, preinfOverride) },
                                 gate = brewGate,
+                                footer = {
+                                    val offset = if (ui.brewParams != null) brewDial?.offsetLabel(brewTemp) else null
+                                    if (offset != null && brewDial != null) {
+                                        BrewTempOffsetRow(offset, enabled = brewGate.editable) {
+                                            vm.quickAdjustBrew(dose, yieldOut, brewDial.anchor, preinfOverride)
+                                        }
+                                    }
+                                },
                             )
                             // Pre-inf | Flush (local — drives the next shot's fixed params).
                             QcCell(
@@ -225,7 +245,9 @@ fun PhoneQuickSheet(
                                 min = QcBounds.PREINF_MIN_S, max = if (piFlushMode == PiFlushMode.Preinf) QcBounds.PREINF_MAX_S else QcBounds.FLUSH_TIME_MAX_S,
                                 presets = if (piFlushMode == PiFlushMode.Preinf) listOf(0.0, 4.0, 8.0, 12.0) else listOf(2.0, 4.0, 6.0, 8.0),
                                 fmt = { fmt("%.0f", it) },
-                                onChange = { if (piFlushMode == PiFlushMode.Preinf) preinf = it else flushTime = it },
+                                onChange = {
+                                    if (piFlushMode == PiFlushMode.Preinf) vm.quickAdjustBrew(dose, yieldOut, brewTemp, it) else flushTime = it
+                                },
                             )
                         }
                         // Steam — Time | Flow | Temp, wired to the same persisted QC
@@ -364,6 +386,8 @@ private fun QcCell(
     onChange: (Double) -> Unit,
     enabled: Boolean = true,
     gate: RowGate = RowGate.Open,
+    /** Optional content under the stepper row (the brew-temp offset hint). */
+    footer: @Composable () -> Unit = {},
 ) {
     val fmt = gate.fmt(fmt)
     Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier) {
@@ -398,6 +422,7 @@ private fun QcCell(
                 }
                 QcRoundBtn("plus") { onChange((value + step).coerceIn(min, max)) }
             }
+            footer()
             Row(Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.4f).gated(gate), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 presets.forEach { p ->
                     val on = kotlin.math.abs(p - value) < 0.001

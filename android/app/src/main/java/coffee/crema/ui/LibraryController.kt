@@ -22,6 +22,7 @@ import coffee.crema.core.blankCremaProfile
 import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.core.cremaProfileFromWire
 import coffee.crema.core.cremaProfileToWire
+import coffee.crema.core.effectiveCremaProfile
 import coffee.crema.core.creditRemaining
 import coffee.crema.core.debitRemaining
 import coffee.crema.core.resettleRemaining
@@ -47,7 +48,6 @@ import coffee.crema.profiles.PinnedProfileStore
 import coffee.crema.profiles.SegmentEdit
 import coffee.crema.profiles.brewDefaultsJson
 import coffee.crema.profiles.duplicatedCustomProfileJson
-import coffee.crema.profiles.overrideBrewParamsJson
 import coffee.crema.profiles.patchCremaProfileJson
 import coffee.crema.profiles.profileIdOf
 import coffee.crema.profiles.quickPresetJson
@@ -375,21 +375,17 @@ class LibraryController(
             if (s.mirror != null) notify("That profile is only on ${s.remoteHubLabel()}")
             return
         }
-        val bp = s.brewParams
         val active = s.profiles.firstOrNull { it.id == activeId }
-        val d = bp?.dose?.toFloat() ?: active?.dose ?: BrewDefaults.INSTANCE.doseG
-        val y = bp?.yieldOut?.toFloat() ?: active?.yieldOut
-            ?: (BrewDefaults.INSTANCE.doseG * BrewDefaults.INSTANCE.ratio)
-        val t = bp?.brewTemp?.toFloat() ?: active?.brewTemp ?: BrewDefaults.INSTANCE.brewTempC
+        // The dial baked in by the core exactly as a shot runs it: brew temp
+        // shifts every segment, pre-infusion rescales the leading segments,
+        // dose / yield replace (id / name / everything else preserved).
+        val effective = runCatching { effectiveCremaProfile(base, s.brewParams.overridesJson(json)) }.getOrElse {
+            appendLog("Save profile failed: ${it.message}")
+            return
+        }
         if (active?.source == "custom") {
-            // User-defined: bake the dialled dose/yield/temp into its own JSON in
-            // place (id / name / segments preserved), replace by id, persist — it
-            // stays active. overrideBrewParamsJson is the locale-safe patcher the
-            // shot-upload path uses, so a comma-decimal locale stays correct.
-            val updated = runCatching { overrideBrewParamsJson(base, d, y, t, json = json) }.getOrElse {
-                appendLog("Save profile failed: ${it.message}")
-                return
-            }
+            // User-defined: replace it by id in place, persist — it stays active.
+            val updated = effective
             customProfilesJson = customProfilesJson.map { if (profileIdOf(it, json) == activeId) updated else it }
             refreshProfiles()
             persistCustomProfiles()
@@ -398,7 +394,7 @@ class LibraryController(
         } else {
             // Predefined (read-only): save a NEW custom copy carrying the dialled
             // values, then make it active.
-            val preset = runCatching { quickPresetJson(base, name, d, y, t, json) }.getOrElse {
+            val preset = runCatching { quickPresetJson(effective, name, json) }.getOrElse {
                 appendLog("Save profile failed: ${it.message}")
                 return
             }
@@ -2003,9 +1999,12 @@ class LibraryController(
         // their declared defaults (a segment target of 0, a dose of exactly
         // 18 g…), the core requires them, and the failed conversion silently
         // dropped the snapshot for any such profile.
+        // With the Quick-Controls override applied by the core, so history
+        // carries the steps the DE1 actually ran.
         val profileWire: JsonObject? = s.activeProfileId?.let { profileJson(it) }?.let { raw ->
             runCatching {
-                json.parseToJsonElement(cremaProfileToWire(raw)) as? JsonObject
+                val ran = effectiveCremaProfile(raw, s.brewParams.overridesJson(json))
+                json.parseToJsonElement(cremaProfileToWire(ran)) as? JsonObject
             }.onFailure { appendLog("Shot profile snapshot failed: ${it.message}") }.getOrNull()
         }
         val bean = s.beans.firstOrNull { it.id == s.activeBeanId }
@@ -2034,6 +2033,9 @@ class LibraryController(
             // The QC grind dial actually used (issue 15) — null until the user sets one.
             grindSetting = s.qcGrind,
             yieldTargetG = (s.brewParams?.yieldOut ?: profile?.yieldOut?.toDouble())?.toFloat(),
+            // The brew temperature the shot ran at: the (core-clamped) dial, else
+            // the profile's own.
+            brewTempC = (s.brewParams?.brewTemp ?: profile?.brewTemp?.toDouble())?.toFloat(),
             peakPressure = peakPressure,
             peakTemp = peakTemp,
             // The stats' yield fallback when the settled final weight is

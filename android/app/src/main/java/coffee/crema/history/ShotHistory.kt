@@ -176,9 +176,10 @@ data class StoredShot(
      */
     val waterG: Float? = null,
     /**
-     * Brew water temperature, °C, for logged brews. Mirrors core
-     * `StoredShot.brew_temp_target` (Android never persisted it for
-     * machine shots; additive).
+     * Brew water temperature, °C: the logged value for brews, and for machine
+     * shots the brew temperature the shot ran at (the core-clamped Quick
+     * Controls dial, else the profile's own). Mirrors core
+     * `StoredShot.brew_temp_target`.
      */
     val brewTempC: Float? = null,
     /**

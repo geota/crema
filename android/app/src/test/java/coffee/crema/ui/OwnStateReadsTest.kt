@@ -39,7 +39,11 @@ class OwnStateReadsTest {
             // Holder writes: on a remote they never reach the machine.
             "applySteamHotWater" to setOf("qcSteamTempC", "qcSteamTimeS", "qcHotWaterTempC", "qcHotWaterVolumeMl"),
             "seedMachineSettings" to setOf("activeProfileId", "connectSweepSettings()"),
-            "reuploadActiveProfile" to setOf("activeProfileId"),
+            "reuploadActiveProfile" to setOf("activeProfileId", "brewParams"),
+            // The device that owns the config (a remote shows its edits in its
+            // mirror slice): the brew override is stored normalized against
+            // its own active profile.
+            "showConfig" to setOf("activeProfileId", "brewParams"),
             // Hub only (StartShot is relayed).
             "applyStartShot" to setOf("activeProfileId", "brewParams", "requireScale", "stopOnWeight"),
             "startShotOnCoreLane" to setOf("autoTare", "brewParams", "preFlush", "stopOnWeight", "volumeStopWithScale"),

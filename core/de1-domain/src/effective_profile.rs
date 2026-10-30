@@ -558,6 +558,23 @@ mod tests {
     }
 
     #[test]
+    fn step_weights_survive_the_overrides() {
+        let mut p = declining();
+        p.segments[1].weight = Some(3.6);
+        let e = effective_crema_profile(
+            &p,
+            &BrewOverrides {
+                dose: Some(20.0),
+                brew_temp: Some(93.0),
+                preinf: Some(4.0),
+                ..BrewOverrides::default()
+            },
+        );
+        let weights: Vec<Option<f32>> = to_wire(&e).steps.iter().map(|s| s.weight).collect();
+        assert_eq!(weights, vec![None, Some(3.6), None]);
+    }
+
+    #[test]
     fn dose_and_yield_replace_the_profile_values() {
         let p = declining();
         let e = effective_crema_profile(

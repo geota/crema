@@ -414,7 +414,11 @@ fun BrewScreen(
                 onCoffee = { if (espressoActive || ui.shotStarting) vm.stopShot() else vm.startShot() },
             )
             if (quickOpen) {
+                // The core's dial for the profile on screen (range, anchor,
+                // pre-infusion seed): recomputed when the profile changes.
+                val brewDial = remember(ui.activeProfileId, ui.profiles, ui.mirroredProfileJson) { vm.brewDial() }
                 QuickControlsSheet(
+                    brewDial = brewDial,
                     active = active,
                     brewParams = ui.brewParams,
                     pinnedProfiles = ui.profiles.filter { it.pinned },

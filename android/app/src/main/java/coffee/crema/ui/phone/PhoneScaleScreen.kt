@@ -270,7 +270,7 @@ private fun ConnectedBody(
                     // whereas effectiveBrew's tracks the base dose — so compute it here.
                     val yieldOut = ui.brewParams?.yieldOut ?: active?.yieldOut?.toDouble() ?: (dose * 2)
                     val temp = base.brewTemp
-                    vm.quickAdjustBrew(dose, yieldOut, temp)
+                    vm.quickAdjustBrew(dose, yieldOut, temp, ui.brewParams?.preinf)
                 }) {
                     PhIcon("plus", sizeDp = 16); Spacer(Modifier.width(4.dp)); Text("Add 0.5 g")
                 }

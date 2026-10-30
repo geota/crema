@@ -107,7 +107,7 @@ class MaintenanceRunTextTest {
             MaintenancePhase.WaitingForPreheat,
             held.events.filterIsInstance<Event.MaintenanceProgress>().single().content.phase,
         )
-        val raw = bridge.uploadProfile(brewProfile, 1_500uL)
+        val raw = bridge.uploadWire(brewProfile, 1_500uL)
         val failed = coreJson.decodeFromString(CoreOutput.serializer(), raw).events
             .filterIsInstance<Event.MaintenanceProgress>().single().content
         assertEquals(MaintenancePhase.Failed, failed.phase)

@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import coffee.crema.ui.BrewDial
 import coffee.crema.ui.BrewMode
 import coffee.crema.ui.DoseGrindMode
 import coffee.crema.ui.FlushMode
@@ -147,12 +148,17 @@ fun QuickControlsSheet(
     /** Each machine or session control's gate (spec §7.6): on a remote the
      *  steam, hot-water and flush steppers are read-only. */
     gate: (Setting) -> RowGate = { RowGate.Open },
+    /** The active profile's brew-temperature dial from the core (range, the
+     *  profile's own brew temp, its pre-infusion seconds); null = none. */
+    brewDial: BrewDial? = null,
 ) {
-    // Effective brew values: the transient override if set, else the active profile.
-    val (dose, yieldOut, brewTemp) = effectiveBrew(brewParams, active)
-    // Pre-infusion is the leading segment's time (no separate machine setting); a
-    // transient override caps it, else show the active profile's own (issue 15).
-    val preinf = brewParams?.preinf ?: (active?.preinfuseSeconds?.toDouble() ?: 8.0)
+    // Effective brew values: the transient override if set, else the active
+    // profile (its brew temp as the core anchors it).
+    val (dose, yieldOut, profileBrewTemp) = effectiveBrew(brewParams, active)
+    val brewTemp = brewParams?.brewTemp ?: brewDial?.anchor ?: profileBrewTemp
+    // Pre-infusion is the total of the profile's leading pre-infusion segments
+    // (the core's seed); a transient override rescales them (issue 15).
+    val preinf = brewParams?.preinf ?: brewDial?.preinfS ?: (active?.preinfuseSeconds?.toDouble() ?: 8.0)
     // The current pre-infuse override state (null = not overridden) — preserved
     // when other brew steppers fire so a dose tweak doesn't drop a preinf override.
     val preinfOverride = brewParams?.preinf
@@ -310,24 +316,36 @@ fun QuickControlsSheet(
                         },
                     )
                 },
-                // 3 — Brew temp | pre-infuse.
+                // 3 — Brew temp | pre-infuse. The temperature is absolute, inside the
+                // core's range for the profile (every step shifts with it); off the
+                // profile's own value it says how far, with a Reset.
                 { m ->
-                    CremaStepper(
-                        modifier = m,
-                        value = if (brewMode == BrewMode.Temp) brewTemp else preinf,
-                        unit = if (brewMode == BrewMode.Temp) "°C" else "s",
-                        min = if (brewMode == BrewMode.Temp) QcBounds.BREW_TEMP_MIN_C else QcBounds.PREINF_MIN_S,
-                        max = if (brewMode == BrewMode.Temp) QcBounds.BREW_TEMP_MAX_C else QcBounds.PREINF_MAX_S,
-                        step = if (brewMode == BrewMode.Temp) 0.5 else 1.0,
-                        fmt = niceFmt,
-                        chips = if (brewMode == BrewMode.Temp) listOf(88.0, 91.0, 93.0, 95.0, 97.0) else listOf(0.0, 4.0, 8.0, 12.0, 16.0),
-                        onChange = { if (brewMode == BrewMode.Temp) onAdjustBrew(dose, yieldOut, it, preinfOverride) else onAdjustBrew(dose, yieldOut, brewTemp, it) },
-                        style = CremaStepperStyle.Boxed,
-                        gate = brewGate,
-                        header = {
-                            CremaSplitLabel(prefix = "Brew", options = listOf(SplitOption("temp", "Temp"), SplitOption("preinf", "Pre-infuse")), value = brewMode.value, onChange = { brewMode = BrewMode.of(it) })
-                        },
-                    )
+                    val tempMin = brewDial?.min ?: QcBounds.BREW_TEMP_MIN_C
+                    val tempMax = brewDial?.max ?: QcBounds.BREW_TEMP_MAX_C
+                    Column(m) {
+                        CremaStepper(
+                            modifier = Modifier.fillMaxWidth(),
+                            value = if (brewMode == BrewMode.Temp) brewTemp else preinf,
+                            unit = if (brewMode == BrewMode.Temp) "°C" else "s",
+                            min = if (brewMode == BrewMode.Temp) tempMin else QcBounds.PREINF_MIN_S,
+                            max = if (brewMode == BrewMode.Temp) tempMax else QcBounds.PREINF_MAX_S,
+                            step = if (brewMode == BrewMode.Temp) 0.5 else 1.0,
+                            fmt = niceFmt,
+                            chips = if (brewMode == BrewMode.Temp) listOf(88.0, 91.0, 93.0, 95.0, 97.0).filter { it in tempMin..tempMax } else listOf(0.0, 4.0, 8.0, 12.0, 16.0),
+                            onChange = { if (brewMode == BrewMode.Temp) onAdjustBrew(dose, yieldOut, it, preinfOverride) else onAdjustBrew(dose, yieldOut, brewTemp, it) },
+                            style = CremaStepperStyle.Boxed,
+                            gate = brewGate,
+                            header = {
+                                CremaSplitLabel(prefix = "Brew", options = listOf(SplitOption("temp", "Temp"), SplitOption("preinf", "Pre-infuse")), value = brewMode.value, onChange = { brewMode = BrewMode.of(it) })
+                            },
+                        )
+                        val offset = if (brewMode == BrewMode.Temp && brewParams != null) brewDial?.offsetLabel(brewTemp) else null
+                        if (offset != null && brewDial != null) {
+                            BrewTempOffsetRow(offset, enabled = brewGate.editable) {
+                                onAdjustBrew(dose, yieldOut, brewDial.anchor, preinfOverride)
+                            }
+                        }
+                    }
                 },
                 // 4 — Steam time | flow | temp.
                 { m ->
@@ -511,5 +529,19 @@ private fun QcMiniToggle(label: String, on: Boolean, onToggle: (Boolean) -> Unit
             Box(Modifier.padding(horizontal = 2.dp).size(10.dp).clip(CircleShape).background(if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant))
         }
         Text(label, style = MaterialTheme.typography.bodySmall, color = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** "+x.x °C from profile" under the brew-temperature dial, with a Reset that
+ *  puts the dial back on the profile's own brew temperature. */
+@Composable
+internal fun BrewTempOffsetRow(label: String, enabled: Boolean, onReset: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        CremaButton(onClick = onReset, variant = CremaButtonVariant.Text, label = "Reset", enabled = enabled)
     }
 }
