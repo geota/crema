@@ -248,9 +248,12 @@ pub fn days_off_roast(
             let capped = frozen_ms.min(today_unix_ms);
             Some((capped - roast_unix_ms).div_euclid(MS_PER_DAY).max(0))
         }
-        // Thawed: subtract the frozen span from the running total.
+        // Thawed: subtract the frozen span from the running total (none
+        // yet for a freeze dated after today).
         Some(defrosted_ms) if defrosted_ms >= frozen_ms => {
-            let span_days = (defrosted_ms.min(today_unix_ms) - frozen_ms).div_euclid(MS_PER_DAY);
+            let span_days = (defrosted_ms.min(today_unix_ms) - frozen_ms)
+                .div_euclid(MS_PER_DAY)
+                .max(0);
             Some((total - span_days).max(0))
         }
         // Defrost recorded before the freeze — malformed pair; ignore.
@@ -811,6 +814,84 @@ pub fn duplicate_bean_json(bean_json: &str, new_id: &str, now_ms: i64) -> Result
     serde_json::to_string(&duplicate_bean(&bean, new_id, now_ms)).map_err(|e| e.to_string())
 }
 
+/// The UTC calendar date of `now_ms` as ISO `yyyy-mm-dd`.
+#[allow(clippy::cast_sign_loss)]
+fn iso_date_from_ms(now_ms: i64) -> String {
+    let days = now_ms.div_euclid(MS_PER_DAY).max(0) as u64;
+    let (y, m, d) = crate::history_export::civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// `bean` with its Frozen switch set to `frozen` — the freeze / defrost /
+/// refreeze rule every shell's switch and Freeze / Defrost action uses. Only
+/// `frozen_on` and `defrosted_on` change (the shell stamps `updated_at`), and
+/// the switch never moves [`days_off_roast`] on the day it is flipped:
+///
+/// - **Freeze** a bag that was never frozen: `frozen_on` = today.
+/// - **Defrost** (switch off): `defrosted_on` = today and `frozen_on` is
+///   kept, so the frozen span stays subtracted. A freeze date after today is
+///   pulled back to today (the count already treated it as today).
+/// - **Refreeze** a defrosted bag: `defrosted_on` is cleared and `frozen_on`
+///   moves forward by the days the bag spent thawed, so the earlier frozen
+///   span still doesn't count as age. The model holds one freeze window; this
+///   keeps the count right at the cost of a `frozen_on` that is no longer the
+///   first freeze date. Undoing a same-day defrost restores the original
+///   `frozen_on`. A freeze/defrost pair the count ignores (unparseable,
+///   before the roast, defrost before freeze) refreezes from today.
+///
+/// Setting the state the bag is already in (`frozen` = currently frozen)
+/// returns it unchanged. "Currently frozen" is `frozen_on` set and no
+/// `defrosted_on`, the shells' `isFrozen`.
+#[must_use]
+pub fn set_bean_frozen(bean: &Bean, frozen: bool, now_ms: i64) -> Bean {
+    let is_frozen = bean.frozen_on.is_some() && bean.defrosted_on.is_none();
+    let mut out = bean.clone();
+    if frozen == is_frozen {
+        return out;
+    }
+    let today_ms = now_ms.div_euclid(MS_PER_DAY) * MS_PER_DAY;
+    let today = iso_date_from_ms(now_ms);
+    let roast = bean
+        .roasted_on
+        .as_deref()
+        .and_then(parse_iso_date_to_unix_ms);
+    // The freeze date as the count sees it: parsed and not before the roast.
+    let counted_freeze = bean
+        .frozen_on
+        .as_deref()
+        .and_then(parse_iso_date_to_unix_ms)
+        .filter(|f| roast.is_none_or(|r| *f >= r));
+    if frozen {
+        let thawed_since = bean
+            .defrosted_on
+            .as_deref()
+            .and_then(parse_iso_date_to_unix_ms);
+        out.frozen_on = Some(match (counted_freeze, thawed_since) {
+            (Some(f), Some(d)) if d >= f => {
+                iso_date_from_ms((f + (today_ms - d).max(0)).min(today_ms))
+            }
+            _ => today,
+        });
+        out.defrosted_on = None;
+    } else {
+        if counted_freeze.is_some_and(|f| f > today_ms) {
+            out.frozen_on = Some(today.clone());
+        }
+        out.defrosted_on = Some(today);
+    }
+    out
+}
+
+/// JSON-bridged [`set_bean_frozen`]. Input: a [`Bean`] JSON; output: the
+/// updated [`Bean`] JSON.
+///
+/// # Errors
+/// The JSON parse error string on a malformed `bean_json`.
+pub fn set_bean_frozen_json(bean_json: &str, frozen: bool, now_ms: i64) -> Result<String, String> {
+    let bean: Bean = serde_json::from_str(bean_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&set_bean_frozen(&bean, frozen, now_ms)).map_err(|e| e.to_string())
+}
+
 impl Bean {
     /// Build a brand-new bag with a freshly minted id and `name`. Every
     /// other field starts at its default (empty / `None` / `false` / `0`).
@@ -1345,6 +1426,151 @@ mod tests {
         bean.grinder_setting = "1.2".to_owned();
         bean.metadata = serde_json::json!({"co2eKg": 1.4});
         bean
+    }
+
+    // -- set_bean_frozen ------------------------------------------------
+
+    /// `NOW` is 2026-05-22 12:00 UTC; `day(n)` is the ISO date `n` days later.
+    fn day(n: i64) -> String {
+        iso_date_from_ms(NOW + n * MS_PER_DAY)
+    }
+
+    fn frozen_bag(roasted: i64, frozen: Option<i64>, defrosted: Option<i64>) -> Bean {
+        let mut bean = Bean::new("bean:f".to_owned(), "Frozen".to_owned(), NOW);
+        bean.roasted_on = Some(day(roasted));
+        bean.frozen_on = frozen.map(day);
+        bean.defrosted_on = defrosted.map(day);
+        bean
+    }
+
+    fn count(bean: &Bean) -> Option<i64> {
+        days_off_roast(
+            bean.roasted_on.as_deref()?,
+            bean.frozen_on.as_deref(),
+            bean.defrosted_on.as_deref(),
+            NOW,
+        )
+    }
+
+    #[test]
+    fn days_off_roast_never_adds_days_for_a_freeze_dated_after_today() {
+        // Freeze and defrost both typed 3 days ahead: the bag hasn't been
+        // frozen yet, so the count is the plain 30, not 33.
+        assert_eq!(count(&frozen_bag(-30, Some(3), Some(3))), Some(30));
+    }
+
+    #[test]
+    fn iso_date_from_ms_formats_the_utc_day() {
+        assert_eq!(iso_date_from_ms(NOW), "2026-05-22");
+        assert_eq!(iso_date_from_ms(0), "1970-01-01");
+        assert_eq!(day(-22), "2026-04-30");
+    }
+
+    /// The review's case: roasted 28 days ago, frozen 13 days in. Switching
+    /// Frozen off used to erase the dates (13 → 28 days off roast).
+    #[test]
+    fn toggling_frozen_off_defrosts_today_and_keeps_the_freeze_date() {
+        let bag = frozen_bag(-28, Some(-15), None);
+        assert_eq!(count(&bag), Some(13));
+        let off = set_bean_frozen(&bag, false, NOW);
+        assert_eq!(off.frozen_on, bag.frozen_on);
+        assert_eq!(off.defrosted_on.as_deref(), Some("2026-05-22"));
+        assert_eq!(count(&off), Some(13));
+        // Nothing else moves; the shell stamps updated_at.
+        assert_eq!(
+            Bean {
+                defrosted_on: None,
+                ..off
+            },
+            bag
+        );
+    }
+
+    #[test]
+    fn freezing_a_never_frozen_bag_stamps_today() {
+        let bag = frozen_bag(-10, None, None);
+        let on = set_bean_frozen(&bag, true, NOW);
+        assert_eq!(on.frozen_on.as_deref(), Some("2026-05-22"));
+        assert_eq!(on.defrosted_on, None);
+        assert_eq!(count(&on), Some(10));
+    }
+
+    #[test]
+    fn refreezing_carries_the_earlier_frozen_span() {
+        // Roasted 28 days ago, frozen days -15..-10, thawed since: 23 days.
+        let bag = frozen_bag(-28, Some(-15), Some(-10));
+        assert_eq!(count(&bag), Some(23));
+        let on = set_bean_frozen(&bag, true, NOW);
+        assert_eq!(on.frozen_on, Some(day(-5)));
+        assert_eq!(on.defrosted_on, None);
+        assert_eq!(count(&on), Some(23));
+        // Off then on the same day restores the original freeze date.
+        let frozen = frozen_bag(-28, Some(-15), None);
+        let back = set_bean_frozen(&set_bean_frozen(&frozen, false, NOW), true, NOW);
+        assert_eq!(back, frozen);
+    }
+
+    #[test]
+    fn set_bean_frozen_is_a_no_op_in_the_current_state_and_clamps_a_future_freeze() {
+        let frozen = frozen_bag(-20, Some(-5), None);
+        assert_eq!(set_bean_frozen(&frozen, true, NOW), frozen);
+        let thawed = frozen_bag(-20, Some(-5), Some(-2));
+        assert_eq!(set_bean_frozen(&thawed, false, NOW), thawed);
+        let plain = frozen_bag(-20, None, None);
+        assert_eq!(set_bean_frozen(&plain, false, NOW), plain);
+        // A freeze typed in the future is pulled back to today on defrost.
+        let future = frozen_bag(-20, Some(3), None);
+        let off = set_bean_frozen(&future, false, NOW);
+        assert_eq!(off.frozen_on.as_deref(), Some("2026-05-22"));
+        assert_eq!(count(&off), count(&future));
+    }
+
+    /// AC-F13: no flip of the switch moves the count, over every mix of
+    /// roast / freeze / defrost dates, including the pairs the count ignores.
+    #[test]
+    fn toggling_frozen_never_changes_days_off_roast() {
+        let offsets = [
+            None,
+            Some(-40),
+            Some(-28),
+            Some(-15),
+            Some(-10),
+            Some(-1),
+            Some(0),
+            Some(3),
+        ];
+        for roasted in [-30, -10, 0, 5] {
+            for frozen in offsets {
+                for defrosted in offsets {
+                    let mut variants = vec![frozen_bag(roasted, frozen, defrosted)];
+                    let mut garbled = frozen_bag(roasted, frozen, defrosted);
+                    if garbled.frozen_on.is_some() {
+                        garbled.frozen_on = Some("not-a-date".to_owned());
+                        variants.push(garbled);
+                    }
+                    for bag in variants {
+                        for to in [true, false] {
+                            let next = set_bean_frozen(&bag, to, NOW);
+                            assert_eq!(count(&next), count(&bag), "{bag:?} -> {to}: {next:?}");
+                            assert_eq!(
+                                next.frozen_on.is_some() && next.defrosted_on.is_none(),
+                                to,
+                                "{bag:?} -> {to}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn set_bean_frozen_json_round_trips_and_rejects_garbage() {
+        let bag = frozen_bag(-28, Some(-15), None);
+        let out = set_bean_frozen_json(&serde_json::to_string(&bag).unwrap(), false, NOW).unwrap();
+        let off: Bean = serde_json::from_str(&out).unwrap();
+        assert_eq!(off, set_bean_frozen(&bag, false, NOW));
+        assert!(set_bean_frozen_json("nope", true, NOW).is_err());
     }
 
     // -- duplicate_bean -------------------------------------------------
