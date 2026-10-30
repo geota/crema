@@ -38,6 +38,9 @@
 	 * every step is shifted). The quick-pick chips outside it are hidden.
 	 */
 	const tempBounds = $derived(params.brewTempBounds());
+	/** The core's pre-infusion range for the profile; not adjustable when it
+	 *  has no pre-infusion segment. */
+	const preinfBounds = $derived(params.preinfusionBounds());
 	const tempChips = $derived(
 		[88, 91, 93, 95, 97].filter((t) => t >= tempBounds.min && t <= tempBounds.max)
 	);
@@ -70,7 +73,7 @@
 		]}
 		value={p.brewMode}
 		onChange={(v) => params.set('brewMode', v as 'temp' | 'preinf')}
-		dot={p.brewMode === 'preinf'}
+		dot={p.brewMode === 'preinf' && preinfBounds.adjustable}
 		dotOn={p.preinf > 0}
 		onDot={() => params.set('preinf', p.preinf > 0 ? 0 : 8)}
 	/>
@@ -107,14 +110,16 @@
 			dimension="temp"
 			onChange={(v) => params.set('brewTemp', v)}
 		/>
+	{:else if !preinfBounds.adjustable}
+		<p class="bts-na" role="note">This profile has no pre-infusion step, so there is nothing to adjust.</p>
 	{:else}
 		<div class="bts-preinf" class:is-off={p.preinf === 0}>
 			<QuickStepper
 				value={p.preinf}
 				name="Pre-infusion"
 				unit="s"
-				min={0}
-				max={30}
+				min={preinfBounds.min}
+				max={preinfBounds.max}
 				step={1}
 				onChange={(v) => params.set('preinf', v)}
 				fmt={(v) => v.toFixed(0)}
@@ -123,7 +128,7 @@
 			/>
 			<div style="height:6px"></div>
 			<QuickChipRow
-				options={[0, 4, 8, 12, 16]}
+				options={[0, 4, 8, 12, 16].filter((v) => v <= preinfBounds.max)}
 				value={p.preinf}
 				name="Pre-infusion"
 				unit="s"
@@ -143,6 +148,12 @@
 	}
 	.bts-preinf.is-off {
 		opacity: 0.4;
+	}
+	/* The pre-infusion slot for a profile with no pre-infusion step. */
+	.bts-na {
+		margin: 6px 0 0;
+		font-size: 12px;
+		opacity: 0.7;
 	}
 	/* "+x.x °C from profile" + Reset, under the dial while it is overridden. */
 	.bts-offset {

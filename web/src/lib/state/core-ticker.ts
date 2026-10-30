@@ -1,6 +1,6 @@
 /**
- * `#lib/state/core-ticker.js` — the steady core clock while a DE1 link is up
- * or recovering (cohort review 2026-10-28, #2 N1).
+ * `#lib/state/core-ticker.js` — the steady core clock while a DE1 or a scale
+ * link is up or recovering (cohort review 2026-10-28, #2 N1).
  *
  * `CremaCore::on_tick` runs the profile-upload ack watchdog, the wait for the
  * machine model, the repeat of an outstanding re-upload request, the
@@ -9,9 +9,13 @@
  * "DE1 holds" fingerprint stayed, no re-upload was asked for, idle sleep stayed
  * pinned and a firmware flash stayed blocked.
  *
+ * A scale alone keeps it ticking too: the lost-scale watchdog (`ScaleStale`,
+ * `ScaleLinkDead`) runs on this clock, and a scale-only session (a guided brew,
+ * the Scale page) otherwise never noticed a dead scale link.
+ *
  * The guided-brew 250 ms tick keeps running beside this one; `on_tick` computes
  * everything from timestamps, so extra calls are harmless. Android's
- * `CoreTicker` runs the same 1 s cadence.
+ * `CoreTicker` runs the same 1 s cadence and rule.
  */
 
 import type { BleConnectionState } from '#lib/ble/connection-state.js';
@@ -38,6 +42,8 @@ export interface CoreTickerDeps {
 
 export class CoreTicker {
 	#timer: ReturnType<typeof setInterval> | null = null;
+	#de1 = false;
+	#scale = false;
 
 	constructor(private readonly deps: CoreTickerDeps) {}
 
@@ -46,9 +52,20 @@ export class CoreTicker {
 		return this.#timer !== null;
 	}
 
-	/** Follow the DE1 link state: tick while it is up or recovering. */
+	/** Follow the DE1 link state: tick while it (or the scale's) is up or recovering. */
 	onDe1State(state: BleConnectionState): void {
-		if (TICKING.has(state)) this.start();
+		this.#de1 = TICKING.has(state);
+		this.#follow();
+	}
+
+	/** Follow the scale link state: tick while it (or the DE1's) is up or recovering. */
+	onScaleState(state: BleConnectionState): void {
+		this.#scale = TICKING.has(state);
+		this.#follow();
+	}
+
+	#follow(): void {
+		if (this.#de1 || this.#scale) this.start();
 		else this.stop();
 	}
 

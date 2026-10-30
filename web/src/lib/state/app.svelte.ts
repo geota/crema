@@ -579,6 +579,9 @@ export class CremaApp {
 			onState: (scaleState) => {
 				const wasReady = this.state.current.scaleState === 'ready';
 				this.state.patch({ scaleState });
+				// The lost-scale watchdog runs on the core clock, so a scale
+				// alone keeps it ticking (a scale-only session).
+				this.ticker.onScaleState(scaleState);
 				// A terminal drop (auto-reconnect exhausted, or a failure)
 				// must stop the heartbeat clock — it otherwise kept writing
 				// to a dead device every ~2 s forever (review #34). The
@@ -706,6 +709,11 @@ export class CremaApp {
 			this.state.applyEvent(event);
 			if (event.type === 'MachineStateChanged') {
 				this.startSequence.onMachineState(event.content.state);
+			}
+			if (event.type === 'ScaleLinkDead') {
+				// The core presumed the scale link dead (silent past the grace,
+				// or writes failing): drop it so the reconnect loop recovers it.
+				this.scale.presumeDead(event.content.reason);
 			}
 			if (event.type === 'MachineErrorChanged') {
 				const nextMachineError = this.state.current.machineError;
@@ -1098,10 +1106,14 @@ export class CremaApp {
 	 */
 	/**
 	 * The flash let go of the link: run what a reconnect skipped while it held
-	 * it (the settings sweep, after which the core's profile sync uploads).
+	 * it (the identity reads, the settings sweep, after which the core's
+	 * profile sync uploads). The identity reads go first, like Android's
+	 * `afterFirmwareRelease`: the core refused them during the hold, and the
+	 * flash changed the build.
 	 */
 	private afterFirmwareRelease(): void {
 		if (this.state.current.de1State !== 'ready') return;
+		void this.de1.readMachineInfo();
 		this.sweep.onDe1State('ready');
 		// No presence poke here: the idle-sleep timer (#139) pokes on real
 		// activity only, and the core pinned its countdown while the flash
@@ -2334,6 +2346,11 @@ export class CremaApp {
 		}
 		try {
 			await this.runStart(start, qc);
+		} catch (e) {
+			// A start that failed brews nothing: its dial snapshot must not be
+			// recorded onto a later group-head shot.
+			this.brewParamsAtShotStart = null;
+			throw e;
 		} finally {
 			this.startSequence.end(start);
 		}

@@ -332,6 +332,12 @@ export interface CremaCore {
 	/** Feed a periodic clock tick. Resolves to the parsed `CoreOutput`. */
 	onTick(nowMs: number): Promise<CoreOutput>;
 	/**
+	 * Report how one scale write the shell sent went (`ok` = it landed). The
+	 * output may carry `ScaleLinkDead` (consecutive failures with no reading
+	 * in between) — see `CremaCore::on_scale_write_result`.
+	 */
+	onScaleWriteResult(ok: boolean): Promise<CoreOutput>;
+	/**
 	 * How many times the bridge reset its core after a panicked call
 	 * (`CremaBridge::panic_recoveries`). Optional so test doubles need not
 	 * implement it; see `#lib/core/recovery-watch.js`.
@@ -1070,6 +1076,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async onTick(nowMs) {
 			return parseOutput(bridge.on_tick(nowMs));
+		},
+		async onScaleWriteResult(ok) {
+			return parseOutput(bridge.on_scale_write_result(ok));
 		},
 		panicRecoveries() {
 			return bridge.panic_recoveries();

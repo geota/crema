@@ -94,4 +94,35 @@ class CoreTickerTest {
         assertFalse(bridge.profileUploadInProgress())
         ticker.stop()
     }
+
+    /** A Bookoo weight frame (the core's own test helper). */
+    private fun bookooPacket(centigrams: Int): ByteArray {
+        val p = ByteArray(20)
+        val head = intArrayOf(0x03, 0x0B, 0, 0, 0, 0, '+'.code, centigrams shr 16 and 0xFF, centigrams shr 8 and 0xFF, centigrams and 0xFF)
+        head.forEachIndexed { i, b -> p[i] = b.toByte() }
+        p[19] = p.take(19).fold(0) { a, b -> a xor b.toInt() }.toByte()
+        return p
+    }
+
+    @Test
+    fun `a scale-only session ticks the core and gets ScaleLinkDead`() = runTest {
+        // No DE1 at all (core/shell fixes F14): only the scale keeps the clock.
+        val bridge = CremaBridge()
+        bridge.connectScale("BOOKOO_SC", emptyList())
+        val outputs = mutableListOf<String>()
+        val ticker = CoreTicker(backgroundScope) { outputs += bridge.onTick(testScheduler.currentTime.toULong()) }
+        ticker.onScaleState(coffee.crema.ble.ScaleBleManager.State.READY)
+        bridge.onNotification(NotificationSource.SCALE_WEIGHT, bookooPacket(2_000), testScheduler.currentTime.toULong())
+        advanceTimeBy(7_001)
+        runCurrent()
+        val dead = outputs.flatMap { json.decodeFromString(CoreOutput.serializer(), it).events }
+            .filterIsInstance<coffee.crema.core.Event.ScaleLinkDead>()
+        assertEquals(1, dead.size)
+        // The DE1 coming and going leaves the scale's clock running.
+        ticker.onLinkState(De1BleManager.State.READY)
+        ticker.onLinkState(De1BleManager.State.DISCONNECTED)
+        assertTrue(ticker.running)
+        ticker.onScaleState(coffee.crema.ble.ScaleBleManager.State.DISCONNECTED)
+        assertFalse(ticker.running)
+    }
 }

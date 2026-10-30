@@ -33,6 +33,7 @@ import {
 	toCoreProfile,
 	type CremaProfile
 } from './model';
+import { withDerivedBrewTemp } from './fingerprint';
 
 /** localStorage key for the user's custom profiles (a `CremaProfile[]`). */
 const CUSTOM_KEY = 'crema.profiles.custom.v1';
@@ -189,9 +190,15 @@ export class ProfileStore {
 		writeJson(ACTIVE_KEY, this.activeId);
 	}
 
-	/** Look up one profile by id, or `undefined` if it is not in the library. */
+	/**
+	 * Look up one profile by id, or `undefined` if it is not in the library.
+	 * Hidden built-ins resolve too: hiding only takes a built-in out of the
+	 * library list (like Android's `hiddenProfileIds` filter), so a bean's
+	 * linked profile or the active id still finds it.
+	 */
 	get(id: string): CremaProfile | undefined {
-		return this.all.find((p) => p.id === id);
+		const builtin = this.builtins.find((b) => b.id === id);
+		return builtin ? this.applyOverrides(builtin) : this.custom.find((p) => p.id === id);
 	}
 
 	/**
@@ -213,6 +220,9 @@ export class ProfileStore {
 			// core (`de1_domain::crema_profile`).
 			await loadCore();
 			this.builtins = builtinCremaProfiles();
+			// The top-level brew temp follows the first step (the dial's
+			// anchor): re-derive it for customs saved before that rule.
+			this.custom = this.custom.map(withDerivedBrewTemp);
 		} catch {
 			// If the wasm core fails to load the grid still works — it just
 			// shows the custom profiles. A failure here is non-fatal.
@@ -360,7 +370,9 @@ export class ProfileStore {
 	 * reaches here — the editor duplicates a built-in to a custom profile
 	 * before saving, so every saved profile is `source: 'custom'`.
 	 */
-	save(profile: CremaProfile): void {
+	save(saved: CremaProfile): void {
+		// The top-level brew temp always shows the first step's temperature.
+		const profile = withDerivedBrewTemp(saved);
 		const idx = this.custom.findIndex((p) => p.id === profile.id);
 		if (idx >= 0) {
 			this.custom = [

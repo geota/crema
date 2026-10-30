@@ -1,5 +1,8 @@
 package coffee.crema.ui.screens
 
+import coffee.crema.ui.BrewParams
+import coffee.crema.ui.effectiveBrew
+
 import coffee.crema.ui.UNKNOWN_VALUE
 import coffee.crema.ui.awaitingHubValues
 import coffee.crema.ui.gate
@@ -171,6 +174,7 @@ fun BrewScreen(
         Column(Modifier.weight(1f).fillMaxHeight()) {
             BrewHeader(
                 active = active,
+                brewParams = ui.brewParams,
                 profiles = ui.profiles,
                 onSelectProfile = vm::setActiveProfile,
                 uploading = ui.profileUploading,
@@ -482,6 +486,7 @@ private fun ratioWeight(ui: coffee.crema.ui.MainUiState, running: Boolean): Floa
 @Composable
 private fun BrewHeader(
     active: CremaProfile?,
+    brewParams: BrewParams?,
     profiles: List<CremaProfile>,
     onSelectProfile: (String) -> Unit,
     uploading: Boolean,
@@ -510,6 +515,7 @@ private fun BrewHeader(
     ) {
         ProfileBlock(
             active = active,
+            brewParams = brewParams,
             profiles = profiles,
             onSelect = onSelectProfile,
             uploading = uploading,
@@ -600,6 +606,7 @@ private fun BrewHeadBanner(
 @Composable
 private fun ProfileBlock(
     active: CremaProfile?,
+    brewParams: BrewParams?,
     profiles: List<CremaProfile>,
     onSelect: (String) -> Unit,
     uploading: Boolean,
@@ -634,10 +641,14 @@ private fun ProfileBlock(
             onClick = { open = !open },
             lines = buildList {
                 if (active != null) {
+                    // What the next shot runs: the Quick-Controls override over
+                    // the profile's own values.
+                    val run = effectiveBrew(brewParams, active)
+                    val preinf = brewParams?.preinf?.let { Math.round(it) } ?: active.preinfuseSeconds
                     add(
                         HeaderBlockLine(
-                            "Pre-inf ${active.preinfuseSeconds}s · ${formatRatio(active.dose, active.yieldOut)} · " +
-                                "${formatWeight(active.yieldOut, weightUnit)} · ${formatTemp(active.brewTemp, tempUnit)}",
+                            "Pre-inf ${preinf}s · ${formatRatio(run.dose.toFloat(), run.yieldOut.toFloat())} · " +
+                                "${formatWeight(run.yieldOut.toFloat(), weightUnit)} · ${formatTemp(run.brewTemp.toFloat(), tempUnit)}",
                         ),
                     )
                     // .bh-spec — "{beverage} · {roast} · {author}".

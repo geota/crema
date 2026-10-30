@@ -2,6 +2,7 @@ package coffee.crema.ui
 
 import coffee.crema.core.BrewOverrides
 import coffee.crema.core.BrewTempRange
+import coffee.crema.core.PreinfusionDial
 import kotlinx.serialization.json.Json
 
 /**
@@ -64,7 +65,18 @@ internal fun normalizedBrewParams(
  * profile's pre-infusion seconds (the total of its leading pre-infusion
  * segments) — the pre-infusion dial's seed.
  */
-data class BrewDial(val min: Double, val max: Double, val anchor: Double, val preinfS: Double) {
+data class BrewDial(
+    val min: Double,
+    val max: Double,
+    val anchor: Double,
+    val preinfS: Double,
+    /** The pre-infusion dial's top, seconds: the stepper's 30, raised to the
+     *  profile's own value when that is longer (the core's). */
+    val preinfMax: Double = 30.0,
+    /** False for a profile with no pre-infusion segment: nothing to rescale,
+     *  so the sheets disable the dial and say why. */
+    val preinfAdjustable: Boolean = true,
+) {
     /** How far [brewTemp] sits from the profile's own, °C: the
      *  "+x.x °C from profile" hint; `null` at the anchor. */
     fun offsetLabel(brewTemp: Double): String? {
@@ -77,16 +89,20 @@ data class BrewDial(val min: Double, val max: Double, val anchor: Double, val pr
 
 /** [BrewDial] for a `CremaProfile` JSON; `null` when there is none or the core
  *  can't read it. [range] / [preinfusion] are the core's `brewTempRange` /
- *  `preinfusionSeconds`. */
+ *  `preinfusionDial`. */
 internal fun brewDialOf(
     cremaJson: String?,
     json: Json,
     range: (String) -> String,
-    preinfusion: (String) -> Float,
+    preinfusion: (String) -> String,
 ): BrewDial? = cremaJson?.let { profile ->
     runCatching {
         val r = json.decodeFromString(BrewTempRange.serializer(), range(profile))
-        BrewDial(r.min.toDouble(), r.max.toDouble(), r.anchor.toDouble(), preinfusion(profile).toDouble())
+        val p = json.decodeFromString(PreinfusionDial.serializer(), preinfusion(profile))
+        BrewDial(
+            r.min.toDouble(), r.max.toDouble(), r.anchor.toDouble(), p.seconds.toDouble(),
+            preinfMax = p.max.toDouble(), preinfAdjustable = p.adjustable,
+        )
     }.getOrNull()
 }
 

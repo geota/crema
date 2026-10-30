@@ -4,6 +4,7 @@ import coffee.crema.ui.fmt
 import coffee.crema.settings.Setting
 import coffee.crema.ui.gate
 import coffee.crema.ui.screens.BrewTempOffsetRow
+import coffee.crema.ui.screens.PreinfusionNotAdjustableNote
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -87,6 +88,9 @@ fun PhoneQuickSheet(
     var yieldRatioMode by remember { mutableStateOf(YieldRatioMode.Yield) }
     var piFlushMode by remember { mutableStateOf(PiFlushMode.Preinf) }
     val preinf = preinfOverride ?: brewDial?.preinfS ?: 8.0
+    val preinfMax = brewDial?.preinfMax ?: QcBounds.PREINF_MAX_S
+    // A profile with no pre-infusion step has nothing to adjust.
+    val preinfOff = piFlushMode == PiFlushMode.Preinf && brewDial?.preinfAdjustable == false
     var flushTime by remember { mutableStateOf(4.0) }
     // Steam / hot-water modes are local UI; the values they edit are the VM's
     // persisted QC state (vm.setQcSteam* / vm.setQcHotWater*), shared with the
@@ -242,12 +246,15 @@ fun PhoneQuickSheet(
                                 },
                                 value = if (piFlushMode == PiFlushMode.Preinf) preinf else flushTime,
                                 unit = "s", step = 1.0,
-                                min = QcBounds.PREINF_MIN_S, max = if (piFlushMode == PiFlushMode.Preinf) QcBounds.PREINF_MAX_S else QcBounds.FLUSH_TIME_MAX_S,
-                                presets = if (piFlushMode == PiFlushMode.Preinf) listOf(0.0, 4.0, 8.0, 12.0) else listOf(2.0, 4.0, 6.0, 8.0),
+                                // The core's pre-infusion range holds the profile's own value.
+                                min = QcBounds.PREINF_MIN_S, max = if (piFlushMode == PiFlushMode.Preinf) preinfMax else QcBounds.FLUSH_TIME_MAX_S,
+                                presets = if (piFlushMode == PiFlushMode.Preinf) listOf(0.0, 4.0, 8.0, 12.0).filter { it <= preinfMax } else listOf(2.0, 4.0, 6.0, 8.0),
                                 fmt = { fmt("%.0f", it) },
                                 onChange = {
                                     if (piFlushMode == PiFlushMode.Preinf) vm.quickAdjustBrew(dose, yieldOut, brewTemp, it) else flushTime = it
                                 },
+                                enabled = !preinfOff,
+                                footer = { if (preinfOff) PreinfusionNotAdjustableNote() },
                             )
                         }
                         // Steam — Time | Flow | Temp, wired to the same persisted QC

@@ -169,6 +169,34 @@ fun patchCremaProfileJson(
     json: Json,
 ): String {
     val root = json.parseToJsonElement(baseJson).jsonObject
+    val patchedSegments = editedSegments(root, segments)
+    val patched = root.toMutableMap().apply {
+        put("source", JsonPrimitive("custom"))
+        put("name", JsonPrimitive(name))
+        put("roast", roast?.let { JsonPrimitive(it) } ?: JsonNull)
+        put("tags", JsonArray(tags.map { JsonPrimitive(it) }))
+        put("pinned", JsonPrimitive(pinned))
+        put("notes", JsonPrimitive(notes))
+        put("author", JsonPrimitive(author))
+        // beverageType: Rust CremaProfile.beverage_type is a NON-optional enum with
+        // no serde default — JsonNull AND a missing key both fail cremaProfileToWire
+        // (which would silently block shot starts). A null editor value therefore
+        // leaves the base profile's value untouched.
+        beverageType?.let { put("beverageType", JsonPrimitive(it)) }
+        put("dose", JsonPrimitive(dose))
+        put("yieldOut", JsonPrimitive(yieldOut))
+        put("brewTemp", JsonPrimitive(brewTemp))
+        put("maxTotalVolumeMl", JsonPrimitive(maxTotalVolumeMl))
+        put("preinfuseStepCount", JsonPrimitive(preinfuseStepCount))
+        put("tankTemperatureC", JsonPrimitive(tankTemperatureC))
+        put("segments", patchedSegments)
+    }
+    return json.encodeToString(JsonObject.serializer(), JsonObject(patched))
+}
+
+/** The segment array built from the editor's [segments] over [root]'s own
+ *  (see [patchCremaProfileJson]). */
+private fun editedSegments(root: JsonObject, segments: List<SegmentEdit>): JsonArray {
     val baseSegments = (root["segments"] as? JsonArray) ?: JsonArray(emptyList())
     // Build the segment array from the EDIT list so the editor can add / remove
     // segments: an existing index reuses that base segment (its tempSensor /
@@ -176,7 +204,7 @@ fun patchCremaProfileJson(
     // segment as a template and gets a fresh id + name. Removed segments simply
     // fall off the end.
     val template = baseSegments.firstOrNull() as? JsonObject
-    val patchedSegments = JsonArray(
+    return JsonArray(
         segments.mapIndexed { i, edit ->
             val baseSeg = baseSegments.getOrNull(i) as? JsonObject
             val base = baseSeg ?: template ?: JsonObject(emptyMap())
@@ -219,27 +247,16 @@ fun patchCremaProfileJson(
             JsonObject(base + overlay)
         },
     )
-    val patched = root.toMutableMap().apply {
-        put("source", JsonPrimitive("custom"))
-        put("name", JsonPrimitive(name))
-        put("roast", roast?.let { JsonPrimitive(it) } ?: JsonNull)
-        put("tags", JsonArray(tags.map { JsonPrimitive(it) }))
-        put("pinned", JsonPrimitive(pinned))
-        put("notes", JsonPrimitive(notes))
-        put("author", JsonPrimitive(author))
-        // beverageType: Rust CremaProfile.beverage_type is a NON-optional enum with
-        // no serde default — JsonNull AND a missing key both fail cremaProfileToWire
-        // (which would silently block shot starts). A null editor value therefore
-        // leaves the base profile's value untouched.
-        beverageType?.let { put("beverageType", JsonPrimitive(it)) }
-        put("dose", JsonPrimitive(dose))
-        put("yieldOut", JsonPrimitive(yieldOut))
-        put("brewTemp", JsonPrimitive(brewTemp))
-        put("maxTotalVolumeMl", JsonPrimitive(maxTotalVolumeMl))
-        put("preinfuseStepCount", JsonPrimitive(preinfuseStepCount))
-        put("tankTemperatureC", JsonPrimitive(tankTemperatureC))
-        put("segments", patchedSegments)
-    }
+}
+
+/**
+ * [baseJson] with only its segments replaced by the editor's [segments] — the
+ * profile the editor currently shows, for a core rule that needs the whole
+ * profile (the Brew temp field's shift).
+ */
+fun withEditedSegmentsJson(baseJson: String, segments: List<SegmentEdit>, json: Json): String {
+    val root = json.parseToJsonElement(baseJson).jsonObject
+    val patched = root.toMutableMap().apply { put("segments", editedSegments(root, segments)) }
     return json.encodeToString(JsonObject.serializer(), JsonObject(patched))
 }
 

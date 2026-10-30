@@ -72,8 +72,15 @@ describe('brew overrides (AC-F6.5)', () => {
 	it('the dial is bounded by the core range for the active profile', () => {
 		const active = new ReactiveBox(profileAt(95, 'Hot'));
 		const params = sheet(active);
-		// Every step at 95 °C: the dial can reach 100 and no further.
+		// Every step at 95 °C: the dial can reach 100 and no further; a value
+		// beyond the core's bounds is refused.
 		expect(params.brewTempBounds().max).toBe(100);
-		expect(normalizeBrewOverrides(active.value, { brewTemp: 104 })).toEqual({ brewTemp: 100 });
+		expect(normalizeBrewOverrides(active.value, { brewTemp: 104 })).toEqual({});
+		// A later step at 98 °C leaves 2 °C of room: 99 is clamped to 97.
+		const hotter = profileAt(95, 'Hotter');
+		hotter.segments = hotter.segments.map((s, i) => (i === 1 ? { ...s, temp: 98 } : s));
+		active.value = hotter;
+		expect(params.brewTempBounds().max).toBe(97);
+		expect(normalizeBrewOverrides(hotter, { brewTemp: 99 })).toEqual({ brewTemp: 97 });
 	});
 });

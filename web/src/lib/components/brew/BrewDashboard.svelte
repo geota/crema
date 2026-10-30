@@ -57,7 +57,7 @@
 		getProfileStore,
 		newProfileId,
 		normalizeBrewOverrides,
-		preinfusionSeconds,
+		preinfusionDial,
 		type CremaProfile,
 		type ProfileFingerprintOverrides
 	} from '#lib/profiles/index.js';
@@ -389,6 +389,8 @@
 	 */
 	/** The active profile's brew-temperature dial range and anchor (core-owned). */
 	const activeBrewTempRange = $derived(activeProfile ? brewTempRange(activeProfile) : null);
+	/** The active profile's pre-infusion dial (core-owned range, seed, adjustable). */
+	const activePreinfusionDial = $derived(activeProfile ? preinfusionDial(activeProfile) : null);
 	const paramSeed = $derived.by<BrewParamSeed>(() => {
 		if (activeProfile) {
 			// The core's anchor (the profile's own brew temp) and pre-infusion
@@ -397,7 +399,7 @@
 				dose: activeProfile.dose,
 				yield: activeProfile.yieldOut,
 				brewTemp: activeBrewTempRange?.anchor ?? activeProfile.brewTemp,
-				preinf: preinfusionSeconds(activeProfile)
+				preinf: activePreinfusionDial?.seconds ?? 0
 			};
 		}
 		return {
@@ -531,7 +533,8 @@
 				flushTime: prefs.qcFlushTimeS,
 				flushTemp: prefs.qcFlushTempC
 			})),
-		() => activeBrewTempRange
+		() => activeBrewTempRange,
+		() => activePreinfusionDial
 	);
 	/**
 	 * The Quick Sheet overrides after the core's lifecycle rule (brew temp

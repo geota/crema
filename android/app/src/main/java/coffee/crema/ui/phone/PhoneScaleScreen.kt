@@ -269,7 +269,9 @@ private fun ConnectedBody(
                     // Yield's last-ditch default tracks the *bumped* dose (dose * 2),
                     // whereas effectiveBrew's tracks the base dose — so compute it here.
                     val yieldOut = ui.brewParams?.yieldOut ?: active?.yieldOut?.toDouble() ?: (dose * 2)
-                    val temp = base.brewTemp
+                    // The live override, else the profile's own as the core
+                    // anchors it (its first step) — never a model default.
+                    val temp = ui.brewParams?.brewTemp ?: vm.brewDial()?.anchor ?: base.brewTemp
                     vm.quickAdjustBrew(dose, yieldOut, temp, ui.brewParams?.preinf)
                 }) {
                     PhIcon("plus", sizeDp = 16); Spacer(Modifier.width(4.dp)); Text("Add 0.5 g")

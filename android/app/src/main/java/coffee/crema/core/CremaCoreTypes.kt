@@ -1493,6 +1493,13 @@ data class EventSteamEcoModeChangedInner (
 	val eco: Boolean
 )
 
+/// Generated type representing the anonymous struct variant `ScaleLinkDead` of the `Event` Rust enum
+@Serializable
+data class EventScaleLinkDeadInner (
+	/// Which rule tripped.
+	val reason: ScaleLinkDeadReason
+)
+
 /// Generated type representing the anonymous struct variant `SawAutoZeroed` of the `Event` Rust enum
 @Serializable
 data class EventSawAutoZeroedInner (
@@ -1894,6 +1901,15 @@ sealed class Event {
 	@Serializable
 	@SerialName("ScaleStale")
 	object ScaleStale: Event()
+	/// The scale link looks dead: still no reading 5 s after
+	/// [`Event::ScaleStale`], or three scale writes in a row failed with no
+	/// reading in between. Emitted once per episode — a fresh reading re-arms
+	/// it. The shell drops the link at the transport (not a user disconnect)
+	/// so its reconnect loop recovers it, but only while its link still
+	/// claims ready.
+	@Serializable
+	@SerialName("ScaleLinkDead")
+	data class ScaleLinkDead(val content: EventScaleLinkDeadInner): Event()
 	/// The untared-cup guard latched a virtual zero: a heavy reading right
 	/// after first flow held still, so it was a cup landing after the tare —
 	/// every later reading this shot is netted against it and stop-at-weight
@@ -2141,6 +2157,38 @@ data class CustomMethodLabelInput (
 	/// The shell's display labels for the curated presets ("V60 /
 	/// pourover") — the core owns only the ids, which are checked too.
 	val presetLabels: List<String>
+)
+
+/// One connect-time seed read: a characteristic the DE1 answers on a direct
+/// read but does not notify at connect, so subscribing alone leaves its rows
+/// blank.
+@Serializable
+data class De1SeedRead (
+	/// Full lowercase 128-bit characteristic UUID.
+	val characteristic: String,
+	/// Label for status lines (`machine state`).
+	val label: String,
+	/// Whether the link depends on it. The DE1 answers a StateInfo read even
+	/// asleep, so a link that can't produce it (after one retry, the shells'
+	/// rule) is hollow and is dropped for the reconnect loop. The others are
+	/// best-effort.
+	val required: Boolean
+)
+
+/// One DE1 notify characteristic the shells subscribe to at connect.
+@Serializable
+data class De1Subscription (
+	/// Full lowercase 128-bit characteristic UUID.
+	val characteristic: String,
+	/// Characteristic name for status lines (`StateInfo`).
+	val name: String,
+	/// Its 16-bit short, upper case (`A00E`).
+	val short: String,
+	/// Whether a failed subscribe fails the connect. The required ones are
+	/// the streams the app can't run without, and together the structural
+	/// proof that the device is a DE1: a link that lacks one must never sit
+	/// ready with dead notifications.
+	val required: Boolean
 )
 
 /// The DE1's GATT service + characteristic UUIDs (full lowercase 128-bit
@@ -3111,6 +3159,22 @@ data class PhaseMarker (
 	/// (sensor-confirmed), "pressure_unconfirmed" / "flow_unconfirmed",
 	/// "time", or "" when unknown (old data).
 	val transitionReason: String
+)
+
+/// The pre-infusion dial for one profile: its range, the profile's own
+/// seconds ([`preinfusion_seconds`]) and whether it can be dialled at all.
+@Serializable
+data class PreinfusionDial (
+	/// Lowest pre-infusion, seconds (0 = off).
+	val min: Float,
+	/// Highest pre-infusion, seconds: the stepper's [`PREINFUSION_DIAL_MAX_S`],
+	/// raised to the profile's own value when that is longer.
+	val max: Float,
+	/// The profile's own pre-infusion seconds — the dial's seed.
+	val seconds: Float,
+	/// `false` for a profile with no pre-infusion segment: there is nothing
+	/// to rescale, so the shells disable the dial and say why.
+	val adjustable: Boolean
 )
 
 /// The profile sync's state, as a shell sees it.
@@ -4886,6 +4950,17 @@ sealed class SawModelLoad {
 	@Serializable
 	@SerialName("Corrupt")
 	data class Corrupt(val content: SawModelLoadCorruptInner): SawModelLoad()
+}
+
+/// Why [`Event::ScaleLinkDead`] fired.
+@Serializable
+enum class ScaleLinkDeadReason(val string: String) {
+	/// No weight reading for the stale timeout plus the 5 s grace.
+	@SerialName("Silent")
+	Silent("Silent"),
+	/// Three scale writes in a row failed with no reading in between.
+	@SerialName("WritesFailing")
+	WritesFailing("WritesFailing"),
 }
 
 /// What the shell should do with a just-completed shot — decided at the

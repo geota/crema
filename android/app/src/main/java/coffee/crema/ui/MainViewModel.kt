@@ -72,7 +72,7 @@ import coffee.crema.core.ShotDisposition
 import coffee.crema.core.ShotQualityReport
 import coffee.crema.core.brewTempRange
 import coffee.crema.core.normalizeBrewOverrides
-import coffee.crema.core.preinfusionSeconds
+import coffee.crema.core.preinfusionDial
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.brewDefaultsJson
 import coffee.crema.core.MachineState
@@ -274,10 +274,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Ticker driving [MainUiState.modeElapsedMs] while a service mode runs. */
     private var modeTickerJob: Job? = null
-
-    /** Grace timer between the core's ScaleStale (1 s of silence) and the
-     *  presume-dead teardown — cancelled/replaced per stale episode. */
-    private var scaleStaleJob: Job? = null
 
     /**
      * The outstanding stop write, if any (issue #15 follow-up). Two rules:
@@ -1739,6 +1735,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 wasReady = ready
             }
         }
+        // The lost-scale watchdog runs on the core clock: a scale alone keeps
+        // it ticking (a scale-only session).
+        viewModelScope.launch { scale.state.collect { coreTicker.onScaleState(it) } }
         viewModelScope.launch {
             connection.state.collect { cs ->
                 _ui.update {
@@ -1864,6 +1863,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         id, name, roast, tags, pinned, notes, author, beverageType, dose, yieldOut,
         brewTemp, maxTotalVolumeMl, preinfuseStepCount, tankTemperatureC, segments,
     )
+
+    /** The editor's segments after its Brew temp field moved to [target]: every
+     *  step shifted by the core (Decenza `applyTemperatureToProfile`). */
+    fun editorBrewTemp(id: String, segments: List<SegmentEdit>, target: Double): List<SegmentEdit> =
+        library.editorBrewTemp(id, segments, target)
 
     /** Close the editor without saving (discards any new / duplicated draft). */
     fun cancelProfileEdit() = library.cancelProfileEdit()
@@ -2185,10 +2189,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (shot.doseG != null || shot.yieldTargetG != null) {
             val active = match ?: effectiveState().activeProfile()
             val dose = shot.doseG?.toDouble() ?: active?.dose?.toDouble() ?: 18.0
+            // The profile's own brew temperature as the core anchors it (its
+            // first step), so the dial-in moves no temperature it didn't record.
+            val anchor = brewDialOf(active?.id?.let { library.profileJson(it) }, json, ::brewTempRange, ::preinfusionDial)?.anchor
             quickAdjustBrew(
                 dose = dose,
                 yieldOut = shot.yieldTargetG?.toDouble() ?: active?.yieldOut?.toDouble() ?: (dose * 2),
-                brewTemp = active?.brewTemp?.toDouble() ?: 93.0,
+                brewTemp = shot.brewTempC?.toDouble() ?: anchor ?: active?.brewTemp?.toDouble() ?: 93.0,
             )
         }
         val stamp = java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
@@ -2664,8 +2671,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  anchor and pre-infusion seed); `null` with no active profile. */
     fun brewDial(): BrewDial? {
         val s = effectiveState()
-        val cremaJson = s.activeProfileId?.let { library.profileJson(it) } ?: s.mirroredProfileJson
-        return brewDialOf(cremaJson, json, ::brewTempRange, ::preinfusionSeconds)
+        // On a remote the hub's copy of its custom profile wins over this
+        // library's (possibly out-of-date) one.
+        val cremaJson = s.mirroredProfileJson?.takeIf { _ui.value.mirror != null }
+            ?: s.activeProfileId?.let { library.profileJson(it) } ?: s.mirroredProfileJson
+        return brewDialOf(cremaJson, json, ::brewTempRange, ::preinfusionDial)
     }
 
     /** The rest of a config command on the device that owns the config:
@@ -3117,23 +3127,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun readMachineInfo() {
-        // Identity (firmware / board / model / serial), GHC presence, heater
-        // voltage, flush temp, flow-calibration, refill-kit. Match the generated
-        // MmrReg variant spellings. (GhcMode 0x803820 is intentionally NOT read:
-        // it's dead in de1app + absent in reaprime — see audit F2/F3.)
-        val registers = listOf(
-            MmrReg.FIRMWARE_VERSION,
-            MmrReg.CPU_BOARD_VERSION,
-            MmrReg.MACHINE_MODEL,
-            MmrReg.SERIAL_NUMBER,
-            MmrReg.GHC_INFO,
-            MmrReg.HEATER_VOLTAGE,
-            // FlushTemp (0x803844): web reads it to show the live flush setpoint;
-            // read it here too so the sweeps match (audit F5). reaprime-only register.
-            MmrReg.FLUSH_TEMP,
-            MmrReg.CALIBRATION_FLOW_MULTIPLIER,
-            MmrReg.REFILL_KIT,
-        )
+        // The core's identity table (web reads the same one): firmware build
+        // first, then board, model, GHC, refill kit, serial, heater voltage,
+        // flush temp and flow multiplier. The passes and pacing below stay
+        // this shell's policy.
+        val registers = coffee.crema.core.connectIdentityRegisters()
         machineInfoJob?.cancel()
         machineInfoJob = viewModelScope.launch {
             // Pacing/retry budget — generous enough for a real DE1's notify
@@ -5563,25 +5561,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.ScaleStale -> {
                 _ui.update { it.copy(scaleWeightG = null) }
                 appendLog("Scale stale")
-                // Escalation (Decenza treats an in-shot feed stall as a link
-                // fault; reaprime probes on silence): the core flags staleness
-                // after 1 s without a reading. Scales stream weight
-                // continuously by design, so give the stream a short grace to
-                // resume — a fresh reading repopulates scaleWeightG — and if
-                // it stays silent while the link still claims READY, presume
-                // the link dead and let the reconnect supervisor recover it.
-                // Covers scales with no keep-alive writes (Bookoo), where the
-                // consecutive-write-failure detector never gets a probe.
-                scaleStaleJob?.cancel()
-                scaleStaleJob = viewModelScope.launch {
-                    delay(SCALE_STALE_TEARDOWN_GRACE_MS)
-                    if (_ui.value.scaleState == ScaleBleManager.State.READY &&
-                        _ui.value.scaleWeightG == null
-                    ) {
-                        scale.presumeDead(
-                            "no readings for ${(1_000 + SCALE_STALE_TEARDOWN_GRACE_MS) / 1_000}s",
-                        )
-                    }
+            }
+            is Event.ScaleLinkDead -> {
+                // The core presumed the scale link dead (silent 5 s past
+                // ScaleStale, or three failed writes with no reading between;
+                // once per episode). Tear it down for the reconnect supervisor,
+                // but only while the link still claims READY — one already
+                // reconnecting is left to its ladder.
+                _ui.update { it.copy(scaleWeightG = null) }
+                appendLog("Scale link dead: ${event.content.reason.string}")
+                if (_ui.value.scaleState == ScaleBleManager.State.READY) {
+                    viewModelScope.launch { scale.presumeDead(event.content.reason.string) }
                 }
             }
             is Event.ScaleButtonPressed ->
@@ -5773,12 +5763,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Abort a pending gated-start brew if the upload never completes. */
         const val PROFILE_UPLOAD_TIMEOUT_MS = 15_000L
-
-        /** Grace after the core's ScaleStale (itself 1 s of silence) before
-         *  the scale link is presumed dead and torn down for the reconnect
-         *  supervisor. Long enough that a radio hiccup resumes on its own,
-         *  short enough that a mid-shot stall recovers within the pour. */
-        const val SCALE_STALE_TEARDOWN_GRACE_MS = 5_000L
     }
 }
 

@@ -350,7 +350,6 @@ class ScaleBleManager(
         pending: Boolean = false,
     ) {
         _state.value = State.CONNECTING
-        consecutiveWriteFailures = 0 // fresh link, fresh dead-link budget
         onStatus(if (firstConnect) "Connecting to scale…" else "Reconnecting to scale…")
         if (!pending) timeline?.mark(TIMELINE_DEVICE, ReconnectPhase.GATT_CONNECT)
         // BleTransport.connect suspends until connected AND services discovered;
@@ -529,12 +528,12 @@ class ScaleBleManager(
             // writes appear in the interleaved capture. Stamp it with the same
             // elapsedRealtime() clock the recorder and inbound lines use.
             recorder.recordOutbound("SCALE_COMMAND", data, SystemClock.elapsedRealtime())
-            consecutiveWriteFailures = 0
+            reportWriteResult(true)
             true
         } catch (t: TimeoutCancellationException) {
             Log.w(TAG, "Scale command write timed out", t)
             onStatus("Scale command write timed out")
-            onWriteFailure(d)
+            reportWriteResult(false)
             false
         } catch (c: CancellationException) {
             if (c is UrgentWriteGate.WritePreempted) {
@@ -546,31 +545,23 @@ class ScaleBleManager(
         } catch (e: Exception) {
             Log.w(TAG, "Scale command write failed", e)
             onStatus("Scale command write was rejected")
-            onWriteFailure(d)
+            reportWriteResult(false)
             false
         }
     }
 
     /**
-     * Consecutive [writeCommand] failures — the scale keep-alives (Decent 2 s /
-     * Acaia 3 s / Timemore 10 s) write on a steady cadence, so a wedged link
-     * trips this within seconds. On [MAX_CONSECUTIVE_WRITE_FAILURES] the link
-     * is presumed dead and torn down at the TRANSPORT level (not [disconnect],
-     * which is the user path and would stop the session): the state flow drops,
-     * the reconnect supervisor sees a non-user drop, and its ladder takes over.
-     * The same detector reaprime runs on GATT op timeouts; Decenza's
-     * write-retry exhaustion feeds its `de1LinkFault` the same way.
+     * Tell the core how a sent [writeCommand] went. The dead-link rule is the
+     * core's (`CremaCore::on_scale_write_result`, shared with web): three
+     * failures in a row with no reading in between emit `ScaleLinkDead`, which
+     * the VM answers with [presumeDead] while the link is READY. The scale
+     * keep-alives (Decent 2 s / Acaia 3 s / Timemore 10 s) write on a steady
+     * cadence, so a wedged link trips it within seconds; reaprime runs the
+     * same detector on GATT op timeouts.
      */
-    private var consecutiveWriteFailures = 0
-
-    private suspend fun onWriteFailure(d: BleTransport.DeviceHandle) {
-        consecutiveWriteFailures++
-        if (consecutiveWriteFailures < MAX_CONSECUTIVE_WRITE_FAILURES) return
-        consecutiveWriteFailures = 0
-        Log.w(TAG, "Scale link unresponsive ($MAX_CONSECUTIVE_WRITE_FAILURES consecutive write failures) — forcing teardown")
-        onStatus("Scale link unresponsive — reconnecting…")
-        runCatching { transport.disconnect(d) }
-            .onFailure { Log.w(TAG, "Forced scale teardown failed", it) }
+    private fun reportWriteResult(ok: Boolean) {
+        runCatching { onCoreOutput(bridge.onScaleWriteResult(ok)) }
+            .onFailure { Log.w(TAG, "Scale write result not reported", it) }
     }
 
     /**
@@ -615,10 +606,10 @@ class ScaleBleManager(
         }
     }
 
-    /** External dead-link verdict (the core's stale watchdog with no recovery
-     *  inside the grace window — see the VM's ScaleStale escalation): tear the
-     *  link down at the transport level so the reconnect supervisor takes
-     *  over. No-op when not connected. */
+    /** External dead-link verdict (the core's `ScaleLinkDead` — see the VM):
+     *  tear the link down at the TRANSPORT level (not [disconnect], the user
+     *  path that would stop the session) so the reconnect supervisor sees a
+     *  non-user drop and its ladder takes over. No-op when not connected. */
     suspend fun presumeDead(reason: String) {
         val d = device ?: return
         Log.w(TAG, "Scale link presumed dead ($reason) — forcing teardown")
@@ -724,7 +715,6 @@ class ScaleBleManager(
 
         /** Consecutive write failures before the link is presumed dead and
          *  torn down for the reconnect supervisor (reaprime uses 3). */
-        private const val MAX_CONSECUTIVE_WRITE_FAILURES = 3
 
         /** Spacing before the single write retry (Decenza's retry delay). */
         private const val WRITE_RETRY_DELAY_MS = 500L

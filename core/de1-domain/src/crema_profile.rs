@@ -146,8 +146,10 @@ pub struct CremaProfile {
     pub dose: f32,
     /// Yield target, grams (round-trips as the wire `target_weight`).
     pub yield_out: f32,
-    /// Brew temperature, °C — a display default (the mean step temperature on
-    /// import); per-segment temps are the real control.
+    /// Brew temperature, °C — the first step's temperature, kept derived by
+    /// the core ([`crate::with_derived_brew_temp`]); per-segment temps are the
+    /// real control, and a change to it shifts every step
+    /// ([`crate::effective_crema_profile`]).
     #[serde(default)]
     pub brew_temp: f32,
     /// End the shot when the scale reaches the yield target. Shell behaviour
@@ -336,7 +338,7 @@ fn is_tea_profile(title: &str) -> bool {
 /// library metadata the wire format has no field for: roast is classified from
 /// the title + notes ([`roast_from_profile`]), tea profiles pick up a `"tea"`
 /// tag, dose / yield fall back to a neutral 18 g / 36 g, and the brew
-/// temperature is the mean step temperature rounded to the nearest 0.5 °C.
+/// temperature is the first step's (the brew-temp dial's anchor).
 #[must_use]
 pub fn from_wire(profile: &Profile) -> CremaProfile {
     let segments = profile
@@ -345,22 +347,6 @@ pub fn from_wire(profile: &Profile) -> CremaProfile {
         .enumerate()
         .map(|(i, s)| segment_from_step(s, i))
         .collect();
-
-    let temps: Vec<f32> = profile
-        .steps
-        .iter()
-        .map(|s| s.temperature_c)
-        .filter(|t| *t > 0.0)
-        .collect();
-    // `temps.len()` is a small frame count, so the f32 cast for the mean is
-    // lossless in practice — the same benign-cast `#[allow]` the rest of the
-    // crate uses (e.g. `maintenance.rs`, `volume.rs`).
-    #[allow(clippy::cast_precision_loss)]
-    let mean_temp = if temps.is_empty() {
-        92.0
-    } else {
-        temps.iter().sum::<f32>() / temps.len() as f32
-    };
 
     let mut tags = vec!["Built-in".to_string()];
     if is_tea_profile(&profile.title) {
@@ -389,7 +375,14 @@ pub fn from_wire(profile: &Profile) -> CremaProfile {
         } else {
             36.0
         },
-        brew_temp: (mean_temp * 2.0).round() / 2.0,
+        // The first step's temperature — the anchor a brew-temp change is
+        // measured from ([`crate::brew_temp_anchor`]).
+        brew_temp: profile
+            .steps
+            .first()
+            .map(|s| s.temperature_c)
+            .filter(|t| t.is_finite())
+            .unwrap_or(92.0),
         stop_on_weight: true,
         auto_tare: true,
         preinfuse_step_count: profile.preinfuse_step_count,
@@ -743,13 +736,13 @@ mod tests {
     }
 
     #[test]
-    fn from_wire_means_step_temperatures_to_the_half_degree() {
+    fn from_wire_takes_the_first_steps_temperature() {
         let mut a = wire_step("a", 9.0);
         a.temperature_c = 91.0;
         let mut b = wire_step("b", 9.0);
-        b.temperature_c = 94.2; // mean 92.6 → 92.5
+        b.temperature_c = 94.2;
         let p = from_wire(&wire_profile(vec![a, b]));
-        assert!(close(p.brew_temp, 92.5));
+        assert!(close(p.brew_temp, 91.0));
     }
 
     #[test]

@@ -41,8 +41,11 @@ export {
 	normalizeBrewOverrides,
 	brewTempRange,
 	preinfusionSeconds,
+	preinfusionDial,
+	withDerivedBrewTemp,
 	type ProfileFingerprintOverrides,
-	type BrewTempRange
+	type BrewTempRange,
+	type PreinfusionDial
 } from './fingerprint';
 
 export {

@@ -71,13 +71,14 @@ class OwnStateReadsTest {
         "LibraryController.kt" to mapOf(
             "persistLibrary" to setOf("activeBeanId"),
             "persistLibraryNow" to setOf("activeBeanId"),
-            "exportBeansLibrary" to setOf("activeBeanId"),
-            "beansLibraryJson" to setOf("activeBeanId"),
             "deleteRoaster" to setOf("activeBeanId"),
             "maybeLoadLinkedProfile" to setOf("activeProfileId"),
-            "refreshProfiles" to setOf("activeProfileId"),
-            "deleteProfile" to setOf("activeProfileId"),
-            "archiveBuiltinProfile" to setOf("activeProfileId"),
+            // The library's own selection: a reseed after a delete or hide is
+            // a profile change that clears this device's own override.
+            "refreshProfiles" to setOf("activeProfileId", "withActiveProfileId()"),
+            "deleteProfile" to setOf("activeProfileId", "withActiveProfileId()"),
+            "archiveBuiltinProfile" to setOf("activeProfileId", "withActiveProfileId()"),
+            "activateReseeded" to setOf("activeProfileId"),
             "deleteBean" to setOf("activeBeanId"),
             // Own-state writers (§7.4): a restore and a bean import.
             "restoreBackupFromText" to setOf("activeBeanId"),

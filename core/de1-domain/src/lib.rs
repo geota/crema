@@ -121,7 +121,7 @@ pub use bean::{
     BREWS_REMAINING_WINDOW, Bean, BeanMix, BeanOrigin, BeanRoastType, DEFAULT_DOSE_PER_BREW_G,
     RoastBand, RoastFreshness, Roaster, ShotBean, brews_remaining_estimate, credit_remaining,
     days_off_roast, debit_remaining, duplicate_bean, duplicate_bean_json, resettle_remaining,
-    roast_band, roast_band5, roast_freshness,
+    roast_band, roast_band5, roast_freshness, set_bean_frozen, set_bean_frozen_json,
 };
 pub use bean_coerce::{coerce_bean, coerce_bean_json, coerce_roaster, coerce_roaster_json};
 pub use bean_filter::{
@@ -207,10 +207,12 @@ pub use decent_wire::{
     parse_decent_machines,
 };
 pub use effective_profile::{
-    BrewOverrides, BrewTempRange, brew_temp_anchor, brew_temp_range, brew_temp_range_json,
-    effective_crema_profile, effective_crema_profile_json, effective_profile_fingerprint,
+    BrewOverrides, BrewTempRange, PREINFUSION_DIAL_MAX_S, PreinfusionDial, STEP_FLOOR_C,
+    brew_temp_anchor, brew_temp_range, brew_temp_range_json, effective_crema_profile,
+    effective_crema_profile_json, effective_profile_fingerprint,
     effective_profile_fingerprint_json, normalize_brew_overrides, normalize_brew_overrides_json,
-    parse_brew_overrides, preinfusion_seconds, preinfusion_seconds_json,
+    parse_brew_overrides, preinfusion_dial, preinfusion_dial_json, preinfusion_seconds,
+    preinfusion_seconds_json, with_derived_brew_temp, with_derived_brew_temp_json,
 };
 pub use error::{DomainError, ImportError};
 pub use firmware_builds::{

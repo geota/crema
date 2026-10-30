@@ -426,6 +426,23 @@ pub fn duplicate_bean_json(
     de1_domain::duplicate_bean_json(&bean_json, &new_id, now_unix_ms).map_err(CremaError::from)
 }
 
+/// A bean with its Frozen switch set (`Bean` JSON in and out): freeze stamps
+/// today, defrost stamps `defrosted_on` and keeps `frozen_on`, refreeze
+/// carries the earlier frozen span; days off roast never moves. See
+/// [`de1_domain::set_bean_frozen`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the bean JSON is malformed.
+#[uniffi::export]
+pub fn set_bean_frozen_json(
+    bean_json: String,
+    frozen: bool,
+    now_unix_ms: i64,
+) -> Result<String, CremaError> {
+    de1_domain::set_bean_frozen_json(&bean_json, frozen, now_unix_ms).map_err(CremaError::from)
+}
+
 /// The "≈N brews left" estimate — [`de1_domain::brews_remaining_estimate`]
 /// (the bag's newest ≤10 doses, newest first; 18 g fallback).
 #[uniffi::export]
@@ -1660,6 +1677,31 @@ pub fn brew_temp_range(profile_json: String) -> Result<String, CremaError> {
     de1_domain::brew_temp_range_json(&profile_json).map_err(crema_err)
 }
 
+/// A `CremaProfile` JSON with its top-level `brewTemp` derived from the first
+/// step's temperature (the brew-temp dial's anchor) — applied on load and save
+/// so every surface shows the same number. See
+/// [`de1_domain::with_derived_brew_temp`].
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[uniffi::export]
+pub fn with_derived_brew_temp(profile_json: String) -> Result<String, CremaError> {
+    de1_domain::with_derived_brew_temp_json(&profile_json).map_err(crema_err)
+}
+
+/// The pre-infusion dial for a `CremaProfile` JSON, as a JSON
+/// `PreinfusionDial` (`{min, max, seconds, adjustable}`). See
+/// [`de1_domain::preinfusion_dial`].
+///
+/// # Errors
+///
+/// Returns the JSON parse error string on malformed input.
+#[uniffi::export]
+pub fn preinfusion_dial(profile_json: String) -> Result<String, CremaError> {
+    de1_domain::preinfusion_dial_json(&profile_json).map_err(crema_err)
+}
+
 /// The profile's pre-infusion time, seconds — the total of its leading
 /// pre-infusion segments. See [`de1_domain::preinfusion_seconds`].
 ///
@@ -2179,6 +2221,85 @@ pub fn de1_uuids() -> String {
     de1_app::de1_uuids_json()
 }
 
+/// The connect-time notify subscriptions (`De1Subscription[]` JSON), in
+/// subscribe order, each marked required or best-effort. The shell awaits
+/// every subscribe and fails the connect on a required one. See
+/// `de1_app::de1_subscriptions`.
+#[uniffi::export]
+pub fn de1_subscriptions() -> String {
+    de1_app::de1_subscriptions_json()
+}
+
+/// The connect-time seed reads (`De1SeedRead[]` JSON), in read order. See
+/// `de1_app::de1_seed_reads`.
+#[uniffi::export]
+pub fn de1_seed_reads() -> String {
+    de1_app::de1_seed_reads_json()
+}
+
+/// The MMR registers read for the machine's identity after a connect, in read
+/// order. See `de1_app::connect_identity_registers`.
+#[uniffi::export]
+pub fn connect_identity_registers() -> Vec<MmrReg> {
+    de1_app::connect_identity_registers()
+        .into_iter()
+        .filter_map(mmr_reg_for)
+        .collect()
+}
+
+/// The notification source a DE1 characteristic's notifications and seed-read
+/// bytes feed, or `None` for one the shell doesn't dispatch. See
+/// `de1_app::de1_notification_source`.
+#[uniffi::export]
+pub fn de1_notification_source(characteristic: String) -> Option<NotificationSource> {
+    Some(match de1_app::de1_notification_source(&characteristic)? {
+        Source::De1State => NotificationSource::De1State,
+        Source::De1ShotSample => NotificationSource::De1ShotSample,
+        Source::De1WaterLevels => NotificationSource::De1WaterLevels,
+        Source::De1MmrRead => NotificationSource::De1MmrRead,
+        Source::De1ShotSettings => NotificationSource::De1ShotSettings,
+        Source::De1Calibration => NotificationSource::De1Calibration,
+        Source::De1Version => NotificationSource::De1Version,
+        _ => return None,
+    })
+}
+
+/// The FFI [`MmrReg`] for a core register — the inverse of
+/// `From<MmrReg> for MmrRegister`, for the registers the FFI mirrors.
+fn mmr_reg_for(register: MmrRegister) -> Option<MmrReg> {
+    Some(match register {
+        MmrRegister::CpuBoardVersion => MmrReg::CpuBoardVersion,
+        MmrRegister::MachineModel => MmrReg::MachineModel,
+        MmrRegister::FirmwareVersion => MmrReg::FirmwareVersion,
+        MmrRegister::GhcInfo => MmrReg::GhcInfo,
+        MmrRegister::TankTempThreshold => MmrReg::TankTempThreshold,
+        MmrRegister::FanThreshold => MmrReg::FanThreshold,
+        MmrRegister::SerialNumber => MmrReg::SerialNumber,
+        MmrRegister::SteamFlow => MmrReg::SteamFlow,
+        MmrRegister::RefillKit => MmrReg::RefillKit,
+        MmrRegister::FlushFlowRate => MmrReg::FlushFlowRate,
+        MmrRegister::FlushTemp => MmrReg::FlushTemp,
+        MmrRegister::HotWaterFlowRate => MmrReg::HotWaterFlowRate,
+        MmrRegister::Phase1FlowRate => MmrReg::Phase1FlowRate,
+        MmrRegister::Phase2FlowRate => MmrReg::Phase2FlowRate,
+        MmrRegister::HotWaterIdleTemp => MmrReg::HotWaterIdleTemp,
+        MmrRegister::GhcMode => MmrReg::GhcMode,
+        MmrRegister::SteamHighFlowStart => MmrReg::SteamHighFlowStart,
+        MmrRegister::HeaterVoltage => MmrReg::HeaterVoltage,
+        MmrRegister::HeaterUp2Timeout => MmrReg::HeaterUp2Timeout,
+        MmrRegister::CalibrationFlowMultiplier => MmrReg::CalibrationFlowMultiplier,
+        MmrRegister::FlushTimeout => MmrReg::FlushTimeout,
+        MmrRegister::UsbChargerOn => MmrReg::UsbChargerOn,
+        MmrRegister::FeatureFlags => MmrReg::FeatureFlags,
+        MmrRegister::UserPresent => MmrReg::UserPresent,
+        MmrRegister::SteamTwoTapStop => MmrReg::SteamTwoTapStop,
+        MmrRegister::CupWarmerTemp => MmrReg::CupWarmerTemp,
+        MmrRegister::InactivitySleepTimeout => MmrReg::InactivitySleepTimeout,
+        #[allow(unreachable_patterns)]
+        _ => return None,
+    })
+}
+
 /// The DE1 characteristic UUID a `Command.WriteCharacteristic`'s `WriteTarget`
 /// (passed by its serde name, e.g. `"De1ProfileFrame"`) is written to, or
 /// `None` for an unknown target. The one `WriteTarget` → UUID map. See
@@ -2276,6 +2397,13 @@ impl CremaBridge {
     /// Feed a periodic clock tick. Returns a JSON-encoded [`CoreOutput`].
     pub fn on_tick(&self, now_ms: u64) -> String {
         self.emit(self.core().on_tick(now_ms))
+    }
+
+    /// Report how one scale write the shell sent went (`ok` = it landed).
+    /// Returns a JSON-encoded [`CoreOutput`] that may carry
+    /// `Event::ScaleLinkDead`. See `CremaCore::on_scale_write_result`.
+    pub fn on_scale_write_result(&self, ok: bool) -> String {
+        self.emit(self.core().on_scale_write_result(ok))
     }
 
     // ── Guided brew sessions (issue #10) ─────────────────────────
@@ -3330,6 +3458,19 @@ fn json(output: CoreOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_identity_register_and_de1_subscription_crosses_the_ffi() {
+        assert_eq!(
+            connect_identity_registers().len(),
+            de1_app::connect_identity_registers().len()
+        );
+        let subs: Vec<de1_app::De1Subscription> =
+            serde_json::from_str(&de1_subscriptions()).unwrap();
+        for s in subs {
+            assert!(de1_notification_source(s.characteristic).is_some());
+        }
+    }
 
     #[test]
     fn firmware_flash_facades_speak_json() {
