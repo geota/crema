@@ -1829,9 +1829,10 @@ export class CremaApp {
 
 	/**
 	 * Write the four QC-modeled steam / hot-water fields (issue 14). The core
-	 * owns the read-modify-write of the combined cuuid_0B packet: the fields
-	 * the Quick Sheet doesn't model (flags, timeouts, espresso volume, group
-	 * temp) keep their current values.
+	 * owns the read-modify-write of the combined cuuid_0B packet: the group
+	 * target is the effective profile's temperature, and the fields the Quick
+	 * Sheet doesn't model (flags, timeouts, espresso volume) keep their
+	 * current values.
 	 */
 	async setSteamHotwater(values: {
 		steamTempC: number;

@@ -16,12 +16,15 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 
 /**
  * The steam / hot-water packet (cuuid_0B) through the core (core/shell fixes
- * AC-F5.2): Android passes the four Quick Controls targets and the core does
- * the read-modify-write, so the fields Android doesn't own reach the DE1
- * unchanged. Replaces the shell-side `buildSteamHotWaterSettings` tests.
+ * AC-F5.2, AC-F5.3): Android passes the four Quick Controls targets and the
+ * core does the read-modify-write, so the fields Android doesn't own reach the
+ * DE1 unchanged and the group target is the active profile's temperature.
+ * Replaces the shell-side `buildSteamHotWaterSettings` tests.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
@@ -43,11 +46,17 @@ class SteamHotWaterTargetsTest {
         bridge.onNotification(NotificationSource.DE1_SHOT_SETTINGS, machinePacket, 0uL)
     }
 
+    /** AC-F5.2 and AC-F5.3: a Quick Controls edit goes through the core,
+     *  which keeps the machine's fields and sets the group target to the
+     *  active profile's temperature. */
     @Test
-    fun `a Quick Controls steam edit keeps the machine's other fields`() {
+    fun `a Quick Controls steam edit keeps the machine's fields and follows the profile`() {
         writePrefs(AppPrefs(qcSteamTempC = 150f, qcSteamTimeS = 20f, qcHotWaterTempC = 80f, qcHotWaterVolumeMl = 150f))
         val vm = VmHarness.build(store)
         VmHarness.awaitPrefsLoaded(vm)
+        VmHarness.awaitStartupLoaded(vm)
+        val profileTemp = assertNotNull(vm.brewDial()).anchor.toFloat()
+        assertNotEquals(88.5f, profileTemp, "the profile's temperature differs from the machine's")
         feedMachinePacket(VmHarness.bridge(vm))
 
         vm.setQcSteamTemp(148f)
@@ -59,14 +68,14 @@ class SteamHotWaterTargetsTest {
         assertEquals(150f, s.hot_water_volume, "QC water volume")
         assertEquals(45f, s.hot_water_timeout, "machine's water timeout kept")
         assertEquals(220f, s.espresso_volume, "machine's espresso volume kept")
-        assertEquals(88.5f, s.group_temp, "machine's group target kept")
+        assertEquals(profileTemp, s.group_temp, "the active profile's temperature")
     }
 
     @Test
     fun `the packet keeps the machine's flag byte`() {
         val bridge = CremaBridge()
         feedMachinePacket(bridge)
-        val raw = bridge.setSteamHotwaterTargets(SteamHotWaterTargets(148f, 20f, 80f, 150f, groupTempC = null))
+        val raw = bridge.setSteamHotwaterTargets(SteamHotWaterTargets(148f, 20f, 80f, 150f))
         val packet = coreJson.decodeFromString(CoreOutput.serializer(), raw).commands
             .filterIsInstance<Command.WriteCharacteristic>()
             .single { it.content.target == WriteTarget.De1ShotSettings }

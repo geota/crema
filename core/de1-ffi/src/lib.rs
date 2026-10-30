@@ -298,10 +298,10 @@ impl From<MachineRequest> for MachineState {
     }
 }
 
-/// The steam / hot-water targets Crema owns, mirrored across the FFI boundary
-/// ([`de1_app::SteamHotWaterTargets`]). The core writes them read-modify-write
-/// inside [`CremaBridge::set_steam_hotwater_targets`], keeping every other
-/// field of the packet.
+/// The steam / hot-water targets the shells own, mirrored across the FFI
+/// boundary ([`de1_app::SteamHotWaterTargets`]). The core writes them
+/// read-modify-write inside [`CremaBridge::set_steam_hotwater_targets`], with
+/// the effective profile's group target, keeping every other field.
 #[derive(uniffi::Record)]
 pub struct SteamHotWaterTargets {
     /// Target steam temperature, °C (0 turns the heater off).
@@ -312,8 +312,6 @@ pub struct SteamHotWaterTargets {
     pub hot_water_temp_c: f32,
     /// Hot-water volume, ml.
     pub hot_water_volume_ml: f32,
-    /// Espresso group target, °C; `None` keeps the current value.
-    pub group_temp_c: Option<f32>,
 }
 
 impl From<SteamHotWaterTargets> for de1_app::SteamHotWaterTargets {
@@ -323,7 +321,6 @@ impl From<SteamHotWaterTargets> for de1_app::SteamHotWaterTargets {
             steam_timeout_s: t.steam_timeout_s,
             hot_water_temp_c: t.hot_water_temp_c,
             hot_water_volume_ml: t.hot_water_volume_ml,
-            group_temp_c: t.group_temp_c,
         }
     }
 }
@@ -3851,7 +3848,6 @@ mod tests {
             steam_timeout_s: 120.0,
             hot_water_temp_c: 85.0,
             hot_water_volume_ml: 50.0,
-            group_temp_c: None,
         }
     }
 

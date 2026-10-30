@@ -3227,8 +3227,8 @@ impl CremaBridge {
 
     /// Set the steam / hot-water targets: the core writes the combined
     /// packet read-modify-write, keeping every field it doesn't own (see
-    /// [`de1_app::CremaCore::set_steam_hotwater_targets`]). `group_temp_c`
-    /// `undefined` keeps the current group target. Returns a JSON-encoded
+    /// [`de1_app::CremaCore::set_steam_hotwater_targets`]); the group target
+    /// is the effective profile's temperature. Returns a JSON-encoded
     /// [`CoreOutput`] whose command applies them (with the legacy hot-water
     /// volume override when a scale is connected).
     pub fn set_steam_hotwater_targets(
@@ -3237,14 +3237,12 @@ impl CremaBridge {
         steam_timeout_s: f32,
         hot_water_temp_c: f32,
         hot_water_volume_ml: f32,
-        group_temp_c: Option<f32>,
     ) -> String {
         let targets = SteamHotWaterTargets {
             steam_temp_c,
             steam_timeout_s,
             hot_water_temp_c,
             hot_water_volume_ml,
-            group_temp_c,
         };
         json(self.state().core.set_steam_hotwater_targets(&targets))
     }
@@ -3991,7 +3989,7 @@ mod tests {
 
     /// Apply representative steam / hot-water targets to `bridge`.
     fn set_steam_settings(bridge: &CremaBridge) -> String {
-        bridge.set_steam_hotwater_targets(150.0, 120.0, 85.0, 50.0, None)
+        bridge.set_steam_hotwater_targets(150.0, 120.0, 85.0, 50.0)
     }
 
     #[test]

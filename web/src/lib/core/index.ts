@@ -282,17 +282,16 @@ export type NotificationSource =
 	| 'ScaleButton';
 
 /**
- * The steam / hot-water targets Crema owns in the DE1's combined settings
+ * The steam / hot-water targets the shell owns in the DE1's combined settings
  * packet (cuuid_0B), the argument to {@link CremaCore.setSteamHotwaterTargets}.
- * Canonical units (°C, s, ml); the wire scaling lives in the core. An omitted
- * `groupTempC` keeps the current group target.
+ * Canonical units (°C, s, ml); the wire scaling lives in the core. The group
+ * target is the core's (the effective profile's temperature).
  */
 export interface SteamHotwaterTargets {
 	steamTempC: number;
 	steamTimeoutS: number;
 	hotWaterTempC: number;
 	hotWaterVolumeMl: number;
-	groupTempC?: number;
 }
 
 /**
@@ -810,9 +809,9 @@ export interface CremaCore {
 	setTankThreshold(celsius: number): Promise<CoreOutput>;
 	/**
 	 * Set the steam / hot-water targets. The core writes the combined packet
-	 * (cuuid_0B) read-modify-write, keeping every field it doesn't own (the
-	 * flag byte, the hot-water timeout, the espresso volume, the group target
-	 * when `groupTempC` is omitted).
+	 * (cuuid_0B) read-modify-write with the effective profile's group target,
+	 * keeping every field it doesn't own (the flag byte, the hot-water
+	 * timeout, the espresso volume).
 	 */
 	setSteamHotwaterTargets(targets: SteamHotwaterTargets): Promise<CoreOutput>;
 	/** Set the steam flow rate, ml/s. */
@@ -1407,8 +1406,7 @@ async function createCore(): Promise<CremaCore> {
 					t.steamTempC,
 					t.steamTimeoutS,
 					t.hotWaterTempC,
-					t.hotWaterVolumeMl,
-					t.groupTempC
+					t.hotWaterVolumeMl
 				)
 			);
 		},

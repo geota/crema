@@ -3661,9 +3661,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // Persisted QC overrides that stick + take priority. On change we update
     // UiState, persist, and write to the machine. Steam temp/time + hot-water
     // temp/vol share one packet (cuuid_0B), which the core writes
-    // read-modify-write so the fields QC doesn't model (flags, timeouts,
-    // espresso volume, group temp) survive; steam flow + flush temp/time are
-    // separate writes.
+    // read-modify-write: the group target is the effective profile's, and the
+    // fields QC doesn't model (flags, timeouts, espresso volume) survive;
+    // steam flow + flush temp/time are separate writes.
 
     /** Route a core-output-producing machine write through the shared command
      *  path, logging (not throwing) on failure. */
@@ -3684,7 +3684,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             steamTimeoutS = ui.qcSteamTimeS,
             hotWaterTempC = ui.qcHotWaterTempC,
             hotWaterVolumeMl = ui.qcHotWaterVolumeMl,
-            groupTempC = null,
         )
         routeWrite("Set steam/hot-water") { bridge.setSteamHotwaterTargets(targets) }
     }

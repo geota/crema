@@ -181,7 +181,6 @@ impl CremaCore {
                 steam_timeout_s: settings.steam_timeout_s,
                 hot_water_temp_c: settings.hot_water_temp_c,
                 hot_water_volume_ml: settings.hot_water_volume_ml,
-                group_temp_c: None,
             }),
         );
         append(&mut out, self.set_steam_flow(settings.steam_flow_ml_s));
