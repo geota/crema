@@ -1679,6 +1679,44 @@ pub fn retry_backoff_ms(status: Option<u32>, attempt: u32) -> f64 {
     ms
 }
 
+/// What a failed Visualizer refresh-token grant means: `"Definitive"` (sign
+/// out), `"Retryable"` or `"Transient"` (keep the session). `status` is
+/// `undefined` when the request got no answer. See
+/// `de1_domain::classify_token_refresh_failure`.
+#[wasm_bindgen(js_name = classifyTokenRefreshFailure)]
+#[must_use]
+pub fn classify_token_refresh_failure(status: Option<u32>, body: Option<String>) -> String {
+    format!(
+        "{:?}",
+        de1_domain::classify_token_refresh_failure(
+            status.and_then(|s| u16::try_from(s).ok()),
+            body.as_deref()
+        )
+    )
+}
+
+/// The Visualizer retry queue's rule for a failed operation: a JSON
+/// `QueueDecision`. `op` is `"create"`, `"update"` or `"delete"`;
+/// `attemptsMade` counts this attempt. See
+/// `de1_domain::visualizer_queue_decision`.
+#[wasm_bindgen(js_name = visualizerQueueDecision)]
+#[must_use]
+pub fn visualizer_queue_decision(
+    op: &str,
+    tag: &str,
+    status: Option<u32>,
+    body: &str,
+    attempts_made: u32,
+) -> String {
+    de1_domain::visualizer_queue_decision_json(
+        op,
+        tag,
+        status.and_then(|s| u16::try_from(s).ok()),
+        body,
+        attempts_made,
+    )
+}
+
 /// Whether the DE1 with serial `serial` (MMR `SerialNumber`) is on Decent's
 /// stolen-machine list `list_json` (the published `stolen_serials.json`).
 /// `0` and a malformed list never match. See

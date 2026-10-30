@@ -1194,6 +1194,33 @@ pub fn retry_backoff_ms(status: Option<u16>, attempt: u32) -> u64 {
     de1_domain::retry_backoff_ms(status, attempt)
 }
 
+/// What a failed Visualizer refresh-token grant means: `"Definitive"` (sign
+/// out), `"Retryable"` or `"Transient"` (keep the session). `status` is
+/// `None` when the request got no answer. See
+/// [`de1_domain::classify_token_refresh_failure`].
+#[uniffi::export]
+pub fn classify_token_refresh_failure(status: Option<u16>, body: Option<String>) -> String {
+    format!(
+        "{:?}",
+        de1_domain::classify_token_refresh_failure(status, body.as_deref())
+    )
+}
+
+/// The Visualizer retry queue's rule for a failed operation: a JSON
+/// `QueueDecision`. `op` is `"create"`, `"update"` or `"delete"`;
+/// `attempts_made` counts this attempt. See
+/// [`de1_domain::visualizer_queue_decision`].
+#[uniffi::export]
+pub fn visualizer_queue_decision(
+    op: String,
+    tag: String,
+    status: Option<u16>,
+    body: String,
+    attempts_made: u32,
+) -> String {
+    de1_domain::visualizer_queue_decision_json(&op, &tag, status, &body, attempts_made)
+}
+
 /// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` → `"DE1"`),
 /// falling back to `"model N"`. Mirrors the wasm `machineModelName`; see
 /// [`de1_protocol::machine_model_name`].

@@ -4967,6 +4967,81 @@ enum class Pump(val string: String) {
 	Flow("flow"),
 }
 
+/// Generated type representing the anonymous struct variant `Drop` of the `QueueDecision` Rust enum
+@Serializable
+data class QueueDecisionDropInner (
+	/// Stop the drain.
+	val stop_pass: Boolean
+)
+
+/// Generated type representing the anonymous struct variant `Park` of the `QueueDecision` Rust enum
+@Serializable
+data class QueueDecisionParkInner (
+	/// Wait, ms.
+	val delay_ms: UInt
+)
+
+/// Generated type representing the anonymous struct variant `Retry` of the `QueueDecision` Rust enum
+@Serializable
+data class QueueDecisionRetryInner (
+	/// Wait, ms.
+	val delay_ms: UInt,
+	/// Stop the drain.
+	val stop_pass: Boolean
+)
+
+/// What a retry queue does with an operation that just failed.
+@Serializable
+sealed class QueueDecision {
+	/// Remove it. `stop_pass`: stop this drain (the daily quota — every other
+	/// upload would hit it too).
+	@Serializable
+	@SerialName("Drop")
+	data class Drop(val details: QueueDecisionDropInner): QueueDecision()
+	/// Keep it without spending an attempt; look again after `delay_ms` (a
+	/// delete while signed out).
+	@Serializable
+	@SerialName("Park")
+	data class Park(val details: QueueDecisionParkInner): QueueDecision()
+	/// Retry after `delay_ms`. `stop_pass`: leave the rest of the queue for a
+	/// later drain (the rate limit).
+	@Serializable
+	@SerialName("Retry")
+	data class Retry(val details: QueueDecisionRetryInner): QueueDecision()
+}
+
+/// The kind of queued Visualizer operation.
+@Serializable
+enum class QueueOp(val string: String) {
+	/// Upload a new shot.
+	@SerialName("Create")
+	Create("Create"),
+	/// Update a remote row.
+	@SerialName("Update")
+	Update("Update"),
+	/// Delete a remote row.
+	@SerialName("Delete")
+	Delete("Delete"),
+}
+
+/// What a failed OAuth refresh means for the session (both shells; web
+/// `classifyRefreshFailure`, review 03 P1-1).
+@Serializable
+enum class RefreshFailure(val string: String) {
+	/// The token endpoint rejected the refresh token: the session is over.
+	@SerialName("Definitive")
+	Definitive("Definitive"),
+	/// A transient server answer (5xx, 408, 429): keep the session, retry on
+	/// the status-aware backoff.
+	@SerialName("Retryable")
+	Retryable("Retryable"),
+	/// Anything else — a transport failure, a captive portal, a proxy page,
+	/// `invalid_client`: nothing proves the refresh token is dead, so the
+	/// session stays.
+	@SerialName("Transient")
+	Transient("Transient"),
+}
+
 /// Generated type representing the anonymous struct variant `LegacyPeer` of the `RelayEvent` Rust enum
 @Serializable
 data class RelayEventLegacyPeerInner (

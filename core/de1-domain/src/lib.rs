@@ -306,7 +306,9 @@ pub use visualizer_catalogue::{
     parse_catalogue_roasters, parse_catalogue_roasters_json, roaster_match_key,
 };
 pub use visualizer_error::{
-    VISUALIZER_DEFAULT_DAILY_LIMIT, VisualizerCallError, is_recoverable, retry_backoff_ms,
+    AUTH_PARK_MS, MAX_QUEUE_ATTEMPTS, QueueDecision, QueueOp, RefreshFailure,
+    VISUALIZER_DEFAULT_DAILY_LIMIT, VisualizerCallError, classify_token_refresh_failure,
+    is_recoverable, retry_backoff_ms, visualizer_queue_decision, visualizer_queue_decision_json,
     visualizer_quota_limit,
 };
 pub use visualizer_sync::{
