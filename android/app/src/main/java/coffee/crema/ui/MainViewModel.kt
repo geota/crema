@@ -5550,8 +5550,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Shot started on the machine: ${lines.joinToString("; ")}")
                 notifyUser(lines.joinToString("\n"))
             }
-            is Event.MachineRequestHeld ->
+            is Event.MachineRequestHeld -> {
                 appendLog("${event.content.state.string} request held until the profile finishes loading")
+                notifyUser(REQUEST_HELD_TEXT)
+            }
+            is Event.MachineRequestDropped -> {
+                val text = machineRequestDropText(event.content.state, event.content.reason)
+                appendLog(text)
+                notifyUser(text)
+            }
             is Event.MachineRequestRefused -> {
                 val text = machineRequestRefusalText(event.content.state, event.content.reason)
                 appendLog("Request refused: $text")

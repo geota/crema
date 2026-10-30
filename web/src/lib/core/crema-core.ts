@@ -1998,14 +1998,28 @@ export type Event =
 	notices: StartNoticeLine[];
 }}
 	/**
-	 * A machine state request is waiting out the firmware's profile-download
-	 * guard (a profile upload in flight, or the 500 ms after it — see
-	 * [`machine_requests`](crate::machine_requests)); it goes out on its own.
-	 * For the log; the shell need not tell the user.
+	 * A machine state request the user made is waiting out the firmware's
+	 * profile-download guard (a profile upload in flight, or the 500 ms after
+	 * it — see [`machine_requests`](crate::machine_requests)); it goes out on
+	 * its own, or is dropped ([`Event::MachineRequestDropped`]). A shell
+	 * shows a small non-blocking "waiting" note.
 	 */
 	| { type: "MachineRequestHeld", content: {
 	/** The requested state. */
 	state: MachineState;
+}}
+	/**
+	 * A request the user made, held through the profile-download guard,
+	 * was dropped instead of sent: the machine left the state it was in (a
+	 * shot started at the group head), a maintenance cycle is no longer
+	 * allowed, or the profile took too long to load. Tell the user; nothing
+	 * was written.
+	 */
+	| { type: "MachineRequestDropped", content: {
+	/** The requested state. */
+	state: MachineState;
+	/** Why. */
+	reason: MachineRequestDrop;
 }}
 	/**
 	 * A machine state request was refused before anything was written: a
@@ -4646,6 +4660,21 @@ export type IdleSleepInput =
 	 * shell regains the CPU (a tab turning visible, the app resuming).
 	 */
 	| { type: "Tick", content?: undefined };
+
+/** Why a held machine state request was dropped instead of sent. */
+export type MachineRequestDrop = 
+	/**
+	 * The machine left the state it was in when the request was made (a
+	 * shot started at the group head, for one).
+	 */
+	| { kind: "StateChanged", details: {
+	/** The state it was in. */
+	from?: MachineState;
+	/** The state it is in now. */
+	to: MachineState;
+}}
+	/** The profile took longer than [`MAX_HOLD`] to load. */
+	| { kind: "TookTooLong", details?: undefined };
 
 /** Why a machine state request was refused before it reached the DE1. */
 export type MachineRequestRefusal = 

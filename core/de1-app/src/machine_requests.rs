@@ -17,6 +17,18 @@
 //! pending — a group-head shot can start while a profile uploads — so an Idle
 //! request bypasses the guard and drops any held request.
 //!
+//! **A held request is for the machine as it was.** The machine state is
+//! recorded when a request is held; if the machine has left that state by
+//! the release (a shot started at the group head, a steam session, sleep),
+//! the request is dropped, not sent — sending it would bounce the machine
+//! through Idle and stop what it is doing — and a maintenance request held
+//! from Idle or Sleep can't go out from any other state, so the Run-now gate
+//! holds at the release too. A request held longer than
+//! [`MAX_HOLD`] (an upload waiting for the machine model) is dropped too.
+//! The user's own requests report each of these as
+//! [`Event::MachineRequestDropped`]; [`Event::MachineRequestHeld`] tells
+//! them one is waiting.
+//!
 //! **Run-now gate.** The app may request a maintenance cycle (descale, clean,
 //! air purge, steam rinse) only with the machine in Idle or Sleep
 //! ([`de1_domain::maintenance_request_allowed`], the calibration guard's
@@ -41,6 +53,28 @@ use crate::{Command, CoreOutput, CremaCore, Event, WriteTarget};
 /// request (BC 9788201734; reaprime `ConnectionTimings.profileDownloadGuard`).
 pub const PROFILE_DOWNLOAD_GUARD: Duration = Duration::from_millis(500);
 
+/// The longest a request waits out the guard before it is dropped (an upload
+/// that waits for the machine model can take ~10 s).
+pub const MAX_HOLD: Duration = Duration::from_secs(3);
+
+/// Why a held machine state request was dropped instead of sent.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "details")]
+#[non_exhaustive]
+pub enum MachineRequestDrop {
+    /// The machine left the state it was in when the request was made (a
+    /// shot started at the group head, for one).
+    StateChanged {
+        /// The state it was in.
+        from: Option<MachineState>,
+        /// The state it is in now.
+        to: MachineState,
+    },
+    /// The profile took longer than [`MAX_HOLD`] to load.
+    TookTooLong,
+}
+
 /// Why a machine state request was refused before it reached the DE1.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,9 +96,21 @@ pub(crate) struct RequestGuard {
     /// When the last profile upload completed.
     upload_completed_at: Option<Duration>,
     /// The request waiting out the guard.
-    held: Option<MachineState>,
+    held: Option<Held>,
     /// The deadline the last [`Event::WakeAt`] asked for.
     wake_sent: Option<Duration>,
+}
+
+/// A request waiting out the guard.
+#[derive(Debug, Clone, Copy)]
+struct Held {
+    state: MachineState,
+    /// The machine state when it was held.
+    from: Option<MachineState>,
+    /// When it was held.
+    at: Duration,
+    /// The user asked for it (not the core itself).
+    user: bool,
 }
 
 /// Where the guard stands.
@@ -119,32 +165,63 @@ impl CremaCore {
 
     /// Send `state` through the guard: Idle at once (dropping a held
     /// request), anything else at once when the guard is clear, else held.
-    pub(crate) fn issue_state_request(&mut self, state: MachineState, out: &mut CoreOutput) {
+    /// `user`: the user asked for it (a held or dropped request is reported).
+    pub(crate) fn issue_state_request(
+        &mut self,
+        state: MachineState,
+        user: bool,
+        out: &mut CoreOutput,
+    ) {
         if state == MachineState::Idle || self.guard() == Guard::Clear {
             self.request_guard.held = None;
             self.write_state_now(state, out);
         } else {
-            self.request_guard.held = Some(state);
-            out.events.push(Event::MachineRequestHeld { state });
+            self.request_guard.held = Some(Held {
+                state,
+                from: self.last_state.map(|info| info.state),
+                at: self.clock,
+                user,
+            });
+            if user {
+                out.events.push(Event::MachineRequestHeld { state });
+            }
         }
         self.emit_wake(out);
     }
 
-    /// A held request goes out once the guard is clear. Run on every tick
-    /// and whenever an upload ends.
+    /// A held request goes out once the guard is clear — unless the machine
+    /// has moved on or it waited longer than [`MAX_HOLD`]. Run on every tick
+    /// and whenever an upload ends. (A maintenance request passed the Run-now
+    /// gate when it was held; with the machine still in that state, the gate
+    /// still passes, and any other state drops it here.)
     pub(crate) fn drive_held_request(&mut self, out: &mut CoreOutput) {
-        if self.request_guard.held.is_some() && self.guard() == Guard::Clear {
-            let state = self.request_guard.held.take();
+        if let Some(held) = self.request_guard.held {
             let current = self.last_state.map(|info| info.state);
-            // Re-checked at release: a shot that started meanwhile is not
-            // bounced by a late Espresso.
-            if let Some(state) = state
-                && !(state == MachineState::Espresso && current == Some(MachineState::Espresso))
-            {
-                self.write_state_now(state, out);
+            let clear = self.guard() == Guard::Clear;
+            let drop = if current != held.from {
+                current.map(|to| MachineRequestDrop::StateChanged {
+                    from: held.from,
+                    to,
+                })
+            } else if !clear && self.clock >= held.at + MAX_HOLD {
+                Some(MachineRequestDrop::TookTooLong)
+            } else {
+                None
+            };
+            if let Some(reason) = drop {
+                self.request_guard.held = None;
+                if held.user {
+                    out.events.push(Event::MachineRequestDropped {
+                        state: held.state,
+                        reason,
+                    });
+                }
+            } else if clear {
+                self.request_guard.held = None;
+                self.write_state_now(held.state, out);
+                // The profile sync waited for it.
+                self.drive_profile_sync(out);
             }
-            // The profile sync waited for it.
-            self.drive_profile_sync(out);
         }
         self.emit_wake(out);
     }
@@ -193,10 +270,24 @@ impl CremaCore {
             (true, Guard::Clear) => Some(self.clock),
             _ => None,
         };
+        // A held request's hold limit.
+        let limit = self.request_guard.held.map(|held| held.at + MAX_HOLD);
+        let guard = match (guard, limit) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         match (guard, self.shot_start_deadline()) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         }
+    }
+
+    /// A tick arrived: ask again for the next deadline, even an unchanged
+    /// one — the shell's timer may have fired early against the core's clock,
+    /// and a request must not wait for the next regular tick.
+    pub(crate) fn rearm_wake(&mut self, out: &mut CoreOutput) {
+        self.request_guard.wake_sent = None;
+        self.emit_wake(out);
     }
 
     /// Emit [`Event::WakeAt`] when the earliest deadline changed.
@@ -305,8 +396,8 @@ mod tests {
         assert_eq!(held(&out), vec![MachineState::Steam]);
         assert_eq!(
             wakes(&out),
-            Vec::<f64>::new(),
-            "no deadline while it uploads"
+            vec![4_000.0],
+            "its hold limit, while it uploads"
         );
         let done = complete(&mut core, &upload, 1_200);
         assert_eq!(wakes(&done), vec![1_700.0], "the guard's end");
@@ -471,5 +562,101 @@ mod tests {
         let out = core.on_tick(1_600);
         assert_eq!(state_writes(&out)[0], requested_state(MachineState::Sleep));
         assert!(core.profile_upload_in_progress(), "then the sync uploads");
+    }
+
+    /// Validation P1 (F16a): a request held from Idle is dropped, not sent,
+    /// when the machine has left Idle by the release — a shot started at the
+    /// group head must not be bounced through Idle. One case per state.
+    #[test]
+    fn f16_2_a_held_request_never_stops_a_group_head_shot() {
+        for state in [
+            MachineState::Steam,
+            MachineState::HotWater,
+            MachineState::HotWaterRinse,
+            MachineState::Sleep,
+        ] {
+            let (mut core, upload) = uploading(1_000);
+            let out = core.request_machine_state(state);
+            assert!(state_writes(&out).is_empty(), "{state:?} held");
+            // The user presses Espresso at the group head.
+            let _ = core.on_notification(Source::De1State, &ESPRESSO, 1_100);
+            let done = complete(&mut core, &upload, 1_200);
+            let mut writes = state_writes(&done);
+            let release = core.on_tick(1_700);
+            writes.extend(state_writes(&release));
+            writes.extend(state_writes(&core.on_tick(5_000)));
+            assert!(
+                writes.is_empty(),
+                "{state:?}: nothing written, got {writes:?}"
+            );
+            assert!(
+                release.events.contains(&Event::MachineRequestDropped {
+                    state,
+                    reason: MachineRequestDrop::StateChanged {
+                        from: Some(MachineState::Idle),
+                        to: MachineState::Espresso,
+                    },
+                }),
+                "{state:?}: {:?}",
+                release.events
+            );
+        }
+    }
+
+    /// Validation P2 (F16a): a request is held at most 3 s; then it is dropped
+    /// and the user told, not sent by surprise later.
+    #[test]
+    fn f16_2_a_long_hold_is_dropped_after_3_s() {
+        let (mut core, upload) = uploading(1_000);
+        let _ = core.request_machine_state(MachineState::Steam);
+        assert!(
+            core.on_tick(3_999)
+                .events
+                .iter()
+                .all(|e| !matches!(e, Event::MachineRequestDropped { .. }))
+        );
+        let out = core.on_tick(4_000);
+        assert!(out.events.contains(&Event::MachineRequestDropped {
+            state: MachineState::Steam,
+            reason: MachineRequestDrop::TookTooLong,
+        }));
+        let _ = complete(&mut core, &upload, 9_000);
+        assert!(
+            state_writes(&core.on_tick(10_000)).is_empty(),
+            "never sent later"
+        );
+    }
+
+    /// Validation P3 (F16a): a tick before the deadline asks for it again, so a
+    /// shell timer that fired early can't strand a held request.
+    #[test]
+    fn an_early_tick_asks_for_the_deadline_again() {
+        let (mut core, upload) = uploading(1_000);
+        let _ = complete(&mut core, &upload, 1_100);
+        let first = core.request_machine_state(MachineState::Steam);
+        assert_eq!(wakes(&first), vec![1_600.0]);
+        assert_eq!(wakes(&core.on_tick(1_500)), vec![1_600.0], "asked again");
+        assert_eq!(
+            state_writes(&core.on_tick(1_600)),
+            vec![requested_state(MachineState::Steam)]
+        );
+    }
+
+    /// The core's own requests (a shot start's, the purge's) are not reported
+    /// to the user as held or dropped.
+    #[test]
+    fn only_the_users_requests_are_reported() {
+        let (mut core, _upload) = uploading(1_000);
+        let mut out = CoreOutput::default();
+        core.issue_state_request(MachineState::HotWaterRinse, false, &mut out);
+        assert!(held(&out).is_empty());
+        let _ = core.on_notification(Source::De1State, &ESPRESSO, 1_100);
+        let out = core.on_tick(1_200);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::MachineRequestDropped { .. }))
+        );
+        assert!(state_writes(&out).is_empty());
     }
 }

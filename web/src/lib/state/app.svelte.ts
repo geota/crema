@@ -83,7 +83,11 @@ import { IdleSleepRunner } from './idle-sleep';
 import { CoreTicker } from './core-ticker';
 import { stepCapRefusal } from '#lib/profiles/step-cap.js';
 import { WakeTimer } from './wake-timer';
-import { machineRequestRefusalText } from './machine-requests';
+import {
+	REQUEST_HELD_TEXT,
+	machineRequestDropText,
+	machineRequestRefusalText
+} from './machine-requests';
 import {
 	ProfileWriteGenerations,
 	UNNAMED_PROFILE_BATCH_LOG,
@@ -702,6 +706,13 @@ export class CremaApp {
 			}
 			if (event.type === 'MachineRequestRefused') {
 				toast.error(machineRequestRefusalText(event.content.state, event.content.reason));
+			}
+			if (event.type === 'MachineRequestHeld') {
+				// The user's request waits for the profile to load (up to 3 s).
+				toast.info(REQUEST_HELD_TEXT, 2500);
+			}
+			if (event.type === 'MachineRequestDropped') {
+				toast.info(machineRequestDropText(event.content.state, event.content.reason), 6000);
 			}
 			if (event.type === 'ScaleLinkDead') {
 				// The core presumed the scale link dead (silent past the grace,

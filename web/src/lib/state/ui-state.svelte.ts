@@ -17,7 +17,7 @@
  * then just applies the returned snapshot.
  */
 
-import { machineRequestRefusalText } from './machine-requests';
+import { machineRequestDropText, machineRequestRefusalText } from './machine-requests';
 import { calibrationRefusalMessage } from '#lib/calibration/refusal.js';
 import type {
 	Event,
@@ -1490,6 +1490,14 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			};
 		case 'GroupHeadStartUnchecked':
 			return snapshot;
+		case 'MachineRequestDropped':
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					machineRequestDropText(event.content.state, event.content.reason)
+				)
+			};
 		case 'MachineRequestRefused':
 			return {
 				...snapshot,

@@ -644,13 +644,25 @@ pub enum Event {
         /// One line per skipped check.
         notices: Vec<crate::StartNoticeLine>,
     },
-    /// A machine state request is waiting out the firmware's profile-download
-    /// guard (a profile upload in flight, or the 500 ms after it — see
-    /// [`machine_requests`](crate::machine_requests)); it goes out on its own.
-    /// For the log; the shell need not tell the user.
+    /// A machine state request the user made is waiting out the firmware's
+    /// profile-download guard (a profile upload in flight, or the 500 ms after
+    /// it — see [`machine_requests`](crate::machine_requests)); it goes out on
+    /// its own, or is dropped ([`Event::MachineRequestDropped`]). A shell
+    /// shows a small non-blocking "waiting" note.
     MachineRequestHeld {
         /// The requested state.
         state: MachineState,
+    },
+    /// A request the user made, held through the profile-download guard,
+    /// was dropped instead of sent: the machine left the state it was in (a
+    /// shot started at the group head), a maintenance cycle is no longer
+    /// allowed, or the profile took too long to load. Tell the user; nothing
+    /// was written.
+    MachineRequestDropped {
+        /// The requested state.
+        state: MachineState,
+        /// Why.
+        reason: crate::MachineRequestDrop,
     },
     /// A machine state request was refused before anything was written: a
     /// maintenance cycle needs the machine in Idle or Sleep.

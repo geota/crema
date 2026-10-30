@@ -435,7 +435,7 @@ impl CremaCore {
                 },
                 out,
             );
-            self.issue_state_request(MachineState::HotWaterRinse, out);
+            self.issue_state_request(MachineState::HotWaterRinse, false, out);
         } else {
             self.request_start_espresso(out);
         }
@@ -448,7 +448,7 @@ impl CremaCore {
             },
             out,
         );
-        self.issue_state_request(MachineState::Espresso, out);
+        self.issue_state_request(MachineState::Espresso, false, out);
     }
 
     fn set_start_phase(&mut self, phase: Phase, out: &mut CoreOutput) {
@@ -620,7 +620,7 @@ impl CremaCore {
             self.starter.purge_at = None;
             let idle = self.last_state.map(|info| info.state) == Some(MachineState::Idle);
             if idle && self.starter.start.is_none() && !self.request_held() {
-                self.issue_state_request(MachineState::HotWaterRinse, out);
+                self.issue_state_request(MachineState::HotWaterRinse, false, out);
             }
         }
     }

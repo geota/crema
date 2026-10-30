@@ -1,6 +1,7 @@
 package coffee.crema.ui
 
 import coffee.crema.core.CalibrationRefusal
+import coffee.crema.core.MachineRequestDrop
 import coffee.crema.core.MachineRequestRefusal
 import coffee.crema.core.StartEnd
 import coffee.crema.core.StartRefusal
@@ -25,6 +26,7 @@ internal val kindTaggedCoreEnums: SerializersModule = SerializersModule {
     polymorphicDefaultDeserializer(MachineRequestRefusal::class) { KindTagged(MachineRequestRefusal.serializer()) }
     polymorphicDefaultDeserializer(StartRefusal::class) { KindTagged(StartRefusal.serializer()) }
     polymorphicDefaultDeserializer(StartEnd::class) { KindTagged(StartEnd.serializer()) }
+    polymorphicDefaultDeserializer(MachineRequestDrop::class) { KindTagged(MachineRequestDrop.serializer()) }
 }
 
 /**
