@@ -1,0 +1,6 @@
+# uniffi-bindgen config for the TEST-ONLY bindings (generateUniffiTestBindings in
+# build.gradle.kts): the same de1-ffi API, generated from the host library built
+# with `test-seeds`, in its own package so it can sit next to the app's bindings
+# (coffee.crema.core) on the unit-test classpath. Never used for the APK.
+[crates.de1_ffi.bindings.kotlin]
+package_name = "coffee.crema.core.testseeds"

@@ -254,14 +254,9 @@ impl Run {
         String::from_utf8_lossy(&self.log[0].1.bytes).into_owned()
     }
 
+    /// The code the remote shows (it is in `Pake` right after the ServerHello).
     fn code(&self) -> String {
-        self.remote_events
-            .iter()
-            .find_map(|e| match e {
-                RelayEvent::ShowCode { code, .. } => Some(code.clone()),
-                _ => None,
-            })
-            .unwrap_or_default()
+        self.remote.code().unwrap_or_default()
     }
 
     fn hub_send(&mut self, message: &[u8]) {

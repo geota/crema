@@ -4723,8 +4723,6 @@ data class RelayEventHubHelloInner (
 /// Generated type representing the anonymous struct variant `ShowCode` of the `RelayEvent` Rust enum
 @Serializable
 data class RelayEventShowCodeInner (
-	/// Six ASCII digits.
-	val code: String,
 	/// When the code expires (`now_ms` clock).
 	val expires_at_ms: Long
 )
@@ -4799,7 +4797,9 @@ sealed class RelayEvent {
 	@Serializable
 	@SerialName("HubHello")
 	data class HubHello(val content: RelayEventHubHelloInner): RelayEvent()
-	/// Remote: show this code until `expires_at_ms`.
+	/// Remote: show the code, read from `RemoteConnection::code()`, until
+	/// `expires_at_ms`. The event itself never carries the code, so no event,
+	/// event JSON or record a bridge builds from it can leak it into a log.
 	@Serializable
 	@SerialName("ShowCode")
 	data class ShowCode(val content: RelayEventShowCodeInner): RelayEvent()
