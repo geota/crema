@@ -80,6 +80,17 @@ internal object VmHarness {
         idleUntil("the prefs load") { field.getBoolean(vm) }
     }
 
+    /** Wait for the whole startup load (library, prefs, custom profiles, …):
+     *  [awaitPrefsLoaded] returns before the custom profiles load, which would
+     *  overwrite a profile a test saves in that window. */
+    fun awaitStartupLoaded(vm: MainViewModel) {
+        val field = runCatching { MainViewModel::class.java.getDeclaredField("prefsReady") }.getOrNull()
+            ?: error("MainViewModel no longer has a prefsReady deferred: update VmHarness.awaitStartupLoaded")
+        field.isAccessible = true
+        val ready = field.get(vm) as kotlinx.coroutines.Deferred<*>
+        idleUntil("the startup load") { ready.isCompleted }
+    }
+
     /** The VM's own state: what it persists (the screens see [MainViewModel.ui]). */
     fun ownState(vm: MainViewModel): MainUiState = vm.ownState.value
 
