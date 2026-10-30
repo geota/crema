@@ -470,10 +470,8 @@ impl RemoteConnection {
                 };
                 let lifetime = CODE_LIFETIME_MS.min(u64::from(sh.secs_left) * 1000);
                 let expires_at_ms = now_ms + lifetime;
-                step.events.push(RelayEvent::ShowCode {
-                    code: code.as_str().to_owned(),
-                    expires_at_ms,
-                });
+                // The code itself stays here; the shell reads it with `code()`.
+                step.events.push(RelayEvent::ShowCode { expires_at_ms });
                 let (state, pake_a) = pake::start_a(&code, &self.my_id, &sh.hub_id, spake_rng);
                 step.push_binary(wire::encode_pake(kind::PAKE_A, &pake_a));
                 self.code = Some(code);

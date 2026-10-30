@@ -6,10 +6,11 @@
 #                                            library, its Kotlin bindings and the
 #                                            production wasm bundle, with positive
 #                                            controls (CI job release-symbols-check)
-#   relay-release-symbols-check.sh apk APK BINDINGS_DIR
-#                                            check a built APK's libde1_ffi.so and
-#                                            its generated Kotlin bindings
-#                                            (release and nightly workflows)
+#   relay-release-symbols-check.sh apk ARTIFACT BINDINGS_DIR
+#                                            check a built APK's (lib/) or AAB's
+#                                            (base/lib/) libde1_ffi.so and the
+#                                            generated Kotlin bindings (release
+#                                            and nightly workflows)
 #
 # Run from the repository root. Release builds use `-p de1-ffi --lib` so no
 # dev-dependency (de1-relay's test-seeds self-dependency) takes part.
@@ -35,10 +36,14 @@ symbols() {
 check_library() {
   local lib="${1:?library path}"
   [ -f "$lib" ] || fail "missing library $lib"
-  local hits
+  local hits relay
   hits="$(symbols "$lib" | grep -iE "$PATTERN" || true)"
   [ -z "$hits" ] || fail "test constructors exported by $lib:"$'\n'"$hits"
-  echo "ok: no test constructors in $(basename "$lib") ($(symbols "$lib" | grep -c relay) relay symbols)"
+  # No relay symbols at all means the wrong library (or a stripped symbol
+  # table), and "no test constructors" would then prove nothing.
+  relay="$(symbols "$lib" | grep -c relay || true)"
+  [ "$relay" -gt 0 ] || fail "no relay symbols in $lib (wrong library?)"
+  echo "ok: no test constructors in $(basename "$lib") ($relay relay symbols)"
 }
 
 check_bindings() {
@@ -102,14 +107,16 @@ case "${1:-}" in
     echo "ok: positive control sees $found test-constructor exports in the test-seeds wasm"
     ;;
   apk)
-    apk="${2:?APK path}"
+    artifact="${2:?APK or AAB path}"
     bindings="${3:?bindings dir}"
-    [ -f "$apk" ] || fail "missing APK $apk"
+    [ -f "$artifact" ] || fail "missing $artifact"
     work="$(mktemp -d)"
-    unzip -q -o "$apk" 'lib/*/libde1_ffi.so' -d "$work"
+    # An APK keeps native libraries under lib/, an AAB under base/lib/; unzip
+    # exits non-zero for the pattern that matches nothing, so check by glob.
+    unzip -q -o "$artifact" 'lib/*/libde1_ffi.so' 'base/lib/*/libde1_ffi.so' -d "$work" || true
     shopt -s nullglob
-    libs=("$work"/lib/*/libde1_ffi.so)
-    [ "${#libs[@]}" -gt 0 ] || fail "no libde1_ffi.so in $apk"
+    libs=("$work"/lib/*/libde1_ffi.so "$work"/base/lib/*/libde1_ffi.so)
+    [ "${#libs[@]}" -gt 0 ] || fail "no libde1_ffi.so in $artifact"
     for lib in "${libs[@]}"; do
       check_library "$lib"
     done

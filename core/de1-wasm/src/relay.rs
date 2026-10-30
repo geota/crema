@@ -421,8 +421,10 @@ impl RelayRemoteConnection {
         self.try_send(message, now_ms).map_err(|e| js_error(&e))
     }
 
-    /// Closes (an authenticated `CLOSE(NORMAL)` once established).
-    pub fn close(&self, now_ms: f64) -> RelayStep {
+    /// Closes (an authenticated `CLOSE(NORMAL)` once established). Named
+    /// `closeSession`, like the Kotlin bridge's `close_session`.
+    #[wasm_bindgen(js_name = closeSession)]
+    pub fn close_session(&self, now_ms: f64) -> RelayStep {
         self.step(now_ms, |c, now| c.close(CloseReason::Normal, now))
     }
 
@@ -560,7 +562,7 @@ mod tests {
             conn.tick(T0),
             conn.on_binary(&[0x10], T0),
             conn.on_text(b"{}", T0),
-            conn.close(T0),
+            conn.close_session(T0),
         ] {
             assert_eq!(step.close_code(), Some(DEAD_CLOSE));
             assert_eq!((step.send_count(), step.deliver_count()), (0, 0));
@@ -596,7 +598,7 @@ mod tests {
         let step = RelayStep {
             send: vec![(true, b"hello".to_vec())],
             deliver: vec![b"frame".to_vec()],
-            events_json: r#"[{"type":"ShowCode","content":{"code":"482913"}}]"#.into(),
+            events_json: r#"[{"type":"HubHello","content":{"hub_name":"482913"}}]"#.into(),
             close: None,
         };
         let shown = format!("{step:?}");

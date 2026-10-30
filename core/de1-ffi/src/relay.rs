@@ -18,7 +18,10 @@
 //!   [`RelayKeys::private_for_storage`], for the platform key store.
 //! - **Events** cross as JSON (`events_json`, a JSON array of `RelayEvent`), so
 //!   Kotlin decodes them with the typeshare-generated type. `Debug` of a
-//!   [`RelayStep`] never prints bytes or events (a `ShowCode` carries the code).
+//!   [`RelayStep`] prints sizes only. No event carries the pairing code: a
+//!   `ShowCode` holds only its expiry, and the shell reads the code with
+//!   `RelayRemoteConnection::code()`, so neither `events_json` nor the Kotlin
+//!   record's generated `toString()` can contain it.
 
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
@@ -317,8 +320,7 @@ pub struct RelayStep {
 }
 
 impl std::fmt::Debug for RelayStep {
-    /// Sizes and the close only: never message bytes or events (a `ShowCode`
-    /// event carries the pairing code).
+    /// Sizes and the close only: never message bytes or events.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RelayStep")
             .field(
@@ -542,8 +544,10 @@ impl RelayHubConnection {
         self.conn.result(|c| c.send(&message, now_ms))
     }
 
-    /// Closes the session (an authenticated `CLOSE` once established).
-    pub fn close(&self, reason: RelayCloseReason, now_ms: u64) -> RelayStep {
+    /// Closes the session (an authenticated `CLOSE` once established). Named
+    /// `close_session`, not `close`: in Kotlin a `close` would overload
+    /// `AutoCloseable.close()`, which destroys the object without the CLOSE.
+    pub fn close_session(&self, reason: RelayCloseReason, now_ms: u64) -> RelayStep {
         self.conn.step(|c| c.close(reason.into(), now_ms))
     }
 
@@ -674,8 +678,8 @@ impl RelayRemoteConnection {
     }
 
     /// Closes (an authenticated `CLOSE` once established, `ABORT(CANCELLED)`
-    /// during a pairing).
-    pub fn close(&self, reason: RelayCloseReason, now_ms: u64) -> RelayStep {
+    /// during a pairing). `close_session`, not `close` (see the hub's).
+    pub fn close_session(&self, reason: RelayCloseReason, now_ms: u64) -> RelayStep {
         self.conn.step(|c| c.close(reason.into(), now_ms))
     }
 
@@ -866,7 +870,7 @@ mod tests {
         assert_dead(hub.tick(T0 + 1));
         assert_dead(hub.cancel_pairing(T0));
         assert_dead(hub.reject_pairing(T0));
-        assert_dead(hub.close(RelayCloseReason::Normal, T0));
+        assert_dead(hub.close_session(RelayCloseReason::Normal, T0));
         assert_eq!(
             kind(&hub.enter_code("123456".into(), T0).unwrap_err()),
             "Poisoned"
@@ -922,6 +926,8 @@ mod tests {
         let shown = remote.on_binary(sh.send[0].bytes.clone(), T0);
         assert!(shown.events_json.contains("ShowCode"));
         let code = remote.code().unwrap();
+        // The code never rides in an event, nor in the Step's events JSON.
+        assert!(!shown.events_json.contains(&code), "{}", shown.events_json);
         hub.on_binary(shown.send[0].bytes.clone(), T0);
         let mut to_remote = hub.enter_code(code, T0).unwrap().send;
         let mut to_hub = Vec::new();
@@ -983,8 +989,7 @@ mod tests {
                 bytes: vec![0xab; 4],
             }],
             deliver: vec![b"secret frame".to_vec()],
-            events_json: r#"[{"type":"ShowCode","content":{"code":"482913","expires_at_ms":1}}]"#
-                .into(),
+            events_json: r#"[{"type":"HubHello","content":{"hub_name":"482913"}}]"#.into(),
             close_code: None,
             close_reason: None,
         };

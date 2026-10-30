@@ -88,11 +88,12 @@ class RelayFfiRoundTripTest {
         assertTrue(events(serverHello).single() is RelayEvent.PairRequest)
         val pakeA = remote.onBinary(single(serverHello), t0)
         wire += single(pakeA)
-        val shown = events(pakeA).filterIsInstance<RelayEvent.ShowCode>().single()
-        assertEquals(v.str("code"), shown.content.code)
-        assertEquals(v.str("code"), remote.code())
+        // ShowCode carries only the expiry; the code comes from code().
+        events(pakeA).filterIsInstance<RelayEvent.ShowCode>().single()
+        val code = remote.code()!!
+        assertEquals(v.str("code"), code)
         assertTrue(hub.onBinary(single(pakeA), t0).send.isEmpty())
-        val pakeB = hub.enterCode(shown.content.code, t0)
+        val pakeB = hub.enterCode(code, t0)
         wire += single(pakeB)
         val noise1 = remote.onBinary(single(pakeB), t0)
         wire += single(noise1)
@@ -112,6 +113,13 @@ class RelayFfiRoundTripTest {
         assertTrue(events(paired).single() is RelayEvent.Paired)
         assertEquals(1000.toUShort(), paired.closeCode)
         assertArrayEquals(hubKeys.publicKey(), remote.peerPublicKey())
+
+        // No generated record's toString() (Kotlin data classes print every
+        // field) can contain the code: it is in no event and no step.
+        for (step in listOf(hello, serverHello, pakeA, pakeB, noise1, noise2, noise3, pending, done, paired)) {
+            assertTrue(step.toString(), !step.toString().contains(code))
+            assertTrue(!step.eventsJson.contains(code))
+        }
 
         val order = listOf("client_hello", "server_hello", "pake_a", "pake_b", "noise_1", "noise_2", "noise_3", "pair_complete")
         assertEquals(order.size, wire.size)

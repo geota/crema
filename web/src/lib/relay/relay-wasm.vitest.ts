@@ -97,7 +97,9 @@ describe.skipIf(!present)('relay wasm bridge reproduces v4.json', () => {
 		expect(sent(hello)).toBe(v.client_hello);
 		const shown = readStep(conn.onBinary(unhex(v.server_hello), T0));
 		expect(sent(shown)).toBe(v.pake_a);
-		expect(shown.events.some((e) => e.type === 'ShowCode' && e.content.code === v.code)).toBe(true);
+		// ShowCode carries only the expiry; the code comes from code().
+		expect(shown.events.some((e) => e.type === 'ShowCode')).toBe(true);
+		expect(JSON.stringify(shown.events)).not.toContain(v.code);
 		expect(conn.code()).toBe(v.code);
 		expect(sent(readStep(conn.onBinary(unhex(v.pake_b), T0)))).toBe(v.noise_1);
 		expect(sent(readStep(conn.onBinary(unhex(v.noise_2), T0)))).toBe(v.noise_3);
