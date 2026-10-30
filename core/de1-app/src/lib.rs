@@ -28,7 +28,10 @@ mod sweep;
 pub use calibration_guard::CalibrationRefusal;
 pub use de1_domain::{FirmwareBuildReport, FirmwareBuildStatus};
 pub use de1_uuids::{
-    De1Uuids, de1_uuids, de1_uuids_json, de1_write_target_uuid, de1_write_target_uuid_by_name,
+    De1SeedRead, De1Subscription, De1Uuids, connect_identity_registers,
+    connect_identity_registers_json, de1_notification_source, de1_notification_source_name,
+    de1_seed_reads, de1_seed_reads_json, de1_subscriptions, de1_subscriptions_json, de1_uuids,
+    de1_uuids_json, de1_write_target_uuid, de1_write_target_uuid_by_name,
 };
 pub use error::AppError;
 pub use event::{

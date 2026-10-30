@@ -39,7 +39,7 @@ import {
 import { De1Liveness } from './de1-liveness';
 import { HOLLOW_LINK_STATUS, stuckLinkHint } from './stuck-link';
 import type { BleConnectionState } from './connection-state';
-import { De1Uuids } from './de1-uuids';
+import { De1Uuids, de1NotificationSource } from './de1-uuids';
 import {
 	advertisingStatus,
 	BleDevice,
@@ -65,6 +65,7 @@ type De1NotificationSource = Extract<
 	| 'De1ShotSettings'
 	| 'De1FrameAck'
 	| 'De1Calibration'
+	| 'De1Version'
 >;
 
 /**
@@ -783,24 +784,9 @@ function uuidForWriteTarget(target: WriteTarget): string | null {
  * `null` for an unmapped characteristic, which is dropped.
  */
 function sourceFor(characteristicUuid: string): De1NotificationSource | null {
-	switch (characteristicUuid) {
-		case De1Uuids.STATE_INFO:
-			return 'De1State';
-		case De1Uuids.SHOT_SAMPLE:
-			return 'De1ShotSample';
-		case De1Uuids.WATER_LEVELS:
-			return 'De1WaterLevels';
-		case De1Uuids.MMR_READ:
-			return 'De1MmrRead';
-		case De1Uuids.SHOT_SETTINGS:
-			return 'De1ShotSettings';
-		case De1Uuids.FRAME_WRITE:
-			return 'De1FrameAck';
-		case De1Uuids.CALIBRATION:
-			return 'De1Calibration';
-		default:
-			return null;
-	}
+	// The core's map (Android uses the same one). No FrameWrite entry: the DE1
+	// sends no notification there; the app synthesises the frame ack.
+	return de1NotificationSource(characteristicUuid) as De1NotificationSource | null;
 }
 
 /**
@@ -816,6 +802,7 @@ function freshCounts(): Record<De1NotificationSource, number> {
 		De1MmrRead: 0,
 		De1ShotSettings: 0,
 		De1FrameAck: 0,
-		De1Calibration: 0
+		De1Calibration: 0,
+		De1Version: 0
 	};
 }

@@ -12,7 +12,8 @@
 //! I/O against these UUIDs. Symmetric with the scale side, just without the
 //! per-model identification step.
 
-use crate::event::WriteTarget;
+use crate::event::{Source, WriteTarget};
+use de1_protocol::MmrRegister;
 
 /// Expand a 16-bit DE1 short into the full lowercase Bluetooth-SIG 128-bit UUID
 /// string. Web Bluetooth wants lowercase; `java.util.UUID.fromString` accepts it.
@@ -86,6 +87,165 @@ pub fn de1_uuids() -> De1Uuids {
 #[must_use]
 pub fn de1_uuids_json() -> String {
     serde_json::to_string(&de1_uuids()).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// One DE1 notify characteristic the shells subscribe to at connect.
+#[typeshare::typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct De1Subscription {
+    /// Full lowercase 128-bit characteristic UUID.
+    pub characteristic: String,
+    /// Characteristic name for status lines (`StateInfo`).
+    pub name: String,
+    /// Its 16-bit short, upper case (`A00E`).
+    pub short: String,
+    /// Whether a failed subscribe fails the connect. The required ones are
+    /// the streams the app can't run without, and together the structural
+    /// proof that the device is a DE1: a link that lacks one must never sit
+    /// ready with dead notifications.
+    pub required: bool,
+}
+
+/// One connect-time seed read: a characteristic the DE1 answers on a direct
+/// read but does not notify at connect, so subscribing alone leaves its rows
+/// blank.
+#[typeshare::typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct De1SeedRead {
+    /// Full lowercase 128-bit characteristic UUID.
+    pub characteristic: String,
+    /// Label for status lines (`machine state`).
+    pub label: String,
+    /// Whether the link depends on it. The DE1 answers a StateInfo read even
+    /// asleep, so a link that can't produce it (after one retry, the shells'
+    /// rule) is hollow and is dropped for the reconnect loop. The others are
+    /// best-effort.
+    pub required: bool,
+}
+
+/// The connect-time notify subscriptions, in subscribe order: the five
+/// required streams first (web subscribes them before declaring the GATT
+/// verified), then the best-effort ones. Both shells subscribe exactly this
+/// set.
+#[must_use]
+pub fn de1_subscriptions() -> Vec<De1Subscription> {
+    let u = de1_uuids();
+    let entry = |characteristic: String, name: &str, short: &str, required: bool| De1Subscription {
+        characteristic,
+        name: name.to_owned(),
+        short: short.to_owned(),
+        required,
+    };
+    vec![
+        entry(u.state_info, "StateInfo", "A00E", true),
+        entry(u.shot_sample, "ShotSample", "A00D", true),
+        entry(u.water_levels, "WaterLevels", "A011", true),
+        entry(u.mmr_read, "MMR_READ", "A005", true),
+        entry(u.shot_settings, "ShotSettings", "A00B", true),
+        // The DE1 answers a calibration read on this notify; without it the
+        // Settings calibration panel stays blank, but the link still works.
+        // (Version, A001, is not subscribed: it is read at connect, a seed
+        // read, as web and reaprime do.)
+        entry(u.calibration, "Calibration", "A012", false),
+    ]
+}
+
+/// The connect-time seed reads, in read order.
+#[must_use]
+pub fn de1_seed_reads() -> Vec<De1SeedRead> {
+    let u = de1_uuids();
+    let entry = |characteristic: String, label: &str, required: bool| De1SeedRead {
+        characteristic,
+        label: label.to_owned(),
+        required,
+    };
+    vec![
+        entry(u.version, "firmware version", false),
+        entry(u.state_info, "machine state", true),
+        entry(u.shot_settings, "shot-settings", false),
+    ]
+}
+
+/// The MMR registers read for the machine's identity after a connect, in
+/// read order: the firmware build first (the update check needs it), then
+/// the board, model (frame encoding), GHC (the cold-maintenance gate), refill
+/// kit, serial (the stolen-machine check), heater voltage, flush temperature
+/// and flow multiplier (de1app `later_new_de1_connection_setup`). How often
+/// and how many passes stay shell policy.
+#[must_use]
+pub fn connect_identity_registers() -> Vec<MmrRegister> {
+    vec![
+        MmrRegister::FirmwareVersion,
+        MmrRegister::CpuBoardVersion,
+        MmrRegister::MachineModel,
+        MmrRegister::GhcInfo,
+        MmrRegister::RefillKit,
+        MmrRegister::SerialNumber,
+        MmrRegister::HeaterVoltage,
+        MmrRegister::FlushTemp,
+        MmrRegister::CalibrationFlowMultiplier,
+    ]
+}
+
+/// The core [`Source`] a DE1 characteristic's notifications (and seed-read
+/// bytes) feed, or `None` for a characteristic the shell doesn't dispatch.
+/// Covers every [`de1_subscriptions`] and [`de1_seed_reads`] entry;
+/// case-insensitive. The profile
+/// frame ack is not here: the DE1 sends no notification on `FrameWrite`, the
+/// shell synthesises it.
+#[must_use]
+pub fn de1_notification_source(characteristic: &str) -> Option<Source> {
+    let u = de1_uuids();
+    let table = [
+        (u.state_info, Source::De1State),
+        (u.shot_sample, Source::De1ShotSample),
+        (u.water_levels, Source::De1WaterLevels),
+        (u.mmr_read, Source::De1MmrRead),
+        (u.shot_settings, Source::De1ShotSettings),
+        (u.calibration, Source::De1Calibration),
+        (u.version, Source::De1Version),
+    ];
+    table
+        .into_iter()
+        .find(|(uuid, _)| uuid.eq_ignore_ascii_case(characteristic))
+        .map(|(_, source)| source)
+}
+
+/// [`de1_notification_source`] as the source's name (`"De1State"`, the
+/// spelling the wasm bridge takes), for the wasm boundary.
+#[must_use]
+pub fn de1_notification_source_name(characteristic: &str) -> Option<&'static str> {
+    Some(match de1_notification_source(characteristic)? {
+        Source::De1State => "De1State",
+        Source::De1ShotSample => "De1ShotSample",
+        Source::De1WaterLevels => "De1WaterLevels",
+        Source::De1MmrRead => "De1MmrRead",
+        Source::De1ShotSettings => "De1ShotSettings",
+        Source::De1Calibration => "De1Calibration",
+        Source::De1Version => "De1Version",
+        _ => return None,
+    })
+}
+
+/// [`de1_subscriptions`] as JSON — the FFI / wasm boundary shape.
+#[must_use]
+pub fn de1_subscriptions_json() -> String {
+    serde_json::to_string(&de1_subscriptions()).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// [`de1_seed_reads`] as JSON — the FFI / wasm boundary shape.
+#[must_use]
+pub fn de1_seed_reads_json() -> String {
+    serde_json::to_string(&de1_seed_reads()).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// [`connect_identity_registers`] as JSON (register names, as the typeshare
+/// `MmrRegister` spells them) — the wasm boundary shape.
+#[must_use]
+pub fn connect_identity_registers_json() -> String {
+    serde_json::to_string(&connect_identity_registers()).unwrap_or_else(|_| "[]".to_string())
 }
 
 /// The DE1 characteristic UUID a [`WriteTarget`]'s bytes are written to. This
@@ -175,6 +335,74 @@ mod tests {
             Some(de1_write_target_uuid(WriteTarget::De1ProfileFrame))
         );
         assert_eq!(de1_write_target_uuid_by_name("NotATarget"), None);
+    }
+
+    #[test]
+    fn the_five_required_subscriptions_come_first() {
+        let subs = de1_subscriptions();
+        let u = de1_uuids();
+        let required: Vec<&str> = subs
+            .iter()
+            .filter(|s| s.required)
+            .map(|s| s.characteristic.as_str())
+            .collect();
+        assert_eq!(
+            required,
+            [
+                u.state_info.as_str(),
+                u.shot_sample.as_str(),
+                u.water_levels.as_str(),
+                u.mmr_read.as_str(),
+                u.shot_settings.as_str()
+            ]
+        );
+        assert!(subs.iter().take(5).all(|s| s.required));
+        assert!(subs.iter().skip(5).all(|s| !s.required));
+    }
+
+    #[test]
+    fn every_subscription_and_seed_read_has_a_notification_source() {
+        for s in de1_subscriptions() {
+            assert!(
+                de1_notification_source_name(&s.characteristic).is_some(),
+                "{}",
+                s.name
+            );
+        }
+        for s in de1_seed_reads() {
+            assert!(
+                de1_notification_source(&s.characteristic).is_some(),
+                "{}",
+                s.label
+            );
+        }
+        assert_eq!(
+            de1_notification_source(&de1_uuids().state_info.to_uppercase()),
+            Some(Source::De1State)
+        );
+        // No dispatch for the frame-write characteristic: the shell
+        // synthesises the ack.
+        assert_eq!(de1_notification_source(&de1_uuids().frame_write), None);
+    }
+
+    #[test]
+    fn only_the_machine_state_seed_read_is_required() {
+        let seeds = de1_seed_reads();
+        let required: Vec<&str> = seeds
+            .iter()
+            .filter(|s| s.required)
+            .map(|s| s.label.as_str())
+            .collect();
+        assert_eq!(required, ["machine state"]);
+    }
+
+    #[test]
+    fn identity_reads_start_with_the_firmware_build() {
+        let regs = connect_identity_registers();
+        assert_eq!(regs[0], MmrRegister::FirmwareVersion);
+        assert!(regs.contains(&MmrRegister::SerialNumber));
+        assert!(regs.contains(&MmrRegister::GhcInfo));
+        assert!(connect_identity_registers_json().starts_with("[\"FirmwareVersion\""));
     }
 
     #[test]

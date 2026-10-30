@@ -974,6 +974,37 @@ pub fn de1_uuids() -> String {
     de1_app::de1_uuids_json()
 }
 
+/// The connect-time notify subscriptions (`De1Subscription[]` JSON), in
+/// subscribe order, each marked required or best-effort. See
+/// `de1_app::de1_subscriptions`.
+#[wasm_bindgen(js_name = de1Subscriptions)]
+pub fn de1_subscriptions() -> String {
+    de1_app::de1_subscriptions_json()
+}
+
+/// The connect-time seed reads (`De1SeedRead[]` JSON), in read order. See
+/// `de1_app::de1_seed_reads`.
+#[wasm_bindgen(js_name = de1SeedReads)]
+pub fn de1_seed_reads() -> String {
+    de1_app::de1_seed_reads_json()
+}
+
+/// The MMR registers read for the machine's identity after a connect
+/// (`MmrRegister[]` JSON), in read order. See
+/// `de1_app::connect_identity_registers`.
+#[wasm_bindgen(js_name = connectIdentityRegisters)]
+pub fn connect_identity_registers() -> String {
+    de1_app::connect_identity_registers_json()
+}
+
+/// The notification source (`"De1State"`, …) a DE1 characteristic feeds, or
+/// `None` for one the shell doesn't dispatch. See
+/// `de1_app::de1_notification_source`.
+#[wasm_bindgen(js_name = de1NotificationSource)]
+pub fn de1_notification_source(characteristic: &str) -> Option<String> {
+    de1_app::de1_notification_source_name(characteristic).map(str::to_owned)
+}
+
 /// The DE1 characteristic UUID a `WriteTarget` (by its serde name) is written
 /// to, or `None` for an unknown target. The one `WriteTarget` → UUID map. See
 /// `de1_app::de1_write_target_uuid`.
