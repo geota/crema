@@ -225,7 +225,7 @@ class LibraryController(
     suspend fun adoptCustomProfile(raw: String) {
         customProfilesJson = listOf(raw) + customProfilesJson
         refreshProfiles()
-        customProfileStore.save(customProfilesJson)
+        customProfileStore.save(customProfilesJson, ++customProfilesGeneration)
     }
 
     // ── Startup loads (called from the VM's init, same order as before) ──────
@@ -324,8 +324,14 @@ class LibraryController(
     /** Persist the current custom profiles (best-effort, off the main thread). */
     private fun persistCustomProfiles() {
         val snapshot = customProfilesJson
-        scope.launch { customProfileStore.save(snapshot) }
+        // Numbered as the snapshot is taken: the store skips one that lands
+        // after a newer one (the awaited T6 adoption save, say).
+        val generation = ++customProfilesGeneration
+        scope.launch { customProfileStore.save(snapshot, generation) }
     }
+
+    /** The last custom-profile snapshot's number. */
+    private var customProfilesGeneration = 0L
 
     /**
      * Toggle a profile's Favorites star (the `pinned` flag the Quick-Controls
